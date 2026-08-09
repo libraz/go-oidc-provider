@@ -21,7 +21,7 @@ func TestRace_BeginTxAndPerKindReads(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
-	clock := fakeClock{now: now}
+	clock := &fakeClock{now: now}
 	persistent := inmem.New(inmem.WithClock(clock))
 	ephemeral := inmem.New(inmem.WithClock(clock))
 

@@ -1,11 +1,9 @@
 package composite_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/store/contract"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/composite"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -39,12 +37,13 @@ func TestContract_HotColdSplit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("composite.New: %v", err)
 		}
-		// Wrap in registryFacade so the contract harness's
-		// type-assertion based ClientRegistry detection succeeds; the
-		// composite intentionally hides ClientRegistry behind an
-		// accessor so this thin adapter is the single bridge.
+		// The composite goes into the harness unwrapped. It withholds
+		// the plain store.ClientRegistry on purpose — the capability
+		// depends on which backend is routed for Clients — and the
+		// harness probes the accessor, so a facade here would only test
+		// the facade.
 		return contract.Backend{
-			Store: &registryFacade{Store: s},
+			Store: s,
 			Now:   clock.Now,
 			Advance: func(delta time.Duration) {
 				clock.now = clock.now.Add(delta)
@@ -53,47 +52,4 @@ func TestContract_HotColdSplit(t *testing.T) {
 	}
 
 	contract.Run(t, factory)
-}
-
-// registryFacade exposes [store.ClientRegistry] via direct embedding so the
-// contract harness's [requireRegistry] type assertion succeeds. The facade
-// forwards to the composite's accessor; if the composite reports the
-// capability as absent the forwarders return [store.ErrNotFound] so the
-// contract failure surfaces clearly rather than as a nil-pointer panic.
-type registryFacade struct {
-	*composite.Store
-}
-
-// GetClient implements [store.ClientStore], which is embedded into
-// [store.ClientRegistry]. The facade forwards to the composite's Clients
-// substore so the read path is identical to a non-registry caller.
-func (f *registryFacade) GetClient(ctx context.Context, id string) (*store.Client, error) {
-	return f.Clients().GetClient(ctx, id)
-}
-
-// RegisterClient implements [store.ClientRegistry].
-func (f *registryFacade) RegisterClient(ctx context.Context, c *store.Client) error {
-	reg, ok := f.ClientRegistry()
-	if !ok {
-		return store.ErrNotFound
-	}
-	return reg.RegisterClient(ctx, c)
-}
-
-// UpdateClient implements [store.ClientRegistry].
-func (f *registryFacade) UpdateClient(ctx context.Context, c *store.Client) error {
-	reg, ok := f.ClientRegistry()
-	if !ok {
-		return store.ErrNotFound
-	}
-	return reg.UpdateClient(ctx, c)
-}
-
-// DeleteClient implements [store.ClientRegistry].
-func (f *registryFacade) DeleteClient(ctx context.Context, id string) error {
-	reg, ok := f.ClientRegistry()
-	if !ok {
-		return store.ErrNotFound
-	}
-	return reg.DeleteClient(ctx, id)
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // interactionStore implements [store.InteractionStore] against Redis.
@@ -87,7 +88,7 @@ func (s *interactionStore) CompareAndSwap(
 	if previous == nil || next == nil || previous.ID == "" || previous.ID != next.ID {
 		return errors.New("oidcredis: invalid interaction compare-and-swap")
 	}
-	if !previous.ExpiresAt.IsZero() && previous.ExpiresAt.Before(s.parent.clock.Now()) {
+	if patterns.IsExpiredInclusive(previous.ExpiresAt, s.parent.clock.Now()) {
 		return store.ErrNotFound
 	}
 	replacement, err := marshalInteraction(next)
@@ -141,7 +142,7 @@ func (s *interactionStore) DeleteIfUnchanged(
 	if previous == nil || previous.ID == "" {
 		return errors.New("oidcredis: invalid conditional interaction delete")
 	}
-	if !previous.ExpiresAt.IsZero() && previous.ExpiresAt.Before(s.parent.clock.Now()) {
+	if patterns.IsExpiredInclusive(previous.ExpiresAt, s.parent.clock.Now()) {
 		return store.ErrNotFound
 	}
 	const deleteInteractionIfUnchanged = `
@@ -195,22 +196,11 @@ func marshalInteraction(i *store.Interaction) ([]byte, error) {
 // ErrNotFound automatically — the contract's "MUST NOT return expired
 // interactions" clause is satisfied by the engine.
 func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interaction, error) {
-	raw, err := s.parent.client.Get(ctx, s.interactionKey(id)).Bytes()
+	rec, err := s.fetch(ctx, id)
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("oidcredis: GET interaction: %w", err)
+		return nil, err
 	}
-	var rec interactionRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return nil, fmt.Errorf("oidcredis: unmarshal interaction: %w", err)
-	}
-	// Defence in depth against clock skew between the adapter and the
-	// Redis server: re-evaluate expiry against the adapter's clock.
-	// In normal operation the Redis TTL has already evicted such
-	// records and this branch is unreachable.
-	if !rec.ExpiresAt.IsZero() && !rec.ExpiresAt.After(s.parent.clock.Now()) {
+	if s.expired(rec) {
 		return nil, store.ErrNotFound
 	}
 	return &store.Interaction{
@@ -224,16 +214,49 @@ func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interact
 	}, nil
 }
 
+// fetch returns the on-the-wire record for id, or [store.ErrNotFound]
+// when Redis reports the key as absent. Callers MUST re-check expiry
+// with [interactionStore.expired] before treating the record as live.
+func (s *interactionStore) fetch(ctx context.Context, id string) (*interactionRecord, error) {
+	raw, err := s.parent.client.Get(ctx, s.interactionKey(id)).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("oidcredis: GET interaction: %w", err)
+	}
+	var rec interactionRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return nil, fmt.Errorf("oidcredis: unmarshal interaction: %w", err)
+	}
+	return &rec, nil
+}
+
+// expired is defence in depth against clock skew between the adapter
+// and the Redis server: it re-evaluates the record's own ExpiresAt
+// against the adapter's clock. In normal operation the Redis TTL has
+// already evicted such records and it never reports true.
+func (s *interactionStore) expired(rec *interactionRecord) bool {
+	return patterns.IsExpiredInclusive(rec.ExpiresAt, s.parent.clock.Now())
+}
+
 // Delete removes the interaction identified by id, returning
-// [store.ErrNotFound] when no such record exists. Redis DEL returns
-// the number of keys removed; zero indicates the contract's "MUST
-// return ErrNotFound when no such interaction exists" condition.
+// [store.ErrNotFound] when no such record exists or when the record has
+// expired. Reading before the DEL is what separates the two: DEL alone
+// counts keys, and a record still resident but expired per the adapter
+// clock must read as absent here exactly as it does through Find. The
+// key is reclaimed either way.
 func (s *interactionStore) Delete(ctx context.Context, id string) error {
+	rec, err := s.fetch(ctx, id)
+	if err != nil {
+		return err
+	}
+	expired := s.expired(rec)
 	n, err := s.parent.client.Del(ctx, s.interactionKey(id)).Result()
 	if err != nil {
 		return fmt.Errorf("oidcredis: DEL interaction: %w", err)
 	}
-	if n == 0 {
+	if n == 0 || expired {
 		return store.ErrNotFound
 	}
 	return nil

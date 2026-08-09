@@ -35,6 +35,7 @@ type queries struct {
 	authCodeSave    string
 	authCodeFind    string
 	authCodeConsume string
+	authCodeGC      string
 
 	// refresh tokens
 	refreshSave                string
@@ -90,11 +91,13 @@ type queries struct {
 	sessionTouch              string
 	sessionDelete             string
 	sessionListByChooserGroup string
+	sessionGC                 string
 
 	// pushed authorization requests
 	parSave    string
 	parFind    string
 	parConsume string
+	parGC      string
 
 	// interactions
 	interactionSave              string
@@ -102,6 +105,7 @@ type queries struct {
 	interactionDeleteIfUnchanged string
 	interactionFind              string
 	interactionDelete            string
+	interactionGC                string
 
 	// consumed JTIs
 	jtiDeleteExpired string
@@ -186,6 +190,8 @@ type queries struct {
 	// email OTP challenges
 	emailOTPGet            string
 	emailOTPPut            string
+	emailOTPInsertIfAbsent string
+	emailOTPReplaceStale   string
 	emailOTPCompareAndSwap string
 	emailOTPConsume        string
 	emailOTPDelete         string
@@ -336,6 +342,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" FROM " + n.authCodes + " WHERE id = ?"),
 		authCodeConsume: d.rebind(
 			"UPDATE " + n.authCodes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),
+		authCodeGC: d.rebind(
+			"DELETE FROM " + n.authCodes + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// refresh tokens
 		refreshSave: d.rebind(
@@ -496,6 +504,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		sessionListByChooserGroup: d.rebind(
 			"SELECT id, subject, auth_time, amr, acr, chooser_group_id, expires_at, created_at, updated_at" +
 				" FROM " + n.sessions + " WHERE chooser_group_id = ?"),
+		sessionGC: d.rebind(
+			"DELETE FROM " + n.sessions + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// PAR
 		parSave: d.rebind(
@@ -507,6 +517,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" FROM " + n.pars + " WHERE uri = ?"),
 		parConsume: d.rebind(
 			"UPDATE " + n.pars + " SET consumed_at = ? WHERE uri = ? AND consumed_at IS NULL"),
+		parGC: d.rebind(
+			"DELETE FROM " + n.pars + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// interactions (upsert keyed on id)
 		interactionSave: d.rebind(
@@ -531,6 +543,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)"),
 		interactionDelete: d.rebind(
 			"DELETE FROM " + n.interactions + " WHERE id = ?"),
+		interactionGC: d.rebind(
+			"DELETE FROM " + n.interactions + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// consumed JTIs
 		jtiDeleteExpired: d.rebind(
@@ -755,6 +769,27 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" (subject, " + joinColumns(emailOTPValueColumns) + ")" +
 				" VALUES (" + bindPlaceholders(1+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
 				d.upsertOnConflict("subject", assignExcluded(d, emailOTPValueColumns))),
+		// The nil-previous form of the compare-and-swap reserves the
+		// first challenge for a subject, and reserving is what bounds
+		// how many codes a subject can be sent. It is a conditional
+		// insert rather than a read followed by a write: two sends
+		// racing on a subject with no stored challenge would both read
+		// an empty row, both write, and both deliver a message.
+		emailOTPInsertIfAbsent: d.rebind(
+			"INSERT INTO " + n.emailOTPs +
+				" (subject, " + joinColumns(emailOTPValueColumns) + ")" +
+				" VALUES (" + bindPlaceholders(1+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
+				d.upsertDoNothingQualified("subject", n.emailOTPs)),
+		// A row past its retention horizon no longer holds the key. The
+		// predicate is evaluated against the current row version, so of
+		// two racers that both saw a stale row only one lands — and a
+		// row another racer has just refreshed reads as live.
+		emailOTPReplaceStale: d.rebind(
+			"UPDATE " + n.emailOTPs +
+				" SET " + assignPlaceholders(emailOTPValueColumns) +
+				" WHERE subject = ?" +
+				" AND ((retain_until > 0 AND retain_until < ?)" +
+				" OR (retain_until = 0 AND expires_at > 0 AND expires_at < ?))"),
 		emailOTPCompareAndSwap: d.rebind(
 			"UPDATE " + n.emailOTPs +
 				" SET " + assignPlaceholders(emailOTPValueColumns) +

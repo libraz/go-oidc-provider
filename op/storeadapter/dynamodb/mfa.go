@@ -228,16 +228,27 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 // createIfAbsent handles the nil-previous form, which reserves the
 // first challenge for a subject. A record that is still retained means
 // another send won the race.
+//
+// The reservation is what caps how many messages a subject can be sent,
+// so the write carries the free-key condition rather than following a
+// read: two first sends arriving together would otherwise both find the
+// key empty and both deliver a code, rolling the send-count ceiling
+// back to one. [emailOTPItem] projects the retention horizon onto the
+// expiry attribute the condition reads, so a retained challenge holds
+// the key and a lapsed one does not.
 func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTPRecord) error {
-	current, err := s.load(ctx, next.Subject)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-	case err != nil:
+	entry, err := emailOTPItem(next)
+	if err != nil {
 		return err
-	case !emailOTPRetentionElapsed(current, s.parent.now()):
+	}
+	placed, err := s.parent.putIfKeyFree(ctx, s.parent.names.emailOTPs, entry)
+	if err != nil {
+		return wrapErr("emailOTP.CompareAndSwap.create", err)
+	}
+	if !placed {
 		return store.ErrAlreadyConsumed
 	}
-	return s.Put(ctx, next)
+	return nil
 }
 
 // Consume stamps the redemption. The condition asserts the challenge is
@@ -510,6 +521,11 @@ func (s *passkeyStore) ListBySubject(ctx context.Context, subject string) ([]*st
 	return out, nil
 }
 
+// Put upserts the credential record under a condition that admits only
+// a first registration or a rewrite by the subject that already holds
+// the credential. Reading the owner first and writing afterwards would
+// leave a window in which a concurrent registration moves the record to
+// another subject; the condition closes it inside the write itself.
 func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 	if r == nil {
 		return errors.New("oidcdynamo: nil passkey record")
@@ -521,7 +537,23 @@ func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := s.parent.put(ctx, s.parent.names.passkeys, entry); err != nil {
+	if _, err := s.parent.api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(s.parent.names.passkeys),
+		Item:                entry,
+		ConditionExpression: aws.String("attribute_not_exists(#pk) OR #subject = :subject"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":      attrPK,
+			"#subject": attrSubject,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":subject": avS(r.Subject),
+		},
+	}); err != nil {
+		if isConditionalCheckFailed(err) {
+			// The credential belongs to somebody else. Replacing it
+			// here would unlink their authenticator.
+			return store.ErrAlreadyExists
+		}
 		return wrapErr("passkeys.Put", err)
 	}
 	return nil

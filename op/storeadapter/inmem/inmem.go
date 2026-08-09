@@ -40,10 +40,30 @@
 // authorization codes, refresh tokens, JTIs) are filtered through the
 // configured [Clock] on every Find/Consume. A record whose ExpiresAt is
 // strictly before [Clock.Now()] is treated as absent: the lookup returns
-// [store.ErrNotFound] and Consume returns the same. The records remain in
-// the map for diagnostic purposes. PAR Save additionally sweeps expired PAR
-// rows before inserting, so a client that keeps pushing requests cannot grow
-// that map solely with already-dead request_uri records.
+// [store.ErrNotFound] and Consume returns the same.
+//
+// # Reclamation
+//
+// Expired records are not merely hidden, they are reclaimed. Every
+// substore whose map can be grown by an unauthenticated request sweeps
+// itself: authorization codes, sessions, interactions, PAR records,
+// consumed JTIs, device codes, CIBA requests, and the cross-factor
+// lockout counters each run a full sweep once a fixed number of writes
+// has accumulated since the last one, so a write costs O(1) amortised
+// rather than O(total records). Records that collide with the exact key
+// an insert is claiming are evicted immediately, without waiting for the
+// sweep, so a reused request_uri, device_code, user_code, or
+// auth_req_id is never rejected as a duplicate of a dead row.
+//
+// A sweep only removes records the lookup paths already treat as
+// absent, so it cannot change what a caller observes. The lockout
+// counters carry no ExpiresAt and are instead retired once their lock
+// has lapsed and their window anchor has aged out, which is the point
+// at which the library's own rolling-window rollover would reset them.
+//
+// Substores whose rows have no expiry (clients, users, grants,
+// metadata, enrolled authentication factors) are owned by the embedder
+// and are never swept.
 package inmem
 
 import (
@@ -144,7 +164,7 @@ func New(opts ...Option) *Store {
 	s.recoveries = newRecoveryStore()
 	s.passkeys = newPasskeyStore()
 	s.emailotps = newEmailOTPStore(s.clock)
-	s.authnLockouts = newAuthnLockoutStore()
+	s.authnLockouts = newAuthnLockoutStore(s.clock)
 	s.accessTokens = newAccessTokenStore()
 	s.opaqueAccessTokens = newOpaqueAccessTokenStore()
 	s.grantRevocations = newGrantRevocationStore()
@@ -322,6 +342,11 @@ func (s *Store) GetClient(ctx context.Context, id string) (*store.Client, error)
 // BeginTx implements [store.Transactional]. The returned [store.Tx] holds the
 // process-wide tx mutex and stages writes that are flushed atomically on
 // [store.Tx.Commit] and discarded on [store.Tx.Rollback].
+//
+// Every substore in the cluster stages through an overlay onto the
+// committed map rather than a copy of it, so the cost of starting a
+// transaction is a fixed set of empty maps and does not grow with the
+// number of records the store holds.
 func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -360,9 +385,9 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			added:   make(map[string]*store.PushedAuthRequest),
 			updated: make(map[string]*store.PushedAuthRequest),
 		},
-		accessTokens:       accessTokenSnapshotLocked(s.accessTokens),
-		opaqueAccessTokens: opaqueAccessTokenSnapshotLocked(s.opaqueAccessTokens),
-		grantRevocations:   grantRevocationSnapshotLocked(s.grantRevocations),
+		atStaging:  newAccessTokenStaging(s.accessTokens),
+		oatStaging: newOpaqueAccessTokenStaging(s.opaqueAccessTokens),
+		grvStaging: newGrantRevocationStaging(s.grantRevocations),
 	}
 	return t, nil
 }
@@ -424,22 +449,21 @@ func (s *refreshStore) Save(_ context.Context, token *store.RefreshToken) error 
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	stored := storeRefresh(token, key)
 	// Close the replay-revocation TOCTOU (RFC 9700 §2.2.2): a rotation
 	// Save and a concurrent RevokeChain both take this mutex, so the
 	// parent-still-alive check below and the insert form a single
 	// critical section that no chain-revocation walk can interleave. If
 	// the parent link was already tombstoned by a racing cascade, the
-	// rotated descendant descends from a revoked chain and MUST NOT be
-	// redeemable regardless of when it was minted: stamp it consumed +
-	// revoked before it enters the map so no Find / Consume / grace path
-	// ever treats it as live. The happy-path parent (consumed by
-	// legitimate rotation, Revoked == false) is untouched.
-	if token.ParentID != nil {
-		if parent, ok := s.m[hashKey(*token.ParentID)]; ok && parent.Revoked {
-			markRevoked(stored, s.clock.Now())
-		}
+	// rotated descendant descends from a revoked chain and MUST NOT
+	// become redeemable, so the row is never inserted and the caller is
+	// told the chain is retired — see [store.RefreshTokenStore.Save].
+	// The happy-path parent (consumed by legitimate rotation,
+	// Revoked == false) is untouched, and a parent that is absent
+	// altogether proves no revocation.
+	if err := s.assertParentAliveLocked(token.ParentID); err != nil {
+		return err
 	}
+	stored := storeRefresh(token, key)
 	s.m[key] = stored
 	s.indexRefreshLocked(key, stored)
 	return nil
@@ -458,14 +482,29 @@ func (s *refreshStore) SaveRotationWithRetry(_ context.Context, token *store.Ref
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	stored := storeRefresh(token, key)
-	parentKey := hashKey(*token.ParentID)
-	if parent, ok := s.m[parentKey]; ok && parent.Revoked {
-		markRevoked(stored, s.clock.Now())
+	if err := s.assertParentAliveLocked(token.ParentID); err != nil {
+		return err
 	}
+	stored := storeRefresh(token, key)
 	s.m[key] = stored
 	s.indexRefreshLocked(key, stored)
-	s.retries[parentKey] = append([]byte(nil), sealed...)
+	s.retries[hashKey(*token.ParentID)] = append([]byte(nil), sealed...)
+	return nil
+}
+
+// assertParentAliveLocked reports [store.ErrAlreadyConsumed] when parentID
+// names a record that a revocation cascade has already tombstoned, so a
+// rotation can never extend a retired chain (RFC 9700 §2.2.2). A root save
+// (nil parentID) and a parent that no longer exists both pass: neither is
+// evidence of a revocation. The caller must hold refreshStore.mu for
+// writing.
+func (s *refreshStore) assertParentAliveLocked(parentID *string) error {
+	if parentID == nil {
+		return nil
+	}
+	if parent, ok := s.m[hashKey(*parentID)]; ok && parent.Revoked {
+		return store.ErrAlreadyConsumed
+	}
 	return nil
 }
 
@@ -957,10 +996,18 @@ func cloneJSONReflect(v reflect.Value) reflect.Value {
 // --- SessionStore ------------------------------------------------------------
 
 type sessionStore struct {
-	mu    sync.RWMutex
-	clock Clock
-	m     map[string]*store.Session
+	mu           sync.RWMutex
+	clock        Clock
+	m            map[string]*store.Session
+	savesSinceGC uint32
 }
+
+// sessionFullGCSaveInterval is how many Save calls pass between full
+// sweeps of the session map. Every unauthenticated login attempt that
+// reaches the session step can create a row, so the map needs
+// reclamation; sweeping on each Save would make every login cost
+// O(total sessions).
+const sessionFullGCSaveInterval uint32 = 64
 
 func newSessionStore(c Clock) *sessionStore {
 	return &sessionStore{clock: c, m: make(map[string]*store.Session)}
@@ -972,8 +1019,30 @@ func (s *sessionStore) Save(_ context.Context, sess *store.Session) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.maybeGCLocked(s.clock.Now())
 	s.m[sess.ID] = cloneSession(sess)
 	return nil
+}
+
+// gcLocked drops every session whose ExpiresAt has passed. Find, Touch,
+// ListByChooserGroup, and Delete all treat an expired session as
+// absent, so removing it cannot change what a caller observes on any
+// path.
+func (s *sessionStore) gcLocked(now time.Time) {
+	for id, rec := range s.m {
+		if isExpiredAtStrict(rec.ExpiresAt, now) {
+			delete(s.m, id)
+		}
+	}
+	s.savesSinceGC = 0
+}
+
+func (s *sessionStore) maybeGCLocked(now time.Time) {
+	s.savesSinceGC++
+	if s.savesSinceGC < sessionFullGCSaveInterval {
+		return
+	}
+	s.gcLocked(now)
 }
 
 func (s *sessionStore) Find(_ context.Context, id string) (*store.Session, error) {
@@ -1007,10 +1076,17 @@ func (s *sessionStore) Touch(_ context.Context, id string, expiresAt, updatedAt 
 func (s *sessionStore) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.m[id]; !ok {
+	rec, ok := s.m[id]
+	if !ok {
 		return store.ErrNotFound
 	}
+	// Reclaim the entry either way, but report an expired record as
+	// absent: the contract makes the answer turn on ExpiresAt, not on
+	// whether the sweep has reached this key yet.
 	delete(s.m, id)
+	if isExpired(rec.ExpiresAt, s.clock) {
+		return store.ErrNotFound
+	}
 	return nil
 }
 
@@ -1159,10 +1235,18 @@ func (s *parStore) deleteExpiredKeyLocked(key string, now time.Time) {
 // --- InteractionStore --------------------------------------------------------
 
 type interactionStore struct {
-	mu    sync.RWMutex
-	clock Clock
-	m     map[string]*store.Interaction
+	mu           sync.RWMutex
+	clock        Clock
+	m            map[string]*store.Interaction
+	savesSinceGC uint32
 }
+
+// interactionFullGCSaveInterval is how many Save calls pass between
+// full sweeps of the interaction map. An interaction is created by an
+// unauthenticated /authorize request and abandoned whenever the user
+// walks away, so abandoned rows are the common case rather than the
+// exception.
+const interactionFullGCSaveInterval uint32 = 64
 
 func newInteractionStore(c Clock) *interactionStore {
 	return &interactionStore{clock: c, m: make(map[string]*store.Interaction)}
@@ -1174,8 +1258,30 @@ func (s *interactionStore) Save(_ context.Context, i *store.Interaction) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.maybeGCLocked(s.clock.Now())
 	s.m[i.ID] = cloneInteraction(i)
 	return nil
+}
+
+// gcLocked drops every interaction whose ExpiresAt has passed. Find,
+// CompareAndSwap, DeleteIfUnchanged, and the unconditional Delete all
+// treat an expired interaction as absent and report ErrNotFound, so a
+// swept row is indistinguishable from one that was left in place.
+func (s *interactionStore) gcLocked(now time.Time) {
+	for id, rec := range s.m {
+		if isExpiredAtStrict(rec.ExpiresAt, now) {
+			delete(s.m, id)
+		}
+	}
+	s.savesSinceGC = 0
+}
+
+func (s *interactionStore) maybeGCLocked(now time.Time) {
+	s.savesSinceGC++
+	if s.savesSinceGC < interactionFullGCSaveInterval {
+		return
+	}
+	s.gcLocked(now)
 }
 
 func (s *interactionStore) CompareAndSwap(
@@ -1234,10 +1340,17 @@ func (s *interactionStore) Find(_ context.Context, id string) (*store.Interactio
 func (s *interactionStore) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.m[id]; !ok {
+	rec, ok := s.m[id]
+	if !ok {
 		return store.ErrNotFound
 	}
+	// Reclaim the entry either way, but report an expired record as
+	// absent: the contract makes the answer turn on ExpiresAt, not on
+	// whether the sweep has reached this key yet.
 	delete(s.m, id)
+	if isExpired(rec.ExpiresAt, s.clock) {
+		return store.ErrNotFound
+	}
 	return nil
 }
 
@@ -1288,6 +1401,10 @@ func (s *jtiStore) Mark(_ context.Context, jti string, expiresAt time.Time) erro
 	return nil
 }
 
+// Has reports whether jti is still marked. The expiry bound is the
+// inclusive one [jtiStore.Mark] applies (a marker is expired from its
+// expiresAt onwards), so the two methods cannot disagree at the boundary
+// instant about whether a jti is consumed; see [store.ConsumedJTIStore].
 func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 	digest := patterns.Digest(jti)
 	s.mu.RLock()
@@ -1296,7 +1413,7 @@ func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	if isExpired(expiresAt, s.clock) {
+	if isExpiredAt(expiresAt, s.clock.Now()) {
 		return false, nil
 	}
 	return true, nil
@@ -1315,8 +1432,14 @@ func (s *jtiStore) maybeGCJTILocked(now time.Time) {
 	s.marksSinceGC = 0
 }
 
+// isExpiredAt is the inclusive expiry bound the consumed-JTI substore
+// uses: a marker is expired from expiresAt onwards, and a zero expiresAt
+// never expires. It is deliberately stricter than [isExpired], which
+// keeps a record alive at its own expiry instant, because
+// [store.ConsumedJTIStore] pins the inclusive boundary for both Mark and
+// Has.
 func isExpiredAt(expiresAt, now time.Time) bool {
-	return !expiresAt.IsZero() && !now.UTC().Before(expiresAt.UTC())
+	return patterns.IsExpiredInclusive(expiresAt, now)
 }
 
 // --- UserStore ---------------------------------------------------------------

@@ -17,7 +17,7 @@ func TestSQLite_DeviceCodeSave_GCEvictsExpiredRows(t *testing.T) {
 
 	ctx := context.Background()
 	db := openSQLite(t)
-	clock := fixedClock{now: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)}
+	clock := &fixedClock{now: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)}
 	s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithClock(clock))
 	if err != nil {
 		t.Fatalf("oidcsql.New: %v", err)
@@ -95,7 +95,7 @@ func TestSQLite_CIBARequestSave_GCEvictsExpiredRows(t *testing.T) {
 
 	ctx := context.Background()
 	db := openSQLite(t)
-	clock := fixedClock{now: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)}
+	clock := &fixedClock{now: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)}
 	s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithClock(clock))
 	if err != nil {
 		t.Fatalf("oidcsql.New: %v", err)

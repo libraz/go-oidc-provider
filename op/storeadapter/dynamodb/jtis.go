@@ -54,7 +54,7 @@ func (s *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 	if err != nil {
 		return wrapErr("jtis.Mark.inspect", err)
 	}
-	if !s.parent.expired(existing) {
+	if !s.jtiExpired(existing) {
 		return store.ErrAlreadyConsumed
 	}
 	if err := s.parent.put(ctx, s.parent.names.jtis, i); err != nil {
@@ -67,14 +67,24 @@ func (s *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 // expiry reads as absent so a stale marker DynamoDB has not reclaimed
 // yet cannot reject a fresh token.
 func (s *jtiStore) Has(ctx context.Context, jti string) (bool, error) {
-	_, err := s.parent.getLive(ctx, s.parent.names.jtis, patterns.Digest(jti))
+	found, err := s.parent.get(ctx, s.parent.names.jtis, patterns.Digest(jti))
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, wrapErr("jtis.Has", err)
 	}
-	return true, nil
+	return !s.jtiExpired(found), nil
+}
+
+// jtiExpired applies the inclusive expiry bound [store.ConsumedJTIStore]
+// pins for replay markers: a marker is expired from its expiresAt
+// onwards. The substore does not reuse the store-wide [Store.expired]
+// helper, which keeps a record live at its own expiry instant, because
+// Mark and Has must agree on the boundary or a caller can observe a jti
+// as consumed and still consume it again.
+func (s *jtiStore) jtiExpired(found item) bool {
+	return patterns.IsExpiredInclusive(readTime(found, attrExpiresAt), s.parent.now())
 }
 
 var _ store.ConsumedJTIStore = (*jtiStore)(nil)

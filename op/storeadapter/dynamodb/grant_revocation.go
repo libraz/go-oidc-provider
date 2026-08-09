@@ -5,6 +5,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -27,20 +31,108 @@ const (
 )
 
 // RevokeGrant writes a tombstone covering every token issued under the
-// grant before RevokedAt. Re-revoking extends the tombstone's own
-// expiry rather than shortening it: the record has to outlive the
-// longest-lived token it invalidates.
+// grant before RevokedAt. Both of the row's horizons only ever widen:
+// the record has to outlive the longest-lived token it invalidates, and
+// a later revocation instant is the point of a second cascade, because a
+// token minted after the previous one must fall inside the new window.
+//
+// Widening is expressed as two guarded updates rather than as a read
+// followed by a replacement. Cascades against one grant arrive in
+// parallel — a logout and a replay detection can run at the same
+// instant — and a read-modify-write would let the one that read first
+// write last, narrowing the window it found and quietly restoring every
+// access token the other had just killed.
 func (s *grantRevocationStore) RevokeGrant(ctx context.Context, t store.GrantTombstone) error {
 	pk := tombstonePrefix + t.GrantID
-	existing, err := s.read(ctx, pk)
+	if s.tx != nil {
+		return s.revokeGrantStaged(ctx, pk, t)
+	}
+	if err := s.widenRevokedAt(ctx, pk, t); err != nil {
+		return err
+	}
+	return s.widenLifetime(ctx, pk, t.ExpiresAt)
+}
+
+// widenRevokedAt advances the revocation instant, and writes the row
+// when the grant has no tombstone yet. The document rides along with it
+// so the reason recorded is the one of the cascade that set the instant;
+// the projected attributes, not the document, are what IsRevoked and GC
+// read.
+func (s *grantRevocationStore) widenRevokedAt(ctx context.Context, pk string, t store.GrantTombstone) error {
+	entry, err := newItem(pk).doc(&t)
+	if err != nil {
+		return err
+	}
+	_, err = s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:        aws.String(s.parent.names.grantTombstones),
+		Key:              key(pk),
+		UpdateExpression: aws.String("SET #doc = :doc, #revoked = :revoked"),
+		ConditionExpression: aws.String(
+			"attribute_not_exists(#pk) OR attribute_not_exists(#revoked) OR #revoked < :revoked"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":      attrPK,
+			"#doc":     attrDoc,
+			"#revoked": attrRevokedAt,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":doc":     entry[attrDoc],
+			":revoked": avTime(t.RevokedAt),
+		},
+	})
+	if err != nil && !isConditionalCheckFailed(err) {
+		return wrapErr("grantRevocations.RevokeGrant.revokedAt", err)
+	}
+	// A rejected guard means the stored instant is already at or past the
+	// one supplied, which is the outcome the call asked for.
+	return nil
+}
+
+// widenLifetime extends the row's retention. A zero ExpiresAt means "no
+// expiry" and is therefore the widest horizon of all, so it is reached
+// by clearing the TTL rather than by comparing against a larger number —
+// and a row that already carries it is never narrowed to a finite one.
+func (s *grantRevocationStore) widenLifetime(ctx context.Context, pk string, at time.Time) error {
+	in := &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.parent.names.grantTombstones),
+		Key:       key(pk),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":      attrPK,
+			"#expires": attrExpiresAt,
+			"#ttl":     attrTTL,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":never": avN(0)},
+	}
+	if at.IsZero() {
+		in.UpdateExpression = aws.String("SET #expires = :never REMOVE #ttl")
+		in.ConditionExpression = aws.String(
+			"attribute_not_exists(#pk) OR attribute_not_exists(#expires) OR #expires <> :never")
+	} else {
+		ttl, _ := avTTL(at)
+		in.UpdateExpression = aws.String("SET #expires = :expires, #ttl = :ttl")
+		in.ConditionExpression = aws.String(
+			"attribute_not_exists(#pk) OR attribute_not_exists(#expires) OR " +
+				"(#expires <> :never AND #expires < :expires)")
+		in.ExpressionAttributeValues[":expires"] = avTime(at)
+		in.ExpressionAttributeValues[":ttl"] = ttl
+	}
+	if _, err := s.parent.api.UpdateItem(ctx, in); err != nil && !isConditionalCheckFailed(err) {
+		return wrapErr("grantRevocations.RevokeGrant.lifetime", err)
+	}
+	return nil
+}
+
+// revokeGrantStaged widens the tombstone inside a caller-owned
+// transaction. A transaction cannot issue the two guarded updates —
+// TransactWriteItems carries no read — so the widening is computed
+// against the row as the transaction read it and the staged write
+// asserts that state again on commit: a cascade that lands meanwhile
+// aborts the transaction instead of narrowing the window it wrote.
+func (s *grantRevocationStore) revokeGrantStaged(ctx context.Context, pk string, t store.GrantTombstone) error {
+	existing, err := s.tx.get(ctx, s.parent.names.grantTombstones, pk)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return wrapErr("grantRevocations.RevokeGrant.read", err)
 	}
 	if existing != nil {
-		// Both horizons only ever widen. ExpiresAt has to outlive the
-		// longest-lived token the tombstone invalidates, and RevokedAt
-		// advancing is the point of a second cascade: a token minted
-		// after the previous one must fall inside the new window.
 		if prior := readTime(existing, attrExpiresAt); prior.After(t.ExpiresAt) {
 			t.ExpiresAt = prior
 		}
@@ -48,21 +140,14 @@ func (s *grantRevocationStore) RevokeGrant(ctx context.Context, t store.GrantTom
 			t.RevokedAt = priorRevoked
 		}
 	}
-
 	entry, err := newItem(pk).doc(&t)
 	if err != nil {
 		return err
 	}
 	entry.expires(t.ExpiresAt)
 	entry.setTime(attrRevokedAt, t.RevokedAt)
-
-	if s.tx != nil {
-		return s.tx.put(s.parent.names.grantTombstones, pk, entry)
-	}
-	if err := s.parent.put(ctx, s.parent.names.grantTombstones, entry); err != nil {
-		return wrapErr("grantRevocations.RevokeGrant", err)
-	}
-	return nil
+	return s.tx.putGuarded(
+		ctx, s.parent.names.grantTombstones, pk, entry, attrRevokedAt, attrExpiresAt)
 }
 
 // RevokeJTI denylists one access token by id.

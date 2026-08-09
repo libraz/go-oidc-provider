@@ -60,6 +60,12 @@ func (s *passkeyStore) ListBySubject(_ context.Context, subject string) ([]*stor
 // has upsert semantics: a record at the same CredentialID is
 // overwritten in place, matching the contract documented on the
 // interface.
+//
+// The one write it refuses is the cross-subject one: a credential ID
+// already held by another subject reports [store.ErrAlreadyExists]
+// rather than moving the record onto the writing subject. Holding the
+// write lock across the ownership read and the write is the reference
+// implementation of the contract's atomicity requirement.
 func (s *passkeyStore) Put(_ context.Context, r *store.PasskeyRecord) error {
 	if r == nil {
 		return errors.New("inmem: nil passkey record")
@@ -69,7 +75,11 @@ func (s *passkeyStore) Put(_ context.Context, r *store.PasskeyRecord) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.m[passkeyKey(r.CredentialID)] = clonePasskeyRecord(r)
+	key := passkeyKey(r.CredentialID)
+	if current, ok := s.m[key]; ok && current.Subject != r.Subject {
+		return store.ErrAlreadyExists
+	}
+	s.m[key] = clonePasskeyRecord(r)
 	return nil
 }
 

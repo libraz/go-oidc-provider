@@ -3,9 +3,15 @@ package oidcdynamo
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
+
+// conditionalCheckFailed is the code DynamoDB reports for an action a
+// ConditionExpression turned away, both as a standalone exception and
+// as one entry of a transaction's cancellation reasons.
+const conditionalCheckFailed = "ConditionalCheckFailed"
 
 // ErrInvalidDocument is returned when a record cannot be encoded to, or
 // decoded from, the JSON document attribute. An encode failure means
@@ -49,14 +55,24 @@ func isConditionalCheckFailed(err error) bool {
 // exception carrying a per-action reason list, so the reasons have to
 // be inspected to tell a lost race from a real fault.
 func isTransactionCanceledByCondition(err error) bool {
+	return slices.Contains(transactionCancellationCodes(err), conditionalCheckFailed)
+}
+
+// transactionCancellationCodes returns the cancellation code of every
+// action of a failed TransactWriteItems, in the order the actions were
+// submitted, or nil when err is not a cancellation. It is how a
+// multi-action write tells which of its guards rejected it; an action
+// that was not itself at fault reports "None".
+func transactionCancellationCodes(err error) []string {
 	var canceled *types.TransactionCanceledException
 	if !errors.As(err, &canceled) {
-		return false
+		return nil
 	}
-	for _, reason := range canceled.CancellationReasons {
-		if reason.Code != nil && *reason.Code == "ConditionalCheckFailed" {
-			return true
+	codes := make([]string, len(canceled.CancellationReasons))
+	for i, reason := range canceled.CancellationReasons {
+		if reason.Code != nil {
+			codes[i] = *reason.Code
 		}
 	}
-	return false
+	return codes
 }

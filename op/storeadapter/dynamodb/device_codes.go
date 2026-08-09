@@ -15,15 +15,31 @@ import (
 // deviceCodeStore backs RFC 8628 device authorization.
 //
 // Two identifiers address the same record: the device_code the device
-// polls with (a bearer secret, so items are keyed on its digest) and
-// the user_code the human reads aloud (canonicalised and carried on an
-// index). Every state transition is a conditional update on the status
-// attribute, so approve, deny, and consume cannot race each other into
-// an inconsistent record.
+// polls with (a bearer secret, so items are keyed on its digest) and the
+// user_code the human reads aloud, which is claimed as a reservation
+// item under its own key. Every state transition is a conditional update
+// on the status attribute, so approve, deny, and consume cannot race
+// each other into an inconsistent record.
 type deviceCodeStore struct {
 	parent *Store
 }
 
+// userCodePrefix namespaces the user_code reservations inside the device
+// code table. Record keys are hex digests, so the two key shapes cannot
+// collide.
+const userCodePrefix = "uc#"
+
+func userCodeKey(userCode string) string { return userCodePrefix + userCode }
+
+// Save writes the record and, when it carries a user_code, claims that
+// code in the same transaction.
+//
+// The claim is a conditional write onto the code's own key rather than a
+// lookup followed by an insert. DynamoDB cannot enforce uniqueness on a
+// secondary index, and checking one first leaves a window in which two
+// device authorization requests both find the code free: the verification
+// page would then approve whichever record the eventually consistent
+// index happened to surface, and the other device would poll forever.
 func (s *deviceCodeStore) Save(ctx context.Context, code *store.DeviceCode) error {
 	if code == nil {
 		return errors.New("oidcdynamo: nil device code")
@@ -32,48 +48,48 @@ func (s *deviceCodeStore) Save(ctx context.Context, code *store.DeviceCode) erro
 	if err != nil {
 		return err
 	}
-	// The user_code is unique among live records. DynamoDB cannot
-	// enforce uniqueness on a secondary index, so the check is explicit:
-	// an expired holder releases the code, a live one does not.
-	if err := s.assertUserCodeFree(ctx, code.UserCode); err != nil {
-		return err
-	}
-	placed, err := s.parent.putIfAbsent(ctx, s.parent.names.deviceCodes, entry)
-	if err != nil {
-		return wrapErr("deviceCodes.Save", err)
-	}
-	if placed {
-		return nil
-	}
-	// The key is taken. A record that has expired no longer identifies
-	// anything redeemable, so the fresh Save replaces it; a live one is
-	// a genuine collision.
-	if _, _, err := s.findLive(ctx, digestKey(code.ID)); errors.Is(err, store.ErrNotFound) {
-		if err := s.parent.put(ctx, s.parent.names.deviceCodes, entry); err != nil {
-			return wrapErr("deviceCodes.Save.replaceExpired", err)
+	if code.UserCode == "" {
+		placed, err := s.parent.putIfKeyFree(ctx, s.parent.names.deviceCodes, entry)
+		if err != nil {
+			return wrapErr("deviceCodes.Save", err)
+		}
+		if !placed {
+			return store.ErrAlreadyExists
 		}
 		return nil
-	} else if err != nil {
-		return err
 	}
-	return store.ErrAlreadyExists
+	return s.saveWithUserCode(ctx, entry, code)
 }
 
-// assertUserCodeFree reports [store.ErrAlreadyExists] when a live
-// record already holds userCode. resolveUserCode already skips expired
-// holders, so finding one at all is the collision.
-func (s *deviceCodeStore) assertUserCodeFree(ctx context.Context, userCode string) error {
-	if userCode == "" {
-		return nil
+// saveWithUserCode writes the record and its user_code reservation as
+// one all-or-nothing transaction, so a reservation can never outlive a
+// record that failed to land and block the code until it expires.
+func (s *deviceCodeStore) saveWithUserCode(ctx context.Context, entry item, code *store.DeviceCode) error {
+	reservation := newItem(userCodeKey(code.UserCode)).set(attrReservedFor, readS(entry, attrPK))
+	reservation.expires(code.ExpiresAt)
+
+	names, values := freeKeyNames(), s.parent.freeKeyValues()
+	claim := func(i item) types.TransactWriteItem {
+		return types.TransactWriteItem{Put: &types.Put{
+			TableName:                 aws.String(s.parent.names.deviceCodes),
+			Item:                      i,
+			ConditionExpression:       aws.String(freeKeyCondition),
+			ExpressionAttributeNames:  names,
+			ExpressionAttributeValues: values,
+		}}
 	}
-	_, err := s.resolveUserCode(ctx, userCode)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil
-	}
+	_, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{claim(reservation), claim(entry)},
+	})
 	if err != nil {
-		return err
+		// Either key is held by a live record: the user_code is in use, or
+		// the device_code itself was issued twice.
+		if isTransactionCanceledByCondition(err) {
+			return store.ErrAlreadyExists
+		}
+		return wrapErr("deviceCodes.Save", err)
 	}
-	return store.ErrAlreadyExists
+	return nil
 }
 
 func (s *deviceCodeStore) FindByDeviceCode(ctx context.Context, deviceCode string) (*store.DeviceCode, error) {
@@ -103,44 +119,32 @@ func (s *deviceCodeStore) FindByUserCode(ctx context.Context, userCode string) (
 }
 
 // resolveUserCode maps a user code onto the partition key of the live
-// record holding it.
+// record holding it, through the reservation [deviceCodeStore.Save]
+// claimed for it.
 //
-// Two things make this more than an index lookup. The index is
-// eventually consistent, so a candidate is confirmed against the item
-// itself before any transition is issued against it. And an expired
-// record releases its user code to a fresh request without being
-// deleted — DynamoDB reclaims it asynchronously — so several items can
-// legitimately carry the same code and only the live one counts.
+// Resolving through the reservation rather than through a secondary
+// index is what keeps the answer single-valued: the reservation is the
+// uniqueness constraint, its read is strongly consistent, and an expired
+// reservation reports nothing even while DynamoDB still holds the item.
 func (s *deviceCodeStore) resolveUserCode(ctx context.Context, userCode string) (string, error) {
 	if userCode == "" {
 		return "", store.ErrNotFound
 	}
-	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.deviceCodes, indexByUserCode, attrUserCode, userCode)
+	found, err := s.parent.get(ctx, s.parent.names.deviceCodes, userCodeKey(userCode))
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", store.ErrNotFound
+		}
 		return "", wrapErr("deviceCodes.FindByUserCode", err)
 	}
-	for _, match := range matches {
-		pk := readS(match, attrPK)
-		if pk == "" {
-			continue
-		}
-		found, err := s.parent.get(ctx, s.parent.names.deviceCodes, pk)
-		if errors.Is(err, store.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return "", wrapErr("deviceCodes.FindByUserCode.reread", err)
-		}
-		if readS(found, attrUserCode) != userCode {
-			continue
-		}
-		if s.parent.expired(found) {
-			continue
-		}
-		return pk, nil
+	if s.parent.expired(found) {
+		return "", store.ErrNotFound
 	}
-	return "", store.ErrNotFound
+	pk := readS(found, attrReservedFor)
+	if pk == "" {
+		return "", store.ErrNotFound
+	}
+	return pk, nil
 }
 
 func (s *deviceCodeStore) findLive(ctx context.Context, pk string) (*store.DeviceCode, item, error) {
@@ -155,6 +159,11 @@ func (s *deviceCodeStore) findLive(ctx context.Context, pk string) (*store.Devic
 	if err := unmarshalDoc(found, &rec); err != nil {
 		return nil, nil, err
 	}
+	// The brute-force counters are incremented in place, so the copy
+	// carried by the document may lag the projected attributes; the
+	// attributes are what the record reports.
+	rec.UserCodeStrikes = counter8(found, attrUserCodeStrikes)
+	rec.PollViolations = counter8(found, attrPollViolations)
 	if s.parent.isExpired(rec.ExpiresAt) {
 		return nil, nil, store.ErrNotFound
 	}
@@ -276,28 +285,19 @@ func (s *deviceCodeStore) IncrementUserCodeStrikeByUserCode(ctx context.Context,
 	return s.incrementStrike(ctx, pk)
 }
 
+// incrementStrike records one user_code mismatch. The counter gates a
+// brute-force lockout, so it is incremented atomically rather than
+// through [deviceCodeStore.transition]: guesses arrive in parallel by
+// design, and a read-modify-write would record a burst of them as one.
 func (s *deviceCodeStore) incrementStrike(ctx context.Context, pk string) (uint8, error) {
-	var out uint8
-	err := s.transition(ctx, pk, func(rec *store.DeviceCode) error {
-		if rec.UserCodeStrikes < ^uint8(0) {
-			rec.UserCodeStrikes++
-		}
-		out = rec.UserCodeStrikes
-		return nil
-	}, -1)
-	return out, err
+	return s.parent.incrementCounter(
+		ctx, "deviceCodes.IncrementUserCodeStrike", s.parent.names.deviceCodes, pk, attrUserCodeStrikes)
 }
 
 func (s *deviceCodeStore) IncrementPollViolation(ctx context.Context, deviceCode string) (uint8, error) {
-	var out uint8
-	err := s.transition(ctx, digestKey(deviceCode), func(rec *store.DeviceCode) error {
-		if rec.PollViolations < ^uint8(0) {
-			rec.PollViolations++
-		}
-		out = rec.PollViolations
-		return nil
-	}, -1)
-	return out, err
+	return s.parent.incrementCounter(
+		ctx, "deviceCodes.IncrementPollViolation", s.parent.names.deviceCodes,
+		digestKey(deviceCode), attrPollViolations)
 }
 
 // Consume redeems an approved record exactly once.
@@ -337,6 +337,11 @@ func (s *deviceCodeStore) Consume(ctx context.Context, deviceCode string) (*stor
 //
 // expectStatus is the status the record must still carry, or -1 when
 // the transition does not depend on one.
+//
+// The write is an update rather than a replacement so it leaves the
+// brute-force counters alone: they are incremented in place by callers
+// that race this one, and a full item write would roll back whichever
+// increments landed since the record was read.
 func (s *deviceCodeStore) transition(
 	ctx context.Context,
 	pk string,
@@ -355,20 +360,17 @@ func (s *deviceCodeStore) transition(
 		return err
 	}
 
-	in := &dynamodb.PutItemInput{
-		TableName: aws.String(s.parent.names.deviceCodes),
-		Item:      entry,
-	}
+	in := updateFromItem(s.parent.names.deviceCodes, entry, attrUserCodeStrikes, attrPollViolations)
+	in.ExpressionAttributeNames["#pk"] = attrPK
 	if expectStatus >= 0 {
 		in.ConditionExpression = aws.String("attribute_exists(#pk) AND #status = :expected")
-		in.ExpressionAttributeNames = map[string]string{"#pk": attrPK, "#status": attrStatus}
-		in.ExpressionAttributeValues = map[string]types.AttributeValue{":expected": avN(expectStatus)}
+		in.ExpressionAttributeNames["#status"] = attrStatus
+		in.ExpressionAttributeValues[":expected"] = avN(expectStatus)
 	} else {
 		in.ConditionExpression = aws.String("attribute_exists(#pk)")
-		in.ExpressionAttributeNames = map[string]string{"#pk": attrPK}
 	}
 
-	if _, err := s.parent.api.PutItem(ctx, in); err != nil {
+	if _, err := s.parent.api.UpdateItem(ctx, in); err != nil {
 		if isConditionalCheckFailed(err) {
 			return store.ErrConflict
 		}
@@ -401,6 +403,12 @@ func deviceCodeItemFrom(code *store.DeviceCode, pk, userCode string) (item, erro
 	entry.set(attrClientID, code.ClientID)
 	entry.setN(attrStatus, int64(stored.Status))
 	entry.setTime(attrIssuedAt, code.IssuedAt)
+	// The brute-force counters are projected so they can be incremented
+	// atomically. A transition preserves whatever the table holds; only
+	// a Save (a fresh record, or one replacing an expired holder) writes
+	// them, which is what resets them.
+	entry.setN(attrUserCodeStrikes, int64(code.UserCodeStrikes))
+	entry.setN(attrPollViolations, int64(code.PollViolations))
 	return entry, nil
 }
 

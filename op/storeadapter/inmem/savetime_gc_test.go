@@ -11,10 +11,10 @@ import (
 )
 
 // TestCIBARequests_SaveTimeGC_ExpiredRowEvictedBeforeDupCheck verifies that
-// maybeGCLocked evicts an already-expired CIBA row so that a subsequent Save
-// with the same auth_req_id succeeds (returns nil) rather than ErrAlreadyExists.
-// A parallel control case confirms that a non-expired row is NOT evicted, so
-// the second Save for a live ID still returns ErrAlreadyExists.
+// Save evicts an already-expired CIBA row under the key it is claiming so a
+// subsequent Save with the same auth_req_id succeeds (returns nil) rather than
+// ErrAlreadyExists. A parallel control case confirms that a non-expired row is
+// NOT evicted, so the second Save for a live ID still returns ErrAlreadyExists.
 func TestCIBARequests_SaveTimeGC_ExpiredRowEvictedBeforeDupCheck(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -31,11 +31,11 @@ func TestCIBARequests_SaveTimeGC_ExpiredRowEvictedBeforeDupCheck(t *testing.T) {
 		t.Fatalf("Save expired: %v", err)
 	}
 
-	// Re-save with the same ID but a fresh ExpiresAt.  GC must remove the
+	// Re-save with the same ID but a fresh ExpiresAt.  Save must remove the
 	// expired row before the dup check fires, so this must succeed.
 	fresh := makeCIBARequest("gc-ciba-x", store.CIBARequestStatusPending, clk.Now().Add(10*time.Minute))
 	if err := cs.Save(ctx, fresh); err != nil {
-		t.Fatalf("Save fresh after GC eviction: got %v, want nil (GC must have removed the expired row)", err)
+		t.Fatalf("Save fresh after eviction: got %v, want nil (Save must have removed the expired row)", err)
 	}
 
 	// The fresh record is findable by its original ID.
@@ -60,9 +60,10 @@ func TestCIBARequests_SaveTimeGC_ExpiredRowEvictedBeforeDupCheck(t *testing.T) {
 	}
 }
 
-// TestCIBARequests_SaveTimeGC_OnlyEvictsExpired confirms that GC does not
-// touch rows whose ExpiresAt is in the future, even when an expired row is
-// present in the same Save call.
+// TestCIBARequests_SaveTimeGC_OnlyEvictsExpired confirms that eviction never
+// reaches a row whose ExpiresAt is in the future, even when an expired row is
+// present in the same Save call. The physical sweep is amortised, so the
+// assertions here are on what the lookup paths report.
 func TestCIBARequests_SaveTimeGC_OnlyEvictsExpired(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -81,7 +82,7 @@ func TestCIBARequests_SaveTimeGC_OnlyEvictsExpired(t *testing.T) {
 		t.Fatalf("Save expired: %v", err)
 	}
 
-	// Trigger GC by saving a new record; GC runs before the dup check.
+	// Save an unrelated record; the live row must be unaffected.
 	trigger := makeCIBARequest("gc-only-trigger", store.CIBARequestStatusPending, clk.Now().Add(time.Hour))
 	if err := cs.Save(ctx, trigger); err != nil {
 		t.Fatalf("Save trigger: %v", err)
@@ -92,16 +93,16 @@ func TestCIBARequests_SaveTimeGC_OnlyEvictsExpired(t *testing.T) {
 		t.Errorf("FindByAuthReqID live after GC trigger: %v (GC must not evict unexpired rows)", err)
 	}
 
-	// The expired record is gone — Find returns ErrNotFound.
+	// The expired record is unreachable — Find returns ErrNotFound.
 	if _, err := cs.FindByAuthReqID(ctx, "gc-only-exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("FindByAuthReqID expired after GC: want ErrNotFound, got %v", err)
 	}
 }
 
 // TestDeviceCodes_SaveTimeGC_ExpiredRowEvictedBeforeDupCheck mirrors the CIBA
-// test for the deviceCodeStore: an expired device_code row is evicted by
-// maybeGCLocked so that a fresh Save with the same ID succeeds, and the
-// user_code index is rebuilt for the fresh record.
+// test for the deviceCodeStore: an expired device_code row is evicted by the
+// key-scoped eviction Save performs, so a fresh Save with the same ID
+// succeeds and the user_code index is rebuilt for the fresh record.
 func TestDeviceCodes_SaveTimeGC_ExpiredRowEvictedBeforeDupCheck(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -117,12 +118,12 @@ func TestDeviceCodes_SaveTimeGC_ExpiredRowEvictedBeforeDupCheck(t *testing.T) {
 		t.Fatalf("Save expired: %v", err)
 	}
 
-	// Re-save the same device_id with a fresh ExpiresAt.  GC must remove
+	// Re-save the same device_id with a fresh ExpiresAt.  Save must remove
 	// the expired row (and its user_code index entry) before the dup
 	// check, so this must succeed.
 	fresh := makeDeviceCode("gc-dev-x", "GC-CODE-X", store.DeviceCodeStatusPending, clk.Now().Add(10*time.Minute))
 	if err := ds.Save(ctx, fresh); err != nil {
-		t.Fatalf("Save fresh after GC eviction: got %v, want nil (GC must have removed the expired row)", err)
+		t.Fatalf("Save fresh after eviction: got %v, want nil (Save must have removed the expired row)", err)
 	}
 
 	// The fresh record is findable by device_code.
@@ -155,7 +156,7 @@ func TestDeviceCodes_SaveTimeGC_ExpiredRowEvictedBeforeDupCheck(t *testing.T) {
 }
 
 // TestDeviceCodes_SaveTimeGC_OnlyEvictsExpired confirms the device-code
-// store's maybeGCLocked leaves unexpired rows intact, mirroring the CIBA
+// store leaves unexpired rows intact in both indexes, mirroring the CIBA
 // selective-eviction check.
 func TestDeviceCodes_SaveTimeGC_OnlyEvictsExpired(t *testing.T) {
 	t.Parallel()
@@ -175,7 +176,7 @@ func TestDeviceCodes_SaveTimeGC_OnlyEvictsExpired(t *testing.T) {
 		t.Fatalf("Save expired: %v", err)
 	}
 
-	// Trigger GC via a new Save.
+	// Save an unrelated record; the live rows must be unaffected.
 	trigger := makeDeviceCode("gc-dc-trigger", "DC-TRIG-1", store.DeviceCodeStatusPending, clk.Now().Add(time.Hour))
 	if err := ds.Save(ctx, trigger); err != nil {
 		t.Fatalf("Save trigger: %v", err)

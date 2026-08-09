@@ -182,9 +182,11 @@ func WithMaxValueBytes(n int) Option {
 
 // Store is the Redis adapter. It satisfies [store.Store] for the
 // volatile substores ([store.InteractionStore], [store.ConsumedJTIStore],
-// and [store.SessionStore]); every other accessor returns
-// a stub that panics on first call so misconfiguration surfaces loudly.
-// The adapter is intended to be composed with
+// and [store.SessionStore]) plus [store.MetadataStore]; every other
+// accessor returns nil, which op.New turns into a construction-time
+// configuration error naming the missing substore, so a
+// misconfiguration never reaches a request. The adapter is intended to
+// be composed with
 // [github.com/libraz/go-oidc-provider/op/storeadapter/composite] so
 // that out-of-scope substores resolve to a different backend.
 type Store struct {
@@ -414,8 +416,18 @@ func (s *Store) Grants() store.GrantStore { return nil }
 
 // Metadata implements [store.Store] against a Redis hash. The
 // substore is the persistence path for coarse construction-time
-// decisions (subject_mode in v0.9.1; future keys compose on the
-// same surface without further interface change).
+// decisions such as subject_mode; further keys compose on the same
+// surface without an interface change.
+//
+// The hash carries no TTL, unlike every other key this adapter
+// writes, because the values it holds must outlive any session. That
+// makes it the one Redis key whose loss is not self-healing: under a
+// maxmemory policy that evicts arbitrary keys (allkeys-lru /
+// allkeys-random) it can be evicted like any other, and the OP would
+// then boot as if the decision had never been recorded. Deployments
+// that keep metadata in Redis rather than in a durable backend should
+// use a volatile-* eviction policy, which only evicts keys that have
+// an expiry set.
 func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s) }
 
 // DeviceCodes implements [store.Store]; out-of-scope on Redis.

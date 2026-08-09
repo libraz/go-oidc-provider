@@ -238,6 +238,11 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 // index entry is removed in the same pipeline; lazy cleanup in
 // [sessionStore.ListByChooserGroup] handles the case where Redis
 // TTL beat us to the parent record.
+//
+// A record that is still resident but expired per the adapter clock is
+// reclaimed and reported as absent, matching every other read path.
+// Redis TTL normally evicts first, so this only shows up when the two
+// clocks disagree — the same skew window [sessionStore.Find] guards.
 func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	rec, fetchErr := s.fetch(ctx, id)
 	if errors.Is(fetchErr, store.ErrNotFound) {
@@ -246,6 +251,7 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	if fetchErr != nil {
 		return fetchErr
 	}
+	expired := patterns.IsExpiredInclusive(rec.ExpiresAt, s.parent.clock.Now())
 
 	pipe := s.parent.client.TxPipeline()
 	delCmd := pipe.Del(ctx, s.sessionKey(id))
@@ -255,7 +261,7 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("oidcredis: DEL session: %w", err)
 	}
-	if delCmd.Val() == 0 {
+	if delCmd.Val() == 0 || expired {
 		return store.ErrNotFound
 	}
 	return nil

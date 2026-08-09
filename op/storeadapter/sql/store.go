@@ -486,11 +486,13 @@ func (s *Store) CIBARequests() store.CIBARequestStore { return s.cibaRequestsImp
 
 // --- store.ClientRegistry ----------------------------------------------------
 
-// Compile-time guard: the library calls cfg.store.(store.ClientRegistry)
-// to discover registry support (op.WithStaticClients, dynamic registration
-// endpoint). The assertion fails silently at runtime if the receiver loses
-// any of the embedded ClientStore methods, so the assignment below pins
-// the satisfaction at build time.
+// Compile-time guard: the library discovers registry support (the dynamic
+// registration endpoint) by resolving the configured store to a
+// [store.ClientRegistry], preferring an accessor and falling back to a type
+// assertion on the store itself. Static client seeding goes through
+// [store.StaticClientReconciler] instead. The resolution fails silently at
+// runtime if the receiver loses any of the embedded ClientStore methods, so
+// the assignment below pins the satisfaction at build time.
 var _ store.ClientRegistry = (*Store)(nil)
 
 // GetClient implements [store.ClientStore]. ClientRegistry embeds

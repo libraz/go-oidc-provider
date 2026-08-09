@@ -75,7 +75,7 @@ func (s *accessTokenStore) read(ctx context.Context, pk string) (item, error) {
 // answer 200 for an unknown token either way, so the substore has
 // nothing to report.
 func (s *accessTokenStore) RevokeByJTI(ctx context.Context, jti string) error {
-	err := s.parent.setRevoked(ctx, s.parent.names.accessTokens, jti)
+	err := s.retire(ctx, jti)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}
@@ -85,9 +85,27 @@ func (s *accessTokenStore) RevokeByJTI(ctx context.Context, jti string) error {
 	return nil
 }
 
+// retire marks one registered token revoked, reporting
+// [store.ErrNotFound] when there is no row to mark.
+//
+// A handle obtained from a transaction buffers the write like every
+// other write it makes: the registry carries the half of a revocation
+// cascade that retires what the client already holds, and a write that
+// went straight to the table could not be taken back by a Rollback.
+func (s *accessTokenStore) retire(ctx context.Context, pk string) error {
+	if s.tx != nil {
+		return s.tx.attach(ctx, s.parent.names.accessTokens, pk, attrRevoked, avBool(true))
+	}
+	return s.parent.setRevoked(ctx, s.parent.names.accessTokens, pk)
+}
+
 // RevokeByGrant marks every access token of a grant revoked and reports
 // how many it touched. A token already revoked is still counted: the
 // caller uses the number for audit, not for control flow.
+//
+// Inside a transaction the enumeration reads the index while each
+// retirement is buffered, so the cascade covers the committed set and
+// costs one of the transaction's actions per token.
 func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
 	matches, err := s.parent.queryIndex(
 		ctx, s.parent.names.accessTokens, indexByGrant, attrGrantID, grantID)
@@ -100,7 +118,7 @@ func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (i
 		if pk == "" {
 			continue
 		}
-		if err := s.parent.setRevoked(ctx, s.parent.names.accessTokens, pk); err != nil {
+		if err := s.retire(ctx, pk); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				continue
 			}
@@ -163,6 +181,12 @@ func (s *Store) setRevoked(ctx context.Context, table, pk string) error {
 // It scans, which is acceptable because the operation is a maintenance
 // sweep and never a request path, and a TTL-carrying table is expected
 // to be mostly reclaimed by DynamoDB already.
+//
+// The sweep runs on the table directly even when it is reached through
+// a substore handle bound to a transaction: it removes records that are
+// already outside their lifetime, which no decision depends on, and
+// buffering an unbounded number of deletes would push the transaction
+// past its action ceiling for no gain.
 func (s *Store) gcExpired(ctx context.Context, table string, cutoff time.Time, op string) (int, error) {
 	found, err := s.scanAll(ctx, table, 0)
 	if err != nil {

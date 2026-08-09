@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -70,6 +68,10 @@ func (s *cibaRequestStore) findLive(ctx context.Context, pk string) (*store.CIBA
 	if err := unmarshalDoc(found, &rec); err != nil {
 		return nil, err
 	}
+	// The poll-violation counter is incremented in place, so the copy
+	// carried by the document may lag the projected attribute; the
+	// attribute is what the record reports.
+	rec.PollViolations = counter8(found, attrPollViolations)
 	if s.parent.isExpired(rec.ExpiresAt) {
 		return nil, store.ErrNotFound
 	}
@@ -122,16 +124,15 @@ func (s *cibaRequestStore) RecordPoll(
 	}, -1)
 }
 
+// IncrementPollViolation records one poll that arrived too early. The
+// counter gates a lockout against clients that ignore the backoff, so
+// it is incremented atomically rather than through
+// [cibaRequestStore.transition]: polls arrive in parallel, and a
+// read-modify-write would record a burst of them as one.
 func (s *cibaRequestStore) IncrementPollViolation(ctx context.Context, authReqID string) (uint8, error) {
-	var out uint8
-	err := s.transition(ctx, digestKey(authReqID), func(rec *store.CIBARequest) error {
-		if rec.PollViolations < ^uint8(0) {
-			rec.PollViolations++
-		}
-		out = rec.PollViolations
-		return nil
-	}, -1)
-	return out, err
+	return s.parent.incrementCounter(
+		ctx, "cibaRequests.IncrementPollViolation", s.parent.names.cibaRequests,
+		digestKey(authReqID), attrPollViolations)
 }
 
 // Consume redeems an approved request exactly once. The status guard is
@@ -165,6 +166,12 @@ func (s *cibaRequestStore) Consume(ctx context.Context, authReqID string) (*stor
 	return rec, nil
 }
 
+// transition applies mutate to the stored record and writes it back
+// under the status it expects to still find. The write is an update
+// rather than a replacement so it leaves the poll-violation counter
+// alone: it is incremented in place by callers that race this one, and
+// a full item write would roll back whichever increments landed since
+// the record was read.
 func (s *cibaRequestStore) transition(
 	ctx context.Context,
 	pk string,
@@ -183,20 +190,17 @@ func (s *cibaRequestStore) transition(
 		return err
 	}
 
-	in := &dynamodb.PutItemInput{
-		TableName: aws.String(s.parent.names.cibaRequests),
-		Item:      entry,
-	}
+	in := updateFromItem(s.parent.names.cibaRequests, entry, attrPollViolations)
+	in.ExpressionAttributeNames["#pk"] = attrPK
 	if expectStatus >= 0 {
 		in.ConditionExpression = aws.String("attribute_exists(#pk) AND #status = :expected")
-		in.ExpressionAttributeNames = map[string]string{"#pk": attrPK, "#status": attrStatus}
-		in.ExpressionAttributeValues = map[string]types.AttributeValue{":expected": avN(expectStatus)}
+		in.ExpressionAttributeNames["#status"] = attrStatus
+		in.ExpressionAttributeValues[":expected"] = avN(expectStatus)
 	} else {
 		in.ConditionExpression = aws.String("attribute_exists(#pk)")
-		in.ExpressionAttributeNames = map[string]string{"#pk": attrPK}
 	}
 
-	if _, err := s.parent.api.PutItem(ctx, in); err != nil {
+	if _, err := s.parent.api.UpdateItem(ctx, in); err != nil {
 		if isConditionalCheckFailed(err) {
 			return store.ErrConflict
 		}
@@ -223,6 +227,11 @@ func cibaItem(req *store.CIBARequest, pk string) (item, error) {
 	entry.set(attrClientID, req.ClientID)
 	entry.setN(attrStatus, int64(stored.Status))
 	entry.setTime(attrIssuedAt, req.IssuedAt)
+	// The poll-violation counter is projected so it can be incremented
+	// atomically. A transition preserves whatever the table holds; only
+	// a Save (a fresh record, or one replacing an expired holder) writes
+	// it, which is what resets it.
+	entry.setN(attrPollViolations, int64(req.PollViolations))
 	return entry, nil
 }
 

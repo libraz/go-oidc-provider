@@ -73,8 +73,10 @@ func TestRefreshRotation_HappyPath(t *testing.T) {
 
 // TestRefreshRotation_SaveAfterRevokeIsDead exercises the revoke-then-save
 // ordering: a chain revocation lands before the racing rotation's Save.
-// The single-critical-section guard must stamp the rotated descendant
-// consumed + revoked so it never becomes redeemable (RFC 9700 §2.2.2).
+// The single-critical-section guard must refuse the rotation outright and
+// report the chain retired, so the descendant never becomes redeemable
+// and the caller cannot mistake the rotation for a success
+// (RFC 9700 §2.2.2, [store.RefreshTokenStore.Save]).
 func TestRefreshRotation_SaveAfterRevokeIsDead(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference
@@ -92,18 +94,15 @@ func TestRefreshRotation_SaveAfterRevokeIsDead(t *testing.T) {
 	if err := rt.RevokeChain(ctx, "R"); err != nil {
 		t.Fatalf("RevokeChain R: %v", err)
 	}
-	if err := rt.Save(ctx, newGuardRefresh(now, "R2", strPtr("R"))); err != nil {
-		t.Fatalf("Save rotated R2: %v", err)
+	err := rt.Save(ctx, newGuardRefresh(now, "R2", strPtr("R")))
+	if !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("Save rotated R2: want ErrAlreadyConsumed, got %v", err)
 	}
-	got, err := rt.Find(ctx, "R2")
-	if err != nil {
-		t.Fatalf("Find R2: %v", err)
+	if _, err := rt.Find(ctx, "R2"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find R2 after a refused rotation: want ErrNotFound, got %v", err)
 	}
-	if got.ConsumedAt == nil || !got.Revoked {
-		t.Fatalf("R2 saved under a revoked parent must be dead: %+v", got)
-	}
-	if _, err := rt.Consume(ctx, "R2"); !errors.Is(err, store.ErrAlreadyConsumed) {
-		t.Fatalf("Consume R2 err=%v, want ErrAlreadyConsumed", err)
+	if _, err := rt.Consume(ctx, "R2"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Consume R2 after a refused rotation: want ErrNotFound, got %v", err)
 	}
 }
 
@@ -143,9 +142,12 @@ func TestRefreshRotation_RevokeAfterSaveIsDead(t *testing.T) {
 // TestRefreshRotation_ConcurrentReplayRevokesRotatedChain is the -race
 // sentinel for the replay-revocation TOCTOU. Across many iterations two
 // goroutines contend for the same token: exactly one wins the Consume and
-// rotates (Save R'), the other observes replay and revokes the chain. No
-// matter which side wins the race, the rotated descendant MUST end up
-// revoked and unusable (RFC 9700 §2.2.2).
+// rotates (Save R'), the other observes replay and revokes the chain.
+// Either interleaving is legal, and each has one correct outcome: a Save
+// that lands first is later reached by the cascade and ends up revoked; a
+// Save that lands after the cascade is refused with
+// [store.ErrAlreadyConsumed] and leaves no row at all. What must never
+// happen is a redeemable descendant (RFC 9700 §2.2.2).
 func TestRefreshRotation_ConcurrentReplayRevokesRotatedChain(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference
@@ -187,18 +189,40 @@ func TestRefreshRotation_ConcurrentReplayRevokesRotatedChain(t *testing.T) {
 		if !rotated {
 			t.Fatalf("iter %d: no goroutine won the consume race", i)
 		}
-		if saveErr != nil {
+		if saveErr != nil && !errors.Is(saveErr, store.ErrAlreadyConsumed) {
 			t.Fatalf("iter %d: Save rotated: %v", i, saveErr)
 		}
-		got, err := rt.Find(ctx, rotatedID)
-		if err != nil {
-			t.Fatalf("iter %d: Find rotated: %v", i, err)
+		assertRotatedDescendantDead(t, i, rt, rotatedID, saveErr)
+	}
+}
+
+// assertRotatedDescendantDead checks the one property both interleavings of
+// the replay race must produce: the rotated descendant is not redeemable. A
+// refused Save leaves no row; a Save that beat the cascade leaves a row the
+// chain walk has stamped consumed + revoked.
+func assertRotatedDescendantDead(
+	t *testing.T,
+	iter int,
+	rt store.RefreshTokenStore,
+	rotatedID string,
+	saveErr error,
+) {
+	t.Helper()
+	ctx := context.Background()
+	if saveErr != nil {
+		if _, err := rt.Find(ctx, rotatedID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("iter %d: refused rotation left a row: err=%v", iter, err)
 		}
-		if got.ConsumedAt == nil || !got.Revoked {
-			t.Fatalf("iter %d: rotated descendant survived the replay race: %+v", i, got)
-		}
-		if _, err := rt.Consume(ctx, rotatedID); !errors.Is(err, store.ErrAlreadyConsumed) {
-			t.Fatalf("iter %d: rotated descendant still consumable: err=%v", i, err)
-		}
+		return
+	}
+	got, err := rt.Find(ctx, rotatedID)
+	if err != nil {
+		t.Fatalf("iter %d: Find rotated: %v", iter, err)
+	}
+	if got.ConsumedAt == nil || !got.Revoked {
+		t.Fatalf("iter %d: rotated descendant survived the replay race: %+v", iter, got)
+	}
+	if _, err := rt.Consume(ctx, rotatedID); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("iter %d: rotated descendant still consumable: err=%v", iter, err)
 	}
 }

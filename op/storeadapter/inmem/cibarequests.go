@@ -16,10 +16,18 @@ import (
 // bearer secret. Unlike [deviceCodeStore], CIBA has no user_code
 // channel, so a single hash-keyed map is sufficient.
 type cibaRequestStore struct {
-	mu    sync.RWMutex
-	clock Clock
-	m     map[string]*store.CIBARequest // key: hashKey(auth_req_id)
+	mu           sync.RWMutex
+	clock        Clock
+	m            map[string]*store.CIBARequest // key: hashKey(auth_req_id)
+	savesSinceGC uint32
 }
+
+// cibaFullGCSaveInterval is how many Save calls pass between full
+// sweeps of the CIBA map. Save additionally evicts the exact key it is
+// about to write whenever that key holds an expired record, so a
+// colliding auth_req_id is reclaimed immediately rather than waiting
+// for the sweep.
+const cibaFullGCSaveInterval uint32 = 64
 
 func newCIBARequestStore(c Clock) *cibaRequestStore {
 	return &cibaRequestStore{
@@ -34,8 +42,10 @@ func (s *cibaRequestStore) Save(_ context.Context, req *store.CIBARequest) error
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.maybeGCLocked()
+	now := s.clock.Now()
 	key := hashKey(req.ID)
+	s.deleteExpiredKeyLocked(key, now)
+	s.maybeGCLocked(now)
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
@@ -50,11 +60,38 @@ func (s *cibaRequestStore) Save(_ context.Context, req *store.CIBARequest) error
 	return nil
 }
 
-func (s *cibaRequestStore) maybeGCLocked() {
+func (s *cibaRequestStore) gcLocked(now time.Time) {
 	for key, rec := range s.m {
-		if isExpired(rec.ExpiresAt, s.clock) {
+		if isExpiredAtStrict(rec.ExpiresAt, now) {
 			delete(s.m, key)
 		}
+	}
+	s.savesSinceGC = 0
+}
+
+// maybeGCLocked runs a full sweep once every [cibaFullGCSaveInterval]
+// saves, amortising the sweep over the saves that made it necessary
+// instead of paying O(total requests) on each one.
+func (s *cibaRequestStore) maybeGCLocked(now time.Time) {
+	s.savesSinceGC++
+	if s.savesSinceGC < cibaFullGCSaveInterval {
+		return
+	}
+	s.gcLocked(now)
+}
+
+// deleteExpiredKeyLocked evicts the record stored under key when it has
+// expired. Save calls it so an incoming auth_req_id that collides with
+// a dead record is accepted rather than rejected as a duplicate; the
+// amortised sweep alone would leave that collision standing for up to
+// [cibaFullGCSaveInterval] saves.
+func (s *cibaRequestStore) deleteExpiredKeyLocked(key string, now time.Time) {
+	rec, ok := s.m[key]
+	if !ok {
+		return
+	}
+	if isExpiredAtStrict(rec.ExpiresAt, now) {
+		delete(s.m, key)
 	}
 }
 

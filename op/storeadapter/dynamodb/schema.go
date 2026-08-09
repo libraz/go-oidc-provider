@@ -19,7 +19,6 @@ const (
 	indexByClient       = "by_client"
 	indexByParent       = "by_parent"
 	indexByHandle       = "by_handle"
-	indexByUserCode     = "by_user_code"
 	indexByUsername     = "by_username"
 	indexByChooserGroup = "by_chooser_group"
 	indexByHash         = "by_hash"
@@ -29,31 +28,34 @@ const (
 // condition expression reads; everything else lives inside the JSON
 // document.
 const (
-	attrPK            = "pk"
-	attrSubject       = "subject"
-	attrClientID      = "client_id"
-	attrGrantID       = "grant_id"
-	attrParentID      = "parent_id"
-	attrStoredHandle  = "stored_handle"
-	attrUserCode      = "user_code"
-	attrUsername      = "username"
-	attrChooserGroup  = "chooser_group"
-	attrTokenHash     = "token_hash"
-	attrConsumedAt    = "consumed_at"
-	attrRevoked       = "revoked"
-	attrSubjectClient = "subject_client"
-	attrStatus        = "status"
-	attrIssuedAt      = "issued_at"
-	attrRevokedAt     = "revoked_at"
-	attrValue         = "value"
-	attrRawState      = "raw_state"
-	attrUses          = "uses"
-	attrSlotIndex     = "slot_index"
-	attrCodeHash      = "code_hash"
-	attrRetryResponse = "retry_response"
-	attrTOTPStep      = "last_accepted_step"
-	attrRecordVersion = "record_version"
-	attrMaxUses       = "max_uses"
+	attrPK              = "pk"
+	attrSubject         = "subject"
+	attrClientID        = "client_id"
+	attrGrantID         = "grant_id"
+	attrParentID        = "parent_id"
+	attrStoredHandle    = "stored_handle"
+	attrUserCode        = "user_code"
+	attrUsername        = "username"
+	attrChooserGroup    = "chooser_group"
+	attrTokenHash       = "token_hash"
+	attrConsumedAt      = "consumed_at"
+	attrRevoked         = "revoked"
+	attrSubjectClient   = "subject_client"
+	attrStatus          = "status"
+	attrIssuedAt        = "issued_at"
+	attrRevokedAt       = "revoked_at"
+	attrValue           = "value"
+	attrRawState        = "raw_state"
+	attrUses            = "uses"
+	attrSlotIndex       = "slot_index"
+	attrCodeHash        = "code_hash"
+	attrRetryResponse   = "retry_response"
+	attrTOTPStep        = "last_accepted_step"
+	attrRecordVersion   = "record_version"
+	attrMaxUses         = "max_uses"
+	attrUserCodeStrikes = "user_code_strikes"
+	attrPollViolations  = "poll_violations"
+	attrReservedFor     = "reserved_for"
 )
 
 // TableDefinition describes one table the adapter expects. Embedders
@@ -260,15 +262,16 @@ func (s *Store) TableDefinitions() []TableDefinition {
 			AttributeDefinitions: stringAttr(attrPK),
 		},
 		{
-			// by_user_code serves the operations the user-facing device
-			// flow addresses by the human-read-aloud code.
+			// The table holds two item shapes: the record, keyed by the
+			// device_code digest, and the reservation that claims its
+			// user_code, keyed "uc#<user_code>". The reservation is the
+			// uniqueness constraint DynamoDB cannot express on an index,
+			// and the user-facing device flow resolves through it, so no
+			// secondary index is needed.
 			Name:                 n.deviceCodes,
 			KeySchema:            keySchema(attrPK),
-			AttributeDefinitions: stringAttr(attrPK, attrUserCode),
-			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
-				gsi(indexByUserCode, attrUserCode),
-			},
-			TTLAttribute: attrTTL,
+			AttributeDefinitions: stringAttr(attrPK),
+			TTLAttribute:         attrTTL,
 		},
 		{
 			Name:                 n.cibaRequests,

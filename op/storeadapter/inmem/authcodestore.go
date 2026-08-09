@@ -5,15 +5,24 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 type authCodeStore struct {
-	mu    sync.RWMutex
-	clock Clock
-	m     map[string]*store.AuthorizationCode
+	mu           sync.RWMutex
+	clock        Clock
+	m            map[string]*store.AuthorizationCode
+	savesSinceGC uint32
 }
+
+// authCodeFullGCSaveInterval is how many inserts pass between full
+// sweeps of the authorization-code map. Codes are written by an
+// unauthenticated /authorize round trip, so an unswept map is a
+// remotely reachable memory leak; sweeping on every insert would make
+// each request cost O(total codes) instead.
+const authCodeFullGCSaveInterval uint32 = 64
 
 func newAuthCodeStore(c Clock) *authCodeStore {
 	return &authCodeStore{clock: c, m: make(map[string]*store.AuthorizationCode)}
@@ -25,6 +34,7 @@ func (s *authCodeStore) Save(_ context.Context, code *store.AuthorizationCode) e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.maybeGCLocked(s.clock.Now())
 	key := hashKey(code.ID)
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
@@ -86,6 +96,33 @@ func (s *authCodeStore) Consume(_ context.Context, id string) (*store.Authorizat
 	out := cloneAuthCode(rec)
 	out.ID = id
 	return out, nil
+}
+
+// gcLocked drops every code whose ExpiresAt has passed. An expired code
+// is already unreachable through Find and Consume, including the
+// replay-detection branch, so removing it cannot change what any caller
+// observes.
+func (s *authCodeStore) gcLocked(now time.Time) {
+	for key, rec := range s.m {
+		if isExpiredAtStrict(rec.ExpiresAt, now) {
+			delete(s.m, key)
+		}
+	}
+	s.savesSinceGC = 0
+}
+
+// maybeGCLocked runs a full sweep once every
+// [authCodeFullGCSaveInterval] inserts, amortising the sweep cost over
+// the inserts that made it necessary. It is called from both write
+// paths: the direct Save and the transactional flush, because the
+// browser authorization-code flow persists codes inside a transaction
+// and would otherwise never reach a sweep.
+func (s *authCodeStore) maybeGCLocked(now time.Time) {
+	s.savesSinceGC++
+	if s.savesSinceGC < authCodeFullGCSaveInterval {
+		return
+	}
+	s.gcLocked(now)
 }
 
 func cloneAuthCode(c *store.AuthorizationCode) *store.AuthorizationCode {

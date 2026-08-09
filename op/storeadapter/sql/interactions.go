@@ -116,7 +116,17 @@ func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interact
 	return &i, nil
 }
 
+// Delete removes the row and reports whether what it removed was live.
+// The DELETE statement alone cannot tell a live row from an expired one
+// still awaiting collection, so the read comes first: an expired
+// interaction is absent on every path, and the row is reclaimed
+// regardless.
 func (s *interactionStore) Delete(ctx context.Context, id string) error {
+	_, findErr := s.Find(ctx, id)
+	absent := errors.Is(findErr, store.ErrNotFound)
+	if findErr != nil && !absent {
+		return findErr
+	}
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.interactionDelete, id)
 	if err != nil {
 		return wrapErr("interactions.Delete", err)
@@ -125,7 +135,7 @@ func (s *interactionStore) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return wrapErr("interactions.Delete.RowsAffected", err)
 	}
-	if n == 0 {
+	if n == 0 || absent {
 		return store.ErrNotFound
 	}
 	return nil

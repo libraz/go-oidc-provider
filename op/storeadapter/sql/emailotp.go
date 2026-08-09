@@ -80,16 +80,55 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 // createIfAbsent handles the nil-previous form of CompareAndSwap, which
 // reserves the first challenge for a subject. A live record already
 // present means another send won the race.
+//
+// The reservation is what caps how many messages a subject can be sent,
+// so it is written conditionally rather than as a read followed by a
+// Put: two first sends arriving together would otherwise both find the
+// key empty and both deliver a code, rolling the send-count ceiling
+// back to one. The two statements cover the two ways the key can be
+// free — nothing stored, or a row whose retention horizon has passed —
+// and each is atomic against a concurrent writer on its own.
 func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTPRecord) error {
-	current, err := s.scanOne(ctx, next.Subject)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-	case err != nil:
+	insertArgs := append([]any{next.Subject}, emailOTPValues(next)...)
+	placed, err := s.execAffects(ctx, s.parent.queries.emailOTPInsertIfAbsent, "emailOTPs.CompareAndSwap.insert", insertArgs)
+	if err != nil {
 		return err
-	case !emailOTPRetentionElapsed(current, s.parent.clock.Now()):
-		return store.ErrAlreadyConsumed
 	}
-	return s.Put(ctx, next)
+	if placed {
+		return nil
+	}
+	// A row holds the key. It yields only while past its retention
+	// horizon, which is re-checked as part of the UPDATE rather than
+	// beforehand.
+	now := timeToInt64(s.parent.clock.Now())
+	staleArgs := emailOTPValues(next)
+	staleArgs = append(staleArgs, next.Subject, now, now)
+	replaced, err := s.execAffects(ctx, s.parent.queries.emailOTPReplaceStale, "emailOTPs.CompareAndSwap.replaceStale", staleArgs)
+	if err != nil {
+		return err
+	}
+	if replaced {
+		return nil
+	}
+	// MySQL reports zero affected rows for an UPDATE that matched but
+	// changed nothing, so fall through to the same settle path the
+	// full-tuple compare-and-swap uses.
+	return s.settleNoOp(ctx, next)
+}
+
+// execAffects runs a conditional statement and reports whether it
+// changed a row. The label names the operation in a wrapped backend
+// error.
+func (s *emailOTPStore) execAffects(ctx context.Context, query, label string, args []any) (bool, error) {
+	res, err := s.parent.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, wrapErr(label, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, wrapErr(label+".RowsAffected", err)
+	}
+	return n > 0, nil
 }
 
 func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) error {

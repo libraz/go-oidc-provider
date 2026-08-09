@@ -169,9 +169,10 @@ func TestTx_CommitSpansSubstores(t *testing.T) {
 
 func newIsolatedStore(t *testing.T, prefix string) *oidcdynamo.Store {
 	t.Helper()
-	s, err := oidcdynamo.New(newEmulatorClient(t),
+	client := newEmulatorClient(t)
+	s, err := oidcdynamo.New(client,
 		oidcdynamo.WithTablePrefix(prefix),
-		oidcdynamo.WithClock(fixedClock{now: contract.Reference}),
+		oidcdynamo.WithClock(&fixedClock{now: contract.Reference}),
 	)
 	if err != nil {
 		t.Fatalf("oidcdynamo.New: %v", err)
@@ -179,5 +180,6 @@ func newIsolatedStore(t *testing.T, prefix string) *oidcdynamo.Store {
 	if err := s.CreateTables(t.Context()); err != nil {
 		t.Fatalf("CreateTables: %v", err)
 	}
+	disableEmulatorTTL(t, client, s)
 	return s
 }

@@ -56,6 +56,38 @@
 // Rollback finalise the underlying transaction; subsequent calls on
 // the substore handles return [store.ErrTxRequired].
 //
+// # Retention
+//
+// Most OP tables hold short-lived rows, and nothing in the request path
+// deletes them once they expire: an authorization code that was never
+// redeemed, a PAR record whose client walked away, an interaction the
+// user abandoned, and a session that timed out all stay on disk. One
+// authorization request writes one row, and an unauthenticated caller
+// can drive that loop, so a deployment that never reclaims them grows
+// until the disk or the index does. Operating this adapter includes
+// scheduling the reclamation.
+//
+// [Store.GC] is the entry point. It deletes expired authorization
+// codes, PAR records, interactions and sessions in one call, returns
+// per-table counts as [GCStats], and runs on the *sql.DB the Store
+// already holds — a cron job or worker needs nothing but a handle to
+// the same Store. The adapter starts no goroutine of its own: when the
+// sweep runs, how often, and on which replica are the embedder's
+// decisions, not the library's.
+//
+//	stats, err := store.GC(ctx, time.Now())
+//
+// Passing an earlier cutoff keeps a grace window; rows whose expires_at
+// is zero opt out of the sweep entirely.
+//
+// The remaining expiring tables are already covered elsewhere and do
+// not need to be added to the schedule twice. Access tokens, opaque
+// access tokens, grant revocations and consumed JTIs each expose a GC
+// method on the substore interface they implement, because how long a
+// revocation record outlives the token it revokes is an OP policy
+// decision rather than plain expiry. Device codes and CIBA requests
+// evict expired rows on their own insert path.
+//
 // # Cardinality and PII
 //
 // The adapter never logs row content. Errors returned to the caller

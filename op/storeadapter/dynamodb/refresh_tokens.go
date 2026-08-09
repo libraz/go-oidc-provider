@@ -90,42 +90,103 @@ func (s *refreshStore) assertParentAlive(ctx context.Context, parentID string) e
 }
 
 // SaveRotationWithRetry implements [store.RefreshRetryResponseStore].
-// The successor and the sealed response cache land in one transaction
-// so a grace-window retry can never observe a successor without the
-// response that belongs to it.
+// The successor and the sealed response cache land in one
+// TransactWriteItems, so a failure leaves neither behind. Splitting
+// them would let a successor persist while its cache write failed, and
+// the client — which sees only the 5xx — would then retry with the
+// predecessor it still holds: the grace window would find no cached
+// response, take the presentation for a replay, and revoke a chain the
+// client legitimately owns.
+//
+// The parent guard folded into the transaction is the same
+// replay-revocation check [refreshStore.Save] makes after the fact
+// (RFC 9700 §2.2.2), except that here it cannot leave a descendant to
+// undo: a chain tombstoned meanwhile simply fails the rotation.
 func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.RefreshToken, sealed []byte) error {
 	if t == nil || t.ParentID == nil || len(sealed) == 0 {
 		return errors.New("oidcdynamo: retryable refresh rotation requires successor, parent, and sealed response")
 	}
-	if err := s.Save(ctx, t); err != nil {
+	parentDigest := digestKey(*t.ParentID)
+	if s.tx != nil {
+		// Inside a caller-owned transaction both writes are buffered and
+		// commit together with everything else the token endpoint staged.
+		if err := s.Save(ctx, t); err != nil {
+			return err
+		}
+		return s.tx.attach(ctx, s.parent.names.refreshes, parentDigest, attrRetryResponse, avB(sealed))
+	}
+
+	entry, err := refreshItem(t)
+	if err != nil {
 		return err
 	}
-	parentDigest := digestKey(*t.ParentID)
-	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:           aws.String(s.parent.names.refreshes),
-		Key:                 key(parentDigest),
-		UpdateExpression:    aws.String("SET #retry = :sealed"),
-		ConditionExpression: aws.String("attribute_exists(#pk)"),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":    attrPK,
-			"#retry": attrRetryResponse,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":sealed": avB(sealed),
+	_, err = s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{
+				TableName:           aws.String(s.parent.names.refreshes),
+				Item:                entry,
+				ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+			}},
+			{Update: &types.Update{
+				TableName:        aws.String(s.parent.names.refreshes),
+				Key:              key(parentDigest),
+				UpdateExpression: aws.String("SET #retry = :sealed"),
+				ConditionExpression: aws.String(
+					"attribute_exists(#pk) AND (attribute_not_exists(#revoked) OR #revoked = :false)"),
+				ExpressionAttributeNames: map[string]string{
+					"#pk":      attrPK,
+					"#retry":   attrRetryResponse,
+					"#revoked": attrRevoked,
+				},
+				ExpressionAttributeValues: map[string]types.AttributeValue{
+					":sealed": avB(sealed),
+					":false":  avBool(false),
+				},
+			}},
 		},
 	})
 	if err != nil {
-		if isConditionalCheckFailed(err) {
-			return store.ErrNotFound
+		if isTransactionCanceledByCondition(err) {
+			return s.rotationRejected(ctx, *t.ParentID, transactionCancellationCodes(err))
 		}
 		return wrapErr("refreshes.SaveRotationWithRetry", err)
 	}
 	return nil
 }
 
-// LoadRetryResponse implements [store.RefreshRetryResponseStore].
+// rotationRejected maps a rejected rotation onto the sentinel the token
+// endpoint expects. The parent guard is the one that carries meaning:
+// it fails when the predecessor is no longer stored or its chain was
+// tombstoned by a replay cascade, and the two drive different
+// responses. codes is the transaction's per-action reason list, whose
+// entries follow the submitted order (successor, then predecessor).
+func (s *refreshStore) rotationRejected(ctx context.Context, parentID string, codes []string) error {
+	if len(codes) < 2 || codes[1] == conditionalCheckFailed {
+		parent, err := s.findByHandle(ctx, parentID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return store.ErrNotFound
+		case err != nil:
+			return err
+		case parent.Revoked:
+			return store.ErrAlreadyConsumed
+		}
+	}
+	if len(codes) > 0 && codes[0] == conditionalCheckFailed {
+		return store.ErrAlreadyExists
+	}
+	// A guard turned the write away but neither cause survives a
+	// re-read: the rotation lost a race it must not silently win.
+	return store.ErrConflict
+}
+
+// LoadRetryResponse implements [store.RefreshRetryResponseStore]. The
+// read goes through the transaction when the handle came from one, so a
+// rotation that has just staged the sealed response reads it back
+// instead of reporting the grace window empty and taking the client's
+// retry for a replay.
 func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
-	found, err := s.parent.get(ctx, s.parent.names.refreshes, digestKey(predecessorID))
+	found, err := s.read(ctx, digestKey(predecessorID))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, store.ErrNotFound
@@ -257,11 +318,24 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 }
 
 // RevokeChain walks the rotation tree breadth-first from rootID and
-// stamps every node consumed and revoked. The walk is not one atomic
-// operation — a chain can outgrow the 100-action transaction ceiling —
-// but it is idempotent and converges: a descendant written while it
-// runs is caught either by this walk or by the parent-alive re-check
-// in [refreshStore.Save].
+// stamps every node consumed and revoked.
+//
+// Outside a transaction the walk is not one atomic operation, but it is
+// idempotent and converges: a descendant written while it runs is caught
+// either by this walk or by the parent-alive re-check in
+// [refreshStore.Save].
+//
+// Inside one it is atomic, and bounded: every node costs one of the
+// transaction's actions, so a chain longer than the TransactWriteItems
+// ceiling reports [ErrTransactionTooLarge] rather than retiring part of
+// itself. The caller's fallback is the same walk outside a transaction,
+// which has no ceiling.
+//
+// The child enumeration is an index read either way, so a descendant
+// this transaction has staged but not committed is not part of the walk.
+// The OP does not produce that shape — a rotation's successor is written
+// onto a chain the same request is not also revoking — and a descendant
+// that arrives afterwards is caught by the parent-alive re-check.
 func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
 	root, err := s.resolveChainRoot(ctx, rootID)
 	if err != nil {
@@ -299,15 +373,17 @@ func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
 }
 
 // resolveChainRoot maps the caller's handle onto the stored key the
-// parent index is expressed in.
+// parent index is expressed in. The probe reads through the transaction
+// when there is one, so a chain whose root this transaction has just
+// written resolves rather than reading as an unknown handle.
 func (s *refreshStore) resolveChainRoot(ctx context.Context, rootID string) (string, error) {
 	digest := digestKey(rootID)
-	if _, err := s.parent.get(ctx, s.parent.names.refreshes, digest); err == nil {
+	if _, err := s.read(ctx, digest); err == nil {
 		return digest, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return "", wrapErr("refreshes.RevokeChain.resolve", err)
 	}
-	if _, err := s.parent.get(ctx, s.parent.names.refreshes, rootID); err != nil {
+	if _, err := s.read(ctx, rootID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return "", store.ErrNotFound
 		}
@@ -317,6 +393,9 @@ func (s *refreshStore) resolveChainRoot(ctx context.Context, rootID string) (str
 }
 
 func (s *refreshStore) revokeOne(ctx context.Context, pk string, now time.Time) error {
+	if s.tx != nil {
+		return s.revokeOneStaged(ctx, pk, now)
+	}
 	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:           aws.String(s.parent.names.refreshes),
 		Key:                 key(pk),
@@ -337,6 +416,42 @@ func (s *refreshStore) revokeOne(ctx context.Context, pk string, now time.Time) 
 		return wrapErr("refreshes.revoke", err)
 	}
 	return s.stampConsumedIfUnset(ctx, pk, now)
+}
+
+// revokeOneStaged retires one chain node inside a transaction. The
+// cascade is part of whatever the caller is deciding — a rotation, a
+// replay response — so it has to be undoable: a write that reached the
+// table immediately would survive a Rollback and retire a chain on the
+// strength of a request that failed.
+//
+// Both attributes join a single staged action for the item, so a node
+// costs one of the transaction's actions rather than two, and a node
+// this transaction has already stamped consumed keeps the guard that
+// stamping carried.
+func (s *refreshStore) revokeOneStaged(ctx context.Context, pk string, now time.Time) error {
+	found, err := s.tx.get(ctx, s.parent.names.refreshes, pk)
+	if errors.Is(err, store.ErrNotFound) {
+		// Nothing is stored under the key, so there is nothing to retire.
+		// The direct path reaches the same outcome through its existence
+		// guard.
+		return nil
+	}
+	if err != nil {
+		return wrapErr("refreshes.revoke", err)
+	}
+	// consumed_at is read before the revoked flag is staged, so the
+	// decision below is made against the record as it stood rather than
+	// against the copy this call is amending.
+	consumed := readTime(found, attrConsumedAt)
+	if err := s.tx.attach(ctx, s.parent.names.refreshes, pk, attrRevoked, avBool(true)); err != nil {
+		return err
+	}
+	if !consumed.IsZero() {
+		// See [refreshStore.stampConsumedIfUnset]: the instant a
+		// legitimate rotation recorded is not overwritten.
+		return nil
+	}
+	return s.tx.attach(ctx, s.parent.names.refreshes, pk, attrConsumedAt, avTime(now))
 }
 
 // stampConsumedIfUnset sets consumed_at only when it is still zero, so
@@ -378,6 +493,11 @@ func (s *refreshStore) RevokeByClient(ctx context.Context, clientID string) erro
 	return s.revokeByIndex(ctx, indexByClient, attrClientID, clientID, "refreshes.RevokeByClient")
 }
 
+// revokeByIndex retires every token an index points at. Inside a
+// transaction the enumeration still reads the index — DynamoDB has no
+// way to query staged writes — while each retirement is buffered, so the
+// set is the committed one and the writes are undoable. The same
+// per-node action cost as [refreshStore.RevokeChain] applies.
 func (s *refreshStore) revokeByIndex(ctx context.Context, index, attr, value, op string) error {
 	matches, err := s.parent.queryIndex(ctx, s.parent.names.refreshes, index, attr, value)
 	if err != nil {

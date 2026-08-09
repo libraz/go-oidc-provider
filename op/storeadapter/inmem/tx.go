@@ -3,6 +3,7 @@ package inmem
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -11,8 +12,10 @@ import (
 
 // errTxClosed is returned by tx substores once the transaction has committed
 // or rolled back. The library treats this as a programming error: a handler
-// path that holds onto a Tx after Commit/Rollback is buggy.
-var errTxClosed = errors.New("inmem: transaction already closed")
+// path that holds onto a Tx after Commit/Rollback is buggy. It wraps
+// [store.ErrTxRequired] so embedders can match the closed-handle case with
+// [errors.Is] uniformly across backends, as [store.Tx] requires.
+var errTxClosed = fmt.Errorf("inmem: transaction already closed: %w", store.ErrTxRequired)
 
 // tx is the in-memory implementation of [store.Tx]. It buffers writes against
 // staging maps while owning every atomic-cluster substore mutex. Commit applies
@@ -25,13 +28,13 @@ type tx struct {
 
 	closed atomic.Bool
 
-	acStaging          *authCodeStaging
-	rtStaging          *refreshStaging
-	grStaging          *grantStaging
-	parStaging         *parStaging
-	accessTokens       *accessTokenStore
-	opaqueAccessTokens *opaqueAccessTokenStore
-	grantRevocations   *grantRevocationStore
+	acStaging  *authCodeStaging
+	rtStaging  *refreshStaging
+	grStaging  *grantStaging
+	parStaging *parStaging
+	atStaging  *accessTokenStaging
+	oatStaging *opaqueAccessTokenStaging
+	grvStaging *grantRevocationStaging
 }
 
 // AuthorizationCodes returns the transactional authorization-code substore.
@@ -78,51 +81,10 @@ func (t *tx) Commit() error {
 	t.rtStaging.flushLocked()
 	t.grStaging.flushLocked()
 	t.parStaging.flushLocked()
-	flushAccessTokenSnapshotLocked(t.owner.accessTokens, t.accessTokens)
-	flushOpaqueAccessTokenSnapshotLocked(t.owner.opaqueAccessTokens, t.opaqueAccessTokens)
-	flushGrantRevocationSnapshotLocked(t.owner.grantRevocations, t.grantRevocations)
+	t.atStaging.flushLocked()
+	t.oatStaging.flushLocked()
+	t.grvStaging.flushLocked()
 	return nil
-}
-
-func accessTokenSnapshotLocked(parent *accessTokenStore) *accessTokenStore {
-	out := newAccessTokenStore()
-	for id, rec := range parent.m {
-		out.m[id] = cloneAccessToken(rec)
-	}
-	return out
-}
-
-func flushAccessTokenSnapshotLocked(parent, snapshot *accessTokenStore) {
-	parent.m = snapshot.m
-}
-
-func opaqueAccessTokenSnapshotLocked(parent *opaqueAccessTokenStore) *opaqueAccessTokenStore {
-	out := newOpaqueAccessTokenStore()
-	for id, rec := range parent.m {
-		out.m[id] = cloneOpaqueAccessToken(rec)
-	}
-	return out
-}
-
-func flushOpaqueAccessTokenSnapshotLocked(parent, snapshot *opaqueAccessTokenStore) {
-	parent.m = snapshot.m
-}
-
-func grantRevocationSnapshotLocked(parent *grantRevocationStore) *grantRevocationStore {
-	out := newGrantRevocationStore()
-	for id, rec := range parent.tombstones {
-		v := *rec
-		out.tombstones[id] = &v
-	}
-	for id, rec := range parent.denylist {
-		v := *rec
-		out.denylist[id] = &v
-	}
-	return out
-}
-
-func flushGrantRevocationSnapshotLocked(parent, snapshot *grantRevocationStore) {
-	parent.tombstones, parent.denylist = snapshot.tombstones, snapshot.denylist
 }
 
 // Rollback discards every staged write and releases the tx mutex. Rollback is
@@ -176,114 +138,15 @@ func (t *tx) clearStaging() {
 		clear(t.parStaging.added)
 		clear(t.parStaging.updated)
 	}
-}
-
-// The auxiliary atomic-cluster stores use private snapshots rather than the
-// delta staging used by the older stores above. Keep their handles bound to
-// the transaction as well: returning a raw snapshot would allow writes after
-// Commit or Rollback, violating Tx's closed-handle contract.
-type txAccessTokens struct{ tx *tx }
-
-func (s txAccessTokens) Register(ctx context.Context, rec store.AccessTokenRecord) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
+	if t.atStaging != nil {
+		t.atStaging.clear()
 	}
-	return s.tx.accessTokens.Register(ctx, rec)
-}
-
-func (s txAccessTokens) Find(ctx context.Context, jti string) (*store.AccessTokenRecord, error) {
-	if s.tx.closed.Load() {
-		return nil, errTxClosed
+	if t.oatStaging != nil {
+		t.oatStaging.clear()
 	}
-	return s.tx.accessTokens.Find(ctx, jti)
-}
-
-func (s txAccessTokens) RevokeByJTI(ctx context.Context, jti string) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
+	if t.grvStaging != nil {
+		t.grvStaging.clear()
 	}
-	return s.tx.accessTokens.RevokeByJTI(ctx, jti)
-}
-
-func (s txAccessTokens) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	return s.tx.accessTokens.RevokeByGrant(ctx, grantID)
-}
-
-func (s txAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	return s.tx.accessTokens.GC(ctx, cutoff)
-}
-
-type txOpaqueAccessTokens struct{ tx *tx }
-
-func (s txOpaqueAccessTokens) Save(ctx context.Context, tok *store.OpaqueAccessToken) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	return s.tx.opaqueAccessTokens.Save(ctx, tok)
-}
-
-func (s txOpaqueAccessTokens) Find(ctx context.Context, id string) (*store.OpaqueAccessToken, error) {
-	if s.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	return s.tx.opaqueAccessTokens.Find(ctx, id)
-}
-
-func (s txOpaqueAccessTokens) RevokeByID(ctx context.Context, id string) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	return s.tx.opaqueAccessTokens.RevokeByID(ctx, id)
-}
-
-func (s txOpaqueAccessTokens) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	return s.tx.opaqueAccessTokens.RevokeByGrant(ctx, grantID)
-}
-
-func (s txOpaqueAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	return s.tx.opaqueAccessTokens.GC(ctx, cutoff)
-}
-
-type txGrantRevocations struct{ tx *tx }
-
-func (s txGrantRevocations) RevokeGrant(ctx context.Context, tombstone store.GrantTombstone) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	return s.tx.grantRevocations.RevokeGrant(ctx, tombstone)
-}
-
-func (s txGrantRevocations) RevokeJTI(ctx context.Context, revoked store.RevokedJTI) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	return s.tx.grantRevocations.RevokeJTI(ctx, revoked)
-}
-
-func (s txGrantRevocations) IsRevoked(ctx context.Context, grantID, jti string, iat time.Time) (bool, error) {
-	if s.tx.closed.Load() {
-		return false, errTxClosed
-	}
-	return s.tx.grantRevocations.IsRevoked(ctx, grantID, jti, iat)
-}
-
-func (s txGrantRevocations) GC(ctx context.Context, cutoff time.Time) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	return s.tx.grantRevocations.GC(ctx, cutoff)
 }
 
 // --- staging: authorization codes -------------------------------------------
@@ -301,6 +164,13 @@ func (s *authCodeStaging) flushLocked() {
 	for id, rec := range s.updated {
 		s.parent.m[id] = rec
 	}
+	// The browser authorization-code flow persists every code inside a
+	// transaction, so the amortised sweep has to be driven from here as
+	// well: counting only the direct Save path would leave the map
+	// unreclaimed on the one route an unauthenticated request can grow
+	// without limit. The sweep runs after the staged writes land so it
+	// judges the map the transaction actually committed.
+	s.parent.maybeGCLocked(s.parent.clock.Now())
 }
 
 type txAuthCodes struct{ tx *tx }
@@ -448,6 +318,16 @@ func (r *txRefreshes) Save(ctx context.Context, token *store.RefreshToken) error
 	if parentExists {
 		return store.ErrAlreadyExists
 	}
+	// Mirror the non-transactional guard (RFC 9700 §2.2.2): a rotation
+	// whose parent link has already been tombstoned descends from a
+	// revoked chain and must never become redeemable. The transaction
+	// owns the whole atomic cluster, so the staged view is the
+	// authoritative one and the check cannot be raced.
+	if token.ParentID != nil {
+		if parent := st.lookup(hashKey(*token.ParentID)); parent != nil && parent.Revoked {
+			return store.ErrAlreadyConsumed
+		}
+	}
 	stored := storeRefresh(token, key)
 	st.added[key] = stored
 	st.byClient.add(stored.ClientID, key)
@@ -523,7 +403,12 @@ func (r *txRefreshes) Consume(ctx context.Context, id string) (*store.RefreshTok
 		return nil, store.ErrNotFound
 	}
 	if rec.ConsumedAt != nil {
-		return nil, store.ErrAlreadyConsumed
+		// Return the consumed record alongside the sentinel so the
+		// replay path can recover the chain root, matching
+		// [store.RefreshTokenStore.Consume] and refreshStore.Consume.
+		out := cloneRefresh(rec)
+		out.ID = id
+		return out, store.ErrAlreadyConsumed
 	}
 	updated := cloneRefresh(rec)
 	now := r.tx.clock.Now()
@@ -549,14 +434,16 @@ func (r *txRefreshes) RevokeChain(ctx context.Context, rootID string) error {
 		return store.ErrNotFound
 	}
 	// Stamp the root immediately and queue chain traversal for flush time
-	// so we can see records added later in the same tx.
+	// so we can see records added later in the same tx. The stamp sets
+	// Revoked as well as ConsumedAt: a read issued through this same Tx
+	// must observe the tombstone the transaction just wrote, and the
+	// flag is what separates "retired by cascade" from "consumed by
+	// legitimate rotation" on the grace path.
 	now := r.tx.clock.Now()
-	if rec.ConsumedAt == nil {
-		updated := cloneRefresh(rec)
-		updated.ConsumedAt = &now
-		updated.ID = rootKey
-		st.updated[rootKey] = updated
-	}
+	updated := cloneRefresh(rec)
+	markRevoked(updated, now)
+	updated.ID = rootKey
+	st.updated[rootKey] = updated
 	st.revoked[rootKey] = struct{}{}
 	// Apply chain marking against the staging view so callers within the
 	// same tx see revoked descendants.
@@ -599,8 +486,8 @@ func (s *refreshStaging) revokeIDs(ids map[string]struct{}, now time.Time) {
 }
 
 // markChainStaged walks the in-memory view (parent + staging) and stamps
-// every descendant with ConsumedAt. It is called at RevokeChain time so that
-// reads inside the same tx see the revocations.
+// every descendant consumed + revoked. It is called at RevokeChain time so
+// that reads inside the same tx see the revocations in full.
 func (s *refreshStaging) markChainStaged(rootID string, now time.Time) {
 	revoked := map[string]struct{}{rootID: {}}
 	for s.markOneGenerationStaged(revoked, now) {
@@ -628,10 +515,7 @@ func (s *refreshStaging) markOneGenerationStaged(revoked map[string]struct{}, no
 			return
 		}
 		updated := cloneRefresh(rec)
-		if updated.ConsumedAt == nil {
-			t := now
-			updated.ConsumedAt = &t
-		}
+		markRevoked(updated, now)
 		updated.ID = id
 		s.updated[id] = updated
 		revoked[id] = struct{}{}

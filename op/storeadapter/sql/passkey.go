@@ -52,6 +52,11 @@ func (s *passkeyStore) ListBySubject(ctx context.Context, subject string) ([]*st
 	return out, nil
 }
 
+// Put upserts the credential record. The upsert is keyed on the
+// credential ID, so it runs under the same row lock UpdateAssertion
+// takes: the owner check and the write have to be one atomic operation
+// or a registration racing another subject's could still overwrite the
+// row the check just cleared.
 func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 	if r == nil {
 		return errors.New("oidcsql: nil passkey record")
@@ -59,7 +64,25 @@ func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 	if len(r.CredentialID) == 0 {
 		return errors.New("oidcsql: passkey record missing CredentialID")
 	}
-	_, err := s.parent.db.ExecContext(ctx, s.parent.queries.passkeyPut,
+
+	tx, err := s.parent.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrapErr("passkeys.Put.BeginTx", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx, s.parent.queries.passkeyGetForUpdate, nonNilBytes(r.CredentialID))
+	current, err := scanPasskey(row)
+	switch {
+	case err != nil && !errors.Is(err, store.ErrNotFound):
+		return err
+	case err == nil && current.Subject != r.Subject:
+		// The credential belongs to somebody else. Replacing it here
+		// would unlink their authenticator.
+		return store.ErrAlreadyExists
+	}
+
+	if _, err := tx.ExecContext(ctx, s.parent.queries.passkeyPut,
 		nonNilBytes(r.CredentialID),
 		r.Subject,
 		nonNilBytes(r.PublicKey),
@@ -74,9 +97,11 @@ func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 		boolToInt64(r.BackupState),
 		boolToInt64(r.CloneWarning),
 		timeToInt64(r.CreatedAt),
-	)
-	if err != nil {
+	); err != nil {
 		return wrapErr("passkeys.Put", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return wrapErr("passkeys.Put.Commit", err)
 	}
 	return nil
 }

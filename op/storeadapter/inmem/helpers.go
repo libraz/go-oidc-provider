@@ -47,3 +47,13 @@ func constantTimeKeyMatch(stored, presented string) bool {
 func isExpired(t time.Time, clock Clock) bool {
 	return patterns.IsExpiredStrict(t, clock.Now())
 }
+
+// isExpiredAtStrict is [isExpired] with the instant supplied by the
+// caller instead of read from a [Clock]. Sweep loops evaluate every
+// record in a map against one instant, so they take the clock reading
+// once and pass it down rather than re-reading it per record; a sweep
+// that straddled two readings could keep a record it had already
+// decided was dead.
+func isExpiredAtStrict(t, now time.Time) bool {
+	return patterns.IsExpiredStrict(t, now)
+}

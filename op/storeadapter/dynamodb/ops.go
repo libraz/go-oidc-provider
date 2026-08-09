@@ -2,6 +2,11 @@ package oidcdynamo
 
 import (
 	"context"
+	"errors"
+	"maps"
+	"math"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -124,6 +129,42 @@ func (s *Store) put(ctx context.Context, table string, i item) error {
 	return err
 }
 
+// A record whose expiry has passed no longer identifies anything
+// redeemable, and DynamoDB reclaims it asynchronously — documented as
+// taking up to 48 hours — so a fresh record has to be able to take its
+// key rather than wait for the row to disappear. The free-key guard
+// states that as one condition: nothing is stored under the key, or what
+// is stored has already expired. A record with no expiry at all holds
+// its key indefinitely.
+const freeKeyCondition = "attribute_not_exists(#pk) OR (#expires <> :never AND #expires < :now)"
+
+func freeKeyNames() map[string]string {
+	return map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
+}
+
+func (s *Store) freeKeyValues() map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{":never": avN(0), ":now": avTime(s.now())}
+}
+
+// putIfKeyFree writes an item onto a key nothing live holds, reporting
+// whether the write landed. See [freeKeyCondition].
+func (s *Store) putIfKeyFree(ctx context.Context, table string, i item) (bool, error) {
+	_, err := s.api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:                 aws.String(table),
+		Item:                      i,
+		ConditionExpression:       aws.String(freeKeyCondition),
+		ExpressionAttributeNames:  freeKeyNames(),
+		ExpressionAttributeValues: s.freeKeyValues(),
+	})
+	if err != nil {
+		if isConditionalCheckFailed(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // putIfAbsent writes an item only when its primary key is unused,
 // reporting whether the write landed.
 func (s *Store) putIfAbsent(ctx context.Context, table string, i item) (bool, error) {
@@ -141,6 +182,136 @@ func (s *Store) putIfAbsent(ctx context.Context, table string, i item) (bool, er
 	return true, nil
 }
 
+// updateFromItem renders entry as an UpdateItem that SETs every
+// attribute it carries except the primary key and the ones named in
+// preserve. The caller attaches the condition its read justified to the
+// returned input.
+//
+// It exists for records that hold an atomically incremented counter
+// beside their document: a PutItem replaces the whole item and would
+// drop every increment that landed since the record was read. An
+// attribute absent from entry is left as it is stored rather than
+// removed, which holds because a record's projected attribute set is
+// fixed by its writer and no transition clears one.
+func updateFromItem(table string, entry item, preserve ...string) *dynamodb.UpdateItemInput {
+	attrs := slices.Sorted(maps.Keys(entry))
+	names := make(map[string]string, len(attrs))
+	values := make(map[string]types.AttributeValue, len(attrs))
+	clauses := make([]string, 0, len(attrs))
+	for i, attr := range attrs {
+		if attr == attrPK || slices.Contains(preserve, attr) {
+			continue
+		}
+		alias, placeholder := "#u"+formatInt(int64(i)), ":u"+formatInt(int64(i))
+		names[alias] = attr
+		values[placeholder] = entry[attr]
+		clauses = append(clauses, alias+" = "+placeholder)
+	}
+	return &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(table),
+		Key:                       key(readS(entry, attrPK)),
+		UpdateExpression:          aws.String("SET " + strings.Join(clauses, ", ")),
+		ExpressionAttributeNames:  names,
+		ExpressionAttributeValues: values,
+	}
+}
+
+// putBumpingVersion writes every attribute entry carries and advances
+// the record's version in the same call, creating the item when its key
+// is unused.
+//
+// The version is what a transaction's read-amend-write conditions on
+// (see [txBuffer.putVersioned]). Letting the service do the increment is
+// what keeps this path free of a read-modify-write of its own: a version
+// read beforehand and written back could hand a stale value to a
+// transaction that is about to commit against it.
+func (s *Store) putBumpingVersion(ctx context.Context, table string, entry item, attr string) error {
+	in := updateFromItem(table, entry, attr)
+	in.UpdateExpression = aws.String(*in.UpdateExpression + " ADD #version :one")
+	in.ExpressionAttributeNames["#version"] = attr
+	in.ExpressionAttributeValues[":one"] = avN(1)
+	_, err := s.api.UpdateItem(ctx, in)
+	return err
+}
+
+// maxCounter8 is the ceiling of the saturating counters the store
+// interfaces expose as uint8 (user-code strikes, poll violations). The
+// SQL adapter's update carries the same guard, so a counter that has
+// run away reports the ceiling on every backend instead of wrapping.
+const maxCounter8 = math.MaxUint8
+
+// counter8 reads a saturating counter projected beside a record's
+// document. The projected attribute is authoritative: the counter is
+// incremented in place, so the copy inside the document may lag it.
+func counter8(from item, attr string) uint8 {
+	switch n := readN(from, attr); {
+	case n <= 0:
+		return 0
+	case n >= maxCounter8:
+		return maxCounter8
+	default:
+		// The cases above bound n to (0, maxCounter8).
+		return uint8(n)
+	}
+}
+
+// incrementCounter bumps a saturating counter projected beside a
+// record's document and returns the new value.
+//
+// The increment is one conditional update rather than a
+// read-modify-write. These counters exist to detect parallel guessing,
+// and N concurrent increments that each read the same value before
+// writing it back would be recorded as one — the lockout they arm would
+// then never trigger against the very access pattern it defends.
+//
+// The guard also enforces liveness, so a missing or expired record
+// reports [store.ErrNotFound]. A counter already at [maxCounter8] stays
+// there and reports the ceiling rather than an error.
+func (s *Store) incrementCounter(ctx context.Context, op, table, pk, attr string) (uint8, error) {
+	out, err := s.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:        aws.String(table),
+		Key:              key(pk),
+		UpdateExpression: aws.String("ADD #counter :one"),
+		ConditionExpression: aws.String(
+			"attribute_exists(#pk) AND (#expires = :never OR #expires >= :now) " +
+				"AND (attribute_not_exists(#counter) OR #counter < :max)"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":      attrPK,
+			"#expires": attrExpiresAt,
+			"#counter": attr,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":one":   avN(1),
+			":never": avN(0),
+			":now":   avTime(s.now()),
+			":max":   avN(maxCounter8),
+		},
+		ReturnValues: types.ReturnValueUpdatedNew,
+	})
+	if err != nil {
+		if isConditionalCheckFailed(err) {
+			return s.rejectedCounter(ctx, op, table, pk, attr)
+		}
+		return 0, wrapErr(op, err)
+	}
+	return counter8(out.Attributes, attr), nil
+}
+
+// rejectedCounter resolves an increment the guard turned away. Two
+// situations reach it and only one is an error: a record that is gone
+// or expired reports [store.ErrNotFound], while a counter already at
+// the ceiling reports the ceiling.
+func (s *Store) rejectedCounter(ctx context.Context, op, table, pk, attr string) (uint8, error) {
+	found, err := s.getLive(ctx, table, pk)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return 0, store.ErrNotFound
+		}
+		return 0, wrapErr(op, err)
+	}
+	return counter8(found, attr), nil
+}
+
 // deleteKey removes one item and reports whether it existed. ALL_OLD
 // return values are what make the distinction possible; DeleteItem is
 // otherwise idempotent and silent.
@@ -154,6 +325,28 @@ func (s *Store) deleteKey(ctx context.Context, table, pk string) (bool, error) {
 		return false, err
 	}
 	return out.Attributes != nil, nil
+}
+
+// deleteLiveKey removes one item and reports whether what it removed
+// was live. DynamoDB reclaims a TTL-expired item asynchronously —
+// documented as taking up to 48 hours — so "the item was there" and
+// "the item was redeemable" are different answers, and a substore whose
+// Delete owes the caller [store.ErrNotFound] for an expired record
+// needs the second one. ALL_OLD gives it in the same round trip the
+// delete already costs; the item is reclaimed either way.
+func (s *Store) deleteLiveKey(ctx context.Context, table, pk string) (bool, error) {
+	out, err := s.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:    aws.String(table),
+		Key:          key(pk),
+		ReturnValues: types.ReturnValueAllOld,
+	})
+	if err != nil {
+		return false, err
+	}
+	if out.Attributes == nil {
+		return false, nil
+	}
+	return !s.expired(out.Attributes), nil
 }
 
 // queryIndex enumerates every item whose indexed attribute equals

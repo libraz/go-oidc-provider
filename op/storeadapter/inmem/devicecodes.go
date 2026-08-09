@@ -21,7 +21,15 @@ type deviceCodeStore struct {
 	clock         Clock
 	m             map[string]*store.DeviceCode // key: hashKey(deviceCode)
 	userCodeIndex map[string]string            // key: canonical user_code, value: hashKey(deviceCode)
+	savesSinceGC  uint32
 }
+
+// deviceCodeFullGCSaveInterval is how many Save calls pass between full
+// sweeps of the device-code map. Save additionally evicts the exact
+// device_code and user_code it is about to claim whenever those hold an
+// expired record, so a collision on either key is reclaimed immediately
+// rather than waiting for the sweep.
+const deviceCodeFullGCSaveInterval uint32 = 64
 
 func newDeviceCodeStore(c Clock) *deviceCodeStore {
 	return &deviceCodeStore{
@@ -37,8 +45,11 @@ func (s *deviceCodeStore) Save(_ context.Context, code *store.DeviceCode) error 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.maybeGCLocked()
+	now := s.clock.Now()
 	key := hashKey(code.ID)
+	s.deleteExpiredKeyLocked(key, now)
+	s.deleteExpiredUserCodeLocked(code.UserCode, now)
+	s.maybeGCLocked(now)
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
@@ -57,15 +68,68 @@ func (s *deviceCodeStore) Save(_ context.Context, code *store.DeviceCode) error 
 	return nil
 }
 
-func (s *deviceCodeStore) maybeGCLocked() {
+func (s *deviceCodeStore) gcLocked(now time.Time) {
 	for key, rec := range s.m {
-		if !isExpired(rec.ExpiresAt, s.clock) {
+		if !isExpiredAtStrict(rec.ExpiresAt, now) {
 			continue
 		}
-		delete(s.m, key)
-		if s.userCodeIndex[rec.UserCode] == key {
-			delete(s.userCodeIndex, rec.UserCode)
-		}
+		s.dropLocked(key, rec)
+	}
+	s.savesSinceGC = 0
+}
+
+// maybeGCLocked runs a full sweep once every
+// [deviceCodeFullGCSaveInterval] saves, amortising the sweep over the
+// saves that made it necessary instead of paying O(total codes) on
+// each one.
+func (s *deviceCodeStore) maybeGCLocked(now time.Time) {
+	s.savesSinceGC++
+	if s.savesSinceGC < deviceCodeFullGCSaveInterval {
+		return
+	}
+	s.gcLocked(now)
+}
+
+// deleteExpiredKeyLocked evicts the record stored under the device-code
+// digest key when it has expired, so an incoming device_code that
+// collides with a dead record is accepted rather than rejected as a
+// duplicate.
+func (s *deviceCodeStore) deleteExpiredKeyLocked(key string, now time.Time) {
+	rec, ok := s.m[key]
+	if !ok {
+		return
+	}
+	if isExpiredAtStrict(rec.ExpiresAt, now) {
+		s.dropLocked(key, rec)
+	}
+}
+
+// deleteExpiredUserCodeLocked is the user_code counterpart of
+// [deviceCodeStore.deleteExpiredKeyLocked]. The two keys are claimed
+// independently, so a fresh device_code can still collide on the
+// user_code index alone.
+func (s *deviceCodeStore) deleteExpiredUserCodeLocked(userCode string, now time.Time) {
+	key, ok := s.userCodeIndex[userCode]
+	if !ok {
+		return
+	}
+	rec, ok := s.m[key]
+	if !ok {
+		delete(s.userCodeIndex, userCode)
+		return
+	}
+	if isExpiredAtStrict(rec.ExpiresAt, now) {
+		s.dropLocked(key, rec)
+	}
+}
+
+// dropLocked removes rec from the primary map and retires its
+// user_code index entry, but only when that entry still points at rec:
+// a later record may already have claimed the same user_code.
+func (s *deviceCodeStore) dropLocked(key string, rec *store.DeviceCode) {
+	delete(s.m, key)
+	if s.userCodeIndex[rec.UserCode] == key {
+		delete(s.userCodeIndex, rec.UserCode)
 	}
 }
 

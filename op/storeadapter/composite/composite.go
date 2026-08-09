@@ -230,7 +230,7 @@ var allKinds = []Kind{
 // writes with token-endpoint commits, and embedders are expected to route
 // Sessions to a volatile cache.
 //
-//nolint:gochecknoglobals // closed enumeration mirroring 002 §D.1.1.
+//nolint:gochecknoglobals // closed enumeration of the transactional cluster.
 var TxClusterKinds = []Kind{
 	AuthorizationCodes,
 	RefreshTokens,

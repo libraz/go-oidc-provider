@@ -25,9 +25,11 @@ import (
 // Production deployments SHOULD wrap Digest behind a key-derivation
 // step (HMAC with a server-side pepper, or a KMS-backed MAC) so a
 // stolen database also requires a stolen key to mount an offline
-// dictionary attack against the digest. The wrapping is a future
-// extension; for v0.x the helper exposes plain SHA-256 to keep the
-// invariant — "no raw secret in storage" — visible in every adapter.
+// dictionary attack against the digest. The helper deliberately stops
+// at plain SHA-256 rather than taking a pepper of its own: keeping it
+// keyless is what lets every adapter call the same function, so the
+// invariant — "no raw secret in storage" — stays visible and uniform
+// across the adapter corpus instead of varying per backend.
 func Digest(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])

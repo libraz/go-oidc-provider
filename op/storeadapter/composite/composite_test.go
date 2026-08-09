@@ -15,11 +15,15 @@ import (
 // deterministic during validation tests.
 type fakeClock struct{ now time.Time }
 
-func (c fakeClock) Now() time.Time { return c.now }
+// Now reads through the pointer so a Now method value bound once —
+// as the contract harness does — still observes later mutations. A
+// value receiver would copy the struct at bind time and freeze the
+// harness clock while the store's own clock kept moving.
+func (c *fakeClock) Now() time.Time { return c.now }
 
 func newInmem(t *testing.T) *inmem.Store {
 	t.Helper()
-	return inmem.New(inmem.WithClock(fakeClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}))
+	return inmem.New(inmem.WithClock(&fakeClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}))
 }
 
 // readOnlyStore wraps a [store.Store] and intentionally does NOT implement

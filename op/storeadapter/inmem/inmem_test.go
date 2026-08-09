@@ -563,13 +563,32 @@ func TestTx_ClosedAfterCommit(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
-	if err := tx.Commit(); err == nil {
-		t.Fatal("second Commit must return an error")
+	// A closed handle reports store.ErrTxRequired, per store.Tx: an
+	// embedder matches on the sentinel to tell a stale handle from a
+	// transport fault, so a bare adapter-local error would be unreadable.
+	if err := tx.Commit(); !errors.Is(err, store.ErrTxRequired) {
+		t.Fatalf("second Commit: want store.ErrTxRequired, got %v", err)
 	}
 	// Substore handles obtained from a closed tx must error on use.
-	err = tx.AuthorizationCodes().Save(ctx, &store.AuthorizationCode{ID: "x", ExpiresAt: now.Add(time.Hour)})
-	if err == nil {
-		t.Fatal("Save on closed tx must return an error")
+	closed := map[string]error{
+		"AuthorizationCodes.Save": tx.AuthorizationCodes().Save(
+			ctx, &store.AuthorizationCode{ID: "x", ExpiresAt: now.Add(time.Hour)}),
+		"Grants.Save": tx.Grants().Save(ctx, &store.Grant{ID: "g"}),
+		"RefreshTokens.Save": tx.RefreshTokens().Save(
+			ctx, &store.RefreshToken{ID: "rt", ExpiresAt: now.Add(time.Hour)}),
+		"PushedAuthRequests.Save": tx.PushedAuthRequests().Save(
+			ctx, &store.PushedAuthRequest{URI: "urn:par:x", ExpiresAt: now.Add(time.Hour)}),
+		"AccessTokens.Register": tx.AccessTokens().Register(
+			ctx, store.AccessTokenRecord{JTI: "jti"}),
+		"OpaqueAccessTokens.Save": tx.OpaqueAccessTokens().Save(
+			ctx, &store.OpaqueAccessToken{ID: "oat", ExpiresAt: now.Add(time.Hour)}),
+		"GrantRevocations.RevokeGrant": tx.GrantRevocations().RevokeGrant(
+			ctx, store.GrantTombstone{GrantID: "g"}),
+	}
+	for name, err := range closed {
+		if !errors.Is(err, store.ErrTxRequired) {
+			t.Errorf("%s on closed tx: want store.ErrTxRequired, got %v", name, err)
+		}
 	}
 }
 

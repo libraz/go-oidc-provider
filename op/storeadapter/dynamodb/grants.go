@@ -11,6 +11,14 @@ import (
 // grantStore holds the standing authorization a subject has given a
 // client. Grants never expire on their own — they are revoked — so the
 // table carries no TTL.
+//
+// The record carries a version because a grant is the one substore
+// record the OP amends rather than replaces: a repeat authorization adds
+// scopes, authorization details, and a fresh authentication context to
+// whatever the grant already held. Every write advances the version, and
+// a write staged inside a transaction asserts the version it amended is
+// still the stored one, so two authorizations completing at once cannot
+// end with one silently dropping the other's additions.
 type grantStore struct {
 	parent *Store
 	tx     *txBuffer
@@ -25,9 +33,10 @@ func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
 		return err
 	}
 	if s.tx != nil {
-		return s.tx.put(s.parent.names.grants, g.ID, entry)
+		return s.tx.putVersioned(ctx, s.parent.names.grants, g.ID, entry, attrRecordVersion)
 	}
-	if err := s.parent.put(ctx, s.parent.names.grants, entry); err != nil {
+	if err := s.parent.putBumpingVersion(
+		ctx, s.parent.names.grants, entry, attrRecordVersion); err != nil {
 		return wrapErr("grants.Save", err)
 	}
 	return nil

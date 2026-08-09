@@ -87,12 +87,16 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 	return nil
 }
 
+// Delete removes the session and reports whether what it removed was
+// live. An expired item is absent on every read path, and TTL
+// reclamation is asynchronous, so answering from mere presence would
+// make the result depend on when DynamoDB got around to the row.
 func (s *sessionStore) Delete(ctx context.Context, id string) error {
-	existed, err := s.parent.deleteKey(ctx, s.parent.names.sessions, id)
+	live, err := s.parent.deleteLiveKey(ctx, s.parent.names.sessions, id)
 	if err != nil {
 		return wrapErr("sessions.Delete", err)
 	}
-	if !existed {
+	if !live {
 		return store.ErrNotFound
 	}
 	return nil

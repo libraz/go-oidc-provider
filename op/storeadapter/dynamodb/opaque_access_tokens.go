@@ -68,7 +68,7 @@ func (s *opaqueAccessTokenStore) read(ctx context.Context, pk string) (item, err
 // there is not an error: /revocation is defined to answer 200 for an
 // unknown token, so the substore has nothing to report.
 func (s *opaqueAccessTokenStore) RevokeByID(ctx context.Context, id string) error {
-	err := s.parent.setRevoked(ctx, s.parent.names.opaqueAccessTokens, digestKey(id))
+	err := s.retire(ctx, digestKey(id))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}
@@ -78,6 +78,21 @@ func (s *opaqueAccessTokenStore) RevokeByID(ctx context.Context, id string) erro
 	return nil
 }
 
+// retire marks one stored token revoked, reporting [store.ErrNotFound]
+// when there is no row to mark. A handle obtained from a transaction
+// buffers the write, so a cascade the caller rolls back does not leave
+// the tokens retired.
+func (s *opaqueAccessTokenStore) retire(ctx context.Context, pk string) error {
+	if s.tx != nil {
+		return s.tx.attach(ctx, s.parent.names.opaqueAccessTokens, pk, attrRevoked, avBool(true))
+	}
+	return s.parent.setRevoked(ctx, s.parent.names.opaqueAccessTokens, pk)
+}
+
+// RevokeByGrant retires every token of a grant and reports how many it
+// touched. Inside a transaction the enumeration reads the index while
+// each retirement is buffered, so the cascade covers the committed set
+// and costs one of the transaction's actions per token.
 func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
 	matches, err := s.parent.queryIndex(
 		ctx, s.parent.names.opaqueAccessTokens, indexByGrant, attrGrantID, grantID)
@@ -90,7 +105,7 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID stri
 		if pk == "" {
 			continue
 		}
-		if err := s.parent.setRevoked(ctx, s.parent.names.opaqueAccessTokens, pk); err != nil {
+		if err := s.retire(ctx, pk); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				continue
 			}
@@ -117,8 +132,7 @@ func (s *opaqueAccessTokenStore) RevokeByClient(ctx context.Context, clientID st
 		if pk == "" {
 			continue
 		}
-		if err := s.parent.setRevoked(ctx, s.parent.names.opaqueAccessTokens, pk); err != nil &&
-			!errors.Is(err, store.ErrNotFound) {
+		if err := s.retire(ctx, pk); err != nil && !errors.Is(err, store.ErrNotFound) {
 			return wrapErr("opaqueAccessTokens.RevokeByClient", err)
 		}
 	}

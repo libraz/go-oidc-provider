@@ -42,7 +42,7 @@ func openHashOnStoreFixture(t *testing.T) (*oidcsql.Store, *databasesql.DB, time
 		t.Fatalf("sql.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithClock(fixedClock{now: now}))
+	s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithClock(&fixedClock{now: now}))
 	if err != nil {
 		t.Fatalf("oidcsql.New: %v", err)
 	}

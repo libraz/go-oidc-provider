@@ -18,6 +18,12 @@
 //     session state with Redis TTL. It is intentionally non-transactional:
 //     compose it with a durable backend for grants and credentials.
 //
+// The adapter additionally implements
+// [github.com/libraz/go-oidc-provider/op/store.MetadataStore], which does
+// not fit the volatile pattern: it holds construction-time decisions that
+// must survive every restart, so its hash carries no TTL. See the godoc on
+// [Store.Metadata] for the eviction-policy consequence.
+//
 // The transactional cluster substores (AuthorizationCodes, RefreshTokens,
 // Grants, PushedAuthRequests, AccessTokens) and the long-lived
 // substores (Clients, Users, IATs, RATs) are deliberately out of scope.

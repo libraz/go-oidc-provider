@@ -51,12 +51,16 @@ func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interact
 	return &rec, nil
 }
 
+// Delete removes the interaction and reports whether what it removed
+// was live. An expired item is absent on every read path, and TTL
+// reclamation is asynchronous, so answering from mere presence would
+// make the result depend on when DynamoDB got around to the row.
 func (s *interactionStore) Delete(ctx context.Context, id string) error {
-	existed, err := s.parent.deleteKey(ctx, s.parent.names.interactions, id)
+	live, err := s.parent.deleteLiveKey(ctx, s.parent.names.interactions, id)
 	if err != nil {
 		return wrapErr("interactions.Delete", err)
 	}
-	if !existed {
+	if !live {
 		return store.ErrNotFound
 	}
 	return nil
