@@ -31,11 +31,20 @@ type FeatureFile struct {
 
 // Row mirrors one entry under FeatureFile.Rows.
 type Row struct {
-	ID               string   `yaml:"id"`
-	Severity         string   `yaml:"severity"`
-	Spec             string   `yaml:"spec"`
-	Behaviour        string   `yaml:"behaviour"`
-	Status           string   `yaml:"status,omitempty"`
+	ID        string `yaml:"id"`
+	Severity  string `yaml:"severity"`
+	Spec      string `yaml:"spec"`
+	Behaviour string `yaml:"behaviour"`
+	Status    string `yaml:"status,omitempty"`
+	// CoveredBy names the test that asserts this row when the assertion
+	// cannot live in the scenario suite — a construction-time rejection
+	// the black-box harness never observes, a clock the flow harness
+	// does not seat. Format: "<package path>.<TestFunc>", e.g.
+	// "internal/authorizeendpoint.TestAuthorize_MaxAgeViolation". The
+	// coverage gate resolves it against `go test -list`, so a rename or
+	// deletion on the other side fails the build instead of quietly
+	// leaving the row asserted by nothing.
+	CoveredBy        string   `yaml:"covered_by,omitempty"`
 	CrossRefs        []string `yaml:"cross_refs,omitempty"`
 	Notes            string   `yaml:"notes,omitempty"`
 	OutOfScopeReason string   `yaml:"out_of_scope_reason,omitempty"`
@@ -125,6 +134,12 @@ var rowIDPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]+(-[A-Z][A-Z0-9]+)*-[0-9]+$
 
 // crossRefPattern matches "<feature>#<ID>".
 var crossRefPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*#[A-Z][A-Z0-9]+(-[A-Z][A-Z0-9]+)*-[0-9]+$`)
+
+// coveredByPattern matches "<package path>.<TestFunc>". The package is
+// written relative to the module root, exactly as it would be passed to
+// `go test`; the function must be a Test or Fuzz entry point, because
+// those are the only names `go test -list` can resolve.
+var coveredByPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*(?:/[a-z0-9_]+)*\.(?:Test|Fuzz)[A-Za-z0-9_]*$`)
 
 // featurePattern guards file-level feature slugs.
 var featurePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -228,6 +243,18 @@ func (c *Catalog) Validate(opts ValidationOptions) error {
 			}
 			if status != "out-of-scope" && r.OutOfScopeReason != "" {
 				report("%s: 'out_of_scope_reason' is only valid when status=out-of-scope", where)
+			}
+			if r.CoveredBy != "" {
+				if !coveredByPattern.MatchString(r.CoveredBy) {
+					report("%s: covered_by %q must be <package path>.<TestFunc>, e.g. internal/authorizeendpoint.TestAuthorize_MaxAge",
+						where, r.CoveredBy)
+				}
+				// A row is either covered or it is not. Naming the test
+				// that covers a pending row, or one declared
+				// unreachable, states two incompatible things at once.
+				if status != "active" {
+					report("%s: covered_by is only valid when status=active (row is %s)", where, status)
+				}
 			}
 			for j, ref := range r.CrossRefs {
 				if !crossRefPattern.MatchString(ref) {

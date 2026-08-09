@@ -79,6 +79,109 @@ func TestSame(t *testing.T) {}
 	}
 }
 
+func TestScanGoFile_SeparatesCoverageFromMention(t *testing.T) {
+	src := `package x
+
+import "testing"
+
+// Ship notes that CVE-2099-10001 exists. Prose, not a claim.
+func Ship() {}
+
+// Guard is production code that names CVE-2099-10002 in a
+// Tracks: block. The comment cannot fail.
+func Guard() {}
+
+// TestAlpha pins the fix. Tracks: CVE-2099-10003.
+func TestAlpha(t *testing.T) {}
+
+// Contract is a shared assertion helper, not a Test* function.
+// Tracks: CVE-2099-10004.
+func Contract(t *testing.T) {}
+
+// FuzzBeta pins the parse contract.
+//
+// Tracks (parse-DoS class): the harness covers
+//   - CVE-2099-10005 — qualified marker header.
+func FuzzBeta(f *testing.F) {}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x_test.go")
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	hits, err := scanGoFile(path)
+	if err != nil {
+		t.Fatalf("scanGoFile: %v", err)
+	}
+	want := map[string]bool{
+		"CVE-2099-10001": false, // no marker, no test
+		"CVE-2099-10002": false, // marker, but nothing can fail
+		"CVE-2099-10003": true,
+		"CVE-2099-10004": true, // helper taking *testing.T counts
+		"CVE-2099-10005": true, // qualified marker header, indented list
+	}
+	got := map[string]bool{}
+	for _, h := range hits {
+		got[h.ID] = h.Covers()
+	}
+	if len(got) != len(want) {
+		t.Fatalf("hits = %v, want %d IDs", got, len(want))
+	}
+	for id, covers := range want {
+		if got[id] != covers {
+			t.Errorf("%s Covers() = %v, want %v", id, got[id], covers)
+		}
+	}
+}
+
+func TestRunAdvisories_MentionIsNotCoverage(t *testing.T) {
+	tmp := t.TempDir()
+	catalogDir := filepath.Join(tmp, "catalog")
+	srcDir := filepath.Join(tmp, "src")
+	for _, d := range []string{catalogDir, srcDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	inv := `schema_version: 1
+advisories:
+  - {id: CVE-2099-20001, severity: P0, source: https://example, threat: T-01, status: covered}
+`
+	if err := os.WriteFile(filepath.Join(catalogDir, advisoryFileName), []byte(inv), 0o600); err != nil {
+		t.Fatalf("write inv: %v", err)
+	}
+	// The ID appears twice, and neither occurrence is an assertion.
+	src := `package x
+
+// Notes mention CVE-2099-20001 in passing.
+const notes = 1
+
+// Guard documents the CVE-2099-20001 mitigation. Tracks: CVE-2099-20001.
+func Guard() {}
+`
+	if err := os.WriteFile(filepath.Join(srcDir, "a.go"), []byte(src), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	r, w, _ := os.Pipe()
+	stdout := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = stdout; _ = r.Close() }()
+
+	err := runAdvisories(catalogDir, tmp, []string{"src"}, true /*check*/, false)
+	_ = w.Close()
+	if err == nil {
+		t.Fatal("expected the gate to fail: two mentions, no assertion")
+	}
+	var ev *exitError
+	if !errorsAs(err, &ev) {
+		t.Fatalf("expected *exitError, got %T (%v)", err, err)
+	}
+	if !strings.Contains(ev.message, "1 issue(s)") {
+		t.Errorf("message=%q, want 1 issue", ev.message)
+	}
+}
+
 func TestLoadAdvisoryInventory_RejectsBadShape(t *testing.T) {
 	cases := []struct {
 		name    string

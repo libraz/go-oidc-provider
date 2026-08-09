@@ -27,7 +27,8 @@ Subcommands:
   stats [feature]                Severity x status dashboard, optionally for one feature.
   next [feature]                 Print the next pending row(s) to pick up.
   flip <id> <status>             Update a row's status to active|pending|out-of-scope.
-  coverage [--strict|--yaml-only] Diff catalog rows against Test_<PREFIX>_<NNN>_ Go tests.
+  coverage [--strict|--check-bindings|--yaml-only]
+                                 Diff catalog rows against Test_<PREFIX>_<NNN>_ Go tests.
   advisories [--check|--json]    Cross-reference _advisories.yaml with '// Tracks: <id>' comments.
 
 Flags:
@@ -147,12 +148,14 @@ func dispatch(cmd string, args []string) error {
 		dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
 		tests := fs.String("tests", "./test/scenarios/...", "go test package selector")
 		cwd := fs.String("cwd", "", "working directory for `go test -list` (defaults to current directory)")
-		strict := fs.Bool("strict", false, "exit non-zero when any binding gap exists")
+		testRoot := fs.String("test-root", "test/scenarios", "directory holding <feature>_test.go files; pass empty to skip the skip-stub scan")
+		strict := fs.Bool("strict", false, "exit non-zero when any binding gap exists, skip-only bindings included")
+		checkBindings := fs.Bool("check-bindings", false, "exit non-zero on a row without a test, a test without a row, or a running test under an out-of-scope row")
 		yamlOnly := fs.Bool("yaml-only", false, "skip `go test -list` and report only YAML-side counts")
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
-		return runCoverage(*dir, *tests, *cwd, *strict, *yamlOnly)
+		return runCoverage(*dir, *tests, *cwd, resolveTestRoot(*cwd, *testRoot), *strict, *checkBindings, *yamlOnly)
 
 	case "advisories":
 		fs := flag.NewFlagSet("advisories", flag.ContinueOnError)
