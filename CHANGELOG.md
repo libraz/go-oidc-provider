@@ -52,6 +52,571 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
+## [Unreleased]
+
+A security and correctness pass. Several of the fixes close paths on which the
+OP returned a wrong answer silently: a consent ceremony that never ran, a
+revoked token that kept introspecting as active, an authentication context that
+described an older login than the one being served.
+
+Three deployments need to read the Changed section before upgrading: anyone
+running a BYO `store.PasskeyStore`, anyone on the DynamoDB adapter, and anyone
+whose OP serves only machine-to-machine grants.
+
+### Security
+
+- `/bc-authorize` verifies an inbound `id_token_hint` itself before any
+  `HintResolver` runs: the signature against the OP's own keyset, `iss` equal to
+  the issuer, and an audience naming the client that authenticated on the same
+  request (CIBA Core 1.0 §7.1). The parameter was previously handed to the
+  resolver verbatim, so an implementation that read `sub` out of the payload —
+  the obvious reading of the old godoc — let any CIBA-registered client address
+  the authentication ceremony to a subject it was never entitled to name.
+  See the note under **Changed** for what a resolver now receives.
+- A detected refresh-token replay retires the whole rotation chain regardless of
+  how the surrounding storage transaction settles, and regardless of how long
+  the chain is. The RFC 9700 §2.2.2 cascade previously ran on transaction-bound
+  substore handles, which bounded it by whatever action limit the backend's
+  transaction imposes; a chain past that limit was retired only in part, and
+  because the walk is breadth-first from the root, the surviving node was the
+  newest one — the one an attacker presenting a stolen token holds.
+- The reference relying-party implementations validate the RFC 9207 `iss`
+  authorization-response parameter and fail the callback on a mismatch. The OP
+  has always advertised and emitted it, but no bundled RP checked it, so the
+  FAPI 2.0 example shipped without the mix-up defence the profile mandates.
+- `/authorize` no longer skips the consent ceremony when the request carries
+  `prompt=consent` or `authorization_details` the cached grant does not cover.
+  A covering grant previously marked consent as already run before the prompt
+  matrix was consulted, so an RP that asked for re-consent received an
+  authorization code without the user seeing a screen, and RFC 9396 rich
+  authorizations (payment amount, payee) were never displayed.
+- Verifying a recovery code costs one Argon2id derivation regardless of how many
+  codes the batch holds. Every unconsumed slot previously carried its own salt,
+  so the only way to answer a submitted string was to derive once per slot: a
+  ten-code batch turned a single short input into ten sequential 64 MiB
+  derivations, letting one client drive the memory and CPU of ten at a tenth the
+  request rate. Batches minted before this release keep their layout and keep
+  verifying at the old cost — the OP stores only hashes, so it cannot re-derive
+  a batch whose plaintext it never held, and refusing them would void every
+  recovery sheet already in a user's hands at the moment they needed it. The
+  affected population shrinks as users regenerate through
+  `recoverykit.Replace`; the residual cost stays bounded by the batch-size cap
+  and sits behind the cross-factor lockout counter. Which layout a batch has is
+  a property of the batch as a whole, not of any one row: an operator who wants
+  to size the remaining population compares the salt — the fifth `$`-separated
+  field of the stored hash — across the slots of one subject, and finds more
+  than one distinct value on the older layout. Batches minted after upgrading
+  are on the new one, so the mint timestamp already on each batch is the
+  cheaper filter.
+- A successful recovery-code verify no longer runs faster the earlier the
+  matched code sits in the batch. The scan stopped at the matching slot, so the
+  elapsed time reported the slot's position — and a recovery sheet is printed in
+  order, which makes that position useful to someone holding part of the list.
+  Every candidate is now compared and the winner selected without a branch, on
+  both batch layouts.
+- A recovery slot whose stored encoding declares work-factor parameters outside
+  the range the generator emits is refused before any derivation runs. A
+  corrupted or tampered row could otherwise name an arbitrary memory cost and
+  have the verifier honour it.
+- A JARM response whose signing fails no longer falls back to delivering the
+  authorization code in plain form. `response_mode=form_post.jwt` was compared
+  against the string `form_post`, which never matches, so the failure path
+  reached the plain-redirect branch and put the code in a URL — in browser
+  history, in the `Referer` of whatever the page loaded next, and in every
+  proxy log along the way. The code is now withheld entirely and the RP
+  receives `error=server_error` with
+  `error_description=jarm_response_signing_failed`; the unredeemed code lapses
+  at its TTL.
+- A DPoP proof presented on a request that then fails client authentication is
+  no longer consumed, at `/token` (every grant), `/par`, `/bc-authorize` and
+  `/device_authorization` — every endpoint that requires a credential and
+  accepts a proof. Proof verification
+  runs before client authentication by design — RFC 9449 §8's nonce challenge
+  has to be issuable before a `client_assertion`'s own `jti` is spent — but it
+  also performed the replay-marking write there, which made it the only durable
+  write an unauthenticated caller could drive, at their own request rate. The
+  observable effect beyond the storage: a client that retried the same proof
+  with corrected credentials was told the proof had been replayed. Verification
+  is now split so the stateless checks stay ahead of authentication and the
+  marking happens after it.
+- The `Origin` allowlist enforced on state-changing `/interaction` requests no
+  longer includes the origin of every registered client's `redirect_uri`. That
+  list is the CORS allowlist, and reusing it here let an origin registered by
+  one client post to another client's consent ceremony. The interaction gate now
+  admits the issuer origin and whatever `op.WithCORSOrigins` names explicitly;
+  the CORS layer is unchanged.
+- The audit event raised when a JWS presents a retired key id carries the
+  context of the request that presented it, so it reaches the embedder's sink
+  correlated with a request id and an active trace span. It was emitted on a
+  detached background context, which left the OP's highest-signal key-rotation
+  event unattributable: an operator could see that a retired kid had been
+  presented and not which caller did it.
+- `/end_session` requires the `id_token_hint` to name the subject the session
+  cookie authenticates before it skips the confirmation interstitial. Holding a
+  valid hint proves possession of an OP-signed token, not ownership of the
+  browser making the request, so any account holder at the same OP could
+  previously force every visitor to be logged out and have their access tokens
+  revoked from an `<img>` tag.
+- Revoking a JWT access token now closes `/introspect` and `/userinfo` even
+  when the token carries no grant id. `client_credentials` tokens have none by
+  construction, so an M2M credential stayed usable for its full lifetime after
+  `/revoke` (RFC 7009 §2.1).
+- A passkey registration is refused when the credential ID is already held by a
+  different subject, at both the library and the storage layer. The duplicate
+  check previously covered only the registering subject's own credentials while
+  the write was a credential-ID-keyed upsert, so a credential ID could be moved
+  onto another account and unlink the authenticator of whoever held it
+  (WebAuthn L3 §7.1 step 27).
+- A failed WebAuthn assertion now retires the challenge it was made against.
+  The orchestrator cleared the challenge on the failure path but the HTTP layer
+  discarded the updated state, leaving it replayable for the rest of the
+  interaction's lifetime — with no signature counter to catch the replay on the
+  platform authenticators that report none.
+- The brute-force counters of the DynamoDB adapter are incremented atomically.
+  A read-modify-write recorded a burst of parallel `user_code` guesses as a
+  single attempt, so the lockout never fired against a parallel attack.
+- The credential-stuffing path can no longer be used to amplify database load:
+  the lockout counter's compare-and-swap loop is bounded and honours context
+  cancellation. It previously retried without limit, turning the brute-force
+  defence into an O(N²) write amplifier under contention.
+- Back-channel logout will not deliver to a private-network destination unless
+  the deployment opts in with `op.WithBackchannelAllowPrivateNetwork`. Loopback,
+  link-local, RFC 1918 and IPv6 ULA targets are refused by default, so a
+  registered `backchannel_logout_uri` can no longer aim the OP's signed logout
+  token at a service inside the deployment's own network.
+- A panicking `LoginAttemptObserver` no longer fails the login or silently
+  truncates the fan-out. Each observer is isolated, the panic is reported to the
+  provider's configured logger, and the remaining observers still run — which
+  matters because one of them supplies the brute-force counter. The log record
+  names only the factor, so a broken observer cannot turn the operational log
+  into an enumeration surface.
+- Grant management refuses a client registered with
+  `token_endpoint_auth_method=none`. A public client presents no credential
+  beyond declaring its own `client_id`, which left the `grant_id` in the
+  request path as the only thing standing between a caller and the endpoint —
+  and a path segment is not a secret: it reaches proxy logs, browser history
+  and `Referer` headers. Anyone who read one could enumerate what a user had
+  consented to, including RFC 9396 authorization details, and delete every
+  grant that subject held with that client. Confidential clients are
+  unaffected; the same request from them still needs the secret or assertion.
+- Fourteen bundled examples configured a provider that could not authenticate
+  anyone: they enabled the `authorization_code` grant with no authenticator and
+  no login flow, so `/authorize` was unreachable in practice. The interactive
+  ones now carry a real password login, and the machine-to-machine ones declare
+  only the grants they serve. `11-custom-consent-ui` was the starkest — the
+  example is about the consent screen and had no way to reach it, and its own
+  instructions told the reader to re-wire the option into a different example to
+  see it work.
+- `interaction.ErrorPrompt.State` is documented as attacker-controlled. It is
+  the `state` parameter exactly as it arrived, unvalidated and unbounded, and on
+  the error paths that fire before the client and `redirect_uri` are trusted it
+  is not tied to any registered party either. A custom driver that interpolates
+  it into markup without escaping turns a rejected authorization request into
+  reflected XSS on the OP's own origin. The bundled drivers escape it; nothing
+  said so where an embedder writing a driver would read it.
+- `op.Deny.Reason` is documented as reaching the log sink unmasked. The godoc
+  previously said the value sat on a redaction allow-list and was masked, and
+  no such redaction exists — the reason is written verbatim to the operational
+  logger under a plain `reason` attribute. **Deployments whose `Decider` puts
+  an email address, an account identifier or a raw request input into
+  `Deny.Reason` have been logging it in the clear** and should check what they
+  put there. No behaviour changed; the guarantee never existed.
+- An RP's `jwks_uri` response body is capped at 64 KiB. The previous ceiling was
+  large enough that a hostile or misconfigured RP could make each fetch
+  materially expensive.
+- A custom grant can no longer displace the built-in token exchange.
+  `op.WithCustomGrant` accepted a handler named
+  `urn:ietf:params:oauth:grant-type:token-exchange` and routed to it in
+  preference to the RFC 8693 implementation, so `subject_token` /
+  `actor_token` validation, `act` chain construction, audience
+  normalisation and `cnf` re-binding were all skipped without a word. The
+  reserved set is now derived from the grants the library implements rather
+  than transcribed by hand, and a test fails if a natively routed grant_type
+  goes missing from it.
+
+### Fixed
+
+- Every `response_mode=form_post.jwt` fallback is delivered as a self-posting
+  form rather than a 302. The signing-failure, encryption-failure and
+  `unsupported_response_mode` paths all redirected, which contradicts the
+  response mode the RP asked for and puts the parameters in a URL.
+  `query.jwt`, `fragment.jwt` and bare `jwt` still redirect, as they should.
+- The SPA shell serves `Referrer-Policy: same-origin` and `Pragma: no-cache`.
+  Its own documentation said it mirrored the HTML driver's hardening and it
+  omitted both; the shell URL carries the interaction id, which is exactly the
+  value a `Referer` must not leak. The policy is `same-origin` rather than
+  `no-referrer` because the shell's own fetches would otherwise present
+  `Origin: null` and be refused by the CSRF gate.
+- A JAR failure at `/authorize` renders through `interaction.Driver.RenderError`
+  when the caller prefers HTML, instead of always returning raw JSON. Under a
+  FAPI deployment every request is a JAR request, so this was the one error
+  class a browser user met as an unstyled JSON body. Status codes and error
+  codes are unchanged, and a non-browser caller receives the same bytes as
+  before.
+- `/jwks` honours a weak entity-tag in `If-None-Match`, as RFC 9110 §8.8.3.2
+  requires for that header. Weak validators were treated as non-matching, so a
+  client or intermediary that returned the OP's own ETag in weakened form was
+  answered with the full key set instead of a 304. The response ETag is still a
+  strong validator; only the comparison changed.
+- `/jwks` no longer re-serialises and re-hashes the key set on every request.
+  The rendering is memoised and re-derived when the published document changes,
+  which for the encryption half happens on the wall clock rather than on a
+  rotation event: entries past their `NotAfter` drop out of the document, and a
+  cache that missed that would keep advertising a recipient key the OP has
+  stopped decrypting for.
+- A captcha-enabled deployment is usable. The token the challenge collects was
+  never read from the submission and the prompt advertised no field to carry
+  it, so crossing the failure threshold locked the user into a challenge loop
+  with no exit. The challenge now also interposes on the failure that crosses
+  the threshold rather than only on a fresh dispatcher entry, which previously
+  made it reachable only by reloading the interaction.
+- A silent re-authorization stamps the current session's `auth_time`, `acr` and
+  `amr` on the grant. The request was validated against the session while the
+  id_token reported whatever an older ceremony had recorded, producing login
+  loops under `max_age` and overstating assurance under `acr_values`.
+- An RP whose `jwks_uri` publishes a key type go-jose does not support (X25519,
+  Ed448) is no longer locked out entirely. The set is parsed key by key and
+  unusable members are skipped, per RFC 7517 §5. Applies to `private_key_jwt`,
+  JAR, dynamic client registration and `self_signed_tls_client_auth`.
+- A cancelled request can no longer poison the JWKS cache. `context.Canceled`
+  and `context.DeadlineExceeded` are no longer cached as fetch failures, and
+  the fetch runs on a context detached from the caller's, so an unauthenticated
+  client could previously keep an RP's JAR and `private_key_jwt` authentication
+  failing by disconnecting mid-fetch.
+- `/end_session` carries `client_id` through its confirmation form. Logout
+  failed with a 400 for every RP using the `client_id` +
+  `post_logout_redirect_uri` form of the request — the most common one.
+- Grant management accepts `private_key_jwt`. Its GET and DELETE operations
+  read the assertion from the query string, which is the only channel a
+  bodyless request has; `client_secret` in a query string is refused outright.
+  The endpoint previously returned 401 for every request under the FAPI 2.0
+  profiles that mandate `private_key_jwt`.
+- A request object stays valid for the window the FAPI 2.0 profiles grant it.
+  The profile sets a 60-minute lifetime while the request-object verifier capped
+  `iat` age at a fixed 10 minutes and checked that first, so an object that was
+  conformant by the profile's own arithmetic was refused with
+  `invalid_request_object` part-way through its declared lifetime.
+- `/authorize` and `/par` refuse a `dpop_jkt` commitment when DPoP is not
+  enabled, instead of answering with a code or a `request_uri` whose only
+  possible outcome at `/token` is `invalid_grant` (RFC 9449 §10.1). The check
+  runs after request-object merging, so a value carried inside a signed JAR is
+  covered too.
+- The DynamoDB store adapter honours its own transaction contract on the
+  revocation paths. `RevokeChain`, `RevokeByGrant`, `RevokeByJTI`, `RevokeByID`,
+  `RevokeByClient` and the retry-response read reached the table directly even
+  through a transaction handle, so a rollback could not take them back and a
+  read could not see what the same transaction had just written.
+- The Redis store adapter's plaintext-link warning reaches an operator in the
+  bundled sample and demo binaries. Both passed a no-op sink to
+  `oidcredis.WithDevModeAllowPlaintext`, so the one signal the adapter makes a
+  required argument was discarded by the two files an embedder is most likely to
+  copy. `cmd/op-demo` additionally now admits a plaintext `redis://` DSN only for
+  a loopback engine and refuses to start otherwise, with the DSN redacted in the
+  message.
+- `op.WithOpenIDScopeOptional` reaches the token endpoint, so a pure OAuth 2.0
+  deployment receives refresh tokens from the authorization-code, device-code
+  and CIBA grants instead of only from custom grants.
+- A `composite.Store` can be combined with dynamic client registration. Both
+  capability checks now consult the store's accessor before falling back to a
+  bare type assertion, so the documented hot/cold layout and RFC 7591/7592 are
+  no longer mutually exclusive.
+- The DynamoDB adapter's refresh rotation writes the successor token and its
+  retry-cache entry as one transaction. A partial write made the client's
+  legitimate retry look like a replay and revoked the whole chain.
+- Concurrent revocation cascades against one grant converge on the widest
+  window on DynamoDB. Both tombstone horizons widen under guarded updates
+  instead of being replaced, so a cascade can no longer narrow another's.
+- Concurrent authorizations against one grant no longer lose each other's
+  amendments on DynamoDB. Grants carry a version and a losing write reports
+  `store.ErrConflict` rather than dropping the other's `authorization_details`,
+  `ACR` or `AuthTime`.
+- `X-Forwarded-Proto` and `X-Forwarded-Host` are read as the header chains they
+  are. A two-proxy deployment produced a scheme of `"https, https"`, which
+  corrupted every issuer-relative URL and the DPoP `htu` comparison.
+- The CORS preflight advertises `X-CSRF-Token`, the header the interaction
+  handler actually reads. The documented cross-origin SPA pattern was silently
+  blocked by the browser. `Access-Control-Allow-Origin` also echoes the
+  canonical origin the allowlist matched rather than the raw request header.
+- `op.WithCIBAMaxExpiresIn` bounds the lifetime applied when the client omits
+  `requested_expiry`; a larger explicitly configured default is rejected at
+  construction.
+- A custom grant handler that sets only `CustomGrantResponse.Subject` and
+  returns a `BoundAccessToken` no longer fails with `server_error`. The
+  documented fallback chain was not the one the code took, so the field the
+  godoc told handlers to use was the one path that did not work.
+- A custom grant handler that omits the access-token TTL gets the provider's
+  default rather than `expires_in: 0`. The response was a 200 carrying a token
+  the client discarded on arrival, which fails without a symptom to search for.
+- A device or CIBA client polling exactly as instructed is no longer driven to
+  `access_denied`. On `slow_down` the OP raised its own interval by doubling it
+  while RFC 8628 §3.5 and CIBA Core §11 tell the client to add five seconds, so
+  the two diverged within a few rounds and the abuse counter fired on a client
+  that had done nothing wrong. The OP now adds the same five seconds. It also
+  allows a one-second undershoot before counting a violation, because the OP
+  measures the gap between arrivals while the client measures the gap between
+  sends — jitter alone put roughly half of an on-time client's polls marginally
+  early. The absolute floor that catches a tight polling loop is unchanged.
+- `verification_uri_complete` is assembled as a URL rather than by string
+  concatenation. A `verification_uri` carrying a query produced
+  `…?tenant=acme?user_code=…`, so a device that only renders a QR code showed a
+  link the user code never reached, with nothing reporting an error.
+- RFC 8693 token exchange accepts an OP-issued `id_token` as the
+  `subject_token`. Every path through it previously failed: the code read the
+  scope from a `scope` claim, which this OP's id_tokens do not carry, so the
+  derived scope was always empty and no request could satisfy the subset check.
+  The scope now comes from the durable grant the id_token resolves to, which
+  also means the exchange stops working the moment consent is withdrawn and can
+  never yield more than a refresh of that grant would. An id_token issued to a
+  client enrolled for pairwise subjects still cannot be exchanged — its `sub` is
+  the projected value while the grant holds the OP-internal one — and is refused
+  rather than exchanged on rights the provider cannot establish.
+- The refresh grace window no longer returns 500 on a deployment without
+  retry-response encryption keys. Those keys are only mandatory when the
+  authorization-code grant is enabled, so a CIBA-only, device-code-only or
+  custom-grant-only OP failed on every grace retry. A missing cache now answers
+  the same `invalid_grant` a retry past the window gets — indistinguishable on
+  the wire, and with no chain revocation, since the successor is live and the
+  client did nothing wrong.
+- Discovery no longer advertises encryption support the OP cannot provide.
+  `id_token_encryption_*`, `userinfo_encryption_*`, `authorization_encryption_*`
+  and `introspection_encryption_*` were published whether or not an encryption
+  keyset was configured, so an RP could register encrypted-response metadata
+  against an OP with no key to satisfy it.
+- `op.WithSupportedEncryptionAlgs` is enforced rather than merely advertised. The
+  allowlist now gates inbound decryption, outbound encryption and the algorithms
+  dynamic client registration will accept, so narrowing it actually narrows what
+  the OP will do.
+- `op.WithJWKSHTTPTransport` reaches the encryption-key fetcher. A deployment
+  that supplied a pinned or proxied transport had it applied to signing-key
+  fetches only, and encryption-key fetches quietly used the default transport.
+
+### Changed
+
+- **BREAKING (configuration).** `op.New` refuses a configuration that enables
+  the `authorization_code` grant while registering neither
+  `op.WithAuthenticators` nor `op.WithLoginFlow`. There is no way to establish a
+  session other than the interaction chain, and the chain runner is only built
+  when one of those two is present, so such a provider could never serve an
+  authorization request: it constructed successfully and then answered the first
+  real `/authorize` with a `server_error`, which reads as an OP fault to the
+  relying party and gives the operator nothing to act on. A deployment that
+  genuinely runs only non-interactive grants is unaffected and still needs no
+  authenticator — remove `authorization_code` from `op.WithGrants` to say so.
+- **BREAKING (CIBA embedders).** `op.HintResolver.Resolve` receives the
+  OP-verified `sub` claim on the `op.HintIDTokenHint` branch, where it
+  previously received the raw `id_token_hint` JWT. `op.HintLoginHint` and
+  `op.HintLoginHintToken` are unchanged and still deliver the raw parameter. A
+  resolver that parsed the id_token itself should drop that code and look the
+  value up as a subject; one that parsed it and did *not* verify it was relying
+  on behaviour that is now closed (see **Security**). Requests from a client
+  registered with `subject_type=pairwise` are refused with `invalid_request`
+  before a resolver is reached, because a per-sector pseudonym (OIDC Core 1.0
+  §8.1) has no reverse index the OP could resolve it through; such clients use
+  `login_hint` or `login_hint_token`.
+- **BREAKING (FAPI seeding).** `profile.AllowedClientAuthMethods` no longer
+  returns `tls_client_auth` / `self_signed_tls_client_auth` for the FAPI
+  profiles. The library does not implement RFC 8705 §2 mutual-TLS client
+  authentication — discovery never advertised it and registration always
+  refused it — so a client seeded from the returned list failed `op.New` with a
+  configuration error. The list is now directly usable as a seed source, and
+  FAPI 2.0 remains satisfiable through `private_key_jwt`. `feature.MTLS` is
+  unchanged and still delivers RFC 8705 §3 certificate-bound tokens, which is
+  orthogonal to how a client proves its identity; its godoc now says so.
+- `/introspect` returns `iss` for opaque access tokens and refresh tokens, not
+  only for JWT-formatted access tokens. A resource server that validated the
+  issuer of an introspection response — what RFC 7662 §2.2 lists `iss` for —
+  broke when a deployment switched `op.WithAccessTokenFormat`, with no change on
+  either side. `jti` remains JWT-only on purpose: the only identifier an opaque
+  record holds is the credential the client presented, so projecting it would
+  echo a live bearer token into a body resource servers routinely log.
+- **BREAKING (BYO stores).** `store.PasskeyStore.Put` MUST now leave the stored
+  record untouched and return `store.ErrAlreadyExists` when the credential ID
+  is held by a different subject, and the comparison and write MUST be one
+  atomic operation. Re-writing a record under its own subject is unchanged. The
+  bundled inmem, SQL and DynamoDB adapters implement this; a third-party store
+  that does not will fail the contract suite's new `PutRefusesCrossSubjectCredential`
+  case. The library performs its own ownership check before the write, so the
+  takeover is closed even against a store that has not been updated — the
+  contract requirement closes the remaining race.
+- **BREAKING (DynamoDB schema).** `user_code` uniqueness moved from the
+  `by_user_code` GSI to a transactional reservation item, and the index is gone
+  from `TableDefinitions`. Existing tables keep an unused index, which can be
+  dropped by hand. Device codes issued before the upgrade carry no reservation
+  and stop resolving by `user_code`; they expire within minutes. An index
+  fallback was deliberately not added, because it would let a new request claim
+  a `user_code` a live pre-upgrade record still holds — the defect being fixed.
+  Usernames written through `PutUserWithPassword` are reserved the same way;
+  directories bulk-imported by the embedder still resolve through the index and
+  own their own uniqueness.
+- A machine-to-machine OP no longer advertises endpoints it does not mount.
+  `authorization_endpoint`, `end_session_endpoint` and
+  `backchannel_logout_supported` are omitted, and `response_types_supported` is
+  an empty array, when no configured grant uses the authorization endpoint. It
+  stays present because RFC 8414 §2 makes it unconditionally required. An RP
+  that followed the old document received a bodiless 404; one that registered a
+  `backchannel_logout_uri` never received a logout token.
+- `op.MaxAccessTokenTTL` and `op.DefaultRefreshTokenTTL` are constants rather
+  than variables.
+- Dynamic client registration accepts the standard OpenID Connect Dynamic
+  Client Registration 1.0 §2 metadata set. Any member the OP did not model was
+  rejected outright, including `userinfo_signed_response_alg` — which the OP
+  advertises support for in its own discovery document — so a general-purpose
+  RP library that fills in the specification's fields could not onboard at all.
+  Unmodelled members are now ignored per RFC 7591 §2. Members naming a
+  capability the OP will not actually apply are still refused rather than
+  accepted and dropped, so a client is never told it has a protection it does
+  not have: `dpop_bound_access_tokens: true` and
+  `require_pushed_authorization_requests: true` are refused because the OP has
+  no per-client enforcement for either.
+- A `PUT` to the client-configuration endpoint keeps configuration the
+  registration metadata cannot express. The record was rebuilt from the
+  submitted document, so an RFC 8707 `Resources` allow-list or an
+  `IntrospectionSignedResponseAlg` set out of band was silently discarded the
+  first time the RP updated anything.
+- `feature.RAR` and `feature.GrantManagement` are rejected at `op.New` when the
+  option that configures them is absent, matching how `feature.DynamicRegistration`
+  already behaved. Enabling either alone previously did nothing at all, with no
+  way for the embedder to discover why.
+- The duplicate-declaration check for `feature.DynamicRegistration` no longer
+  depends on the order the options were passed in.
+- `op.WithCustomGrant` rejects a handler named after a grant the OP implements
+  itself, including the CIBA and token-exchange URNs it previously accepted.
+  Registering the CIBA URN was already inert — the token endpoint routes that
+  grant natively, so the handler was never reached — and registering the
+  token-exchange URN silently replaced the built-in implementation. Both now
+  fail at `op.New` with `ErrCustomGrantBuiltinCollision`.
+- `op.CustomGrantRequest.Subject` and `.AuthTime` are documented as always
+  empty. The token endpoint authenticates a client rather than an end user and
+  does not interpret an extension grant's parameters, so it has nothing from
+  which to resolve a subject; identity resolution belongs to the handler, which
+  reports its result back through the response. The fields previously read as
+  though the OP would sometimes populate them.
+- Every Prometheus metric the OP exports carries a constant `issuer` label. No
+  metric is renamed or removed, so existing queries keep resolving; they gain a
+  dimension. This is what lets one registry serve several providers — previously
+  the second `op.WithPrometheus` against a shared registry failed on duplicate
+  collector names. Two providers declaring the *same* issuer still collide,
+  which is the intended reading: one issuer is one OP.
+- `op.WithPrometheus` registration is all-or-nothing. A failure part-way through
+  unregisters what it already registered instead of leaving the registry holding
+  a partial metric set.
+- `/end_session` no longer waits for back-channel logout delivery. The fan-out is
+  detached from the request and runs under an overall 30-second budget, so a slow
+  or unresponsive RP cannot hold the user's logout response — previously 256
+  targets at a 5-second timeout, 8 at a time, could block it for minutes.
+  Deliveries abandoned when the budget expires are recorded per target in the
+  audit trail rather than dropped silently. The per-RP timeout is unchanged.
+- `op.WithAuditLogger`'s contract is stated rather than implied: the handler runs
+  synchronously on the request goroutine, must not block, and must be safe for
+  concurrent use. Behaviour is unchanged; the documentation previously suggested
+  remote sinks without saying what that costs.
+
+### Added
+
+- `op.WithMTLSRootCAs`, which installs the trust anchors the OP validates a
+  client certificate against before using it for RFC 8705 §3 token binding.
+  `internal/mtls` supported chain validation but nothing could reach it, so the
+  check and its error were unreachable. It matters most behind a reverse proxy,
+  where the OP cannot see the validation the proxy performed. A nil pool is
+  refused at construction: an empty `x509.CertPool` is how "trust nothing" is
+  spelled, and accepting nil would silently mean "trust whatever the transport
+  supplied".
+- `op.MTLSProxy`, the public name for the value `op.WithMTLSProxy` records and
+  `op.MTLSProxyConfig` reads back. The accessor previously returned a type from
+  an internal package, so no caller outside the module could declare a variable
+  of it or construct one — the symbol's only intended use was unreachable.
+- `profile.MaxRequestObjectAge`, the per-profile bound on how old a signed
+  request object's `iat` may be.
+- `op.EmailOTPConfig.LockoutStore`, which puts a directly constructed
+  `op.NewEmailOTPAuthenticator` on the same cross-factor brute-force counter
+  `op.WithAuthnLockoutStore` attaches to the built-in `op.StepEmailOTP`. Without
+  it such an authenticator is budgeted only by the per-challenge failure count
+  on its own record, so an attacker who has burned their TOTP allowance can
+  pivot to email OTP for a fresh one. `op.WithAuthnLockoutStore` now says so in
+  its own documentation, since the gap is silent rather than an error.
+- `recoverykit.Kit` and `recoverykit.Clock`, so recovery-code generation and
+  replacement can be driven against an injected clock instead of the system
+  one. The package-level `recoverykit.Generate` and `recoverykit.Replace` are
+  unchanged and remain the zero-configuration entry points.
+- The store contract suite covers the insert-if-absent form of
+  `store.EmailOTPStore.CompareAndSwap`, including two first sends racing on the
+  same empty key. That call is how the first send for a subject reserves its
+  record, and a backend implementing it as an unconditional upsert passes every
+  other case in the suite while letting a concurrent send reset the send-rate
+  and brute-force windows the reservation exists to hold. The interface
+  documentation now states the condition instead of leaving it implied by the
+  bundled adapters.
+- `op.ProtectedResource.IntrospectionClients`, which names the client_ids that
+  authenticate at `/introspect` on that resource server's behalf. A named client
+  may introspect an access token issued to any client provided the token's
+  audience is that resource — RFC 7662's canonical deployment, and previously
+  impossible: a resource server that followed the OP's own protected-resource
+  metadata to the introspection endpoint authenticated successfully and received
+  `{"active": false}` for every token it would ever see. The delegation is
+  scoped to the audience, so registering a gateway for one API never becomes
+  blanket visibility over every client's tokens, and it does not cover refresh
+  tokens. Naming no client keeps the previous same-client-only posture exactly.
+- The store contract suite exercises the transactional path of the substores
+  that carry a revocation cascade: refresh-token consume and rotation, chain and
+  grant revocation, the retry-response store, and both access-token stores. The
+  transactional group previously covered only authorization codes, grants and
+  pushed authorization requests, so a backend could ship a broken transactional
+  implementation of the machinery RFC 9700 §2.2.2 replay detection runs on and
+  still pass the suite clean.
+- `make verify-examples-api`, `make verify-examples-browser` and
+  `make verify-examples-harness` run the example verification harnesses, which
+  boot each example as a real process. They existed but nothing invoked them,
+  which is how three examples shipped in a state where `/authorize` returned
+  `server_error` from the first step of their documented walkthrough. `make
+  verify` states that it compiles examples without booting them; CI runs the
+  runtime gate as a separate job.
+- The store contract suite gains a concurrency group asserting that consume,
+  rotation and increment operations have exactly one winner under parallel
+  callers, and that a revocation window converges on the widest horizon.
+- `op.Provider.Shutdown(ctx)`, which waits for detached back-channel logout
+  fan-outs to finish. Because delivery no longer runs on the request, a SIGTERM
+  during a rolling deploy would otherwise end the process with signed Logout
+  Tokens still queued and the RPs never told the session ended. It is a drain,
+  not a close: the provider keeps serving afterwards, so stop accepting requests
+  first and drain second. Safe to call unconditionally — a provider that never
+  mounts `/end_session` returns nil — and safe to call repeatedly.
+- `op.WithBackchannelFanOutBudget`, which sets the overall deadline for one
+  back-channel logout fan-out. The default is 30 seconds.
+- `op.WithBackchannelAllowPrivateNetwork`, which permits back-channel logout
+  delivery to private-network destinations. Needed for a deployment whose RPs
+  genuinely sit on an internal network; see the Security note above for the
+  default.
+- `op.PrimaryPasskey.RequireUserVerification`, which makes every WebAuthn
+  ceremony demand user verification rather than accepting presence alone.
+- `oidcsql.Store.GC(ctx, cutoff)` with `oidcsql.GCStats`, reclaiming expired rows
+  from the authorization-code, pushed-request, interaction and session tables.
+  The SQL adapter previously had no retention path for them, so a deployment
+  accumulated one row per authorization request forever. It is a single
+  aggregate call on the store's existing pool with no goroutine of its own —
+  scheduling is the embedder's, because only they know their maintenance window.
+- The in-memory adapter reclaims expired authorization codes, sessions,
+  interactions and lockout counters. Without it an unauthenticated `/authorize`
+  loop grew the process until it ran out of memory.
+
+### Deprecated
+
+Nothing listed here is removed, and none of it changes behaviour. Each symbol
+turned out to do less than its documentation claimed, and the godoc now says
+what it actually does.
+
+- `op.AuditDenyReasonKey` — no code path emits it. A denied login is recorded
+  under a plain `reason` attribute; match that instead. See the Security note
+  above for what this means for anything you put in `op.Deny.Reason`.
+- `op.SPAUI.ConsentMount` and `op.SPAUI.LogoutMount` — no handler reads either.
+  The consent ceremony is served through the `LoginMount` routes and
+  discriminated by the state envelope's prompt type; the logout confirmation is
+  the OP's built-in page. Both values are still validated, but reserve no route
+  and change no routing.
+- `op.Endpoints.Session` — nothing is mounted under this prefix and the
+  discovery document does not advertise it. Setting it only changes which paths
+  `op.New` reports as colliding. Session state is served under `Interaction`,
+  or under `SPAUI.LoginMount` when an SPA owns rendering.
+
 ## [v1.0.0] — 2026-07-27
 
 The first release under strict Semantic Versioning. From here the public `op`

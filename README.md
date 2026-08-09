@@ -88,19 +88,33 @@ End-to-end startup (key generation, store wiring, graceful shutdown) lives in
 
 ### Local development
 
-The defaults are tuned for production (https-only, public-network-only). When
-you boot against `http://127.0.0.1` or a stub RP on the loopback interface, two
-opt-ins keep the validators from rejecting the demo wiring:
+The defaults are tuned for production (https-only, public-network-only), but a
+loopback IP literal is already carved out: `http://127.0.0.1:8080` is a valid
+issuer and a valid `redirect_uri` host with no options at all. That is why most
+examples under [`examples/`](examples) need neither opt-in below — they bind
+`127.0.0.1` throughout.
+
+Two narrower opt-ins exist for the cases the IP literal does not cover:
 
 ```go
-op.WithAllowLocalhostLoopback(),                 // admit textual "localhost" hosts
-op.WithAllowInsecureBackchannelLogoutForDev(),   // admit http://localhost backchannel_logout_uri
+op.WithAllowLocalhostLoopback(),                 // admit the textual host "localhost"
+op.WithAllowInsecureBackchannelLogoutForDev(),   // admit an http:// backchannel_logout_uri
 ```
 
-Both options are dev / CI-only — production embedders leave them off and front
-their RPs over TLS. Every example under [`examples/`](examples) that binds a
-loopback listener uses these options; an embedder porting one of the demos
-into a production stack drops the lines.
+`WithAllowLocalhostLoopback` is needed only when something in the wiring must
+be spelled `localhost` rather than `127.0.0.1` — 7 of the 43 examples reach for
+it, mostly because a stub RP registers a `http://localhost:…/callback`
+`redirect_uri`, and [`29-passkey`](examples/29-passkey/main.go) because WebAuthn
+requires a Relying Party ID that is a domain and browsers reject an IP literal
+for it. The textual host is not in the default carve-out because `localhost`
+resolution can be hijacked (RFC 8252 §7.3).
+
+`WithAllowInsecureBackchannelLogoutForDev` is needed only to register a
+plain-http `backchannel_logout_uri`; exactly one example
+([`42-back-channel-logout`](examples/42-back-channel-logout/main.go)) does.
+
+Both are dev / CI-only. Add neither unless the validator has actually rejected
+your wiring, and drop them when porting a demo into a production stack.
 
 ### Security profiles in one switch
 
@@ -142,9 +156,26 @@ configuration). Detail in
 
 ## Standards
 
-OpenID Connect Core 1.0; OAuth 2.0 (RFC 6749) and the Security Best Current
-Practices (RFC 9700); PKCE (RFC 7636), DPoP (RFC 9449), PAR (RFC 9126), JAR
-(RFC 9101), JARM, mTLS (RFC 8705); FAPI 2.0 Baseline / Message Signing.
+Core: OpenID Connect Core 1.0; OAuth 2.0 (RFC 6749) and the Security Best
+Current Practices (RFC 9700); OAuth 2.0 Authorization Server Metadata
+(RFC 8414) alongside OpenID Connect Discovery 1.0.
+
+Request and token hardening: PKCE (RFC 7636), DPoP (RFC 9449), PAR (RFC 9126),
+JAR (RFC 9101), JARM, mTLS (RFC 8705), authorization-response issuer
+identification (RFC 9207), Rich Authorization Requests (RFC 9396),
+step-up authentication (RFC 9470); FAPI 2.0 Baseline / Message Signing.
+
+Additional grants: Device Authorization Grant (RFC 8628), Client-Initiated
+Backchannel Authentication (CIBA Core 1.0), Token Exchange (RFC 8693), plus
+embedder-defined grants through `op.WithCustomGrant`.
+
+Token and client lifecycle: JWT-profile access tokens (RFC 9068), token
+revocation (RFC 7009), token introspection (RFC 7662), Dynamic Client
+Registration and its management API (RFC 7591 / RFC 7592, OpenID Connect
+Dynamic Client Registration 1.0).
+
+Session termination: OpenID Connect RP-Initiated Logout 1.0 and Back-Channel
+Logout 1.0. Front-channel logout is not implemented.
 
 Each release is regressed against the OpenID Foundation conformance suite —
 the live scoreboard is on the
@@ -160,8 +191,8 @@ letter of the specification: a relying party that can only verify RS256 is
 not supported. The trade is one vetted curve with no algorithm negotiation
 and therefore no downgrade path to defend, and ES256 is a first-class
 algorithm in the FAPI 2.0 profiles this library targets — which exclude
-RS256 outright. RS256 and PS256 remain accepted for *verification* of
-client assertions and request objects.
+RS256 outright. *Verification* is wider: RS256, PS256, ES256 and EdDSA are
+all accepted on client assertions and request objects.
 
 ## Storage
 
@@ -173,7 +204,7 @@ Bring your own backend by implementing the substore interfaces in
 | `inmem` | `op/storeadapter/inmem` | Reference / dev / test store. The contract harness in [`op/store/contract`](op/store/contract) runs against it. |
 | `sql` | `op/storeadapter/sql` | `database/sql` adapter for SQLite, MySQL 8.0+, PostgreSQL 14+. **Sub-module.** Contract harness exercises every substore against a real engine via testcontainers (`go test -tags=testcontainers`). |
 | `redis` | `op/storeadapter/redis` | Volatile substores (`InteractionStore`, `ConsumedJTIStore`, `SessionStore`). **Sub-module.** Redis TTL governs sessions; compose with a durable backend for grants and credentials. Refuses to start without TLS (`rediss://`) and AUTH unless `WithDevModeAllowPlaintext` is set explicitly. |
-| `dynamodb` | `op/storeadapter/dynamodb` | DynamoDB adapter, one table per substore. Implements `store.Transactional` by buffering writes and committing them as one `TransactWriteItems`, so the browser authorization-code flow runs on DynamoDB alone. **Sub-module.** Contract harness runs against `amazon/dynamodb-local` (`go test -tags=testcontainers`). Marked `Experimental:` — see below. |
+| `dynamodb` | `op/storeadapter/dynamodb` | DynamoDB adapter, one table per substore. Implements `store.Transactional` by buffering writes and committing them as one `TransactWriteItems`, so the browser authorization-code flow runs on DynamoDB alone. **Sub-module.** Contract harness runs against `amazon/dynamodb-local` (`go test -tags=testcontainers`). Marked `Experimental:`, so it is listed in [`api/experimental.txt`](api/experimental.txt) and exempt from the SemVer promise. |
 | `composite` | `op/storeadapter/composite` | Hot/cold splitter — durable substores to one backend, volatile to another, while enforcing the transactional-cluster invariant. |
 
 **Verify your backend against the contract suite.**
@@ -236,8 +267,21 @@ maps to a use-case page on the docs site under
 [Use cases](https://go-oidc-provider.libraz.net/use-cases/).
 
 ```sh
-(cd examples/01-minimal && go run -tags example .)
+(cd examples/01-minimal && GOWORK=off go run -tags example .)
 ```
+
+Each example is its own module resolved through a development `replace`, so it
+is run with the repository workspace disabled; `make example-01` does the same.
+
+## Reference application
+
+[`sample/`](sample/README.md) is the counterpart to the numbered examples: one
+worked application instead of one option apiece. It owns its accounts, embeds
+the OP in the same process, and completes the round-trip against a relying
+party, with MySQL for the durable substores and Redis for the volatile ones
+joined through `op/storeadapter/composite`. It boots from
+`docker compose -f sample/compose.yaml up -d --build`, and it is a
+demonstration — not something to host publicly.
 
 ## Community
 

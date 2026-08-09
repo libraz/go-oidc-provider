@@ -94,19 +94,34 @@ log.Fatal(http.ListenAndServe(":8080", handler))
 
 ### ローカル開発
 
-既定値は本番向けに調整してあります（https のみ・公開ネットワークのみ）。
-`http://127.0.0.1` やループバック上のスタブ RP に対して起動するときは、
-次の 2 つのオプションを渡すと、検証ロジックがデモ用の配線を弾かなくなります。
+既定値は本番向けに調整してあります（https のみ・公開ネットワークのみ）が、
+ループバックの IP リテラルは最初から除外規定に入っています。つまり
+`http://127.0.0.1:8080` は、オプションを 1 つも渡さない状態で issuer としても
+`redirect_uri` のホストとしても有効です。[`examples/`](examples) 配下の例の
+大半が下記のどちらのオプションも必要としないのはこのためで、これらは一貫して
+`127.0.0.1` にバインドしています。
+
+IP リテラルでは足りないケース向けに、次の 2 つの限定的なオプションがあります。
 
 ```go
 op.WithAllowLocalhostLoopback(),                 // "localhost" という文字列ホストを許可
-op.WithAllowInsecureBackchannelLogoutForDev(),   // http://localhost の backchannel_logout_uri を許可
+op.WithAllowInsecureBackchannelLogoutForDev(),   // http:// の backchannel_logout_uri を許可
 ```
 
-どちらも開発・CI 用途に限ったものです。本番の組み込み側ではオフのままにし、
-RP は TLS の背後に置いてください。ループバックのアドレスにバインドする
-[`examples/`](examples) 配下の例はすべてこの 2 つを使っているので、デモを
-本番スタックへ移植するときはこの行を外します。
+`WithAllowLocalhostLoopback` が要るのは、配線のどこかを `127.0.0.1` ではなく
+`localhost` と綴らなければならない場合だけです。43 例のうち 7 例が使っており、
+その多くはスタブ RP が `http://localhost:…/callback` を `redirect_uri` として
+登録するためです。[`29-passkey`](examples/29-passkey/main.go) だけは理由が別で、
+WebAuthn の Relying Party ID はドメインである必要があり、ブラウザが IP
+リテラルを拒否するからです。この文字列ホストが既定の除外規定に入っていないのは、
+`localhost` の名前解決が乗っ取られうるためです（RFC 8252 §7.3）。
+
+`WithAllowInsecureBackchannelLogoutForDev` が要るのは、平文 http の
+`backchannel_logout_uri` を登録する場合だけで、これを使う例は
+[`42-back-channel-logout`](examples/42-back-channel-logout/main.go) の 1 つです。
+
+どちらも開発・CI 用途に限ったものです。検証ロジックに実際に弾かれたのでない
+限り追加せず、デモを本番スタックへ移植するときは外してください。
 
 ### セキュリティプロファイルをワンスイッチで
 
@@ -153,10 +168,26 @@ Core 1.0 の形であり、RFC 7636 より古い仕様なので confidential cli
 
 ## 準拠する仕様
 
-OpenID Connect Core 1.0 / OAuth 2.0 (RFC 6749) と Security Best Current
-Practices (RFC 9700) / PKCE (RFC 7636), DPoP (RFC 9449), PAR (RFC 9126),
-JAR (RFC 9101), JARM, mTLS (RFC 8705) / FAPI 2.0 Baseline / Message
-Signing。
+コア: OpenID Connect Core 1.0、OAuth 2.0 (RFC 6749) と Security Best Current
+Practices (RFC 9700)、OpenID Connect Discovery 1.0 と OAuth 2.0 Authorization
+Server Metadata (RFC 8414)。
+
+リクエストとトークンの堅牢化: PKCE (RFC 7636)、DPoP (RFC 9449)、PAR
+(RFC 9126)、JAR (RFC 9101)、JARM、mTLS (RFC 8705)、認可レスポンスの issuer
+識別 (RFC 9207)、Rich Authorization Requests (RFC 9396)、ステップアップ認証
+(RFC 9470)、FAPI 2.0 Baseline / Message Signing。
+
+追加の grant: Device Authorization Grant (RFC 8628)、Client-Initiated
+Backchannel Authentication (CIBA Core 1.0)、Token Exchange (RFC 8693)。
+`op.WithCustomGrant` で組み込み側が定義した grant も追加できます。
+
+トークンとクライアントのライフサイクル: JWT プロファイルのアクセストークン
+(RFC 9068)、トークン失効 (RFC 7009)、トークンイントロスペクション (RFC 7662)、
+Dynamic Client Registration とその管理 API (RFC 7591 / RFC 7592、OpenID
+Connect Dynamic Client Registration 1.0)。
+
+セッションの終了: OpenID Connect RP-Initiated Logout 1.0 と Back-Channel
+Logout 1.0。Front-Channel Logout は実装していません。
 
 各リリースは OpenID Foundation Conformance Suite に対して回帰テストを
 かけています。最新のスコアボードは
@@ -174,8 +205,9 @@ OpenID Connect Core §15.1 は RS256 の実装を必須としているため、�
 扱い、アルゴリズムのネゴシエーションを持たず、したがって防ぐべきダウングレード
 経路も存在しないという性質です。ES256 は本ライブラリが対象とする FAPI 2.0
 プロファイルの第一級アルゴリズムであり、そのプロファイルは RS256 自体を
-禁じています。なお RS256 と PS256 は、クライアント認証アサーションや
-リクエストオブジェクトの**検証**では引き続き受け付けます。
+禁じています。なお**検証**側はこれより広く、クライアント認証アサーションと
+リクエストオブジェクトについては RS256 / PS256 / ES256 / EdDSA をいずれも
+受け付けます。
 
 ## ストレージ
 
@@ -187,7 +219,7 @@ OpenID Connect Core §15.1 は RS256 の実装を必須としているため、�
 | `inmem` | `op/storeadapter/inmem` | リファレンス実装。開発・テスト向け。[`op/store/contract`](op/store/contract) のコントラクトハーネスはこれに対して走る。 |
 | `sql` | `op/storeadapter/sql` | SQLite / MySQL 8.0+ / PostgreSQL 14+ 向けの `database/sql` アダプタ。**別モジュール。** `go test -tags=testcontainers` で全サブストアを実エンジン（testcontainers）に対して走らせる。 |
 | `redis` | `op/storeadapter/redis` | 揮発性のサブストア（`InteractionStore` / `ConsumedJTIStore` / `SessionStore`）向け。**別モジュール。** Session は Redis TTL に従うため、grant / credential は durable backend と合成する。TLS（`rediss://`）と AUTH が無いと起動を拒否する（明示的な `WithDevModeAllowPlaintext` のみ例外）。 |
-| `dynamodb` | `op/storeadapter/dynamodb` | DynamoDB アダプタ。サブストアごとに 1 テーブル。書き込みをバッファし `TransactWriteItems` 1 回でコミットすることで `store.Transactional` を満たすため、ブラウザ認可コードフローを DynamoDB 単体で提供できる。**別モジュール。** コントラクトハーネスは `amazon/dynamodb-local` に対して走る（`go test -tags=testcontainers`）。`Experimental:` マーカー付き。 |
+| `dynamodb` | `op/storeadapter/dynamodb` | DynamoDB アダプタ。サブストアごとに 1 テーブル。書き込みをバッファし `TransactWriteItems` 1 回でコミットすることで `store.Transactional` を満たすため、ブラウザ認可コードフローを DynamoDB 単体で提供できる。**別モジュール。** コントラクトハーネスは `amazon/dynamodb-local` に対して走る（`go test -tags=testcontainers`）。`Experimental:` マーカー付きのため [`api/experimental.txt`](api/experimental.txt) に載り、SemVer の約束の対象外。 |
 | `composite` | `op/storeadapter/composite` | ホット/コールドの振り分け役。永続サブストアを一方のバックエンド、揮発性を他方へ振り分けつつ、トランザクショナルクラスタの不変条件を強制する。 |
 
 **自作バックエンドはコントラクトスイートで検証できます。**
@@ -250,8 +282,22 @@ Terraform に渡すキースキーマを返し、`CreateTables(ctx)` が開発�
 配下のページに対応します。
 
 ```sh
-(cd examples/01-minimal && go run -tags example .)
+(cd examples/01-minimal && GOWORK=off go run -tags example .)
 ```
+
+各サンプルは開発用の `replace` でチェックアウトを参照する独立モジュールなので、
+リポジトリのワークスペースを無効にして実行します。`make example-01` も同じ
+ことをします。
+
+## リファレンスアプリケーション
+
+[`sample/`](sample/README.md) は番号付きサンプルの対になるものです。オプションを
+1 つずつ見せるのではなく、ひとつのアプリケーションとして組み上げてあります。
+アカウントを自前で持ち、同一プロセスに OP を組み込み、リライングパーティとの
+往復まで完結させます。ストレージは永続サブストアが MySQL、揮発性サブストアが
+Redis で、`op/storeadapter/composite` で束ねています。起動は
+`docker compose -f sample/compose.yaml up -d --build` です。これはデモンスト
+レーション用であり、公開ホスティングを想定したものではありません。
 
 ## コミュニティ
 
