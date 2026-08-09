@@ -29,7 +29,7 @@ cd "$REPO_ROOT"
 # paths relative to the repository root so the generated go.work is readable
 # and identical to the one CI produces.
 workspace_modules() {
-  while IFS=$'\t' read -r mod tags; do
+  while IFS=$'\t' read -r mod pkgs tags; do
     [ -n "$tags" ] && continue
     local rel="${mod#"$REPO_ROOT"}"
     rel="${rel#/}"

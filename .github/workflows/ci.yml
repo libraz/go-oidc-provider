@@ -214,6 +214,36 @@ jobs:
       - name: make verify-examples
         run: make verify-examples
 
+  # The runtime half of the example gate. verify-examples only compiles and
+  # vets, so an example whose configuration op.New has come to reject stays
+  # green there; this job is the one that boots each example as a real
+  # process. It is a separate job because it takes minutes, and the browser
+  # half needs a Chrome the compile job has no reason to install.
+  example-harness:
+    name: example harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: |
+            go.sum
+            op/storeadapter/sql/go.sum
+            op/storeadapter/redis/go.sum
+            op/storeadapter/dynamodb/go.sum
+
+      - name: make verify-examples-api
+        run: make verify-examples-api
+
+      # ubuntu-latest ships Chrome, so a skip here would mean the harness
+      # stopped finding it rather than that the runner lacks one.
+      - name: make verify-examples-browser
+        run: make verify-examples-browser
+        env:
+          BROWSERVERIFY_REQUIRED: "1"
+
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest

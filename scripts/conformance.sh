@@ -119,11 +119,28 @@ usage() {
   sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e 's/^# \{0,1\}//' -e '$d'
 }
 
+# cert_is_usable reports whether a certificate exists and still has
+# enough life left to outlast a conformance run. An expired cert is not
+# a missing cert: every downstream failure is a TLS handshake error
+# somewhere else, which reads as a suite regression rather than as
+# "regenerate the certificate". Rotating it here is the only place that
+# can tell the difference.
+cert_is_usable() {
+  local cert="$1" grace="${2:-86400}"
+  [[ -f "${cert}" ]] || return 1
+  openssl x509 -in "${cert}" -noout -checkend "${grace}" >/dev/null 2>&1
+}
+
 cmd_certs() {
   mkdir -p "${CERTS}"
-  if [[ -f "${CERT_FILE}" && -f "${KEY_FILE}" ]]; then
+  if [[ -f "${KEY_FILE}" ]] && cert_is_usable "${CERT_FILE}"; then
     echo "[certs] OP cert already present at ${CERTS} (delete the file to regenerate)"
   else
+    if [[ -f "${CERT_FILE}" ]]; then
+      echo "[certs] OP cert at ${CERT_FILE} has expired or is about to; regenerating"
+      # The truststore pins the old cert, so it has to go with it.
+      rm -f "${TRUSTSTORE_FILE}"
+    fi
     cmd_certs_op
   fi
   cmd_certs_fapi_clients
@@ -156,8 +173,13 @@ EOF
   # only negotiate TLS_ECDHE_ECDSA_* ciphers, which OFCS treats as
   # "non-permitted" and fails the test on. RSA keeps the cipher within
   # the OFCS-recognised allowlist.
+  # The lifetime is long on purpose. This is a self-signed certificate
+  # for a loopback listener that no client outside this repository ever
+  # trusts, so a short life buys nothing and costs a scheduled outage:
+  # the harness would keep working until the day it stopped, in a
+  # component nobody had touched.
   openssl genrsa -out "${KEY_FILE}" 2048
-  openssl req -new -x509 -days 30 \
+  openssl req -new -x509 -days 3650 \
     -key "${KEY_FILE}" \
     -out "${CERT_FILE}" \
     -config "${CFG_FILE}" \
@@ -180,9 +202,12 @@ cmd_certs_fapi_clients() {
     base="${CERTS}/${client}"
     cert_file="${base}.cert.pem"
     key_file="${base}.key.pem"
-    if [[ -f "${cert_file}" && -f "${key_file}" ]]; then
+    if [[ -f "${key_file}" ]] && cert_is_usable "${cert_file}"; then
       echo "[certs] ${client} mTLS pair already present"
       continue
+    fi
+    if [[ -f "${cert_file}" ]]; then
+      echo "[certs] ${client} cert has expired or is about to; regenerating"
     fi
     tmp_pkcs1="${base}.key.pkcs1.pem"
     openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \

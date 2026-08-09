@@ -62,10 +62,18 @@ linters:
         - name: defer
         - name: empty-block
     forbidigo:
+      # Match against the resolved package rather than the literal
+      # source text, so an aliased import cannot walk past a rule.
+      # `pattern` is then matched against "<package name>.<identifier>"
+      # and `pkg` against the full import path; a rule that names an
+      # import path in `pattern` alone matches nothing.
+      analyze-types: true
       forbid:
         - pattern: ^time\.Now$
-          msg: "use a Clock obtained from internal/timex instead — see ADR 0002"
-        - pattern: ^math/rand\.
+          pkg: ^time$
+          msg: "use a Clock obtained from internal/timex so every deadline is testable and moves together"
+        - pattern: ^rand\.
+          pkg: ^math/rand(/v2)?$
           msg: "math/rand is forbidden; use crypto/rand via internal/keys"
         - pattern: ^panic$
           msg: "panic is forbidden in library code; return an error"
@@ -149,6 +157,7 @@ linters:
             - "!**/internal/clientauth/**"
             - "!**/internal/clientencjwks/**"
             - "!**/internal/introspectendpoint/**"
+            - "!**/internal/rpjwks/**"
             - "!**/internal/tokens/**"
             - "!**/internal/userinfo/**"
             - "!**/op/testkit/**"
@@ -183,6 +192,10 @@ linters:
         - error
         - empty
         - stdlib
+        # A function returning its own type parameter has no concrete
+        # type available to return instead, so the finding is never
+        # actionable there.
+        - generic
         - github.com/libraz/go-oidc-provider/op\.Option
         - github.com/libraz/go-oidc-provider/op\.CIBAOption
         - github.com/libraz/go-oidc-provider/op\.HintResolver
@@ -194,6 +207,7 @@ linters:
         - github.com/libraz/go-oidc-provider/internal/log\.Logger
         - github.com/libraz/go-oidc-provider/internal/timex\.Clock
         - github.com/libraz/go-oidc-provider/internal/audit\.Emitter
+        - github.com/libraz/go-oidc-provider/internal/jose\.EncryptionKeyResolver
         - github.com/go-jose/go-jose/v4\.Signer
         - github.com/libraz/go-oidc-provider/op/storeadapter/sql\.runner
     nakedret:
@@ -217,17 +231,37 @@ linters:
           - depguard
           - gochecknoglobals
           - gosec
+      # The example verification harnesses (apiverify / browserverify) are
+      # modules made entirely of _test.go files. Each test compiles one
+      # example and runs it as a subprocess, and the examples bind fixed
+      # ports (OP :8080, RP :9090) plus, for browserverify, a single
+      # headless Chrome — so the tests are required to run sequentially and
+      # t.Parallel would make them fight over the port. Nothing here is
+      # importable either: there is no production package, so an external
+      # _test package would be a rename with no visibility change.
+      - path: examples/internal/(api|browser)verify/
+        linters:
+          - paralleltest
+          - testpackage
       # The reference application is an embedder, not library code. Two
       # rules exist to keep the library routing through internal packages
       # it cannot reach from outside the module: randomness through
       # internal/keys (depguard) and wall-clock reads through
       # internal/timex (forbidigo). An application calls crypto/rand and
       # time.Now directly, which is what its readers should copy.
+      #
+      # The forbidigo half is narrowed to the wall-clock rule on purpose.
+      # Excluding the whole linter also lifted the math/rand ban, and a
+      # reference application seeding randomness from math/rand is
+      # exactly the code a reader would copy.
       - path: sample/
         linters:
           - depguard
-          - forbidigo
           - gochecknoglobals
+      - path: sample/
+        linters:
+          - forbidigo
+        text: time\.Now
       - path: cmd/op-demo/
         linters:
           - gochecknoinits

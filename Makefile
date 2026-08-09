@@ -2,11 +2,12 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := verify
 
-.PHONY: tools format lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify verify-examples clean \
+.PHONY: tools format lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify clean \
+        verify-examples verify-examples-api verify-examples-browser verify-examples-harness \
         stability stability-check \
         scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
+        scenario-coverage-bindings \
         scenario-coverage-yaml-only scenario-stats scenario-advisories scenario-advisories-strict \
-        example-01 example-03 example-17 example-41 example-51 \
         conformance-certs conformance-up conformance-down \
         conformance-ofcs-up conformance-ofcs-down conformance-ofcs-status \
         conformance-op-up conformance-op-down conformance-op-status \
@@ -49,28 +50,53 @@ licenses:
 verify:
 	@scripts/verify.sh
 
+# Compile / vet the examples plus the static documentation checks. Fast
+# enough to be part of `make verify`; it never calls op.New.
 verify-examples:
 	@scripts/verify_examples.sh
+
+# Runtime verification of the examples: boot each one as a real process and
+# assert it does what its header doc promises. These are the only gates that
+# construct an example's configuration, so a library change that invalidates
+# one surfaces here and nowhere earlier. They are minutes of work apiece (and
+# the browser half needs Chrome), so they are NOT wired into `make verify` —
+# the release pre-flight runs them.
+verify-examples-api:
+	@scripts/verify_example_harness.sh api
+
+# Set BROWSERVERIFY_REQUIRED=1 to make a missing Chrome — or a run that
+# executed zero browser cases — a failure instead of a skip.
+verify-examples-browser:
+	@scripts/verify_example_harness.sh browser
+
+verify-examples-harness:
+	@scripts/verify_example_harness.sh all
 
 # Manual smoke targets for examples that pair an OP with an
 # in-process Relying Party. These targets are operator-driven —
 # they boot a long-running process the developer drives from a
 # browser, and they are NOT wired into `make verify`. See the
 # example godoc for the click path.
-example-01:
-	cd examples/01-minimal && go run -tags example .
+#
+# EXAMPLE_SMOKE is the single source of truth: the target names and
+# the .PHONY list are both derived from it, so adding an entry cannot
+# leave the two out of step. Every example is its own module resolved
+# through a development `replace`, so the run is GOWORK=off like the
+# per-module commands in scripts/ — the repository workspace covers
+# only the published modules.
+EXAMPLE_SMOKE := 01-minimal 03-fapi2 41-dynamic-registration 51-dpop-nonce 61-claims-request
+EXAMPLE_TARGETS := $(foreach e,$(EXAMPLE_SMOKE),example-$(word 1,$(subst -, ,$(e))))
 
-example-03:
-	cd examples/03-fapi2 && go run -tags example .
+.PHONY: $(EXAMPLE_TARGETS)
 
-example-61:
-	cd examples/61-claims-request && go run -tags example .
-
-example-41:
-	cd examples/41-dynamic-registration && go run -tags example .
-
-example-51:
-	cd examples/51-dpop-nonce && go run -tags example .
+# One explicit rule per entry rather than a single `example-%` pattern:
+# make excludes .PHONY targets from implicit-rule search, so a pattern
+# rule would never fire for the names above.
+define example_smoke_rule
+example-$(word 1,$(subst -, ,$(1))):
+	cd examples/$(1) && GOWORK=off go run -tags example .
+endef
+$(foreach e,$(EXAMPLE_SMOKE),$(eval $(call example_smoke_rule,$(e))))
 
 # Spec Scenario Suite — catalog validation and coverage.
 # api/experimental.txt records the public API exempt from the SemVer
@@ -96,6 +122,12 @@ scenario-coverage:
 
 scenario-coverage-strict:
 	@scripts/scenario.sh coverage --strict
+
+# The subset of the coverage gate that is a binding check rather than a
+# progress report: a row with no test, a test with no row, or a test
+# that runs under an out-of-scope row. `make verify` runs this one.
+scenario-coverage-bindings:
+	@scripts/scenario.sh coverage --check-bindings
 
 # Catalog-only coverage view — does not run `go test -list`, so it
 # stays useful when the main module currently fails to build.

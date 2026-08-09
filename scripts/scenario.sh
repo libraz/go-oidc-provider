@@ -4,9 +4,8 @@
 # into the main module's go.sum. We invoke it with `go run` from that
 # directory and inject repo-rooted defaults for -dir / -tests.
 #
-# See test/scenarios/catalog/README.md for the catalog schema and
-# ADR 0023 for the binding rules between catalog rows and Go test
-# function names.
+# See test/scenarios/catalog/README.md for the catalog schema and for
+# how a catalog row binds to the Go test function that covers it.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
@@ -43,6 +42,8 @@ extra=()
 [ "$inject_dir" -eq 1 ] && extra+=( -dir "$CATALOG_DIR" )
 case "$cmd" in
   coverage)
+    # -cwd anchors both the `go test -list` run and the relative
+    # -test-root the tool scans for skip stubs.
     extra+=( -cwd "$REPO_ROOT" )
     if [ "$inject_tests" -eq 1 ]; then
       extra+=( -tests "./test/scenarios/..." )
