@@ -17,6 +17,7 @@ package serve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -83,5 +84,41 @@ func Demo(name, addr, issuer string, probes ...string) {
 	log.Printf("%s listening on %s (issuer %s)", name, addr, issuer)
 	for _, p := range probes {
 		log.Printf("try: %s", p)
+	}
+}
+
+// WaitForIssuer polls iss + "/.well-known/openid-configuration" until
+// it answers 200 or ctx is cancelled.
+//
+// Every example that pairs an OP with a client in the same process
+// needs this gate: [Listen] returns only when the server stops, so the
+// client half has no other signal that the listener is accepting. The
+// discovery document is the probe because it is the first thing the
+// client fetches anyway — a 200 there means the OP is not merely bound
+// but able to answer.
+//
+// The 50 ms cadence is chosen for a localhost demo, where the wait is
+// a few ticks. Callers bound the total wait with ctx.
+func WaitForIssuer(ctx context.Context, iss string) error {
+	endpoint := iss + "/.well-known/openid-configuration"
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("serve.WaitForIssuer: timeout polling %s", endpoint)
+		case <-tick.C:
+		}
 	}
 }

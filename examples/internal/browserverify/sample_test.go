@@ -4,6 +4,7 @@ package browserverify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -81,10 +82,10 @@ func requireCompose(t *testing.T) string {
 	t.Helper()
 	docker, err := exec.LookPath("docker")
 	if err == nil {
-		if probeErr := exec.Command(docker, "compose", "version").Run(); probeErr == nil {
+		if probeErr := exec.CommandContext(t.Context(), docker, "compose", "version").Run(); probeErr == nil {
 			return docker
 		}
-		err = fmt.Errorf("`docker compose version` failed")
+		err = errors.New("`docker compose version` failed")
 	}
 	if browserVerifyRequired() {
 		t.Fatalf("docker compose unavailable (%v); required verification cannot run", err)
@@ -174,7 +175,7 @@ func signUp(ctx context.Context, email string) (string, error) {
 	}
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return "", fmt.Errorf("signup: the account page rendered an empty subject")
+		return "", errors.New("signup: the account page rendered an empty subject")
 	}
 	// The subject must not be the email address. Deriving it from a mutable,
 	// personally identifying value is the mistake the application exists not

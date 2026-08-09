@@ -52,7 +52,7 @@
 //
 // # Running
 //
-//	cd examples/28-email-otp-recovery && go run -tags example .
+//	cd examples/28-email-otp-recovery && GOWORK=off go run -tags example .
 //
 // Two listeners come up in the same process:
 //
@@ -96,6 +96,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/seedkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
+	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/recoverykit"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -114,7 +115,7 @@ const (
 	demoSubject  = "demo-user"
 	demoEmail    = "demo@example.com"
 
-	staticDir = "./web/static"
+	staticDir = webui.StaticDir
 )
 
 func main() {
@@ -125,7 +126,7 @@ func main() {
 
 func run() error {
 	if _, err := os.Stat(staticDir); err != nil {
-		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so ./web/static resolves")
+		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so the shared SPA bundle resolves")
 	}
 
 	keys := devkeys.MustEphemeral("email-otp-recovery-1")
@@ -217,7 +218,7 @@ func run() error {
 
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := waitForIssuer(waitCtx, issuer); err != nil {
+	if err := serve.WaitForIssuer(waitCtx, issuer); err != nil {
 		return err
 	}
 
@@ -305,31 +306,4 @@ func printRecoveryBanner(codes []string) {
 		log.Printf("  %s", c)
 	}
 	log.Println("──────────────────────────────────────────────────────────")
-}
-
-// waitForIssuer polls the discovery document until it answers 200 or
-// ctx is cancelled. The OP and the RP boot in one process, so the RP's
-// discovery call runs as soon as the OP listener is ready.
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
 }

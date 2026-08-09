@@ -4,7 +4,8 @@ package browserverify
 
 import (
 	"crypto/hmac"
-	"crypto/sha1" //nolint:gosec // RFC 6238 mandates HMAC-SHA-1 for authenticator interop.
+	// RFC 6238 mandates HMAC-SHA-1 for authenticator interop.
+	"crypto/sha1"
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"

@@ -119,6 +119,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
+	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/composite"
@@ -138,7 +139,7 @@ const (
 	demoPassword = "demo"
 	demoSubject  = "demo-user"
 
-	staticDir = "./web/static"
+	staticDir = webui.StaticDir
 )
 
 func main() {
@@ -149,7 +150,7 @@ func main() {
 
 func run() error {
 	if _, err := os.Stat(staticDir); err != nil {
-		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so ./web/static resolves")
+		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so the shared SPA bundle resolves")
 	}
 
 	keys := devkeys.MustEphemeral("spa-composite-1")
@@ -227,7 +228,7 @@ func run() error {
 	// listener before constructing the RP.
 	rpCtx, rpCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer rpCancel()
-	if err := waitForIssuer(rpCtx, issuer); err != nil {
+	if err := serve.WaitForIssuer(rpCtx, issuer); err != nil {
 		return err
 	}
 
@@ -392,30 +393,3 @@ func (e *mysqlConnectionFailure) Error() string {
 }
 
 func (e *mysqlConnectionFailure) Unwrap() error { return e.cause }
-
-// waitForIssuer polls the discovery document until it answers 200 or
-// ctx is cancelled. The OP and the RP boot in one process, so the RP's
-// discovery call runs as soon as the OP listener is ready.
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
-}

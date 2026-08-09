@@ -58,7 +58,7 @@
 //
 // # Running
 //
-//	cd examples/29-passkey && go run -tags example .
+//	cd examples/29-passkey && GOWORK=off go run -tags example .
 //
 // Two listeners come up in the same process:
 //
@@ -108,6 +108,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/seedkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
+	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/passkeykit"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -132,7 +133,13 @@ const (
 	demoPassword = "demo"
 	demoSubject  = "demo-user"
 
-	staticDir = "./web/static"
+	// staticDir is the SPA bundle every example shares; accountDir is
+	// this example's own — the enrolment page and the script that runs
+	// the registration ceremony, which no other example has. The split
+	// is the point: what is shared sits in one place, and what makes
+	// this example different sits in its own directory.
+	staticDir  = webui.StaticDir
+	accountDir = "./web/account"
 
 	// enrolCookie names the opaque handle to the server-side ceremony
 	// session. It carries no ceremony state itself, so a browser that
@@ -147,8 +154,10 @@ func main() {
 }
 
 func run() error {
-	if _, err := os.Stat(staticDir); err != nil {
-		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so ./web/static resolves")
+	for _, dir := range []string{staticDir, accountDir} {
+		if _, err := os.Stat(dir); err != nil {
+			return errors.New("static directory " + dir + " missing — run from the example directory so both it and the shared SPA bundle resolve")
+		}
 	}
 
 	keys := devkeys.MustEphemeral("passkey-1")
@@ -232,7 +241,7 @@ func run() error {
 	// service changes nothing about the library wiring.
 	opMux := http.NewServeMux()
 	opMux.HandleFunc("GET /account", serveAccountPage)
-	opMux.Handle("GET /account/assets/", http.StripPrefix("/account", http.FileServer(http.Dir(staticDir))))
+	opMux.Handle("GET /account/assets/", http.StripPrefix("/account", http.FileServer(http.Dir(accountDir))))
 	opMux.HandleFunc("POST /account/register/begin", enrol.begin)
 	opMux.HandleFunc("POST /account/register/finish", enrol.finish)
 	opMux.Handle("/", provider)
@@ -245,7 +254,7 @@ func run() error {
 
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := waitForIssuer(waitCtx, issuer); err != nil {
+	if err := serve.WaitForIssuer(waitCtx, issuer); err != nil {
 		return err
 	}
 
@@ -461,7 +470,7 @@ func (logCloneWarning) HandleCloneDetected(_ context.Context, subject string, cr
 // file because nothing about it belongs to the library — the OP has no
 // account surface and never renders one.
 func serveAccountPage(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, staticDir+"/account.html")
+	http.ServeFile(w, r, accountDir+"/account.html")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -472,31 +481,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
-}
-
-// waitForIssuer polls the discovery document until it answers 200 or
-// ctx is cancelled. The OP and the RP boot in one process, so the RP's
-// discovery call runs as soon as the OP listener is ready.
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
 }

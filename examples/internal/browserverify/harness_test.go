@@ -31,6 +31,7 @@ package browserverify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -208,7 +209,7 @@ func startExample(t *testing.T, dir string) (func(), string) {
 	t.Helper()
 
 	bin := filepath.Join(t.TempDir(), "example.bin")
-	build := exec.Command("go", "build", "-tags", "example", "-o", bin, ".")
+	build := exec.CommandContext(t.Context(), "go", "build", "-tags", "example", "-o", bin, ".")
 	build.Dir = dir
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build example %s: %v\n%s", dir, err, out)
@@ -218,7 +219,10 @@ func startExample(t *testing.T, dir string) (func(), string) {
 	if err != nil {
 		t.Fatalf("create log file: %v", err)
 	}
-	cmd := exec.Command(bin)
+	// Bound to the test context as a backstop for the returned stop: every
+	// example binds OP :8080 and RP :9090, so a caller that loses its stop
+	// would stall every test that follows rather than just its own.
+	cmd := exec.CommandContext(t.Context(), bin)
 	cmd.Dir = dir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -447,7 +451,7 @@ func spaLoop(ctx context.Context, spec exampleSpec, totpSecret string, codes *co
 			}
 		case "email":
 			if spec.emailAddress == "" {
-				return "", fmt.Errorf("spa e-mail prompt: the example asked for an address but the spec supplies none")
+				return "", errors.New("spa e-mail prompt: the example asked for an address but the spec supplies none")
 			}
 			if err := chromedp.Run(ctx,
 				chromedp.SendKeys(`#prompt-form input[name="email"]`, spec.emailAddress, chromedp.ByQuery),
@@ -520,7 +524,7 @@ func spaSubmit(ctx context.Context) error {
 		return fmt.Errorf("mark submit button: %w", err)
 	}
 	if !marked {
-		return fmt.Errorf("no submit button in current prompt")
+		return errors.New("no submit button in current prompt")
 	}
 	if err := chromedp.Run(ctx,
 		chromedp.Click(`#prompt-form button[data-bv-clicked]`, chromedp.ByQuery),
@@ -532,7 +536,10 @@ func spaSubmit(ctx context.Context) error {
 		var present bool
 		if err := chromedp.Run(ctx, chromedp.Evaluate(
 			`!!document.querySelector('#prompt-form button[data-bv-clicked]')`, &present)); err != nil {
-			return nil // navigated away — the marked button is gone with the document
+			// The evaluation failed because the document navigated away and
+			// took the marked button with it — the same observation as
+			// querying the live document and not finding it.
+			present = false
 		}
 		if !present {
 			return nil

@@ -2,19 +2,21 @@
 
 // Example 10 demonstrates [op.WithSPAUI]: the OP delegates the
 // login screens to a SPA at the configured mount paths while still
-// driving the OAuth + OIDC protocol surface. The SPA bundle in
-// ./web/static is hand-rolled vanilla HTML/CSS/JS with no build step
-// so the demo runs out of the box.
+// driving the OAuth + OIDC protocol surface. The SPA bundle comes
+// from examples/internal/webui — hand-rolled vanilla HTML/CSS/JS with
+// no build step, shared by every SPA example — so the demo runs out
+// of the box.
 //
-// Run with the example build tag:
+// Run with the example build tag, from this directory so the shared
+// SPA bundle resolves:
 //
-//	(cd examples/10-react-login && go run -tags example .)
+//	(cd examples/10-react-login && GOWORK=off go run -tags example .)
 //
 // Two listeners come up in the same process:
 //
 //   - :8080 — the OP, with one seeded password user, one
 //     statically-registered public client, and the SPA bundle
-//     served from ./web/static at /login.
+//     served at /login.
 //   - :9090 — the RP, built from examples/internal/rpkit. It
 //     exposes /, /login, /callback, /me.
 //
@@ -55,6 +57,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
+	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -72,7 +75,7 @@ const (
 	demoPassword = "demo"
 	demoSubject  = "demo-user"
 
-	staticDir = "./web/static"
+	staticDir = webui.StaticDir
 )
 
 func main() {
@@ -83,7 +86,7 @@ func main() {
 
 func run() error {
 	if _, err := os.Stat(staticDir); err != nil {
-		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so ./web/static resolves")
+		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so the shared SPA bundle resolves")
 	}
 
 	keys := devkeys.MustEphemeral("react-1")
@@ -128,7 +131,7 @@ func run() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := waitForIssuer(ctx, issuer); err != nil {
+	if err := serve.WaitForIssuer(ctx, issuer); err != nil {
 		return err
 	}
 
@@ -172,32 +175,4 @@ func seedUser(st *inmem.Store) error {
 		},
 	}, demoUsername, hash)
 	return nil
-}
-
-// waitForIssuer polls iss + "/.well-known/openid-configuration"
-// until it returns 200 or ctx is cancelled. The example boots the OP
-// and the RP in the same process, so the RP's OIDC discovery runs as
-// soon as the OP listener is ready.
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
 }

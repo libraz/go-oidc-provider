@@ -125,7 +125,7 @@ func loginWithPasskey(t *testing.T, p *proc, client *http.Client, key *softkey.K
 	}
 	stateURL := pkOPBase + "/login/state/" + uid
 
-	for step := 0; step < 8; step++ {
+	for step := range 8 {
 		prompt := fetchPrompt(t, client, stateURL)
 		promptType, _ := prompt["type"].(string)
 

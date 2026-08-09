@@ -7,8 +7,9 @@
 #   * redis  — the volatile substores (Sessions, Interactions,
 #              ConsumedJTIs)
 #   * op     — the OP example (this repository) paired with a
-#              rpkit-driven RP, both in the same Go process. The SPA
-#              bundle is baked into the image and served at /login.
+#              rpkit-driven RP, both in the same Go process. The
+#              shared SPA bundle (examples/internal/webui) is baked
+#              into the image and served at /login.
 #
 # The mysql / redis ports are *not* published to the host because the
 # OP runs inside the compose network and reaches them by service name.

@@ -6,6 +6,13 @@
 // The CSRF token is taken from the prompt envelope and echoed via
 // the X-CSRF-Token header (the server's __Host-oidc_csrf cookie is
 // HttpOnly and unreadable from JS).
+//
+// Every SPA example serves this one directory rather than a copy of
+// it, so the bundle handles the whole prompt vocabulary instead of
+// only the prompts one example happens to raise. A branch that never
+// fires — the passkey ceremony against an OP with no passkey step,
+// say — costs nothing and keeps the examples from drifting apart on
+// the parts they do share.
 
 const $ = (sel) => document.querySelector(sel);
 const statusEl = $("#status");
@@ -44,6 +51,12 @@ async function fetchPrompt() {
 function renderPrompt(prompt) {
   formEl.replaceChildren();
   formEl.hidden = false;
+  // Stamp the prompt type on the form. Field names alone do not
+  // identify a prompt — a one-time e-mail code and a recovery code
+  // both arrive as a field called "code" — so anything keying off the
+  // DOM (styling, analytics, an automated walkthrough) needs the type
+  // to tell them apart.
+  formEl.dataset.promptType = prompt.type ?? "";
   statusEl.textContent = titleFor(prompt.type);
   applyLocale(prompt);
 
@@ -54,6 +67,11 @@ function renderPrompt(prompt) {
 
   if (prompt.type === "captcha") {
     renderCaptcha(prompt);
+    return;
+  }
+
+  if (prompt.type === "auth.passkey") {
+    renderPasskey(prompt);
     return;
   }
 
@@ -102,6 +120,87 @@ function renderCaptcha(prompt) {
     ev.preventDefault();
     submitForm(prompt, { captcha_token: input.value });
   };
+}
+
+// renderPasskey answers the assertion prompt. Unlike every other prompt
+// in this bundle it collects nothing from the user: the credential comes
+// from navigator.credentials.get(), and the only field the server wants
+// is the serialised response.
+//
+// The button exists because the ceremony has to be user-activated —
+// browsers refuse a get() that was not triggered by a gesture, which
+// rules out firing it as soon as the prompt renders.
+function renderPasskey(prompt) {
+  const note = document.createElement("p");
+  note.className = "muted";
+  note.textContent = "Your browser will ask for the passkey you registered.";
+  formEl.appendChild(note);
+  formEl.appendChild(buildSubmit("Use passkey"));
+
+  formEl.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const submit = formEl.querySelector("button[type=submit]");
+    if (submit) submit.disabled = true;
+    try {
+      const assertion = await requestAssertion(prompt.data ?? {});
+      submitForm(prompt, { response: JSON.stringify(assertion) });
+    } catch (err) {
+      fail(err.message || String(err));
+    }
+  };
+}
+
+async function requestAssertion(data) {
+  // The prompt carries the challenge and the allow-list as Go []byte
+  // values, which encoding/json renders as standard base64 — padded,
+  // and with the +/ alphabet rather than the -_ one the WebAuthn wire
+  // format uses elsewhere. Decoding is the only translation needed.
+  const publicKey = {
+    challenge: b64ToBytes(data.Challenge),
+    allowCredentials: (data.AllowCredentials ?? []).map((c) => ({
+      type: c.Type || "public-key",
+      id: b64ToBytes(c.ID),
+      transports: c.Transports?.length ? c.Transports : undefined,
+    })),
+    userVerification: "preferred",
+    // rpId is deliberately absent: it defaults to the effective domain
+    // of the page, which is the OP's own origin — the same value the
+    // credential was registered under. Naming it here would add a
+    // second place for it to be wrong.
+  };
+
+  const credential = await navigator.credentials.get({ publicKey });
+  if (!credential) {
+    throw new Error("The browser returned no assertion.");
+  }
+  return {
+    id: credential.id,
+    rawId: bytesToB64url(credential.rawId),
+    type: credential.type,
+    response: {
+      clientDataJSON: bytesToB64url(credential.response.clientDataJSON),
+      authenticatorData: bytesToB64url(credential.response.authenticatorData),
+      signature: bytesToB64url(credential.response.signature),
+      userHandle: credential.response.userHandle
+        ? bytesToB64url(credential.response.userHandle)
+        : undefined,
+    },
+    clientExtensionResults: credential.getClientExtensionResults(),
+  };
+}
+
+function b64ToBytes(value) {
+  const raw = atob(String(value ?? ""));
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function bytesToB64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function renderConsent(prompt) {
@@ -287,7 +386,7 @@ function fail(msg) {
 // applyLocale stamps the OP-resolved locale onto <html lang> so the
 // browser picks the right hyphenation / spell-check rules and any
 // downstream Intl API observes the active language. The OP runs the
-// §L.2 priority chain (PreferredLocaleStore → ui_locales → cookie →
+// locale priority chain (PreferredLocaleStore → ui_locales → cookie →
 // Accept-Language → default) before [Driver.Render]; the SPA never
 // re-runs the chain. Embedders that want to override the OP's pick
 // consult prompt.ui_locales_hint (the RP's raw list) instead.
