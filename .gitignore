@@ -92,8 +92,10 @@ conformance/render/
 
 # Examples do the same: `go build` inside examples/NN-slug/ drops a binary
 # named after the directory, which is otherwise indistinguishable from a
-# source file to git.
+# source file to git. The root-relative form covers `go build
+# ./examples/NN-slug`, which writes the same name into the repository root.
 /examples/*/[0-9][0-9]-*
+/[0-9][0-9]-*
 
 # Internal-only artefacts (kept locally, never committed). The OSS-facing
 # documentation lives in README.md, CHANGELOG.md, SECURITY.md, NOTICE,
