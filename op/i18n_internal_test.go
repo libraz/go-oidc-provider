@@ -148,7 +148,7 @@ func TestBuildLocaleResolver_NewLocaleRegisteredAsIs(t *testing.T) {
 }
 
 // fakePreferredLocaleStore returns a fixed locale or a fixed error,
-// letting the resolver tests exercise the head of the §L.2 chain
+// letting the resolver tests exercise the head of the locale chain
 // without standing up a real user store.
 type fakePreferredLocaleStore struct {
 	tag Locale
@@ -191,7 +191,7 @@ func TestWithPreferredLocaleStore_RejectsTypedNil(t *testing.T) {
 
 // TestBuildLocaleResolver_PreferredStoreWiresChainHead verifies the
 // store reaches the resolver and is consulted at the top of the
-// §L.2 chain. The fake returns "ja" so only the preferred-store
+// locale chain. The fake returns "ja" so only the preferred-store
 // branch could explain the resolved tag — none of the other inputs
 // hint at Japanese.
 func TestBuildLocaleResolver_PreferredStoreWiresChainHead(t *testing.T) {
@@ -212,7 +212,7 @@ func TestBuildLocaleResolver_PreferredStoreWiresChainHead(t *testing.T) {
 }
 
 // TestBuildLocaleResolver_PreferredStoreErrorTreatedAsNoPreference
-// pins design 002 §L.2: the store is best-effort, so a backend
+// pins the chain-head contract: the store is best-effort, so a backend
 // failure must not fail the resolve — instead the chain falls
 // through to the next layer. Without this, an outage on the
 // preferred-store backend (Redis / LDAP) would block every login

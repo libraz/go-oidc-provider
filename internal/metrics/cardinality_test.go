@@ -24,6 +24,10 @@ var labelAllowlist = map[string]struct{}{
 	"reason":        {},
 	"event":         {},
 	"kind":          {},
+	// issuer is a constant label sourced from configuration, not from
+	// request input; its cardinality is the number of Providers in the
+	// process.
+	"issuer": {},
 }
 
 func TestCardinality_LabelAllowlist(t *testing.T) {
@@ -32,6 +36,7 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	c, err := metrics.New(reg, metrics.Options{
 		StaticClientIDs: map[string]struct{}{"client-1": {}},
+		Issuer:          testIssuer,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
 // fakeCustomGrant is a no-op CustomGrantHandler used to exercise the
@@ -59,14 +61,23 @@ func TestWithCustomGrant_RejectsEmptyName(t *testing.T) {
 	}
 }
 
+// TestWithCustomGrant_RejectsBuiltinCollision drives every grant_type
+// the OP implements itself through op.New and requires the
+// registration to fail. The case list is derived from the grant.Type
+// enumeration plus the token-exchange URN — the one in-tree grant with
+// no enum constant — so a grant added to the enum is covered here
+// without a second edit.
 func TestWithCustomGrant_RejectsBuiltinCollision(t *testing.T) {
 	t.Parallel()
 
-	cases := []string{
-		"authorization_code",
-		"refresh_token",
-		"client_credentials",
-		"urn:ietf:params:oauth:grant-type:device_code",
+	cases := []string{op.TokenExchangeGrantType}
+	for ordinal := grant.Type(0); ; ordinal++ {
+		if wire := ordinal.String(); ordinal.IsValid() && wire != "" {
+			cases = append(cases, wire)
+		}
+		if ordinal == math.MaxUint8 {
+			break
+		}
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {

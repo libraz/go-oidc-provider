@@ -24,6 +24,14 @@ import (
 // out-of-band from the brute-force feed.
 const captchaFailureThreshold = 3
 
+// captchaMaxFailures bounds how many rejected tokens a single attempt
+// may submit before the orchestrator abandons the chain with
+// [ErrCaptchaExhausted]. The gate is a liveness bound, not a security
+// one: without it a deployment whose verifier rejects everything (a
+// misconfigured site key, an upstream outage) would re-emit the
+// challenge indefinitely and no factor would ever become reachable.
+const captchaMaxFailures = 5
+
 // stateRefTTL is how long an issued [interaction.Prompt.StateRef] stays valid
 // from the orchestrator's perspective. The default is short enough to
 // rule out long-tail replay attacks but long enough to outlast a
@@ -242,20 +250,28 @@ func (o *Orchestrator) consumeSubmission(ctx context.Context, st State, in Input
 }
 
 // handleCaptchaSubmission validates the captcha token; on success
-// CaptchaPassed flips and the chain advances, on failure the captcha
-// Prompt is re-emitted with a fresh nonce (the StepCounter still
-// increments so the previous token cannot replay). Captcha events do
-// NOT call observers — captcha is intentionally out-of-band from the
-// brute-force feed.
+// CaptchaPassed flips and the chain advances, on failure
+// [State.CaptchaFailures] advances and the captcha Prompt is re-emitted
+// with a fresh nonce (the StepCounter still increments so the previous
+// token cannot replay). Once the failure count reaches
+// [captchaMaxFailures] the chain aborts with [ErrCaptchaExhausted]
+// instead of re-emitting, so a verifier that rejects every token cannot
+// trap the user in a challenge the chain never leaves. Captcha events
+// do NOT call observers, and they do not touch [State.LastFailures] —
+// captcha is intentionally out-of-band from the brute-force feed.
 func (o *Orchestrator) handleCaptchaSubmission(ctx context.Context, st State, in Input) (State, interaction.Step, error) {
 	if o.cfg.Captcha == nil {
 		return st, interaction.Step{}, ErrInvalidStateRef
 	}
 	captchaIn := CaptchaInput{
-		Token:    in.CaptchaToken,
+		Token:    captchaToken(in),
 		RemoteIP: st.RemoteIP,
 	}
 	if err := o.cfg.Captcha.Verify(ctx, captchaIn); err != nil {
+		st.CaptchaFailures++
+		if st.CaptchaFailures >= captchaMaxFailures {
+			return st, interaction.Step{}, ErrCaptchaExhausted
+		}
 		next, step, err2 := o.emitCaptchaPrompt(st, in.Now)
 		if err2 != nil {
 			return st, interaction.Step{}, err2
@@ -263,8 +279,23 @@ func (o *Orchestrator) handleCaptchaSubmission(ctx context.Context, st State, in
 		return next, step, nil
 	}
 	st.CaptchaPassed = true
+	st.CaptchaFailures = 0
 	st.LastFailures = 0
 	return st, interaction.Step{}, nil
+}
+
+// captchaToken extracts the provider token from the tick input. The
+// submission's [CaptchaTokenField] is the wire route every driver uses
+// (the prompt declares the field, so the HTML driver renders it and the
+// SPA envelope advertises it); [Input.CaptchaToken] remains as an
+// override for callers that drive Tick directly.
+func captchaToken(in Input) string {
+	if in.Submission != nil {
+		if v, ok := in.Submission.Values[CaptchaTokenField]; ok && v != "" {
+			return v
+		}
+	}
+	return in.CaptchaToken
 }
 
 // handleAuthSubmission delegates the submission to the active
@@ -288,7 +319,9 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 		o.observeFailure(ctx, st, in.Now, auth.Type())
 		// Soft failures wrap [ErrFactorRetry]; observe the failure
 		// (already done), advance the brute-force counter, and
-		// re-emit the factor's prompt so the SPA can offer a retry.
+		// re-emit the factor's prompt so the SPA can offer a retry —
+		// or defer to the dispatcher when the counter reached the
+		// captcha threshold, so the challenge runs first.
 		// Hard failures bubble up so the HTTP layer can surface 5xx /
 		// 4xx unchanged. Scratch is cleared only on the hard-failure
 		// path; the retry helper decides whether to preserve it (a
@@ -297,7 +330,7 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 		if errors.Is(err, ErrFactorRetry) {
 			return o.softRetryAuthFactor(ctx, st, auth, step, in.Now, err)
 		}
-		st.FactorScratch = nil
+		st = retireActiveFactorToken(st)
 		return st, interaction.Step{}, err
 	}
 	if step.Prompt != nil {
@@ -328,16 +361,51 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 	return st, interaction.Step{}, nil
 }
 
+// retireActiveFactorToken invalidates everything the ceremony that just
+// failed left behind: the scratch slot carrying the factor's in-flight
+// challenge, and the StateRef that addressed it (the signer binds each
+// token to [State.StepCounter], so advancing the counter retires the
+// outstanding token). A single-use WebAuthn challenge that survived a
+// rejected assertion would otherwise stay replayable for the whole
+// StateRef TTL, and an authenticator that reports no signature counter
+// — the common case for platform passkeys — has nothing left to catch
+// the replay with.
+//
+// Callers MUST return the returned State to [Tick]'s caller even though
+// the tick is failing: the invalidation only takes effect once the HTTP
+// layer persists it.
+func retireActiveFactorToken(st State) State {
+	st.FactorScratch = nil
+	st.StepCounter++
+	return st
+}
+
 // softRetryAuthFactor advances the brute-force counter and re-emits
-// the active factor's prompt after a soft credential failure. The
-// helper is split out of [handleAuthSubmission] so the latter stays
-// under the gocognit ceiling. origErr is the [ErrFactorRetry]-wrapped
-// error from the authenticator's Continue; we surface it verbatim
-// when Begin cannot produce a retry prompt so the HTTP layer renders
-// the original auth-failure response rather than swallowing the
-// failure into a generic 5xx.
+// the active factor's prompt after a soft credential failure — unless
+// the counter just reached the captcha threshold, in which case the
+// helper retires the factor and defers to the dispatcher so the
+// challenge interposes first. The helper is split out of
+// [handleAuthSubmission] so the latter stays under the gocognit
+// ceiling. origErr is the [ErrFactorRetry]-wrapped error from the
+// authenticator's Continue; we surface it verbatim when Begin cannot
+// produce a retry prompt so the HTTP layer renders the original
+// auth-failure response rather than swallowing the failure into a
+// generic 5xx.
 func (o *Orchestrator) softRetryAuthFactor(ctx context.Context, st State, auth Authenticator, cont interaction.Step, now time.Time, origErr error) (State, interaction.Step, error) {
 	st.LastFailures++
+	// The failure that just landed may be the one that crosses the
+	// captcha threshold. Returning a zero Step hands control back to the
+	// dispatcher, which runs the same [captchaRequired] gate every fresh
+	// advance runs; the LoginFlow path defers the same way. Re-emitting
+	// the factor prompt from here instead would leave the gate reachable
+	// only by re-entering the dispatcher, which a submit-only guessing
+	// loop never does — the browser would have to reload the interaction
+	// for the challenge to appear at all.
+	if o.captchaRequired(st) {
+		st.FactorScratch = nil
+		st.ActiveFactorIdx = -1
+		return st, interaction.Step{}, nil
+	}
 	// A multi-step factor (e.g. email-OTP on its verify screen) returns
 	// the sub-prompt to re-show alongside ErrFactorRetry. Preserve its
 	// scratch (emitFactorPrompt mirrors cont.Scratch into

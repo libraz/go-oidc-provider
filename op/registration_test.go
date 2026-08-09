@@ -99,6 +99,7 @@ func dcrBaseOpts(tb testing.TB, s store.Store, clock op.Clock) []op.Option {
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
 		op.WithClock(clock),
+		fixtureAuthenticator(),
 	}
 }
 
@@ -328,21 +329,59 @@ func TestWithDynamicRegistration_RejectsDuplicate(t *testing.T) {
 // embedder who passes feature.DynamicRegistration through WithFeature in
 // addition to WithDynamicRegistration receives a deterministic configuration
 // error rather than silent double-enablement.
+//
+// Both call orders are covered because WithFeature is idempotent: it
+// returns without touching the config when the flag is already present.
+// A duplicate check that lived at the option site therefore only saw the
+// second declaration in one of the two orders, and the same
+// configuration booted or failed depending on the order the embedder
+// happened to list the options in.
 func TestWithDynamicRegistration_RejectsRedundantFeatureFlag(t *testing.T) {
 	t.Parallel()
 
-	clock := dcrFixedClock()
-	s := inmem.New(inmem.WithClock(clock))
-	opts := append(dcrBaseOpts(t, s, clock),
-		op.WithFeature(feature.DynamicRegistration),
-		op.WithDynamicRegistration(op.RegistrationOption{}),
-	)
-	_, err := op.New(opts...)
-	if err == nil {
-		t.Fatal("expected configuration error when feature flag and option are both supplied")
+	cases := []struct {
+		name string
+		opts func(t *testing.T) []op.Option
+	}{
+		{
+			name: "flag first",
+			opts: func(t *testing.T) []op.Option {
+				t.Helper()
+				clock := dcrFixedClock()
+				return append(dcrBaseOpts(t, inmem.New(inmem.WithClock(clock)), clock),
+					op.WithFeature(feature.DynamicRegistration),
+					op.WithDynamicRegistration(op.RegistrationOption{}),
+				)
+			},
+		},
+		{
+			name: "option first",
+			opts: func(t *testing.T) []op.Option {
+				t.Helper()
+				clock := dcrFixedClock()
+				return append(dcrBaseOpts(t, inmem.New(inmem.WithClock(clock)), clock),
+					op.WithDynamicRegistration(op.RegistrationOption{}),
+					op.WithFeature(feature.DynamicRegistration),
+				)
+			},
+		},
 	}
-	if !op.IsServerError(err) {
-		t.Errorf("redundant feature flag must surface as server configuration error: %v", err)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := op.New(tc.opts(t)...)
+			if err == nil {
+				t.Fatal("expected configuration error when feature flag and option are both supplied")
+			}
+			if !op.IsServerError(err) {
+				t.Errorf("redundant feature flag must surface as server configuration error: %v", err)
+			}
+			if desc := configurationDescription(t, err); !strings.Contains(desc, "more than once") {
+				t.Errorf("description=%q must report the duplicate declaration", desc)
+			}
+		})
 	}
 }
 

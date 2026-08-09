@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 )
 
 // TestSupportedEncryptionAlgs_Snapshot pins the public discovery
@@ -132,6 +133,7 @@ func TestWithEncryptionKeyset_RejectsKidCollision(t *testing.T) {
 		op.WithStore(stubStore{}),
 		op.WithKeyset(op.Keyset{signing}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithEncryptionKeyset(op.EncryptionKeyset{
 			{KeyID: "shared-kid", PrivateKey: rsaKey},
 		}),
@@ -270,10 +272,9 @@ func TestWithSupportedEncryptionAlgs_RejectsUnknownEnc(t *testing.T) {
 
 // TestDiscovery_AdvertisesEncryptionFields asserts that the
 // id_token / userinfo encryption arrays land in the discovery
-// document when an encryption keyset is registered. The
-// request_object / authorization / introspection arrays are gated on
-// their respective features and tested in their own integration
-// surfaces.
+// document. The request_object / authorization / introspection arrays
+// are gated on their respective features and tested in their own
+// integration surfaces.
 func TestDiscovery_AdvertisesEncryptionFields(t *testing.T) {
 	t.Parallel()
 
@@ -318,32 +319,121 @@ func TestDiscovery_AdvertisesEncryptionFields(t *testing.T) {
 	}
 }
 
-// TestDiscovery_OmitsEncryptionFields asserts that an OP without an
-// encryption keyset keeps the *_encryption_*_values_supported fields
-// absent from the wire (omitempty). Embedders who do not want JWE
-// must not see the fields advertised even as empty arrays.
-func TestDiscovery_OmitsEncryptionFields(t *testing.T) {
+// TestDiscovery_OutboundEncryptionAdvertisedWithoutKeyset pins the
+// capability the advertisement is supposed to describe. An id_token /
+// userinfo response is encrypted to a key from the recipient client's
+// JWKS, so an OP with no encryption keyset of its own serves them
+// exactly as well as one with a keyset — and must say so. Gating these
+// fields on op.WithEncryptionKeyset made a working OP advertise that it
+// could not encrypt, and left "register a throwaway keyset" as the only
+// workaround.
+func TestDiscovery_OutboundEncryptionAdvertisedWithoutKeyset(t *testing.T) {
 	t.Parallel()
 
-	provider, err := op.New(validBaseOpts(t)...)
-	if err != nil {
-		t.Fatalf("op.New: %v", err)
-	}
-	srv := httptest.NewServer(provider)
-	t.Cleanup(srv.Close)
+	doc := fetchDiscoveryDoc(t, validBaseOpts(t))
 
-	resp := getJSON(t, srv.URL+"/.well-known/openid-configuration")
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var doc map[string]any
-	_ = json.Unmarshal(body, &doc)
+	for _, k := range []string{
+		"id_token_encryption_alg_values_supported",
+		"id_token_encryption_enc_values_supported",
+		"userinfo_encryption_alg_values_supported",
+		"userinfo_encryption_enc_values_supported",
+	} {
+		values, ok := doc[k].([]any)
+		if !ok || len(values) == 0 {
+			t.Errorf("discovery must advertise %q without an encryption keyset, got %v", k, doc[k])
+		}
+	}
+}
+
+// TestDiscovery_InboundEncryptionRequiresKeyset pins the other half of
+// the split: a request object is encrypted TO the OP, so the OP claims
+// to accept one only when it holds a key to decrypt it.
+func TestDiscovery_InboundEncryptionRequiresKeyset(t *testing.T) {
+	t.Parallel()
+
+	inbound := []string{
+		"request_object_encryption_alg_values_supported",
+		"request_object_encryption_enc_values_supported",
+	}
+
+	without := fetchDiscoveryDoc(t, append(validBaseOpts(t), op.WithFeature(feature.JAR)))
+	for _, k := range inbound {
+		if _, ok := without[k]; ok {
+			t.Errorf("discovery must omit %q without an encryption keyset", k)
+		}
+	}
+
+	with := fetchDiscoveryDoc(t, append(validBaseOpts(t),
+		op.WithFeature(feature.JAR),
+		op.WithEncryptionKeyset(op.EncryptionKeyset{{KeyID: "enc-1", PrivateKey: mustRSA(t)}}),
+	))
+	for _, k := range inbound {
+		values, ok := with[k].([]any)
+		if !ok || len(values) == 0 {
+			t.Errorf("discovery must advertise %q with an encryption keyset, got %v", k, with[k])
+		}
+	}
+}
+
+// TestDiscovery_NarrowedEncryptionAlgsShrinkEveryFamily pins that
+// op.WithSupportedEncryptionAlgs reaches the wire on every family at
+// once, inbound and outbound, so the advertisement cannot disagree with
+// what the runtime will accept.
+func TestDiscovery_NarrowedEncryptionAlgsShrinkEveryFamily(t *testing.T) {
+	t.Parallel()
+
+	doc := fetchDiscoveryDoc(t, append(validBaseOpts(t),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.JARM),
+		op.WithFeature(feature.Introspect),
+		op.WithEncryptionKeyset(op.EncryptionKeyset{{KeyID: "enc-1", PrivateKey: mustRSA(t)}}),
+		op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, []string{"A256GCM"}),
+	))
 
 	for _, k := range []string{
 		"id_token_encryption_alg_values_supported",
 		"userinfo_encryption_alg_values_supported",
+		"request_object_encryption_alg_values_supported",
+		"authorization_encryption_alg_values_supported",
+		"introspection_encryption_alg_values_supported",
+	} {
+		if got := doc[k]; !slices.Equal(toStrings(t, got), []string{"ECDH-ES"}) {
+			t.Errorf("%s=%v want [ECDH-ES]", k, got)
+		}
+	}
+	for _, k := range []string{
+		"id_token_encryption_enc_values_supported",
+		"userinfo_encryption_enc_values_supported",
+		"request_object_encryption_enc_values_supported",
+		"authorization_encryption_enc_values_supported",
+		"introspection_encryption_enc_values_supported",
+	} {
+		if got := doc[k]; !slices.Equal(toStrings(t, got), []string{"A256GCM"}) {
+			t.Errorf("%s=%v want [A256GCM]", k, got)
+		}
+	}
+}
+
+// TestDiscovery_EmptyEncryptionNarrowingOmitsEveryFamily pins the
+// deliberate "publish keys, negotiate nothing" posture: narrowing to
+// the empty set drops the whole family from the wire.
+func TestDiscovery_EmptyEncryptionNarrowingOmitsEveryFamily(t *testing.T) {
+	t.Parallel()
+
+	doc := fetchDiscoveryDoc(t, append(validBaseOpts(t),
+		op.WithFeature(feature.JAR),
+		op.WithEncryptionKeyset(op.EncryptionKeyset{{KeyID: "enc-1", PrivateKey: mustRSA(t)}}),
+		op.WithSupportedEncryptionAlgs([]string{}, nil),
+	))
+
+	for _, k := range []string{
+		"id_token_encryption_alg_values_supported",
+		"id_token_encryption_enc_values_supported",
+		"userinfo_encryption_alg_values_supported",
+		"request_object_encryption_alg_values_supported",
 	} {
 		if _, ok := doc[k]; ok {
-			t.Errorf("discovery should omit %q when JWE is off", k)
+			t.Errorf("discovery must omit %q when the inventory is narrowed to nothing", k)
 		}
 	}
 }
@@ -402,6 +492,51 @@ func TestJWKS_PublishesEncryptionKeys(t *testing.T) {
 }
 
 // --- helpers --------------------------------------------------------
+
+// fetchDiscoveryDoc boots a Provider from opts, fetches its discovery
+// document and returns it decoded.
+func fetchDiscoveryDoc(t *testing.T, opts []op.Option) map[string]any {
+	t.Helper()
+
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	srv := httptest.NewServer(provider)
+	t.Cleanup(srv.Close)
+
+	resp := getJSON(t, srv.URL+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read discovery body: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("unmarshal discovery: %v", err)
+	}
+	return doc
+}
+
+// toStrings converts a decoded JSON array into a []string so slice
+// comparisons read directly.
+func toStrings(t *testing.T, raw any) []string {
+	t.Helper()
+
+	values, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("discovery array member %v is not a string", v)
+		}
+		out = append(out, s)
+	}
+	return out
+}
 
 // getJSON is the test-only HTTP GET helper that satisfies the noctx
 // linter. The default httptest server scope keeps the request short-

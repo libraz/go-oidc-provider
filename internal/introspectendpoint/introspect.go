@@ -46,6 +46,47 @@ type response struct {
 	AuthorizationDetails []map[string]any `json:"authorization_details,omitempty"`
 }
 
+// mayIntrospectForResource reports whether the authenticated client is
+// registered as an introspection client for at least one of the
+// resources the token is addressed to.
+//
+// This is what makes RFC 7662's canonical deployment possible — a
+// resource server introspecting the tokens its callers present, which
+// were issued to those callers and not to it. The permission is scoped
+// to the audience deliberately: a listed client can read only tokens
+// meant for the resource it speaks for, so registering an API gateway
+// never turns into blanket visibility over every client's tokens.
+//
+// A nil [Deps.IntrospectionDelegates] answers false for everything,
+// which is the same-client-only posture a deployment gets by not
+// naming any introspection client.
+func (d Deps) mayIntrospectForResource(authenticatedClientID string, audience []string) bool {
+	if len(d.IntrospectionDelegates) == 0 || authenticatedClientID == "" {
+		return false
+	}
+	allowed := d.IntrospectionDelegates[authenticatedClientID]
+	if len(allowed) == 0 {
+		return false
+	}
+	for _, aud := range audience {
+		if _, ok := allowed[aud]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// audienceList lifts an opaque record's single-valued Audience onto the
+// slice shape [Deps.mayIntrospectForResource] takes, so the two token
+// formats are compared against the delegation map identically. An empty
+// audience yields a nil slice and therefore never matches.
+func audienceList(audience string) []string {
+	if audience == "" {
+		return nil
+	}
+	return []string{audience}
+}
+
 // inactive is the canonical "active": false response. RFC 7662 §2.2
 // requires that an inactive response carry ONLY the "active" member;
 // the helper makes the rule explicit at every call site.
@@ -136,16 +177,17 @@ func appendNonNil(branches ...branchFn) []branchFn {
 // reports success: false means the verifier rejected the token (or
 // same-client-only failed) and the caller MUST fall through.
 func resolveJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerifier, authenticatedClientID, token string) (response, bool) {
-	claims, _, err := verifier.Verify(token)
+	claims, _, err := verifier.Verify(ctx, token)
 	if err != nil {
 		return response{}, false
 	}
-	if claims.ClientID != authenticatedClientID {
-		// Same-client-only: a token belonging to a different client is
-		// inactive from this client's point of view. RFC 7662 §2.2
-		// allows the OP to refuse cross-client introspection; the
-		// library's v1.0 posture is the most conservative — return
-		// inactive without leaking why.
+	if claims.ClientID != authenticatedClientID &&
+		!deps.mayIntrospectForResource(authenticatedClientID, claims.Audience) {
+		// Same-client-only unless the caller is a registered
+		// introspection client for a resource this token is addressed
+		// to. RFC 7662 §2.2 leaves cross-client introspection to the
+		// OP's discretion; the default stays the most conservative
+		// reading and returns inactive without leaking why.
 		return response{}, false
 	}
 	if revoked, ok := isJWTAccessTokenRevoked(ctx, deps, claims); !ok || revoked {
@@ -258,7 +300,7 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 	if !ok {
 		return response{}, false
 	}
-	out := projectRefreshToken(rec, publicSubject)
+	out := projectRefreshToken(rec, publicSubject, deps.Issuer)
 	out.AuthorizationDetails = grantAuthorizationDetails(ctx, deps, rec.GrantID)
 	return out, true
 }
@@ -289,16 +331,17 @@ func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClien
 	if !rec.ExpiresAt.After(now) {
 		return response{}, false
 	}
-	if rec.ClientID != authenticatedClientID {
-		// Same-client-only: a token issued to another client is inactive
-		// from this client's point of view.
+	if rec.ClientID != authenticatedClientID &&
+		!deps.mayIntrospectForResource(authenticatedClientID, audienceList(rec.Audience)) {
+		// Same-client-only unless the caller is a registered
+		// introspection client for the resource this token names.
 		return response{}, false
 	}
 	publicSubject, ok := projectIntrospectionSubject(ctx, deps, rec.Subject, rec.ClientID)
 	if !ok {
 		return response{}, false
 	}
-	out := projectOpaqueAccessToken(rec, publicSubject)
+	out := projectOpaqueAccessToken(rec, publicSubject, deps.Issuer)
 	out.AuthorizationDetails = grantAuthorizationDetails(ctx, deps, rec.GrantID)
 	return out, true
 }
@@ -351,13 +394,24 @@ func projectIntrospectionSubject(ctx context.Context, deps Deps, rawSubject, cli
 // no SubjectProjector is configured) that the wire response carries;
 // the caller resolves it through [projectIntrospectionSubject] so the
 // "sub" returned here matches what the JWT access-token branch would
-// emit for the same chain (RFC 9068 §3 / OIDC Core §8.1).
-func projectOpaqueAccessToken(rec *store.OpaqueAccessToken, publicSubject string) response {
+// emit for the same chain (RFC 9068 §3 / OIDC Core §8.1). issuer is
+// carried for the same reason: a resource server validating "iss"
+// must not start failing because the deployment switched the access
+// token format.
+//
+// "jti" stays absent on this branch, and that asymmetry is deliberate
+// rather than an oversight. The only identifier an opaque record
+// holds is [store.OpaqueAccessToken.ID], which IS the credential
+// handed to the client; publishing it as "jti" would echo a bearer
+// token back into a response body that routinely lands in resource
+// server logs.
+func projectOpaqueAccessToken(rec *store.OpaqueAccessToken, publicSubject, issuer string) response {
 	out := response{
 		Active:    true,
 		ClientID:  rec.ClientID,
 		TokenType: tokenTypeBearer,
 		Sub:       publicSubject,
+		Iss:       issuer,
 		ACR:       rec.ACR,
 	}
 	if !rec.IssuedAt.IsZero() {
@@ -407,13 +461,16 @@ func opaqueAccessTokenCnf(rec *store.OpaqueAccessToken) map[string]string {
 // "exp" mirrors ExpiresAt; the response carries cnf when the token
 // chain is sender-constrained. publicSubject is the per-client pairwise
 // value resolved by [projectIntrospectionSubject], so the "sub" on the
-// wire matches the JWT access-token branch (RFC 9068 §3 / OIDC §8.1).
-func projectRefreshToken(rec *store.RefreshToken, publicSubject string) response {
+// wire matches the JWT access-token branch (RFC 9068 §3 / OIDC §8.1);
+// issuer is carried for the same reason. "jti" is omitted here on the
+// same grounds as [projectOpaqueAccessToken].
+func projectRefreshToken(rec *store.RefreshToken, publicSubject, issuer string) response {
 	out := response{
 		Active:    true,
 		ClientID:  rec.ClientID,
 		TokenType: tokenTypeBearer,
 		Sub:       publicSubject,
+		Iss:       issuer,
 		Exp:       rec.ExpiresAt.Unix(),
 	}
 	if !rec.CreatedAt.IsZero() {

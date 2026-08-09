@@ -10,16 +10,35 @@ import (
 // that cross the public API boundary. It carries an OAuth/OIDC-style code,
 // a short description suitable for logging, and an optional wrapped cause.
 //
-// Construct Error values through the package-level helpers
-// ([newConfigurationError]; future code-class helpers SHOULD follow the
-// same shape) rather than instantiating this struct directly so that
-// the catalog stays the single source of truth. New code-class factories
-// MUST live in this file so the closed catalog of error codes stays
-// auditable from one location.
+// The configuration errors [New] returns are package-level values
+// ([ErrIssuerRequired], [ErrKeysetRequired], …), so a caller inspecting
+// them uses [errors.Is] rather than constructing anything.
+//
+// Callers that produce an Error build it as a composite literal. That is
+// the path a [CustomGrantHandler] takes to choose its own wire response:
+// returning an *Error from Handle makes the OP emit exactly that code and
+// description, while returning any other error is mapped to invalid_grant
+// with the message redacted. For example:
+//
+//	return op.CustomGrantResponse{}, &op.Error{
+//		Code:        "invalid_grant",
+//		Description: "service token is expired",
+//		Cause:       err,
+//	}
+//
+// Code is not free-form — see its own documentation for the permitted
+// values.
 type Error struct {
-	// Code is the OAuth-style machine-readable error code (e.g.
-	// "invalid_request"). It MUST come from the catalog defined in this
-	// file; ad-hoc codes are forbidden.
+	// Code is the OAuth-style machine-readable error code. It MUST be
+	// one of the RFC 6749 §5.2 codes the OP already emits —
+	// "access_denied", "invalid_client", "invalid_grant",
+	// "invalid_request", "invalid_scope", "unauthorized_client",
+	// "unsupported_grant_type", "unsupported_response_type" — or one of
+	// the operator-fault codes "configuration_error", "server_error",
+	// "temporarily_unavailable". Ad-hoc codes are forbidden. Nothing
+	// rewrites an unrecognised one — [Error.WriteOAuthError] copies
+	// Code onto the wire verbatim and falls back to HTTP 400 for its
+	// status, so an invented code ships to the client as-is.
 	Code string
 
 	// Description is a human-readable, non-localised hint for operators.
@@ -202,13 +221,19 @@ var ErrUserStoreRequired = &Error{
 }
 
 // ErrIssuerInvalid is returned by [New] when [WithIssuer] receives a value
-// that is not a syntactically valid absolute issuer URL: the scheme MUST be
-// https (or http when the host is a loopback IP literal in 127.0.0.0/8 or
-// [::1] for development), with a non-empty authority, no trailing slash, and
-// no query or fragment, per OpenID Connect Discovery 1.0 §3 / FAPI 2.0 §5.4.
+// that is not a syntactically valid absolute issuer URL, per OpenID Connect
+// Discovery 1.0 §3 / FAPI 2.0 §5.4. The value MUST carry a non-empty
+// authority, no trailing slash, no query and no fragment, and be in RFC 3986
+// canonical form (lowercase scheme and host, canonical path, no default port).
+//
+// The scheme MUST be https, except that http is admitted for development when
+// the host is a loopback IP literal in 127.0.0.0/8 or [::1] — or, once
+// [WithAllowLocalhostLoopback] has been supplied, the textual host
+// "localhost". The textual host needs the opt-in because its resolution can be
+// hijacked (RFC 8252 §7.3) while an IP literal's cannot.
 var ErrIssuerInvalid = &Error{
 	Code:        codeConfiguration,
-	Description: "issuer must be an absolute URL with no trailing slash, query, or fragment (https; http permitted only for loopback IP literals)",
+	Description: "issuer must be an absolute URL with no trailing slash, query, or fragment (https; http permitted only for loopback IP literals; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host)",
 }
 
 // ErrKeysetRequired is returned by [New] when [WithKeyset] is not supplied or
@@ -306,12 +331,21 @@ var ErrCustomGrantNameEmpty = &Error{
 }
 
 // ErrCustomGrantBuiltinCollision is returned when [WithCustomGrant]
-// is given a handler whose [CustomGrantHandler.Name] equals one of
-// the built-in grant_type strings the OP routes natively
-// (authorization_code / refresh_token / client_credentials /
-// urn:ietf:params:oauth:grant-type:device_code). The OP refuses the
-// override because the handler would shadow built-in security
-// invariants (PKCE, refresh-token rotation, device-code polling).
+// is given a handler whose [CustomGrantHandler.Name] equals a
+// grant_type the OP implements itself. The reserved set is every
+// grant_type the token endpoint routes natively — one per constant of
+// the grant.Type enumeration — together with each extension grant the
+// OP ships a handler for, such as the RFC 8693 token exchange enabled
+// by [RegisterTokenExchange]. The set is a property of the library
+// rather than of the deployment, so a registration is refused whether
+// or not the colliding grant is enabled on this provider.
+//
+// The OP refuses the override because the handler would take the wire
+// away from an implementation carrying invariants it cannot be assumed
+// to reproduce: PKCE, refresh-token rotation, and device-code polling
+// on the natively routed grants; audience narrowing, scope
+// intersection, and sender-constraint re-binding on the extension
+// grants.
 var ErrCustomGrantBuiltinCollision = &Error{
 	Code:        codeConfiguration,
 	Description: "CustomGrantHandler.Name collides with a built-in grant_type",

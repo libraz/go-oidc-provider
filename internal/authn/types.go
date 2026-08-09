@@ -2,6 +2,7 @@ package authn
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"time"
 
@@ -99,6 +100,17 @@ type State struct {
 	// one captcha [interaction.Prompt] per attempt; once the bit is set it
 	// stays set.
 	CaptchaPassed bool
+
+	// CaptchaFailures counts the tokens the [CaptchaVerifier]
+	// rejected during this attempt. It is deliberately separate from
+	// [State.LastFailures]: captcha is out-of-band from the
+	// brute-force feed, so a rejected token must not push the chain
+	// further into the gate it is trying to clear. The orchestrator
+	// aborts the chain once the count reaches its internal ceiling so
+	// a verifier that rejects everything (misconfigured site key,
+	// upstream outage) cannot trap the user in an endless challenge
+	// loop. A cleared challenge resets it to zero.
+	CaptchaFailures int `json:"captcha_failures,omitempty"`
 
 	// ActiveFactorIdx is the index of the active
 	// [Authenticator] in the chain configuration, or -1 when no
@@ -251,9 +263,12 @@ type Input struct {
 	// is the first call of an attempt (no prompt outstanding).
 	Submission *interaction.FormSubmission
 
-	// CaptchaToken is the SPA's response to a captcha
-	// [interaction.Prompt]. Populated only when the previous tick emitted a
-	// captcha challenge; otherwise the orchestrator ignores it.
+	// CaptchaToken is an out-of-band override for the token the
+	// captcha [interaction.Prompt] asks for. The ordinary route is the
+	// [CaptchaTokenField] entry of [Input.Submission]; the field exists
+	// for callers that drive [Orchestrator.Tick] directly and have
+	// already extracted the token themselves. The submission value
+	// wins when both are present.
 	CaptchaToken string
 
 	// Now is the wall-clock time for this tick. The HTTP layer
@@ -331,4 +346,14 @@ var (
 	// dispatch on the authn-level class without importing each factor's
 	// sentinels.
 	ErrFactorAbort = errors.New("authn: factor aborted")
+
+	// ErrCaptchaExhausted is returned when the [CaptchaVerifier] has
+	// rejected the maximum number of tokens the orchestrator accepts
+	// for one attempt. The chain terminates instead of re-emitting the
+	// challenge forever: a verifier that never succeeds would otherwise
+	// leave the user with no reachable factor. It wraps
+	// [ErrFactorAbort] so the HTTP layer renders a 4xx rather than a
+	// 5xx — the condition is terminal for this attempt but the user can
+	// start a fresh one.
+	ErrCaptchaExhausted = fmt.Errorf("authn: captcha challenge exhausted: %w", ErrFactorAbort)
 )

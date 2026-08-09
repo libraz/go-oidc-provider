@@ -63,7 +63,7 @@ var (
 
 	// ErrCodeReplayed indicates the code was already consumed by a prior
 	// token exchange. The token endpoint MUST revoke every refresh token
-	// descending from this code's grant (§A.12.4).
+	// descending from this code's grant.
 	ErrCodeReplayed = errors.New("authcode: code already consumed")
 
 	// ErrClientMismatch indicates the authenticated client does not match
@@ -258,7 +258,7 @@ type ExchangeInput struct {
 	RedirectURI string
 
 	// CodeVerifier is the PKCE verifier from RFC 7636. Required because
-	// the OP rejects code issuance without a challenge (§A.12.3).
+	// the OP rejects code issuance without a challenge.
 	CodeVerifier string
 }
 
@@ -297,7 +297,7 @@ type Exchanged struct {
 
 	// HadCodeChallenge reports whether the consumed code carried a
 	// PKCE challenge at issuance. The token endpoint consults this to
-	// run the RFC 9700 §2.1.1 / §A.12.3 downgrade guard: a public
+	// run the RFC 9700 §2.1.1 downgrade guard: a public
 	// client whose code was issued without PKCE MUST be rejected at
 	// /token as defence-in-depth, regardless of the active profile's
 	// PKCE-mandatory posture. Surfacing the bit instead of the raw
@@ -336,7 +336,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 	if in.Code == "" {
 		return nil, ErrCodeMissing
 	}
-	rec, err := e.store.Consume(ctx, in.Code)
+	rec, err := e.consume(ctx, in.Code)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -389,6 +389,18 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		ConsumedAt:       *rec.ConsumedAt,
 		IssuedAt:         rec.CreatedAt,
 	}, nil
+}
+
+// consume redeems the code and normalises the store-contract violation of a
+// nil record returned alongside a nil error onto [store.ErrNotFound]: the
+// exchange cannot prove the code was ever issued, so it takes the same path
+// an unknown code takes rather than dereferencing the missing record.
+func (e *Exchanger) consume(ctx context.Context, code string) (*store.AuthorizationCode, error) {
+	rec, err := e.store.Consume(ctx, code)
+	if err == nil && rec == nil {
+		return nil, store.ErrNotFound
+	}
+	return rec, err
 }
 
 // newID returns a 256-bit base64url-encoded value suitable for the "code"

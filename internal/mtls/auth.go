@@ -6,13 +6,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
 
 	josev4 "github.com/go-jose/go-jose/v4"
+
+	"github.com/libraz/go-oidc-provider/internal/jose"
 )
 
 // ClientMatcher is the projection of a registered client's
@@ -117,15 +118,23 @@ const MethodSelfSignedTLSClientAuth = "self_signed_tls_client_auth"
 // "no cert at all" from "cert presented but does not satisfy the
 // registered method".
 //
-// Status: this verifier is complete but not yet wired into the token
-// endpoint's client-authentication dispatch, so RFC 8705 §2
+// Status: the OP does not offer RFC 8705 §2 client authentication.
 // tls_client_auth / self_signed_tls_client_auth are not selectable as a
-// token_endpoint_auth_method today. Wiring it requires the embedder's TLS
-// terminator (reverse proxy or [tls.Config.ClientCAs]) to surface the
-// verified client certificate to the token endpoint; that plumbing is a
-// follow-up. The mTLS *token binding* path (cnf.x5t#S256), which needs
-// only the presented cert thumbprint, IS wired and independent of this
-// client-authentication verifier.
+// token_endpoint_auth_method: neither discovery nor client registration
+// admits them, and no endpoint calls this function. Offering them would
+// require the client record to carry the expected subject DN / SAN (§2.1)
+// alongside the registration and discovery surface to populate it, which
+// is a feature rather than a wiring detail. The library's supported path
+// for a profile that demands asymmetric client authentication is
+// private_key_jwt.
+//
+// The verifier is kept because it is complete, spec-shaped, and covered
+// by tests, so the decision above is reversible without re-deriving RFC
+// 8705 §2. It is deliberately unreachable from the HTTP layer today.
+//
+// The mTLS *token binding* path (cnf.x5t#S256, RFC 8705 §3), which needs
+// only the presented cert thumbprint and no per-client metadata, IS
+// wired and is independent of this client-authentication verifier.
 func VerifyClientAuth(method string, cert *x509.Certificate, expected ClientMatcher, jwks []byte) error {
 	switch method {
 	case MethodTLSClientAuth:
@@ -448,6 +457,15 @@ func containsIP(haystack []net.IP, needle string) bool {
 // client's "jwks" metadata field. A nil / empty input returns
 // [ErrJWKSMalformed] so the caller can distinguish "client has no
 // JWKS" from "JWKS does not contain this key".
+//
+// Decoding runs member by member through [jose.DecodeJWKSet], so a key
+// this build cannot represent (an X25519 encryption key published
+// alongside the client's EC signing key, say) is skipped instead of
+// failing the whole document — RFC 7517 §5 directs implementations to
+// ignore JWKs they do not understand, and a client that publishes one
+// must still be able to authenticate with the keys that do decode. A
+// document whose every member is undecodable yields [ErrJWKSMalformed]:
+// no thumbprint can be compared against it.
 func VerifySelfSignedTLSClientAuth(cert *x509.Certificate, jwks []byte) error {
 	if cert == nil {
 		return fmt.Errorf("%w: nil certificate", ErrNoClientCert)
@@ -455,8 +473,8 @@ func VerifySelfSignedTLSClientAuth(cert *x509.Certificate, jwks []byte) error {
 	if len(jwks) == 0 {
 		return ErrJWKSMalformed
 	}
-	var set josev4.JSONWebKeySet
-	if err := json.Unmarshal(jwks, &set); err != nil {
+	set, _, err := jose.DecodeJWKSet(jwks)
+	if err != nil {
 		return fmt.Errorf("%w: %w", ErrJWKSMalformed, err)
 	}
 

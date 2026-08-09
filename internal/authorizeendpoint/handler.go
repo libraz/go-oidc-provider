@@ -167,6 +167,21 @@ type Deps struct {
 	// library wires this only when the [feature.JAR] flag is enabled.
 	JAR *jar.Verifier
 
+	// DPoPEnabled reports whether the OP can honour an RFC 9449 §10.1
+	// "dpop_jkt" commitment. The authorization endpoint never verifies a
+	// DPoP proof itself — it only records the committed thumbprint on the
+	// authorization code — so it has no verifier of its own to infer the
+	// answer from and the wiring layer MUST set this from the same
+	// condition that decides whether the token endpoint gets a DPoP
+	// verifier. When false, a request carrying "dpop_jkt" is rejected
+	// with invalid_request rather than minting a code the token endpoint
+	// is guaranteed to refuse (see [authorize.ExtensionPolicy.DPoPEnabled]).
+	//
+	// The zero value therefore means "this OP cannot honour dpop_jkt",
+	// which is the correct reading for a handler built without the
+	// field: a deployment that does support DPoP says so explicitly.
+	DPoPEnabled bool
+
 	// Sessions is the chooser-group session manager. The handler reads
 	// the active session via [sessions.Manager.Resolve] before deciding
 	// whether interaction is required, and calls [sessions.Manager.Issue]
@@ -185,9 +200,18 @@ type Deps struct {
 	// CSRF is the HMAC signer for double-submit tokens.
 	CSRF *csrf.Signer
 
-	// Origins is the Origin / Referer allowlist enforced on every state-
-	// changing /interaction request.
-	Origins *csrf.Allowlist
+	// InteractionOrigins is the Origin / Referer allowlist enforced on
+	// every state-changing /interaction request.
+	//
+	// It is deliberately NOT the OP's CORS allowlist. That list also
+	// carries the origin of every registered client's redirect_uri, so
+	// reusing it here would let an origin registered by one client post
+	// to another client's consent ceremony. The interaction endpoint is
+	// reached from the OP's own login UI (same origin as the issuer) or,
+	// when the embedder hosts that UI elsewhere, from an origin the
+	// embedder enumerated explicitly — nothing derived from a client
+	// registration belongs in it.
+	InteractionOrigins *csrf.Allowlist
 
 	// Driver is the [interaction.Driver] the handler delegates UI
 	// rendering to. A nil value falls back to [interaction.JSONDriver].
@@ -356,7 +380,7 @@ type Deps struct {
 	// unchanged).
 	ACRResolver ACRResolver
 
-	// LocaleResolver, when non-nil, walks the §L.2 priority chain
+	// LocaleResolver, when non-nil, walks the locale priority chain
 	// (PreferredLocaleStore → ui_locales → __Host-oidc_locale cookie
 	// → Accept-Language → default) and stamps the result onto every
 	// rendered [interaction.Prompt] (Locale / UILocalesHint /

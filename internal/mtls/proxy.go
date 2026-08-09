@@ -28,6 +28,15 @@ import (
 // vector where an attacker reaches the OP directly (bypassing the
 // proxy) and forges the header on a connection the OP would otherwise
 // have honoured.
+//
+// PUBLIC SURFACE: this struct is re-exported verbatim as op.MTLSProxy
+// (a type alias), so embedders name and build it without importing
+// internal/. Every exported field below is therefore part of the
+// library's public API: renaming a field, removing one, or changing a
+// field's type is a breaking change under SemVer even though this
+// package is internal. Adding a field is additive and safe. Anything
+// that would break the alias belongs behind a distinct public struct
+// with an explicit conversion in op/ instead.
 type ProxyConfig struct {
 	// HeaderName is the HTTP header carrying a URL-encoded PEM block
 	// of the client cert. Empty disables the header path entirely;

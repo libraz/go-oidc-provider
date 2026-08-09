@@ -670,7 +670,7 @@ func TestExchange_GraceWindow_MismatchInsideWindowRevokesChain(t *testing.T) {
 // TestExchange_GraceWindow_ScopeWideningInsideWindowRevokesChain
 // covers the second mismatch shape: an attacker who captured the
 // just-consumed refresh token re-presents it with a widened scope
-// before the grace window expires. RFC 9700 §2.2.2 / §A.12.5 still
+// before the grace window expires. RFC 9700 §2.2.2 still
 // requires chain revocation — scope widening on a consumed token is
 // the same threat shape as client_id mismatch.
 func TestExchange_GraceWindow_ScopeWideningInsideWindowRevokesChain(t *testing.T) {

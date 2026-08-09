@@ -22,6 +22,7 @@ func TestWithStaticClients_IsIdempotentAcrossProviderConstruction(t *testing.T) 
 			op.WithStore(st),
 			op.WithKeyset(validKeyset(t)),
 			op.WithCookieKeys(newRandomCookieKey(t)),
+			fixtureAuthenticator(),
 			op.WithStaticClients(op.ConfidentialClient{
 				ID:           "restart-client",
 				Secret:       "restart-secret",
@@ -60,6 +61,7 @@ func TestWithStaticClients_DifferentStoredRecordConflicts(t *testing.T) {
 			op.WithStore(st),
 			op.WithKeyset(validKeyset(t)),
 			op.WithCookieKeys(newRandomCookieKey(t)),
+			fixtureAuthenticator(),
 			op.WithStaticClients(op.PublicClient{
 				ID:           "stable-client",
 				RedirectURIs: []string{"https://app.example.com/cb"},
@@ -106,6 +108,7 @@ func TestWithStaticClients_NonStaticStoredRecordConflicts(t *testing.T) {
 		op.WithStore(st),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithStaticClients(op.PublicClient{
 			ID:           existing.ID,
 			RedirectURIs: existing.RedirectURIs,
@@ -134,6 +137,7 @@ func TestWithStaticClients_DifferentSecretConflicts(t *testing.T) {
 			op.WithStore(st),
 			op.WithKeyset(validKeyset(t)),
 			op.WithCookieKeys(newRandomCookieKey(t)),
+			fixtureAuthenticator(),
 			op.WithStaticClients(op.ConfidentialClient{
 				ID:           "secret-client",
 				Secret:       secret,
@@ -171,6 +175,7 @@ func TestWithStaticClients_RemovedSeedIsNotDeleted(t *testing.T) {
 		op.WithStore(st),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	}
 	if _, err := op.New(append(base, op.WithStaticClients(op.PublicClient{
 		ID:           "retained-client",
@@ -201,6 +206,7 @@ func TestWithStaticClients_LaterBuildFailureLeavesStoreUntouched(t *testing.T) {
 		op.WithStore(st),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithPrometheus(registry),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "must-not-persist",
@@ -236,6 +242,7 @@ func TestWithStaticClients_NthBatchFailureLeavesStoreUntouched(t *testing.T) {
 		op.WithStore(st),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "batch-a",

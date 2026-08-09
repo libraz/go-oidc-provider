@@ -81,8 +81,9 @@ var (
 
 // totpDigits is the RFC 6238 default code length the verify path
 // pins. Re-stated here so the [Confirm] guard can reject blanks
-// before the cryptographic compare; the verify-side compare itself
-// uses the same constant from [internal/authn/totp].
+// before the cryptographic compare; the verify-side compare uses its
+// own copy of the same constant. The two are independent declarations
+// of one RFC default, not a shared one.
 const totpDigits = 6
 
 // totpStep is the RFC 6238 default time step. The constant is

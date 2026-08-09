@@ -115,6 +115,16 @@ const mfaEncryptionKeyLen = 32
 // cross-factor counter wraps its authenticator with the factor package's
 // own WithLockout helper before registering it.
 //
+// The attachment is to the [Step], not to the factor. An authenticator
+// built directly — [NewEmailOTPAuthenticator] with an
+// [EmailOTPConfig] — and registered through [WithAuthenticators] does
+// NOT inherit the counter from this option, because the option never
+// sees it. Set [EmailOTPConfig.LockoutStore] to the same store to close
+// that gap. Leaving it nil is a silent hole rather than an error: the
+// factor still enforces its own per-record FailedCount, so it looks
+// rate-limited under test while an attacker who has exhausted their
+// TOTP budget pivots to email OTP for a fresh one.
+//
 // Backends MUST implement the versioned atomic-transition contract on
 // [store.AuthnLockoutStore.CompareAndSwap]. The library uses that one
 // primitive for increments, rolling-window rollover, lock stamping, and
@@ -132,8 +142,8 @@ const mfaEncryptionKeyLen = 32
 // on another backend supplies its own implementation.
 //
 // The default (nil store, option unset) preserves the per-factor
-// counters that ship in [internal/authn/totp] and
-// [internal/authn/emailotp]; embedders who want defence-in-depth
+// counters the TOTP and email-OTP authenticators keep on their own,
+// each budgeting its own factor; embedders who want defence-in-depth
 // against pivot attacks set this option and route the supplied store
 // to a backend every replica shares.
 //
@@ -324,15 +334,17 @@ func WithInteractions(i ...Interaction) Option {
 	})
 }
 
-// SPAUI declares the SPA-shell mount points and optional asset root
+// SPAUI declares the SPA-shell mount point and optional asset root
 // the [Provider] should expose so the embedder's React (or framework-
 // neutral SPA) frontend can drive the login / consent / RP-Initiated
 // Logout flows. The struct is supplied to [WithSPAUI]; the option
-// stores it on config and the orchestrator wiring later translates
-// the mount points into JSON state endpoints. The scope is
-// deliberately limited to login / consent / RP-Initiated Logout:
+// stores it on config and the orchestrator wiring translates
+// LoginMount into the shell, JSON state, and asset routes. The scope
+// is deliberately limited to login / consent / RP-Initiated Logout:
 // front-channel logout and session management iframes are out of
 // scope, so [SPAUI] does not carry mounts for those surfaces.
+// LoginMount is the only field that affects routing; see the
+// deprecation notes on ConsentMount and LogoutMount.
 // Experimental: the field set MAY gain optional members in a minor
 // release. Embedders SHOULD construct [SPAUI] with named field
 // initialisation so future additions remain source-compatible.
@@ -343,16 +355,23 @@ type SPAUI struct {
 	// site so the misconfiguration surfaces at construction time.
 	LoginMount string
 
-	// ConsentMount is the URL path the consent screen renders
-	// under. Empty means the SPA serves the consent screen from
-	// LoginMount and an internal route discriminator. When set
-	// MUST start with "/".
+	// ConsentMount is the URL path the consent screen renders under.
+	//
+	// Deprecated: no handler reads this field. The consent ceremony is
+	// served through the same LoginMount routes as every other prompt,
+	// discriminated by the state envelope's prompt type, whether
+	// ConsentMount is set or empty. The value is still validated — when
+	// non-empty it MUST start with "/" — but it reserves no route and
+	// changes no routing.
 	ConsentMount string
 
-	// LogoutMount is the URL path the RP-Initiated Logout
-	// confirmation screen renders under. Empty means the OP
-	// renders a built-in confirmation; when set MUST start with
-	// "/".
+	// LogoutMount is the URL path the RP-Initiated Logout confirmation
+	// screen renders under.
+	//
+	// Deprecated: no handler reads this field. The OP renders its
+	// built-in logout confirmation whether LogoutMount is set or empty.
+	// The value is still validated — when non-empty it MUST start with
+	// "/" — but it reserves no route and changes no routing.
 	LogoutMount string
 
 	// StaticDir is the on-disk directory the [Provider] serves
@@ -473,9 +492,10 @@ func WithLoginFlow(flow LoginFlow) Option {
 // /interaction state endpoint. Mutually exclusive with [WithConsentUI];
 // supplying both fails [New].
 // Validation:
-//   - LoginMount MUST be non-empty and MUST start with "/".
+//   - LoginMount MUST be non-empty and MUST start with "/". It is the
+//     only mount the router acts on.
 //   - ConsentMount and LogoutMount MAY be empty; when set they MUST
-//     start with "/".
+//     start with "/". Both are deprecated and affect no route.
 //   - StaticDir MAY be empty; when set the directory MUST exist at
 //     construction time (an [os.Stat] check) so a typo fails [New]
 //     rather than the first request.

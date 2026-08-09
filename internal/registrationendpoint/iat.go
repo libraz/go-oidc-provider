@@ -105,8 +105,10 @@ func verifyIAT(
 
 // consumeIAT atomically increments the IAT's Uses counter. It is
 // called after structural validation has passed but before the client
-// is persisted; a [store.ErrConflict] surfaces as a 400 invalid_token
-// race02-product-design.md §A.6.2.2.
+// is persisted. Concurrent registrations presenting the same IAT are
+// resolved by the store's compare-and-set, so only the first caller
+// wins and the losers see [store.ErrConflict], which surfaces as a 401
+// invalid_token just like a replayed IAT.
 // On success the function returns ok=true; on any failure it writes
 // the response envelope and returns ok=false.
 func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVerification) bool {

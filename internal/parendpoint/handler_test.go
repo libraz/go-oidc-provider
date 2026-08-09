@@ -373,12 +373,12 @@ func TestHandler_RequestURIInBody_Rejected(t *testing.T) {
 
 // TestHandler_MissingPKCE_AcceptedUnderNoProfile asserts that an
 // authorization request without code_challenge is accepted when no
-// profile is active. PKCE is profile-conditional in v0.x: the
-// library's overall posture is OAuth 2.1 (PKCE good practice
-// everywhere), but the OpenID Connect Basic certification suite
-// drives the OP without PKCE because OIDC Core 1.0 predates RFC
-// 7636. The test pins the new contract so a regression that
-// re-instates the always-required gate becomes loud.
+// profile is active. PKCE is profile-conditional: the library's
+// overall posture is OAuth 2.1 (PKCE good practice everywhere), but
+// the OpenID Connect Basic certification suite drives the OP without
+// PKCE because OIDC Core 1.0 predates RFC 7636. The test pins the
+// contract so a regression that re-instates the always-required gate
+// becomes loud.
 func TestHandler_MissingPKCE_AcceptedUnderNoProfile(t *testing.T) {
 	t.Parallel()
 

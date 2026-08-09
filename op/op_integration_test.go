@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -380,6 +381,7 @@ func TestIntegration_UserInfo_CustomScopeClaimsAreWired(t *testing.T) {
 		op.WithStore(st),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithScope(op.Scope{
 			Name:   "projects:read",
 			Public: true,
@@ -482,6 +484,96 @@ func TestIntegration_Discovery_ClaimsSupported_AdvertisesEmbedderList(t *testing
 	}
 }
 
+// TestIntegration_Discovery_MachineToMachine_OmitsAuthorizeSurfaces
+// pins the agreement between the discovery document and the routing
+// table for a client_credentials-only OP. Both are derived from the
+// same grant predicate, so an advertised authorization_endpoint /
+// end_session_endpoint would be a promise the mux cannot keep: a
+// relying party that followed it would get a bare 404 with no OAuth
+// error body, and an RP that registered a backchannel_logout_uri would
+// wait forever for a Logout Token that no session teardown can emit.
+func TestIntegration_Discovery_MachineToMachine_OmitsAuthorizeSurfaces(t *testing.T) {
+	t.Parallel()
+
+	_, base := startProvider(t, op.WithGrants(grant.ClientCredentials))
+
+	resp := httpGet(t, base+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, absent := range []string{
+		"authorization_endpoint",
+		"end_session_endpoint",
+		"backchannel_logout_supported",
+	} {
+		if got, ok := doc[absent]; ok {
+			t.Errorf("%s=%v must be absent when no grant mounts the authorization endpoint", absent, got)
+		}
+	}
+	types, ok := doc["response_types_supported"].([]any)
+	if !ok {
+		t.Fatalf("response_types_supported=%#v, want a JSON array (RFC 8414 §2 marks it REQUIRED)",
+			doc["response_types_supported"])
+	}
+	if len(types) != 0 {
+		t.Errorf("response_types_supported=%v, want [] when no response_type is accepted", types)
+	}
+
+	// The routing table must match what the document promised.
+	for _, path := range []string{"/oidc/auth", "/oidc/end_session"} {
+		unmounted := httpGet(t, base+path)
+		func() {
+			defer unmounted.Body.Close()
+			if unmounted.StatusCode != http.StatusNotFound {
+				t.Errorf("GET %s status=%d, want 404 (route must stay unmounted)", path, unmounted.StatusCode)
+			}
+		}()
+	}
+}
+
+// TestIntegration_Discovery_AuthorizationCode_AdvertisesAuthorizeSurfaces
+// is the positive half: the default grant set mounts /authorize, so the
+// same four members must appear and the routes must answer.
+func TestIntegration_Discovery_AuthorizationCode_AdvertisesAuthorizeSurfaces(t *testing.T) {
+	t.Parallel()
+
+	_, base := startProvider(t)
+
+	resp := httpGet(t, base+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, _ := doc["authorization_endpoint"].(string); got != validIssuer+"/oidc/auth" {
+		t.Errorf("authorization_endpoint=%v want %s/oidc/auth", doc["authorization_endpoint"], validIssuer)
+	}
+	if got, _ := doc["end_session_endpoint"].(string); got != validIssuer+"/oidc/end_session" {
+		t.Errorf("end_session_endpoint=%v want %s/oidc/end_session", doc["end_session_endpoint"], validIssuer)
+	}
+	if got, _ := doc["backchannel_logout_supported"].(bool); !got {
+		t.Errorf("backchannel_logout_supported=%v want true", doc["backchannel_logout_supported"])
+	}
+	types, _ := doc["response_types_supported"].([]any)
+	if len(types) != 1 || types[0] != "code" {
+		t.Errorf("response_types_supported=%v want [code]", types)
+	}
+
+	// A bare GET carries no client_id, so the authorize handler answers
+	// with an error envelope rather than a redirect — anything other
+	// than 404 proves the route is mounted.
+	mounted := httpGet(t, base+"/oidc/auth")
+	defer mounted.Body.Close()
+	if mounted.StatusCode == http.StatusNotFound {
+		t.Error("GET /oidc/auth returned 404 although discovery advertises the endpoint")
+	}
+}
+
 // TestIntegration_Discovery_DCRDisabled_OmitsRegistrationEndpoint
 // confirms that the discovery document omits "registration_endpoint"
 // (and the auth methods supported list) when WithDynamicRegistration
@@ -519,6 +611,7 @@ func TestIntegration_Discovery_DCREnabled_AdvertisesRegistrationEndpoint(t *test
 		op.WithStore(inmem.New()),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithDynamicRegistration(op.RegistrationOption{}),
 	)
 	if err != nil {

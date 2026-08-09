@@ -26,8 +26,8 @@
 // The package is best-effort by design: a failed delivery does not
 // roll back the OP-side session termination. The 1.0 spec does not
 // require synchronous delivery, and the embedder can plug in a queue-
-// backed [Deliverer] later when retry semantics are desired (see
-// design 002 §H.2). For v1.0 the OP makes one synchronous attempt per
+// backed [Deliverer] later when retry semantics are desired.
+// For v1.0 the OP makes one synchronous attempt per
 // RP and surfaces success / failure through audit events
 // (`logout.back_channel.delivered`, `logout.back_channel.failed`).
 package backchannel

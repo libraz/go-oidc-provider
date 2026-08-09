@@ -189,15 +189,19 @@ const (
 	// makes the short-circuit visible regardless of wrapper order.
 	AuditCORSPreflightAllowed = AuditEvent(auditevent.AuditCORSPreflightAllowed)
 
-	// AuditDPoPLooseMethodCaseAdmitted fires when the embedder has
-	// opted into the DPoP verifier's AllowLooseMethodCase bridge AND
-	// a proof was admitted whose "htm" claim differed from the
-	// request method only in ASCII case. The wire response is
-	// unchanged — the proof was admitted — but SOC tooling needs
-	// the signal so the loose-mode bridge stays visible while the
-	// responsible RP library is fixed. The RFC 9449 §4.3 strict
-	// posture is the default; loose mode is opt-in and produces
-	// this warn-level event on every admission.
+	// AuditDPoPLooseMethodCaseAdmitted fires when the DPoP verifier's
+	// loose-method-case bridge admits a proof whose "htm" claim
+	// differed from the request method only in ASCII case. The wire
+	// response is unchanged — the proof was admitted — but SOC tooling
+	// needs the signal so the bridge stays visible while the
+	// responsible RP library is fixed.
+	//
+	// No option on this package enables the bridge, so a [Provider]
+	// built through [New] verifies proofs in the RFC 9449 §4.3 strict
+	// posture and never emits this event; the Prometheus counter it
+	// mirrors onto therefore stays at zero. The constant and its
+	// counter are part of the catalog so the emission path is already
+	// wired if the opt-in is exposed. Warn-level when it does fire.
 	AuditDPoPLooseMethodCaseAdmitted = AuditEvent(auditevent.AuditDPoPLooseMethodCaseAdmitted)
 
 	// AuditKeyRetiredKidPresented fires when a JWS / JWE presented

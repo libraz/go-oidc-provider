@@ -26,11 +26,14 @@
 //     clients without a static-seed entry collapse onto the empty
 //     client_id label. PII labels (subject, IP, user-agent) are never
 //     emitted.
-//   - Registry ownership: the [prometheus.Registry] is the embedder's;
-//     this package only calls Register, never Unregister. Re-registering
-//     on the same registry surfaces the standard
-//     [prometheus.AlreadyRegisteredError] from [Collector.New] so the
-//     embedder can decide how to recover.
+//   - Registry ownership: the [prometheus.Registry] is the embedder's.
+//     Every metric carries the OP issuer as a constant label, so several
+//     Providers in one process can share a single registry without a
+//     name collision and without the metric names shifting under
+//     existing dashboards. Unregister is called only to roll back a
+//     failed [New], never on a live collector. Re-registering the same
+//     issuer surfaces the standard [prometheus.AlreadyRegisteredError]
+//     so the embedder can decide how to recover.
 //
 // The package depends on [github.com/prometheus/client_golang]; the
 // dependency is gated to this directory so the rest of the codebase

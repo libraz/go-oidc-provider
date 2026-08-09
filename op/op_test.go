@@ -356,7 +356,35 @@ func (stubGrantStore) HasAny(context.Context) (bool, error) { return false, nil 
 
 const validIssuer = "https://idp.example.com"
 
+// fixtureFactor is the [op.FactorType] of the authenticator
+// [validBaseOpts] registers. It is deliberately not one of the built-in
+// factor constants so a test that registers a real factor of its own
+// never collides with the fixture.
+const fixtureFactor op.FactorType = "fixture.primary"
+
+// validBaseOpts is the minimal option set that builds a provider. The
+// default grant set includes authorization_code, which [op.New] refuses
+// to construct without a way to authenticate anyone, so the fixture
+// carries an authenticator. Tests exercising [op.WithLoginFlow] — which
+// is mutually exclusive with [op.WithAuthenticators] — or the
+// authenticator wiring itself want [validBaseOptsNoAuthn] instead.
 func validBaseOpts(tb testing.TB) []op.Option {
+	tb.Helper()
+	return append(validBaseOptsNoAuthn(tb), fixtureAuthenticator())
+}
+
+// fixtureAuthenticator is the [op.Option] that satisfies the login
+// configuration [op.New] requires alongside the authorization_code
+// grant. Tests that assemble their own option slice rather than
+// calling [validBaseOpts] append it.
+func fixtureAuthenticator() op.Option {
+	return op.WithAuthenticators(stubAuthenticator{typ: fixtureFactor, aal: op.AAL1})
+}
+
+// validBaseOptsNoAuthn is [validBaseOpts] without the fixture
+// authenticator, for tests that supply their own login configuration or
+// that assert on what happens when none is supplied.
+func validBaseOptsNoAuthn(tb testing.TB) []op.Option {
 	tb.Helper()
 	return []op.Option{
 		op.WithIssuer(validIssuer),
@@ -410,6 +438,7 @@ func TestNew_RejectsMissingClientStore(t *testing.T) {
 		op.WithStore(noClientsStore{}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	}, []op.Option{}...)...)
 	if err == nil {
 		t.Fatal("expected configuration error for missing ClientStore")
@@ -432,6 +461,7 @@ func TestNew_RejectsMissingSessionStore(t *testing.T) {
 		op.WithStore(noSessionsStore{}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	)
 	if err == nil {
 		t.Fatal("expected configuration error for missing SessionStore")
@@ -452,6 +482,7 @@ func TestNew_RejectsAuthorizationCodeStoreWithoutTransactions(t *testing.T) {
 		op.WithStore(storeWithoutTransactions{Store: stubStore{}}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	)
 	if err == nil {
 		t.Fatal("expected configuration error for missing Transactional capability")
@@ -469,6 +500,7 @@ func TestNew_RejectsAuthorizationCodeStoreWithoutInteractionCAS(t *testing.T) {
 		op.WithStore(storeWithoutInteractionCAS{}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	)
 	if err == nil {
 		t.Fatal("expected configuration error for missing InteractionStoreCAS capability")
@@ -486,6 +518,7 @@ func TestNew_RejectsAuthorizationCodeStoreWithoutGrantClientLister(t *testing.T)
 		op.WithStore(storeWithoutGrantClientLister{}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	)
 	if err == nil {
 		t.Fatal("expected configuration error for missing GrantClientLister capability")
@@ -507,6 +540,7 @@ func TestNew_RejectsRefreshGrantStoreWithoutRetryResponses(t *testing.T) {
 		op.WithStore(storeWithoutRefreshRetry{}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	)
 	if err == nil {
 		t.Fatal("expected configuration error for missing RefreshRetryResponseStore capability")
@@ -527,6 +561,7 @@ func TestNew_AllowsMissingRetryResponsesWithoutRefreshGrant(t *testing.T) {
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		op.WithGrants(grant.AuthorizationCode),
+		fixtureAuthenticator(),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error without the refresh_token grant: %v", err)

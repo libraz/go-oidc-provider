@@ -6,17 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// parRequestURIPrefix is the URN namespace RFC 9126 §2.2 reserves for PAR
-// request_uri values. The /par endpoint emits this prefix verbatim; the
-// authorize endpoint matches on it to distinguish PAR URIs from the
-// (out-of-scope) JAR request_uri parameter.
-const parRequestURIPrefix = "urn:ietf:params:oauth:request_uri:"
 
 // errPARDisabled is the wire response when the OP receives a request_uri
 // while [Deps.PARs] is nil. The library uses invalid_request rather than
@@ -80,11 +73,16 @@ func resolvePARIfNeeded(
 	if uri == "" {
 		return nil, false
 	}
-	if !strings.HasPrefix(uri, parRequestURIPrefix) {
+	if !authorize.HasPARRequestURIPrefix(uri) {
 		// Not a PAR URN: leave the value intact so the downstream JAR
 		// consumer can pick it up (a non-PAR request_uri is a JAR
 		// reference per RFC 9101 §5.2.2). When JAR is also disabled,
 		// the JAR consumer surfaces invalid_request itself.
+		//
+		// The predicate is the shared one so this branch and the JAR
+		// consumer's mirror of it classify the same value the same
+		// way; a URN whose prefix differs only in case belongs to PAR
+		// and must be answered here, not routed into JAR.
 		return nil, false
 	}
 	if deps.PARs == nil {
@@ -92,6 +90,11 @@ func resolvePARIfNeeded(
 		return nil, true
 	}
 	rec, err := deps.PARs.Find(ctx, uri)
+	if err == nil && rec == nil {
+		// A nil record alongside a nil error violates the store contract;
+		// a request_uri the backend cannot produce is not a valid one.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			renderAuthorizeError(w, r, deps, authorize.ErrInvalidRequestURI)

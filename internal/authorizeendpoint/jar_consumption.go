@@ -1,7 +1,6 @@
 package authorizeendpoint
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -40,9 +40,18 @@ const jarRequestURITimeout = 5 * time.Second
 // The function leaves PAR-style "request_uri" values
 // (urn:ietf:params:oauth:request_uri:...) untouched: those go through
 // the existing PAR consumption path.
+//
+// Every rejection here is pre-redirect-trust, so it renders through
+// [renderJARError] rather than redirecting. That helper negotiates the
+// same way the rest of the /authorize failure paths do: the embedder's
+// [interaction.Driver] owns the surface a browser sees. Under a profile
+// that mandates signed requests every /authorize call is a JAR call, so
+// this is the error path the deployment's users actually meet, and
+// answering it with a raw JSON body is a visible regression from what
+// the same failure produces one gate later.
 func resolveJARRequestIfNeeded(
-	ctx context.Context,
 	w http.ResponseWriter,
+	r *http.Request,
 	deps resolved,
 	clientID string,
 	values url.Values,
@@ -52,49 +61,81 @@ func resolveJARRequestIfNeeded(
 	if requestObject == "" && requestURI == "" {
 		return nil, false, false
 	}
+	ctx := r.Context()
+	// The wire "state" has not been through the parser yet (a repeated
+	// parameter is faulted later), so read the first occurrence only.
+	// It is echoed into the rendered page, never into a redirect: the
+	// driver escapes it, and no redirect target is trusted at this
+	// stage.
+	state := values.Get("state")
 	if requestObject != "" && requestURI != "" {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest,
-			"request and request_uri are mutually exclusive")
+		renderJARError(w, r, deps, errInvalidRequest,
+			"request and request_uri are mutually exclusive", state)
 		return nil, true, true
 	}
 	// PAR's request_uri shape is handled by [resolvePARIfNeeded]; defer
-	// to it without disturbing the wire values.
-	if requestURI != "" && strings.HasPrefix(requestURI, parRequestURIPrefix) {
+	// to it without disturbing the wire values. The classification uses
+	// the shared predicate so this branch and the PAR consumer agree on
+	// what a PAR URN is — a value only one of them recognises would fall
+	// through to a fetcher the client never asked for.
+	if requestURI != "" && authorize.HasPARRequestURIPrefix(requestURI) {
 		return nil, false, false
 	}
 	if deps.JAR == nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest,
-			"request and request_uri are not supported by this OP")
+		renderJARError(w, r, deps, errInvalidRequest,
+			"request and request_uri are not supported by this OP", state)
 		return nil, true, true
 	}
 	if clientID == "" {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "client_id is required")
+		renderJARError(w, r, deps, errInvalidRequest, "client_id is required", state)
 		return nil, true, true
 	}
 	client, err := deps.Clients.GetClient(ctx, clientID)
-	if err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "client_id is not registered")
+	if err != nil || client == nil {
+		// A nil client alongside a nil error violates the store contract;
+		// a client the backend cannot produce is not a registered one.
+		renderJARError(w, r, deps, errInvalidRequest, "client_id is not registered", state)
 		return nil, true, true
 	}
 	raw := requestObject
 	if requestURI != "" {
-		fetched, ok := fetchJARRequestURI(ctx, w, client, requestURI, deps.AllowPrivateNetworkJAR)
+		fetched, ok := fetchJARRequestURI(w, r, deps, client, requestURI, state)
 		if !ok {
 			return nil, true, true
 		}
 		raw = fetched
 	}
+	// Verify consumes the request object's "jti", so the object is
+	// single-use from here. That is the same rule the pushed path
+	// applies — /par verifies (and consumes) the object once at push
+	// time — and the visible difference between the two is a property of
+	// the mechanisms rather than a policy split: a pushed request is
+	// thereafter referenced by a request_uri, which /authorize resolves
+	// with a lookup and spends only at code emission, whereas a direct
+	// request object IS the /authorize parameter and is therefore
+	// re-presented by a reload. Relaxing it here would make the object
+	// replayable at /authorize with no counterpart at /par.
 	obj, err := deps.JAR.Verify(ctx, raw, clientID, client)
 	if err != nil {
-		writeJAREnvelopeError(w, err)
+		writeJAREnvelopeError(w, r, deps, err, state)
 		return nil, true, true
 	}
 	merged, err := jar.Merge(values, obj)
 	if err != nil {
-		writeJAREnvelopeError(w, err)
+		writeJAREnvelopeError(w, r, deps, err, state)
 		return nil, true, true
 	}
 	return merged, true, false
+}
+
+// renderJARError renders a JAR-stage rejection. Every such rejection is
+// pre-redirect-trust — the request object is what would have carried the
+// redirect_uri, and it has just been refused — so the response is an
+// inline page (or the JSON envelope for a non-browser caller), never a
+// redirect. state is the RP-supplied value echoed onto the page; the
+// driver is responsible for escaping it.
+func renderJARError(w http.ResponseWriter, r *http.Request, deps resolved, code, description, state string) {
+	renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, code, description, state)
 }
 
 // fetchJARRequestURI retrieves the signed request object referenced by
@@ -125,21 +166,23 @@ func resolveJARRequestIfNeeded(
 // The function writes the response envelope on every failure path; the
 // boolean is false in that case and true on success.
 func fetchJARRequestURI(
-	ctx context.Context,
 	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
 	client *store.Client,
 	uri string,
-	allowPrivate bool,
+	state string,
 ) (string, bool) {
+	ctx := r.Context()
 	if !isPreregisteredRequestURI(client, uri) {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
-			"request_uri is not preregistered for this client")
+		renderJARError(w, r, deps, errInvalidRequestURI,
+			"request_uri is not preregistered for this client", state)
 		return "", false
 	}
-	netsecOpts := jarRequestURINetsecOptions(allowPrivate)
+	netsecOpts := jarRequestURINetsecOptions(deps.AllowPrivateNetworkJAR)
 	if err := netsec.AssertSafeURL(ctx, uri, netsecOpts); err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
-			classifyJARRequestURISSRFError(err))
+		renderJARError(w, r, deps, errInvalidRequestURI,
+			classifyJARRequestURISSRFError(err), state)
 		return "", false
 	}
 	httpClient := netsec.NewHTTPClient(netsecOpts)
@@ -147,16 +190,16 @@ func fetchJARRequestURI(
 	// passed both the URL-time SSRF gate above and the dial-time gate
 	// installed by [netsec.NewHTTPClient]; the gosec G107/G704 SSRF
 	// taint warning is acknowledged here as covered by the deny-list.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, http.NoBody) //nolint:gosec // see netsec gates above.
+	fetchReq, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, http.NoBody) //nolint:gosec // see netsec gates above.
 	if err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI, "request_uri is malformed")
+		renderJARError(w, r, deps, errInvalidRequestURI, "request_uri is malformed", state)
 		return "", false
 	}
-	req.Header.Set("Accept", "application/oauth-authz-req+jwt, application/jwt, text/plain;q=0.5")
-	resp, err := httpClient.Do(req) //nolint:gosec // see netsec gates above.
+	fetchReq.Header.Set("Accept", "application/oauth-authz-req+jwt, application/jwt, text/plain;q=0.5")
+	resp, err := httpClient.Do(fetchReq) //nolint:gosec // see netsec gates above.
 	if err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
-			classifyJARRequestURIDoError(err))
+		renderJARError(w, r, deps, errInvalidRequestURI,
+			classifyJARRequestURIDoError(err), state)
 		return "", false
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -164,28 +207,28 @@ func fetchJARRequestURI(
 	// http.ErrUseLastResponse, so a redirect surfaces here as a non-2xx
 	// status. We refuse the response rather than follow the location.
 	if resp.StatusCode/100 == 3 {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
-			"request_uri must not redirect")
+		renderJARError(w, r, deps, errInvalidRequestURI,
+			"request_uri must not redirect", state)
 		return "", false
 	}
 	if resp.StatusCode/100 != 2 {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
-			fmt.Sprintf("request_uri responded with status %d", resp.StatusCode))
+		renderJARError(w, r, deps, errInvalidRequestURI,
+			fmt.Sprintf("request_uri responded with status %d", resp.StatusCode), state)
 		return "", false
 	}
 	if !isJARRequestObjectContentType(resp.Header.Get("Content-Type")) {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
-			fmt.Sprintf("request_uri content-type %q is not a JWS media type", resp.Header.Get("Content-Type")))
+		renderJARError(w, r, deps, errInvalidRequestURI,
+			fmt.Sprintf("request_uri content-type %q is not a JWS media type", resp.Header.Get("Content-Type")), state)
 		return "", false
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJARRequestURIBody+1))
 	if err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI, "request_uri body read failed")
+		renderJARError(w, r, deps, errInvalidRequestURI, "request_uri body read failed", state)
 		return "", false
 	}
 	if int64(len(body)) > maxJARRequestURIBody {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
-			"request_uri body exceeds size cap")
+		renderJARError(w, r, deps, errInvalidRequestURI,
+			"request_uri body exceeds size cap", state)
 		return "", false
 	}
 	return strings.TrimSpace(string(body)), true
@@ -296,12 +339,12 @@ func isPreregisteredRequestURI(c *store.Client, uri string) bool {
 // JWKS-resolution failures map to the same code (the OP cannot
 // distinguish a bad request from a misconfigured client without
 // helping an attacker enumerate clients).
-func writeJAREnvelopeError(w http.ResponseWriter, err error) {
+func writeJAREnvelopeError(w http.ResponseWriter, r *http.Request, deps resolved, err error, state string) {
 	switch {
 	case errors.Is(err, jar.ErrClientIDMismatch):
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "client_id mismatch in request object")
+		renderJARError(w, r, deps, errInvalidRequest, "client_id mismatch in request object", state)
 	default:
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestObject, sanitiseJARDescription(err))
+		renderJARError(w, r, deps, errInvalidRequestObject, sanitiseJARDescription(err), state)
 	}
 }
 

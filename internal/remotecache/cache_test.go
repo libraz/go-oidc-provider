@@ -221,6 +221,120 @@ func TestCache_StaleValueSurvivesNegativeWindowForChangeDetection(t *testing.T) 
 	}
 }
 
+func TestCache_RefreshBypassesAFreshEntry(t *testing.T) {
+	t.Parallel()
+
+	cache := New[string](Config{TTL: time.Hour})
+	cache.Put("key", "original")
+
+	value, err := cache.RefreshTTL(context.Background(), "key", func(_ context.Context, stale string, hasStale bool) (string, time.Duration, error) {
+		if !hasStale || stale != "original" {
+			t.Fatalf("refresh stale=%q hasStale=%v want original,true", stale, hasStale)
+		}
+		return "rotated", 0, nil
+	})
+	if err != nil || value != "rotated" {
+		t.Fatalf("refresh value=%q err=%v want rotated,nil", value, err)
+	}
+	if cached, ok, _ := cache.Get("key"); !ok || cached != "rotated" {
+		t.Fatalf("cached value=%q ok=%v want rotated,true", cached, ok)
+	}
+}
+
+// TestCache_FailedRefreshKeepsTheStoredValue pins that a refresh cannot be used
+// to discard a value the cache is still serving correctly. The trigger for a
+// refresh is an identifier any peer can supply, so a peer timing its probes
+// against a brief upstream outage would otherwise take the key down for the
+// whole negative window.
+func TestCache_FailedRefreshKeepsTheStoredValue(t *testing.T) {
+	t.Parallel()
+
+	cache := New[string](Config{TTL: time.Hour, NegativeTTL: time.Hour})
+	cache.Put("key", "original")
+	errUpstream := errors.New("upstream failed")
+
+	if _, err := cache.RefreshTTL(context.Background(), "key", func(context.Context, string, bool) (string, time.Duration, error) {
+		return "", 0, errUpstream
+	}); !errors.Is(err, errUpstream) {
+		t.Fatalf("refresh err=%v want upstream failure", err)
+	}
+	value, ok, cachedErr := cache.Get("key")
+	if !ok || cachedErr != nil || value != "original" {
+		t.Fatalf("after a failed refresh value=%q ok=%v err=%v want original,true,nil", value, ok, cachedErr)
+	}
+}
+
+// TestCache_FailedRefreshOfAnUnknownKeyIsNegativeCached is the control: with no
+// value to protect, a refresh failure takes the same negative entry a plain
+// load would have produced, so the amplification guard still applies.
+func TestCache_FailedRefreshOfAnUnknownKeyIsNegativeCached(t *testing.T) {
+	t.Parallel()
+
+	cache := New[string](Config{TTL: time.Hour, NegativeTTL: time.Hour})
+	errUpstream := errors.New("upstream failed")
+	var calls atomic.Int32
+	loader := func(context.Context, string, bool) (string, time.Duration, error) {
+		calls.Add(1)
+		return "", 0, errUpstream
+	}
+
+	if _, err := cache.RefreshTTL(context.Background(), "key", loader); !errors.Is(err, errUpstream) {
+		t.Fatalf("refresh err=%v want upstream failure", err)
+	}
+	if _, err := cache.Load(context.Background(), "key", func(context.Context, string, bool) (string, error) {
+		t.Fatal("the negative entry should have short-circuited the load")
+		return "", nil
+	}); !errors.Is(err, errUpstream) {
+		t.Fatalf("load err=%v want the cached upstream failure", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("loader calls=%d want 1", got)
+	}
+}
+
+// TestCache_AbandonedCallerDoesNotStallOrPoison pins that a caller whose
+// context is cancelled mid-load returns promptly with its own context error,
+// while the loader it shares with everyone else runs to completion and its
+// result lands in the cache.
+func TestCache_AbandonedCallerDoesNotStallOrPoison(t *testing.T) {
+	t.Parallel()
+
+	cache := New[string](Config{TTL: time.Hour, NegativeTTL: time.Hour})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	loader := func(context.Context, string, bool) (string, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		return "value", nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	abandoned := make(chan error, 1)
+	go func() {
+		_, err := cache.Load(ctx, "key", loader)
+		abandoned <- err
+	}()
+
+	<-entered
+	cancel()
+	if err := <-abandoned; !errors.Is(err, context.Canceled) {
+		t.Fatalf("abandoned Load err=%v want context.Canceled", err)
+	}
+	close(release)
+
+	value, err := cache.Load(context.Background(), "key", loader)
+	if err != nil || value != "value" {
+		t.Fatalf("Load after an abandoned one value=%q err=%v want value,nil", value, err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("loader calls=%d want 1; the abandoned load should have served the retry", got)
+	}
+}
+
 func TestCache_ContextFailureIsNotNegativeCached(t *testing.T) {
 	t.Parallel()
 

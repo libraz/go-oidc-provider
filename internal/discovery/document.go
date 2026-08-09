@@ -13,8 +13,10 @@ type Document struct {
 	Issuer string `json:"issuer"`
 
 	// AuthorizationEndpoint is the absolute URL of the authorization
-	// endpoint.
-	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	// endpoint. RFC 8414 §2 makes the member REQUIRED "unless no grant
+	// types are supported that use the authorization endpoint", so it is
+	// omitted for an OP whose grant set never mounts /authorize.
+	AuthorizationEndpoint string `json:"authorization_endpoint,omitempty"`
 
 	// TokenEndpoint is the absolute URL of the token endpoint.
 	TokenEndpoint string `json:"token_endpoint"`
@@ -26,15 +28,18 @@ type Document struct {
 	JWKSURI string `json:"jwks_uri"`
 
 	// EndSessionEndpoint is the absolute URL of the RP-Initiated Logout
-	// endpoint per OpenID Connect RP-Initiated Logout 1.0 §2.
+	// endpoint per OpenID Connect RP-Initiated Logout 1.0 §2. The
+	// endpoint exists only for an OP that also mounts /authorize, so the
+	// member is omitted for a machine-to-machine grant set.
 	EndSessionEndpoint string `json:"end_session_endpoint,omitempty"`
 
 	// BackchannelLogoutSupported reports whether the OP implements
 	// OpenID Connect Back-Channel Logout 1.0 §2 — i.e. POSTs a Logout
 	// Token to clients that registered a backchannel_logout_uri when
-	// their session terminates. v1.0 always reports true; the field is
-	// omitted from the wire only if the value is false (which the
-	// library never sets) so RPs can rely on its presence.
+	// their session terminates. Logout Tokens originate from a session
+	// teardown, which only an OP with the authorization endpoint mounted
+	// can perform; the member is therefore omitted (false) for a
+	// machine-to-machine grant set and true otherwise.
 	BackchannelLogoutSupported bool `json:"backchannel_logout_supported,omitempty"`
 
 	// BackchannelLogoutSessionSupported reports whether the Logout
@@ -138,7 +143,10 @@ type Document struct {
 	BackchannelAuthenticationRequestSigningAlgValuesSupported []string `json:"backchannel_authentication_request_signing_alg_values_supported,omitempty"`
 
 	// ResponseTypesSupported lists the response_type values the OP
-	// accepts. v1.0 ships with "code" only (no implicit / hybrid).
+	// accepts: "code" only (no implicit / hybrid), and the empty list
+	// when the grant set mounts no authorization endpoint. RFC 8414 §2
+	// marks the member REQUIRED unconditionally, so it is always
+	// present on the wire.
 	ResponseTypesSupported []string `json:"response_types_supported"`
 
 	// GrantTypesSupported lists the grant_type values the token endpoint
@@ -265,34 +273,37 @@ type Document struct {
 	// IDTokenEncryptionAlgValuesSupported lists the JWE alg values
 	// the OP can use to encrypt id_tokens for clients whose metadata
 	// requests encryption (OIDC Discovery 1.0 §3
-	// "id_token_encryption_alg_values_supported"). The list mirrors
-	// the OP's encryption keyset alg allow-list. Emitted only when
-	// op.WithEncryptionKeyset has been supplied.
+	// "id_token_encryption_alg_values_supported"). The recipient key
+	// comes from the client's own JWKS, so the field is emitted
+	// whenever the OP negotiates JWE at all — op.WithEncryptionKeyset
+	// is not required.
 	IDTokenEncryptionAlgValuesSupported []string `json:"id_token_encryption_alg_values_supported,omitempty"`
 
 	// IDTokenEncryptionEncValuesSupported lists the JWE enc values
 	// the OP can use to encrypt id_tokens (OIDC Discovery 1.0 §3
-	// "id_token_encryption_enc_values_supported"). Emitted only
-	// when op.WithEncryptionKeyset has been supplied.
+	// "id_token_encryption_enc_values_supported"). Same emission rule
+	// as IDTokenEncryptionAlgValuesSupported.
 	IDTokenEncryptionEncValuesSupported []string `json:"id_token_encryption_enc_values_supported,omitempty"`
 
 	// UserInfoEncryptionAlgValuesSupported lists the JWE alg values
 	// the OP can use to encrypt UserInfo responses (OIDC Discovery
-	// 1.0 §3 "userinfo_encryption_alg_values_supported"). Emitted
-	// only when op.WithEncryptionKeyset has been supplied.
+	// 1.0 §3 "userinfo_encryption_alg_values_supported"). Same
+	// emission rule as IDTokenEncryptionAlgValuesSupported.
 	UserInfoEncryptionAlgValuesSupported []string `json:"userinfo_encryption_alg_values_supported,omitempty"`
 
 	// UserInfoEncryptionEncValuesSupported lists the JWE enc values
 	// the OP can use to encrypt UserInfo responses (OIDC Discovery
-	// 1.0 §3 "userinfo_encryption_enc_values_supported"). Emitted
-	// only when op.WithEncryptionKeyset has been supplied.
+	// 1.0 §3 "userinfo_encryption_enc_values_supported"). Same
+	// emission rule as IDTokenEncryptionAlgValuesSupported.
 	UserInfoEncryptionEncValuesSupported []string `json:"userinfo_encryption_enc_values_supported,omitempty"`
 
 	// RequestObjectEncryptionAlgValuesSupported lists the JWE alg
 	// values the OP accepts on a JAR request object (OIDC Discovery
 	// 1.0 §3 "request_object_encryption_alg_values_supported", RFC
-	// 9101 §10.1). Emitted only when op.WithEncryptionKeyset has
-	// been supplied AND the JAR feature is enabled.
+	// 9101 §10.1). This is the one inbound direction: the ciphertext
+	// is addressed to the OP's own key, so the field is emitted only
+	// when op.WithEncryptionKeyset has been supplied AND the JAR
+	// feature is enabled.
 	RequestObjectEncryptionAlgValuesSupported []string `json:"request_object_encryption_alg_values_supported,omitempty"`
 
 	// RequestObjectEncryptionEncValuesSupported lists the JWE enc
@@ -305,27 +316,26 @@ type Document struct {
 	// AuthorizationEncryptionAlgValuesSupported lists the JWE alg
 	// values the OP can use to encrypt JARM responses (OAuth 2.0
 	// JARM §10.1 "authorization_encryption_alg_values_supported").
-	// Emitted only when op.WithEncryptionKeyset has been supplied
-	// AND the JARM feature is enabled.
+	// Emitted whenever the OP negotiates JWE AND the JARM feature is
+	// enabled; op.WithEncryptionKeyset is not required.
 	AuthorizationEncryptionAlgValuesSupported []string `json:"authorization_encryption_alg_values_supported,omitempty"`
 
 	// AuthorizationEncryptionEncValuesSupported lists the JWE enc
-	// values the OP can use to encrypt JARM responses. Emitted only
-	// when op.WithEncryptionKeyset has been supplied AND the JARM
-	// feature is enabled.
+	// values the OP can use to encrypt JARM responses. Same emission
+	// rule as AuthorizationEncryptionAlgValuesSupported.
 	AuthorizationEncryptionEncValuesSupported []string `json:"authorization_encryption_enc_values_supported,omitempty"`
 
 	// IntrospectionEncryptionAlgValuesSupported lists the JWE alg
 	// values the OP can use to encrypt JWT-formatted introspection
 	// responses (RFC 9701 §6 + OIDC Discovery 1.0 §3 by analogy with
-	// id_token / userinfo). Emitted only when op.WithEncryptionKeyset
-	// has been supplied AND the Introspect feature is enabled.
+	// id_token / userinfo). Emitted whenever the OP negotiates JWE
+	// AND the Introspect feature is enabled; op.WithEncryptionKeyset
+	// is not required.
 	IntrospectionEncryptionAlgValuesSupported []string `json:"introspection_encryption_alg_values_supported,omitempty"`
 
 	// IntrospectionEncryptionEncValuesSupported lists the JWE enc
-	// values the OP can use to encrypt introspection responses.
-	// Emitted only when op.WithEncryptionKeyset has been supplied
-	// AND the Introspect feature is enabled.
+	// values the OP can use to encrypt introspection responses. Same
+	// emission rule as IntrospectionEncryptionAlgValuesSupported.
 	IntrospectionEncryptionEncValuesSupported []string `json:"introspection_encryption_enc_values_supported,omitempty"`
 
 	// ClaimsParameterSupported reports whether the OP honours the

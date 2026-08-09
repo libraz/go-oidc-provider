@@ -26,6 +26,28 @@ const DefaultMaxConcurrentDeliveries = 8
 // DefaultMaxTargets bounds the post-deduplication audience set for one logout.
 const DefaultMaxTargets = 256
 
+// DefaultFanOutBudget bounds the wall-clock lifetime of one detached
+// fan-out started by [Coordinator.NotifyDetached]. The per-RP timeout
+// alone does not bound the whole event: with the shipped defaults a
+// fully unresponsive audience would occupy
+// DefaultMaxTargets / DefaultMaxConcurrentDeliveries waves of
+// [DefaultTimeout] each. The budget caps the total instead, so a
+// detached fan-out cannot outlive the process by more than this
+// window. Targets abandoned when the budget elapses fail their
+// delivery with the context error and are recorded as
+// [eventFailed], so nothing disappears silently.
+const DefaultFanOutBudget = 30 * time.Second
+
+// DefaultMaxInflightFanOuts bounds how many detached fan-outs may run
+// at once. Detaching removes the natural back-pressure the request
+// path used to provide, so the coordinator applies its own: once the
+// cap is reached a further fan-out is shed rather than queued, and the
+// shed is recorded as [eventFailed] with a "fanout_capacity" stage.
+// The cap exists so an adversary who registers black-holing
+// backchannel_logout_uri values cannot convert a burst of logouts into
+// an unbounded pile of long-lived outbound connections.
+const DefaultMaxInflightFanOuts = 256
+
 // auditEvent names lifted from op.AuditEvent. The internal package
 // references them as raw strings so the import graph stays one-way
 // (op depends on internal, not the reverse). The op package guards
@@ -33,6 +55,7 @@ const DefaultMaxTargets = 256
 const (
 	eventDelivered         = string(auditevent.AuditLogoutBackChannelDelivered)
 	eventFailed            = string(auditevent.AuditLogoutBackChannelFailed)
+	eventResolveFailed     = string(auditevent.AuditLogoutBackChannelResolveFailed)
 	eventOverflow          = string(auditevent.AuditLogoutBackChannelOverflow)
 	eventNoSessionsForSubj = string(auditevent.AuditBCLNoSessionsForSubject)
 )
@@ -90,8 +113,15 @@ func (p SessionDurabilityPosture) String() string {
 // [op/store.ClientStore]. Clients without a
 // registered backchannel_logout_uri are skipped silently — they have
 // opted out by configuration, not by error. Deliveries run through a bounded
-// worker pool; the coordinator blocks until all admitted deliveries complete
-// or the parent context expires.
+// worker pool.
+//
+// Two entry points share that machinery. [Coordinator.Notify] blocks
+// until all admitted deliveries complete or the parent context
+// expires; it is the seam tests and embedder-driven fan-outs use.
+// [Coordinator.NotifyDetached] runs the same fan-out on a background
+// goroutine under its own deadline and is what the /end_session
+// handler calls, so a stalled RP never holds the end-user's logout
+// response open.
 type Coordinator struct {
 	issuer           string
 	signing          SigningKey
@@ -105,6 +135,16 @@ type Coordinator struct {
 	posture          SessionDurabilityPosture
 	maxConcurrent    int
 	maxTargets       int
+	fanOutBudget     time.Duration
+
+	// slots is the capacity semaphore for detached fan-outs: a buffered
+	// channel whose capacity is the in-flight cap. A non-blocking send
+	// admits a fan-out, the goroutine receives from it on exit.
+	slots chan struct{}
+
+	// running counts detached fan-outs that have been admitted and not
+	// yet finished. [Coordinator.Drain] waits on it.
+	running sync.WaitGroup
 }
 
 // Config carries the construction-time dependencies for [NewCoordinator].
@@ -170,29 +210,51 @@ type Config struct {
 	// MaxTargets limits the deduplicated audience set. Zero selects
 	// [DefaultMaxTargets]; negative values are invalid.
 	MaxTargets int
+
+	// FanOutBudget caps the total wall-clock time one detached fan-out
+	// may occupy, per [Coordinator.NotifyDetached]. Zero selects
+	// [DefaultFanOutBudget]; negative values are invalid.
+	FanOutBudget time.Duration
+
+	// MaxInflightFanOuts limits concurrently running detached fan-outs.
+	// Zero selects [DefaultMaxInflightFanOuts]; negative values are
+	// invalid.
+	MaxInflightFanOuts int
+}
+
+// validate reports the first missing required dependency or
+// out-of-range bound in cfg. Splitting it out of [NewCoordinator]
+// keeps the constructor's remaining body about defaulting, so the two
+// concerns stay separately readable as bounds are added.
+func (c Config) validate() error {
+	switch {
+	case c.Issuer == "":
+		return errors.New("backchannel: Config.Issuer is empty")
+	case c.Signing.Signer == nil:
+		return errors.New("backchannel: Config.Signing has nil Signer")
+	case c.Clients == nil:
+		return errors.New("backchannel: Config.Clients is nil")
+	case c.Grants == nil:
+		return errors.New("backchannel: Config.Grants is nil")
+	case c.MaxConcurrentDeliveries < 0:
+		return errors.New("backchannel: Config.MaxConcurrentDeliveries is negative")
+	case c.MaxTargets < 0:
+		return errors.New("backchannel: Config.MaxTargets is negative")
+	case c.FanOutBudget < 0:
+		return errors.New("backchannel: Config.FanOutBudget is negative")
+	case c.MaxInflightFanOuts < 0:
+		return errors.New("backchannel: Config.MaxInflightFanOuts is negative")
+	default:
+		return nil
+	}
 }
 
 // NewCoordinator validates cfg and returns a ready-to-use
 // [Coordinator]. The function fails fast on missing required
 // dependencies; optional fields fall back to their package defaults.
 func NewCoordinator(cfg Config) (*Coordinator, error) {
-	if cfg.Issuer == "" {
-		return nil, errors.New("backchannel: Config.Issuer is empty")
-	}
-	if cfg.Signing.Signer == nil {
-		return nil, errors.New("backchannel: Config.Signing has nil Signer")
-	}
-	if cfg.Clients == nil {
-		return nil, errors.New("backchannel: Config.Clients is nil")
-	}
-	if cfg.Grants == nil {
-		return nil, errors.New("backchannel: Config.Grants is nil")
-	}
-	if cfg.MaxConcurrentDeliveries < 0 {
-		return nil, errors.New("backchannel: Config.MaxConcurrentDeliveries is negative")
-	}
-	if cfg.MaxTargets < 0 {
-		return nil, errors.New("backchannel: Config.MaxTargets is negative")
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 	deliverer := cfg.Deliverer
 	if deliverer == nil {
@@ -218,6 +280,14 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if maxTargets == 0 {
 		maxTargets = DefaultMaxTargets
 	}
+	budget := cfg.FanOutBudget
+	if budget == 0 {
+		budget = DefaultFanOutBudget
+	}
+	maxInflight := cfg.MaxInflightFanOuts
+	if maxInflight == 0 {
+		maxInflight = DefaultMaxInflightFanOuts
+	}
 	return &Coordinator{
 		issuer:           cfg.Issuer,
 		signing:          cfg.Signing,
@@ -231,6 +301,8 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		posture:          cfg.SessionDurabilityPosture,
 		maxConcurrent:    maxConcurrent,
 		maxTargets:       maxTargets,
+		fanOutBudget:     budget,
+		slots:            make(chan struct{}, maxInflight),
 	}, nil
 }
 
@@ -312,8 +384,127 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 	return len(targets), resolutionErr
 }
 
+// NotifyDetached runs the [Coordinator.Notify] fan-out on a background
+// goroutine and returns immediately. It is the entry point the
+// /end_session handler uses so the end-user's logout response is
+// written as soon as the OP-side session is durably gone, instead of
+// waiting on the slowest relying party.
+//
+// Detaching is sound because OpenID Connect Back-Channel Logout 1.0
+// defines delivery as a back-channel exchange independent of the
+// end-user's user agent, and explicitly allows an RP to miss a Logout
+// Token (for instance while temporarily unreachable). Nothing in
+// RP-Initiated Logout 1.0 conditions the logout response — the static
+// page or the post_logout_redirect_uri redirect — on delivery having
+// happened. What the OP still owes the user is that its own session is
+// terminated first; that step stays on the request path.
+//
+// The background work is bounded three ways:
+//
+//   - a per-fan-out deadline (Config.FanOutBudget) so the goroutine
+//     cannot outlive the request indefinitely. The context is derived
+//     with [context.WithoutCancel] so request-scoped values (request
+//     id, trace context) still reach the audit records, while the
+//     browser disconnecting no longer aborts delivery;
+//   - the existing per-RP timeout, target cap, and worker-pool width;
+//   - a cap on concurrently running fan-outs
+//     (Config.MaxInflightFanOuts). Over the cap the fan-out is shed
+//     and audited rather than queued.
+//
+// Nothing is returned: the caller has already answered the browser, so
+// every outcome — per-RP delivery result, target-resolution fault,
+// capacity shed — is reported through the audit emitter instead.
+func (c *Coordinator) NotifyDetached(ctx context.Context, notice Notice) {
+	select {
+	case c.slots <- struct{}{}:
+	default:
+		c.emitFanOutShed(ctx, notice)
+		return
+	}
+	base := context.WithoutCancel(ctx)
+	detached, cancel := context.WithTimeout(base, c.fanOutBudget)
+	c.running.Add(1)
+	go func() {
+		defer c.running.Done()
+		defer cancel()
+		defer func() { <-c.slots }()
+		if _, err := c.Notify(detached, notice); err != nil {
+			c.emitFanOutFailure(base, notice, err)
+		}
+	}()
+}
+
+// Drain blocks until every detached fan-out admitted before the call
+// has finished, or until ctx expires, in which case it returns ctx's
+// error. It backs the OP's public graceful-shutdown seam and is also
+// how tests observe a detached fan-out deterministically.
+//
+// Draining is not what bounds the background work — each fan-out is
+// self-limiting through Config.FanOutBudget, so a process that never
+// drains still converges. What Drain adds is the ability to wait for
+// that convergence instead of racing process exit and losing the
+// Logout Tokens still in flight.
+//
+// The method holds no closed state: it does not stop further fan-outs
+// from being admitted, so a caller that wants a quiescent coordinator
+// must first stop the traffic that starts them.
+func (c *Coordinator) Drain(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		c.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// emitFanOutShed records a fan-out that was refused because the
+// in-flight cap was already saturated. The event is deliberately the
+// same one a per-RP failure raises: from an operator's point of view a
+// shed fan-out is a set of RPs that were not notified, which is what
+// the back-channel failure signal already means. The "failure_stage"
+// extra distinguishes it for anyone who needs the detail.
+func (c *Coordinator) emitFanOutShed(ctx context.Context, notice Notice) {
+	c.emitEvent(ctx, audit.Event{
+		Name:      eventFailed,
+		Level:     audit.LevelError,
+		Message:   "back-channel logout fan-out shed: in-flight limit reached",
+		ActorID:   notice.Subject,
+		SessionID: notice.SessionID,
+		RequestID: notice.RequestID,
+		Extras: map[string]any{
+			"failure_stage":         "fanout_capacity",
+			"max_inflight_fan_outs": cap(c.slots),
+			"retryable":             true,
+		},
+	})
+}
+
+// emitFanOutFailure records the aggregate error [Coordinator.Notify]
+// would otherwise have returned to the caller. Detaching removed that
+// return path, so the audit record is what replaces it; the per-target
+// evidence records ([eventFailed] from resolveTargets / dispatchOne)
+// continue to fire alongside it.
+func (c *Coordinator) emitFanOutFailure(ctx context.Context, notice Notice, cause error) {
+	c.emitEvent(ctx, audit.Event{
+		Name:      eventResolveFailed,
+		Level:     audit.LevelError,
+		Message:   "back-channel logout target resolution failed",
+		ActorID:   notice.Subject,
+		SessionID: notice.SessionID,
+		RequestID: notice.RequestID,
+		Extras: map[string]any{
+			"error": cause.Error(),
+		},
+	})
+}
+
 func (c *Coordinator) emitOverflow(ctx context.Context, notice Notice, nextCursor string) {
-	c.emitter.Emit(ctx, audit.Event{
+	c.emitEvent(ctx, audit.Event{
 		Name:      eventOverflow,
 		Level:     audit.LevelWarn,
 		Message:   "back-channel logout target limit exceeded",
@@ -404,7 +595,7 @@ func (c *Coordinator) emitResolutionFailure(
 	clientID, stage string,
 	cause error,
 ) {
-	c.emitter.Emit(ctx, audit.Event{
+	c.emitEvent(ctx, audit.Event{
 		Name:      eventFailed,
 		Level:     audit.LevelError,
 		Message:   "back-channel logout target resolution failed",
@@ -466,7 +657,7 @@ func (c *Coordinator) emitNoSessionsForSubject(ctx context.Context, notice Notic
 	if notice.SessionID == "" {
 		return
 	}
-	c.emitter.Emit(ctx, audit.Event{
+	c.emitEvent(ctx, audit.Event{
 		Name:      eventNoSessionsForSubj,
 		Level:     audit.LevelInfo,
 		Message:   "back-channel logout: no RPs to notify for subject",
@@ -477,6 +668,17 @@ func (c *Coordinator) emitNoSessionsForSubject(ctx context.Context, notice Notic
 			"session_durability_posture": c.posture.String(),
 		},
 	})
+}
+
+// emitEvent is the single funnel every audit record in this package
+// passes through. It strips cancellation from ctx before handing the
+// event to the emitter: the fan-out runs under a deadline, and an
+// emitter that writes to a context-aware sink would otherwise drop
+// exactly the records describing the deliveries that deadline
+// abandoned. Request-scoped values (request id, trace context) survive
+// the strip, so correlation is unaffected.
+func (c *Coordinator) emitEvent(ctx context.Context, ev audit.Event) {
+	c.emitter.Emit(context.WithoutCancel(ctx), ev)
 }
 
 // emit assembles the audit record. The helper centralises the field
@@ -500,7 +702,7 @@ func (c *Coordinator) emit(
 	if cause != nil {
 		extras["error"] = cause.Error()
 	}
-	c.emitter.Emit(ctx, audit.Event{
+	c.emitEvent(ctx, audit.Event{
 		Name:      name,
 		Level:     level,
 		Message:   message,

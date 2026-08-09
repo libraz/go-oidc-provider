@@ -7,7 +7,9 @@ import (
 
 // CacheControl is the value the handler stamps on every successful
 // response. It targets a 1-hour cache with a 10-minute
-// stale-while-revalidate window02-product-design.md §F.6.
+// stale-while-revalidate window: the metadata changes rarely, so
+// letting relying parties cache it cuts their round-trips and the OP's
+// load without pinning them to a stale document for long.
 const CacheControl = "public, max-age=3600, stale-while-revalidate=600"
 
 // Handler returns an [http.Handler] that serves the OpenID Connect

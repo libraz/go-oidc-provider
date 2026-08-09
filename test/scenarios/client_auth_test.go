@@ -1900,10 +1900,9 @@ func TestScenario_CA_PKJWT_07_JtiSingleUseEnforced(t *testing.T) {
 // deterministic; without it the verifier reads time.Now() and the
 // "future" claim could pass on slow hosts.
 //
-// The catalog row originally said "default tolerance is zero". v0.x
-// ships a 60-second default (mirrors the JAR / id_token verifier
-// leeway). The catalog wording is rewritten alongside this binding so
-// the documented behaviour matches the code.
+// The default tolerance is 60 seconds, not zero — it mirrors the JAR
+// and id_token verifier leeway so one clock-skew budget applies to
+// every inbound assertion the OP verifies.
 //
 // Spec: RFC 7523 §3 / RFC 7519 §4.1.4.
 func TestScenario_CA_PKJWT_08_ClockToleranceDefaultZero(t *testing.T) {
@@ -1931,7 +1930,7 @@ func TestScenario_CA_PKJWT_08_ClockToleranceDefaultZero(t *testing.T) {
 }
 
 // TestScenario_CA_PKJWT_09_RegisteredAlgPinning is the per-client
-// signing-alg pinning row. v0.x [store.Client] does NOT carry a
+// signing-alg pinning row. [store.Client] does NOT carry a
 // per-client TokenEndpointAuthSigningAlg field (only
 // RequestObjectSigningAlg exists), so pinning happens implicitly
 // through the registered JWK Set: a client whose JWKS only carries an
@@ -1942,10 +1941,9 @@ func TestScenario_CA_PKJWT_08_ClockToleranceDefaultZero(t *testing.T) {
 // with a separate, non-registered keypair) assertion (rejected with
 // 401 invalid_client).
 //
-// Per-client TokenEndpointAuthSigningAlg pinning will arrive when the
-// store record is extended; this row's catalog wording is rewritten
-// to describe the v0.x behaviour explicitly so the test does not
-// regress.
+// Explicit per-client TokenEndpointAuthSigningAlg pinning would
+// require extending the store record; until then the JWKS is the only
+// pin, and this test holds that implicit binding in place.
 //
 // Spec: OIDC Core §9.
 func TestScenario_CA_PKJWT_09_RegisteredAlgPinning(t *testing.T) {
@@ -2326,9 +2324,11 @@ func caDiscoveryStrings(doc map[string]any, key string) (out []string, ok bool) 
 // default discovery document advertises exactly the client authentication
 // methods the OP actually supports at /token: client_secret_basic,
 // client_secret_post, and private_key_jwt. client_secret_jwt is
-// intentionally NEVER advertised — the OP does not implement it
-// (docs/plans/002-product-design.md line 2159) — and attestation-based
-// methods are absent for the same reason.
+// intentionally NEVER advertised: a shared-secret JWT assertion makes
+// the OP and the client hold the same signing key, so a leak on either
+// side forges assertions in both directions. The OP ships only the
+// asymmetric private_key_jwt verifier, and attestation-based methods
+// are absent for the same "no verifier, no advertisement" reason.
 //
 // Spec: OIDC Discovery §3.
 func TestScenario_CA_DISC_01_OnlyEnabledMethodsAdvertised(t *testing.T) {
@@ -2360,7 +2360,7 @@ func TestScenario_CA_DISC_01_OnlyEnabledMethodsAdvertised(t *testing.T) {
 			t.Errorf("token_endpoint_auth_methods_supported=%v advertises unexpected %q", methods, m)
 		}
 	}
-	// CSJWT is non-goal (docs/plans/002-product-design.md line 2159);
+	// client_secret_jwt is a non-goal (shared-secret assertion model);
 	// it must never appear in the wire advertisement.
 	if got["client_secret_jwt"] {
 		t.Errorf("token_endpoint_auth_methods_supported=%v MUST NOT advertise client_secret_jwt (out-of-scope)", methods)
@@ -2378,9 +2378,9 @@ func TestScenario_CA_DISC_01_OnlyEnabledMethodsAdvertised(t *testing.T) {
 // token_endpoint_auth_signing_alg_values_supported is published with a
 // non-empty list. The OP advertises private_key_jwt by default, which
 // satisfies the "an assertion-bearing method is enabled" precondition
-// from OIDC Discovery §3 / FAPI 2.0 §5.4. client_secret_jwt is
-// out-of-scope (docs/plans/002-product-design.md line 2159), so the
-// trigger is private_key_jwt only.
+// from OIDC Discovery §3 / FAPI 2.0 §5.4. The OP ships no
+// client_secret_jwt verifier (shared-secret assertions are a non-goal),
+// so the trigger is private_key_jwt only.
 //
 // Spec: OIDC Discovery §3 / FAPI 2.0 §5.4.
 func TestScenario_CA_DISC_02_SigningAlgValuesPublishedConditionally(t *testing.T) {
@@ -2401,8 +2401,8 @@ func TestScenario_CA_DISC_02_SigningAlgValuesPublishedConditionally(t *testing.T
 // TestScenario_CA_DISC_04_PrivateKeyJWTPublishesAsymmetricOnly asserts
 // that token_endpoint_auth_signing_alg_values_supported lists only
 // asymmetric JWS algs (RS*, PS*, ES*, EdDSA) and never HMAC ones. The
-// HMAC algs would belong to client_secret_jwt, which is out-of-scope per
-// docs/plans/002-product-design.md line 2159; advertising them would
+// HMAC algs would belong to client_secret_jwt, whose shared-secret
+// assertion model the OP does not implement; advertising them would
 // imply a verifier the OP does not ship.
 //
 // Spec: OIDC Core §9 / RFC 7518 §3.

@@ -1,5 +1,5 @@
-// Package sessions implements the chooser-group session manager described in
-// 02-product-design.md §A.9 / §F.1. It owns the encrypted
+// Package sessions implements the OP's chooser-group session manager.
+// It owns the encrypted
 // __Host-oidc_session cookie payload and orchestrates the SessionStore
 // operations that maintain the multi-account chooser group.
 // The package treats the chooser group as the stable browsing context: a

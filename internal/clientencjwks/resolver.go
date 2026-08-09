@@ -2,7 +2,6 @@ package clientencjwks
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -10,45 +9,19 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
-	"github.com/libraz/go-oidc-provider/internal/remotecache"
-	"github.com/libraz/go-oidc-provider/internal/securefetch"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
-)
-
-// Default knobs the package applies when [Config] leaves a field
-// zero. The numbers mirror the JAR JWKS fetcher posture so the
-// outbound-encryption side does not introduce new SSRF / DoS
-// surface relative to the inbound side.
-const (
-	// defaultHTTPTimeout caps the per-request budget on the JWKS
-	// fetcher. Five seconds is the same value the JAR fetcher uses.
-	defaultHTTPTimeout = 5 * time.Second
-
-	// defaultJWKSCacheTTL is the in-memory cache lifetime for a
-	// fetched keyset. Five minutes is short enough that an RP key
-	// rotation propagates without operator intervention while
-	// saving most fetches.
-	defaultJWKSCacheTTL = 5 * time.Minute
-
-	// defaultJWKSNegativeCacheTTL suppresses retry amplification during a
-	// transient upstream failure while allowing prompt recovery.
-	defaultJWKSNegativeCacheTTL = remotecache.DefaultNegativeTTL
-
-	// defaultJWKSCacheMaxEntries bounds combined positive and negative URL
-	// cardinality for the process-wide resolver.
-	defaultJWKSCacheMaxEntries = remotecache.DefaultMaxEntries
-
-	// defaultMaxBodyBytes caps the JWKS body size at 64 KiB. Real
-	// keysets are well under 4 KiB; the ceiling exists to bound
-	// memory use against a malicious or misconfigured peer.
-	defaultMaxBodyBytes = int64(64 * 1024)
 )
 
 // Config configures [New]. The zero value is a hardened production posture:
 // deny-list engaged, default timeouts, bounded TTL/LRU cache, and short
 // negative caching. Tests opt into more permissive shapes by setting fields
 // explicitly.
+//
+// Every field forwards to [internal/rpjwks], which is where the OP-wide
+// relying-party JWKS limits are defined; the outbound-encryption side does not
+// get to introduce SSRF / DoS surface the inbound side does not have.
 type Config struct {
 	// Clock drives the JWKS cache TTL. A nil value falls back to
 	// [timex.SystemClock]; tests inject a fake clock so cache
@@ -56,19 +29,19 @@ type Config struct {
 	Clock timex.Clock
 
 	// HTTPTimeout caps the per-request budget on the JWKS fetcher.
-	// Zero falls back to [defaultHTTPTimeout].
+	// Zero falls back to [rpjwks.DefaultTimeout].
 	HTTPTimeout time.Duration
 
 	// JWKSCacheTTL is the in-memory cache lifetime applied to every
-	// fetched keyset. Zero falls back to [defaultJWKSCacheTTL].
+	// fetched keyset. Zero falls back to [rpjwks.DefaultTTL].
 	JWKSCacheTTL time.Duration
 
 	// JWKSNegativeCacheTTL is the lifetime of a failed remote lookup.
-	// Zero falls back to [defaultJWKSNegativeCacheTTL].
+	// Zero falls back to [rpjwks.DefaultNegativeTTL].
 	JWKSNegativeCacheTTL time.Duration
 
 	// JWKSCacheMaxEntries bounds the combined positive/negative URL entries.
-	// Zero falls back to [defaultJWKSCacheMaxEntries]; non-positive values
+	// Zero falls back to [rpjwks.DefaultMaxEntries]; non-positive values
 	// never disable eviction.
 	JWKSCacheMaxEntries int
 
@@ -79,7 +52,7 @@ type Config struct {
 	AllowPrivateNetwork bool
 
 	// MaxBodyBytes caps the JWKS body size. Zero falls back to
-	// [defaultMaxBodyBytes].
+	// [rpjwks.DefaultMaxBodyBytes].
 	MaxBodyBytes int64
 
 	// BaseTransport overrides the [http.RoundTripper] base inside
@@ -89,6 +62,14 @@ type Config struct {
 	// dial hook is reinstalled on the supplied transport so the
 	// deny-list still fires regardless.
 	BaseTransport http.RoundTripper
+
+	// Policy narrows the (alg, enc) pairs this resolver will build a
+	// recipient for, below the [internal/jose] allow-list. The zero
+	// value leaves the full allow-list in force. A pair the policy
+	// removed surfaces [ErrAlgNotAllowed], so an operator restriction
+	// blocks the outbound JWE instead of only shrinking the discovery
+	// advertisement.
+	Policy jose.JWEPolicy
 }
 
 // Resolver builds a [jose.EncryptionRecipient] for an RP given the
@@ -96,38 +77,27 @@ type Config struct {
 // safe for concurrent use; callers construct it once at startup and
 // share the instance across every outbound-encryption response path.
 type Resolver struct {
-	cache   *jwksCache
-	fetcher *fetcher
+	fetcher *rpjwks.Fetcher
+	policy  jose.JWEPolicy
 }
 
 // New returns a resolver wired with the supplied configuration. The
 // function applies [Config] defaults for every zero-valued field; a
 // zero-valued [Config] is a valid hardened production posture.
 func New(cfg Config) *Resolver {
-	httpTimeout := cfg.HTTPTimeout
-	if httpTimeout <= 0 {
-		httpTimeout = defaultHTTPTimeout
-	}
-	maxBody := cfg.MaxBodyBytes
-	if maxBody <= 0 {
-		maxBody = defaultMaxBodyBytes
-	}
-
-	client := securefetch.NewClient(securefetch.Policy{
-		AllowPrivateNetwork: cfg.AllowPrivateNetwork,
-		MaxBodyBytes:        maxBody,
-		AcceptContentTypes:  []string{"application/json", "application/jwk-set+json"},
-		Timeout:             httpTimeout,
-		BaseTransport:       cfg.BaseTransport,
-	})
 	return &Resolver{
-		cache: newJWKSCache(
-			cfg.Clock,
-			cfg.JWKSCacheTTL,
-			cfg.JWKSNegativeCacheTTL,
-			cfg.JWKSCacheMaxEntries,
-		),
-		fetcher: &fetcher{client: client},
+		policy: cfg.Policy,
+		fetcher: rpjwks.New(rpjwks.Config{
+			FetchError:          ErrJWKSFetch,
+			Clock:               cfg.Clock,
+			Timeout:             cfg.HTTPTimeout,
+			TTL:                 cfg.JWKSCacheTTL,
+			NegativeTTL:         cfg.JWKSNegativeCacheTTL,
+			MaxEntries:          cfg.JWKSCacheMaxEntries,
+			MaxBodyBytes:        cfg.MaxBodyBytes,
+			AllowPrivateNetwork: cfg.AllowPrivateNetwork,
+			BaseTransport:       cfg.BaseTransport,
+		}),
 	}
 }
 
@@ -144,8 +114,9 @@ func New(cfg Config) *Resolver {
 //     JWE wrap.
 //  2. Both alg and enc must be on the OP allow-list
 //     ([internal/jose.JWEAlg.IsAllowed] /
-//     [internal/jose.JWEEnc.IsAllowed]); a non-empty value outside
-//     the list surfaces [ErrAlgNotAllowed].
+//     [internal/jose.JWEEnc.IsAllowed]) and must survive
+//     [Config.Policy]; a non-empty value outside either surfaces
+//     [ErrAlgNotAllowed].
 //  3. The JWKS comes from inline JWKs (preferred) or from
 //     JWKsURI through the cache. A client carrying neither shape
 //     surfaces [ErrJWKSConfigured].
@@ -161,7 +132,7 @@ func (r *Resolver) ResolveRecipient(
 	if alg == "" && enc == "" {
 		return jose.EncryptionRecipient{}, ErrNoEncryptionConfigured
 	}
-	jweAlg, jweEnc, err := validateAlgEnc(alg, enc)
+	jweAlg, jweEnc, err := validateAlgEnc(alg, enc, r.policy)
 	if err != nil {
 		return jose.EncryptionRecipient{}, err
 	}
@@ -197,39 +168,35 @@ func (r *Resolver) resolveJWKS(
 	client *store.Client,
 ) (*josev4.JSONWebKeySet, error) {
 	if len(client.JWKs) > 0 {
-		var keys josev4.JSONWebKeySet
-		if err := json.Unmarshal(client.JWKs, &keys); err != nil {
-			return nil, fmt.Errorf("%w: parse inline jwks: %w", ErrJWKSFetch, err)
-		}
-		return &keys, nil
+		return r.fetcher.ParseKeySet(client.JWKs)
 	}
 	if client.JWKsURI != "" {
-		return r.cache.load(ctx, client.JWKsURI, func(ctx context.Context) (*josev4.JSONWebKeySet, error) {
-			return r.fetcher.fetch(ctx, client.JWKsURI)
-		})
+		return r.fetcher.Fetch(ctx, client.JWKsURI)
 	}
 	return nil, ErrJWKSConfigured
 }
 
 // validateAlgEnc parses raw alg / enc strings against the OP-wide
-// JWE allow-list. Either side outside the list collapses onto
-// [ErrAlgNotAllowed] so an attacker probing for sub-causes through
-// the wire response learns nothing useful.
+// JWE allow-list as narrowed by policy. Either side outside the
+// resulting set collapses onto [ErrAlgNotAllowed] so an attacker
+// probing for sub-causes through the wire response learns nothing
+// useful — in particular, "outside the library ceiling" and "removed
+// by this deployment" are indistinguishable.
 //
 // The function tolerates an empty alg / enc only when both are
 // empty (handled by the caller). When one side is set the other
 // MUST also be set, otherwise the function returns
 // [ErrAlgNotAllowed] — partial encryption metadata is a
 // configuration bug.
-func validateAlgEnc(alg, enc string) (jose.JWEAlg, jose.JWEEnc, error) {
+func validateAlgEnc(alg, enc string, policy jose.JWEPolicy) (jose.JWEAlg, jose.JWEEnc, error) {
 	if alg == "" || enc == "" {
 		return "", "", fmt.Errorf("%w: alg=%q enc=%q (both required)", ErrAlgNotAllowed, alg, enc)
 	}
-	jweAlg, ok := jose.ParseJWEAlg(alg)
+	jweAlg, ok := jose.ParseJWEAlgPolicy(alg, policy)
 	if !ok {
 		return "", "", fmt.Errorf("%w: alg %q", ErrAlgNotAllowed, alg)
 	}
-	jweEnc, ok := jose.ParseJWEEnc(enc)
+	jweEnc, ok := jose.ParseJWEEncPolicy(enc, policy)
 	if !ok {
 		return "", "", fmt.Errorf("%w: enc %q", ErrAlgNotAllowed, enc)
 	}

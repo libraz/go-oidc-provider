@@ -132,17 +132,18 @@ rows:
     severity: P0
     spec: OIDC Core §10 / Encryption feature
     behaviour: |
-      When encryption is ON, discovery advertises
-      id_token_encryption_alg_values_supported,
+      Discovery advertises id_token_encryption_alg_values_supported,
       id_token_encryption_enc_values_supported,
-      request_object_encryption_alg_values_supported,
-      request_object_encryption_enc_values_supported,
       userinfo_encryption_alg_values_supported,
       userinfo_encryption_enc_values_supported,
-      introspection_encryption_alg_values_supported,
-      introspection_encryption_enc_values_supported.
+      introspection_encryption_alg_values_supported and
+      introspection_encryption_enc_values_supported for the outbound
+      response paths, and
+      request_object_encryption_alg_values_supported /
+      request_object_encryption_enc_values_supported for the inbound
+      one, each on its own capability.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not ship encryption (encryption.yaml is 100% out-of-scope); the *_encryption_alg_values_supported / *_encryption_enc_values_supported metadata fields are not advertised at /.well-known/openid-configuration. Reconsider when JWE support lands.
+    out_of_scope_reason: "Duplicate of encryption#ENC-010, which asserts the same eight fields against the same conditions and additionally distinguishes the outbound arrays (advertised on the relying party's key, so no OP encryption keyset is required) from the inbound request_object pair (gated on op.WithEncryptionKeyset and JAR). A second binding here would drift from that one rather than add coverage."
     cross_refs:
       - encryption#ENC-010
 
@@ -176,9 +177,9 @@ rows:
     spec: RFC 8628
     behaviour: |
       When device flow is ON, discovery advertises
-      device_authorization_endpoint.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not expose a device-flow feature flag and does not mount /device_authorization. grant.DeviceCode is a stub constant for option-signature stability; no /device/auth endpoint is routable. discovery never advertises device_authorization_endpoint because the underlying handler is absent. No public surface to drive this row.
+      device_authorization_endpoint; with the grant off the field is
+      omitted.
+    status: active
 
   - id: DIS-035
     severity: P1

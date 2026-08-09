@@ -1,6 +1,7 @@
 package endsession
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,12 +54,31 @@ var (
 	errIDTokenStale = errors.New("endsession: id_token_hint too old")
 )
 
+// hintClaims carries the id_token_hint facts the handler acts on.
+// The value is produced once per request by [verifyIDTokenHint] and
+// then flows through the resolution, CSRF, and termination steps so
+// the token is parsed and verified exactly once.
+type hintClaims struct {
+	// clientID is the requesting client: the "azp" claim when present,
+	// otherwise the first "aud" entry.
+	clientID string
+
+	// subject is the token's "sub" claim, expressed in the per-client
+	// subject space (the pairwise hash for a pairwise client). The
+	// CSRF gate compares it against the browser session's subject so a
+	// hint can only skip the confirmation prompt for the session it
+	// actually belongs to. An empty value means the token carried no
+	// "sub", which never matches.
+	subject string
+}
+
 // verifyIDTokenHint parses raw, verifies the signature against the OP
 // keyset, asserts the iss claim matches the configured issuer, and
 // returns the requesting client_id (azp when present, otherwise the
-// first audience). The function does NOT enforce "exp": OIDC
-// RP-Initiated Logout 1.0 lets the user sign out from a stale tab,
-// and the spec does not require freshness through "exp".
+// first audience) together with the token's subject. The function does
+// NOT enforce "exp": OIDC RP-Initiated Logout 1.0 lets the user sign
+// out from a stale tab, and the spec does not require freshness
+// through "exp".
 //
 // The function DOES enforce a soft "iat" age cap of
 // [maxIDTokenHintAge] when the claim is present. Tokens older than
@@ -72,34 +92,39 @@ var (
 // now is the wall-clock reading the iat comparison uses; callers
 // pass [timex.SystemClock]'s reading or a [Deps.Clock]-derived value
 // so the same instant flows through every subsystem.
-func verifyIDTokenHint(set *keys.Set, issuer, raw string, now time.Time) (string, error) {
+//
+// ctx is the logout request's context. Nothing here performs I/O; it
+// travels only so the keyset's retired-kid audit event can name the
+// request that presented a hint signed by a key the OP has retired.
+func verifyIDTokenHint(ctx context.Context, set *keys.Set, issuer, raw string, now time.Time) (hintClaims, error) {
 	jws, _, err := jose.ParseSigned(raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errIDTokenMalformed, err)
+		return hintClaims{}, fmt.Errorf("%w: %w", errIDTokenMalformed, err)
 	}
 	kid := jws.Signatures[0].Header.KeyID
 	if kid == "" {
-		return "", errIDTokenSignature
+		return hintClaims{}, errIDTokenSignature
 	}
-	entry, ok := set.Find(kid)
+	entry, ok := set.Find(ctx, kid)
 	if !ok {
-		return "", errIDTokenSignature
+		return hintClaims{}, errIDTokenSignature
 	}
 	payload, err := jws.Verify(entry.Signer.Public())
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errIDTokenSignature, err)
+		return hintClaims{}, fmt.Errorf("%w: %w", errIDTokenSignature, err)
 	}
 	var wire struct {
 		Issuer   string          `json:"iss"`
+		Subject  string          `json:"sub"`
 		Audience json.RawMessage `json:"aud"`
 		AZP      string          `json:"azp"`
 		IssuedAt int64           `json:"iat"`
 	}
 	if err := json.Unmarshal(payload, &wire); err != nil {
-		return "", fmt.Errorf("%w: %w", errIDTokenMalformed, err)
+		return hintClaims{}, fmt.Errorf("%w: %w", errIDTokenMalformed, err)
 	}
 	if issuer != "" && wire.Issuer != issuer {
-		return "", errIDTokenIssuer
+		return hintClaims{}, errIDTokenIssuer
 	}
 	if wire.IssuedAt > 0 {
 		// "iat" is a NumericDate (seconds since the Unix epoch). Convert
@@ -109,12 +134,12 @@ func verifyIDTokenHint(set *keys.Set, issuer, raw string, now time.Time) (string
 		// here is one-sided so freshness skew never blocks a logout.
 		issued := time.Unix(wire.IssuedAt, 0).UTC()
 		if now.Sub(issued) > maxIDTokenHintAge {
-			return "", errIDTokenStale
+			return hintClaims{}, errIDTokenStale
 		}
 	}
 	aud, err := decodeAudienceFirst(wire.Audience)
 	if err != nil {
-		return "", err
+		return hintClaims{}, err
 	}
 	if wire.AZP != "" {
 		// OIDC Core 1.0 §2: when azp is present it identifies the
@@ -122,11 +147,11 @@ func verifyIDTokenHint(set *keys.Set, issuer, raw string, now time.Time) (string
 		// client_id and verify it appears among the aud entries so a
 		// stolen multi-aud token cannot escape its azp binding.
 		if !audienceContains(wire.Audience, wire.AZP) {
-			return "", errIDTokenAZP
+			return hintClaims{}, errIDTokenAZP
 		}
-		return wire.AZP, nil
+		return hintClaims{clientID: wire.AZP, subject: wire.Subject}, nil
 	}
-	return aud, nil
+	return hintClaims{clientID: aud, subject: wire.Subject}, nil
 }
 
 // hintNow returns the wall-clock reading used by [verifyIDTokenHint]

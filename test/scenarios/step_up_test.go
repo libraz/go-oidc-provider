@@ -56,15 +56,15 @@ func TestScenario_SUP_001_MaxAgeZeroForcesReauthentication(t *testing.T) {
 	}
 }
 
-// TestScenario_SUP_002_MaxAgeExpiryForcesReauthentication binds the
-// "session older than a positive max_age re-authenticates" behaviour.
-// Aging a session past a positive max_age requires a controllable clock,
-// which the black-box flow harness does not seat; the white-box coverage
-// lives in internal/authorizeendpoint
-// TestAuthorize_MaxAgeViolationForcesInteraction.
+// TestScenario_SUP_002_MaxAgeExpiryForcesReauthentication marks where
+// the scenario-level test would go. Aging a session past a positive
+// max_age requires a controllable clock the black-box flow harness does
+// not seat, so the row names its own coverage in `covered_by` and the
+// gate resolves that name; repeating it here would be a second copy
+// nothing checks.
 func TestScenario_SUP_002_MaxAgeExpiryForcesReauthentication(t *testing.T) {
 	t.Parallel()
-	t.Skip("covered by internal/authorizeendpoint TestAuthorize_MaxAgeViolationForcesInteraction")
+	t.Skip("covered outside the suite; see the step_up catalog row's covered_by")
 }
 
 // TestScenario_SUP_003_ACRUnsatisfiedForcesStepUp seats a session at acr

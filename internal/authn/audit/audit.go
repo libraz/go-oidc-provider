@@ -13,6 +13,7 @@ package audit
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
 	"time"
 )
@@ -56,14 +57,44 @@ type Observer interface {
 
 // FanOut delivers evt to every observer in registration order. Nil
 // entries are skipped. The orchestrator's contract is "non-blocking"
-// fan-out; this helper does not retry or recover from observer panics
-// — the parent package wraps each observer earlier when the public
-// API contract requires panic isolation.
-func FanOut(ctx context.Context, observers []Observer, evt Event) {
+// fan-out; this helper does not retry.
+//
+// Each observer runs under its own recover() so a panicking embedder
+// sink neither fails the login it was reporting on nor stops the
+// remaining observers from being fed — a brute-force counter that sits
+// behind a broken risk-feed sink must keep advancing.
+func FanOut(ctx context.Context, logger *slog.Logger, observers []Observer, evt Event) {
 	for _, obs := range observers {
 		if obs == nil {
 			continue
 		}
-		obs.Observe(ctx, evt)
+		safeObserve(ctx, logger, obs, evt)
 	}
+}
+
+// safeObserve dispatches one event to one observer under a recover().
+// The panic is reported on the OP's configured logger, the same sink
+// the other embedder-callback seams in this subsystem use for the same
+// class of fault; a nil logger falls back to slog.Default so a caller
+// that has not wired one still gets the report.
+//
+// The record deliberately carries only the non-identifying part of the
+// event (the factor); Subject / RemoteIP / UserAgent stay out so a
+// broken observer cannot turn the operational log into an enumeration
+// surface.
+func safeObserve(ctx context.Context, logger *slog.Logger, obs Observer, evt Event) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Error("authn audit: login-attempt observer panicked",
+			slog.String("factor", evt.Factor),
+			slog.Any("panic", r),
+		)
+	}()
+	obs.Observe(ctx, evt)
 }

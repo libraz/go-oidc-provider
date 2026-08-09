@@ -103,7 +103,7 @@ func (t *Trust) hostAllowed(xfh string) bool {
 }
 
 // IsConfigured reports whether the trust has at least one CIDR. It is exposed
-// so the caller can emit the start-up WARNING required by §F.5 when the trust
+// so the caller can emit the start-up WARNING when the trust
 // is empty but the deployment is presumed to be behind a proxy.
 func (t *Trust) IsConfigured() bool { return t != nil && len(t.cidrs) > 0 }
 
@@ -142,7 +142,7 @@ type Resolved struct {
 }
 
 // Resolve inspects r and t to produce a [Resolved] view of the request.
-// Behaviour matrix (§F.5):
+// Behaviour matrix:
 //   - Trust empty                       → forwarded headers ignored, scheme
 //     comes from r.URL/r.TLS, ClientIP from r.RemoteAddr.
 //   - Trust set, RemoteAddr ∉ trust     → forwarded headers ignored, audit
@@ -166,13 +166,37 @@ func Resolve(r *http.Request, t *Trust) Resolved {
 	if ip, ok := walkForwardedFor(r.Header.Values("X-Forwarded-For"), t); ok {
 		res.ClientIP = ip
 	}
-	if scheme := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); scheme != "" {
-		res.Scheme = strings.ToLower(scheme)
+	if scheme := firstForwardedValue(r.Header.Values("X-Forwarded-Proto")); scheme != "" {
+		// Only http and https are meaningful here. Anything else is a
+		// malformed hop; keeping the locally derived scheme is safer
+		// than propagating it into issuer-relative URLs and the DPoP
+		// htu comparison.
+		if lower := strings.ToLower(scheme); lower == "http" || lower == "https" {
+			res.Scheme = lower
+		}
 	}
-	if host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); host != "" && t.hostAllowed(host) {
+	if host := firstForwardedValue(r.Header.Values("X-Forwarded-Host")); host != "" && t.hostAllowed(host) {
 		res.Host = host
 	}
 	return res
+}
+
+// firstForwardedValue returns the left-most element of a forwarded header
+// chain. Each proxy in a multi-hop deployment appends its own view, either as
+// a new header line or as a comma-separated element, so a two-proxy chain
+// yields "https, https". The left-most element is the one closest to the
+// original client, which is the value these headers are defined to carry.
+// Reading the whole string verbatim would produce a scheme like "https, https"
+// and a host that no longer parses.
+func firstForwardedValue(values []string) string {
+	for _, v := range values {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				return part
+			}
+		}
+	}
+	return ""
 }
 
 // parseRemoteAddr strips the optional ":port" suffix from r.RemoteAddr and

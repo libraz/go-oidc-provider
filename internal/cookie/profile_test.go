@@ -15,6 +15,7 @@ func TestPredefinedProfiles_BuildSuccessfully(t *testing.T) {
 		"session":     cookie.SessionProfile,
 		"interaction": cookie.InteractionProfile,
 		"csrf":        cookie.CSRFProfile,
+		"logout_csrf": cookie.LogoutCSRFProfile,
 		"locale":      cookie.LocaleProfile,
 	}
 	for name, p := range cases {
@@ -65,6 +66,22 @@ func TestCSRFProfile_StrictAndPlaintext(t *testing.T) {
 	}
 	if cookie.CSRFProfile.MaxAge != 0 {
 		t.Errorf("MaxAge=%v want 0 (session)", cookie.CSRFProfile.MaxAge)
+	}
+}
+
+func TestLogoutCSRFProfile_StrictAndShortLived(t *testing.T) {
+	t.Parallel()
+
+	if cookie.LogoutCSRFProfile.SameSite != http.SameSiteStrictMode {
+		t.Errorf("SameSite=%v want Strict", cookie.LogoutCSRFProfile.SameSite)
+	}
+	if cookie.LogoutCSRFProfile.Encrypted {
+		t.Error("logout CSRF cookie carries an opaque token, must not be encrypted")
+	}
+	// The confirmation is a single user gesture; a token that outlives
+	// the prompt widens the replay window for nothing.
+	if cookie.LogoutCSRFProfile.MaxAge != 5*time.Minute {
+		t.Errorf("MaxAge=%v want 5m", cookie.LogoutCSRFProfile.MaxAge)
 	}
 }
 

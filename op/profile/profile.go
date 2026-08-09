@@ -28,9 +28,10 @@ const (
 	//   - sender-constrained access tokens via DPoP or mTLS
 	//     (inherited from FAPI 2.0 §3.1.4);
 	//   - 10-minute access-token TTL cap (FAPI 2.0 §3.1.9);
-	//   - private_key_jwt / tls_client_auth /
-	//     self_signed_tls_client_auth client authentication
-	//     (FAPI 2.0 §3.1.3);
+	//   - private_key_jwt client authentication (FAPI 2.0 §3.1.3;
+	//     the profile also permits the two RFC 8705 §2 mTLS methods,
+	//     which this library does not implement — see
+	//     [AllowedClientAuthMethods]);
 	//   - server-side access-token revocation
 	//     (FAPI 2.0 §5.3.2.2).
 	FAPICIBA

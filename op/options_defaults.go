@@ -29,9 +29,7 @@ const DefaultAccessTokenTTL = 5 * time.Minute
 //
 // The canonical value lives in [timex.RefreshTokenTTLDefault]; this
 // name is preserved for embedders that already reference the constant.
-//
-//nolint:gochecknoglobals // re-export of the canonical timex value; var is required for cross-package alias.
-var DefaultRefreshTokenTTL = timex.RefreshTokenTTLDefault
+const DefaultRefreshTokenTTL = timex.RefreshTokenTTLDefault
 
 // applyDefaults fills in optional fields with their library defaults.
 func (c *config) applyDefaults() {

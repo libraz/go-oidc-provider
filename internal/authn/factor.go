@@ -23,11 +23,13 @@ type Factor struct {
 	// custom authenticator name does not need a translation table.
 	Type FactorType
 
-	// AssuranceLevel is the [AAL] this factor independently
-	// satisfies. The aggregator takes the maximum across the slice;
-	// a single AAL3 factor therefore lifts the whole session, while
-	// adding a weaker factor next to a stronger one does not weaken
-	// it.
+	// AssuranceLevel is the [AAL] the authenticator declared through
+	// [Authenticator.AAL] — the ceiling the method can reach, before
+	// the per-ceremony evidence is applied. Read [Factor.EffectiveAAL]
+	// for the level the factor actually earned; the aggregator takes
+	// the maximum of that across the slice, so a single AAL3 factor
+	// lifts the whole session while adding a weaker factor next to a
+	// stronger one does not weaken it.
 	AssuranceLevel AAL
 
 	// UserVerified is true when the authenticator confirmed the user
@@ -36,6 +38,31 @@ type Factor struct {
 	// "swk" and "hwk" RFC 8176 tokens; other methods MAY leave it
 	// false.
 	UserVerified bool
+}
+
+// EffectiveAAL returns the assurance level the factor actually earned,
+// which is [Factor.AssuranceLevel] capped by what the ceremony proved.
+// [Authenticator.AAL] is a static per-adapter declaration — the
+// ceiling the method can reach — while the WebAuthn user-verification
+// bit is known only once the assertion comes back.
+//
+// The one cap the library applies: a passkey assertion without the UV
+// flag proved possession of the private key and nothing else. That is
+// a single factor, so it cannot stand in for the two NIST SP 800-63B
+// §4.2 requires of AAL2, and the level drops to [AAL1]. Without the
+// cap a presence-only assertion would carry the AAL2 acr (silver) and
+// satisfy a step-up that asked for two factors. [AAL3] is unreachable
+// here because the orchestrator refuses an AAL3 factor with the UV bit
+// clear outright.
+//
+// Every other factor type reports its declared level unchanged;
+// UserVerified is documented as passkey-specific and other methods MAY
+// leave it false.
+func (f Factor) EffectiveAAL() AAL {
+	if f.Type == FactorPasskey && !f.UserVerified && f.AssuranceLevel > AAL1 {
+		return AAL1
+	}
+	return f.AssuranceLevel
 }
 
 // AMRValue returns the RFC 8176 §2 token corresponding to f.Type.

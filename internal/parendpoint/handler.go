@@ -38,13 +38,12 @@ const (
 	// §2.2 mandates "sufficient entropy that guessing is infeasible";
 	// 32 bytes (256 bits) is the same posture the library uses for
 	// authorization codes and refresh tokens.
+	//
+	// The URN namespace the identifier is minted under is
+	// [authorize.PARRequestURIPrefix]: the same constant the authorization
+	// endpoint classifies inbound request_uri values with, so the issuer
+	// and the consumer cannot disagree about what a PAR reference is.
 	uriByteLength = 32
-
-	// uriPrefix is the URN namespace RFC 9126 §2.2 reserves for PAR
-	// request_uri values. The full URN is the storage key; consumers at
-	// /authorize match on this prefix to distinguish PAR URIs from the
-	// (out-of-scope) JAR request_uri.
-	uriPrefix = "urn:ietf:params:oauth:request_uri:"
 )
 
 // Clock is the package-local view of the wall clock. It mirrors the
@@ -133,8 +132,11 @@ type Deps struct {
 	// also enforces the §10 mismatch rule: when the request
 	// already carries a "dpop_jkt" parameter (form or merged
 	// request-object claim), it MUST equal the proof's thumbprint.
-	// A nil verifier disables both behaviours; the existing form
-	// "dpop_jkt" still flows through to the snapshot unchanged.
+	//
+	// A nil verifier disables both behaviours AND makes a request
+	// carrying "dpop_jkt" fail with invalid_request. The OP cannot
+	// honour the §10.1 commitment without the feature, so accepting
+	// the push would mint a request_uri that can only fail at /token.
 	DPoP *dpop.Verifier
 
 	// DPoPNonces is the RFC 9449 §8 nonce issuer consulted on the

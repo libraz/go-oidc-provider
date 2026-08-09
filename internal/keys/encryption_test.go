@@ -1,14 +1,17 @@
 package keys_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
@@ -150,6 +153,131 @@ func TestEncryptionSet_RetirementGate(t *testing.T) {
 	}
 	if _, ok := set.Resolve("retired"); ok {
 		t.Fatalf("Resolve(retired): want ok=false after deadline")
+	}
+}
+
+// A *keys.EncryptionSet MUST satisfy the contextual resolver extension,
+// not merely the base resolver: [internal/jar] discovers the context
+// seam by type-asserting the resolver it was handed, so losing the
+// method would silently drop the encryption-side retired-kid event back
+// to an uncorrelated one with nothing failing to compile at the call
+// site.
+var _ jose.ContextualEncryptionKeyResolver = (*keys.EncryptionSet)(nil)
+
+// TestEncryptionSet_WithContext_ObserverReceivesCallerContext pins that
+// the retired-kid notification fired by the encryption keyset carries
+// the context the decryption caller pinned through
+// [keys.EncryptionSet.WithContext]. The assertion reads a marker value
+// back out of the observed context; a non-nil check alone would pass
+// against the detached fallback and so would not detect the audit event
+// arriving without request correlation.
+//
+// [internal/jose.Decrypt] consults the resolver through an interface
+// whose methods take no context, which is why the context is pinned
+// onto a copy of the set rather than passed per lookup.
+func TestEncryptionSet_WithContext_ObserverReceivesCallerContext(t *testing.T) {
+	t.Parallel()
+
+	rsaKey := mustRSA(t)
+	frozen := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	var observedMarker atomic.Value
+	var observedKid atomic.Value
+	set, err := keys.NewEncryptionSet(
+		[]keys.EncryptionEntry{
+			{KeyID: "retired", PrivateKey: rsaKey, NotAfter: frozen},
+		},
+		keys.WithClock(func() time.Time { return frozen.Add(time.Hour) }),
+		keys.WithRetiredKidObserver(func(ctx context.Context, kid string) {
+			marker, _ := ctx.Value(correlationKeyType{}).(string)
+			observedMarker.Store(marker)
+			observedKid.Store(kid)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewEncryptionSet: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), correlationKeyType{}, "request-11")
+	if _, ok := set.WithContext(ctx).Resolve("retired"); ok {
+		t.Fatal("Resolve(retired): want ok=false after deadline")
+	}
+	if got, _ := observedMarker.Load().(string); got != "request-11" {
+		t.Fatalf("observer context marker=%q want request-11 — the caller's context did not reach the observer", got)
+	}
+	if got, _ := observedKid.Load().(string); got != "retired" {
+		t.Errorf("observer kid=%q want retired", got)
+	}
+}
+
+// TestEncryptionSet_WithContext_LeavesReceiverUnpinned pins that
+// [keys.EncryptionSet.WithContext] returns a copy. The set is built once
+// at startup and shared by every concurrent request, so pinning a
+// context MUST NOT reach back into the receiver — otherwise one
+// request's correlation would be stamped onto another's audit event.
+func TestEncryptionSet_WithContext_LeavesReceiverUnpinned(t *testing.T) {
+	t.Parallel()
+
+	rsaKey := mustRSA(t)
+	frozen := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	markers := make(chan string, 2)
+	set, err := keys.NewEncryptionSet(
+		[]keys.EncryptionEntry{
+			{KeyID: "retired", PrivateKey: rsaKey, NotAfter: frozen},
+		},
+		keys.WithClock(func() time.Time { return frozen.Add(time.Hour) }),
+		keys.WithRetiredKidObserver(func(ctx context.Context, _ string) {
+			marker, _ := ctx.Value(correlationKeyType{}).(string)
+			markers <- marker
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewEncryptionSet: %v", err)
+	}
+
+	pinned := set.WithContext(context.WithValue(context.Background(), correlationKeyType{}, "request-13"))
+	if _, ok := pinned.Resolve("retired"); ok {
+		t.Fatal("Resolve(retired) on the pinned copy: want ok=false")
+	}
+	if got := <-markers; got != "request-13" {
+		t.Fatalf("pinned copy marker=%q want request-13", got)
+	}
+
+	// The shared receiver must still be unpinned: its notifications
+	// carry no marker at all rather than the previous request's.
+	if _, ok := set.Resolve("retired"); ok {
+		t.Fatal("Resolve(retired) on the receiver: want ok=false")
+	}
+	if got := <-markers; got != "" {
+		t.Fatalf("receiver marker=%q want empty — WithContext mutated the shared set", got)
+	}
+}
+
+// TestEncryptionSet_Resolve_NoObserverDoesNotPanic guards the nil-guard
+// on the encryption side: a set built without
+// [keys.WithRetiredKidObserver] MUST reject a retired kid without
+// dereferencing the absent callback, both unpinned and pinned to a
+// context.
+func TestEncryptionSet_Resolve_NoObserverDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	rsaKey := mustRSA(t)
+	frozen := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	set, err := keys.NewEncryptionSet(
+		[]keys.EncryptionEntry{
+			{KeyID: "retired", PrivateKey: rsaKey, NotAfter: frozen},
+		},
+		keys.WithClock(func() time.Time { return frozen.Add(time.Hour) }),
+	)
+	if err != nil {
+		t.Fatalf("NewEncryptionSet: %v", err)
+	}
+	if _, ok := set.Resolve("retired"); ok {
+		t.Fatal("retired kid was admitted")
+	}
+	if _, ok := set.WithContext(context.Background()).Resolve("retired"); ok {
+		t.Fatal("retired kid was admitted through the pinned copy")
 	}
 }
 

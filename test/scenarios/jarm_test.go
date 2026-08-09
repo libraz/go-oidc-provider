@@ -132,10 +132,18 @@ func doJARMAuthorize(t *testing.T, tk *testkit.Provider, query url.Values) *http
 // /.well-known/openid-configuration on a JARM-enabled OP advertises the
 // signing-alg list with at least "ES256" and a response_modes_supported
 // matching the v1.0 set ["query", "form_post", "query.jwt",
-// "fragment.jwt", "form_post.jwt", "jwt"]. The encryption-alg / -enc
-// fields are absent because JWE for JARM responses is out-of-scope, and
-// "web_message" / "web_message.jwt" are absent because the transport
-// is not implemented.
+// "fragment.jwt", "form_post.jwt", "jwt"].
+//
+// The encryption-alg / -enc fields are advertised alongside them. The
+// OP wraps the signed JARM JWT in a JWE for any client registered with
+// authorization_encrypted_response_alg / _enc, addressing it to a key
+// from that client's own JWKS — so the capability rides on the JARM
+// feature alone and does not require [op.WithEncryptionKeyset]. An RP
+// that negotiates from discovery has to see the fields to turn the
+// feature on.
+//
+// "web_message" / "web_message.jwt" are absent because the transport is
+// not implemented.
 //
 // Spec: JARM §6 / RFC 8414 §2.
 func TestScenario_JARM_001_DiscoverySurfaceAdvertised(t *testing.T) {
@@ -159,11 +167,14 @@ func TestScenario_JARM_001_DiscoverySurfaceAdvertised(t *testing.T) {
 		t.Errorf("authorization_signing_alg_values_supported must include ES256: %v", signing)
 	}
 
-	if _, ok := doc["authorization_encryption_alg_values_supported"]; ok {
-		t.Errorf("authorization_encryption_alg_values_supported MUST NOT be published in v1.0 (JWE OOS): %v", doc["authorization_encryption_alg_values_supported"])
-	}
-	if _, ok := doc["authorization_encryption_enc_values_supported"]; ok {
-		t.Errorf("authorization_encryption_enc_values_supported MUST NOT be published in v1.0 (JWE OOS): %v", doc["authorization_encryption_enc_values_supported"])
+	for _, field := range []string{
+		"authorization_encryption_alg_values_supported",
+		"authorization_encryption_enc_values_supported",
+	} {
+		values, ok := doc[field].([]any)
+		if !ok || len(values) == 0 {
+			t.Errorf("%s must be published on a JARM-enabled OP: %v", field, doc[field])
+		}
 	}
 
 	modesAny, _ := doc["response_modes_supported"].([]any)

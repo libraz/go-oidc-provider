@@ -51,7 +51,7 @@ func (*typedNilTokenExchangePolicy) Allow(context.Context, op.TokenExchangeReque
 // carrying the concrete type's zero value. Test callers supply pointer-backed
 // implementations, so the result is the typed-nil shape that defeats a plain
 // interface == nil check.
-func typedNilFrom[T any](t *testing.T, sample T) T { //nolint:ireturn // preserving the requested interface type is the purpose of this typed-nil fixture helper.
+func typedNilFrom[T any](t *testing.T, sample T) T {
 	t.Helper()
 
 	value := reflect.ValueOf(sample)
@@ -214,7 +214,7 @@ func TestWithLoginFlow_RejectsTypedNilDependencies(t *testing.T) {
 			t.Parallel()
 
 			st := inmem.New()
-			_, err := op.New(append(validBaseOpts(t), op.WithLoginFlow(tc.buildFlow(t, st)))...)
+			_, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(tc.buildFlow(t, st)))...)
 			if err == nil {
 				t.Fatalf("op.New accepted typed-nil %s", tc.field)
 			}

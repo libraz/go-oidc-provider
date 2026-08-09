@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	databasesql "database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -108,7 +112,7 @@ func openCompositeBackend(ctx context.Context, cfg runConfig, logger *slog.Logge
 		return demoBackend{}, fmt.Errorf("migrate schema: %w", err)
 	}
 
-	volatile, err := openRedis(ctx, cfg)
+	volatile, err := openRedis(ctx, cfg, logger)
 	if err != nil {
 		closeDB()
 		return demoBackend{}, fmt.Errorf("connect redis: %w", err)
@@ -139,17 +143,72 @@ func openCompositeBackend(ctx context.Context, cfg runConfig, logger *slog.Logge
 	}, nil
 }
 
-// openRedis dials Redis. Plaintext is admitted explicitly because op-demo is
-// a development binary run against a loopback engine; the adapter refuses it
-// otherwise, and a deployment uses rediss:// instead.
-func openRedis(ctx context.Context, cfg runConfig) (*oidcredis.Store, error) {
-	dialCtx, cancel := context.WithTimeout(ctx, storeBackendTimeout)
-	defer cancel()
-	return oidcredis.New(dialCtx,
+// openRedis dials Redis. Plaintext is admitted only for a loopback engine,
+// which is the arrangement the rest of this binary calls development: the
+// listener defaults to loopback and an http:// issuer is accepted only
+// without TLS. A plaintext DSN naming any other host is refused here rather
+// than waved through — sessions and interaction state cross that link.
+func openRedis(ctx context.Context, cfg runConfig, logger *slog.Logger) (*oidcredis.Store, error) {
+	opts := []oidcredis.Option{
 		oidcredis.WithDSN(cfg.redisDSN),
 		oidcredis.WithRedisAuth(os.Getenv("REDIS_USERNAME"), os.Getenv("REDIS_PASSWORD")),
-		oidcredis.WithDevModeAllowPlaintext(func(string) {}),
-	)
+	}
+	allowPlaintext, err := allowPlaintextRedis(cfg.redisDSN)
+	if err != nil {
+		return nil, err
+	}
+	if allowPlaintext {
+		// The adapter takes the sink as a required argument so an operator
+		// learns the link is unencrypted; dropping the warning on the floor
+		// is what makes that argument pointless.
+		opts = append(opts, oidcredis.WithDevModeAllowPlaintext(plaintextRedisWarning(cfg.redisDSN, logger)))
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, storeBackendTimeout)
+	defer cancel()
+	return oidcredis.New(dialCtx, opts...)
+}
+
+// allowPlaintextRedis reports whether the adapter's plaintext escape hatch
+// may be supplied for dsn, and fails when a plaintext link would leave the
+// loopback interface. A rediss:// DSN needs no escape hatch, and any other
+// scheme is left for the adapter to reject so the diagnostic stays in one
+// place.
+func allowPlaintextRedis(dsn string) (bool, error) {
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return false, errors.New("op-demo: -redis-dsn is not a valid URL")
+	}
+	if !strings.EqualFold(parsed.Scheme, "redis") {
+		return false, nil
+	}
+	if !isLoopbackHost(parsed.Hostname()) {
+		return false, fmt.Errorf(
+			"op-demo: refusing an unencrypted link to %s — point -redis-dsn at a loopback engine or use rediss://",
+			oidcredis.RedactedDSN(dsn))
+	}
+	return true, nil
+}
+
+// isLoopbackHost reports whether host names the loopback interface. The
+// textual "localhost" counts alongside the literal addresses: the demo
+// recipes spell the engine both ways.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// plaintextRedisWarning returns the sink the adapter calls when it admits
+// an unencrypted link. The endpoint is named through the adapter's own
+// redaction, which drops credentials and query parameters, so the record
+// identifies the engine without logging the password a DSN may carry.
+func plaintextRedisWarning(dsn string, logger *slog.Logger) func(string) {
+	return func(warning string) {
+		logger.Warn(warning, "redis", oidcredis.RedactedDSN(dsn))
+	}
 }
 
 // waitForDB blocks until MySQL answers, so the binary survives being started

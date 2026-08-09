@@ -148,8 +148,8 @@ func TestVerify_NoCodesOnEmptyBatch(t *testing.T) {
 	}
 }
 
-// TestVerify_RejectsOversizedBatch pins audit finding S-10's batch
-// amplification gate: a persisted batch carrying more than the
+// TestVerify_RejectsOversizedBatch pins the batch-amplification
+// gate: a persisted batch carrying more than the
 // in-tree maxBatchSize (16) is treated as store corruption and
 // refused before any argon2id derivation runs. Without the gate, a
 // single verify call would invoke argon2id once per slot, turning

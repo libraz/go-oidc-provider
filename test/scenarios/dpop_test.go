@@ -2019,3 +2019,60 @@ func TestScenario_DPOP_049_NonceHeaderFormat(t *testing.T) {
 // reference keeps it from looking unused while no test in the active
 // set exercises a resource-server flow.
 var _ = accessTokenHashB64
+
+// TestScenario_DPOP_050_DPoPJKTAdmissionFollowsTheFeatureFlag pins the
+// RFC 9449 §10.1 "dpop_jkt" gate end to end, through op.New rather than
+// through a hand-built handler dependency set.
+//
+// The gate is decided in two layers: the authorize handler reads a flag,
+// and the constructor is what sets it from the DPoP feature. A
+// handler-level test can satisfy both halves by assigning the flag
+// itself, which leaves the constructor half asserted by nothing — and
+// that is exactly the shape that shipped a provider rejecting every
+// dpop_jkt regardless of configuration. Only a black-box row catches it.
+func TestScenario_DPOP_050_DPoPJKTAdmissionFollowsTheFeatureFlag(t *testing.T) {
+	t.Parallel()
+
+	const jkt = "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I"
+
+	t.Run("accepted when DPoP is enabled", func(t *testing.T) {
+		t.Parallel()
+
+		f := newDPoPFixture(t)
+		code, _ := f.runFlowWithExtra(t, url.Values{"dpop_jkt": {jkt}})
+		if code == "" {
+			t.Fatal("no authorization code for a dpop_jkt request under an OP with DPoP enabled")
+		}
+	})
+
+	t.Run("rejected when DPoP is disabled", func(t *testing.T) {
+		t.Parallel()
+
+		tk := testkit.NewProvider(t)
+		const clientID = "rp-no-dpop"
+		const redirect = "https://rp.testkit.invalid/callback"
+		tk.RegisterClient(t, testkit.ClientFixture{
+			ID:                      clientID,
+			RedirectURIs:            []string{redirect},
+			Scopes:                  []string{"openid", "profile", "email"},
+			TokenEndpointAuthMethod: "none",
+			PublicClient:            true,
+		})
+		pkce := scenariokit.NewPKCEPair("")
+		res := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+			ClientID:    clientID,
+			RedirectURI: redirect,
+			PKCE:        pkce,
+			Extra:       url.Values{"dpop_jkt": {jkt}},
+		})
+		if res.Code != "" {
+			t.Fatal("an OP without DPoP minted a code committed to a DPoP key it can never verify")
+		}
+		if res.Error != "invalid_request" {
+			t.Errorf("error=%q want invalid_request (desc=%q)", res.Error, res.ErrorDesc)
+		}
+		if !strings.Contains(res.ErrorDesc, "dpop_jkt") {
+			t.Errorf("error_description=%q does not name the offending parameter", res.ErrorDesc)
+		}
+	})
+}

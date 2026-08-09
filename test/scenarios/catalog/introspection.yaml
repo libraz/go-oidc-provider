@@ -132,7 +132,7 @@ rows:
       message "Structured JWT Tokens cannot be introspected via the
       introspection_endpoint".
     status: out-of-scope
-    out_of_scope_reason: "The OP collapses every cross-client / unrecognised / malformed token submission to {active:false} per RFC 7662 §2.2 (single inactive envelope) and the doc.go same-client-only policy. Returning 400 unsupported_token_type with the wording this row asserts would leak token-shape information (\"this is a JWT but I don't introspect those\") to a probing caller; the privacy-preserving baseline already in place is strictly stronger. RFC 9068 §6 leaves JWT introspection optional, so the OP's choice is spec-compliant."
+    out_of_scope_reason: "The OP answers every unrecognised / malformed token submission — and every cross-client one the caller is not entitled to read — with {active:false} per RFC 7662 §2.2 (single inactive envelope). A JWT access token the authenticated caller IS entitled to read (its own, or one addressed to a resource it is a registered op.ProtectedResource.IntrospectionClients member of) is introspected normally rather than refused for its shape. Returning 400 unsupported_token_type with the wording this row asserts would leak token-shape information (\"this is a JWT but I don't introspect those\") to a probing caller; the privacy-preserving baseline already in place is strictly stronger. RFC 9068 §6 leaves JWT introspection optional, so the OP's choice is spec-compliant."
 
   - id: INT-014
     severity: P0
@@ -141,8 +141,7 @@ rows:
       A pairwise client introspecting its own refresh token receives a
       sub that is the pairwise subject (different from the raw account
       id).
-    status: out-of-scope
-    out_of_scope_reason: Pairwise subject types are a v1.0 placeholder (op/op.go PairwiseEnabled=false); pairwise.yaml has discovery-side rows but the introspection-side pairwise sub projection is not implemented. Reconsider when WithPairwiseSubject lands.
+    status: active
 
   - id: INT-015
     severity: P1
@@ -151,8 +150,7 @@ rows:
       A resource-server-style introspection client inspecting another
       pairwise client's token receives the original token's pairwise
       sub; the inspecting client's subject_type does not override it.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 collapses cross-client introspection onto {active:false} per the same-client-only policy (introspectendpoint/doc.go); a 'resource-server inspecting another client's pairwise token receives the original pairwise sub' shape requires cross-client metadata projection that the OP deliberately does not surface (RFC 7662 §2.2 single inactive envelope to avoid token-existence leaks). INT-019 / ATO-005 cover the canonical inactive collapse."
+    status: active
 
   - id: INT-016
     severity: P1

@@ -326,7 +326,7 @@ func TestCustomGrant_BoundAccessToken_PlainBearer(t *testing.T) {
 	}
 	keySet := mustKeySet(t, prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: prov.Issuer, Clock: clock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestCustomGrant_BoundAccessToken_JTIRegistryRegistersShadowRow(t *testing.T
 		Keys:   mustKeySet(t, prov),
 		Issuer: prov.Issuer,
 		Clock:  clock,
-	}).Verify(at)
+	}).Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestCustomGrant_BoundAccessToken_DPoP(t *testing.T) {
 	}
 	keySet := mustKeySet(t, prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: prov.Issuer, Clock: clock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -571,7 +571,7 @@ func TestCustomGrant_BoundAccessToken_MTLS(t *testing.T) {
 	}
 	keySet := mustKeySet(t, prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: prov.Issuer, Clock: clock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -908,5 +908,137 @@ func TestCustomGrant_TTLCappedToGlobal(t *testing.T) {
 	// The default cap (5 min = 300s) is what the dispatcher truncates to.
 	if expires != 300 {
 		t.Errorf("expires_in=%v want 300 (capped to default 5m)", expires)
+	}
+}
+
+// TestCustomGrant_HandlerSuppliedTTLUnsetFallsBackToGlobal confirms a
+// handler that returns an access token without stating a lifetime gets
+// the OP's configured access-token TTL on the wire. An unset TTL is
+// "the handler did not say", not "expire on arrival": shipping
+// expires_in: 0 would make every issued credential unusable the moment
+// the client parsed the response.
+func TestCustomGrant_HandlerSuppliedTTLUnsetFallsBackToGlobal(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:ttl-unset"
+	handler := &recordingGrant{
+		name:     grantURN,
+		response: op.CustomGrantResponse{AccessToken: "at"},
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	expires, ok := body["expires_in"].(float64)
+	if !ok {
+		t.Fatalf("expires_in not a number: %T", body["expires_in"])
+	}
+	if expires != 300 {
+		t.Errorf("expires_in=%v want 300 (default 5m); an unset handler TTL must not ship as an expired token", expires)
+	}
+}
+
+// TestCustomGrant_BoundAccessTokenInheritsResponseSubject confirms the
+// bound-mint path takes the response-level Subject when the bound token
+// carries none of its own. The token endpoint authenticates a client
+// rather than an end user, so a handler acting for a user states the
+// subject on its response; without this fallback that handler would
+// have to repeat the value on the bound token or receive server_error.
+// The same request leaves the bound TTL unset, pinning the lifetime
+// fallback on this path too.
+func TestCustomGrant_BoundAccessTokenInheritsResponseSubject(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:bound-response-subject"
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			Subject:          op.Subject("user-from-response"),
+			BoundAccessToken: &op.BoundAccessToken{},
+			Scope:            []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithCustomGrant(handler)),
+	)
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token", clock: clock}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	keySet := mustKeySet(t, prov)
+	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: prov.Issuer, Clock: clock}
+	parsed, _, err := v.Verify(context.Background(), at)
+	if err != nil {
+		t.Fatalf("Verify access token: %v", err)
+	}
+	if parsed.Subject != "user-from-response" {
+		t.Errorf("sub=%q want user-from-response", parsed.Subject)
+	}
+	expires, ok := body["expires_in"].(float64)
+	if !ok {
+		t.Fatalf("expires_in not a number: %T", body["expires_in"])
+	}
+	if expires != 300 {
+		t.Errorf("expires_in=%v want 300 (default 5m)", expires)
+	}
+	if parsed.ExpiresAt-parsed.IssuedAt != 300 {
+		t.Errorf("exp-iat=%d want 300; the advertised lifetime must match the minted one",
+			parsed.ExpiresAt-parsed.IssuedAt)
+	}
+}
+
+// TestCustomGrant_BoundAccessTokenWithoutAnySubjectReturns500 pins the
+// end of the subject fallback chain: with no subject on the bound
+// token, none on the response, and none on the request, the OP has no
+// value for the REQUIRED "sub" claim and refuses to mint rather than
+// signing a subject-less access token.
+func TestCustomGrant_BoundAccessTokenWithoutAnySubjectReturns500(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:bound-no-subject"
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			BoundAccessToken: &op.BoundAccessToken{TTL: 2 * time.Minute},
+			Scope:            []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	if got := decodeJSON(t, resp)["error"]; got != "server_error" {
+		t.Errorf("error=%v want server_error", got)
 	}
 }

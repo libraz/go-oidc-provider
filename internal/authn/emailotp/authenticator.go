@@ -115,8 +115,8 @@ const (
 	resendWindow = 1 * time.Hour
 
 	// resendWindowCap is the upper bound on send events within
-	// [resendWindow]. Five matches the brute-force defence the
-	// product design carries for verify failures and is well above
+	// [resendWindow]. Five matches the brute-force defence applied
+	// to verify failures and is well above
 	// the legitimate-user count (one resend per typo, occasional
 	// retransmits) while keeping the SMTP cost amplification small.
 	resendWindowCap = 5
@@ -313,8 +313,7 @@ func (a *Authenticator) WithLockout(c *lockout.Counter) *Authenticator {
 // [authn.FactorEmailOTP].
 func (*Authenticator) Type() authn.FactorType { return authn.FactorEmailOTP }
 
-// AAL implements [op.Authenticator]. Email OTP contributes AAL2
-// (002 §E.3).
+// AAL implements [op.Authenticator]. Email OTP contributes AAL2.
 func (*Authenticator) AAL() authn.AAL { return authn.AAL2 }
 
 // AMR implements [op.Authenticator]. Maps to RFC 8176 §2 "otp" — the

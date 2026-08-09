@@ -34,11 +34,22 @@ func (f *fakeATRegistry) RevokeByGrant(_ context.Context, grantID string) (int, 
 }
 func (f *fakeATRegistry) GC(context.Context, time.Time) (int, error) { return 0, nil }
 
+// isRevokedCall records the arguments one
+// [store.GrantRevocationStore.IsRevoked] call was made with, so a test
+// can pin that the reader hands the substore both lookup keys rather
+// than gating the call on one of them.
+type isRevokedCall struct {
+	grantID string
+	jti     string
+	iat     time.Time
+}
+
 type fakeGrantRevocations struct {
-	tombstones  []store.GrantTombstone
-	revokedJTIs []store.RevokedJTI
-	revoked     bool
-	err         error
+	tombstones    []store.GrantTombstone
+	revokedJTIs   []store.RevokedJTI
+	isRevokedWith []isRevokedCall
+	revoked       bool
+	err           error
 }
 
 func (f *fakeGrantRevocations) RevokeGrant(_ context.Context, t store.GrantTombstone) error {
@@ -51,7 +62,8 @@ func (f *fakeGrantRevocations) RevokeJTI(_ context.Context, r store.RevokedJTI) 
 	return nil
 }
 
-func (f *fakeGrantRevocations) IsRevoked(context.Context, string, string, time.Time) (bool, error) {
+func (f *fakeGrantRevocations) IsRevoked(_ context.Context, grantID, jti string, iat time.Time) (bool, error) {
+	f.isRevokedWith = append(f.isRevokedWith, isRevokedCall{grantID: grantID, jti: jti, iat: iat})
 	return f.revoked, f.err
 }
 func (f *fakeGrantRevocations) GC(context.Context, time.Time) (int, error) { return 0, nil }
@@ -149,6 +161,92 @@ func TestJWTAccessTokenRevoked_GrantTombstoneUsesGrantStore(t *testing.T) {
 	}, claims)
 	if !revoked || !ok {
 		t.Fatalf("got revoked=%v ok=%v want true,true", revoked, ok)
+	}
+}
+
+// TestJWTAccessTokenRevoked_GrantTombstoneConsultsDenylistWithoutGrantID
+// pins the grantless read path. A client_credentials access token has no
+// "gid" claim, so /revocation can only denylist it by jti; a reader that
+// consulted the tombstone substore solely for grant-bound tokens would
+// never see that row and would keep reporting the token live until exp.
+func TestJWTAccessTokenRevoked_GrantTombstoneConsultsDenylistWithoutGrantID(t *testing.T) {
+	t.Parallel()
+
+	iat := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	revs := &fakeGrantRevocations{revoked: true}
+	claims := &tokens.AccessTokenClaims{JTI: "jti-grantless", IssuedAt: iat.Unix()}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		GrantRevocations:   revs,
+		RevocationStrategy: store.RevocationStrategyGrantTombstone,
+	}, claims)
+	if !revoked || !ok {
+		t.Fatalf("got revoked=%v ok=%v want true,true", revoked, ok)
+	}
+	if len(revs.isRevokedWith) != 1 {
+		t.Fatalf("IsRevoked calls=%d want 1", len(revs.isRevokedWith))
+	}
+	got := revs.isRevokedWith[0]
+	if got.jti != "jti-grantless" || got.grantID != "" || !got.iat.Equal(iat) {
+		t.Fatalf("IsRevoked call=%+v want jti=jti-grantless grantID=\"\" iat=%v", got, iat)
+	}
+}
+
+// TestJWTAccessTokenRevoked_GrantTombstoneLookupErrorWithoutGrantID pins
+// that a substore fault on the grantless path is fatal rather than
+// silently degrading to "live": userinfo and introspection deny on
+// (false, false), which is the fail-secure posture.
+func TestJWTAccessTokenRevoked_GrantTombstoneLookupErrorWithoutGrantID(t *testing.T) {
+	t.Parallel()
+
+	revs := &fakeGrantRevocations{err: errors.New("boom")}
+	claims := &tokens.AccessTokenClaims{JTI: "jti-grantless-fault"}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		GrantRevocations:   revs,
+		AccessTokens:       &fakeATRegistry{},
+		RevocationStrategy: store.RevocationStrategyGrantTombstone,
+	}, claims)
+	if revoked || ok {
+		t.Fatalf("got revoked=%v ok=%v want false,false", revoked, ok)
+	}
+}
+
+// TestJWTAccessTokenRevoked_GrantlessLiveTokenStillFallsBackToRegistry
+// keeps the migration window intact: when the tombstone substore reports
+// a grantless token live, a legacy registry row marking the same jti
+// revoked still wins.
+func TestJWTAccessTokenRevoked_GrantlessLiveTokenStillFallsBackToRegistry(t *testing.T) {
+	t.Parallel()
+
+	revs := &fakeGrantRevocations{}
+	reg := &fakeATRegistry{find: &store.AccessTokenRecord{JTI: "jti-legacy", Revoked: true}}
+	claims := &tokens.AccessTokenClaims{JTI: "jti-legacy"}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		GrantRevocations:   revs,
+		AccessTokens:       reg,
+		RevocationStrategy: store.RevocationStrategyGrantTombstone,
+	}, claims)
+	if !revoked || !ok {
+		t.Fatalf("got revoked=%v ok=%v want true,true", revoked, ok)
+	}
+}
+
+// TestJWTAccessTokenRevoked_GrantBoundLiveTokenSkipsRegistry pins that a
+// grant-bound token is fully described by the tombstone substore: once it
+// reports the token live the registry is not consulted, so a stale legacy
+// row cannot resurrect a revocation the operator already cleared.
+func TestJWTAccessTokenRevoked_GrantBoundLiveTokenSkipsRegistry(t *testing.T) {
+	t.Parallel()
+
+	revs := &fakeGrantRevocations{}
+	reg := &fakeATRegistry{find: &store.AccessTokenRecord{JTI: "jti-bound", Revoked: true}}
+	claims := &tokens.AccessTokenClaims{JTI: "jti-bound", GrantID: "grant-bound"}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		GrantRevocations:   revs,
+		AccessTokens:       reg,
+		RevocationStrategy: store.RevocationStrategyGrantTombstone,
+	}, claims)
+	if revoked || !ok {
+		t.Fatalf("got revoked=%v ok=%v want false,true", revoked, ok)
 	}
 }
 

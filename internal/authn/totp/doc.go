@@ -4,8 +4,7 @@
 // verification, the AES-256-GCM at-rest envelope for the persisted secret,
 // and the brute-force counter that protects the verifier.
 // # Scope
-// The package is **self-contained** in the sense documented in
-// 02-product-design.md §E: orchestrator wiring, HTTP handlers,
+// The package is **self-contained**: orchestrator wiring, HTTP handlers,
 // and the [op.WithMFAEncryptionKeys] option live elsewhere. Callers compose
 // the building blocks here into an authenticator chain. The package does
 // not import any other internal authn code: the existing
@@ -40,7 +39,7 @@
 // stolen from one user's row cannot be replayed under a different
 // subject — the GCM tag fails to authenticate.
 // # Brute-force defence
-// 02-product-design.md §M.6 specifies a 24-hour cumulative
+// The verifier maintains a 24-hour cumulative
 // counter rather than a sliding window: the field FailedCount on the
 // persisted record increments on every wrong code and resets on success
 // or after the 24-hour rollover. When FailedCount reaches 30 the verifier

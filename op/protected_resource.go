@@ -38,6 +38,32 @@ type ProtectedResource struct {
 
 	// ResourceDocumentation is a human-readable documentation URL.
 	ResourceDocumentation string
+
+	// IntrospectionClients lists the client_ids that authenticate at
+	// /introspect on this resource server's behalf. A client named here
+	// may introspect an access token issued to any client, provided the
+	// token's audience is this resource — which is RFC 7662's canonical
+	// deployment and the reason the endpoint exists. Without it the
+	// endpoint answers {"active": false} to everyone but the token's own
+	// client, so a resource server that follows this OP's own metadata
+	// document to the introspection endpoint learns nothing about the
+	// tokens presented to it.
+	//
+	// The delegation is scoped, not blanket. A listed client may read
+	// only tokens addressed to this resource; tokens for another
+	// resource, and tokens with no matching audience, stay invisible to
+	// it. Refresh tokens are never covered: a refresh token is the
+	// client's own credential rather than something presented to a
+	// resource server, so it remains same-client-only regardless of this
+	// field.
+	//
+	// A client listed here still authenticates normally, and being
+	// listed does not otherwise change what it may do. Naming a
+	// client_id that is not registered is not an error — the entry
+	// simply never matches.
+	//
+	// Stable since v1.1.
+	IntrospectionClients []string
 }
 
 // WithProtectedResources registers one or more resource-server metadata
@@ -119,4 +145,48 @@ func (c *config) validateProtectedResources() error {
 		paths[path] = r.Resource
 	}
 	return nil
+}
+
+// introspectionDelegates projects the registered resources onto the
+// lookup the introspection endpoint needs: client_id -> the set of
+// canonicalised resource identifiers that client may introspect tokens
+// for. The map is built once at [New] and read-only afterwards.
+//
+// Returning nil when nothing is configured is deliberate: the endpoint
+// treats a nil map as "same-client-only", so a deployment that never
+// names an introspection client keeps the stricter posture without the
+// endpoint needing a separate flag to consult.
+func (c *config) introspectionDelegates() map[string]map[string]struct{} {
+	out := make(map[string]map[string]struct{})
+	for _, r := range c.protectedResources {
+		if len(r.IntrospectionClients) == 0 {
+			continue
+		}
+		canon, err := resourceindicator.Canonicalize(r.Resource)
+		if err != nil {
+			// Unreachable: validateProtectedResources ran first.
+			continue
+		}
+		grantIntrospection(out, r.IntrospectionClients, canon)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// grantIntrospection records that each named client may introspect
+// tokens addressed to resource. An empty client_id is skipped rather
+// than stored, so a stray entry cannot become a wildcard for the
+// unauthenticated case.
+func grantIntrospection(out map[string]map[string]struct{}, clientIDs []string, resource string) {
+	for _, clientID := range clientIDs {
+		if clientID == "" {
+			continue
+		}
+		if out[clientID] == nil {
+			out[clientID] = make(map[string]struct{}, 1)
+		}
+		out[clientID][resource] = struct{}{}
+	}
 }

@@ -10,6 +10,7 @@ package scenarios_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -756,16 +758,349 @@ func TestScenario_INT_013_StructuredJWTRejectedAtIntrospection(t *testing.T) {
 	t.Skip("out-of-scope: INT-013 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_INT_014_PairwiseClientReceivesPairwiseSub is OOS — see catalog out_of_scope_reason.
+// TestScenario_INT_014_PairwiseClientReceivesPairwiseSub verifies that
+// a client registered with subject_type=pairwise introspecting its own
+// refresh token reads back the pairwise pseudonym rather than the
+// OP-internal account id the record persists.
+//
+// The contrast half is what makes the row worth pinning: a
+// subject_type=public client on the SAME provider, authenticating the
+// same end user, must see the raw account id. Without both directions
+// a projector that returned the raw value unconditionally would still
+// pass, because the pairwise value is only recognisable as pairwise
+// when something else on the wire is not.
+//
+// Spec: OIDC Core 1.0 §8 / RFC 7662 §2.2.
 func TestScenario_INT_014_PairwiseClientReceivesPairwiseSub(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: INT-014 (see catalog out_of_scope_reason)")
+
+	const (
+		pairwiseID       = "rp-int-014-pairwise"
+		publicID         = "rp-int-014-public"
+		pairwiseCallback = "https://rp-int-014-pairwise.example.com/cb"
+		publicCallback   = "https://rp-int-014-public.example.net/cb"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const secret = "rp-int-014-secret"
+
+	hash, err := op.HashClientSecret(secret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithPairwiseSubject(int015PairwiseSalt),
+		op.WithFeature(feature.Introspect),
+	))
+	pairwiseRP := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      pairwiseID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{pairwiseCallback},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		SubjectType:             "pairwise",
+	})
+	publicRP := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      publicID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{publicCallback},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		SubjectType:             "public",
+	})
+	tk.Store.PutUser(context.Background(), &store.User{Subject: scenariokit.DefaultSubject})
+
+	pairwiseTok := int015CodeFlow(t, tk, pairwiseRP.ID, pairwiseCallback, secret, "openid offline_access", nil)
+	if pairwiseTok.RefreshToken == "" {
+		t.Fatalf("pairwise client got no refresh_token: %v", pairwiseTok.Raw)
+	}
+	publicTok := int015CodeFlow(t, tk, publicRP.ID, publicCallback, secret, "openid offline_access", nil)
+	if publicTok.RefreshToken == "" {
+		t.Fatalf("public client got no refresh_token: %v", publicTok.Raw)
+	}
+
+	pairwiseIntro := int015Introspect(t, tk, pairwiseRP.ID, secret, pairwiseTok.RefreshToken, "refresh_token")
+	if active, _ := pairwiseIntro["active"].(bool); !active {
+		t.Fatalf("pairwise client's own refresh token introspected inactive: %v", pairwiseIntro)
+	}
+	pairwiseSub, _ := pairwiseIntro["sub"].(string)
+	if pairwiseSub == "" {
+		t.Fatalf("introspection response carries no sub: %v", pairwiseIntro)
+	}
+	if pairwiseSub == scenariokit.DefaultSubject {
+		t.Errorf("sub=%q is the raw account id; a pairwise client must receive the pseudonym", pairwiseSub)
+	}
+	// The pseudonym the RP already holds is the one in its id_token; a
+	// second, different pseudonym on the introspection egress would
+	// break the OIDC Core §8.1 one-sub-per-client guarantee.
+	if idSub := int015IDTokenSub(t, pairwiseTok.IDToken); pairwiseSub != idSub {
+		t.Errorf("introspection sub=%q must equal the client's id_token sub=%q", pairwiseSub, idSub)
+	}
+
+	publicIntro := int015Introspect(t, tk, publicRP.ID, secret, publicTok.RefreshToken, "refresh_token")
+	if active, _ := publicIntro["active"].(bool); !active {
+		t.Fatalf("public client's own refresh token introspected inactive: %v", publicIntro)
+	}
+	if got, _ := publicIntro["sub"].(string); got != scenariokit.DefaultSubject {
+		t.Errorf("public client sub=%q want the raw account id %q", got, scenariokit.DefaultSubject)
+	}
 }
 
-// TestScenario_INT_015_RSIntrospectionRespectsTokenSubjectType is OOS — see catalog out_of_scope_reason.
+// TestScenario_INT_015_RSIntrospectionRespectsTokenSubjectType verifies
+// the RFC 7662 §2.2 deployment [op.ProtectedResource.IntrospectionClients]
+// exists for: a resource server introspects an access token that was
+// issued to a DIFFERENT client, because the token names the resource
+// that server speaks for.
+//
+// The load-bearing assertion is the subject projection. The `sub` the
+// resource server reads back is the pseudonym belonging to the token's
+// OWN client, not one recomputed for the inspecting client — the test
+// pins that by driving a second flow in which the resource server acts
+// as an RP for the same end user, so its own pseudonym for that user is
+// a known value the response must NOT equal. Getting this backwards
+// would hand every delegated resource server a subject identifier its
+// callers have never seen, silently breaking correlation.
+//
+// Both negatives are pinned too, because the delegation is only safe if
+// it stays scoped: an undelegated client sees {active:false} for the
+// same token, and a client delegated for a different resource sees
+// {active:false} as well.
+//
+// Spec: RFC 7662 §2.2 / RFC 8707 §2 / OIDC Core 1.0 §8.
 func TestScenario_INT_015_RSIntrospectionRespectsTokenSubjectType(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: INT-015 (see catalog out_of_scope_reason)")
+
+	const (
+		rpID        = "rp-int-015"
+		rsAID       = "rs-int-015-a"
+		rsBID       = "rs-int-015-b"
+		rsNoneID    = "rs-int-015-none"
+		rpCallback  = "https://rp-int-015.example.com/cb"
+		rsACallback = "https://rs-int-015-a.example.net/cb"
+		// RFC 9728 §3.1 derives each resource's metadata path from the
+		// resource's PATH component, so two resources that differ only
+		// by host would collide at /.well-known/oauth-protected-resource.
+		resourceA = "https://api.int015.example/a"
+		resourceB = "https://api.int015.example/b"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const secret = "rp-int-015-secret"
+
+	hash, err := op.HashClientSecret(secret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithPairwiseSubject(int015PairwiseSalt),
+		op.WithFeature(feature.Introspect),
+		// Opaque so the introspection response is composed from the
+		// stored record and therefore actually runs the projector; a
+		// JWT access token would carry an already-projected sub and
+		// leave the projector's client choice unobserved.
+		op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
+		op.WithProtectedResources(
+			op.ProtectedResource{Resource: resourceA, IntrospectionClients: []string{rsAID}},
+			op.ProtectedResource{Resource: resourceB, IntrospectionClients: []string{rsBID}},
+		),
+	))
+
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      rpID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{rpCallback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		Resources:               []string{resourceA, resourceB},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		SubjectType:             "pairwise",
+	})
+	// The resource server is also an RP in its own right, on a
+	// different sector, so its pseudonym for this user is a concrete
+	// value the introspection response must not return.
+	rsA := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      rsAID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{rsACallback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		SubjectType:             "pairwise",
+	})
+	tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      rsBID,
+		SecretHash:              hash,
+		Scopes:                  []string{"api"},
+		GrantTypes:              []string{"client_credentials"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+	tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      rsNoneID,
+		SecretHash:              hash,
+		Scopes:                  []string{"api"},
+		GrantTypes:              []string{"client_credentials"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+	tk.Store.PutUser(context.Background(), &store.User{Subject: scenariokit.DefaultSubject})
+
+	rpTok := int015CodeFlow(t, tk, rp.ID, rpCallback, secret, "openid profile",
+		url.Values{"resource": {resourceA}})
+	if rpTok.AccessToken == "" {
+		t.Fatalf("RP got no access_token: %v", rpTok.Raw)
+	}
+	rpSub := int015IDTokenSub(t, rpTok.IDToken)
+	if rpSub == scenariokit.DefaultSubject {
+		t.Fatalf("RP id_token sub=%q is the raw account id; pairwise projection did not run", rpSub)
+	}
+
+	rsATok := int015CodeFlow(t, tk, rsA.ID, rsACallback, secret, "openid profile", nil)
+	rsASub := int015IDTokenSub(t, rsATok.IDToken)
+	if rsASub == rpSub {
+		t.Fatalf("fixture is degenerate: RP and RS resolved to the same pseudonym %q; "+
+			"they must sit on different sectors for this row to mean anything", rpSub)
+	}
+
+	// The delegated resource server reads a token issued to the RP.
+	intro := int015Introspect(t, tk, rsAID, secret, rpTok.AccessToken, "access_token")
+	if active, _ := intro["active"].(bool); !active {
+		t.Fatalf("delegated RS saw active=false for a token addressed to its resource: %v", intro)
+	}
+	if got, _ := intro["client_id"].(string); got != rp.ID {
+		t.Errorf("client_id=%v want %q (the token's own client)", intro["client_id"], rp.ID)
+	}
+	gotSub, _ := intro["sub"].(string)
+	if gotSub != rpSub {
+		t.Errorf("sub=%q want %q — the projection must follow the token's own client", gotSub, rpSub)
+	}
+	if gotSub == rsASub {
+		t.Errorf("sub=%q is the INSPECTING client's pseudonym; the inspecting client's "+
+			"subject_type must not override the token's", gotSub)
+	}
+	if gotSub == scenariokit.DefaultSubject {
+		t.Errorf("sub=%q leaked the raw account id to the resource server", gotSub)
+	}
+
+	// Negative 1: a client named by no resource stays same-client-only.
+	if got := int015Introspect(t, tk, rsNoneID, secret, rpTok.AccessToken, "access_token"); !int015Inactive(got) {
+		t.Errorf("undelegated client read another client's token: %v", got)
+	}
+	// Negative 2: delegation is scoped to the resource, not blanket.
+	if got := int015Introspect(t, tk, rsBID, secret, rpTok.AccessToken, "access_token"); !int015Inactive(got) {
+		t.Errorf("client delegated for %s read a token addressed to %s: %v", resourceB, resourceA, got)
+	}
+}
+
+// int015PairwiseSalt is the pairwise salt the INT-014 / INT-015
+// providers enrol. [op.WithPairwiseSubject] requires at least 32 bytes;
+// a fixed value keeps a failing trace replayable across runs.
+var int015PairwiseSalt = []byte("int-015-pairwise-fixed-salt-32by")
+
+// int015CodeFlow drives a full code flow for clientID and returns the
+// parsed /token envelope, failing the test on any non-200. extra is
+// merged into BOTH the /authorize query and the /token form so a
+// resource indicator is bound at each hop the way RFC 8707 expects.
+func int015CodeFlow(
+	t *testing.T,
+	tk *testkit.Provider,
+	clientID, callback, secret, scope string,
+	extra url.Values,
+) scenariokit.TokenResponse {
+	t.Helper()
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    clientID,
+		RedirectURI: callback,
+		Scope:       scope,
+		PKCE:        pkce,
+		Extra:       extra,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback for %s missing code: %+v", clientID, flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     clientID,
+		ClientSecret: secret,
+		Extra:        extra,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token for %s status=%d body=%v", clientID, tok.StatusCode, tok.Raw)
+	}
+	return tok
+}
+
+// int015Introspect POSTs token to /introspect as clientID and returns
+// the decoded envelope. A non-200 fails the test: RFC 7662 §2.2 answers
+// an unreadable token with {"active":false} at 200, never a status code.
+func int015Introspect(
+	t *testing.T,
+	tk *testkit.Provider,
+	clientID, secret, token, hint string,
+) map[string]any {
+	t.Helper()
+	form := url.Values{"token": {token}, "token_type_hint": {hint}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, secret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect as %s: %v", clientID, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /introspect body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/introspect as %s status=%d body=%s", clientID, resp.StatusCode, body)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("/introspect body is not JSON: %v (raw=%s)", err, body)
+	}
+	return env
+}
+
+// int015Inactive reports whether env is the canonical RFC 7662 §2.2
+// inactive envelope: active=false and no other member. The membership
+// check matters as much as the flag — an inactive response that still
+// leaked sub or client_id would be the token-existence oracle the
+// single-envelope rule exists to prevent.
+func int015Inactive(env map[string]any) bool {
+	if active, _ := env["active"].(bool); active {
+		return false
+	}
+	return len(env) == 1
+}
+
+// int015IDTokenSub extracts the "sub" claim from a compact JWS id_token.
+func int015IDTokenSub(t *testing.T, idToken string) string {
+	t.Helper()
+	if idToken == "" {
+		t.Fatal("id_token missing; cannot read the client's pseudonym")
+	}
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("id_token is not a compact JWS: %q", idToken)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode id_token payload: %v", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		t.Fatalf("id_token payload is not JSON: %v", err)
+	}
+	sub, _ := claims["sub"].(string)
+	if sub == "" {
+		t.Fatalf("id_token carries no sub: %v", claims)
+	}
+	return sub
 }
 
 // TestScenario_INT_016_ResponseCarriesNoStore confirms that every

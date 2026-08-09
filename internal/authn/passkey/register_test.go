@@ -19,7 +19,16 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
 	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
+
+// newEmptyPasskeyStore returns the credential store FinishRegistration
+// checks ownership against, with nothing registered in it.
+func newEmptyPasskeyStore(t *testing.T) store.PasskeyStore {
+	t.Helper()
+	return inmem.New().Passkeys()
+}
 
 func newTestVerifier(t *testing.T, now time.Time) *passkey.Verifier {
 	t.Helper()
@@ -87,7 +96,7 @@ func TestFinishRegistration_RejectsExpiredSession(t *testing.T) {
 		// Expired one second ago.
 		Expires: now.Add(-1 * time.Second),
 	}
-	_, err := v.FinishRegistration(context.Background(), stale, "user-alice", "alice@example.com", "Alice", nil, []byte(`{"id":"x"}`))
+	_, err := v.FinishRegistration(context.Background(), newEmptyPasskeyStore(t), stale, "user-alice", "alice@example.com", "Alice", nil, []byte(`{"id":"x"}`))
 	if !errors.Is(err, passkey.ErrChallengeExpired) {
 		t.Fatalf("err=%v want ErrChallengeExpired", err)
 	}
@@ -103,7 +112,7 @@ func TestFinishRegistration_RejectsZeroExpiresSession(t *testing.T) {
 		Challenge: "abc",
 		UserID:    []byte("user-alice"),
 	}
-	_, err := v.FinishRegistration(context.Background(), zero, "user-alice", "alice@example.com", "Alice", nil, []byte(`{"id":"x"}`))
+	_, err := v.FinishRegistration(context.Background(), newEmptyPasskeyStore(t), zero, "user-alice", "alice@example.com", "Alice", nil, []byte(`{"id":"x"}`))
 	if !errors.Is(err, passkey.ErrChallengeExpired) {
 		t.Fatalf("err=%v want ErrChallengeExpired", err)
 	}
@@ -114,6 +123,7 @@ func TestFinishRegistration_RejectsMalformedResponse(t *testing.T) {
 
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	v := newTestVerifier(t, now)
+	credentials := newEmptyPasskeyStore(t)
 	fresh := &passkey.Session{
 		Challenge: "abc",
 		UserID:    []byte("user-alice"),
@@ -129,7 +139,7 @@ func TestFinishRegistration_RejectsMalformedResponse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := v.FinishRegistration(context.Background(), fresh, "user-alice", "alice@example.com", "Alice", nil, tc.body)
+			_, err := v.FinishRegistration(context.Background(), credentials, fresh, "user-alice", "alice@example.com", "Alice", nil, tc.body)
 			if !errors.Is(err, passkey.ErrInvalidResponse) {
 				t.Fatalf("err=%v want ErrInvalidResponse", err)
 			}
@@ -141,9 +151,29 @@ func TestFinishRegistration_RejectsNilSession(t *testing.T) {
 	t.Parallel()
 
 	v := newTestVerifier(t, time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC))
-	_, err := v.FinishRegistration(context.Background(), nil, "user-alice", "alice@example.com", "Alice", nil, []byte(`{}`))
+	_, err := v.FinishRegistration(context.Background(), newEmptyPasskeyStore(t), nil, "user-alice", "alice@example.com", "Alice", nil, []byte(`{}`))
 	if !errors.Is(err, passkey.ErrInvalidResponse) {
 		t.Fatalf("err=%v want ErrInvalidResponse", err)
+	}
+}
+
+// TestFinishRegistration_RequiresCredentialStore pins the store as a
+// required argument: without one the ceremony cannot tell whether the
+// credential the authenticator minted already belongs to another
+// subject, and a caller that omitted it would silently lose that check.
+func TestFinishRegistration_RequiresCredentialStore(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	v := newTestVerifier(t, now)
+	fresh := &passkey.Session{
+		Challenge: "abc",
+		UserID:    []byte("user-alice"),
+		Expires:   now.Add(5 * time.Minute),
+	}
+	_, err := v.FinishRegistration(context.Background(), nil, fresh, "user-alice", "alice@example.com", "Alice", nil, []byte(`{}`))
+	if !errors.Is(err, passkey.ErrStoreRequired) {
+		t.Fatalf("err=%v want ErrStoreRequired", err)
 	}
 }
 

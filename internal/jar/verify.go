@@ -33,6 +33,13 @@ const (
 	// window for a stolen JWT regardless of its "exp"; a JWT with
 	// "iat" older than this is rejected even if "exp" still lies in
 	// the future.
+	//
+	// This default is deliberately tighter than the window FAPI 2.0
+	// Message Signing §5.6 grants a request object (60 minutes). A
+	// deployment running under that profile MUST raise
+	// [VerifierConfig.MaxAge] to the profile's bound, otherwise it
+	// rejects request objects the profile declares valid; the
+	// op-level wiring does exactly that from the active profile set.
 	DefaultMaxAge = 10 * time.Minute
 
 	// maxJTILen bounds the "jti" claim length. RFC 9101 sets no cap;
@@ -143,8 +150,15 @@ type VerifierConfig struct {
 	// falls back to the default.
 	MaxFutureSkew time.Duration
 
-	// MaxAge overrides [DefaultMaxAge]. Zero or negative falls back to
-	// the default.
+	// MaxAge overrides [DefaultMaxAge]: it is the oldest "iat" the
+	// verifier admits. Zero or negative falls back to the default.
+	//
+	// The field is profile-driven at the op layer. It must not be left
+	// at the default under a profile that grants request objects a
+	// longer window than [DefaultMaxAge] — FAPI 2.0 Message Signing
+	// §5.6 grants 60 minutes — because the age check runs ahead of
+	// [VerifierConfig.MaxLifetime] and would reject a still-valid
+	// object first.
 	MaxAge time.Duration
 
 	// RequireNbf, when true, rejects request objects whose "nbf"
@@ -361,7 +375,7 @@ func (v *Verifier) verifyForUse(ctx context.Context, raw, expectedClientID strin
 	if client == nil {
 		return nil, fmt.Errorf("%w: client is required", ErrJWKSConfigured)
 	}
-	innerJWS, err := v.maybeDecrypt(raw)
+	innerJWS, err := v.maybeDecrypt(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +451,7 @@ func (v *Verifier) verifySignature(ctx context.Context, parsed *Object, client *
 // cache-bypassing refetch; in every other case, or when the refreshed set
 // still lacks the key, it returns the original miss unchanged so the wire
 // response and error precedence are preserved. The forced refetch is
-// throttled per URL by the fetcher (minForcedRefreshInterval), so a bogus
+// throttled per URL by the fetcher ([rpjwks.ForcedRefreshInterval]), so a bogus
 // kid cannot be used to hammer the RP's jwks_uri endpoint.
 func (v *Verifier) pickFromRefreshedKeys(
 	ctx context.Context,
@@ -499,7 +513,13 @@ func (v *Verifier) pickFromRefreshedKeys(
 //   - Every other JOSE sentinel — including [jose.ErrJWENestingTooDeep]
 //     — maps to [ErrParse] so the wire layer surfaces
 //     invalid_request_object uniformly.
-func (v *Verifier) maybeDecrypt(raw string) (string, error) {
+//
+// ctx is pinned onto the resolver when it implements
+// [jose.ContextualEncryptionKeyResolver], so the audit event a rotating
+// encryption keyset fires for a retired kid names the request object
+// that presented it. [jose.DecryptChain] itself takes no context: the
+// JOSE layer does no I/O and has nothing to cancel.
+func (v *Verifier) maybeDecrypt(ctx context.Context, raw string) (string, error) {
 	dotCount := strings.Count(raw, ".")
 	if dotCount != 4 {
 		return raw, nil
@@ -507,12 +527,16 @@ func (v *Verifier) maybeDecrypt(raw string) (string, error) {
 	if v.decrypter == nil {
 		return "", ErrEncryptionUnsupported
 	}
+	decrypter := v.decrypter
+	if contextual, ok := decrypter.(jose.ContextualEncryptionKeyResolver); ok {
+		decrypter = contextual.WithContext(ctx)
+	}
 	// Reserve one slot of [jose.MaxJOSENestingDepth] for the inner
 	// JWS [Parse] consumes after this function returns; the rest of
 	// the budget bounds how many JWE layers DecryptChain may peel.
 	// The boundary therefore lands at 9 JWE peels + 1 JWS parse =
 	// MaxJOSENestingDepth layers total.
-	out, err := jose.DecryptChain(raw, v.decrypter, jose.MaxJOSENestingDepth-1)
+	out, err := jose.DecryptChain(raw, decrypter, jose.MaxJOSENestingDepth-1)
 	if err != nil {
 		return "", mapJWEError(err)
 	}

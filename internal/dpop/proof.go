@@ -30,8 +30,9 @@ const maxJTILen = 256
 // secure" and PS256 (RSASSA-PSS) is the FAPI-recommended RSA scheme.
 // RS256 (PKCS#1 v1.5) is excluded — modern profiles steer RSA toward PSS
 // and OFCS's negative-test pipeline relies on this rejection. ES384 is
-// reserved for a future jose-package expansion (see [internal/tokens]
-// §150 on the same gating).
+// absent because [jose.Algorithm] has no member for it — the
+// verification alg set is a closed enum there, so widening this map
+// alone would name a constant that does not exist.
 //
 //nolint:gochecknoglobals // closed allow-list, intentional package state.
 var allowedProofAlgs = map[jose.Algorithm]struct{}{
@@ -45,8 +46,8 @@ var allowedProofAlgs = map[jose.Algorithm]struct{}{
 // required when the proof is presented alongside an access token; and
 // "nonce" is required when the verifier has been configured with a
 // [NonceVerifier] (RFC 9449 §8 / §9 server-supplied nonce flow).
-// Without that config the field is parsed but unread, matching the
-// v0.x posture so a proof minted with a nonce claim still round-trips.
+// Without that config the field is parsed but unread, so a proof
+// minted with a nonce claim still round-trips.
 type proofClaims struct {
 	JTI      string `json:"jti"`
 	HTM      string `json:"htm"`

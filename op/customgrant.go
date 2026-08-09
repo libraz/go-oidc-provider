@@ -12,13 +12,13 @@ import (
 // CustomGrantHandler is the embedder-supplied component that backs an
 // extension grant_type at the token endpoint. The interface is the
 // single seam through which the OP routes a token request whose
-// grant_type matches none of the built-in values
-// (authorization_code / refresh_token / client_credentials /
-// urn:ietf:params:oauth:grant-type:device_code). Embedders register
-// handlers via [WithCustomGrant]; the OP runs client authentication,
-// rate limiting, and DPoP / mTLS verification before invoking
-// [Handle], so handlers receive a request that has already cleared
-// the surface every grant shares.
+// grant_type matches none of the values the OP implements itself;
+// those are reserved, and registering a handler under one of them
+// fails with [ErrCustomGrantBuiltinCollision], which documents the
+// reserved set. Embedders register handlers via [WithCustomGrant]; the
+// OP runs client authentication, rate limiting, and DPoP / mTLS
+// verification before invoking [Handle], so handlers receive a request
+// that has already cleared the surface every grant shares.
 //
 // The interface is small on purpose. The OP keeps ownership of:
 //
@@ -136,18 +136,23 @@ type CustomGrantRequest struct {
 	// off the client to derive the response shape.
 	Client *store.Client
 
-	// Subject is the resource owner the request acts on behalf of.
-	// Nil for delegation-style grants where the client owns the
-	// identity (token-exchange impersonation, client_credentials).
-	// When non-nil, the OP has confirmed the subject exists and is
-	// reachable through the configured [Store].
+	// Subject is the resource owner the request acts on behalf of, and
+	// is nil on every invocation. The token endpoint authenticates a
+	// client, not an end user: there is no session to read, and the OP
+	// does not interpret an extension grant's parameters, so it holds
+	// no material from which to resolve a subject. Identity resolution
+	// belongs to the handler, which reads whatever [Store] hooks the
+	// embedder configured and reports the result on
+	// [CustomGrantResponse.Subject] (or [BoundAccessToken.Subject]) —
+	// that is where the OP reads the subject back from.
 	Subject *Subject
 
 	// AuthTime is the wall-clock time the subject most recently
-	// authenticated. Zero when [Subject] is nil. Handlers SHOULD
-	// thread this into the issued id_token's auth_time claim
-	// (the OP does so automatically when [CustomGrantResponse.IDToken]
-	// is empty).
+	// authenticated, and is zero on every invocation for the same
+	// reason [Subject] is nil. A handler that knows when its subject
+	// authenticated reports it on [CustomGrantResponse.AuthTime],
+	// which the OP threads onto the id_token auth_time claim whenever
+	// it signs the token itself.
 	AuthTime time.Time
 
 	// Form contains the parsed token-endpoint parameters the
@@ -265,13 +270,21 @@ type CustomGrantResponse struct {
 	// the OP signs a fresh id_token from [ExtraClaims].
 	IDToken string
 
-	// Subject is the OP-internal "sub" claim value the OP writes
-	// into the id_token it signs when [IDToken] is empty and Scope
-	// contains "openid". Required on that path; the empty value
-	// yields server_error so a delegation-style grant that should
-	// not advertise an end-user sub MUST omit "openid" from Scope.
-	// Ignored when [IDToken] is non-empty (the embedder-signed
+	// Subject is the OP-internal "sub" claim value, and is the field
+	// through which a handler reports the identity it resolved: the
+	// request never carries one (see [CustomGrantRequest.Subject]).
+	//
+	// The OP writes it into the id_token it signs when [IDToken] is
+	// empty and Scope contains "openid". Required on that path; the
+	// empty value yields server_error so a delegation-style grant that
+	// should not advertise an end-user sub MUST omit "openid" from
+	// Scope. Ignored when [IDToken] is non-empty (the embedder-signed
 	// token already carries its own "sub").
+	//
+	// It also supplies the "sub" of an OP-minted access token when
+	// [BoundAccessToken] is set and leaves its own Subject empty, so a
+	// handler acting for a user states the subject once and both
+	// tokens carry it.
 	Subject Subject
 
 	// AuthTime is the wall-clock time the subject most recently
@@ -323,10 +336,13 @@ type CustomGrantResponse struct {
 //
 // Stable since v1.0.
 type BoundAccessToken struct {
-	// Subject is the "sub" claim. When the zero value, the OP
-	// defaults to the request's Subject; a request whose Subject is
-	// also nil yields server_error so a delegation-style grant that
-	// has no end-user MUST set [Subject] explicitly.
+	// Subject is the "sub" claim. When the zero value, the OP falls
+	// back to [CustomGrantResponse.Subject] — the subject the handler
+	// resolved for the grant as a whole — and then to any subject the
+	// request carried into dispatch. With all three empty the OP
+	// returns server_error rather than sign a token missing a REQUIRED
+	// claim, so a handler whose grant has an end user MUST state it on
+	// one of the two Subject fields.
 	Subject Subject
 
 	// Audience is the "aud" claim. When empty, the OP defaults to a

@@ -20,12 +20,17 @@ import (
 // failure (typically as a transport error) instead of pretending the
 // pad completed.
 //
-// PadUntil reads the wall clock through the supplied [Clock] so tests
-// can drive a deterministic schedule. Production callers pass
-// [SystemClock]; the elapsed-time check resolves against the same
-// clock the [Clock]-aware caller already uses for token TTLs and
-// rate-limit windows so a test that freezes time also freezes the
-// pad.
+// The [Clock] decides only how much padding is owed, never how it is
+// waited out: the wait itself is a real timer. That asymmetry is
+// deliberate — the defence is against an observer measuring real
+// elapsed time, so a padding that a clock could shorten would not be a
+// padding at all.
+//
+// It does mean a test that freezes the clock makes this call slower,
+// not faster. A frozen clock reports zero elapsed time, so the full
+// target is still owed and is then paid in real seconds. Tests that
+// need the padded path to be cheap should exercise the caller with a
+// small target rather than reaching for the clock.
 func PadUntil(ctx context.Context, clock Clock, start time.Time, target time.Duration) error {
 	if target <= 0 {
 		return nil

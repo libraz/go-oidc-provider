@@ -29,7 +29,7 @@ const (
 
 // LoginAttempt is the brute-force / risk-counter feed event the
 // orchestrator emits at every login attempt. The shape is independent
-// from the §N.2 audit slog: the audit logger receives general events
+// from the audit slog stream: the audit logger receives general events
 // and is the stream operators read; this stream feeds backend logic
 // (counters, denylist updates, ML ingest) and is intended to be
 // consumed by code, not humans.
@@ -37,7 +37,6 @@ const (
 // OTP codes, recovery codes, email OTP codes, WebAuthn signatures).
 // On failure paths Subject is empty or a salted hash to avoid
 // enumeration through the observer feed.
-// 02-product-design.md §M.6.3.
 type LoginAttempt struct {
 	// Subject is the OP-internal subject identifier on success
 	// paths; empty or a salted hash on failure paths to avoid
@@ -47,8 +46,7 @@ type LoginAttempt struct {
 	// ClientID is the OAuth client_id of the relying party.
 	ClientID string
 
-	// RemoteIP is the client IP after trusted-proxy normalisation
-	// (§F.5).
+	// RemoteIP is the client IP after trusted-proxy normalisation.
 	RemoteIP netip.Addr
 
 	// UserAgent is the request's User-Agent header truncated to a
@@ -83,8 +81,8 @@ type LoginAttempt struct {
 // goroutines. Long-running work belongs in a worker the observer
 // hands off to; the orchestrator does not retry on observer errors
 // (this is the brute-force / risk-counter feed, not general audit —
-// general audit events are emitted by the library to slog per §N.2,
-// so do not duplicate them here).
+// general audit events are emitted by the library to slog on their
+// own stream, so do not duplicate them here).
 type LoginAttemptObserver interface {
 	// Observe is invoked once per attempt. The implementation
 	// MUST return promptly; the orchestrator does not wait for

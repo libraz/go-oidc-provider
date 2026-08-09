@@ -207,14 +207,15 @@ func (d *Deps) verificationURI() string {
 
 // successResponse is the §3.2 device-authorization response body.
 // All fields except verification_uri_complete are required by the
-// RFC; the OP always emits verification_uri_complete so devices
-// with QR-code support can render the URI without round-tripping
-// the user_code.
+// RFC; the OP emits verification_uri_complete whenever it can build
+// one so devices with QR-code support can render the URI without
+// round-tripping the user_code, and omits the member outright rather
+// than advertising a link it could not assemble.
 type successResponse struct {
 	DeviceCode              string `json:"device_code"`
 	UserCode                string `json:"user_code"`
 	VerificationURI         string `json:"verification_uri"`
-	VerificationURIComplete string `json:"verification_uri_complete"`
+	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
 	ExpiresIn               int64  `json:"expires_in"`
 	Interval                int64  `json:"interval"`
 }
@@ -291,11 +292,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"parameter "+name+" must not be repeated")
 		return
 	}
-	dpopJKT, ok := verifyDPoPProof(r, w, deps)
-	if !ok {
-		return
-	}
-	client, _, ok := authenticate(r.Context(), w, r, deps)
+	dpopJKT, client, ok := authenticateWithDPoP(w, r, deps)
 	if !ok {
 		return
 	}
@@ -323,24 +320,102 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	})
 }
 
-// verifyDPoPProof inspects the request for a DPoP proof. When
-// [Deps.DPoP] is nil or the request does not carry a proof, the
-// returned thumbprint is empty and the handler proceeds. When the
+// authenticateWithDPoP runs DPoP proof verification and client
+// authentication in the one order that satisfies both of the
+// constraints the two mechanisms impose, and returns the proof's RFC
+// 7638 thumbprint ("" when no proof was presented) alongside the
+// authenticated client.
+//
+// Proof verification runs FIRST so the RFC 9449 §8 `use_dpop_nonce`
+// challenge fires before any client_assertion jti is consumed: §8
+// contemplates a verbatim retry of the client-side request body with
+// only the proof refreshed, and RP libraries rebuild only the DPoP
+// header, reusing the original client_assertion. Marking the
+// assertion's jti on the first attempt would surface on the retry as
+// invalid_client. Nothing in the verification depends on the resolved
+// client identity — the proof is bound to the request and to its own
+// key, never to the client's credential.
+//
+// The proof's replay marker is written LAST, after authentication
+// succeeds. /device_authorization requires a credential, so that write
+// is the one place where an unauthenticated request rate would
+// translate into storage cost, and a proof burned on a request that
+// never authenticated would make the legitimate retry look like a
+// replay. The token and PAR endpoints apply the identical ordering.
+//
+// The function writes the response on every failure path; the caller
+// only checks the bool.
+func authenticateWithDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (string, *store.Client, bool) {
+	checked, ok := verifyDPoPProof(r, w, deps)
+	if !ok {
+		return "", nil, false
+	}
+	client, _, ok := authenticate(r.Context(), w, r, deps)
+	if !ok {
+		return "", nil, false
+	}
+	if !commitDPoPProof(r.Context(), w, deps, checked) {
+		return "", nil, false
+	}
+	return checkedJKT(checked), client, true
+}
+
+// verifyDPoPProof runs the stateless RFC 9449 §4.3 gates over the
+// optional DPoP header and returns the accepted proof when one was
+// presented. When [Deps.DPoP] is nil or the request does not carry a
+// proof, the returned proof is nil and the handler proceeds. When the
 // proof is present and verification fails, the function writes the
 // RFC 9449 §8 envelope and returns ok=false.
-func verifyDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps) (string, bool) {
+//
+// The proof is not single-use until [commitDPoPProof] has run; see
+// [authenticateWithDPoP] for why the two phases are kept apart.
+func verifyDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps) (*dpop.Checked, bool) {
 	if deps.DPoP == nil {
-		return "", true
+		return nil, true
 	}
 	if r.Header.Get("DPoP") == "" {
-		return "", true
+		return nil, true
 	}
-	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
+	checked, err := deps.DPoP.CheckHTTPRequest(r.Context(), r, "")
 	if err != nil {
-		dpop.WriteError(r.Context(), w, err, dpop.NonceSourceFromIssuer(deps.DPoPNonces))
-		return "", false
+		writeDPoPError(r.Context(), w, deps, err)
+		return nil, false
 	}
-	return res.JKT, true
+	return checked, true
+}
+
+// commitDPoPProof writes the replay marker for the proof
+// [verifyDPoPProof] accepted, making it single-use. It is a no-op when
+// no proof was presented. The function emits the response and returns
+// false on failure; a repeated or concurrent use of the same proof
+// surfaces through the same [dpop.WriteError] mapping the single-phase
+// verifier produced.
+func commitDPoPProof(ctx context.Context, w http.ResponseWriter, deps Deps, checked *dpop.Checked) bool {
+	if checked == nil {
+		return true
+	}
+	if err := deps.DPoP.Commit(ctx, checked); err != nil {
+		writeDPoPError(ctx, w, deps, err)
+		return false
+	}
+	return true
+}
+
+// checkedJKT returns the proof's RFC 7638 thumbprint, or "" when no
+// proof was presented. The helper keeps the nil handling out of
+// [authenticateWithDPoP]'s return statement.
+func checkedJKT(checked *dpop.Checked) string {
+	if checked == nil {
+		return ""
+	}
+	return checked.JKT
+}
+
+// writeDPoPError translates a [dpop.Err*] sentinel onto the wire form,
+// including the RFC 9449 §8 `use_dpop_nonce` challenge. Both proof
+// phases route through it so their boundary mapping cannot drift.
+func writeDPoPError(ctx context.Context, w http.ResponseWriter, deps Deps, err error) {
+	dpop.WriteError(ctx, w, err, dpop.NonceSourceFromIssuer(deps.DPoPNonces))
 }
 
 // authenticate resolves the client credentials carried by the
@@ -560,7 +635,7 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 		return
 	}
 	verificationURI := deps.verificationURI()
-	complete := verificationURI + "?user_code=" + url.QueryEscape(userCode)
+	complete := completeVerificationURI(verificationURI, userCode)
 	deps.auditEmitter().Emit(ctx, audit.Event{
 		Name:     devicecode.AuditAuthorizationIssued,
 		Level:    audit.LevelInfo,
@@ -585,6 +660,36 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 		ExpiresIn:               int64(deps.expiresIn().Seconds()),
 		Interval:                int64(interval.Seconds()),
 	})
+}
+
+// completeVerificationURI returns the RFC 8628 §3.3.1
+// verification_uri_complete: the verification URI carrying the
+// user_code as a query parameter, so a device rendering a QR code
+// hands the user a link that already contains the code.
+//
+// The parameter is merged into the URI's existing query rather than
+// appended textually. An embedder is free to point
+// [Deps.VerificationURI] at a page that already carries query
+// parameters (a tenant selector, say) or a fragment; concatenating
+// "?user_code=" onto such a URI produces a second "?" and a link the
+// user_code never survives, and nothing downstream would reject it. A
+// pre-existing user_code parameter is replaced so the emitted link can
+// only carry the code this record was issued with.
+//
+// An unparseable base yields the empty string, which drops the
+// OPTIONAL member from the response rather than advertising a broken
+// link; the public option that sets the base rejects unparseable input
+// at construction, so this is a defensive fallback for direct
+// handler embedders.
+func completeVerificationURI(base, userCode string) string {
+	u, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	q.Set("user_code", userCode)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // saveWithUserCodeRetry generates a fresh user_code and persists

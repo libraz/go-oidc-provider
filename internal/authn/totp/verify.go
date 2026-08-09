@@ -118,8 +118,7 @@ type Result struct {
 }
 
 // Verifier verifies RFC 6238 codes against a persisted [store.TOTPRecord]
-// and maintains the 24-hour brute-force counter described in
-// 02-product-design.md §M.6.
+// and maintains the 24-hour brute-force counter.
 // The zero value is not usable: callers MUST set Codec at minimum.
 // Clock falls back to [timex.SystemClock] and Skew falls back to
 // [defaultSkew] (one step on each side) when zero.

@@ -11,8 +11,8 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// PromptType is the [interaction.Prompt.Type] the adapter emits, fixed by
-// 02-product-design.md §E.2.
+// PromptType is the [interaction.Prompt.Type] the adapter emits. The
+// value is fixed; SPAs dispatch on it to pick the recovery-code screen.
 const PromptType = "auth.recovery_code"
 
 // CodeFieldName is the [interaction.FieldSpec.Name] the adapter expects in

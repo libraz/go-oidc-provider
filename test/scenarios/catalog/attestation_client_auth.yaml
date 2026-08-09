@@ -33,11 +33,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-002
     severity: P0
@@ -50,11 +49,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-003
     severity: P0
@@ -66,11 +64,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-004
     severity: P0
@@ -82,11 +79,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-005
     severity: P0
@@ -98,11 +94,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-006
     severity: P0
@@ -114,11 +109,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-007
     severity: P0
@@ -130,11 +124,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-008
     severity: P0
@@ -147,11 +140,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-009
     severity: P0
@@ -163,11 +155,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-010
     severity: P0
@@ -179,11 +170,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-011
     severity: P0
@@ -195,11 +185,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-012
     severity: P0
@@ -211,11 +200,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-013
     severity: P0
@@ -227,11 +215,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-014
     severity: P0
@@ -244,11 +231,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-015
     severity: P0
@@ -261,11 +247,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-016
     severity: P0
@@ -277,11 +262,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-017
     severity: P0
@@ -295,11 +279,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-018
     severity: P0
@@ -312,11 +295,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-019
     severity: P0
@@ -329,11 +311,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-020
     severity: P1
@@ -346,11 +327,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-021
     severity: P0
@@ -362,11 +342,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-022
     severity: P1
@@ -378,11 +357,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-023
     severity: P0
@@ -395,11 +373,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-024
     severity: P0
@@ -413,11 +390,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-025
     severity: P0
@@ -430,11 +406,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-026
     severity: P0
@@ -446,11 +421,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-027
     severity: P0
@@ -464,11 +438,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-028
     severity: P0
@@ -481,11 +454,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-029
     severity: P0
@@ -497,11 +469,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-030
     severity: P0
@@ -514,11 +485,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-031
     severity: P0
@@ -531,11 +501,10 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.
 
   - id: ATB-032
     severity: P2
@@ -549,8 +518,7 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
-      demand surfaces.
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the
+      draft is promoted to RFC and embedder demand surfaces.

@@ -28,6 +28,7 @@ Per row:
 | `spec`               | yes | Specific RFC clause or OIDC § the row binds to. |
 | `behaviour`          | yes | Plain-English expected behaviour, imperative voice. |
 | `status`             | no  | `active` / `pending` / `out-of-scope` (default `pending`). |
+| `covered_by`         | no  | `<package path>.<TestFunc>` naming the test that asserts this row from outside the suite. Only valid when `status == active`. |
 | `cross_refs`         | no  | List of `<feature>#<ID>` refs to other rows. |
 | `notes`              | no  | Reviewer context (blocked-on, fixture needs, etc.). |
 | `out_of_scope_reason`| if `status == out-of-scope` | Brief justification, may reference an ADR. |
@@ -60,15 +61,17 @@ scripts/scenario.sh next [-severity P0|P1|P2] [-count N] [<feature>]
                                           # Next pending row(s) with file:line of the t.Skip stub
 scripts/scenario.sh flip <id> <status> [-reason "..."]
                                           # Set status to active|pending|out-of-scope (in-place YAML edit)
-scripts/scenario.sh coverage [--strict|--yaml-only]
+scripts/scenario.sh coverage [--strict|--check-bindings|--yaml-only]
                                           # Catalog ↔ Go test binding state
+                                          # --check-bindings fails on drift between row and test
+                                          # --strict additionally fails on skip-only bindings
                                           # --yaml-only skips `go test -list` (use when build is broken)
 ```
 
 `make scenario-validate`, `make scenario-coverage`,
 `make scenario-coverage-yaml-only`, and `make scenario-stats` are the
-entry points wired into the developer workflow. `make verify` runs
-the validator as part of the pre-merge gate.
+entry points wired into the developer workflow. `make verify` runs the
+validator and `--check-bindings` as part of the pre-merge gate.
 
 Flag-vs-positional ordering follows Go's `flag` package: any `-flag`
 arguments must precede positional arguments
@@ -97,9 +100,22 @@ the script gate is preferred for consistency.
 ```
 
 `active` rows MUST have a corresponding `TestScenario_<id>_<slug>`
-function. `pending` rows MAY have a `t.Skip("pending: <ID>")`
-placeholder. `out-of-scope` rows MUST NOT have a Go function and are
-allowlisted in the coverage diff.
+function that asserts something, or a `covered_by` naming the test that
+does. `pending` rows MAY have a `t.Skip("pending: <ID>")` placeholder.
+`out-of-scope` rows MAY keep a `t.Skip` stub as a marker where the test
+would go — that is the shape the suite uses — but MUST NOT have a test
+that runs, because a row declaring the behaviour unreachable and a test
+asserting it are not both true.
+
+The coverage gate reads exactly those rules:
+
+- a row with no test at all, and a `TestScenario_*` matching no row,
+  both fail;
+- a test that runs under an `out-of-scope` row fails;
+- a `covered_by` naming a test that no longer exists fails, so
+  delegated coverage cannot rot the way a prose reference does;
+- a row bound only to a `t.Skip` stub is reported and fails `--strict`,
+  but not `--check-bindings`, which is the mode `make verify` runs.
 
 ## Catalog-adjacent inventories
 

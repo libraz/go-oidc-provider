@@ -13,6 +13,7 @@ import (
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
+	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 )
 
@@ -23,7 +24,7 @@ func TestValidatePolicy_RejectsJWKSAndJWKSURI(t *testing.T) {
 		RedirectURIs: []string{"https://rp.test.invalid/cb"},
 		JWKs:         []byte(`{"keys":[]}`),
 		JWKsURI:      "https://rp.test.invalid/jwks.json",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -35,7 +36,7 @@ func TestValidatePolicy_RejectsHTTPClientURI(t *testing.T) {
 	_, err := validatePolicy(ClientMetadata{
 		RedirectURIs: []string{"https://rp.test.invalid/cb"},
 		ClientURI:    "http://rp.test.invalid",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -48,7 +49,7 @@ func TestValidatePolicy_PrivateKeyJWTRequiresJWKS(t *testing.T) {
 	_, err := validatePolicy(ClientMetadata{
 		RedirectURIs:            []string{"https://rp.test.invalid/cb"},
 		TokenEndpointAuthMethod: "private_key_jwt",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -83,7 +84,7 @@ func TestValidatePolicy_PrivateKeyJWTRejectsBadInlineJWKS(t *testing.T) {
 				RedirectURIs:            []string{"https://rp.test.invalid/cb"},
 				TokenEndpointAuthMethod: "private_key_jwt",
 				JWKs:                    tc.jwks,
-			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
@@ -109,10 +110,82 @@ func TestValidatePolicy_PrivateKeyJWTAcceptsValidInlineJWKS(t *testing.T) {
 			Algorithm: "ES256",
 			Use:       "sig",
 		}),
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err != nil {
 		t.Fatalf("validatePolicy: %v", err)
 	}
+}
+
+// unsupportedMemberJWK is a JWK the JOSE layer cannot turn into a key: an
+// OKP curve outside the Ed25519 it implements. An RP that offers ECDH-ES
+// encryption registers a member of this shape next to the signing key it
+// authenticates with.
+const unsupportedMemberJWK = `{"kty":"OKP","crv":"X25519","x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo","use":"enc","kid":"enc-1"}`
+
+// TestValidatePolicy_PrivateKeyJWTIgnoresUnsupportedInlineJWK pins RFC 7517
+// §5 at registration: a member whose key type this build does not implement
+// is ignored, so a client publishing an encryption key next to its signing
+// key still registers. The unsupported member is placed first because the
+// document-level decode used to fail on it before ever reaching the usable
+// key behind it.
+func TestValidatePolicy_PrivateKeyJWTIgnoresUnsupportedInlineJWK(t *testing.T) {
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	//nolint:gosec // G101 false positive: private_key_jwt is an auth-method label.
+	_, err = validatePolicy(ClientMetadata{
+		RedirectURIs:            []string{"https://rp.test.invalid/cb"},
+		TokenEndpointAuthMethod: "private_key_jwt",
+		JWKs: spliceUnsupportedMember(t, jwksRaw(t, josev4.JSONWebKey{
+			Key:       &key.PublicKey,
+			KeyID:     "p256",
+			Algorithm: "ES256",
+			Use:       "sig",
+		})),
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
+	if err != nil {
+		t.Fatalf("validatePolicy: %v", err)
+	}
+}
+
+// TestValidatePolicy_PrivateKeyJWTRejectsOnlyUnsupportedInlineJWK is the
+// counterpart: a keyset that leaves no usable key behind is still rejected,
+// so registration cannot succeed with a set the OP could never verify with.
+func TestValidatePolicy_PrivateKeyJWTRejectsOnlyUnsupportedInlineJWK(t *testing.T) {
+	t.Parallel()
+
+	//nolint:gosec // G101 false positive: private_key_jwt is an auth-method label.
+	_, err := validatePolicy(ClientMetadata{
+		RedirectURIs:            []string{"https://rp.test.invalid/cb"},
+		TokenEndpointAuthMethod: "private_key_jwt",
+		JWKs:                    []byte(`{"keys":[` + unsupportedMemberJWK + `]}`),
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	assertInvalidClientMetadata(t, err)
+}
+
+// spliceUnsupportedMember prepends [unsupportedMemberJWK] to the members of
+// set, modelling the keyset an RP publishes when it offers an encryption
+// key alongside the signing key it authenticates with.
+func spliceUnsupportedMember(tb testing.TB, set []byte) []byte {
+	tb.Helper()
+	var doc struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(set, &doc); err != nil {
+		tb.Fatalf("unmarshal jwks: %v", err)
+	}
+	doc.Keys = append([]json.RawMessage{json.RawMessage(unsupportedMemberJWK)}, doc.Keys...)
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		tb.Fatalf("marshal jwks: %v", err)
+	}
+	return raw
 }
 
 func jwksRaw(tb testing.TB, keys ...josev4.JSONWebKey) []byte {
@@ -141,7 +214,7 @@ func TestValidatePolicy_RejectsUnsupportedRequestObjectSigningAlg(t *testing.T) 
 	_, err := validatePolicy(ClientMetadata{
 		RedirectURIs:            []string{"https://rp.test.invalid/cb"},
 		RequestObjectSigningAlg: "HS256",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -155,7 +228,7 @@ func TestValidatePolicy_RejectsUnsupportedTokenEndpointAuthSigningAlg(t *testing
 		RedirectURIs:                []string{"https://rp.example.com/cb"},
 		TokenEndpointAuthMethod:     "private_key_jwt",
 		TokenEndpointAuthSigningAlg: "none",
-	}, []string{"authorization_code", "refresh_token"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code", "refresh_token"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -198,7 +271,7 @@ func TestValidatePolicy_AcceptsRequestObjectEncryption(t *testing.T) {
 				RedirectURIs:               []string{"https://rp.test.invalid/cb"},
 				RequestObjectEncryptionAlg: tc.alg,
 				RequestObjectEncryptionEnc: tc.enc,
-			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 			if err != nil {
 				t.Fatalf("validatePolicy: %v", err)
 			}
@@ -229,7 +302,7 @@ func TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist(t *testin
 				RedirectURIs:               []string{"https://rp.test.invalid/cb"},
 				RequestObjectEncryptionAlg: tc.alg,
 				RequestObjectEncryptionEnc: tc.enc,
-			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
@@ -316,7 +389,7 @@ func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
 				p.set(&m, c.alg, c.enc)
 				if _, err := validatePolicy(m,
 					[]string{"authorization_code"}, []string{"code"},
-					nil, false, nil, nil, false, false, false); err != nil {
+					nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{}); err != nil {
 					t.Fatalf("validatePolicy: %v", err)
 				}
 			})
@@ -396,7 +469,7 @@ func TestValidatePolicy_RejectsResponseEncryptionOutsideAllowlist(t *testing.T) 
 				p.applyAlg(&m, c.alg, c.enc)
 				_, err := validatePolicy(m,
 					[]string{"authorization_code"}, []string{"code"},
-					nil, false, nil, nil, false, false, false)
+					nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 				if err == nil {
 					t.Fatal("expected validation error, got nil")
 				}
@@ -424,7 +497,7 @@ func TestValidatePolicy_RejectsPairwiseMultiHostWithoutSectorIdentifier(t *testi
 			"https://b.example.com/cb",
 		},
 		SubjectType: "pairwise",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, true, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, true, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -438,7 +511,7 @@ func TestValidatePolicy_RejectsCodeResponseTypeWithoutAuthorizationCodeGrant(t *
 		GrantTypes:      []string{"implicit"},
 		ResponseTypes:   []string{"code"},
 		ApplicationType: "web",
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -451,7 +524,7 @@ func TestValidatePolicy_RejectsImplicitResponseTypeWithoutImplicitGrant(t *testi
 		RedirectURIs:  []string{"https://rp.test.invalid/cb"},
 		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"id_token"},
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -464,7 +537,7 @@ func TestValidatePolicy_RejectsHybridResponseTypeWithoutImplicitGrant(t *testing
 		RedirectURIs:  []string{"https://rp.test.invalid/cb"},
 		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"code id_token"},
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token", "code id_token"}, nil, false, nil, nil, false, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token", "code id_token"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -622,7 +695,7 @@ func TestValidateMetadataURIs_RejectsUserinfo(t *testing.T) {
 			m := ClientMetadata{RedirectURIs: []string{"https://rp.test.invalid/cb"}}
 			tc.mut(&m)
 			_, err := validatePolicy(m,
-				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 			if err == nil {
 				t.Fatalf("%s: expected validation error for userinfo URL %q", tc.name, evilURL)
 			}
@@ -711,7 +784,7 @@ func TestValidateBackchannelLogoutURI(t *testing.T) {
 			m := ClientMetadata{RedirectURIs: []string{"https://rp.test.invalid/cb"}}
 			tc.mut(&m)
 			_, err := validatePolicy(m,
-				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("validatePolicy unexpected error: %v", err)

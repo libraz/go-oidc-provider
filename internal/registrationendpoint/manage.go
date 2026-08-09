@@ -38,9 +38,10 @@ func handleRead(w http.ResponseWriter, r *http.Request, deps Deps, clientID stri
 
 // handleUpdate implements PUT /register/{client_id} (RFC 7592 §2.2).
 // The handler accepts the same metadata shape as POST /register, runs
-// the same validators, rotates the RAT (per
-// 02-product-design.md §A.6.2.2 peer divergence), and
-// updates the client.
+// the same validators, rotates the RAT (RFC 7592 leaves rotation
+// undefined; this OP issues a fresh registration_access_token on every
+// successful update and revokes the previous one), and updates the
+// client.
 func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID string) {
 	ctx := r.Context()
 	existing, ok := verifyRAT(ctx, w, r, deps, clientID)
@@ -71,6 +72,10 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		writeRegistrationError(w, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
+	if err := validateUnpersistedMetadata(extras); err != nil {
+		writeMetadataValidationError(ctx, w, deps, err, clientID)
+		return
+	}
 	canonical, err := validatePolicy(
 		metadata,
 		deps.AllowedGrantTypes,
@@ -82,6 +87,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		deps.PairwiseEnabled,
 		deps.AllowLocalhostLoopback,
 		deps.AllowInsecureBackchannelLogoutForDev,
+		deps.JWEPolicy,
 	)
 	if err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, clientID)
@@ -141,57 +147,7 @@ func rotateAndUpdate(
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
 		return rotatedRegistration{}, false
 	}
-	updated := &store.Client{
-		ID:                          existing.ID,
-		ClientIDIssuedAt:            existing.ClientIDIssuedAt,
-		RedirectURIs:                slices.Clone(m.RedirectURIs),
-		GrantTypes:                  slices.Clone(m.GrantTypes),
-		ResponseTypes:               slices.Clone(m.ResponseTypes),
-		Scopes:                      oidcscope.Parse(m.Scope),
-		TokenEndpointAuthMethod:     m.TokenEndpointAuthMethod,
-		TokenEndpointAuthSigningAlg: m.TokenEndpointAuthSigningAlg,
-		// Preserve the existing secret hash unless the
-		// auth-method change requires a fresh secret. RFC 7592
-		// §2.2 leaves rotation policy to the OP; the conservative
-		// posture is to keep the secret stable so the RP does not
-		// have to roll over after every metadata edit. A genuine
-		// secret rotation is a separate operator-initiated action
-		// (out of scope for v1.0).
-		SecretHash:                        secretHash,
-		PublicClient:                      isPublicAuthMethod(m.TokenEndpointAuthMethod),
-		Source:                            store.ClientSourceDynamic,
-		ApplicationType:                   m.ApplicationType,
-		SubjectType:                       m.SubjectType,
-		IDTokenSignedResponseAlg:          m.IDTokenSignedResponseAlg,
-		SectorIdentifierURI:               m.SectorIdentifierURI,
-		ClientName:                        m.ClientName,
-		ClientURI:                         m.ClientURI,
-		LogoURI:                           m.LogoURI,
-		PolicyURI:                         m.PolicyURI,
-		TosURI:                            m.TosURI,
-		JWKsURI:                           m.JWKsURI,
-		JWKs:                              append(json.RawMessage(nil), m.JWKs...),
-		Contacts:                          slices.Clone(m.Contacts),
-		DefaultMaxAge:                     clone.Int64Ptr(m.DefaultMaxAge),
-		RequireAuthTime:                   m.RequireAuthTime,
-		DefaultACRValues:                  slices.Clone(m.DefaultACRValues),
-		InitiateLoginURI:                  m.InitiateLoginURI,
-		RequestURIs:                       slices.Clone(m.RequestURIs),
-		RequestObjectSigningAlg:           m.RequestObjectSigningAlg,
-		RequestObjectEncryptionAlg:        m.RequestObjectEncryptionAlg,
-		RequestObjectEncryptionEnc:        m.RequestObjectEncryptionEnc,
-		IDTokenEncryptedResponseAlg:       m.IDTokenEncryptedResponseAlg,
-		IDTokenEncryptedResponseEnc:       m.IDTokenEncryptedResponseEnc,
-		UserInfoEncryptedResponseAlg:      m.UserInfoEncryptedResponseAlg,
-		UserInfoEncryptedResponseEnc:      m.UserInfoEncryptedResponseEnc,
-		AuthorizationEncryptedResponseAlg: m.AuthorizationEncryptedResponseAlg,
-		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
-		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
-		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
-		PostLogoutRedirectURIs:            slices.Clone(m.PostLogoutRedirectURIs),
-		BackchannelLogoutURI:              m.BackchannelLogoutURI,
-		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
-	}
+	updated := applyMetadataToClient(existing, m, secretHash)
 	if err := deps.Clients.UpdateClient(ctx, updated); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// Race: the client was deleted between RAT verify and
@@ -230,6 +186,75 @@ func rotateAndUpdate(
 		return rotatedRegistration{}, false
 	}
 	return rotatedRegistration{client: updated, rawRAT: rawRAT, rawSecret: rawSecret}, true
+}
+
+// applyMetadataToClient returns the record PUT /register/{client_id}
+// persists: a copy of the stored client with every field the RFC 7591
+// §2 metadata document can express overwritten from the submitted
+// values (an omitted member clears the field, per RFC 7592 §2.2).
+//
+// Copying first is load-bearing. [store.Client] carries persisted
+// configuration the registration wire shape has no member for — the
+// RFC 8707 resource-indicator allow-list and the JWT-introspection
+// response switch — plus the identity and provenance the OP assigned at
+// creation. Rebuilding the record from the metadata alone would silently
+// discard all of it the first time the RP submits an update, so an
+// operator's out-of-band configuration would survive exactly until the
+// client next edited its own display name.
+//
+// The fields that deliberately do not come from the metadata are:
+//
+//   - ID / ClientIDIssuedAt are immutable identity the OP minted.
+//   - Source records how the record reached the registry, which is a
+//     property of its creation rather than of any later edit. Only a
+//     self-registered record reaches this path at all ([verifyRAT]
+//     refuses every other origin), so the copied value is the same one
+//     a restamp would write.
+//   - SecretHash comes from [secretMaterialForUpdate], which decides
+//     whether the auth-method change requires minting, clearing, or
+//     preserving the secret.
+func applyMetadataToClient(existing *store.Client, m ClientMetadata, secretHash string) *store.Client {
+	updated := *existing
+	updated.RedirectURIs = slices.Clone(m.RedirectURIs)
+	updated.GrantTypes = slices.Clone(m.GrantTypes)
+	updated.ResponseTypes = slices.Clone(m.ResponseTypes)
+	updated.Scopes = oidcscope.Parse(m.Scope)
+	updated.TokenEndpointAuthMethod = m.TokenEndpointAuthMethod
+	updated.TokenEndpointAuthSigningAlg = m.TokenEndpointAuthSigningAlg
+	updated.SecretHash = secretHash
+	updated.PublicClient = isPublicAuthMethod(m.TokenEndpointAuthMethod)
+	updated.ApplicationType = m.ApplicationType
+	updated.SubjectType = m.SubjectType
+	updated.IDTokenSignedResponseAlg = m.IDTokenSignedResponseAlg
+	updated.SectorIdentifierURI = m.SectorIdentifierURI
+	updated.ClientName = m.ClientName
+	updated.ClientURI = m.ClientURI
+	updated.LogoURI = m.LogoURI
+	updated.PolicyURI = m.PolicyURI
+	updated.TosURI = m.TosURI
+	updated.JWKsURI = m.JWKsURI
+	updated.JWKs = append(json.RawMessage(nil), m.JWKs...)
+	updated.Contacts = slices.Clone(m.Contacts)
+	updated.DefaultMaxAge = clone.Int64Ptr(m.DefaultMaxAge)
+	updated.RequireAuthTime = m.RequireAuthTime
+	updated.DefaultACRValues = slices.Clone(m.DefaultACRValues)
+	updated.InitiateLoginURI = m.InitiateLoginURI
+	updated.RequestURIs = slices.Clone(m.RequestURIs)
+	updated.RequestObjectSigningAlg = m.RequestObjectSigningAlg
+	updated.RequestObjectEncryptionAlg = m.RequestObjectEncryptionAlg
+	updated.RequestObjectEncryptionEnc = m.RequestObjectEncryptionEnc
+	updated.IDTokenEncryptedResponseAlg = m.IDTokenEncryptedResponseAlg
+	updated.IDTokenEncryptedResponseEnc = m.IDTokenEncryptedResponseEnc
+	updated.UserInfoEncryptedResponseAlg = m.UserInfoEncryptedResponseAlg
+	updated.UserInfoEncryptedResponseEnc = m.UserInfoEncryptedResponseEnc
+	updated.AuthorizationEncryptedResponseAlg = m.AuthorizationEncryptedResponseAlg
+	updated.AuthorizationEncryptedResponseEnc = m.AuthorizationEncryptedResponseEnc
+	updated.IntrospectionEncryptedResponseAlg = m.IntrospectionEncryptedResponseAlg
+	updated.IntrospectionEncryptedResponseEnc = m.IntrospectionEncryptedResponseEnc
+	updated.PostLogoutRedirectURIs = slices.Clone(m.PostLogoutRedirectURIs)
+	updated.BackchannelLogoutURI = m.BackchannelLogoutURI
+	updated.BackchannelLogoutSessionRequired = m.BackchannelLogoutSessionRequired
+	return &updated
 }
 
 func validateManageUpdateRequest(existing *store.Client, clientID string, extras metadataExtras) error {
@@ -302,9 +327,9 @@ func secretMaterialForUpdate(existing *store.Client, confidential bool) (raw, ha
 // 204. The library does not perform a built-in cascade because the
 // store surfaces required to enumerate access_token / refresh_token /
 // session records keyed by client are not part of v1.0 — embedders
-// that maintain those indexes wire the cascade through the hook;
-// 02-product-design.md §A.6.2.2 captures the eventual
-// shape.
+// that maintain those indexes wire the cascade through the hook, whose
+// contract is to revoke every access_token / refresh_token / session
+// the deleted client holds and to deliver Back-Channel Logout.
 func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID string) {
 	ctx := r.Context()
 	if _, ok := verifyRAT(ctx, w, r, deps, clientID); !ok {

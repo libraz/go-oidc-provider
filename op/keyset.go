@@ -23,9 +23,10 @@ type SigningKey struct {
 	// ECDSA on curve P-256; any other shape causes [op.New] to fail at
 	// construction time. The restriction is a permanent design choice
 	// rather than a staged rollout: it removes algorithm negotiation
-	// and the downgrade guard negotiation would require. RS256 and
-	// PS256 remain accepted for verification of client assertions and
-	// request objects.
+	// and the downgrade guard negotiation would require. The
+	// verification side is wider: RS256, PS256, ES256 and EdDSA are all
+	// accepted on client assertions and request objects, and that is
+	// the set the discovery document advertises.
 	Signer crypto.Signer
 
 	// NotAfter is the optional retirement deadline for the entry.

@@ -36,6 +36,20 @@
 //	}
 //	http.ListenAndServe(":8080", handler)
 //
+// [New] returns a [*Provider], which serves as the [http.Handler] above and
+// carries the one lifecycle seam the library has: [Provider.Shutdown] waits
+// for back-channel
+// logout deliveries that are still in flight. `/end_session` answers the user
+// without waiting for the relying parties to be notified, so a process that
+// exits the moment its listener closes can drop signed Logout Tokens that were
+// already queued. Stop accepting requests first, then drain:
+//
+//	srv.Shutdown(ctx)      // stop accepting
+//	provider.Shutdown(ctx) // then drain
+//
+// It is safe to call on any provider, including one that never mounts
+// /end_session, so it costs nothing to wire in unconditionally.
+//
 // [WithLoginFlow] declares how a browser session authenticates. It is outside
 // the required set because an OP serving only client_credentials has no user
 // to authenticate. A provider that mounts the authorize endpoint without one

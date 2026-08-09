@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
@@ -50,21 +49,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
-	// DPoP proof verification runs ahead of client authentication so
-	// the `use_dpop_nonce` challenge fires before any client_assertion
-	// is consumed. RFC 9449 §8 contemplates a verbatim retry of the
-	// client-side request body with only the proof refreshed; OFCS
-	// (and other RP libraries) rebuild only the DPoP header, reusing
-	// the original client_assertion verbatim, so consuming the
-	// assertion's jti on the first attempt would surface as
-	// invalid_client / ErrAssertionReplayed on the retry. Reordering
-	// is safe because [verifyDPoPProof] does not depend on the
-	// resolved client identity.
-	dpopJKT, ok := verifyDPoPProof(r, w, deps)
-	if !ok {
-		return
-	}
-	client, _, ok := authenticate(r.Context(), w, r, deps)
+	dpopJKT, client, ok := authenticateWithDPoP(w, r, deps)
 	if !ok {
 		return
 	}
@@ -102,89 +87,51 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeAuthorizeError(w, err)
 		return
 	}
-	if !validateAuthorizationDetails(w, r, deps, req, client) {
-		return
-	}
-	if !validateGrantManagement(w, deps, req) {
+	if !validateRequestExtensions(w, r, deps, req, client) {
 		return
 	}
 	persist(r.Context(), w, deps, req)
 }
 
-// validateGrantManagement enforces the Grant Management draft request rules
-// at push time, mirroring the authorize endpoint's check so a request_uri
-// is never issued for a request that /authorize would reject. When the
-// feature is disabled the parameters are cleared off req as unknown
-// extensions. Returns false when it wrote an error response.
-func validateGrantManagement(w http.ResponseWriter, deps Deps, req *authorize.Request) bool {
-	if !deps.GrantManagementEnabled {
-		req.GrantManagementAction = ""
-		req.GrantID = ""
-		return true
-	}
-	action := req.GrantManagementAction
-	if action == "" {
-		if deps.GrantManagementActionRequired {
-			writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_management_action is required")
-			return false
-		}
-		return true
-	}
-	switch action {
-	case gmActionCreate, gmActionReplace, gmActionMerge:
-		// authorize-time action; continue.
-	default:
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_management_action is not valid at the authorization endpoint")
-		return false
-	}
-	if !deps.GrantManagementActions[action] {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_management_action is not supported")
-		return false
-	}
-	if action == gmActionCreate && req.GrantID != "" {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_id must not accompany grant_management_action=create")
-		return false
-	}
-	if (action == gmActionReplace || action == gmActionMerge) && req.GrantID == "" {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_id is required for grant_management_action="+action)
-		return false
-	}
-	return true
-}
-
-// gmAction* are the authorize-time Grant Management actions PAR validates.
-// They mirror the authorize endpoint's constants (duplicated rather than
-// shared because parendpoint does not import authorizeendpoint).
-const (
-	gmActionCreate  = "create"
-	gmActionReplace = "replace"
-	gmActionMerge   = "merge"
-)
-
-// validateAuthorizationDetails honours a pushed RFC 9396
-// authorization_details parameter when the OP has registered types. It
-// validates the raw value against the registry and stamps the decoded
-// elements onto req so [persist] snapshots them; the /authorize
-// consumption path then reuses the validated elements without re-parsing.
+// validateRequestExtensions runs the RFC 9396 authorization_details, Grant
+// Management draft, and RFC 9449 §10.1 "dpop_jkt" gates at push time.
+//
+// The rules live in [authorize.Request.ValidateExtensions], shared verbatim
+// with the authorization endpoint. That sharing is the point: /par and
+// /authorize are consecutive gates on the same request, and a rule that
+// fires at only one of them mints a request_uri whose one-time value the RP
+// spends on a request the next gate refuses, stranding the user with no way
+// forward. This function only renders — per RFC 9126 §2.3 the PAR response
+// is always a JSON envelope, because the redirect_uri may not be trusted (or
+// even known) by the time the call arrives.
+//
+// The gates run after [authorize.Request.Validate] so a malformed request is
+// faulted on its shape before it is faulted on an extension, matching the
+// order /authorize applies.
+//
 // Returns false when it wrote an error response.
-func validateAuthorizationDetails(w http.ResponseWriter, r *http.Request, deps Deps, req *authorize.Request, client *store.Client) bool {
-	if len(deps.AuthorizationDetailTypes) == 0 || req.AuthorizationDetailsRaw == "" {
+func validateRequestExtensions(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps Deps,
+	req *authorize.Request,
+	client *store.Client,
+) bool {
+	rejection := req.ValidateExtensions(r.Context(), client, authorize.ExtensionPolicy{
+		AuthorizationDetailTypes:      deps.AuthorizationDetailTypes,
+		GrantManagementEnabled:        deps.GrantManagementEnabled,
+		GrantManagementActions:        deps.GrantManagementActions,
+		GrantManagementActionRequired: deps.GrantManagementActionRequired,
+		// A nil verifier is exactly "the OP cannot honour a §10.1
+		// commitment": it can neither bind the issued token to the
+		// committed key nor demand proof of possession at /token.
+		DPoPEnabled: deps.DPoP != nil,
+	})
+	if rejection == nil {
 		return true
 	}
-	details, err := authorizationdetails.Check(r.Context(), req.AuthorizationDetailsRaw, client, deps.AuthorizationDetailTypes)
-	if err != nil {
-		// Decision §9②: over-size is invalid_request; every other shape
-		// failure is RFC 9396 §5's invalid_authorization_details.
-		code := errInvalidAuthorizationDetails
-		status := http.StatusBadRequest
-		if errors.Is(err, authorizationdetails.ErrTooLarge) {
-			code = errInvalidRequest
-		}
-		writeError(w, status, code, "authorization_details is not acceptable")
-		return false
-	}
-	req.AuthorizationDetails = details
-	return true
+	writeError(w, http.StatusBadRequest, rejection.Code, rejection.Description)
+	return false
 }
 
 // consumeJARRequestObject inspects the (post-strip) PAR form values for
@@ -294,32 +241,103 @@ func jarDescriptionFor(err error) string {
 	return "request object verification failed"
 }
 
-// verifyDPoPProof verifies the optional DPoP header on the /par
-// request and returns the proof's RFC 7638 thumbprint when one was
-// presented. The function runs ahead of client authentication and
-// JAR consumption so the §8 nonce challenge can fire before any
-// jti-bearing credential is consumed; the §10 commitment check
-// against the request's "dpop_jkt" parameter (form or merged JAR
-// claim) lives in [applyDPoPJKT], which runs after JAR merging so
-// the comparison sees the post-merge value.
+// authenticateWithDPoP runs DPoP proof verification and client
+// authentication in the one order that satisfies both of the
+// constraints the two mechanisms impose, and returns the proof's RFC
+// 7638 thumbprint ("" when no proof was presented) alongside the
+// authenticated client.
+//
+// Proof verification runs FIRST so the RFC 9449 §8 `use_dpop_nonce`
+// challenge fires before any client_assertion jti is consumed: §8
+// contemplates a verbatim retry of the client-side request body with
+// only the proof refreshed, and RP libraries (OFCS included) rebuild
+// only the DPoP header, reusing the original client_assertion. Marking
+// the assertion's jti on the first attempt would surface on the retry
+// as invalid_client / ErrAssertionReplayed. Nothing in the verification
+// depends on the resolved client identity — the proof is bound to the
+// request and to its own key, never to the client's credential.
+//
+// The proof's replay marker is written LAST, after authentication
+// succeeds. /par is reachable without a credential, so that write is
+// the one place where an unauthenticated request rate would translate
+// into storage cost. Deferring it weakens nothing: the marker still
+// lands before the endpoint acts on the request, and a proof replayed
+// on a request that cannot authenticate is refused on the credential
+// instead. The token endpoint applies the identical ordering.
+//
+// The function writes the response on every failure path; the caller
+// only checks the bool.
+func authenticateWithDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (string, *store.Client, bool) {
+	checked, ok := verifyDPoPProof(r, w, deps)
+	if !ok {
+		return "", nil, false
+	}
+	client, _, ok := authenticate(r.Context(), w, r, deps)
+	if !ok {
+		return "", nil, false
+	}
+	if !commitDPoPProof(r.Context(), w, deps, checked) {
+		return "", nil, false
+	}
+	return checkedJKT(checked), client, true
+}
+
+// verifyDPoPProof runs the stateless RFC 9449 §4.3 gates over the
+// optional DPoP header on the /par request and returns the accepted
+// proof when one was presented. The function runs ahead of client
+// authentication and JAR consumption so the §8 nonce challenge can
+// fire before any jti-bearing credential is consumed; the §10
+// commitment check against the request's "dpop_jkt" parameter (form or
+// merged JAR claim) lives in [applyDPoPJKT], which runs after JAR
+// merging so the comparison sees the post-merge value.
+//
+// The proof is not single-use until [commitDPoPProof] has run; see
+// [authenticateWithDPoP] for why the two phases are kept apart.
 //
 // A nil [Deps.DPoP] disables verification; a missing DPoP header is
 // always tolerated because RFC 9449 §10.1 makes the header optional
 // at /par. Errors emit the response body and the function returns
 // ok=false so the caller stops.
-func verifyDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps) (string, bool) {
+func verifyDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps) (*dpop.Checked, bool) {
 	if deps.DPoP == nil {
-		return "", true
+		return nil, true
 	}
 	if r.Header.Get("DPoP") == "" {
-		return "", true
+		return nil, true
 	}
-	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
+	checked, err := deps.DPoP.CheckHTTPRequest(r.Context(), r, "")
 	if err != nil {
 		writeDPoPError(w, deps, err)
-		return "", false
+		return nil, false
 	}
-	return res.JKT, true
+	return checked, true
+}
+
+// commitDPoPProof writes the replay marker for the proof
+// [verifyDPoPProof] accepted, making it single-use. It is a no-op when
+// no proof was presented. The function emits the response and returns
+// false on failure; a repeated or concurrent use of the same proof
+// surfaces through the same [dpop.WriteError] mapping the single-phase
+// verifier produced.
+func commitDPoPProof(ctx context.Context, w http.ResponseWriter, deps Deps, checked *dpop.Checked) bool {
+	if checked == nil {
+		return true
+	}
+	if err := deps.DPoP.Commit(ctx, checked); err != nil {
+		writeDPoPError(w, deps, err)
+		return false
+	}
+	return true
+}
+
+// checkedJKT returns the proof's RFC 7638 thumbprint, or "" when no
+// proof was presented. The helper keeps the nil handling out of
+// [serve].
+func checkedJKT(checked *dpop.Checked) string {
+	if checked == nil {
+		return ""
+	}
+	return checked.JKT
 }
 
 // applyDPoPJKT reconciles the proof's thumbprint (from
@@ -549,5 +567,5 @@ func newRequestURI() (string, error) {
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("parendpoint: read random: %w", err)
 	}
-	return uriPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
+	return authorize.PARRequestURIPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
 }

@@ -179,16 +179,16 @@ func TestValidate_SentinelTable(t *testing.T) {
 			wantRedirectOK: true,
 		},
 		{
-			name:           "max_age_negative",
-			mutate:         func(v url.Values) { v.Set("max_age", "-1") },
-			want:           authorize.ErrMaxAgeInvalid,
-			wantRedirectOK: true,
+			// Parse-time: no client has been looked up, so the
+			// rejection cannot take the redirect channel.
+			name:   "max_age_negative",
+			mutate: func(v url.Values) { v.Set("max_age", "-1") },
+			want:   authorize.ErrMaxAgeInvalid,
 		},
 		{
-			name:           "max_age_non_integer",
-			mutate:         func(v url.Values) { v.Set("max_age", "abc") },
-			want:           authorize.ErrMaxAgeInvalid,
-			wantRedirectOK: true,
+			name:   "max_age_non_integer",
+			mutate: func(v url.Values) { v.Set("max_age", "abc") },
+			want:   authorize.ErrMaxAgeInvalid,
 		},
 		{
 			name:           "resource_not_absolute",
@@ -416,6 +416,10 @@ func TestRequest_Validate_ResourceCanonicalisation(t *testing.T) {
 // TestRequest_Validate_DuplicateResourceParameters confirms the v1 single-
 // resource posture: because the request model persists one Resource string,
 // repeated wire entries are rejected instead of silently selecting one.
+//
+// The rejection is the parse-time sentinel, which carries the validator's
+// wire shape (invalid_target / "resource indicator is malformed") but is
+// not redirect-safe: the parser runs before any client lookup.
 func TestRequest_Validate_DuplicateResourceParametersRejected(t *testing.T) {
 	t.Parallel()
 
@@ -423,8 +427,15 @@ func TestRequest_Validate_DuplicateResourceParametersRejected(t *testing.T) {
 	values["resource"] = []string{"https://api.example.com", "https://api.example.com"}
 
 	_, err := authorize.ParseValues(values)
-	if !errors.Is(err, authorize.ErrResourceInvalid) {
-		t.Fatalf("err=%v want ErrResourceInvalid", err)
+	if !errors.Is(err, authorize.ErrResourceDuplicated) {
+		t.Fatalf("err=%v want ErrResourceDuplicated", err)
+	}
+	if got := err.Error(); got != authorize.ErrResourceInvalid.Error() {
+		t.Errorf("wire shape=%q want %q (the RP must not see a different envelope)",
+			got, authorize.ErrResourceInvalid.Error())
+	}
+	if authorize.IsRedirectSafe(err) {
+		t.Error("IsRedirectSafe = true; a parse-time rejection has no trusted redirect target")
 	}
 }
 
@@ -1106,6 +1117,63 @@ func TestValidate_ScopeAllowedClients(t *testing.T) {
 			t.Errorf("nil registry must skip allowlist enforcement, got %v", err)
 		}
 	})
+}
+
+// TestIsRedirectSafe_ParseTimeErrorsAreNeverRedirectSafe drives every
+// rejection [authorize.ParseValues] can produce and asserts none of them
+// is classified redirect-safe. The parser runs before any client has been
+// looked up, so the request's redirect_uri is still an unverified claim;
+// a sentinel that leaked into the "safe" set would let a caller that
+// consults the predicate on a parse error redirect to an attacker-chosen
+// target with the OAuth error parameters attached.
+func TestIsRedirectSafe_ParseTimeErrorsAreNeverRedirectSafe(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		mutate func(url.Values)
+		want   error
+	}{
+		{
+			name:   "duplicate_single_valued_parameter",
+			mutate: func(v url.Values) { v["state"] = []string{"a", "b"} },
+			want:   authorize.ErrDuplicateParameter,
+		},
+		{
+			name:   "duplicate_resource",
+			mutate: func(v url.Values) { v["resource"] = []string{"https://a.example", "https://b.example"} },
+			want:   authorize.ErrResourceDuplicated,
+		},
+		{
+			name:   "max_age_not_an_integer",
+			mutate: func(v url.Values) { v.Set("max_age", "abc") },
+			want:   authorize.ErrMaxAgeInvalid,
+		},
+		{
+			name:   "claims_not_json",
+			mutate: func(v url.Values) { v.Set("claims", "{not json") },
+			want:   authorize.ErrClaimsRequestInvalid,
+		},
+		{
+			name:   "request_uri_is_not_a_par_urn",
+			mutate: func(v url.Values) { v.Set("request_uri", "https://attacker.example/req") },
+			want:   authorize.ErrInvalidRequestURI,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			values := goodValues()
+			tc.mutate(values)
+			_, err := authorize.ParseValues(values)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err=%v want %v", err, tc.want)
+			}
+			if authorize.IsRedirectSafe(err) {
+				t.Errorf("IsRedirectSafe(%v) = true; parse-time errors have no trusted redirect target", err)
+			}
+		})
+	}
 }
 
 // TestIsRedirectSafe_NonPackageError confirms that callers passing in an

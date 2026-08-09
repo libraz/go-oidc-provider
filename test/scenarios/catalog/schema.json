@@ -78,6 +78,11 @@
           },
           "description": "References to rows in other catalog files. Format: <feature>#<ID>."
         },
+        "covered_by": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(/[a-z0-9_]+)*\\.(Test|Fuzz)[A-Za-z0-9_]*$",
+          "description": "Names the test that asserts this row when the assertion cannot live in the scenario suite. Format: <package path>.<TestFunc>. Only valid when status == active. The coverage gate resolves the name with `go test -list`, so a rename on the other side fails the build."
+        },
         "notes": {
           "type": "string",
           "description": "Freeform context for reviewers (e.g. blocked-on, special fixture needs)."
@@ -91,6 +96,10 @@
         {
           "if": { "properties": { "status": { "const": "out-of-scope" } } },
           "then": { "required": ["out_of_scope_reason"] }
+        },
+        {
+          "if": { "required": ["covered_by"] },
+          "then": { "properties": { "status": { "const": "active" } }, "required": ["status"] }
         }
       ]
     }

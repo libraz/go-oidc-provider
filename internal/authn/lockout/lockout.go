@@ -27,7 +27,7 @@ import (
 // Threshold values. The constants are package-private so embedders
 // cannot tune them per-deployment; the defence is tuned once for the
 // entire library. The values match the per-factor TOTP / email-OTP
-// thresholds (002-product-design.md §M.6).
+// thresholds.
 const (
 	// thresholdShort triggers a 1-hour LockedUntil stamp.
 	thresholdShort = 30
@@ -48,6 +48,17 @@ const (
 	// dropped: the next failure resets FirstFailureAt to "now" and the
 	// counter to 1.
 	counterWindow = 24 * time.Hour
+
+	// maxSwapAttempts bounds the compare-and-swap loop in
+	// [Counter.RecordFailure]. Losing the swap is a normal outcome, so
+	// without a bound a burst of concurrent failed logins against one
+	// subject keeps re-reading and re-swapping: the brute-force gate
+	// would amplify the attack into store round trips instead of
+	// damping it. The bound sits above the per-factor verifiers' own
+	// retry cap because the cross-factor row is a single hot row shared
+	// by every factor of one subject, so it sees more concurrent
+	// writers than any per-factor record.
+	maxSwapAttempts = 32
 )
 
 // Sentinel errors. Returned values are wrapped through [errors.Is] so
@@ -65,7 +76,43 @@ var (
 	// LockedUntil stamp has been persisted; the orchestrator MUST
 	// route the user to the recovery / step-up reset flow.
 	ErrResetRequired = errors.New("lockout: factor reset required")
+
+	// ErrSwapContention is returned by [Counter.RecordFailure] when the
+	// versioned compare-and-swap lost [maxSwapAttempts] times in a row.
+	// The failure has NOT been counted, so the caller MUST fail the
+	// attempt closed rather than treat it as a soft retry: a counter
+	// that cannot commit is a counter that cannot defend, and sustained
+	// contention on one subject's row is itself an attack signal worth
+	// surfacing.
+	ErrSwapContention = errors.New("lockout: failure counter contended, attempt not recorded")
 )
+
+// Store contract violations. A store that answers a Get with a nil
+// record and a nil error, with another subject's row, or with an
+// unversioned row breaks the [store.AuthnLockoutStore] contract; every
+// read path fails closed on it instead of dereferencing nil or trusting
+// the row.
+var (
+	errNilRecord       = errors.New("lockout: store returned nil record without error")
+	errSubjectMismatch = errors.New("lockout: store returned record for a different subject")
+	errZeroVersion     = errors.New("lockout: persisted record has zero version")
+)
+
+// checkRecord validates a record the store returned alongside a nil
+// error. version reports whether the caller needs a usable CAS version
+// (the read-only paths do not).
+func checkRecord(rec *store.AuthnLockoutRecord, subject string, version bool) error {
+	if rec == nil {
+		return errNilRecord
+	}
+	if rec.Subject != subject {
+		return errSubjectMismatch
+	}
+	if version && rec.Version == 0 {
+		return errZeroVersion
+	}
+	return nil
+}
 
 // Outcome reports the cross-factor counter's verdict on a single failed
 // attempt. The per-factor adapter reads the fields to decide whether to
@@ -115,7 +162,9 @@ func New(lockoutStore store.AuthnLockoutStore, clock timex.Clock) (*Counter, err
 // stamp is in the future. The per-factor adapter calls it on every
 // Begin (and at the top of Continue) so a locked subject sees a
 // uniform lockout response across factors. A missing record returns
-// nil — a first-time-ever subject has no lock.
+// nil — a first-time-ever subject has no lock. A record that breaks the
+// store contract surfaces as an error rather than as an implicit
+// "unlocked".
 func (c *Counter) GuardBegin(ctx context.Context, subject string) error {
 	if subject == "" {
 		return nil
@@ -127,6 +176,9 @@ func (c *Counter) GuardBegin(ctx context.Context, subject string) error {
 		}
 		return err
 	}
+	if err := checkRecord(rec, subject, false); err != nil {
+		return err
+	}
 	now := c.clock.Now()
 	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
 		return ErrLocked
@@ -135,7 +187,9 @@ func (c *Counter) GuardBegin(ctx context.Context, subject string) error {
 }
 
 // IsLocked reports whether the cross-factor LockedUntil stamp is in
-// the future. A missing record is treated as "not locked".
+// the future. A missing record is treated as "not locked"; a record
+// that breaks the store contract returns the error alongside the zero
+// verdict.
 func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time, error) {
 	if subject == "" {
 		return false, time.Time{}, nil
@@ -145,6 +199,9 @@ func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time
 		if errors.Is(err, store.ErrNotFound) {
 			return false, time.Time{}, nil
 		}
+		return false, time.Time{}, err
+	}
+	if err := checkRecord(rec, subject, false); err != nil {
 		return false, time.Time{}, err
 	}
 	now := c.clock.Now()
@@ -158,14 +215,22 @@ func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time
 // a versioned compare-and-swap. Increment, window rollover, and lock
 // stamping are one transition, so none can overwrite a concurrently
 // committed failure. A stale transition is recomputed from the latest
-// record until it commits.
+// record and retried up to [maxSwapAttempts] times; past that the
+// attempt is abandoned with [ErrSwapContention] rather than spinning,
+// and a cancelled ctx aborts between attempts.
 func (c *Counter) RecordFailure(ctx context.Context, subject string) (Outcome, error) {
 	if subject == "" {
 		return Outcome{}, errors.New("lockout: subject required")
 	}
 	now := c.clock.Now()
 
-	for {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return Outcome{}, err
+		}
+		if attempt == maxSwapAttempts {
+			return Outcome{}, ErrSwapContention
+		}
 		expectedVersion, next, err := c.failureBase(ctx, subject)
 		if err != nil {
 			return Outcome{}, err
@@ -189,14 +254,8 @@ func (c *Counter) failureBase(ctx context.Context, subject string) (uint64, *sto
 	if err != nil {
 		return 0, nil, err
 	}
-	if prior == nil {
-		return 0, nil, errors.New("lockout: store returned nil record without error")
-	}
-	if prior.Subject != subject {
-		return 0, nil, errors.New("lockout: store returned record for a different subject")
-	}
-	if prior.Version == 0 {
-		return 0, nil, errors.New("lockout: persisted record has zero version")
+	if err := checkRecord(prior, subject, true); err != nil {
+		return 0, nil, err
 	}
 	return prior.Version, prior, nil
 }
@@ -252,14 +311,8 @@ func (c *Counter) Reset(ctx context.Context, subject string) error {
 		}
 		return err
 	}
-	if rec == nil {
-		return errors.New("lockout: store returned nil record without error")
-	}
-	if rec.Subject != subject {
-		return errors.New("lockout: store returned record for a different subject")
-	}
-	if rec.Version == 0 {
-		return errors.New("lockout: persisted record has zero version")
+	if err := checkRecord(rec, subject, true); err != nil {
+		return err
 	}
 	if rec.FailedCount == 0 && rec.FirstFailureAt.IsZero() && rec.LockedUntil.IsZero() {
 		return nil

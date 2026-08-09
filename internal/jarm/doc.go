@@ -9,6 +9,12 @@
 // the final code / error envelope and the RP verifies the signature
 // against the OP's published JWKS.
 //
+// This package produces the signed JWT only. A client that registered
+// authorization_encrypted_response_alg / _enc receives that JWT wrapped
+// in a JWE, but the wrap is applied by the authorize endpoint on top of
+// what this package returns, against a key from the client's own JWKS —
+// so the encryption path needs nothing from here.
+//
 // # Response modes
 //
 // The package recognises four response_mode values:
@@ -17,8 +23,8 @@
 //   - "fragment.jwt"  — JWT in the URL fragment of redirect_uri.
 //   - "form_post.jwt" — JWT in an auto-submitted HTML form.
 //   - "jwt"           — bare alias resolved to one of the above based on
-//     the request's response_type. Because v0.x only supports the Code
-//     flow, the bare alias always lands on "query.jwt".
+//     the request's response_type. Because the OP only supports the
+//     Code flow, the bare alias always lands on "query.jwt".
 //
 // # Claim set
 //
@@ -35,9 +41,9 @@
 // # Algorithm policy
 //
 // JARM responses are signed with ES256, using the OP's existing
-// access-token / id-token signing key. No new keyset is introduced.
-// Encrypted JARM (the JWE variants) is intentionally out of scope; the
-// *.jwt response modes here are signed-only.
+// access-token / id-token signing key. No new keyset is introduced —
+// including for the encrypted variant, whose recipient key is the
+// client's, not the OP's.
 //
 // # Feature gating
 //

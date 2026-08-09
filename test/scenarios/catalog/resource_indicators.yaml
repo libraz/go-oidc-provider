@@ -27,7 +27,7 @@ rows:
       The default implementation returns undefined; when the caller
       passes a fallback list, the hook returns that list verbatim.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose a defaultResource(ctx, client, oneOf) hook — the only resource-policy surface is the per-client store.Client.Resources allowlist (covered by RI-021 / RI-031 / RI-032 / RI-033 / RI-060 / RI-062 / RI-063). Adding the hook would expand the OP's public surface for a dynamism the allowlist already expresses declaratively; docs/plans/002 favours declarative configuration over imperative hooks (the same rationale that puts the sibling getResourceServerInfo hook RI-002 out of scope)."
+    out_of_scope_reason: "v1.0 does not expose a defaultResource(ctx, client, oneOf) hook — the only resource-policy surface is the per-client store.Client.Resources allowlist (covered by RI-021 / RI-031 / RI-032 / RI-033 / RI-060 / RI-062 / RI-063). Adding the hook would expand the OP's public surface for a dynamism the allowlist already expresses declaratively. The library prefers narrow, declarative configuration over imperative hooks, which is the same rationale that puts the sibling getResourceServerInfo hook RI-002 out of scope."
 
   - id: RI-002
     severity: P0
@@ -38,7 +38,7 @@ rows:
       invalid_target ("resource indicator is missing, or unknown") so
       unconfigured resources are denied.
     status: out-of-scope
-    out_of_scope_reason: Dynamic getResourceServerInfo(ctx, resource, client) hook is not exposed. The OP relies on the per-client store.Client.Resources []string allowlist (RI-010/011/030 cover that path). docs/plans/002 favours narrow, declarative configuration over imperative hooks because a per-resource hook expands the attack surface (an embedder bug → bad audience) without adding capability the allowlist cannot already express.
+    out_of_scope_reason: Dynamic getResourceServerInfo(ctx, resource, client) hook is not exposed. The OP relies on the per-client store.Client.Resources []string allowlist (RI-010/011/030 cover that path). The library prefers narrow, declarative configuration over imperative hooks because a per-resource hook expands the attack surface (an embedder bug becomes a wrong audience) without adding capability the allowlist cannot already express.
 
   - id: RI-010
     severity: P0
@@ -97,7 +97,7 @@ rows:
       defaultResource hook returns a value, the issued access token's
       aud MUST reflect that default.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose a defaultResource(ctx, client, oneOf) hook; the only resource-policy surface is the per-client store.Client.Resources allowlist. RI-002 (the sibling getResourceServerInfo hook row) is out-of-scope on the same grounds: docs/plans/002 favours declarative configuration over imperative hooks."
+    out_of_scope_reason: "v1.0 does not expose a defaultResource(ctx, client, oneOf) hook; the only resource-policy surface is the per-client store.Client.Resources allowlist. RI-002 (the sibling getResourceServerInfo hook row) is out-of-scope on the same grounds: the library prefers declarative configuration over imperative hooks."
 
   - id: RI-023
     severity: P0
@@ -284,7 +284,7 @@ rows:
       Unsupported scopes are silently dropped from the issued token's
       scope; the supported subset is honoured.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 client_credentials does not silently drop unsupported scopes; it rejects with invalid_scope (clientcred.ErrScopeForbidden in internal/grants/clientcred/clientcred.go: 'requested scope is not permitted for client'). The strict-rejection posture is documented on ErrScopeForbidden's godoc as a deliberate library posture vs the §3.3 'MAY narrow' permission. The silent-drop behaviour this row asserts is vendor-specific; rebinding it would require us to adopt that posture, which docs/plans/002 declines."
+    out_of_scope_reason: "v1.0 client_credentials does not silently drop unsupported scopes; it rejects with invalid_scope (clientcred.ErrScopeForbidden in internal/grants/clientcred/clientcred.go: 'requested scope is not permitted for client'). The strict-rejection posture is documented on ErrScopeForbidden's godoc as a deliberate library posture vs the §3.3 'MAY narrow' permission. The silent-drop behaviour this row asserts is vendor-specific; rebinding it would require adopting a posture where a client silently receives less than it asked for, which the library declines."
 
   - id: RI-062
     severity: P0
@@ -330,7 +330,7 @@ rows:
       resource (e.g. via a resource-scoped policy decision); both
       paths MUST accept a single resource parameter.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose a per-resource access-token format policy hook. The token format choice (opaque vs JWT) is global (op.WithJWTAccessTokens); there is no resource-scoped 'this resource gets opaque, that one gets JWT' policy decision at the /token boundary. Adding such a hook would need a new public option and a per-resource policy callback shape that docs/plans/002 has not enumerated. Embedders that need resource-scoped formats run a downstream gateway that re-projects opaque tokens to JWT (or vice versa) per the resource server's expectation."
+    out_of_scope_reason: "v1.0 does not expose a per-resource access-token format policy hook. The token format choice (opaque vs JWT) is global (op.WithJWTAccessTokens); there is no resource-scoped 'this resource gets opaque, that one gets JWT' policy decision at the /token boundary. Adding such a hook would need a new public option and a per-resource policy callback shape the library does not define. Embedders that need resource-scoped formats run a downstream gateway that re-projects opaque tokens to JWT (or vice versa) per the resource server's expectation."
 
   - id: RI-070
     severity: P1

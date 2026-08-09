@@ -137,3 +137,86 @@ func AllowedJWEEncs() []JWEEnc {
 		JWEEncA256GCM,
 	}
 }
+
+// JWEPolicy is the deployment-level narrowing of the package
+// allow-lists. The package lists above are the ceiling and cannot be
+// widened; a policy only removes values from them.
+//
+// The zero value permits everything the package permits, so a caller
+// that never narrows can pass a zero [JWEPolicy] and keep the library
+// default. A nil slice means "no narrowing for this half"; an empty
+// non-nil slice means "permit nothing", which is how an operator
+// disables JWE negotiation without also removing the keyset.
+//
+// One policy value is shared by every surface that negotiates JWE —
+// inbound decryption ([Decrypt] via [EncryptionPolicyResolver]),
+// outbound recipient selection, and the client-registration validator —
+// so an operator-imposed restriction cannot hold on one surface while
+// another silently keeps accepting the excluded value.
+type JWEPolicy struct {
+	// Algs narrows the key-management algorithms. Nil leaves
+	// [AllowedJWEAlgs] in force.
+	Algs []JWEAlg
+
+	// Encs narrows the content-encryption algorithms. Nil leaves
+	// [AllowedJWEEncs] in force.
+	Encs []JWEEnc
+}
+
+// AllowsAlg reports whether a survives both the package allow-list and
+// the policy narrowing.
+func (p JWEPolicy) AllowsAlg(a JWEAlg) bool {
+	if !a.IsAllowed() {
+		return false
+	}
+	if p.Algs == nil {
+		return true
+	}
+	for _, allowed := range p.Algs {
+		if allowed == a {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowsEnc reports whether e survives both the package allow-list and
+// the policy narrowing.
+func (p JWEPolicy) AllowsEnc(e JWEEnc) bool {
+	if !e.IsAllowed() {
+		return false
+	}
+	if p.Encs == nil {
+		return true
+	}
+	for _, allowed := range p.Encs {
+		if allowed == e {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseJWEAlgPolicy converts the wire form of a JWE `alg` into a
+// [JWEAlg] and applies p in one step. It returns ok=false for a value
+// outside the package allow-list and for a value the policy removed;
+// callers MUST treat both the same way, because the distinction is
+// operator configuration an unauthenticated peer has no business
+// learning.
+func ParseJWEAlgPolicy(s string, p JWEPolicy) (JWEAlg, bool) {
+	a, ok := ParseJWEAlg(s)
+	if !ok || !p.AllowsAlg(a) {
+		return JWEAlg(""), false
+	}
+	return a, true
+}
+
+// ParseJWEEncPolicy mirrors [ParseJWEAlgPolicy] for the JWE `enc`
+// header.
+func ParseJWEEncPolicy(s string, p JWEPolicy) (JWEEnc, bool) {
+	e, ok := ParseJWEEnc(s)
+	if !ok || !p.AllowsEnc(e) {
+		return JWEEnc(""), false
+	}
+	return e, true
+}

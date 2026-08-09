@@ -95,3 +95,8 @@ rows:
       (omit-on-zero); a client that sets `require_auth_time`
       additionally surfaces the missing value as a 500 server_error.
     status: active
+    covered_by: internal/tokenendpoint.TestHandleCIBA_IDTokenStampsAuthTime
+    notes: |
+      Driving a CIBA redemption end to end needs an approve hook the
+      public surface does not expose, so the assertion sits at the
+      token endpoint where the approved record can be seated directly.

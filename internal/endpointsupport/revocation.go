@@ -26,9 +26,10 @@ type JWTRevocationOpts struct {
 //   - RevocationStrategyNone: never revoked, lookup succeeded.
 //   - RevocationStrategyJTIRegistry: consult AccessTokens.Find(jti).
 //   - RevocationStrategyGrantTombstone: consult
-//     GrantRevocations.IsRevoked(grantID, jti, iat) when both grantID
-//     and GrantRevocations are present; otherwise fall back to the JTI
-//     registry for the legacy migration window.
+//     GrantRevocations.IsRevoked(grantID, jti, iat) whenever
+//     GrantRevocations is present, then fall back to the JTI registry
+//     for a grantless token when the tombstone substore reported it
+//     live (the legacy migration window).
 //
 // A missing JTI row is accepted so directly-constructed test tokens and
 // external-issuer registries do not flip the contract. A substore error
@@ -53,7 +54,14 @@ func jwtAccessTokenRevokedByTombstone(
 	opts JWTRevocationOpts,
 	claims *tokens.AccessTokenClaims,
 ) (revoked, ok bool) {
-	if claims.GrantID != "" && opts.GrantRevocations != nil {
+	if opts.GrantRevocations != nil {
+		// The substore evaluates its two inputs independently: the JTI
+		// denylist keyed on the token's jti and the grant tombstone keyed
+		// on its "gid" private claim. Both are handed over unconditionally
+		// so a grantless access token -- client_credentials mints one with
+		// no "gid" -- is still closed by the denylist row /revocation
+		// wrote for it. Gating the whole call on a non-empty GrantID would
+		// leave that row unread.
 		got, err := opts.GrantRevocations.IsRevoked(
 			ctx,
 			claims.GrantID,
@@ -63,7 +71,14 @@ func jwtAccessTokenRevokedByTombstone(
 		if err != nil {
 			return false, false
 		}
-		return got, true
+		if got {
+			return true, true
+		}
+		if claims.GrantID != "" {
+			// A grant-bound token is fully described by the tombstone
+			// substore, so the registry fallback below does not apply.
+			return false, true
+		}
 	}
 	if opts.AccessTokens == nil {
 		return false, true

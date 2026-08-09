@@ -48,9 +48,7 @@ func WithFeature(f feature.Flag) Option {
 //
 // The canonical value lives in [timex.AccessTokenTTLMax]; this name is
 // preserved for embedders that already reference the constant.
-//
-//nolint:gochecknoglobals // re-export of the canonical timex value; var is required for cross-package alias.
-var MaxAccessTokenTTL = timex.AccessTokenTTLMax
+const MaxAccessTokenTTL = timex.AccessTokenTTLMax
 
 // WithAccessTokenTTL overrides the lifetime applied to issued access
 // tokens. Zero means "use [DefaultAccessTokenTTL]"; a negative value

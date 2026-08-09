@@ -2,6 +2,7 @@ package tokens
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,7 +130,13 @@ type AccessTokenVerifier struct {
 // validates that aud contains its own resource identifier. Callers
 // that want the assertion compare claims.Audience after Verify
 // returns and surface [ErrAccessTokenAudienceMismatch] on failure.
-func (v *AccessTokenVerifier) Verify(raw string) (*AccessTokenClaims, string, error) {
+//
+// ctx is the context of the request that presented raw. Verification
+// does no I/O and does not observe cancellation; the context exists so
+// the keyset's retired-kid audit event — fired when the token names a
+// kid the OP has stopped trusting — reaches the embedder's sink with
+// the presenting request's correlation attached.
+func (v *AccessTokenVerifier) Verify(ctx context.Context, raw string) (*AccessTokenClaims, string, error) {
 	jws, _, err := jose.ParseSigned(raw)
 	if err != nil {
 		// jose.ParseSigned wraps both alg-not-allowed and parse
@@ -153,7 +160,7 @@ func (v *AccessTokenVerifier) Verify(raw string) (*AccessTokenClaims, string, er
 	if kid == "" {
 		return nil, "", ErrAccessTokenSignature
 	}
-	entry, ok := v.Keys.Find(kid)
+	entry, ok := v.Keys.Find(ctx, kid)
 	if !ok {
 		return nil, "", ErrAccessTokenSignature
 	}

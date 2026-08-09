@@ -49,21 +49,21 @@ func newSPAHarness(t *testing.T) *spaHarness {
 		"SECRET=42")
 
 	deps := authorizeendpoint.Deps{
-		Clients:         base.store.Clients(),
-		Codes:           base.store.AuthorizationCodes(),
-		Grants:          base.store.Grants(),
-		Interactions:    base.store.Interactions(),
-		Sessions:        base.sessionMgr,
-		CookieCodec:     base.cookieCodec,
-		CSRF:            base.csrfSigner,
-		Origins:         mustOriginAllowlist(t),
-		Driver:          base.driver,
-		Authn:           base.orchestrator,
-		AuthorizePath:   base.authorizePath,
-		InteractionPath: base.interactionPth,
-		SPALoginMount:   "/login",
-		SPAStaticDir:    staticDir,
-		Clock:           base.clock,
+		Clients:            base.store.Clients(),
+		Codes:              base.store.AuthorizationCodes(),
+		Grants:             base.store.Grants(),
+		Interactions:       base.store.Interactions(),
+		Sessions:           base.sessionMgr,
+		CookieCodec:        base.cookieCodec,
+		CSRF:               base.csrfSigner,
+		InteractionOrigins: mustOriginAllowlist(t),
+		Driver:             base.driver,
+		Authn:              base.orchestrator,
+		AuthorizePath:      base.authorizePath,
+		InteractionPath:    base.interactionPth,
+		SPALoginMount:      "/login",
+		SPAStaticDir:       staticDir,
+		Clock:              base.clock,
 	}
 
 	return &spaHarness{
@@ -144,6 +144,13 @@ func TestSPA_ShellGET_ReturnsIndexHTMLWithHardeningHeaders(t *testing.T) {
 	}
 	checkHeader(t, resp, "X-Frame-Options", "DENY")
 	checkHeader(t, resp, "X-Content-Type-Options", "nosniff")
+	checkHeader(t, resp, "Pragma", "no-cache")
+	// The shell URL carries the interaction uid, so a full referrer must
+	// not cross an origin boundary. same-origin (not no-referrer) matches
+	// HTMLDriver.Render: no-referrer would make the browser serialize the
+	// Origin header of the SPA's own state-changing fetches as "null",
+	// which the interaction CSRF gate then rejects.
+	checkHeader(t, resp, "Referrer-Policy", "same-origin")
 	cc := resp.Header.Get("Cache-Control")
 	if cc == "" || !strings.Contains(cc, "no-store") {
 		t.Errorf("Cache-Control=%q want it to include no-store", cc)

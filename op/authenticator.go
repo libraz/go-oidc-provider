@@ -3,7 +3,7 @@ package op
 import "github.com/libraz/go-oidc-provider/internal/authn"
 
 // FactorType / Authenticator-related symbols are re-exported from
-// the canonical home in [internal/authn]. The op package surface is
+// their canonical home in the orchestrator package. The op surface is
 // the public-API contract embedders consume; internal/authn carries
 // the orchestrator wiring that consumes the same types. Aliasing
 // keeps both sides referencing one canonical declaration so there is

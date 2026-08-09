@@ -1,6 +1,7 @@
 package op
 
 import (
+	"crypto/x509"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
@@ -164,6 +166,13 @@ type config struct {
 	// substitutes [backchannel.DefaultTimeout].
 	backchannelLogoutTimeout time.Duration
 
+	// backchannelFanOutBudget caps the total wall-clock time one
+	// detached back-channel logout fan-out may occupy, across every
+	// RP it notifies. Zero substitutes
+	// [backchannel.DefaultFanOutBudget]; non-positive values are
+	// rejected at the option site. See [WithBackchannelFanOutBudget].
+	backchannelFanOutBudget time.Duration
+
 	// sessionDurabilityPosture carries the embedder's declaration of
 	// how SessionStore writes flow through their persistence tier.
 	// Default zero value is [SessionDurabilityVolatile]; embedders
@@ -253,6 +262,15 @@ type config struct {
 	// derivation without widening the JWKS or JAR fetchers.
 	allowPrivateNetworkSector bool
 
+	// backchannelAllowPrivateNetwork mirrors
+	// [allowPrivateNetworkJWKS] for the back-channel logout
+	// deliverer. The default false rejects loopback / link-local /
+	// RFC 1918 / IPv6 ULA destinations so a hostile RP cannot
+	// register a backchannel_logout_uri that aims the OP's signed
+	// logout_token at an internal service. Embedders opt in via
+	// [WithBackchannelAllowPrivateNetwork].
+	backchannelAllowPrivateNetwork bool
+
 	// allowLocalhostLoopback widens the RFC 8252 §7.3 loopback
 	// redirect_uri carve-out to admit the textual "localhost" host
 	// in addition to the IP literals 127.0.0.1 and [::1]. The
@@ -273,8 +291,10 @@ type config struct {
 	allowInsecureBackchannelLogoutForDev bool
 
 	// jwksHTTPTransport is the [http.RoundTripper] [WithJWKSHTTPTransport]
-	// passes to the JWKS fetcher (both the JAR resolver and the
-	// client-assertion verifier share one fetcher type). Nil means
+	// passes to every relying-party JWKS fetch: the JAR resolver, the
+	// client-assertion verifier, and the outbound-encryption recipient
+	// resolver. All three read the same RP endpoints, so a private CA
+	// that one of them needs is a private CA all of them need. Nil means
 	// "use the package default" — [internal/netsec.NewHTTPClient]
 	// constructs an [http.Transport] backed by Go's system trust
 	// store. Embedders that need a private CA (an internal CA-issued
@@ -455,6 +475,15 @@ type config struct {
 	// without growing a separate plumbing path.
 	metricsCollector *metrics.Collector
 
+	// backchannelCoordinator is the back-channel logout fan-out
+	// coordinator the /end_session handler dispatches to. It is
+	// populated by [op.New] while the router is assembled, and only
+	// for a configuration that mounts the browser authorize endpoint;
+	// nil otherwise. Stored on the config so [Provider.Shutdown] can
+	// reach the same instance the handler uses without the router
+	// growing a second return value.
+	backchannelCoordinator *backchannel.Coordinator
+
 	// accessTokenFormat selects the wire encoding the OP applies to
 	// access tokens issued by every grant type. Default
 	// [AccessTokenFormatJWT] (RFC 9068); embedders flip the value via
@@ -614,26 +643,28 @@ type config struct {
 	cibaMaxPollViolations uint8
 
 	// encryptionKeyset carries the asymmetric private keys the OP
-	// uses to decrypt inbound JWE (request_object) and to encrypt
-	// outbound JWE addressed to RP keys (id_token / userinfo / JARM
-	// / introspection). Nil means JWE is not configured: discovery
-	// omits the *_encryption_*_values_supported arrays and inbound
-	// decryption attempts fail with invalid_request_object. RFC 7517
-	// §4.2 requires the keyset to be disjoint by kid from the signing
-	// keyset; the construction-time gate runs in
-	// [config.validateEncryptionKeyset].
+	// uses to decrypt inbound JWE (request_object). Nil means the OP
+	// accepts no encrypted request object: discovery omits the
+	// request_object_encryption_*_values_supported arrays and a
+	// decryption attempt fails with invalid_request_object. Outbound
+	// encryption is unaffected — it addresses the recipient client's
+	// key, not one of these. RFC 7517 §4.2 requires the keyset to be
+	// disjoint by kid from the signing keyset; the construction-time
+	// gate runs in [config.validateEncryptionKeyset].
 	encryptionKeyset EncryptionKeyset
 
 	// encryptionAlgsAllowed is the embedder-narrowed JWE alg
 	// allow-list. Empty (with the Set companion flag false) falls
 	// back to [SupportedEncryptionAlgs]; an empty (non-nil) slice
-	// with the flag true means "advertise no algs" — a deliberate
-	// disable-negotiation posture.
+	// with the flag true means "permit no algs" — a deliberate
+	// disable-negotiation posture. [config.jwePolicy] turns the pair
+	// into the value the decryption, encryption and registration
+	// gates all enforce.
 	encryptionAlgsAllowed    []string
 	encryptionAlgsAllowedSet bool
 
 	// encryptionEncsAllowed mirrors encryptionAlgsAllowed for the JWE
-	// content-encryption advertisement.
+	// content-encryption half.
 	encryptionEncsAllowed    []string
 	encryptionEncsAllowedSet bool
 
@@ -644,6 +675,13 @@ type config struct {
 	// lifetime is tied to the owning [Provider]: once the Provider is
 	// unreachable, this field is collected with it.
 	mtlsProxy mtlsProxyState
+
+	// mtlsRootCAs stores the [WithMTLSRootCAs] trust anchors. Nil
+	// (the default) leaves chain validation to whoever terminated the
+	// client's TLS connection; a non-nil pool makes the OP's own mTLS
+	// verifier re-validate every client leaf it selects before the
+	// certificate is thumbprinted or matched.
+	mtlsRootCAs *x509.CertPool
 }
 
 // claimsParameterSupported returns the effective discovery
@@ -907,8 +945,15 @@ func (c *config) effectiveAuditEmitter() audit.Emitter {
 // clients are bucketed into the empty label so label cardinality stays
 // bounded. PII labels (subject, IP, user-agent) are never emitted.
 //
+// Every metric carries the constant label issuer="<the value given to
+// [WithIssuer]>". Several Providers may therefore share one registry:
+// their series are distinguished by that label rather than by the
+// metric name. Two Providers configured with the same issuer on the
+// same registry remain a collision and fail [New].
+//
 // The registry's lifecycle is the embedder's responsibility — the
-// library calls Register but never Unregister.
+// library calls Unregister only to undo a partially completed
+// registration when [New] fails, never on a live collector.
 //
 // Stable since v1.0.
 func WithPrometheus(registry *prometheus.Registry) Option {
@@ -952,13 +997,28 @@ func WithJWKSRotationActive(predicate func() bool) Option {
 // WithAuditLogger injects the [*slog.Logger] the library routes
 // audit events on. Audit records carry the slog attribute
 // "audit"="true" so log shippers can split them onto a dedicated
-// retention bucket without parsing the [AuditEvent] name; the
-// design rationale is in design 002 §N.1.
+// retention bucket without parsing the [AuditEvent] name — the
+// attribute keeps the routing decision independent of the event
+// vocabulary, which may grow in a minor release.
 // If unset, the [Provider] uses the operational logger from
 // [WithLogger]; if neither is configured, audit records are dropped.
-// Embedders SHOULD pass a logger pointed at long-retention storage
-// (S3-backed handler, BigQuery sink, ELK index, …) so audit lines
-// outlive the operational stream.
+//
+// The handler is invoked synchronously, on the request goroutine that
+// produced the event, and the OP waits for it to return before the
+// response is written. Handlers MUST therefore be non-blocking:
+// serialise the record and hand it to a buffered channel / batching
+// worker, and never perform a network round trip inline. A handler
+// that ships each record to long-retention storage (S3, BigQuery, an
+// ELK index, …) — which embedders SHOULD do, so audit lines outlive
+// the operational stream — belongs behind that asynchronous hop, not
+// on the emission path: a slow or stalled sink otherwise adds its
+// latency to every token, authorize and logout request. Handlers MUST
+// also be safe for concurrent use by multiple goroutines.
+//
+// The OP does not retry, and it recovers from a panicking handler
+// rather than failing the request; a dropped record is the failure
+// mode a broken sink produces.
+//
 // The supplied logger's handler is wrapped with the same redaction
 // hook as [WithLogger] so a regression that puts a token into an
 // [AuditEvent] extras map cannot escape the wire posture.

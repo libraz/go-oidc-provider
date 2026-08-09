@@ -1,6 +1,7 @@
 package tokenendpoint_test
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -174,7 +175,7 @@ func TestClientCredentials_Resource(t *testing.T) {
 				verifier := &tokens.AccessTokenVerifier{
 					Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 				}
-				parsed, _, err := verifier.Verify(at)
+				parsed, _, err := verifier.Verify(context.Background(), at)
 				if err != nil {
 					t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 				}
@@ -294,7 +295,7 @@ func TestClientCredentials_Resource_Canonicalisation(t *testing.T) {
 			verifier := &tokens.AccessTokenVerifier{
 				Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 			}
-			parsed, _, err := verifier.Verify(at)
+			parsed, _, err := verifier.Verify(context.Background(), at)
 			if err != nil {
 				t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 			}

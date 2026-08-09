@@ -174,7 +174,7 @@ func TestAuthCode_MTLS_BindsX5T(t *testing.T) {
 	// The access token MUST carry cnf.x5t#S256.
 	keySet := mustKeySet(t, f.prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: f.prov.Issuer, Clock: f.clock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestAuthCode_MTLS_NoCertBearer(t *testing.T) {
 	at, _ := body["access_token"].(string)
 	keySet := mustKeySet(t, f.prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: f.prov.Issuer, Clock: f.clock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestAuthCode_MTLS_DPoPAndMTLSBothPopulateCnf(t *testing.T) {
 	at, _ := body["access_token"].(string)
 	keySet := mustKeySet(t, prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: prov.Issuer, Clock: clock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}

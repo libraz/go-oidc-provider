@@ -30,6 +30,7 @@ func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispat
 			GrantRevocations:   cfg.store.GrantRevocations(),
 			RevocationStrategy: cfg.atRevocation,
 			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
+			Grants:             cfg.store.Grants(),
 			Audit:              cfg.effectiveAuditEmitter(),
 			Clock:              clock,
 			MaxAccessTTL:       cfg.accessTokenTTL,

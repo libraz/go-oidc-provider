@@ -34,6 +34,7 @@ func (c *config) validate() error {
 	for _, fn := range []func() error{
 		c.validateScopes,
 		c.validateProfiles,
+		c.validateFeatureActivation,
 		c.validateRegistration,
 		c.validateAuthenticators,
 		c.validateInteractions,
@@ -342,6 +343,7 @@ func (c *config) validateStaticClients() error {
 		PairwiseEnabled:                      c.pairwiseEnabled(),
 		AllowLocalhostLoopback:               c.allowLocalhostLoopback,
 		AllowInsecureBackchannelLogoutForDev: c.allowInsecureBackchannelLogoutForDev,
+		JWEPolicy:                            c.jwePolicy(),
 	}
 	for i := range c.staticClients {
 		seed := c.staticClients[i]
@@ -369,32 +371,23 @@ func (c *config) validateStaticClients() error {
 // static-client validator runs against. Static clients are trusted
 // configuration: the embedder authoritatively names the grants their
 // clients participate in. The validator therefore admits every
-// library-known grant_type plus any custom grant the embedder wired
-// through [WithCustomGrant], so a seed listing
+// grant_type the library implements plus any custom grant the embedder
+// wired through [WithCustomGrant], so a seed listing
 // `["authorization_code", "refresh_token"]` flows through cleanly even
 // when the OP only mounts the CIBA grant at runtime — the runtime
 // dispatcher rejects an unsupported grant on the wire side, and the
 // static-client gate stays focused on structural rules (malformed
 // values, unknown wire form).
 //
-// [config.applyDefaults] populates [config.grants] before [config.validate]
-// runs, so the slice is always non-empty by the time the static-client
-// gate consults it.
+// The library half comes from [builtinGrantTypeWireList] rather than a
+// second transcription of the same wires: a grant added to the library
+// is admitted here with no parallel edit. Membership is unconditional,
+// independent of which grants this deployment enabled — a seed naming
+// a grant the OP does not mount still receives unsupported_grant_type
+// at /token, which is the surface where "configured but not enabled"
+// belongs.
 func (c *config) staticClientAllowedGrantTypes() []string {
-	allowed := []string{
-		grant.AuthorizationCode.String(),
-		grant.RefreshToken.String(),
-		grant.ClientCredentials.String(),
-		grant.DeviceCode.String(),
-		grant.CIBA.String(),
-		// Token exchange (RFC 8693) is admitted unconditionally
-		// because the dispatcher gates the runtime path through
-		// [config.tokenExchangePolicy]; a static seed listing the
-		// URN without the policy still receives unsupported_grant_type
-		// at /token, which is the right surface for the
-		// "configured-without-policy" diagnostic.
-		"urn:ietf:params:oauth:grant-type:token-exchange",
-	}
+	allowed := builtinGrantTypeWireList()
 	for _, h := range c.customGrants {
 		if h == nil {
 			continue
@@ -641,6 +634,22 @@ func checkExternalStepKind(where string, ext ExternalStep) error {
 // profiles. Centralising the check lets future first-party / FAPI
 // interactions extend the predicate without scattering profile
 // enumerations across the option layer.
+// hasFAPI2Profile reports whether any profile the embedder declared is
+// one of the FAPI 2.0 profiles. Callers that need the profile-driven
+// default rather than the validation verdict use this, so the two stay
+// derived from the same predicate.
+func (c *config) hasFAPI2Profile() bool {
+	if c == nil {
+		return false
+	}
+	for _, p := range c.profiles {
+		if isFAPI2Profile(p) {
+			return true
+		}
+	}
+	return false
+}
+
 func isFAPI2Profile(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
@@ -864,10 +873,7 @@ func featureFlagNames(fs []feature.Flag) []string {
 // chain run.
 func (c *config) validateAuthenticators() error {
 	if len(c.authenticators) == 0 {
-		// Zero authenticators is permitted at this layer; the
-		// orchestrator surfaces the missing-authenticator
-		// construction error when [New] wires the chain runner.
-		return nil
+		return c.validateAuthenticatorsRequired()
 	}
 	seen := make(map[FactorType]struct{}, len(c.authenticators))
 	for i, a := range c.authenticators {
@@ -885,6 +891,41 @@ func (c *config) validateAuthenticators() error {
 			}
 		}
 		seen[t] = struct{}{}
+	}
+	return nil
+}
+
+// validateAuthenticatorsRequired covers the zero-authenticator case.
+//
+// Registering none is legitimate for a deployment that runs only
+// non-interactive grants — client_credentials, or refresh_token against
+// a code some other component issued. Those never reach the chain
+// runner, and [New] deliberately builds no orchestrator for them.
+//
+// The authorization_code grant is the opposite: every /authorize request
+// that is not resumed from a live session has to run the chain, so an OP
+// that offers the grant without a way to authenticate anyone cannot
+// serve a single one. Left unchecked the failure lands on the first real
+// authorization request as a server_error, which reads as an OP fault to
+// the relying party and gives the operator nothing to act on. This is
+// exactly the class the boot contract exists to exclude, so it is
+// refused at construction alongside the other required wiring.
+//
+// [WithLoginFlow] satisfies the requirement in place of
+// [WithAuthenticators]: it declares the same chain in compiled form.
+func (c *config) validateAuthenticatorsRequired() error {
+	if c.loginFlowSet {
+		return nil
+	}
+	for _, g := range c.grants {
+		if g != grant.AuthorizationCode {
+			continue
+		}
+		return &Error{
+			Code: codeConfiguration,
+			Description: "the authorization_code grant is enabled but no Authenticator is registered; " +
+				"supply WithAuthenticators or WithLoginFlow, or drop the grant",
+		}
 	}
 	return nil
 }
@@ -923,34 +964,33 @@ func (c *config) validateInteractions() error {
 	return nil
 }
 
-// validateRegistration enforces the cross-cutting invariants between
-// [WithDynamicRegistration] and [WithFeature]. The two surfaces MUST
-// agree: a non-nil [config.dcr] requires the
-// [feature.DynamicRegistration] flag, and the configured store MUST
-// expose the IAT and RAT substores. The method also rejects
-// [WithDynamicRegistration] without a backing flag (so a caller who
-// removed the feature accidentally is told why /register is missing).
+// validateRegistration enforces the cross-cutting invariants of
+// [WithDynamicRegistration] and owns the [feature.DynamicRegistration]
+// flag: the option records only the configuration, and the flag is
+// derived here once every option has been applied.
+//
+// Deriving it here rather than inside the option is what makes the
+// "flag declared twice" diagnostic order-independent. [WithFeature] is
+// idempotent, so an embedder who passed the flag explicitly leaves no
+// trace once the option has also set it — the duplicate would be
+// visible in one call order and invisible in the other. With the
+// option no longer setting the flag, a flag present alongside a
+// configured [config.dcr] can only have come from [WithFeature].
 func (c *config) validateRegistration() error {
-	flagOn := false
-	for _, f := range c.features {
-		if f == feature.DynamicRegistration {
-			flagOn = true
-			break
+	flagOn := featureEnabled(c.features, feature.DynamicRegistration)
+	if c.dcr == nil {
+		if flagOn {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "feature.DynamicRegistration enabled without WithDynamicRegistration",
+			}
 		}
-	}
-	if c.dcr == nil && !flagOn {
 		return nil
 	}
-	if c.dcr == nil {
+	if flagOn {
 		return &Error{
 			Code:        codeConfiguration,
-			Description: "feature.DynamicRegistration enabled without WithDynamicRegistration",
-		}
-	}
-	if !flagOn {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithDynamicRegistration set without feature.DynamicRegistration enabled",
+			Description: "feature.DynamicRegistration was enabled more than once",
 		}
 	}
 	if c.store.InitialAccessTokens() == nil {
@@ -965,10 +1005,10 @@ func (c *config) validateRegistration() error {
 			Description: "RegistrationAccessTokens not implemented by store backend",
 		}
 	}
-	if _, ok := c.store.(store.ClientRegistry); !ok {
+	if _, ok := resolveClientRegistry(c.store); !ok {
 		return &Error{
 			Code:        codeConfiguration,
-			Description: "Store does not implement ClientRegistry; dynamic registration requires write access",
+			Description: "Store does not expose ClientRegistry; dynamic registration requires a client backend with write access",
 		}
 	}
 	for _, name := range c.dcr.OpenRegistrationDefaultScopes {
@@ -983,6 +1023,35 @@ func (c *config) validateRegistration() error {
 				Code:        codeConfiguration,
 				Description: "WithDynamicRegistration: OpenRegistrationDefaultScopes contains unknown scope " + name,
 			}
+		}
+	}
+	// Every check has passed, so the configuration is complete: publish
+	// the flag the router and the discovery builder read.
+	c.features = append(c.features, feature.DynamicRegistration)
+	return nil
+}
+
+// validateFeatureActivation rejects the feature flags that carry no
+// behaviour of their own. [feature.RAR] and [feature.GrantManagement]
+// are activated by the option that supplies their configuration —
+// [WithAuthorizationDetailTypes] registers the type set RAR validates
+// against, [WithGrantManagement] supplies the action set and mounts the
+// endpoint — so a flag arriving without that option describes a
+// deployment the OP cannot serve. Accepting it silently would advertise
+// nothing, mount nothing, and give the embedder no way to discover why.
+// [feature.DynamicRegistration] is rejected the same way, in
+// [config.validateRegistration], where the store checks it shares live.
+func (c *config) validateFeatureActivation() error {
+	if featureEnabled(c.features, feature.RAR) && len(c.authorizationDetailTypes) == 0 {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "feature.RAR enabled without WithAuthorizationDetailTypes",
+		}
+	}
+	if featureEnabled(c.features, feature.GrantManagement) && !c.grantManagementEnabled {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "feature.GrantManagement enabled without WithGrantManagement",
 		}
 	}
 	return nil
@@ -1239,9 +1308,9 @@ const cookieKeyLen = 32
 // validateCookieKeysRequired enforces the rule that any grant which depends
 // on the authorize endpoint setting encrypted cookies (interaction binding,
 // session resumption) MUST be paired with at least one cookie key. The
-// authorization_code grant is the only one in v0.x that imposes the
-// requirement; the rule is centralised here so future grants can opt in by
-// adding themselves to the switch.
+// authorization_code grant is the only one that imposes the
+// requirement; the rule is centralised here so another grant can opt in by
+// adding itself to the switch.
 func validateCookieKeysRequired(grants []grant.Type, keys [][]byte) error {
 	if len(keys) > 0 {
 		return nil

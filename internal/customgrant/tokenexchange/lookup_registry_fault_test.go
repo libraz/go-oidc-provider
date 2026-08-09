@@ -1,4 +1,4 @@
-// Test file pins the M10 invariant: a non-NotFound fault from the
+// Test file pins this invariant: a non-NotFound fault from the
 // access-token registry during subject_token / actor_token lookup
 // MUST surface on a dedicated audit event so SOC tooling can
 // distinguish a transient outage (registry timeout, secondary
@@ -100,7 +100,7 @@ func (s revokedGrantStore) GC(context.Context, time.Time) (int, error) {
 }
 
 // recordingEmitter captures every emitted audit.Event in order so the
-// test can scan for the M10 audit name. The struct is intentionally not
+// test can scan for the registry-fault audit name. The struct is intentionally not
 // goroutine-safe — a single test goroutine drives one Handle call.
 type recordingEmitter struct {
 	events []audit.Event
@@ -110,7 +110,7 @@ func (e *recordingEmitter) Emit(_ context.Context, ev audit.Event) {
 	e.events = append(e.events, ev)
 }
 
-// TestHandle_RegistryFault_EmitsRegistryErrorAudit pins the M10
+// TestHandle_RegistryFault_EmitsRegistryErrorAudit pins the same
 // invariant end-to-end through the handler:
 //
 //   - the wire response is invalid_grant (the existing wire shape
@@ -205,7 +205,7 @@ func TestHandle_RegistryFault_EmitsRegistryErrorAudit(t *testing.T) {
 	for i := range emitter.events {
 		ev := emitter.events[i]
 		if ev.Name == auditSubjectTokenInvalid {
-			t.Errorf("emitted %q for a registry fault; M10 splits this onto a dedicated event", ev.Name)
+			t.Errorf("emitted %q for a registry fault; the two are split onto separate events", ev.Name)
 		}
 		if ev.Name == auditSubjectTokenRegistryError {
 			ev := ev

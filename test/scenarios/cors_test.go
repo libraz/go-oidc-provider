@@ -159,7 +159,7 @@ func TestScenario_COR_012_TokenEarlyErrorCarriesCORSHeaders(t *testing.T) {
 // 403 on preflight and receives no Allow-Origin echo on the actual POST.
 // Vary: Origin is always stamped so a shared cache cannot conflate origins.
 //
-// Spec: RFC 7009 §2 / plan 002 §F.4.
+// Spec: RFC 7009 §2 / W3C CORS.
 func TestScenario_COR_013_RevocationCORSGatedByClientPolicy(t *testing.T) {
 	t.Parallel()
 	p := testkit.NewProvider(t,
@@ -178,7 +178,7 @@ func TestScenario_COR_013_RevocationCORSGatedByClientPolicy(t *testing.T) {
 // 403 on preflight and receives no Allow-Origin echo on the actual POST.
 // Vary: Origin is always stamped so a shared cache cannot conflate origins.
 //
-// Spec: RFC 7662 §2 / plan 002 §F.4.
+// Spec: RFC 7662 §2 / W3C CORS.
 func TestScenario_COR_014_IntrospectionCORSGatedByClientPolicy(t *testing.T) {
 	t.Parallel()
 	p := testkit.NewProvider(t,
@@ -316,7 +316,9 @@ func newStrictCORSProvider(tb testing.TB) *testkit.Provider {
 // TestScenario_COR_050_StrictPreflightAllowsAllowlistOrigin verifies
 // that a CORS preflight on a credentialed endpoint from an allowlisted
 // Origin returns 204 with the per-origin echo, credentials flag, and
-// Vary: Origin. Plan 002 §F.4.
+// Vary: Origin. The allowlist is the static origin set the embedder
+// registers through op.WithCORSOrigins; "*" is never emitted because it
+// is mutually exclusive with Access-Control-Allow-Credentials: true.
 func TestScenario_COR_050_StrictPreflightAllowsAllowlistOrigin(t *testing.T) {
 	t.Parallel()
 	p := newStrictCORSProvider(t)
@@ -346,7 +348,8 @@ func TestScenario_COR_050_StrictPreflightAllowsAllowlistOrigin(t *testing.T) {
 // TestScenario_COR_051_StrictPreflightDeniesUnknownOrigin verifies that
 // a CORS preflight on a credentialed endpoint from an Origin outside
 // the allowlist is rejected with 403 and no CORS headers (no leak about
-// what would have been accepted). Plan 002 §F.4.
+// what would have been accepted). Silently allowing an unregistered
+// origin is never an option: the request is refused at the preflight.
 func TestScenario_COR_051_StrictPreflightDeniesUnknownOrigin(t *testing.T) {
 	t.Parallel()
 	p := newStrictCORSProvider(t)
@@ -370,7 +373,8 @@ func TestScenario_COR_051_StrictPreflightDeniesUnknownOrigin(t *testing.T) {
 // TestScenario_COR_052_StrictActualEchoGatedByAllowlist verifies that
 // an actual (non-preflight) cross-origin request only carries
 // Access-Control-Allow-Origin when the Origin is allowlisted, while
-// Vary: Origin is set unconditionally. Plan 002 §F.4.
+// Vary: Origin is set unconditionally so a shared cache cannot serve
+// one origin's response to another.
 func TestScenario_COR_052_StrictActualEchoGatedByAllowlist(t *testing.T) {
 	t.Parallel()
 	p := newStrictCORSProvider(t)

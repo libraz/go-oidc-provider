@@ -23,8 +23,13 @@
 package authorizeendpoint
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 )
 
 const (
@@ -32,10 +37,33 @@ const (
 	testRedirectURI = "https://rp.example.com/callback"
 )
 
-// TestBuildSuccessRedirect_AlwaysCarriesIssuer pins that
-// buildSuccessRedirect emits "iss" on every successful legacy
-// (non-JARM) authorization response.
-func TestBuildSuccessRedirect_AlwaysCarriesIssuer(t *testing.T) {
+// emitPlainSuccessLocation drives [emitPlainResponse] with a
+// success-shaped payload and returns the parsed Location the redirect
+// carried. It fails the test when the response was not a redirect.
+func emitPlainSuccessLocation(tb testing.TB, req *authorize.Request, issuer string) *url.URL {
+	tb.Helper()
+	rec := httptest.NewRecorder()
+	emitPlainResponse(
+		rec,
+		httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/authorize", nil),
+		resolved{Deps{Issuer: issuer}},
+		req,
+		url.Values{"code": {"the-code"}},
+	)
+	if rec.Code != http.StatusFound {
+		tb.Fatalf("status=%d want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	u, err := url.Parse(loc)
+	if err != nil {
+		tb.Fatalf("Parse(%q): %v", loc, err)
+	}
+	return u
+}
+
+// TestEmitPlainResponse_SuccessAlwaysCarriesIssuer pins that the plain
+// (non-JARM) success response emits "iss".
+func TestEmitPlainResponse_SuccessAlwaysCarriesIssuer(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -51,27 +79,47 @@ func TestBuildSuccessRedirect_AlwaysCarriesIssuer(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildSuccessRedirect(tc.redirectURI, "the-code", tc.state, testIssuer)
-			u, err := url.Parse(got)
-			if err != nil {
-				t.Fatalf("Parse(%q): %v", got, err)
-			}
+			u := emitPlainSuccessLocation(t, &authorize.Request{
+				RedirectURI: tc.redirectURI,
+				State:       tc.state,
+			}, testIssuer)
 			if iss := u.Query().Get("iss"); iss != testIssuer {
-				t.Fatalf("iss=%q want %q (full=%s)", iss, testIssuer, got)
+				t.Fatalf("iss=%q want %q (full=%s)", iss, testIssuer, u)
 			}
 			if code := u.Query().Get("code"); code != "the-code" {
 				t.Errorf("code=%q want %q", code, "the-code")
+			}
+			if tc.state != "" && u.Query().Get("state") != tc.state {
+				t.Errorf("state=%q want %q", u.Query().Get("state"), tc.state)
 			}
 		})
 	}
 }
 
-// TestBuildRedirectError_AlwaysCarriesIssuer pins that buildRedirectError
-// emits "iss" on every legacy error response. The error path is the
-// most attractive target for the mix-up attack: an attacker can force
-// the OP into the error branch (e.g. by tampering with consent) and
-// rely on the absence of "iss" to misroute the response.
-func TestBuildRedirectError_AlwaysCarriesIssuer(t *testing.T) {
+// emitPlainErrorTarget drives [emitPlainResponse] with an error-shaped
+// payload and returns the raw Location the redirect carried.
+func emitPlainErrorTarget(tb testing.TB, req *authorize.Request, code, description, issuer string) string {
+	tb.Helper()
+	rec := httptest.NewRecorder()
+	emitPlainResponse(
+		rec,
+		httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/authorize", nil),
+		resolved{Deps{Issuer: issuer}},
+		req,
+		url.Values{"error": {code}, "error_description": {description}},
+	)
+	if rec.Code != http.StatusFound {
+		tb.Fatalf("status=%d want 302", rec.Code)
+	}
+	return rec.Header().Get("Location")
+}
+
+// TestEmitPlainResponse_ErrorAlwaysCarriesIssuer pins that the plain
+// error response emits "iss". The error path is the most attractive
+// target for the mix-up attack: an attacker can force the OP into the
+// error branch (e.g. by tampering with consent) and rely on the absence
+// of "iss" to misroute the response.
+func TestEmitPlainResponse_ErrorAlwaysCarriesIssuer(t *testing.T) {
 	t.Parallel()
 
 	codes := []string{
@@ -91,10 +139,10 @@ func TestBuildRedirectError_AlwaysCarriesIssuer(t *testing.T) {
 	for _, code := range codes {
 		t.Run(code, func(t *testing.T) {
 			t.Parallel()
-			got, err := buildRedirectError(testRedirectURI, code, "diag", "state-1", testIssuer)
-			if err != nil {
-				t.Fatalf("buildRedirectError: %v", err)
-			}
+			got := emitPlainErrorTarget(t, &authorize.Request{
+				RedirectURI: testRedirectURI,
+				State:       "state-1",
+			}, code, "diag", testIssuer)
 			u, err := url.Parse(got)
 			if err != nil {
 				t.Fatalf("Parse(%q): %v", got, err)
@@ -112,18 +160,18 @@ func TestBuildRedirectError_AlwaysCarriesIssuer(t *testing.T) {
 	}
 }
 
-// TestBuildRedirectError_EmptyIssuerOmitted exists as a negative pin:
-// when the OP has no configured issuer (only possible in unit-test
+// TestEmitPlainResponse_ErrorEmptyIssuerOmitted exists as a negative
+// pin: when the OP has no configured issuer (only possible in unit-test
 // composition; production op.New rejects an empty issuer at build
-// time), the builder must NOT stamp an empty "iss" — that would create
+// time), the emitter must NOT stamp an empty "iss" — that would create
 // a false sense of presence on the wire.
-func TestBuildRedirectError_EmptyIssuerOmitted(t *testing.T) {
+func TestEmitPlainResponse_ErrorEmptyIssuerOmitted(t *testing.T) {
 	t.Parallel()
 
-	got, err := buildRedirectError(testRedirectURI, errAccessDenied, "", "s", "")
-	if err != nil {
-		t.Fatalf("buildRedirectError: %v", err)
-	}
+	got := emitPlainErrorTarget(t, &authorize.Request{
+		RedirectURI: testRedirectURI,
+		State:       "s",
+	}, errAccessDenied, "", "")
 	u, err := url.Parse(got)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -133,17 +181,16 @@ func TestBuildRedirectError_EmptyIssuerOmitted(t *testing.T) {
 	}
 }
 
-// TestBuildSuccessRedirect_EmptyIssuerOmitted is the success-path twin
+// TestEmitPlainResponse_EmptyIssuerOmitted is the success-path twin
 // of [TestBuildRedirectError_EmptyIssuerOmitted].
-func TestBuildSuccessRedirect_EmptyIssuerOmitted(t *testing.T) {
+func TestEmitPlainResponse_EmptyIssuerOmitted(t *testing.T) {
 	t.Parallel()
 
-	got := buildSuccessRedirect(testRedirectURI, "c", "s", "")
-	u, err := url.Parse(got)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
+	u := emitPlainSuccessLocation(t, &authorize.Request{
+		RedirectURI: testRedirectURI,
+		State:       "s",
+	}, "")
 	if _, ok := u.Query()["iss"]; ok {
-		t.Fatalf("iss must be absent when issuer empty; full=%s", got)
+		t.Fatalf("iss must be absent when issuer empty; full=%s", u)
 	}
 }

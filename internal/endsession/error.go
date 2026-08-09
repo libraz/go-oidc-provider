@@ -60,6 +60,13 @@ const (
 	// the response is not an oracle for which limit fired.
 	descRequestTooLarge = "logout request exceeds permitted size"
 
+	// descInternalError is rendered when the OP cannot build the
+	// confirmation page — no entropy source for the CSRF token, or a
+	// cookie profile that fails to validate. Both are OP-side faults
+	// rather than request-shaped ones, so the message says nothing
+	// about the request.
+	descInternalError = "logout request could not be processed"
+
 	// descDuplicateParameter is rendered when a single-valued
 	// parameter (id_token_hint / client_id /
 	// post_logout_redirect_uri / state / logout_hint / ui_locales)

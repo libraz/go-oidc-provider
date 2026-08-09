@@ -69,8 +69,8 @@ type HandlerDeps struct {
 	// honour any OIDC Core 1.0 §5.5 "claims" request that was
 	// persisted on the originating grant. A nil store disables the
 	// per-claim projection — the handler falls back to scope-derived
-	// release, which is the v0.x default for embedders that have not
-	// yet wired the grant store into the userinfo handler.
+	// release, so an embedder that leaves the grant store unwired still
+	// receives every scope-implied claim.
 	Grants store.GrantStore
 
 	// Clock supplies the current wall-clock reading consumed by the
@@ -206,7 +206,7 @@ func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps, ver
 }
 
 func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, verifier *tokens.AccessTokenVerifier, raw string) {
-	claims, _, err := verifier.Verify(raw)
+	claims, _, err := verifier.Verify(r.Context(), raw)
 	if err != nil {
 		respondInvalidToken(w, err)
 		return
@@ -624,11 +624,13 @@ func buildDPoPChallenge(code, description string) string {
 // [HandlerDeps.RevocationStrategy]:
 //
 //   - [store.RevocationStrategyGrantTombstone] (default): consult
-//     [store.GrantRevocationStore.IsRevoked] keyed by the AT's "gid"
-//     private claim. Legacy ATs without "gid" fall back to the
-//     [store.AccessTokenRegistry] when one is configured (the
-//     §Migration); embedders that wired neither substore opt out
-//     entirely.
+//     [store.GrantRevocationStore.IsRevoked], which evaluates the jti
+//     denylist and the grant tombstone keyed by the AT's "gid" private
+//     claim independently — an AT without "gid" (client_credentials
+//     mints one) is still closed by its denylist row. Only when that
+//     substore reports a grantless AT live does the lookup fall back to
+//     the [store.AccessTokenRegistry]; embedders that wired neither
+//     substore opt out entirely.
 //   - [store.RevocationStrategyJTIRegistry]: consult the registry by
 //     JTI; the marked-revoked row collapses onto invalid_token. This
 //     is the per-JTI behaviour preserved for embedders pinning the
@@ -713,6 +715,12 @@ func assembleClaims(
 		return nil, nil, false
 	}
 	user, err := deps.UserStore.FindBySubject(ctx, rawSubject)
+	if err == nil && user == nil {
+		// A nil record alongside a nil error violates the store contract.
+		// A subject the backend cannot produce is answered as an unknown
+		// one rather than served a claim set assembled from nothing.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			respondGenericInvalidToken(w)
@@ -825,8 +833,8 @@ func projectResponseSubject(
 //
 // The resolution path uses [store.GrantStore.FindBySubjectClient] which
 // returns the active grant for the (subject, client) pair. Multiple
-// historical grants are not exercised by the v0.x library; the path
-// will continue to read the latest active grant, which matches the
+// historical grants for one (subject, client) pair are not exercised
+// by the library; reading the latest active grant matches the
 // expectation that consent only ever broadens, not narrows, between
 // issuances of the same chain.
 func lookupClaimsRequest(

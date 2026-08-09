@@ -1,6 +1,7 @@
 package tokens_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -117,7 +118,7 @@ func TestVerify_CnfRoundTrip(t *testing.T) {
 		Issuer: claims.Issuer,
 		Clock:  fixedClock{now: now},
 	}
-	parsed, _, err := v.Verify(jws)
+	parsed, _, err := v.Verify(context.Background(), jws)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}

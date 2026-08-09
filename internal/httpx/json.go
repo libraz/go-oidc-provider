@@ -17,8 +17,8 @@ import (
 const JSONContentType = "application/json; charset=utf-8"
 
 // noStoreCacheControl is the value applied to every response written via
-// [WriteJSON].02-product-design.md §A.12.9, every dynamic
-// authentication-flow response must instruct caches not to retain the body.
+// [WriteJSON]. Every dynamic authentication-flow response must instruct
+// caches not to retain the body.
 // Discovery / JWKS use a different (cacheable) profile applied by their own
 // handlers.
 const noStoreCacheControl = "no-store"

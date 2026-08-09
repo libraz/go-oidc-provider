@@ -2,8 +2,8 @@ package op
 
 import "github.com/libraz/go-oidc-provider/internal/authn"
 
-// AttemptOutcome / LoginAttempt / LoginAttemptObserver are aliases
-// for the canonical types in [internal/authn]. The op package
+// AttemptOutcome / LoginAttempt / LoginAttemptObserver are aliases for
+// the canonical types the login orchestrator declares. The op package
 // re-exports them so embedders write `op.LoginAttemptObserver` etc.
 
 // AttemptOutcome is an alias for [authn.AttemptOutcome].

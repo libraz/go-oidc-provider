@@ -142,6 +142,7 @@ func TestWithDeviceCodeExpiry_IndependentOfShortAccessTokenTTL(t *testing.T) {
 		op.WithStore(s),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithDeviceCodeGrant(),
 		op.WithAccessTokenTTL(shortAccessTokenTTL),
 		op.WithDeviceCodeExpiry(deviceCodeExpiry),

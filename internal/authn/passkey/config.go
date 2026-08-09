@@ -94,14 +94,27 @@ type Config struct {
 	// entry so a typo cannot silently widen the policy.
 	AAGUIDAllowlist []string
 
+	// UserVerification is the WebAuthn user-verification requirement
+	// bound into every ceremony. Empty falls back to
+	// [protocol.VerificationPreferred], under which an authenticator MAY
+	// return a presence-only assertion — proof of possession without the
+	// PIN / biometric gesture, which is single-factor and therefore
+	// AAL1-equivalent. Deployments that need every assertion to count as
+	// two factors set [protocol.VerificationRequired]: the verifier then
+	// refuses an assertion whose UV flag is clear instead of accepting a
+	// weaker ceremony.
+	//
+	// v1.0 supports "required", "preferred" and "discouraged"; any other
+	// value returns [ErrInvalidConfig] at construction time.
+	UserVerification protocol.UserVerificationRequirement
+
 	// AAGUIDReCheckOnAssertion enables the defence: when true the
 	// verifier re-checks the matched credential's AAGUID against the
 	// configured [AAGUIDAllowlist] at assertion time so an embedder that
 	// narrows the allowlist after registration can revoke credentials
 	// whose authenticator model has fallen out of policy. The default
-	// (false) preserves the v0.x behaviour where AAGUID was enforced
-	// only at registration; embedders that want defence-in-depth flip
-	// the bit on. The allowlist itself is shared with the registration
+	// (false) enforces AAGUID at registration only; embedders that want
+	// defence-in-depth flip the bit on. The allowlist itself is shared with the registration
 	// check; an empty allowlist short-circuits the assertion-time check
 	// (every AAGUID is accepted, mirroring the registration behaviour).
 	AAGUIDReCheckOnAssertion bool
@@ -130,6 +143,12 @@ type Verifier struct {
 
 	// wa is the underlying webauthn instance, built once in [New].
 	wa *webauthn.WebAuthn
+
+	// userVerification is the normalised [Config.UserVerification]
+	// requirement bound into every ceremony. It is read back through
+	// [Verifier.UserVerificationRequired] so the authenticator adapter
+	// can describe the assurance a successful assertion guarantees.
+	userVerification protocol.UserVerificationRequirement
 
 	// aaguidAllowlist is the canonicalised AAGUID set the verifier
 	// enforces at FinishRegistration. The map keys are 16-byte
@@ -171,6 +190,10 @@ func New(cfg Config) (*Verifier, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
+	uv, err := resolveUserVerification(cfg.UserVerification)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
 	allow, err := normaliseAAGUIDAllowlist(cfg.AAGUIDAllowlist)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
@@ -200,7 +223,7 @@ func New(cfg Config) (*Verifier, error) {
 		AttestationPreference: pref,
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
 			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
-			UserVerification: protocol.VerificationPreferred,
+			UserVerification: uv,
 		},
 		// EncodeUserIDAsString is left at the library default
 		// (false). The user handle round-trips through the JSON as a
@@ -243,9 +266,37 @@ func New(cfg Config) (*Verifier, error) {
 	return &Verifier{
 		SessionTTL:               ttl,
 		wa:                       wa,
+		userVerification:         uv,
 		aaguidAllowlist:          allow,
 		aaguidReCheckOnAssertion: cfg.AAGUIDReCheckOnAssertion,
 	}, nil
+}
+
+// resolveUserVerification normalises [Config.UserVerification] into the
+// upstream library's enum form. Empty falls back to
+// [protocol.VerificationPreferred], which is what the package has always
+// requested; an unrecognised value is rejected at construction so a
+// typo cannot silently downgrade the ceremony to "preferred" in a
+// deployment that meant to demand user verification.
+func resolveUserVerification(p protocol.UserVerificationRequirement) (protocol.UserVerificationRequirement, error) {
+	switch p {
+	case "":
+		return protocol.VerificationPreferred, nil
+	case protocol.VerificationRequired, protocol.VerificationPreferred, protocol.VerificationDiscouraged:
+		return p, nil
+	default:
+		return "", fmt.Errorf(
+			"UserVerification %q is not supported (use %q, %q or %q)",
+			p, protocol.VerificationRequired, protocol.VerificationPreferred, protocol.VerificationDiscouraged)
+	}
+}
+
+// UserVerificationRequired reports whether every ceremony this verifier
+// drives must carry the WebAuthn UV flag. The assertion path enforces
+// it, so a successful login under this setting is always
+// user-verified — which is what lets the factor count as two.
+func (v *Verifier) UserVerificationRequired() bool {
+	return v != nil && v.userVerification == protocol.VerificationRequired
 }
 
 // clock returns the verifier's [timex.Clock], defaulting to

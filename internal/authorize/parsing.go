@@ -9,13 +9,19 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 )
 
-// parRequestURIPrefix is the URN scheme + namespace RFC 9126 §2.2
+// PARRequestURIPrefix is the URN scheme + namespace RFC 9126 §2.2
 // reserves for pushed-authorization-request identifiers. The library
 // admits exactly this shape directly on the authorization endpoint.
 // Generic JAR-by-URI is supported through the preregistration and
 // network-security-gated request-object pipeline; unregistered
 // request_uri values still fail this structural parser gate.
-const parRequestURIPrefix = "urn:ietf:params:oauth:request_uri:"
+//
+// It is exported so the PAR endpoint mints identifiers from the same
+// constant the authorization endpoint classifies them with; a second
+// copy of the literal is what let the two drift apart. Always pair it
+// with [HasPARRequestURIPrefix] for comparisons — a bare
+// [strings.HasPrefix] applies a case rule RFC 8141 does not.
+const PARRequestURIPrefix = "urn:ietf:params:oauth:request_uri:"
 
 // ParseRequest extracts the canonical [Request] from r. For GET it reads
 // r.URL.Query(); for POST it parses the form body via [http.Request.ParseForm]
@@ -63,7 +69,7 @@ func ParseValues(v url.Values) (*Request, error) {
 		// case-insensitive (RFC 8141 §1.2 makes the URN scheme case-
 		// insensitive) on the prefix portion only; the body, which the PAR
 		// store keys on, stays case-sensitive at the persistence layer.
-		if !hasPARRequestURIPrefix(rawURI) {
+		if !HasPARRequestURIPrefix(rawURI) {
 			return nil, ErrInvalidRequestURI
 		}
 	}
@@ -130,7 +136,7 @@ func parseSingleValues(v url.Values) (map[string]string, error) {
 		val, err := singleValue(v, name)
 		if err != nil {
 			if name == "resource" && errors.Is(err, ErrDuplicateParameter) {
-				return nil, ErrResourceInvalid
+				return nil, ErrResourceDuplicated
 			}
 			return nil, err
 		}
@@ -226,24 +232,37 @@ func multiValue(v url.Values, key string) (string, error) {
 	return singleEntry(v, key)
 }
 
-// hasPARRequestURIPrefix reports whether raw begins with
-// [parRequestURIPrefix] under a case-insensitive comparison on the
+// HasPARRequestURIPrefix reports whether raw begins with
+// [PARRequestURIPrefix] under a case-insensitive comparison on the
 // prefix bytes only. The body of the URN — what comes after the
 // prefix — is not folded so the byte-equality lookup that
 // [op/store.PushedAuthRequestStore] performs at consumption time
 // keeps every concrete identifier distinct (a 128-bit base64url
 // suffix is case-sensitive and collapsing it here would create
 // collisions on the persistence side).
-func hasPARRequestURIPrefix(raw string) bool {
-	if len(raw) < len(parRequestURIPrefix) {
+//
+// The predicate is the single classification rule for "is this
+// request_uri a PAR reference or a JAR reference?", and every site
+// that asks the question MUST route through it. RFC 8141 §3 makes at
+// least the "urn" scheme and the "ietf" namespace identifier
+// case-insensitive, so a byte-exact comparison misclassifies a
+// spec-legal "URN:ietf:params:oauth:request_uri:...". Folding the
+// whole prefix rather than only the two components RFC 8141 names is
+// deliberate: the job here is classification, not identity, and the
+// conservative direction is to hand a near-miss URN to the PAR branch
+// — where it is answered with invalid_request_uri because no record
+// carries that key — instead of to the JAR branch, which would report
+// a failure about a mechanism the client never invoked.
+func HasPARRequestURIPrefix(raw string) bool {
+	if len(raw) < len(PARRequestURIPrefix) {
 		return false
 	}
-	for i := range len(parRequestURIPrefix) {
+	for i := range len(PARRequestURIPrefix) {
 		c := raw[i]
 		if c >= 'A' && c <= 'Z' {
 			c += 'a' - 'A'
 		}
-		if c != parRequestURIPrefix[i] {
+		if c != PARRequestURIPrefix[i] {
 			return false
 		}
 	}

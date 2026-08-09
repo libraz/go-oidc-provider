@@ -391,3 +391,68 @@ func TestHandler_RevokeSecurityCascadeFailure_Returns500(t *testing.T) {
 		})
 	}
 }
+
+// TestHandler_PublicClient_Refused pins that a client registered with
+// token_endpoint_auth_method=none cannot reach the endpoint even where
+// no profile narrows the accepted authentication methods.
+//
+// A public client presents a client_id and nothing else, so admitting it
+// would leave the grant_id in the request path as the only thing
+// standing between a reader of a proxy log and another user's consent
+// record — readable through GET, destroyable through DELETE.
+func TestHandler_PublicClient_Refused(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.QueryEnabled = true
+		d.RevokeEnabled = true
+		// No profile is active, so every method a registered client
+		// carries is admitted — including "none".
+		d.AllowedClientAuthMethods = nil
+	})
+
+	publicClient := &store.Client{
+		ID:                      "client-public",
+		PublicClient:            true,
+		TokenEndpointAuthMethod: "none",
+		Scopes:                  []string{"openid"},
+	}
+	if err := f.store.RegisterClient(ctx, publicClient); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+	if err := f.store.Grants().Save(ctx, &store.Grant{
+		ID:        "grant-public",
+		Subject:   "user-gm",
+		ClientID:  publicClient.ID,
+		Scope:     []string{"openid"},
+		CreatedAt: f.clock.now,
+		UpdatedAt: f.clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+
+	target := f.endpoint + "/grant-public?client_id=" + publicClient.ID
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		req, err := http.NewRequestWithContext(ctx, method, target, http.NoBody)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		resp, err := f.server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		if resp.StatusCode != http.StatusUnauthorized {
+			resp.Body.Close()
+			t.Fatalf("%s status=%d want 401", method, resp.StatusCode)
+		}
+		if body := decodeError(t, resp); body["error"] != "invalid_client" {
+			t.Errorf("%s error=%v want invalid_client", method, body["error"])
+		}
+		resp.Body.Close()
+	}
+
+	if _, err := f.store.Grants().Find(ctx, "grant-public"); err != nil {
+		t.Errorf("grant was touched by a refused caller: %v", err)
+	}
+}

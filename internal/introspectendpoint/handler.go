@@ -82,6 +82,20 @@ type Deps struct {
 	// [internal/clientauth].
 	Clients store.ClientStore
 
+	// IntrospectionDelegates maps a client_id to the set of
+	// canonicalised resource identifiers that client may introspect
+	// access tokens for, even when the token was issued to somebody
+	// else. It is derived from the resource-server metadata the
+	// embedder registered.
+	//
+	// A nil or empty map keeps the endpoint same-client-only, which is
+	// the default posture. The map is read-only after construction.
+	// Refresh tokens are never resolved through it: a refresh token is
+	// the client's own credential, not something a resource server is
+	// ever presented with, so relaxing its owner check would hand a
+	// resource server a credential it has no use for.
+	IntrospectionDelegates map[string]map[string]struct{}
+
 	// RefreshTokens is the substore for refresh tokens. A nil value
 	// disables the opaque path: opaque tokens always project onto
 	// inactive. JWT introspection still functions because it does not

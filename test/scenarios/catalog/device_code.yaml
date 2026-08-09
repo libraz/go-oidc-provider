@@ -701,10 +701,12 @@ rows:
     spec: RFC 8628 §3.5 (slow_down)
     behaviour: |
       A /token poll that arrives sooner than the advertised interval
-      after the previous poll MUST return 400 slow_down. The OP
-      doubles the effective interval on each slow_down hit
-      (internal/devicecode.DecidePoll's ladder), persists the doubled
-      value through DeviceCodeStore.RecordPoll so the next poll
+      after the previous poll MUST return 400 slow_down. The OP raises
+      the effective interval by five seconds on each slow_down hit
+      (internal/devicecode.DecidePoll's ladder), matching the increment
+      §3.5 instructs the client to add to its own timer so the OP's bar
+      and a compliant client's cadence move together. It persists the
+      raised value through DeviceCodeStore.RecordPoll so the next poll
       observes the elevated bar (RFC 8628 §3.5 "If the interval is
       more than 5 seconds, the client MUST honor the new value"),
       and emits a device_code.token.slow_down audit event carrying

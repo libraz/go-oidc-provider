@@ -11,6 +11,8 @@ import (
 	"github.com/go-webauthn/webauthn/metadata"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // RegistrationChallenge wraps the JSON-shaped CredentialCreationOptions
@@ -47,12 +49,16 @@ var (
 	ErrAttestationInvalid = errors.New("passkey: attestation invalid")
 
 	// ErrCredentialAlreadyExists is returned when the credential ID
-	// emitted by FinishRegistration matches one already in the
-	// caller-supplied "existing" list. The duplicate check happens
-	// inside the verifier rather than at the storage layer because
-	// the library has no concept of "store" at this point in the
-	// flow; doing it here lets callers branch on a structured error
-	// instead of a backend-specific unique-constraint violation.
+	// emitted by FinishRegistration is already registered — either in
+	// the caller-supplied "existing" list (the subject's own
+	// credentials) or, per the store lookup FinishRegistration
+	// performs, to a different subject. Doing the check in the
+	// verifier lets callers branch on a structured error instead of a
+	// backend-specific unique-constraint violation.
+	//
+	// One sentinel covers both cases on purpose: an attacker probing
+	// credential IDs must not be able to tell "already yours" from
+	// "already someone else's".
 	ErrCredentialAlreadyExists = errors.New("passkey: credential already registered")
 
 	// ErrInvalidResponse is returned when the SPA-supplied response
@@ -113,7 +119,15 @@ func (v *Verifier) BeginRegistration(_ context.Context, subject, name, displayNa
 // [Credential] the caller MUST persist via the embedder's
 // [github.com/libraz/go-oidc-provider/op/store.PasskeyStore].
 //
+// owners is the credential store the ceremony checks the freshly minted
+// credential ID against. It is a required argument rather than an
+// optional one because the check it enables is what stops a registration
+// from taking a credential ID away from the subject that holds it; a
+// caller that could pass it by omission would be able to skip the check
+// by forgetting about it.
+//
 // The function returns:
+//   - [ErrStoreRequired] when owners is nil;
 //   - [ErrChallengeExpired] when the session has expired against the
 //     verifier's clock;
 //   - [ErrInvalidResponse] when the response payload cannot be parsed;
@@ -121,11 +135,15 @@ func (v *Verifier) BeginRegistration(_ context.Context, subject, name, displayNa
 //     WebAuthn L3 §7.1 check;
 //   - [ErrCredentialAlreadyExists] when the credential ID is already
 //     present in the caller-supplied "existing" slice (intended to be
-//     populated from [PasskeyStore.ListBySubject]).
+//     populated from [PasskeyStore.ListBySubject]) or is held in owners
+//     by a different subject.
 //
 // On any error the returned [*Credential] is nil. Backends MUST NOT
 // persist anything in that case.
-func (v *Verifier) FinishRegistration(_ context.Context, session *Session, subject, name, displayName string, existing []Credential, response []byte) (*Credential, error) {
+func (v *Verifier) FinishRegistration(ctx context.Context, owners store.PasskeyStore, session *Session, subject, name, displayName string, existing []Credential, response []byte) (*Credential, error) {
+	if owners == nil {
+		return nil, ErrStoreRequired
+	}
 	if session == nil {
 		return nil, fmt.Errorf("%w: nil session", ErrInvalidResponse)
 	}
@@ -159,6 +177,13 @@ func (v *Verifier) FinishRegistration(_ context.Context, session *Session, subje
 		}
 	}
 
+	// The list above only covers this subject. A credential ID held by
+	// another subject has to be refused too, and only the store can
+	// answer that.
+	if err := ensureCredentialUnclaimed(ctx, owners, subject, wc.ID); err != nil {
+		return nil, err
+	}
+
 	// Enforce the AAGUID allowlist. An empty allowlist on the Verifier
 	// short-circuits to "any AAGUID allowed" so embedders that did not
 	// configure [Config.AAGUIDAllowlist] are unaffected.
@@ -185,6 +210,38 @@ func (v *Verifier) FinishRegistration(_ context.Context, session *Session, subje
 	out := fromWebauthnCredential(*wc)
 	out.CreatedAt = v.clock().Now().UTC()
 	return &out, nil
+}
+
+// ensureCredentialUnclaimed refuses a registration whose credential ID
+// is already held by a different subject.
+//
+// WebAuthn Level 3 §7.1 step 27 requires the Relying Party to detect a
+// credential ID that is already registered to another user and either
+// fail the ceremony or delete the older registration. Failing is the
+// only safe half of that choice here: [store.PasskeyStore.Put] is an
+// upsert keyed on the credential ID, so admitting the registration would
+// move the existing record onto the registering subject and unlink the
+// authenticator of whoever held it — an account takeover no
+// account-management screen can undo.
+//
+// A store fault is reported as a fault rather than swallowed: an
+// unreadable owner record means the ceremony cannot establish that the
+// credential is free, and admitting it on that basis would make a
+// backend outage into the bypass.
+func ensureCredentialUnclaimed(ctx context.Context, owners store.PasskeyStore, subject string, credentialID []byte) error {
+	rec, err := owners.Get(ctx, credentialID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("passkey: look up credential owner: %w", err)
+	case rec == nil:
+		return nil
+	case rec.Subject != subject:
+		return ErrCredentialAlreadyExists
+	default:
+		return nil
+	}
 }
 
 // requireVouchedAttestation reports whether an attestation of the given

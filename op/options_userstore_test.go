@@ -99,6 +99,7 @@ func TestWithUserStore_ServesClaimsFromTheSuppliedStore(t *testing.T) {
 		op.WithUserStore(members),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
@@ -127,6 +128,7 @@ func TestWithUserStore_OmittedKeepsTheBackendUsers(t *testing.T) {
 		op.WithStore(backend),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)

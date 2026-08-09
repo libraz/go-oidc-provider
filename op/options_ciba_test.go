@@ -306,6 +306,28 @@ func TestWithCIBAMaxExpiresIn_RejectsNegative(t *testing.T) {
 	}
 }
 
+// TestWithCIBAExpiresIn_RejectsDefaultAboveMax pins the inversion guard.
+// The cap bounds what a client may ask for, so a larger default would give a
+// client that omits requested_expiry a longer-lived auth_req_id than one that
+// asks for the documented maximum.
+func TestWithCIBAExpiresIn_RejectsDefaultAboveMax(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithCIBA(
+			op.WithCIBAHintResolver(stubHintResolver{}),
+			op.WithCIBADefaultExpiresIn(10*time.Minute),
+			op.WithCIBAMaxExpiresIn(5*time.Minute),
+		),
+	)...)
+	if err == nil {
+		t.Fatal("expected error when the default expiry exceeds the cap")
+	}
+	if !strings.Contains(err.Error(), "WithCIBADefaultExpiresIn") {
+		t.Errorf("err = %v, want it to name the option", err)
+	}
+}
+
 // TestWithCIBAPollInterval_RejectsNegative mirrors the
 // expiry-options' negative-value rejection on the poll-interval
 // option.

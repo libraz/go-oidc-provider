@@ -1,6 +1,7 @@
 package tokens_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"encoding/base64"
 	"encoding/json"
@@ -69,7 +70,7 @@ func TestVerify_RoundTripSingleAudience(t *testing.T) {
 		Issuer: "https://op.example.com",
 		Clock:  fakeClock{now: now.Add(time.Minute)},
 	}
-	got, kid, err := v.Verify(jws)
+	got, kid, err := v.Verify(context.Background(), jws)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestVerify_RoundTripMultipleAudiences(t *testing.T) {
 	jws := signed(t, entry, want)
 
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: want.Issuer, Clock: fakeClock{now: now}}
-	got, _, err := v.Verify(jws)
+	got, _, err := v.Verify(context.Background(), jws)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -172,7 +173,7 @@ func TestVerify_RoundTripAuthorizationDetails(t *testing.T) {
 	}
 
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
-	got, _, err := v.Verify(jws)
+	got, _, err := v.Verify(context.Background(), jws)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestVerify_ExpiredReturnsExpiredSentinel(t *testing.T) {
 		Issuer: "https://op.example.com",
 		Clock:  fakeClock{now: issuedAt.Add(time.Hour)},
 	}
-	_, _, err := v.Verify(jws)
+	_, _, err := v.Verify(context.Background(), jws)
 	if !errors.Is(err, tokens.ErrAccessTokenExpired) {
 		t.Fatalf("err=%v want ErrAccessTokenExpired", err)
 	}
@@ -241,7 +242,7 @@ func TestVerify_FutureIATReturnsMalformed(t *testing.T) {
 		Issuer: "https://op.example.com",
 		Clock:  fakeClock{now: tokenNow.Add(-time.Hour)},
 	}
-	_, _, err := v.Verify(jws)
+	_, _, err := v.Verify(context.Background(), jws)
 	if !errors.Is(err, tokens.ErrAccessTokenMalformed) {
 		t.Fatalf("err=%v want ErrAccessTokenMalformed", err)
 	}
@@ -267,7 +268,7 @@ func TestVerify_IssuerMismatch(t *testing.T) {
 		Issuer: "https://op.example.com",
 		Clock:  fakeClock{now: now},
 	}
-	_, _, err := v.Verify(jws)
+	_, _, err := v.Verify(context.Background(), jws)
 	if !errors.Is(err, tokens.ErrAccessTokenIssuerMismatch) {
 		t.Fatalf("err=%v want ErrAccessTokenIssuerMismatch", err)
 	}
@@ -310,13 +311,16 @@ func TestVerify_RetiredKidReturnsSignatureError(t *testing.T) {
 
 	var observed atomic.Int64
 	var observedKid atomic.Value
+	var observedMarker atomic.Value
 	retired := keys.Entry{KeyID: entry.KeyID, Signer: entry.Signer, NotAfter: deadline}
 	set, err := keys.NewSet(
 		[]keys.Entry{retired},
 		keys.WithClock(func() time.Time { return now }),
-		keys.WithRetiredKidObserver(func(kid string) {
+		keys.WithRetiredKidObserver(func(ctx context.Context, kid string) {
 			observed.Add(1)
 			observedKid.Store(kid)
+			marker, _ := ctx.Value(correlationKeyType{}).(string)
+			observedMarker.Store(marker)
 		}),
 	)
 	if err != nil {
@@ -328,7 +332,8 @@ func TestVerify_RetiredKidReturnsSignatureError(t *testing.T) {
 		Issuer: "https://op.example.com",
 		Clock:  fakeClock{now: now},
 	}
-	_, _, gotErr := v.Verify(jws)
+	ctx := context.WithValue(context.Background(), correlationKeyType{}, "request-3")
+	_, _, gotErr := v.Verify(ctx, jws)
 	if !errors.Is(gotErr, tokens.ErrAccessTokenSignature) {
 		t.Fatalf("err=%v want ErrAccessTokenSignature on retired kid", gotErr)
 	}
@@ -339,7 +344,19 @@ func TestVerify_RetiredKidReturnsSignatureError(t *testing.T) {
 	if got, _ := observedKid.Load().(string); got != "kid-retired" {
 		t.Errorf("observer kid=%q want kid-retired", got)
 	}
+	// The audit event MUST be correlatable back to the request that
+	// presented the retired kid. Asserting on a marker carried in the
+	// context (rather than on non-nil) is what distinguishes the
+	// caller's context from a detached [context.Background].
+	if got, _ := observedMarker.Load().(string); got != "request-3" {
+		t.Errorf("observer context marker=%q want request-3 — Verify did not thread the caller's context", got)
+	}
 }
+
+// correlationKeyType is the key under which the retired-kid test stashes
+// its request marker. A dedicated unexported type keeps the lookup
+// collision-free, as [context.WithValue] requires.
+type correlationKeyType struct{}
 
 func TestVerify_UnknownKidReturnsSignatureError(t *testing.T) {
 	t.Parallel()
@@ -360,7 +377,7 @@ func TestVerify_UnknownKidReturnsSignatureError(t *testing.T) {
 	// Verify against a Set that only has key B.
 	setB, _ := mustKeySet(t, "kid-B")
 	v := &tokens.AccessTokenVerifier{Keys: setB, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
-	_, _, err := v.Verify(jws)
+	_, _, err := v.Verify(context.Background(), jws)
 	if !errors.Is(err, tokens.ErrAccessTokenSignature) {
 		t.Fatalf("err=%v want ErrAccessTokenSignature", err)
 	}
@@ -396,7 +413,7 @@ func TestVerify_TamperedSignatureReturnsSignatureError(t *testing.T) {
 	tampered := strings.Join(parts, ".")
 
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
-	_, _, gotErr := v.Verify(tampered)
+	_, _, gotErr := v.Verify(context.Background(), tampered)
 	if !errors.Is(gotErr, tokens.ErrAccessTokenSignature) {
 		t.Fatalf("err=%v want ErrAccessTokenSignature", gotErr)
 	}
@@ -407,7 +424,7 @@ func TestVerify_NotAJWTReturnsMalformed(t *testing.T) {
 
 	set, _ := mustKeySet(t, "kid-1")
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com"}
-	_, _, err := v.Verify("not.a.jwt")
+	_, _, err := v.Verify(context.Background(), "not.a.jwt")
 	if !errors.Is(err, tokens.ErrAccessTokenMalformed) {
 		t.Fatalf("err=%v want ErrAccessTokenMalformed", err)
 	}
@@ -441,7 +458,7 @@ func TestVerify_RejectsHS256AsMalformed(t *testing.T) {
 
 	set, _ := mustKeySet(t, "kid-1")
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
-	_, _, gotErr := v.Verify(raw)
+	_, _, gotErr := v.Verify(context.Background(), raw)
 	if !errors.Is(gotErr, tokens.ErrAccessTokenMalformed) {
 		t.Fatalf("HS256 err=%v want ErrAccessTokenMalformed", gotErr)
 	}
@@ -506,7 +523,7 @@ func TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret(t *testing.T) {
 	}
 
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
-	_, _, gotErr := v.Verify(raw)
+	_, _, gotErr := v.Verify(context.Background(), raw)
 	if !errors.Is(gotErr, tokens.ErrAccessTokenMalformed) {
 		t.Fatalf("alg-confusion err=%v want ErrAccessTokenMalformed", gotErr)
 	}
@@ -528,7 +545,7 @@ func TestVerify_RejectsAlgNoneAsMalformed(t *testing.T) {
 
 	set, _ := mustKeySet(t, "kid-1")
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com"}
-	_, _, gotErr := v.Verify(raw)
+	_, _, gotErr := v.Verify(context.Background(), raw)
 	if !errors.Is(gotErr, tokens.ErrAccessTokenMalformed) {
 		t.Fatalf("alg=none err=%v want ErrAccessTokenMalformed", gotErr)
 	}
@@ -560,13 +577,13 @@ func TestVerify_LeewayAcceptsSlightlyExpired(t *testing.T) {
 		Clock:  fakeClock{now: exp.Add(5 * time.Second)},
 		Leeway: 10 * time.Second,
 	}
-	if _, _, err := v.Verify(jws); err != nil {
+	if _, _, err := v.Verify(context.Background(), jws); err != nil {
 		t.Fatalf("Verify (within leeway): %v", err)
 	}
 
 	// 30s past expiry, 10s leeway -> rejected as expired.
 	v.Clock = fakeClock{now: exp.Add(30 * time.Second)}
-	_, _, err := v.Verify(jws)
+	_, _, err := v.Verify(context.Background(), jws)
 	if !errors.Is(err, tokens.ErrAccessTokenExpired) {
 		t.Fatalf("err=%v want ErrAccessTokenExpired", err)
 	}
@@ -596,7 +613,7 @@ func TestVerify_RoundTripGrantID(t *testing.T) {
 		Issuer: "https://op.example.com",
 		Clock:  fakeClock{now: now},
 	}
-	got, _, err := v.Verify(jws)
+	got, _, err := v.Verify(context.Background(), jws)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -634,7 +651,7 @@ func TestVerify_LegacyTokenWithoutGidDecodesEmpty(t *testing.T) {
 		Issuer: "https://op.example.com",
 		Clock:  fakeClock{now: now},
 	}
-	got, _, err := v.Verify(jws)
+	got, _, err := v.Verify(context.Background(), jws)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -678,7 +695,7 @@ func TestVerify_RejectsIDTokenTypAtAccessTokenSlot(t *testing.T) {
 	}
 
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
-	_, _, gotErr := v.Verify(raw)
+	_, _, gotErr := v.Verify(context.Background(), raw)
 	if !errors.Is(gotErr, tokens.ErrAccessTokenTypeMismatch) {
 		t.Fatalf("typ=JWT err=%v want ErrAccessTokenTypeMismatch", gotErr)
 	}
@@ -716,7 +733,7 @@ func TestVerify_RejectsMissingTypHeader(t *testing.T) {
 	}
 
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
-	_, _, gotErr := v.Verify(raw)
+	_, _, gotErr := v.Verify(context.Background(), raw)
 	if !errors.Is(gotErr, tokens.ErrAccessTokenTypeMismatch) {
 		t.Fatalf("missing typ err=%v want ErrAccessTokenTypeMismatch", gotErr)
 	}
@@ -769,7 +786,7 @@ func TestVerify_RejectsMissingRequiredClaim(t *testing.T) {
 				Issuer: "https://op.example.com",
 				Clock:  fakeClock{now: now},
 			}
-			_, _, err := v.Verify(jws)
+			_, _, err := v.Verify(context.Background(), jws)
 			if !errors.Is(err, tokens.ErrAccessTokenMalformed) {
 				t.Fatalf("%s err=%v want ErrAccessTokenMalformed", tc.name, err)
 			}
@@ -805,7 +822,7 @@ func TestVerify_RequireJTIRejectsMissingJTI(t *testing.T) {
 		Issuer: "https://op.example.com",
 		Clock:  fakeClock{now: now},
 	}
-	if _, _, err := v.Verify(jws); err != nil {
+	if _, _, err := v.Verify(context.Background(), jws); err != nil {
 		t.Fatalf("RequireJTI=false err=%v want nil", err)
 	}
 
@@ -816,7 +833,7 @@ func TestVerify_RequireJTIRejectsMissingJTI(t *testing.T) {
 		Clock:      fakeClock{now: now},
 		RequireJTI: true,
 	}
-	if _, _, err := strict.Verify(jws); !errors.Is(err, tokens.ErrAccessTokenMalformed) {
+	if _, _, err := strict.Verify(context.Background(), jws); !errors.Is(err, tokens.ErrAccessTokenMalformed) {
 		t.Fatalf("RequireJTI=true err=%v want ErrAccessTokenMalformed", err)
 	}
 }
@@ -845,7 +862,7 @@ func TestVerify_NilClockUsesSystemClock(t *testing.T) {
 	})
 
 	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com"}
-	if _, _, err := v.Verify(jws); err != nil {
+	if _, _, err := v.Verify(context.Background(), jws); err != nil {
 		t.Fatalf("Verify with nil Clock: %v", err)
 	}
 }

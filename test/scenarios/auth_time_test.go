@@ -91,13 +91,13 @@ func TestScenario_AT_007_DeviceCodeIDTokenCarriesAuthTime(t *testing.T) {
 }
 
 // TestScenario_AT_008_CIBAIDTokenCarriesAuthTime is the CIBA
-// counterpart of AT-007. CIBA's helper does not expose a public
-// approve hook the test can call directly today, so this row is a
-// catalog-binding sentinel; the actual coverage lives in
-// internal/tokenendpoint TestHandleCIBA_IDTokenStampsAuthTime.
+// counterpart of AT-007, and marks where the scenario-level test would
+// go. CIBA's helper exposes no public approve hook the suite can call,
+// so the row names its own coverage in `covered_by` and the gate
+// resolves that name; a copy of the name here would only rot.
 func TestScenario_AT_008_CIBAIDTokenCarriesAuthTime(t *testing.T) {
 	t.Parallel()
-	t.Skip("covered by internal/tokenendpoint TestHandleCIBA_IDTokenStampsAuthTime")
+	t.Skip("covered outside the suite; see the auth_time catalog row's covered_by")
 }
 
 type atFlowConfig struct {

@@ -73,6 +73,13 @@ type Config struct {
 	// not parse as a JWS.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
 
+	// Grants is the persisted-consent substore. It is the scope source
+	// for an id_token subject_token, which carries no scope claim of
+	// its own, and the revocation gate on that path. A nil value leaves
+	// id_token subject tokens unexchangeable; access-token and JWT
+	// subject tokens are unaffected.
+	Grants store.GrantStore
+
 	// Audit is the structured audit-event sink.
 	Audit audit.Emitter
 
@@ -96,6 +103,7 @@ type Handler struct {
 	grantRevocations   store.GrantRevocationStore
 	revocationStrategy store.AccessTokenRevocationStrategy
 	opaqueAccessTokens store.OpaqueAccessTokenStore
+	grants             store.GrantStore
 	audit              audit.Emitter
 	clock              interface{ Now() time.Time }
 	maxAccessTTL       time.Duration
@@ -122,6 +130,7 @@ func New(cfg Config) (*Handler, error) {
 		grantRevocations:   cfg.GrantRevocations,
 		revocationStrategy: cfg.RevocationStrategy,
 		opaqueAccessTokens: cfg.OpaqueAccessTokens,
+		grants:             cfg.Grants,
 		audit:              cfg.Audit,
 		clock:              cfg.Clock,
 		maxAccessTTL:       cfg.MaxAccessTTL,

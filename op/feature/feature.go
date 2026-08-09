@@ -33,8 +33,22 @@ const (
 	// and refresh tokens are bound to a client-held key via DPoP proofs.
 	DPoP
 
-	// MTLS enables RFC 8705 OAuth 2.0 Mutual-TLS Client Authentication
-	// and certificate-bound access tokens.
+	// MTLS enables RFC 8705 §3 certificate-bound access tokens: the
+	// OP reads the client certificate presented on the request (TLS
+	// handshake, or a trusted reverse-proxy header when one is
+	// configured), stamps its "x5t#S256" thumbprint into the issued
+	// token's "cnf" claim, and re-verifies that binding at /token and
+	// /userinfo.
+	//
+	// The flag does NOT add a token_endpoint_auth_method: RFC 8705 §2
+	// mutual-TLS client authentication ("tls_client_auth",
+	// "self_signed_tls_client_auth") is not implemented. Neither
+	// discovery advertises those values nor do static seeding and
+	// dynamic client registration admit them. The two halves of
+	// RFC 8705 are independent — sender-constraining a token says
+	// nothing about how the client proved its identity — so a
+	// deployment pairs this flag with private_key_jwt (or any other
+	// supported method) for client authentication.
 	MTLS
 
 	// Introspect enables RFC 7662 Token Introspection. The /introspect

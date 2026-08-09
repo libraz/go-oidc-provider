@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // dpopOutcome is the result of [verifyTokenDPoP]: a (possibly empty)
@@ -17,10 +18,9 @@ type dpopOutcome struct {
 	// when no proof was presented.
 	JKT string
 
-	// JTI is the proof's "jti" claim. Already marked consumed by the
-	// time the caller observes the value; exposed so downstream
-	// consumers (e.g. custom-grant dispatch) can include the value in
-	// audit emission without re-parsing the proof.
+	// JTI is the proof's "jti" claim, exposed so downstream consumers
+	// (e.g. custom-grant dispatch) can include the value in audit
+	// emission without re-parsing the proof.
 	JTI string
 
 	// Presented reports whether the request carried a DPoP header at
@@ -28,14 +28,68 @@ type dpopOutcome struct {
 	// jkt requires a proof to be presented even if the verifier is
 	// configured to issue bearer tokens by default.
 	Presented bool
+
+	// checked is the accepted-but-uncommitted proof whose replay
+	// marker [commitTokenDPoP] writes. Nil when no proof was
+	// presented or when DPoP is not enabled.
+	checked *dpop.Checked
 }
 
-// verifyTokenDPoP runs the DPoP verifier over the inbound request when
-// the feature is wired and a proof header is present. The function
-// emits an HTTP error and returns (nil, false) on every failure path so
-// the caller only checks the bool. When DPoP is not enabled or no
-// proof is presented the function returns (&dpopOutcome{}, true) — the
-// caller proceeds with bearer-token issuance.
+// authenticateWithDPoP runs DPoP proof verification and client
+// authentication in the one order that satisfies both of the
+// constraints the two mechanisms impose, and is the entry point every
+// grant handler uses.
+//
+// Proof verification runs FIRST because RFC 9449 §8 contemplates a
+// verbatim retry of the client-side request body with only the proof
+// refreshed: RP libraries rebuild the DPoP header and resend the
+// original client_assertion, so a `use_dpop_nonce` challenge raised
+// after the assertion's jti had been consumed would surface on the
+// retry as invalid_client. The proof is bound to the request, never to
+// the client's credential, so nothing in the verification depends on
+// the resolved identity.
+//
+// The proof's own replay marker is written LAST, after authentication
+// succeeds. That write is the only durable storage effect on this path,
+// and leaving it ahead of authentication would let an unauthenticated
+// request rate translate directly into storage cost. Deferring it
+// weakens nothing: a replayed proof on a request that cannot
+// authenticate is refused on the credential, and any request that
+// reaches the commit is refused with the same ErrProofReplayed it
+// would have seen under the single-phase verifier.
+//
+// The function writes the response on every failure path; the caller
+// only checks the bool.
+func authenticateWithDPoP(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	deps Deps,
+) (*dpopOutcome, *store.Client, bool) {
+	out, ok := verifyTokenDPoP(w, r, deps)
+	if !ok {
+		return nil, nil, false
+	}
+	client, _, ok := authenticate(ctx, w, r, deps)
+	if !ok {
+		return nil, nil, false
+	}
+	if !commitTokenDPoP(ctx, w, deps, out) {
+		return nil, nil, false
+	}
+	return out, client, true
+}
+
+// verifyTokenDPoP runs the stateless DPoP gates over the inbound
+// request when the feature is wired and a proof header is present. The
+// function emits an HTTP error and returns (nil, false) on every
+// failure path so the caller only checks the bool. When DPoP is not
+// enabled or no proof is presented the function returns
+// (&dpopOutcome{}, true) — the caller proceeds with bearer-token
+// issuance.
+//
+// The proof is not yet single-use when this returns; see
+// [commitTokenDPoP].
 func verifyTokenDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (*dpopOutcome, bool) {
 	if deps.DPoP == nil {
 		return &dpopOutcome{}, true
@@ -44,12 +98,29 @@ func verifyTokenDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (*dpopOu
 	if header == "" {
 		return &dpopOutcome{}, true
 	}
-	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
+	checked, err := deps.DPoP.CheckHTTPRequest(r.Context(), r, "")
 	if err != nil {
 		writeDPoPError(w, deps, err)
 		return nil, false
 	}
-	return &dpopOutcome{JKT: res.JKT, JTI: res.JTI, Presented: true}, true
+	return &dpopOutcome{JKT: checked.JKT, JTI: checked.JTI, Presented: true, checked: checked}, true
+}
+
+// commitTokenDPoP writes the replay marker for the proof
+// [verifyTokenDPoP] accepted, making it single-use. It is a no-op when
+// no proof was presented. The function emits the response and returns
+// false on failure; a repeated or concurrent use of the same proof
+// surfaces through the same [dpop.WriteError] mapping the single-phase
+// verifier produced.
+func commitTokenDPoP(ctx context.Context, w http.ResponseWriter, deps Deps, out *dpopOutcome) bool {
+	if out == nil || out.checked == nil {
+		return true
+	}
+	if err := deps.DPoP.Commit(ctx, out.checked); err != nil {
+		writeDPoPError(w, deps, err)
+		return false
+	}
+	return true
 }
 
 // enforceDPoPRefreshBinding reconciles the post-exchange DPoP state for

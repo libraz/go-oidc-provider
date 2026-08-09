@@ -12,6 +12,7 @@
 // # Status
 //
 // Experimental: the Driver interface and surrounding types MAY change in
-// a minor release. The intent is locked; the signatures will evolve as
-// the SPA endpoints are wired in a future release.
+// a minor release. The SPA endpoints themselves are wired and serving; what
+// remains unsettled is the shape of the types crossing this seam, which MAY
+// still be refined as embedder-driven UIs exercise them.
 package interaction

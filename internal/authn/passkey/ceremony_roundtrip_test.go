@@ -16,6 +16,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
 	"github.com/libraz/go-oidc-provider/internal/testutil/softkey"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 const (
@@ -29,9 +30,28 @@ const (
 // returns the credential the verifier accepted.
 func registerRoundTrip(t *testing.T, v *passkey.Verifier, key *softkey.Key) *passkey.Credential {
 	t.Helper()
+	cred, err := registerAs(t, v, newEmptyPasskeyStore(t), key, roundTripSubject, nil)
+	if err != nil {
+		t.Fatalf("FinishRegistration: %v", err)
+	}
+	return cred
+}
+
+// registerAs drives one registration ceremony for the named subject
+// against the supplied credential store and returns the verifier's
+// verdict unfiltered, so a caller can assert on a refusal too.
+func registerAs(
+	t *testing.T,
+	v *passkey.Verifier,
+	credentials store.PasskeyStore,
+	key *softkey.Key,
+	subject string,
+	existing []passkey.Credential,
+) (*passkey.Credential, error) {
+	t.Helper()
 	ctx := context.Background()
 
-	challenge, session, err := v.BeginRegistration(ctx, roundTripSubject, roundTripName, "Alice", nil)
+	challenge, session, err := v.BeginRegistration(ctx, subject, roundTripName, "Alice", existing)
 	if err != nil {
 		t.Fatalf("BeginRegistration: %v", err)
 	}
@@ -43,11 +63,7 @@ func registerRoundTrip(t *testing.T, v *passkey.Verifier, key *softkey.Key) *pas
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	cred, err := v.FinishRegistration(ctx, session, roundTripSubject, roundTripName, "Alice", nil, response)
-	if err != nil {
-		t.Fatalf("FinishRegistration: %v", err)
-	}
-	return cred
+	return v.FinishRegistration(ctx, credentials, session, subject, roundTripName, "Alice", existing, response)
 }
 
 // assertRoundTrip runs the assertion ceremony against the supplied

@@ -150,8 +150,8 @@ func (k StepKind) IsUserDefined() bool {
 // The library accepts password hashes in PHC argon2id encoding
 // (`$argon2id$v=19$m=...,t=...,p=...$<salt>$<hash>`). Embedders with
 // legacy encodings (bcrypt, scrypt, custom) wrap their own
-// [Authenticator] in [ExternalStep] until a hash-migration surface
-// lands; v0.x intentionally omits it so the verifier path stays
+// [Authenticator] in [ExternalStep]. The library deliberately ships
+// no hash-migration surface: omitting it keeps the verifier path
 // branch-free and the library never inspects unfamiliar encodings.
 type PrimaryPassword struct {
 	// Store is the user-account store the password is verified
@@ -240,6 +240,20 @@ type PrimaryPasskey struct {
 	// Expect a user-agent attestation prompt on registration, and
 	// leave the field empty if that disclosure is not wanted.
 	AAGUIDAllowlist []string
+
+	// RequireUserVerification makes every ceremony demand the WebAuthn
+	// user-verification gesture (PIN, biometric) instead of merely
+	// preferring it. The default (false) lets an authenticator answer
+	// with a presence-only assertion, which proves possession of the
+	// private key and nothing else: that is a single factor, so the
+	// login is reported at AAL1 and its acr is the AAL1 URI. Setting the
+	// field refuses an assertion whose UV flag is clear, so every
+	// successful passkey login counts as two factors and reaches AAL2.
+	//
+	// Deployments that gate a scope or an acr on two-factor
+	// authentication SHOULD set it; the cost is that authenticators
+	// without a PIN or biometric can no longer be used to log in.
+	RequireUserVerification bool
 
 	// AAGUIDReCheckOnAssertion makes the verifier re-check the matched
 	// credential's AAGUID against [AAGUIDAllowlist] at assertion time,

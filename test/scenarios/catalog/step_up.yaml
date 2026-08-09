@@ -38,6 +38,11 @@ rows:
       requested positive `max_age`, the authorization request forces
       re-authentication instead of silently reusing the session.
     status: active
+    covered_by: internal/authorizeendpoint.TestAuthorize_MaxAgeViolationForcesInteraction
+    notes: |
+      Aging a session past a positive max_age needs a clock the
+      black-box flow harness does not seat, so the assertion lives
+      where the clock can be controlled.
 
   - id: SUP-003
     severity: P0

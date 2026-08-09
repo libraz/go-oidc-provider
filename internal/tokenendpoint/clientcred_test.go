@@ -98,7 +98,7 @@ func TestClientCredentials_HappyPath(t *testing.T) {
 	verifier := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	parsed, _, err := verifier.Verify(at)
+	parsed, _, err := verifier.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestClientCredentials_DPoPBound(t *testing.T) {
 	verifier := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	parsed, _, err := verifier.Verify(at)
+	parsed, _, err := verifier.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestClientCredentials_MTLSBound(t *testing.T) {
 	verifier := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	parsed, _, err := verifier.Verify(at)
+	parsed, _, err := verifier.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -466,7 +466,7 @@ func TestClientCredentials_GidClaim_AbsentForSyntheticGrant(t *testing.T) {
 	verifier := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	claims, _, err := verifier.Verify(at)
+	claims, _, err := verifier.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}

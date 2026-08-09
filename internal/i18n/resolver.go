@@ -10,7 +10,7 @@ import (
 const maxLocaleCookieLen = 64
 
 // Resolver picks a [Tag] for an inbound request by walking the
-// priority chain from design 002 §L.2. The resolver is constructed
+// package's locale priority chain. The resolver is constructed
 // once at OP startup; it is safe for concurrent use.
 type Resolver struct {
 	bundles map[Tag]*Bundle
@@ -130,7 +130,7 @@ func (r *Resolver) Available() []Tag {
 }
 
 // Request bundles the per-call signals the resolver consults. The
-// fields mirror design 002 §L.2 step-by-step; an embedder that does
+// fields mirror the priority chain step-by-step; an embedder that does
 // not have a particular signal leaves the corresponding field at
 // its zero value.
 type Request struct {

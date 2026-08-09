@@ -161,7 +161,9 @@ func isWildcardLoopbackHost(host string) bool {
 }
 
 // validateResponseType rejects every value other than the literal "code".
-// Implicit / Hybrid flows are not shipped in v1.0.
+// The OP has no emission path for implicit or hybrid responses at all,
+// so this is the single point where their absence is enforced rather
+// than a disabled feature that could be switched back on.
 func (req *Request) validateResponseType() error {
 	if req.ResponseType != "code" {
 		return ErrResponseTypeUnsupported
@@ -170,7 +172,7 @@ func (req *Request) validateResponseType() error {
 }
 
 // validateResponseMode rejects unknown response_mode values. The empty
-// string (default for the response_type) and the v0.x-supported set
+// string (default for the response_type) and the plain set
 // {"query", "form_post"} pass; the four JARM values
 // {"query.jwt", "fragment.jwt", "form_post.jwt", "jwt"} pass too. The
 // HTTP layer is still expected to enforce the [feature.JARM] gate

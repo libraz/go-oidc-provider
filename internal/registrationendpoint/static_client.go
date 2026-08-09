@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -49,6 +50,13 @@ type StaticClientValidationOptions struct {
 	// without TLS termination. The default false keeps the
 	// production https-only posture.
 	AllowInsecureBackchannelLogoutForDev bool
+
+	// JWEPolicy mirrors [Deps.JWEPolicy]: the JWE alg / enc narrowing
+	// applied below the [internal/jose] allow-list. The zero value
+	// leaves the full allow-list in force. Applying it here keeps a
+	// static seed that declares an excluded algorithm from booting an
+	// OP whose runtime would refuse every encrypted exchange with it.
+	JWEPolicy internaljose.JWEPolicy
 }
 
 // StaticClientValidationError reports a structural rule violation a
@@ -135,6 +143,7 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 		opts.PairwiseEnabled,
 		opts.AllowLocalhostLoopback,
 		opts.AllowInsecureBackchannelLogoutForDev,
+		opts.JWEPolicy,
 	)
 	if err == nil {
 		return validateStaticClientAuthMethod(metadata.TokenEndpointAuthMethod, opts.AllowedClientAuthMethods)

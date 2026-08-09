@@ -2,19 +2,13 @@ package op
 
 import "context"
 
-// AuditDenyReasonKey is the slog attribute key under which the
-// orchestrator writes [Deny.Reason] when it emits the deny audit
-// event. The constant is the contract between the orchestrator's
-// audit emitter and the redaction handler installed by [WithLogger]
-// / [WithAuditLogger]: the redact substring matcher MUST keep this
-// key on its allow-list so a misbehaving [Decider] that puts a
-// credential or PII fragment into [Deny.Reason] cannot leak it
-// through the audit sink.
+// AuditDenyReasonKey is a slog attribute key reserved for [Deny.Reason].
 //
-// External code SHOULD NOT depend on this constant for log
-// scraping — the audit envelope itself is authoritative — but
-// embedders writing integration tests can use it to assert the
-// emitted record carries the expected field.
+// Deprecated: no code path emits this key. A denied login is recorded on
+// the operational logger installed by [WithLogger] under the plain
+// "reason" attribute, so an assertion that matches AuditDenyReasonKey
+// never fires; match "reason" instead. The constant is retained so
+// existing references keep compiling and its value will not change.
 const AuditDenyReasonKey = "audit.deny.reason"
 
 // Decider is the imperative complement to [LoginFlow.Rules]. The
@@ -107,29 +101,30 @@ func (Require) isDecision() {}
 // error per RFC 6749 §4.1.2.1 and redirects the user-agent back to
 // the client's redirect URI with the request `state` preserved.
 //
-// Reason is recorded in the audit log; it is NOT surfaced to the
+// Reason is written to the operational log; it is NOT surfaced to the
 // user-agent, which always sees the standard `access_denied` error
 // description.
 type Deny struct {
-	// Reason is the operator-facing explanation written to the audit
-	// stream. The orchestrator emits it under the slog attribute key
-	// "audit.deny.reason" so operators can grep for the field
-	// directly.
+	// Reason is the operator-facing explanation of the denial. The
+	// orchestrator writes it to the operational logger installed by
+	// [WithLogger], at info level, under the slog attribute "reason"
+	// alongside the subject and client_id of the attempt.
 	//
-	// The string is treated as untrusted by the redaction handler the
-	// library wraps around every operational and audit logger (see
-	// internal/redact / [WithLogger] / [WithAuditLogger]): the
-	// "audit.deny.reason" key is on the redaction allow-list so a
-	// misbehaving [Decider] that copies a credential or PII fragment
-	// into Reason cannot leak it through the audit sink. Implementers
-	// SHOULD still keep Reason free of raw inputs, tokens, and PII —
-	// the redaction is defence-in-depth, not a sanitisation hook —
-	// but the library guarantees the field is masked when a
-	// regression slips through.
+	// The value is logged verbatim. No masking is applied to it: the
+	// redaction handler the library wraps around every operational
+	// and audit logger matches a closed catalogue of
+	// credential-bearing attribute keys, and "reason" is not one of
+	// them. Whatever a [Decider] puts in Reason — an email address,
+	// an account identifier, an internal case reference, a raw
+	// request input — reaches the configured log sink in the clear.
+	// Implementers MUST therefore keep Reason to a stable
+	// non-identifying code such as "policy.geo" or
+	// "anomaly.velocity", and carry any identifier through their own
+	// pipeline instead.
 	//
 	// The wire-side `error_description` returned to the user-agent is
 	// always the static OAuth string ("access_denied"); Reason is
-	// invisible to the relying party regardless of redaction.
+	// invisible to the relying party.
 	Reason string
 }
 

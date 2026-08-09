@@ -11,7 +11,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -136,8 +135,11 @@ type RegistrationOption struct {
 // hook; the library does not defensively copy on the way in.
 type ClientMetadata struct {
 	// RedirectURIs is the candidate redirect_uri set the RP submitted.
-	// The library has already enforced the §J.6 native-app rules by
-	// the time the hook runs; embedders MAY tighten further.
+	// The library has already enforced the RFC 8252 native-app rules
+	// by the time the hook runs (loopback URIs restricted to
+	// 127.0.0.1 / [::1] with a wildcard port, custom schemes required
+	// to be reverse-DNS, exact match otherwise); embedders MAY tighten
+	// further.
 	RedirectURIs []string
 
 	// GrantTypes is the candidate grant_types list. The library has
@@ -418,11 +420,12 @@ type InitialAccessTokenIssued struct {
 
 // WithDynamicRegistration enables RFC 7591 / RFC 7592 / OpenID Connect
 // Dynamic Client Registration 1.0 on the [Provider]. The option mounts
-// the /register endpoint (gated on [feature.DynamicRegistration],
-// which the option enables implicitly), advertises
-// "registration_endpoint" in the discovery document, and unlocks
+// the /register endpoint, advertises "registration_endpoint" in the
+// discovery document, and unlocks
 // [Provider.IssueInitialAccessToken] /
-// [Provider.RevokeInitialAccessToken].
+// [Provider.RevokeInitialAccessToken]. It enables the
+// dynamic-registration feature flag implicitly, so passing that flag
+// to [WithFeature] as well fails [New] in either call order.
 //
 // Calling the option twice fails at construction time so the operator
 // notices the duplicate. The supplied [RegistrationOption] is
@@ -449,17 +452,6 @@ func WithDynamicRegistration(o RegistrationOption) Option {
 		if err := validateRegistrationOption(o); err != nil {
 			return err
 		}
-		// Reject a pre-existing feature flag so an embedder who passed
-		// feature.DynamicRegistration through WithFeature gets a
-		// deterministic error instead of silent double-enablement.
-		for _, existing := range c.features {
-			if existing == feature.DynamicRegistration {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "feature.DynamicRegistration was enabled more than once",
-				}
-			}
-		}
 		// Defensive copy of slice fields so a later mutation of the
 		// caller's slice does not silently change the OP's policy.
 		copyCfg := o
@@ -467,9 +459,10 @@ func WithDynamicRegistration(o RegistrationOption) Option {
 		copyCfg.AllowedResponseTypes = slices.Clone(o.AllowedResponseTypes)
 		copyCfg.OpenRegistrationDefaultScopes = slices.Clone(o.OpenRegistrationDefaultScopes)
 		c.dcr = &copyCfg
-		// Implicitly enable the feature flag so discovery and routing
-		// lookups can use the same predicate as every other feature.
-		c.features = append(c.features, feature.DynamicRegistration)
+		// The feature flag is derived in config.validateRegistration
+		// rather than set here: setting it at the option site makes the
+		// "declared twice" check depend on whether WithFeature ran
+		// before or after this option.
 		return nil
 	})
 }
@@ -574,9 +567,12 @@ func defaultRegistrationResponseTypes() []string {
 //     ship to production.
 //
 // Returns [ErrDynamicRegistrationDisabled] when [WithDynamicRegistration]
-// was not configured. A non-nil error from the underlying store is
-// returned wrapped in [*Error] with the configuration_error code so
-// callers can branch on [errors.As].
+// was not configured. Every other failure is an [*Error] callers can
+// branch on with [errors.As], and the code separates the two kinds: a
+// rejected argument (a negative TTL or MaxUses) carries
+// configuration_error, while a failure of the underlying store or of
+// credential generation carries server_error. The split matters because
+// only the first is worth retrying with different input.
 func (p *Provider) IssueInitialAccessToken(ctx context.Context, spec InitialAccessTokenSpec) (*InitialAccessTokenIssued, error) {
 	if p.cfg.dcr == nil {
 		return nil, ErrDynamicRegistrationDisabled
@@ -652,10 +648,10 @@ func (p *Provider) IssueInitialAccessToken(ctx context.Context, spec InitialAcce
 // IAT expired between lookup and revoke; we do that filtering once
 // here so the surface stays clean.
 //
-// All other store errors are wrapped in a configuration_error
-// [*Error] so callers can branch on [errors.As]. The empty id is
-// rejected up front so a caller who lost track of the value cannot
-// silently no-op a "delete every token" request.
+// All other store errors are wrapped in a server_error [*Error] so
+// callers can branch on [errors.As]; an empty id is the one
+// configuration_error, rejected up front so a caller who lost track of
+// the value cannot silently no-op a "delete every token" request.
 //
 // Returns [ErrDynamicRegistrationDisabled] when [WithDynamicRegistration]
 // was not configured.

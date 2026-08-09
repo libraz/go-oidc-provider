@@ -149,6 +149,11 @@ func persistCompletionIntent(
 	// Another terminal POST won the immutable transition. Resume the winner's
 	// intent instead of overwriting it or minting a second durable result.
 	current, err := deps.Interactions.Find(ctx, rec.ID)
+	if err == nil && current == nil {
+		// A nil record alongside a nil error violates the store contract;
+		// the winner's intent cannot be resumed without it.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		return nil, authorize.RequestState{}, fmt.Errorf(
 			"authorizeendpoint: reload completion intent after conflict: %w", err)

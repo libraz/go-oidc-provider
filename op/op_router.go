@@ -139,6 +139,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			RefreshTokenGraceTTL:           cfg.effectiveRefreshGrace(),
 			RefreshRetryEncryptionKeys:     cfg.cookieKeys,
 			StrictOfflineAccess:            cfg.strictOfflineAccess,
+			OpenIDScopeOptional:            cfg.openIDScopeOptional,
 			GrantManagementEnabled:         cfg.grantManagementEnabled,
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
@@ -156,8 +157,8 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		})),
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)
-	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifier, strictCORS)
-	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encResolver, jarVerifier, originAllow, strictCORS, locales, proxyTrust)
+	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifier, strictCORS)
+	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encResolver, jarVerifier, strictCORS, locales, proxyTrust)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +181,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			return nil, err
 		}
 	}
-	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, strictCORS)
+	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, subjectProjector, strictCORS)
 	return mux, nil
 }
 
@@ -260,11 +261,11 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 	if cfg.dcr == nil {
 		return
 	}
-	// validateRegistration ran inside [config.validate]; the type
-	// assertion here cannot fail in practice. The defensive ok-check
-	// preserves the property that a misconfigured store does not panic
-	// at request time.
-	registry, ok := cfg.store.(store.ClientRegistry)
+	// validateRegistration ran inside [config.validate] against the same
+	// resolver, so the lookup here cannot fail in practice. The defensive
+	// ok-check preserves the property that a misconfigured store does not
+	// panic at request time.
+	registry, ok := resolveClientRegistry(cfg.store)
 	if !ok {
 		return
 	}
@@ -284,6 +285,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		PairwiseEnabled:                      cfg.pairwiseEnabled(),
 		AllowLocalhostLoopback:               cfg.allowLocalhostLoopback,
 		AllowInsecureBackchannelLogoutForDev: cfg.allowInsecureBackchannelLogoutForDev,
+		JWEPolicy:                            cfg.jwePolicy(),
 		SectorResolver:                       buildSectorResolver(cfg),
 		ValidateMetadata:                     wrapValidateMetadata(cfg.dcr.ValidateMetadata),
 		Logger:                               cfg.logger,
@@ -373,6 +375,7 @@ func mountIntrospectionEndpoint(
 		strictCORS.Handler(introspectendpoint.Handler(introspectendpoint.Deps{
 			Issuer:                     cfg.issuer,
 			Clients:                    cfg.store.Clients(),
+			IntrospectionDelegates:     cfg.introspectionDelegates(),
 			RefreshTokens:              cfg.store.RefreshTokens(),
 			Grants:                     cfg.store.Grants(),
 			Keys:                       keySet,
@@ -441,13 +444,18 @@ func mountAuthorizeHandlers(
 	keySet *keys.Set,
 	encResolver *clientencjwks.Resolver,
 	jarVerifier *jar.Verifier,
-	allow *csrf.Allowlist,
 	strictCORS *cors.Strict,
 	locales *i18n.Resolver,
 	proxyTrust *proxy.Trust,
 ) (*sessions.Manager, error) {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
 		return nil, nil //nolint:nilnil // documented "no manager needed" sentinel.
+	}
+	// Narrower than the CORS allowlist by design — see
+	// [buildInteractionOriginAllowlist].
+	interactionOrigins, err := buildInteractionOriginAllowlist(cfg)
+	if err != nil {
+		return nil, err
 	}
 	jarmSigner, err := buildJARMSigner(cfg, keySet)
 	if err != nil {
@@ -477,6 +485,7 @@ func mountAuthorizeHandlers(
 		Codes:                         cfg.store.AuthorizationCodes(),
 		Grants:                        cfg.store.Grants(),
 		Transactions:                  transactionalStore(cfg.store),
+		DPoPEnabled:                   featureEnabled(cfg.features, feature.DPoP),
 		AuthorizationDetailTypes:      authorizationDetailRegistry(cfg),
 		GrantManagementEnabled:        cfg.grantManagementEnabled,
 		GrantManagementActions:        grantManagementActionSet(cfg),
@@ -488,7 +497,7 @@ func mountAuthorizeHandlers(
 		Sessions:                      sessMgr,
 		CookieCodec:                   cookieCodec,
 		CSRF:                          csrfSigner,
-		Origins:                       allow,
+		InteractionOrigins:            interactionOrigins,
 		Driver:                        cfg.interactionD,
 		Authn:                         orchestrator,
 		Scopes:                        scopes,
@@ -534,6 +543,7 @@ func mountEndSessionEndpoint(
 	keySet *keys.Set,
 	sessMgr *sessions.Manager,
 	bcc *backchannel.Coordinator,
+	subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error),
 	strictCORS *cors.Strict,
 ) {
 	if sessMgr == nil {
@@ -554,6 +564,7 @@ func mountEndSessionEndpoint(
 			AccessTokenTTL:     cfg.accessTokenTTL,
 			GrantRevocations:   cfg.store.GrantRevocations(),
 			RevocationStrategy: cfg.atRevocation,
+			SubjectProjector:   subjectProjector,
 			Audit:              cfg.effectiveAuditEmitter(),
 		})),
 	)
@@ -670,10 +681,17 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 // handler surfaces invalid_request_object for any inbound request
 // that carries a "request" parameter, and rejects requests under
 // FAPI-CIBA (which mandates the parameter) with invalid_request.
+//
+// The OP keyset is threaded in so the handler can verify an inbound
+// id_token_hint against the keys that signed it (CIBA Core 1.0 §7.1);
+// it is the same [keys.Set] /end_session verifies its own hint
+// against, so both surfaces honour the retiring-key window
+// identically.
 func mountBackchannelAuthenticationEndpoint(
 	mux *http.ServeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
+	keySet *keys.Set,
 	dpopVerifier *dpop.Verifier,
 	mtlsVerifier *mtls.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
@@ -694,6 +712,7 @@ func mountBackchannelAuthenticationEndpoint(
 			Clients:                  cfg.store.Clients(),
 			CIBARequests:             cibaRequestsFor(cfg),
 			Scopes:                   scopes,
+			Keys:                     keySet,
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),

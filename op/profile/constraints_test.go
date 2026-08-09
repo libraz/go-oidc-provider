@@ -185,10 +185,44 @@ func TestMaxAccessTokenTTL(t *testing.T) {
 	}
 }
 
+// TestMaxRequestObjectAge pins the request-object age cap each profile
+// carries. The FAPI family grants a 60-minute validity window
+// (FAPI 2.0 Message Signing §5.6); a verifier left on its own, shorter
+// default would reject a conformant request object part-way through
+// that window, so the profile has to publish the number.
+func TestMaxRequestObjectAge(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want time.Duration
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, 60 * time.Minute},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, 60 * time.Minute},
+		{"fapi-ciba", profile.FAPICIBA, 60 * time.Minute},
+		{"baseline", profile.Baseline, 0},
+		{"zero", profile.Profile(0), 0},
+		{"unknown", profile.Profile(99), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := profile.MaxRequestObjectAge(tc.in)
+			if got != tc.want {
+				t.Errorf("MaxRequestObjectAge(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAllowedClientAuthMethods(t *testing.T) {
 	t.Parallel()
 
-	fapi2Allowed := []string{"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth"}
+	// The RFC 8705 §2 mTLS methods FAPI 2.0 §3.1.3 also permits are
+	// deliberately absent: the OP does not implement them, so listing
+	// them would hand callers a seed value no client could use.
+	fapi2Allowed := []string{"private_key_jwt"}
 
 	cases := []struct {
 		name string

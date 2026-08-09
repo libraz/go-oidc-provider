@@ -54,7 +54,7 @@ rows:
       at /authorize when an ID Token is co-issued (detached signature
       path).
     status: out-of-scope
-    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. The OP is code-only — OAuth 2.1 and FAPI 2.0 both drop the hybrid flow, so response_types_supported is [\"code\"] and there is no signed front-channel response to profile. The shipped profiles are ProfileFAPI2Baseline and ProfileFAPI2MessageSigning; the FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-011
     severity: P0
@@ -65,7 +65,7 @@ rows:
       with description "Authorization Server policy requires PKCE to
       be used for this request".
     status: out-of-scope
-    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. The OP is code-only — OAuth 2.1 and FAPI 2.0 both drop the hybrid flow, so response_types_supported is [\"code\"] and there is no signed front-channel response to profile. The shipped profiles are ProfileFAPI2Baseline and ProfileFAPI2MessageSigning; the FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-012
     severity: P0
@@ -77,7 +77,7 @@ rows:
       the OP returns invalid_request with description "requested
       response_mode is not allowed for this client or request".
     status: out-of-scope
-    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. The OP is code-only — OAuth 2.1 and FAPI 2.0 both drop the hybrid flow, so response_types_supported is [\"code\"] and there is no signed front-channel response to profile. The shipped profiles are ProfileFAPI2Baseline and ProfileFAPI2MessageSigning; the FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-013
     severity: P0
@@ -86,7 +86,7 @@ rows:
       The same response_mode=jwt requirement applies when the
       authorization request is sent as a signed Request Object (JAR).
     status: out-of-scope
-    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. The OP is code-only — OAuth 2.1 and FAPI 2.0 both drop the hybrid flow, so response_types_supported is [\"code\"] and there is no signed front-channel response to profile. The shipped profiles are ProfileFAPI2Baseline and ProfileFAPI2MessageSigning; the FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-014
     severity: P0
@@ -96,7 +96,7 @@ rows:
       fragment redirect with error=invalid_request_object and
       error_description="Request Object is missing the 'exp' claim".
     status: out-of-scope
-    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. The OP is code-only — OAuth 2.1 and FAPI 2.0 both drop the hybrid flow, so response_types_supported is [\"code\"] and there is no signed front-channel response to profile. The shipped profiles are ProfileFAPI2Baseline and ProfileFAPI2MessageSigning; the FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-015
     severity: P0
@@ -106,7 +106,7 @@ rows:
       invalid_request_object with description "Request Object is
       missing the 'nbf' claim".
     status: out-of-scope
-    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. The OP is code-only — OAuth 2.1 and FAPI 2.0 both drop the hybrid flow, so response_types_supported is [\"code\"] and there is no signed front-channel response to profile. The shipped profiles are ProfileFAPI2Baseline and ProfileFAPI2MessageSigning; the FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-016
     severity: P0
@@ -116,7 +116,7 @@ rows:
       invalid_request_object with description "Request Object 'exp'
       claim too far from 'nbf' claim".
     status: out-of-scope
-    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. The OP is code-only — OAuth 2.1 and FAPI 2.0 both drop the hybrid flow, so response_types_supported is [\"code\"] and there is no signed front-channel response to profile. The shipped profiles are ProfileFAPI2Baseline and ProfileFAPI2MessageSigning; the FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-017
     severity: P1
@@ -126,7 +126,7 @@ rows:
       produce id_token, code and state in the fragment for
       response_type=code id_token.
     status: out-of-scope
-    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. The OP is code-only — OAuth 2.1 and FAPI 2.0 both drop the hybrid flow, so response_types_supported is [\"code\"] and there is no signed front-channel response to profile. The shipped profiles are ProfileFAPI2Baseline and ProfileFAPI2MessageSigning; the FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V2-020
     severity: P0
@@ -199,7 +199,7 @@ rows:
       metadata; the OP error rendering MUST emit iss per RFC 9207
       even on policy rejections.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue: catalog asserts the OP MUST emit RFC 9207 iss on every policy rejection, including the rendered (no trusted redirect target) error envelope. RFC 9207 §2.4 itself only mandates iss on responses sent to the redirect_uri; rendered errors carry no redirect target by definition, so v1.0's wire shape (iss on redirect-channel errors via internal/authorizeendpoint/error.go buildRedirectError; no iss on rendered JSON envelopes) matches the spec's actual scope. The 'enforced regardless of client metadata' half is exercised by every other FAPI-V2 binding in this file: every FAPI-active rejection in v1.0 fires from the op-level wiring, not from per-client knobs (the registered client has no PKCE / redirect_uri / nbf required flags, yet the rejections still fire)."
+    out_of_scope_reason: "non-spec residue: catalog asserts the OP MUST emit RFC 9207 iss on every policy rejection, including the rendered (no trusted redirect target) error envelope. RFC 9207 §2.4 itself only mandates iss on responses sent to the redirect_uri; rendered errors carry no redirect target by definition, so the OP's wire shape (iss stamped on every redirect-channel and form-post error by internal/authorizeendpoint/jarm_emit.go emitPlainResponse, which composes the target through mergeRedirectParams; no iss on a rendered error, whether that is the interaction.Driver's HTML page or the JSON envelope renderBrowserError falls back to) matches the spec's actual scope. The 'enforced regardless of client metadata' half is exercised by every other FAPI-V2 binding in this file: every FAPI-active rejection in v1.0 fires from the op-level wiring, not from per-client knobs (the registered client has no PKCE / redirect_uri / nbf required flags, yet the rejections still fire)."
 
   - id: FAPI-031
     severity: P1
@@ -209,4 +209,4 @@ rows:
       id_token carries s_hash (state hash) AND c_hash, as implied by
       the response_mode policy decision tree.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue: catalog asserts the detached-signature path (response_type=code id_token, hybrid flow) carries s_hash and c_hash on the front-channel id_token. v1.0 advertises only response_type=code (docs/plans/002-product-design.md OAuth 2.1 / FAPI 2.0 code-only stance); hybrid is intentionally not shipped. With no hybrid surface there is no front-channel id_token, so the s_hash / c_hash claims have no emission path to assert. Mirrors the blanket OOS already applied to the FAPI-V1-010..017 hybrid rows in this file."
+    out_of_scope_reason: "non-spec residue: catalog asserts the detached-signature path (response_type=code id_token, hybrid flow) carries s_hash and c_hash on the front-channel id_token. v1.0 advertises only response_type=code, following the OAuth 2.1 / FAPI 2.0 code-only stance; hybrid is intentionally not shipped. With no hybrid surface there is no front-channel id_token, so the s_hash / c_hash claims have no emission path to assert. Mirrors the blanket OOS already applied to the FAPI-V1-010..017 hybrid rows in this file."

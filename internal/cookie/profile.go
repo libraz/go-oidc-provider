@@ -147,6 +147,24 @@ var CSRFProfile = Profile{
 	Encrypted:  false,
 }
 
+// LogoutCSRFProfile defines the __Host-oidc_logout_csrf cookie: the
+// double-submit token that carries RP-initiated logout across the
+// interstitial GET → POST round-trip. It differs from [CSRFProfile] in
+// lifetime only: the confirmation is a single user gesture expected
+// within minutes, so the cookie is given a short max-age rather than
+// living for the browsing session. Strict SameSite means a cross-site
+// POST cannot present it even when the attacker also forges the
+// provenance headers.
+//
+//nolint:gochecknoglobals // Predefined cookie profiles are configuration constants.
+var LogoutCSRFProfile = Profile{
+	Name:       "__Host-oidc_logout_csrf",
+	MaxAge:     5 * time.Minute,
+	SameSite:   http.SameSiteStrictMode,
+	HostPrefix: true,
+	Encrypted:  false,
+}
+
 // LocaleProfile defines the __Host-oidc_locale cookie: a one-year,
 // plain-text Lax cookie remembering the user's chosen UI locale.
 //

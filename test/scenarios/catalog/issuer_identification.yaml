@@ -42,10 +42,9 @@ rows:
       state, access_token, and iss in the fragment.
     status: out-of-scope
     out_of_scope_reason: |
-      Implicit / hybrid response_type is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
-      records the policy: "Bearer token の URL fragment 露出 — implicit
-      を持たないため自動的に不在." The OP advertises only
+      Implicit / hybrid response_type is intentionally not supported:
+      returning a bearer token in the URL fragment leaks it through
+      browser history and Referer. The OP advertises only
       response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
       deprecate the implicit grant for the same reason.
 
@@ -59,10 +58,9 @@ rows:
       level iss as well).
     status: out-of-scope
     out_of_scope_reason: |
-      Implicit / hybrid response_type is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
-      records the policy: "Bearer token の URL fragment 露出 — implicit
-      を持たないため自動的に不在." The OP advertises only
+      Implicit / hybrid response_type is intentionally not supported:
+      returning a bearer token in the URL fragment leaks it through
+      browser history and Referer. The OP advertises only
       response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
       deprecate the implicit grant for the same reason.
 
@@ -75,10 +73,9 @@ rows:
       expires_in, and scope in the fragment.
     status: out-of-scope
     out_of_scope_reason: |
-      Implicit / hybrid response_type is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
-      records the policy: "Bearer token の URL fragment 露出 — implicit
-      を持たないため自動的に不在." The OP advertises only
+      Implicit / hybrid response_type is intentionally not supported:
+      returning a bearer token in the URL fragment leaks it through
+      browser history and Referer. The OP advertises only
       response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
       deprecate the implicit grant for the same reason.
 
@@ -91,10 +88,9 @@ rows:
       scope in the fragment.
     status: out-of-scope
     out_of_scope_reason: |
-      Implicit / hybrid response_type is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
-      records the policy: "Bearer token の URL fragment 露出 — implicit
-      を持たないため自動的に不在." The OP advertises only
+      Implicit / hybrid response_type is intentionally not supported:
+      returning a bearer token in the URL fragment leaks it through
+      browser history and Referer. The OP advertises only
       response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
       deprecate the implicit grant for the same reason.
 
@@ -106,10 +102,9 @@ rows:
       id_token in the fragment.
     status: out-of-scope
     out_of_scope_reason: |
-      Implicit / hybrid response_type is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
-      records the policy: "Bearer token の URL fragment 露出 — implicit
-      を持たないため自動的に不在." The OP advertises only
+      Implicit / hybrid response_type is intentionally not supported:
+      returning a bearer token in the URL fragment leaks it through
+      browser history and Referer. The OP advertises only
       response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
       deprecate the implicit grant for the same reason.
 
@@ -120,7 +115,7 @@ rows:
       A successful response_type=none redirect carries state and iss
       as query parameters.
     status: out-of-scope
-    out_of_scope_reason: "response_type=none is intentionally not supported. docs/plans/002-product-design.md line 2146 records the policy: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一\" — the OP advertises response_types_supported=[\"code\"] only. response_type=none is a session-check oddity that does not return tokens; it expands the attack surface (silent issuance with no envelope) without adding usable functionality."
+    out_of_scope_reason: "response_type=none is intentionally not supported. The OP is code-only, following the OAuth 2.1 / FAPI 2.0 stance, and advertises response_types_supported=[\"code\"]. response_type=none is a session-check oddity that returns no tokens; it expands the attack surface (silent issuance with no envelope) without adding usable functionality."
 
   - id: ISS-017
     severity: P0
@@ -147,7 +142,7 @@ rows:
       A response_type=none error redirects back with error, iss, and
       state as query parameters.
     status: out-of-scope
-    out_of_scope_reason: "response_type=none is intentionally not supported. docs/plans/002-product-design.md line 2146 records the policy: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一\" — the OP advertises response_types_supported=[\"code\"] only. response_type=none is a session-check oddity that does not return tokens; it expands the attack surface (silent issuance with no envelope) without adding usable functionality."
+    out_of_scope_reason: "response_type=none is intentionally not supported. The OP is code-only, following the OAuth 2.1 / FAPI 2.0 stance, and advertises response_types_supported=[\"code\"]. response_type=none is a session-check oddity that returns no tokens; it expands the attack surface (silent issuance with no envelope) without adding usable functionality."
 
   - id: ISS-022
     severity: P0
@@ -165,4 +160,4 @@ rows:
       redirects back with the response JWT (which carries iss) in
       the fragment.
     status: out-of-scope
-    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167) records the policy: \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" The OP advertises only response_types_supported=[\"code\"]; OAuth 2.1 / RFC 9700 §1.4 deprecate the implicit grant for the same reason."
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported: returning a bearer token in the URL fragment leaks it through browser history and Referer. The OP advertises only response_types_supported=[\"code\"]; OAuth 2.1 / RFC 9700 §1.4 deprecate the implicit grant for the same reason."

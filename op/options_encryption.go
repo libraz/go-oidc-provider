@@ -41,8 +41,12 @@ func SupportedEncryptionEncs() []string {
 }
 
 // WithEncryptionKeyset registers the JWKs the OP uses to decrypt
-// inbound JWE (request_object) and to encrypt outbound JWE
-// addressed to RP keys (id_token / userinfo / JARM / introspection).
+// inbound JWE — request objects on /authorize and /par, which are the
+// only ciphertexts addressed to the OP itself. Outbound JWE (id_token /
+// userinfo / JARM / introspection) does NOT use this keyset: those
+// responses are encrypted to a key taken from the recipient client's
+// JWKS, and work whether or not this option is supplied.
+//
 // Every entry MUST carry an asymmetric private key — *rsa.PrivateKey
 // (>= 2048 bit) or *ecdsa.PrivateKey on P-256 / P-384 / P-521; other
 // shapes cause [op.New] to fail at construction time.
@@ -56,19 +60,16 @@ func SupportedEncryptionEncs() []string {
 // would be a configuration smell even if the underlying key
 // material is distinct).
 //
-// Multiple keys allow rotation: new outbound encryptions pick the
-// first entry whose alg matches the RP's registered `*_encryption_alg`
-// metadata; inbound decryptions match `kid` first and fall back to
-// trial decryption against every key in slice order when `kid` is
-// absent (RFC 7516 §4.1.6).
+// Multiple keys allow rotation: inbound decryptions match `kid` first
+// and fall back to trial decryption against every key in slice order
+// when `kid` is absent (RFC 7516 §4.1.6).
 //
-// The encryption keyset is OPTIONAL. Embedders who never encrypt
-// anything (no client requests `*_encryption_*` metadata and the
-// OP itself has no inbound request_object encryption) omit this
-// option and the OP runs without JWE support: the discovery
-// document advertises empty `*_encryption_*_values_supported`
-// arrays and decryption attempts fail with
-// `invalid_request_object`.
+// The encryption keyset is OPTIONAL. Embedders who never accept an
+// encrypted request object omit it, and the OP runs without inbound
+// JWE: discovery omits `request_object_encryption_*_values_supported`
+// and a decryption attempt fails with `invalid_request_object`. The
+// outbound advertisements and the outbound encryption paths remain
+// available.
 //
 // Stable since v1.0.
 func WithEncryptionKeyset(ks EncryptionKeyset) Option {
@@ -84,10 +85,23 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 	})
 }
 
-// WithSupportedEncryptionAlgs narrows the OP's advertised
-// `*_encryption_alg_values_supported` and
-// `*_encryption_enc_values_supported` discovery lists below the
-// v0.9.1 default ([SupportedEncryptionAlgs] / [SupportedEncryptionEncs]).
+// WithSupportedEncryptionAlgs narrows the JWE algorithms the OP will
+// negotiate, below the v0.9.1 default ([SupportedEncryptionAlgs] /
+// [SupportedEncryptionEncs]).
+//
+// The narrowing is enforced, not merely advertised. It reaches every
+// JWE surface at once:
+//
+//   - the `*_encryption_alg_values_supported` /
+//     `*_encryption_enc_values_supported` discovery lists;
+//   - inbound decryption — a request object whose protected header
+//     names an excluded alg or enc is rejected before any key is
+//     touched, exactly as if the algorithm had never shipped;
+//   - outbound encryption — a client registered for an excluded pair
+//     gets no recipient, so no id_token / userinfo / JARM /
+//     introspection response is encrypted with it;
+//   - client registration — a dynamic registration or a static seed
+//     declaring an excluded pair is rejected.
 //
 // Embedders cannot extend the allow-list — values outside the v0.9.1
 // default are rejected at [op.New]. The option exists for
@@ -95,10 +109,10 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 // (e.g. ECDH-ES + A256GCM only) without rebuilding the library.
 //
 // Either argument may be nil; a nil slice means "use the default".
-// An empty (non-nil) slice means "no algs / encs advertised", which
-// effectively disables JWE negotiation while still publishing the
-// encryption keyset (a deliberate "advertise keys but no negotiated
-// algorithms" posture is unusual but not forbidden).
+// An empty (non-nil) slice means "no algs / encs at all", which
+// disables JWE negotiation outright while still publishing the
+// encryption keyset (a deliberate "advertise keys but negotiate
+// nothing" posture is unusual but not forbidden).
 //
 // Stable since v1.0.
 func WithSupportedEncryptionAlgs(algs, encs []string) Option {
@@ -113,7 +127,7 @@ func WithSupportedEncryptionAlgs(algs, encs []string) Option {
 // applyAlgNarrowing validates the embedder-supplied alg subset and
 // stores it on the config when non-nil. A nil slice leaves the
 // default (the closed v0.9.1 allow-list) untouched; an empty
-// non-nil slice records "advertise no algs".
+// non-nil slice records "permit no algs".
 func applyAlgNarrowing(c *config, algs []string) error {
 	if algs == nil {
 		return nil
@@ -133,7 +147,7 @@ func applyAlgNarrowing(c *config, algs []string) error {
 }
 
 // applyEncNarrowing mirrors [applyAlgNarrowing] for the JWE
-// content-encryption advertisement.
+// content-encryption half.
 func applyEncNarrowing(c *config, encs []string) error {
 	if encs == nil {
 		return nil
@@ -152,15 +166,17 @@ func applyEncNarrowing(c *config, encs []string) error {
 	return nil
 }
 
-// effectiveEncryptionAlgs returns the alg slice the discovery
-// builder advertises. The embedder-supplied narrowing wins if it was
-// explicitly set; otherwise the closed v0.9.1 default applies.
-// Returns nil when no encryption keyset is registered (so the
-// discovery fields stay omitted via omitempty).
+// effectiveEncryptionAlgs returns the alg slice every JWE surface
+// works from: the discovery advertisement, the inbound decryption
+// gate, the outbound recipient selection, and the client-registration
+// validator. The embedder-supplied narrowing wins if it was explicitly
+// set; otherwise the closed v0.9.1 default applies.
+//
+// The result does not depend on [WithEncryptionKeyset]. That keyset is
+// what the OP decrypts *with*; the algorithms it can negotiate are a
+// separate question, and outbound encryption answers it against the
+// relying party's key rather than the OP's own.
 func (c *config) effectiveEncryptionAlgs() []string {
-	if len(c.encryptionKeyset) == 0 {
-		return nil
-	}
 	if c.encryptionAlgsAllowedSet {
 		return append([]string(nil), c.encryptionAlgsAllowed...)
 	}
@@ -168,22 +184,52 @@ func (c *config) effectiveEncryptionAlgs() []string {
 }
 
 // effectiveEncryptionEncs mirrors [effectiveEncryptionAlgs] for the
-// content-encryption advertisement.
+// content-encryption half.
 func (c *config) effectiveEncryptionEncs() []string {
-	if len(c.encryptionKeyset) == 0 {
-		return nil
-	}
 	if c.encryptionEncsAllowedSet {
 		return append([]string(nil), c.encryptionEncsAllowed...)
 	}
 	return SupportedEncryptionEncs()
 }
 
-// encryptionEnabled reports whether the OP has an encryption keyset
-// configured. The discovery builder uses the flag to decide whether
-// to emit the five `*_encryption_*_values_supported` arrays.
-func (c *config) encryptionEnabled() bool {
+// encryptionInboundEnabled reports whether the OP holds a decryption
+// keyset, i.e. whether it can accept an encrypted request object. The
+// discovery builder uses it to gate the
+// `request_object_encryption_*_values_supported` arrays, which are the
+// only ones that describe an inbound capability.
+func (c *config) encryptionInboundEnabled() bool {
 	return len(c.encryptionKeyset) > 0
+}
+
+// jwePolicy converts the embedder's narrowing into the value every JWE
+// surface enforces. A half that was never narrowed stays nil, which
+// [jose.JWEPolicy] reads as "the library allow-list, unmodified"; a
+// narrowed half becomes a non-nil slice, so an explicitly empty
+// narrowing permits nothing rather than collapsing back to the default.
+//
+// Values are re-parsed rather than cast: the option layer already
+// rejected anything outside the allow-list, so a parse failure here
+// would mean the two gates had drifted, and dropping the value is the
+// fail-closed answer.
+func (c *config) jwePolicy() jose.JWEPolicy {
+	var p jose.JWEPolicy
+	if c.encryptionAlgsAllowedSet {
+		p.Algs = make([]jose.JWEAlg, 0, len(c.encryptionAlgsAllowed))
+		for _, raw := range c.encryptionAlgsAllowed {
+			if alg, ok := jose.ParseJWEAlg(raw); ok {
+				p.Algs = append(p.Algs, alg)
+			}
+		}
+	}
+	if c.encryptionEncsAllowedSet {
+		p.Encs = make([]jose.JWEEnc, 0, len(c.encryptionEncsAllowed))
+		for _, raw := range c.encryptionEncsAllowed {
+			if enc, ok := jose.ParseJWEEnc(raw); ok {
+				p.Encs = append(p.Encs, enc)
+			}
+		}
+	}
+	return p
 }
 
 // validateEncryptionKeyset enforces the kid-disjoint invariant

@@ -36,15 +36,28 @@
 // ("If the server is unable to locate the token using the given hint,
 // it MUST extend its search across all of its supported token types").
 //
-// # Authorization model — same-client-only
+// # Authorization model — same-client-only, with scoped delegation
 //
-// RFC 7662 §2.1 leaves the authorization policy to the deployment. v1.0
-// adopts the most conservative posture: the authenticated client_id MUST
-// match the introspected token's client_id; otherwise the response is
-// inactive. This aligns with FAPI 2.0 where introspection is a per-
-// resource-server affair. An embedder who needs cross-client
-// introspection (a single resource server inspecting tokens from many
-// clients) wraps the handler — there is no config knob in v1.0.
+// RFC 7662 §2.1 leaves the authorization policy to the deployment. The
+// default is the most conservative posture: the authenticated client_id
+// MUST match the introspected token's client_id; otherwise the response
+// is inactive.
+//
+// An embedder that runs a resource server opts out of that default by
+// naming the resource server's client_id on the resource-server metadata
+// it registers, which reaches the handler as [Deps.IntrospectionDelegates].
+// A named client may introspect an access token issued to any client
+// provided the token's audience is that resource — which is RFC 7662's
+// canonical deployment, and without it a resource server that follows
+// this OP's own metadata document to the introspection endpoint learns
+// nothing about the tokens presented to it.
+//
+// The delegation is deliberately narrow in two ways. It is scoped to the
+// audience, so registering a gateway for one API never becomes blanket
+// visibility over every client's tokens. And it never covers refresh
+// tokens: a refresh token is the client's own credential rather than
+// something a resource server is presented with, so its owner check
+// stays absolute.
 //
 // # Inactive vs. error
 //

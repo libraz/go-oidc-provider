@@ -206,8 +206,8 @@ type Active struct {
 }
 
 // Resolve reads the supplied cookie value, decrypts it, and returns the
-// matching live session record. It performs every safety check required by
-// §A.9: cookie integrity (via the codec), session existence (via the
+// matching live session record. It performs every safety check the cookie
+// contract requires: cookie integrity (via the codec), session existence (via the
 // store), idle expiry (via Session.ExpiresAt), and chooser-group cross-
 // reference (Session.ChooserGroupID must match the cookie).
 //
@@ -219,12 +219,9 @@ func (m *Manager) Resolve(ctx context.Context, cookieValue string) (*Active, err
 	if err != nil {
 		return nil, err
 	}
-	sess, err := m.store.Find(ctx, payload.CurrentSessionID)
+	sess, err := m.findSession(ctx, payload.CurrentSessionID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, ErrCurrentSessionExpired
-		}
-		return nil, fmt.Errorf("sessions: find: %w", err)
+		return nil, err
 	}
 	if sess.ChooserGroupID != payload.ChooserGroupID {
 		// Cookie references a session that was reassigned to another
@@ -241,6 +238,29 @@ func sessionExpired(expiresAt, now time.Time) bool {
 	return !expiresAt.IsZero() && expiresAt.UTC().Before(now.UTC())
 }
 
+// findSession reads one session record and normalises the lookup outcome the
+// manager's read paths share: a missing row becomes
+// [ErrCurrentSessionExpired] so the caller clears the cookie, and any other
+// backend failure is wrapped.
+//
+// A nil record returned alongside a nil error violates the store contract. It
+// is folded into the same expired signal rather than dereferenced: a backend
+// that cannot produce the record has not proven the cookie still names a live
+// session, and the caller's existing branch already handles that.
+func (m *Manager) findSession(ctx context.Context, id string) (*store.Session, error) {
+	sess, err := m.store.Find(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrCurrentSessionExpired
+		}
+		return nil, fmt.Errorf("sessions: find: %w", err)
+	}
+	if sess == nil {
+		return nil, ErrCurrentSessionExpired
+	}
+	return sess, nil
+}
+
 // Touch refreshes the active session's idle timer to now + idleTTL. It is
 // a no-op when [Manager.Resolve] has already failed; callers should only
 // invoke Touch after a successful Resolve.
@@ -253,12 +273,9 @@ func sessionExpired(expiresAt, now time.Time) bool {
 func (m *Manager) Touch(ctx context.Context, sessionID string) error {
 	now := m.clock().UTC()
 	if m.absoluteTTL > 0 {
-		sess, err := m.store.Find(ctx, sessionID)
+		sess, err := m.findSession(ctx, sessionID)
 		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return ErrCurrentSessionExpired
-			}
-			return fmt.Errorf("sessions: find: %w", err)
+			return err
 		}
 		if now.Sub(sess.CreatedAt) > m.absoluteTTL {
 			// Best-effort delete: ignore not-found, surface only real errors.
@@ -304,12 +321,9 @@ func (m *Manager) Rotate(ctx context.Context, oldSessionID string) (Outcome, err
 	if oldSessionID == "" {
 		return Outcome{}, errors.New("sessions: Rotate requires oldSessionID")
 	}
-	sess, err := m.store.Find(ctx, oldSessionID)
+	sess, err := m.findSession(ctx, oldSessionID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return Outcome{}, ErrCurrentSessionExpired
-		}
-		return Outcome{}, fmt.Errorf("sessions: find: %w", err)
+		return Outcome{}, err
 	}
 	now := m.clock().UTC()
 	newID, err := newID()
@@ -362,8 +376,7 @@ func (m *Manager) Logout(ctx context.Context, sessionID string) error {
 
 // AddAccount adds a new authenticated account to an existing chooser group
 // and switches the cookie to point at it. It is the operation invoked when
-// the user clicks "sign in to another account" on the chooser screen
-// (002-product-design §A.9).
+// the user clicks "sign in to another account" on the chooser screen.
 //
 // chooserGroupID identifies the existing group to add to; the caller MUST
 // have previously confirmed the cookie's group via [Manager.Resolve] so
@@ -419,12 +432,9 @@ func (m *Manager) Switch(ctx context.Context, chooserGroupID, targetSessionID st
 	if chooserGroupID == "" || targetSessionID == "" {
 		return Outcome{}, errors.New("sessions: Switch requires ChooserGroupID and SessionID")
 	}
-	sess, err := m.store.Find(ctx, targetSessionID)
+	sess, err := m.findSession(ctx, targetSessionID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return Outcome{}, ErrCurrentSessionExpired
-		}
-		return Outcome{}, fmt.Errorf("sessions: find: %w", err)
+		return Outcome{}, err
 	}
 	if sess.ChooserGroupID != chooserGroupID {
 		return Outcome{}, ErrCookieInvalid
@@ -474,12 +484,9 @@ func (m *Manager) AuthContext(ctx context.Context, chooserGroupID, sessionID str
 	if chooserGroupID == "" || sessionID == "" {
 		return SessionAuthContext{}, errors.New("sessions: AuthContext requires ChooserGroupID and SessionID")
 	}
-	sess, err := m.store.Find(ctx, sessionID)
+	sess, err := m.findSession(ctx, sessionID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return SessionAuthContext{}, ErrCurrentSessionExpired
-		}
-		return SessionAuthContext{}, fmt.Errorf("sessions: find: %w", err)
+		return SessionAuthContext{}, err
 	}
 	if sess.ID != sessionID || sess.ChooserGroupID != chooserGroupID {
 		return SessionAuthContext{}, ErrCookieInvalid

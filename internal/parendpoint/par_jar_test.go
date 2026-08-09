@@ -121,7 +121,7 @@ func (f *jarFixture) happyClaims() map[string]any {
 		"aud": f.prov.Issuer,
 		"exp": f.clock.now.Add(5 * time.Minute).Unix(),
 		"iat": f.clock.now.Unix(),
-		// nbf is now required by default per L-JAR-NBF; pin it to iat
+		// nbf is required by default; pin it to iat
 		// so the FAPI 2.0 Message Signing §5.6 posture is satisfied
 		// uniformly across the test suite. jti is required by default
 		// per RFC 9101 §10.8; the helper mints a fresh value per call

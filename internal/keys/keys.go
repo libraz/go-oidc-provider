@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"context"
 	"crypto"
 	"errors"
 	"fmt"
@@ -44,18 +45,26 @@ type Entry struct {
 	NotAfter time.Time
 }
 
-// RetiredKidObserver is the seam [Set.Find] notifies when it rejects a
-// presented kid because the matching [Entry.NotAfter] has elapsed. The
-// observer is invoked with the requested kid value; a nil observer
-// silences the notification (the rejection still fires). The hook is
-// configured at construction time through [WithRetiredKidObserver] so
-// every verifier path that consults [Set.Find] surfaces the audit event
-// without threading the emitter through individual call sites.
+// RetiredKidObserver is the seam [Set.Find] and [EncryptionSet.Resolve]
+// notify when they reject a presented kid because the matching
+// retirement deadline has elapsed. The observer is invoked with the
+// requested kid value; a nil observer silences the notification (the
+// rejection still fires). The hook is configured at construction time
+// through [WithRetiredKidObserver] so every verifier path that consults
+// the keyset surfaces the audit event without threading the emitter
+// through individual call sites.
+//
+// ctx is the context of the request whose JWS presented the retired
+// kid. It carries the correlation an operator needs to answer "who
+// presented it, on which request" — the notification is otherwise a
+// bare kid with no way back to the caller. Verification paths that
+// hold a request context MUST pass it; see [Set.Find] and
+// [EncryptionSet.WithContext].
 //
 // The observer MUST NOT block on I/O (e.g. a synchronous network audit
 // sink) — it runs on the request hot path and a slow handler would
 // amplify a hostile-traffic burst into a verifier latency spike.
-type RetiredKidObserver func(keyID string)
+type RetiredKidObserver func(ctx context.Context, keyID string)
 
 // SetOption customises a [Set] at construction. Apply via [NewSet] or
 // the variadic options on the underlying constructor; later values
@@ -67,6 +76,7 @@ type SetOption func(*setConfig)
 type setConfig struct {
 	now      func() time.Time
 	observer RetiredKidObserver
+	jwe      jose.JWEPolicy
 }
 
 // WithClock pins the wall-clock seam [Set.Find] consults when comparing
@@ -83,12 +93,26 @@ func WithClock(now func() time.Time) SetOption {
 }
 
 // WithRetiredKidObserver registers the [RetiredKidObserver] notified
-// when [Set.Find] rejects a retired kid. A nil observer (or omitting
-// the option) leaves the notification path silent — the rejection
-// still happens, but no audit event fires.
+// when [Set.Find] or [EncryptionSet.Resolve] rejects a retired kid. A
+// nil observer (or omitting the option) leaves the notification path
+// silent — the rejection still happens, but no audit event fires.
 func WithRetiredKidObserver(obs RetiredKidObserver) SetOption {
 	return func(c *setConfig) {
 		c.observer = obs
+	}
+}
+
+// WithJWEPolicy pins the deployment's JWE narrowing onto an
+// [EncryptionSet] so inbound decryption enforces the same alg / enc
+// subset the discovery document advertises. The zero policy leaves the
+// [internal/jose] allow-list in force.
+//
+// Only [NewEncryptionSet] reads the value: a signing [Set] has no JWE
+// surface, so [NewSet] accepts the option and ignores it rather than
+// growing a second option type for one field.
+func WithJWEPolicy(p jose.JWEPolicy) SetOption {
+	return func(c *setConfig) {
+		c.jwe = p
 	}
 }
 
@@ -179,18 +203,24 @@ func (s *Set) Active() Entry { return s.entries[0] }
 // as an unknown-kid signal and MUST NOT fall back to the active key —
 // doing so would defeat key rotation auditing.
 //
+// ctx is the context of the request that presented the kid. It is used
+// only to correlate the retired-kid notification described below; the
+// lookup itself does no I/O and does not observe cancellation. Callers
+// MUST pass the request context rather than a detached one so the audit
+// event reaches the sink with the request's correlation attached.
+//
 // Retirement gate: an entry whose [Entry.NotAfter] is non-zero
 // and lies on or before the [Set]'s configured clock reading is
 // rejected as if the kid were unknown. The configured
-// [RetiredKidObserver] is notified so the audit pipeline can fire
-// [op.AuditKeyRetiredKidPresented] with the rejected kid; the
+// [RetiredKidObserver] is notified with ctx so the audit pipeline can
+// fire [op.AuditKeyRetiredKidPresented] with the rejected kid; the
 // notification fires once per call.
 //
 // The retirement comparison uses `!After(now)` (i.e., now >= NotAfter)
 // so a deadline of exactly "now" rejects, matching the intuitive
 // semantics: a kid scheduled to retire at T MUST NOT verify a JWS
 // presented at T.
-func (s *Set) Find(keyID string) (Entry, bool) {
+func (s *Set) Find(ctx context.Context, keyID string) (Entry, bool) {
 	for _, e := range s.entries {
 		if e.KeyID != keyID {
 			continue
@@ -199,7 +229,7 @@ func (s *Set) Find(keyID string) (Entry, bool) {
 			now := s.nowOrSystem()
 			if !now.Before(e.NotAfter) {
 				if s.observer != nil {
-					s.observer(keyID)
+					s.observer(ctx, keyID)
 				}
 				return Entry{}, false
 			}

@@ -30,8 +30,8 @@ type errorResponse struct {
 
 // writeRegistrationError emits the §3.2.2 envelope with the supplied
 // status, code, and description. Cache-Control: no-store is stamped
-// here so every error path automatically satisfies §A.6.2.2; callers
-// MUST NOT re-stamp it.
+// here so every registration failure response is uncacheable without
+// each call site repeating the header; callers MUST NOT re-stamp it.
 func writeRegistrationError(w http.ResponseWriter, status int, code, description string) {
 	stampNoStore(w)
 	w.Header().Set("Content-Type", "application/json")
@@ -47,7 +47,8 @@ func writeRegistrationError(w http.ResponseWriter, status int, code, description
 // writeInvalidToken is the dedicated 401 path for the "invalid_token"
 // code. RFC 6750 §3 mandates a WWW-Authenticate Bearer challenge so
 // RP libraries that follow the bearer state machine retry intelligently.
-// The realm value is the OP issuer per §A.6.2.2.
+// The realm value is the OP issuer, which names the protection space
+// unambiguously even when several OPs sit behind one host.
 func writeInvalidToken(w http.ResponseWriter, issuer, description string) {
 	header := `Bearer realm="` + issuer + `", error="invalid_token"`
 	if description != "" {
@@ -57,8 +58,9 @@ func writeInvalidToken(w http.ResponseWriter, issuer, description string) {
 	writeRegistrationError(w, http.StatusUnauthorized, codeInvalidToken, description)
 }
 
-// stampNoStore writes the cache-control headers RFC 7591 §3.2 and
-// §A.12.9 mandate on every registration response, success or failure.
+// stampNoStore writes the cache-control headers RFC 7591 §3.2 mandates
+// on every registration response; the OP applies them to failures as
+// well so no intermediary caches an error envelope.
 // Splitting the helper keeps the success and error paths from drifting.
 func stampNoStore(w http.ResponseWriter) {
 	endpointsupport.StampNoStore(w)
@@ -68,7 +70,7 @@ func stampNoStore(w http.ResponseWriter) {
 // safe to embed in error_description without leaking internal details
 // (DB names, SQL fragments, stack traces). The rules are: strip control
 // characters and CR/LF, collapse whitespace, and truncate to 200
-// characters02-product-design.md §J.4.1.
+// characters.
 func sanitizeDescription(s string) string {
 	if s == "" {
 		return s
@@ -107,7 +109,7 @@ func sanitizeHeaderValue(s string) string {
 	return s
 }
 
-// maxDescriptionBytes is the §J.4.1 ceiling applied to embedder
+// maxDescriptionBytes is the ceiling applied to embedder-supplied
 // error_description strings. 200 is enough for an operator hint while
 // short enough to defeat accidental exposure of multi-kilobyte stack
 // traces in error logs.

@@ -196,10 +196,18 @@ type TokenExchangeDecision struct {
 // subject_token or actor_token handed to a [TokenExchangePolicy].
 // The fields are populated from the provider's stores
 // ([store.AccessTokenRegistry] for JWT access tokens,
-// [store.OpaqueAccessTokenStore] for opaque access tokens, the
-// active signing keyset for id_tokens) so the policy can read
-// scope, audience, and binding metadata without re-implementing
-// verification.
+// [store.OpaqueAccessTokenStore] for opaque access tokens, and for
+// id_tokens the active signing keyset for verification plus
+// [store.GrantStore] for the scope the signature cannot carry) so the
+// policy can read scope, audience, and binding metadata without
+// re-implementing verification.
+//
+// An id_token issued to a client enrolled for pairwise subjects
+// (OpenID Connect Core 1.0 §8.1) cannot be exchanged: its "sub" is the
+// projected per-client value while the grant record holds the
+// OP-internal subject, so no grant resolves and the exchange is
+// refused rather than proceeding on rights the provider cannot
+// establish.
 //
 // Stable since v1.0.
 type SubjectTokenView struct {
@@ -216,10 +224,18 @@ type SubjectTokenView struct {
 	// added for the calling client.
 	ClientID string
 
-	// Scope is the scope set the original token carried. The
-	// provider has already verified the requested scope is a
-	// subset of this value; policies inspect it for risk-scoring
-	// or audit context.
+	// Scope is the scope set backing the original token. An access
+	// token carries its own scope claim and that is what appears
+	// here. An id_token does not: it has no scope claim, so the
+	// provider reads the scope from the durable grant the id_token's
+	// subject and client resolve to — the consent the user actually
+	// gave. Either way the provider has already verified the
+	// requested scope is a subset of this value; policies inspect it
+	// for risk-scoring or audit context.
+	//
+	// Because the id_token path goes through the grant, an exchange
+	// stops working the moment consent is withdrawn, and it can never
+	// yield more than the client would get by refreshing that grant.
 	Scope []string
 
 	// Audience is the audience set the original token carried.

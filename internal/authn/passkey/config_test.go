@@ -296,3 +296,64 @@ func TestNew_TimeoutsEnforceFalse(t *testing.T) {
 		t.Error("Timeouts.Login.Timeout = 0, want non-zero")
 	}
 }
+
+// TestNew_UserVerificationDefaultsToPreferred pins the default: a
+// config that says nothing about user verification requests
+// "preferred", which is what the package has always sent and what the
+// AAL accounting assumes when it treats a presence-only assertion as
+// single-factor.
+func TestNew_UserVerificationDefaultsToPreferred(t *testing.T) {
+	t.Parallel()
+
+	v, err := passkey.New(validConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := v.WebauthnForTest().Config.AuthenticatorSelection.UserVerification; got != protocol.VerificationPreferred {
+		t.Errorf("UserVerification = %q, want %q", got, protocol.VerificationPreferred)
+	}
+	if v.UserVerificationRequired() {
+		t.Error("UserVerificationRequired() = true, want false under the default")
+	}
+}
+
+// TestNew_UserVerificationRequiredIsSelectable covers the knob a
+// deployment needs to guarantee every assertion carries the UV gesture:
+// the requirement reaches the ceremony configuration, and the verifier
+// reports it so the assurance accounting can rely on it.
+func TestNew_UserVerificationRequiredIsSelectable(t *testing.T) {
+	t.Parallel()
+
+	cfg := validConfig()
+	cfg.UserVerification = protocol.VerificationRequired
+	v, err := passkey.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := v.WebauthnForTest().Config.AuthenticatorSelection.UserVerification; got != protocol.VerificationRequired {
+		t.Errorf("UserVerification = %q, want %q", got, protocol.VerificationRequired)
+	}
+	if !v.UserVerificationRequired() {
+		t.Error("UserVerificationRequired() = false, want true")
+	}
+}
+
+// TestNew_RejectsUnsupportedUserVerification confirms an unrecognised
+// requirement is a construction error rather than a silent fallback to
+// "preferred": a typo in the field would otherwise read as "user
+// verification is mandatory here" while accepting presence-only
+// assertions.
+func TestNew_RejectsUnsupportedUserVerification(t *testing.T) {
+	t.Parallel()
+
+	for _, uv := range []string{"Required", "mandatory", "bogus"} {
+		t.Run(uv, func(t *testing.T) {
+			t.Parallel()
+			cfg := validConfig()
+			cfg.UserVerification = protocol.UserVerificationRequirement(uv)
+			if _, err := passkey.New(cfg); !errors.Is(err, passkey.ErrInvalidConfig) {
+				t.Errorf("uv=%q err=%v want ErrInvalidConfig", uv, err)
+			}
+		})
+	}
+}

@@ -73,11 +73,12 @@ var (
 	ErrConflictingAccessTokenForms = errors.New("custom_grant: AccessToken and BoundAccessToken are mutually exclusive")
 
 	// ErrEmptyBoundSubject signals the handler returned a
-	// BoundAccessToken with no Subject AND the dispatch input also
-	// carried no SubjectID. The OP cannot synthesise a "sub" claim
-	// without a value from the handler so the wire layer rejects the
-	// response. Maps to server_error.
-	ErrEmptyBoundSubject = errors.New("custom_grant: BoundAccessToken has no Subject and request carries no SubjectID")
+	// BoundAccessToken with no Subject, the response carried no
+	// Subject either, AND the dispatch input carried no SubjectID.
+	// The OP cannot synthesise a "sub" claim without a value from the
+	// handler so the wire layer rejects the response. Maps to
+	// server_error.
+	ErrEmptyBoundSubject = errors.New("custom_grant: BoundAccessToken has no subject and none can be derived from the response or request")
 
 	// ErrNegativeTTL signals the handler returned a negative
 	// AccessTokenTTL. Maps to server_error; a negative TTL would

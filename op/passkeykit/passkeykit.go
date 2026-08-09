@@ -35,10 +35,18 @@ var (
 	ErrAttestationInvalid = passkey.ErrAttestationInvalid
 
 	// ErrCredentialAlreadyExists is returned when the authenticator
-	// produced a credential ID the subject has already registered. It
-	// is the server-side half of the excludeCredentials list [Registrar.Begin]
-	// sends: a compliant authenticator declines before it gets this
-	// far, and this is what catches the case where it did not.
+	// produced a credential ID that is already registered — to this
+	// subject or to another one. For this subject it is the
+	// server-side half of the excludeCredentials list
+	// [Registrar.Begin] sends: a compliant authenticator declines
+	// before it gets this far, and this is what catches the case where
+	// it did not. For another subject it is the refusal WebAuthn Level
+	// 3 §7.1 step 27 calls for, without which the enrolment would
+	// unlink that subject's authenticator.
+	//
+	// The two cases share one error deliberately. A handler that
+	// rendered them apart would tell whoever posted the response
+	// whether a credential ID belongs to somebody else.
 	ErrCredentialAlreadyExists = passkey.ErrCredentialAlreadyExists
 
 	// ErrInvalidResponse is returned when the posted bytes cannot be
@@ -234,7 +242,9 @@ func (r *Registrar) Finish(ctx context.Context, session *Session, user User, res
 
 	// Read the exclude list again rather than trusting the one Begin
 	// saw: a credential registered in between is one this ceremony must
-	// still refuse to duplicate.
+	// still refuse to duplicate. The list is this subject's own; the
+	// ceremony additionally asks the store whether the credential the
+	// authenticator minted belongs to somebody else.
 	existing, err := r.existingCredentials(ctx, user.Subject)
 	if err != nil {
 		return nil, err
@@ -242,7 +252,7 @@ func (r *Registrar) Finish(ctx context.Context, session *Session, user User, res
 
 	inner := session.inner
 	cred, err := r.verifier.FinishRegistration(
-		ctx, &inner, user.Subject, user.Name, user.DisplayName, existing, response)
+		ctx, r.store, &inner, user.Subject, user.Name, user.DisplayName, existing, response)
 	if err != nil {
 		return nil, fmt.Errorf("passkeykit: finish: %w", err)
 	}
@@ -256,13 +266,21 @@ func (r *Registrar) Finish(ctx context.Context, session *Session, user User, res
 // device the user believes is registered.
 //
 // Errors are [Registrar.Finish]'s, plus whatever
-// [store.PasskeyStore.Put] reports.
+// [store.PasskeyStore.Put] reports. A backend that refuses the write
+// because the credential ID is held by another subject — the
+// [store.ErrAlreadyExists] half of the Put contract, which closes the
+// window between the ceremony's ownership check and the write — is
+// reported as [ErrCredentialAlreadyExists] so callers see one error for
+// one condition however it was detected.
 func (r *Registrar) Register(ctx context.Context, session *Session, user User, response []byte) (*store.PasskeyRecord, error) {
 	rec, err := r.Finish(ctx, session, user, response)
 	if err != nil {
 		return nil, err
 	}
 	if err := r.store.Put(ctx, rec); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return nil, fmt.Errorf("passkeykit: persist credential: %w", ErrCredentialAlreadyExists)
+		}
 		return nil, fmt.Errorf("passkeykit: persist credential: %w", err)
 	}
 	return rec, nil

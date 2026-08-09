@@ -13,8 +13,7 @@ import (
 )
 
 // PromptType is the [interaction.Prompt.Type] the adapter emits. The string is
-// fixed by 02-product-design.md §E.2 and matches the
-// constant set [op.Authenticator.Prompts] returns.
+// fixed and matches the constant set [op.Authenticator.Prompts] returns.
 const PromptType = "auth.totp"
 
 // CodeFieldName is the [interaction.FieldSpec.Name] the adapter expects in
@@ -109,8 +108,8 @@ func (a *Authenticator) WithLockout(c *lockout.Counter) *Authenticator {
 // Type implements [authn.Authenticator]. Always returns [authn.FactorTOTP].
 func (*Authenticator) Type() authn.FactorType { return authn.FactorTOTP }
 
-// AAL implements [authn.Authenticator]. TOTP contributes AAL2 — the
-// RFC 8176 §2 mapping02-product-design.md §E.2.
+// AAL implements [authn.Authenticator]. TOTP contributes AAL2: the
+// shared secret is a possession factor distinct from a password.
 func (*Authenticator) AAL() authn.AAL { return authn.AAL2 }
 
 // AMR implements [authn.Authenticator]. TOTP maps to RFC 8176 §2 "otp".

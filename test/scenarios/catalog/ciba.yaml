@@ -205,9 +205,10 @@ rows:
     behaviour: |
       A POST /bc-authorize with id_token_hint and scope=openid returns
       200 OK; the persisted record's hint_kind is "id_token_hint". The
-      handler does not parse the id_token internally — the
-      HintResolver receives the raw value and is responsible for any
-      JWT verification.
+      OP verifies the token itself — signature against its own keyset,
+      iss equal to the issuer, and an audience naming the client that
+      authenticated on the request — and passes the HintResolver the
+      verified "sub" claim rather than the JWT.
     status: active
 
   - id: CIBA-020
@@ -536,4 +537,55 @@ rows:
       "amr := acr_values" plumbing was a wire-shape mismatch and
       let the OP misrepresent the methods the authentication device
       actually satisfied.
+    status: active
+    covered_by: internal/tokenendpoint.TestHandleCIBA_IDTokenStampsApprovedACRWithoutAMR
+    notes: |
+      Driving a CIBA redemption end to end needs an approve hook the
+      public surface does not expose, so the assertion sits at the
+      token endpoint where the approved record can be seated directly.
+
+  - id: CIBA-050
+    severity: P0
+    spec: CIBA Core §7.1 / OIDC Core §2
+    behaviour: |
+      A POST /bc-authorize whose id_token_hint fails any check the OP
+      owes MUST be rejected with 400 invalid_request before any
+      HintResolver runs. The checks are: the value parses as a compact
+      JWS whose kid names a live OP key and whose signature verifies
+      under it; iss equals the OP issuer; aud contains the
+      authenticated client_id and azp, when present, equals it.
+      The audience binding is the load-bearing one — without it any
+      CIBA-registered client could present an ID Token minted for a
+      different client and have the authentication ceremony addressed
+      to a subject it was never entitled to name. Every cause collapses
+      onto the same wire code and description so the response is not an
+      oracle for which check closed.
+    status: active
+
+  - id: CIBA-051
+    severity: P1
+    spec: CIBA Core §7.1
+    behaviour: |
+      An id_token_hint whose exp is in the past is accepted. This is a
+      policy choice, not a spec clause: a CIBA consumption device
+      legitimately holds an ID Token minted during a session that ended
+      long ago, and because ID Tokens are short-lived an exp gate would
+      reject nearly every real hint. Freshness adds nothing to the
+      decision — the client has authenticated at the endpoint, and it
+      is the signature plus the audience binding that establish who is
+      asking. RP-Initiated Logout's id_token_hint makes the same
+      choice, so the two hint surfaces stay consistent.
+    status: active
+
+  - id: CIBA-052
+    severity: P1
+    spec: CIBA Core §7.1 / OIDC Core §8.1
+    behaviour: |
+      A client registered with subject_type=pairwise MUST be refused
+      when it supplies id_token_hint, with 400 invalid_request naming
+      login_hint and login_hint_token as the alternatives. Its "sub"
+      values are per-sector pseudonyms the OP keeps no reverse index
+      for, so a resolver could neither map one back to an end-user nor
+      be told to guess. Requests from the same client carrying
+      login_hint or login_hint_token are unaffected.
     status: active

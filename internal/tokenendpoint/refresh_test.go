@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/tokenendpoint"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -85,7 +87,7 @@ func TestRefresh_HappyPath_OIDC(t *testing.T) {
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-happy"
+	const refreshID = "rt-happy"
 	const subject = "user-1"
 	const grantID = "grant-rt"
 
@@ -94,14 +96,14 @@ func TestRefresh_HappyPath_OIDC(t *testing.T) {
 		Scope: []string{"openid", "email"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
 		Scope:    []string{"openid", "email"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -109,8 +111,8 @@ func TestRefresh_HappyPath_OIDC(t *testing.T) {
 	}
 	body := decodeJSON(t, resp)
 	rotated, _ := body["refresh_token"].(string)
-	if rotated == "" || rotated == tokenID {
-		t.Errorf("refresh_token must be rotated; got %q (input %q)", rotated, tokenID)
+	if rotated == "" || rotated == refreshID {
+		t.Errorf("refresh_token must be rotated; got %q (input %q)", rotated, refreshID)
 	}
 	if _, hasID := body["id_token"]; !hasID {
 		t.Errorf("id_token must be issued for openid-scoped refresh")
@@ -129,7 +131,7 @@ func TestRefresh_RequireAuthTime_EmitsAuthTime(t *testing.T) {
 	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
 		t.Fatalf("UpdateClient: %v", err)
 	}
-	const tokenID = "rt-require-auth-time" //nolint:gosec // G101 false positive: refresh-token row ID, not a credential.
+	const refreshID = "rt-require-auth-time"
 	const subject = "user-1"
 	const grantID = "grant-rt-require-auth-time"
 	authTime := f.clock.now.Add(-3 * time.Minute)
@@ -146,14 +148,14 @@ func TestRefresh_RequireAuthTime_EmitsAuthTime(t *testing.T) {
 		t.Fatalf("Grants.Save: %v", err)
 	}
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
 		Scope:    []string{"openid", "offline_access"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -178,10 +180,10 @@ func TestRefresh_UsesRefreshRecordAuthContextWithoutGrant(t *testing.T) {
 	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
 		t.Fatalf("UpdateClient: %v", err)
 	}
-	const tokenID = "rt-record-auth-context" //nolint:gosec // refresh-token id fixture, not a live credential.
+	const refreshID = "rt-record-auth-context"
 	authTime := f.clock.now.Add(-7 * time.Minute)
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:                   tokenID,
+		ID:                   refreshID,
 		ClientID:             client.ID,
 		Subject:              "user-1",
 		GrantID:              "missing-grant-record-context",
@@ -192,7 +194,7 @@ func TestRefresh_UsesRefreshRecordAuthContextWithoutGrant(t *testing.T) {
 		AuthorizationDetails: []map[string]any{{"type": "payment"}},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -215,7 +217,7 @@ func TestRefresh_AuthorizationDetailsCanBeReducedAtTokenEndpoint(t *testing.T) {
 
 	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-rar-reduce" //nolint:gosec // test fixture token ID, not a credential.
+	const refreshID = "rt-rar-reduce"
 	const subject = "user-rar-reduce"
 	const grantID = "grant-rar-reduce"
 	granted := []map[string]any{
@@ -230,7 +232,7 @@ func TestRefresh_AuthorizationDetailsCanBeReducedAtTokenEndpoint(t *testing.T) {
 		AuthorizationDetails: granted,
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:                   tokenID,
+		ID:                   refreshID,
 		ClientID:             client.ID,
 		Subject:              subject,
 		GrantID:              grantID,
@@ -238,7 +240,7 @@ func TestRefresh_AuthorizationDetailsCanBeReducedAtTokenEndpoint(t *testing.T) {
 		AuthorizationDetails: granted,
 	})
 
-	form := refreshForm(tokenID, "")
+	form := refreshForm(refreshID, "")
 	form.Set("authorization_details", `[{"type":"payment","amount":"100"}]`)
 	resp := f.post(t, form, client.ID, secret)
 	defer resp.Body.Close()
@@ -265,7 +267,7 @@ func TestRefresh_AuthorizationDetailsGrantWinsOverStaleRefreshSnapshot(t *testin
 
 	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-rar-stale-snapshot" //nolint:gosec // test fixture token ID, not a credential.
+	const refreshID = "rt-rar-stale-snapshot"
 	const subject = "user-rar-stale-snapshot"
 	const grantID = "grant-rar-stale-snapshot"
 	oldDetails := []map[string]any{{"type": "payment", "amount": "100000"}}
@@ -278,7 +280,7 @@ func TestRefresh_AuthorizationDetailsGrantWinsOverStaleRefreshSnapshot(t *testin
 		AuthorizationDetails: currentDetails,
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:                   tokenID,
+		ID:                   refreshID,
 		ClientID:             client.ID,
 		Subject:              subject,
 		GrantID:              grantID,
@@ -286,7 +288,7 @@ func TestRefresh_AuthorizationDetailsGrantWinsOverStaleRefreshSnapshot(t *testin
 		AuthorizationDetails: oldDetails,
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -324,7 +326,7 @@ func TestRefresh_AuthorizationDetailsOutsideGrantRejected(t *testing.T) {
 
 	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-rar-reject" //nolint:gosec // test fixture token ID, not a credential.
+	const refreshID = "rt-rar-reject"
 	const subject = "user-rar-reject"
 	const grantID = "grant-rar-reject"
 	granted := []map[string]any{{"type": "payment", "amount": "100"}}
@@ -336,7 +338,7 @@ func TestRefresh_AuthorizationDetailsOutsideGrantRejected(t *testing.T) {
 		AuthorizationDetails: granted,
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:                   tokenID,
+		ID:                   refreshID,
 		ClientID:             client.ID,
 		Subject:              subject,
 		GrantID:              grantID,
@@ -344,7 +346,7 @@ func TestRefresh_AuthorizationDetailsOutsideGrantRejected(t *testing.T) {
 		AuthorizationDetails: granted,
 	})
 
-	form := refreshForm(tokenID, "")
+	form := refreshForm(refreshID, "")
 	form.Set("authorization_details", `[{"type":"payment","amount":"999"}]`)
 	resp := f.post(t, form, client.ID, secret)
 	defer resp.Body.Close()
@@ -356,7 +358,7 @@ func TestRefresh_AuthorizationDetailsOutsideGrantRejected(t *testing.T) {
 		t.Fatalf("error=%v want invalid_authorization_details", got)
 	}
 
-	rejected, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	rejected, err := f.prov.Store.RefreshTokens().Find(context.Background(), refreshID)
 	if err != nil {
 		t.Fatalf("RefreshTokens.Find(rejected predecessor): %v", err)
 	}
@@ -364,7 +366,7 @@ func TestRefresh_AuthorizationDetailsOutsideGrantRejected(t *testing.T) {
 		t.Fatalf("authorization_details mismatch consumed predecessor at %v", rejected.ConsumedAt)
 	}
 
-	retryForm := refreshForm(tokenID, "")
+	retryForm := refreshForm(refreshID, "")
 	retryForm.Set("authorization_details", `[{"type":"payment","amount":"100"}]`)
 	retry := f.post(t, retryForm, client.ID, secret)
 	defer retry.Body.Close()
@@ -383,7 +385,7 @@ func TestRefresh_AuthorizationDetailsStaleSnapshotMismatchDoesNotConsume(t *test
 
 	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-rar-stale-reject" //nolint:gosec // test fixture token ID, not a credential.
+	const refreshID = "rt-rar-stale-reject"
 	const subject = "user-rar-stale-reject"
 	const grantID = "grant-rar-stale-reject"
 	staleDetails := []map[string]any{{"type": "payment", "amount": "100000"}}
@@ -396,7 +398,7 @@ func TestRefresh_AuthorizationDetailsStaleSnapshotMismatchDoesNotConsume(t *test
 		AuthorizationDetails: currentDetails,
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:                   tokenID,
+		ID:                   refreshID,
 		ClientID:             client.ID,
 		Subject:              subject,
 		GrantID:              grantID,
@@ -404,7 +406,7 @@ func TestRefresh_AuthorizationDetailsStaleSnapshotMismatchDoesNotConsume(t *test
 		AuthorizationDetails: staleDetails,
 	})
 
-	form := refreshForm(tokenID, "")
+	form := refreshForm(refreshID, "")
 	form.Set("authorization_details", `[{"type":"payment","amount":"100000"}]`)
 	resp := f.post(t, form, client.ID, secret)
 	defer resp.Body.Close()
@@ -415,7 +417,7 @@ func TestRefresh_AuthorizationDetailsStaleSnapshotMismatchDoesNotConsume(t *test
 	if got := body["error"]; got != "invalid_authorization_details" {
 		t.Fatalf("error=%v want invalid_authorization_details", got)
 	}
-	rejected, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	rejected, err := f.prov.Store.RefreshTokens().Find(context.Background(), refreshID)
 	if err != nil {
 		t.Fatalf("RefreshTokens.Find(rejected predecessor): %v", err)
 	}
@@ -423,7 +425,7 @@ func TestRefresh_AuthorizationDetailsStaleSnapshotMismatchDoesNotConsume(t *test
 		t.Fatalf("stale-snapshot mismatch consumed predecessor at %v", rejected.ConsumedAt)
 	}
 
-	retry := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	retry := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer retry.Body.Close()
 	if retry.StatusCode != http.StatusOK {
 		t.Fatalf("retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
@@ -460,7 +462,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T
 	server := httptest.NewServer(provider)
 	t.Cleanup(server.Close)
 
-	const secret = "rar-grant-fault-secret" //nolint:gosec // fixture-only client credential.
+	const secret = "rar-grant-fault-secret" //nolint:gosec // G101: fixture client secret for a test provider, never a live credential.
 	hash, err := (&clientauth.Argon2id{}).Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)
@@ -475,7 +477,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T
 		t.Fatalf("RegisterClient: %v", err)
 	}
 
-	const tokenID = "rt-rar-grant-fault" //nolint:gosec // test fixture token ID, not a credential.
+	const refreshID = "rt-rar-grant-fault"
 	const grantID = "grant-rar-grant-fault"
 	details := []map[string]any{{"type": "payment", "amount": "100"}}
 	if err := backing.Grants().Save(context.Background(), &store.Grant{
@@ -490,7 +492,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T
 		t.Fatalf("Grants.Save: %v", err)
 	}
 	if err := backing.RefreshTokens().Save(context.Background(), &store.RefreshToken{
-		ID:                   tokenID,
+		ID:                   refreshID,
 		ClientID:             client.ID,
 		Subject:              "user-rar-grant-fault",
 		GrantID:              grantID,
@@ -522,7 +524,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T
 		return resp
 	}
 
-	form := refreshForm(tokenID, "")
+	form := refreshForm(refreshID, "")
 	form.Set("authorization_details", `[{"type":"payment","amount":"100"}]`)
 	resp := post(form)
 	defer resp.Body.Close()
@@ -533,7 +535,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T
 	if got := body["error"]; got != "server_error" {
 		t.Fatalf("fault error=%v want server_error", got)
 	}
-	rejected, err := backing.RefreshTokens().Find(context.Background(), tokenID)
+	rejected, err := backing.RefreshTokens().Find(context.Background(), refreshID)
 	if err != nil {
 		t.Fatalf("RefreshTokens.Find(after fault): %v", err)
 	}
@@ -557,7 +559,7 @@ func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
 		t.Fatalf("UpdateClient: %v", err)
 	}
-	const tokenID = "rt-require-auth-time-missing" //nolint:gosec // G101 false positive: refresh-token row ID, not a credential.
+	const refreshID = "rt-require-auth-time-missing"
 	const subject = "user-1"
 	const grantID = "grant-rt-require-auth-time-missing"
 
@@ -570,14 +572,14 @@ func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 		t.Fatalf("Grants.Save: %v", err)
 	}
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
 		Scope:    []string{"openid", "offline_access"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status=%d want 500 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -586,7 +588,7 @@ func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 	if got := body["error"]; got != "server_error" {
 		t.Fatalf("error=%v want server_error", got)
 	}
-	stored, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	stored, err := f.prov.Store.RefreshTokens().Find(context.Background(), refreshID)
 	if err != nil {
 		t.Fatalf("Find after 500: %v", err)
 	}
@@ -597,7 +599,7 @@ func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
 		t.Fatalf("UpdateClient retry config: %v", err)
 	}
-	retry := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	retry := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer retry.Body.Close()
 	if retry.StatusCode != http.StatusOK {
 		t.Fatalf("retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
@@ -611,16 +613,16 @@ func TestRefresh_HappyPath_NonOIDC(t *testing.T) {
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-nooidc" //nolint:gosec // not a credential — opaque test fixture id.
+	const refreshID = "rt-nooidc"
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  "user-1",
 		GrantID:  "grant-nooidc",
 		Scope:    []string{"profile"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
@@ -636,7 +638,7 @@ func TestRefresh_ResourcePreservesAudienceAndRotation(t *testing.T) {
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-resource"
+	const refreshID = "rt-resource"
 	const subject = "user-1"
 	const grantID = "grant-rt-resource"
 	const resource = "https://api.example.com"
@@ -646,7 +648,7 @@ func TestRefresh_ResourcePreservesAudienceAndRotation(t *testing.T) {
 		Scope: []string{"openid", "email", "offline_access"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
@@ -654,7 +656,7 @@ func TestRefresh_ResourcePreservesAudienceAndRotation(t *testing.T) {
 		Resource: resource,
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -667,7 +669,7 @@ func TestRefresh_ResourcePreservesAudienceAndRotation(t *testing.T) {
 	verifier := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	claims, _, err := verifier.Verify(at)
+	claims, _, err := verifier.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
@@ -710,9 +712,9 @@ func TestRefresh_Replay(t *testing.T) {
 		clock:    fixedClock{now: cur},
 	}
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-replay"
+	const refreshID = "rt-replay"
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  "user-1",
 		GrantID:  "grant-replay",
@@ -720,7 +722,7 @@ func TestRefresh_Replay(t *testing.T) {
 	})
 
 	// First exchange must succeed.
-	first := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	first := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	if first.StatusCode != http.StatusOK {
 		t.Fatalf("first exchange status=%d want 200", first.StatusCode)
 	}
@@ -736,7 +738,7 @@ func TestRefresh_Replay(t *testing.T) {
 	cur = cur.Add(2 * time.Minute)
 
 	// Replay of the original token must fail and revoke the chain.
-	second := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	second := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusBadRequest {
 		t.Fatalf("replay status=%d want 400", second.StatusCode)
@@ -774,16 +776,16 @@ func TestRefresh_GraceWindow(t *testing.T) {
 		clock:    fixedClock{now: cur},
 	}
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-grace"
+	const refreshID = "rt-grace"
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  "user-1",
 		GrantID:  "grant-grace",
 		Scope:    []string{"openid"},
 	})
 
-	first := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	first := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	if first.StatusCode != http.StatusOK {
 		t.Fatalf("first status=%d want 200", first.StatusCode)
 	}
@@ -801,7 +803,7 @@ func TestRefresh_GraceWindow(t *testing.T) {
 	// Step inside the grace window (default 30s).
 	cur = cur.Add(5 * time.Second)
 
-	second := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	second := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusOK {
 		t.Fatalf("grace status=%d want 200", second.StatusCode)
@@ -817,22 +819,159 @@ func TestRefresh_GraceWindow(t *testing.T) {
 	}
 }
 
+// keylessRefreshFixture drives [tokenendpoint.Handler] with a Deps that
+// carries no retry-response encryption keys. That is not an incomplete
+// wiring: those keys are the cookie keys, which are mandatory only for
+// the authorization-code grant, so an OP built around CIBA, the device
+// flow, or a custom grant runs without them and its rotations never
+// cache a response to replay.
+type keylessRefreshFixture struct {
+	deps   tokenendpoint.Deps
+	store  *inmem.Store
+	client *store.Client
+	secret string
+}
+
+func newKeylessRefreshFixture(t *testing.T, clock movableClock) *keylessRefreshFixture {
+	t.Helper()
+
+	const secret = "keyless-refresh-secret"
+	s := inmem.New(inmem.WithClock(clock))
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := &store.Client{
+		ID:                      "client-keyless-refresh",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grant.RefreshToken.String()},
+		Scopes:                  []string{"openid"},
+	}
+	if err := s.RegisterClient(context.Background(), client); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+	entry, err := keys.GenerateES256("keyless-refresh-kid")
+	if err != nil {
+		t.Fatalf("keys.GenerateES256: %v", err)
+	}
+	keySet, err := keys.NewSet([]keys.Entry{entry})
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+	return &keylessRefreshFixture{
+		deps: tokenendpoint.Deps{
+			Issuer:        "https://op.example",
+			Clients:       s,
+			Codes:         s.AuthorizationCodes(),
+			RefreshTokens: s.RefreshTokens(),
+			Grants:        s.Grants(),
+			UserStore:     s.Users(),
+			AccessTokens:  s.AccessTokens(),
+			Keys:          keySet,
+			Clock:         clock,
+		},
+		store:  s,
+		client: client,
+		secret: secret,
+	}
+}
+
+func (f *keylessRefreshFixture) post(t *testing.T, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(f.client.ID, f.secret)
+	rec := httptest.NewRecorder()
+	tokenendpoint.Handler(f.deps).ServeHTTP(rec, req)
+	return rec
+}
+
+// decodeRecorderJSON parses a recorded response body as a JSON object.
+func decodeRecorderJSON(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body map[string]any
+	if err := jsonUnmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
+	}
+	return body
+}
+
+// TestRefresh_GraceWindow_WithoutRetryCache covers the grace window on a
+// deployment that has no retry-response cache at all. The window is a
+// property of the refresh grant, so it opens for these deployments too,
+// but there is nothing cached to re-emit. The retry must then earn the
+// same invalid_grant a presentation past the window earns — a spent
+// token is spent — rather than a 500 that reads as an OP fault and
+// tells the client to try again.
+func TestRefresh_GraceWindow_WithoutRetryCache(t *testing.T) {
+	t.Parallel()
+
+	cur := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newKeylessRefreshFixture(t, movableClock{cur: &cur})
+	const refreshID = "rt-keyless-grace"
+	if err := f.store.RefreshTokens().Save(context.Background(), &store.RefreshToken{
+		ID:        refreshID,
+		ClientID:  f.client.ID,
+		Subject:   "user-1",
+		GrantID:   "grant-keyless-grace",
+		Scope:     []string{"openid"},
+		CreatedAt: cur,
+		ExpiresAt: cur.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("RefreshTokens.Save: %v", err)
+	}
+
+	first := f.post(t, refreshForm(refreshID, ""))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status=%d want 200, body=%s", first.Code, first.Body.String())
+	}
+	successor, _ := decodeRecorderJSON(t, first)["refresh_token"].(string)
+	if successor == "" {
+		t.Fatal("first exchange did not rotate a refresh token")
+	}
+
+	// Step inside the default 30-second grace window.
+	cur = cur.Add(5 * time.Second)
+
+	second := f.post(t, refreshForm(refreshID, ""))
+	if second.Code == http.StatusInternalServerError {
+		t.Fatalf("grace retry without a cache returned 500: %s", second.Body.String())
+	}
+	if second.Code != http.StatusBadRequest {
+		t.Fatalf("grace retry status=%d want 400, body=%s", second.Code, second.Body.String())
+	}
+	if got := decodeRecorderJSON(t, second)["error"]; got != "invalid_grant" {
+		t.Errorf("grace retry error=%v want invalid_grant", got)
+	}
+
+	// The refused retry must leave the chain alone: the successor the
+	// first exchange handed out is still the live token.
+	third := f.post(t, refreshForm(successor, ""))
+	if third.Code != http.StatusOK {
+		t.Fatalf("successor status=%d want 200 (the refused retry must not revoke the chain), body=%s",
+			third.Code, third.Body.String())
+	}
+}
+
 // TestRefresh_ScopeWidening enforces RFC 6749 §6.
 func TestRefresh_ScopeWidening(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-widen"
+	const refreshID = "rt-widen"
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  "user-1",
 		GrantID:  "grant-widen",
 		Scope:    []string{"openid"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, "openid email"), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, "openid email"), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
@@ -849,16 +988,16 @@ func TestRefresh_ScopeNarrowing(t *testing.T) {
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-narrow"
+	const refreshID = "rt-narrow"
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  "user-1",
 		GrantID:  "grant-narrow",
 		Scope:    []string{"openid", "email", "profile"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, "openid"), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, "openid"), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
@@ -914,20 +1053,20 @@ func TestRefresh_ScopeAllowedClients_Rejected(t *testing.T) {
 		Scopes:                  []string{"openid", "profile", "email", "billing:write"},
 	})
 
-	const tokenID = "rt-allowlist"
+	const refreshID = "rt-allowlist"
 	f.seedGrant(t, &store.Grant{
 		ID: "grant-allowlist", Subject: "user-1", ClientID: client.ID,
 		Scope: []string{"openid", "billing:write"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  "user-1",
 		GrantID:  "grant-allowlist",
 		Scope:    []string{"openid", "billing:write"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, "openid billing:write"), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, "openid billing:write"), client.ID, secret)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusBadRequest {
@@ -942,7 +1081,7 @@ func TestRefresh_ScopeAllowedClients_Rejected(t *testing.T) {
 	// check runs before refresh.Exchanger.Exchange, so the record's
 	// ConsumedAt should remain nil and a subsequent allowlist-clean
 	// request must succeed against the same token.
-	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), refreshID)
 	if err != nil {
 		t.Fatalf("RefreshTokens.Find after rejection: %v", err)
 	}
@@ -971,22 +1110,20 @@ func TestRefresh_ScopeAllowedClients_RejectedWhenScopeOmitted(t *testing.T) {
 		TokenEndpointAuthMethod: "client_secret_basic",
 		Scopes:                  []string{"openid", "profile", "email", "billing:write"},
 	})
-
-	//nolint:gosec // G101 false positive: test fixture identifier, not a credential.
-	const tokenID = "rt-allowlist-omitted"
+	const refreshID = "rt-allowlist-omitted"
 	f.seedGrant(t, &store.Grant{
 		ID: "grant-allowlist-omitted", Subject: "user-1", ClientID: client.ID,
 		Scope: []string{"openid", "billing:write"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  "user-1",
 		GrantID:  "grant-allowlist-omitted",
 		Scope:    []string{"openid", "billing:write"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusBadRequest {
@@ -996,7 +1133,7 @@ func TestRefresh_ScopeAllowedClients_RejectedWhenScopeOmitted(t *testing.T) {
 	if got := body["error"]; got != "invalid_scope" {
 		t.Errorf("error=%v want invalid_scope", got)
 	}
-	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), refreshID)
 	if err != nil {
 		t.Fatalf("RefreshTokens.Find after rejection: %v", err)
 	}
@@ -1025,20 +1162,20 @@ func TestRefresh_ScopeAllowedClients_Permitted(t *testing.T) {
 		Scopes:                  []string{"openid", "billing:write"},
 	})
 
-	const tokenID = "rt-allowlist-ok" //nolint:gosec // not a credential — opaque test fixture id.
+	const refreshID = "rt-allowlist-ok"
 	f.seedGrant(t, &store.Grant{
 		ID: "grant-allowlist-ok", Subject: "user-1", ClientID: client.ID,
 		Scope: []string{"openid", "billing:write"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  "user-1",
 		GrantID:  "grant-allowlist-ok",
 		Scope:    []string{"openid", "billing:write"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, "openid billing:write"), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, "openid billing:write"), client.ID, secret)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -1067,7 +1204,7 @@ func TestRefresh_HonoursClaimsRequest_IDToken(t *testing.T) {
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-claims"
+	const refreshID = "rt-claims"
 	const subject = "user-claims"
 	const grantID = "grant-claims"
 
@@ -1087,14 +1224,14 @@ func TestRefresh_HonoursClaimsRequest_IDToken(t *testing.T) {
 		},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
 		Scope:    []string{"openid"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -1115,7 +1252,7 @@ func TestRefresh_IDTokenOmitsACRWhenClaimsRequestDisallowsStoredACR(t *testing.T
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-claims-acr" //nolint:gosec // test fixture token ID, not a credential.
+	const refreshID = "rt-claims-acr"
 	const subject = "user-claims-acr"
 	const grantID = "grant-claims-acr"
 
@@ -1137,14 +1274,14 @@ func TestRefresh_IDTokenOmitsACRWhenClaimsRequestDisallowsStoredACR(t *testing.T
 		},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
 		Scope:    []string{"openid"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -1192,7 +1329,7 @@ func TestRefresh_OpaqueFormat_RotationRevokesPriorAT(t *testing.T) {
 	f := opaqueRefreshFixture(t)
 	client, secret := f.confidentialClientFixture(t)
 
-	const tokenID = "rt-opaque-rotate" //nolint:gosec // G101 false positive: refresh-token row ID, not a credential.
+	const refreshID = "rt-opaque-rotate"
 	const subject = "user-opaque-rotate"
 	const grantID = "grant-opaque-rotate"
 	f.seedGrant(t, &store.Grant{
@@ -1200,7 +1337,7 @@ func TestRefresh_OpaqueFormat_RotationRevokesPriorAT(t *testing.T) {
 		Scope: []string{"openid"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
@@ -1225,7 +1362,7 @@ func TestRefresh_OpaqueFormat_RotationRevokesPriorAT(t *testing.T) {
 		t.Fatalf("OpaqueAccessTokens.Save: %v", err)
 	}
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -1285,7 +1422,7 @@ func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
 	server := httptest.NewServer(provider)
 	t.Cleanup(server.Close)
 
-	const secret = "opaque-revoke-failure-secret" //nolint:gosec // fixture-only client credential.
+	const secret = "opaque-revoke-failure-secret" //nolint:gosec // G101: fixture client secret for a test provider, never a live credential.
 	hash, err := (&clientauth.Argon2id{}).Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)
@@ -1370,7 +1507,7 @@ func TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT(t *testing.T) {
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
 
-	const tokenID = "rt-jwt-rotate" //nolint:gosec // G101 false positive: refresh-token row ID, not a credential.
+	const refreshID = "rt-jwt-rotate"
 	const subject = "user-jwt-rotate"
 	const grantID = "grant-jwt-rotate"
 	f.seedGrant(t, &store.Grant{
@@ -1378,7 +1515,7 @@ func TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT(t *testing.T) {
 		Scope: []string{"openid"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
@@ -1398,7 +1535,7 @@ func TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT(t *testing.T) {
 		t.Fatalf("AccessTokens.Register: %v", err)
 	}
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -1435,7 +1572,7 @@ func TestRefresh_GrantTombstoned_MintRefused(t *testing.T) {
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-tombstoned"
+	const refreshID = "rt-tombstoned"
 	const grantID = "grant-tombstoned-mint-refused"
 	const subject = "user-tombstoned"
 
@@ -1444,7 +1581,7 @@ func TestRefresh_GrantTombstoned_MintRefused(t *testing.T) {
 		Scope: []string{"openid", "offline_access"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:        tokenID,
+		ID:        refreshID,
 		ClientID:  client.ID,
 		Subject:   subject,
 		GrantID:   grantID,
@@ -1465,7 +1602,7 @@ func TestRefresh_GrantTombstoned_MintRefused(t *testing.T) {
 		t.Fatalf("GrantRevocations.RevokeGrant: %v", err)
 	}
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -1492,7 +1629,7 @@ func TestRefresh_GrantNotTombstoned_MintAllowed(t *testing.T) {
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-not-tombstoned"
+	const refreshID = "rt-not-tombstoned"
 	const grantID = "grant-not-tombstoned"
 	const subject = "user-not-tombstoned"
 
@@ -1501,14 +1638,14 @@ func TestRefresh_GrantNotTombstoned_MintAllowed(t *testing.T) {
 		Scope: []string{"openid"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
 		Scope:    []string{"openid"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -1532,7 +1669,7 @@ func TestRefresh_GidClaim_PresentOnRotatedAT(t *testing.T) {
 
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-gid"
+	const refreshID = "rt-gid"
 	const grantID = "grant-rt-gid"
 	const subject = "user-rt-gid"
 
@@ -1541,14 +1678,14 @@ func TestRefresh_GidClaim_PresentOnRotatedAT(t *testing.T) {
 		Scope: []string{"openid"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
 		Scope:    []string{"openid"},
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -1561,7 +1698,7 @@ func TestRefresh_GidClaim_PresentOnRotatedAT(t *testing.T) {
 	verifier := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	claims, _, err := verifier.Verify(at)
+	claims, _, err := verifier.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
@@ -1585,10 +1722,10 @@ func TestRefresh_NoncePreservedAcrossRotation(t *testing.T) {
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
 	const (
-		tokenID = "rt-nonce-preserve" //nolint:gosec // test fixture: not a real credential.
-		subject = "user-1"
-		grantID = "grant-rt-nonce-preserve"
-		nonce   = "n-0S6_WzA2Mj-original"
+		refreshID = "rt-nonce-preserve"
+		subject   = "user-1"
+		grantID   = "grant-rt-nonce-preserve"
+		nonce     = "n-0S6_WzA2Mj-original"
 	)
 
 	f.seedGrant(t, &store.Grant{
@@ -1596,7 +1733,7 @@ func TestRefresh_NoncePreservedAcrossRotation(t *testing.T) {
 		Scope: []string{"openid", "offline_access"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
@@ -1604,7 +1741,7 @@ func TestRefresh_NoncePreservedAcrossRotation(t *testing.T) {
 		Nonce:    nonce,
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -1619,8 +1756,8 @@ func TestRefresh_NoncePreservedAcrossRotation(t *testing.T) {
 		t.Fatalf("rotated id_token nonce=%v want %q", got, nonce)
 	}
 	rotated, _ := body["refresh_token"].(string)
-	if rotated == "" || rotated == tokenID {
-		t.Fatalf("refresh_token was not rotated: got %q (input %q)", rotated, tokenID)
+	if rotated == "" || rotated == refreshID {
+		t.Fatalf("refresh_token was not rotated: got %q (input %q)", rotated, refreshID)
 	}
 	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), rotated)
 	if err != nil {
@@ -1643,9 +1780,9 @@ func TestRefresh_NonceAbsent_OmitsClaim(t *testing.T) {
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
 	const (
-		tokenID = "rt-no-nonce" //nolint:gosec // test fixture: not a real credential.
-		subject = "user-1"
-		grantID = "grant-rt-no-nonce"
+		refreshID = "rt-no-nonce"
+		subject   = "user-1"
+		grantID   = "grant-rt-no-nonce"
 	)
 
 	f.seedGrant(t, &store.Grant{
@@ -1653,7 +1790,7 @@ func TestRefresh_NonceAbsent_OmitsClaim(t *testing.T) {
 		Scope: []string{"openid"},
 	})
 	f.seedRefreshToken(t, &store.RefreshToken{
-		ID:       tokenID,
+		ID:       refreshID,
 		ClientID: client.ID,
 		Subject:  subject,
 		GrantID:  grantID,
@@ -1661,7 +1798,7 @@ func TestRefresh_NonceAbsent_OmitsClaim(t *testing.T) {
 		// Nonce intentionally empty.
 	})
 
-	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	resp := f.post(t, refreshForm(refreshID, ""), client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)

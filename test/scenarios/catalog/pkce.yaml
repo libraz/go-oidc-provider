@@ -107,7 +107,7 @@ rows:
       policy requires PKCE to be used for this request"; state is
       preserved.
     status: out-of-scope
-    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167) records the policy: \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised."
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported: returning a bearer token in the URL fragment leaks it through browser history and Referer, and OAuth 2.1 / RFC 9700 §2.1.2 drop the implicit grant for that reason. Only response_type=code is advertised."
 
   - id: PKCE-009
     severity: P1
@@ -117,7 +117,7 @@ rows:
       not in effect: the request succeeds and the response carries
       id_token and state in the fragment.
     status: out-of-scope
-    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167) records the policy: \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised."
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported: returning a bearer token in the URL fragment leaks it through browser history and Referer, and OAuth 2.1 / RFC 9700 §2.1.2 drop the implicit grant for that reason. Only response_type=code is advertised."
 
   - id: PKCE-010
     severity: P0

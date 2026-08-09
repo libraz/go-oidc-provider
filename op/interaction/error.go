@@ -30,6 +30,22 @@ import (
 //     successfully. The HTML / SPA layer surfaces it so a user can
 //     correlate the failure with their RP-side flow without exposing
 //     server-internal identifiers.
+//
+// # State is attacker-controlled
+//
+// State is the value as it arrived on the wire. It is NOT validated,
+// sanitised, or length-bounded, and on the error paths that fire before
+// the client and redirect_uri are trusted — a refused request object,
+// an unregistered client_id — it has not been tied to any registered
+// party either. Anyone who can get a browser to issue the request
+// chooses it.
+//
+// An implementation that interpolates it into markup MUST escape it for
+// the context it lands in. The bundled drivers do; a driver written
+// against this type is on its own. Getting this wrong turns a rejected
+// authorization request into reflected XSS on the OP's own origin,
+// which is where the session cookie lives. A driver that has no use for
+// the value should drop it rather than echo it.
 type ErrorPrompt struct {
 	Code        string `json:"error"`
 	Description string `json:"error_description,omitempty"`

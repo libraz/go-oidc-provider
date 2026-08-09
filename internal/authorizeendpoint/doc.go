@@ -5,8 +5,9 @@
 // [op/interaction], and the on-the-wire cookie codec in [internal/cookie].
 // # Boundary
 // The handler implements the authorization endpoint as defined by RFC 6749
-// §4.1 / OpenID Connect Core 1.0 §3.1.2 plus the SPA interaction surface
-// described02-product-design.md §A.9 / §C.4. Only the Code
+// §4.1 / OpenID Connect Core 1.0 §3.1.2 plus the OP's own SPA
+// interaction surface (the /interaction/{uid} JSON API and the
+// multi-account cookie layout). Only the Code
 // flow is implemented in v1.0; Implicit and Hybrid response_types are
 // rejected at parse time.
 // # CSRF / Origin policy

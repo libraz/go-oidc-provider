@@ -16,9 +16,11 @@ const batchSize = 10
 // [store.RecoveryBatch.Codes] before walking the slot list. The
 // generator only ever emits [batchSize] entries; a stored batch
 // claiming more is treated as store-integrity corruption rather than
-// a legitimate state, because each unmatched slot triggers an
-// argon2id derivation under [argon2id.DefaultPolicy] and an unbounded
-// slot count would let one verify call burn unbounded CPU / memory.
+// a legitimate state. For a batch sharing one salt the cap bounds the
+// per-slot parse and constant-time compare; for one carrying a salt
+// per slot it still bounds the argon2id derivations, which is what
+// keeps a corrupted row from turning a single verify call into an
+// unbounded CPU / memory burst.
 //
 // The cap is deliberately loose (1.6× the generator size) so a
 // future revision that adjusts [batchSize] does not silently make
@@ -100,9 +102,9 @@ func crockfordEncode(raw []byte) string {
 }
 
 // normalise strips whitespace and the formatting hyphen and uppercases
-// the remainder. It is the canonical form fed into both [hashCode] and
-// [verifyCode] so that a user typing "abcde-12345" matches the stored
-// hash of "ABCDE12345". Characters outside [crockfordAlphabet] are not
+// the remainder. It is the canonical form [deriveKey] hashes on both the
+// generate and the verify side, so that a user typing "abcde-12345"
+// matches the stored hash of "ABCDE12345". Characters outside [crockfordAlphabet] are not
 // rewritten — Crockford's spec maps O->0, I/L->1 — because the
 // generated codes never contain ambiguous glyphs, so any such input is
 // already a typo and SHOULD fall through to ErrCodeInvalid rather than

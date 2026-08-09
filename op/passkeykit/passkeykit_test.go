@@ -47,13 +47,38 @@ func newRegistrar(t *testing.T) (*passkeykit.Registrar, store.PasskeyStore) {
 	return reg, st.Passkeys()
 }
 
+// otherUser is the second account the cross-subject tests enrol from.
+func otherUser() passkeykit.User {
+	return passkeykit.User{
+		Subject:     "user-mallory",
+		Name:        "mallory@example.com",
+		DisplayName: "Mallory Example",
+	}
+}
+
 // enrol runs one complete ceremony against a soft authenticator and
 // returns the persisted record.
 func enrol(t *testing.T, reg *passkeykit.Registrar, key *softkey.Key) *store.PasskeyRecord {
 	t.Helper()
+	rec, err := enrolAs(t, reg, key, testUser())
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	return rec
+}
+
+// enrolAs runs one ceremony for the named user and returns the verdict
+// unfiltered, so a caller can assert on a refusal too.
+func enrolAs(
+	t *testing.T,
+	reg *passkeykit.Registrar,
+	key *softkey.Key,
+	user passkeykit.User,
+) (*store.PasskeyRecord, error) {
+	t.Helper()
 	ctx := t.Context()
 
-	opts, session, err := reg.Begin(ctx, testUser())
+	opts, session, err := reg.Begin(ctx, user)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -65,11 +90,7 @@ func enrol(t *testing.T, reg *passkeykit.Registrar, key *softkey.Key) *store.Pas
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	rec, err := reg.Register(ctx, session, testUser(), response)
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	return rec
+	return reg.Register(ctx, session, user, response)
 }
 
 func newKey(t *testing.T) *softkey.Key {
@@ -169,6 +190,86 @@ func TestRegister_RejectsDuplicateCredential(t *testing.T) {
 		t.Fatalf("ChallengeFromOptions: %v", err)
 	}
 	response, err := key.Create(testRPID, testOrigin, challenge)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := reg.Register(ctx, session, testUser(), response); !errors.Is(err, passkeykit.ErrCredentialAlreadyExists) {
+		t.Fatalf("err=%v want ErrCredentialAlreadyExists", err)
+	}
+}
+
+// TestRegister_RefusesCredentialHeldByAnotherSubject drives the
+// takeover the credential ID makes possible: the stored record is keyed
+// on it alone, so a registration allowed to name a credential somebody
+// else holds moves that credential instead of adding one, and the
+// subject that held it can no longer log in. WebAuthn Level 3 §7.1 step
+// 27 requires the refusal; this is it, end to end.
+func TestRegister_RefusesCredentialHeldByAnotherSubject(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	reg, passkeys := newRegistrar(t)
+	key := newKey(t)
+	enrol(t, reg, key)
+
+	// The attacker's authenticator presents the victim's credential ID.
+	if _, err := enrolAs(t, reg, key, otherUser()); !errors.Is(err, passkeykit.ErrCredentialAlreadyExists) {
+		t.Fatalf("err=%v want ErrCredentialAlreadyExists", err)
+	}
+
+	stored, err := passkeys.Get(ctx, key.CredentialID())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Subject != testSubject {
+		t.Errorf("stored Subject=%q want %q — the credential changed hands", stored.Subject, testSubject)
+	}
+	held, err := passkeys.ListBySubject(ctx, testSubject)
+	if err != nil {
+		t.Fatalf("ListBySubject: %v", err)
+	}
+	if len(held) != 1 {
+		t.Fatalf("victim holds %d credentials, want 1 — the passkey was unlinked", len(held))
+	}
+	taken, err := passkeys.ListBySubject(ctx, otherUser().Subject)
+	if err != nil {
+		t.Fatalf("ListBySubject: %v", err)
+	}
+	if len(taken) != 0 {
+		t.Errorf("attacker holds %d credentials, want 0", len(taken))
+	}
+}
+
+// TestRegister_ReportsStoreOwnershipRefusal covers the other half of the
+// defence: the backend refuses a cross-subject write of its own accord,
+// which is what closes the window between the ceremony's owner lookup
+// and the write. The refusal has to reach the caller as the same error
+// the lookup would have produced, or a handler would render one
+// condition two ways.
+func TestRegister_ReportsStoreOwnershipRefusal(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	reg, err := passkeykit.New(op.PrimaryPasskey{
+		Store:         &racingStore{PasskeyStore: inmem.New().Passkeys()},
+		RPID:          testRPID,
+		RPDisplayName: "Example Identity",
+		RPOrigins:     []string{testOrigin},
+		SessionTTL:    5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	opts, session, err := reg.Begin(ctx, testUser())
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	challenge, err := softkey.ChallengeFromOptions(opts.PublicKey)
+	if err != nil {
+		t.Fatalf("ChallengeFromOptions: %v", err)
+	}
+	response, err := newKey(t).Create(testRPID, testOrigin, challenge)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -529,6 +630,17 @@ func backdateSession(t *testing.T, s *passkeykit.Session, delta time.Duration) *
 		t.Fatalf("Unmarshal session: %v", err)
 	}
 	return &out
+}
+
+// racingStore models the window the [store.PasskeyStore] Put contract
+// closes: the ceremony's owner lookup finds the credential free, and the
+// write is the first to learn that another registration took it.
+type racingStore struct {
+	store.PasskeyStore
+}
+
+func (*racingStore) Put(context.Context, *store.PasskeyRecord) error {
+	return store.ErrAlreadyExists
 }
 
 // nilStore exists only so a typed-nil interface value can be built. Its

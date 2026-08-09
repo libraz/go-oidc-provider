@@ -72,26 +72,84 @@ func TestScenario_ENC_002_ExpiredSecretBlocksSymmetricIDToken(t *testing.T) {
 	t.Skip("out-of-scope: ENC-002 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_ENC_010_DiscoveryAdvertisesEncryptionMetadata pins the
-// OIDC Discovery 1.0 §3 toggle: when [op.WithEncryptionKeyset] is
-// configured the eight `*_encryption_*_values_supported` arrays MUST
-// be present, and when it is omitted those same fields MUST be absent
-// (the document uses `omitempty`).
-//
-// Spec: OIDC Discovery 1.0 §3.
-func TestScenario_ENC_010_DiscoveryAdvertisesEncryptionMetadata(t *testing.T) {
-	t.Parallel()
-
-	encFields := []string{
+// outboundEncryptionFields lists the discovery arrays that describe a
+// response the OP encrypts TO the relying party. The recipient key
+// comes from that party's own JWKS, so the OP advertises them whether
+// or not it holds an encryption keyset — a keyset would not be used for
+// any of them.
+func outboundEncryptionFields() []string {
+	return []string{
 		"id_token_encryption_alg_values_supported",
 		"id_token_encryption_enc_values_supported",
-		"request_object_encryption_alg_values_supported",
-		"request_object_encryption_enc_values_supported",
 		"userinfo_encryption_alg_values_supported",
 		"userinfo_encryption_enc_values_supported",
 		"authorization_encryption_alg_values_supported",
 		"authorization_encryption_enc_values_supported",
+		"introspection_encryption_alg_values_supported",
+		"introspection_encryption_enc_values_supported",
 	}
+}
+
+// inboundEncryptionFields lists the discovery arrays that describe a
+// ciphertext addressed TO the OP. Only these depend on
+// [op.WithEncryptionKeyset].
+func inboundEncryptionFields() []string {
+	return []string{
+		"request_object_encryption_alg_values_supported",
+		"request_object_encryption_enc_values_supported",
+	}
+}
+
+// assertNonEmptyArrays fails when any named field is missing from doc
+// or is not a non-empty JSON array.
+func assertNonEmptyArrays(t *testing.T, doc map[string]any, context string, fields []string) {
+	t.Helper()
+
+	for _, f := range fields {
+		v, ok := doc[f]
+		if !ok {
+			t.Errorf("%s: discovery doc missing %q", context, f)
+			continue
+		}
+		arr, ok := v.([]any)
+		if !ok || len(arr) == 0 {
+			t.Errorf("%s: discovery field %q must be non-empty array, got %T %v", context, f, v, v)
+		}
+	}
+}
+
+// assertAbsentOrEmpty fails when any named field is present in doc with
+// a non-empty value.
+func assertAbsentOrEmpty(t *testing.T, doc map[string]any, context string, fields []string) {
+	t.Helper()
+
+	for _, f := range fields {
+		v, present := doc[f]
+		if !present {
+			continue
+		}
+		if arr, ok := v.([]any); !ok || len(arr) != 0 {
+			t.Errorf("%s: discovery field %q must be absent or empty, got %v", context, f, v)
+		}
+	}
+}
+
+// TestScenario_ENC_010_DiscoveryAdvertisesEncryptionMetadata pins the
+// OIDC Discovery 1.0 §3 advertisement against the capability each field
+// actually describes.
+//
+// The eight outbound arrays are published on every OP that negotiates
+// JWE, because the OP encrypts those responses to a key from the
+// relying party's JWKS and needs none of its own; the two JARM /
+// introspection pairs additionally require their protocol feature. The
+// two request_object arrays describe a ciphertext addressed to the OP
+// itself, so they are published only alongside
+// [op.WithEncryptionKeyset] and are absent otherwise (the document uses
+// `omitempty`).
+//
+// Spec: OIDC Discovery 1.0 §3.
+func TestScenario_ENC_010_DiscoveryAdvertisesEncryptionMetadata(t *testing.T) {
+	t.Parallel()
 
 	encKey := scenariokit.NewOPEncryptionKey(t, "enc-1")
 	tkOn := testkit.NewProvider(t, testkit.WithOptions(
@@ -100,18 +158,9 @@ func TestScenario_ENC_010_DiscoveryAdvertisesEncryptionMetadata(t *testing.T) {
 		op.WithFeature(feature.Introspect),
 		op.WithEncryptionKeyset(op.EncryptionKeyset{encKey}),
 	))
-	_, _, doc := fetchDiscovery(t, tkOn.Server.URL)
-	for _, f := range encFields {
-		v, ok := doc[f]
-		if !ok {
-			t.Errorf("with encryption keyset: discovery doc missing %q", f)
-			continue
-		}
-		arr, ok := v.([]any)
-		if !ok || len(arr) == 0 {
-			t.Errorf("with encryption keyset: discovery field %q must be non-empty array, got %T %v", f, v, v)
-		}
-	}
+	_, _, docOn := fetchDiscovery(t, tkOn.Server.URL)
+	assertNonEmptyArrays(t, docOn, "with encryption keyset", outboundEncryptionFields())
+	assertNonEmptyArrays(t, docOn, "with encryption keyset", inboundEncryptionFields())
 
 	tkOff := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithFeature(feature.JAR),
@@ -119,13 +168,27 @@ func TestScenario_ENC_010_DiscoveryAdvertisesEncryptionMetadata(t *testing.T) {
 		op.WithFeature(feature.Introspect),
 	))
 	_, _, docOff := fetchDiscovery(t, tkOff.Server.URL)
-	for _, f := range encFields {
-		if v, present := docOff[f]; present {
-			if arr, ok := v.([]any); !ok || len(arr) != 0 {
-				t.Errorf("without encryption keyset: discovery field %q must be absent or empty, got %v", f, v)
-			}
-		}
-	}
+	assertNonEmptyArrays(t, docOff, "without encryption keyset", outboundEncryptionFields())
+	assertAbsentOrEmpty(t, docOff, "without encryption keyset", inboundEncryptionFields())
+
+	// The two outbound families that ride on another protocol feature
+	// stay gated on it: an OP that serves neither JARM nor introspection
+	// must not advertise encryption for a response it never produces.
+	// id_token / userinfo carry no such gate.
+	tkBare := testkit.NewProvider(t)
+	_, _, docBare := fetchDiscovery(t, tkBare.Server.URL)
+	assertNonEmptyArrays(t, docBare, "no optional features", []string{
+		"id_token_encryption_alg_values_supported",
+		"id_token_encryption_enc_values_supported",
+		"userinfo_encryption_alg_values_supported",
+		"userinfo_encryption_enc_values_supported",
+	})
+	assertAbsentOrEmpty(t, docBare, "no optional features", []string{
+		"authorization_encryption_alg_values_supported",
+		"authorization_encryption_enc_values_supported",
+		"introspection_encryption_alg_values_supported",
+		"introspection_encryption_enc_values_supported",
+	})
 }
 
 // TestScenario_ENC_020_NestedJWEIsFivePartCompact pins the RFC 7516 §3
@@ -477,9 +540,10 @@ func TestScenario_ENC_031_UnsupportedEncRejectsRequestObject(t *testing.T) {
 // [op.SupportedEncryptionAlgs] / [op.SupportedEncryptionEncs]. With
 // [op.WithEncryptionKeyset] configured the
 // `request_object_encryption_*_values_supported` arrays MUST be
-// non-empty subsets of the public helpers; without the keyset the
-// whole `*_encryption_*_values_supported` family MUST be absent
-// (omitempty).
+// non-empty subsets of the public helpers; without the keyset that
+// pair MUST be absent (omitempty), while the outbound families stay
+// published because their recipient key comes from the relying party
+// rather than the OP.
 //
 // Spec: OIDC Core §10.1 / OIDC Discovery §3.
 func TestScenario_ENC_032_DefaultJWEInventoryFromKeystore(t *testing.T) {
@@ -496,31 +560,22 @@ func TestScenario_ENC_032_DefaultJWEInventoryFromKeystore(t *testing.T) {
 		encSet[e] = struct{}{}
 	}
 
-	encFamilyFields := []string{
-		"id_token_encryption_alg_values_supported",
-		"id_token_encryption_enc_values_supported",
-		"request_object_encryption_alg_values_supported",
-		"request_object_encryption_enc_values_supported",
-		"userinfo_encryption_alg_values_supported",
-		"userinfo_encryption_enc_values_supported",
-		"authorization_encryption_alg_values_supported",
-		"authorization_encryption_enc_values_supported",
-	}
-
-	// (a) Without WithEncryptionKeyset.
+	// (a) Without WithEncryptionKeyset: the inbound pair is absent, the
+	// outbound families are not.
 	tkOff := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithFeature(feature.JAR),
 		op.WithFeature(feature.JARM),
 	))
 	_, _, docOff := fetchDiscovery(t, tkOff.Server.URL)
-	for _, f := range encFamilyFields {
-		if v, present := docOff[f]; present {
-			arr, ok := v.([]any)
-			if !ok || len(arr) != 0 {
-				t.Errorf("without encryption keyset: discovery field %q must be absent or empty, got %v", f, v)
-			}
-		}
-	}
+	assertAbsentOrEmpty(t, docOff, "without encryption keyset", inboundEncryptionFields())
+	assertNonEmptyArrays(t, docOff, "without encryption keyset", []string{
+		"id_token_encryption_alg_values_supported",
+		"id_token_encryption_enc_values_supported",
+		"userinfo_encryption_alg_values_supported",
+		"userinfo_encryption_enc_values_supported",
+		"authorization_encryption_alg_values_supported",
+		"authorization_encryption_enc_values_supported",
+	})
 
 	// (b) With WithEncryptionKeyset: arrays present, subsets of helpers.
 	encKey := scenariokit.NewOPEncryptionKey(t, "op-enc-032")

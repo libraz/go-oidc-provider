@@ -261,7 +261,12 @@ func (o *Orchestrator) captchaRequired(st State) bool {
 }
 
 // emitCaptchaPrompt issues a fresh captcha prompt with a new
-// StepCounter so a stale token cannot replay.
+// StepCounter so a stale token cannot replay. The prompt declares the
+// [CaptchaTokenField] input so every driver has somewhere to put the
+// provider's token: the HTML driver renders the hidden field for the
+// widget's JS to fill, and a SPA reads the same field name off the
+// envelope. A prompt without the field would leave the SPA no way to
+// answer the challenge and the chain no way to leave it.
 func (o *Orchestrator) emitCaptchaPrompt(st State, now time.Time) (State, interaction.Step, error) {
 	st.StepCounter++
 	ref, err := o.cfg.StateRefSigner.Issue(st.InteractionUID, tagCaptcha, st.StepCounter, now.Add(stateRefTTL))
@@ -269,8 +274,15 @@ func (o *Orchestrator) emitCaptchaPrompt(st State, now time.Time) (State, intera
 		return st, interaction.Step{}, err
 	}
 	prompt := interaction.Prompt{
-		Type:     "captcha",
-		Data:     interaction.CaptchaPromptData{},
+		Type: "captcha",
+		Data: interaction.CaptchaPromptData{},
+		Inputs: []interaction.FieldSpec{{
+			Name:     CaptchaTokenField,
+			Kind:     interaction.FieldHidden,
+			Label:    "auth.captcha.token",
+			Required: true,
+			MaxLen:   captchaTokenMaxLen,
+		}},
 		StateRef: ref,
 	}
 	return st, interaction.Step{Prompt: &prompt}, nil

@@ -25,17 +25,10 @@ import (
 // returned access_token is written verbatim, the dispatcher having
 // already enforced TTL / scope / audience invariants.
 func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantType string) {
-	// DPoP verification runs ahead of client authentication so the
-	// `use_dpop_nonce` challenge fires before any client_assertion jti
-	// is consumed. RFC 9449 §8 contemplates a verbatim retry of the
-	// client-side request body; recording the jti on the first
-	// attempt would force the OP to reject the retry as a replay.
-	dpopOut, ok := verifyTokenDPoP(w, r, deps)
-	if !ok {
-		return
-	}
+	// Proof verification, client authentication, and the proof's
+	// replay marking run in the order [authenticateWithDPoP] documents.
 	ctx := r.Context()
-	client, _, ok := authenticate(ctx, w, r, deps)
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
 	if !ok {
 		return
 	}
@@ -239,7 +232,15 @@ func customGrantRefreshSubject(resp customgrant.Response) string {
 // binding stamped automatically: cnf.jkt for DPoP, cnf.x5t#S256 for
 // mTLS, neither for a plain bearer request. The function is the single
 // seam through which the bound-mint path enters the existing wire
-// pipeline; the handler-supplied path keeps the original semantics.
+// pipeline; on the handler-supplied path the token value itself is
+// passed through untouched.
+//
+// Both paths substitute the OP's configured access-token TTL for an
+// unset handler lifetime. A zero TTL means "the handler did not state
+// one", not "expire immediately": expires_in is the RFC 6749 §5.1
+// lifetime the client uses to decide when to stop presenting the
+// credential, so shipping 0 turns an omitted field into a token the
+// client discards on arrival.
 func resolveCustomGrantAccessToken(
 	ctx context.Context,
 	deps Deps,
@@ -250,12 +251,9 @@ func resolveCustomGrantAccessToken(
 	grantID string,
 ) (string, time.Duration, error) {
 	if resp.BoundAccessToken == nil {
-		return resp.AccessToken, resp.AccessTokenTTL, nil
+		return resp.AccessToken, customGrantTTL(deps, resp.AccessTokenTTL), nil
 	}
-	subject := resp.BoundAccessToken.Subject
-	if subject == "" {
-		subject = in.SubjectID
-	}
+	subject := customGrantBoundSubject(in, resp)
 	if subject == "" {
 		return "", 0, customgrant.ErrEmptyBoundSubject
 	}
@@ -263,10 +261,7 @@ func resolveCustomGrantAccessToken(
 	if len(audience) == 0 {
 		audience = []string{client.ID}
 	}
-	ttl := resp.BoundAccessToken.TTL
-	if ttl <= 0 {
-		ttl = deps.AccessTokenTTL
-	}
+	ttl := customGrantTTL(deps, resp.BoundAccessToken.TTL)
 	jti, err := newJTI()
 	if err != nil {
 		return "", 0, err
@@ -303,6 +298,39 @@ func resolveCustomGrantAccessToken(
 		}
 	}
 	return signed, ttl, nil
+}
+
+// customGrantTTL resolves the lifetime the OP advertises for a
+// custom-grant access token. A handler that leaves the lifetime unset
+// gets the OP's configured access-token TTL, which is also the ceiling
+// the dispatcher truncates any stated lifetime to, so the substituted
+// value can never exceed what an explicit TTL would have been allowed
+// to request. Negative lifetimes never reach this point: the dispatcher
+// rejects them before the wire layer runs.
+func customGrantTTL(deps Deps, stated time.Duration) time.Duration {
+	if stated > 0 {
+		return stated
+	}
+	return deps.AccessTokenTTL
+}
+
+// customGrantBoundSubject picks the "sub" claim for an OP-minted bound
+// access token. The handler's most specific statement wins: the bound
+// token's own Subject, then the response-level Subject it resolved for
+// the grant, then whatever subject the request carried into dispatch.
+// The request-level value is last because the token endpoint
+// authenticates a client rather than an end user — no custom grant
+// reaching this seam has an OP-resolved subject to offer, so the chain
+// would otherwise dead-end on a handler that stated its subject once,
+// at the response level.
+func customGrantBoundSubject(in customgrant.DispatchInput, resp customgrant.Response) string {
+	if resp.BoundAccessToken != nil && resp.BoundAccessToken.Subject != "" {
+		return resp.BoundAccessToken.Subject
+	}
+	if resp.Subject != "" {
+		return resp.Subject
+	}
+	return in.SubjectID
 }
 
 // resolveCustomGrantIDToken returns the id_token to surface on the wire.

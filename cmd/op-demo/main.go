@@ -195,7 +195,7 @@ func mainErr() error {
 		// against the MySQL + Redis split a deployment actually runs.
 		storeBackend = flag.String("store", storeInmem, "storage backend: \"inmem\" (in-process, nothing to run alongside) or \"composite\" (durable substores on MySQL, volatile ones on Redis). The composite backend exists so a conformance run can be captured against deployment-shaped storage; it consults -mysql-dsn and -redis-dsn.")
 		mysqlDSN     = flag.String("mysql-dsn", "opdemo:opdemo@tcp(127.0.0.1:3306)/opdemo?parseTime=true&charset=utf8mb4&loc=UTC", "MySQL DSN for -store=composite. Only consulted when -store=composite.")
-		redisDSN     = flag.String("redis-dsn", "redis://127.0.0.1:6379/0", "Redis DSN for -store=composite. Only consulted when -store=composite; plaintext is admitted because this is a development binary.")
+		redisDSN     = flag.String("redis-dsn", "redis://127.0.0.1:6379/0", "Redis DSN for -store=composite. Only consulted when -store=composite. A plaintext redis:// DSN is admitted only for a loopback engine, which is the development arrangement this binary is for; anything further away must use rediss://.")
 	)
 	flag.Parse()
 

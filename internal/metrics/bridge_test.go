@@ -35,11 +35,24 @@ func (r *recordingEmitter) snapshot() []audit.Event {
 	return out
 }
 
+// testIssuer is the issuer every collector built by newTestCollector
+// carries. The constructor stamps it as a constant label on every
+// metric, so counterValue folds it into the expected label set rather
+// than making each assertion site repeat it. The label itself is
+// asserted directly in TestCollector_New_IssuerConstLabelEmitted.
+const testIssuer = "https://idp.example.test"
+
 // counterValue scans families for the metric with the matching name
 // and label set, returning its current value. The helper isolates the
 // dto.Metric inspection loop from the assertion sites below.
 func counterValue(t *testing.T, families []*dto.MetricFamily, name string, labels map[string]string) float64 {
 	t.Helper()
+	want := make(map[string]string, len(labels)+1)
+	for k, v := range labels {
+		want[k] = v
+	}
+	want["issuer"] = testIssuer
+	labels = want
 	for _, fam := range families {
 		if fam.GetName() != name {
 			continue
@@ -70,6 +83,9 @@ func labelsMatch(have []*dto.LabelPair, want map[string]string) bool {
 // Gather; the collector is the bridge target.
 func newTestCollector(t *testing.T, opts metrics.Options) (*metrics.Collector, *prometheus.Registry) {
 	t.Helper()
+	if opts.Issuer == "" {
+		opts.Issuer = testIssuer
+	}
 	reg := prometheus.NewRegistry()
 	c, err := metrics.New(reg, opts)
 	if err != nil {

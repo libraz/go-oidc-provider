@@ -6,7 +6,7 @@
 // two constructors ([Slog] for production, [Discard] for tests and
 // the default no-op).
 //
-// The wire posture follows design 002 §N.3:
+// The wire posture is fixed:
 //
 //   - Every record has slog attribute "audit"="true" so log shippers
 //     can route audit lines to a separate retention bucket without

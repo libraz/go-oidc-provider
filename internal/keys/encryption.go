@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
@@ -62,6 +63,18 @@ type EncryptionSet struct {
 	jwks     josev4.JSONWebKeySet
 	now      func() time.Time
 	observer RetiredKidObserver
+	jwe      jose.JWEPolicy
+
+	// ctx is the request context [Resolve] hands to the
+	// [RetiredKidObserver]. It is nil on the set built at startup and
+	// non-nil only on the per-request shallow copies [WithContext]
+	// returns. Carrying a context on a struct is normally a smell; it
+	// is the only route available here because
+	// [internal/jose.EncryptionKeyResolver] is the interface
+	// [internal/jose.Decrypt] consults and its methods take no context.
+	// The field is read for observability alone — no decryption path
+	// branches on it, and no path observes cancellation through it.
+	ctx context.Context
 }
 
 // NewEncryptionSet validates entries and builds the runtime
@@ -73,7 +86,10 @@ type EncryptionSet struct {
 // The function reuses [SetOption] for the wall-clock seam and the
 // retired-kid observer so encryption-side rotation observability
 // composes with the signing-side audit pipeline (the same
-// op.AuditKeyRetiredKidPresented event covers both).
+// op.AuditKeyRetiredKidPresented event covers both). [WithJWEPolicy]
+// additionally pins the deployment's alg / enc narrowing onto the set,
+// which is what carries the restriction into
+// [internal/jose.Decrypt].
 func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*EncryptionSet, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("%w: empty keyset", ErrInvalidEncryptionKey)
@@ -115,7 +131,17 @@ func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*Encryption
 		jwks:     jwks,
 		now:      cfg.now,
 		observer: cfg.observer,
+		jwe:      cfg.jwe,
 	}, nil
+}
+
+// JWEPolicy implements [internal/jose.EncryptionPolicyResolver] so
+// [internal/jose.Decrypt] enforces the deployment's narrowing on every
+// inbound ciphertext this set is asked to decrypt. The value comes from
+// [WithJWEPolicy]; omitting the option leaves the package allow-list in
+// force.
+func (s *EncryptionSet) JWEPolicy() jose.JWEPolicy {
+	return s.jwe
 }
 
 // isNilPrivateKey detects both a nil interface and a crypto.PrivateKey
@@ -212,10 +238,46 @@ func isAllowedECDHCurve(name string) bool {
 	}
 }
 
+// WithContext returns a shallow copy of the set whose retired-kid
+// notifications carry ctx. It implements
+// [internal/jose.ContextualEncryptionKeyResolver] so a decryption caller
+// holding a request context can pin it onto the resolver before handing
+// the resolver to [internal/jose.Decrypt] / [internal/jose.DecryptChain],
+// whose signatures have no context to thread.
+//
+// Without the pin the retired-kid audit event reaches the embedder's
+// sink with no request correlation, which is the difference between
+// "a retired kid was presented" and "a retired kid was presented by
+// this caller on this request". Every other aspect of the returned set
+// — entries, clock, JWKS view, JWE policy — is shared with the
+// receiver, so the copy is as immutable and as concurrency-safe as the
+// original.
+func (s *EncryptionSet) WithContext(ctx context.Context) jose.EncryptionKeyResolver {
+	scoped := *s
+	scoped.ctx = ctx
+	return &scoped
+}
+
+// observerContext returns the context retired-kid notifications ride
+// on. A set that was never passed through [WithContext] has none, so
+// the notification still fires — silencing the audit event because a
+// caller forgot to pin a context would trade an observability gap for
+// a security-signal gap.
+func (s *EncryptionSet) observerContext() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
 // Resolve returns the private key whose kid matches keyID. The
 // boolean is false when no entry matches OR when the matching entry
 // has retired per its [EncryptionEntry.NotAfter] (the same
 // observer-fed retirement gate the signing [Set.Find] uses).
+//
+// The retired-kid notification carries the context [WithContext]
+// pinned onto the set, because [internal/jose.EncryptionKeyResolver]
+// gives Resolve no context parameter of its own.
 //
 // Decrypt callers MUST treat ok=false as a hard kid-unknown signal
 // and MUST NOT fall back to trial decryption when kid is present —
@@ -229,7 +291,7 @@ func (s *EncryptionSet) Resolve(keyID string) (any, bool) {
 			now := s.nowOrSystem()
 			if !now.Before(e.NotAfter) {
 				if s.observer != nil {
-					s.observer(keyID)
+					s.observer(s.observerContext(), keyID)
 				}
 				return nil, false
 			}

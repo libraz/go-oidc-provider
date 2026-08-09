@@ -1,7 +1,12 @@
 package op_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -51,6 +56,7 @@ func TestWithStaticClients_AcceptsCompositeStore(t *testing.T) {
 		op.WithStore(storage),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://app.example.com/cb"},
@@ -96,6 +102,7 @@ func TestWithStaticClients_RejectsCompositeWithReadOnlyClients(t *testing.T) {
 		op.WithStore(storage),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://app.example.com/cb"},
@@ -110,6 +117,126 @@ func TestWithStaticClients_RejectsCompositeWithReadOnlyClients(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "StaticClientReconciler") {
 		t.Errorf("err = %v, want it to mention StaticClientReconciler", err)
+	}
+}
+
+// TestWithDynamicRegistration_AcceptsCompositeStore confirms that the
+// documented hot/cold composition and RFC 7591 / RFC 7592 are not
+// mutually exclusive. composite.Store deliberately withholds
+// store.ClientRegistry from direct type assertion so a read-only Clients
+// route cannot masquerade as writable; both the construction-time check
+// and the /register mount must therefore probe the optional accessor.
+// The registered client is read back from the routed durable backend so
+// the assertion covers the route, not just op.New.
+func TestWithDynamicRegistration_AcceptsCompositeStore(t *testing.T) {
+	t.Parallel()
+
+	durable := inmem.New()
+	volatile := inmem.New()
+
+	storage, err := composite.New(
+		composite.WithDefault(durable),
+		composite.With(composite.Interactions, volatile),
+		composite.With(composite.ConsumedJTIs, volatile),
+	)
+	if err != nil {
+		t.Fatalf("composite.New: %v", err)
+	}
+	if _, ok := any(storage).(store.ClientRegistry); ok {
+		t.Fatal("composite.Store must NOT satisfy store.ClientRegistry by direct " +
+			"type assertion; the test premise relies on the optional accessor probe")
+	}
+
+	provider, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storage),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	if err != nil {
+		t.Fatalf("op.New with composite store and dynamic registration: %v", err)
+	}
+
+	ctx := context.Background()
+	issued, err := provider.IssueInitialAccessToken(ctx, op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+
+	srv := httptest.NewServer(provider)
+	t.Cleanup(srv.Close)
+
+	body, err := json.Marshal(map[string]any{
+		"redirect_uris": []string{"https://rp.example.com/cb"},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/oidc/register", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issued.Value)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST /oidc/register: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST /oidc/register status=%d want 201; body=%s", resp.StatusCode, raw)
+	}
+	var registered struct {
+		ClientID string `json:"client_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&registered); err != nil {
+		t.Fatalf("decode registration response: %v", err)
+	}
+	if registered.ClientID == "" {
+		t.Fatal("registration response carried no client_id")
+	}
+	if _, err := durable.Clients().GetClient(ctx, registered.ClientID); err != nil {
+		t.Fatalf("registration did not reach the routed Clients backend: %v", err)
+	}
+}
+
+// TestWithDynamicRegistration_RejectsCompositeWithReadOnlyClients is the
+// negative half: when the routed Clients backend cannot accept writes,
+// the accessor reports (nil, false) and op.New must still refuse the
+// composition rather than mount a /register that fails on first use.
+func TestWithDynamicRegistration_RejectsCompositeWithReadOnlyClients(t *testing.T) {
+	t.Parallel()
+
+	storage, err := composite.New(
+		composite.WithDefault(inmem.New()),
+		composite.With(composite.Clients, readOnlyClientsStore{Store: inmem.New()}),
+	)
+	if err != nil {
+		t.Fatalf("composite.New: %v", err)
+	}
+	if _, ok := storage.ClientRegistry(); ok {
+		t.Fatal("read-only Clients route must not advertise ClientRegistry")
+	}
+
+	_, err = op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storage),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	if err == nil {
+		t.Fatal("expected a configuration error for a read-only Clients route, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("missing ClientRegistry must be classified as a server-side configuration error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ClientRegistry") {
+		t.Errorf("err = %v, want it to mention ClientRegistry", err)
 	}
 }
 

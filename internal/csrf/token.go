@@ -27,6 +27,11 @@ const keyLen = 32
 // well above the birthday bound for the lifetime of a single OP session.
 const nonceLen = 16
 
+// randomTokenLen is the byte length of the opaque tokens [NewRandomToken]
+// mints. 32 bytes matches the HMAC key length and is far beyond guessing
+// range for the minutes-long window a double-submit token stays valid.
+const randomTokenLen = 32
+
 // ErrInvalidKey is returned when [NewSigner] receives a key of the wrong
 // length. CSRF protection collapses if the key is too short, so the package
 // rejects the misconfiguration at startup.
@@ -57,7 +62,7 @@ func NewSigner(key []byte) (*Signer, error) {
 
 // Issue mints a fresh token bound to sessionID and stamped at issuedAt. The
 // returned string is suitable both as the [__Host-oidc_csrf] cookie value
-// and as the [X-CSRF] header — the double-submit pattern relies on the two
+// and as the X-CSRF-Token header — the double-submit pattern relies on the two
 // being literally identical.
 // Format: "<nonce_b64>.<unix_seconds>.<hmac_b64>" where the HMAC covers a
 // length-prefixed canonicalisation of (sessionID, nonce, iat, ""). The
@@ -156,9 +161,28 @@ func (s *Signer) compute(sessionID string, nonce []byte, iat int64, binding stri
 	return h.Sum(nil)
 }
 
+// NewRandomToken mints an opaque, cryptographically random double-submit
+// token encoded as unpadded base64url. The encoding is URL-safe so the
+// value round-trips through both a Set-Cookie header and an
+// application/x-www-form-urlencoded field without escaping.
+//
+// The token carries no binding of its own — the cookie IS the state, and
+// the only check is [ConstantTimeEqual] against the resubmitted copy. Use
+// it for a gate whose flow has no server-side identifier to bind to; a
+// flow that does (an interaction uid, a form step) should mint through
+// [Signer.IssueScoped] instead so a token cannot be replayed across
+// steps.
+func NewRandomToken() (string, error) {
+	buf := make([]byte, randomTokenLen)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("csrf: read token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
 // ConstantTimeEqual reports whether the cookie value and the supplied header
 // value are equal in constant time, matching the double-submit comparison
-// required by §F.3.1. The function is exported so handlers can use it
+// the interaction endpoints require. The function is exported so handlers can use it
 // without re-importing crypto/subtle.
 func ConstantTimeEqual(cookie, header string) bool {
 	if len(cookie) != len(header) {

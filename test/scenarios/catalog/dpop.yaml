@@ -489,3 +489,19 @@ rows:
       URL-safe pattern ^[\w-]{43}$.
     status: out-of-scope
     out_of_scope_reason: "v1.0 in-memory DPoP nonce source mints 128-bit base64url values (22 chars); the catalog's ^[\\\\w-]{43}$ regex matches a 256-bit value (32 bytes) which v1.0 does not emit."
+
+  - id: DPOP-050
+    severity: P1
+    spec: RFC 9449 §10.1
+    behaviour: |
+      Whether /authorize admits "dpop_jkt" follows the OP's DPoP
+      feature flag, end to end through the constructor. With DPoP
+      enabled the parameter is accepted and reaches the authorization
+      code; with DPoP disabled the request is rejected with
+      invalid_request naming the parameter, rather than minting a code
+      whose only possible outcome at /token is invalid_grant.
+      The row exists because the two halves are decided in different
+      layers — the handler reads a flag, the constructor sets it — and
+      a handler-level test can satisfy both halves by setting the flag
+      itself while nothing sets it in a real provider.
+    status: active

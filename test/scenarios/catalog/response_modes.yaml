@@ -26,7 +26,7 @@ rows:
       whose hidden inputs include code, state, and the response_type
       specific fields.
     status: out-of-scope
-    out_of_scope_reason: "form_post response_mode is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2150) records: \"Form POST response mode (response_mode=form_post) — implicit / hybrid 専用、code flow には不要.\" Only response_mode=query (and JARM, when enabled) is implemented."
+    out_of_scope_reason: "response_type=code id_token token is a hybrid response_type and the OP is code-only: response_types_supported is [\"code\"], so the multi-token form body this row describes has no emission path. The code-flow form_post body the OP does emit carries code, state and iss."
 
   - id: RMO-002
     severity: P0
@@ -37,7 +37,7 @@ rows:
       https://client.example.com/cb"><script>...</script><x=" MUST be
       rendered as escaped text only and never executed.
     status: out-of-scope
-    out_of_scope_reason: "form_post response_mode is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2150) records: \"Form POST response mode (response_mode=form_post) — implicit / hybrid 専用、code flow には不要.\" Only response_mode=query (and JARM, when enabled) is implemented."
+    out_of_scope_reason: "The XSS precondition is unreachable. redirect_uri is matched for exact equality against the client's registered set before any response is composed, so an attacker-supplied payload URI is refused with invalid_request and never reaches the form writer; the writer additionally escapes the action attribute. There is no wire seam on which to observe the unescaped interpolation this row attacks."
 
   - id: RMO-003
     severity: P0
@@ -47,7 +47,7 @@ rows:
       returns a 400 HTML form posting error=login_required and state to
       redirect_uri, and emits an authorization.error audit event.
     status: out-of-scope
-    out_of_scope_reason: "form_post response_mode is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2150) records: \"Form POST response mode (response_mode=form_post) — implicit / hybrid 専用、code flow には不要.\" Only response_mode=query (and JARM, when enabled) is implemented."
+    out_of_scope_reason: "The OP delivers form_post error responses — error, error_description, state and iss as hidden inputs — but with HTTP 200 OK, which is the status the auto-submitting form body carries in every case. The 400 status this row asserts is not the OP's wire behaviour, so the row cannot be bound as written."
 
   - id: RMO-004
     severity: P1
@@ -56,7 +56,7 @@ rows:
       GET and POST authorization endpoints MUST behave identically when
       response_mode=form_post is selected.
     status: out-of-scope
-    out_of_scope_reason: "form_post response_mode is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2150) records: \"Form POST response mode (response_mode=form_post) — implicit / hybrid 専用、code flow には不要.\" Only response_mode=query (and JARM, when enabled) is implemented."
+    out_of_scope_reason: "GET and POST /authorize are parsed by one request decoder and reach one emit path, so response_mode handling is method-independent by construction rather than by a per-method branch. There is no method-specific seam for this row to observe; the shared emit path is covered by the form_post rows that do bind."
 
   - id: RMO-010
     severity: P1
@@ -67,7 +67,7 @@ rows:
       embedding a JSON literal of the form
       var data = {redirect_uri, response: {...}};.
     status: out-of-scope
-    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and 002 does not enumerate it as a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
+    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and it is not a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
     notes: web_message is deprecated; do not enable by default.
 
   - id: RMO-011
@@ -79,7 +79,7 @@ rows:
       (code, state, id_token, access_token, expires_in, token_type,
       scope as applicable).
     status: out-of-scope
-    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and 002 does not enumerate it as a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
+    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and it is not a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
 
   - id: RMO-012
     severity: P0
@@ -90,7 +90,7 @@ rows:
       Mode is not supported. The OP MUST NOT honour relay because of
       its known abuse surface.
     status: out-of-scope
-    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and 002 does not enumerate it as a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
+    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and it is not a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
 
   - id: RMO-013
     severity: P0
@@ -101,7 +101,7 @@ rows:
       response is itself the messaging surface, so the OP controls
       framing per its own policy.
     status: out-of-scope
-    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and 002 does not enumerate it as a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
+    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and it is not a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
 
   - id: RMO-014
     severity: P1
@@ -112,7 +112,7 @@ rows:
       response.error, response.state, and iss instead of the success
       fields.
     status: out-of-scope
-    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and 002 does not enumerate it as a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
+    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and it is not a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
 
   - id: RMO-020
     severity: P1
@@ -121,7 +121,7 @@ rows:
       When the web_message feature is enabled, the discovery document
       response_modes_supported array MUST include web_message.
     status: out-of-scope
-    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and 002 does not enumerate it as a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
+    out_of_scope_reason: "Web Message response mode is intentionally not supported by default. The catalog header itself notes \"Web Message is informational only and SHOULD NOT be enabled by default\" (response_modes.yaml description) and it is not a shipped feature; the deprecated draft has known abuse surface (cf. RMO-012 relay-mode rejection rationale)."
 
   - id: RMO-030
     severity: P1
@@ -131,7 +131,7 @@ rows:
       can add new transports without the registration call panicking
       or returning an error for valid input.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 exposes no public registerResponseMode(name, fn) hook. The valid response_modes set is fixed at the dispatcher boundary (internal/authorizeendpoint) to {query, jwt, query.jwt, fragment.jwt, form_post.jwt} and gated by op.WithJARMResponseMode for the .jwt half; an unknown value triggers unsupported_response_mode (RMO-033). Adding a custom-response-mode extension API would expand the OP's public surface for a feature deliberately scoped out by docs/plans/002 (form_post / web_message / extension transports are out-of-scope; only query and JARM ship). Embedders that need custom transports wrap the OP's response and re-encode at the gateway layer."
+    out_of_scope_reason: "v1.0 exposes no public registerResponseMode(name, fn) hook. The valid response_modes set is fixed at the dispatcher boundary (internal/authorizeendpoint) to {query, form_post, jwt, query.jwt, fragment.jwt, form_post.jwt} and gated by op.WithJARMResponseMode for the .jwt half; an unknown value triggers unsupported_response_mode (RMO-033). Adding a custom-response-mode extension API would expand the OP's public surface for a transport family the library deliberately keeps closed: web_message and embedder-defined modes do not ship. Embedders that need custom transports wrap the OP's response and re-encode at the gateway layer."
 
   - id: RMO-031
     severity: P1

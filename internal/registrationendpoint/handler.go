@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sector"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -138,6 +139,15 @@ type Deps struct {
 	// [op.WithAllowInsecureBackchannelLogoutForDev] for dev/CI
 	// fixtures only — production deployments leave it off.
 	AllowInsecureBackchannelLogoutForDev bool
+
+	// JWEPolicy narrows the JWE alg / enc values a registration may
+	// declare below the [internal/jose] allow-list. The zero value
+	// leaves the full allow-list in force. The op layer populates it
+	// from [op.WithSupportedEncryptionAlgs] so a client cannot register
+	// an algorithm the OP has been configured to refuse — which the
+	// runtime would otherwise reject on the client's first encrypted
+	// exchange.
+	JWEPolicy internaljose.JWEPolicy
 
 	// SectorResolver is the SSRF-defended sector_identifier_uri fetcher
 	// the validator drives at registration time (OIDC Core 1.0 §5 /

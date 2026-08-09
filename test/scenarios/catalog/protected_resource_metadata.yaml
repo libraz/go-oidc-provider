@@ -61,3 +61,8 @@ rows:
       relative URI, or one carrying a fragment) is rejected when the OP
       is constructed, rather than serving a malformed document.
     status: active
+    covered_by: op.TestWithProtectedResources_RejectsInvalidResource
+    notes: |
+      The rejection happens before the OP starts serving, so the
+      black-box harness — which fails the test on a construction error
+      — cannot observe it. The assertion lives at the public-API layer.

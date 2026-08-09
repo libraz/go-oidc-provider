@@ -3,9 +3,12 @@
 // authorization request into a normalised [Request] and, against a registered
 // [store.Client], decides whether the request is structurally and policy-wise
 // admissible.
-// The package never reads the wall clock, never performs I/O, and never
-// resolves a session. Those couplings live in the HTTP layer that composes
-// this validator with session resolution and the [interaction.Driver].
+// The package never reads the wall clock, never performs I/O of its own, and
+// never resolves a session. Those couplings live in the HTTP layer that
+// composes this validator with session resolution and the
+// [interaction.Driver]. The one context-carrying entry point,
+// [Request.ValidateExtensions], holds a context solely to pass it to the
+// embedder-supplied RFC 9396 authorization_details validators.
 // # Wire mapping
 // Each sentinel returned by the package carries an OAuth wire code (one of
 // "invalid_request", "unsupported_response_type", "invalid_scope") via the
@@ -59,10 +62,12 @@ func newErr(code, description string) *Error {
 }
 
 // Sentinel errors. Each maps to a single OAuth wire code so the HTTP layer
-// can translate uniformly. The grouping below also documents the
-// redirect-safety boundary enforced by [IsRedirectSafe]:
-//   - ErrClientIDRequired, ErrRedirectURIRequired, ErrRedirectURIInvalid:
-//     fired BEFORE the redirect target is trusted. Callers MUST NOT redirect.
+// can translate uniformly, and each is raised at exactly one site so
+// [IsRedirectSafe] can classify it. The redirect-safety boundary that
+// function enforces:
+//   - Every sentinel the parser returns, plus ErrClientIDRequired,
+//     ErrRedirectURIRequired and ErrRedirectURIInvalid: fired BEFORE the
+//     redirect target is trusted. Callers MUST NOT redirect.
 //   - Every other sentinel: fired AFTER redirect_uri verification. Callers
 //     MAY redirect to the RP with the OAuth error parameters.
 var (
@@ -126,7 +131,8 @@ var (
 	ErrPromptConflict = newErr("invalid_request", "prompt=none cannot combine with other prompts")
 
 	// ErrMaxAgeInvalid indicates max_age is present but not parseable as a
-	// non-negative integer. Maps to invalid_request.
+	// non-negative integer. Raised by the parser, so NOT redirect-safe.
+	// Maps to invalid_request.
 	ErrMaxAgeInvalid = newErr("invalid_request", "max_age must be a non-negative integer")
 
 	// ErrStateRequired indicates the state parameter was omitted. OIDC
@@ -140,8 +146,8 @@ var (
 	ErrNonceRequired = newErr("invalid_request", "nonce is required")
 
 	// ErrDuplicateParameter indicates a request parameter appeared more
-	// than once where the parser only accepts one occurrence. Maps to
-	// invalid_request.
+	// than once where the parser only accepts one occurrence. Raised by
+	// the parser, so NOT redirect-safe. Maps to invalid_request.
 	ErrDuplicateParameter = newErr("invalid_request", "request parameter appeared more than once")
 
 	// ErrInvalidRequestURI indicates the request_uri value presented at
@@ -176,30 +182,101 @@ var (
 	// ErrClaimsRequestInvalid indicates the OIDC Core §5.5 "claims"
 	// parameter is present but not valid JSON, or its top-level
 	// shape is not an object, or a per-claim entry is not null/object.
-	// The wire layer surfaces it on the redirect channel because the
-	// parser only fires AFTER redirect_uri validation passed (see
-	// [Request.Validate] ordering). Maps to invalid_request.
+	// Raised by the parser, so it is NOT redirect-safe: no client has
+	// been looked up yet and the request's redirect_uri is still
+	// whatever the caller claimed. Maps to invalid_request.
 	ErrClaimsRequestInvalid = newErr("invalid_request", "claims parameter is not valid JSON")
 
 	// ErrResourceInvalid indicates the RFC 8707 resource indicator is
-	// malformed: either more than one value was supplied, the URI is not
-	// absolute, or it contains a fragment component. Maps to
-	// invalid_target.
+	// malformed: the URI is not absolute, or it contains a fragment
+	// component. Maps to invalid_target. Raised by [Request.Validate],
+	// so it is redirect-safe; the parse-time duplicate-parameter case
+	// carries the same wire shape through [ErrResourceDuplicated].
 	ErrResourceInvalid = newErr("invalid_target", "resource indicator is malformed")
+
+	// ErrResourceDuplicated indicates the wire form carried more than
+	// one "resource" parameter. RFC 8707 §2 permits repetition in
+	// general; this OP admits a single indicator, so the repetition is
+	// a malformed request. It carries the same wire code and
+	// description as [ErrResourceInvalid] — the RP sees no difference —
+	// but is a distinct sentinel because it fires in the parser, before
+	// any redirect target is trusted, and [IsRedirectSafe] must be able
+	// to tell the two sites apart.
+	ErrResourceDuplicated = newErr("invalid_target", "resource indicator is malformed")
 
 	// ErrResourceNotAllowed indicates the client supplied a syntactically
 	// valid resource indicator that is not on the client's registered
 	// allowlist. Maps to invalid_target.
 	ErrResourceNotAllowed = newErr("invalid_target", "resource indicator is missing, or unknown")
+
+	// ErrAuthorizationDetailsInvalid indicates the RFC 9396
+	// authorization_details payload failed the structural or the
+	// type-specific validator. Maps to RFC 9396 §5's
+	// invalid_authorization_details.
+	ErrAuthorizationDetailsInvalid = newErr("invalid_authorization_details", "authorization_details is not acceptable")
+
+	// ErrAuthorizationDetailsTooLarge indicates the RFC 9396
+	// authorization_details payload exceeded the size cap. An over-size
+	// payload is a malformed request rather than an unacceptable
+	// authorization, so it maps to invalid_request; every other
+	// authorization_details failure maps to
+	// [ErrAuthorizationDetailsInvalid].
+	ErrAuthorizationDetailsTooLarge = newErr("invalid_request", "authorization_details is not acceptable")
+
+	// ErrGrantManagementActionRequired indicates the OP is configured to
+	// demand a grant_management_action on every authorization request and
+	// this one omitted it. Maps to invalid_request.
+	ErrGrantManagementActionRequired = newErr("invalid_request", "grant_management_action is required")
+
+	// ErrGrantManagementActionNotAuthorizeTime indicates the request
+	// carried a grant_management_action that is not an authorization-time
+	// action. The Grant Management draft's query / revoke actions are
+	// operations on the grant management endpoint, not on an
+	// authorization request. Maps to invalid_request.
+	ErrGrantManagementActionNotAuthorizeTime = newErr("invalid_request",
+		"grant_management_action is not valid at the authorization endpoint")
+
+	// ErrGrantManagementActionUnsupported indicates the requested action
+	// is an authorization-time action the OP did not enable. Maps to
+	// invalid_request.
+	ErrGrantManagementActionUnsupported = newErr("invalid_request", "grant_management_action is not supported")
+
+	// ErrGrantIDForbiddenOnCreate indicates the request paired
+	// grant_management_action=create with a grant_id. "create" mints a
+	// new grant, so naming an existing one is contradictory. Maps to
+	// invalid_request.
+	ErrGrantIDForbiddenOnCreate = newErr("invalid_request", "grant_id must not accompany grant_management_action=create")
+
+	// ErrDPoPJKTUnsupported indicates the request committed to a DPoP key
+	// via RFC 9449 §10.1 "dpop_jkt" while the OP cannot honour the
+	// commitment. Maps to invalid_request.
+	ErrDPoPJKTUnsupported = newErr("invalid_request", "dpop_jkt is not supported by this OP")
 )
+
+// grantIDRequiredFor builds the rejection for a replace / merge action
+// that arrived without a grant_id. The action is named in the
+// description so an RP that sent "merge" is not pointed at the
+// "replace" rules; that is why this one condition is a constructor
+// rather than a singleton sentinel.
+func grantIDRequiredFor(action string) *Error {
+	return newErr("invalid_request", "grant_id is required for grant_management_action="+action)
+}
 
 // IsRedirectSafe reports whether err arose AFTER redirect_uri validation
 // passed and is therefore safe to surface to the RP via a redirect with the
 // OAuth error parameters. Errors that fire before the redirect target is
-// trusted (missing client_id, missing or unregistered redirect_uri) return
-// false: the HTTP layer MUST render an inline error page in those cases.
-// Errors not produced by this package return false; the caller has not
-// validated, so we cannot make any redirect-safety claim.
+// trusted return false: the HTTP layer MUST render an inline error page in
+// those cases. Errors not produced by this package return false; the caller
+// has not validated, so we cannot make any redirect-safety claim.
+//
+// The predicate answers from the sentinel alone, which is only sound
+// because every sentinel is raised at exactly one site. A sentinel shared
+// between the parser and the validator could not be classified — that is
+// why the duplicate-"resource" case has its own [ErrResourceDuplicated]
+// rather than reusing the validator's [ErrResourceInvalid]. Any new
+// sentinel MUST keep that property, and a parse-time one MUST be listed
+// below: [ParseRequest] / [ParseValues] run before any client lookup, so
+// nothing they return has a trusted redirect target behind it.
 func IsRedirectSafe(err error) bool {
 	if err == nil {
 		return false
@@ -209,8 +286,13 @@ func IsRedirectSafe(err error) bool {
 		return false
 	}
 	switch e {
-	case ErrClientIDRequired, ErrRedirectURIRequired, ErrRedirectURIInvalid, ErrInvalidRequestURI,
-		ErrRequestAndRequestURI, ErrRequestObjectInvalid:
+	// Raised by Validate before redirect_uri is matched against the
+	// client's registration.
+	case ErrClientIDRequired, ErrRedirectURIRequired, ErrRedirectURIInvalid:
+		return false
+	// Raised by the parser, i.e. before any client has been looked up.
+	case ErrInvalidRequestURI, ErrRequestAndRequestURI, ErrRequestObjectInvalid,
+		ErrDuplicateParameter, ErrResourceDuplicated, ErrMaxAgeInvalid, ErrClaimsRequestInvalid:
 		return false
 	default:
 		return true

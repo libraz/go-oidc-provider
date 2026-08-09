@@ -103,6 +103,75 @@ func TestResolve_UntrustedRemote_IgnoresForwardedHeaders(t *testing.T) {
 	}
 }
 
+// TestResolve_TrustedRemote_ForwardedChains covers multi-hop deployments,
+// where each proxy appends its own view of the scheme and host. Reading the
+// header verbatim yields "https, https" as the scheme, which corrupts every
+// issuer-relative URL and breaks the DPoP htu comparison.
+func TestResolve_TrustedRemote_ForwardedChains(t *testing.T) {
+	t.Parallel()
+
+	tr, err := proxy.NewTrust([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatalf("NewTrust: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		proto      []string
+		host       []string
+		wantScheme string
+		wantHost   string
+	}{
+		{
+			name:       "comma separated chain",
+			proto:      []string{"https, https"},
+			host:       []string{"op.public.example.com, op.public.example.com"},
+			wantScheme: "https",
+			wantHost:   "op.public.example.com",
+		},
+		{
+			name:       "repeated header lines",
+			proto:      []string{"https", "http"},
+			host:       []string{"op.public.example.com", "inner.example.com"},
+			wantScheme: "https",
+			wantHost:   "op.public.example.com",
+		},
+		{
+			name:       "unknown scheme falls back to the local view",
+			proto:      []string{"gopher"},
+			wantScheme: "http",
+		},
+		{
+			name:       "leading empty element is skipped",
+			proto:      []string{", https"},
+			wantScheme: "https",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := newRequest(t, "http://op.example.com/x")
+			req.RemoteAddr = "10.1.2.3:7777"
+			for _, v := range tc.proto {
+				req.Header.Add("X-Forwarded-Proto", v)
+			}
+			for _, v := range tc.host {
+				req.Header.Add("X-Forwarded-Host", v)
+			}
+
+			got := proxy.Resolve(req, tr)
+			if got.Scheme != tc.wantScheme {
+				t.Errorf("Scheme=%q want %q", got.Scheme, tc.wantScheme)
+			}
+			if tc.wantHost != "" && got.Host != tc.wantHost {
+				t.Errorf("Host=%q want %q", got.Host, tc.wantHost)
+			}
+		})
+	}
+}
+
 func TestResolve_TrustedRemote_HonoursForwardedHeaders(t *testing.T) {
 	t.Parallel()
 

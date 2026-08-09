@@ -1,93 +1,21 @@
 package op
 
-import (
-	"sync"
-)
-
-// protocolOptionState carries per-config protocol-layer settings the
-// audit-driven security hardening introduces. The state is stored
-// out-of-line (a private sync.Map keyed by the *config pointer) so
-// that the new options can be added without growing the [config]
-// struct's surface; the indirection lets this file expose the public
-// [Option] entry points while the wiring layer (op.go) reads the
-// resulting values back through accessor methods declared here.
-//
-// The map is intentionally write-once-per-config: each [optionFunc]
-// runs exactly once during [newConfig], so storing a fresh
-// [protocolOptionState] keyed by the config pointer is a write
-// without lock contention. Reads happen on the request path through
-// the wiring layer; the sync.Map's concurrent-read guarantee is
-// sufficient because the entry is never updated after [newConfig]
-// returns.
-//
-//nolint:gochecknoglobals // package-level registry intentionally scoped to the protocol-options surface; a struct field would force a touch on the existing [config] declaration.
-var protocolOptionsState sync.Map
-
-// protocolOptionState is the per-config payload [protocolOptionsState]
-// carries. The field set is closed: every option declared in this
-// file maps onto exactly one boolean / interface / value.
-type protocolOptionState struct {
-	// backchannelAllowPrivateNetwork mirrors
-	// [op.WithBackchannelAllowPrivateNetwork]; when true the back-
-	// channel logout deliverer's SSRF deny-list is suppressed. The
-	// default false rejects loopback / link-local / RFC 1918 hosts
-	// so an attacker-controlled backchannel_logout_uri cannot pivot
-	// the OP onto an internal service.
-	backchannelAllowPrivateNetwork bool
-}
-
-// loadProtocolState returns the [protocolOptionState] associated
-// with c, or a zero value when no protocol option has run against
-// the config. The accessor never allocates — the zero value is
-// returned by value — so the read path stays cheap.
-func loadProtocolState(c *config) protocolOptionState {
-	if c == nil {
-		return protocolOptionState{}
-	}
-	v, ok := protocolOptionsState.Load(c)
-	if !ok {
-		return protocolOptionState{}
-	}
-	st, ok := v.(*protocolOptionState)
-	if !ok || st == nil {
-		return protocolOptionState{}
-	}
-	return *st
-}
-
-// mutateProtocolState invokes mutate on the [protocolOptionState]
-// associated with c, creating one when absent. The function returns
-// nothing because every protocol option is a void mutation; errors
-// are surfaced through the [Option]'s own return value.
-func mutateProtocolState(c *config, mutate func(*protocolOptionState)) {
-	if c == nil {
-		return
-	}
-	v, ok := protocolOptionsState.Load(c)
-	var st *protocolOptionState
-	if ok {
-		st, _ = v.(*protocolOptionState)
-	}
-	if st == nil {
-		st = &protocolOptionState{}
-		protocolOptionsState.Store(c, st)
-	}
-	mutate(st)
-}
+import "time"
 
 // BackchannelAllowsPrivateNetwork reports whether
 // [WithBackchannelAllowPrivateNetwork] was invoked with a true
 // argument against this config. The wiring layer (op.go) consults the
 // accessor when constructing the back-channel deliverer so the
-// per-config gate flows through to the SSRF check without forcing
-// a [config]-struct field that the Option-side cannot reach from
-// this file.
+// per-config gate flows through to the SSRF check.
 //
 // The accessor is the only path through which the SSRF gate's
 // inversion is exposed to the wiring layer; tests that need to
 // observe the flag drive the option, not this method.
 func (c *config) BackchannelAllowsPrivateNetwork() bool {
-	return loadProtocolState(c).backchannelAllowPrivateNetwork
+	if c == nil {
+		return false
+	}
+	return c.backchannelAllowPrivateNetwork
 }
 
 // WithBackchannelAllowPrivateNetwork suppresses the SSRF deny-list
@@ -109,12 +37,49 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 // grant private-network access for one fetcher without widening the
 // other.
 //
-// Stable since v1.0.
+// Stable since v1.1.
 func WithBackchannelAllowPrivateNetwork(allow bool) Option {
 	return optionFunc(func(c *config) error {
-		mutateProtocolState(c, func(st *protocolOptionState) {
-			st.backchannelAllowPrivateNetwork = allow
-		})
+		c.backchannelAllowPrivateNetwork = allow
+		return nil
+	})
+}
+
+// WithBackchannelFanOutBudget caps the total wall-clock time one
+// back-channel logout fan-out may occupy. The /end_session handler
+// terminates the OP-side session, starts the fan-out on a detached
+// context, and answers the browser immediately, so this budget — not
+// the end-user's request — is what bounds the lifetime of the
+// outbound work.
+//
+// The budget is a whole-event cap and is therefore distinct from
+// [WithBackchannelLogoutTimeout], which bounds a single RP's POST.
+// The two compose: an audience larger than the delivery worker pool
+// is notified in waves, so the per-RP timeout alone would let a fully
+// unresponsive audience occupy many multiples of itself. Deliveries
+// abandoned when the budget elapses fail with the context error and
+// raise [AuditLogoutBackChannelFailed], so an under-sized budget is
+// visible in the audit stream rather than silent.
+//
+// Not calling the option selects the library default of 30 seconds,
+// which suits an audience of a few dozen responsive RPs. Raise it for
+// deployments where one subject holds grants with many RPs; lower it
+// where the deployment would rather shed a slow logout than hold
+// outbound connections open. A non-positive duration is rejected at
+// the option site — "no budget" is not an expressible posture,
+// because an unbounded fan-out would outlive any shutdown deadline
+// [Provider.Shutdown] is given.
+//
+// Stable since v1.1.
+func WithBackchannelFanOutBudget(d time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		if d <= 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithBackchannelFanOutBudget requires a positive duration",
+			}
+		}
+		c.backchannelFanOutBudget = d
 		return nil
 	})
 }

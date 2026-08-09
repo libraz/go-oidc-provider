@@ -103,6 +103,7 @@ func TestWithAccessTokenRevocationStrategy_RejectsMissingGrantRevocations(t *tes
 		op.WithStore(storeWithoutGrantRevocations{inner: stubStore{}}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 	)
 	if err == nil {
 		t.Fatal("expected error for missing GrantRevocations under default strategy, got nil")
@@ -254,6 +255,7 @@ func TestWithAccessTokenRevocationStrategy_RejectsMissingAccessTokens(t *testing
 		op.WithStore(storeWithoutAccessTokens{inner: stubStore{}}),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry),
 	)
 	if err == nil {

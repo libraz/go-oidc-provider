@@ -105,7 +105,7 @@ rows:
       (referenced account not found)") and a grant.error audit event
       is emitted.
     status: out-of-scope
-    out_of_scope_reason: "UserStore is intentionally read-only on the public surface. docs/plans/002-product-design.md (line 1122 + §\"ライブラリ性の核\") records: \"users テーブルを奪わない\" — the embedder owns user lifecycle. Simulating \"findAccount returns nothing at refresh time\" requires either (a) UserStore.Delete (which the OP does not expose by design) or (b) a testkit injection seam that has not been built. Until a non-Delete seam is decided this row is not reachable from black-box scenarios."
+    out_of_scope_reason: "UserStore is intentionally read-only on the public surface: the library never takes ownership of the embedder's users table, so it offers no write path into it and the embedder owns the user lifecycle end to end. Simulating \"findAccount returns nothing at refresh time\" requires either (a) UserStore.Delete (which the OP does not expose by design) or (b) a testkit injection seam that has not been built. Until a non-Delete seam is decided this row is not reachable from black-box scenarios."
 
   - id: REF-010
     severity: P1

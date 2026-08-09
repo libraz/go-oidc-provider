@@ -169,7 +169,7 @@ func TestValidateProfile_RejectsMissingRequiredFeature(t *testing.T) {
 }
 
 // TestWithProfile_FAPI2Baseline_AutoEnablesRequiredFeatures confirms
-// the plan 005 §3.6 auto-enable contract: an embedder calling
+// the profile auto-enable contract: an embedder calling
 // [op.WithProfile(profile.FAPI2Baseline)] without explicit
 // [op.WithFeature] calls for PAR and JAR still constructs
 // successfully because both flags are auto-enabled. The disjunctive

@@ -2,6 +2,7 @@
 package tokenexchange
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"testing"
@@ -12,6 +13,48 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// staticGrantStore answers FindBySubjectClient with the same record for
+// every (subject, client) pair, or [store.ErrNotFound] when grant is
+// nil. Only that one method is reachable from the lookup path; the rest
+// panic so a future change that quietly reaches for them fails loudly
+// instead of reading a zero value.
+//
+// The stub stands in for consent that the OP recorded elsewhere. Tests
+// that must prove the scope really travels from an OP-written grant
+// drive the provider end to end instead (see the black-box file in this
+// directory) -- a stub can answer with a grant the OP would never
+// write, which is exactly the gap that hides a broken lookup.
+type staticGrantStore struct {
+	grant *store.Grant
+}
+
+func (s staticGrantStore) Save(context.Context, *store.Grant) error {
+	panic("staticGrantStore.Save should not be reached on the lookup path")
+}
+
+func (s staticGrantStore) Find(context.Context, string) (*store.Grant, error) {
+	panic("staticGrantStore.Find should not be reached on the lookup path")
+}
+
+func (s staticGrantStore) FindBySubjectClient(context.Context, string, string) (*store.Grant, error) {
+	if s.grant == nil {
+		return nil, store.ErrNotFound
+	}
+	return s.grant, nil
+}
+
+func (s staticGrantStore) ListBySubject(context.Context, string) ([]*store.Grant, error) {
+	panic("staticGrantStore.ListBySubject should not be reached on the lookup path")
+}
+
+func (s staticGrantStore) Delete(context.Context, string) error {
+	panic("staticGrantStore.Delete should not be reached on the lookup path")
+}
+
+func (s staticGrantStore) HasAny(context.Context) (bool, error) {
+	panic("staticGrantStore.HasAny should not be reached on the lookup path")
+}
 
 func TestLookupIDToken_RejectsCrossTokenConfusionAndInvalidLifetime(t *testing.T) {
 	t.Parallel()
@@ -29,6 +72,12 @@ func TestLookupIDToken_RejectsCrossTokenConfusionAndInvalidLifetime(t *testing.T
 		issuer: "https://op.example",
 		keys:   keySet,
 		clock:  fixedClock{now: now},
+		grants: staticGrantStore{grant: &store.Grant{
+			ID:       "grant-id-token-validation",
+			Subject:  "user-123",
+			ClientID: "caller-client",
+			Scope:    []string{"openid", "profile"},
+		}},
 	}
 	signer := tokens.FromInternalEntry(entry)
 
@@ -46,7 +95,6 @@ func TestLookupIDToken_RejectsCrossTokenConfusionAndInvalidLifetime(t *testing.T
 		Audience:  []string{"caller-client"},
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(time.Hour).Unix(),
-		Extra:     map[string]any{"scope": "openid profile"},
 	}
 	valid := signIDToken(t, validClaims)
 	missingExpClaims := validClaims
@@ -117,7 +165,7 @@ func TestLookupIDToken_RejectsCrossTokenConfusionAndInvalidLifetime(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			result, lookupErr := h.lookupIDToken(tc.raw)
+			result, lookupErr := h.lookupIDToken(t.Context(), tc.raw)
 			if !tc.wantErr {
 				if lookupErr != nil {
 					t.Fatalf("lookupIDToken: %v", lookupErr)
@@ -128,6 +176,9 @@ func TestLookupIDToken_RejectsCrossTokenConfusionAndInvalidLifetime(t *testing.T
 				if result.view.ExpiresAt.Unix() != validClaims.ExpiresAt {
 					t.Errorf("ExpiresAt=%v want Unix(%d)", result.view.ExpiresAt, validClaims.ExpiresAt)
 				}
+				if !equalStrings(result.view.Scope, []string{"openid", "profile"}) {
+					t.Errorf("Scope=%v want the grant's scope [openid profile]", result.view.Scope)
+				}
 				return
 			}
 			if !errors.Is(lookupErr, errTokenInvalid) {
@@ -135,6 +186,98 @@ func TestLookupIDToken_RejectsCrossTokenConfusionAndInvalidLifetime(t *testing.T
 			}
 			if result.reason != tc.wantReason {
 				t.Errorf("reason=%q want %q", result.reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+// errInjectedGrantFault is the sentinel the faulty grant store returns
+// so the test can distinguish a transport fault from "no such grant".
+var errInjectedGrantFault = errors.New("injected: grant store FindBySubjectClient fault")
+
+// faultyGrantStore fails every FindBySubjectClient call. It models the
+// transport fault an unreachable consent store produces, which MUST be
+// classified apart from a withdrawn consent so operators can tell a
+// database outage from a revocation wave.
+type faultyGrantStore struct {
+	staticGrantStore
+}
+
+func (faultyGrantStore) FindBySubjectClient(context.Context, string, string) (*store.Grant, error) {
+	return nil, errInjectedGrantFault
+}
+
+// TestLookupIDToken_GrantGatesTheExchange pins the three ways the
+// consent lookup can refuse an id_token subject_token. All three MUST
+// yield errTokenInvalid so the handler collapses them to invalid_grant
+// on the wire; only the audit reason distinguishes them.
+//
+// The withdrawn-consent row is the security-relevant one: an id_token
+// stays cryptographically valid until its own exp, so nothing else in
+// the exchange path would notice that the user revoked the client.
+func TestLookupIDToken_GrantGatesTheExchange(t *testing.T) {
+	t.Parallel()
+
+	entry, err := keys.GenerateES256("tx-id-token-grant-kid")
+	if err != nil {
+		t.Fatalf("GenerateES256: %v", err)
+	}
+	keySet, err := keys.NewSet([]keys.Entry{entry})
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	raw, err := tokens.SignIDToken(tokens.FromInternalEntry(entry), tokens.IDTokenClaims{
+		Issuer:    "https://op.example",
+		Subject:   "user-123",
+		Audience:  []string{"caller-client"},
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("SignIDToken: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		grants     store.GrantStore
+		wantReason string
+	}{
+		{
+			name:       "consent withdrawn",
+			grants:     staticGrantStore{},
+			wantReason: "grant_not_found",
+		},
+		{
+			name:       "consent store unreachable",
+			grants:     faultyGrantStore{},
+			wantReason: "store_error",
+		},
+		{
+			name:       "no consent store configured",
+			grants:     nil,
+			wantReason: "no_grant_store",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := &Handler{
+				issuer: "https://op.example",
+				keys:   keySet,
+				clock:  fixedClock{now: now},
+				grants: tc.grants,
+			}
+			result, lookupErr := h.lookupIDToken(t.Context(), raw)
+			if !errors.Is(lookupErr, errTokenInvalid) {
+				t.Fatalf("lookupIDToken err=%v want errTokenInvalid", lookupErr)
+			}
+			if result.reason != tc.wantReason {
+				t.Errorf("reason=%q want %q", result.reason, tc.wantReason)
+			}
+			if len(result.view.Scope) != 0 {
+				t.Errorf("Scope=%v want empty on the refusal path", result.view.Scope)
 			}
 		})
 	}

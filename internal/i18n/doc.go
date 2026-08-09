@@ -7,7 +7,7 @@
 //  1. Which locale should we render this request in?
 //  2. What does message key "X" say in that locale?
 //
-// The resolver walks the priority chain from design 002 §L.2:
+// The resolver walks this priority chain:
 //
 //	UserStore.PreferredLocale(sub)
 //	→ ui_locales authorize parameter
@@ -24,6 +24,6 @@
 // Message catalogues are simple JSON files: the leaves are strings
 // with `{var}` placeholders that [Bundle.Get] substitutes from the
 // supplied data map. v1.0 deliberately avoids ICU MessageFormat —
-// the design 002 §L.4 plural / gender support lands once the
-// surface area justifies the dependency.
+// plural / gender support lands once the surface area justifies the
+// dependency.
 package i18n

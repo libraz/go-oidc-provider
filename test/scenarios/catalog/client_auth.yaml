@@ -310,14 +310,15 @@ rows:
       values are rejected with 400 invalid_request.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-02
     severity: P0
@@ -327,14 +328,15 @@ rows:
       be rejected with 400 invalid_request.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-03
     severity: P0
@@ -345,14 +347,15 @@ rows:
       description "invalid client_assertion format".
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-04
     severity: P0
@@ -362,14 +365,15 @@ rows:
       HMAC key is derived from the client's client_secret.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-05
     severity: P0
@@ -380,14 +384,15 @@ rows:
       error_detail recorded per claim.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-06
     severity: P0
@@ -397,14 +402,15 @@ rows:
       with detail "iss must be the client_id".
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-07
     severity: P0
@@ -413,14 +419,15 @@ rows:
       sub MUST equal client_id; mismatch yields 401 invalid_client.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-08
     severity: P0
@@ -432,14 +439,15 @@ rows:
       reused by the same client at any of those endpoints.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-09
     severity: P0
@@ -454,14 +462,15 @@ rows:
       store, otherwise replay across nodes is undetectable.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-10
     severity: P0
@@ -471,14 +480,15 @@ rows:
       401 invalid_client with description "jwt expired".
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-11
     severity: P0
@@ -495,14 +505,15 @@ rows:
       widening the acceptance window.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-12
     severity: P0
@@ -513,14 +524,15 @@ rows:
       "client_id mismatch".
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-13
     severity: P0
@@ -531,14 +543,15 @@ rows:
       "only one mechanism".
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-14
     severity: P0
@@ -549,14 +562,15 @@ rows:
       401 invalid_client and detail "alg mismatch".
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-15
     severity: P0
@@ -568,14 +582,15 @@ rows:
       none is never accepted.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-16
     severity: P0
@@ -586,14 +601,15 @@ rows:
       expired".
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-17
     severity: P0
@@ -605,14 +621,15 @@ rows:
       otherwise valid (matching jti, etc.).
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions — a strictly wider blast radius than
+      private_key_jwt, which offers the same capability with an
+      asymmetric key the OP never possesses. It is also incompatible
+      with the OP's single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted.
 
   - id: CA-CSJWT-18
     severity: P1
@@ -624,12 +641,13 @@ rows:
     status: out-of-scope
     out_of_scope_reason: |
       client_secret_jwt and HS-signed responses are intentionally not
-      supported. docs/plans/002-product-design.md §"Out-of-scope"
-      (line 2159) excludes shared-secret JWT auth, and §J.5
-      (line 2163: "ES256 単一") excludes HS*/RS*/PS* signing. The OP
-      advertises only id_token_signing_alg_values_supported=["ES256"]
-      and rejects clients registering id_token_signed_response_alg=HS*
-      / userinfo_signed_response_alg=HS* upstream of this row.
+      supported. Shared-secret JWT auth is excluded because a leaked
+      secret forges assertions in both directions, and the OP signs
+      with a single algorithm (ES256), which rules out HS*/RS*/PS*
+      issuance. The OP advertises only
+      id_token_signing_alg_values_supported=["ES256"] and rejects
+      clients registering id_token_signed_response_alg=HS* /
+      userinfo_signed_response_alg=HS* upstream of this row.
 
   - id: CA-PKJWT-01
     severity: P0
@@ -738,7 +756,7 @@ rows:
       60 seconds when zero is passed (assertion.go:118-120), so an
       assertion whose iat lands far outside the 60-second window —
       e.g. 5 minutes in the future — is rejected with 401
-      invalid_client. v0.x does not expose a public knob to widen
+      invalid_client. The OP does not expose a public knob to widen
       the leeway; the verifier swap point is the
       [op.Provider]'s public store override.
     notes: |
@@ -750,7 +768,7 @@ rows:
     severity: P0
     spec: OIDC Core §9
     behaviour: |
-      v0.x [store.Client] does not carry a per-client
+      [store.Client] does not carry a per-client
       TokenEndpointAuthSigningAlg field. Per-client alg pinning is
       therefore implicit: a client whose registered JWK Set only
       contains EC P-256 keys cannot authenticate with an RS256 / PS256
@@ -984,10 +1002,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-02
@@ -1001,10 +1018,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-03
@@ -1018,10 +1034,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-04
@@ -1035,10 +1050,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-05
@@ -1051,10 +1065,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-06
@@ -1069,10 +1082,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-07
@@ -1086,10 +1098,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-08
@@ -1104,10 +1115,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-09
@@ -1121,10 +1131,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-10
@@ -1139,10 +1148,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-ATT-11
@@ -1156,10 +1164,9 @@ rows:
     out_of_scope_reason: |
       Attestation-based client authentication
       (draft-ietf-oauth-attestation-based-client-auth) is intentionally
-      not implemented in v1.0. The spec is an IETF draft, has no entry
-      in docs/plans/002-product-design.md, and duplicates the threat
-      model already covered by private_key_jwt for the in-scope use
-      cases. Revisit when the draft is promoted to RFC and embedder
+      not implemented in v1.0. The spec is still an IETF draft, and
+      for the deployment shapes this OP targets it duplicates the
+      threat model private_key_jwt already covers. Revisit when the draft is promoted to RFC and embedder
       demand surfaces.
 
   - id: CA-DISC-01
@@ -1170,8 +1177,8 @@ rows:
       published in token_endpoint_auth_methods_supported. The default
       v1.0 list is client_secret_basic, client_secret_post, and
       private_key_jwt; client_secret_jwt and attestation-based methods
-      are intentionally absent (both are out-of-scope per
-      docs/plans/002-product-design.md line 2159).
+      are intentionally absent because the OP ships no verifier for
+      either.
     status: active
 
   - id: CA-DISC-02
@@ -1180,10 +1187,10 @@ rows:
     behaviour: |
       token_endpoint_auth_signing_alg_values_supported is published
       whenever an assertion-bearing client authentication method is
-      enabled. v1.0 supports private_key_jwt only (client_secret_jwt
-      is out-of-scope per docs/plans/002-product-design.md line
-      2159), so the field is published whenever private_key_jwt
-      remains in token_endpoint_auth_methods_supported.
+      enabled. v1.0 supports private_key_jwt only (shared-secret
+      client_secret_jwt is a non-goal), so the field is published
+      whenever private_key_jwt remains in
+      token_endpoint_auth_methods_supported.
     status: active
 
   - id: CA-DISC-03
@@ -1196,15 +1203,14 @@ rows:
       excluded from enabledJWA, client_secret_jwt itself is disabled.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. Only private_key_jwt and the
-      secret-derived client_secret_basic / client_secret_post are
-      accepted, so the HMAC-only alg advertisement this row describes
-      never appears on the wire.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions, and it is incompatible with the OP's
+      single-signing-algorithm policy (ES256 only). Only
+      private_key_jwt and the secret-derived client_secret_basic /
+      client_secret_post are accepted, so the HMAC-only alg
+      advertisement this row describes never appears on the wire.
 
   - id: CA-DISC-04
     severity: P0
@@ -1213,8 +1219,8 @@ rows:
       When private_key_jwt is enabled, only asymmetric algs (RS, PS,
       ES, EdDSA) are published in
       token_endpoint_auth_signing_alg_values_supported; HMAC algs
-      (HS256/384/512) MUST NOT appear because client_secret_jwt is
-      out-of-scope per docs/plans/002-product-design.md line 2159.
+      (HS256/384/512) MUST NOT appear: they would belong to
+      client_secret_jwt, for which the OP ships no verifier.
     status: active
 
   - id: CA-DISC-05
@@ -1225,14 +1231,14 @@ rows:
       the union of HMAC and asymmetric algs is published.
     status: out-of-scope
     out_of_scope_reason: |
-      client_secret_jwt is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
-      records the policy: shared-secret JWT auth (HS256/384/512)
-      broadens the blast radius of a leaked secret without offering
-      anything private_key_jwt does not, and is incompatible with the
-      §J.5 ES256 single-policy. With csjwt out of the picture there
-      is no "union of HMAC and asymmetric algs" wire shape to assert;
-      the asymmetric-only advertisement is covered by CA-DISC-04.
+      client_secret_jwt is intentionally not supported. Shared-secret
+      JWT auth (HS256/384/512) makes the OP and the client hold the
+      same signing key, so a leak on either side forges assertions in
+      both directions, and it is incompatible with the OP's
+      single-signing-algorithm policy (ES256 only). With
+      client_secret_jwt absent there is no "union of HMAC and
+      asymmetric algs" wire shape to assert; the asymmetric-only
+      advertisement is covered by CA-DISC-04.
 
   - id: CA-DISC-06
     severity: P1

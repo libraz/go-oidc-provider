@@ -14,7 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
-// TestInteractionLocale_PriorityChain pins the §L.2 priority chain for
+// TestInteractionLocale_PriorityChain pins the locale priority chain for
 // the interaction prompt envelope: the layer the embedder supplies
 // MUST win against the layers below it. A single test exercises all
 // four layers below the optional PreferredLocaleStore (which lives in
@@ -70,8 +70,8 @@ func TestInteractionLocale_PriorityChain(t *testing.T) {
 	}
 }
 
-// TestInteractionLocale_AvailableAndHint pins the rest of the §L.6
-// envelope: `ui_locales_hint` echoes the RP's request parameter and
+// TestInteractionLocale_AvailableAndHint pins the rest of the prompt's
+// i18n envelope: `ui_locales_hint` echoes the RP's request parameter and
 // `locales_available` lists every registered tag. Embedder SPAs use
 // the latter to build a language picker without re-fetching
 // discovery.

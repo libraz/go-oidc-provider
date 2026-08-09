@@ -45,7 +45,7 @@ import (
 //   - 43 char with "+" / "/" + S256 covers the wrong-alphabet branch
 //     ("+/" are standard base64, NOT base64url, so must be rejected).
 //   - valid challenge + "plain" covers [ErrChallengeMethodUnsupported]
-//     (RFC 7636 §A.12.3 / OAuth 2.1 forbid plain).
+//     (OAuth 2.1 forbids plain).
 //   - valid challenge + "s256" (lowercase) covers method case-sensitivity.
 func FuzzValidateChallenge(f *testing.F) {
 	const validChallenge = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ" // 43 base64url chars

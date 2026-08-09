@@ -221,6 +221,18 @@ type Deps struct {
 	// `refresh_token` grant requirement.
 	StrictOfflineAccess bool
 
+	// OpenIDScopeOptional mirrors
+	// [authorizeendpoint.Deps.OpenIDScopeOptional]: the deployment serves
+	// plain OAuth 2.0 clients alongside OIDC ones, so a granted scope
+	// without "openid" is legitimate. The flag lifts the "openid"
+	// precondition from the refresh-token issuance gate, which otherwise
+	// would silently withhold refresh tokens from exactly the non-OIDC
+	// grants the option exists to serve. The per-client `refresh_token`
+	// grant registration still applies. Wired by the OP from
+	// [op.WithOpenIDScopeOptional]; mutually exclusive with
+	// StrictOfflineAccess, which op.New rejects at construction.
+	OpenIDScopeOptional bool
+
 	// GrantManagementEnabled makes the token response carry the issued
 	// grant_id (the Grant Management draft). Off by default so the
 	// non-GM response shape is unchanged.
@@ -601,18 +613,43 @@ func isFormContent(ct string) bool {
 	return endpointsupport.IsFormContent(ct)
 }
 
+// refreshScopePolicy is the scope half of the refresh-token issuance
+// gate: the two deployment flags that decide which granted scopes
+// qualify. It is a struct rather than a pair of bool parameters so the
+// call sites read as policy rather than as positional flags.
+type refreshScopePolicy struct {
+	// StrictOfflineAccess additionally requires "offline_access" in the
+	// granted scope (op.WithStrictOfflineAccess).
+	StrictOfflineAccess bool
+
+	// OpenIDScopeOptional drops the "openid" requirement so plain
+	// OAuth 2.0 grants qualify (op.WithOpenIDScopeOptional).
+	OpenIDScopeOptional bool
+}
+
+// refreshPolicy projects the deployment flags the refresh-token
+// issuance gate consults.
+func (d *Deps) refreshPolicy() refreshScopePolicy {
+	return refreshScopePolicy{
+		StrictOfflineAccess: d.StrictOfflineAccess,
+		OpenIDScopeOptional: d.OpenIDScopeOptional,
+	}
+}
+
 // clientPermitsRefresh reports whether the registered client may
 // receive refresh tokens. The lax reading of OIDC Core 1.0 §11 is the
 // historical default: a refresh token is issued when "refresh_token"
 // is in the client's GrantTypes AND the granted scope includes
-// "openid". When strictOfflineAccess is true the gate additionally
-// requires "offline_access" in scope, matching the strict reading of
-// §11 (opt-in via op.WithStrictOfflineAccess).
-func clientPermitsRefresh(c *store.Client, scope []string, strictOfflineAccess bool) bool {
-	if !oidcscope.ContainsOpenID(scope) {
+// "openid". When policy.StrictOfflineAccess is true the gate
+// additionally requires "offline_access" in scope, matching the strict
+// reading of §11. When policy.OpenIDScopeOptional is true the "openid"
+// precondition is lifted, because the deployment deliberately serves
+// non-OIDC grants whose scope never carries it.
+func clientPermitsRefresh(c *store.Client, scope []string, policy refreshScopePolicy) bool {
+	if !policy.OpenIDScopeOptional && !oidcscope.ContainsOpenID(scope) {
 		return false
 	}
-	if strictOfflineAccess && !oidcscope.ContainsOfflineAccess(scope) {
+	if policy.StrictOfflineAccess && !oidcscope.ContainsOfflineAccess(scope) {
 		return false
 	}
 	for _, g := range c.GrantTypes {

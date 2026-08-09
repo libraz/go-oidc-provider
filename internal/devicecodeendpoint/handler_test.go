@@ -365,6 +365,90 @@ func TestHandlerRejectsPolicyViolations(t *testing.T) {
 	})
 }
 
+// TestHandlerBuildsVerificationURICompleteAsAValidURL pins the RFC 8628
+// §3.3.1 member to a real URL rather than a textual concatenation. A
+// verification page that already carries a query or a fragment is a
+// supported configuration, and the emitted link is what a device renders
+// into a QR code: if the user_code lands after a second "?" the user
+// follows a link the code never reaches, and no layer downstream would
+// notice.
+func TestHandlerBuildsVerificationURICompleteAsAValidURL(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		base     string
+		wantKeep map[string]string
+		wantFrag string
+	}{
+		{
+			name: "no existing query",
+			base: "https://login.example/activate",
+		},
+		{
+			name:     "existing query is preserved",
+			base:     "https://login.example/activate?tenant=acme",
+			wantKeep: map[string]string{"tenant": "acme"},
+		},
+		{
+			name: "existing user_code is replaced",
+			base: "https://login.example/activate?user_code=STALE-CODE",
+		},
+		{
+			name:     "fragment survives the merge",
+			base:     "https://login.example/activate?tenant=acme#code-form",
+			wantKeep: map[string]string{"tenant": "acme"},
+			wantFrag: "code-form",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+			_, deps := newFixture(t, now, store.Client{
+				ID:                      "device-client",
+				PublicClient:            true,
+				TokenEndpointAuthMethod: "none",
+				GrantTypes:              []string{grant.DeviceCode.String()},
+				Scopes:                  []string{"openid"},
+			})
+			deps.VerificationURI = tc.base
+
+			rec := postForm(t, deps, url.Values{"client_id": {"device-client"}})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			body := decodeSuccess(t, rec)
+
+			if got := strings.Count(body.VerificationURIComplete, "?"); got != 1 {
+				t.Fatalf("verification_uri_complete = %q contains %d query separators, want exactly 1",
+					body.VerificationURIComplete, got)
+			}
+			u, err := url.Parse(body.VerificationURIComplete)
+			if err != nil {
+				t.Fatalf("verification_uri_complete = %q is not a valid URL: %v", body.VerificationURIComplete, err)
+			}
+			if u.Scheme != "https" || u.Host != "login.example" || u.Path != "/activate" {
+				t.Errorf("verification_uri_complete = %q lost the base URI's identity", body.VerificationURIComplete)
+			}
+			q := u.Query()
+			if got := q["user_code"]; len(got) != 1 || got[0] != body.UserCode {
+				t.Errorf("user_code = %v, want exactly one entry equal to %q", got, body.UserCode)
+			}
+			for k, want := range tc.wantKeep {
+				if got := q.Get(k); got != want {
+					t.Errorf("%s = %q, want %q (the base URI's own parameters must survive)", k, got, want)
+				}
+			}
+			if u.Fragment != tc.wantFrag {
+				t.Errorf("fragment = %q, want %q", u.Fragment, tc.wantFrag)
+			}
+		})
+	}
+}
+
 func TestHandlerRejectsMissingDeviceCodeStoreAsServerMisconfiguration(t *testing.T) {
 	t.Parallel()
 

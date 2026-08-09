@@ -54,7 +54,22 @@ func FindByHandle(ctx context.Context, tokens store.RefreshTokenStore, handle st
 // lookup resolves a chain node. When credential is true the value is a bearer
 // secret and goes through the hash-only Find; otherwise it is a stored chain
 // handle resolved through [store.RefreshChainResolver] when available.
+//
+// A backend that answers with a nil record and a nil error violates the store
+// contract; lookup normalises that pair onto [store.ErrNotFound] so the walk
+// stops instead of dereferencing the missing record.
 func lookup(ctx context.Context, tokens store.RefreshTokenStore, id string, credential bool) (*store.RefreshToken, error) {
+	rec, err := resolveNode(ctx, tokens, id, credential)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return nil, store.ErrNotFound
+	}
+	return rec, nil
+}
+
+func resolveNode(ctx context.Context, tokens store.RefreshTokenStore, id string, credential bool) (*store.RefreshToken, error) {
 	if !credential {
 		if r, ok := tokens.(store.RefreshChainResolver); ok {
 			return r.FindByStoredHandle(ctx, id)

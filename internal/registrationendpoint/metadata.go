@@ -100,11 +100,11 @@ type metadataWire struct {
 	BackchannelLogoutURI              string          `json:"backchannel_logout_uri,omitempty"`
 	BackchannelLogoutSessionRequired  bool            `json:"backchannel_logout_session_required,omitempty"`
 
-	// Standard metadata the library does not persist or enforce today.
-	// RFC 7591 §2 requires authorization servers to ignore metadata
-	// they do not understand; parse-and-drop keeps DisallowUnknownFields
-	// useful for truly misspelled local fields without rejecting common
-	// interoperable registrations.
+	// Standard metadata the OP knowingly accepts and drops. The decoder
+	// ignores unmodelled members anyway, so declaring them records
+	// which members have been considered and found to have no
+	// behaviour here — an RP sending them is not being ignored by
+	// oversight.
 	SoftwareID                                 string   `json:"software_id,omitempty"`
 	SoftwareVersion                            string   `json:"software_version,omitempty"`
 	TLSClientCertificateBoundAccessTokens      *bool    `json:"tls_client_certificate_bound_access_tokens,omitempty"`
@@ -114,6 +114,18 @@ type metadataWire struct {
 	BackchannelUserCodeParameter               *bool    `json:"backchannel_user_code_parameter,omitempty"`
 	AuthorizationSignedResponseAlg             string   `json:"authorization_signed_response_alg,omitempty"`
 	AuthorizationDetailsTypes                  []string `json:"authorization_details_types,omitempty"`
+
+	// Metadata the OP does not persist but MUST answer for, because the
+	// discovery document advertises the capability the member selects
+	// from or because the member asks for an enforcement the OP does not
+	// apply per client. Ignoring these silently would either contradict
+	// the published metadata or quietly drop a hardening the client
+	// asked for, so they are parsed and checked by
+	// [validateUnpersistedMetadata].
+	UserInfoSignedResponseAlg          string `json:"userinfo_signed_response_alg,omitempty"`
+	IntrospectionSignedResponseAlg     string `json:"introspection_signed_response_alg,omitempty"`
+	DPoPBoundAccessTokens              bool   `json:"dpop_bound_access_tokens,omitempty"`
+	RequirePushedAuthorizationRequests bool   `json:"require_pushed_authorization_requests,omitempty"`
 
 	// SoftwareStatement is parsed only so the handler can detect its
 	// presence and reject with invalid_software_statement; v1.0 does
@@ -148,6 +160,13 @@ type metadataExtras struct {
 	ClientIDIssuedAt  json.RawMessage
 	RegAccessToken    json.RawMessage
 	RegClientURI      json.RawMessage
+
+	// Members the OP validates but does not persist. See
+	// [validateUnpersistedMetadata] for the rule applied to each.
+	UserInfoSignedResponseAlg          string
+	IntrospectionSignedResponseAlg     string
+	DPoPBoundAccessTokens              bool
+	RequirePushedAuthorizationRequests bool
 }
 
 // parseClientMetadataWithExtras is the variant the handler uses; it
@@ -157,7 +176,12 @@ type metadataExtras struct {
 func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras, error) {
 	var w metadataWire
 	dec := json.NewDecoder(r)
-	dec.DisallowUnknownFields()
+	// Unmodelled members are dropped rather than rejected: RFC 7591 §2
+	// requires the authorization server to ignore metadata it does not
+	// understand. Rejecting them locks out every RP library that sends
+	// the full standard metadata set, and the members that do carry a
+	// meaning the OP owes an answer for are modelled explicitly on
+	// [metadataWire] so they reach a validator instead of the floor.
 	if err := dec.Decode(&w); err != nil {
 		return ClientMetadata{}, metadataExtras{}, fmt.Errorf("registrationendpoint: decode metadata: %w", err)
 	}
@@ -217,6 +241,11 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		ClientIDIssuedAt:  append(json.RawMessage(nil), w.ClientIDIssuedAt...),
 		RegAccessToken:    append(json.RawMessage(nil), w.RegistrationAccessToken...),
 		RegClientURI:      append(json.RawMessage(nil), w.RegistrationClientURI...),
+
+		UserInfoSignedResponseAlg:          w.UserInfoSignedResponseAlg,
+		IntrospectionSignedResponseAlg:     w.IntrospectionSignedResponseAlg,
+		DPoPBoundAccessTokens:              w.DPoPBoundAccessTokens,
+		RequirePushedAuthorizationRequests: w.RequirePushedAuthorizationRequests,
 	}
 	return m, extras, nil
 }
@@ -245,8 +274,10 @@ func cloneStrings(in []string) []string {
 }
 
 // Library defaults for the OIDC profile fields when the caller leaves
-// them blank. The values mirror 02-product-design.md
-// §A.6.2 / §K.3.
+// them blank. client_secret_basic and web are the OpenID Connect
+// Dynamic Client Registration 1.0 §2 defaults; a dynamic client gets
+// the public subject type unless pairwise subjects are enabled, and
+// ES256 is the only algorithm this OP signs ID Tokens with.
 const (
 	defaultAuthMethod      = "client_secret_basic"
 	defaultSubjectType     = "public"

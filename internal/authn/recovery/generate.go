@@ -52,12 +52,12 @@ func (v *Verifier) Generate(_ context.Context, subject string) (*GenerationResul
 	if err != nil {
 		return nil, err
 	}
-	codes := make([]store.RecoveryCode, 0, len(plaintext))
-	for _, p := range plaintext {
-		h, err := hashCode(p)
-		if err != nil {
-			return nil, err
-		}
+	hashes, err := hashCodes(plaintext)
+	if err != nil {
+		return nil, err
+	}
+	codes := make([]store.RecoveryCode, 0, len(hashes))
+	for _, h := range hashes {
 		codes = append(codes, store.RecoveryCode{Hash: h})
 	}
 	batch := &store.RecoveryBatch{

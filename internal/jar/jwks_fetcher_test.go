@@ -1,6 +1,6 @@
-// White-box tests against the package-private cache / fetcher
-// helpers. Living in the same package avoids exporting the SSRF
-// gate and the ETag plumbing solely so the tests can reach them.
+// White-box tests against the package-private fetcher helpers. Living
+// in the same package avoids exporting the inline-keyset parser solely
+// so the tests can reach it.
 //
 //nolint:testpackage // intentional white-box test for unexported helpers.
 package jar
@@ -12,12 +12,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -25,6 +27,11 @@ import (
 // The exact bytes are not material; only the parser-level shape and
 // the headers the server emits are.
 const jwksJSON = `{"keys":[{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","kid":"k1"}]}`
+
+// unsupportedMemberJWK is a JWK the JOSE layer cannot turn into a key: an
+// OKP curve outside the Ed25519 it implements. RPs publish members of this
+// shape for ECDH-ES key agreement alongside their signing keys.
+const unsupportedMemberJWK = `{"kty":"OKP","crv":"X25519","x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo","use":"enc","kid":"enc-1"}`
 
 // movableClock is a [timex.Clock] whose Now reading callers can shift.
 // Tests use it to drive the cache's TTL expiry without sleeping.
@@ -80,43 +87,90 @@ func TestJWKSCache_HitWithinTTL(t *testing.T) {
 	}
 }
 
-func TestJWKSCache_BoundsURLCardinalityAndRetainsRecentEntry(t *testing.T) {
+// TestFetch_CallerCancellationDoesNotPoisonCache pins that a caller hanging
+// up mid-fetch neither aborts the outbound request the other waiters share
+// nor leaves a negative entry behind. The fetch runs inside a singleflight,
+// so before the fix the first caller's request context was the one every
+// collapsed caller depended on: an unauthenticated peer could disconnect
+// mid-fetch and keep a client's keyset negative-cached indefinitely by
+// repeating it.
+func TestFetch_CallerCancellationDoesNotPoisonCache(t *testing.T) {
 	t.Parallel()
 
-	clock := &movableClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
-	cache := newJWKSCache(clock)
-	cache.maxEntries = 2
-	keys := &josev4.JSONWebKeySet{}
-	cache.put("https://rp.example/a", "", keys, time.Hour)
-	cache.put("https://rp.example/b", "", keys, time.Hour)
-	// Touch a so b becomes the least-recently used entry.
-	if _, ok := cache.get("https://rp.example/a"); !ok {
-		t.Fatal("cache entry a missing before eviction")
-	}
-	cache.put("https://rp.example/c", "", keys, time.Hour)
-	if len(cache.entries) != 2 {
-		t.Fatalf("entries=%d want bounded 2", len(cache.entries))
-	}
-	if _, ok := cache.entries["https://rp.example/a"]; !ok {
-		t.Fatal("recent entry a was evicted")
-	}
-	if _, ok := cache.entries["https://rp.example/b"]; ok {
-		t.Fatal("least-recent entry b was not evicted")
-	}
+	release := make(chan struct{})
+	inflight := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(inflight) })
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		_, _ = w.Write([]byte(jwksJSON))
+	}))
+	defer srv.Close()
 
-	for i := range 5 {
-		cache.putFailure(fmt.Sprintf("https://rp.example/f%d", i), errors.New("unreachable"), time.Hour)
-		cache.tryForced(fmt.Sprintf("https://rp.example/r%d", i), time.Hour)
+	f := NewFetcher(timex.SystemClock)
+	f.SetAllowPrivate(true) // httptest binds to 127.0.0.1.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	abandoned := make(chan error, 1)
+	go func() {
+		_, err := f.Fetch(ctx, srv.URL)
+		abandoned <- err
+	}()
+
+	<-inflight
+	cancel()
+	if err := <-abandoned; !errors.Is(err, context.Canceled) {
+		t.Fatalf("abandoned Fetch err=%v want context.Canceled", err)
 	}
-	if len(cache.failures) > 2 || len(cache.forced) > 2 {
-		t.Fatalf("unbounded auxiliary maps: failures=%d forced=%d", len(cache.failures), len(cache.forced))
+	close(release)
+
+	keys, err := f.Fetch(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Fetch after an abandoned one: %v", err)
+	}
+	if len(keys.Keys) != 1 || keys.Keys[0].KeyID != "k1" {
+		t.Fatalf("Fetch returned kids %v, want [k1]", keyIDs(keys))
+	}
+}
+
+// TestParseJWKS_KeepsSupportedKeyBesideUnsupportedOne pins RFC 7517 §5 on
+// the fetched-keyset path: an RP publishing a key type this build cannot
+// represent (an X25519 key for ECDH-ES, say) next to its signing key stays
+// usable for JAR instead of failing the whole document.
+func TestParseJWKS_KeepsSupportedKeyBesideUnsupportedOne(t *testing.T) {
+	t.Parallel()
+
+	body := `{"keys":[` + unsupportedMemberJWK + `,{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","kid":"k1"}]}`
+	keys, err := parseJWKS([]byte(body))
+	if err != nil {
+		t.Fatalf("parseJWKS: %v", err)
+	}
+	if len(keys.Keys) != 1 || keys.Keys[0].KeyID != "k1" {
+		t.Fatalf("parseJWKS returned kids %v, want [k1]", keyIDs(keys))
+	}
+}
+
+// TestParseJWKS_RejectsKeysetWithoutAnySupportedKey confirms the tolerant
+// decode still fails when nothing usable is left, so the verifier reports a
+// fetch failure rather than silently holding an empty keyset.
+func TestParseJWKS_RejectsKeysetWithoutAnySupportedKey(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseJWKS([]byte(`{"keys":[` + unsupportedMemberJWK + `]}`)); !errors.Is(err, ErrJWKSFetch) {
+		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}
 }
 
 func TestParseJWKS_RejectsExcessiveKeyCount(t *testing.T) {
 	t.Parallel()
 
-	body := `{"keys":[` + strings.Repeat(`{"kty":"EC"},`, defaultJWKSMaxKeys) + `{"kty":"EC"}]}`
+	body := `{"keys":[` + strings.Repeat(`{"kty":"EC"},`, rpjwks.MaxKeys) + `{"kty":"EC"}]}`
 	if _, err := parseJWKS([]byte(body)); err == nil {
 		t.Fatal("parseJWKS accepted an excessive key count")
 	}
@@ -189,7 +243,7 @@ func TestFetchFresh_BypassesFreshCacheThenThrottles(t *testing.T) {
 	}
 
 	// Past the throttle window a forced refetch is allowed again.
-	clock.now = clock.now.Add(minForcedRefreshInterval + time.Second)
+	clock.now = clock.now.Add(rpjwks.ForcedRefreshInterval + time.Second)
 	if _, err := f.FetchFresh(context.Background(), srv.URL); err != nil {
 		t.Fatalf("FetchFresh 3: %v", err)
 	}
@@ -232,7 +286,7 @@ func TestJWKSCache_RevalidatesViaETag(t *testing.T) {
 func TestJWKSCache_RejectsOversizeBody(t *testing.T) {
 	t.Parallel()
 
-	huge := strings.Repeat("X", int(defaultJWKSMaxBody+1))
+	huge := strings.Repeat("X", int(rpjwks.DefaultMaxBodyBytes+1))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"keys":[`)
@@ -306,39 +360,6 @@ func TestJWKSCache_RejectsRFC1918ByDefault(t *testing.T) {
 	_, err := f.Fetch(context.Background(), "http://10.0.0.1/jwks")
 	if !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
-	}
-}
-
-func TestParseMaxAge_HappyPath(t *testing.T) {
-	t.Parallel()
-	got, ok := parseMaxAge("public, max-age=120")
-	if !ok || got != 120*time.Second {
-		t.Fatalf("got=%v ok=%v", got, ok)
-	}
-}
-
-func TestParseMaxAge_Absent(t *testing.T) {
-	t.Parallel()
-	if _, ok := parseMaxAge("no-store"); ok {
-		t.Fatal("ok should be false when max-age missing")
-	}
-}
-
-func TestIsJSONContentType(t *testing.T) {
-	t.Parallel()
-	for _, ct := range []string{
-		"application/json",
-		"application/json; charset=utf-8",
-		"application/jwk-set+json",
-	} {
-		if !isJSONContentType(ct) {
-			t.Errorf("rejected %q", ct)
-		}
-	}
-	for _, ct := range []string{"text/plain", "text/html", ""} {
-		if isJSONContentType(ct) {
-			t.Errorf("accepted %q", ct)
-		}
 	}
 }
 

@@ -145,7 +145,7 @@ func deriveJWSAlgorithm(key tokens.SigningKey) (josev4.SignatureAlgorithm, error
 	pub := key.Signer.Public()
 	alg, _, _, ok := jose.KeyShape(pub)
 	if !ok {
-		return "", fmt.Errorf("%w: %w: key type %T (v0.x supports ECDSA P-256 only; see internal/keys.NewSet)", ErrEncode, jose.ErrUnsupportedKeyShape, pub)
+		return "", fmt.Errorf("%w: %w: key type %T (the OP signs with ECDSA P-256 only; see internal/keys.NewSet)", ErrEncode, jose.ErrUnsupportedKeyShape, pub)
 	}
 	if alg != string(josev4.ES256) {
 		return "", fmt.Errorf("%w: %w: alg %q is not ES256 (the OP signs with ECDSA P-256 only)", ErrEncode, jose.ErrUnsupportedKeyShape, alg)
@@ -176,7 +176,7 @@ func (s *Signer) Sign(p Payload) (string, error) {
 	now := s.clock.Now().UTC()
 	// "nbf" is set equal to "iat" so JARM consumers running under
 	// FAPI 2.0 Message Signing §5.6 can apply a uniform nbf-or-fail
-	// rule (closes L-JARM-NBF). RFC 9101 / draft-ietf-oauth-jwsreq
+	// rule. RFC 9101 / draft-ietf-oauth-jwsreq
 	// neither mandate nbf on response objects nor forbid it; pinning
 	// the value to iat keeps the wire shape compatible with relaxed
 	// consumers while satisfying strict ones.

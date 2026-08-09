@@ -105,7 +105,7 @@ rows:
       (no access_token), scope-derived claims ARE emitted in the
       id_token because there is no userinfo channel.
     status: out-of-scope
-    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167): \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported: returning a bearer token in the URL fragment leaks it through browser history and Referer, and OAuth 2.1 / RFC 9700 §2.1.2 drop the implicit grant for that reason. Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
 
   - id: IDT-12
     severity: P0
@@ -126,7 +126,7 @@ rows:
       claims; the access_token is used to retrieve them via
       /userinfo.
     status: out-of-scope
-    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167): \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported: returning a bearer token in the URL fragment leaks it through browser history and Referer, and OAuth 2.1 / RFC 9700 §2.1.2 drop the implicit grant for that reason. Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
 
   - id: IDT-14
     severity: P0
@@ -170,7 +170,7 @@ rows:
       issued together at the authorize endpoint
       (response_type=token id_token or code id_token token).
     status: out-of-scope
-    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167): \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported: returning a bearer token in the URL fragment leaks it through browser history and Referer, and OAuth 2.1 / RFC 9700 §2.1.2 drop the implicit grant for that reason. Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
 
   - id: IDT-21
     severity: P0
@@ -188,7 +188,7 @@ rows:
       c_hash is required when an id_token and a code are issued
       together (response_type=code id_token or code id_token token).
     status: out-of-scope
-    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167): \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported: returning a bearer token in the URL fragment leaks it through browser history and Referer, and OAuth 2.1 / RFC 9700 §2.1.2 drop the implicit grant for that reason. Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
 
   - id: IDT-23
     severity: P0
@@ -356,7 +356,7 @@ rows:
       returns a signed JWT with content-type application/jwt instead
       of JSON.
     status: out-of-scope
-    out_of_scope_reason: "userinfo_signed_response_alg is intentionally not honoured: /userinfo always returns application/json. The redact list namechecks the metadata field for storage hygiene, but no signer is wired into internal/userinfoendpoint and the response writer hard-codes JSON."
+    out_of_scope_reason: "The OP does sign UserInfo responses — internal/userinfo/serve_jwt.go returns an ES256 JWT with content-type application/jwt — but the trigger is the request's Accept header, not this metadata field. Honouring the field would make a signed response the per-client default, which needs a store.Client member the record does not carry, so the exact behaviour this row asserts has no path. Rebind once the client record can express it."
 
   - id: IDT-53
     severity: P1

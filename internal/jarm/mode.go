@@ -23,7 +23,7 @@ const (
 	// ResponseModeJWT is the bare alias the JARM spec defines as "use
 	// the default for the response_type". For "code" it resolves to
 	// [ResponseModeQueryJWT]; for "token" / "id_token" responses it
-	// would resolve to [ResponseModeFragmentJWT], but v0.x does not
+	// would resolve to [ResponseModeFragmentJWT], but the OP does not
 	// implement those flows.
 	ResponseModeJWT ResponseMode = "jwt"
 )
@@ -61,9 +61,10 @@ func IsJARM(s string) bool {
 //     "id_token") → query.jwt
 //   - response_type containing "token" or "id_token"           → fragment.jwt
 //
-// v0.x only ships the Code flow, so in practice every resolution lands
-// on [ResponseModeQueryJWT]; the fragment branch is wired so future
-// hybrid-flow support can opt into JARM without rewriting this helper.
+// The OP only ships the Code flow, so in practice every resolution
+// lands on [ResponseModeQueryJWT]; the fragment branch is wired so
+// hybrid-flow support could opt into JARM without rewriting this
+// helper.
 func Resolve(mode ResponseMode, responseType string) ResponseMode {
 	if mode != ResponseModeJWT {
 		if _, ok := Parse(string(mode)); ok {

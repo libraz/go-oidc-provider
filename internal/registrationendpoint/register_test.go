@@ -586,7 +586,7 @@ func TestRegister_OpenRegistration_AcceptedAndLogged(t *testing.T) {
 }
 
 // TestRegister_Errors_4xx covers the IAT verification and metadata
-// validation error matrix from §A.6.2.2.
+// validation failure paths.
 func TestRegister_Errors_4xx(t *testing.T) {
 	t.Parallel()
 

@@ -30,12 +30,14 @@ rows:
       response_modes_supported equal to ["query", "form_post",
       "query.jwt", "fragment.jwt", "form_post.jwt", "jwt"]. The
       authorization_encryption_alg_values_supported and
-      authorization_encryption_enc_values_supported fields are NOT
-      published (JWE for JARM responses is out-of-scope in v1.0;
-      see encryption.yaml). The response_modes list does NOT
-      include "web_message" or "web_message.jwt" (web_message
-      transport is not implemented and is discouraged by OAuth 2.1
-      / RFC 9700).
+      authorization_encryption_enc_values_supported fields ARE
+      published: the OP wraps the signed JARM JWT in a JWE for any
+      client registered with authorization_encrypted_response_alg /
+      _enc, using a key from that client's JWKS, so the capability
+      does not depend on [op.WithEncryptionKeyset] (see
+      encryption.yaml). The response_modes list does NOT include
+      "web_message" or "web_message.jwt" (web_message transport is
+      not implemented and is discouraged by OAuth 2.1 / RFC 9700).
     status: active
 
   - id: JARM-010
@@ -49,10 +51,10 @@ rows:
       exp (number), state, iss=issuer, scope=openid.
     status: out-of-scope
     out_of_scope_reason: |
-      Implicit / hybrid response_type is intentionally not supported.
-      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
-      records the policy: "Bearer token の URL fragment 露出 — implicit
-      を持たないため自動的に不在." The OP advertises only
+      Implicit / hybrid response_type is intentionally not supported:
+      returning a bearer token in the URL fragment leaks it through
+      browser history and Referer, and the OP has no emission path for
+      it at all rather than a disabled one. The OP advertises only
       response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
       deprecate the implicit grant for the same reason.
 
@@ -73,7 +75,7 @@ rows:
       delivery; the payload contains only the envelope claims exp,
       aud, state, iss (no token or code claims).
     status: out-of-scope
-    out_of_scope_reason: "response_type=none is not supported. response_types_supported=[\"code\"] only per the v0.x design (no implicit/hybrid, no none); internal/discovery/build_test.go pins this list. The bare /authorize never accepts response_type=none, so a JARM resolution test for it has no caller."
+    out_of_scope_reason: "response_type=none is not supported: the OP advertises response_types_supported=[\"code\"] and nothing else (no implicit, no hybrid, no none), a list internal/discovery/build_test.go pins. The bare /authorize never accepts response_type=none, so a JARM resolution test for it has no caller."
 
   - id: JARM-020
     severity: P0
@@ -116,7 +118,16 @@ rows:
       a JWT Authorization response" via the redirect (or rendered
       page for non-redirecting modes).
     status: out-of-scope
-    out_of_scope_reason: HMAC client-secret-bound JARM signing algs (HS*) and JWE alg families (A*KW, dir) are both out-of-scope in v1.0. client_secret_jwt is OOS per docs/plans/002-product-design.md, encryption is OOS per encryption.yaml. The Go OP cannot pin a client to those algs, so the expired-secret rejection path has no caller.
+    out_of_scope_reason: |
+      No JARM alg the OP can be configured with consumes client_secret.
+      Signing is ES256 only, and the supported JWE alg families are
+      asymmetric (RSA-OAEP-256, ECDH-ES / +A128KW / +A256KW) with the
+      recipient key resolved from the client's JWKS — the
+      secret-derived families (HS*, bare A*KW, dir) are rejected by
+      internal/jose.JWEAlg.isSupported. Encrypted JARM itself is
+      supported (see ENC-120 / ENC-121); it is specifically the
+      secret-bound algs that are absent, so the expired-client_secret
+      rejection path has no caller.
 
   - id: JARM-040
     severity: P0
@@ -130,7 +141,7 @@ rows:
       the requested response_type unless encrypted" plus state, aud,
       exp, iss.
     status: out-of-scope
-    out_of_scope_reason: "No implicit/hybrid grant flows (response_types_supported=[\"code\"]); same rationale as JARM-010. JWE for JARM responses is also OOS in v1.0."
+    out_of_scope_reason: "No implicit/hybrid grant flows (response_types_supported=[\"code\"]); same rationale as JARM-010. The response_type half alone makes the scenario unreachable, so the encryption half of the rule is never consulted."
 
   - id: JARM-041
     severity: P0
@@ -140,7 +151,7 @@ rows:
       configured, implicit/hybrid + query.jwt is allowed and the OP
       emits an authorization.success event.
     status: out-of-scope
-    out_of_scope_reason: No implicit/hybrid grant flows; JWE-encrypted JARM responses are OOS in v1.0 per encryption.yaml. Both prerequisites are absent.
+    out_of_scope_reason: No implicit/hybrid grant flows, so the precondition this row builds on (id_token token + query.jwt) has no emission path. Encrypted JARM itself is supported and covered by ENC-120.
 
   - id: JARM-042
     severity: P0
@@ -169,7 +180,7 @@ rows:
       cannot issue a JWT Authorization response" delivered via the
       bare query (no JWT can be produced).
     status: out-of-scope
-    out_of_scope_reason: "Same rationale as JARM-030: HS*/A*KW/dir families are OOS (client_secret_jwt + encryption both OOS in v1.0); the OP cannot enter the expired-client_secret rejection path for a JARM transport because no JARM-bound alg consumes the secret."
+    out_of_scope_reason: "Same rationale as JARM-030: the secret-derived alg families (HS*, bare A*KW, dir) are unsupported, so no JARM-bound alg consumes client_secret and the expired-secret rejection path has no caller."
 
   - id: JARM-050
     severity: P0

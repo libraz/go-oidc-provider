@@ -1,6 +1,7 @@
 package authorizeendpoint
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -98,7 +99,7 @@ func serveInteractionGet(w http.ResponseWriter, r *http.Request, deps resolved, 
 // serveInteractionPost runs the orchestrator against the SPA's
 // submission and dispatches the resulting [interaction.Step].
 func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
-	if err := csrf.CheckOrigin(r, deps.Origins); err != nil {
+	if err := csrf.CheckOrigin(r, deps.InteractionOrigins); err != nil {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "origin not allowed")
 		return
 	}
@@ -193,7 +194,7 @@ func dispatchTick(
 		Now:        now,
 	})
 	if err != nil {
-		writeAuthnError(w, r, deps, state, err)
+		failTick(w, r, deps, rec, state, next, now, err)
 		return
 	}
 	if step.Result != nil {
@@ -267,6 +268,86 @@ func dispatchTick(
 	}
 }
 
+// failTick completes an errored tick: persist whatever the failure
+// branch already mutated, then render the orchestrator's error. The
+// persist has to happen first — it is what retires an in-flight
+// challenge — and it writes its own response when it cannot land, in
+// which case the authn error is not rendered at all.
+func failTick(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	rec *store.Interaction,
+	state authorize.RequestState,
+	next authn.State,
+	now time.Time,
+	tickErr error,
+) {
+	if !persistFailedTick(w, r, deps, rec, state, next, now) {
+		return
+	}
+	writeAuthnError(w, r, deps, state, tickErr)
+}
+
+// persistFailedTick saves the chain state an errored
+// [authn.Orchestrator.Tick] returned. Tick's contract is that the
+// updated [authn.State] comes back even on the error path, because the
+// failure branches mutate it before giving up: the hard-failure branch
+// clears the active factor's scratch, which is what retires an
+// in-flight WebAuthn challenge, and the captcha branch advances its
+// failure counter. Dropping that write would leave the same challenge
+// replayable for the rest of the interaction's lifetime — and an
+// authenticator with no signature counter (a platform passkey) has no
+// second line of defence against the replay.
+//
+// The save is skipped when the tick left the state byte-identical (a
+// rejected StateRef, say) so a hostile client cannot turn refused
+// submissions into an unbounded stream of store writes. The persisted
+// [store.Interaction.Step] is carried over unchanged: no new prompt was
+// emitted, so the CSRF token already issued for the current step stays
+// the valid one.
+//
+// It returns false once it has written a response of its own. A save
+// that does not land is fail-closed: the caller is about to tell the
+// client the attempt failed, and answering that way while the store
+// still holds the state that made the attempt replayable is exactly the
+// outcome the write exists to prevent.
+func persistFailedTick(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	rec *store.Interaction,
+	state authorize.RequestState,
+	next authn.State,
+	now time.Time,
+) bool {
+	encoded, err := encodeAuthnState(next)
+	if err != nil {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction state corrupted")
+		return false
+	}
+	if bytes.Equal(encoded, state.Authn) {
+		return true
+	}
+	savedRec, savedState, err := persistAuthnState(r.Context(), deps, rec, state, next, rec.Step, now)
+	if err == nil {
+		return true
+	}
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		if savedState.Completion != nil {
+			resumeInteractionCompletion(w, r, deps, savedRec, savedState)
+			return false
+		}
+		renderJSONError(w, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing")
+	case errors.Is(err, store.ErrNotFound):
+		http.NotFound(w, r)
+	default:
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist interaction")
+	}
+	return false
+}
+
 // writeAuthnError translates an orchestrator [authn] error into the
 // matching HTTP response. Most failures are server-side (state
 // corruption, store outage) but a few — invalid StateRef, risk denial
@@ -330,6 +411,11 @@ func persistAuthnState(
 			"authorizeendpoint: save interaction: %w", err)
 	}
 	current, err := deps.Interactions.Find(ctx, rec.ID)
+	if err == nil && current == nil {
+		// A nil record alongside a nil error violates the store contract;
+		// the concurrent writer's state cannot be read without it.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		return nil, authorize.RequestState{}, err
 	}
@@ -351,6 +437,11 @@ func loadInteraction(
 	uid string,
 ) (*store.Interaction, authorize.RequestState, bool) {
 	rec, err := deps.Interactions.Find(r.Context(), uid)
+	if err == nil && rec == nil {
+		// A nil record alongside a nil error violates the store contract;
+		// an interaction the backend cannot produce is treated as absent.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.NotFound(w, r)
@@ -479,23 +570,67 @@ func resolveGrantACRAMR(
 		}
 	case deps.ACRResolver != nil:
 		out := deps.ACRResolver(r.Context(), ACRResolveInput{
-			RequestedACRValues: append([]string(nil), req.ACRValues...),
+			RequestedACRValues: requestedACRValues(req),
 			CompletedKinds:     append([]string(nil), authnState.CompletedStepKinds...),
 			InternalAAL:        level,
 			Subject:            subject,
 			ClientID:           rec.ClientID,
 			RequestedScopes:    append([]string(nil), req.Scope...),
+			RemoteIP:           acrRemoteIP(r, deps, authnState),
+			UserAgent:          acrUserAgent(r, authnState),
+			AcceptLanguage:     r.Header.Get("Accept-Language"),
 		})
-		if !out.OK {
-			acr = ""
-		} else {
+		switch {
+		case out.OK:
 			acr = out.ACR
 			if out.AMR != nil {
 				amr = append([]string(nil), out.AMR...)
 			}
+		case essentialACRRequested(req):
+			return "", nil, time.Time{}, errACRUnmet
+		default:
+			acr = ""
 		}
 	}
 	return acr, amr, authTime, nil
+}
+
+// errACRUnmet signals that the ceremony reached a context the
+// configured ACR policy refused for an acr the request marked
+// essential. The caller translates it into the
+// unmet_authentication_requirements wire error; flattening the acr to
+// "" instead (the treatment a voluntary request gets) would hand the
+// relying party a code for an authentication it declared insufficient.
+var errACRUnmet = errors.New("authorizeendpoint: essential acr is not satisfied")
+
+// acrRemoteIP returns the client IP the ACR policy sees. The chain
+// state carries the address /authorize resolved through the
+// trusted-proxy chain when it created the interaction, which is the
+// address the ceremony actually started from; it is preferred over
+// re-resolving the terminal request so a policy sees one address for
+// the whole login. The fallback re-resolves the current request
+// through the same trusted-proxy path for chains that predate the
+// recorded field. An unresolvable address yields "" rather than
+// netip.Addr's "invalid IP" placeholder so the policy's no-hints
+// branch stays reachable.
+func acrRemoteIP(r *http.Request, deps resolved, st authn.State) string {
+	if st.RemoteIP.IsValid() {
+		return st.RemoteIP.String()
+	}
+	if ip := clientIPFromRequest(r, deps); ip.IsValid() {
+		return ip.String()
+	}
+	return ""
+}
+
+// acrUserAgent mirrors [acrRemoteIP] for the User-Agent hint: the
+// value recorded on the chain wins, and the terminal request's header
+// (truncated to the same bound the chain applies) is the fallback.
+func acrUserAgent(r *http.Request, st authn.State) string {
+	if st.UserAgent != "" {
+		return st.UserAgent
+	}
+	return truncateUserAgent(r.UserAgent())
 }
 
 // terminateInteraction is the happy-path branch of a Tick that
@@ -532,6 +667,10 @@ func terminateInteraction(
 		result.AuthTime,
 	)
 	if err != nil {
+		if errors.Is(err, errACRUnmet) {
+			failUnmetAuthenticationRequirements(w, r, deps, rec, req)
+			return
+		}
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not resolve authentication context")
 		return
 	}
@@ -556,6 +695,28 @@ func terminateInteraction(
 		return
 	}
 	resumeInteractionCompletion(w, r, deps, rec, state)
+}
+
+// failUnmetAuthenticationRequirements ends the interaction when the
+// completed ceremony cannot satisfy an acr the request marked
+// essential. The interaction is claimed and its cookies cleared before
+// the error is emitted, mirroring the "subject was not authenticated"
+// branch: the ceremony is over either way, and leaving the record
+// behind would let the same completed chain be replayed for a code.
+func failUnmetAuthenticationRequirements(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	rec *store.Interaction,
+	req *authorize.Request,
+) {
+	if !claimTerminalInteraction(w, r, deps, rec) {
+		return
+	}
+	clearCookie(w, cookie.InteractionProfile)
+	clearCookie(w, cookie.CSRFProfile)
+	emitAuthorizeError(w, r, deps, req, errUnmetAuthenticationRequirements,
+		"the authentication performed does not satisfy the requested acr")
 }
 
 func claimTerminalInteraction(
@@ -1012,7 +1173,7 @@ func setIfNotEmpty(values url.Values, name, value string) {
 	}
 }
 
-// stampPromptLocale walks the §L.2 priority chain through the
+// stampPromptLocale walks the locale priority chain through the
 // configured [i18n.Resolver] and stamps the result onto prompt.
 // A nil resolver leaves the locale fields empty so direct callers
 // (unit tests, embedders that do not need i18n) keep the legacy

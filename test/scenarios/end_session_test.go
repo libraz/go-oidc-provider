@@ -272,7 +272,10 @@ func TestScenario_ES_005_RedirectViaClientID(t *testing.T) {
 		t.Fatalf("build POST %s: %v", target, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Origin", tk.Server.URL)
+	// The confirmation form is served from, and posts back to, the
+	// issuer origin, so that is what a real browser sends. The test
+	// server's loopback URL is a different origin and is rejected.
+	req.Header.Set("Origin", tk.Issuer)
 	req.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: csrfCookie.Value})
 	postResp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {

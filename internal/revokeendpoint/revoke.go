@@ -113,7 +113,7 @@ func appendNonNil(branches ...branchFn) []branchFn {
 // the verifier rejected the token (or same-client-only failed) and
 // the caller MUST fall through.
 func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerifier, authenticatedClientID, token string) bool {
-	claims, _, err := verifier.Verify(token)
+	claims, _, err := verifier.Verify(ctx, token)
 	if err != nil {
 		return false
 	}

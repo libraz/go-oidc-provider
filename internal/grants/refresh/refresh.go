@@ -15,10 +15,14 @@
 //     the consumed token's ID as ParentID to rotate.
 //
 //   - Replay defence: when [store.RefreshTokenStore.Consume] reports
-//     [store.ErrAlreadyConsumed], the Exchanger walks the rotation chain
-//     to its root and calls [store.RefreshTokenStore.RevokeChain]
-//     synchronously. The caller sees [ErrTokenReplayed] and is free to
-//     surface invalid_grant without further bookkeeping.
+//     [store.ErrAlreadyConsumed], the caller sees [ErrTokenReplayed] and
+//     the rotation chain is retired — walked to its root, then passed to
+//     [store.RefreshTokenStore.RevokeChain] together with a matching grant
+//     tombstone. Who runs that cascade is decided by
+//     [ExchangerConfig.DeferReplayCascade]: by default the Exchanger runs
+//     it inline, and a caller that wraps Exchange in a [store.Tx] sets the
+//     flag and calls [Exchanger.RevokeReplayedChain] itself once the
+//     transaction has settled.
 //
 // Like the authorization-code package, this layer never reads the wall
 // clock directly; callers inject a clock so tests advance time
@@ -73,8 +77,9 @@ const GraceTTLDefault = 60 * time.Second
 //
 //   - ErrTokenMissing → invalid_grant.
 //   - ErrTokenExpired → invalid_grant.
-//   - ErrTokenReplayed → invalid_grant; the chain has already been revoked
-//     by the exchanger, so the caller does not need to call RevokeChain.
+//   - ErrTokenReplayed → invalid_grant; the chain is retired by the
+//     exchanger inline, or by the caller's [Exchanger.RevokeReplayedChain]
+//     when it opted into [ExchangerConfig.DeferReplayCascade].
 //   - ErrClientMismatch → invalid_grant.
 //   - ErrScopeWidening → invalid_scope.
 var (
@@ -86,9 +91,12 @@ var (
 	// converge on invalid_grant at the HTTP layer.
 	ErrTokenExpired = errors.New("refresh: token expired")
 
-	// ErrTokenReplayed indicates the token was consumed previously. The
-	// exchanger has already invoked [store.RefreshTokenStore.RevokeChain]
-	// on the chain root by the time this error is returned.
+	// ErrTokenReplayed indicates the token was consumed previously.
+	// Unless the caller took ownership of the cascade through
+	// [ExchangerConfig.DeferReplayCascade], the exchanger has already
+	// invoked [store.RefreshTokenStore.RevokeChain] on the chain root by
+	// the time this error is returned; a caller that did opt in MUST call
+	// [Exchanger.RevokeReplayedChain] with the presented token.
 	ErrTokenReplayed = errors.New("refresh: token already consumed")
 
 	// ErrClientMismatch indicates the authenticated client does not match
@@ -265,6 +273,7 @@ type Exchanger struct {
 	audit            audit.Emitter
 	grantRevocations store.GrantRevocationStore
 	tombstoneTTL     time.Duration
+	deferCascade     bool
 }
 
 // ExchangerConfig is the parameter bundle for [NewExchanger].
@@ -316,6 +325,24 @@ type ExchangerConfig struct {
 	// tombstone is never collected) but unbounded in storage; the
 	// token endpoint wires a positive value at construction.
 	GrantTombstoneTTL time.Duration
+
+	// DeferReplayCascade hands ownership of the RFC 9700 §2.2.2 chain
+	// cascade to the caller. When false (the default) [Exchanger.Exchange]
+	// walks the chain and retires it inline before returning
+	// [ErrTokenReplayed]. When true it only reports the replay, and the
+	// caller MUST call [Exchanger.RevokeReplayedChain] with the presented
+	// token to retire the chain.
+	//
+	// A caller that wraps Exchange in a [store.Tx] sets this. The cascade
+	// touches one row per chain node plus a grant tombstone, which a
+	// transactional backend has to buffer against a bounded action limit,
+	// so a long chain would be retired only in part — and breadth-first
+	// from the root, leaving the newest node, the one a thief holds, alive.
+	// Rollback would discard the cascade outright. Such a caller therefore
+	// runs it after the transaction settles, on a non-transactional handle,
+	// in both the commit and the rollback direction: the replay is the
+	// finding regardless of what became of the rotation.
+	DeferReplayCascade bool
 }
 
 // NewExchanger constructs an [Exchanger] from cfg.
@@ -345,6 +372,7 @@ func NewExchanger(cfg ExchangerConfig) (*Exchanger, error) {
 		audit:            em,
 		grantRevocations: cfg.GrantRevocations,
 		tombstoneTTL:     cfg.GrantTombstoneTTL,
+		deferCascade:     cfg.DeferReplayCascade,
 	}, nil
 }
 
@@ -458,13 +486,21 @@ type Exchanged struct {
 // store reports [store.ErrAlreadyConsumed], Exchange consults the
 // configured grace window — within it the presented token is treated
 // as still valid (RFC 9700 §2.2.2) and an [Exchanged] with InGrace=true
-// is returned; outside it the chain root is revoked and
-// [ErrTokenReplayed] is surfaced.
+// is returned; outside it [ErrTokenReplayed] is surfaced and the chain is
+// retired, inline or through the caller's later
+// [Exchanger.RevokeReplayedChain] depending on
+// [ExchangerConfig.DeferReplayCascade].
 func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged, error) {
 	if in.Token == "" {
 		return nil, ErrTokenMissing
 	}
 	rec, err := e.store.Consume(ctx, in.Token)
+	if err == nil && rec == nil {
+		// A nil record alongside a nil error violates the store contract.
+		// The exchange cannot prove the token was ever issued, so it takes
+		// the same path an unknown token takes.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			existing, handled, gerr := e.tryGrace(ctx, in)
@@ -510,18 +546,17 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 }
 
 // mapConsumeError translates raw store errors into refresh sentinels and,
-// in the replay case, performs the chain revocation before returning
-// [ErrTokenReplayed]. Callers reach this only when the presented token
-// is genuinely outside the [ExchangerConfig.GraceTTL] window — the
-// grace branch in [Exchanger.Exchange] short-circuits before this
-// function runs.
+// in the replay case, records the finding through
+// [Exchanger.onReplayDetected] before returning [ErrTokenReplayed].
+// Callers reach this only when the presented token is genuinely outside
+// the [ExchangerConfig.GraceTTL] window — the grace branch in
+// [Exchanger.Exchange] short-circuits before this function runs.
 func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err error) error {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return ErrTokenMissing
 	case errors.Is(err, store.ErrAlreadyConsumed):
-		e.emitReplayDetected(ctx, presentedID)
-		e.revokeChainBestEffort(ctx, presentedID)
+		e.onReplayDetected(ctx, presentedID)
 		return ErrTokenReplayed
 	default:
 		return fmt.Errorf("refresh: consume: %w", err)
@@ -540,7 +575,7 @@ func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err
 //
 //   - handled=false: tryGrace did not engage (window disabled, record
 //     missing, ConsumedAt outside the window); caller routes to
-//     [Exchanger.mapConsumeError] which revokes the chain and surfaces
+//     [Exchanger.mapConsumeError] which records the replay and surfaces
 //     [ErrTokenReplayed].
 //   - handled=true with gerr=nil: idempotent re-emission inside the
 //     grace window; existing carries the projection.
@@ -552,9 +587,11 @@ func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err
 // Validation failure inside the grace window (client_id mismatch or
 // scope widening) is treated as evidence of a stolen consumed token:
 // per RFC 9700 §2.2.2 such replays MUST revoke the chain. tryGrace
-// invokes [Exchanger.revokeChainBestEffort] directly on that branch
-// and returns handled=true with [ErrTokenReplayed] so the caller does
-// not run [Exchanger.mapConsumeError] and double-count the replay.
+// invokes [Exchanger.onReplayDetected] directly on that branch and
+// returns handled=true with [ErrTokenReplayed] so the caller does not
+// run [Exchanger.mapConsumeError] and double-count the replay. A caller
+// that set [ExchangerConfig.DeferReplayCascade] owns the cascade for
+// this branch too — the sentinel it keys off is the same one.
 func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged, bool, error) {
 	if e.graceTTL <= 0 {
 		return nil, false, nil
@@ -587,14 +624,48 @@ func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged,
 		// or scope widening). Surface as replay so the chain is
 		// revoked: a consumed token presented by a different client,
 		// or with a widened scope, is the same threat shape RFC 9700
-		// §2.2.2 calls out. Revoke explicitly here so the cascade
-		// is anchored to the validation point without double-emitting
-		// through mapConsumeError.
-		e.emitReplayDetected(ctx, in.Token)
-		e.revokeChainBestEffort(ctx, in.Token)
+		// §2.2.2 calls out. Record the replay explicitly here so the
+		// cascade is anchored to the validation point without
+		// double-emitting through mapConsumeError.
+		e.onReplayDetected(ctx, in.Token)
 		return nil, true, ErrTokenReplayed
 	}
 	return exchanged, true, nil
+}
+
+// onReplayDetected records a confirmed RFC 9700 §2.2.2 replay: it raises
+// the replay audit event and, unless the caller took ownership through
+// [ExchangerConfig.DeferReplayCascade], retires the chain inline.
+//
+// The audit event fires in both modes and at the same point, so a deferring
+// caller cannot lose the finding by failing to run the cascade.
+func (e *Exchanger) onReplayDetected(ctx context.Context, presentedID string) {
+	e.emitReplayDetected(ctx, presentedID)
+	if e.deferCascade {
+		return
+	}
+	e.revokeChainBestEffort(ctx, presentedID)
+}
+
+// RevokeReplayedChain retires the rotation chain behind a replay the
+// exchanger reported as [ErrTokenReplayed] while
+// [ExchangerConfig.DeferReplayCascade] was set. presentedToken is the
+// refresh_token value the client sent; the chain root and the grant it
+// belongs to are both derived from it, so no other state has to survive
+// the round trip from Exchange to here.
+//
+// The call is best effort in exactly the sense the inline cascade is: a
+// transport fault raises a warn-level audit event and returns normally, so
+// a caller that has already settled on invalid_grant never has to convert
+// a storage failure into a server error. It is safe to call after the
+// surrounding transaction has committed or rolled back — the presented
+// record is already consumed either way, which is what the chain walk
+// reads.
+func (e *Exchanger) RevokeReplayedChain(ctx context.Context, presentedToken string) {
+	if presentedToken == "" {
+		return
+	}
+	e.revokeChainBestEffort(ctx, presentedToken)
 }
 
 // emitReplayDetected fires [auditRefreshReplayDetected]. The Extras
@@ -680,7 +751,9 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 }
 
 // revokeChainBestEffort walks parent pointers from presentedID up to the
-// chain root and calls [store.RefreshTokenStore.RevokeChain] on it.
+// chain root and calls [store.RefreshTokenStore.RevokeChain] on it. It is
+// reached from [Exchanger.onReplayDetected] in the inline mode and from
+// [Exchanger.RevokeReplayedChain] when the caller deferred the cascade.
 // When the [Exchanger] was wired with a [store.GrantRevocationStore],
 // the cascade also writes a [store.GrantTombstone] keyed by the chain
 // root's GrantID so JWT access tokens descended from the replayed

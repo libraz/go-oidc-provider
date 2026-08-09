@@ -56,17 +56,27 @@ type Request struct {
 	// the handler.
 	Client *store.Client
 
-	// SubjectID is the resolved subject identifier when the request
-	// targets an end-user, empty for delegation-style grants
+	// SubjectID is the resolved subject identifier when the caller
+	// knows one before dispatch, empty for delegation-style grants
 	// (token-exchange impersonation, client_credentials-style flows
 	// where the client owns the identity). The dispatcher does not
 	// project this through a SubjectGenerator — the handler is
 	// expected to resolve identity using whatever store hooks the
 	// embedder configured.
+	//
+	// The token endpoint authenticates a client, not an end user, and
+	// a custom grant_type carries no OP-interpretable subject
+	// reference, so the wire caller leaves this empty on every
+	// dispatch. Handlers that act on behalf of a user MUST derive the
+	// subject themselves and return it on [Response.Subject] or
+	// [BoundAccessToken.Subject], which is where the wire layer reads
+	// the subject back from.
 	SubjectID string
 
 	// AuthTime is the wall-clock time the subject most recently
-	// authenticated. Zero when [SubjectID] is empty.
+	// authenticated. Zero when [SubjectID] is empty, which is every
+	// dispatch the token endpoint drives; handlers report authentication
+	// time on [Response.AuthTime] instead.
 	AuthTime time.Time
 
 	// Form contains the parsed token-endpoint parameters the
@@ -120,7 +130,9 @@ type Response struct {
 	BoundAccessToken *BoundAccessToken
 
 	// AccessTokenTTL is the lifetime the dispatcher caps to the
-	// global access-token TTL before issuance.
+	// global access-token TTL before issuance. Zero means the handler
+	// stated no lifetime; the wire layer substitutes the global TTL so
+	// an omitted value never ships as expires_in: 0.
 	AccessTokenTTL time.Duration
 
 	// IssueRefreshToken asks the wire layer to mint and persist a
@@ -176,7 +188,9 @@ const DupCap = 32
 // boundary without importing op.
 type BoundAccessToken struct {
 	// Subject is the value the wire layer writes into the JWT "sub"
-	// claim. When empty the wire layer falls back to [Response.Subject].
+	// claim. When empty the wire layer falls back to [Response.Subject],
+	// then to the request's SubjectID; when all three are empty the
+	// response is rejected with [ErrEmptyBoundSubject].
 	Subject string
 
 	// Audience is the value the wire layer writes into the JWT "aud"

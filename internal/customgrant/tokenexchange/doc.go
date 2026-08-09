@@ -12,7 +12,10 @@
 //   - normalise the requested audience per RFC 8707 §2 and
 //     intersect with the calling client's allowed resources;
 //   - intersect the requested scope with the subject_token's scope
-//     and the client's allowed scopes;
+//     and the client's allowed scopes. An id_token carries no scope
+//     claim, so its bound is the persisted consent recorded for the
+//     (subject, client) pair it names — which also makes withdrawn
+//     consent close the exchange before the id_token expires;
 //   - cap the issued TTL at min(handler request, subject_token
 //     remaining, global access-token cap);
 //   - build the act-claim chain on the provider side, mandatory

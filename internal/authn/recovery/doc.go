@@ -5,8 +5,7 @@
 // constant-time verification, and the slot-consumption bookkeeping that
 // enforces single-use semantics.
 // # Scope
-// The package is **self-contained** in the sense documented in
-// 02-product-design.md §E: orchestrator wiring, HTTP
+// The package is **self-contained**: orchestrator wiring, HTTP
 // handlers, and any user-facing display logic live elsewhere. Callers
 // compose the building blocks here into a fall-back authenticator
 // branch. The package does not import any other internal authn code:
@@ -33,8 +32,8 @@
 // cannot be redeemed once the user has noticed and regenerated.
 // # Why this is NOT a primary auth path
 // Recovery codes exist for the narrow case of "I have a session
-// device-lost gap and need to bootstrap a new authenticator". Per
-// 02-product-design.md §O.3, **full account recovery** —
+// device-lost gap and need to bootstrap a new authenticator".
+// **Full account recovery** —
 // the user has lost both their primary authenticator AND every recovery
 // code — is intentionally not automated by the library: it requires
 // human-driven identity proofing (support ticket, government ID, etc.)
@@ -54,6 +53,29 @@
 // weaken the defence and complicate verifier compatibility across
 // rotation. The encoding is the modular-crypt `$argon2id$...$salt$hash`
 // form so an embedder running custom diagnostics can recognise it.
+// # One salt per batch
+// Every slot in a batch is hashed under the same randomly drawn salt.
+// That is what bounds the cost of a guess: the verifier derives the
+// presented code once and compares the result against every slot in
+// constant time, so a wrong code costs one 64 MiB derivation no matter
+// how many codes are stored. With a salt per slot the only way to
+// answer a guess is to derive once per slot, and ten derivations per
+// submitted string is a memory amplifier reachable with one short
+// input.
+// The salt remains unique per batch, so it still defeats
+// cross-record precomputation. The concession is that an attacker
+// holding a stolen batch can attack its ten codes in one derivation
+// pass rather than ten — a factor-of-ten cut in an offline search of a
+// 50-bit space, which the online path already offers anyway.
+// # Batches minted before the shared salt
+// A stored batch whose slots each carry their own salt predates this
+// layout, and the verifier still accepts it by deriving once per slot.
+// It has to: only hashes are stored, so no migration can re-hash a
+// sheet the OP never held the plaintext for, and refusing the layout
+// would void every already-printed sheet at the moment its owner
+// finally needed it. Those batches keep the old cost profile — one
+// derivation per unconsumed slot per guess — until the user
+// regenerates.
 // # Concurrency
 // [Verifier] is immutable after construction and safe for concurrent
 // use. The persisted batch is the per-user mutable state; the caller is

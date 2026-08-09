@@ -39,10 +39,11 @@ import (
 // endpoint's histogram observations to land in the "other" bucket
 // rather than leaking the literal path as a label value.
 //
-// The collector is registered on the embedder-supplied registry; any
-// AlreadyRegisteredError is surfaced as a configuration error so a
-// double-construction in tests fails fast instead of corrupting the
-// metric names.
+// The collector is registered on the embedder-supplied registry with
+// the issuer stamped on every metric as a constant label, so two
+// Providers can share one registry. A collision — which now means two
+// Providers claiming the same issuer — is surfaced as a configuration
+// error so the misconfiguration fails fast at start-up.
 func buildMetricsCollector(cfg *config) error {
 	if cfg.promRegistry == nil {
 		return nil
@@ -53,6 +54,7 @@ func buildMetricsCollector(cfg *config) error {
 	}
 	collector, err := metrics.New(cfg.promRegistry, metrics.Options{
 		StaticClientIDs: staticIDs,
+		Issuer:          cfg.issuer,
 	})
 	if err != nil {
 		return &Error{
@@ -185,9 +187,39 @@ func issuerHost(issuer string) string {
 	return u.Hostname()
 }
 
-// buildOriginAllowlist composes the cross-origin allowlist consumed by both
-// the strict CORS layer and the /authorize CSRF Origin gate. The list is the
-// union of:
+// buildInteractionOriginAllowlist composes the Origin / Referer allowlist
+// the /interaction CSRF gate enforces on every state-changing request. It
+// is the OP's own canonical origin plus the explicit [WithCORSOrigins]
+// entries, and deliberately NOT the wider list [buildOriginAllowlist]
+// hands to the CORS layer.
+//
+// The difference is the per-client redirect_uri origins. Admitting those
+// is right for CORS — an SPA relying party calls /token and /userinfo from
+// the page its redirect_uri landed on — but at /interaction it would mean
+// an origin registered by one client can post to the consent ceremony of
+// another, which is the whole ceremony's trust boundary. The interaction
+// UI is served by the OP itself (the HTML driver, or the SPA shell mounted
+// under [WithSPAUI]); an embedder that hosts it on a separate origin says
+// so through [WithCORSOrigins], which is an explicit act rather than a
+// side effect of registering a client.
+func buildInteractionOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {
+	allowOrigins := append([]string(nil), cfg.corsOrigins...)
+	if origin, oerr := csrf.CanonicalOrigin(cfg.issuer); oerr == nil {
+		allowOrigins = append(allowOrigins, origin)
+	}
+	allow, err := csrf.NewAllowlist(allowOrigins)
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "interaction csrf allowlist construction failed",
+			Cause:       err,
+		}
+	}
+	return allow, nil
+}
+
+// buildOriginAllowlist composes the cross-origin allowlist consumed by the
+// strict CORS layer. The list is the union of:
 //
 //   - explicit entries from [WithCORSOrigins] (cfg.corsOrigins);
 //   - the OP's own canonical origin derived from cfg.issuer, so same-origin
@@ -280,17 +312,25 @@ func buildDPoPVerifier(cfg *config) (*dpop.Verifier, error) {
 // (nil, nil) on that path on purpose.
 //
 // When the embedder configured [WithMTLSProxy] the recorded
-// [mtls.ProxyConfig] is threaded into the verifier so the
+// [MTLSProxy] state is threaded into the verifier so the
 // reverse-proxy header path is honoured. Embedders that did not call
-// [WithMTLSProxy] get a zero [mtls.ProxyConfig], which restricts the
-// trust path to TLS handshakes terminated at the OP.
+// [WithMTLSProxy] get a zero value, which restricts the trust path to
+// TLS handshakes terminated at the OP.
+//
+// [WithMTLSRootCAs] supplies the optional trust anchors: with a pool
+// configured the verifier re-validates the chain of every client leaf
+// it selects, which is the only chain check available in a deployment
+// where a reverse proxy forwards the certificate in a header.
 //
 //nolint:nilnil // (nil, nil) is the documented "mTLS not enabled" signal.
 func buildMTLSVerifier(cfg *config) (*mtls.Verifier, error) {
 	if !featureEnabled(cfg.features, feature.MTLS) {
 		return nil, nil
 	}
-	v, err := mtls.NewVerifier(mtls.VerifierConfig{Proxy: loadMTLSProxyConfig(cfg)})
+	v, err := mtls.NewVerifier(mtls.VerifierConfig{
+		Proxy:   loadMTLSProxyConfig(cfg),
+		RootCAs: cfg.mtlsRootCAsPool(),
+	})
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -347,16 +387,30 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	// negative test "ensure-request-object-missing-jti-fails" against
 	// it. The flag below tracks that requirement and applies only when
 	// no other profile loosened the constraint.
+	//
+	// MaxAge is the third arm of the same window and must be raised in
+	// step with MaxLifetime: it caps how old "iat" may be, and the
+	// verifier's own default (10 minutes) is far tighter than the 60
+	// minutes the profile grants. Left unset, a request object minted
+	// 30 minutes ago — conformant by §5.6's own arithmetic, exp still
+	// in the future — would be refused as stale. [profile.MaxRequestObjectAge]
+	// carries the per-profile value; the largest active profile's bound
+	// wins, and a zero leaves the verifier default in place for
+	// non-FAPI deployments.
 	var (
 		requireNbf      bool
 		requireIAT      bool
 		maxLifetime     time.Duration
+		maxAge          time.Duration
 		allowMissingJTI = true
 	)
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
 			requireNbf = true
 			maxLifetime = 60 * time.Minute
+		}
+		if age := profile.MaxRequestObjectAge(p); age > maxAge {
+			maxAge = age
 		}
 		if p == profile.FAPICIBA {
 			allowMissingJTI = false
@@ -380,6 +434,7 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 		EncryptionResolver: jarEncryptionResolver(encSet),
 		AllowMissingJTI:    allowMissingJTI,
 		MaxLifetime:        maxLifetime,
+		MaxAge:             maxAge,
 	})
 	if err != nil {
 		return nil, &Error{
@@ -417,15 +472,25 @@ func jarEncryptionResolver(encSet *keys.EncryptionSet) jar.EncryptionResolver {
 // registered (alg, enc) pair into a [jose.EncryptionRecipient]. The
 // resolver shares its SSRF posture with the JAR JWKS fetcher: the
 // [WithAllowPrivateNetworkJWKS] opt-in suppresses the deny-list for
-// embedders fronting their RPs with private DNS. Construction is
+// embedders fronting their RPs with private DNS, and
+// [WithJWKSHTTPTransport] replaces the transport underneath it so a
+// deployment behind an internal CA presents the same trust store on
+// this fetch as on the JAR and private_key_jwt fetches. Construction is
 // unconditional — a client that did not register encryption metadata
 // surfaces [clientencjwks.ErrNoEncryptionConfigured] at request time
 // and the consumer skips the JWE wrap, so the resolver only adds a
 // constant-time sentinel check on the non-encryption path.
+//
+// [WithSupportedEncryptionAlgs] rides along as the policy, so a pair
+// the deployment excluded yields no recipient and the response goes
+// out unencrypted-or-refused rather than wrapped in an algorithm the
+// operator ruled out.
 func buildClientEncryptionResolver(cfg *config) *clientencjwks.Resolver {
 	return clientencjwks.New(clientencjwks.Config{
 		Clock:               cfg.clock,
 		AllowPrivateNetwork: cfg.allowPrivateNetworkJWKS,
+		BaseTransport:       cfg.jwksHTTPTransport,
+		Policy:              cfg.jwePolicy(),
 	})
 }
 
@@ -640,6 +705,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		Emitter:                  cfg.effectiveAuditEmitter(),
 		Clock:                    cfg.clock,
 		SessionDurabilityPosture: backchannelPostureFor(cfg.sessionDurabilityPosture),
+		FanOutBudget:             cfg.backchannelFanOutBudget,
 	})
 	if err != nil {
 		return nil, &Error{
@@ -648,6 +714,10 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 			Cause:       err,
 		}
 	}
+	// Recorded on the config so [Provider.Shutdown] drains the very
+	// instance the /end_session handler dispatches to. The fan-out is
+	// detached from the request, so nothing else would wait for it.
+	cfg.backchannelCoordinator = coord
 	return coord, nil
 }
 
@@ -881,14 +951,14 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 // # Default install
 //
 // Without any subject option the projector hands every client to the
-// UUIDv7 passthrough, preserving the legacy v0.x wire shape where the
-// OP-internal subject flows verbatim into the "sub" claim.
+// UUIDv7 passthrough, so the OP-internal subject flows verbatim into
+// the "sub" claim.
 func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, client *store.Client) (string, error) {
 	if cfg.pairwiseEnabled() {
 		// Built-in pairwise wiring: dispatch on the per-client
 		// subject_type. The pairwise generator is the one the option
 		// recorded; the non-pairwise arm collapses onto the package
-		// default (UUIDv7 passthrough), which preserves the v0.x wire
+		// default (UUIDv7 passthrough), which keeps the verbatim wire
 		// shape for any client that did not opt into pairwise.
 		pairwiseGen := cfg.subjectGenerator
 		fallbackGen := defaultSubjectGenerator()
@@ -949,7 +1019,12 @@ func buildDiscoveryFeatures(cfg *config) discovery.Features {
 	out := buildFeatures(cfg.features)
 	out.DeviceCodeGrant = cfg.deviceCodeGrantConfigured()
 	out.CIBAGrant = cfg.cibaGrantConfigured()
-	out.Encryption = cfg.encryptionEnabled()
+	out.EncryptionInbound = cfg.encryptionInboundEnabled()
+	// The advertisement of /authorize, /end_session, response_types and
+	// back-channel logout is derived from the very predicate that decides
+	// whether the router mounts those handlers, so metadata and routing
+	// table cannot disagree.
+	out.AuthorizeEndpoint = grantsRequireAuthorizeEndpoint(cfg.grants)
 	return out
 }
 

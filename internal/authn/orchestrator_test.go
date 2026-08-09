@@ -444,8 +444,9 @@ func TestTickRiskDeny(t *testing.T) {
 // an ErrFactorRetry-wrapping error — the shape the TOTP / email-OTP /
 // recovery adapters now return — so the orchestrator MUST fire the
 // observer and advance the brute-force counter on every miss (unlike
-// the old nil-error re-prompt, which left SIEM blind). Once the counter
-// reaches the captcha threshold, a fresh advance interposes the captcha.
+// the old nil-error re-prompt, which left SIEM blind). The miss that
+// crosses the captcha threshold interposes the challenge in the same
+// response, and it stays interposed on the next advance.
 func TestTickOTPWrongCodeObservesFailureAndTripsCaptcha(t *testing.T) {
 	t.Parallel()
 
@@ -505,9 +506,15 @@ func TestTickOTPWrongCodeObservesFailureAndTripsCaptcha(t *testing.T) {
 		if st.LastFailures != i {
 			t.Errorf("LastFailures after miss %d = %d, want %d", i, st.LastFailures, i)
 		}
-		// Each miss re-emits the factor prompt so the SPA can retry.
-		if step.Prompt == nil || step.Prompt.Type != "auth.totp" {
-			t.Fatalf("miss %d: expected re-emitted auth.totp prompt, got %+v", i, step.Prompt)
+		// A miss below the threshold re-emits the factor prompt so the
+		// SPA can retry; the miss that reaches the threshold interposes
+		// the captcha in the very same response.
+		want := "auth.totp"
+		if i >= captchaFailureThresholdForTest {
+			want = "captcha"
+		}
+		if step.Prompt == nil || step.Prompt.Type != want {
+			t.Fatalf("miss %d: expected %q prompt, got %+v", i, want, step.Prompt)
 		}
 	}
 
@@ -521,7 +528,7 @@ func TestTickOTPWrongCodeObservesFailureAndTripsCaptcha(t *testing.T) {
 		t.Errorf("observer AttemptFailure events = %d, want %d", failures, captchaFailureThresholdForTest)
 	}
 
-	// A fresh advance (no submission) now interposes the captcha gate
+	// A fresh advance (no submission) keeps the captcha gate interposed
 	// because LastFailures has reached the threshold.
 	_, captchaStep, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
 	if err != nil {

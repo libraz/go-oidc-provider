@@ -4,16 +4,36 @@ import "time"
 
 // Default polling discipline parameters, per RFC 8628 §3.5. The token
 // endpoint clamps incoming polls below [DefaultInterval] to slow_down,
-// doubles the effective interval on each violation (no upper cap; the
-// record's TTL is the hard stop), and rejects sub-[FastPollFloor]
-// repeats once per offence even when the previous response was
-// authorization_pending.
+// raises the effective interval by [SlowDownIncrement] on each
+// violation (no upper cap; the record's TTL is the hard stop), and
+// rejects sub-[FastPollFloor] repeats once per offence even when the
+// previous response was authorization_pending.
 const (
-	// DefaultInterval is the seed value of the slow_down doubling
-	// rule and the value the OP advertises in the
-	// device-authorization response so a well-behaved device never
-	// triggers slow_down on its first poll.
+	// DefaultInterval is the seed value of the slow_down ladder and
+	// the value the OP advertises in the device-authorization
+	// response so a well-behaved device never triggers slow_down on
+	// its first poll.
 	DefaultInterval = 5 * time.Second
+
+	// SlowDownIncrement is the amount the effective interval grows by
+	// on every slow_down. RFC 8628 §3.5 instructs the device to
+	// increase its own interval by five seconds for this and all
+	// subsequent requests, so the OP's bar MUST grow by the same
+	// amount: any steeper escalation outruns the interval a compliant
+	// device actually observes, and the device is then strike-counted
+	// out of the flow for polling exactly as instructed.
+	SlowDownIncrement = 5 * time.Second
+
+	// IntervalTolerance is how far a poll may undershoot the
+	// effective interval without earning slow_down. The OP measures
+	// the gap between arrivals while the device measures the gap
+	// between sends, so scheduler and network jitter routinely land
+	// an on-time poll marginally early; a strict comparison would
+	// flag roughly half of them and accumulate strikes against a
+	// device that never polled faster than it was told to.
+	// [FastPollFloor] stays an absolute floor, so the tolerance
+	// cannot admit a tight polling loop.
+	IntervalTolerance = 1 * time.Second
 
 	// FastPollFloor is the absolute minimum gap between two polls
 	// the OP tolerates regardless of the slow_down ladder. A poll
@@ -59,8 +79,10 @@ const (
 
 	// PollDecisionSlowDown means the device polled inside the
 	// current interval and MUST back off. The wire form is
-	// slow_down per RFC 8628 §3.5; the token endpoint also doubles
-	// the device's effective interval before the next poll.
+	// slow_down per RFC 8628 §3.5; the token endpoint also raises
+	// the device's effective interval by [SlowDownIncrement] before
+	// the next poll, matching the increase the RFC asks the device
+	// to apply.
 	PollDecisionSlowDown
 
 	// PollDecisionAccessDenied means the user explicitly rejected
@@ -115,12 +137,13 @@ type PollInput struct {
 
 	// EffectiveInterval is the interval the device is currently
 	// expected to observe. It starts at the value the
-	// device-authorization response advertised
-	// ([DefaultInterval] in v0.9.1) and doubles each time
+	// device-authorization response advertised (by default
+	// [DefaultInterval]) and grows by [SlowDownIncrement] each time
 	// [DecidePoll] returns [PollDecisionSlowDown]. Callers MAY
-	// persist the doubled value alongside the record; the
+	// persist the raised value alongside the record; the
 	// reference implementation keeps it in [DeviceCode.Interval]
-	// so a later poll observes the elevated bar.
+	// so a later poll observes the elevated bar. A poll landing
+	// within [IntervalTolerance] of the bar counts as on time.
 	EffectiveInterval time.Duration
 
 	// ExpiresAt is the wall-clock time the record becomes invalid.
@@ -155,7 +178,7 @@ type PollInput struct {
 // PollOutput captures the decision plus the next-interval the token
 // endpoint stamps on the record before responding to the device.
 // NextInterval is meaningful only when Decision is
-// [PollDecisionSlowDown]; it is the doubled value the next poll's
+// [PollDecisionSlowDown]; it is the raised value the next poll's
 // gate compares against.
 type PollOutput struct {
 	Decision             PollDecision
@@ -171,9 +194,9 @@ type PollOutput struct {
 //  3. Denied → access_denied.
 //  4. PollViolations ≥ [MaxPollViolations] → access_denied.
 //  5. Now − LastPolledAt < FastPollFloor (only when a previous
-//     poll exists) → slow_down (doubling applies).
-//  6. Now − LastPolledAt < EffectiveInterval (only when a previous
-//     poll exists) → slow_down (doubling applies).
+//     poll exists) → slow_down (the ladder advances).
+//  6. Now − LastPolledAt < EffectiveInterval − IntervalTolerance
+//     (only when a previous poll exists) → slow_down (same).
 //  7. Approved → emit.
 //  8. Otherwise → authorization_pending.
 //
@@ -201,7 +224,7 @@ func DecidePoll(in PollInput) PollOutput {
 	}
 	if !in.LastPolledAt.IsZero() {
 		gap := in.Now.Sub(in.LastPolledAt)
-		if gap < FastPollFloor || gap < in.EffectiveInterval {
+		if gap < FastPollFloor || gap < intervalBar(in.EffectiveInterval) {
 			return PollOutput{
 				Decision:             PollDecisionSlowDown,
 				NextInterval:         nextInterval(in.EffectiveInterval),
@@ -215,12 +238,27 @@ func DecidePoll(in PollInput) PollOutput {
 	return PollOutput{Decision: PollDecisionAuthorizationPending}
 }
 
-// nextInterval doubles current. A zero or negative current value
-// falls back to [DefaultInterval] so the discipline recovers from an
-// embedder that mis-seeded the substore record.
+// nextInterval raises current by [SlowDownIncrement], the same step
+// RFC 8628 §3.5 tells the device to apply when it sees slow_down, so
+// the OP's bar and the device's own timer stay in lockstep. A zero or
+// negative current value falls back to [DefaultInterval] so the
+// discipline recovers from an embedder that mis-seeded the substore
+// record.
 func nextInterval(current time.Duration) time.Duration {
 	if current <= 0 {
 		return DefaultInterval
 	}
-	return current * 2
+	return current + SlowDownIncrement
+}
+
+// intervalBar returns the shortest gap that still clears the interval
+// gate: the effective interval less [IntervalTolerance], floored at
+// zero so a mis-seeded interval leaves [FastPollFloor] as the only
+// gate rather than admitting every poll.
+func intervalBar(effective time.Duration) time.Duration {
+	bar := effective - IntervalTolerance
+	if bar < 0 {
+		return 0
+	}
+	return bar
 }

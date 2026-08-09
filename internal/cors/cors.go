@@ -37,7 +37,7 @@ const preflightMaxAge = 10 * time.Minute
 // allowedHeaders is the static list advertised on every strict preflight.
 // It deliberately omits proprietary headers — anything outside the list
 // requires a config change rather than a runtime override.
-const allowedHeaders = "Content-Type, Authorization, DPoP, X-CSRF"
+const allowedHeaders = "Content-Type, Authorization, DPoP, X-CSRF-Token"
 
 // allowedHeadersSet is the lower-cased lookup table for [allowedHeaders].
 // It is consulted on every preflight to intersect the request's
@@ -80,10 +80,10 @@ func NewStrict(allow *csrf.Allowlist, emitter audit.Emitter) *Strict {
 }
 
 // AllowedMethods is the static list of methods the OP advertises on a
-// strict CORS preflight. The §F.4 spec fixes this to GET / POST / OPTIONS;
-// callers cannot widen it without a code change.
+// strict CORS preflight. The OP's CORS posture fixes this to
+// GET / POST / OPTIONS; callers cannot widen it without a code change.
 //
-//nolint:gochecknoglobals // Mirrors a fixed §F.4 spec value.
+//nolint:gochecknoglobals // Mirrors a fixed policy value.
 var allowedMethods = []string{
 	http.MethodGet,
 	http.MethodPost,
@@ -118,12 +118,18 @@ func (s *Strict) Handler(next http.Handler) http.Handler {
 		canon, err := csrf.CanonicalOrigin(origin)
 		allowed := err == nil && s.allow.Contains(canon)
 
+		// Echo the canonical form, never the raw header. The allow
+		// decision was made against canon, so echoing the raw string
+		// would let a request whose Origin differs from the matched
+		// entry (case, default port, trailing dot) carry that variant
+		// into Access-Control-Allow-Origin — a value the OP never
+		// actually admitted.
 		if isPreflight(r) {
-			s.servePreflight(w, r, origin, allowed)
+			s.servePreflight(w, r, canon, allowed)
 			return
 		}
 		if allowed {
-			s.stampActual(w, origin)
+			s.stampActual(w, canon)
 		}
 		next.ServeHTTP(w, r)
 	})

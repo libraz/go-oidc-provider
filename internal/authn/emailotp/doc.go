@@ -1,6 +1,5 @@
 // Package emailotp implements the [op.FactorEmailOTP] reference
-// authenticator: a two-screen email-delivery one-time password factor
-// 02-product-design.md §E.2 / §E.3.
+// authenticator: a two-screen email-delivery one-time password factor.
 // # Shape
 // The factor emits two prompts:
 //   - "auth.email_otp.send"    — the SPA collects the user's email

@@ -4,9 +4,13 @@
 // its grant_id. Grant creation / replace / merge happen at the
 // authorization endpoint; this endpoint owns the read and delete halves.
 //
-// Every request is authenticated as a confidential client and the target
-// grant MUST belong to that client — a grant_id owned by a different
-// client is reported as 404 (not 403) so the endpoint does not confirm the
+// Every request is authenticated as a confidential client: a client
+// registered with token_endpoint_auth_method=none is refused with
+// invalid_client even where the OP otherwise admits it, because its
+// authentication proves nothing and the grant_id in the request path
+// would become the sole credential. The target grant MUST belong to the
+// authenticated client — a grant_id owned by a different client is
+// reported as 404 (not 403) so the endpoint does not confirm the
 // existence of another client's grant.
 package grantmgmtendpoint
 
@@ -163,11 +167,12 @@ func allowHeader(deps Deps) string {
 // response and returns ok=false on any failure (auth failure already
 // surfaced by the auth helper; a missing / foreign grant becomes 404).
 func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*store.Client, *store.Grant, bool) {
-	// Parse the form so query-string client_assertion (private_key_jwt
-	// on a GET / DELETE) is visible to the authenticator; Basic / mTLS
-	// auth flow through the request headers regardless. The body is
-	// size-capped first (a GET / DELETE rarely carries one, but the cap
-	// is cheap defence against memory exhaustion).
+	// Reject a malformed query up front so the authenticator never sees
+	// a half-parsed request: on a bodyless method the query string is
+	// where private_key_jwt clients put their client_assertion (Basic /
+	// mTLS auth flow through the request headers regardless). The body
+	// is size-capped first (a GET / DELETE rarely carries one, but the
+	// cap is cheap defence against memory exhaustion).
 	endpointsupport.LimitFormBody(w, r)
 	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 		writeError(w, http.StatusBadRequest, "invalid_request", "malformed request")
@@ -181,6 +186,18 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 			AllowedMethods:    deps.AllowedClientAuthMethods,
 		}, nil)
 	if !ok {
+		return nil, nil, false
+	}
+	if client.PublicClient {
+		// A public client proves nothing at authentication time: it
+		// presents a client_id and no secret. That would leave the
+		// grant_id in the request path as the endpoint's only
+		// credential, and a path segment is not one — it reaches proxy
+		// logs, browser history and Referer headers. Anyone who read
+		// one there could enumerate what a user consented to and revoke
+		// it. The endpoint therefore serves confidential clients only.
+		writeError(w, http.StatusUnauthorized, "invalid_client",
+			"grant management requires a confidential client")
 		return nil, nil, false
 	}
 	grantID := strings.TrimSpace(r.PathValue("grant_id"))

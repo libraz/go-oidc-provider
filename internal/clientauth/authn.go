@@ -8,7 +8,7 @@
 //   - none                (public clients with PKCE)
 //
 // client_secret_jwt (HS256-shared-secret JWT) is intentionally NOT
-// supported per the product design §J.1: shared-secret JWTs broaden the
+// supported: shared-secret JWTs broaden the
 // blast radius of a leaked secret without offering anything the existing
 // methods don't already cover.
 //

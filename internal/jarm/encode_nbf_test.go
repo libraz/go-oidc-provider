@@ -7,8 +7,8 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 )
 
-// TestSigner_StampsNbf closes the L-JARM-NBF gap: every JARM response
-// MUST carry an "nbf" claim equal to "iat" so consumers running under
+// TestSigner_StampsNbf pins the response-object claim set: every JARM
+// response carries an "nbf" claim equal to "iat" so consumers under
 // FAPI 2.0 Message Signing §5.6 can enforce a uniform nbf-or-fail
 // rule on response objects.
 func TestSigner_StampsNbf(t *testing.T) {

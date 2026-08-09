@@ -17,7 +17,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
-	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
@@ -69,6 +68,11 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		return
 	}
 	client, err := deps.Clients.GetClient(r.Context(), req.ClientID)
+	if err == nil && client == nil {
+		// A nil client alongside a nil error violates the store contract;
+		// a client the backend cannot produce is not a registered one.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		// Treat a missing or unknown client as an unrecoverable
 		// invalid_request: redirect_uri is not yet trusted, so the
@@ -97,10 +101,7 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 			"response_mode is not supported by this OP")
 		return
 	}
-	if !validateAuthorizationDetails(w, r, deps, req, client) {
-		return
-	}
-	if !validateGrantManagement(w, r, deps, req) {
+	if !validateRequestExtensions(w, r, deps, req, client) {
 		return
 	}
 	if jarmModeMissing(deps, req) {
@@ -118,84 +119,50 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 	dispatchAuthorize(w, r, deps, req, client)
 }
 
-// validateAuthorizationDetails honours the RFC 9396 authorization_details
-// parameter when the OP has registered any types (feature.RAR). It decodes
-// and validates the raw parameter against the registry, stamps the
-// validated elements onto req for the grant emission path, and rejects an
-// unacceptable request via the redirect channel. When no types are
-// registered the parameter is treated as an unknown extension and ignored.
-// The return value reports whether processing should continue.
-func validateAuthorizationDetails(w http.ResponseWriter, r *http.Request, deps resolved, req *authorize.Request, client *store.Client) bool {
-	if len(deps.AuthorizationDetailTypes) == 0 || req.AuthorizationDetailsRaw == "" {
+// validateRequestExtensions runs the request gates that sit between a
+// successful [authorize.Request.Validate] and dispatch: RFC 9396
+// authorization_details, the Grant Management draft parameters, and the
+// RFC 9449 §10.1 "dpop_jkt" commitment.
+//
+// The rules themselves live in [authorize.Request.ValidateExtensions],
+// shared verbatim with the pushed-authorization-request endpoint so the
+// two consecutive gates on the same request cannot disagree. This
+// function only renders: the checks run after [authorize.Request.Validate]
+// so redirect_uri has been matched against the client's registration and
+// the rejection can take the endpoint's normal channel (JARM / form_post
+// / redirect) rather than a pre-redirect first-party page.
+//
+// Returns false when it wrote the response; the caller then stops.
+func validateRequestExtensions(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+	client *store.Client,
+) bool {
+	rejection := req.ValidateExtensions(r.Context(), client, authorize.ExtensionPolicy{
+		AuthorizationDetailTypes:      deps.AuthorizationDetailTypes,
+		GrantManagementEnabled:        deps.GrantManagementEnabled,
+		GrantManagementActions:        deps.GrantManagementActions,
+		GrantManagementActionRequired: deps.GrantManagementActionRequired,
+		DPoPEnabled:                   deps.DPoPEnabled,
+	})
+	if rejection == nil {
 		return true
 	}
-	details, err := authorizationdetails.Check(r.Context(), req.AuthorizationDetailsRaw, client, deps.AuthorizationDetailTypes)
-	if err != nil {
-		// Decision §9②: an over-size payload is a malformed request
-		// (invalid_request); every other failure is RFC 9396 §5's
-		// invalid_authorization_details.
-		code := errInvalidAuthorizationDetails
-		if errors.Is(err, authorizationdetails.ErrTooLarge) {
-			code = errInvalidRequest
-		}
-		emitAuthorizeError(w, r, deps, req, code, "authorization_details is not acceptable")
-		return false
-	}
-	req.AuthorizationDetails = details
-	return true
+	emitAuthorizeError(w, r, deps, req, rejection.Code, rejection.Description)
+	return false
 }
 
 // Grant Management draft action wire strings honoured at /authorize.
-// query / revoke are endpoint-only operations and are rejected here.
+// query / revoke are endpoint-only operations and are rejected by the
+// shared gate. The names alias the shared constants so the grant
+// emission path here and the request gate cannot drift apart.
 const (
-	gmActionCreate  = "create"
-	gmActionReplace = "replace"
-	gmActionMerge   = "merge"
+	gmActionCreate  = authorize.GrantManagementActionCreate
+	gmActionReplace = authorize.GrantManagementActionReplace
+	gmActionMerge   = authorize.GrantManagementActionMerge
 )
-
-// validateGrantManagement enforces the Grant Management draft request
-// rules before dispatch. When the feature is disabled the parameters are
-// ignored (cleared off req) as unknown extensions. When enabled it checks
-// the action is one the OP accepts and is an authorize-time action, and
-// that grant_id presence matches the action (forbidden for create,
-// required for replace / merge). Ownership of grant_id is enforced later,
-// at grant emission, where the authenticated subject is known. Returns
-// false when it wrote an error response.
-func validateGrantManagement(w http.ResponseWriter, r *http.Request, deps resolved, req *authorize.Request) bool {
-	if !deps.GrantManagementEnabled {
-		req.GrantManagementAction = ""
-		req.GrantID = ""
-		return true
-	}
-	action := req.GrantManagementAction
-	if action == "" {
-		if deps.GrantManagementActionRequired {
-			emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_management_action is required")
-			return false
-		}
-		return true
-	}
-	switch action {
-	case gmActionCreate, gmActionReplace, gmActionMerge:
-		// authorize-time action; continue.
-	default:
-		emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_management_action is not valid at the authorization endpoint")
-		return false
-	}
-	if !deps.GrantManagementActions[action] {
-		emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_management_action is not supported")
-		return false
-	}
-	if action == gmActionCreate && req.GrantID != "" {
-		emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_id must not accompany grant_management_action=create")
-		return false
-	}
-	if (action == gmActionReplace || action == gmActionMerge) && req.GrantID == "" {
-		emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_id is required for grant_management_action="+action)
-		return false
-	}
-	return true
-}
 
 func applyClientAuthorizeDefaults(req *authorize.Request, client *store.Client) {
 	if req == nil || client == nil {
@@ -265,7 +232,7 @@ func resolveAuthorizeRequest(
 		renderAuthorizeError(w, r, deps, errPARRequired)
 		return nil, false
 	}
-	merged, jarHandled, jarStop := resolveJARRequestIfNeeded(r.Context(), w, deps, queryClientID, values)
+	merged, jarHandled, jarStop := resolveJARRequestIfNeeded(w, r, deps, queryClientID, values)
 	if jarStop {
 		return nil, false
 	}
@@ -507,22 +474,24 @@ func originFromRawURL(raw string) (string, bool) {
 //
 // The grant subject is the projected (post-[op.SubjectGenerator])
 // value, mirroring what [interaction.go] persists at the end of an
-// interactive consent ceremony. AuthTime / ACR / AMR are pulled from
-// the active session record so the grant reflects the most recent
-// authentication on this device, identical to the interactive path.
+// interactive consent ceremony. AuthTime / ACR / AMR come from
+// [sessionAuthContext] so the grant reflects the authentication the
+// request was served from, the same context [resolveSilentGrant]
+// stamps on the silent-mint path.
 func applyFirstPartySkip(
 	deps resolved,
 	req *authorize.Request,
 	client *store.Client,
 	active *sessions.Active,
 ) authorizeHint {
+	authCtx := sessionAuthContext(active)
 	planned := &grantUpsert{
 		Subject:              active.Session.Subject,
 		ClientID:             client.ID,
 		Scope:                append([]string(nil), req.Scope...),
-		AuthTime:             active.Session.AuthTime,
-		ACR:                  active.Session.ACR,
-		AMR:                  append([]string(nil), active.Session.AMR...),
+		AuthTime:             authCtx.AuthTime,
+		ACR:                  authCtx.ACR,
+		AMR:                  authCtx.AMR,
 		Claims:               req.Claims,
 		AuthorizationDetails: req.AuthorizationDetails,
 		Now:                  deps.now(),
@@ -564,8 +533,9 @@ func resolveSession(r *http.Request, deps resolved) (*sessions.Active, error) {
 	return active, nil
 }
 
-// computeAuthorizeHint runs the decision matrix described in
-// 02-product-design.md §A.12.2. The outcome depends on three
+// computeAuthorizeHint runs the authorize decision matrix that picks
+// between "reuse the session", "re-authenticate" and "prompt for
+// consent". The outcome depends on three
 // orthogonal inputs: whether a session exists, whether the request forces
 // a fresh login (prompt=login or max_age violation), and whether the
 // existing grant covers the requested scope (or no grant exists at all).
@@ -641,17 +611,7 @@ func buildHintState(
 			out.existing = g
 		}
 	}
-	out.needConsent = containsString(req.Prompt, interaction.PromptConsent) ||
-		out.existing == nil ||
-		!scopeIsSubset(req.Scope, out.existing.Scope) ||
-		!authorizationDetailsCovered(req.AuthorizationDetails, out.existing)
-	// A Grant Management action mutates a specific grant (create a fresh
-	// one, or replace / merge the targeted grant_id). The mutation and
-	// its ownership check run in upsertGrant on the interaction path, so
-	// never silent-mint a GM request: force it through consent.
-	if req.GrantManagementAction != "" {
-		out.needConsent = true
-	}
+	out.needConsent = !consentAlreadyCovered(req, out.existing)
 	return out, nil
 }
 
@@ -675,6 +635,39 @@ func findGrantForConsentDecision(
 		return nil, errors.New("authorizeendpoint: grant lookup returned mismatched record")
 	}
 	return grant, nil
+}
+
+// consentAlreadyCovered reports whether the cached grant fully covers
+// what this request would ask the user to approve. It is the single
+// predicate behind both consent gates: the dispatcher's needConsent
+// flag and the pre-marking of the built-in consent interaction in
+// [initialInteractionsRun]. Keeping one predicate is what stops the
+// two from disagreeing — a request the matrix routes to a consent
+// prompt must never arrive at the orchestrator with consent already
+// marked as run, which would hand the RP a code without a ceremony.
+//
+// Coverage requires all of:
+//
+//   - The RP did not ask for re-consent (prompt=consent is the RP's
+//     explicit override and is never satisfied by a cached grant).
+//   - No Grant Management action: create / replace / merge each mutate
+//     a specific grant, and the mutation plus its ownership check run
+//     in upsertGrant on the interaction path.
+//   - A grant exists whose scope set subsumes the requested scope.
+//   - Every requested RFC 9396 authorization_details element is already
+//     on that grant.
+func consentAlreadyCovered(req *authorize.Request, existing *store.Grant) bool {
+	if req == nil || existing == nil {
+		return false
+	}
+	if containsString(req.Prompt, interaction.PromptConsent) {
+		return false
+	}
+	if req.GrantManagementAction != "" {
+		return false
+	}
+	return scopeIsSubset(req.Scope, existing.Scope) &&
+		authorizationDetailsCovered(req.AuthorizationDetails, existing)
 }
 
 // authorizationDetailsCovered reports whether every requested RFC 9396
@@ -897,7 +890,7 @@ func initialAuthnState(
 		Phase:                    authn.PhaseBeforeAuthn,
 		InteractionsRun:          initialInteractionsRun(req, existing, willRunChooser),
 		RequestedScopes:          append([]string(nil), req.Scope...),
-		ACRValues:                append([]string(nil), req.ACRValues...),
+		ACRValues:                requestedACRValues(req),
 		ChooserGroupID:           activeChooserGroupID(active, willRunChooser),
 		ChooserAddAccount:        chooserAddAccountRequested(req, active),
 		ChooserAddAccountGroupID: chooserAddAccountGroupID(req, active),
@@ -911,7 +904,12 @@ func initialInteractionsRun(req *authorize.Request, existing *store.Grant, willR
 	// subject) does not authoritatively cover the picked subject's scope
 	// set, so do NOT pre-mark consent as already run. Consent re-evaluates
 	// after the chooser binds the picked subject.
-	if !willRunChooser && existing != nil && scopeIsSubset(req.Scope, existing.Scope) {
+	//
+	// Otherwise the pre-marking uses the same coverage predicate the
+	// dispatcher used to decide it needed an interaction at all, so a
+	// request routed here *because* consent is owed always reaches the
+	// consent screen.
+	if !willRunChooser && consentAlreadyCovered(req, existing) {
 		interactionsRun[consent.Name] = true
 	}
 	return interactionsRun
@@ -1156,6 +1154,18 @@ func resolveSilentGrant(
 		!scopeIsSubset(req.Scope, grant.Scope) {
 		return nil, errors.New("authorizeendpoint: authorization grant unavailable")
 	}
+	// The grant may have been recorded by an older ceremony than the
+	// session now serving this request. Re-stamp the session's context so
+	// the id_token reports the authentication the decision matrix just
+	// validated max_age / acr_values against, instead of a stale (and
+	// possibly stronger) one. The interactive and auto-grant paths do the
+	// equivalent through upsertGrant.
+	if stampGrantAuthContext(grant, sessionAuthContext(active)) {
+		grant.UpdatedAt = deps.now().UTC()
+		if err := deps.Grants.Save(ctx, grant); err != nil {
+			return nil, fmt.Errorf("authorizeendpoint: refresh silent grant auth context: %w", err)
+		}
+	}
 	return grant, nil
 }
 
@@ -1175,32 +1185,6 @@ func silentAuthorizationCodeMatches(actual, expected *store.AuthorizationCode) b
 		actual.Nonce == expected.Nonce &&
 		actual.State == expected.State &&
 		actual.DPoPJKT == expected.DPoPJKT
-}
-
-// buildSuccessRedirect composes the success redirect target. It is split
-// out so it can be tested without invoking the HTTP machinery.
-func buildSuccessRedirect(redirectURI, code, state, issuer string) string {
-	u, err := url.Parse(redirectURI)
-	if err != nil {
-		// The validator already accepted the redirect_uri, so a parse
-		// failure here is a programmer bug. Return the original URI
-		// unchanged; the caller emits a redirect either way and the
-		// audit log will surface the malformed value.
-		return redirectURI
-	}
-	q := u.Query()
-	q.Set("code", code)
-	if state != "" {
-		q.Set("state", state)
-	}
-	if issuer != "" {
-		// RFC 9207 §2.3: every authorization response carries "iss"
-		// equal to the OP's discovery issuer. Defense-in-depth against
-		// the mix-up attack class; FAPI 2.0 §5.3.2.2 mandates it.
-		q.Set("iss", issuer)
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
 }
 
 // setInteractionCookie seals uid under the interaction AAD and writes it as

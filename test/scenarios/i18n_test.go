@@ -4,8 +4,24 @@ package scenarios_test
 // Spec:
 //   - OpenID Connect Core 1.0 §3.1.2.1 — ui_locales request parameter
 //   - OpenID Connect Discovery 1.0 §3 — ui_locales_supported metadata
-//   - design 002 §L.2 — Locale resolution priority chain
-//   - design 002 §L.6 — SPA prompt envelope
+//
+// Two library-level contracts have no spec clause of their own and are
+// stated here in full, because the rows below pin them:
+//
+//   Locale resolution chain — the OP adopts the first signal that
+//   matches a registered locale, walking (1) the PreferredLocaleStore
+//   entry for the authenticated subject, (2) the RP's ui_locales
+//   request parameter, (3) the __Host-oidc_locale cookie, (4) the
+//   Accept-Language header, (5) the configured default locale ("en"
+//   when unset). The same order governs SPA prompts, e-mail and SSR
+//   templates, and the result is always a registered tag.
+//
+//   SPA prompt envelope — the interaction prompt carries `locale` (the
+//   resolved tag, always populated), `ui_locales_hint` (the RP's
+//   ui_locales list, split but otherwise verbatim) and
+//   `locales_available` (the registered locales, equal to discovery's
+//   ui_locales_supported). All three are omitted when empty so an SPA
+//   written against an OP without i18n keeps working.
 
 import (
 	"context"
@@ -22,8 +38,8 @@ import (
 )
 
 // i18nFakeStore satisfies [op.PreferredLocaleStore] with a fixed tag.
-// The scenario tests use it to pin the head of the §L.2 chain
-// without standing up a real user store.
+// The scenario tests use it to pin the head of the locale resolution
+// chain without standing up a real user store.
 type i18nFakeStore struct {
 	tag op.Locale
 }
@@ -35,8 +51,8 @@ func (s i18nFakeStore) PreferredLocale(_ context.Context, _ string) (op.Locale, 
 // fetchI18nPrompt drives /authorize → /interaction GET against the
 // supplied provider and returns the decoded prompt envelope. The
 // helper attaches an optional Accept-Language header and
-// __Host-oidc_locale cookie so each row of the §L.2 chain can be
-// exercised in isolation. The provider is constructed by the caller
+// __Host-oidc_locale cookie so each step of the locale resolution
+// chain can be exercised in isolation. The provider is constructed by the caller
 // so a row that needs WithPreferredLocaleStore can supply it.
 func fetchI18nPrompt(t *testing.T, p *testkit.Provider, uiLocales, cookie, acceptLanguage string) map[string]any {
 	t.Helper()
@@ -119,8 +135,8 @@ func fetchI18nPrompt(t *testing.T, p *testkit.Provider, uiLocales, cookie, accep
 	return env
 }
 
-// TestScenario_I18N_001_PreferredLocaleStoreWinsChainHead pins §L.2
-// rule 1: when op.WithPreferredLocaleStore returns a registered
+// TestScenario_I18N_001_PreferredLocaleStoreWinsChainHead pins chain
+// step 1: when op.WithPreferredLocaleStore returns a registered
 // locale for the authenticated subject, it wins against any other
 // signal in the chain.
 //
@@ -133,7 +149,7 @@ func fetchI18nPrompt(t *testing.T, p *testkit.Provider, uiLocales, cookie, accep
 // chain. The wire-shape coverage stays with rows I18N-002 onward,
 // where the chain can be exercised via /authorize round-trips.
 //
-// Spec: design 002 §L.2.
+// Spec: locale resolution chain (file header).
 func TestScenario_I18N_001_PreferredLocaleStoreWinsChainHead(t *testing.T) {
 	t.Parallel()
 
@@ -149,11 +165,11 @@ func TestScenario_I18N_001_PreferredLocaleStoreWinsChainHead(t *testing.T) {
 }
 
 // TestScenario_I18N_002_UILocalesWinsOverCookieAndAcceptLanguage pins
-// §L.2 rule 2: when the RP supplies ui_locales, the OP MUST honour
+// chain step 2: when the RP supplies ui_locales, the OP MUST honour
 // the first registered tag in the list, ahead of any cookie or
 // Accept-Language signal.
 //
-// Spec: design 002 §L.2 / OIDC Core §3.1.2.1.
+// Spec: OIDC Core §3.1.2.1 / locale resolution chain (file header).
 func TestScenario_I18N_002_UILocalesWinsOverCookieAndAcceptLanguage(t *testing.T) {
 	t.Parallel()
 
@@ -164,11 +180,11 @@ func TestScenario_I18N_002_UILocalesWinsOverCookieAndAcceptLanguage(t *testing.T
 	}
 }
 
-// TestScenario_I18N_003_CookieWinsOverAcceptLanguage pins §L.2 rule 3:
+// TestScenario_I18N_003_CookieWinsOverAcceptLanguage pins chain step 3:
 // the __Host-oidc_locale cookie wins against Accept-Language and
 // against the default locale.
 //
-// Spec: design 002 §L.2.
+// Spec: locale resolution chain (file header).
 func TestScenario_I18N_003_CookieWinsOverAcceptLanguage(t *testing.T) {
 	t.Parallel()
 
@@ -180,11 +196,11 @@ func TestScenario_I18N_003_CookieWinsOverAcceptLanguage(t *testing.T) {
 }
 
 // TestScenario_I18N_004_AcceptLanguageHonoursLanguageSubtagFallback
-// pins §L.2 rule 4: when only Accept-Language is supplied, the OP
+// pins chain step 4: when only Accept-Language is supplied, the OP
 // honours its q-value-descending order and falls back to the
 // language sub-tag for unregistered full tags ("ja-JP" → "ja").
 //
-// Spec: design 002 §L.2.
+// Spec: locale resolution chain (file header).
 func TestScenario_I18N_004_AcceptLanguageHonoursLanguageSubtagFallback(t *testing.T) {
 	t.Parallel()
 
@@ -195,12 +211,12 @@ func TestScenario_I18N_004_AcceptLanguageHonoursLanguageSubtagFallback(t *testin
 	}
 }
 
-// TestScenario_I18N_005_DefaultLocaleFallback pins §L.2 rule 5: when
+// TestScenario_I18N_005_DefaultLocaleFallback pins chain step 5: when
 // no signal in the chain matches a registered locale, the OP MUST
 // fall back to the configured default (or "en" when not supplied).
 // The resolver guarantees the result is a registered tag.
 //
-// Spec: design 002 §L.2.
+// Spec: locale resolution chain (file header).
 func TestScenario_I18N_005_DefaultLocaleFallback(t *testing.T) {
 	t.Parallel()
 
@@ -211,11 +227,11 @@ func TestScenario_I18N_005_DefaultLocaleFallback(t *testing.T) {
 	}
 }
 
-// TestScenario_I18N_010_PromptCarriesResolvedLocale pins §L.6: the
-// OP-resolved locale rides on the prompt envelope `locale` field
-// every time the resolver is wired.
+// TestScenario_I18N_010_PromptCarriesResolvedLocale pins the prompt
+// envelope contract: the OP-resolved locale rides on the `locale`
+// field every time the resolver is wired.
 //
-// Spec: design 002 §L.6.
+// Spec: SPA prompt envelope (file header).
 func TestScenario_I18N_010_PromptCarriesResolvedLocale(t *testing.T) {
 	t.Parallel()
 
@@ -230,11 +246,11 @@ func TestScenario_I18N_010_PromptCarriesResolvedLocale(t *testing.T) {
 	}
 }
 
-// TestScenario_I18N_011_PromptEchoesUILocalesHint pins §L.6: the RP's
-// ui_locales parameter rides on the prompt envelope as
-// `ui_locales_hint`, in caller-supplied order.
+// TestScenario_I18N_011_PromptEchoesUILocalesHint pins the prompt
+// envelope contract: the RP's ui_locales parameter rides on the
+// envelope as `ui_locales_hint`, in caller-supplied order.
 //
-// Spec: design 002 §L.6.
+// Spec: SPA prompt envelope (file header).
 func TestScenario_I18N_011_PromptEchoesUILocalesHint(t *testing.T) {
 	t.Parallel()
 
@@ -249,12 +265,13 @@ func TestScenario_I18N_011_PromptEchoesUILocalesHint(t *testing.T) {
 	}
 }
 
-// TestScenario_I18N_012_PromptListsAvailableLocales pins §L.6: the
-// `locales_available` field equals the registered locale list (and
-// the discovery `ui_locales_supported` value) so SPAs can build a
-// language picker without re-fetching discovery.
+// TestScenario_I18N_012_PromptListsAvailableLocales pins the prompt
+// envelope contract: the `locales_available` field equals the
+// registered locale list (and the discovery `ui_locales_supported`
+// value) so SPAs can build a language picker without re-fetching
+// discovery.
 //
-// Spec: design 002 §L.6 / OIDC Discovery §3.
+// Spec: OIDC Discovery §3 / SPA prompt envelope (file header).
 func TestScenario_I18N_012_PromptListsAvailableLocales(t *testing.T) {
 	t.Parallel()
 
@@ -278,12 +295,12 @@ func TestScenario_I18N_012_PromptListsAvailableLocales(t *testing.T) {
 	}
 }
 
-// TestScenario_I18N_013_LocaleFieldsOmitWhenResolverAbsent pins §L.6
-// backward compatibility: when no resolver is wired (unit tests,
-// embedders without i18n) the locale fields stay off the wire so
-// pre-existing SPAs keep working.
+// TestScenario_I18N_013_LocaleFieldsOmitWhenResolverAbsent pins the
+// omit-when-empty half of the prompt envelope contract: when no
+// resolver is wired (unit tests, embedders without i18n) the locale
+// fields stay off the wire so pre-existing SPAs keep working.
 //
-// Spec: design 002 §L.6.
+// Spec: SPA prompt envelope (file header).
 func TestScenario_I18N_013_LocaleFieldsOmitWhenResolverAbsent(t *testing.T) {
 	t.Parallel()
 

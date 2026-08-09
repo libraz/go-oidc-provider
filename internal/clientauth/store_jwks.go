@@ -2,12 +2,12 @@ package clientauth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -127,14 +127,19 @@ func (r *StoreJWKSResolver) JWKS(ctx context.Context, clientID string) (*josev4.
 		}
 		return keys, nil
 	}
-	var keys josev4.JSONWebKeySet
-	if err := json.Unmarshal(client.JWKs, &keys); err != nil {
+	// Decoding shares [rpjwks.ParseKeySet] with the fetched path, so the
+	// registered keyset is bounded by the same member cap and decoded
+	// member-wise: a key this build cannot represent (an X25519 encryption key
+	// published next to the client's signing key, say) is ignored rather than
+	// discarding the whole set, per RFC 7517 §5.
+	keys, err := rpjwks.ParseKeySet(client.JWKs)
+	if err != nil {
 		return nil, fmt.Errorf("clientauth: parse client JWKs: %w", err)
 	}
 	if len(keys.Keys) == 0 {
 		return nil, ErrJWKSNotConfigured
 	}
-	return &keys, nil
+	return keys, nil
 }
 
 // RefreshJWKS forces a cache-bypassing refetch of a jwks_uri-registered

@@ -27,9 +27,10 @@ const AuditEventLooseMethodCaseAdmitted = string(auditevent.AuditDPoPLooseMethod
 
 // DefaultIatWindow is the symmetric tolerance applied to the proof
 // "iat" claim when [VerifyOptions.IatWindow] is unset. RFC 9449 §11.1
-// recommends "a few minutes"; the value here matches the design doc's
-// 5-minute replay-store TTL while keeping the per-request window
-// short enough that a stolen proof has a small replay surface.
+// recommends "a few minutes"; this OP sits at the short end of that
+// range so a stolen proof has a small replay surface, and the JTI
+// replay marker's retention is derived from the window rather than
+// configured independently, which keeps the two from drifting apart.
 const DefaultIatWindow = 60 * time.Second
 
 // Clock is the package-local view of the wall clock. It mirrors the
@@ -120,7 +121,7 @@ type VerifierConfig struct {
 	// otherwise the verifier returns [ErrProofNonceMissing] or
 	// [ErrProofNonceInvalid] and the HTTP layer issues the
 	// "use_dpop_nonce" challenge. A nil value (the default) leaves
-	// the proof's nonce claim unread, matching the v0.x posture.
+	// the proof's nonce claim unread.
 	Nonces NonceVerifier
 
 	// AllowLooseMethodCase, when true, compares the proof's "htm"
@@ -196,10 +197,10 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		// guarantees the entry outlives the latest acceptable replay
 		// attempt no matter when the legitimate use first marked it
 		// (the worst case is mark at iat - iatWindow, replay at
-		// iat + iatWindow — a gap of 2*iatWindow). The previous
-		// iat + iatWindow value left a boundary where the entry
-		// expired exactly when the iat gate would still accept the
-		// proof, so a replay at now == iat + iatWindow passed both
+		// iat + iatWindow — a gap of 2*iatWindow). A retention of
+		// iat + iatWindow would leave a boundary where the entry
+		// expires exactly when the iat gate still accepts the proof,
+		// letting a replay at now == iat + iatWindow through both
 		// gates.
 		replayLeew:    2 * window,
 		nonces:        cfg.Nonces,
@@ -253,6 +254,37 @@ type VerifyResult struct {
 	JTI string
 }
 
+// Checked is a proof that passed every stateless RFC 9449 §4.3 gate —
+// parse, signature, typ/alg, htm, htu, iat, the optional "ath"
+// binding, and the §8 / §9 nonce gate — but whose replay marker has
+// NOT been written yet. [Verifier.Commit] performs that write and is
+// what makes the proof single-use.
+//
+// The two-phase shape exists so an endpoint can reject a bad proof —
+// including answering the §8 `use_dpop_nonce` challenge — before it
+// has authenticated the client, without letting the unauthenticated
+// request reach the durable replay table. RFC 9449 imposes no ordering
+// between proof verification and client authentication: the proof is
+// bound to the HTTP request (htm / htu / iat / ath / nonce) and to its
+// own key, never to the client's credential, so deferring the write
+// leaves every gate answering exactly the question it answered before.
+// A caller that has no reason to split the two uses [Verifier.Verify],
+// which runs both phases back to back.
+type Checked struct {
+	// JKT is the RFC 7638 SHA-256 thumbprint of the proof's JWK,
+	// base64url-no-pad. The OP places it in cnf.jkt.
+	JKT string
+
+	// JTI is the proof's "jti" claim, exposed for audit logging.
+	JTI string
+
+	// replayExpiresAt is the retention deadline the replay marker
+	// carries. It is derived from the proof's own iat rather than
+	// from the commit time so a deferred [Verifier.Commit] cannot
+	// stretch the entry past the window the iat gate accepts.
+	replayExpiresAt time.Time
+}
+
 // Verify runs the full RFC 9449 §4.3 checklist on the supplied proof:
 // parse + signature + typ/alg gate, htm/htu/iat/jti claim validation,
 // optional ath binding, and replay marking via
@@ -260,8 +292,52 @@ type VerifyResult struct {
 // the [Err*] sentinel set on every failure path; the caller maps the
 // sentinel onto an HTTP status without inspecting the wrapped cause.
 //
-//nolint:gocognit // verify enumerates RFC 9449 §4 / §6 gates in flat shape; refactor would obscure spec mapping.
+// Verify is [Verifier.Check] followed immediately by
+// [Verifier.Commit]; endpoints that must answer a proof rejection
+// before authenticating the client call the two phases separately so
+// an unauthenticated request performs no durable write.
 func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, error) {
+	checked, err := v.Check(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if err := v.Commit(ctx, checked); err != nil {
+		return nil, err
+	}
+	return &VerifyResult{JKT: checked.JKT, JTI: checked.JTI}, nil
+}
+
+// Commit writes the replay marker for a proof [Verifier.Check] already
+// accepted, making that proof single-use. It returns [ErrProofReplayed]
+// when the same (key, jti) pair was already committed.
+//
+// Commit is the only phase that touches storage, so a caller that runs
+// it after client authentication keeps the durable write behind a
+// credential. Two concurrent requests carrying the same proof still
+// resolve deterministically: the store's compare-and-set decides, and
+// the loser sees ErrProofReplayed exactly as it would have under
+// [Verifier.Verify].
+func (v *Verifier) Commit(ctx context.Context, checked *Checked) error {
+	if checked == nil {
+		return fmt.Errorf("%w: nil checked proof", ErrProofMalformed)
+	}
+	if err := v.jtis.Mark(ctx, "dpop:"+checked.JKT+":"+checked.JTI, checked.replayExpiresAt); err != nil {
+		if errors.Is(err, store.ErrAlreadyConsumed) {
+			return ErrProofReplayed
+		}
+		return fmt.Errorf("dpop: mark jti: %w", err)
+	}
+	return nil
+}
+
+// Check runs every stateless RFC 9449 §4.3 gate on the supplied proof
+// and returns the accepted proof without marking it consumed. See
+// [Checked] for why the replay marking is a separate phase.
+//
+// The gates are deliberately enumerated in flat shape so each one maps
+// onto its RFC 9449 §4 / §6 clause; do not fold them into helpers to
+// shorten the function.
+func (v *Verifier) Check(ctx context.Context, in VerifyInput) (*Checked, error) {
 	if in.URL == nil {
 		return nil, fmt.Errorf("%w: nil request URL", ErrProofMalformed)
 	}
@@ -330,15 +406,11 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 		return nil, fmt.Errorf("%w: %w", ErrProofMalformed, err)
 	}
 
-	expiresAt := time.Unix(parsed.claims.IssuedAt, 0).Add(v.replayLeew)
-	if err := v.jtis.Mark(ctx, "dpop:"+jkt+":"+parsed.claims.JTI, expiresAt); err != nil {
-		if errors.Is(err, store.ErrAlreadyConsumed) {
-			return nil, ErrProofReplayed
-		}
-		return nil, fmt.Errorf("dpop: mark jti: %w", err)
-	}
-
-	return &VerifyResult{JKT: jkt, JTI: parsed.claims.JTI}, nil
+	return &Checked{
+		JKT:             jkt,
+		JTI:             parsed.claims.JTI,
+		replayExpiresAt: time.Unix(parsed.claims.IssuedAt, 0).Add(v.replayLeew),
+	}, nil
 }
 
 // checkNonce runs the optional RFC 9449 §8 / §9 nonce gate. The check
@@ -374,25 +446,49 @@ func (v *Verifier) checkNonce(nonce string) error {
 // "DPoP" header values surface as [ErrProofMalformed] so the handler
 // emits invalid_request rather than silently picking the first proof.
 func (v *Verifier) VerifyHTTPRequest(ctx context.Context, r *http.Request, accessToken string) (*VerifyResult, error) {
+	in, err := httpVerifyInput(r, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	return v.Verify(ctx, in)
+}
+
+// CheckHTTPRequest is the [Verifier.Check] counterpart of
+// [Verifier.VerifyHTTPRequest]: it runs the stateless gates over an
+// [*http.Request] and leaves the replay marking to a later
+// [Verifier.Commit]. Endpoints that authenticate the client between
+// the two phases use this entry point.
+func (v *Verifier) CheckHTTPRequest(ctx context.Context, r *http.Request, accessToken string) (*Checked, error) {
+	in, err := httpVerifyInput(r, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	return v.Check(ctx, in)
+}
+
+// httpVerifyInput projects an [*http.Request] onto a [VerifyInput].
+// It is shared by the two HTTP entry points so the header handling
+// (including the §4.1 single-proof rule) cannot drift between them.
+func httpVerifyInput(r *http.Request, accessToken string) (VerifyInput, error) {
 	if r == nil {
-		return nil, fmt.Errorf("%w: nil request", ErrProofMalformed)
+		return VerifyInput{}, fmt.Errorf("%w: nil request", ErrProofMalformed)
 	}
 	headers := r.Header.Values("DPoP")
 	if len(headers) > 1 {
-		return nil, fmt.Errorf("%w: multiple DPoP proofs", ErrProofMalformed)
+		return VerifyInput{}, fmt.Errorf("%w: multiple DPoP proofs", ErrProofMalformed)
 	}
 	header := ""
 	if len(headers) == 1 {
 		header = headers[0]
 	}
-	return v.Verify(ctx, VerifyInput{
+	return VerifyInput{
 		ProofHeader: header,
 		Method:      r.Method,
 		URL:         r.URL,
 		Host:        r.Host,
 		TLS:         r.TLS != nil,
 		AccessToken: accessToken,
-	})
+	}, nil
 }
 
 // AccessTokenHash returns the SHA-256 base64url-no-pad hash of token,

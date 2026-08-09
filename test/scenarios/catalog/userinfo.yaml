@@ -28,7 +28,7 @@ rows:
       configuration error stating that jwt-userinfo requires the
       userinfo endpoint; there is no silent fallback.
     status: out-of-scope
-    out_of_scope_reason: "Signed / Encrypted UserInfo response is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2153) records: \"Signed / Encrypted UserInfo response — TLS + plain JSON で十分、JWS/JWE userinfo は実装負荷に見合わない.\" UserInfo always returns application/json."
+    out_of_scope_reason: "There is no provider-level jwt-userinfo toggle to combine with a disabled userinfo endpoint, so the construction-time conflict this row describes cannot be expressed. UserInfo returns application/json; a JWT-shaped response is a per-client decision driven by the registered userinfo_encrypted_response_alg / _enc metadata rather than a provider option."
 
   - id: UI-002
     severity: P1

@@ -28,24 +28,26 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 )
 
-// TestBuildRedirectError_EncodesHostileBytes_NoXSS pins that hostile
-// bytes routed through buildRedirectError on the description / state
-// arguments are percent-encoded on the wire, never echoed verbatim.
-// A regression that switched the builder from url.Values.Encode to
+// TestEmitPlainResponse_EncodesHostileBytes_NoXSS pins that hostile
+// bytes reaching the redirect surface through the description / state
+// values are percent-encoded on the wire, never echoed verbatim.
+// A regression that switched the composer from url.Values.Encode to
 // raw string concatenation would surface here.
-func TestBuildRedirectError_EncodesHostileBytes_NoXSS(t *testing.T) {
+func TestEmitPlainResponse_EncodesHostileBytes_NoXSS(t *testing.T) {
 	t.Parallel()
 
 	const (
 		hostileDesc  = `<script>alert(1)</script>`
 		hostileState = `"><img src=x onerror=alert(1)>`
 	)
-	got, err := buildRedirectError(testRedirectURI, errInvalidRequest, hostileDesc, hostileState, testIssuer)
-	if err != nil {
-		t.Fatalf("buildRedirectError: %v", err)
-	}
+	got := emitPlainErrorTarget(t, &authorize.Request{
+		RedirectURI: testRedirectURI,
+		State:       hostileState,
+	}, errInvalidRequest, hostileDesc, testIssuer)
 
 	// Negative half: the rendered URL MUST NOT contain the hostile
 	// bytes verbatim. A URL-encoded "<script>" appears as "%3Cscript%3E";
@@ -80,20 +82,20 @@ func TestBuildRedirectError_EncodesHostileBytes_NoXSS(t *testing.T) {
 	}
 }
 
-// TestBuildRedirectError_StripsControlBytes pins that ASCII control
+// TestEmitPlainResponse_StripsControlBytes pins that ASCII control
 // characters (CR, LF, tab) are also encoded rather than echoed
 // verbatim. CR/LF in particular MUST NOT survive on the wire because
 // they enable header-splitting attacks (CRLF injection) — they would
 // also let an attacker forge the URL's query separator, splicing a
 // second key=value onto the redirect.
-func TestBuildRedirectError_StripsControlBytes(t *testing.T) {
+func TestEmitPlainResponse_StripsControlBytes(t *testing.T) {
 	t.Parallel()
 
 	const hostile = "diag\r\nSet-Cookie: session=evil"
-	got, err := buildRedirectError(testRedirectURI, errInvalidRequest, hostile, "s", testIssuer)
-	if err != nil {
-		t.Fatalf("buildRedirectError: %v", err)
-	}
+	got := emitPlainErrorTarget(t, &authorize.Request{
+		RedirectURI: testRedirectURI,
+		State:       "s",
+	}, errInvalidRequest, hostile, testIssuer)
 
 	if strings.ContainsAny(got, "\r\n") {
 		t.Errorf("redirect target leaked raw CR/LF bytes: %q", got)

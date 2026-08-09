@@ -537,7 +537,8 @@ func (o *Orchestrator) loginFlowCaptchaPending(st State, flow *CompiledLoginFlow
 
 // evalLoginFlowRules walks the compiled rule list in declaration
 // order and dispatches the first matching, not-yet-completed step.
-// Predicate panics are recovered per plan 005 H1-D §3 invariant 3.
+// A panic in an embedder-supplied predicate is recovered and treated
+// as "does not match" so one bad rule cannot take down the flow.
 func (o *Orchestrator) evalLoginFlowRules(ctx context.Context, st State, flow *CompiledLoginFlow, lc LoginFlowContext, now time.Time) (bool, State, interaction.Step, error) {
 	for i, r := range flow.rules {
 		if containsString(st.CompletedStepKinds, r.then.kind) {
@@ -609,7 +610,7 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 // emitLoginFlowPrompt issues a fresh StateRef tagged with the step's
 // kind and returns the prompt for the SPA. The kind is appended
 // verbatim so two distinct steps emit distinguishable signed payloads
-// — the StateRef-per-Step tagging invariant from plan 005 H1-D §1.
+// — a StateRef issued for one step can never be replayed into another.
 func (o *Orchestrator) emitLoginFlowPrompt(st State, kind string, prompt interaction.Prompt, now time.Time) (State, interaction.Step, error) {
 	st.StepCounter++
 	ref, err := o.cfg.StateRefSigner.Issue(st.InteractionUID, tagLoginFlowPrefix+kind, st.StepCounter, now.Add(stateRefTTL))
@@ -624,7 +625,8 @@ func (o *Orchestrator) emitLoginFlowPrompt(st State, kind string, prompt interac
 // for factor-shaped steps it appends a [Factor] (so [Aggregate]
 // observes the AAL contribution and amr value), for captcha-shaped
 // steps it flips [State.CaptchaPassed] without entering [State.Factors]
-// — the captcha-out-of-Factors invariant from plan 005 H1-D §5.
+// — a captcha is a bot check, not an authentication factor, so it must
+// not contribute to the AAL aggregate or the amr claim.
 //
 // In all cases the step's kind is appended to CompletedStepKinds for
 // dedup, ActiveStepKind is cleared, and the FactorScratch slot is
@@ -707,7 +709,7 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 			st.ActiveStepKind = ""
 			return o.advanceLoginFlow(ctx, st, in.Now)
 		}
-		st.FactorScratch = nil
+		st = retireActiveFactorToken(st)
 		return st, interaction.Step{}, err
 	}
 	if cont.Prompt != nil {

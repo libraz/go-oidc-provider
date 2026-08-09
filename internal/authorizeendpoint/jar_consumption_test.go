@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -21,6 +23,20 @@ func fakeClient(uri string) *store.Client {
 		RequestURIs:  []string{uri},
 		RedirectURIs: []string{"https://rp.example/cb"},
 	}
+}
+
+// jarFetchRequest returns the inbound request a JAR-stage rejection is
+// rendered against. No Accept header is set, so the content negotiation
+// in [renderBrowserError] stays on the JSON envelope most of these tests
+// decode; a caller that wants the browser branch sets Accept itself.
+func jarFetchRequest() *http.Request {
+	return httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/authorize", nil)
+}
+
+// jarFetchDeps returns the minimal [resolved] the fetcher reads: the
+// private-network toggle, and a nil Driver so rejections render as JSON.
+func jarFetchDeps(allowPrivate bool) resolved {
+	return resolved{Deps{AllowPrivateNetworkJAR: allowPrivate}}
 }
 
 // decodeWireError parses the OAuth JSON envelope written by
@@ -47,7 +63,7 @@ func TestFetchJARRequestURI_HTTPSOnlyByDefault(t *testing.T) {
 
 	uri := "http://example.com/req"
 	rec := httptest.NewRecorder()
-	body, ok := fetchJARRequestURI(context.Background(), rec, fakeClient(uri), uri, false /*allowPrivate*/)
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(false), fakeClient(uri), uri, "")
 	if ok {
 		t.Fatalf("fetchJARRequestURI succeeded; want refusal. body=%q", body)
 	}
@@ -77,7 +93,7 @@ func TestFetchJARRequestURI_AllowPrivateAdmitsHTTP(t *testing.T) {
 
 	uri := srv.URL + "/req"
 	rec := httptest.NewRecorder()
-	body, ok := fetchJARRequestURI(context.Background(), rec, fakeClient(uri), uri, true /*allowPrivate*/)
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(true), fakeClient(uri), uri, "")
 	if !ok {
 		t.Fatalf("fetchJARRequestURI failed: status=%d body=%q", rec.Code, rec.Body.String())
 	}
@@ -97,7 +113,7 @@ func TestFetchJARRequestURI_BlocksCloudMetadataEvenWithAllowPrivate(t *testing.T
 
 	uri := "http://169.254.169.254/latest/meta-data/"
 	rec := httptest.NewRecorder()
-	body, ok := fetchJARRequestURI(context.Background(), rec, fakeClient(uri), uri, true /*allowPrivate*/)
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(true), fakeClient(uri), uri, "")
 	if ok {
 		t.Fatalf("fetchJARRequestURI accepted cloud metadata under AllowPrivate; body=%q", body)
 	}
@@ -127,7 +143,7 @@ func TestFetchJARRequestURI_RefusesRedirect(t *testing.T) {
 
 	uri := srv.URL + "/req"
 	rec := httptest.NewRecorder()
-	body, ok := fetchJARRequestURI(context.Background(), rec, fakeClient(uri), uri, true /*allowPrivate*/)
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(true), fakeClient(uri), uri, "")
 	if ok {
 		t.Fatalf("fetchJARRequestURI followed a redirect; body=%q", body)
 	}
@@ -158,7 +174,7 @@ func TestFetchJARRequestURI_RefusesNonJWSContentType(t *testing.T) {
 
 	uri := srv.URL + "/req"
 	rec := httptest.NewRecorder()
-	body, ok := fetchJARRequestURI(context.Background(), rec, fakeClient(uri), uri, true /*allowPrivate*/)
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(true), fakeClient(uri), uri, "")
 	if ok {
 		t.Fatalf("fetchJARRequestURI accepted text/html; body=%q", body)
 	}
@@ -189,7 +205,7 @@ func TestFetchJARRequestURI_AcceptsAbsentContentType(t *testing.T) {
 
 	uri := srv.URL + "/req"
 	rec := httptest.NewRecorder()
-	body, ok := fetchJARRequestURI(context.Background(), rec, fakeClient(uri), uri, true /*allowPrivate*/)
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(true), fakeClient(uri), uri, "")
 	if !ok {
 		t.Fatalf("fetchJARRequestURI rejected absent Content-Type: status=%d body=%q",
 			rec.Code, rec.Body.String())
@@ -213,7 +229,7 @@ func TestFetchJARRequestURI_BodyCapEnforced(t *testing.T) {
 
 	uri := srv.URL + "/req"
 	rec := httptest.NewRecorder()
-	body, ok := fetchJARRequestURI(context.Background(), rec, fakeClient(uri), uri, true /*allowPrivate*/)
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(true), fakeClient(uri), uri, "")
 	if ok {
 		t.Fatalf("fetchJARRequestURI accepted oversized body; len=%d", len(body))
 	}
@@ -238,7 +254,7 @@ func TestFetchJARRequestURI_RejectsUnregisteredURI(t *testing.T) {
 	registered := "https://allowed.example/req"
 	probe := "https://attacker.example/req"
 	rec := httptest.NewRecorder()
-	body, ok := fetchJARRequestURI(context.Background(), rec, fakeClient(registered), probe, false)
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(false), fakeClient(registered), probe, "")
 	if ok {
 		t.Fatalf("fetchJARRequestURI fetched an unregistered URI; body=%q", body)
 	}
@@ -252,6 +268,55 @@ func TestFetchJARRequestURI_RejectsUnregisteredURI(t *testing.T) {
 	if !strings.Contains(desc, "preregistered") {
 		t.Fatalf("description=%q must mention preregistration", desc)
 	}
+}
+
+// TestResolveJARRequestIfNeeded_RendersThroughTheDriver pins that a
+// JAR-stage rejection reaches the embedder's interaction driver like
+// every other pre-redirect /authorize failure. Under a profile that
+// mandates signed requests every /authorize call carries a request
+// object, so this is the error page the deployment's users actually
+// meet; emitting a raw JSON body there is a visible regression from
+// what the same failure produces one gate later.
+//
+// The nil-JAR branch stands in for the whole family: every rejection in
+// the function goes through the same renderer.
+func TestResolveJARRequestIfNeeded_RendersThroughTheDriver(t *testing.T) {
+	t.Parallel()
+
+	values := url.Values{
+		"request":   {"not.a.jws"},
+		"client_id": {"rp-jar"},
+		"state":     {"state-abc"},
+	}
+	deps := resolved{Deps{Driver: interaction.HTMLDriver{}}}
+
+	t.Run("browser_gets_the_driver_page", func(t *testing.T) {
+		t.Parallel()
+		rec := httptest.NewRecorder()
+		req := jarFetchRequest()
+		req.Header.Set("Accept", "text/html,application/xhtml+xml")
+		_, handled, stop := resolveJARRequestIfNeeded(rec, req, deps, "rp-jar", values)
+		if !handled || !stop {
+			t.Fatalf("handled=%v stop=%v; want the request refused", handled, stop)
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Fatalf("Content-Type=%q want text/html; the driver owns the browser surface", ct)
+		}
+	})
+
+	t.Run("api_caller_keeps_the_json_envelope", func(t *testing.T) {
+		t.Parallel()
+		rec := httptest.NewRecorder()
+		req := jarFetchRequest()
+		_, handled, stop := resolveJARRequestIfNeeded(rec, req, deps, "rp-jar", values)
+		if !handled || !stop {
+			t.Fatalf("handled=%v stop=%v; want the request refused", handled, stop)
+		}
+		code, _ := decodeWireError(t, rec)
+		if code != "invalid_request" {
+			t.Fatalf("error=%q want invalid_request", code)
+		}
+	})
 }
 
 // TestIsJARRequestObjectContentType_Matrix pins the whitelist used by

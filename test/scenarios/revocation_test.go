@@ -393,9 +393,10 @@ func TestScenario_REV_011_RefreshTokenRevokeUnrecognisedHint(t *testing.T) {
 // /oidc/introspect (client_credentials tokens have no end-user subject
 // so /userinfo is not the right verification surface). The OP runs in
 // the opaque access-token format so the substore that backs introspect
-// observes the revoked row directly; the JWT-AT path for
-// client_credentials tokens lacks a "gid" claim so the GrantTombstone
-// branch cannot pin a denylist row to it.
+// observes the revoked row directly. The JWT-AT path is covered
+// separately: a client_credentials token carries no "gid" claim, and the
+// GrantTombstone branch consults the JTI denylist independently of the
+// grant tombstone precisely so a grantless token can still be pinned.
 //
 // Spec: RFC 7009 §2 / RFC 6749 §4.4.
 func TestScenario_REV_012_ClientCredentialsRevokeNoHint(t *testing.T) {
@@ -928,8 +929,9 @@ func mintRevocationRefreshToken(t *testing.T, idPrefix string) (*testkit.Provide
 
 // mintRevocationClientCredentialsToken stands up a cc-only client and
 // mints an opaque access token through grant_type=client_credentials.
-// Opaque AT format is required so /introspect can observe the
-// revocation directly without going through the JTI-denylist path.
+// Opaque AT format keeps this case on the substore-row path so
+// /introspect observes the revocation directly; the JTI-denylist path
+// that backs the JWT format is exercised by its own cases.
 func mintRevocationClientCredentialsToken(t *testing.T, idPrefix string) (*testkit.Provider, *store.Client, string, string) {
 	t.Helper()
 	clientID := idPrefix

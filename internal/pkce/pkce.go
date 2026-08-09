@@ -2,8 +2,8 @@
 // for the authorization_code grant.
 //
 // The OP only accepts the S256 transformation. The "plain" method is rejected
-// by policy regardless of client configuration: §A.12.3 requires it and OAuth
-// 2.1 / FAPI 2.0 forbid plain. Callers therefore never need to thread a
+// by policy regardless of client configuration: OAuth 2.1 and FAPI 2.0 forbid
+// it, and the OP mandates PKCE with no off-switch. Callers therefore never need to thread a
 // method choice through the API; this package validates the challenge format
 // at issuance and the verifier at exchange.
 package pkce

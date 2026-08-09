@@ -99,9 +99,9 @@ type StateRefPayload struct {
 // that caches the token alongside other request state).
 // StateRefSigner is immutable after construction and safe for
 // concurrent use by multiple goroutines.
-// 02-product-design.md §E.2.1 for the security
-// requirements StateRef satisfies (no plaintext secrets, single-use,
-// short TTL, cross-interaction-replay rejection).
+// The security requirements StateRef satisfies: no plaintext secrets
+// in the payload, single-use, short TTL, and rejection of replays
+// across interactions and across factors.
 type StateRefSigner struct {
 	key []byte
 }

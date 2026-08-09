@@ -345,6 +345,90 @@ func TestVerifySelfSigned_MalformedJWKS(t *testing.T) {
 	}
 }
 
+// undecodableJWK is a syntactically valid JWK the JOSE layer cannot
+// represent: X25519 is a real, registered OKP curve that key-agreement
+// deployments publish, and a relying party may well carry one next to
+// its signing key.
+const undecodableJWK = `{"kty":"OKP","crv":"X25519","kid":"kid-x25519",` +
+	`"x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"}`
+
+// jwksWithUndecodableMember serialises a JWK set whose first member is
+// [undecodableJWK] and whose remaining members are the supplied public
+// keys. The undecodable member comes first so a whole-document decode
+// fails before it ever reaches the usable key.
+func jwksWithUndecodableMember(tb testing.TB, keys ...crypto.PublicKey) []byte {
+	tb.Helper()
+	members := make([]string, 0, 1+len(keys))
+	members = append(members, undecodableJWK)
+	for i, k := range keys {
+		raw, err := json.Marshal(josev4.JSONWebKey{Key: k, KeyID: keyIDFor(i), Use: "sig"})
+		if err != nil {
+			tb.Fatalf("json.Marshal: %v", err)
+		}
+		members = append(members, string(raw))
+	}
+	var buf []byte
+	buf = append(buf, `{"keys":[`...)
+	for i, m := range members {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, m...)
+	}
+	return append(buf, `]}`...)
+}
+
+// TestVerifySelfSigned_MixedJWKSAuthenticatesOnUsableKey is the
+// regression for an RP locked out of self_signed_tls_client_auth by a
+// key it does not even authenticate with. RFC 7517 §5 directs an
+// implementation to ignore JWKs it cannot understand; decoding the
+// document as a whole instead rejected the entire keyset the moment one
+// member used a curve this build has no representation for, so a client
+// publishing an X25519 key alongside its EC cert key could not
+// authenticate at all.
+func TestVerifySelfSigned_MixedJWKSAuthenticatesOnUsableKey(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(4),
+		Subject:      pkix.Name{CommonName: "mixed-keyset"},
+		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2125, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+
+	jwks := jwksWithUndecodableMember(t, &priv.PublicKey)
+	if err := mtls.VerifySelfSignedTLSClientAuth(cert, jwks); err != nil {
+		t.Errorf("VerifySelfSignedTLSClientAuth(mixed keyset): %v", err)
+	}
+}
+
+// TestVerifySelfSigned_AllKeysUndecodable keeps the fail-closed end of
+// the skip rule: dropping members the JOSE layer cannot decode must not
+// turn a keyset with nothing usable in it into a pass. There is no
+// thumbprint to compare against, so the call fails exactly as it did
+// before member-wise decoding.
+func TestVerifySelfSigned_AllKeysUndecodable(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeafWith(t, nil)
+	err := mtls.VerifySelfSignedTLSClientAuth(cert, jwksWithUndecodableMember(t))
+	if !errors.Is(err, mtls.ErrJWKSMalformed) {
+		t.Errorf("err=%v want ErrJWKSMalformed", err)
+	}
+}
+
 // TestVerifySelfSigned_EmptyJWKS treats an empty payload as malformed
 // (no keys can possibly match).
 func TestVerifySelfSigned_EmptyJWKS(t *testing.T) {

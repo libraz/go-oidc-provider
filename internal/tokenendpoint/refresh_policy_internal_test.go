@@ -19,6 +19,7 @@ func TestClientPermitsRefresh_PolicyMatrix(t *testing.T) {
 		grantTypes          []string
 		scope               []string
 		strictOfflineAccess bool
+		openIDScopeOptional bool
 		want                bool
 	}{
 		{
@@ -62,6 +63,32 @@ func TestClientPermitsRefresh_PolicyMatrix(t *testing.T) {
 			strictOfflineAccess: true,
 			want:                true,
 		},
+		{
+			name:                "openid missing with openid scope optional",
+			grantTypes:          []string{"authorization_code", "refresh_token"},
+			scope:               []string{"api:read"},
+			openIDScopeOptional: true,
+			want:                true,
+		},
+		{
+			name:                "empty scope with openid scope optional",
+			grantTypes:          []string{"authorization_code", "refresh_token"},
+			openIDScopeOptional: true,
+			want:                true,
+		},
+		{
+			name:                "client grant missing with openid scope optional",
+			grantTypes:          []string{"authorization_code"},
+			scope:               []string{"api:read"},
+			openIDScopeOptional: true,
+		},
+		{
+			name:                "openid present with openid scope optional",
+			grantTypes:          []string{"authorization_code", "refresh_token"},
+			scope:               []string{"openid"},
+			openIDScopeOptional: true,
+			want:                true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -69,12 +96,17 @@ func TestClientPermitsRefresh_PolicyMatrix(t *testing.T) {
 			t.Parallel()
 
 			client := &store.Client{GrantTypes: tt.grantTypes}
-			if got := clientPermitsRefresh(client, tt.scope, tt.strictOfflineAccess); got != tt.want {
+			policy := refreshScopePolicy{
+				StrictOfflineAccess: tt.strictOfflineAccess,
+				OpenIDScopeOptional: tt.openIDScopeOptional,
+			}
+			if got := clientPermitsRefresh(client, tt.scope, policy); got != tt.want {
 				t.Errorf(
-					"clientPermitsRefresh(grants=%v, scope=%v, strict=%t)=%t want %t",
+					"clientPermitsRefresh(grants=%v, scope=%v, strict=%t, openIDOptional=%t)=%t want %t",
 					tt.grantTypes,
 					tt.scope,
 					tt.strictOfflineAccess,
+					tt.openIDScopeOptional,
 					got,
 					tt.want,
 				)

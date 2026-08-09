@@ -25,7 +25,7 @@ rows:
       id_token with three compact-JWS segments and a non-empty
       signature; the JWS header alg is HS256.
     status: out-of-scope
-    out_of_scope_reason: "ES256 sole-issuance policy (002 §J.5 / line 2163: \"ES256 単一\"). HS256 issuance is not supported because the symmetric-key model violates §J.5 and §non-goals (line 2159)."
+    out_of_scope_reason: "The OP signs with ES256 and nothing else: a single fixed algorithm removes the allowlist that downgrade attacks feed on, and leaves the embedder no algorithm choice to get wrong. HS256 issuance is doubly excluded — it is symmetric, so the OP and the RP would share the signing key."
     notes: needs RP simulator + per-client alg pinning.
 
   - id: SIG-002
@@ -36,7 +36,7 @@ rows:
       /authorize?prompt=none for the same client; the flow returns
       code + state.
     status: out-of-scope
-    out_of_scope_reason: "HS256 (and the broader HS* family) is intentionally not supported in v1.0: docs/plans/002-product-design.md §J.5 (line 2248) pins ES256 as the sole issuance alg, and §non-goals (line 2159) excludes the symmetric-key model. Already-OOS rows in this same feature (SIG-001 / SIG-010 / SIG-011 / SIG-012) cite the same product policy. The id_token_hint acceptance path described by SIG-002 has no caller because the OP never issues an HS256 id_token to begin with; if v1.x ever ships symmetric signing, a paired SIG-001 + SIG-002 bind can revisit this."
+    out_of_scope_reason: "HS256 (and the broader HS* family) is intentionally not supported: the OP signs with ES256 alone, and the symmetric-key model would additionally make the OP and the RP share a signing key. SIG-001 / SIG-010 / SIG-011 / SIG-012 are out-of-scope on the same grounds. The id_token_hint acceptance path this row describes has no caller because the OP never issues an HS256 id_token to begin with; a paired SIG-001 + SIG-002 bind can revisit it if symmetric signing ever ships."
 
   - id: SIG-010
     severity: P0
@@ -45,7 +45,7 @@ rows:
       For RS256 / ES256 / PS256, at_hash and c_hash are the left 128
       bits of SHA-256 (base64url, 22 chars).
     status: out-of-scope
-    out_of_scope_reason: ES256-only issuance per 002 §J.5 (line 2248). RS*/PS*/ES384/ES512 are not minted by the OP; only verification-side acceptance is wider (line 2255).
+    out_of_scope_reason: The OP signs with ES256 alone, so RS*/PS*/ES384/ES512 id_tokens are never minted and the hash-claim lengths this row describes have no emission path. Verification-side acceptance is deliberately wider (RP assertions and upstream federation JWTs), but that is a separate surface.
     notes: needs hybrid response_type wiring.
 
   - id: SIG-011
@@ -55,7 +55,7 @@ rows:
       For RS384 / ES384 / PS384, at_hash and c_hash are the left 192
       bits of SHA-384 (base64url, 32 chars).
     status: out-of-scope
-    out_of_scope_reason: ES256-only issuance per 002 §J.5 (line 2248). RS*/PS*/ES384/ES512 are not minted by the OP; only verification-side acceptance is wider (line 2255).
+    out_of_scope_reason: The OP signs with ES256 alone, so RS*/PS*/ES384/ES512 id_tokens are never minted and the hash-claim lengths this row describes have no emission path. Verification-side acceptance is deliberately wider (RP assertions and upstream federation JWTs), but that is a separate surface.
 
   - id: SIG-012
     severity: P0
@@ -64,7 +64,7 @@ rows:
       For RS512 / ES512 / PS512, at_hash and c_hash are the left 256
       bits of SHA-512 (base64url, 43 chars).
     status: out-of-scope
-    out_of_scope_reason: ES256-only issuance per 002 §J.5 (line 2248). RS*/PS*/ES384/ES512 are not minted by the OP; only verification-side acceptance is wider (line 2255).
+    out_of_scope_reason: The OP signs with ES256 alone, so RS*/PS*/ES384/ES512 id_tokens are never minted and the hash-claim lengths this row describes have no emission path. Verification-side acceptance is deliberately wider (RP assertions and upstream federation JWTs), but that is a separate surface.
 
   - id: SIG-013
     severity: P1
@@ -73,7 +73,7 @@ rows:
       For EdDSA, at_hash and c_hash are the left 256 bits of SHA-512
       (base64url, 43 chars).
     status: out-of-scope
-    out_of_scope_reason: "EdDSA / Ed25519 issuance is intentionally not supported in v1.0: docs/plans/002-product-design.md §J.5 (line 2248) pins ES256 as the sole issuance alg. The hash-claim length rules (left-256 bits of SHA-512 for both EdDSA and Ed25519 id_tokens) only apply when the OP actually mints those id_token shapes; with ES256-only issuance there is no caller. Verification-side acceptance is explicitly wider per line 2255 but that is governed by id_token_hint / userinfo verification rows in other features, not by SIG-013/014's signing-side claims."
+    out_of_scope_reason: "EdDSA / Ed25519 issuance is intentionally not supported: the OP signs with ES256 alone. The hash-claim length rules (left-256 bits of SHA-512 for both EdDSA and Ed25519 id_tokens) only apply when the OP actually mints those id_token shapes, so with ES256-only issuance there is no caller. Verification-side acceptance is deliberately wider, but that is governed by the id_token_hint / userinfo verification rows in other features, not by these signing-side claims."
 
   - id: SIG-014
     severity: P1
@@ -82,7 +82,7 @@ rows:
       For Ed25519, at_hash and c_hash are the left 256 bits of
       SHA-512 (base64url, 43 chars).
     status: out-of-scope
-    out_of_scope_reason: "EdDSA / Ed25519 issuance is intentionally not supported in v1.0: docs/plans/002-product-design.md §J.5 (line 2248) pins ES256 as the sole issuance alg. The hash-claim length rules (left-256 bits of SHA-512 for both EdDSA and Ed25519 id_tokens) only apply when the OP actually mints those id_token shapes; with ES256-only issuance there is no caller. Verification-side acceptance is explicitly wider per line 2255 but that is governed by id_token_hint / userinfo verification rows in other features, not by SIG-013/014's signing-side claims."
+    out_of_scope_reason: "EdDSA / Ed25519 issuance is intentionally not supported: the OP signs with ES256 alone. The hash-claim length rules (left-256 bits of SHA-512 for both EdDSA and Ed25519 id_tokens) only apply when the OP actually mints those id_token shapes, so with ES256-only issuance there is no caller. Verification-side acceptance is deliberately wider, but that is governed by the id_token_hint / userinfo verification rows in other features, not by these signing-side claims."
 
   - id: SIG-015
     severity: P2

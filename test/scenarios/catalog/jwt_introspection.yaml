@@ -97,7 +97,7 @@ rows:
       cannot respond with HS256 JWT Introspection response" delivered
       as JSON.
     status: out-of-scope
-    out_of_scope_reason: client_secret_jwt and HS* token-endpoint-auth signing algs are out-of-scope per docs/plans/002-product-design.md (cited in CA-DISC-04). The OP advertises no HS* in token_endpoint_auth_signing_alg_values_supported and registration cannot pin a client to an HMAC introspection-response alg, so the expired-secret rejection path has no caller.
+    out_of_scope_reason: client_secret_jwt and HS* token-endpoint-auth signing algs are both non-goals — a shared signing secret forges assertions in either direction, and the OP signs with ES256 alone (see client_auth#CA-DISC-04). The OP advertises no HS* in token_endpoint_auth_signing_alg_values_supported and registration cannot pin a client to an HMAC introspection-response alg, so the expired-secret rejection path has no caller.
 
   - id: JINT-010
     severity: P0

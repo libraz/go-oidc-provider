@@ -9,8 +9,7 @@ import "time"
 // Note: these names live in a different namespace from
 // [Prompt.Type] (which uses dotted prefixes like "auth.password").
 // Sharing constants between the two would have been ambiguous; the
-// orchestrator keeps them deliberately separate per
-// 02-product-design.md §E.2.3.
+// orchestrator keeps them deliberately separate.
 const (
 	// PromptLogin is the "login" value of the OIDC prompt parameter:
 	// the RP asks the OP to re-authenticate the user.
@@ -34,12 +33,12 @@ const (
 // Prompt is the unit of UI an [op.Authenticator] or [op.Interaction]
 // returns. The SPA reads Prompt verbatim; the [PromptData] type
 // projection determines which concrete fields are safe to expose.
-// Prompt.Type follows the namespace rules in §E.2.3:
+// Prompt.Type follows these namespace rules:
 //   - "auth.*"        — Authenticator-emitted prompts ("auth.password",
 //     "auth.totp", "auth.email_otp.send", "auth.email_otp.verify",
 //     "auth.passkey", "auth.recovery_code", "auth.<myorg>.<factor>.*").
 //   - "consent.*"     — consent screens ("consent.scope").
-//   - "captcha"       — bot-detection prompt (§M.6.1).
+//   - "captcha"       — bot-detection prompt.
 //   - "interaction.*" — orchestrator-driven non-authn prompts
 //     (select_account etc.).
 //   - "<myorg>.*"     — user-extension prompts. The first dotted token
@@ -54,7 +53,8 @@ type Prompt struct {
 	Type string `json:"type"`
 
 	// Data is the typed payload for this prompt. The concrete type
-	// is fixed by Prompt.Type per §E.2 schema.
+	// is fixed one-to-one by Prompt.Type; see the [PromptData]
+	// implementations for the mapping.
 	Data PromptData `json:"data,omitempty"`
 
 	// Inputs is the form fields the SPA renders. Empty means the
@@ -73,8 +73,10 @@ type Prompt struct {
 	//  it).
 	// StateRef MUST NOT carry plaintext secrets (OTP codes, TOTP
 	// shared secrets, recovery codes, email OTP codes) — the rule
-	// applies even when the value is HMAC-signed. See §E.2.1 for
-	// the security requirements.
+	// applies even when the value is HMAC-signed. Implementations
+	// may back StateRef with an HMAC-signed payload or a server-side
+	// store; either is acceptable as long as all of the bindings
+	// above hold.
 	StateRef string `json:"state_ref"`
 
 	// CSRFToken is the per-render value of the __Host-oidc_csrf
@@ -85,14 +87,18 @@ type Prompt struct {
 	// pattern) or a "csrf_token" form field (the SSR pattern).
 	// The field is empty for non-prompt-stage flows that the
 	// orchestrator does not protect with the double-submit pattern.
-	// JSON-mode SPAs may ignore it; they read the cookie via
-	// document.cookie (when the embedder strips the HttpOnly flag)
-	// or, more commonly, take the cookie's value from the prompt
-	// envelope and echo it back in the X-CSRF-Token header.
+	//
+	// This field is the only way a JSON-mode SPA obtains the value:
+	// the cookie is set HttpOnly with no option to relax it, so
+	// document.cookie cannot see it. Read the token here and echo it
+	// back in the X-CSRF-Token header. Keeping the cookie half of the
+	// pair unreadable to script is what makes the double-submit
+	// meaningful — a token an injected script could read is a token
+	// it could also replay.
 	CSRFToken string `json:"csrf_token,omitempty"`
 
 	// Locale is the BCP 47 tag the OP resolved for this prompt
-	// through the §L.2 priority chain (PreferredLocaleStore →
+	// through the locale priority chain (PreferredLocaleStore →
 	// ui_locales → __Host-oidc_locale cookie → Accept-Language →
 	// default). The orchestrator stamps it before [Driver.Render]
 	// so SPAs can set <html lang="..."> and pick translation

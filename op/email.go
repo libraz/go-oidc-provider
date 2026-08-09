@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -96,6 +97,19 @@ type EmailOTPConfig struct {
 	// CodeTTL is the acceptance window from issuance to verify.
 	// Zero falls back to [DefaultEmailOTPCodeTTL].
 	CodeTTL time.Duration
+
+	// LockoutStore wires the cross-factor brute-force counter, the
+	// same one [WithAuthnLockoutStore] attaches to the built-in
+	// [StepEmailOTP]. Supply it whenever the deployment sets that
+	// option: a directly constructed authenticator is otherwise
+	// outside the shared budget, and an attacker who has burned
+	// their TOTP allowance can pivot to email OTP for a fresh one.
+	//
+	// Nil leaves only the per-record FailedCount on the challenge,
+	// which budgets email OTP alone. Pass the same
+	// [store.AuthnLockoutStore] handed to [WithAuthnLockoutStore] so
+	// both paths count against one record.
+	LockoutStore store.AuthnLockoutStore
 }
 
 // DefaultEmailOTPCodeTTL is the acceptance window applied when
@@ -108,8 +122,7 @@ const DefaultEmailOTPCodeTTL = emailotp.DefaultCodeTTL
 // [FactorEmailOTP] factor. Embedders register the returned value
 // through [WithAuthenticators] alongside any other factors they
 // support.
-// Behaviour highlights (full design in
-// 02-product-design.md §E.2):
+// Behaviour highlights:
 //   - Two-screen UX: "auth.email_otp.send" collects the address;
 //     "auth.email_otp.verify" collects the 6-digit code.
 //   - Constant shape: the verify prompt is emitted regardless of
@@ -124,6 +137,10 @@ const DefaultEmailOTPCodeTTL = emailotp.DefaultCodeTTL
 //   - Single-use: the persisted record is deleted on a successful
 //     verify so a replay of the code (e.g., from a leaked SPA log)
 //     is rejected on the next attempt.
+//   - Cross-factor budget: set [EmailOTPConfig.LockoutStore] and the
+//     factor shares the per-subject counter every other built-in
+//     second factor consults, so guesses cannot be reset by pivoting
+//     between factors.
 func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nolint:ireturn,nolintlint // returns the public Authenticator interface so embedders can pass the result to WithAuthenticators without a concrete-type leak.
 	// The internal NewAuthenticator nil-checks its own Mailer, but
 	// the public Mailer is wrapped through emailMailerAdapter — a
@@ -135,13 +152,50 @@ func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nol
 		return nil, emailotp.ErrMailerRequired
 	}
 	clk := emailOTPClock(cfg.Clock)
-	return emailotp.NewAuthenticator(emailotp.Config{
+	counter, err := emailOTPLockout(cfg.LockoutStore, clk)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := emailotp.NewAuthenticator(emailotp.Config{
 		Mailer:  emailMailerAdapter{m: cfg.Mailer},
 		Store:   cfg.Store,
 		Users:   cfg.Users,
 		Clock:   clk,
 		CodeTTL: cfg.CodeTTL,
 	})
+	if err != nil {
+		return nil, err
+	}
+	if counter == nil {
+		return auth, nil
+	}
+	return auth.WithLockout(counter), nil
+}
+
+// emailOTPLockout builds the cross-factor counter for a directly
+// constructed authenticator. An unset store leaves the factor on its
+// per-record counter alone; a typed-nil store is a configuration
+// mistake rather than an opt-out, and is refused here instead of
+// silently disabling the gate at the first guess.
+func emailOTPLockout(lockoutStore store.AuthnLockoutStore, clk timex.Clock) (*lockout.Counter, error) {
+	if lockoutStore == nil {
+		return nil, nil //nolint:nilnil // documented "no cross-factor counter" signal
+	}
+	if isNilLike(lockoutStore) {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "EmailOTPConfig.LockoutStore holds a typed-nil AuthnLockoutStore",
+		}
+	}
+	counter, err := lockout.New(lockoutStore, clk)
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "EmailOTPConfig.LockoutStore rejected by the cross-factor counter",
+			Cause:       err,
+		}
+	}
+	return counter, nil
 }
 
 // emailMailerAdapter bridges the public [Mailer] surface to the

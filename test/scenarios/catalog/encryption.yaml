@@ -69,17 +69,27 @@ rows:
     severity: P1
     spec: OIDC Discovery §3
     behaviour: |
-      When [op.WithEncryptionKeyset] is configured the discovery
-      document MUST emit the eight encryption-related arrays:
+      The discovery document MUST advertise each encryption array on
+      the capability it describes.
+
+      The outbound arrays are encrypted to a key from the relying
+      party's own JWKS, so they MUST be emitted whether or not
+      [op.WithEncryptionKeyset] is configured:
       id_token_encryption_alg_values_supported,
       id_token_encryption_enc_values_supported,
-      request_object_encryption_alg_values_supported,
-      request_object_encryption_enc_values_supported,
-      userinfo_encryption_alg_values_supported,
-      userinfo_encryption_enc_values_supported,
+      userinfo_encryption_alg_values_supported and
+      userinfo_encryption_enc_values_supported unconditionally;
       authorization_encryption_alg_values_supported and
-      authorization_encryption_enc_values_supported. When the option
-      is omitted the same fields MUST be absent (omitempty).
+      authorization_encryption_enc_values_supported when JARM is
+      enabled; introspection_encryption_alg_values_supported and
+      introspection_encryption_enc_values_supported when introspection
+      is enabled.
+
+      The inbound arrays describe a ciphertext addressed to the OP
+      itself, so request_object_encryption_alg_values_supported and
+      request_object_encryption_enc_values_supported MUST be emitted
+      only when [op.WithEncryptionKeyset] is configured AND JAR is
+      enabled, and MUST be absent otherwise (omitempty).
     status: active
 
   - id: ENC-020
@@ -179,8 +189,10 @@ rows:
       document's request_object_encryption_alg_values_supported MUST
       be a subset of [op.SupportedEncryptionAlgs]; the embedder may
       narrow it via [op.WithSupportedEncryptionAlgs] but MUST NOT
-      extend it. Without an encryption keyset all
-      *_encryption_*_values_supported arrays MUST be absent.
+      extend it. Without an encryption keyset the
+      request_object_encryption_*_values_supported arrays MUST be
+      absent, while the outbound arrays stay published because their
+      recipient key comes from the relying party.
     status: active
 
   - id: ENC-035

@@ -119,10 +119,11 @@ type Input struct {
 
 	// EncryptionAlgsSupported lists the JWE alg values the OP
 	// advertises across the *_encryption_alg_values_supported
-	// fields when [Features.Encryption] is true. The op layer
-	// supplies the closed v0.9.1 default
+	// fields. The op layer supplies the closed v0.9.1 default
 	// (op.SupportedEncryptionAlgs) or the embedder's narrowed
-	// subset (op.WithSupportedEncryptionAlgs).
+	// subset (op.WithSupportedEncryptionAlgs). An empty list
+	// suppresses every *_encryption_* array: the OP negotiates no
+	// JWE at all.
 	EncryptionAlgsSupported []string
 
 	// EncryptionEncsSupported mirrors EncryptionAlgsSupported for
@@ -205,6 +206,16 @@ type Features struct {
 	Revoke              bool
 	DynamicRegistration bool
 
+	// AuthorizeEndpoint reports whether the OP mounts the browser
+	// authorization endpoint, and with it the surfaces that only exist
+	// behind it: RP-Initiated Logout and Back-Channel Logout. The op
+	// layer wires the flag from the same predicate that decides the
+	// router mount, so the advertisement cannot drift from the routing
+	// table. A machine-to-machine OP (client_credentials only) leaves it
+	// false and the discovery document stops claiming endpoints that
+	// would answer 404.
+	AuthorizeEndpoint bool
+
 	// DeviceCodeGrant reports whether the OP is configured to accept
 	// the RFC 8628 device_code grant. The discovery builder uses the
 	// flag to gate emission of the device_authorization_endpoint
@@ -223,14 +234,21 @@ type Features struct {
 	// and substore presence.
 	CIBAGrant bool
 
-	// Encryption reports whether the OP has a JWE encryption keyset
-	// configured (op.WithEncryptionKeyset). When true the discovery
-	// builder emits the *_encryption_alg_values_supported and
-	// *_encryption_enc_values_supported arrays for the targets the
-	// OP serves: id_token / userinfo unconditionally,
-	// request_object only when JAR is also on, JARM only when JARM
-	// is also on, introspection only when Introspect is also on.
-	Encryption bool
+	// EncryptionInbound reports whether the OP holds a JWE decryption
+	// keyset (op.WithEncryptionKeyset). It gates the
+	// request_object_encryption_* arrays and nothing else: an encrypted
+	// request object is addressed to the OP's own key, so without one
+	// the OP cannot accept any.
+	//
+	// The outbound arrays (id_token / userinfo / authorization /
+	// introspection) are NOT gated on this flag. Those responses are
+	// encrypted to a key from the relying party's JWKS, which the OP
+	// never has to own, so an OP with no keyset of its own can still
+	// serve every one of them. They are gated on
+	// [Input.EncryptionAlgsSupported] / [Input.EncryptionEncsSupported]
+	// being non-empty, plus their own protocol feature where one
+	// applies (JARM, Introspect).
+	EncryptionInbound bool
 }
 
 // ValidateIssuer enforces the OIDC Discovery 1.0 §3 / FAPI 2.0 §5.4
@@ -448,34 +466,34 @@ func applyCIBAFeature(in Input, doc *Document) {
 
 // applyEncryptionFeature publishes the five
 // *_encryption_alg_values_supported and *_encryption_enc_values_supported
-// arrays when the OP has a JWE encryption keyset configured
-// (op.WithEncryptionKeyset). The id_token / userinfo arrays are
-// emitted unconditionally; the request_object / authorization (JARM)
-// / introspection arrays are gated on their respective protocol
-// features so a deployment that disables JAR / JARM / Introspect
-// keeps the field absent from the wire.
+// pairs, each on the capability that actually decides whether the OP
+// can serve it.
+//
+// The direction matters. id_token / userinfo / authorization (JARM) /
+// introspection are encrypted *to* the relying party, using a key taken
+// from that party's JWKS, so the OP needs no encryption key of its own
+// to serve them; they are advertised whenever the OP negotiates JWE at
+// all, gated only by their own protocol feature where one applies.
+// request_object travels the other way — it is encrypted to the OP —
+// so it is advertised only when the OP holds a decryption keyset
+// ([Features.EncryptionInbound]) and JAR is enabled.
 //
 // The alg / enc lists are the embedder's narrowed subset (or the
-// closed v0.9.1 default when no narrowing was applied). Empty (but
-// non-nil) lists are explicitly emitted so embedders who deliberately
-// disable negotiation can advertise the empty array — not the same
-// as omitting the field entirely.
+// closed v0.9.1 default when no narrowing was applied). An empty list
+// on either side means no pair can be negotiated, so nothing is
+// advertised.
 func applyEncryptionFeature(in Input, doc *Document) {
-	if !in.Features.Encryption {
+	algs := slices.Clone(in.EncryptionAlgsSupported)
+	encs := slices.Clone(in.EncryptionEncsSupported)
+	if len(algs) == 0 || len(encs) == 0 {
 		return
 	}
-	algs := append([]string(nil), in.EncryptionAlgsSupported...)
-	encs := append([]string(nil), in.EncryptionEncsSupported...)
 
 	doc.IDTokenEncryptionAlgValuesSupported = algs
 	doc.IDTokenEncryptionEncValuesSupported = encs
 	doc.UserInfoEncryptionAlgValuesSupported = algs
 	doc.UserInfoEncryptionEncValuesSupported = encs
 
-	if in.Features.JAR {
-		doc.RequestObjectEncryptionAlgValuesSupported = algs
-		doc.RequestObjectEncryptionEncValuesSupported = encs
-	}
 	if in.Features.JARM {
 		doc.AuthorizationEncryptionAlgValuesSupported = algs
 		doc.AuthorizationEncryptionEncValuesSupported = encs
@@ -484,20 +502,27 @@ func applyEncryptionFeature(in Input, doc *Document) {
 		doc.IntrospectionEncryptionAlgValuesSupported = algs
 		doc.IntrospectionEncryptionEncValuesSupported = encs
 	}
+	if in.Features.EncryptionInbound && in.Features.JAR {
+		doc.RequestObjectEncryptionAlgValuesSupported = algs
+		doc.RequestObjectEncryptionEncValuesSupported = encs
+	}
 }
 
-// newBaseDocument seeds the document with the fields that do not depend
-// on feature toggles. Subsequent helpers layer feature-conditional
-// fields on top.
+// newBaseDocument seeds the document with the fields every OP publishes
+// regardless of its feature toggles, then layers the authorization-
+// endpoint family on top ([applyAuthorizeEndpoint]). Subsequent helpers
+// add the remaining feature-conditional fields.
 func newBaseDocument(in Input) Document {
-	return Document{
-		Issuer:                 in.Issuer,
-		AuthorizationEndpoint:  join(in.Issuer, in.MountPrefix, in.Endpoints.Authorize),
-		TokenEndpoint:          join(in.Issuer, in.MountPrefix, in.Endpoints.Token),
-		UserInfoEndpoint:       join(in.Issuer, in.MountPrefix, in.Endpoints.UserInfo),
-		JWKSURI:                join(in.Issuer, in.MountPrefix, in.Endpoints.JWKS),
-		EndSessionEndpoint:     join(in.Issuer, in.MountPrefix, in.Endpoints.EndSession),
-		ResponseTypesSupported: []string{"code"},
+	doc := Document{
+		Issuer:           in.Issuer,
+		TokenEndpoint:    join(in.Issuer, in.MountPrefix, in.Endpoints.Token),
+		UserInfoEndpoint: join(in.Issuer, in.MountPrefix, in.Endpoints.UserInfo),
+		JWKSURI:          join(in.Issuer, in.MountPrefix, in.Endpoints.JWKS),
+		// RFC 8414 §2 marks response_types_supported REQUIRED with no
+		// carve-out, so the member stays on the wire even for an OP that
+		// mounts no authorization endpoint. The empty array is the honest
+		// value there: no response_type is accepted at all.
+		ResponseTypesSupported: []string{},
 		// OIDC Core §3.1.2.1 / Form Post Response Mode 1.0: "query" is
 		// the implicit default for response_type=code; "form_post"
 		// delivers the same parameters via a self-submitting POST body
@@ -512,9 +537,33 @@ func newBaseDocument(in Input) Document {
 		ScopesSupported:                   append([]string(nil), in.ScopesSupported...),
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: defaultAuthMethods(in.AuthMethodsSupported),
-		BackchannelLogoutSupported:        true,
 		BackchannelLogoutSessionSupported: false,
 	}
+	applyAuthorizeEndpoint(in, &doc)
+	return doc
+}
+
+// applyAuthorizeEndpoint publishes the members that only carry meaning
+// when the OP mounts the browser authorization endpoint: the endpoint
+// URL, the response_type values it accepts, the RP-Initiated Logout
+// endpoint, and the Back-Channel Logout capability flag. A logout token
+// is only ever emitted from a session teardown that starts at
+// /end_session, which in turn exists only alongside /authorize, so the
+// three travel together.
+//
+// RFC 8414 §2 makes authorization_endpoint REQUIRED "unless no grant
+// types are supported that use the authorization endpoint" — which is
+// exactly this gate. Without it a machine-to-machine deployment would
+// advertise routes its router never registered and hand the RP a bare
+// 404 with no OAuth error body.
+func applyAuthorizeEndpoint(in Input, doc *Document) {
+	if !in.Features.AuthorizeEndpoint {
+		return
+	}
+	doc.AuthorizationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Authorize)
+	doc.EndSessionEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.EndSession)
+	doc.ResponseTypesSupported = []string{"code"}
+	doc.BackchannelLogoutSupported = true
 }
 
 // subjectTypesFor returns the subject_types_supported slice. OIDC Core

@@ -126,10 +126,10 @@ func TestVerify_NonceRejected(t *testing.T) {
 }
 
 // TestVerify_NoNonceVerifier: when the embedder did not configure a
-// NonceVerifier (the v0.x default), proofs are accepted regardless
-// of the nonce claim — present, absent, or empty all pass through.
-// Confirms the v1.0 addition is opt-in and does not implicitly
-// tighten existing deployments.
+// NonceVerifier (the default), proofs are accepted regardless of the
+// nonce claim — present, absent, or empty all pass through. Confirms
+// the nonce gate is opt-in and does not implicitly tighten a
+// deployment that never asked for it.
 func TestVerify_NoNonceVerifier(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)

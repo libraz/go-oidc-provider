@@ -5,7 +5,7 @@
 // parameter and supports the two grant types this library exposes in v1.0:
 //
 //   - authorization_code (RFC 6749 §4.1.3, OIDC Core §3.1.3.3) — PKCE is
-//     mandatory per the product design's §A.12.3, so the handler rejects
+//     mandatory for every client with no off-switch, so the handler rejects
 //     any code exchange that arrives without a code_verifier.
 //
 //   - refresh_token (RFC 6749 §6) — every successful exchange rotates the

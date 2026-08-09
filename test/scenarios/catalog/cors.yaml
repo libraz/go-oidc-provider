@@ -16,8 +16,20 @@ description: |
   Cross-Origin Resource Sharing for OP endpoints. Public endpoints
   (discovery, JWKS) ship a "any origin" profile. Credentialed
   endpoints (token, userinfo, introspection, revocation, device
-  authorization) ship the per-client allowlisted profile gated by the
-  embedder's clientBasedCORS hook.
+  authorization) ship the Strict-CORS profile.
+
+  OP Strict-CORS policy: the allowlist is static — everything the
+  embedder passes to op.WithCORSOrigins, plus the OP's own issuer
+  origin and the origin of every redirect_uri on a statically
+  registered client. An allowlisted Origin gets its canonical form
+  echoed back on Access-Control-Allow-Origin (never the raw header,
+  which may differ in case, default port or trailing dot) together
+  with Access-Control-Allow-Credentials: true; "*" is never emitted
+  because it is mutually exclusive with credentials. A credentialed
+  request from an origin outside the allowlist is refused at preflight
+  with 403 and no CORS headers, never silently allowed. Vary: Origin
+  is stamped unconditionally so a shared cache cannot serve one
+  origin's response to another.
 
 rows:
   - id: COR-001
@@ -53,7 +65,7 @@ rows:
       clientBasedCORS(ctx, client) returns true; the preflight is
       always open with GET, POST.
     status: out-of-scope
-    out_of_scope_reason: "The OP gates CORS on credentialed endpoints with a static allowlist (op.WithCORSOrigins) per plan 002 §F.4, not a per-client clientBasedCORS(ctx, client) hook. Adding the dynamic hook would expand the per-client config surface and the middleware decision branch for a rare deployment shape: most embedders register a small set of trusted SPA origins once at boot. Revisit if multi-tenant SaaS embedders need per-tenant CORS gating."
+    out_of_scope_reason: "The OP gates CORS on credentialed endpoints with a static allowlist (op.WithCORSOrigins plus the origins derived from each client's registered redirect_uri), not a per-client clientBasedCORS(ctx, client) hook. Adding the dynamic hook would expand the per-client config surface and the middleware decision branch for a rare deployment shape: most embedders register a small set of trusted SPA origins once at boot. Revisit if multi-tenant SaaS embedders need per-tenant CORS gating."
 
   - id: COR-011
     severity: P0
@@ -139,7 +151,7 @@ rows:
 
   - id: COR-050
     severity: P0
-    spec: plan 002 §F.4 / W3C CORS preflight
+    spec: W3C CORS preflight / OP Strict-CORS policy
     behaviour: |
       Strict-CORS preflight on a credentialed endpoint (/token,
       /userinfo, /interaction/*, /revoke, /end_session, ...) from an
@@ -153,7 +165,7 @@ rows:
 
   - id: COR-051
     severity: P0
-    spec: plan 002 §F.4
+    spec: OP Strict-CORS policy
     behaviour: |
       Strict-CORS preflight on a credentialed endpoint from an Origin
       NOT in the allowlist is rejected with 403 and no CORS response
@@ -163,7 +175,7 @@ rows:
 
   - id: COR-052
     severity: P0
-    spec: plan 002 §F.4
+    spec: OP Strict-CORS policy
     behaviour: |
       Actual (non-preflight) cross-origin request on a credentialed
       endpoint stamps Access-Control-Allow-Origin only when the Origin

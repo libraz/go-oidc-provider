@@ -4,18 +4,39 @@ import "time"
 
 // Default polling discipline parameters per OIDC CIBA Core 1.0 §11.
 // The token endpoint clamps incoming polls below [DefaultInterval]
-// to slow_down, doubles the effective interval on each violation
-// (no upper cap; the record's TTL is the hard stop), rejects
-// sub-[FastPollFloor] repeats once per offence even when the
-// previous response was authorization_pending, and locks the record
-// to access_denied once the violation counter reaches
+// to slow_down, raises the effective interval by [SlowDownIncrement]
+// on each violation (no upper cap; the record's TTL is the hard
+// stop), rejects sub-[FastPollFloor] repeats once per offence even
+// when the previous response was authorization_pending, and locks the
+// record to access_denied once the violation counter reaches
 // [MaxPollViolations].
 const (
-	// DefaultInterval is the seed value of the slow_down doubling
-	// rule and the value the OP advertises in the bc-authorize
-	// response so a well-behaved client never triggers slow_down on
-	// its first poll.
+	// DefaultInterval is the seed value of the slow_down ladder and
+	// the value the OP advertises in the bc-authorize response so a
+	// well-behaved client never triggers slow_down on its first
+	// poll.
 	DefaultInterval = 5 * time.Second
+
+	// SlowDownIncrement is the amount the effective interval grows
+	// by on every slow_down. CIBA Core §11 instructs the client to
+	// increase its own interval by five seconds for this and all
+	// subsequent requests, so the OP's bar MUST grow by the same
+	// amount: any steeper escalation outruns the interval a
+	// compliant client actually observes, and the client is then
+	// strike-counted out of the flow for polling exactly as
+	// instructed.
+	SlowDownIncrement = 5 * time.Second
+
+	// IntervalTolerance is how far a poll may undershoot the
+	// effective interval without earning slow_down. The OP measures
+	// the gap between arrivals while the client measures the gap
+	// between sends, so scheduler and network jitter routinely land
+	// an on-time poll marginally early; a strict comparison would
+	// flag roughly half of them and accumulate strikes against a
+	// client that never polled faster than it was told to.
+	// [FastPollFloor] stays an absolute floor, so the tolerance
+	// cannot admit a tight polling loop.
+	IntervalTolerance = 1 * time.Second
 
 	// DefaultExpiresIn is the auth_req_id lifetime advertised on the
 	// bc-authorize response and stamped on the substore record.
@@ -62,8 +83,10 @@ const (
 
 	// PollDecisionSlowDown means the client polled inside the
 	// current interval and MUST back off. The wire form is
-	// slow_down per CIBA Core §11; the token endpoint also doubles
-	// the client's effective interval before the next poll.
+	// slow_down per CIBA Core §11; the token endpoint also raises
+	// the client's effective interval by [SlowDownIncrement] before
+	// the next poll, matching the increase the spec asks the client
+	// to apply.
 	PollDecisionSlowDown
 
 	// PollDecisionAccessDenied means the user explicitly rejected
@@ -128,11 +151,13 @@ type PollInput struct {
 
 	// EffectiveInterval is the interval the client is currently
 	// expected to observe. It starts at the value the bc-authorize
-	// response advertised ([DefaultInterval]) and doubles
-	// each time [DecidePoll] returns [PollDecisionSlowDown].
-	// Callers persist the doubled value alongside the record; the
-	// substore keeps it in [CIBARequest.Interval] so a later poll
-	// observes the elevated bar.
+	// response advertised ([DefaultInterval]) and grows by
+	// [SlowDownIncrement] each time [DecidePoll] returns
+	// [PollDecisionSlowDown]. Callers persist the raised value
+	// alongside the record; the substore keeps it in
+	// [CIBARequest.Interval] so a later poll observes the elevated
+	// bar. A poll landing within [IntervalTolerance] of the bar
+	// counts as on time.
 	EffectiveInterval time.Duration
 
 	// ExpiresAt is the wall-clock time the record becomes invalid.
@@ -177,7 +202,7 @@ type PollInput struct {
 // substore's IncrementPollViolation call.
 //
 // NextInterval is meaningful only when Decision is
-// [PollDecisionSlowDown]; it is the doubled value the next poll's
+// [PollDecisionSlowDown]; it is the raised value the next poll's
 // gate compares against.
 //
 // CountThisAsViolation is true exactly when slow_down fires; the
@@ -202,9 +227,9 @@ type PollOutput struct {
 //     reason="poll_abuse").
 //  5. Now − LastPolledAt < [FastPollFloor] (only when a previous
 //     poll exists) → slow_down (CountThisAsViolation=true,
-//     NextInterval=double of EffectiveInterval).
-//  6. Now − LastPolledAt < EffectiveInterval (only when a previous
-//     poll exists) → slow_down (same).
+//     NextInterval=EffectiveInterval+[SlowDownIncrement]).
+//  6. Now − LastPolledAt < EffectiveInterval − [IntervalTolerance]
+//     (only when a previous poll exists) → slow_down (same).
 //  7. Approved → emit.
 //  8. Otherwise → authorization_pending.
 //
@@ -231,7 +256,7 @@ func DecidePoll(in PollInput) PollOutput {
 	}
 	if !in.LastPolledAt.IsZero() {
 		gap := in.Now.Sub(in.LastPolledAt)
-		if gap < FastPollFloor || gap < in.EffectiveInterval {
+		if gap < FastPollFloor || gap < intervalBar(in.EffectiveInterval) {
 			return PollOutput{
 				Decision:             PollDecisionSlowDown,
 				NextInterval:         nextInterval(in.EffectiveInterval),
@@ -245,13 +270,27 @@ func DecidePoll(in PollInput) PollOutput {
 	return PollOutput{Decision: PollDecisionAuthorizationPending}
 }
 
-// nextInterval doubles current per the CIBA Core §11 doubling rule.
-// A zero or negative current value falls back to [DefaultInterval]
-// so the discipline recovers from an embedder that mis-seeded the
-// substore record.
+// nextInterval raises current by [SlowDownIncrement], the same step
+// CIBA Core §11 tells the client to apply when it sees slow_down, so
+// the OP's bar and the client's own timer stay in lockstep. A zero or
+// negative current value falls back to [DefaultInterval] so the
+// discipline recovers from an embedder that mis-seeded the substore
+// record.
 func nextInterval(current time.Duration) time.Duration {
 	if current <= 0 {
 		return DefaultInterval
 	}
-	return current * 2
+	return current + SlowDownIncrement
+}
+
+// intervalBar returns the shortest gap that still clears the interval
+// gate: the effective interval less [IntervalTolerance], floored at
+// zero so a mis-seeded interval leaves [FastPollFloor] as the only
+// gate rather than admitting every poll.
+func intervalBar(effective time.Duration) time.Duration {
+	bar := effective - IntervalTolerance
+	if bar < 0 {
+		return 0
+	}
+	return bar
 }

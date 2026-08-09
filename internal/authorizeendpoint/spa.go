@@ -93,12 +93,27 @@ func newSPAShellHandler(deps resolved) http.Handler {
 // derive it from the .html extension because http.ServeFile only
 // stamps Content-Type when the header is absent and the embedder may
 // have wrapped the handler in middleware that pre-populates it.
+//
+// Content-Security-Policy is the one header the driver stamps and this
+// handler cannot: the shell loads the embedder's own bundle, so the
+// script-src / connect-src / style-src the policy would have to admit
+// are unknown here and any fixed policy would either break the bundle
+// or be too loose to be worth stamping. The embedder owns the shell's
+// CSP, which is why StaticDir is documented as embedder-controlled.
 func stampSPAShellHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", spaCacheControl)
+	h.Set("Pragma", "no-cache")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("X-Content-Type-Options", "nosniff")
+	// same-origin (not no-referrer), matching HTMLDriver.Render. The
+	// shell URL carries the interaction uid, so a full referrer must
+	// not cross an origin boundary; no-referrer would go further but
+	// makes the browser serialize the Origin header of the SPA's own
+	// state-changing fetches as "null" (Fetch "Append a request Origin
+	// header" §3), which the interaction CSRF Origin gate then rejects.
+	h.Set("Referrer-Policy", "same-origin")
 }
 
 // newSPAAssetHandler returns the HTTP handler that serves the SPA

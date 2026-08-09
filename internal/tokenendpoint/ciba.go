@@ -38,11 +38,9 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"grant_type is not supported")
 		return
 	}
-	dpopOut, ok := verifyTokenDPoP(w, r, deps)
-	if !ok {
-		return
-	}
-	client, _, ok := authenticate(ctx, w, r, deps)
+	// Proof verification, client authentication, and the proof's
+	// replay marking run in the order [authenticateWithDPoP] documents.
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
 	if !ok {
 		return
 	}
@@ -109,7 +107,7 @@ func parseCIBARequest(w http.ResponseWriter, r *http.Request) (cibaInputs, bool)
 // applyCIBAPollDecision computes the polling decision per CIBA
 // Core §11 and short-circuits the wire response on every non-emit
 // branch. The helper also stamps the LastPolledAt observation
-// (for the next slow_down ladder step), persists the doubled
+// (for the next slow_down ladder step), persists the raised
 // interval on slow_down via [store.CIBARequestStore.RecordPoll], and triggers
 // the poll-abuse lockout when the strike counter saturates. It
 // returns true when the decision is "emit" — the only branch that
@@ -229,6 +227,11 @@ func lookupCIBARequest(
 	authReqID, clientID string,
 ) (*store.CIBARequest, bool) {
 	rec, err := deps.CIBARequests.FindByAuthReqID(ctx, authReqID)
+	if err == nil && rec == nil {
+		// A nil record alongside a nil error violates the store contract;
+		// an auth_req_id the backend cannot produce is treated as unknown.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			emitCIBARejectWithExtras(ctx, deps, clientID, errExpiredToken, map[string]any{
@@ -358,6 +361,11 @@ func consumeCIBARequest(
 	authReqID string,
 ) (*store.CIBARequest, bool) {
 	consumed, err := deps.CIBARequests.Consume(ctx, authReqID)
+	if err == nil && consumed == nil {
+		// A nil record alongside a nil error violates the store contract;
+		// without the consumed record there is nothing to issue against.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrAlreadyConsumed):
@@ -616,9 +624,9 @@ func emitCIBARejectWithExtras(ctx context.Context, deps Deps, clientID, reason s
 }
 
 // emitCIBASlowDown logs a slow_down rejection alongside the
-// rejection event so SOC tooling can see the doubling ladder
-// without parsing the audit name. effective is the bar before
-// doubling; next is the elevated bar.
+// rejection event so SOC tooling can see the ladder step
+// without parsing the audit name. effective is the bar the poll was
+// measured against; next is the raised bar.
 func emitCIBASlowDown(ctx context.Context, deps Deps, clientID string, effective, next time.Duration) {
 	deps.audit().Emit(ctx, audit.Event{
 		Name:     ciba.AuditTokenSlowDown,

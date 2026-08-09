@@ -140,21 +140,29 @@ func (a *Authenticator) WithCloneDetectionHandler(h CloneDetectionHandler) *Auth
 // Type implements [authn.Authenticator]. Always returns [authn.FactorPasskey].
 func (*Authenticator) Type() authn.FactorType { return authn.FactorPasskey }
 
-// AAL implements [authn.Authenticator]. v1.0 passkeys default to AAL2
-// even when user-verification is set — the conservative reading of
-// NIST SP 800-63B §5.1.7 documented on [authn.AAL] (passkeys default to
-// AAL2 unless the deployment explicitly raises the level on a
-// hardware-attested cross-platform key). The orchestrator takes the
-// maximum across factors when computing the session AAL.
+// AAL implements [authn.Authenticator]. The returned level is the
+// ceiling a passkey assertion can reach, not a promise every assertion
+// reaches it: AAL2 requires the user-verification gesture that turns
+// proof of possession into two factors, and under
+// [Config.UserVerification] = "preferred" an authenticator MAY answer
+// with a presence-only assertion. The per-assertion UV flag rides
+// [interaction.Result.UserVerified] onto [authn.Factor.UserVerified],
+// and [authn.Factor.EffectiveAAL] drops a UV-less assertion back to
+// AAL1 there — so a deployment that must have AAL2 from every login
+// sets [Config.UserVerification] to "required".
+//
+// The ceiling stays AAL2 rather than AAL3 per the conservative reading
+// of NIST SP 800-63B §5.1.7 documented on [authn.AAL]: reaching AAL3
+// takes a hardware-attested cross-platform key the deployment vouches
+// for. The orchestrator takes the maximum across factors when computing
+// the session AAL.
 func (*Authenticator) AAL() authn.AAL { return authn.AAL2 }
 
-// AMR implements [authn.Authenticator]. The WebAuthn user-verification bit
-// drives the runtime amr value: a user-verified assertion contributes
-// "hwk" (hardware key with verified user) and a presence-only assertion
-// contributes "swk". v1.0 reports the static value "hwk" because the
-// configured [Verifier] sets UserVerification = "preferred"; deployments
-// that intentionally accept presence-only assertions should run a
-// separate adapter instance with a different AMR string.
+// AMR implements [authn.Authenticator]. The value is the RFC 8176 token
+// for the strongest ceremony the adapter drives; the runtime token is
+// picked per assertion by [authn.Factor.AMRValue] from the UV flag the
+// Result carried — "hwk" (hardware key with verified user) when the
+// authenticator verified the user, "swk" when it only proved presence.
 func (*Authenticator) AMR() string { return "hwk" }
 
 // Prompts implements [authn.Authenticator]. The adapter emits a single

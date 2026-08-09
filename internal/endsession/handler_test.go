@@ -52,6 +52,12 @@ type harness struct {
 	clientID       string
 	postLogoutURI  string
 	audit          *endSessionAuditRecorder
+
+	// deps is the dependency set the mounted handler was built from.
+	// Rows that need a variant handler (a pairwise subject projector,
+	// say) copy it, override the one field they care about, and
+	// re-mount through [harness.withSubjectProjector].
+	deps endsession.Deps
 }
 
 type endSessionAuditRecorder struct {
@@ -163,6 +169,7 @@ func newHarness(t *testing.T) *harness {
 		clientID:       clientID,
 		postLogoutURI:  postLogout,
 		audit:          auditRecorder,
+		deps:           deps,
 	}
 }
 
@@ -984,6 +991,10 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
 	}
+	// The fan-out is detached from the request, so the delivery may
+	// still be in flight when the response lands. Draining is what
+	// establishes the happens-before edge for the captured values.
+	drainFanOut(t, coord)
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("deliverer called %d times, want 1", got)
 	}

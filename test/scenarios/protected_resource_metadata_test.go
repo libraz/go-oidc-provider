@@ -124,14 +124,14 @@ func TestScenario_PRM_004_CrossOriginFetchable(t *testing.T) {
 	}
 }
 
-// TestScenario_PRM_005_InvalidResourceRejectedAtBuild binds the
-// "invalid resource identifier rejected at construction" behaviour. The
-// testkit fails the test on a build error, so it cannot observe the
-// rejection; the public-API coverage lives in op
-// TestWithProtectedResources_RejectsInvalidResource.
+// TestScenario_PRM_005_InvalidResourceRejectedAtBuild marks where the
+// scenario-level test would go. The testkit fails the test on a build
+// error, so it cannot observe a construction-time rejection; the row
+// names its own coverage in `covered_by` and the gate resolves that
+// name, which repeating it here would not.
 func TestScenario_PRM_005_InvalidResourceRejectedAtBuild(t *testing.T) {
 	t.Parallel()
-	t.Skip("covered by op TestWithProtectedResources_RejectsInvalidResource")
+	t.Skip("covered outside the suite; see the protected_resource_metadata catalog row's covered_by")
 }
 
 // toStrings narrows a decoded JSON array to a []string, dropping any

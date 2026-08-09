@@ -15,9 +15,14 @@ import (
 // bad entry does not poison the rest of the negotiation.
 var errBadQValue = errors.New("authorizeendpoint: malformed q-value")
 
-// OAuth wire codes the /authorize and /interaction handlers emit. The list
-// is closed; ad-hoc codes are forbidden so the discoverable error surface
-// stays auditable.
+// OAuth wire codes the /authorize and /interaction handlers emit
+// directly. The list is closed; ad-hoc codes are forbidden so the
+// discoverable error surface stays auditable. Codes the endpoint emits
+// through another package's catalogue are absent so there is exactly one
+// definition of each: the request-gate codes — RFC 9396 §5's
+// "invalid_authorization_details" among them — come from
+// [internal/authorize]'s sentinels, whose Code
+// [validateRequestExtensions] renders verbatim.
 const (
 	errInvalidRequest           = "invalid_request"
 	errLoginRequired            = "login_required"
@@ -31,14 +36,19 @@ const (
 	errInvalidScope             = "invalid_scope"
 	errInvalidRequestObject     = "invalid_request_object"
 	errInvalidRequestURI        = "invalid_request_uri"
-	// errInvalidAuthorizationDetails is RFC 9396 §5's wire code for an
-	// authorization_details parameter the OP cannot honour (unknown type,
-	// malformed structure, validator rejection).
-	errInvalidAuthorizationDetails = "invalid_authorization_details"
 	// errInvalidGrant is the OAuth wire code the Grant Management draft
 	// returns when a grant_management_action references a grant_id the
 	// authenticated client does not own.
 	errInvalidGrant = "invalid_grant"
+	// errUnmetAuthenticationRequirements is the OIDC wire code for
+	// "the authentication that ran cannot satisfy the authentication
+	// context the request required". The OP emits it when the resolved
+	// acr fails an acr the request marked essential (OIDC Core 1.0
+	// §5.5.1.1); a voluntary request is instead served with the acr
+	// claim omitted. Registered by the OpenID Connect Core Error Code
+	// unmet_authentication_requirements 1.0 extension and referenced by
+	// RFC 9470 §4 for the step-up case.
+	errUnmetAuthenticationRequirements = "unmet_authentication_requirements"
 )
 
 // errorResponse mirrors the token endpoint's failure envelope so embedders
@@ -183,46 +193,25 @@ func parseQValue(s string) (float64, error) {
 	return val, nil
 }
 
-// redirectError emits a 302 to the RP's redirect_uri with the OAuth error
-// parameters attached. The state parameter is echoed verbatim per OAuth
-// 2.0 §4.1.2.1; an empty state is omitted entirely.
+// mergeRedirectParams merges params into the query string of
+// redirectURI, preserving any parameters the registered URI already
+// carried (a static analytics suffix is a common registration). It is
+// the single query-merge used by every redirect-mode authorization
+// response, success and error alike, so the two cannot drift on
+// encoding or on the treatment of a pre-existing query.
 //
-// The function never inspects the existing query string of redirectURI: the
-// authorize parser has already verified that the URI parses cleanly, and we
-// preserve any existing query the client registered.
-func redirectError(w http.ResponseWriter, r *http.Request, redirectURI, code, description, state, issuer string) {
-	target, err := buildRedirectError(redirectURI, code, description, state, issuer)
-	if err != nil {
-		// The redirect target is unparseable; fall back to the JSON
-		// envelope so the operator gets a useful diagnostic instead of
-		// a silent 302-to-nothing.
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "redirect target rejected")
-		return
-	}
-	stampNoStore(w)
-	http.Redirect(w, r, target, http.StatusFound)
-}
-
-// buildRedirectError composes the redirect target. It is split out so the
-// query-merge logic can be unit-tested without invoking the HTTP machinery.
-func buildRedirectError(redirectURI, code, description, state, issuer string) (string, error) {
+// Empty values are skipped: an absent state or iss must not surface as
+// a stray "state=" on the wire.
+func mergeRedirectParams(redirectURI string, params url.Values) (string, error) {
 	u, err := url.Parse(redirectURI)
 	if err != nil {
 		return "", err
 	}
 	q := u.Query()
-	q.Set("error", code)
-	if description != "" {
-		q.Set("error_description", description)
-	}
-	if state != "" {
-		q.Set("state", state)
-	}
-	if issuer != "" {
-		// RFC 9207 §2.4: error responses also carry "iss". Skipping
-		// it on the error path would defeat the mix-up protection the
-		// success path already has.
-		q.Set("iss", issuer)
+	for name := range params {
+		if v := params.Get(name); v != "" {
+			q.Set(name, v)
+		}
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil

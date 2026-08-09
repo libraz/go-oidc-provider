@@ -133,8 +133,11 @@ const (
 	HintLoginHint
 
 	// HintIDTokenHint means the request supplied an id_token_hint
-	// parameter (a previously issued ID token whose sub claim
-	// identifies the end-user).
+	// parameter: an ID Token this OP previously issued to the
+	// requesting client, whose sub claim identifies the end-user.
+	// The OP verifies the token itself through [VerifyIDTokenHint]
+	// before the hint reaches a resolver, so the value a resolver
+	// observes for this kind is the OP-verified sub, never the JWT.
 	HintIDTokenHint
 
 	// HintLoginHintToken means the request supplied a
@@ -165,6 +168,12 @@ func (k HintKind) String() string {
 // §7.1 requires exactly one to be supplied: when zero or more than
 // one is non-empty the function returns [ErrInvalidHintCombination].
 // The caller maps this to the invalid_request wire code.
+//
+// The returned value is the raw wire parameter — classification is
+// shape analysis only and asserts nothing about the value's contents.
+// On the [HintIDTokenHint] branch the caller MUST run
+// [VerifyIDTokenHint] before the value is trusted or handed onward;
+// CIBA Core §7.1 places that verification on the OP.
 func ClassifyHint(loginHint, idTokenHint, loginHintToken string) (HintKind, string, error) {
 	loginHint = strings.TrimSpace(loginHint)
 	idTokenHint = strings.TrimSpace(idTokenHint)

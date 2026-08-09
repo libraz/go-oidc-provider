@@ -66,7 +66,7 @@ func TestAuthCode_DPoP_BindsCnfJkt(t *testing.T) {
 	// Verify cnf.jkt is present on the access token.
 	keySet := mustKeySet(t, f.prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: f.prov.Issuer, Clock: f.clock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestAuthCode_DPoP_NoProofBearer(t *testing.T) {
 	at, _ := body["access_token"].(string)
 	keySet := mustKeySet(t, f.prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: f.prov.Issuer, Clock: f.clock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify access token: %v", err)
 	}

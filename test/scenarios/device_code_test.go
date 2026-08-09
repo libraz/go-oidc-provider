@@ -1380,13 +1380,18 @@ func TestScenario_DEV_097_DeviceAuthGetReturnsMethodNotAllowed(t *testing.T) {
 // RFC 8628 §3.5 slow_down ladder. The test drives three consecutive
 // /token polls against a Pending device_code: the first establishes
 // the LastPolledAt baseline, the second polls below the advertised
-// interval and triggers slow_down (the persisted Interval doubles),
-// and the third polls below the now-doubled interval and triggers
-// slow_down again (the persisted Interval doubles again). The test
-// reads the Interval back through the substore between polls so the
-// persistence half of the ladder is observed: a regression where
+// interval and triggers slow_down (the persisted Interval rises by
+// five seconds), and the third polls below the raised interval and
+// triggers slow_down again (another five seconds). The increment
+// matches what §3.5 instructs the client to add to its own timer, so
+// the OP's bar and a compliant client's cadence move together; a
+// multiplicative ladder would outrun the client and eventually deny a
+// device that was polling exactly as told.
+//
+// The test reads the Interval back through the substore between polls
+// so the persistence half of the ladder is observed: a regression where
 // the OP returned slow_down on the wire but failed to persist the
-// doubled bar would let a malicious device keep hammering at the
+// raised bar would let a malicious device keep hammering at the
 // original cadence indefinitely.
 //
 // Spec: RFC 8628 §3.5 (slow_down).
@@ -1435,7 +1440,8 @@ func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 	}
 
 	// Poll #2: arrives well within the advertised interval (we just
-	// polled). Decision is slow_down → persisted Interval doubles.
+	// polled). Decision is slow_down → persisted Interval rises by the
+	// increment.
 	status, body = p.tokenForm(t, url.Values{
 		"grant_type":  {devURNDeviceCode},
 		"device_code": {deviceCode},
@@ -1448,18 +1454,20 @@ func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindByDeviceCode after poll #2: %v", err)
 	}
-	wantAfter2 := seedInterval * 2
+	wantAfter2 := seedInterval + devicecode.SlowDownIncrement
 	if rec.Interval != wantAfter2 {
-		t.Errorf("after poll #2 (slow_down #1): Interval = %v, want %v (double of seed %v)",
+		t.Errorf("after poll #2 (slow_down #1): Interval = %v, want %v (seed %v plus one increment)",
 			rec.Interval, wantAfter2, seedInterval)
 	}
 
-	// Poll #3: arrives still within the now-doubled interval. Decision
-	// is slow_down again → persisted Interval doubles again. This is
-	// the assertion that pins the regression: prior to the fix, the
-	// OP returned slow_down on the wire but the persisted Interval
-	// never moved off the seed value, letting the device keep hitting
-	// the same bar indefinitely.
+	// Poll #3: arrives still within the raised interval. Decision is
+	// slow_down again → the Interval rises by a second increment. This
+	// poll is what distinguishes addition from doubling: at the seed of
+	// 5s the first step is 10s either way, so only the second step
+	// tells them apart. It also pins the persistence regression —
+	// previously the OP returned slow_down on the wire while the stored
+	// Interval never moved off the seed, letting the device keep
+	// hitting the same bar indefinitely.
 	status, body = p.tokenForm(t, url.Values{
 		"grant_type":  {devURNDeviceCode},
 		"device_code": {deviceCode},
@@ -1472,9 +1480,9 @@ func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindByDeviceCode after poll #3: %v", err)
 	}
-	wantAfter3 := wantAfter2 * 2
+	wantAfter3 := wantAfter2 + devicecode.SlowDownIncrement
 	if rec.Interval != wantAfter3 {
-		t.Errorf("after poll #3 (slow_down #2): Interval = %v, want %v (double of %v)",
+		t.Errorf("after poll #3 (slow_down #2): Interval = %v, want %v (%v plus one increment)",
 			rec.Interval, wantAfter3, wantAfter2)
 	}
 }
@@ -1488,7 +1496,14 @@ func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 // Spec: RFC 8628 §3.5, RFC 8628 §5.2.
 func TestScenario_DEV_098B_TokenPollAbuseLockout(t *testing.T) {
 	t.Parallel()
-	p := newDevProvider(t, []string{"openid"})
+	// Pinned for the same reason as DEV-098: every poll after the
+	// baseline has to land inside the effective interval for a strike
+	// to be recorded. On a real clock the gap between two HTTP round
+	// trips is whatever the machine gives it, so a loaded run sees a
+	// poll fall outside the interval, get authorization_pending, and
+	// shift the whole ladder by one.
+	clock := newAdvanceableClock(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	p := newDevProviderWithResources(t, []string{"openid"}, nil, testkit.WithClock(clock))
 
 	deviceCode := p.issueDeviceCode(t, "openid")
 	status, body := p.tokenForm(t, url.Values{

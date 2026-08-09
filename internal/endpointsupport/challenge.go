@@ -57,11 +57,11 @@ func SanitizeChallengeValue(s string) string {
 // caller-supplied error_description / realm / scope cannot inject CR /
 // LF / quote breakouts.
 //
-// scheme is the leading authentication scheme name; v0.x callers pass
-// either "Bearer" (RFC 6750) or "DPoP" (RFC 9449). Other values are
-// accepted verbatim — the helper does not validate scheme tokens, on
-// the assumption that the caller built the value from a closed
-// internal constant set.
+// scheme is the leading authentication scheme name; callers in this
+// library pass either "Bearer" (RFC 6750) or "DPoP" (RFC 9449). Other
+// values are accepted verbatim — the helper does not validate scheme
+// tokens, on the assumption that the caller built the value from a
+// closed internal constant set.
 //
 // params is processed in order; an entry whose value is empty after
 // sanitisation is skipped so the header stays compact and valid for

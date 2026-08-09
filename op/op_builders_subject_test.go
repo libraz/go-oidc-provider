@@ -200,11 +200,11 @@ func TestBuildSubjectProjector_CustomGeneratorBypassesDispatch(t *testing.T) {
 	}
 }
 
-// TestBuildSubjectProjector_DefaultPathPassthrough pins the v0.x
-// default: without any subject option every client receives the
-// UUIDv7 passthrough regardless of [store.Client.SubjectType].
-// This preserves backwards compatibility for embedders who never
-// touched the subject options.
+// TestBuildSubjectProjector_DefaultPathPassthrough pins the default:
+// without any subject option every client receives the UUIDv7
+// passthrough regardless of [store.Client.SubjectType], so embedders
+// who never touched the subject options see the raw OP-internal
+// subject in the "sub" claim.
 func TestBuildSubjectProjector_DefaultPathPassthrough(t *testing.T) {
 	t.Parallel()
 	cfg := &config{}

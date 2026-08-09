@@ -581,8 +581,9 @@ func TestScenario_ATO_010_MTLSOpaqueATCertMismatchAtUserinfo(t *testing.T) {
 	t.Skip("out-of-scope: ATO-010 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_ATO_011_FormatConfusionWireBytesNoDot pins the §S.9
-// invariant by inspecting the wire bytes: an opaque AT carries no
+// TestScenario_ATO_011_FormatConfusionWireBytesNoDot pins the opaque
+// access-token format invariant by inspecting the wire bytes: an
+// opaque AT carries no
 // "." characters, so a JWS Compact Serialisation parse rejects it
 // at the parse step rather than mis-interpreting the bytes.
 func TestScenario_ATO_011_FormatConfusionWireBytesNoDot(t *testing.T) {

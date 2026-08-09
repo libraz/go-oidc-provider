@@ -65,7 +65,11 @@ var (
 
 	// ErrJWKSMalformed signals that the supplied JWKS bytes are not
 	// a valid JSON Web Key Set. Used by the self_signed path when the
-	// embedder's [Client.JWKS] field cannot be parsed.
+	// embedder's [Client.JWKS] field cannot be parsed, which covers
+	// both an undecodable document and a well-formed one whose every
+	// member uses a key type this build cannot represent (individual
+	// undecodable members are skipped, see
+	// [VerifySelfSignedTLSClientAuth]).
 	ErrJWKSMalformed = errors.New("mtls: JWKS could not be parsed")
 
 	// ErrThumbprintMismatch signals that the cert presented at a

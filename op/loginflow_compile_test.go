@@ -115,7 +115,7 @@ func TestProjectStepToFlow_BuiltinSteps_BuildSuccessfully(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			st := inmem.New()
-			opts := append(validBaseOptsWithStore(t, st), op.WithLoginFlow(tc.flow(st)))
+			opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(tc.flow(st)))
 			if _, err := op.New(opts...); err != nil {
 				t.Fatalf("op.New for %s: unexpected error: %v", tc.name, err)
 			}
@@ -227,7 +227,7 @@ func TestProjectStepToFlow_BuiltinSteps_RejectMissingDeps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			st := inmem.New()
-			opts := append(validBaseOptsWithStore(t, st), op.WithLoginFlow(tc.buildFlow(st)))
+			opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(tc.buildFlow(st)))
 			_, err := op.New(opts...)
 			if err == nil {
 				t.Fatalf("op.New: expected error, got nil")
@@ -255,7 +255,7 @@ func TestProjectStepToFlow_PrimaryPassword_BuildsSuccessfully(t *testing.T) {
 	t.Parallel()
 	st := inmem.New()
 	flow := op.LoginFlow{Primary: op.PrimaryPassword{Store: st.UserPasswords()}}
-	opts := append(validBaseOptsWithStore(t, st), op.WithLoginFlow(flow))
+	opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(flow))
 	if _, err := op.New(opts...); err != nil {
 		t.Fatalf("op.New: unexpected error: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestProjectStepToFlow_PrimaryPassword_RejectsNilStore(t *testing.T) {
 	t.Parallel()
 	st := inmem.New()
 	flow := op.LoginFlow{Primary: op.PrimaryPassword{}}
-	opts := append(validBaseOptsWithStore(t, st), op.WithLoginFlow(flow))
+	opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(flow))
 	_, err := op.New(opts...)
 	if err == nil {
 		t.Fatalf("op.New: expected error, got nil")
@@ -296,7 +296,7 @@ func TestProjectStepToFlow_StepTOTP_FallsBackToProviderKey(t *testing.T) {
 		When: func(op.LoginContext) bool { return true },
 		Then: op.StepTOTP{Store: st.TOTPs()},
 	}}}
-	opts := append(validBaseOptsWithStore(t, st),
+	opts := append(validBaseOptsWithStoreNoAuthn(t, st),
 		op.WithMFAEncryptionKeys(bytes32("global-mfa-key-32-bytes-padding-")),
 		op.WithLoginFlow(flow),
 	)
@@ -316,7 +316,7 @@ func TestProjectStepToFlow_StepTOTP_RejectsMissingKeyAndFallback(t *testing.T) {
 		When: func(op.LoginContext) bool { return true },
 		Then: op.StepTOTP{Store: st.TOTPs()},
 	}}}
-	opts := append(validBaseOptsWithStore(t, st), op.WithLoginFlow(flow))
+	opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(flow))
 	_, err := op.New(opts...)
 	if err == nil {
 		t.Fatalf("op.New: expected error when neither per-step nor global key is set")
@@ -336,10 +336,18 @@ func TestProjectStepToFlow_StepTOTP_RejectsMissingKeyAndFallback(t *testing.T) {
 
 // validBaseOptsWithStore is a thin wrapper over [validBaseOpts] that
 // substitutes the inmem [*inmem.Store] the caller has already built
-// (so the LoginFlow under test can pull substores off it). The base
+// (so the flow under test can pull substores off it). The base
 // keyset / cookie / issuer come from validBaseOpts; only the store
 // changes.
 func validBaseOptsWithStore(tb testing.TB, st *inmem.Store) []op.Option {
+	tb.Helper()
+	return append(validBaseOptsWithStoreNoAuthn(tb, st), fixtureAuthenticator())
+}
+
+// validBaseOptsWithStoreNoAuthn is [validBaseOptsWithStore] without the
+// fixture authenticator, for tests that supply their own login
+// configuration through [op.WithLoginFlow].
+func validBaseOptsWithStoreNoAuthn(tb testing.TB, st *inmem.Store) []op.Option {
 	tb.Helper()
 	return []op.Option{
 		op.WithIssuer(validIssuer),

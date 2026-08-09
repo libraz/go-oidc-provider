@@ -428,8 +428,8 @@ func TestScenario_DIS_031_EncryptionMetadataAdvertisedWhenFeatureOn(t *testing.T
 // pin a verification alg) and that `response_modes_supported` includes
 // the JARM modes `jwt`, `query.jwt`, `fragment.jwt`, and
 // `form_post.jwt`. The encryption-side fields
-// (`authorization_encryption_*`) are gated on the encryption feature
-// and are covered separately by DIS-031.
+// (`authorization_encryption_*`) ride on the same JARM gate and are
+// asserted by JARM-001.
 //
 // Spec: JARM (OpenID Foundation FAPI 2.0).
 func TestScenario_DIS_032_JARMMetadataAdvertisedWhenFeatureOn(t *testing.T) {
@@ -474,10 +474,59 @@ func TestScenario_DIS_033_WebMessageResponseModeAdvertisedWhenOn(t *testing.T) {
 	t.Skip("out-of-scope: DIS-033 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_DIS_034_DeviceAuthorizationEndpointWhenDeviceOn is OOS — see catalog out_of_scope_reason.
+// TestScenario_DIS_034_DeviceAuthorizationEndpointWhenDeviceOn verifies
+// that enabling the device-authorization grant makes the discovery
+// document advertise `device_authorization_endpoint`, and that leaving
+// it off omits the field. A device has no other way to learn the URL it
+// must post to, so advertising it unconditionally would point every
+// device at an endpoint the OP does not mount.
+//
+// Spec: RFC 8628 §4 (device authorization grant metadata).
 func TestScenario_DIS_034_DeviceAuthorizationEndpointWhenDeviceOn(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: DIS-034 (see catalog out_of_scope_reason)")
+
+	on := testkit.NewProvider(t, testkit.WithOptions(op.WithDeviceCodeGrant()))
+	_, _, doc := fetchDiscovery(t, on.Server.URL)
+
+	deviceURL, ok := doc["device_authorization_endpoint"].(string)
+	if !ok || deviceURL == "" {
+		t.Fatalf("device_authorization_endpoint missing/empty with the grant on: %v",
+			doc["device_authorization_endpoint"])
+	}
+	// RFC 8414 §2 requires the metadata values to be absolute URLs, so
+	// a relative path would leave the device with nothing to resolve
+	// against.
+	if !strings.HasPrefix(deviceURL, "http://") && !strings.HasPrefix(deviceURL, "https://") {
+		t.Errorf("device_authorization_endpoint=%q must be an absolute URL", deviceURL)
+	}
+	if !strings.Contains(deviceURL, "/device_authorization") {
+		t.Errorf("device_authorization_endpoint=%q must reference the device-authorization path", deviceURL)
+	}
+	// The advertised grant set has to agree with the advertised
+	// endpoint; a device that trusts one and not the other stalls.
+	if !containsString(doc["grant_types_supported"], "urn:ietf:params:oauth:grant-type:device_code") {
+		t.Errorf("grant_types_supported=%v must include the device_code grant", doc["grant_types_supported"])
+	}
+
+	off := testkit.NewProvider(t)
+	_, _, offDoc := fetchDiscovery(t, off.Server.URL)
+	if v, present := offDoc["device_authorization_endpoint"]; present {
+		t.Errorf("device_authorization_endpoint=%v advertised with the grant off", v)
+	}
+}
+
+// containsString reports whether a decoded JSON array holds want.
+func containsString(v any, want string) bool {
+	arr, ok := v.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range arr {
+		if s, ok := item.(string); ok && s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestScenario_DIS_035_PAREndpointAdvertisedWhenPAROn verifies that

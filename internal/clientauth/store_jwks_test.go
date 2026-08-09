@@ -2,14 +2,19 @@ package clientauth_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // fakeClientStore is a tiny [store.ClientStore] for the resolver tests.
@@ -286,6 +291,112 @@ func TestStoreJWKSResolver_RefreshJWKSUnsupportedFetcher(t *testing.T) {
 	_, err = r.RefreshJWKS(context.Background(), "url-only")
 	if !errors.Is(err, clientauth.ErrJWKSURIUnsupported) {
 		t.Errorf("err=%v, want ErrJWKSURIUnsupported", err)
+	}
+}
+
+// unsupportedMemberJWK is a JWK the JOSE layer cannot turn into a key: an
+// OKP curve outside the Ed25519 it implements. An RP that also offers
+// ECDH-ES encryption publishes a member of this shape next to the signing
+// key it authenticates with.
+const unsupportedMemberJWK = `{"kty":"OKP","crv":"X25519","x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo","use":"enc","kid":"enc-1"}`
+
+// TestStoreJWKSResolver_InlineIgnoresUnsupportedMember pins RFC 7517 §5 on
+// the inline path: a member whose key type this build does not implement is
+// ignored, leaving the client's signing key resolvable. Failing the whole
+// document instead would lock the client out of /token, request objects and
+// re-registration at once.
+func TestStoreJWKSResolver_InlineIgnoresUnsupportedMember(t *testing.T) {
+	t.Parallel()
+
+	mixed := `{"keys":[` + unsupportedMemberJWK +
+		`,{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","use":"sig","kid":"k1","alg":"ES256"}]}`
+	r, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"alice": {ID: "alice", JWKs: json.RawMessage(mixed)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	keys, err := r.JWKS(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("JWKS: %v", err)
+	}
+	if len(keys.Keys) != 1 || keys.Keys[0].KeyID != "k1" {
+		t.Fatalf("got Keys=%+v, want only the EC signing key (kid k1)", keys.Keys)
+	}
+}
+
+// TestStoreJWKSResolver_InlineWithoutAnySupportedMember confirms a keyset
+// that leaves nothing usable behind is still an error, so the verifier
+// reports a credentials failure rather than trying an empty keyset.
+func TestStoreJWKSResolver_InlineWithoutAnySupportedMember(t *testing.T) {
+	t.Parallel()
+
+	r, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"enc-only": {ID: "enc-only", JWKs: json.RawMessage(`{"keys":[` + unsupportedMemberJWK + `]}`)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	if _, err := r.JWKS(context.Background(), "enc-only"); err == nil {
+		t.Fatal("expected an error for a keyset with no supported member, got nil")
+	}
+}
+
+// TestPrivateKeyJWTVerifier_InlineJWKSWithUnsupportedMember drives the
+// whole client-assertion path for such a client: registration-time keyset,
+// resolver, signature verification. It is the end-to-end statement that
+// publishing an unsupported key type alongside a supported one does not
+// cost the client its /token authentication.
+func TestPrivateKeyJWTVerifier_InlineJWKSWithUnsupportedMember(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	member, err := (&josev4.JSONWebKey{
+		Key:       &priv.PublicKey,
+		KeyID:     "rp-sig",
+		Algorithm: string(josev4.ES256),
+		Use:       "sig",
+	}).MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal signing JWK: %v", err)
+	}
+	mixed := `{"keys":[` + unsupportedMemberJWK + `,` + string(member) + `]}`
+
+	resolver, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"client-1": {ID: "client-1", JWKs: json.RawMessage(mixed)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential, the token endpoint URL.
+	assertion := signAssertion(t, priv, "rp-sig", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": tokenAud,
+		"jti": "j-mixed-jwks",
+		"iat": now.Add(-30 * time.Second).Unix(),
+		"exp": now.Add(2 * time.Minute).Unix(),
+	})
+
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver: resolver,
+		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
+		Audience: tokenAud,
+		Clock:    fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); err != nil {
+		t.Fatalf("Verify with a mixed inline keyset: %v", err)
 	}
 }
 

@@ -6,10 +6,12 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -77,7 +79,7 @@ func TestWithLoginFlow_BuiltinStepRejectedAtNew(t *testing.T) {
 	t.Parallel()
 
 	flow := op.LoginFlow{Primary: stagedH1DStep{kind: op.StepKindPassword}}
-	_, err := op.New(append(validBaseOpts(t), op.WithLoginFlow(flow))...)
+	_, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(flow))...)
 	if err == nil {
 		t.Fatal("expected built-in Step error from op.New, got nil")
 	}
@@ -108,7 +110,7 @@ func TestWithLoginFlow_ExternalStepConstructs(t *testing.T) {
 			KindLabel: op.StepKind("myorg.password"),
 		},
 	}
-	if _, err := op.New(append(validBaseOpts(t), op.WithLoginFlow(flow))...); err != nil {
+	if _, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(flow))...); err != nil {
 		t.Fatalf("WithLoginFlow + ExternalStep should construct, got %v", err)
 	}
 }
@@ -127,7 +129,7 @@ func TestWithLoginFlow_RejectsAuthenticatorCombo(t *testing.T) {
 			KindLabel:     op.StepKind("myorg.password"),
 		},
 	}
-	_, err := op.New(append(validBaseOpts(t),
+	_, err := op.New(append(validBaseOptsNoAuthn(t),
 		op.WithLoginFlow(flow),
 		op.WithAuthenticators(&h1dStubAuth{typeID: op.FactorTOTP, aal: op.AAL2, amr: "otp"}),
 	)...)
@@ -153,7 +155,7 @@ func TestWithLoginFlow_RejectsExternalStepBuiltinKindLabel(t *testing.T) {
 			KindLabel:     op.StepKindPassword, // collides with built-in
 		},
 	}
-	_, err := op.New(append(validBaseOpts(t), op.WithLoginFlow(flow))...)
+	_, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(flow))...)
 	if err == nil {
 		t.Fatal("expected error for built-in KindLabel collision, got nil")
 	}
@@ -176,7 +178,7 @@ func TestWithLoginFlow_RejectsExternalStepBareKindLabel(t *testing.T) {
 			KindLabel:     op.StepKind("myfactor"), // bare, no dot
 		},
 	}
-	_, err := op.New(append(validBaseOpts(t), op.WithLoginFlow(flow))...)
+	_, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(flow))...)
 	if err == nil {
 		t.Fatal("expected error for bare KindLabel, got nil")
 	}
@@ -212,7 +214,7 @@ func (s *h1dStubAuth) Continue(_ context.Context, _ op.ContinueInput) (interacti
 func TestWithLoginFlow_RejectsNilPrimary(t *testing.T) {
 	t.Parallel()
 
-	_, err := op.New(append(validBaseOpts(t), op.WithLoginFlow(op.LoginFlow{}))...)
+	_, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(op.LoginFlow{}))...)
 	if err == nil {
 		t.Fatal("expected error for nil Primary, got nil")
 	}
@@ -225,7 +227,7 @@ func TestWithLoginFlow_RejectsDuplicate(t *testing.T) {
 	t.Parallel()
 
 	flow := op.LoginFlow{Primary: stagedH1DStep{kind: op.StepKindPassword}}
-	_, err := op.New(append(validBaseOpts(t),
+	_, err := op.New(append(validBaseOptsNoAuthn(t),
 		op.WithLoginFlow(flow),
 		op.WithLoginFlow(flow),
 	)...)
@@ -247,7 +249,7 @@ func TestWithLoginFlow_RejectsDuplicateRuleKinds(t *testing.T) {
 			{When: func(op.LoginContext) bool { return true }, Then: stagedH1DStep{kind: op.StepKindTOTP}},
 		},
 	}
-	_, err := op.New(append(validBaseOpts(t), op.WithLoginFlow(flow))...)
+	_, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(flow))...)
 	if err == nil {
 		t.Fatal("expected error for duplicate Rule StepKind, got nil")
 	}
@@ -259,11 +261,105 @@ func TestWithLoginFlow_RejectsDuplicateRuleKinds(t *testing.T) {
 func TestWithLoginFlow_AbsentLeavesNoError(t *testing.T) {
 	t.Parallel()
 
-	// No WithLoginFlow at all: the staged-for-H1-D guard must NOT
-	// fire because c.loginFlow.Primary stays nil.
+	// No WithLoginFlow at all: the flow validator must NOT fire
+	// because c.loginFlow.Primary stays nil.
 	if _, err := op.New(validBaseOpts(t)...); err != nil {
 		t.Fatalf("op.New without WithLoginFlow: %v", err)
 	}
+}
+
+// TestNew_RejectsAuthorizationCodeWithoutLoginConfiguration pins the
+// boot contract for the interactive grant: /authorize has to run the
+// authentication chain for every request that is not resumed from a
+// live session, so an OP offering authorization_code without a way to
+// authenticate anyone cannot serve a single one. The refusal belongs at
+// construction, where the operator can act on it.
+func TestNew_RejectsAuthorizationCodeWithoutLoginConfiguration(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(validBaseOptsNoAuthn(t)...)
+	if err == nil {
+		t.Fatal("expected a configuration error for authorization_code with no login configuration, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("missing login configuration must be a server-side configuration error: %v", err)
+	}
+	if op.IsClientError(err) {
+		t.Errorf("missing login configuration must not be classified as a client error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "WithAuthenticators") ||
+		!strings.Contains(err.Error(), "WithLoginFlow") {
+		t.Errorf("err = %v, want it to name both options that satisfy the requirement", err)
+	}
+}
+
+// TestNew_AuthenticatorsSatisfyTheAuthorizationCodeRequirement covers
+// the first of the two ways to declare the chain.
+func TestNew_AuthenticatorsSatisfyTheAuthorizationCodeRequirement(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithAuthenticators(&h1dStubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"}),
+	)...); err != nil {
+		t.Fatalf("op.New with WithAuthenticators: %v", err)
+	}
+}
+
+// TestNew_LoginFlowSatisfiesTheAuthorizationCodeRequirement covers the
+// second: a LoginFlow declares the same chain in compiled form, so it
+// stands alone without WithAuthenticators (with which it is mutually
+// exclusive).
+func TestNew_LoginFlowSatisfiesTheAuthorizationCodeRequirement(t *testing.T) {
+	t.Parallel()
+
+	flow := op.LoginFlow{
+		Primary: op.ExternalStep{
+			Authenticator: &h1dStubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
+			KindLabel:     op.StepKind("myorg.password"),
+		},
+	}
+	if _, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(flow))...); err != nil {
+		t.Fatalf("op.New with WithLoginFlow: %v", err)
+	}
+}
+
+// TestNew_NonInteractiveGrantsNeedNoLoginConfiguration guards the
+// legitimate deployment the login-configuration requirement must not
+// catch: a grant set that never reaches the authentication chain —
+// client_credentials here — constructs with no authenticator and no
+// LoginFlow at all.
+//
+// The second case holds everything else fixed and adds
+// authorization_code back, so the two together pin the grant set as
+// the input the requirement keys on. A requirement rewritten to demand
+// an authenticator unconditionally passes the second case and fails the
+// first.
+func TestNew_NonInteractiveGrantsNeedNoLoginConfiguration(t *testing.T) {
+	t.Parallel()
+
+	t.Run("client_credentials only", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := op.New(append(validBaseOptsNoAuthn(t),
+			op.WithGrants(grant.ClientCredentials),
+		)...); err != nil {
+			t.Fatalf("op.New for a client_credentials-only deployment: %v", err)
+		}
+	})
+
+	t.Run("client_credentials with authorization_code", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := op.New(append(validBaseOptsNoAuthn(t),
+			op.WithGrants(grant.ClientCredentials, grant.AuthorizationCode),
+		)...)
+		if err == nil {
+			t.Fatal("expected a configuration error once authorization_code joins the grant set, got nil")
+		}
+		if !op.IsServerError(err) {
+			t.Errorf("missing login configuration must be a server-side configuration error: %v", err)
+		}
+	})
 }
 
 func TestWithSPAUI_AcceptsValid(t *testing.T) {
@@ -337,6 +433,48 @@ func TestWithSPAUI_AcceptsExistingStaticDir(t *testing.T) {
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil Provider")
+	}
+}
+
+// TestWithSPAUI_ConsentAndLogoutMountsAreInert pins what the deprecation
+// notes on SPAUI.ConsentMount / SPAUI.LogoutMount state: the two fields
+// are validated and then dropped. Nothing is mounted at either path, and
+// neither reserves a route — a value that would collide with a protocol
+// endpoint if it were reserved still boots. The pin exists so the fields
+// cannot quietly acquire behaviour that contradicts their documentation,
+// in either direction.
+func TestWithSPAUI_ConsentAndLogoutMountsAreInert(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOpts(t),
+		op.WithSPAUI(op.SPAUI{
+			LoginMount:   "/login",
+			ConsentMount: "/consent",
+			LogoutMount:  "/logout",
+		}),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New with consent / logout mounts: %v", err)
+	}
+	for _, path := range []string{"/consent", "/logout"} {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
+		rec := httptest.NewRecorder()
+		provider.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404: no handler is mounted for the deprecated mount", path, rec.Code)
+		}
+	}
+
+	// The token endpoint's path proves the absence of a route
+	// reservation: WithSPAUI.LoginMount would be rejected for the same
+	// value.
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithSPAUI(op.SPAUI{
+			LoginMount:   "/login",
+			ConsentMount: "/oidc/token",
+		}),
+	)...); err != nil {
+		t.Errorf("op.New with ConsentMount on a protocol endpoint path: %v; the field reserves no route", err)
 	}
 }
 

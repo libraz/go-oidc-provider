@@ -2,7 +2,9 @@ package csrf_test
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -155,6 +157,34 @@ func TestSigner_DistinctTokensPerIssue(t *testing.T) {
 	b, _ := s.Issue("session", now)
 	if a == b {
 		t.Error("Issue produced identical tokens for the same input (nonce reuse)")
+	}
+}
+
+func TestNewRandomToken(t *testing.T) {
+	t.Parallel()
+
+	a, err := csrf.NewRandomToken()
+	if err != nil {
+		t.Fatalf("NewRandomToken: %v", err)
+	}
+	b, err := csrf.NewRandomToken()
+	if err != nil {
+		t.Fatalf("NewRandomToken: %v", err)
+	}
+	if a == b {
+		t.Error("NewRandomToken produced identical tokens (entropy source not consumed)")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(a)
+	if err != nil {
+		t.Fatalf("token is not unpadded base64url: %v", err)
+	}
+	if len(raw) != 32 {
+		t.Errorf("token decodes to %d bytes want 32", len(raw))
+	}
+	// The value travels in a Set-Cookie header and a form field, so it
+	// must survive both without escaping.
+	if url.QueryEscape(a) != a {
+		t.Errorf("token %q is not URL-safe", a)
 	}
 }
 

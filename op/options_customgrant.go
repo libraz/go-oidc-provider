@@ -1,17 +1,69 @@
 package op
 
-// builtinGrantTypeWires is the closed list of grant_type strings the
-// token endpoint routes natively. [WithCustomGrant] rejects any
-// handler whose [CustomGrantHandler.Name] equals one of these so a
-// misconfigured registration cannot shadow built-in security
-// invariants (PKCE, refresh-token rotation, device-code polling).
+import (
+	"math"
+
+	"github.com/libraz/go-oidc-provider/op/grant"
+)
+
+// builtinGrantTypeWires is the set of grant_type strings the OP serves
+// with its own implementation. [WithCustomGrant] rejects any handler
+// whose [CustomGrantHandler.Name] equals one of these so a
+// misconfigured registration cannot displace an in-tree grant and the
+// security invariants that ride with it: PKCE, refresh-token rotation,
+// device-code polling, CIBA request binding, and the token-exchange
+// audience narrowing / scope intersection / cnf re-binding pass.
 //
-//nolint:gochecknoglobals // closed catalog; immutable.
-var builtinGrantTypeWires = map[string]struct{}{
-	"authorization_code": {},
-	"refresh_token":      {},
-	"client_credentials": {},
-	"urn:ietf:params:oauth:grant-type:device_code": {},
+// The set is derived rather than transcribed. A hand-maintained list
+// disables a security control the moment it falls behind the grants
+// the OP actually implements, and the drift is silent — the colliding
+// registration is simply accepted. Every [grant.Type] the enumeration
+// recognises therefore contributes its wire form automatically, so
+// adding a grant to the enum needs no second edit here.
+//
+//nolint:gochecknoglobals // derived catalog; immutable after package init.
+var builtinGrantTypeWires = builtinGrantTypeWireSet()
+
+// builtinGrantTypeWireSet indexes [builtinGrantTypeWireList] for the
+// membership tests the option layer runs per registration.
+func builtinGrantTypeWireSet() map[string]struct{} {
+	list := builtinGrantTypeWireList()
+	out := make(map[string]struct{}, len(list))
+	for _, wire := range list {
+		out[wire] = struct{}{}
+	}
+	return out
+}
+
+// builtinGrantTypeWireList enumerates the grant_type wires the OP
+// implements itself, in a stable order: the [grant.Type] constants by
+// ordinal, then the extension grants. Callers that surface the values
+// (rather than testing membership) depend on that determinism, so the
+// list — not the set — is the primitive.
+//
+// The walk covers the whole [grant.Type] value space, the bound being
+// the enum's underlying width, rather than naming constants one by
+// one, so a constant added anywhere in the enum is picked up even if
+// it is not appended at the end.
+//
+// Token exchange is the one wire with no [grant.Type] constant: it is
+// enabled through [RegisterTokenExchange] rather than [WithGrants] and
+// its handler rides the extension dispatcher, where a same-named
+// custom registration would win the lookup outright. It is added by
+// name, and a test pins the result against every extension grant the
+// OP advertises so a future addition of that shape cannot slip
+// through.
+func builtinGrantTypeWireList() []string {
+	out := make([]string, 0, 8)
+	for ordinal := grant.Type(0); ; ordinal++ {
+		if wire := ordinal.String(); ordinal.IsValid() && wire != "" {
+			out = append(out, wire)
+		}
+		if ordinal == math.MaxUint8 {
+			break
+		}
+	}
+	return append(out, TokenExchangeGrantType)
 }
 
 // secretLikeFormParameters is the closed list of token-endpoint

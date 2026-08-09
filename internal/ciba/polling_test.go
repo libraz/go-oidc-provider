@@ -90,12 +90,12 @@ func TestDecidePoll(t *testing.T) {
 			},
 			want: ciba.PollOutput{
 				Decision:             ciba.PollDecisionSlowDown,
-				NextInterval:         2 * time.Millisecond,
+				NextInterval:         time.Millisecond + ciba.SlowDownIncrement,
 				CountThisAsViolation: true,
 			},
 		},
 		{
-			name: "slow_down via interval doubles",
+			name: "slow_down raises the interval by the increment",
 			in: ciba.PollInput{
 				Now:               now,
 				LastPolledAt:      now.Add(-2 * time.Second),
@@ -226,6 +226,136 @@ func TestDecidePoll_NextIntervalFallback(t *testing.T) {
 	}
 	if !out.CountThisAsViolation {
 		t.Error("CountThisAsViolation: got false, want true")
+	}
+}
+
+// TestDecidePoll_OnTimePollWithinToleranceIsNotAViolation pins the
+// jitter allowance: the OP times arrivals while the client times sends,
+// so an on-time poll routinely lands marginally early and MUST NOT be
+// treated as an offence.
+func TestDecidePoll_OnTimePollWithinToleranceIsNotAViolation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+	out := ciba.DecidePoll(ciba.PollInput{
+		Now:               now,
+		LastPolledAt:      now.Add(-(ciba.DefaultInterval - 100*time.Millisecond)),
+		EffectiveInterval: ciba.DefaultInterval,
+		ExpiresAt:         now.Add(time.Minute),
+	})
+	if out.Decision != ciba.PollDecisionAuthorizationPending {
+		t.Errorf("poll 100ms early: got %v, want authorization_pending", out.Decision)
+	}
+	if out.CountThisAsViolation {
+		t.Error("a poll inside the jitter tolerance must not count as a violation")
+	}
+}
+
+// pollWalkResult reports what a [pollWalk] run observed.
+type pollWalkResult struct {
+	violations uint8
+	denied     bool
+	expired    bool
+}
+
+// pollWalk replays a client polling against the discipline. The client
+// obeys CIBA Core §11 to the letter: it starts at the advertised
+// interval and adds five seconds to its own timer for every slow_down
+// it receives. jitter is subtracted from every gap so each poll arrives
+// marginally early, which is what a real timer plus network latency
+// produces. The clock is driven entirely from the computed intervals,
+// so the walk never reads wall time.
+func pollWalk(
+	start time.Time,
+	advertised, jitter, firstGap time.Duration,
+	polls int,
+) pollWalkResult {
+	var out pollWalkResult
+	clientInterval := advertised
+	opInterval := advertised
+	now := start
+	var last time.Time
+	for range polls {
+		decision := ciba.DecidePoll(ciba.PollInput{
+			Now:               now,
+			LastPolledAt:      last,
+			EffectiveInterval: opInterval,
+			ExpiresAt:         start.Add(ciba.DefaultExpiresIn),
+			PollViolations:    out.violations,
+		})
+		switch decision.Decision {
+		case ciba.PollDecisionAccessDenied:
+			out.denied = true
+			return out
+		case ciba.PollDecisionExpiredToken:
+			out.expired = true
+			return out
+		case ciba.PollDecisionSlowDown:
+			opInterval = decision.NextInterval
+			// The client applies the increase CIBA Core §11 mandates.
+			clientInterval += ciba.SlowDownIncrement
+		case ciba.PollDecisionAuthorizationPending,
+			ciba.PollDecisionEmit,
+			ciba.PollDecisionAlreadyRedeemed,
+			ciba.PollDecisionInvalid:
+			// The bar is unchanged; the client keeps its current timer.
+		}
+		if decision.CountThisAsViolation {
+			out.violations++
+		}
+		gap := clientInterval - jitter
+		if last.IsZero() && firstGap > 0 {
+			gap = firstGap
+		}
+		last = now
+		now = now.Add(gap)
+	}
+	return out
+}
+
+// TestDecidePoll_SpecCompliantClientIsNeverLockedOut is the property
+// that matters for the ladder: a client that polls exactly as CIBA Core
+// §11 instructs must never be strike-counted out of its own flow. Both
+// rows walk a full auth_req_id lifetime; a ladder that outruns the
+// client's own timer drives the second row to access_denied on timer
+// jitter alone.
+func TestDecidePoll_SpecCompliantClientIsNeverLockedOut(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name           string
+		firstGap       time.Duration
+		wantViolations uint8
+	}{
+		{
+			// Every poll lands 100 ms early, which is inside the
+			// tolerance: the client never earns a strike at all.
+			name:           "steady jitter only",
+			wantViolations: 0,
+		},
+		{
+			// One genuinely early poll (a retry after a dropped
+			// response, say) earns a single strike. From there the
+			// client and the OP hold the same interval, so no further
+			// strike can accrue.
+			name:           "one early poll then compliant",
+			firstGap:       time.Second,
+			wantViolations: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := pollWalk(start, ciba.DefaultInterval, 100*time.Millisecond, tc.firstGap, 40)
+			if got.denied {
+				t.Fatalf("a spec-compliant client was locked out after %d strikes", got.violations)
+			}
+			if got.expired {
+				t.Fatal("the walk outran the auth_req_id TTL; shorten it so every poll is observed")
+			}
+			if got.violations != tc.wantViolations {
+				t.Errorf("violations = %d, want %d", got.violations, tc.wantViolations)
+			}
+		})
 	}
 }
 

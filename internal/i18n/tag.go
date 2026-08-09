@@ -9,7 +9,7 @@ import (
 // without a separate Equal method. The package never round-trips
 // through golang.org/x/text/language; the heavy machinery is not
 // worth the dep at the v1.0 surface area, and BCP 47 prefix matching
-// is enough to satisfy design 002 §L.2.
+// is enough for the resolver's priority chain.
 type Tag string
 
 // English is the library default fallback. It is the locale of the

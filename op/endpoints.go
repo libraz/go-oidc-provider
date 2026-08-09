@@ -53,6 +53,13 @@ type Endpoints struct {
 	Interaction string
 
 	// Session overrides the SPA session prefix. Default: "/session".
+	//
+	// Deprecated: the [Provider] mounts no handler under this prefix
+	// and the discovery document does not advertise it. The path is
+	// validated and reserved against the OP's other endpoint paths, so
+	// overriding it only changes which paths [New] reports as
+	// colliding. Session state is served under Interaction — or, when
+	// [WithSPAUI] is configured, under [SPAUI.LoginMount].
 	Session string
 
 	// Register overrides the RFC 7591 Dynamic Client Registration

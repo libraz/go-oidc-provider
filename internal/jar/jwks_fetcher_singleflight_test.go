@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -140,7 +141,7 @@ func TestJWKSCache_NegativeCacheClearsOnSuccess(t *testing.T) {
 	}
 	// Roll the clock past the negative TTL so a second fetch retries
 	// the upstream rather than short-circuiting.
-	clock.now = clock.now.Add(2 * defaultJWKSNegativeTTL)
+	clock.now = clock.now.Add(2 * rpjwks.DefaultNegativeTTL)
 	fail.Store(false)
 	if _, err := f.Fetch(ctx, srv.URL); err != nil {
 		t.Fatalf("second fetch err=%v; want nil after upstream recovery", err)

@@ -202,9 +202,8 @@ func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
 // `use_dpop_nonce` challenge along with a fresh value from
 // [DPoPNonceSource.IssueNonce] in the response's `DPoP-Nonce`
 // header.
-// Without this option the provider preserves the v0.x posture:
-// proofs without a nonce claim are accepted and the challenge is
-// never emitted. The option is independent of [WithFeature]
+// Without this option proofs without a nonce claim are accepted and
+// the challenge is never emitted. The option is independent of [WithFeature]
 // (feature.DPoP); the nonce flow only fires when DPoP is also
 // enabled because the verifier itself is wired only on that flag.
 // At most one source may be registered; a second [WithDPoPNonceSource]
@@ -277,13 +276,22 @@ func WithRefreshGracePeriod(d time.Duration) Option {
 }
 
 // effectiveRefreshGrace returns the refresh-token grace window the
-// token endpoint should apply. The function honours [WithRefreshGracePeriod]
-// when called, else returns 0 so the internal exchanger falls back
-// to its [refresh.GraceTTLDefault]. The grace window is profile-
-// agnostic: FAPI 2.0 OFCS conformance treats a brief replay window
-// as legitimate retry handling, so no profile forces a strict zero.
+// token endpoint should apply. The function honours
+// [WithRefreshGracePeriod] when called, else returns 0 so the internal
+// exchanger falls back to its [refresh.GraceTTLDefault].
+//
+// A FAPI 2.0 profile is the exception: it resolves to a strict zero
+// when the option is absent. FAPI 2.0 §3.1.7 forbids a replay-tolerant
+// window for a replayed refresh token, and [New] already refuses an
+// explicit non-zero one under that profile — so without this the
+// profile would be honoured only for the embedder who asked for the
+// wrong thing out loud, and silently violated for the one who said
+// nothing, which is every deployment that simply declares the profile.
 func (c *config) effectiveRefreshGrace() time.Duration {
 	if !c.refreshGracePeriodSet {
+		if c.hasFAPI2Profile() {
+			return -1
+		}
 		return 0
 	}
 	if c.refreshGracePeriodIsZero {
@@ -405,9 +413,13 @@ func WithAllowInsecureBackchannelLogoutForDev() Option {
 }
 
 // WithJWKSHTTPTransport injects an [http.RoundTripper] the OP uses
-// when fetching RP-controlled JWKS endpoints — both the signed
-// request-object resolver (RFC 9101) and the private_key_jwt client-
-// assertion verifier (RFC 7523) share one fetcher type. The default
+// when fetching RP-controlled JWKS endpoints. All three consumers take
+// it: the signed request-object resolver (RFC 9101), the
+// private_key_jwt client-assertion verifier (RFC 7523), and the
+// outbound-encryption recipient resolver that turns a client's jwks_uri
+// into the key an encrypted id_token / userinfo / JARM / introspection
+// response is addressed to. They read the same endpoints, so a trust
+// store one of them needs is one all of them need. The default
 // nil leaves [internal/netsec.NewHTTPClient] to construct a transport
 // backed by Go's system trust store; embedders that front their RPs
 // with an internal CA, or run the OP under a conformance harness

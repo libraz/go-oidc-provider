@@ -11,7 +11,8 @@ import "embed"
 var embeddedFS embed.FS
 
 // DefaultBundles returns the bundles bundled with the library — en
-// and ja per design 002 §L.3 ("v1.0 から完備同梱"). Embedders that
+// and ja, both complete since v1.0 so an embedder gets a working
+// bilingual OP without registering anything. Embedders that
 // want to override an entry register their own bundle for the same
 // [Tag] through [op.WithLocale]; the registration order in
 // [NewResolver] determines which copy wins.

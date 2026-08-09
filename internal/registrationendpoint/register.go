@@ -64,7 +64,8 @@ type registrationResponse struct {
 }
 
 // handleRegister implements POST /register (RFC 7591 §3). The function
-// follows the 02-product-design.md §A.6.2.2 error matrix:
+// runs its failure checks in a fixed order so an unauthenticated
+// caller never reaches metadata parsing or persistence:
 // IAT verification first, then content-type / body parse, then
 // metadata validation, then secret / RAT generation, then persistence.
 // Decomposing the body keeps cyclop's max-complexity gate happy while
@@ -95,6 +96,10 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"software_statement is not supported in v1.0")
 		return
 	}
+	if err := validateUnpersistedMetadata(extras); err != nil {
+		writeMetadataValidationError(ctx, w, deps, err, "")
+		return
+	}
 	iatScopes := iatAllowedScopes(ver)
 	canonical, err := validatePolicy(
 		metadata,
@@ -107,6 +112,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 		deps.PairwiseEnabled,
 		deps.AllowLocalhostLoopback,
 		deps.AllowInsecureBackchannelLogoutForDev,
+		deps.JWEPolicy,
 	)
 	if err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, "")

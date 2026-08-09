@@ -47,11 +47,9 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"grant_type is not supported")
 		return
 	}
-	dpopOut, ok := verifyTokenDPoP(w, r, deps)
-	if !ok {
-		return
-	}
-	client, _, ok := authenticate(ctx, w, r, deps)
+	// Proof verification, client authentication, and the proof's
+	// replay marking run in the order [authenticateWithDPoP] documents.
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
 	if !ok {
 		return
 	}
@@ -118,7 +116,7 @@ func parseDeviceCodeRequest(w http.ResponseWriter, r *http.Request) (deviceCodeI
 // applyPollDecision computes the polling decision per RFC 8628 §3.5
 // and short-circuits the wire response on every non-emit branch. The
 // helper also stamps the LastPolledAt observation (for the next
-// slow_down ladder step) and persists the doubled interval on
+// slow_down ladder step) and persists the raised interval on
 // slow_down. It returns true when the decision is "emit" — the only
 // branch that lets the caller proceed to authorization gates and
 // credential issuance.
@@ -217,6 +215,11 @@ func lookupDeviceCode(
 	deviceCode, clientID string,
 ) (*store.DeviceCode, bool) {
 	rec, err := deps.DeviceCodes.FindByDeviceCode(ctx, deviceCode)
+	if err == nil && rec == nil {
+		// A nil record alongside a nil error violates the store contract;
+		// a device_code the backend cannot produce is treated as unknown.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			emitDeviceCodeReject(ctx, deps, clientID, errExpiredToken)
@@ -337,6 +340,11 @@ func consumeDeviceCode(
 	deviceCode string,
 ) (*store.DeviceCode, bool) {
 	consumed, err := deps.DeviceCodes.Consume(ctx, deviceCode)
+	if err == nil && consumed == nil {
+		// A nil record alongside a nil error violates the store contract;
+		// without the consumed record there is nothing to issue against.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrAlreadyConsumed),
@@ -602,10 +610,10 @@ func emitDeviceCodeReject(ctx context.Context, deps Deps, clientID, reason strin
 }
 
 // emitDeviceCodeSlowDown logs a slow_down rejection alongside the
-// rejection event so SOC tooling can see the doubling ladder
+// rejection event so SOC tooling can see the ladder step
 // without parsing the audit name. observed is the gap the device
-// polled at; effective is the bar before doubling; next is the
-// elevated bar.
+// polled at; effective is the bar the poll was measured against;
+// next is the raised bar.
 func emitDeviceCodeSlowDown(ctx context.Context, deps Deps, clientID string, effective, next time.Duration) {
 	deps.audit().Emit(ctx, audit.Event{
 		Name:     devicecode.AuditTokenSlowDown,

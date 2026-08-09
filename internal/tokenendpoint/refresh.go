@@ -30,18 +30,13 @@ import (
 // DPoP, which RFC 9449 §5.2 allows to bind opportunistically on
 // first refresh).
 func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
-	// DPoP verification runs ahead of client authentication so the
-	// `use_dpop_nonce` challenge fires before any client_assertion jti
-	// is consumed. The bound-chain invariants (proof required when the
-	// presented refresh token was DPoP-bound, jkt match) depend on the
-	// exchange outcome and are enforced post-exchange via
-	// [enforceDPoPRefreshBinding]. Mirrors handleAuthorizationCode.
-	dpopOut, ok := verifyTokenDPoP(w, r, deps)
-	if !ok {
-		return
-	}
+	// Proof verification, client authentication, and the proof's replay
+	// marking run in the order [authenticateWithDPoP] documents. The
+	// bound-chain invariants (proof required when the presented refresh
+	// token was DPoP-bound, jkt match) depend on the exchange outcome
+	// and are enforced post-exchange via [enforceDPoPRefreshBinding].
 	ctx := r.Context()
-	client, _, ok := authenticate(ctx, w, r, deps)
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
 	if !ok {
 		return
 	}
@@ -73,7 +68,14 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	completeRefreshToken(ctx, w, r, deps, client, in, dpopOut, effectiveAuthorizationDetails)
+	// No transaction to settle behind, but the response is still staged so a
+	// replayed chain is retired before the client is told its token was
+	// refused — the same ordering the transactional path gives.
+	var cascade replayCascade
+	staged := newStagedResponseWriter()
+	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, effectiveAuthorizationDetails, &cascade)
+	cascade.run(ctx, deps)
+	staged.copyTo(w)
 }
 
 func completeRefreshToken(
@@ -85,8 +87,9 @@ func completeRefreshToken(
 	in refreshInputs,
 	dpopOut *dpopOutcome,
 	authorizationDetails []map[string]any,
+	cascade *replayCascade,
 ) {
-	exchanged, ok := exchangeRefresh(ctx, w, deps, client.ID, in)
+	exchanged, ok := exchangeRefresh(ctx, w, deps, client.ID, in, cascade)
 	if !ok {
 		return
 	}
@@ -116,6 +119,12 @@ func completeRefreshToken(
 // behind a transaction and only forwards the buffered response after Commit.
 // A signing/JWE/cache/write failure consequently rolls Consume back instead of
 // stranding the predecessor refresh token.
+//
+// The RFC 9700 §2.2.2 replay cascade is the one mutation that is NOT staged:
+// it runs against the non-transactional substore handles once the transaction
+// has settled, in the commit and the rollback direction alike, and before the
+// response reaches the client. See [replayCascade] for why it cannot live
+// inside the transaction.
 func handleRefreshTokenTransaction(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -126,10 +135,40 @@ func handleRefreshTokenTransaction(
 	dpopOut *dpopOutcome,
 	authorizationDetails []map[string]any,
 ) {
-	tx, err := deps.Transactions.BeginTx(ctx)
-	if err != nil {
+	var cascade replayCascade
+	staged, ok := runRefreshTokenTransaction(ctx, r, deps, client, in, dpopOut, authorizationDetails, &cascade)
+	// The transaction has settled by the time the helper returns, so the direct
+	// substore handles are free and a replayed chain is retired here — before
+	// the client is told anything, and in both settle directions.
+	cascade.run(ctx, deps)
+	if !ok {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
+	}
+	staged.copyTo(w)
+}
+
+// runRefreshTokenTransaction stages the refresh exchange behind a transaction
+// and settles it, handing the staged response back for the caller to forward.
+// ok=false means the transaction could not be opened or could not be settled,
+// and the caller owes the client a server_error.
+//
+// The staged response is deliberately NOT written here: the caller runs the
+// replay cascade between the settle and the write, so nothing observable
+// depends on how the HTTP layer happens to buffer the response.
+func runRefreshTokenTransaction(
+	ctx context.Context,
+	r *http.Request,
+	deps Deps,
+	client *store.Client,
+	in refreshInputs,
+	dpopOut *dpopOutcome,
+	authorizationDetails []map[string]any,
+	cascade *replayCascade,
+) (*stagedResponseWriter, bool) {
+	tx, err := deps.Transactions.BeginTx(ctx)
+	if err != nil {
+		return nil, false
 	}
 	defer func() { _ = tx.Rollback() }()
 	txDeps := deps
@@ -148,23 +187,29 @@ func handleRefreshTokenTransaction(
 		authorizationDetails,
 	)
 	if !ok {
-		staged.copyTo(w)
-		return
+		return staged, true
 	}
-	completeRefreshToken(ctx, staged, r, txDeps, client, in, dpopOut, effectiveAuthorizationDetails)
+	completeRefreshToken(ctx, staged, r, txDeps, client, in, dpopOut, effectiveAuthorizationDetails, cascade)
 	// Preserve OAuth rejection semantics that intentionally finalize token
-	// state (notably replay detection and tombstoned-grant mint refusal) while
-	// rolling back server-side failures in token assembly/persistence.
-	// Request-shape and narrowing rejections are handled before Exchange.
+	// state (notably tombstoned-grant mint refusal, which rejects only after
+	// Consume has spent the presented token) while rolling back server-side
+	// failures in token assembly/persistence. Request-shape and narrowing
+	// rejections are handled before Exchange.
 	if staged.status >= http.StatusInternalServerError || staged.status == 0 {
-		staged.copyTo(w)
-		return
+		return staged, true
 	}
 	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+		if cascade.armed() {
+			// A replay stages nothing: Consume refused the presented token, so
+			// the transaction carries no write whose loss the client needs to
+			// hear about. Reporting the settle fault as server_error would
+			// replace a correct RFC 6749 §5.2 invalid_grant with a 5xx and bury
+			// the finding; the cascade retires the chain either way.
+			return staged, true
+		}
+		return nil, false
 	}
-	staged.copyTo(w)
+	return staged, true
 }
 
 // checkRefreshScopeAllowlist enforces the per-scope AllowedClients
@@ -203,6 +248,12 @@ func preflightRefreshBeforeConsume(
 	dpopOut *dpopOutcome,
 ) bool {
 	rec, err := deps.RefreshTokens.Find(ctx, in.Token)
+	if err == nil && rec == nil {
+		// A nil record alongside a nil error violates the store contract.
+		// Treat it as a miss: the preflight has nothing to check against and
+		// the exchanger below still refuses the token.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return true
@@ -279,16 +330,19 @@ func preflightRefreshAuthorizationDetails(
 	requested []map[string]any,
 ) ([]map[string]any, bool) {
 	rec, err := deps.RefreshTokens.Find(ctx, token)
+	if err == nil && rec == nil {
+		// A nil record alongside a nil error violates the store contract.
+		// Treat it as a miss so the presented token earns the same
+		// invalid_grant an unknown handle earns rather than a distinguishable
+		// 5xx; the exchanger below still refuses to issue against it.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// Preserve the exchanger's invalid_grant mapping for unknown or
 			// expired handles.
 			return nil, true
 		}
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return nil, false
-	}
-	if rec == nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return nil, false
 	}
@@ -339,24 +393,85 @@ func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (refreshInputs,
 	return in, true
 }
 
+// newRefreshExchanger builds the [refresh.Exchanger] the refresh path
+// drives. The exchanger always defers the RFC 9700 §2.2.2 chain cascade:
+// the token endpoint owns when it runs (see [replayCascade]) so the same
+// ordering holds whether or not the request took the transactional path.
+func newRefreshExchanger(deps Deps) (*refresh.Exchanger, error) {
+	return refresh.NewExchanger(refresh.ExchangerConfig{
+		Store:              deps.RefreshTokens,
+		Clock:              deps.clockFunc(),
+		GraceTTL:           deps.RefreshTokenGraceTTL,
+		Audit:              deps.audit(),
+		GrantRevocations:   refreshChainRevocationStore(deps),
+		GrantTombstoneTTL:  refreshChainTombstoneTTL(deps),
+		DeferReplayCascade: true,
+	})
+}
+
+// replayCascade carries a detected refresh-token replay out of the
+// exchange so the RFC 9700 §2.2.2 chain cascade runs once the surrounding
+// transaction has settled, against non-transactional substore handles.
+//
+// Running the cascade on transaction-bound handles bounds it by whatever
+// action limit the backend's transaction imposes, and a chain long enough
+// to exceed it would be retired only in part — breadth-first from the
+// root, so the newest node, the one an attacker presenting a stolen token
+// holds, would survive. A rollback would discard the cascade entirely.
+// Deferring past the settle point removes both failure modes, and the
+// replay is the finding whichever way the transaction went.
+type replayCascade struct {
+	// token is the refresh_token the client presented, empty until a
+	// replay is detected. Nothing else has to travel: the chain root and
+	// the grant it belongs to are derived by walking parent pointers from
+	// this value.
+	token string
+}
+
+// arm records that presented was replayed, so the cascade runs at the
+// next settle point.
+func (c *replayCascade) arm(presented string) {
+	if c == nil {
+		return
+	}
+	c.token = presented
+}
+
+// armed reports whether a replay was detected during the exchange.
+func (c *replayCascade) armed() bool { return c != nil && c.token != "" }
+
+// run retires the replayed chain through non-transactional substores. It
+// is a no-op unless a replay was detected and it never reports failure:
+// the exchanger raises a warn-level audit event on a transport fault and
+// the client keeps the invalid_grant answer it has already been given.
+func (c *replayCascade) run(ctx context.Context, deps Deps) {
+	if !c.armed() {
+		return
+	}
+	exchanger, err := newRefreshExchanger(deps)
+	if err != nil {
+		// Unreachable in practice: the same construction already succeeded
+		// during the exchange that detected the replay. Dropping the
+		// cascade is the best-effort contract's answer, and the replay
+		// audit event has already been emitted.
+		return
+	}
+	exchanger.RevokeReplayedChain(ctx, c.token)
+}
+
 // exchangeRefresh runs the [refresh.Exchanger] and translates sentinel
-// errors into the wire form. Returns ok=false when a response has
-// already been written.
+// errors into the wire form. A detected replay arms cascade so the caller
+// retires the chain after the surrounding transaction settles. Returns
+// ok=false when a response has already been written.
 func exchangeRefresh(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
 	clientID string,
 	in refreshInputs,
+	cascade *replayCascade,
 ) (*refresh.Exchanged, bool) {
-	exchanger, err := refresh.NewExchanger(refresh.ExchangerConfig{
-		Store:             deps.RefreshTokens,
-		Clock:             deps.clockFunc(),
-		GraceTTL:          deps.RefreshTokenGraceTTL,
-		Audit:             deps.audit(),
-		GrantRevocations:  refreshChainRevocationStore(deps),
-		GrantTombstoneTTL: refreshChainTombstoneTTL(deps),
-	})
+	exchanger, err := newRefreshExchanger(deps)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return nil, false
@@ -367,6 +482,9 @@ func exchangeRefresh(
 		RequestedScope: in.RequestedScope,
 	})
 	if err != nil {
+		if errors.Is(err, refresh.ErrTokenReplayed) {
+			cascade.arm(in.Token)
+		}
 		writeRefreshExchangeError(w, err)
 		return nil, false
 	}
@@ -397,9 +515,9 @@ func enforceStrictOfflineAccess(w http.ResponseWriter, deps Deps, scope []string
 }
 
 // writeRefreshExchangeError maps the refresh-package sentinels onto wire
-// codes. Replay handling lives entirely inside [refresh.Exchanger]
-// (which calls RevokeChain before returning ErrTokenReplayed), so the
-// HTTP layer only has to surface the right wire code.
+// codes. Replay *detection* lives inside [refresh.Exchanger]; the chain
+// cascade it implies is armed by [exchangeRefresh] and run at the request's
+// settle point, so this function only has to surface the right wire code.
 func writeRefreshExchangeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, refresh.ErrTokenMissing),
@@ -430,7 +548,57 @@ func writeRefreshExchangeError(w http.ResponseWriter, err error) {
 // admit mid-chain upgrades). Both cases collapse to a single source
 // of truth on the wire and on the persisted rotated record.
 //
-//nolint:gocognit // Protocol-mandated issuance order keeps each failure boundary explicit.
+// serveGraceRetry answers a refresh presented inside the rotation
+// grace window (RFC 9700 §2.2.2), where the client is retrying an
+// exchange whose response it never received. It replays the cached
+// response rather than rotating again, so a lost response does not
+// cost the client its chain. Every branch writes a response.
+func serveGraceRetry(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	client *store.Client,
+	exchanged *refresh.Exchanged,
+	binding tokenBinding,
+) {
+	response, found, err := loadRefreshRetryResponse(ctx, deps, exchanged.ConsumedID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
+	if !found {
+		// The rotation that consumed this token cached nothing to
+		// replay, so there is no response to recover: an OP running
+		// without retry-response encryption keys rotates without a
+		// cache at all. The presented token is spent either way, so
+		// the retry earns the same invalid_grant a presentation past
+		// the grace window earns — indistinguishable on the wire, and
+		// no chain revocation, because the successor is live and the
+		// client has done nothing wrong.
+		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
+		return
+	}
+	// A grace retry may not widen or otherwise change the effective scope
+	// of the response originally cached for this predecessor.
+	if response.Scope != joinScope(exchanged.Scope) {
+		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token retry does not match original exchange")
+		return
+	}
+	// Bearer chains recover the cached response verbatim (RFC 9700
+	// §2.2.2). Sender-constrained chains cannot: RFC 9449 §5/§6 binds
+	// each access token to the DPoP key (or mTLS certificate) the
+	// request presents, and a confidential client may rotate that key
+	// across refreshes — replaying the originally-bound token would
+	// hand back one the client can no longer use. Re-mint the access
+	// token against the current binding while keeping the idempotent
+	// successor refresh token and id_token.
+	if binding.constrained() {
+		reissueGraceAccessToken(ctx, w, deps, client, exchanged, binding, &response)
+		return
+	}
+	writeSuccess(w, response)
+}
+
 func issueRefreshResponse(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -441,30 +609,7 @@ func issueRefreshResponse(
 	authorizationDetails []map[string]any,
 ) {
 	if exchanged.InGrace {
-		response, err := loadRefreshRetryResponse(ctx, deps, exchanged.ConsumedID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
-		}
-		// A grace retry may not widen or otherwise change the effective scope
-		// of the response originally cached for this predecessor.
-		if response.Scope != joinScope(exchanged.Scope) {
-			writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token retry does not match original exchange")
-			return
-		}
-		// Bearer chains recover the cached response verbatim (RFC 9700
-		// §2.2.2). Sender-constrained chains cannot: RFC 9449 §5/§6 binds
-		// each access token to the DPoP key (or mTLS certificate) the
-		// request presents, and a confidential client may rotate that key
-		// across refreshes — replaying the originally-bound token would
-		// hand back one the client can no longer use. Re-mint the access
-		// token against the current binding while keeping the idempotent
-		// successor refresh token and id_token.
-		if binding.constrained() {
-			reissueGraceAccessToken(ctx, w, deps, client, exchanged, binding, &response)
-			return
-		}
-		writeSuccess(w, response)
+		serveGraceRetry(ctx, w, deps, client, exchanged, binding)
 		return
 	}
 	now := deps.now().UTC()
@@ -815,16 +960,43 @@ func rotateRefreshToken(
 	return nil
 }
 
-func loadRefreshRetryResponse(ctx context.Context, deps Deps, predecessor string) (successResponse, error) {
+// loadRefreshRetryResponse recovers the response cached for predecessor
+// by the rotation that consumed it. found reports whether a cached
+// response exists at all; an error is reserved for a lookup that should
+// have succeeded.
+//
+// The absent cases are legitimate configurations rather than faults.
+// Retry responses are sealed with the cookie keys, which are mandatory
+// only for the authorization-code grant, so a deployment built around
+// CIBA, the device flow, or a custom grant can run without them; that
+// deployment's rotations never cache anything, and neither does an
+// entry whose retention has lapsed. Both surface as found=false so the
+// caller can answer the retry rather than fail it.
+func loadRefreshRetryResponse(
+	ctx context.Context,
+	deps Deps,
+	predecessor string,
+) (response successResponse, found bool, err error) {
+	if len(deps.RefreshRetryEncryptionKeys) == 0 {
+		return successResponse{}, false, nil
+	}
 	retries, ok := deps.RefreshTokens.(store.RefreshRetryResponseStore)
 	if !ok {
-		return successResponse{}, errors.New("tokenendpoint: refresh store does not support durable retry responses")
+		return successResponse{}, false,
+			errors.New("tokenendpoint: refresh store does not support durable retry responses")
 	}
 	sealed, err := retries.LoadRetryResponse(ctx, predecessor)
 	if err != nil {
-		return successResponse{}, err
+		if errors.Is(err, store.ErrNotFound) {
+			return successResponse{}, false, nil
+		}
+		return successResponse{}, false, err
 	}
-	return openRefreshRetryResponse(deps.RefreshRetryEncryptionKeys, predecessor, sealed)
+	response, err = openRefreshRetryResponse(deps.RefreshRetryEncryptionKeys, predecessor, sealed)
+	if err != nil {
+		return successResponse{}, false, err
+	}
+	return response, true, nil
 }
 
 // enforceGrantTombstoneMintRefusal implements the mint- refusal check

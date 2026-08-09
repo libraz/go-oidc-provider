@@ -41,8 +41,8 @@ import (
 // Wiring: [New] validates the option and threads the resulting
 // allow-list into the OP's mTLS verifier so the reverse-proxy header
 // path is honoured for every request handled by the [Provider].
-// Embedders who construct an [internal/mtls.Verifier] themselves can
-// still pass the recorded value via [MTLSProxyConfig].
+// [MTLSProxyConfig] reads the recorded value back as an [MTLSProxy]
+// so embedder-side middleware can be pinned to the same allow-list.
 //
 // The recorded state lives on the [Provider]'s own configuration
 // (not a package-level registry), so two [Provider] instances never
@@ -80,35 +80,53 @@ func WithMTLSProxy(headerName string, trustedCIDRs []string) Option {
 	})
 }
 
-// MTLSProxyConfig returns the [mtls.ProxyConfig] previously recorded
-// through [WithMTLSProxy] on p. The returned value carries an empty
+// MTLSProxy describes where the OP looks for a client certificate on
+// an inbound request: the header a trusted reverse proxy forwards the
+// PEM-encoded leaf in, and the CIDR ranges the OP is willing to honour
+// that header from. The zero value means "header path disabled" — only
+// a certificate from the TLS handshake is considered.
+//
+// The type is the public name for the value [WithMTLSProxy] records
+// and [MTLSProxyConfig] reads back, so embedder code can name it,
+// declare variables of it, and build one directly (for edge middleware
+// that must strip the same header from untrusted sources, say).
+//
+// Stable since v1.1.
+type MTLSProxy = mtls.ProxyConfig
+
+// MTLSProxyConfig returns the [MTLSProxy] previously recorded through
+// [WithMTLSProxy] on p. The returned value carries an empty
 // HeaderName / TrustedProxies when the option was not configured —
 // the embedder treats that as "header path disabled" and the
 // verifier consults TLS-handshake certs only.
 //
-// The function is exported so embedders that construct an
-// [internal/mtls.Verifier] themselves (e.g., for an out-of-band
-// introspection endpoint) can reuse the same allow-list configured
-// for the [Provider].
-func MTLSProxyConfig(p *Provider) mtls.ProxyConfig {
+// TrustedProxies is a fresh slice on every call, so a caller that
+// appends to it cannot widen the allow-list the [Provider] enforces.
+//
+// The function is exported so embedder-side code that has to agree
+// with the OP about which hop may forward a client certificate — an
+// edge middleware that strips the header, a reverse-proxy health
+// check, an out-of-band resource server — can read the configured
+// allow-list back rather than duplicating the literal CIDR list.
+func MTLSProxyConfig(p *Provider) MTLSProxy {
 	if p == nil {
-		return mtls.ProxyConfig{}
+		return MTLSProxy{}
 	}
 	return loadMTLSProxyConfig(p.cfg)
 }
 
 // loadMTLSProxyConfig reads the [WithMTLSProxy] state recorded on cfg
-// and projects it into a fresh [mtls.ProxyConfig]. Returns the zero
-// value when [WithMTLSProxy] was not called.
-func loadMTLSProxyConfig(cfg *config) mtls.ProxyConfig {
+// and projects it into a fresh [MTLSProxy]. Returns the zero value
+// when [WithMTLSProxy] was not called.
+func loadMTLSProxyConfig(cfg *config) MTLSProxy {
 	if cfg == nil {
-		return mtls.ProxyConfig{}
+		return MTLSProxy{}
 	}
 	state := cfg.mtlsProxy
 	if state.header == "" && len(state.trusted) == 0 {
-		return mtls.ProxyConfig{}
+		return MTLSProxy{}
 	}
-	return mtls.ProxyConfig{
+	return MTLSProxy{
 		HeaderName:     state.header,
 		TrustedProxies: append([]netip.Prefix(nil), state.trusted...),
 	}

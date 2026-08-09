@@ -1,9 +1,9 @@
 // Package remotecache provides the bounded in-process cache primitive used by
 // remote, client-controlled URL resolvers. Protocol-specific fetch and
 // validation stay at the call site; this package owns only TTL/LRU accounting,
-// expired-entry removal, per-key singleflight, and short negative caching.
-//
-//nolint:ireturn // Generic cache methods intentionally return the caller-selected concrete V.
+// expired-entry removal, per-key singleflight, short negative caching, and the
+// forced-refresh entry point a protocol layer needs when the cached value is
+// fresh but demonstrably out of date.
 package remotecache
 
 import (
@@ -28,6 +28,11 @@ const (
 	DefaultNegativeTTL = 5 * time.Second
 
 	defaultTTL = 5 * time.Minute
+
+	// refreshFlightSuffix separates a forced refresh's singleflight key from
+	// the plain load's. The NUL byte cannot occur in a URL, so no key can
+	// collide with another key's refresh flight.
+	refreshFlightSuffix = "\x00refresh"
 )
 
 var errUnexpectedResult = errors.New("remotecache: singleflight returned an unexpected result")
@@ -49,6 +54,12 @@ type Config struct {
 // stale and hasStale let the protocol layer perform change detection without
 // retaining the expired entry in the cache map.
 type Loader[V any] func(ctx context.Context, stale V, hasStale bool) (V, error)
+
+// TTLLoader is a [Loader] whose upstream advertises its own freshness lifetime
+// (an HTTP Cache-Control max-age, say). A non-positive TTL selects the cache's
+// configured [Config.TTL], so a loader that has nothing to advertise simply
+// returns zero.
+type TTLLoader[V any] func(ctx context.Context, stale V, hasStale bool) (V, time.Duration, error)
 
 // Cache is a concurrency-safe, size-bounded TTL/LRU cache. Positive and
 // negative entries share one cardinality budget.
@@ -118,33 +129,95 @@ func New[V any](cfg Config) *Cache[V] {
 }
 
 // Load returns a fresh cached value or invokes loader. Concurrent misses for
-// the same key share one loader call.
+// the same key share one loader call. Entries stored through Load expire after
+// the configured [Config.TTL].
 func (c *Cache[V]) Load(ctx context.Context, key string, loader Loader[V]) (V, error) {
+	return c.LoadTTL(ctx, key, func(ctx context.Context, stale V, hasStale bool) (V, time.Duration, error) {
+		value, err := loader(ctx, stale, hasStale)
+		return value, 0, err
+	})
+}
+
+// LoadTTL is [Cache.Load] for an upstream that advertises its own freshness
+// lifetime; the loader's TTL replaces [Config.TTL] for the entry it produces.
+func (c *Cache[V]) LoadTTL(ctx context.Context, key string, loader TTLLoader[V]) (V, error) {
 	if cached := c.getFresh(key); cached.ok {
 		return cached.value, cached.err
 	}
 
-	raw, _, _ := c.flight.Do(key, func() (any, error) {
+	return c.await(ctx, c.flight.DoChan(key, func() (any, error) {
+		// Re-check inside the singleflight so a concurrent winner that
+		// completed between the probe above and the call here does not force a
+		// redundant load.
 		if cached := c.getFresh(key); cached.ok {
 			return loadResult[V]{value: cached.value, err: cached.err}, nil
 		}
 		stale := c.removeExpired(key)
-		value, err := loader(ctx, stale.value, stale.ok)
+		value, ttl, err := loader(ctx, stale.value, stale.ok)
 		if err != nil {
 			if c.cacheableError(err) {
 				c.putNegative(key, err, stale.value, stale.ok)
 			}
 			return loadResult[V]{err: err}, nil
 		}
-		c.putPositive(key, value)
+		c.putPositive(key, value, ttl)
 		return loadResult[V]{value: value}, nil
-	})
-	result, ok := raw.(loadResult[V])
-	if !ok {
-		var zero V
-		return zero, errUnexpectedResult
+	}))
+}
+
+// RefreshTTL invokes loader even when a fresh entry exists, so a protocol layer
+// can recover from an upstream rotation it can already prove happened (a
+// signature naming a key id the cached value does not contain) without waiting
+// out the TTL. The currently stored value is handed to the loader for change
+// detection.
+//
+// A failed refresh leaves an existing value in place instead of replacing it
+// with a negative entry. The refresh is triggered by an unrecognised identifier,
+// which any peer can supply at will; caching the failure would let that peer
+// discard a value the cache holds and is still serving correctly. Only a key
+// that holds no usable value takes a negative entry, which is the same outcome
+// a plain [Cache.LoadTTL] would have produced there.
+//
+// The refresh runs under its own singleflight key so it never collapses onto a
+// concurrent [Cache.LoadTTL], whose inner re-check would hand back the very
+// entry the refresh exists to replace.
+func (c *Cache[V]) RefreshTTL(ctx context.Context, key string, loader TTLLoader[V]) (V, error) {
+	return c.await(ctx, c.flight.DoChan(key+refreshFlightSuffix, func() (any, error) {
+		current := c.peek(key)
+		value, ttl, err := loader(ctx, current.value, current.ok)
+		if err != nil {
+			if !current.ok && c.cacheableError(err) {
+				var zero V
+				c.putNegative(key, err, zero, false)
+			}
+			return loadResult[V]{err: err}, nil
+		}
+		c.putPositive(key, value, ttl)
+		return loadResult[V]{value: value}, nil
+	}))
+}
+
+// await blocks on a singleflight result while still honouring the caller's
+// context. A caller that gives up abandons only its own wait: the loader keeps
+// running and its result lands in the cache for the next caller, so a peer that
+// hangs up mid-load neither stalls nor poisons the key for everyone collapsed
+// onto the same flight. The channel singleflight returns is buffered, so the
+// abandoned send does not leak a goroutine.
+func (c *Cache[V]) await(ctx context.Context, ch <-chan singleflight.Result) (V, error) {
+	var zero V
+	select {
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case raw := <-ch:
+		if raw.Err != nil {
+			return zero, raw.Err
+		}
+		result, ok := raw.Val.(loadResult[V])
+		if !ok {
+			return zero, errUnexpectedResult
+		}
+		return result.value, result.err
 	}
-	return result.value, result.err
 }
 
 // Get returns a fresh positive value. Negative entries return their cached
@@ -158,9 +231,25 @@ func (c *Cache[V]) Get(key string) (V, bool, error) {
 	return zero, false, nil
 }
 
+// PeekFresh returns the value stored under key when it is a positive entry
+// still inside its TTL. Unlike [Cache.Get] it touches nothing: the LRU ordering
+// is unchanged and an expired entry is left in place, so a caller deciding
+// whether to force a refresh does not destroy the change-detection state that
+// refresh is about to use.
+func (c *Cache[V]) PeekFresh(key string) (V, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok || e.negative || !c.clock.Now().Before(e.expiry) {
+		var zero V
+		return zero, false
+	}
+	return e.value, true
+}
+
 // Put stores a positive value using the configured positive TTL.
 func (c *Cache[V]) Put(key string, value V) {
-	c.putPositive(key, value)
+	c.putPositive(key, value, 0)
 }
 
 // Delete removes key from both the map and LRU list.
@@ -202,8 +291,25 @@ func (c *Cache[V]) removeExpired(key string) staleResult[V] {
 	return staleResult[V]{value: e.value, ok: hasStale}
 }
 
-func (c *Cache[V]) putPositive(key string, value V) {
-	c.put(key, value, nil, false, false, c.ttl)
+// peek returns the value currently stored under key without touching the LRU
+// ordering and without removing anything. The boolean reports whether the entry
+// carries a usable prior value: a positive entry always does, a negative entry
+// only when it retained the value it replaced.
+func (c *Cache[V]) peek(key string) staleResult[V] {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok {
+		return staleResult[V]{}
+	}
+	return staleResult[V]{value: e.value, ok: !e.negative || e.hasStale}
+}
+
+func (c *Cache[V]) putPositive(key string, value V, ttl time.Duration) {
+	if ttl <= 0 {
+		ttl = c.ttl
+	}
+	c.put(key, value, nil, false, false, ttl)
 }
 
 func (c *Cache[V]) putNegative(key string, err error, stale V, hasStale bool) {

@@ -13,6 +13,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -104,6 +105,20 @@ type Deps struct {
 	// verifier can locate the public key matching the token's kid.
 	Keys *keys.Set
 
+	// Origins is the allowlist the CSRF gate checks the confirmation
+	// POST's Origin / Referer against. It is the same list the
+	// /interaction endpoint uses, so both HTML-facing gates admit the
+	// same set of request shapes.
+	//
+	// A nil value falls back to an allowlist holding [Deps.Issuer]
+	// alone — the interstitial form is served from the issuer origin
+	// and posts back to it, so that is the minimum viable list. When
+	// the issuer is missing or not a canonicalisable http(s) origin
+	// the fallback list is empty and every confirmation POST is
+	// rejected; the gate fails closed rather than falling back to a
+	// request-derived origin.
+	Origins *csrf.Allowlist
+
 	// Clock supplies the current wall-clock reading. A nil Clock
 	// falls back to [internal/timex.SystemClock]; see [Deps.Clock]
 	// godoc for why the field exists despite the v1.0 verifier not
@@ -168,6 +183,19 @@ type Deps struct {
 	// [op.WithAccessTokenRevocationStrategy].
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
+	// SubjectProjector converts the OP-internal subject recorded on the
+	// browser session into the per-client subject that appears in that
+	// client's tokens — the identity function for a public client, the
+	// pairwise hash for a pairwise one. The handler uses it to decide
+	// whether an id_token_hint names the session it is about to
+	// terminate; the projection direction matches the one the token
+	// endpoint applies when it mints the id_token's "sub".
+	//
+	// A nil projector means the OP was not configured with a subject
+	// generator, so the session subject and the token subject are the
+	// same string and are compared directly.
+	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
+
 	// Audit is the structured audit-event sink. A nil Emitter falls
 	// back to [audit.Discard] so the handler can emit session.destroyed
 	// unconditionally on successful OP session termination.
@@ -184,10 +212,31 @@ func (d Deps) audit() audit.Emitter {
 // Handler returns the HTTP handler the OP mounts at its /end_session
 // endpoint. The returned handler is safe for concurrent use; deps
 // MUST NOT be mutated after the call.
+//
+// The CSRF origin allowlist is resolved once here so the per-request
+// path never rebuilds it; see [Deps.Origins] for the fallback rule.
 func Handler(deps Deps) http.Handler {
+	deps.Origins = resolveOrigins(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serve(w, r, deps)
 	})
+}
+
+// resolveOrigins returns the allowlist the CSRF gate runs against: the
+// embedder-supplied list when present, otherwise one derived from the
+// issuer. A nil return is a usable "deny everything" list —
+// [csrf.Allowlist.Contains] reports false on a nil receiver — which is
+// the fail-closed outcome for an OP configured without a usable
+// issuer.
+func resolveOrigins(deps Deps) *csrf.Allowlist {
+	if deps.Origins != nil {
+		return deps.Origins
+	}
+	allow, err := csrf.NewAllowlist([]string{deps.Issuer})
+	if err != nil {
+		return nil
+	}
+	return allow
 }
 
 // request carries the parsed parameters the handler operates on. The
@@ -202,22 +251,52 @@ type request struct {
 	state       string
 }
 
+// flow is the per-request snapshot every step after parsing shares:
+// the wire parameters, the verified id_token_hint claims, the resolved
+// client, and the session the cookie points at. Assembling it once in
+// [serve] keeps the hint from being verified twice and the session
+// from being resolved twice, and it lets the CSRF gate reason about
+// the same session the termination step will delete.
+type flow struct {
+	req     request
+	hint    hintClaims
+	client  *store.Client
+	session sessionFingerprint
+}
+
+// sessionFingerprint is the pair the handler reads out of the session
+// cookie: the session id to delete and the OP-internal subject whose
+// grants the logout cascade retires. The zero value means "no
+// resolvable session", which every downstream step treats as "nothing
+// to terminate".
+type sessionFingerprint struct {
+	sessionID string
+	subject   string
+}
+
 // serve is the request-scoped entry point. It validates the shape,
 // resolves the requesting client, terminates the session, and emits
 // the response. Decomposing the body keeps the function under the
 // project's gocognit / cyclop caps.
 //
-// The serve flow forks on the presence of id_token_hint:
+// The serve flow forks on whether the request proves an explicit user
+// intent to end THIS browser's session:
 //
-//   - With a valid hint, the hint itself proves the requester
-//     possesses an OP-signed token bound to the requesting client.
-//     Both GET and POST are accepted directly.
-//   - Without a hint, an unauthenticated GET is indistinguishable
-//     from a cross-site CSRF probe (e.g. <img src=...>). The handler
-//     emits an interstitial confirmation page on GET and requires a
-//     POST carrying a double-submit __Host- CSRF token before the
-//     session is terminated. This is the OIDC RP-Initiated Logout
-//     1.0 §5 plus an OWASP-grade CSRF defense.
+//   - An id_token_hint whose "sub" names the subject the session
+//     cookie authenticates carries that proof: the caller holds an
+//     OP-signed token for the very session it asks to terminate.
+//     Both GET and POST are accepted directly. A request that
+//     resolves no session at all is admitted on the same branch —
+//     there is nothing to destroy, so the OP just answers with the
+//     post-logout redirect.
+//   - Anything else — no hint, or a hint issued for a different
+//     subject — is indistinguishable from a cross-site CSRF probe
+//     (e.g. <img src=...> carrying the attacker's own id_token). The
+//     handler emits an interstitial confirmation page on GET and
+//     requires a POST carrying a double-submit __Host- CSRF token
+//     before the session is terminated. This is OIDC RP-Initiated
+//     Logout 1.0 §5's "the OP SHOULD confirm" plus an OWASP-grade
+//     CSRF defense.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	values, ok := readValues(w, r)
 	if !ok {
@@ -227,27 +306,30 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeLogoutError(w, http.StatusBadRequest, descDuplicateParameter)
 		return
 	}
-	req := parseRequest(values)
-	if !validateRequestBounds(w, req) {
+	f := flow{req: parseRequest(values)}
+	if !validateRequestBounds(w, f.req) {
 		return
 	}
-	client, ok := resolveClient(r.Context(), w, deps, req)
-	if !ok {
+	if f.hint, ok = verifyHint(r.Context(), w, deps, f.req); !ok {
 		return
 	}
-	if !validatePostLogout(w, client, req.postLogout) {
+	if f.client, ok = resolveClient(r.Context(), w, deps, f.req, f.hint); !ok {
 		return
 	}
-	if !enforceCSRFGate(w, r, req) {
+	if !validatePostLogout(w, f.client, f.req.postLogout) {
 		return
 	}
-	terminateSession(w, r, deps)
-	emitResponse(w, r, req)
+	f.session = readSessionFingerprint(r, deps)
+	if !enforceCSRFGate(w, r, deps, f) {
+		return
+	}
+	terminateSession(w, r, deps, f.session)
+	emitResponse(w, r, f.req)
 }
 
 // validateRequestBounds enforces the per-parameter size caps the
 // /end_session endpoint applies to mitigate amplification / log-leak
-// attacks against the post-logout redirect target. v0.x bounds:
+// attacks against the post-logout redirect target. The bounds:
 //
 //   - state at [maxStateBytes] (2 KiB). The value is echoed back on
 //     the post-logout redirect; an unbounded state amplifies the
@@ -266,30 +348,41 @@ func validateRequestBounds(w http.ResponseWriter, req request) bool {
 	return true
 }
 
-// enforceCSRFGate is the CSRF guard for the hint-less branch of the
-// /end_session flow. The function returns true when the caller may
-// proceed to terminateSession, false when the response has already
-// been written (interstitial page on GET, error on a forged POST).
+// enforceCSRFGate is the CSRF guard for /end_session. The function
+// returns true when the caller may proceed to terminateSession, false
+// when the response has already been written (interstitial page on
+// GET, error on a forged POST).
 //
-// The gate fires only when id_token_hint is absent: a hint-bearing
-// request has already proven the caller possesses an OP-signed token
-// for the requesting client, which a cross-site script cannot forge.
+// The gate is skipped only when [hintAuthorizesSession] reports that
+// the request already carries proof of intent for the session at
+// hand. Otherwise:
 //
-// On a hint-less GET the function renders the interstitial
-// confirmation page (HTTP 200) and returns false so the caller
-// stops without touching the session. On a hint-less POST the
-// function validates the double-submit __Host- CSRF cookie + form
-// field plus the Origin / Referer header; any failure produces a
-// 400 error page and returns false.
-func enforceCSRFGate(w http.ResponseWriter, r *http.Request, req request) bool {
-	if req.idTokenHint != "" {
+//   - GET / HEAD renders the interstitial confirmation page (HTTP 200)
+//     and returns false so the caller stops without touching the
+//     session.
+//   - POST must present the double-submit __Host- CSRF cookie + form
+//     field plus provenance headers [csrf.CheckOrigin] admits; any
+//     failure produces a 400 error page and returns false. A
+//     cross-site POST that carries a foreign subject's id_token_hint
+//     therefore fails closed rather than terminating the browser's
+//     session.
+//
+// The admit / reject decision is the one /interaction/{uid} makes for
+// the same request shape — both gates run [csrf.CheckOrigin] against
+// the same allowlist and compare their double-submit halves with
+// [csrf.ConstantTimeEqual]. Only the rendering differs: /end_session
+// is a browser-facing HTML surface, so a rejection is the static
+// error page under the endpoint's existing 400 contract rather than
+// the interaction endpoint's 403 JSON body.
+func enforceCSRFGate(w http.ResponseWriter, r *http.Request, deps Deps, f flow) bool {
+	if hintAuthorizesSession(r.Context(), deps, f) {
 		return true
 	}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
-		renderLogoutConfirmation(w, r, req)
+		renderLogoutConfirmation(w, r, f)
 		return false
 	}
-	if !validateOriginOrReferer(r) {
+	if !validateOriginOrReferer(r, deps.Origins) {
 		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
 		return false
 	}
@@ -299,6 +392,69 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, req request) bool {
 	}
 	clearConfirmCookie(w)
 	return true
+}
+
+// hintAuthorizesSession reports whether id_token_hint substitutes for
+// the explicit user gesture the interstitial otherwise demands.
+//
+// A verified hint proves only that the caller once held an OP-signed
+// token for the requesting client. It says nothing about WHOSE browser
+// is making the request: any account holder at the same OP can embed
+// their own id_token in a cross-site <img src=...> and, without the
+// subject check below, force every visitor to be logged out and have
+// their access tokens revoked. OIDC RP-Initiated Logout 1.0 §2 calls
+// for confirmation when the hint does not match the session, so the
+// hint short-circuits the gate only when it names the subject the
+// session cookie authenticates.
+//
+// Two admissions remain:
+//
+//   - No resolvable session. There is nothing to terminate, so the
+//     request cannot destroy anyone's login state and the OP answers
+//     with the post-logout redirect the RP asked for.
+//   - Matching subject. The comparison runs in the per-client subject
+//     space: the session stores the OP-internal subject while the
+//     id_token carries whatever [Deps.SubjectProjector] derived for
+//     the resolved client (identity for a public client, the pairwise
+//     hash for a pairwise one).
+//
+// A hint without "sub", or a projection that fails, counts as "does
+// not match" so every unexpected shape falls back to the confirmation
+// page instead of skipping the gate.
+func hintAuthorizesSession(ctx context.Context, deps Deps, f flow) bool {
+	if f.req.idTokenHint == "" {
+		return false
+	}
+	if f.session == (sessionFingerprint{}) {
+		return true
+	}
+	if f.hint.subject == "" || f.session.subject == "" {
+		return false
+	}
+	projected, ok := projectSessionSubject(ctx, deps, f.session.subject, f.client)
+	return ok && projected == f.hint.subject
+}
+
+// projectSessionSubject maps the OP-internal session subject onto the
+// subject space of client. A nil [Deps.SubjectProjector] means the OP
+// runs without a subject generator, so the two spaces coincide. The
+// bool reports whether a usable value was produced; a projector error
+// or an empty result yields false, which the caller reads as "cannot
+// prove a match".
+func projectSessionSubject(
+	ctx context.Context,
+	deps Deps,
+	raw string,
+	client *store.Client,
+) (string, bool) {
+	if deps.SubjectProjector == nil {
+		return raw, true
+	}
+	projected, err := deps.SubjectProjector(ctx, raw, client)
+	if err != nil || projected == "" {
+		return "", false
+	}
+	return projected, true
 }
 
 // readValues enforces the method / content-type / size invariants and
@@ -352,16 +508,37 @@ func parseRequest(v url.Values) request {
 	}
 }
 
-// resolveClient identifies the requesting client from the supplied
-// id_token_hint and / or client_id. The function returns nil when no
-// client can be identified and that absence is acceptable (no hint
-// and no post_logout_redirect_uri); otherwise it writes the error
-// response and returns false.
+// verifyHint validates id_token_hint when the request carries one and
+// returns the claims the rest of the flow acts on. A hint-less request
+// yields the zero value and true; an unverifiable hint writes the 400
+// page and returns false.
+//
+// The verifier consults [Deps.Clock] (or [timex.SystemClock] as a
+// fallback) so the iat-age cap inside [verifyIDTokenHint] is testable
+// against a fixed clock and consistent with the rest of the handler's
+// time references.
+func verifyHint(ctx context.Context, w http.ResponseWriter, deps Deps, req request) (hintClaims, bool) {
+	if req.idTokenHint == "" {
+		return hintClaims{}, true
+	}
+	claims, err := verifyIDTokenHint(ctx, deps.Keys, deps.Issuer, req.idTokenHint, hintNow(deps.Clock))
+	if err != nil {
+		writeLogoutError(w, http.StatusBadRequest, descIDTokenInvalid)
+		return hintClaims{}, false
+	}
+	return claims, true
+}
+
+// resolveClient identifies the requesting client from the verified
+// id_token_hint claims and / or the client_id parameter. The function
+// returns nil when no client can be identified and that absence is
+// acceptable (no hint and no post_logout_redirect_uri); otherwise it
+// writes the error response and returns false.
 //
 // Resolution order:
 //
-//  1. id_token_hint present: verify signature, extract aud. If
-//     client_id is also present and differs from aud, fail.
+//  1. id_token_hint present: use the client the verified claims name.
+//     If client_id is also present and differs, fail.
 //  2. Only client_id present: look it up.
 //  3. Neither present: succeed with a nil client.
 func resolveClient(
@@ -369,41 +546,20 @@ func resolveClient(
 	w http.ResponseWriter,
 	deps Deps,
 	req request,
+	hint hintClaims,
 ) (*store.Client, bool) {
 	switch {
 	case req.idTokenHint != "":
-		return resolveByIDTokenHint(ctx, w, deps, req)
+		if req.clientID != "" && req.clientID != hint.clientID {
+			writeLogoutError(w, http.StatusBadRequest, descClientIDDisagrees)
+			return nil, false
+		}
+		return resolveByClientID(ctx, w, deps, hint.clientID)
 	case req.clientID != "":
 		return resolveByClientID(ctx, w, deps, req.clientID)
 	default:
 		return nil, true
 	}
-}
-
-// resolveByIDTokenHint verifies the id_token_hint signature, extracts
-// the aud claim, optionally cross-checks the client_id parameter, and
-// looks the resulting client up in the registry.
-//
-// The verifier consults [Deps.Clock] (or [timex.SystemClock] as a
-// fallback) so the iat-age cap inside [verifyIDTokenHint] is testable
-// against a fixed clock and consistent with the rest of the handler's
-// time references.
-func resolveByIDTokenHint(
-	ctx context.Context,
-	w http.ResponseWriter,
-	deps Deps,
-	req request,
-) (*store.Client, bool) {
-	aud, err := verifyIDTokenHint(deps.Keys, deps.Issuer, req.idTokenHint, hintNow(deps.Clock))
-	if err != nil {
-		writeLogoutError(w, http.StatusBadRequest, descIDTokenInvalid)
-		return nil, false
-	}
-	if req.clientID != "" && req.clientID != aud {
-		writeLogoutError(w, http.StatusBadRequest, descClientIDDisagrees)
-		return nil, false
-	}
-	return resolveByClientID(ctx, w, deps, aud)
 }
 
 // resolveByClientID looks id up in the client registry. Both
@@ -456,16 +612,28 @@ func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout 
 	return false
 }
 
-// terminateSession is the success-path side effect: read the session
-// cookie, delete the underlying session record, dispatch a
-// back-channel logout fan-out to the affected RPs, and clear the
-// cookie in the response. Store and downstream revocation failures are
-// deliberately non-blocking for the browser response, but they are recorded
-// as distinct audit events rather than being misreported as a successful
-// session destruction. The cookie is always cleared so the browser stops
-// authenticating future requests with stale state.
-func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
-	sid, subject := readSessionFingerprint(r, deps)
+// terminateSession is the success-path side effect: delete the session
+// record the cookie pointed at, hand a back-channel logout fan-out to
+// the affected RPs off to the coordinator, and clear the cookie in the
+// response. Store and downstream revocation failures are deliberately
+// non-blocking for the browser response, but they are recorded as
+// distinct audit events rather than being misreported as a successful
+// session destruction. The cookie is always cleared so the browser
+// stops authenticating future requests with stale state.
+//
+// The ordering here is load-bearing. Session deletion and the
+// access-token cascade run on the request path, so the response is
+// never written while the session the user asked to end is still live.
+// Back-channel delivery does not: it is an out-of-band exchange with
+// the relying parties, bounded only by how fast the slowest of them
+// answers, so it is detached and the caller proceeds to write the
+// response.
+//
+// sess is the fingerprint [serve] read before the CSRF gate ran, so
+// the session that gets destroyed is exactly the one the gate
+// authorised.
+func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, sess sessionFingerprint) {
+	sid, subject := sess.sessionID, sess.subject
 	if sid != "" {
 		err := deps.Sessions.Logout(r.Context(), sid)
 		switch {
@@ -482,16 +650,19 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditLogoutTokenRevokeFailed), Level: audit.LevelError, Message: "logout token revocation failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
 		}
 		if deps.Backchannel != nil {
-			// Back-channel fan-out is best-effort: per-RP failures
-			// are recorded as audit events inside the coordinator
-			// so a broken downstream cannot stall the user-visible
-			// logout.
-			if _, err := deps.Backchannel.Notify(r.Context(), backchannel.Notice{
+			// Back-channel fan-out is detached from the request. The
+			// session is already gone by this point, so the browser can
+			// be answered immediately while delivery continues under
+			// the coordinator's own deadline; a relying party that
+			// never answers therefore cannot hold the end-user's logout
+			// open. Every outcome — per-RP delivery, target-resolution
+			// faults, capacity shedding — is recorded as an audit event
+			// inside the coordinator, which is what replaces the return
+			// value the synchronous call used to hand back.
+			deps.Backchannel.NotifyDetached(r.Context(), backchannel.Notice{
 				Subject:   subject,
 				SessionID: sid,
-			}); err != nil {
-				deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditLogoutBackChannelResolveFailed), Level: audit.LevelError, Message: "back-channel logout target resolution failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
-			}
+			})
 		}
 	}
 	clearSessionCookie(w)
@@ -592,18 +763,18 @@ func endSessionNow(deps Deps) time.Time {
 
 // readSessionFingerprint pulls the session id and the authenticated
 // subject out of the __Host-oidc_session cookie. A missing cookie /
-// decode failure returns the empty pair; the caller treats that as
+// decode failure returns the zero value; the caller treats that as
 // "nothing to terminate".
-func readSessionFingerprint(r *http.Request, deps Deps) (sid, subject string) {
+func readSessionFingerprint(r *http.Request, deps Deps) sessionFingerprint {
 	c, err := r.Cookie(cookie.SessionProfile.Name)
 	if err != nil || c == nil || c.Value == "" {
-		return "", ""
+		return sessionFingerprint{}
 	}
 	active, err := deps.Sessions.Resolve(r.Context(), c.Value)
 	if err != nil || active == nil || active.Session == nil {
-		return "", ""
+		return sessionFingerprint{}
 	}
-	return active.Session.ID, active.Session.Subject
+	return sessionFingerprint{sessionID: active.Session.ID, subject: active.Session.Subject}
 }
 
 // clearSessionCookie writes a Set-Cookie header that retires the

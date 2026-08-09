@@ -255,7 +255,7 @@ func TestRefresh_DPoP_GraceRebindsAccessToken(t *testing.T) {
 	verifierClock := fixedClock{now: cur}
 	keySet := mustKeySet(t, f.prov)
 	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: f.prov.Issuer, Clock: verifierClock}
-	parsed, _, err := v.Verify(at)
+	parsed, _, err := v.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("Verify grace access token: %v", err)
 	}

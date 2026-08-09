@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/recoverykit"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -95,11 +96,52 @@ func TestGenerate_DoesNotTouchStorage(t *testing.T) {
 
 	ctx := context.Background()
 	st := inmem.New()
-	if _, err := recoverykit.Generate(ctx, "sub-1"); err != nil {
+	res, err := recoverykit.Generate(ctx, "sub-1")
+	if err != nil {
 		t.Fatalf("Generate: %v", err)
+	}
+	// The package-level entry point routes through a zero-value Kit, so
+	// it has to land on the system clock rather than on a zero stamp.
+	if res.Batch.GeneratedAt.IsZero() {
+		t.Error("GeneratedAt is zero; the default clock did not stamp the batch")
 	}
 	if _, err := st.RecoveryCodes().Get(ctx, "sub-1"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Get after Generate: err=%v, want store.ErrNotFound; Generate persisted the batch", err)
+	}
+}
+
+// pinnedClock is the injected wall clock the Kit cases read.
+type pinnedClock struct{ now time.Time }
+
+func (c pinnedClock) Now() time.Time { return c.now }
+
+// TestKit_ClockDatesThePersistedBatch drives the injected clock all the
+// way to storage: what the account page later reads back as "codes
+// issued on" has to be the instant the embedder's clock reported, not
+// the host's. Reading the stamp off the store rather than off the
+// returned value is the point — a Kit that dated the returned batch but
+// persisted something else would pass a field-level assertion.
+func TestKit_ClockDatesThePersistedBatch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := inmem.New()
+	pinned := time.Date(2087, 3, 14, 9, 26, 53, 0, time.UTC)
+	kit := recoverykit.Kit{Clock: pinnedClock{now: pinned}}
+
+	res, err := kit.Replace(ctx, st.RecoveryCodes(), "sub-clock")
+	if err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	if !res.Batch.GeneratedAt.Equal(pinned) {
+		t.Errorf("returned GeneratedAt=%v, want the injected clock reading %v", res.Batch.GeneratedAt, pinned)
+	}
+	stored, err := st.RecoveryCodes().Get(ctx, "sub-clock")
+	if err != nil {
+		t.Fatalf("Get persisted batch: %v", err)
+	}
+	if !stored.GeneratedAt.Equal(pinned) {
+		t.Errorf("persisted GeneratedAt=%v, want the injected clock reading %v", stored.GeneratedAt, pinned)
 	}
 }
 

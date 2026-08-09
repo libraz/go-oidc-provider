@@ -28,6 +28,7 @@ func validBaseOptsWithInmem(tb testing.TB) []op.Option {
 		op.WithStore(inmem.New()),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
+		fixtureAuthenticator(),
 	}
 }
 
@@ -123,7 +124,10 @@ func TestWithEndpoints_RejectsActiveRouteCollisions(t *testing.T) {
 			wantRight: "Token",
 		},
 		{
-			name:      "interaction session prefix",
+			name: "interaction session prefix",
+			// Session is deprecated and mounts nothing, but it still
+			// takes part in the collision check; that is the property
+			// this row covers.
 			endpoints: op.Endpoints{Interaction: "/flow", Session: "/flow/session"},
 			wantLeft:  "Interaction",
 			wantRight: "Session",

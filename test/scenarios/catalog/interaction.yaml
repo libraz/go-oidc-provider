@@ -316,7 +316,7 @@ rows:
 
   - id: ITX-073
     severity: P0
-    spec: 02-product-design.md §M.6 / NIST SP 800-63B §5.2.2
+    spec: NIST SP 800-63B §5.2.2 / OP brute-force policy — one lockout counter per subject, shared across factors
     behaviour: |
       Failed authentication attempts MUST share a per-subject counter
       across every authenticator the OP exposes (TOTP, email-OTP,

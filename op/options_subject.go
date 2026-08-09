@@ -4,7 +4,7 @@ package op
 // consults to compute the "sub" claim of issued ID tokens and JWT
 // access tokens. The library ships two reference generators in the
 // [github.com/libraz/go-oidc-provider/op/subject] sub-package:
-// [subject.UUIDv7] (the v0.x default; passes InternalUserID through
+// [subject.UUIDv7] (the default; passes InternalUserID through
 // verbatim) and [subject.Pairwise] (OIDC Core 1.0 §8.1).
 //
 // Embedders running the pairwise strategy SHOULD prefer

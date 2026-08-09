@@ -47,7 +47,7 @@ func (f FederatedSubject) IsZero() bool { return f.Provider == "" && f.ExternalI
 // after grants have been issued is rejected at construction time by
 // the subject-mode immutability gate.
 //
-// The package ships two reference implementations: [UUIDv7] (the v0.x
+// The package ships two reference implementations: [UUIDv7] (the
 // default; passes InternalUserID through verbatim) and [Pairwise]
 // (OIDC Core 1.0 §8.1, scoped by the client's sector host).
 type Generator interface {

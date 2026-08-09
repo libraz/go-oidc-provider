@@ -10,14 +10,14 @@ import (
 // falling back to [GeneratorInput.Federated.ExternalID] when the user
 // authenticated through federation.
 //
-// The name reflects the v0.x convention where embedders generate
+// The name reflects the convention it serves: embedders generate
 // stable UUIDv7 user identifiers upstream and pass them through as
-// the OP-internal subject; the generator itself does not call
+// the OP-internal subject. The generator itself does not call
 // uuid.NewV7() — it has no source of randomness and is purely
 // projective. Returning a fresh value per call would break the
 // determinism contract documented on [Generator].
 //
-// UUIDv7 is the v0.x default; it is wired implicitly when neither
+// UUIDv7 is the default; it is wired implicitly when neither
 // op.WithSubjectGenerator nor op.WithPairwiseSubject is supplied.
 //
 // # Returned errors

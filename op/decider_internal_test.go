@@ -1,10 +1,14 @@
 package op
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/redact"
 )
 
 // stubDecider returns a fixed Decision, so a test can pin what the
@@ -80,5 +84,41 @@ func TestDeciderAdapter_RequireCarriesOnlyTheKind(t *testing.T) {
 	}
 	if got.Step.IsCaptcha {
 		t.Error("Step.IsCaptcha is set; the adapter carries no step configuration at all")
+	}
+}
+
+// TestDenyReason_ReachesTheSinkVerbatim pins the property [Deny.Reason]
+// documents: the value is not masked on its way to a log sink. The
+// redactor matches a closed catalogue of credential-bearing attribute
+// keys, and neither the "reason" attribute the orchestrator writes nor
+// the reserved [AuditDenyReasonKey] is in it. The test exists because
+// the field's godoc previously promised the opposite; an embedder
+// reading it decides what is safe to put in Reason, so the real
+// handling has to be pinned rather than assumed either way.
+//
+// The test lives in the internal test package because
+// [AuditDenyReasonKey] is deprecated and the external test package
+// cannot reference it without a lint suppression.
+func TestDenyReason_ReachesTheSinkVerbatim(t *testing.T) {
+	t.Parallel()
+
+	if AuditDenyReasonKey != "audit.deny.reason" {
+		t.Errorf("AuditDenyReasonKey = %q; the documented value is frozen", AuditDenyReasonKey)
+	}
+	for _, key := range []string{"reason", AuditDenyReasonKey} {
+		if redact.IsSensitive(key) {
+			t.Errorf("redact.IsSensitive(%q) = true, want false: Deny.Reason is documented as reaching the sink unmasked", key)
+		}
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(redact.WrapHandler(slog.NewJSONHandler(&buf, nil)))
+	const reason = "policy.geo"
+	logger.Info("authn: LoginFlow denied", slog.String("reason", reason))
+	if !strings.Contains(buf.String(), reason) {
+		t.Errorf("record = %s, want it to carry %q verbatim", buf.String(), reason)
+	}
+	if strings.Contains(buf.String(), redact.Sentinel) {
+		t.Errorf("record = %s, want no redaction sentinel for the reason attribute", buf.String())
 	}
 }

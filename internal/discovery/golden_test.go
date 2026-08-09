@@ -9,8 +9,9 @@ import (
 
 // TestDiscovery_Golden_AllFeaturesEnabled locks the wire shape of the
 // discovery document for a deployment that opts into every optional
-// feature. The fixture is the contract RPs build against — incidental
-// renames or field reorderings should fail the test rather than ship.
+// feature, including a JWE inventory with a decryption keyset. The
+// fixture is the contract RPs build against — incidental renames or
+// field reorderings should fail the test rather than ship.
 func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -29,10 +30,13 @@ func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 		},
 		Features: discovery.Features{
 			PAR: true, JAR: true, JARM: true, DPoP: true, MTLS: true,
-			Introspect: true, Revoke: true,
+			Introspect: true, Revoke: true, AuthorizeEndpoint: true,
+			EncryptionInbound: true,
 		},
-		RequirePAR:      true,
-		GrantsSupported: []string{"authorization_code", "refresh_token"},
+		EncryptionAlgsSupported: []string{"RSA-OAEP-256", "ECDH-ES", "ECDH-ES+A128KW", "ECDH-ES+A256KW"},
+		EncryptionEncsSupported: []string{"A128GCM", "A256GCM"},
+		RequirePAR:              true,
+		GrantsSupported:         []string{"authorization_code", "refresh_token"},
 		AuthMethodsSupported: []string{
 			"client_secret_basic",
 			"client_secret_post",
@@ -59,6 +63,7 @@ func TestDiscovery_Golden_MinimalProfile(t *testing.T) {
 			Token:     "/token",
 			UserInfo:  "/userinfo",
 		},
+		Features:        discovery.Features{AuthorizeEndpoint: true},
 		GrantsSupported: []string{"authorization_code"},
 		ScopesSupported: []string{"openid", "profile", "email", "address", "phone", "offline_access"},
 	})

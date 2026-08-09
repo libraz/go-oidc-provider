@@ -22,6 +22,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/jar"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
@@ -62,7 +63,21 @@ type Clock interface {
 
 // HintResolver maps a CIBA hint to a stable end-user subject.
 // The library calls Resolve once per /bc-authorize POST after
-// classifying the hint kind. Implementations MUST:
+// classifying the hint kind.
+//
+// What value arrives depends on the kind:
+//
+//   - [ciba.HintLoginHint] and [ciba.HintLoginHintToken] deliver the
+//     raw wire parameter. The OP has no way to interpret either, so
+//     verifying a login_hint_token's signature and issuer is the
+//     implementation's job.
+//   - [ciba.HintIDTokenHint] delivers the OP-verified sub claim, NOT
+//     the JWT. The handler has already checked the signature against
+//     the OP keyset, the iss claim, and that the audience identifies
+//     the authenticated client (CIBA Core 1.0 §7.1), so the value is
+//     an OP-issued subject the implementation can look up directly.
+//
+// Implementations MUST:
 //
 //   - return a non-empty subject on success;
 //   - return [ErrUnknownUser] when the hint does not resolve to a
@@ -101,6 +116,15 @@ type Deps struct {
 	// only the per-scope AllowedClients allowlist check; the client
 	// Scopes intersection still runs.
 	Scopes *scoperegistry.Registry
+
+	// Keys is the OP signing keyset (active plus retiring entries) an
+	// inbound id_token_hint is verified against per CIBA Core 1.0
+	// §7.1. A nil keyset does not weaken the endpoint: it makes every
+	// id_token_hint request fail with server_error, because the OP
+	// cannot establish that the presented token is one it issued and
+	// MUST NOT pass an unverified assertion of identity onward.
+	// Requests carrying login_hint or login_hint_token are unaffected.
+	Keys *keys.Set
 
 	// Clock supplies the current wall-clock reading. A nil Clock
 	// falls back to [internal/timex.SystemClock].
@@ -299,16 +323,14 @@ func resolveDeps(d Deps) Deps {
 // resolves it to a subject, parses the requested parameters,
 // mints the auth_req_id, and persists the resulting record.
 //
-//nolint:cyclop // serve enumerates the /bc-authorize gates (form, DPoP, client auth, hint resolve, mint) in flat shape; refactor would obscure request ordering.
+// The gates are enumerated in flat shape so each one maps onto the
+// CIBA Core clause it enforces; folding them into helpers would
+// obscure the request ordering.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !parseAndValidateForm(w, r) {
 		return
 	}
-	dpopJKT, ok := verifyDPoPProof(r, w, deps)
-	if !ok {
-		return
-	}
-	client, _, ok := authenticate(r.Context(), w, r, deps)
+	dpopJKT, client, ok := authenticateWithDPoP(w, r, deps)
 	if !ok {
 		return
 	}
@@ -327,7 +349,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	subject, ok := resolveHint(r.Context(), w, deps, hintKind, hintValue, client.ID)
+	subject, ok := resolveHint(r.Context(), w, deps, hintKind, hintValue, client)
 	if !ok {
 		return
 	}
@@ -404,24 +426,102 @@ func parseAndValidateForm(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// verifyDPoPProof inspects the request for a DPoP proof. When
-// [Deps.DPoP] is nil or the request does not carry a proof, the
-// returned thumbprint is empty and the handler proceeds. When the
+// authenticateWithDPoP runs DPoP proof verification and client
+// authentication in the one order that satisfies both of the
+// constraints the two mechanisms impose, and returns the proof's RFC
+// 7638 thumbprint ("" when no proof was presented) alongside the
+// authenticated client.
+//
+// Proof verification runs FIRST so the RFC 9449 §8 `use_dpop_nonce`
+// challenge fires before any client_assertion jti is consumed: §8
+// contemplates a verbatim retry of the client-side request body with
+// only the proof refreshed, and RP libraries rebuild only the DPoP
+// header, reusing the original client_assertion. Marking the
+// assertion's jti on the first attempt would surface on the retry as
+// invalid_client. Nothing in the verification depends on the resolved
+// client identity — the proof is bound to the request and to its own
+// key, never to the client's credential.
+//
+// The proof's replay marker is written LAST, after authentication
+// succeeds. /bc-authorize requires a credential, so that write is the
+// one place where an unauthenticated request rate would translate into
+// storage cost, and a proof burned on a request that never
+// authenticated would make the legitimate retry look like a replay.
+// The token and PAR endpoints apply the identical ordering.
+//
+// The function writes the response on every failure path; the caller
+// only checks the bool.
+func authenticateWithDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (string, *store.Client, bool) {
+	checked, ok := verifyDPoPProof(r, w, deps)
+	if !ok {
+		return "", nil, false
+	}
+	client, _, ok := authenticate(r.Context(), w, r, deps)
+	if !ok {
+		return "", nil, false
+	}
+	if !commitDPoPProof(r.Context(), w, deps, checked) {
+		return "", nil, false
+	}
+	return checkedJKT(checked), client, true
+}
+
+// verifyDPoPProof runs the stateless RFC 9449 §4.3 gates over the
+// optional DPoP header and returns the accepted proof when one was
+// presented. When [Deps.DPoP] is nil or the request does not carry a
+// proof, the returned proof is nil and the handler proceeds. When the
 // proof is present and verification fails, the function writes the
 // RFC 9449 §8 envelope and returns ok=false.
-func verifyDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps) (string, bool) {
+//
+// The proof is not single-use until [commitDPoPProof] has run; see
+// [authenticateWithDPoP] for why the two phases are kept apart.
+func verifyDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps) (*dpop.Checked, bool) {
 	if deps.DPoP == nil {
-		return "", true
+		return nil, true
 	}
 	if r.Header.Get("DPoP") == "" {
-		return "", true
+		return nil, true
 	}
-	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
+	checked, err := deps.DPoP.CheckHTTPRequest(r.Context(), r, "")
 	if err != nil {
-		dpop.WriteError(r.Context(), w, err, dpop.NonceSourceFromIssuer(deps.DPoPNonces))
-		return "", false
+		writeDPoPError(r.Context(), w, deps, err)
+		return nil, false
 	}
-	return res.JKT, true
+	return checked, true
+}
+
+// commitDPoPProof writes the replay marker for the proof
+// [verifyDPoPProof] accepted, making it single-use. It is a no-op when
+// no proof was presented. The function emits the response and returns
+// false on failure; a repeated or concurrent use of the same proof
+// surfaces through the same [dpop.WriteError] mapping the single-phase
+// verifier produced.
+func commitDPoPProof(ctx context.Context, w http.ResponseWriter, deps Deps, checked *dpop.Checked) bool {
+	if checked == nil {
+		return true
+	}
+	if err := deps.DPoP.Commit(ctx, checked); err != nil {
+		writeDPoPError(ctx, w, deps, err)
+		return false
+	}
+	return true
+}
+
+// checkedJKT returns the proof's RFC 7638 thumbprint, or "" when no
+// proof was presented. The helper keeps the nil handling out of
+// [authenticateWithDPoP]'s return statement.
+func checkedJKT(checked *dpop.Checked) string {
+	if checked == nil {
+		return ""
+	}
+	return checked.JKT
+}
+
+// writeDPoPError translates a [dpop.Err*] sentinel onto the wire form,
+// including the RFC 9449 §8 `use_dpop_nonce` challenge. Both proof
+// phases route through it so their boundary mapping cannot drift.
+func writeDPoPError(ctx context.Context, w http.ResponseWriter, deps Deps, err error) {
+	dpop.WriteError(ctx, w, err, dpop.NonceSourceFromIssuer(deps.DPoPNonces))
 }
 
 // authenticate resolves the client credentials carried by the
@@ -685,17 +785,112 @@ func classifyHint(
 	return kind, value, true
 }
 
-// resolveHint invokes the embedder's [HintResolver] and maps the
-// outcome onto the wire response. A nil resolver collapses onto
-// login_required so a misconfigured deployment never silently
-// resolves every hint to the empty subject.
+// pairwiseSubjectType is the OIDC Core 1.0 §8 subject_type value that
+// makes a client's "sub" a per-sector pseudonym rather than the
+// OP-internal identifier. Mirrors the literal the issuance-side
+// subject projector dispatches on.
+const pairwiseSubjectType = "pairwise"
+
+// verifyIDTokenHint runs the CIBA Core 1.0 §7.1 verification the OP
+// owes an inbound id_token_hint and returns the value the resolver
+// should see. For every other hint kind the raw parameter passes
+// through untouched.
+//
+// On the id_token_hint branch the returned value is the OP-verified
+// sub claim, not the JWT: the token's signature is checked against the
+// OP keyset, its iss must be this issuer, and its audience must
+// identify the client that authenticated on this very request. Without
+// that last binding any CIBA-registered client could present an ID
+// Token minted for a different client and have the ceremony addressed
+// to a subject it was never entitled to name.
+//
+// Pairwise clients are refused outright. A client registered with
+// subject_type=pairwise receives per-sector pseudonyms (OIDC Core 1.0
+// §8.1), which are SHA-256 outputs the OP keeps no reverse index for;
+// the one place the library recovers a raw subject from a projected
+// one pivots through an access token's grant lineage, and an ID Token
+// carries no such lineage. Handing the resolver a pseudonym it cannot
+// map would either fail confusingly or invite the embedder to guess,
+// so the request is rejected with a description that names the
+// supported alternative.
+//
+// The bool is false when the function wrote the response.
+func verifyIDTokenHint(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	kind ciba.HintKind,
+	value string,
+	client *store.Client,
+) (string, bool) {
+	if kind != ciba.HintIDTokenHint {
+		return value, true
+	}
+	if client.SubjectType == pairwiseSubjectType {
+		emitHintRejected(ctx, deps, client.ID, "id_token_hint_pairwise_unsupported")
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"id_token_hint is not accepted from a client using pairwise subject identifiers; "+
+				"use login_hint or login_hint_token")
+		return "", false
+	}
+	subject, err := ciba.VerifyIDTokenHint(ctx, deps.Keys, deps.Issuer, client.ID, value)
+	if err != nil {
+		if errors.Is(err, ciba.ErrIDTokenHintUnverifiable) {
+			emitHintRejected(ctx, deps, client.ID, "id_token_hint_unverifiable")
+			writeError(w, http.StatusInternalServerError, errServerError,
+				"id_token_hint verification is not configured")
+			return "", false
+		}
+		// Every client-facing cause collapses onto one code and one
+		// description so the wire surface cannot be probed to learn
+		// which check rejected the token.
+		emitHintRejected(ctx, deps, client.ID, "id_token_hint_invalid")
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"id_token_hint is not an id_token this OP issued to this client")
+		return "", false
+	}
+	return subject, true
+}
+
+// emitHintRejected records a hint-verification rejection on the audit
+// stream. reason is a stable code string; the wire response carries
+// less detail on purpose, so the audit event is where an operator
+// learns which gate closed.
+func emitHintRejected(ctx context.Context, deps Deps, clientID, reason string) {
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:     ciba.AuditAuthorizationRejected,
+		Level:    audit.LevelWarn,
+		Message:  "backchannel-authentication rejected: id_token_hint not accepted",
+		ClientID: clientID,
+		Extras: map[string]any{
+			"reason": reason,
+		},
+	})
+}
+
+// resolveHint runs the OP-side id_token_hint verification and then
+// invokes the embedder's [HintResolver], mapping the outcome onto the
+// wire response. A nil resolver collapses onto login_required so a
+// misconfigured deployment never silently resolves every hint to the
+// empty subject.
+//
+// The verification runs here rather than at the call site so no future
+// edit can reorder the two: on the [ciba.HintIDTokenHint] branch the
+// resolver receives the OP-verified sub produced by
+// [verifyIDTokenHint], never the JWT.
 func resolveHint(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
 	kind ciba.HintKind,
-	value, clientID string,
+	value string,
+	client *store.Client,
 ) (string, bool) {
+	clientID := client.ID
+	value, ok := verifyIDTokenHint(ctx, w, deps, kind, value, client)
+	if !ok {
+		return "", false
+	}
 	if deps.HintResolver == nil {
 		deps.auditEmitter().Emit(ctx, audit.Event{
 			Name:     ciba.AuditAuthorizationRejected,

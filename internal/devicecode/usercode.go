@@ -7,8 +7,8 @@ import (
 )
 
 // UserCodeLength is the canonical user_code length in characters. 8
-// characters of Crockford Base32 yield 40 bits of entropy, the
-// brute-force margin / §S.1.
+// characters of Crockford Base32 yield 40 bits of entropy, which is
+// the margin the user_code brute-force gate is sized against.
 const UserCodeLength = 8
 
 // crockfordAlphabet is the Crockford Base32 alphabet (RFC 4648 with

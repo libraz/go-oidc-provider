@@ -81,7 +81,13 @@ var cibaAnchor = time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 type cibaHintResolver struct{}
 
 func (cibaHintResolver) Resolve(_ context.Context, _ op.HintKind, value string) (string, error) {
-	if value == cibaKnownLoginHint {
+	// cibaDefaultSubject is accepted alongside the login_hint because
+	// the id_token_hint branch never reaches a resolver with a JWT: the
+	// OP verifies the token itself and hands over the "sub" it minted
+	// (CIBA Core 1.0 §7.1). A resolver keyed only on the login_hint
+	// spelling would answer unknown_user_id for a subject the OP had
+	// just proved it issued.
+	if value == cibaKnownLoginHint || value == cibaDefaultSubject {
 		return cibaDefaultSubject, nil
 	}
 	return "", op.ErrUnknownCIBAUser
@@ -143,6 +149,79 @@ func newCIBAProviderWithResources(t *testing.T, scopes, resources []string, ciba
 		},
 	})
 	return &cibaProvider{tk: tk, client: client}
+}
+
+// cibaPairwiseSalt is the deterministic 32-byte salt the pairwise CIBA
+// row wires through op.WithPairwiseSubject. Kept distinct from the
+// issuance suite's salt so neither suite's fixtures move when the other
+// is edited.
+var cibaPairwiseSalt = []byte("ciba-pairwise-fixed-salt-32bytes")
+
+// newCIBAPairwiseProvider mirrors [newCIBAProvider] but registers the
+// CIBA client with subject_type=pairwise. It exists for the single row
+// that pins how the id_token_hint branch behaves when the client's
+// "sub" values are per-sector pseudonyms.
+func newCIBAPairwiseProvider(t *testing.T) *cibaProvider {
+	t.Helper()
+	hash, err := op.HashClientSecret(cibaClientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithPairwiseSubject(cibaPairwiseSalt),
+	))
+	client := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "ciba-rp",
+		SecretHash:              hash,
+		Scopes:                  []string{"openid"},
+		SubjectType:             "pairwise",
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes: []string{
+			"authorization_code",
+			"refresh_token",
+			cibaURNGrant,
+		},
+	})
+	return &cibaProvider{tk: tk, client: client}
+}
+
+// cibaIDTokenHintClaims is the claim set the id_token_hint rows sign.
+// Only the members the OP verifies are modelled; iat / exp are carried
+// because a real ID Token has them, not because the hint path reads
+// them (CIBA Core 1.0 §7.1 verification here is signature, iss, and
+// audience — freshness is deliberately not a gate).
+type cibaIDTokenHintClaims struct {
+	Iss string   `json:"iss"`
+	Sub string   `json:"sub"`
+	Aud []string `json:"aud"`
+	AZP string   `json:"azp,omitempty"`
+	Iat int64    `json:"iat,omitempty"`
+	Exp int64    `json:"exp,omitempty"`
+}
+
+// mintIDTokenHint signs an ID Token with the OP's own active key,
+// addressed to the registered CIBA client and naming the subject the
+// harness resolver knows. mutate lets a row bend one claim to exercise
+// a rejection path; the timestamps are derived from [cibaAnchor] rather
+// than the wall clock so a row's outcome never depends on when it ran.
+func (p *cibaProvider) mintIDTokenHint(t *testing.T, mutate func(*cibaIDTokenHintClaims)) string {
+	t.Helper()
+	c := cibaIDTokenHintClaims{
+		Iss: p.tk.Issuer,
+		Sub: cibaDefaultSubject,
+		Aud: []string{p.client.ID},
+		Iat: cibaAnchor.Add(-time.Hour).Unix(),
+		Exp: cibaAnchor.Add(time.Hour).Unix(),
+	}
+	if mutate != nil {
+		mutate(&c)
+	}
+	tok, err := p.tk.SignedJWT(c)
+	if err != nil {
+		t.Fatalf("SignedJWT: %v", err)
+	}
+	return tok
 }
 
 // stubCIBADPoPNonceSource is a minimal [op.DPoPNonceSource] used by
@@ -805,21 +884,19 @@ func TestScenario_CIBA_018_BackchannelHappyPathWithLoginHintToken(t *testing.T) 
 }
 
 // TestScenario_CIBA_019_BackchannelHappyPathWithIDTokenHint pins the
-// id_token_hint branch: the handler does not parse the token
-// internally; the configured HintResolver receives the raw value and
-// is responsible for verification. Returning a known subject yields
-// 200 OK.
+// id_token_hint branch: the OP verifies the token itself — signature
+// against its own keyset, iss, and an audience naming the client that
+// authenticated on this request — and hands the resolver the verified
+// "sub" rather than the JWT. A hint that clears those checks and names
+// a subject the resolver knows yields 200 OK.
 //
 // Spec: CIBA Core §7.1.
 func TestScenario_CIBA_019_BackchannelHappyPathWithIDTokenHint(t *testing.T) {
 	t.Parallel()
 	p := newCIBAProvider(t, []string{"openid"})
 
-	// The HintResolver matches on the raw value, not on JWT shape; an
-	// arbitrary string that maps through the resolver is accepted. A
-	// real deployment would verify JWT structure inside the resolver.
 	status, body, _ := p.bcAuthorizeForm(t, url.Values{
-		"id_token_hint": {cibaKnownLoginHint},
+		"id_token_hint": {p.mintIDTokenHint(t, nil)},
 		"scope":         {"openid"},
 	})
 	if status != http.StatusOK {
@@ -832,6 +909,153 @@ func TestScenario_CIBA_019_BackchannelHappyPathWithIDTokenHint(t *testing.T) {
 	rec := p.findCIBARecord(t, authReqID)
 	if rec.Subject != cibaDefaultSubject {
 		t.Errorf("subject=%q want %q", rec.Subject, cibaDefaultSubject)
+	}
+}
+
+// TestScenario_CIBA_050_BackchannelRejectsUnverifiableIDTokenHint pins
+// the gate CIBA Core 1.0 §7.1 places on the OP. Each row hands
+// /bc-authorize a token that fails exactly one of the checks the OP
+// owes, and each MUST be refused before any HintResolver runs.
+//
+// The audience row is the load-bearing one: without it, any client
+// registered for CIBA could present an ID Token minted for a different
+// client and have the authentication ceremony addressed to a subject it
+// was never entitled to name. The others close the surrounding paths —
+// an unsigned-by-us token, a token from another issuer, and a bare
+// opaque string, which is what an id_token_hint looks like when the
+// verification is skipped entirely.
+//
+// Spec: CIBA Core §7.1, OIDC Core 1.0 §2 (azp).
+func TestScenario_CIBA_050_BackchannelRejectsUnverifiableIDTokenHint(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		hint func(t *testing.T, p *cibaProvider) string
+	}{
+		{
+			name: "issued to another client",
+			hint: func(t *testing.T, p *cibaProvider) string {
+				t.Helper()
+				return p.mintIDTokenHint(t, func(c *cibaIDTokenHintClaims) {
+					c.Aud = []string{"some-other-rp"}
+				})
+			},
+		},
+		{
+			name: "azp names another client",
+			hint: func(t *testing.T, p *cibaProvider) string {
+				t.Helper()
+				return p.mintIDTokenHint(t, func(c *cibaIDTokenHintClaims) {
+					c.Aud = []string{p.client.ID, "some-other-rp"}
+					c.AZP = "some-other-rp"
+				})
+			},
+		},
+		{
+			name: "minted by another issuer",
+			hint: func(t *testing.T, p *cibaProvider) string {
+				t.Helper()
+				return p.mintIDTokenHint(t, func(c *cibaIDTokenHintClaims) {
+					c.Iss = "https://other-op.example.com"
+				})
+			},
+		},
+		{
+			name: "not a JWS at all",
+			hint: func(t *testing.T, _ *cibaProvider) string {
+				t.Helper()
+				return cibaKnownLoginHint
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := newCIBAProvider(t, []string{"openid"})
+
+			status, body, _ := p.bcAuthorizeForm(t, url.Values{
+				"id_token_hint": {tc.hint(t, p)},
+				"scope":         {"openid"},
+			})
+			if status != http.StatusBadRequest {
+				t.Fatalf("status=%d want 400 body=%v", status, body)
+			}
+			if body["error"] != "invalid_request" {
+				t.Errorf("error=%v want invalid_request", body["error"])
+			}
+		})
+	}
+}
+
+// TestScenario_CIBA_051_BackchannelAcceptsExpiredIDTokenHint pins a
+// deliberate policy choice rather than a spec clause. A CIBA
+// consumption device legitimately holds an ID Token minted during a
+// session that ended long ago; ID Tokens are short-lived, so an exp
+// gate would reject nearly every real hint and the primary CIBA use
+// case would not work. Freshness also buys nothing here — the client
+// has authenticated at the endpoint, and it is the signature plus the
+// audience binding that establish who is asking.
+//
+// The same choice is made for RP-Initiated Logout's id_token_hint, so
+// the two hint surfaces stay consistent.
+func TestScenario_CIBA_051_BackchannelAcceptsExpiredIDTokenHint(t *testing.T) {
+	t.Parallel()
+	p := newCIBAProvider(t, []string{"openid"})
+
+	hint := p.mintIDTokenHint(t, func(c *cibaIDTokenHintClaims) {
+		c.Iat = cibaAnchor.Add(-48 * time.Hour).Unix()
+		c.Exp = cibaAnchor.Add(-47 * time.Hour).Unix()
+	})
+	status, body, _ := p.bcAuthorizeForm(t, url.Values{
+		"id_token_hint": {hint},
+		"scope":         {"openid"},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", status, body)
+	}
+	authReqID, _ := body["auth_req_id"].(string)
+	if authReqID == "" {
+		t.Fatalf("auth_req_id missing: %v", body)
+	}
+	if rec := p.findCIBARecord(t, authReqID); rec.Subject != cibaDefaultSubject {
+		t.Errorf("subject=%q want %q", rec.Subject, cibaDefaultSubject)
+	}
+}
+
+// TestScenario_CIBA_052_BackchannelRefusesIDTokenHintFromPairwiseClient
+// pins the one configuration where the OP cannot honour an
+// id_token_hint at all. A pairwise client's "sub" is a per-sector
+// pseudonym (OIDC Core §8.1) that the OP keeps no reverse index for,
+// so passing it to a resolver would either fail confusingly or invite
+// the embedder to guess. The refusal is explicit and names the
+// alternatives; the same client's login_hint path still works, which
+// is what distinguishes "this hint kind is unsupported here" from
+// "pairwise clients cannot use CIBA".
+//
+// Spec: CIBA Core §7.1, OIDC Core §8.1.
+func TestScenario_CIBA_052_BackchannelRefusesIDTokenHintFromPairwiseClient(t *testing.T) {
+	t.Parallel()
+	p := newCIBAPairwiseProvider(t)
+
+	status, body, _ := p.bcAuthorizeForm(t, url.Values{
+		"id_token_hint": {p.mintIDTokenHint(t, nil)},
+		"scope":         {"openid"},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("id_token_hint: status=%d want 400 body=%v", status, body)
+	}
+	if body["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", body["error"])
+	}
+
+	status, body, _ = p.bcAuthorizeForm(t, url.Values{
+		"login_hint": {cibaKnownLoginHint},
+		"scope":      {"openid"},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("login_hint: status=%d want 200 body=%v", status, body)
 	}
 }
 
@@ -1526,17 +1750,17 @@ func TestScenario_CIBA_048_BackchannelRejectsMultiResource(t *testing.T) {
 	expectCIBAError(t, body, "invalid_target")
 }
 
-// TestScenario_CIBA_049_IDTokenStampsACRWithoutAMR pins the
-// acr/amr contract on the CIBA-issued id_token (covered by
-// internal/tokenendpoint TestHandleCIBA_IDTokenStampsACRWithoutAMR
-// at unit scope; this row is the catalog-binding sentinel that
-// catches a regression at the integration layer if the unit
-// coverage is removed).
+// TestScenario_CIBA_049_IDTokenStampsACRWithoutAMR marks where the
+// scenario-level acr/amr test would go. Driving a redemption end to end
+// needs an approve hook the public surface does not expose, so the row
+// names its own coverage in `covered_by` and the gate resolves that
+// name. The prose that used to sit here named a test that had since
+// been renamed, and nothing noticed.
 //
 // Spec: OIDC Core §2, CIBA Core §7.1.
 func TestScenario_CIBA_049_IDTokenStampsACRWithoutAMR(t *testing.T) {
 	t.Parallel()
-	t.Skip("covered by internal/tokenendpoint TestHandleCIBA_IDTokenStampsACRWithoutAMR")
+	t.Skip("covered outside the suite; see the ciba catalog row's covered_by")
 }
 
 // Compile-time guard: ensure the OOS sentinel sentinel is reachable

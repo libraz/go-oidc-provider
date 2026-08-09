@@ -85,7 +85,7 @@ func WithDefaultLocale(locale Locale) Option {
 }
 
 // PreferredLocaleStore is the embedder hook the locale resolver
-// consults at the head of the §L.2 priority chain (before the
+// consults at the head of the locale priority chain (before the
 // authorize ui_locales parameter, the __Host-oidc_locale cookie, the
 // Accept-Language header, and the default locale). Implementations
 // return the saved locale for the supplied subject; an empty Locale
@@ -140,8 +140,8 @@ type Resolver struct {
 // ResolveRequest bundles the per-call signals [Resolver.Resolve]
 // consults. An embedder rendering an out-of-band surface (email,
 // server-rendered admin page) populates the fields it has and leaves
-// the rest at their zero values. The resolver walks the chain in
-// §L.2 order regardless.
+// the rest at their zero values. The resolver walks the chain in the
+// same priority order regardless.
 type ResolveRequest struct {
 	// Subject is the OP-internal subject identifier for the
 	// authenticated user. Empty when the request is unauthenticated;
@@ -163,9 +163,12 @@ type ResolveRequest struct {
 	AcceptLanguage string
 }
 
-// Resolve walks the §L.2 priority chain and returns the first
-// matching locale. The return value is guaranteed to be a registered
-// locale; the chain always terminates at the configured default.
+// Resolve walks the locale priority chain — [PreferredLocaleStore],
+// then the authorize ui_locales parameter, the __Host-oidc_locale
+// cookie, the Accept-Language header, and finally the configured
+// default — and returns the first matching locale. The return value is
+// guaranteed to be a registered locale; the chain always terminates at
+// the configured default.
 func (r *Resolver) Resolve(ctx context.Context, in ResolveRequest) Locale {
 	if r == nil || r.inner == nil {
 		return ""

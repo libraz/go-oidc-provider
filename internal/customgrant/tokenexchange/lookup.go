@@ -11,7 +11,6 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jose"
-	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -48,7 +47,7 @@ func (h *Handler) lookupToken(ctx context.Context, raw, urn string) (lookupResul
 	case TokenTypeJWT:
 		return h.lookupJWT(ctx, raw, TokenTypeJWT)
 	case TokenTypeIDToken:
-		return h.lookupIDToken(raw)
+		return h.lookupIDToken(ctx, raw)
 	default:
 		return lookupResult{}, fmt.Errorf("%w: unknown token-type urn", errTokenInvalid)
 	}
@@ -72,7 +71,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 		Issuer: h.issuer,
 		Clock:  h.clock,
 	}
-	claims, _, err := verifier.Verify(raw)
+	claims, _, err := verifier.Verify(ctx, raw)
 	if err != nil {
 		if errors.Is(err, tokens.ErrAccessTokenIssuerMismatch) {
 			return lookupResult{reason: "issuer_mismatch"}, errExternalIssuer
@@ -112,7 +111,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 // id_token's typ header is "JWT" (not at+jwt) so the access-token
 // verifier rejects it; we therefore parse + verify by hand against
 // the same keyset.
-func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
+func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, error) {
 	jws, _, err := jose.ParseSigned(raw)
 	if err != nil {
 		return lookupResult{reason: "malformed"}, fmt.Errorf("%w: parse: %w", errTokenInvalid, err)
@@ -128,7 +127,7 @@ func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
 	if kid == "" {
 		return lookupResult{reason: "no_kid"}, fmt.Errorf("%w: kid missing", errTokenInvalid)
 	}
-	entry, ok := h.keys.Find(kid)
+	entry, ok := h.keys.Find(ctx, kid)
 	if !ok {
 		return lookupResult{reason: "unknown_kid"}, fmt.Errorf("%w: kid not in keyset", errTokenInvalid)
 	}
@@ -143,14 +142,14 @@ func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
 	if h.issuer != "" && idClaims.Issuer != h.issuer {
 		return lookupResult{reason: "issuer_mismatch"}, errExternalIssuer
 	}
-	scope := oidcscope.Parse(idClaims.Scope)
 	aud = normaliseAudience(aud)
-	clientID := idClaims.AuthorizedParty
+	clientID := idTokenClientID(idClaims, aud)
 	if clientID == "" {
-		clientID = idClaims.ClientID
+		return lookupResult{reason: "missing_claim"}, fmt.Errorf("%w: id_token names no client", errTokenInvalid)
 	}
-	if clientID == "" && len(aud) == 1 {
-		clientID = aud[0]
+	scope, reason, err := h.idTokenScope(ctx, idClaims.Subject, clientID)
+	if err != nil {
+		return lookupResult{reason: reason}, err
 	}
 	act := extractActFromRaw(idClaims.Act)
 	return lookupResult{
@@ -166,6 +165,67 @@ func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
 			ActChainDepth: depthOfAct(act),
 		},
 	}, nil
+}
+
+// idTokenClientID resolves the client an id_token was issued to.
+// "azp" is authoritative when present — OIDC Core 1.0 §2 requires it
+// whenever the audience is not single-valued — and a single-valued
+// "aud" names the client directly. An empty result means the token
+// identifies no client, which leaves the consent lookup unaddressable.
+func idTokenClientID(claims idTokenClaims, aud []string) string {
+	if claims.AuthorizedParty != "" {
+		return claims.AuthorizedParty
+	}
+	if claims.ClientID != "" {
+		return claims.ClientID
+	}
+	if len(aud) == 1 {
+		return aud[0]
+	}
+	return ""
+}
+
+// idTokenScope resolves the scope set an id_token subject_token is
+// bounded by, returning the audit reason alongside the error on the
+// failure paths.
+//
+// An id_token carries no scope claim: OIDC Core 1.0 §2 defines none and
+// this OP emits none, so there is nothing on the token itself to bound
+// the exchange with. The authoritative bound is the persisted consent
+// the id_token was issued under, addressed by the (subject, client)
+// pair the token names. Reading a scope claim off the token instead
+// would leave every exchange of an OP-issued id_token unbounded, and
+// would keep the token exchangeable after the user withdrew the consent
+// behind it.
+//
+// Revocation therefore rides on the store contract rather than on a
+// second lookup: [store.GrantStore.FindBySubjectClient] MUST NOT return
+// a revoked grant, so withdrawn consent surfaces as
+// [store.ErrNotFound] and the exchange is refused for the whole
+// remaining lifetime of the id_token.
+//
+// The lookup addresses the grant by the id_token's "sub", which is the
+// per-client public subject. A client enrolled for pairwise subjects
+// (OIDC Core 1.0 §8.1) presents a projected "sub" while its grant
+// record keeps the OP-internal raw subject, so no grant matches and the
+// exchange is refused. That is the fail-closed direction: the
+// alternative would be exchanging a token whose rights the OP cannot
+// establish.
+func (h *Handler) idTokenScope(ctx context.Context, subject, clientID string) ([]string, string, error) {
+	if h.grants == nil {
+		return nil, "no_grant_store", fmt.Errorf("%w: grant store unavailable", errTokenInvalid)
+	}
+	grant, err := h.grants.FindBySubjectClient(ctx, subject, clientID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, "grant_not_found", errTokenInvalid
+		}
+		return nil, "store_error", fmt.Errorf("%w: grant store: %w", errTokenInvalid, err)
+	}
+	if grant == nil {
+		return nil, "grant_not_found", errTokenInvalid
+	}
+	return append([]string(nil), grant.Scope...), "", nil
 }
 
 // lookupOpaqueAccessToken resolves an opaque AT against the configured
@@ -413,7 +473,6 @@ type idTokenClaims struct {
 	ClientID        string            `json:"client_id"`
 	IssuedAt        int64             `json:"iat"`
 	ExpiresAt       int64             `json:"exp"`
-	Scope           string            `json:"scope"`
 	Confirmation    map[string]string `json:"cnf"`
 	Act             json.RawMessage   `json:"act"`
 }

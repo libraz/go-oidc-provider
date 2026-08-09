@@ -1,6 +1,7 @@
 package jose
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"encoding/base64"
@@ -24,9 +25,26 @@ const MaxJWEPlaintextSize = 1 << 20
 // when the JWE protected header omits `kid`. RFC 7516 §4.1.6 makes `kid`
 // OPTIONAL, so kid-less ciphertexts are accepted, but the candidate set is
 // pre-filtered by matching the protected-header `alg` against each private
-// key's type (RSA vs EC) and the surviving slice is bounded by this cap so
-// one attacker-supplied ciphertext cannot amplify CPU work across an
-// unbounded keyset.
+// key's type (RSA vs EC) so one attacker-supplied ciphertext cannot amplify
+// CPU work across an unbounded keyset.
+//
+// The cap is a hard gate, not a truncation: when more than
+// MaxKidlessTrialKeys candidates survive the alg filter, [Decrypt] refuses
+// the ciphertext with [ErrJWEDecryptFailed] instead of trialling a prefix
+// of the candidates. Trialling a subset would make the outcome depend on
+// keyset ordering and size rather than on the ciphertext — the same input
+// would decrypt before a rotation added a fifth matching key and fail
+// after it, surfacing as intermittent client errors with no diagnosable
+// cause. Refusing turns that into a deterministic signal that the
+// deployment must publish `kid` on its ciphertexts (or shrink the
+// same-alg keyset), which is the condition the cap actually encodes.
+//
+// The refuse-don't-truncate rule is specific to [Decrypt], where the
+// keyset is the OP's own and an oversized one is an operator error the
+// operator can fix. [internal/clientauth] reuses the same numeric
+// budget against a *client*-published JWKS and does truncate there,
+// because a client can grow its JWKS at will and refusing outright
+// would let any client disable its own authentication.
 const MaxKidlessTrialKeys = 4
 
 // MaxJOSENestingDepth bounds the total number of JOSE layers
@@ -76,11 +94,15 @@ var (
 
 	// ErrJWEKidUnknown indicates the JWE protected header named a
 	// `kid` that does not resolve through the supplied
-	// [EncryptionKeyResolver], OR (for kid-less ciphertexts) no
-	// private key in the keyset matched the protected-header `alg`.
-	// When `kid` is absent and at least one keyset entry matches
-	// `alg`, the package falls back to bounded trial decryption (see
-	// [MaxKidlessTrialKeys] and [Decrypt] doc).
+	// [EncryptionKeyResolver]. It is raised only on the kid-present
+	// path: a kid-less ciphertext never produces this sentinel,
+	// because there is no named key to report as unknown. Every
+	// kid-less failure — no candidate key matched the protected-header
+	// `alg`, more candidates survived the filter than
+	// [MaxKidlessTrialKeys] admits, or no trial decrypt succeeded —
+	// collapses onto [ErrJWEDecryptFailed] so the response does not
+	// distinguish "your ciphertext is undecryptable here" from
+	// "this OP holds no key of that shape".
 	ErrJWEKidUnknown = errors.New("jose: JWE kid unknown")
 
 	// ErrJWEDecryptFailed indicates ciphertext authentication or
@@ -118,12 +140,48 @@ var (
 // (newest first). [Decrypt] invokes All only when the protected
 // header omits `kid` (RFC 7516 §4.1.6 permits omission), and only
 // after filtering candidates by matching the header `alg` to each
-// private key's type. The number of trial decrypts on this path is
-// bounded by [MaxKidlessTrialKeys] so a kid-less ciphertext cannot
-// amplify CPU work across an unbounded keyset.
+// private key's type. A kid-less ciphertext whose filtered candidate
+// set exceeds [MaxKidlessTrialKeys] is refused rather than trialled
+// against a truncated subset, so a kid-less ciphertext cannot amplify
+// CPU work across an unbounded keyset.
 type EncryptionKeyResolver interface {
 	Resolve(kid string) (priv any, ok bool)
 	All() []any
+}
+
+// ContextualEncryptionKeyResolver is the optional extension an
+// [EncryptionKeyResolver] implements when its lookups emit
+// request-scoped observability — most importantly the retired-kid
+// audit event a rotating keyset fires when a ciphertext names a key
+// the OP no longer decrypts for.
+//
+// [Decrypt] and [DecryptChain] take no context: the JOSE layer itself
+// does no I/O and has nothing to cancel. A caller that holds a request
+// context therefore pins it onto the resolver before handing the
+// resolver over, so the resolver's own notifications carry the
+// correlation the JOSE signatures cannot. The returned value MUST be a
+// copy — pinning a context MUST NOT mutate the shared startup-built
+// resolver.
+//
+// A resolver that does not implement the interface is used verbatim,
+// which is the library default.
+type ContextualEncryptionKeyResolver interface {
+	EncryptionKeyResolver
+
+	WithContext(ctx context.Context) EncryptionKeyResolver
+}
+
+// EncryptionPolicyResolver is the optional extension an
+// [EncryptionKeyResolver] implements when the deployment narrowed the
+// JWE allow-list below the package ceiling. [Decrypt] consults it after
+// the closed allow-list check and rejects an `alg` / `enc` the policy
+// removed, so an operator restriction reaches inbound decryption rather
+// than only the discovery advertisement.
+//
+// A resolver that does not implement the interface leaves the package
+// allow-list in force, which is the library default.
+type EncryptionPolicyResolver interface {
+	JWEPolicy() JWEPolicy
 }
 
 // EncryptionKeyResolverFunc adapts a free function plus a key-list
@@ -191,13 +249,16 @@ type jweProtectedHeader struct {
 //     separated by ".".
 //  2. Protected header parses as JSON.
 //  3. `crit` is absent or empty.
-//  4. `alg` is on [AllowedJWEAlgs].
-//  5. `enc` is on [AllowedJWEEncs].
+//  4. `alg` is on [AllowedJWEAlgs] and survives the resolver's
+//     [EncryptionPolicyResolver] narrowing, when it implements one.
+//  5. `enc` is on [AllowedJWEEncs] and survives the same narrowing.
 //  6. `kid` resolves through resolver — or, when `kid` is absent,
 //     trial decryption runs against the subset of [resolver.All] keys
-//     whose type matches the protected-header `alg`, bounded by
-//     [MaxKidlessTrialKeys]. The trial loop iterates to completion so
-//     wall-clock timing cannot leak which key matched.
+//     whose type matches the protected-header `alg`. That subset must
+//     be non-empty and no larger than [MaxKidlessTrialKeys]; an
+//     oversized subset is refused outright rather than truncated. The
+//     trial loop iterates to completion so wall-clock timing cannot
+//     leak which key matched.
 //  7. Decrypt; reject if plaintext exceeds [MaxJWEPlaintextSize].
 //
 // The hardening posture is "fail uniformly": every decryption failure
@@ -229,11 +290,12 @@ func Decrypt(raw string, resolver EncryptionKeyResolver) (DecryptedJWE, error) {
 	if len(hdr.Crit) > 0 {
 		return DecryptedJWE{}, fmt.Errorf("%w: %v", ErrJWECritUnknown, hdr.Crit)
 	}
-	alg, ok := ParseJWEAlg(hdr.Alg)
+	policy := resolverPolicy(resolver)
+	alg, ok := ParseJWEAlgPolicy(hdr.Alg, policy)
 	if !ok {
 		return DecryptedJWE{}, fmt.Errorf("%w: %q", ErrJWEAlgNotAllowed, hdr.Alg)
 	}
-	enc, ok := ParseJWEEnc(hdr.Enc)
+	enc, ok := ParseJWEEncPolicy(hdr.Enc, policy)
 	if !ok {
 		return DecryptedJWE{}, fmt.Errorf("%w: %q", ErrJWEEncNotAllowed, hdr.Enc)
 	}
@@ -262,14 +324,26 @@ func Decrypt(raw string, resolver EncryptionKeyResolver) (DecryptedJWE, error) {
 	}, nil
 }
 
+// resolverPolicy returns the deployment narrowing resolver carries, or
+// the zero [JWEPolicy] (package allow-list in force) when the resolver
+// does not implement [EncryptionPolicyResolver].
+func resolverPolicy(resolver EncryptionKeyResolver) JWEPolicy {
+	if pr, ok := resolver.(EncryptionPolicyResolver); ok {
+		return pr.JWEPolicy()
+	}
+	return JWEPolicy{}
+}
+
 // decryptWithResolver runs the actual decryption attempt. When kid is
 // present the resolver selects exactly one private key. When kid is absent
 // (RFC 7516 §4.1.6 permits omission) the package falls back to bounded
 // trial decryption: the keyset is filtered to entries whose Go type matches
 // the protected-header `alg` (RSA-OAEP-* → *rsa.PrivateKey, ECDH-ES* →
-// *ecdsa.PrivateKey), capped at [MaxKidlessTrialKeys], and the loop runs
-// to completion regardless of an early success so wall-clock timing cannot
-// leak which key matched.
+// *ecdsa.PrivateKey). A candidate set larger than [MaxKidlessTrialKeys] is
+// rejected whole — trialling a prefix would make the result depend on the
+// keyset's order and size rather than on the ciphertext. Within the cap the
+// loop runs to completion regardless of an early success so wall-clock
+// timing cannot leak which key matched.
 func decryptWithResolver(obj *josev4.JSONWebEncryption, resolver EncryptionKeyResolver, kid string, alg JWEAlg) ([]byte, error) {
 	if kid != "" {
 		priv, found := resolver.Resolve(kid)

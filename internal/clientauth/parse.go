@@ -70,6 +70,10 @@ type Credentials struct {
 // MUST NOT pass a request whose body has already been read by an
 // incompatible parser. The library's HTTP middleware always wraps
 // requests through a multipart-aware decoder before reaching this layer.
+//
+// Which channel carries the credentials depends on the request method:
+// body-carrying methods are read from the form body only, bodyless ones
+// (GET / DELETE) from the URL query. See [readForm] for the rationale.
 func Parse(r *http.Request) (*Credentials, error) {
 	if r == nil {
 		return nil, errors.New("authn: nil request")
@@ -239,16 +243,50 @@ func pickClientID(hasBasic bool, basicID, bodyID string) (string, error) {
 	}
 }
 
-// readForm parses the request's form fields. The parser only consults
-// the form body, never the URL query, because OAuth credentials in the
-// query string are forbidden by the security BCP (RFC 6750 §2.3 and
-// RFC 9700 §2.4) — leaving them to leak through proxy logs is the kind
-// of footgun this package exists to close.
+// readForm collects the request's credential-bearing parameters from
+// the single channel the request method makes available.
+//
+// For body-carrying methods the parser only consults the form body,
+// never the URL query, because OAuth credentials in the query string
+// are forbidden by the security BCP (RFC 6750 §2.3 and RFC 9700 §2.4)
+// — leaving them to leak through proxy logs is the kind of footgun
+// this package exists to close. Every POST-only surface (token, PAR,
+// introspection, revocation) therefore stays exactly as strict as it
+// was: a client_assertion appended to the URL is invisible to it.
+//
+// GET and DELETE requests have no body channel at all — Go's
+// [http.Request.ParseForm] populates PostForm for POST / PUT / PATCH
+// only — so a client authenticating a bodyless request has nowhere but
+// the query string to put its assertion. Those methods read the query
+// instead, which is what makes private_key_jwt usable on the grant
+// management endpoint's query / revoke operations.
 func readForm(r *http.Request) (url.Values, error) {
 	if err := r.ParseForm(); err != nil {
 		return nil, ErrAssertionMalformed
 	}
-	return r.PostForm, nil
+	if !bodylessMethod(r.Method) {
+		return r.PostForm, nil
+	}
+	// On a bodyless method ParseForm leaves PostForm empty and fills
+	// Form from the URL query alone, so Form is exactly the query view.
+	query := r.Form
+	if len(query["client_secret"]) > 0 {
+		// The query channel carries assertion-based credentials only. A
+		// shared secret in a URL survives in proxy logs, browser history,
+		// and Referer headers, so it is refused outright rather than
+		// ignored: a confidential client on a bodyless surface
+		// authenticates with HTTP Basic (a header) or private_key_jwt.
+		return nil, ErrCredentialsInvalid
+	}
+	return query, nil
+}
+
+// bodylessMethod reports whether requests with this method reach the
+// parser without a form body. The list is closed and positive: an
+// unrecognised method is treated as body-carrying, so a new surface
+// never gains the query-string channel by accident.
+func bodylessMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodDelete
 }
 
 // parseBasicAuth extracts the HTTP Basic credentials per RFC 6749 §2.3.1

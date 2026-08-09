@@ -86,7 +86,7 @@ func TestAuthCode_HappyPath(t *testing.T) {
 	verifier2 := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	if _, _, err := verifier2.Verify(at); err != nil {
+	if _, _, err := verifier2.Verify(context.Background(), at); err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
 	// Verify at_hash binds to the access token by computing it ourselves.
@@ -341,7 +341,7 @@ func TestAuthCode_ResourceBindsAudienceAndRefreshToken(t *testing.T) {
 	verifier2 := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	claims, _, err := verifier2.Verify(at)
+	claims, _, err := verifier2.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestAuthCode_Replay(t *testing.T) {
 	}
 }
 
-// TestAuthCode_Replay_RevokesIssuedRefreshToken pins the §A.12.4 /
+// TestAuthCode_Replay_RevokesIssuedRefreshToken pins the
 // RFC 6749 §4.1.2 escalation contract: a replayed authorization code
 // is treated as evidence that the chain is compromised. The token
 // endpoint MUST (a) reject the replay with invalid_grant AND (b)
@@ -1166,7 +1166,7 @@ func TestAuthCode_GrantTombstone_NoRegisterAtIssuance(t *testing.T) {
 	verifier2 := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	claims, _, err := verifier2.Verify(at)
+	claims, _, err := verifier2.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
@@ -1224,7 +1224,7 @@ func TestAuthCode_JTIRegistry_RegisterAtIssuance(t *testing.T) {
 	verifier2 := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	claims, _, err := verifier2.Verify(at)
+	claims, _, err := verifier2.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
@@ -1300,7 +1300,7 @@ func TestAuthCode_GidClaim_PresentOnIssuedAT(t *testing.T) {
 	verifier2 := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	claims, _, err := verifier2.Verify(at)
+	claims, _, err := verifier2.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
@@ -1626,7 +1626,7 @@ func TestAuthCode_Replay_GrantTombstone_NoPerATFlips(t *testing.T) {
 	verifier2 := &tokens.AccessTokenVerifier{
 		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
 	}
-	claims, _, err := verifier2.Verify(at)
+	claims, _, err := verifier2.Verify(context.Background(), at)
 	if err != nil {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}

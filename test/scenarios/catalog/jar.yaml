@@ -166,7 +166,7 @@ rows:
       carried a state value, the authorization error response carries
       that state so the RP can correlate the failure.
     status: out-of-scope
-    out_of_scope_reason: v1.0 renders JAR verifier failures (including client_id mismatch) as a JSON envelope via writeJAREnvelopeError; there is no redirect-mode error response carrying state on this path.
+    out_of_scope_reason: "JAR verifier failures (including client_id mismatch) render inline via writeJAREnvelopeError -> renderJARError -> renderBrowserError: an interaction.Driver-rendered page for a caller that prefers text/html, the JSON envelope otherwise. Neither shape is a redirect, so no error response on this path carries state back to the RP. The state renderBrowserError hands the driver is the OUTER wire value read before verification (internal/authorizeendpoint/jar_consumption.go resolveJARRequestIfNeeded), so a state carried only inside the Request Object is never surfaced at all — the object's claims are never merged once Verify fails."
 
   - id: JAR-017
     severity: P0

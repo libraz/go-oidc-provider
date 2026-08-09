@@ -75,7 +75,8 @@ func TestJWKS_Golden_DocumentShape(t *testing.T) {
 
 // TestJWKS_Golden_HandlerHeaders pins the response headers the handler
 // stamps on every successful read. The Cache-Control window is part of the
-// rotation contract from §F.6 of the product design.
+// key-rotation contract: RPs must not hold a stale key set past the
+// overlap window.
 func TestJWKS_Golden_HandlerHeaders(t *testing.T) {
 	t.Parallel()
 

@@ -11,10 +11,15 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 )
 
-// validatePolicy enforces the structural rules from
-// 02-product-design.md §A.6.2 / §A.6.2.2. It returns the
-// canonicalised metadata (defaults applied, scopes parsed) on success
-// and a [validationError] on the first rule violation.
+// validatePolicy enforces the OP's structural rules on client metadata:
+// redirect / logout URI shape, the grant + response_type whitelists and
+// their consistency, the client-authentication method and its signing
+// alg, subject_type, the requested scope set, the JWKS configuration,
+// and the JOSE alg / enc values each surface may name (narrowed by
+// jwePolicy). It returns the canonicalised metadata (defaults applied,
+// scopes parsed) on success and a [validationError] on the first rule
+// violation.
+//
 // The validator does not invoke [Deps.ValidateMetadata]; the handler
 // runs that hook after structural validation passes so embedder code
 // only sees metadata that already cleared the library checks.
@@ -29,6 +34,7 @@ func validatePolicy(
 	pairwiseEnabled bool,
 	allowLocalhostLoopback bool,
 	allowInsecureBackchannelLogoutForDev bool,
+	jwePolicy internaljose.JWEPolicy,
 ) (ClientMetadata, error) {
 	if len(m.RedirectURIs) == 0 {
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
@@ -53,19 +59,19 @@ func validatePolicy(
 		func() error { return validateJWKSConfiguration(canonical) },
 		func() error { return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg) },
 		func() error {
-			return validateRequestObjectEncryption(canonical.RequestObjectEncryptionAlg, canonical.RequestObjectEncryptionEnc)
+			return validateRequestObjectEncryption(canonical.RequestObjectEncryptionAlg, canonical.RequestObjectEncryptionEnc, jwePolicy)
 		},
 		func() error {
-			return validateIDTokenResponseEncryption(canonical.IDTokenEncryptedResponseAlg, canonical.IDTokenEncryptedResponseEnc)
+			return validateIDTokenResponseEncryption(canonical.IDTokenEncryptedResponseAlg, canonical.IDTokenEncryptedResponseEnc, jwePolicy)
 		},
 		func() error {
-			return validateUserInfoResponseEncryption(canonical.UserInfoEncryptedResponseAlg, canonical.UserInfoEncryptedResponseEnc)
+			return validateUserInfoResponseEncryption(canonical.UserInfoEncryptedResponseAlg, canonical.UserInfoEncryptedResponseEnc, jwePolicy)
 		},
 		func() error {
-			return validateAuthorizationResponseEncryption(canonical.AuthorizationEncryptedResponseAlg, canonical.AuthorizationEncryptedResponseEnc)
+			return validateAuthorizationResponseEncryption(canonical.AuthorizationEncryptedResponseAlg, canonical.AuthorizationEncryptedResponseEnc, jwePolicy)
 		},
 		func() error {
-			return validateIntrospectionResponseEncryption(canonical.IntrospectionEncryptedResponseAlg, canonical.IntrospectionEncryptedResponseEnc)
+			return validateIntrospectionResponseEncryption(canonical.IntrospectionEncryptedResponseAlg, canonical.IntrospectionEncryptedResponseEnc, jwePolicy)
 		},
 		func() error { return validatePairwiseMetadata(canonical) },
 		func() error { return validateDefaultMaxAge(canonical.DefaultMaxAge) },
@@ -79,6 +85,65 @@ func validatePolicy(
 		}
 	}
 	return canonical, nil
+}
+
+// validateUnpersistedMetadata rules on the standard members the OP
+// parses but does not store. Both handlers run it before
+// [validatePolicy] so a request that asks for something the OP will not
+// deliver is refused at registration time rather than silently accepted
+// and quietly ignored.
+//
+// The members fall into two groups:
+//
+//   - Response-signing algorithms. Discovery publishes the alg values
+//     the OP signs UserInfo and introspection responses with, so a
+//     client naming one of those values MUST be admitted; naming any
+//     other algorithm MUST be refused, because the OP signs with one
+//     algorithm and would otherwise hand back a JWT the client cannot
+//     verify. The value itself is not persisted: the OP selects the
+//     JWT shape from the request's Accept header (UserInfo) or from the
+//     client's stored introspection switch, and a registration request
+//     sets neither.
+//   - Per-client enforcement flags. Asking the OP to require DPoP
+//     (RFC 9449 §5.2) or pushed authorization requests (RFC 9126 §6.2)
+//     from this client specifically is a hardening the OP applies
+//     globally or per presented proof, never per registration. Storing
+//     the flag and not enforcing it would leave the client believing a
+//     protection is in place, so the request is refused instead. A
+//     false value is the protocol default and is accepted as the no-op
+//     it is.
+func validateUnpersistedMetadata(extras metadataExtras) error {
+	if err := validateSignedResponseAlg("userinfo_signed_response_alg", extras.UserInfoSignedResponseAlg); err != nil {
+		return err
+	}
+	if err := validateSignedResponseAlg("introspection_signed_response_alg", extras.IntrospectionSignedResponseAlg); err != nil {
+		return err
+	}
+	if extras.DPoPBoundAccessTokens {
+		return errInvalidClientMetadata(
+			"dpop_bound_access_tokens true is not supported: the OP binds an access token when the " +
+				"request presents a DPoP proof and does not enforce the requirement per client")
+	}
+	if extras.RequirePushedAuthorizationRequests {
+		return errInvalidClientMetadata(
+			"require_pushed_authorization_requests true is not supported: the OP requires pushed " +
+				"authorization requests for every client or none, never per client")
+	}
+	return nil
+}
+
+// validateSignedResponseAlg admits the single JWS alg the OP signs
+// with, plus the explicit "none" that names the unsigned JSON shape the
+// OP serves by default. Every other value is refused: the OP holds one
+// signing algorithm, so accepting a second name would promise a
+// signature the client could not verify.
+func validateSignedResponseAlg(field, alg string) error {
+	switch alg {
+	case "", "none", "ES256":
+		return nil
+	default:
+		return errInvalidClientMetadata(field + " " + alg + " is not supported (ES256 only)")
+	}
 }
 
 func validateDefaultMaxAge(v *int64) error {
@@ -223,8 +288,8 @@ func validateGrantResponseTypeConsistency(grantTypes, responseTypes []string) er
 }
 
 // validateAuthMethod rejects token_endpoint_auth_method values the
-// library does not implement (§J.1: client_secret_jwt is rejected
-// because the library does not negotiate symmetric JWT alg) and any
+// library does not implement (client_secret_jwt is rejected because
+// the library does not negotiate symmetric JWT algorithms) and any
 // value outside the closed set the OP advertises.
 func validateAuthMethod(m string) error {
 	switch m {
@@ -476,8 +541,15 @@ func validateJWKSConfiguration(m ClientMetadata) error {
 }
 
 func validateInlineJWKS(raw json.RawMessage) error {
+	// The parser ignores members whose key type this build does not
+	// understand (RFC 7517 §5), so a client registering a supported signing
+	// key alongside an unsupported one still registers successfully; only a
+	// set with nothing usable left is rejected.
 	keys, err := internaljose.ParseJWKSet(raw)
 	if err != nil {
+		if errors.Is(err, internaljose.ErrNoUsableJWK) {
+			return errInvalidClientMetadata("jwks must contain at least one supported key")
+		}
 		return errInvalidClientMetadata("jwks is malformed")
 	}
 	if len(keys) == 0 {
@@ -511,12 +583,15 @@ func validateRequestObjectSigningAlg(alg string) error {
 
 // validateRequestObjectEncryption pins the JWE alg/enc the client may
 // register against the closed allow-list exposed by [jose.ParseJWEAlg]
-// / [jose.ParseJWEEnc] so DCR cannot admit a value the verifier would
-// later reject as [jar.ErrEncryptionAlgNotAllowed]; an embedder that
-// narrows the advertised list via [op.WithSupportedEncryptionAlgs] is
-// responsible for the per-deployment hardening — the registration
-// validator stays at the library ceiling so a non-narrowing OP accepts
-// every alg/enc the JOSE wrapper can decrypt.
+// / [jose.ParseJWEEnc], narrowed by the deployment's policy, so DCR
+// cannot admit a value the verifier would later reject as
+// [jar.ErrEncryptionAlgNotAllowed].
+//
+// The policy is the same value that drives inbound decryption, outbound
+// recipient selection and the discovery advertisement, so an OP that
+// removed an alg cannot be handed a client that registers it: admitting
+// the registration would mint a client whose every encrypted exchange
+// fails at runtime.
 //
 // Both alg and enc are required together. OIDC Core §6.1 permits
 // registering one half and negotiating the other through the discovery
@@ -526,40 +601,43 @@ func validateRequestObjectSigningAlg(alg string) error {
 // half-pairs at registration time to close the admit/runtime-reject gap.
 // Both empty is fine — the client takes the unencrypted (signed-only)
 // path.
-func validateRequestObjectEncryption(alg, enc string) error {
-	return validateJWEAlgEncPair("request_object_encryption_alg", "request_object_encryption_enc", alg, enc)
+func validateRequestObjectEncryption(alg, enc string, policy internaljose.JWEPolicy) error {
+	return validateJWEAlgEncPair("request_object_encryption_alg", "request_object_encryption_enc", alg, enc, policy)
 }
 
 // validateIDTokenResponseEncryption pins the JWE alg/enc the client may
-// register for issued ID tokens (OIDC Core 1.0 §10.2). Same closed
-// allow-list and both-or-neither rule as
+// register for issued ID tokens (OIDC Core 1.0 §10.2). Same allow-list,
+// policy narrowing and both-or-neither rule as
 // [validateRequestObjectEncryption].
-func validateIDTokenResponseEncryption(alg, enc string) error {
-	return validateJWEAlgEncPair("id_token_encrypted_response_alg", "id_token_encrypted_response_enc", alg, enc)
+func validateIDTokenResponseEncryption(alg, enc string, policy internaljose.JWEPolicy) error {
+	return validateJWEAlgEncPair("id_token_encrypted_response_alg", "id_token_encrypted_response_enc", alg, enc, policy)
 }
 
 // validateUserInfoResponseEncryption pins the JWE alg/enc the client may
-// register for /userinfo responses (OIDC Core 1.0 §5.3). Same closed
-// allow-list and both-or-neither rule as
+// register for /userinfo responses (OIDC Core 1.0 §5.3). Same allow-list,
+// policy narrowing and both-or-neither rule as
 // [validateRequestObjectEncryption].
-func validateUserInfoResponseEncryption(alg, enc string) error {
-	return validateJWEAlgEncPair("userinfo_encrypted_response_alg", "userinfo_encrypted_response_enc", alg, enc)
+func validateUserInfoResponseEncryption(alg, enc string, policy internaljose.JWEPolicy) error {
+	return validateJWEAlgEncPair("userinfo_encrypted_response_alg", "userinfo_encrypted_response_enc", alg, enc, policy)
 }
 
 // validateAuthorizationResponseEncryption pins the JWE alg/enc the
-// client may register for JARM authorization responses. Same closed
-// allow-list and both-or-neither rule as
+// client may register for JARM authorization responses. Same allow-list,
+// policy narrowing and both-or-neither rule as
 // [validateRequestObjectEncryption].
-func validateAuthorizationResponseEncryption(alg, enc string) error {
-	return validateJWEAlgEncPair("authorization_encrypted_response_alg", "authorization_encrypted_response_enc", alg, enc)
+func validateAuthorizationResponseEncryption(alg, enc string, policy internaljose.JWEPolicy) error {
+	return validateJWEAlgEncPair(
+		"authorization_encrypted_response_alg", "authorization_encrypted_response_enc", alg, enc, policy)
 }
 
 // validateIntrospectionResponseEncryption pins the JWE alg/enc the
 // client may register for JWT introspection responses (RFC 7662 + draft
-// JWT Response for OAuth Token Introspection). Same closed allow-list
-// and both-or-neither rule as [validateRequestObjectEncryption].
-func validateIntrospectionResponseEncryption(alg, enc string) error {
-	return validateJWEAlgEncPair("introspection_encrypted_response_alg", "introspection_encrypted_response_enc", alg, enc)
+// JWT Response for OAuth Token Introspection). Same allow-list, policy
+// narrowing and both-or-neither rule as
+// [validateRequestObjectEncryption].
+func validateIntrospectionResponseEncryption(alg, enc string, policy internaljose.JWEPolicy) error {
+	return validateJWEAlgEncPair(
+		"introspection_encrypted_response_alg", "introspection_encrypted_response_enc", alg, enc, policy)
 }
 
 // validateJWEAlgEncPair is the shared allow-list check the encryption
@@ -567,12 +645,15 @@ func validateIntrospectionResponseEncryption(alg, enc string) error {
 // labels used in the error description so failures point the embedder
 // at the offending metadata key.
 //
-// The allow-list is sourced verbatim from [jose.ParseJWEAlg] /
-// [jose.ParseJWEEnc] so the registration validator and the JWE
+// The allow-list is sourced verbatim from [jose.ParseJWEAlgPolicy] /
+// [jose.ParseJWEEncPolicy] so the registration validator and the JWE
 // verifier cannot drift; adding a new alg/enc requires editing
 // [internal/jose/jweparam.go] only. RSA1_5, dir, A*KW, A*GCMKW and
 // `none` are deliberately excluded from the JOSE allow-list and are
-// therefore rejected here without any local mention.
+// therefore rejected here without any local mention. A value the
+// deployment removed through policy is rejected with the same wording
+// as one the library never shipped, so a registration attempt cannot
+// be used to enumerate the operator's configuration.
 //
 // Both alg and enc must be set together. OIDC Core §6.1 permits a
 // client to commit to one half and let the OP negotiate the other from
@@ -583,18 +664,18 @@ func validateIntrospectionResponseEncryption(alg, enc string) error {
 // first encrypted response. Rejecting the mismatch at DCR time closes
 // that admit/runtime-reject gap. Both empty is permitted: the client
 // takes the unencrypted (signed-only) path.
-func validateJWEAlgEncPair(algField, encField, alg, enc string) error {
+func validateJWEAlgEncPair(algField, encField, alg, enc string, policy internaljose.JWEPolicy) error {
 	if (alg == "") != (enc == "") {
 		return errInvalidClientMetadata(algField + " and " + encField +
 			" must be set together (RFC 7591 / OIDC Core §6.1)")
 	}
 	if alg != "" {
-		if _, ok := internaljose.ParseJWEAlg(alg); !ok {
+		if _, ok := internaljose.ParseJWEAlgPolicy(alg, policy); !ok {
 			return errInvalidClientMetadata(algField + " " + alg + " is not supported")
 		}
 	}
 	if enc != "" {
-		if _, ok := internaljose.ParseJWEEnc(enc); !ok {
+		if _, ok := internaljose.ParseJWEEncPolicy(enc, policy); !ok {
 			return errInvalidClientMetadata(encField + " " + enc + " is not supported")
 		}
 	}

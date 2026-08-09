@@ -16,27 +16,27 @@
 //
 //  1. Inline JWKs (RFC 7517 §5) — preferred when present because no
 //     network round-trip is required.
-//  2. JWKsURI (RFC 7517 §4.2) — fetched through the package's TTL
-//     cache when inline JWKs is empty.
+//  2. JWKsURI (RFC 7517 §4.2) — fetched through the shared TTL cache
+//     when inline JWKs is empty.
 //
 // A client carrying neither shape surfaces [ErrJWKSConfigured] so
 // the caller can map it onto a clean wire-level error rather than a
 // 500.
 //
-// Remote entries use a combined positive/negative 256-URL LRU budget.
-// Expired entries are physically removed, concurrent misses for one URL
-// collapse to one fetch, and failures are cached for five seconds before the
-// resolver retries a recovered upstream.
+// Both shapes are resolved through [internal/rpjwks], the OP's single
+// relying-party JWKS fetcher, so the cache budget, the body and member caps,
+// the tolerance for unrepresentable members, and the negative-cache policy are
+// the same ones the request-object and client-assertion paths apply.
 //
 // # SSRF posture
 //
-// Remote JWKS fetches go through the same SSRF deny-list the JAR
-// request_uri fetcher uses: the URL must use http or https, the
-// hostname (or every resolved address) must be outside the loopback
-// / link-local / RFC 1918 / ULA / cloud-metadata ranges unless the
-// resolver was constructed with [Config.AllowPrivateNetwork]. The
-// gate fires both before the request is constructed and at dial
-// time so a DNS-rebinding attacker cannot widen the surface.
+// Remote JWKS fetches go through the shared SSRF deny-list: the URL
+// must use http or https, and the hostname (or every resolved
+// address) must be outside the loopback / link-local / RFC 1918 / ULA
+// / cloud-metadata ranges unless the resolver was constructed with
+// [Config.AllowPrivateNetwork]. The gate fires both before the
+// request is constructed and at dial time so a DNS-rebinding attacker
+// cannot widen the surface.
 //
 // # Algorithm policy
 //

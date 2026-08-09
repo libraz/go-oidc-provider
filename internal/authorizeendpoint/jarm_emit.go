@@ -39,6 +39,25 @@ func jarmFeatureRequested(req *authorize.Request) bool {
 	return jarm.IsJARM(req.ResponseMode)
 }
 
+// responseModeUsesFormPost reports whether the request's response_mode
+// delivers the authorization response through an auto-submitted HTML
+// form: the OIDC Core "form_post" mode or the JARM "form_post.jwt"
+// mode, including the bare "jwt" alias when it resolves to the latter.
+//
+// Every fallback that would otherwise emit a redirect MUST consult
+// this predicate rather than comparing against the "form_post" literal.
+// A client picks a form-post mode precisely so the response parameters
+// never enter a URL — where they land in browser history, in the
+// Referer of whatever the landing page loads, and in every proxy log on
+// the path — and a bare string compare silently misses "form_post.jwt",
+// turning that choice into a 302.
+func responseModeUsesFormPost(req *authorize.Request) bool {
+	if req.ResponseMode == formPostResponseMode {
+		return true
+	}
+	return jarmModeForRequest(req) == jarm.ResponseModeFormPostJWT
+}
+
 // jarmModeMissing reports whether the active configuration requires
 // every authorize response to be JARM-wrapped (Deps.RequireJARMResponseMode
 // is true) and this request did not opt into a JARM response_mode.
@@ -158,21 +177,17 @@ func jarmDispatch(
 // emitAuthorizeSuccess sends the success-path response. When the
 // request opted into a JARM mode and the feature is enabled, the
 // response is a signed JWT delivered through the resolved mode;
-// otherwise the function falls back to the legacy
-// "?code=...&state=..." redirect. JARM signing failures degrade to the
-// legacy redirect so the RP always receives a determinate outcome
-// (the alternative — a 500 — would strand the user mid-flow).
+// otherwise the function emits the plain "?code=...&state=..." redirect
+// or, for response_mode=form_post, the equivalent auto-submitted form.
 //
-// JARM encryption failures are treated differently: the client
-// registered authorization_encrypted_response_alg / _enc and so
-// demanded an encrypted response. Falling through to a plain
-// "?code=..." redirect would leak the authorization code through a
-// channel the client explicitly contracted out of, so the function
-// emits an unencrypted "?error=server_error" redirect with
-// description "jarm_response_encryption_failed" instead. The OP
-// cannot honour the contract; surfacing the failure as a determinate
-// error is the lesser evil compared to silent confidentiality
-// downgrade.
+// A JARM emit that fails does NOT fall back to a plain success
+// response. Every plain shape is weaker than what the client
+// contracted for: an unsigned response drops the JARM binding that
+// authenticates the response against a mix-up, and a redirect drops
+// form_post's guarantee that the code never enters a URL. The function
+// emits a determinate error through the transport half of the
+// requested mode instead, and the minted code is simply never
+// delivered — it expires unredeemed on its own TTL.
 func emitAuthorizeSuccess(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -185,43 +200,69 @@ func emitAuthorizeSuccess(
 		if err == nil {
 			return
 		}
+		description := "jarm_response_signing_failed"
 		if errors.Is(err, errJARMEncryptionFailed) {
-			redirectError(w, r, req.RedirectURI, errServerError,
-				"jarm_response_encryption_failed", req.State, deps.Issuer)
-			return
+			description = "jarm_response_encryption_failed"
 		}
-		// Fall through to legacy emit on signer / dispatch failure.
+		emitPlainResponse(w, r, deps, req, url.Values{
+			"error":             {errServerError},
+			"error_description": {description},
+		})
+		return
 	}
-	if req.ResponseMode == formPostResponseMode {
-		params := url.Values{"code": {code}}
-		if req.State != "" {
-			params.Set("state", req.State)
-		}
-		if deps.Issuer != "" {
-			// RFC 9207 §2.3 — same iss echo as the legacy redirect path.
-			params.Set("iss", deps.Issuer)
-		}
+	emitPlainResponse(w, r, deps, req, url.Values{"code": {code}})
+}
+
+// emitPlainResponse delivers params to the RP's redirect_uri without a
+// JARM wrapper, honouring the transport the request asked for: an
+// auto-submitted HTML form for either form-post mode, a redirect
+// otherwise. "state" and RFC 9207 §2.3 / §2.4 "iss" are stamped here so
+// every plain emission carries them identically.
+//
+// A form-post emit that itself fails falls through to the redirect: at
+// that point the response has already been reduced to an error envelope
+// or the OP cannot write the body at all, and a determinate outcome is
+// worth more than the transport preference. Callers MUST NOT route a
+// credential-bearing payload here for a request whose contracted shape
+// could not be produced — see [emitAuthorizeSuccess].
+func emitPlainResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+	params url.Values,
+) {
+	if req.State != "" {
+		params.Set("state", req.State)
+	}
+	if deps.Issuer != "" {
+		params.Set("iss", deps.Issuer)
+	}
+	if responseModeUsesFormPost(req) {
 		if err := jarm.WriteParamsFormPost(w, req.RedirectURI, params); err == nil {
 			return
 		}
-		// Fall through to the legacy redirect on form_post emit failure
-		// so the RP still gets a determinate outcome (the OP cannot
-		// honour the requested mode but the response parameters are
-		// safe to expose via query — they are the same values the
-		// form would have carried).
+	}
+	target, err := mergeRedirectParams(req.RedirectURI, params)
+	if err != nil {
+		// The redirect target is unparseable; fall back to the JSON
+		// envelope so the operator gets a useful diagnostic instead of
+		// a silent 302-to-nothing.
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "redirect target rejected")
+		return
 	}
 	stampNoStore(w)
-	http.Redirect(w, r, buildSuccessRedirect(req.RedirectURI, code, req.State, deps.Issuer), http.StatusFound)
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
-// emitAuthorizeError sends the error-path response. The legacy path is
-// the same redirect [buildRedirectError] composes; the JARM path
-// signs the error claims and dispatches via the resolved mode.
+// emitAuthorizeError sends the error-path response. The plain path is
+// the redirect (or form post) [emitPlainResponse] composes; the JARM
+// path signs the error claims and dispatches via the resolved mode.
 //
 // JARM-modes-without-the-feature is handled here too: when the request
 // asked for a JARM mode but [resolved.JARM] is nil, the function
 // rewrites the wire code to "unsupported_response_mode" and emits the
-// legacy redirect so the RP can detect the misconfiguration. This is
+// plain response so the RP can detect the misconfiguration. This is
 // the boundary contract documented in the package overview.
 func emitAuthorizeError(
 	w http.ResponseWriter,
@@ -232,39 +273,37 @@ func emitAuthorizeError(
 ) {
 	if jarmFeatureRequested(req) && deps.JARM == nil {
 		// The request asked for JARM but the feature is off. Surface
-		// "unsupported_response_mode" via the legacy redirect — JARM
-		// can't be used to convey "JARM is not supported".
-		redirectError(w, r, req.RedirectURI, errUnsupportedResponseMode,
-			"response_mode is not supported by this OP", req.State, deps.Issuer)
+		// "unsupported_response_mode" unwrapped — JARM can't be used to
+		// convey "JARM is not supported".
+		emitPlainResponse(w, r, deps, req, url.Values{
+			"error":             {errUnsupportedResponseMode},
+			"error_description": {"response_mode is not supported by this OP"},
+		})
 		return
 	}
 	if tryJARMErrorResponse(w, r, deps, req, code, description) {
 		return
 	}
-	if req.ResponseMode == formPostResponseMode {
-		params := url.Values{"error": {code}}
-		if description != "" {
-			params.Set("error_description", description)
-		}
-		if req.State != "" {
-			params.Set("state", req.State)
-		}
-		if deps.Issuer != "" {
-			// RFC 9207 §2.4 — error responses carry iss too.
-			params.Set("iss", deps.Issuer)
-		}
-		if err := jarm.WriteParamsFormPost(w, req.RedirectURI, params); err == nil {
-			return
-		}
-		// Fall through to legacy redirect on form_post emit failure.
-	}
-	redirectError(w, r, req.RedirectURI, code, description, req.State, deps.Issuer)
+	emitPlainResponse(w, r, deps, req, url.Values{
+		"error":             {code},
+		"error_description": {description},
+	})
 }
 
 // tryJARMErrorResponse emits an error through the requested JARM
-// transport. It returns false only when signing or dispatch failed and
-// the caller should use the legacy error redirect. Encryption failures
-// are handled here as a generic fail-closed server_error.
+// transport. It returns false only when the request did not opt into
+// JARM (or the feature is off) and the caller should emit the plain
+// response.
+//
+// A JARM emit that fails still keeps the error on the transport the
+// request chose — [emitPlainResponse] honours form_post.jwt as a form
+// post — because an error envelope carries no credential and the only
+// thing the client loses is the JWT wrapper. The one payload
+// substitution is on encryption failure: the client registered
+// authorization_encrypted_response_alg / _enc and so contracted for a
+// confidential response, and answering with the original code through
+// an unencrypted channel would honour the transport at the expense of
+// the contract. A generic server_error is emitted instead.
 func tryJARMErrorResponse(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -280,10 +319,12 @@ func tryJARMErrorResponse(
 	if err == nil {
 		return true
 	}
-	if !errors.Is(err, errJARMEncryptionFailed) {
-		return false
+	if errors.Is(err, errJARMEncryptionFailed) {
+		code, description = errServerError, "jarm_response_encryption_failed"
 	}
-	redirectError(w, r, req.RedirectURI, errServerError,
-		"jarm_response_encryption_failed", req.State, deps.Issuer)
+	emitPlainResponse(w, r, deps, req, url.Values{
+		"error":             {code},
+		"error_description": {description},
+	})
 	return true
 }

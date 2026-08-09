@@ -18,7 +18,7 @@ import (
 const Name = "consent"
 
 // PromptType is the [interaction.Prompt.Type] the interaction emits.
-// The value is fixed to the design's "consent.scope" string; SPAs
+// The value is fixed to "consent.scope"; SPAs
 // dispatch on it to pick the consent-screen template.
 const PromptType = "consent.scope"
 

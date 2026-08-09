@@ -32,7 +32,9 @@ import (
 // [WithCaptchaVerifier] is wired). StepCaptcha lets embedders schedule
 // captcha through the rule list (e.g., always before TOTP, or only for
 // high-risk requests) instead of relying on the threshold gate alone.
-const CaptchaSubmissionFieldName = "captcha_token"
+// Both paths collect the token under the same field name so a SPA
+// written against one renders the other unchanged.
+const CaptchaSubmissionFieldName = authn.CaptchaTokenField
 
 // captchaSubmissionMaxLen caps the token bytes the captcha step accepts
 // in the submission. Provider tokens (Turnstile / reCAPTCHA / hCaptcha)
@@ -290,6 +292,7 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 		RPOrigins:                s.RPOrigins,
 		SessionTTL:               s.SessionTTL,
 		AttestationPreference:    attestation,
+		UserVerification:         passkeyUserVerification(s.RequireUserVerification),
 		AAGUIDAllowlist:          s.AAGUIDAllowlist,
 		AAGUIDReCheckOnAssertion: s.AAGUIDReCheckOnAssertion,
 	})
@@ -332,6 +335,19 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 		}))
 	}
 	return auth, nil
+}
+
+// passkeyUserVerification projects the public
+// [PrimaryPasskey.RequireUserVerification] bit onto the WebAuthn
+// requirement string. Only "required" and "preferred" are reachable
+// from the public surface: "discouraged" asks an authenticator to skip
+// a gesture it would otherwise perform, which no deployment gains
+// assurance from, so the OP does not offer it.
+func passkeyUserVerification(required bool) protocol.UserVerificationRequirement {
+	if required {
+		return protocol.VerificationRequired
+	}
+	return protocol.VerificationPreferred
 }
 
 // buildStepTOTP constructs the internal [totp.Codec] + [totp.Verifier]
@@ -507,9 +523,10 @@ func buildStepEmailOTP(s StepEmailOTP, clock timex.Clock) (authn.Authenticator, 
 
 // buildStepRecoveryCode constructs the internal [recovery.Verifier] +
 // [recovery.Authenticator] that drives the [StepRecoveryCode] step.
-// The verifier carries no construction-time configuration today; the
-// argon2id parameters and lockout policy are pinned by
-// [internal/authn/recovery].
+// The verifier takes no construction-time configuration: the argon2id
+// parameters and the lockout policy are pinned by the recovery-code
+// authenticator itself rather than being embedder-tunable, so a
+// deployment cannot weaken them by misconfiguration.
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepRecoveryCode(s StepRecoveryCode, clock timex.Clock) (authn.Authenticator, error) {

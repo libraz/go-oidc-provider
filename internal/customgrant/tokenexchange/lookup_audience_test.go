@@ -102,6 +102,12 @@ func TestLookupIDToken_AudienceNormalised(t *testing.T) {
 		issuer: "https://op.example",
 		keys:   keySet,
 		clock:  fixedClock{now: now},
+		grants: staticGrantStore{grant: &store.Grant{
+			ID:       "grant-aud-idtoken",
+			Subject:  "user-aud",
+			ClientID: "https://api.example/foo",
+			Scope:    []string{"read"},
+		}},
 	}
 	signer := tokens.FromInternalEntry(entry)
 	idJWS, err := tokens.SignIDToken(signer, tokens.IDTokenClaims{
@@ -115,7 +121,7 @@ func TestLookupIDToken_AudienceNormalised(t *testing.T) {
 		t.Fatalf("SignIDToken: %v", err)
 	}
 
-	result, err := h.lookupIDToken(idJWS)
+	result, err := h.lookupIDToken(context.Background(), idJWS)
 	if err != nil {
 		t.Fatalf("lookupIDToken err=%v want nil", err)
 	}

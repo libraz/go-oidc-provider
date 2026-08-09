@@ -82,6 +82,7 @@ func TestBuild_FormsAbsoluteURLs(t *testing.T) {
 			UserInfo:   "/userinfo",
 			EndSession: "/end_session",
 		},
+		Features:        discovery.Features{AuthorizeEndpoint: true},
 		GrantsSupported: []string{"authorization_code", "refresh_token"},
 	})
 
@@ -117,6 +118,7 @@ func TestBuild_RootMountPrefix(t *testing.T) {
 			Authorize: "/auth",
 			Token:     "/token",
 		},
+		Features: discovery.Features{AuthorizeEndpoint: true},
 	})
 	if got := doc.AuthorizationEndpoint; got != "https://idp.example.com/auth" {
 		t.Errorf("authorization_endpoint=%q", got)
@@ -215,6 +217,7 @@ func TestBuild_StaticPolicyValues(t *testing.T) {
 		Issuer:      "https://idp.example.com",
 		MountPrefix: "/oidc",
 		Endpoints:   discovery.EndpointPaths{JWKS: "/jwks", Authorize: "/auth", Token: "/token"},
+		Features:    discovery.Features{AuthorizeEndpoint: true},
 	})
 	if len(doc.ResponseTypesSupported) != 1 || doc.ResponseTypesSupported[0] != "code" {
 		t.Errorf("response_types_supported=%v want [code]", doc.ResponseTypesSupported)
@@ -224,6 +227,104 @@ func TestBuild_StaticPolicyValues(t *testing.T) {
 	}
 	if len(doc.CodeChallengeMethodsSupported) != 1 || doc.CodeChallengeMethodsSupported[0] != "S256" {
 		t.Errorf("code_challenge_methods=%v want [S256]", doc.CodeChallengeMethodsSupported)
+	}
+}
+
+// TestBuild_OmitsAuthorizeSurfacesForMachineToMachineGrants covers the
+// grant set of a client_credentials-only deployment: the router mounts
+// neither /authorize nor /end_session, and no session teardown can ever
+// emit a Logout Token, so none of those surfaces may be advertised.
+// response_types_supported stays present but empty because RFC 8414 §2
+// marks it REQUIRED with no carve-out.
+//
+// Spec: RFC 8414 §2 / OpenID Connect RP-Initiated Logout 1.0 §2 /
+// OpenID Connect Back-Channel Logout 1.0 §2.
+func TestBuild_OmitsAuthorizeSurfacesForMachineToMachineGrants(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints: discovery.EndpointPaths{
+			JWKS:       "/jwks",
+			Authorize:  "/auth",
+			Token:      "/token",
+			EndSession: "/end_session",
+		},
+		Features:        discovery.Features{}, // AuthorizeEndpoint off.
+		GrantsSupported: []string{"client_credentials"},
+	})
+	if doc.AuthorizationEndpoint != "" {
+		t.Errorf("authorization_endpoint=%q, want it omitted when no grant mounts /authorize", doc.AuthorizationEndpoint)
+	}
+	if doc.EndSessionEndpoint != "" {
+		t.Errorf("end_session_endpoint=%q, want it omitted when no grant mounts /authorize", doc.EndSessionEndpoint)
+	}
+	if doc.BackchannelLogoutSupported {
+		t.Error("backchannel_logout_supported must be false when no session can be terminated")
+	}
+	if doc.ResponseTypesSupported == nil {
+		t.Fatal("response_types_supported = nil, want an empty non-nil array (RFC 8414 §2 marks it REQUIRED)")
+	}
+	if len(doc.ResponseTypesSupported) != 0 {
+		t.Errorf("response_types_supported=%v, want empty", doc.ResponseTypesSupported)
+	}
+
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, absent := range []string{
+		"authorization_endpoint",
+		"end_session_endpoint",
+		"backchannel_logout_supported",
+	} {
+		if _, present := wire[absent]; present {
+			t.Errorf("%s must not appear on the wire for a machine-to-machine grant set", absent)
+		}
+	}
+	types, ok := wire["response_types_supported"].([]any)
+	if !ok {
+		t.Fatalf("response_types_supported = %#v, want a JSON array", wire["response_types_supported"])
+	}
+	if len(types) != 0 {
+		t.Errorf("response_types_supported=%v, want []", types)
+	}
+}
+
+// TestBuild_EmitsAuthorizeSurfacesForInteractiveGrants is the positive
+// half of [TestBuild_OmitsAuthorizeSurfacesForMachineToMachineGrants]:
+// an OP whose grant set mounts /authorize advertises the full set.
+func TestBuild_EmitsAuthorizeSurfacesForInteractiveGrants(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints: discovery.EndpointPaths{
+			JWKS:       "/jwks",
+			Authorize:  "/auth",
+			Token:      "/token",
+			EndSession: "/end_session",
+		},
+		Features:        discovery.Features{AuthorizeEndpoint: true},
+		GrantsSupported: []string{"authorization_code", "client_credentials"},
+	})
+	if got := doc.AuthorizationEndpoint; got != "https://idp.example.com/oidc/auth" {
+		t.Errorf("authorization_endpoint=%q", got)
+	}
+	if got := doc.EndSessionEndpoint; got != "https://idp.example.com/oidc/end_session" {
+		t.Errorf("end_session_endpoint=%q", got)
+	}
+	if !doc.BackchannelLogoutSupported {
+		t.Error("backchannel_logout_supported must be true when /authorize is mounted")
+	}
+	if len(doc.ResponseTypesSupported) != 1 || doc.ResponseTypesSupported[0] != "code" {
+		t.Errorf("response_types_supported=%v want [code]", doc.ResponseTypesSupported)
 	}
 }
 
@@ -352,6 +453,7 @@ func baseInput() discovery.Input {
 			Token:     "/token",
 			UserInfo:  "/userinfo",
 		},
+		Features:        discovery.Features{AuthorizeEndpoint: true},
 		GrantsSupported: []string{"authorization_code"},
 		ScopesSupported: []string{"openid"},
 	}

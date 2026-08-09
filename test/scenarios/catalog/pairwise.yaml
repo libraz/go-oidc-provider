@@ -106,7 +106,7 @@ rows:
       At registration time the OP fetches sector_identifier_uri and
       retrieves a JSON array of redirect_uris.
     status: out-of-scope
-    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-22
     severity: P0
@@ -116,7 +116,7 @@ rows:
       201 / 302 / etc.) fails registration ("unexpected
       sector_identifier_uri response status code").
     status: out-of-scope
-    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-23
     severity: P0
@@ -125,7 +125,7 @@ rows:
       A response that is not parseable as JSON fails registration
       ("failed to parse sector_identifier_uri JSON response").
     status: out-of-scope
-    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-24
     severity: P0
@@ -135,7 +135,7 @@ rows:
       object, etc.) fails registration ("sector_identifier_uri must
       return single JSON array").
     status: out-of-scope
-    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-25
     severity: P0
@@ -145,7 +145,7 @@ rows:
       every redirect_uri the client registered ("all registered
       redirect_uris must be included").
     status: out-of-scope
-    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-26
     severity: P1
@@ -155,7 +155,7 @@ rows:
       sector_identifier_uri still has its host recorded so that a
       later switch to pairwise (or audit) has the value already.
     status: out-of-scope
-    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-27
     severity: P1
@@ -164,7 +164,7 @@ rows:
       The sector identifier is derived from the URL host
       (lowercased); port and path are discarded.
     status: out-of-scope
-    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-30
     severity: P0
@@ -174,7 +174,7 @@ rows:
       have its jwks_uri included in the response array
       ("client's jwks_uri must be included").
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: "The blocker is the sector-document fetch, not CIBA. CIBA ships (internal/cibaendpoint) and pairwise issuance is wired end to end, but this row asserts a REGISTRATION-time rule: the client's sector_identifier_uri must list its jwks_uri. Driving it black-box needs the OP's sector resolver to trust an httptest TLS certificate, and the op surface exposes no WithSectorHTTPClient seam to install one — the same blocker that keeps PW-21..PW-27 out of scope. The rule is covered at the resolver level by internal/sector/resolver_test.go. Bind alongside PW-21..PW-27 when a sector-resolver injection point lands. Separately, the pairwise restriction CIBA does enforce is narrower than 'no pairwise CIBA clients': internal/cibaendpoint refuses an id_token_hint from a subject_type=pairwise client, because a pairwise sub names an end user only inside that client's sector; login_hint and login_hint_token stay open to pairwise clients."
 
   - id: PW-31
     severity: P0
@@ -184,7 +184,7 @@ rows:
       sector_identifier_uri MUST have its jwks_uri included in the
       response array.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: Same sector-document fetch blocker as PW-30. The device authorization grant ships (internal/devicecodeendpoint), so the row is no longer waiting on a handler; it is waiting on a way to drive the registration-time sector_identifier_uri fetch from a black-box scenario, which needs the WithSectorHTTPClient seam the op surface does not expose (see PW-21..PW-27). The rule is covered at the resolver level by internal/sector/resolver_test.go.
 
   - id: PW-32
     severity: P1
@@ -194,7 +194,7 @@ rows:
       jwks_uri serves as the safe sector-binding anchor (consistent
       with the spec's intent for those client types).
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: "Same sector-document fetch blocker as PW-30 / PW-31, and a restatement of PW-13 from the CIBA / device-flow side: a client with no redirect_uris anchors its sector on jwks_uri. Both handlers now ship, so the gap is only the missing WithSectorHTTPClient seam that would let a scenario serve the sector document over TLS the resolver trusts (see PW-21..PW-27). Resolver-level coverage lives in internal/sector/resolver_test.go."
 
   - id: PW-40
     severity: P0
@@ -213,7 +213,7 @@ rows:
       MUST be treated as sensitive because reusing the same salt
       across environments makes pairwise subs predictable.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: "Not wire-observable. The OP never emits the salt, and 'treat it as sensitive' / 'reusing it across environments makes subs predictable' are operational guidance for the embedder's runbook rather than a property any OP response could carry or withhold. The one construction-time guard that does exist is the 32-byte minimum op.WithPairwiseSubject enforces (op.ErrPairwiseSaltTooShort), which is a different assertion from this row's. The observable consequence of the salt being a hash input — change it and every pairwise sub changes with it — is bound by PW-60."
 
   - id: PW-42
     severity: P0
@@ -224,7 +224,7 @@ rows:
       16 bytes and rendered as a UUIDv5-shaped 128-bit value; the
       spec does not mandate one specific shape.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: "Non-normative, and not this OP's shape. The row itself says the spec mandates no particular form ('a typical concrete algorithm', 'the spec does not mandate one specific shape'), and the concrete form it names is not what the OP emits: op/subject.Pairwise hashes salt:sector:userID with SHA-256 and base64url-encodes the FULL 32-byte digest (43 characters), with no truncation to 16 bytes and no UUIDv5 rendering. Binding the row as written would assert a wire shape the OP does not produce; binding the OP's shape instead would freeze an internal choice OIDC Core 1.0 §8.1 deliberately leaves to the OP. The properties that actually constrain the derivation are bound elsewhere: determinism by PW-40, per-sector separation by PW-43 / PW-44, and the length bound by PW-46."
 
   - id: PW-43
     severity: P0
@@ -249,8 +249,7 @@ rows:
     behaviour: |
       A subject_type=public client receives the local account id
       verbatim as the sub; the pairwise transform does not run.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-46
     severity: P0
@@ -258,8 +257,7 @@ rows:
     behaviour: |
       The pairwise sub stays within 255 characters as the spec
       recommends.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-50
     severity: P0
@@ -267,8 +265,7 @@ rows:
     behaviour: |
       The id_token sub follows the client's subject_type (public ->
       local id, pairwise -> pairwise sub).
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-51
     severity: P0
@@ -276,8 +273,7 @@ rows:
     behaviour: |
       The /userinfo response sub follows the same rule as the
       id_token sub.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-52
     severity: P1
@@ -285,8 +281,7 @@ rows:
     behaviour: |
       The introspection response sub follows the access_token's
       issuing client's subject_type (pairwise where applicable).
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-53
     severity: P0
@@ -295,8 +290,7 @@ rows:
       id_token_hint sub comparison uses the public / pairwise sub
       that matches the client's subject_type (consistent with
       claims#CL-61 / claims#CL-63).
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-54
     severity: P0
@@ -306,7 +300,7 @@ rows:
       requested value MUST match the pairwise sub or the OP returns
       login_required (consistent with claims#CL-51 / claims#CL-53).
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: "Blocked by the claims parameter, not by pairwise. Pairwise issuance is wired end to end (PW-50..PW-53 bind it), but the OP has no /authorize gate that compares an OIDC Core 1.0 §5.5 claims.id_token.sub.value entry against the resolved subject and fails with login_required — the entry is parsed and persisted, never enforced. claims#CL-51 and claims#CL-53 are out of scope on exactly that ground. This row is the pairwise-flavoured case of that missing gate, so it becomes bindable when the gate lands, and its pairwise half needs nothing further."
 
   - id: PW-60
     severity: P0
@@ -315,8 +309,7 @@ rows:
       Rotating the pairwise salt invalidates every pairwise sub
       across all clients; embedder documentation MUST flag this
       consequence.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-61
     severity: P0
@@ -326,7 +319,7 @@ rows:
       or audit event payloads delivered to a pairwise client; only
       the pairwise sub is exposed.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: "The delivery channel this row guards does not exist. Audit events are never delivered to a client: op.WithAuditEmitter hands audit.Event to the deployment operator, and the OP deliberately stamps ActorID with the OP-internal subject there (internal/authorizeendpoint/completion.go, internal/tokenendpoint/refresh.go) precisely so an operator can correlate one account across clients — pseudonymising the operator's own audit trail would defeat it. Every client-facing egress does carry the projected value, and each is bound: id_token by PW-50, userinfo by PW-51, introspection by PW-52, the id_token_hint comparison by PW-53, and the JWT access token by PW-40. Log redaction inside the embedder's sink is the embedder's concern."
 
   - id: PW-62
     severity: P1
@@ -335,8 +328,7 @@ rows:
       When the pairwise feature is enabled, discovery's
       subject_types_supported advertises pairwise so clients know
       they may select it.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-63
     severity: P2
@@ -345,8 +337,7 @@ rows:
       The OP exposes a hook (e.g. WithPairwiseSubject(salt, hashFn))
       that lets the embedder supply per-environment salt and hash
       function.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    status: active
 
   - id: PW-64
     severity: P1
@@ -356,7 +347,7 @@ rows:
       registration request lifetime and uses a bounded HTTP
       timeout.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: "Same sector-document fetch blocker as PW-21..PW-27: asserting that the sector_identifier_uri fetch is bounded requires driving a slow upstream through the OP's resolver, and the op surface exposes no WithSectorHTTPClient seam to point the resolver at a test server. The timeout is enforced and covered at the resolver level by internal/sector/resolver_test.go. Bind alongside PW-21..PW-27 when an injection point lands."
 
   - id: PW-65
     severity: P2
@@ -366,7 +357,7 @@ rows:
       detection is the OP's responsibility; the spec does not
       mandate a particular freshness policy.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+    out_of_scope_reason: "Same sector-document fetch blocker as PW-21..PW-27: observing cache behaviour needs two fetches against a test-controlled sector document, which the missing WithSectorHTTPClient seam makes undriveable from a black-box scenario. The row is also deliberately soft — the spec fixes no freshness policy — so what is bindable is the OP's own caching choice, covered at the resolver level by internal/sector/resolver_test.go."
 
   - id: PW-70
     severity: P0

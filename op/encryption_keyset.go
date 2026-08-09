@@ -65,12 +65,18 @@ type EncryptionKey struct {
 
 // EncryptionKeyset is the ordered list of [EncryptionKey] values the
 // OP uses to decrypt inbound JWE and publishes on the JWKs endpoint
-// with use=enc. The first entry is the active key for outbound JWE
-// (id_token / userinfo / JARM / introspection encryption); subsequent
-// entries are published only until their respective NotAfter deadline.
-// During a rotation overlap, retain the retiring entry and use
-// [WithJWKSRotationActive] to shorten JWKS caching; remove it only after
-// that overlap and the longest accepted request lifetime have elapsed.
+// with use=enc. The keyset is inbound-only: an outbound JWE (id_token /
+// userinfo / JARM / introspection) is encrypted to a key selected from
+// the recipient client's JWKS, never from this list, so no entry here
+// is ever an "active outbound key".
+//
+// Slice order is the trial-decryption order for a ciphertext whose
+// protected header omits `kid` (RFC 7516 §4.1.6); a ciphertext that
+// names a kid routes to that entry directly. Entries are published
+// until their respective NotAfter deadline. During a rotation overlap,
+// retain the retiring entry and use [WithJWKSRotationActive] to shorten
+// JWKS caching; remove it only after that overlap and the longest
+// accepted request lifetime have elapsed.
 //
 // EncryptionKeyset is a value type; callers MAY share it across
 // Providers as long as every contained key is itself safe for

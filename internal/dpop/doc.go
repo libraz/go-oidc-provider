@@ -4,8 +4,9 @@
 //   - Parsing and verification of DPoP proof JWTs (RFC 9449 §4): header
 //     "typ"/"alg" gating, public-key JWK in "jwk", "htm"/"htu"/"iat"/"jti"
 //     claim validation, optional "ath" (access-token hash) binding for
-//     resource calls (§4.3), and optional "nonce" (parsed but currently
-//     ignored — server-supplied nonces are out of scope for v0.x).
+//     resource calls (§4.3), and "nonce" (§8 / §9), which is enforced
+//     when the verifier is configured with a [NonceVerifier] and
+//     parsed but unread otherwise.
 //
 //   - JWK thumbprint computation (RFC 7638) — the value bound to issued
 //     tokens as the "jkt" member of the "cnf" claim (RFC 9449 §6).
@@ -22,8 +23,8 @@
 //
 // # Algorithm policy
 //
-// v0.x accepts ES256, EdDSA, and PS256 proofs. RS256 (PKCS#1 v1.5) is
-// rejected — modern profiles steer RSA toward PSS and the OFCS
+// The verifier accepts ES256, EdDSA, and PS256 proofs. RS256 (PKCS#1
+// v1.5) is rejected — modern profiles steer RSA toward PSS and the OFCS
 // negative-test pipeline relies on the rejection; symmetric and "none"
 // are rejected structurally because the input goes through
 // [internal/jose.ParseSigned], which already enforces the project

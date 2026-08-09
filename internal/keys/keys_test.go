@@ -1,6 +1,7 @@
 package keys_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -107,7 +108,7 @@ func TestSet_FindReturnsEntryByKeyID(t *testing.T) {
 		t.Fatalf("NewSet: %v", err)
 	}
 
-	got, ok := set.Find("retiring")
+	got, ok := set.Find(context.Background(), "retiring")
 	if !ok {
 		t.Fatal("Find(retiring) ok=false, want true")
 	}
@@ -118,7 +119,7 @@ func TestSet_FindReturnsEntryByKeyID(t *testing.T) {
 		t.Error("Find(retiring) returned the wrong Signer")
 	}
 
-	if got, ok := set.Find("active"); !ok || got.KeyID != "active" {
+	if got, ok := set.Find(context.Background(), "active"); !ok || got.KeyID != "active" {
 		t.Errorf("Find(active)=(%+v,%v) want active key", got, ok)
 	}
 }
@@ -131,7 +132,7 @@ func TestSet_FindReturnsFalseForUnknownKeyID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSet: %v", err)
 	}
-	got, ok := set.Find("missing")
+	got, ok := set.Find(context.Background(), "missing")
 	if ok {
 		t.Errorf("Find(missing) ok=true want false (got=%+v)", got)
 	}
@@ -139,7 +140,7 @@ func TestSet_FindReturnsFalseForUnknownKeyID(t *testing.T) {
 		t.Errorf("Find(missing) returned non-zero Entry=%+v", got)
 	}
 
-	if _, ok := set.Find(""); ok {
+	if _, ok := set.Find(context.Background(), ""); ok {
 		t.Error("Find(\"\") ok=true want false for empty kid lookup")
 	}
 }
@@ -207,7 +208,7 @@ func TestSet_FindIsPureStringEquality_NoPathTraversal(t *testing.T) {
 	for _, kid := range probes {
 		t.Run("kid="+kid, func(t *testing.T) {
 			t.Parallel()
-			got, ok := set.Find(kid)
+			got, ok := set.Find(context.Background(), kid)
 			if ok {
 				t.Fatalf("Find(%q) ok=true; lookup MUST be byte-equal on kid (got Entry=%+v)", kid, got)
 			}
@@ -259,7 +260,7 @@ func TestSet_Find_RejectsRetiredKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSet: %v", err)
 	}
-	got, ok := set.Find("retiring")
+	got, ok := set.Find(context.Background(), "retiring")
 	if ok {
 		t.Fatalf("Find(retiring) ok=true after deadline; want false (got=%+v)", got)
 	}
@@ -268,7 +269,7 @@ func TestSet_Find_RejectsRetiredKey(t *testing.T) {
 	}
 	// The active key must remain reachable: retirement is per-entry,
 	// not per-set.
-	if got, ok := set.Find("active"); !ok || got.KeyID != "active" {
+	if got, ok := set.Find(context.Background(), "active"); !ok || got.KeyID != "active" {
 		t.Errorf("Find(active)=(%+v,%v) want active key", got, ok)
 	}
 }
@@ -308,7 +309,7 @@ func TestSet_Find_AcceptsKeyBeforeNotAfter(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewSet: %v", err)
 			}
-			got, ok := set.Find("retiring")
+			got, ok := set.Find(context.Background(), "retiring")
 			if ok != tc.want {
 				t.Fatalf("Find(retiring) ok=%v want %v (now=%v deadline=%v)", ok, tc.want, tc.now, deadline)
 			}
@@ -343,7 +344,7 @@ func TestSet_Find_NotifiesObserverOnRetiredKid(t *testing.T) {
 			{KeyID: "retiring", Signer: priv, NotAfter: deadline},
 		},
 		keys.WithClock(func() time.Time { return deadline.Add(time.Hour) }),
-		keys.WithRetiredKidObserver(func(kid string) {
+		keys.WithRetiredKidObserver(func(_ context.Context, kid string) {
 			calls.Add(1)
 			lastKid.Store(kid)
 		}),
@@ -352,7 +353,7 @@ func TestSet_Find_NotifiesObserverOnRetiredKid(t *testing.T) {
 		t.Fatalf("NewSet: %v", err)
 	}
 
-	if _, ok := set.Find("retiring"); ok {
+	if _, ok := set.Find(context.Background(), "retiring"); ok {
 		t.Fatal("Find(retiring) should reject after deadline")
 	}
 	if got := calls.Load(); got != 1 {
@@ -363,10 +364,10 @@ func TestSet_Find_NotifiesObserverOnRetiredKid(t *testing.T) {
 	}
 
 	// Active and unknown kids must not trigger the observer.
-	if _, ok := set.Find("active"); !ok {
+	if _, ok := set.Find(context.Background(), "active"); !ok {
 		t.Fatal("Find(active) should still succeed")
 	}
-	if _, ok := set.Find("never-existed"); ok {
+	if _, ok := set.Find(context.Background(), "never-existed"); ok {
 		t.Fatal("Find(never-existed) should miss")
 	}
 	if got := calls.Load(); got != 1 {
@@ -392,7 +393,7 @@ func TestSet_Find_NoObserverDoesNotPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSet: %v", err)
 	}
-	if _, ok := set.Find("retiring"); ok {
+	if _, ok := set.Find(context.Background(), "retiring"); ok {
 		t.Fatal("retired kid was admitted")
 	}
 }
@@ -413,7 +414,7 @@ func TestSet_Find_ZeroNotAfterNeverRetires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSet: %v", err)
 	}
-	if _, ok := set.Find("evergreen"); !ok {
+	if _, ok := set.Find(context.Background(), "evergreen"); !ok {
 		t.Fatal("zero-NotAfter entry MUST never retire")
 	}
 }
@@ -447,5 +448,48 @@ func TestSet_JWKS_AdvertisesRetiredEntries(t *testing.T) {
 	}
 	if !kids["active"] || !kids["retired"] {
 		t.Fatalf("JWKS view dropped a key: %v", kids)
+	}
+}
+
+// correlationKeyType is the key under which the observer-context tests
+// stash a marker value. A dedicated unexported type keeps the lookup
+// collision-free, as [context.WithValue] requires.
+type correlationKeyType struct{}
+
+// TestSet_Find_ObserverReceivesCallerContext pins that the retired-kid
+// notification carries the context the caller passed to [keys.Set.Find]
+// rather than a detached one. The assertion reads a marker value back
+// out of the observed context: asserting only that the context is
+// non-nil would pass against [context.Background] and would therefore
+// not detect the very defect this pins — an audit event that reaches
+// the embedder's sink with no request id and no trace span, leaving an
+// operator unable to answer "who presented the retired kid, and on
+// which request".
+func TestSet_Find_ObserverReceivesCallerContext(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	deadline := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	var observed atomic.Value
+	set, err := keys.NewSet(
+		[]keys.Entry{{KeyID: "retiring", Signer: priv, NotAfter: deadline}},
+		keys.WithClock(func() time.Time { return deadline.Add(time.Hour) }),
+		keys.WithRetiredKidObserver(func(ctx context.Context, _ string) {
+			marker, _ := ctx.Value(correlationKeyType{}).(string)
+			observed.Store(marker)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), correlationKeyType{}, "request-7")
+	if _, ok := set.Find(ctx, "retiring"); ok {
+		t.Fatal("Find(retiring) should reject after deadline")
+	}
+	got, _ := observed.Load().(string)
+	if got != "request-7" {
+		t.Fatalf("observer context marker=%q want request-7 — the caller's context did not reach the observer", got)
 	}
 }

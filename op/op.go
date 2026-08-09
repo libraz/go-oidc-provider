@@ -110,6 +110,50 @@ func (p *Provider) LocaleResolver() *Resolver {
 	return &Resolver{inner: p.locales}
 }
 
+// Shutdown blocks until every back-channel logout fan-out already in
+// flight has finished, or until ctx expires. It returns nil on a
+// complete drain and ctx's error otherwise, so a caller can
+// distinguish the two with [errors.Is] against
+// [context.DeadlineExceeded] / [context.Canceled].
+//
+// The seam exists because /end_session answers the browser as soon as
+// the OP-side session is gone and notifies the relying parties on a
+// detached context. Nothing on the request path waits for that work,
+// so without a drain a SIGTERM during a rolling deploy would end the
+// process while signed Logout Tokens were still queued, and the RPs
+// would never learn the session ended.
+//
+// Three behaviours embedders wire this into a signal handler need to
+// be able to rely on:
+//
+//   - Shutdown is a no-op returning nil on a Provider with no
+//     back-channel logout coordinator — a machine-to-machine
+//     configuration that never mounts /end_session, or a nil
+//     receiver. Call it unconditionally.
+//   - Shutdown may be called any number of times, from any number of
+//     goroutines. It holds no closed state: each call waits for
+//     whatever is in flight when it runs, and a second call on a
+//     quiet Provider returns nil immediately.
+//   - Shutdown does not seal the Provider. [Provider.ServeHTTP] keeps
+//     serving afterwards, and a /end_session request that arrives
+//     after the drain starts its own fan-out, which that call will
+//     not wait for. Stop accepting requests first — typically
+//     [net/http.Server.Shutdown] — and drain second, so the set of
+//     in-flight fan-outs can only shrink.
+//
+// Each fan-out is independently bounded by
+// [WithBackchannelFanOutBudget], so a Provider left unattended still
+// converges; Shutdown makes the convergence something the embedder
+// can wait for.
+//
+// Stable since v1.1.
+func (p *Provider) Shutdown(ctx context.Context) error {
+	if p == nil || p.cfg == nil || p.cfg.backchannelCoordinator == nil {
+		return nil
+	}
+	return p.cfg.backchannelCoordinator.Drain(ctx)
+}
+
 // New constructs a [Provider] from the supplied options. It validates that
 // every required option is present and that the combination of enabled
 // grants, features, and profiles is internally consistent.
@@ -315,10 +359,15 @@ func toEncryptionEntries(ks EncryptionKeyset) []keys.EncryptionEntry {
 
 // buildEncryptionSet constructs the runtime [keys.EncryptionSet] from
 // the embedder-supplied [EncryptionKeyset]. Returns (nil, nil) when
-// no encryption keyset was registered — that is the documented "JWE
-// off" posture, not an error. A non-empty keyset that fails internal
-// validation is wrapped in a configuration error so the misconfigured
-// boot surfaces at op.New, not on first /authorize fetch.
+// no encryption keyset was registered — that is the documented
+// "inbound JWE off" posture, not an error. A non-empty keyset that
+// fails internal validation is wrapped in a configuration error so the
+// misconfigured boot surfaces at op.New, not on first /authorize fetch.
+//
+// The set also carries the deployment's [config.jwePolicy], which is
+// how a [WithSupportedEncryptionAlgs] narrowing reaches inbound
+// decryption: the JOSE layer reads it off the resolver rather than
+// having it threaded through every verifier that owns one.
 func buildEncryptionSet(cfg *config) (*keys.EncryptionSet, error) {
 	if len(cfg.encryptionKeyset) == 0 {
 		return nil, nil //nolint:nilnil // optional feature; nil is the off state, not a missing value.
@@ -327,6 +376,7 @@ func buildEncryptionSet(cfg *config) (*keys.EncryptionSet, error) {
 		toEncryptionEntries(cfg.encryptionKeyset),
 		keys.WithClock(keysetClock(cfg)),
 		keys.WithRetiredKidObserver(retiredKidObserver(cfg)),
+		keys.WithJWEPolicy(cfg.jwePolicy()),
 	)
 	if err != nil {
 		return nil, &Error{
@@ -360,10 +410,17 @@ func keysetClock(cfg *config) func() time.Time {
 // embedder that did not wire any logger collapses onto [audit.Discard]
 // — so the observer always emits, even when the operator has no sink
 // configured (the discard sink is a no-op but keeps the gate uniform).
+//
+// The event carries the context of the request that presented the
+// retired kid, so the sink can attach the embedder's request id and the
+// active trace span. Without it the operator sees that a retired kid was
+// presented but cannot tell by whom or on which request — and a token
+// signed by a key the OP has stopped trusting is precisely the event
+// worth tracing back to its caller.
 func retiredKidObserver(cfg *config) keys.RetiredKidObserver {
 	emitter := cfg.effectiveAuditEmitter()
-	return func(kid string) {
-		emitter.Emit(context.Background(), audit.Event{
+	return func(ctx context.Context, kid string) {
+		emitter.Emit(ctx, audit.Event{
 			Name:    string(AuditKeyRetiredKidPresented),
 			Level:   audit.LevelWarn,
 			Message: "verification rejected: presented kid is retired",
@@ -516,6 +573,34 @@ func staticClientConflict(id string) error {
 // [store.StaticClientReconciler] for every possible Clients route.
 type staticClientReconcilerProvider interface {
 	StaticClientReconciler() (store.StaticClientReconciler, bool)
+}
+
+// clientRegistryProvider is the conditional capability accessor used by
+// composite stores whose concrete method set cannot honestly implement
+// [store.ClientRegistry] for every possible Clients route. A composite
+// deliberately withholds the plain interface so a read-only backend is
+// not mistaken for a writable registry; the accessor reports the
+// capability of the backend actually routed for Clients.
+type clientRegistryProvider interface {
+	ClientRegistry() (store.ClientRegistry, bool)
+}
+
+// resolveClientRegistry returns the [store.ClientRegistry] view of s,
+// consulting the direct interface first and the conditional accessor
+// second. Both the construction-time validation
+// ([config.validateRegistration]) and the router
+// ([mountRegistrationEndpoint]) go through it so a store that only
+// exposes the accessor — the documented hot/cold composite layout — can
+// serve Dynamic Client Registration instead of failing op.New with an
+// error that reads like a store defect.
+func resolveClientRegistry(s store.Store) (store.ClientRegistry, bool) {
+	if registry, ok := s.(store.ClientRegistry); ok {
+		return registry, true
+	}
+	if provider, ok := s.(clientRegistryProvider); ok {
+		return provider.ClientRegistry()
+	}
+	return nil, false
 }
 
 func resolveStaticClientReconciler(s store.Store) (store.StaticClientReconciler, error) {
@@ -1152,6 +1237,16 @@ func authorizePARStore(cfg *config) store.PushedAuthRequestStore {
 // depends on the /authorize endpoint being mounted. Currently only the
 // AuthorizationCode grant qualifies; the helper exists so future
 // grants can opt in by adding themselves to the switch.
+//
+// This is the single predicate behind three decisions that MUST agree:
+// [mountAuthorizeHandlers] registering /authorize (and, through the
+// session manager it returns, /end_session), the store-capability
+// validation those handlers depend on, and the discovery advertisement
+// of authorization_endpoint / end_session_endpoint /
+// response_types_supported / backchannel_logout_supported
+// ([buildDiscoveryFeatures]). A grant added to the switch therefore
+// gains the routes and the metadata in one step, and a grant set that
+// stays out of it can never advertise an endpoint that answers 404.
 func grantsRequireAuthorizeEndpoint(grants []grant.Type) bool {
 	for _, g := range grants {
 		if g == grant.AuthorizationCode {

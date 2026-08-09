@@ -24,20 +24,9 @@ import (
 // keeps the cyclomatic complexity well under the project's cap.
 func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	ctx := r.Context()
-	// DPoP verification runs ahead of client authentication so the
-	// `use_dpop_nonce` challenge fires before any client_assertion is
-	// consumed. Otherwise the assertion's jti is marked on the first
-	// attempt, the nonce-challenged client retries with the same
-	// assertion (RFC 9449 §8 contemplates a verbatim retry of the
-	// client-side request body), and the OP rejects with
-	// invalid_client/ErrAssertionReplayed instead of completing the
-	// flow. Reordering is safe because [verifyTokenDPoP] does not
-	// depend on the resolved client identity.
-	dpopOut, ok := verifyTokenDPoP(w, r, deps)
-	if !ok {
-		return
-	}
-	client, _, ok := authenticate(ctx, w, r, deps)
+	// Proof verification, client authentication, and the proof's
+	// replay marking run in the order [authenticateWithDPoP] documents.
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
 	if !ok {
 		return
 	}
@@ -180,7 +169,7 @@ func writeAuthCodeExchangeError(
 		errors.Is(err, authcode.ErrRedirectURIMismatch):
 		writeError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
 	case errors.Is(err, authcode.ErrCodeReplayed):
-		// §A.12.4: a replayed code is treated as evidence that the
+		// A replayed code is treated as evidence that the
 		// chain is compromised. Revoke every refresh token descended
 		// from the same grant before responding.
 		emitCodeReplayDetected(ctx, deps, authcode.ReplayGrantID(err))
@@ -839,7 +828,7 @@ func maybeIssueRefreshToken(
 	subjectPublic bool,
 	authCtx authContext,
 ) (string, error) {
-	if !clientPermitsRefresh(client, scope, deps.StrictOfflineAccess) {
+	if !clientPermitsRefresh(client, scope, deps.refreshPolicy()) {
 		return "", nil
 	}
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{

@@ -127,6 +127,7 @@ func TestWithStaticClients_PersistsToStore(t *testing.T) {
 		op.WithStore(st),
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "demo-spa",

@@ -124,8 +124,8 @@ func decodeGTMJWTClaims(tb testing.TB, jws string) map[string]any {
 }
 
 // TestScenario_GTM_001_DefaultStrategyWritesNoRegistryRow pins the
-// reduction in management data the ADR ships: under the default
-// strategy a successful authorization_code exchange writes ZERO rows
+// reduction in management data the default strategy delivers: under
+// it a successful authorization_code exchange writes ZERO rows
 // to Store.AccessTokens(). The user-visible promise is that JWT AT
 // issuance is a pure compute path on the hot path.
 func TestScenario_GTM_001_DefaultStrategyWritesNoRegistryRow(t *testing.T) {
@@ -299,8 +299,8 @@ func TestScenario_GTM_004_CodeReplayCascadesTombstone(t *testing.T) {
 
 // TestScenario_GTM_005_RevocationDenylistsSingleAT pins the RFC 7009
 // path: /oidc/revocation with token=<JWT AT> writes one RevokedJTI
-// row and the introspection of the same token reports inactive. ADR
-// 0025 explicitly does NOT coalesce single-AT revoke into a grant
+// row and the introspection of the same token reports inactive. A
+// single-AT revoke is deliberately NOT coalesced into a grant
 // tombstone.
 func TestScenario_GTM_005_RevocationDenylistsSingleAT(t *testing.T) {
 	t.Parallel()
@@ -347,8 +347,8 @@ func TestScenario_GTM_005_RevocationDenylistsSingleAT(t *testing.T) {
 	}
 }
 
-// TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone pins the ADR
-// 0025 §"Profile interaction (FAPI gate)" rule: under any FAPI profile
+// TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone pins the
+// profile gate: under any FAPI profile
 // op.New rejects op.RevocationStrategyNone because FAPI 2.0 SP §5.3.2.2
 // mandates server-side access-token revocation. Non-FAPI profiles still
 // accept None — that path is bound by op-package unit tests.
@@ -369,6 +369,10 @@ func TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone(t *testing.T) {
 		op.WithStore(inmem.New()),
 		op.WithKeyset(op.Keyset{{KeyID: "gtm-sig-1", Signer: priv}}),
 		op.WithCookieKeys(cookieKey),
+		// The default grant set includes authorization_code, which op.New
+		// refuses without a login configuration. Supplying one keeps the
+		// rejection under test attributable to the revocation strategy.
+		op.WithAuthenticators(testkit.SubjectAuthenticator{}),
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithFeature(feature.DPoP),
 		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyNone),
@@ -388,11 +392,11 @@ func TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone(t *testing.T) {
 	}
 }
 
-// TestScenario_GTM_007_JTIRegistryStrategyPreservesADR0013 pins the
+// TestScenario_GTM_007_JTIRegistryStrategyKeepsPerTokenRows pins the
 // opt-in audit path: under RevocationStrategyJTIRegistry every issued
 // AT writes one row to Store.AccessTokens() and the tombstone substore
 // stays empty.
-func TestScenario_GTM_007_JTIRegistryStrategyPreservesADR0013(t *testing.T) {
+func TestScenario_GTM_007_JTIRegistryStrategyKeepsPerTokenRows(t *testing.T) {
 	t.Parallel()
 
 	tk, rp := newGTMProvider(t,

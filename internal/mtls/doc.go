@@ -7,15 +7,15 @@
 //   - Client-cert extraction from [*http.Request], with optional support
 //     for a trusted reverse-proxy header carrying the URL-encoded PEM.
 //
-//   - The two §2 client-authentication shapes:
-//
-//   - "tls_client_auth": a CA-issued cert whose subject DN or one of
-//     its SANs (DNS / URI / IP / email) matches a value the embedder
-//     registered against the client.
-//
-//   - "self_signed_tls_client_auth": a cert (typically self-signed)
-//     whose public-key JWK thumbprint matches a key in the client's
-//     registered JWKS.
+//   - The two §2 client-authentication shapes — "tls_client_auth" (a
+//     CA-issued cert whose subject DN or one of its SANs matches a
+//     value registered against the client) and
+//     "self_signed_tls_client_auth" (a cert whose public-key JWK
+//     thumbprint matches a key in the client's registered JWKS).
+//     These are NOT reachable from the HTTP layer: the OP does not
+//     offer either as a token_endpoint_auth_method, so the §2 helpers
+//     have no production call site. See [VerifyClientAuth] for the
+//     rationale and what a deployment uses instead.
 //
 //   - High-level §3 binding helpers consumed by the token endpoint and
 //     the resource server (userinfo): the [Verifier] holds the proxy

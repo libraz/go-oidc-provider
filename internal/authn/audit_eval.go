@@ -22,7 +22,7 @@ import (
 // observer. The orchestrator does not retry on observer panics; the
 // public-API contract is "non-blocking".
 func (o *Orchestrator) observeSuccess(ctx context.Context, st State, now time.Time, factor FactorType) {
-	audit.FanOut(ctx, o.auditObservers, audit.Event{
+	audit.FanOut(ctx, o.logger, o.auditObservers, audit.Event{
 		Subject:   st.Subject,
 		ClientID:  st.ClientID,
 		RemoteIP:  st.RemoteIP,
@@ -37,7 +37,7 @@ func (o *Orchestrator) observeSuccess(ctx context.Context, st State, now time.Ti
 // intentionally blanked on the failure path to avoid enumeration via
 // the observer feed.
 func (o *Orchestrator) observeFailure(ctx context.Context, st State, now time.Time, factor FactorType) {
-	audit.FanOut(ctx, o.auditObservers, audit.Event{
+	audit.FanOut(ctx, o.logger, o.auditObservers, audit.Event{
 		ClientID:  st.ClientID,
 		RemoteIP:  st.RemoteIP,
 		UserAgent: st.UserAgent,

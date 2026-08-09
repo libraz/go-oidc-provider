@@ -155,6 +155,13 @@ func LookupClient(ctx context.Context, clients store.ClientStore, id string) (*s
 		}
 		return nil, err
 	}
+	if c == nil {
+		// A nil client alongside a nil error violates the store contract.
+		// A backend that cannot produce the record has not proven the
+		// presented credentials belong to a registered client, so the
+		// lookup collapses onto the same rejection an unknown id gets.
+		return nil, clientauth.ErrCredentialsInvalid
+	}
 	return c, nil
 }
 

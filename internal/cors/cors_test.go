@@ -98,7 +98,7 @@ func TestStrict_Preflight_Allowed(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, OPTIONS" {
 		t.Errorf("ACAM=%q", got)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, DPoP, X-CSRF" {
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, DPoP, X-CSRF-Token" {
 		t.Errorf("ACAH=%q", got)
 	}
 	if got := rec.Header().Get("Access-Control-Max-Age"); got != "600" {
@@ -106,6 +106,55 @@ func TestStrict_Preflight_Allowed(t *testing.T) {
 	}
 	if got := rec.Header().Get("Vary"); got != "Origin" {
 		t.Errorf("Vary=%q want Origin", got)
+	}
+}
+
+// TestStrict_Preflight_CSRFTokenHeaderSurvivesIntersection pins the header
+// name the interaction handler actually reads. The documented SPA pattern
+// echoes the token in X-CSRF-Token, so a preflight requesting that header must
+// see it echoed back: dropping it silently blocks every cross-origin consent
+// submission in the browser.
+func TestStrict_Preflight_CSRFTokenHeaderSurvivesIntersection(t *testing.T) {
+	t.Parallel()
+
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
+	r := newReq(t, http.MethodOptions, "/oidc/interaction/abc")
+	r.Header.Set("Origin", "https://app.example.com")
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	r.Header.Set("Access-Control-Request-Headers", "content-type, x-csrf-token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d want 204", rec.Code)
+	}
+	got := rec.Header().Get("Access-Control-Allow-Headers")
+	if !strings.Contains(strings.ToLower(got), "x-csrf-token") {
+		t.Errorf("ACAH=%q must retain x-csrf-token", got)
+	}
+}
+
+// TestStrict_EchoesCanonicalOrigin pins that the echoed
+// Access-Control-Allow-Origin is the canonical form the allowlist actually
+// matched, not the raw request header. A raw echo would advertise an origin
+// variant (uppercase host, explicit default port) that was never admitted.
+func TestStrict_EchoesCanonicalOrigin(t *testing.T) {
+	t.Parallel()
+
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
+
+	for _, raw := range []string{
+		"https://APP.example.com",
+		"https://app.example.com:443",
+	} {
+		r := newReq(t, http.MethodPost, "/oidc/token")
+		r.Header.Set("Origin", raw)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
+			t.Errorf("origin %q: ACAO=%q want canonical form", raw, got)
+		}
 	}
 }
 
@@ -209,7 +258,7 @@ func TestStrict_ActualRequest_Rejected_NoCORS_StillServes(t *testing.T) {
 	// The OP still serves the response (the request might be a server-to-
 	// server call that incidentally has Origin set) but the browser, on
 	// seeing no ACAO, blocks the JS reader. This is the standard CORS
-	// failure mode and matches §F.4.
+	// failure mode.
 	if rec.Code != http.StatusOK {
 		t.Errorf("status=%d want 200 (next still runs)", rec.Code)
 	}
@@ -327,7 +376,7 @@ func TestStrict_Preflight_NoRequestHeaders_FallsBackToStatic(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 
-	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, DPoP, X-CSRF" {
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, DPoP, X-CSRF-Token" {
 		t.Errorf("ACAH=%q want full static list when ACRH absent", got)
 	}
 }

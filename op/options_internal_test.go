@@ -11,14 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/profile"
 )
 
-// TestApplyDefaults_HTMLDriverDefault confirms the plan 005 §3.4
-// promise: with neither [WithInteractionDriver] nor [WithSPAUI] supplied
+// TestApplyDefaults_HTMLDriverDefault confirms the default-driver
+// contract: with neither [WithInteractionDriver] nor [WithSPAUI] supplied
 // the OP boots with [interaction.HTMLDriver] as its default driver,
 // so an embedder using the default authorization-code grant set with
 // the required constructor options (WithIssuer / WithStore / WithKeyset
@@ -251,6 +252,29 @@ func TestEffectiveDeviceCodePollInterval_DefaultsAndOverride(t *testing.T) {
 	c.deviceCodePollInterval = 15 * time.Second
 	if got, want := c.effectiveDeviceCodePollInterval(), 15*time.Second; got != want {
 		t.Fatalf("effectiveDeviceCodePollInterval() = %v, want override %v", got, want)
+	}
+}
+
+// TestEffectiveCIBADefaultExpiresIn_ClampedByMax pins that a configured cap
+// also bounds the lifetime applied when the client omits requested_expiry.
+// Without the clamp an operator who lowers only the cap still hands out
+// library-default auth_req_ids that outlive the maximum they advertised.
+func TestEffectiveCIBADefaultExpiresIn_ClampedByMax(t *testing.T) {
+	t.Parallel()
+
+	c := &config{}
+	if got, want := c.effectiveCIBADefaultExpiresIn(), ciba.DefaultExpiresIn; got != want {
+		t.Fatalf("effectiveCIBADefaultExpiresIn() = %v, want default %v", got, want)
+	}
+
+	c.cibaMaxExpiresIn = 90 * time.Second
+	if got, want := c.effectiveCIBADefaultExpiresIn(), 90*time.Second; got != want {
+		t.Fatalf("effectiveCIBADefaultExpiresIn() = %v, want clamped %v", got, want)
+	}
+
+	c.cibaDefaultExpiresIn = 30 * time.Second
+	if got, want := c.effectiveCIBADefaultExpiresIn(), 30*time.Second; got != want {
+		t.Fatalf("effectiveCIBADefaultExpiresIn() = %v, want override %v", got, want)
 	}
 }
 

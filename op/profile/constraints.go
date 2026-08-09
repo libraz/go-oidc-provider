@@ -124,6 +124,37 @@ func MaxAccessTokenTTL(p Profile) time.Duration {
 	}
 }
 
+// MaxRequestObjectAge returns the upper bound p places on how old a
+// signed request object's "iat" claim may be by the time it reaches
+// the OP, or 0 when p does not constrain it (the request-object
+// verifier then applies its own, shorter, default).
+//
+// FAPI 2.0 Message Signing §5.6 bounds a request object's validity
+// window at 60 minutes, and FAPI 2.0 Baseline / FAPI-CIBA inherit the
+// same shape through the request objects they mandate. The library's
+// default cap on "iat" age is deliberately tighter than that, because
+// a general-purpose deployment gains nothing from a long replay
+// window; without this constraint, though, a request object that is
+// conformant by the profile's own arithmetic (exp within 60 minutes
+// of nbf) would be rejected as stale part-way through its declared
+// lifetime.
+//
+// The bound is one-directional in the same sense as
+// [MaxAccessTokenTTL]: it raises the floor the profile needs and an
+// embedder may still be served by a stricter verifier configuration.
+//
+// Stable since v1.1.
+func MaxRequestObjectAge(p Profile) time.Duration {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+		return 60 * time.Minute
+	case Baseline, profileUnspecified:
+		return 0
+	default:
+		return 0
+	}
+}
+
 // RequiresPKCE reports whether p mandates that every authorization-
 // code request carries a code_challenge. The library's overall posture
 // is OAuth 2.1 / RFC 9700 — PKCE is good practice on every flow — but
@@ -243,14 +274,24 @@ func RequiresPAR(p Profile) bool {
 // `token_endpoint_auth_methods_supported` strings used in
 // discovery and dynamic client registration (RFC 8414 / RFC 7591).
 //
-// FAPI 2.0 §3.1.3 mandates one of [private_key_jwt],
-// [tls_client_auth] (RFC 8705), or [self_signed_tls_client_auth]
-// (RFC 8705 §2.2). Public clients ("none") and shared-secret
-// methods ("client_secret_basic", "client_secret_post",
-// "client_secret_jwt") are forbidden. Baseline, Message Signing,
-// and FAPI-CIBA inherit the same set; Message Signing's additional
-// constraints concern response signing rather than client auth, and
-// FAPI-CIBA inherits the FAPI 2.0 §3.1.3 set verbatim.
+// FAPI 2.0 §3.1.3 permits one of "private_key_jwt", "tls_client_auth"
+// (RFC 8705 §2.1) or "self_signed_tls_client_auth" (RFC 8705 §2.2).
+// Public clients ("none") and shared-secret methods
+// ("client_secret_basic", "client_secret_post", "client_secret_jwt")
+// are forbidden by the profile, and this library additionally leaves
+// the two mTLS methods out of the returned set: it does not implement
+// RFC 8705 §2 client authentication, so a client registered with
+// either method could never authenticate. What the mTLS feature flag
+// delivers is RFC 8705 §3 certificate-BOUND tokens (cnf."x5t#S256"),
+// which is orthogonal to how the client proves its identity. FAPI 2.0
+// remains satisfiable through private_key_jwt.
+//
+// The list is therefore directly usable as a seed source: a client
+// registered with any method it returns constructs cleanly and can
+// authenticate at runtime. Baseline, Message Signing, and FAPI-CIBA
+// share the same set; Message Signing's additional constraints
+// concern response signing rather than client auth, and FAPI-CIBA
+// inherits the FAPI 2.0 §3.1.3 set.
 //
 // [Baseline] returns nil: OAuth 2.1 keeps every registered client
 // authentication method available, including public clients, and
@@ -262,7 +303,7 @@ func RequiresPAR(p Profile) bool {
 func AllowedClientAuthMethods(p Profile) []string {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
-		return []string{"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth"}
+		return []string{"private_key_jwt"}
 	case Baseline, profileUnspecified:
 		return nil
 	default:

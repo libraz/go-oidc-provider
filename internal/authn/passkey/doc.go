@@ -7,8 +7,7 @@
 // library's [webauthn.Credential] to the project's flat
 // [github.com/libraz/go-oidc-provider/op/store.PasskeyRecord].
 // # Scope
-// The package is **self-contained** in the sense documented in
-// 02-product-design.md §E: orchestrator wiring, HTTP
+// The package is **self-contained**: orchestrator wiring, HTTP
 // handlers, cookie ferrying, and the future [op.WithPasskeyConfig] option
 // live elsewhere. Callers compose the building blocks here into a
 // passkey authenticator branch. The package does not import any other
@@ -73,6 +72,18 @@
 // and never touches the persistent store. The two roles are kept
 // separate in the type system so a caller cannot accidentally persist
 // challenge bytes alongside credential records.
+// # Credential ownership
+// A credential ID identifies one credential across the whole Relying
+// Party, and the stored record is keyed on it alone. A registration
+// allowed to name a credential another subject already holds would
+// therefore not add a credential — it would move one, leaving the
+// previous owner unable to log in with an authenticator that still
+// works. [Verifier.FinishRegistration] takes the credential store as an
+// argument for that reason: the exclude list only covers the registering
+// subject's own credentials, so the cross-subject case is a question
+// only the store can answer. The refusal reuses
+// [ErrCredentialAlreadyExists] rather than a distinct sentinel, so a
+// response cannot be read as "that credential belongs to someone else".
 // # Concurrency
 // [Verifier] is immutable after construction and safe for concurrent
 // use. The persisted [PasskeyRecord] is the per-user mutable state; the

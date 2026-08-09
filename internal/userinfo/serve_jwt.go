@@ -174,6 +174,11 @@ func maybeEncryptUserInfo(
 		return signedJWT, nil
 	}
 	client, err := deps.Clients.GetClient(ctx, clientID)
+	if err == nil && client == nil {
+		// A nil client alongside a nil error violates the store contract;
+		// there is no recipient to resolve encryption keys against.
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		// Client deleted between AT issuance and the userinfo call: the
 		// caller maps this onto invalid_token via the bearer challenge,
@@ -219,6 +224,13 @@ func resolveClient(ctx context.Context, deps HandlerDeps, clientID string) (*sto
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, false
 		}
+		return nil, false
+	}
+	if c == nil {
+		// A nil client alongside a nil error violates the store contract.
+		// The two nil-client returns mean different things here — (nil, true)
+		// is "lookup disabled" — so an unproducible record joins the
+		// "client gone" branch and the challenge fires.
 		return nil, false
 	}
 	return c, true

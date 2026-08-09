@@ -6,9 +6,10 @@ package authn
 // authenticator cannot inject a foreign token into the id_token amr
 // claim. The set is closed: new values land here only when the IANA
 // registry adds them.
-// 02-product-design.md §E.2.2 for the orchestrator
-// contract and §E.6.1 for the "no acr/amr from request parameters"
-// invariant the registry filter exists to defend.
+// The filter exists to defend the "no acr/amr from request parameters"
+// invariant: acr and amr are recomputed from the session's recorded
+// authentication events, never echoed from the RP's acr_values or from
+// interaction input.
 //
 //nolint:gochecknoglobals // closed lookup table; the file declares no init on it.
 var registeredAMR = map[string]struct{}{

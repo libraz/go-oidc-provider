@@ -70,8 +70,8 @@ const (
 	// AuditTokenSlowDown is emitted alongside AuditTokenRejected
 	// when the rejection cause is slow_down. Extras carry:
 	// client_id, observed_interval (the gap the client polled at),
-	// effective_interval (the value before doubling),
-	// next_interval (the value after doubling).
+	// effective_interval (the bar before the ladder advanced),
+	// next_interval (the bar after it advanced).
 	AuditTokenSlowDown = string(auditevent.AuditCIBATokenSlowDown)
 
 	// AuditPollObservationFailed is emitted when the token-endpoint

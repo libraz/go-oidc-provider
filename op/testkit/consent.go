@@ -19,7 +19,7 @@ import (
 const ApproveAllScopes = ""
 
 // IsConsentPrompt reports whether resp is a JSON envelope from the
-// built-in [internal/authn/consent] screen. The test-side dispatcher
+// built-in consent screen. The test-side dispatcher
 // branches on the result to decide whether the chain is complete or a
 // consent submission is still pending.
 //

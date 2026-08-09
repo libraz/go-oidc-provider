@@ -64,7 +64,7 @@ func (EmailOTPVerifyPromptData) isPromptData() {}
 
 // PasskeyPromptData backs Prompt.Type "auth.passkey".
 // Challenge and AllowCredentials must be exposed to the SPA verbatim
-// because WebAuthn (§E.4) consumes them in the browser. The orchestrator
+// because WebAuthn consumes them in the browser. The orchestrator
 // guarantees Challenge is freshly generated per attempt with at least
 // 256 bits of crypto/rand entropy, which is what makes verbatim
 // exposure safe.
@@ -111,7 +111,7 @@ func (RecoveryCodePromptData) isPromptData() {}
 
 // CaptchaPromptData backs Prompt.Type "captcha". The orchestrator
 // emits this prompt when [RiskAssessor] or the brute-force counter
-// require human verification (§M.6.1).
+// require human verification.
 type CaptchaPromptData struct {
 	// Provider is the upstream captcha service identifier.
 	// Stable values: "turnstile", "hcaptcha", "recaptcha_v3".
@@ -136,8 +136,10 @@ func (CaptchaPromptData) isPromptData() {}
 //   - token_endpoint_auth_method, response_types, grant_types,
 //     scopes, redirect_uris — irrelevant to consent rendering
 //
-// Adding a field here is a deliberate widening of the template trust
-// boundary and requires its own ADR.
+// Adding a field here widens the template trust boundary: whatever is
+// added becomes readable by every consent template an embedder ships,
+// including ones rendering attacker-influenced client metadata. Treat
+// it as a security decision, not a convenience one.
 type ClientView struct {
 	// ClientID is the registered client_id (RFC 7591 §2).
 	ClientID string
@@ -162,7 +164,7 @@ type ClientView struct {
 }
 
 // ConsentScope is the slim view of an OAuth scope the consent screen
-// renders. The struct is intentionally a flat copy of the §A.5
+// renders. The struct is intentionally a flat copy of the
 // scope-catalog entry: keeping it in [interaction] avoids an import
 // cycle through [op.Scope] (the catalog type) while preserving the
 // fields the SPA needs to render a consent dialogue.
@@ -181,13 +183,13 @@ type ConsentScope struct {
 	Required bool
 }
 
-// ConsentScopePromptData backs Prompt.Type "consent.scope". The
-// shape mirrors §A.5 of the product design — the SPA renders one
-// row per [ConsentScope] in display order.
+// ConsentScopePromptData backs Prompt.Type "consent.scope". The SPA
+// renders one row per [ConsentScope] in display order.
 //
-// Note: the Client field was added in v0.x; the JSON shape gains six
-// new keys (the [ClientView] fields). Embedders pinning the JSON
-// envelope through golden tests must refresh their fixtures.
+// The serialised payload carries the client projection alongside the
+// scope rows: the six [ClientView] fields appear nested under
+// "Client". Embedders pinning the JSON envelope through golden tests
+// must cover them as well as the scope list.
 type ConsentScopePromptData struct {
 	// Scopes is the list of scopes the user is being asked to grant.
 	// Order matches the orchestrator's display order.

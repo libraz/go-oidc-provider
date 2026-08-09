@@ -17,8 +17,10 @@ const amrMFA = "mfa"
 //
 // Semantics:
 //
-//   - level is the maximum [Factor.AssuranceLevel] across factors. An
-//     empty slice yields [AAL0].
+//   - level is the maximum [Factor.EffectiveAAL] across factors, so a
+//     factor that declared more than the ceremony proved (a passkey
+//     assertion without the user-verification bit) counts at what it
+//     earned. An empty slice yields [AAL0].
 //   - amr is the sorted, de-duplicated set of non-empty
 //     [Factor.AMRValue] results. Foreign factor types contribute the
 //     empty string and are filtered out, so they cannot dilute the
@@ -46,8 +48,8 @@ func Aggregate(factors []Factor) (acr string, amr []string, level AAL) {
 	// (typically 1-3), so allocation overhead is negligible.
 	seen := make(map[string]struct{}, len(factors))
 	for _, f := range factors {
-		if f.AssuranceLevel > level {
-			level = f.AssuranceLevel
+		if eff := f.EffectiveAAL(); eff > level {
+			level = eff
 		}
 		v := f.AMRValue()
 		if v == "" {

@@ -10,8 +10,6 @@ import (
 // [RiskAssessor.Assess] call is being made. The values are stable;
 // callers MAY persist them in audit logs or correlate them with
 // metrics.
-// 02-product-design.md §M.6.2 for the full per-stage
-// design rationale.
 type RiskStage int
 
 // RiskStage values. The set is closed by design — orchestrator
@@ -41,7 +39,7 @@ const (
 // RiskInput is the orchestrator-curated input a [RiskAssessor]
 // receives. The fields are deliberately a flat data carrier: the
 // orchestrator owns trust evaluation (RemoteIP normalisation through
-// the §F.5 trusted-proxy chain, UserAgent truncation) and the
+// the trusted-proxy chain, UserAgent truncation) and the
 // assessor consumes only the post-trust values.
 // RiskInput MUST NOT be serialised to the SPA, id_token, or any
 // user-observable surface. It lives only in the server boundary.
@@ -57,7 +55,7 @@ type RiskInput struct {
 	ClientID string
 
 	// RemoteIP is the client IP after trusted-proxy normalisation
-	// (§F.5). The orchestrator never hands raw X-Forwarded-* values
+	// The orchestrator never hands raw X-Forwarded-* values
 	// to the assessor.
 	RemoteIP netip.Addr
 
@@ -195,8 +193,10 @@ type RiskOutcome struct {
 // calls; per-attempt state lives in the assessor's own backing store.
 // Implementations MUST be safe for concurrent use by multiple
 // goroutines.
-// 02-product-design.md §M.6.2 / §M.6.4 for the full
-// design and the SPA-exposure constraints.
+// [RiskInput], [RiskOutcome] and the assessor's reasoning stay
+// server-side: they are never serialised into the interaction JSON,
+// an id_token claim, or any other SPA-visible surface. The SPA only
+// ever observes the resulting prompt sequence.
 type RiskAssessor interface {
 	// Assess evaluates the RiskInput and returns the orchestrator
 	// directive. A non-nil error fails the request closed (the

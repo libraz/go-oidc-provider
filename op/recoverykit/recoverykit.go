@@ -37,6 +37,7 @@ package recoverykit
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -55,6 +56,35 @@ type Result struct {
 	Codes []string
 }
 
+// Clock is the wall-clock source a [Kit] reads. It is structurally
+// identical to the [github.com/libraz/go-oidc-provider/op.Clock] an
+// embedder passes to op.WithClock, so the same value satisfies both
+// without an adapter.
+//
+// Stable since v1.0.
+type Clock interface {
+	Now() time.Time
+}
+
+// Kit mints recovery batches under a caller-supplied clock. The zero
+// value is usable and reads the system clock, which is what the
+// package-level [Generate] and [Replace] do.
+//
+// Enrolment stamps [store.RecoveryBatch.GeneratedAt], and that stamp is
+// what an account page shows the user as "codes issued on". A
+// deployment that pins time — a test, a replayed fixture, a service
+// that takes its clock from a coordinator rather than from the host —
+// gets a batch dated by the host instead unless it passes its clock
+// here.
+//
+// Stable since v1.0.
+type Kit struct {
+	// Clock stamps [store.RecoveryBatch.GeneratedAt]. A nil value reads
+	// the system clock. Pass the same value handed to op.WithClock so
+	// the enrolment timestamp agrees with the rest of the deployment.
+	Clock Clock
+}
+
 // Generate mints a batch for subject without persisting it. Use it
 // when the batch has to be written inside a transaction the caller
 // owns, or shown for confirmation before it takes effect; otherwise
@@ -66,11 +96,21 @@ type Result struct {
 // calling it inline from a handler is fine; embedders chasing
 // sub-100ms responses generate asynchronously and stream the plaintext
 // to a follow-up GET.
+//
+// The batch is dated by the system clock. A deployment that pins time
+// mints through [Kit] instead.
 func Generate(ctx context.Context, subject string) (*Result, error) {
+	return Kit{}.Generate(ctx, subject)
+}
+
+// Generate mints a batch for subject without persisting it, stamping
+// [store.RecoveryBatch.GeneratedAt] from the Kit's clock. See the
+// package-level [Generate] for when to prefer it over [Kit.Replace].
+func (k Kit) Generate(ctx context.Context, subject string) (*Result, error) {
 	if subject == "" {
 		return nil, errors.New("recoverykit: subject is required")
 	}
-	res, err := (&recovery.Verifier{}).Generate(ctx, subject)
+	res, err := k.verifier().Generate(ctx, subject)
 	if err != nil {
 		return nil, err
 	}
@@ -81,13 +121,34 @@ func Generate(ctx context.Context, subject string) (*Result, error) {
 // prior batch for subject. The plaintext is returned only after the
 // store has accepted the batch, so a storage failure cannot leave the
 // user holding codes that will never verify.
+//
+// The batch is dated by the system clock. A deployment that pins time
+// mints through [Kit] instead.
 func Replace(ctx context.Context, recoveryStore store.RecoveryStore, subject string) (*Result, error) {
+	return Kit{}.Replace(ctx, recoveryStore, subject)
+}
+
+// Replace mints a batch and persists it in one call, stamping
+// [store.RecoveryBatch.GeneratedAt] from the Kit's clock. See the
+// package-level [Replace] for the ordering guarantee it carries.
+func (k Kit) Replace(ctx context.Context, recoveryStore store.RecoveryStore, subject string) (*Result, error) {
 	if recoveryStore == nil {
 		return nil, errors.New("recoverykit: store is required")
 	}
-	res, err := (&recovery.Verifier{}).Replace(ctx, recoveryStore, subject)
+	res, err := k.verifier().Replace(ctx, recoveryStore, subject)
 	if err != nil {
 		return nil, err
 	}
 	return &Result{Batch: res.Batch, Codes: res.PlaintextCodes}, nil
+}
+
+// verifier builds the internal generator bound to the Kit's clock. A nil
+// Clock is passed through as nil, which the verifier resolves to the
+// system clock; the two interfaces share their single method, so no
+// adapter is needed.
+func (k Kit) verifier() *recovery.Verifier {
+	if k.Clock == nil {
+		return &recovery.Verifier{}
+	}
+	return &recovery.Verifier{Clock: k.Clock}
 }

@@ -38,8 +38,8 @@ func EncodeClaimsToGrant(c *ClaimsRequest) map[string]any {
 // so callers can treat "absent" identically. A payload whose shape
 // disagrees with the encoder contract returns nil too — the helper is
 // best-effort by design, because grant records persist for the life
-// of a refresh token and the library reserves the right to evolve the
-// schema in v0.x without breaking older records.
+// of a refresh token, so a decoder must tolerate records written
+// under an older shape of the schema.
 func DecodeClaimsFromGrant(g map[string]any) *ClaimsRequest {
 	if len(g) == 0 {
 		return nil
