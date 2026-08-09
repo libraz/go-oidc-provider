@@ -11,7 +11,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/15-i18n-locale && go run -tags example .)
+//	(cd examples/15-i18n-locale && GOWORK=off go run -tags example .)
 //
 // Startup runs an in-process self-verify probe that drives every row
 // of the priority chain through an httptest server and prints a
@@ -38,8 +38,8 @@
 //   - main.go  — entrypoint, package godoc, public listener.
 //   - op.go    — OP-side wiring: buildProvider, the French
 //     [op.LocaleBundle], and the seed end-user.
-//   - probe.go — self-verify probe that drives every row of the §L.2
-//     priority chain through an httptest server.
+//   - probe.go — self-verify probe that drives every row of the
+//     locale priority chain through an httptest server.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.

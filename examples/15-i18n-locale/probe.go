@@ -1,10 +1,10 @@
 //go:build example
 
-// probe.go — self-verify probe for example 04-i18n-locale.
+// probe.go — self-verify probe for example 15-i18n-locale.
 //
 // The probe stands up an in-process httptest server, drives
-// /authorize → /interaction GET against each row of the §L.2 priority
-// chain (PreferredLocaleStore → ui_locales → __Host-oidc_locale
+// /authorize → /interaction GET against each row of the locale
+// priority chain (PreferredLocaleStore → ui_locales → __Host-oidc_locale
 // cookie → Accept-Language → default), and asserts the resolved
 // [interaction.Prompt] locale matches the expectation. The probe
 // prints PASS / FAIL per row so the example output makes the
@@ -32,7 +32,7 @@ import (
 )
 
 // selfVerifyLocaleChain stands up an in-process httptest server,
-// drives /authorize → /interaction GET against each row of the §L.2
+// drives /authorize → /interaction GET against each row of the locale
 // priority chain, and asserts the resolved locale matches the
 // expectation. The probe prints a PASS / FAIL line per row so the
 // example output makes the resolver behaviour visible without a
@@ -71,7 +71,7 @@ func selfVerifyLocaleChain(provider *op.Provider) error {
 		log.Printf("PASS %s", tc.name)
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d row(s) of the §L.2 chain mismatched the expected locale", failed)
+		return fmt.Errorf("%d row(s) of the locale priority chain mismatched the expected locale", failed)
 	}
 	return nil
 }
@@ -104,22 +104,15 @@ func probeInteractionLocale(baseURL, uiLocales, cookieValue, acceptLanguage stri
 	if uiLocales != "" {
 		values.Set("ui_locales", uiLocales)
 	}
-	authReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
-		baseURL+"/oidc/auth?"+values.Encode(), http.NoBody)
+	authReq, err := localeRequest(baseURL+"/oidc/auth?"+values.Encode(), cookieValue, acceptLanguage)
 	if err != nil {
 		return "", err
-	}
-	if acceptLanguage != "" {
-		authReq.Header.Set("Accept-Language", acceptLanguage)
-	}
-	if cookieValue != "" {
-		authReq.AddCookie(&http.Cookie{Name: "__Host-oidc_locale", Value: cookieValue})
 	}
 	authResp, err := client.Do(authReq)
 	if err != nil {
 		return "", err
 	}
-	defer authResp.Body.Close()
+	defer func() { _ = authResp.Body.Close() }()
 	if authResp.StatusCode != http.StatusFound {
 		dump, _ := io.ReadAll(authResp.Body)
 		return "", fmt.Errorf("authorize status=%d body=%s", authResp.StatusCode, string(dump))
@@ -132,21 +125,15 @@ func probeInteractionLocale(baseURL, uiLocales, cookieValue, acceptLanguage stri
 		return "", errors.New("authorize redirected outside /oidc/interaction/: " + location.String())
 	}
 
-	stepReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, baseURL+location.Path, http.NoBody)
+	stepReq, err := localeRequest(baseURL+location.Path, cookieValue, acceptLanguage)
 	if err != nil {
 		return "", err
-	}
-	if acceptLanguage != "" {
-		stepReq.Header.Set("Accept-Language", acceptLanguage)
-	}
-	if cookieValue != "" {
-		stepReq.AddCookie(&http.Cookie{Name: "__Host-oidc_locale", Value: cookieValue})
 	}
 	stepResp, err := client.Do(stepReq)
 	if err != nil {
 		return "", err
 	}
-	defer stepResp.Body.Close()
+	defer func() { _ = stepResp.Body.Close() }()
 	if stepResp.StatusCode != http.StatusOK {
 		dump, _ := io.ReadAll(stepResp.Body)
 		return "", fmt.Errorf("interaction status=%d body=%s", stepResp.StatusCode, string(dump))
@@ -157,6 +144,26 @@ func probeInteractionLocale(baseURL, uiLocales, cookieValue, acceptLanguage stri
 	}
 	locale, _ := env["locale"].(string)
 	return locale, nil
+}
+
+// localeRequest builds a GET request for rawURL carrying the two
+// transport-level links of the chain: the Accept-Language header and
+// the __Host-oidc_locale cookie. Either is omitted when empty, so a
+// row can exercise one link in isolation. Both the /authorize and the
+// /interaction leg of a probe send the same pair — the resolver must
+// reach the same locale at either endpoint.
+func localeRequest(rawURL, cookieValue, acceptLanguage string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	if acceptLanguage != "" {
+		req.Header.Set("Accept-Language", acceptLanguage)
+	}
+	if cookieValue != "" {
+		req.AddCookie(&http.Cookie{Name: "__Host-oidc_locale", Value: cookieValue})
+	}
+	return req, nil
 }
 
 // pkceChallenge derives the SHA-256 base64url challenge from verifier.

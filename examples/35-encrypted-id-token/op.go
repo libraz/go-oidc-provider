@@ -75,12 +75,15 @@ func buildProvider(opEncPriv *rsa.PrivateKey, rpEncPub *rsa.PublicKey) (*op.Prov
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),
 		// WithEncryptionKeyset publishes the OP's use=enc key on
-		// /.well-known/jwks.json and wires the inbound JWE
-		// decrypter. The same option also unlocks outbound JWE
-		// emission: when a client registers
+		// /.well-known/jwks.json and wires the inbound JWE decrypter,
+		// so this OP can also accept an encrypted request object.
+		//
+		// The outbound direction this example demonstrates does not
+		// need it: when a client registers
 		// id_token_encrypted_response_alg / _enc, the token endpoint
-		// wraps the signed id_token in a JWE addressed to the RP's
-		// own use=enc key (resolved via the client metadata's JWKs).
+		// wraps the signed id_token in a JWE addressed to the RP's own
+		// use=enc key (resolved via the client metadata's JWKs), which
+		// works whether or not the OP holds a keyset of its own.
 		op.WithEncryptionKeyset(op.EncryptionKeyset{{
 			KeyID:      opEncKID,
 			PrivateKey: opEncPriv,

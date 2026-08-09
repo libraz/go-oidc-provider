@@ -228,6 +228,265 @@ func TestRefreshTokens(t *testing.T) {
 	}
 }
 
+// refreshChainRoot mirrors the walk the OP runs once a replay is detected:
+// the first hop presents the raw token the client sent and so goes through
+// the bearer-credential Find, while every later hop presents the stored
+// chain handle the previous record returned and so goes through
+// store.RefreshChainResolver. A store whose parent pointers are digests can
+// only be walked this way, which is why implementing the resolver is the
+// condition for returning one.
+func refreshChainRoot(ctx context.Context, tokens store.RefreshTokenStore, presented string, limit int) (string, error) {
+	current := presented
+	for i := range limit {
+		var (
+			rec *store.RefreshToken
+			err error
+		)
+		if i == 0 {
+			rec, err = tokens.Find(ctx, current)
+		} else {
+			resolver, ok := tokens.(store.RefreshChainResolver)
+			if !ok {
+				return "", errors.New("store does not implement store.RefreshChainResolver")
+			}
+			rec, err = resolver.FindByStoredHandle(ctx, current)
+		}
+		if err != nil {
+			return "", err
+		}
+		if rec.ParentID == nil {
+			return current, nil
+		}
+		current = *rec.ParentID
+	}
+	return "", errors.New("chain walk exceeded its depth limit")
+}
+
+// saveRefreshGeneration writes one generation of a rotation chain the way
+// the token endpoint does: parent is the RAW id of the token that was just
+// consumed, never the handle read back out of storage.
+func saveRefreshGeneration(ctx context.Context, t *testing.T, rt store.RefreshTokenStore, id, parent string, now time.Time) {
+	t.Helper()
+	rec := &store.RefreshToken{
+		ID: id, ClientID: "demo-rp", Subject: "principal-0001",
+		GrantID: "ledger-chain", Scope: []string{"openid"},
+		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+	}
+	if parent != "" {
+		rec.ParentID = &parent
+	}
+	if err := rt.Save(ctx, rec); err != nil {
+		t.Fatalf("Save %s: %v", id, err)
+	}
+}
+
+// TestRefreshChainReplayRevocation drives a chain several generations deep
+// and revokes it from the middle, which is what a stolen-token replay looks
+// like. It is the test that pins the raw/handle split end to end: hashing a
+// parent pointer twice, or hashing a handle that is already a digest, leaves
+// the pointers unable to link up and the cascade stops early.
+func TestRefreshChainReplayRevocation(t *testing.T) {
+	t.Parallel()
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	rt := s.RefreshTokens()
+	now := time.Now()
+
+	// Four generations: save, then consume, then save the successor with
+	// the consumed raw id as its parent.
+	chain := []string{"gen-0", "gen-1", "gen-2", "gen-3"}
+	for i, id := range chain {
+		parent := ""
+		if i > 0 {
+			parent = chain[i-1]
+		}
+		saveRefreshGeneration(ctx, t, rt, id, parent, now)
+		if i < len(chain)-1 {
+			if _, err := rt.Consume(ctx, id); err != nil {
+				t.Fatalf("Consume %s: %v", id, err)
+			}
+		}
+	}
+
+	// Replay of a generation from the middle of the chain.
+	if _, err := rt.Consume(ctx, "gen-1"); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("replay Consume = %v, want ErrAlreadyConsumed", err)
+	}
+
+	root, err := refreshChainRoot(ctx, rt, "gen-1", len(chain)+1)
+	if err != nil {
+		t.Fatalf("chain walk from the replayed token: %v", err)
+	}
+	if root == "gen-0" {
+		t.Fatal("chain walk reached the raw predecessor id — the parent pointer is not stored as a digest")
+	}
+	if err := rt.RevokeChain(ctx, root); err != nil {
+		t.Fatalf("RevokeChain: %v", err)
+	}
+	for _, id := range chain {
+		got, err := rt.Find(ctx, id)
+		if err != nil {
+			t.Fatalf("Find %s after RevokeChain: %v", id, err)
+		}
+		if !got.Revoked || got.ConsumedAt == nil {
+			t.Fatalf("generation %s survived the cascade: revoked=%v consumed=%v", id, got.Revoked, got.ConsumedAt)
+		}
+	}
+
+	// No generation's raw secret is recoverable from the table: a database
+	// reader holds neither a redeemable token nor the material to derive one.
+	for _, id := range chain {
+		var n int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM vault_renewal_slips
+			 WHERE token_secret_digest = ? OR parent_secret_digest = ?`, id, id).Scan(&n); err != nil {
+			t.Fatalf("raw-secret probe for %s: %v", id, err)
+		}
+		if n != 0 {
+			t.Fatalf("raw id %q found in the slips table (%d rows) — hash-on-store violated", id, n)
+		}
+	}
+}
+
+// TestRefreshChainHandles pins the two directions of the credential /
+// handle split on the refresh substore.
+func TestRefreshChainHandles(t *testing.T) {
+	t.Parallel()
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	rt := s.RefreshTokens()
+	resolver, ok := rt.(store.RefreshChainResolver)
+	if !ok {
+		t.Fatal("RefreshTokens() does not implement store.RefreshChainResolver")
+	}
+	now := time.Now()
+	saveRefreshGeneration(ctx, t, rt, "chain-root", "", now)
+	saveRefreshGeneration(ctx, t, rt, "chain-mid", "chain-root", now)
+	saveRefreshGeneration(ctx, t, rt, "chain-leaf", "chain-mid", now)
+
+	leaf, err := rt.Find(ctx, "chain-leaf")
+	if err != nil {
+		t.Fatalf("Find leaf: %v", err)
+	}
+	if leaf.ParentID == nil {
+		t.Fatal("Find leaf returned a nil ParentID")
+	}
+	midHandle := *leaf.ParentID
+	if midHandle == "chain-mid" {
+		t.Fatal("ParentID is the raw predecessor id, not a stored handle")
+	}
+
+	// The handle resolves, and the record it returns carries a ParentID
+	// that is itself a handle, so the walk can keep climbing.
+	mid, err := resolver.FindByStoredHandle(ctx, midHandle)
+	if err != nil {
+		t.Fatalf("FindByStoredHandle(mid): %v", err)
+	}
+	if mid.GrantID != "ledger-chain" {
+		t.Fatalf("FindByStoredHandle(mid) returned the wrong record: %+v", mid)
+	}
+	if mid.ParentID == nil || *mid.ParentID == "chain-root" {
+		t.Fatalf("mid.ParentID = %v, want a stored handle for the root", mid.ParentID)
+	}
+	root, err := resolver.FindByStoredHandle(ctx, *mid.ParentID)
+	if err != nil {
+		t.Fatalf("FindByStoredHandle(root): %v", err)
+	}
+	if root.ParentID != nil {
+		t.Fatalf("root.ParentID = %v, want nil", root.ParentID)
+	}
+	if _, err := resolver.FindByStoredHandle(ctx, "not-a-handle"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("FindByStoredHandle(unknown) = %v, want ErrNotFound", err)
+	}
+
+	// The security property: a handle read out of storage is inert on the
+	// bearer-credential paths, so a digest lifted from a dump, replica, or
+	// backup can never be redeemed as a refresh token.
+	if _, err := rt.Find(ctx, midHandle); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find(handle) = %v, want ErrNotFound — the stored handle is redeemable", err)
+	}
+	if _, err := rt.Consume(ctx, midHandle); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Consume(handle) = %v, want ErrNotFound — the stored handle is redeemable", err)
+	}
+
+	// The reverse direction is deliberately not symmetric: a raw id also
+	// resolves as a handle, because a chain whose replayed token has no
+	// parent hands that raw id straight back as its own root, and both
+	// RevokeChain and the resolver have to accept it there.
+	if _, err := resolver.FindByStoredHandle(ctx, "chain-root"); err != nil {
+		t.Fatalf("FindByStoredHandle(raw root id): %v", err)
+	}
+	if err := rt.RevokeChain(ctx, "chain-root"); err != nil {
+		t.Fatalf("RevokeChain(raw root id): %v", err)
+	}
+	if err := rt.RevokeChain(ctx, "absent"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("RevokeChain(unknown) = %v, want ErrNotFound", err)
+	}
+}
+
+// TestRefreshRetryResponse covers the RFC 9700 delivery grace window: the
+// sealed response rides along with the successor insert and is keyed by the
+// predecessor's digest, so it is reachable by presenting the predecessor and
+// by nothing else.
+func TestRefreshRetryResponse(t *testing.T) {
+	t.Parallel()
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	rt := s.RefreshTokens()
+	retry, ok := rt.(store.RefreshRetryResponseStore)
+	if !ok {
+		t.Fatal("RefreshTokens() does not implement store.RefreshRetryResponseStore")
+	}
+	now := time.Now()
+	saveRefreshGeneration(ctx, t, rt, "retry-parent", "", now)
+	if _, err := rt.Consume(ctx, "retry-parent"); err != nil {
+		t.Fatalf("Consume predecessor: %v", err)
+	}
+
+	parent := "retry-parent"
+	sealed := []byte("opaque-sealed-token-response")
+	if err := retry.SaveRotationWithRetry(ctx, &store.RefreshToken{
+		ID: "retry-child", ClientID: "demo-rp", Subject: "principal-0001",
+		GrantID: "ledger-chain", Scope: []string{"openid"}, ParentID: &parent,
+		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+	}, sealed); err != nil {
+		t.Fatalf("SaveRotationWithRetry: %v", err)
+	}
+
+	got, err := retry.LoadRetryResponse(ctx, "retry-parent")
+	if err != nil {
+		t.Fatalf("LoadRetryResponse: %v", err)
+	}
+	if string(got) != string(sealed) {
+		t.Fatalf("LoadRetryResponse returned %q, want %q", got, sealed)
+	}
+	if _, err := retry.LoadRetryResponse(ctx, "retry-unknown"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("LoadRetryResponse(unknown) = %v, want ErrNotFound", err)
+	}
+
+	// The predecessor id is a bearer credential on this path too: the
+	// handle stored as the successor's ParentID must not unlock the cache.
+	child, err := rt.Find(ctx, "retry-child")
+	if err != nil {
+		t.Fatalf("Find successor: %v", err)
+	}
+	if child.ParentID == nil {
+		t.Fatal("Find successor returned a nil ParentID")
+	}
+	if _, err := retry.LoadRetryResponse(ctx, *child.ParentID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("LoadRetryResponse(handle) = %v, want ErrNotFound", err)
+	}
+
+	// A root token has no predecessor to key a response by.
+	if err := retry.SaveRotationWithRetry(ctx, &store.RefreshToken{
+		ID: "retry-orphan", ClientID: "demo-rp", Subject: "principal-0001",
+		GrantID: "ledger-chain", Scope: []string{"openid"},
+		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+	}, sealed); err == nil {
+		t.Fatal("SaveRotationWithRetry without a parent: want an error")
+	}
+}
+
 func TestAccessTokens(t *testing.T) {
 	t.Parallel()
 	s, _ := newTestStore(t)

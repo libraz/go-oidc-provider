@@ -203,7 +203,7 @@ func run() error {
 
 	rpCtx, rpCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer rpCancel()
-	if err := waitForIssuer(rpCtx, issuer); err != nil {
+	if err := serve.WaitForIssuer(rpCtx, issuer); err != nil {
 		return err
 	}
 
@@ -331,30 +331,4 @@ func seedUser(ctx context.Context, storage *oidcdynamo.Store) error {
 		},
 	}
 	return storage.PutUserWithPassword(ctx, user, demoUsername, hash)
-}
-
-// waitForIssuer polls iss + "/.well-known/openid-configuration" until
-// it returns 200 or ctx is cancelled.
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
 }

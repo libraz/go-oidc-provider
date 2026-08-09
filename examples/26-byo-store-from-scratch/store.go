@@ -56,7 +56,7 @@ func (s *scratchStore) AuthorizationCodes() store.AuthorizationCodeStore {
 }
 
 func (s *scratchStore) RefreshTokens() store.RefreshTokenStore {
-	return &refreshStore{q: s.db, now: s.now}
+	return &refreshStore{q: s.db, now: s.now, db: s.db}
 }
 
 func (s *scratchStore) Grants() store.GrantStore { return &grantStore{q: s.db, now: s.now} }

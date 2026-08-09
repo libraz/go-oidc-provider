@@ -14,6 +14,7 @@
 //	client_id                relying_party
 //	authorization code id    token_secret_digest (in vault_grant_codes)
 //	refresh token id         token_secret_digest (in vault_renewal_slips)
+//	refresh chain pointer    parent_secret_digest
 //	PAR request_uri          handle_digest
 //	scope                    requested_scope (JSON array)
 //	expires_at               expires_epoch (unix seconds)
@@ -91,8 +92,15 @@ CREATE TABLE IF NOT EXISTS vault_renewal_slips (
     amr_values           TEXT NOT NULL,
     authorization_detail TEXT NOT NULL,
     access_token_extra   TEXT NOT NULL,
+    -- The pointer to this token's predecessor, held as the same digest the
+    -- predecessor's own row is keyed by. A chain pointer is not a bearer
+    -- credential: it only ever travels between this store and the OP's
+    -- replay-revocation walk, which resolves it through
+    -- store.RefreshChainResolver rather than the credential lookup. Storing
+    -- it hashed is therefore free, and it is what keeps every superseded
+    -- generation's raw secret out of the database — a dump of this table
+    -- yields no value that can be presented as a refresh token.
     parent_secret_digest TEXT,
-    parent_secret_raw    TEXT,
     -- The sealed token response the OP re-emits when a client retries a
     -- rotation it never received. It lives on the successor row, keyed by
     -- the predecessor's digest, so the successor insert and the cache
@@ -205,7 +213,9 @@ func constantTimeMatch(stored, presented string) bool {
 
 // digestNullable maps a *string holding a raw bearer ID to the nullable
 // bind value the schema expects: nil stays nil (NULL parent pointer),
-// otherwise the digest is returned.
+// otherwise the digest is returned. Callers pass a RAW value here — the
+// parent pointer read back out of storage is already a digest and must
+// not be hashed a second time, or the chain would no longer link up.
 func digestNullable(s *string) any {
 	if s == nil {
 		return nil

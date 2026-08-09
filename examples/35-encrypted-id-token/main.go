@@ -13,7 +13,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/35-encrypted-id-token && go run -tags example .)
+//	(cd examples/35-encrypted-id-token && GOWORK=off go run -tags example .)
 //
 // Two listeners come up in the same process:
 //
@@ -87,7 +87,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -156,7 +155,7 @@ func run() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := waitForIssuer(ctx, issuer); err != nil {
+	if err := serve.WaitForIssuer(ctx, issuer); err != nil {
 		return err
 	}
 
@@ -186,33 +185,5 @@ func run() error {
 		return err
 	case err := <-rpErrCh:
 		return err
-	}
-}
-
-// waitForIssuer polls iss + "/.well-known/openid-configuration" until
-// it returns 200 or ctx is cancelled. The OP boots in the same process
-// as the RP, so this readiness gate runs before the RP fetches
-// discovery + JWKS.
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
 	}
 }

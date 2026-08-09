@@ -85,7 +85,7 @@
 //
 // To iterate on main.go without rebuilding the docker image, expose
 // the engines temporarily by passing a compose override that adds
-// host ports, run the example with `go run -tags example .`, and
+// host ports, run the example with `GOWORK=off go run -tags example .`, and
 // pass the matching MYSQL_HOST / REDIS_DSN env vars. The default
 // compose.yaml deliberately omits host-port mapping so the demo
 // path is conflict-free.
@@ -243,7 +243,7 @@ func run() error {
 	// listener is up before constructing the RP.
 	rpCtx, rpCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer rpCancel()
-	if err := waitForIssuer(rpCtx, issuer); err != nil {
+	if err := serve.WaitForIssuer(rpCtx, issuer); err != nil {
 		return err
 	}
 
@@ -372,32 +372,4 @@ func (e *mysqlConnectionFailure) Error() string {
 
 func (e *mysqlConnectionFailure) Unwrap() error {
 	return e.cause
-}
-
-// waitForIssuer polls iss + "/.well-known/openid-configuration" until
-// it returns 200 or ctx is cancelled. The example boots the OP and
-// the RP in the same process, so the RP's OIDC discovery runs as
-// soon as the OP listener is ready.
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
 }

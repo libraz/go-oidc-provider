@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/61-claims-request && go run -tags example .)
+//	(cd examples/61-claims-request && GOWORK=off go run -tags example .)
 //
 // Two listeners come up in the same process:
 //
@@ -44,7 +44,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -121,7 +120,7 @@ func run() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := waitForIssuer(ctx, issuer); err != nil {
+	if err := serve.WaitForIssuer(ctx, issuer); err != nil {
 		return err
 	}
 
@@ -182,28 +181,4 @@ func seedUser(st *inmem.Store) error {
 		},
 	}, demoUsername, hash)
 	return nil
-}
-
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
 }

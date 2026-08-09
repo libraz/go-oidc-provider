@@ -8,6 +8,20 @@
 // or inside a transaction. Both honour the hash-on-store contract: the
 // bearer secret (code / refresh-token id) is hashed before it reaches
 // the database and looked up by digest, never stored raw.
+//
+// The refresh substore draws one further line, between the two kinds of
+// value it is handed:
+//
+//   - A BEARER CREDENTIAL — the refresh_token the client presents — only
+//     ever reaches the database as a digest, and only ever matches a row
+//     whose stored digest equals the digest of what was presented. Find
+//     and Consume are the credential paths.
+//   - A CHAIN HANDLE — the pointer from a rotated token to its
+//     predecessor — is not a credential. It never leaves the OP: it
+//     travels from this store to the replay-revocation walk and back. So
+//     it may be persisted and returned in digest form, which is what
+//     keeps every superseded generation's raw secret out of the database.
+//     FindByStoredHandle and RevokeChain are the handle paths.
 
 package main
 
@@ -147,7 +161,24 @@ func (s *authCodeStore) Consume(ctx context.Context, id string) (*store.Authoriz
 type refreshStore struct {
 	q   querier
 	now func() time.Time
+
+	// db is set only when the substore was handed out by the plain
+	// store, and is nil when it came from a transaction. Saving a
+	// rotated token needs its own transaction so a rejected rotation
+	// can be rolled back (see save); when the caller already supplied
+	// one, that rollback is theirs to perform.
+	db *databasesql.DB
 }
+
+// Compile-time proof of the optional companions this substore opts into.
+// [store.RefreshChainResolver] is what licenses the digest-only parent
+// pointer: it gives the revocation walk a way to resolve a stored handle
+// that does not run through the bearer-credential Find.
+var (
+	_ store.RefreshTokenStore         = (*refreshStore)(nil)
+	_ store.RefreshChainResolver      = (*refreshStore)(nil)
+	_ store.RefreshRetryResponseStore = (*refreshStore)(nil)
+)
 
 const (
 	refreshInsert = `
@@ -155,22 +186,25 @@ INSERT INTO vault_renewal_slips
   (token_secret_digest, relying_party, principal, ledger_id, requested_scope,
    resource_hint, principal_is_wire, origin_kind, auth_epoch, acr_value,
    amr_values, authorization_detail, access_token_extra, parent_secret_digest,
-   parent_secret_raw, retry_sealed,
+   retry_sealed,
    dpop_thumb, mtls_thumb, nonce_echo, is_void, expires_epoch, consumed_epoch,
    issued_epoch)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	refreshRetrySelect = `
 SELECT retry_sealed FROM vault_renewal_slips
 WHERE parent_secret_digest = ? AND retry_sealed IS NOT NULL`
 
+	// refreshSelect takes two keys rather than one so a single statement
+	// serves both lookup kinds: the credential path binds the same digest
+	// twice, the handle path binds (digest, verbatim). See refreshKeys.
 	refreshSelect = `
 SELECT token_secret_digest, relying_party, principal, ledger_id, requested_scope,
        resource_hint, principal_is_wire, origin_kind, auth_epoch, acr_value,
-       amr_values, authorization_detail, access_token_extra, parent_secret_raw,
+       amr_values, authorization_detail, access_token_extra, parent_secret_digest,
        dpop_thumb, mtls_thumb, nonce_echo, is_void, expires_epoch, consumed_epoch,
        issued_epoch
-FROM vault_renewal_slips WHERE token_secret_digest = ?`
+FROM vault_renewal_slips WHERE token_secret_digest = ? OR token_secret_digest = ?`
 
 	refreshConsume = `
 UPDATE vault_renewal_slips SET consumed_epoch = ?
@@ -179,6 +213,9 @@ WHERE token_secret_digest = ? AND consumed_epoch IS NULL`
 	refreshMark = `
 UPDATE vault_renewal_slips SET consumed_epoch = ?, is_void = 1
 WHERE token_secret_digest = ?`
+
+	refreshParentVoid = `
+SELECT is_void FROM vault_renewal_slips WHERE token_secret_digest = ?`
 
 	refreshChildren = `
 SELECT token_secret_digest FROM vault_renewal_slips WHERE parent_secret_digest = ?`
@@ -207,10 +244,11 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, successor *sto
 	return s.save(ctx, successor, sealed)
 }
 
-// LoadRetryResponse implements [store.RefreshRetryResponseStore]. The
-// lookup is by digest, never by the raw predecessor id: that id is a
-// bearer credential and this store never holds one in a form a database
-// reader could present.
+// LoadRetryResponse implements [store.RefreshRetryResponseStore].
+// predecessorID arrives raw — it is the refresh_token the client just
+// re-presented — so it is hashed here and matched against the stored
+// digest. Nothing on this path accepts a stored digest verbatim: a
+// database reader holds no value that redeems a cached response.
 func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
 	var sealed []byte
 	err := s.q.QueryRowContext(ctx, refreshRetrySelect, digest(predecessorID)).Scan(&sealed)
@@ -223,13 +261,83 @@ func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID stri
 	return sealed, nil
 }
 
+// save persists t. A token that roots its own chain is a plain INSERT; a
+// rotated token additionally has to prove its parent's chain is still
+// alive, which is what saveRotation does.
 func (s *refreshStore) save(ctx context.Context, t *store.RefreshToken, sealed []byte) error {
-	_, err := s.q.ExecContext(ctx, refreshInsert,
+	if t.ParentID == nil {
+		return s.insert(ctx, s.q, t, sealed)
+	}
+	if s.db == nil {
+		// Already inside the caller's transaction: do the work on it and
+		// let the caller roll back when saveRotation refuses.
+		return s.saveRotation(ctx, s.q, t, sealed)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("refreshes.Save.begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.saveRotation(ctx, tx, t, sealed); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("refreshes.Save.commit: %w", err)
+	}
+	return nil
+}
+
+// saveRotation writes the rotated token and then re-reads its parent,
+// refusing the rotation with [store.ErrAlreadyConsumed] when the parent
+// turns out to belong to a revoked chain. Writing a live child onto a
+// dead chain would resurrect it, which is exactly the replay RFC 9700
+// §2.2.2 revocation exists to stop.
+//
+// The INSERT deliberately comes first. Checking the parent and then
+// inserting leaves a window in which a concurrent RevokeChain walks past
+// a child that does not exist yet and the child survives the revocation.
+// Inserting first closes it: the revoking walk either sees the new row
+// and marks it, or has not committed yet — in which case this re-read
+// blocks on it and observes the revoked parent. A parent that is simply
+// gone proves no revocation, so the rotation stands.
+//
+// t.ParentID is raw on this path: a rotation Save carries the raw id of
+// the refresh token the library has just consumed, so it is hashed here
+// to reach the parent's row.
+func (s *refreshStore) saveRotation(ctx context.Context, q querier, t *store.RefreshToken, sealed []byte) error {
+	if err := s.insert(ctx, q, t, sealed); err != nil {
+		return err
+	}
+	var void int64
+	err := q.QueryRowContext(ctx, refreshParentVoid, digest(*t.ParentID)).Scan(&void)
+	if errors.Is(err, databasesql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("refreshes.Save.recheck: %w", err)
+	}
+	if void == 1 {
+		return store.ErrAlreadyConsumed
+	}
+	return nil
+}
+
+// insert is the single raw write both paths funnel through, so the
+// column order lives in exactly one place.
+//
+// Both secrets the library hands in are raw and both are hashed on the
+// way to the database: t.ID is the refresh_token about to be returned to
+// the client, and t.ParentID — non-nil only on a rotation — is the raw id
+// of the token just consumed. The parent lands in the same digest space
+// its own row is keyed by, which is what lets the revocation walk follow
+// the pointers without either generation's raw secret being stored.
+func (s *refreshStore) insert(ctx context.Context, q querier, t *store.RefreshToken, sealed []byte) error {
+	_, err := q.ExecContext(ctx, refreshInsert,
 		digest(t.ID), t.ClientID, t.Subject, t.GrantID,
 		encodeStrings(t.Scope), t.Resource, boolToInt(t.SubjectPublic),
 		string(t.Origin), epochOf(t.AuthTime), t.ACR, encodeStrings(t.AMR),
 		encodeObjectArray(t.AuthorizationDetails), encodeMap(t.AccessTokenExtra),
-		digestNullable(t.ParentID), t.ParentID, sealed,
+		digestNullable(t.ParentID), sealed,
 		t.DPoPJKT, t.MTLSCertThumbprint, t.Nonce, boolToInt(t.Revoked),
 		epochOf(t.ExpiresAt), epochPtr(t.ConsumedAt), epochOf(t.CreatedAt))
 	if err != nil {
@@ -245,12 +353,70 @@ func (s *refreshStore) Find(ctx context.Context, id string) (*store.RefreshToken
 	return s.find(ctx, id)
 }
 
-// find resolves a row by digest. The returned record's ID is restored
-// to the caller's raw value, and ParentID is the raw parent token ID so
-// callers can pass Find(child).ParentID back to Find/RevokeChain without
-// learning this store's hash-on-store representation.
+// FindByStoredHandle implements [store.RefreshChainResolver]. It resolves a
+// chain handle — the digest this store returns as [store.RefreshToken.ParentID],
+// or the raw id the walk started from when the replayed token roots its own
+// chain — and it does NOT re-hash a value that is already a stored digest.
+//
+// Only the OP's replay-revocation walk reaches this method, and the walk
+// revokes rather than issues, so admitting a stored digest here costs nothing:
+// the credential paths (Find, Consume) still refuse it, which is what makes a
+// digest read out of a backup inert.
+func (s *refreshStore) FindByStoredHandle(ctx context.Context, handle string) (*store.RefreshToken, error) {
+	t, _, err := s.findHandle(ctx, handle)
+	return t, err
+}
+
+// find resolves a value presented as a BEARER CREDENTIAL: the presented id is
+// hashed and only the resulting digest can match, so a digest lifted from a
+// database snapshot is not redeemable. An expired row reads as absent, never as
+// a live or already-consumed record — natural expiry is not replay evidence and
+// must not trigger a revocation cascade.
+//
+// The returned record's ID is restored to the caller's raw value; its ParentID
+// is a chain handle (see findHandle).
 func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken, error) {
+	t, _, err := s.lookup(ctx, id, refreshCredentialKeys(id))
+	if err != nil {
+		return nil, err
+	}
+	if expiredStrict(t.ExpiresAt, s.now()) {
+		return nil, store.ErrNotFound
+	}
+	return t, nil
+}
+
+// findHandle resolves a value presented as a CHAIN HANDLE and additionally
+// returns the row's stored digest, which the revocation walk needs as its
+// queue key. Expiry is not filtered: a chain must stay revocable after its
+// tokens have aged out, for as long as the rows are retained.
+func (s *refreshStore) findHandle(ctx context.Context, handle string) (*store.RefreshToken, string, error) {
+	return s.lookup(ctx, handle, refreshHandleKeys(handle))
+}
+
+// refreshCredentialKeys derives the lookup keys for a bearer credential. Both
+// slots hold the digest of the presented secret, so possession of a stored
+// digest alone never resolves a row.
+func refreshCredentialKeys(id string) [2]string {
 	d := digest(id)
+	return [2]string{d, d}
+}
+
+// refreshHandleKeys derives the lookup keys for a chain handle: a stored
+// parent digest matches verbatim, and a raw id matches through its digest.
+// Both have to resolve because a walk that starts at a token with no parent
+// hands the raw id straight back as the chain root.
+func refreshHandleKeys(handle string) [2]string {
+	return [2]string{digest(handle), handle}
+}
+
+func refreshKeyMatches(stored string, keys [2]string) bool {
+	return constantTimeMatch(stored, keys[0]) || constantTimeMatch(stored, keys[1])
+}
+
+// lookup is the single row read both presentations funnel through. keys
+// decides what may match; nothing else about the two paths differs.
+func (s *refreshStore) lookup(ctx context.Context, id string, keys [2]string) (*store.RefreshToken, string, error) {
 	var (
 		t        store.RefreshToken
 		stored   string
@@ -267,19 +433,19 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 		authE    int64
 		origin   string
 	)
-	err := s.q.QueryRowContext(ctx, refreshSelect, d).Scan(
+	err := s.q.QueryRowContext(ctx, refreshSelect, keys[0], keys[1]).Scan(
 		&stored, &t.ClientID, &t.Subject, &t.GrantID, &scope,
 		&t.Resource, &subPub, &origin, &authE, &t.ACR, &amr, &details, &extra,
 		&parent, &t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce, &void,
 		&expires, &consumed, &created)
 	if errors.Is(err, databasesql.ErrNoRows) {
-		return nil, store.ErrNotFound
+		return nil, "", store.ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("refreshes.find: %w", err)
+		return nil, "", fmt.Errorf("refreshes.find: %w", err)
 	}
-	if !constantTimeMatch(stored, d) {
-		return nil, store.ErrNotFound
+	if !refreshKeyMatches(stored, keys) {
+		return nil, "", store.ErrNotFound
 	}
 	t.ID = id
 	t.SubjectPublic = subPub == 1
@@ -289,17 +455,18 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 	t.AMR = decodeStrings(amr)
 	t.AuthorizationDetails = decodeObjectArray(details)
 	t.AccessTokenExtra = decodeMap(extra)
+	// parent is the digest column, so the ParentID handed back is itself a
+	// chain handle and the walk can keep climbing with it.
 	t.ParentID = parent
 	t.ConsumedAt = timePtr(consumed)
 	t.ExpiresAt = timeOf(expires)
 	t.CreatedAt = timeOf(created)
 	t.Revoked = void == 1
-	if expiredStrict(t.ExpiresAt, s.now()) {
-		return nil, store.ErrNotFound
-	}
-	return &t, nil
+	return &t, stored, nil
 }
 
+// Consume is a credential path: id is the raw refresh_token the client
+// presented, so the compare-and-set targets its digest.
 func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
 	t, err := s.find(ctx, id)
 	if err != nil {
@@ -331,15 +498,20 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 }
 
 // RevokeChain marks every token in the rotation chain rooted at rootID
-// consumed + void. The walk operates entirely in digest space: rootID
-// is hashed once, every descendant lookup uses the parent_secret_digest
-// the row was stored with, and the queue holds digests.
+// consumed + void.
+//
+// rootID is a chain handle, not a credential: the revocation walk hands
+// back the stored parent digest it climbed to, or the raw id it started
+// from when the replayed token roots its own chain. Both resolve, and the
+// row's own stored digest seeds the traversal — from there the walk stays
+// entirely in digest space, since every descendant lookup matches the
+// parent_secret_digest the child was written with.
 func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
-	if _, err := s.find(ctx, rootID); err != nil {
+	_, root, err := s.findHandle(ctx, rootID)
+	if err != nil {
 		return err
 	}
 	now := s.now().Unix()
-	root := digest(rootID)
 	visited := map[string]struct{}{root: {}}
 	queue := []string{root}
 	for len(queue) > 0 {

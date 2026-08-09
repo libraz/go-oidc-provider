@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/41-dynamic-registration && go run -tags example .)
+//	(cd examples/41-dynamic-registration && GOWORK=off go run -tags example .)
 //
 // Two listeners come up in the same process:
 //
@@ -32,9 +32,12 @@
 //     matches the dynamic client_id.
 //
 // To exercise the management API (RFC 7592), use the RAT printed at
-// startup. Replace ${RAT} and ${CID} with the printed values:
+// startup. The registration endpoint sits under the default /oidc
+// mount prefix, so the management URL is /oidc/register/{client_id} —
+// the startup log prints it verbatim as registration_client_uri.
+// Replace ${RAT} and ${CID} with the printed values:
 //
-//	curl -s "http://127.0.0.1:8080/register/${CID}" \
+//	curl -s "http://127.0.0.1:8080/oidc/register/${CID}" \
 //	  -H "Authorization: Bearer ${RAT}" | jq
 //
 // PRODUCTION CAVEATS:
@@ -47,7 +50,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -127,7 +129,7 @@ func run() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := waitForIssuer(ctx, issuer); err != nil {
+	if err := serve.WaitForIssuer(ctx, issuer); err != nil {
 		return err
 	}
 
@@ -193,28 +195,4 @@ func seedUser(st *inmem.Store) error {
 		},
 	}, demoUsername, hash)
 	return nil
-}
-
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
 }

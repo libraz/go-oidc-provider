@@ -1,6 +1,6 @@
 //go:build example
 
-// op.go — OP-side wiring for example 04-i18n-locale.
+// op.go — OP-side wiring for example 15-i18n-locale.
 //
 // This file holds the [op.New] construction, the French
 // [op.LocaleBundle] layered on top of the seed en / ja bundles, and

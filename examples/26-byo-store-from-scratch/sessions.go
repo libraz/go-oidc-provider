@@ -106,7 +106,16 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 	return nil
 }
 
+// Delete removes the seat and reports whether what it removed was live.
+// The DELETE statement alone cannot tell a live row from an expired one
+// still awaiting collection, so the read comes first: an expired session
+// is absent on every path, and the row is reclaimed regardless.
 func (s *sessionStore) Delete(ctx context.Context, id string) error {
+	_, findErr := s.Find(ctx, id)
+	absent := errors.Is(findErr, store.ErrNotFound)
+	if findErr != nil && !absent {
+		return findErr
+	}
 	res, err := s.q.ExecContext(ctx, sessionDelete, id)
 	if err != nil {
 		return fmt.Errorf("sessions.Delete: %w", err)
@@ -115,7 +124,7 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("sessions.Delete.RowsAffected: %w", err)
 	}
-	if n == 0 {
+	if n == 0 || absent {
 		return store.ErrNotFound
 	}
 	return nil
