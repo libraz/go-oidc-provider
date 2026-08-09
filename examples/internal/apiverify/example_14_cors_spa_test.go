@@ -13,3 +13,13 @@ func TestExample14CORSSPA(t *testing.T) {
 		[]string{"https://spa.example.com", "https://admin.example.com"},
 		"https://evil.example.com")
 }
+
+// The allowlist only matters if a user can get a token in the first
+// place. This second probe covers the step the preflight assertion
+// takes for granted: the authorization request reaches a login prompt
+// rather than bouncing an error back to the SPA.
+func TestExample14CORSSPA_AuthorizeReachesLogin(t *testing.T) {
+	runAuthorizeInteraction(t, "../../14-cors-spa", "http://127.0.0.1:8080",
+		authorizeParams("spa", "https://spa.example.com/callback", "openid profile"),
+		[]string{`name="password"`})
+}

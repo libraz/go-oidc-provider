@@ -12,11 +12,12 @@
 //
 // Run with:
 //
-//	(cd examples/25-byo-table-names && go run -tags example .)
+//	(cd examples/25-byo-table-names && GOWORK=off go run -tags example .)
 //
 // The example renames all eighteen OP-internal tables under an "auth_"
 // prefix, applies the rewritten schema, logs the physical tables the
-// adapter actually created, and serves the OP on :8080.
+// adapter actually created, seeds one password user into the renamed
+// users table, and serves the OP on :8080.
 //
 // Manual verification:
 //
@@ -25,12 +26,17 @@
 //     prefix.
 //  2. Open http://127.0.0.1:8080/.well-known/openid-configuration to
 //     confirm the OP serves normally from the renamed store.
+//  3. Point a relying party at the OP and sign in as username "demo" /
+//     password "demo". The credential is read back out of auth_users,
+//     which is the rename taking effect on the read path rather than
+//     only on the DDL.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: key derivation uses a hardcoded ephemeral value for the demo; production must derive the signing key from a vault / KMS.
 //   - Store: the sqlite DSN here uses a local file; production uses Postgres / MySQL via op/storeadapter/sql, runs the rewritten schema through the embedder's migration tooling, and persists the database where it belongs.
 //   - Naming: physical names are hard-coded here for clarity; production sources them from the embedder's schema convention.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - User seed: the demo username / password are hard-coded; production embedders enrol users through their own management plane.
 package main
 
 import (
@@ -49,7 +55,17 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
+)
+
+const (
+	opAddr = ":8080"
+	issuer = "http://127.0.0.1" + opAddr
+
+	demoUsername = "demo"
+	demoPassword = "demo"
+	demoSubject  = "demo-user"
 )
 
 // naming maps every logical record kind WithNaming accepts onto a
@@ -116,11 +132,21 @@ func run() error {
 	}
 	log.Printf("created tables: %s", strings.Join(tables, ", "))
 
+	if err := seedUser(storage); err != nil {
+		return fmt.Errorf("seed demo user: %w", err)
+	}
+
 	provider, err := op.New(
-		op.WithIssuer("https://op.example.com"),
+		op.WithIssuer(issuer),
 		op.WithStore(storage),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// The password prompt reads the renamed auth_users table through
+		// the adapter's store interface; the rename is invisible above
+		// this line, which is the whole point of WithNaming.
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: op.PrimaryPassword{Store: storage.UserPasswords()},
+		}),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://rp.example.com/cb"},
@@ -134,11 +160,29 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.Handle("/", provider)
 
-	log.Println("OP backed by renamed SQLite tables listening on :8080 (issuer https://op.example.com)")
-	if err := serve.Listen(":8080", mux); err != nil {
+	log.Printf("OP backed by renamed SQLite tables listening on %s (issuer %s)", opAddr, issuer)
+	log.Printf("demo user: username=%q password=%q (row lives in auth_users)", demoUsername, demoPassword)
+	if err := serve.Listen(opAddr, mux); err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	return nil
+}
+
+// seedUser writes the demo credential through the adapter, which
+// resolves the logical "users" kind to the physical auth_users table
+// declared in the naming map above.
+func seedUser(storage *oidcsql.Store) error {
+	hash, err := op.HashPassword(demoPassword)
+	if err != nil {
+		return err
+	}
+	return storage.PutUserWithPassword(context.Background(), &store.User{
+		Subject: demoSubject,
+		Claims: map[string]any{
+			"name":  "Demo User",
+			"email": "demo@example.com",
+		},
+	}, demoUsername, hash)
 }
 
 // listTables reads the physical table names back from sqlite_master so

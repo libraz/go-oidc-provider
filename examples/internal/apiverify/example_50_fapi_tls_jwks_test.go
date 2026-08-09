@@ -63,7 +63,7 @@ func TestExample50FAPITLSJWKS(t *testing.T) {
 		},
 	)
 	dpop := signES256(t, clientKey,
-		map[string]any{"alg": "ES256", "kid": "example-50-client", "typ": "dpop+jwt", "jwk": publicJWK(&clientKey.PublicKey, "example-50-client")},
+		map[string]any{"alg": "ES256", "kid": "example-50-client", "typ": "dpop+jwt", "jwk": publicJWK(t, &clientKey.PublicKey, "example-50-client")},
 		map[string]any{"htm": "POST", "htu": tokenURL, "iat": now.Unix(), "jti": "example-50-dpop"},
 	)
 	form := url.Values{
@@ -73,7 +73,7 @@ func TestExample50FAPITLSJWKS(t *testing.T) {
 		"client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"},
 		"client_assertion":      {assertion},
 	}
-	req, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestExample50FAPITLSJWKS(t *testing.T) {
 
 func reserveLoopbackAddr(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve listener: %v", err)
 	}
@@ -152,7 +152,7 @@ func writeClientJWKS(t *testing.T) (*ecdsa.PrivateKey, string) {
 	if err != nil {
 		t.Fatalf("generate client key: %v", err)
 	}
-	raw, err := json.Marshal(map[string]any{"keys": []any{publicJWK(&key.PublicKey, "example-50-client")}})
+	raw, err := json.Marshal(map[string]any{"keys": []any{publicJWK(t, &key.PublicKey, "example-50-client")}})
 	if err != nil {
 		t.Fatalf("marshal client JWKS: %v", err)
 	}
@@ -163,11 +163,18 @@ func writeClientJWKS(t *testing.T) (*ecdsa.PrivateKey, string) {
 	return key, path
 }
 
-func publicJWK(key *ecdsa.PublicKey, kid string) map[string]any {
+func publicJWK(t *testing.T, key *ecdsa.PublicKey, kid string) map[string]any {
+	t.Helper()
+	// Bytes returns the uncompressed SEC 1 point 0x04 || X || Y; for P-256
+	// the JWK coordinates are its two 32-byte halves.
+	point, err := key.Bytes()
+	if err != nil {
+		t.Fatalf("encode client public key: %v", err)
+	}
 	return map[string]any{
 		"kty": "EC", "crv": "P-256", "kid": kid, "use": "sig", "alg": "ES256",
-		"x": base64.RawURLEncoding.EncodeToString(key.X.FillBytes(make([]byte, 32))),
-		"y": base64.RawURLEncoding.EncodeToString(key.Y.FillBytes(make([]byte, 32))),
+		"x": base64.RawURLEncoding.EncodeToString(point[1:33]),
+		"y": base64.RawURLEncoding.EncodeToString(point[33:]),
 	}
 }
 
@@ -199,7 +206,11 @@ func pollTLS(t *testing.T, p *proc, client *http.Client, endpoint string) {
 		if exited, code := p.poll(); exited {
 			t.Fatalf("example exited with code %d before TLS readiness:\n%s", code, p.readLog())
 		}
-		resp, err := client.Get(endpoint) //nolint:noctx // bounded test readiness probe.
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, endpoint, nil)
+		if err != nil {
+			t.Fatalf("build TLS readiness probe: %v", err)
+		}
+		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {

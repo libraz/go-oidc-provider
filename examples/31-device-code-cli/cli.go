@@ -7,8 +7,8 @@
 // with §3.5 retry classification (authorization_pending / slow_down),
 // the user_code panel render, and the post-success id_token claim
 // decode. The CLI also waits for the OP listener's discovery document
-// before its first request — that readiness gate lives here because
-// it's part of the CLI's startup ceremony, not the OP's wiring.
+// before its first request — that readiness gate is part of the CLI's
+// startup ceremony, not the OP's wiring, so it is called from here.
 
 package main
 
@@ -24,6 +24,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 )
 
 // authorizationResponse is the §3.2 device-authorization response
@@ -80,7 +82,7 @@ func runCLIFlow(logger *slog.Logger) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), demoPollTimeout)
 	defer cancel()
-	if err := waitForIssuer(ctx, issuer); err != nil {
+	if err := serve.WaitForIssuer(ctx, issuer); err != nil {
 		return fmt.Errorf("wait for issuer: %w", err)
 	}
 
@@ -152,17 +154,22 @@ func postDeviceAuthorization(ctx context.Context, endpoint string) (*authorizati
 
 // pollToken drives the §3.4 polling loop. The loop honours the
 // §3.5 wire codes: authorization_pending continues at the
-// advertised interval, slow_down continues with a doubled
-// interval, anything else terminates. The seed cadence comes from
-// the OP's /device_authorization response so a CLI cannot
+// advertised interval, slow_down continues with the interval raised
+// by five seconds, anything else terminates. The seed cadence comes
+// from the OP's /device_authorization response so a CLI cannot
 // accidentally undercut the advertised value.
+//
+// Five seconds is what §3.5 specifies, and matching it exactly is what
+// keeps a client in step with the OP: an OP that raises its own bar by
+// the same amount will never see a client that followed the
+// instruction arrive early.
 func pollToken(ctx context.Context, authz *authorizationResponse) (*tokenResponse, error) {
 	interval := time.Duration(authz.Interval) * time.Second
 	if interval <= 0 {
 		interval = fallbackPollInterval
 	}
 	for attempt := 1; ; attempt++ {
-		tok, retry, nextInterval, err := pollTokenOnce(ctx, issuer+tokenPath, authz.DeviceCode, attempt)
+		tok, retry, nextInterval, err := pollTokenOnce(ctx, issuer+tokenPath, authz.DeviceCode, attempt, interval)
 		if err != nil {
 			return nil, err
 		}
@@ -203,9 +210,17 @@ func postTokenOnce(ctx context.Context, endpoint, deviceCode string) (*tokenResp
 // response into a terminal success (retry=false, tok non-nil), a
 // pending state that should retry (retry=true), or a terminal
 // failure (err non-nil). The optional nextInterval value is non-
-// zero only when the OP returned slow_down, in which case the
-// caller doubles its sleep before the next poll.
-func pollTokenOnce(ctx context.Context, endpoint, deviceCode string, attempt int) (tok *tokenResponse, retry bool, nextInterval time.Duration, err error) {
+// zero only when the OP returned slow_down, and is the caller's
+// current interval raised by the §3.5 increment. The caller passes
+// its current value in because the ladder is cumulative: a second
+// slow_down must raise the interval again rather than recompute the
+// same value from a constant.
+func pollTokenOnce(
+	ctx context.Context,
+	endpoint, deviceCode string,
+	attempt int,
+	current time.Duration,
+) (tok *tokenResponse, retry bool, nextInterval time.Duration, err error) {
 	status, raw, err := doTokenPost(ctx, endpoint, deviceCode)
 	if err != nil {
 		return nil, false, 0, fmt.Errorf("poll #%d: %w", attempt, err)
@@ -225,11 +240,10 @@ func pollTokenOnce(ctx context.Context, endpoint, deviceCode string, attempt int
 		case "authorization_pending":
 			return nil, true, 0, nil
 		case "slow_down":
-			// Double the next sleep per RFC 8628 §3.5. The
-			// caller seeded its interval from the §3.2 response;
-			// returning a positive duration here makes the
-			// loop adopt the doubled value before the next poll.
-			return nil, true, fallbackPollInterval * 2, nil
+			// RFC 8628 §3.5: add five seconds to the polling
+			// interval. Returning a positive duration here makes
+			// the loop adopt it before the next poll.
+			return nil, true, current + slowDownIncrement, nil
 		default:
 			return nil, false, 0, fmt.Errorf("poll #%d terminal error %q: %s", attempt, wire, string(raw))
 		}
@@ -362,32 +376,4 @@ func decodeIDTokenClaims(idToken string) (sub, aud string, err error) {
 		}
 	}
 	return claims.Sub, aud, nil
-}
-
-// waitForIssuer polls the discovery document until it returns 200
-// or ctx is cancelled. The OP boots in the same process as the
-// CLI, so the discovery probe doubles as a readiness gate before
-// the first /device_authorization POST.
-func waitForIssuer(ctx context.Context, iss string) error {
-	endpoint := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timeout polling %s", endpoint)
-		case <-tick.C:
-		}
-	}
 }

@@ -9,18 +9,19 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/42-back-channel-logout && go run -tags example .)
+//	(cd examples/42-back-channel-logout && GOWORK=off go run -tags example .)
 //
 // The example boots two HTTP servers in the same process:
 //
-//   - :8080 — the OP, with one confidential client registered whose
-//     backchannel_logout_uri points at the RP stub on :9090.
+//   - :8080 — the OP, with one seeded password user and one
+//     confidential client registered whose backchannel_logout_uri
+//     points at the RP stub on :9090.
 //   - :9090 — a tiny RP that prints every Logout Token it receives.
 //
 // To trigger a delivery, drive a normal authorize / token round-trip
-// to establish a session, then hit /oidc/end_session with the
-// id_token_hint. This example ships the wiring; the round-trip is
-// out of scope (see example 02-bundle for an end-to-end driver).
+// to establish a session — sign in as "demo" / "demo-password" —
+// then hit /oidc/end_session with the id_token_hint. The RP stub
+// prints the Logout Token the OP POSTs to it.
 //
 // Wiring details:
 //
@@ -40,19 +41,23 @@
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - User seed: the demo username / password are hard-coded, and one [op.PrimaryPassword] step stands in for the whole login flow; production embedders enrol users through their own management plane and compose their own factors.
 //   - Listener: plain HTTP; OIDC Back-Channel Logout 1.0 §2.2 requires https for backchannel_logout_uri in production.
 //   - Delivery integrity: this example uses inmem (durable for the process lifetime). Swapping SessionStore to Redis without persistence narrows OIDC Back-Channel Logout 1.0 §2.7's best-effort floor — a session evicted before /end_session leaves the coordinator with no RPs to notify. Declare the posture via op.WithSessionDurabilityPosture and watch op.AuditBCLNoSessionsForSubject in the audit stream.
 package main
 
 import (
+	"context"
 	"io"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -60,16 +65,29 @@ const (
 	opAddr   = ":8080"
 	rpAddr   = ":9090"
 	clientID = "demo-rp"
+
+	demoUsername = "demo"
+	demoPassword = "demo-password"
+	demoSubject  = "demo-user"
 )
 
 func main() {
 	keys := devkeys.MustEphemeral("bcl-1")
 
+	memStore := inmem.New()
+	if err := seedUser(memStore); err != nil {
+		log.Fatalf("seed demo user: %v", err)
+	}
+
 	provider, err := op.New(
 		op.WithIssuer("http://127.0.0.1"+opAddr),
-		op.WithStore(inmem.New()),
+		op.WithStore(memStore),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// Back-channel logout terminates a session, so the demo needs a
+		// way to establish one first: the authorize round-trip that
+		// seeds the session runs through this password step.
+		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
 		op.WithAllowLocalhostLoopback(),
 		// Dev / CI-only: admit the http://127.0.0.1 backchannel_logout_uri
 		// below and disable the deliverer's SSRF gate so the in-process
@@ -124,8 +142,27 @@ func main() {
 
 	log.Printf("OP listening on %s — client %q registered with backchannel_logout_uri=http://127.0.0.1%s/backchannel-logout (dev-mode http loopback)",
 		opAddr, clientID, rpAddr)
+	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
 	log.Println("drive /authorize → /token to seed a session, then call /oidc/end_session with the id_token_hint to fire delivery")
 	if err := serve.Listen(opAddr, mux); err != nil {
 		log.Fatalf("OP listen: %v", err)
 	}
+}
+
+// seedUser materialises the demo subject whose session the logout
+// delivery terminates. In a real deployment the user record comes from
+// the embedder's identity backend.
+func seedUser(st *inmem.Store) error {
+	hash, err := op.HashPassword(demoPassword)
+	if err != nil {
+		return err
+	}
+	st.PutUserWithPassword(context.Background(), &store.User{
+		Subject: demoSubject,
+		Claims: map[string]any{
+			"name":  "Demo User",
+			"email": "demo@example.com",
+		},
+	}, demoUsername, hash)
+	return nil
 }

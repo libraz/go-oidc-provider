@@ -16,6 +16,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -43,6 +44,13 @@ func buildProvider() (http.Handler, *inmem.Store, error) {
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// The device-code grant is the only one this OP serves. The
+		// input device has no browser, so nothing ever reaches
+		// /authorize; naming grant.DeviceCode here is what drops the
+		// default {authorization_code, refresh_token} pair, while
+		// WithDeviceCodeGrant below is what mounts
+		// /device_authorization and requires the DeviceCodes substore.
+		op.WithGrants(grant.DeviceCode),
 		op.WithDeviceCodeGrant(),
 		op.WithStaticClients(op.PublicClient{
 			ID: clientID,

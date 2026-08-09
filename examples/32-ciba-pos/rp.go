@@ -6,9 +6,8 @@
 // /bc-authorize POST, holds the auth_req_id, and polls /token until
 // the user approves on a separate authentication device. This file
 // drives the same wire shape against the in-process OP: the POST,
-// the polling loop with §10.1 retry classification, the response
-// decode, and the discovery-readiness probe the RP uses before its
-// first request.
+// the polling loop with §10.1 retry classification, and the response
+// decode.
 
 package main
 
@@ -213,32 +212,4 @@ func decodeIDTokenClaims(idToken string) (sub, aud string, err error) {
 		}
 	}
 	return claims.Sub, aud, nil
-}
-
-// waitForIssuer polls the discovery document until it returns 200 OK
-// or ctx is cancelled. The OP boots in the same process as the RP, so
-// the discovery probe doubles as a readiness gate before the
-// /bc-authorize POST.
-func waitForIssuer(ctx context.Context, iss string) error {
-	endpoint := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timeout polling %s", endpoint)
-		case <-tick.C:
-		}
-	}
 }

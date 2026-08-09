@@ -7,7 +7,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/01-minimal && go run -tags example .)
+//	(cd examples/01-minimal && GOWORK=off go run -tags example .)
 //
 // Two listeners come up in the same process:
 //
@@ -41,13 +41,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
@@ -82,12 +80,20 @@ func run() error {
 		return err
 	}
 
+	// The login flow is written out rather than built by a helper: this
+	// is the first example anyone reads, and op.LoginFlow is the value
+	// an embedder writes in their own code. One Primary step and no
+	// rules is the whole of a password-only login.
+	loginFlow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+	}
+
 	provider, err := op.New(
 		op.WithIssuer(issuer),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
-		op.WithLoginFlow(opkit.DefaultLoginFlow(st.UserPasswords())),
+		op.WithLoginFlow(loginFlow),
 		op.WithStaticClients(op.PublicClient{
 			ID:           clientID,
 			RedirectURIs: []string{redirectURI},
@@ -111,7 +117,7 @@ func run() error {
 	// listener is up before constructing the RP.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := waitForIssuer(ctx, issuer); err != nil {
+	if err := serve.WaitForIssuer(ctx, issuer); err != nil {
 		return err
 	}
 
@@ -155,32 +161,4 @@ func seedUser(st *inmem.Store) error {
 		},
 	}, demoUsername, hash)
 	return nil
-}
-
-// waitForIssuer polls iss + "/.well-known/openid-configuration" until
-// it returns 200 or ctx is cancelled. The example boots the OP and
-// the RP in the same process, so the RP's OIDC discovery runs as
-// soon as the OP listener is ready.
-func waitForIssuer(ctx context.Context, iss string) error {
-	url := iss + "/.well-known/openid-configuration"
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return errors.New("waitForIssuer: timeout polling " + url)
-		case <-tick.C:
-		}
-	}
 }

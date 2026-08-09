@@ -14,7 +14,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/40-first-party-skip-consent && go run -tags example .)
+//	(cd examples/40-first-party-skip-consent && GOWORK=off go run -tags example .)
 //
 // The "first-party-app" client is registered as a public client and
 // listed in [op.WithFirstPartyClients]; it round-trips through
@@ -47,27 +47,49 @@
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - User seed: the demo username / password are hard-coded; production embedders enrol users through their own management plane.
 //   - First-party skip: a deliberate trust extension — production embedders MUST gate it on a registry of clients owned by the embedder's organisation (typically a column on the client table consulted at boot).
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+)
+
+const (
+	opAddr = ":8080"
+	issuer = "http://127.0.0.1" + opAddr
+
+	demoUsername = "demo"
+	demoPassword = "demo"
+	demoSubject  = "demo-user"
 )
 
 func main() {
 	keys := devkeys.MustEphemeral("first-party-1")
 
+	st := inmem.New()
+	if err := seedUser(st); err != nil {
+		log.Fatalf("seed demo user: %v", err)
+	}
+
 	provider, err := op.New(
-		op.WithIssuer("https://op.example.com"),
-		op.WithStore(inmem.New()),
+		op.WithIssuer(issuer),
+		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// The skip removes the consent screen, never the authentication
+		// step: the OP still has to know who the user is before it can
+		// create the grant on their behalf.
+		op.WithLoginFlow(opkit.DefaultLoginFlow(st.UserPasswords())),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "first-party-app",
@@ -91,8 +113,27 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", provider)
 
-	log.Println("first-party example listening on :8080")
-	if err := serve.Listen(":8080", mux); err != nil {
+	log.Printf("first-party example listening on %s (issuer %s)", opAddr, issuer)
+	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
+	if err := serve.Listen(opAddr, mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+}
+
+// seedUser materialises the single demo account both clients
+// authenticate as, so the consent skip can be observed against a real
+// authenticated session.
+func seedUser(st *inmem.Store) error {
+	hash, err := op.HashPassword(demoPassword)
+	if err != nil {
+		return err
+	}
+	st.PutUserWithPassword(context.Background(), &store.User{
+		Subject: demoSubject,
+		Claims: map[string]any{
+			"name":  "Demo User",
+			"email": "demo@example.com",
+		},
+	}, demoUsername, hash)
+	return nil
 }

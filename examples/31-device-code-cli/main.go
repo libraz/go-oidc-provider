@@ -13,7 +13,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/31-device-code-cli && go run -tags example .)
+//	(cd examples/31-device-code-cli && GOWORK=off go run -tags example .)
 //
 // The example is self-contained: a single binary stands up the OP
 // on :8089, runs an in-process self-verify probe against an
@@ -109,6 +109,13 @@ const (
 	// interval. The library default is 5s; mirroring it keeps a
 	// demo that hits an unusual configuration from busy-spinning.
 	fallbackPollInterval = 5 * time.Second
+
+	// slowDownIncrement is what RFC 8628 §3.5 tells the client to add
+	// to its polling interval on each slow_down response. It is an
+	// addition, not a multiplication: a client that backs off faster
+	// than instructed still works, but one that backs off slower is
+	// the case the OP's abuse counter is watching for.
+	slowDownIncrement = 5 * time.Second
 )
 
 func main() {

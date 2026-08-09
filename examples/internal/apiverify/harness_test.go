@@ -9,6 +9,8 @@
 // Examples fall into four shapes, one helper each:
 //
 //   - runDiscovery       — boots an OP and serves a discovery document.
+//   - runAuthorizeInteraction — boots an OP and drives /authorize far enough
+//     to see the interaction the example wires up.
 //   - runSelfVerify      — runs an in-process grant round-trip and prints
 //     a "✓ self-verify" marker (custom-grant,
 //     device-code, token-exchange, pairwise).
@@ -28,6 +30,7 @@
 package apiverify
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -65,7 +68,7 @@ func buildAndStartWithEnv(t *testing.T, dir string, env []string) *proc {
 	t.Helper()
 
 	bin := filepath.Join(t.TempDir(), "example.bin")
-	build := exec.Command("go", "build", "-tags", "example", "-o", bin, ".")
+	build := exec.CommandContext(t.Context(), "go", "build", "-tags", "example", "-o", bin, ".")
 	build.Dir = dir
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build example %s: %v\n%s", dir, err, out)
@@ -75,7 +78,10 @@ func buildAndStartWithEnv(t *testing.T, dir string, env []string) *proc {
 	if err != nil {
 		t.Fatalf("create log file: %v", err)
 	}
-	cmd := exec.Command(bin)
+	// Bound to the test context as a backstop for the deferred kill: the
+	// examples bind fixed ports, so a caller that loses its p.kill would
+	// stall every test that follows rather than just its own.
+	cmd := exec.CommandContext(t.Context(), bin)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = logFile
@@ -182,6 +188,120 @@ func runDiscoveryAssert(t *testing.T, dir, baseURL string, want, notWant []strin
 	}
 }
 
+// authorizeParams builds a minimal Authorization Code + PKCE authorization
+// request. The verifier is never redeemed — the probe stops at the
+// interaction hand-off — so a fixed challenge keeps the call sites short.
+func authorizeParams(clientID, redirectURI, scope string) url.Values {
+	return url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {redirectURI},
+		"scope":                 {scope},
+		"state":                 {"apiverify-state"},
+		"code_challenge":        {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"},
+		"code_challenge_method": {"S256"},
+	}
+}
+
+// runAuthorizeInteraction boots the example, drives one authorization request,
+// and asserts the OP hands the browser to an interaction of its own instead of
+// bouncing an OAuth error back to the relying party. It then follows that
+// hand-off and asserts the rendered prompt contains every want substring.
+//
+// Discovery alone cannot see this: an OP with no login flow wired still
+// publishes a complete document and only fails at /authorize, with
+// error=server_error on the redirect back to the RP. Any example whose header
+// doc promises a browser walkthrough belongs here rather than on runDiscovery.
+func runAuthorizeInteraction(t *testing.T, dir, baseURL string, params url.Values, want []string) {
+	t.Helper()
+	p := buildAndStart(t, dir)
+	defer p.kill()
+
+	doc := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	authorize := discoveryEndpointPath(t, doc, "authorization_endpoint")
+
+	// The hand-off itself is the assertion, so redirects are inspected
+	// rather than followed.
+	client := &http.Client{
+		Timeout:       5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	authzReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+authorize+"?"+params.Encode(), nil)
+	if err != nil {
+		t.Fatalf("build authorization request: %v", err)
+	}
+	resp, err := client.Do(authzReq)
+	if err != nil {
+		t.Fatalf("authorization request: %v\n%s", err, p.readLog())
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("/authorize returned %d, want 302 to an interaction:\n%s\n%s", resp.StatusCode, body, p.readLog())
+	}
+
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location %q: %v", resp.Header.Get("Location"), err)
+	}
+	if oauthErr := loc.Query().Get("error"); oauthErr != "" {
+		t.Fatalf("/authorize bounced %q back to the RP (%s):\n%s",
+			oauthErr, loc.Query().Get("error_description"), p.readLog())
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatalf("parse base URL %q: %v", baseURL, err)
+	}
+	if loc.Host != "" && loc.Host != base.Host {
+		t.Fatalf("/authorize redirected off the OP to %q, want an interaction on %s", loc, base.Host)
+	}
+
+	// Replay the interaction cookies by hand: they carry Secure, which a
+	// cookiejar would strip on this plain-HTTP demo listener.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base.ResolveReference(loc).String(), nil)
+	if err != nil {
+		t.Fatalf("build interaction request: %v", err)
+	}
+	for _, c := range resp.Cookies() {
+		req.AddCookie(c)
+	}
+	prompt, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("interaction request: %v\n%s", err, p.readLog())
+	}
+	promptBody, _ := io.ReadAll(prompt.Body)
+	_ = prompt.Body.Close()
+	if prompt.StatusCode != http.StatusOK {
+		t.Fatalf("interaction %s returned %d:\n%s\n%s", loc, prompt.StatusCode, promptBody, p.readLog())
+	}
+	for _, w := range want {
+		if !strings.Contains(string(promptBody), w) {
+			t.Fatalf("interaction prompt missing %q:\n%s", w, promptBody)
+		}
+	}
+}
+
+// discoveryEndpointPath extracts one endpoint URL from a discovery document
+// and returns its path. Examples that publish a placeholder issuer serve on a
+// loopback address the document never mentions, so the path is the only part
+// of the advertised endpoint a test can reuse.
+func discoveryEndpointPath(t *testing.T, doc, key string) string {
+	t.Helper()
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(doc), &meta); err != nil {
+		t.Fatalf("parse discovery document: %v\n%s", err, doc)
+	}
+	raw, ok := meta[key].(string)
+	if !ok {
+		t.Fatalf("discovery document has no %s:\n%s", key, doc)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %s %q: %v", key, raw, err)
+	}
+	return u.Path
+}
+
 // runCORSPreflight boots the example and drives a CORS preflight against the
 // token endpoint from each origin: allowlisted origins must be echoed back
 // in Access-Control-Allow-Origin, a non-allowlisted origin must not be.
@@ -206,7 +326,7 @@ func runCORSPreflight(t *testing.T, dir, baseURL string, allowed []string, denie
 // origin and returns the Access-Control-Allow-Origin response header.
 func preflightACAO(t *testing.T, baseURL, origin string) string {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodOptions, baseURL+"/oidc/token", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodOptions, baseURL+"/oidc/token", nil)
 	if err != nil {
 		t.Fatalf("build preflight: %v", err)
 	}
@@ -233,7 +353,7 @@ func runMetrics(t *testing.T, dir, baseURL string) {
 	// An unknown client at the token endpoint fails client authentication,
 	// which the metrics bridge counts — enough to surface an oidc_ series.
 	form := url.Values{"grant_type": {"client_credentials"}, "scope": {"api:read"}}
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/oidc/token", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+"/oidc/token", strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatalf("build token request: %v", err)
 	}
@@ -309,7 +429,7 @@ func runClientCredentials(t *testing.T, dir, baseURL, clientID, secret, scope st
 		"grant_type": {"client_credentials"},
 		"scope":      {scope},
 	}
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/oidc/token", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+"/oidc/token", strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatalf("build token request: %v", err)
 	}
@@ -340,7 +460,11 @@ func pollHTTP(t *testing.T, p *proc, url string, within time.Duration) string {
 		if exited, code := p.poll(); exited {
 			t.Fatalf("example exited (code %d) before %s answered:\n%s", code, url, p.readLog())
 		}
-		resp, err := client.Get(url) //nolint:noctx // short-lived readiness poll
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatalf("build readiness probe for %s: %v", url, err)
+		}
+		resp, err := client.Do(req)
 		if err == nil {
 			body, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()

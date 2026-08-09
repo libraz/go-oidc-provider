@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/50-fapi-tls-jwks && go run -tags example .)
+//	(cd examples/50-fapi-tls-jwks && GOWORK=off go run -tags example .)
 //
 // The example expects a JWKS file at ./client.jwks.json (or the path in
 // FAPI_JWKS; any
@@ -27,10 +27,9 @@
 //  1. Place a JWKS at ./client.jwks.json and start the example. If
 //     the set contains private "d" parameters, LoadPublicJWKS strips
 //     them before the bytes would be registered on a client.
-//  2. Set FAPI_CERT and FAPI_KEY to a local certificate/key pair to
-//     start the TLS listener on :8443. Set FAPI_ISSUER to the public
-//     HTTPS issuer that matches the listener (and FAPI_ADDR when :8443
-//     is unsuitable).
+//  2. Set FAPI_ISSUER to the public HTTPS origin the listener answers
+//     on, and FAPI_CERT / FAPI_KEY to a certificate and key for it.
+//     All three are required; set FAPI_ADDR when :8443 is unsuitable.
 //  3. Run `openssl s_client -connect 127.0.0.1:8443 -tls1_2` and
 //     inspect the negotiated TLS 1.2 cipher.
 //
@@ -48,6 +47,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -56,9 +56,8 @@ func main() {
 	keys := devkeys.MustEphemeral("fapi-1")
 
 	const (
-		clientID      = "fapi-tls-jwks-client"
-		defaultIssuer = "https://op.example.com"
-		defaultAddr   = ":8443"
+		clientID    = "fapi-tls-jwks-client"
+		defaultAddr = ":8443"
 	)
 	jwksPath := envOr("FAPI_JWKS", "client.jwks.json")
 	pub, err := op.LoadPublicJWKS(jwksPath)
@@ -71,13 +70,28 @@ func main() {
 	if len(pub) == 0 {
 		log.Fatalf("LoadPublicJWKS returned empty bytes")
 	}
-	issuer := envOr("FAPI_ISSUER", defaultIssuer)
+	// The issuer has no usable default. Every endpoint URL in the
+	// discovery document is built from it, so a placeholder host would
+	// publish a document whose contents resolve nowhere, and an RP
+	// comparing the issuer against the address it fetched from would
+	// reject the document outright. The operator supplies the public
+	// HTTPS origin their TLS listener actually answers on — the same
+	// reason FAPI_CERT and FAPI_KEY are required below.
+	issuer := os.Getenv("FAPI_ISSUER")
+	if issuer == "" {
+		log.Fatal("FAPI_ISSUER is required; it must name the public HTTPS origin this listener serves")
+	}
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// The client below authenticates with private_key_jwt and asks
+		// only for client_credentials, so the default
+		// {authorization_code, refresh_token} pair is replaced by the one
+		// grant this OP serves. Nothing here authenticates an end user.
+		op.WithGrants(grant.ClientCredentials),
 		// FAPI 2.0 Baseline mandates a sender-constrained access token,
 		// satisfied here by DPoP. WithProfile auto-enables PAR / JAR
 		// (RequiredFeatures) and picks DPoP as the default sender-binding

@@ -43,6 +43,8 @@ type Material struct {
 // MustEphemeral returns ephemeral cryptographic material with the
 // supplied JWS kid. The function panics on any RNG failure because
 // example main.go files cannot meaningfully recover from one.
+//
+//nolint:forbidigo // dev-only key material behind the example build tag: the Must* contract keeps example wiring free of branches for a failure that leaves nothing safe to boot with.
 func MustEphemeral(keyID string) *Material {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

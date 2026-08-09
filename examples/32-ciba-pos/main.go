@@ -10,7 +10,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/32-ciba-pos && go run -tags example .)
+//	(cd examples/32-ciba-pos && GOWORK=off go run -tags example .)
 //
 // The example is self-contained: a single binary stands up the OP on
 // :8080, drives the CIBA wire protocol against itself, decodes the
@@ -25,9 +25,7 @@
 //   - op.go     — OP-side wiring: buildProvider with [op.WithCIBA]
 //     enabled and the demo HintResolver.
 //   - rp.go     — POS-terminal-side RP: bc-authorize POST, polling
-//     loop with §10.1 retry classification, id_token decode, and
-//     the discovery readiness probe the RP uses before its first
-//     request.
+//     loop with §10.1 retry classification, and id_token decode.
 //   - device.go — authentication-device simulator: a goroutine
 //     stand-in for the user's phone that calls the substore's
 //     Approve method directly.
@@ -75,6 +73,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 )
 
 const (
@@ -134,7 +134,7 @@ func run(logger *slog.Logger) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)
 	defer cancel()
-	if err := waitForIssuer(ctx, issuer); err != nil {
+	if err := serve.WaitForIssuer(ctx, issuer); err != nil {
 		return fmt.Errorf("ciba example: wait for issuer: %w", err)
 	}
 

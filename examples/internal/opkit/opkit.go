@@ -19,6 +19,12 @@
 // rule predicates that read fields beyond LoginContext.RiskScore)
 // belongs in the example main.go directly so the surface stays
 // auditable.
+//
+// The introductory examples (00, 01, 04) do not use this package even
+// where it would fit. They are the ones read first, and a reader
+// cannot import an examples-internal helper into their own code — so
+// they write op.LoginFlow out in full, which is what an embedder
+// actually types.
 package opkit
 
 import (

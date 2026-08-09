@@ -26,6 +26,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -43,6 +44,13 @@ func buildProvider(keys *devkeys.Material, servicePub *ecdsa.PublicKey) (*op.Pro
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// Custom grants are registered outside the built-in grant set,
+		// so WithGrants governs only the built-ins this OP still serves.
+		// The exchange has no end user and no browser, which rules out
+		// authorization_code; refresh_token stays because a custom
+		// handler may set CustomGrantResponse.IssueRefreshToken (this one
+		// does not) and WithGrants requires at least one built-in.
+		op.WithGrants(grant.RefreshToken),
 		op.WithCustomGrant(handler),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:         clientID,

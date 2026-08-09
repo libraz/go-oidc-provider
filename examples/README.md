@@ -3,17 +3,21 @@
 Runnable demos for [`github.com/libraz/go-oidc-provider`](../README.md).
 
 All examples build behind the `example` build tag, so they are excluded from
-`go test ./...` and from production `go.sum`:
+`go test ./...` and from production `go.sum`. Each one is its own module wired
+to the checkout through a development `replace`, so run it with the repository
+workspace disabled:
 
 ```sh
-(cd examples/01-minimal && go run -tags example .)
+(cd examples/01-minimal && GOWORK=off go run -tags example .)
 ```
+
+`make example-01` (and the other `example-NN` targets) does the same thing.
 
 Embedder-side install (the same versions every example pins):
 
 ```sh
 go get github.com/libraz/go-oidc-provider/op@v1.0.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0       # examples 06 / 07 / 08 / 09 / 17 / 27
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0       # examples 06 / 07 / 08 / 09 / 17 / 24 / 25 / 27
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0     # examples 09 / 17
 go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.0.0  # example 18
 ```
@@ -50,7 +54,8 @@ docker compose -f examples/18-dynamodb-store/compose.yaml down -v
 
 `08-composite-hot-cold` is the no-docker counterpart of `09`: the same
 `composite.With(...)` wiring with `inmem` standing in for the volatile half, so
-it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
+it boots with
+`(cd examples/08-composite-hot-cold && GOWORK=off go run -tags example .)`.
 
 ## I want to…
 
@@ -68,7 +73,7 @@ it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 | implement a store from scratch | [`26-byo-store-from-scratch`](26-byo-store-from-scratch/main.go) |
 | split hot volatile state from durable state | [`08-composite-hot-cold`](08-composite-hot-cold/main.go), [`09-redis-volatile`](09-redis-volatile/main.go) |
 | swap the default HTML driver for JSON | [`16-custom-interaction`](16-custom-interaction/main.go) |
-| drive login / consent / logout from a SPA | [`10-react-login`](10-react-login/main.go) |
+| drive login / consent / logout from a SPA | [`10-react-login`](10-react-login/main.go) — bundle is dependency-free vanilla JS, so it runs with no build step; the JSON contract is the same one a React / Vue / Svelte build output consumes |
 | run a SPA against MySQL + Redis (the usual deployment shape) | [`17-spa-composite-store`](17-spa-composite-store/main.go) |
 | customise the consent screen | [`11-custom-consent-ui`](11-custom-consent-ui/main.go) |
 | support `prompt=select_account` (multi-account) | [`13-multi-account`](13-multi-account/main.go) |
@@ -95,6 +100,25 @@ it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 | notify RPs when a session ends (Back-Channel Logout) | [`42-back-channel-logout`](42-back-channel-logout/main.go) |
 | run the RFC 9449 §8 DPoP nonce flow | [`51-dpop-nonce`](51-dpop-nonce/main.go) |
 | expose Prometheus metrics | [`52-prometheus-metrics`](52-prometheus-metrics/main.go) |
+
+## The shared SPA bundle
+
+Every [`op.WithSPAUI`](../op/options_authn.go) example serves the same
+directory, [`internal/webui/static`](internal/webui/static) — one hand-written
+vanilla HTML/CSS/JS bundle with no build step, pointed at through
+`webui.StaticDir`. There is no per-example copy, so a fix to the prompt
+renderer reaches every SPA example at once and none of them can fall behind on
+a prompt type the others render.
+
+The bundle implements the whole prompt vocabulary the SPA seam defines
+(password, TOTP, captcha, e-mail and recovery codes, the passkey ceremony,
+consent), which is what lets one directory back examples with very different
+login flows. `29-passkey` additionally serves its own
+[`web/account`](29-passkey/web/account) — the enrolment page the *embedder*
+owns, which is precisely the part the OP does not provide.
+
+Production embedders serve their framework's build output under
+`SPAUI.StaticDir` instead; only the JSON contract belongs to the library.
 
 ## Numeric inventory
 

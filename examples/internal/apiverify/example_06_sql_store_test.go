@@ -4,8 +4,12 @@ package apiverify
 
 import "testing"
 
-// 06 boots an OP backed by SQLite; the discovery probe confirms the store
-// wired up and the listener serves.
+// 06 serves its login out of a SQLite-backed user store. Driving the
+// authorization request to the password prompt is what exercises that
+// store: discovery answers identically whether or not any user can
+// actually authenticate.
 func TestExample06SQLStore(t *testing.T) {
-	runDiscovery(t, "../../06-sql-store", "http://127.0.0.1:8080")
+	runAuthorizeInteraction(t, "../../06-sql-store", "http://127.0.0.1:8080",
+		authorizeParams("demo-spa", "https://rp.example.com/cb", "openid profile email"),
+		[]string{`name="password"`})
 }

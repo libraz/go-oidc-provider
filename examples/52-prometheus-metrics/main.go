@@ -9,14 +9,14 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/52-prometheus-metrics && go run -tags example .)
+//	(cd examples/52-prometheus-metrics && GOWORK=off go run -tags example .)
 //
 // Then read the curated counters:
 //
 //	# Drive at least one /token round-trip first so the vec metrics
 //	# emit a sample (Prometheus vec collectors do not surface labels
 //	# until they have been observed at least once).
-//	curl -s http://localhost:9090/metrics | grep oidc_
+//	curl -s http://127.0.0.1:8080/metrics | grep oidc_
 //
 // Curated counters surfaced by the library (canonical names; labels
 // vary per metric — see internal/metrics/collector.go for shape):
@@ -50,10 +50,12 @@
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - User seed: the demo username / password are hard-coded, and one [op.PrimaryPassword] step stands in for the whole login flow; production embedders enrol users through their own management plane and compose their own factors.
 //   - /metrics surface: mounted on the same listener as the OP for brevity; production deployments expose /metrics on a management interface (separate listener, internal-only ingress).
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 
@@ -61,9 +63,20 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+)
+
+const (
+	opAddr = ":8080"
+	issuer = "http://127.0.0.1" + opAddr
+
+	demoUsername = "demo"
+	demoPassword = "demo-password"
+	demoSubject  = "demo-user"
 )
 
 func main() {
@@ -75,11 +88,20 @@ func main() {
 	// (e.g. http_request_duration_seconds installed below).
 	registry := prometheus.NewRegistry()
 
+	memStore := inmem.New()
+	if err := seedUser(memStore); err != nil {
+		log.Fatalf("seed demo user: %v", err)
+	}
+
 	provider, err := op.New(
-		op.WithIssuer("https://op.example.com"),
-		op.WithStore(inmem.New()),
+		op.WithIssuer(issuer),
+		op.WithStore(memStore),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// oidc_login_attempts_total and oidc_token_issued_total only
+		// move when somebody actually signs in, so the OP needs a
+		// login flow for half the curated set to leave zero.
+		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
 		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
 		op.WithAllowLocalhostLoopback(),
 		op.WithPrometheus(registry),
@@ -102,9 +124,28 @@ func main() {
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	mux.Handle("/", provider)
 
-	log.Println("prometheus-metrics example listening on :8080 (OP) and :8080/metrics")
-	log.Println("after at least one /token round-trip, curl -s :8080/metrics | grep oidc_")
-	if err := serve.Listen(":8080", mux); err != nil {
+	log.Printf("prometheus-metrics example listening on %s (issuer %s; /metrics on the same listener)", opAddr, issuer)
+	log.Printf("after at least one /token round-trip, curl -s %s/metrics | grep oidc_", issuer)
+	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
+	if err := serve.Listen(opAddr, mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+}
+
+// seedUser materialises the demo subject whose logins and token
+// issuance move the curated counters. In a real deployment the user
+// record comes from the embedder's identity backend.
+func seedUser(st *inmem.Store) error {
+	hash, err := op.HashPassword(demoPassword)
+	if err != nil {
+		return err
+	}
+	st.PutUserWithPassword(context.Background(), &store.User{
+		Subject: demoSubject,
+		Claims: map[string]any{
+			"name":  "Demo User",
+			"email": "demo@example.com",
+		},
+	}, demoUsername, hash)
+	return nil
 }

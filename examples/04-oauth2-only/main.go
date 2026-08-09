@@ -19,7 +19,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/04-oauth2-only && go run -tags example .)
+//	(cd examples/04-oauth2-only && GOWORK=off go run -tags example .)
 //
 // Drive the OAuth-only path end-to-end:
 //
@@ -61,7 +61,6 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -87,7 +86,9 @@ func main() {
 		// The OIDC client still needs an interactive password prompt
 		// for /authorize; the OAuth-only client uses the same login
 		// flow because both sit behind the same /authorize endpoint.
-		op.WithLoginFlow(opkit.DefaultLoginFlow(st.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+		}),
 		// The single option that flips the OIDC default. With it
 		// absent, the second client below would fail at /authorize
 		// with invalid_scope (missing openid).

@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/34-pairwise-saas && go run -tags example .)
+//	(cd examples/34-pairwise-saas && GOWORK=off go run -tags example .)
 //
 // The example is self-contained: a single binary builds the OP,
 // drives an in-process self-verify probe against the same
@@ -67,6 +67,11 @@
 //     window.
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - User seed: the demo username / password are hard-coded, and one
+//     [op.PrimaryPassword] step stands in for the whole login flow;
+//     production embedders enrol users through their own management
+//     plane and compose their own factors. Neither choice affects how
+//     the pairwise sub is derived.
 //   - Listener: the demo never opens a TCP socket — the self-verify
 //     probe runs entirely in-process. Production OPs front the
 //     [op.Provider] handler behind a TLS-terminating ingress.
@@ -90,8 +95,15 @@ const (
 	// internalUserID is the OP-internal subject the example derives
 	// pairwise sub values from. The pairwise generator hashes
 	// (salt, sector, internalUserID) into the per-tenant "sub";
-	// changing this constant changes every sub the demo prints.
+	// changing this constant changes every sub the demo prints. It is
+	// also the seeded user's subject, so a tenant that drives a real
+	// authorization request lands on the same internal identity.
 	internalUserID = "user-42"
+
+	// Credentials for the seeded end-user. Both tenants authenticate
+	// the same person; the pairwise split happens after login.
+	demoUsername = "demo"
+	demoPassword = "pairwise-demo-password"
 
 	tenantAClientID     = "tenant-a"
 	tenantAClientSecret = "tenant-a-secret-rotate-me"

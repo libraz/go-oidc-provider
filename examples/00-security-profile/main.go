@@ -22,7 +22,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/00-security-profile && go run -tags example .)
+//	(cd examples/00-security-profile && GOWORK=off go run -tags example .)
 //
 // # 1. Read the posture off the audit stream
 //
@@ -94,7 +94,6 @@ import (
 	"os"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -151,14 +150,17 @@ func buildProvider(issuer string, auditLogger *slog.Logger, extra ...op.Option) 
 		return nil, err
 	}
 
-	opts := []op.Option{
+	opts := make([]op.Option, 0, 8+len(extra))
+	opts = append(opts,
 		op.WithIssuer(issuer),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// The demo redirect_uri uses the textual "localhost" host.
 		op.WithAllowLocalhostLoopback(),
-		op.WithLoginFlow(opkit.DefaultLoginFlow(st.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+		}),
 		// Routes startup.profile — and every later business event —
 		// to the audit stream. Without it the record is discarded and
 		// the OP's posture is only readable from the source.
@@ -174,7 +176,7 @@ func buildProvider(issuer string, auditLogger *slog.Logger, extra ...op.Option) 
 			GrantTypes:   []string{"authorization_code", "refresh_token"},
 			Scopes:       []string{"openid", "profile"},
 		}),
-	}
+	)
 	return op.New(append(opts, extra...)...)
 }
 

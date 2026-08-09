@@ -8,7 +8,7 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/30-custom-grant && go run -tags example .)
+//	(cd examples/30-custom-grant && GOWORK=off go run -tags example .)
 //
 // The example is self-contained: a single binary stands up the OP on
 // :8088, runs an in-process self-verify probe before the public listener
@@ -35,12 +35,16 @@
 //     boots an httptest OP, mints a service_token, POSTs to /oidc/token
 //     and asserts HTTP 200 + access_token + token_type=Bearer + a
 //     decodable JWT carrying the expected aud/iss/sub claims.
-//  2. "[OK] self-verify: custom-grant round-trip OK" — the gate
+//  2. "[probe] access_token sub=… aud=… iss=… svc_id=…" — the claims
+//     the gate read back off the issued token.
+//  3. "✓ self-verify: custom-grant round-trip OK" — the gate
 //     succeeded; the probe OP is torn down.
-//  3. "[op] listening on :8088 (issuer http://127.0.0.1:8088)" — the
-//     public listener is now serving the same wiring.
-//  4. Probe FAIL prints "[FAIL] self-verify: <reason>" and exits 1
-//     before the listener starts.
+//  4. "op listening on :8088 (issuer http://127.0.0.1:8088)" followed
+//     by a "try: curl …" line — the public listener is now serving the
+//     same wiring.
+//
+// On failure the process writes "✗ self-verify: <reason>" to stderr
+// and exits 1 before the listener starts.
 //
 // The custom grant in this example:
 //

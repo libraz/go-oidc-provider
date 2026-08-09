@@ -7,13 +7,13 @@
 //
 // Run with the example build tag:
 //
-//	(cd examples/05-client-credentials && go run -tags example .)
+//	(cd examples/05-client-credentials && GOWORK=off go run -tags example .)
 //
 // Then exchange the credential for an access token:
 //
 //	curl -u backend-service:cc-demo-secret-rotate-me \
 //	     -d 'grant_type=client_credentials&scope=api:read' \
-//	     http://localhost:8080/oidc/token | jq
+//	     http://127.0.0.1:8080/oidc/token | jq
 //
 // The "openid" scope is absent on purpose: client_credentials has no
 // authenticated user, so there is no id_token and no userinfo. The
@@ -39,18 +39,24 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
+const (
+	opAddr = ":8080"
+	issuer = "http://127.0.0.1" + opAddr
+)
+
 func main() {
 	keys := devkeys.MustEphemeral("client-credentials-1")
 
 	provider, err := op.New(
-		op.WithIssuer("https://op.example.com"),
+		op.WithIssuer(issuer),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
-		// The default grant set is {authorization_code, refresh_token};
-		// adding ClientCredentials extends it. Embedders that ONLY
-		// need machine-to-machine tokens can pass just the one grant.
-		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials),
+		// The default grant set is {authorization_code, refresh_token}.
+		// This OP serves machine-to-machine traffic only, so the set is
+		// replaced outright: there is no end user to authenticate and
+		// therefore nothing for the authorization_code grant to do.
+		op.WithGrants(grant.ClientCredentials),
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:         "backend-service",
@@ -73,11 +79,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", provider)
 
-	log.Println("client-credentials example listening on :8080")
+	log.Printf("client-credentials example listening on %s (issuer %s)", opAddr, issuer)
 	log.Println("try: curl -u backend-service:cc-demo-secret-rotate-me \\")
 	log.Println("         -d 'grant_type=client_credentials&scope=api:read' \\")
-	log.Println("         http://localhost:8080/oidc/token | jq")
-	if err := serve.Listen(":8080", mux); err != nil {
+	log.Printf("         %s/oidc/token | jq", issuer)
+	if err := serve.Listen(opAddr, mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

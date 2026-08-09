@@ -18,6 +18,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -38,6 +39,12 @@ func buildProvider() (http.Handler, *inmem.Store, error) {
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// CIBA is the only grant this OP serves. The POS terminal never
+		// opens a browser — the user approves on their own authentication
+		// device — so naming grant.CIBA here drops the default
+		// {authorization_code, refresh_token} pair, while WithCIBA below
+		// wires the hint resolver and mounts /bc-authorize.
+		op.WithGrants(grant.CIBA),
 		op.WithCIBA(
 			op.WithCIBAHintResolver(resolver),
 			op.WithCIBAPollInterval(pollInterval),
