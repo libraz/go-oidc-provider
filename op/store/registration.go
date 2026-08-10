@@ -81,6 +81,16 @@ type InitialAccessTokenStore interface {
 	// MUST return [ErrNotFound] when no row matches. Backends MUST
 	// scope the lookup strictly to HashedValue equality; the library
 	// does not pass partial matches.
+	//
+	// Unlike the expiry-gating lookups elsewhere in this package
+	// ([PushedAuthRequestStore.Find], [SessionStore.Find]), GetByHash
+	// MUST return a matching row whose ExpiresAt has passed rather than
+	// reporting it absent. The library applies the expiry gate itself,
+	// because the registration endpoint tells a client whose token
+	// lapsed something different from one presenting a token that never
+	// existed, and emits a different audit event for each. A backend
+	// that filters here collapses the two, leaving an operator unable
+	// to tell an expired credential from a forged one.
 	GetByHash(ctx context.Context, hash string) (*InitialAccessToken, error)
 
 	// IncrementUses atomically increments the Uses counter for the

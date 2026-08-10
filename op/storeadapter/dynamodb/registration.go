@@ -44,6 +44,16 @@ func (s *iatStore) Put(ctx context.Context, t *store.InitialAccessToken) error {
 // GetByHash resolves a presented token. The index is eventually
 // consistent, so the hit is re-read by primary key before it is
 // returned: registration must not run against a stale use counter.
+//
+// The re-read deliberately uses the plain get rather than the
+// expiry-filtering getLive the rest of this adapter reaches for. Per
+// [store.InitialAccessTokenStore.GetByHash] an expired token is still
+// returned and the caller applies the expiry gate, because the
+// registration endpoint distinguishes "this token expired" from "no
+// such token" in what it tells the client and in the audit event it
+// emits. Filtering here collapses the two, and an operator reading the
+// trail would see the same signal for a lapsed token as for a forged
+// one.
 func (s *iatStore) GetByHash(ctx context.Context, hash string) (*store.InitialAccessToken, error) {
 	matches, err := s.parent.queryIndex(ctx, s.parent.names.iats, indexByHash, attrTokenHash, hash)
 	if err != nil {
@@ -54,7 +64,7 @@ func (s *iatStore) GetByHash(ctx context.Context, hash string) (*store.InitialAc
 		if id == "" {
 			continue
 		}
-		found, err := s.parent.getLive(ctx, s.parent.names.iats, id)
+		found, err := s.parent.get(ctx, s.parent.names.iats, id)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}

@@ -21,6 +21,7 @@ var iatCases = []subtest{
 	{"PutGet", iatPutGet},
 	{"PutDuplicate", iatPutDuplicate},
 	{"GetByHashMissing", iatGetByHashMissing},
+	{"GetByHashReturnsExpired", iatGetByHashReturnsExpired},
 	{"IncrementUsesSequence", iatIncrementUsesSequence},
 	{"IncrementUsesMissing", iatIncrementUsesMissing},
 	{"IncrementUsesExceedsCap", iatIncrementUsesExceedsCap},
@@ -71,6 +72,34 @@ func iatGetByHashMissing(t *testing.T, f Factory) {
 	_, err := s.GetByHash(context.Background(), "absent")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetByHash missing: want ErrNotFound, got %v", err)
+	}
+}
+
+// iatGetByHashReturnsExpired pins the deliberate exception to the
+// expiry-gating convention the sibling substores follow: an IAT whose
+// ExpiresAt has passed is still returned, and the library applies the
+// gate. The registration endpoint answers a lapsed token differently
+// from an unknown one — different message to the client, different
+// audit event — so a backend that filters here leaves an operator
+// unable to tell an expired credential from a forged one.
+func iatGetByHashReturnsExpired(t *testing.T, f Factory) {
+	b := f(t)
+	s := requireIATStore(t, b.Store)
+	ctx := context.Background()
+	tok := newIAT(b.Now(), "iat-expired", "hash-expired")
+	tok.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := s.Put(ctx, tok); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := s.GetByHash(ctx, "hash-expired")
+	if err != nil {
+		t.Fatalf("GetByHash on an expired IAT: want the record, got %v", err)
+	}
+	if got.ID != "iat-expired" {
+		t.Fatalf("unexpected IAT: %+v", got)
+	}
+	if !got.ExpiresAt.Before(b.Now()) {
+		t.Errorf("ExpiresAt=%v is not in the past; the caller's expiry gate would pass", got.ExpiresAt)
 	}
 }
 
