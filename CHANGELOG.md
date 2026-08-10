@@ -236,6 +236,51 @@ whose OP serves only machine-to-machine grants.
 
 ### Fixed
 
+- The SQL adapter preserves integer fidelity when reading claim maps back out
+  of the database. `decodeObjectArray` used `json.Decoder`+`UseNumber` for the
+  `authorization_details` column, but `decodeMap` — which reads user claims,
+  grant claims and refresh-token extras — decoded with the default settings,
+  widening every JSON number to `float64`. Anything past the float64
+  integer-exact range came back rounded: an upstream account id or order
+  number carried as a custom claim reached the ID token and `/userinfo` as a
+  different value than the one stored. The rounding was deterministic, so
+  every read agreed with every other read and nothing downstream could notice.
+  The DynamoDB adapter already decoded its whole document this way.
+- The SQL adapter recognises a unique-constraint violation on a MySQL or
+  PostgreSQL server that does not speak English. The classifier matched only
+  the server's message text (`duplicate entry`, `duplicate key value`), which
+  both engines translate under `lc_messages`, so on a localized server a
+  duplicate insert surfaced as a generic storage error instead of
+  `store.ErrAlreadyExists` — a replayed JTI or a colliding client registration
+  reported the wrong reason and the wrong audit signal. The check now leads
+  with the identity each driver renders itself in Go and cannot translate:
+  go-sql-driver's `Error <number>` prefix and pgx's `(SQLSTATE ...)` suffix.
+  The English phrases remain as a fall-back.
+- The reference SQL schema indexes every column its retention sweeps and
+  cascades filter on: `expires_at` on authorization codes, PAR records,
+  interactions, sessions, access tokens and consumed JTIs, and `client_id` on
+  grants. The grants table carried a composite index leading with `subject`,
+  which cannot serve the client-scoped cascade a client deletion runs. Without
+  these the sweep scans, and on MySQL an unindexed `DELETE` locks the rows it
+  examines rather than the rows it removes, so the reclamation job contends
+  with live traffic in proportion to the backlog it exists to clear. Existing
+  databases do not gain the indexes automatically: re-running the SQLite or
+  PostgreSQL schema adds them, while MySQL declares indexes inside
+  `CREATE TABLE` and needs an explicit `ALTER TABLE`.
+- The DynamoDB adapter returns an expired Initial Access Token from
+  `GetByHash` instead of reporting it absent. Its lookup went through the
+  adapter's expiry-filtering read, so a lapsed IAT was indistinguishable from
+  one that never existed — the registration endpoint told the client
+  "invalid" rather than "expired" and emitted the wrong audit event, on that
+  backend only. The library owns this expiry gate; the store contract now says
+  so, and the shared contract suite checks it.
+- `store.PushedAuthRequestStore.Consume` returns a nil record alongside
+  `ErrAlreadyConsumed` on every backend. DynamoDB returned the record, so a
+  replayed `request_uri` handed back the entire pushed authorization request
+  on one backend and nothing on the others. A failed consume should not yield
+  a usable request; the contract now requires the nil and the shared suite
+  checks it. `AuthorizationCodeStore.Consume` still returns its record on
+  replay, deliberately — RFC 9700 requires identifying the grant to revoke.
 - Every `response_mode=form_post.jwt` fallback is delivered as a self-posting
   form rather than a 302. The signing-failure, encryption-failure and
   `unsupported_response_mode` paths all redirected, which contradicts the
@@ -534,6 +579,39 @@ whose OP serves only machine-to-machine grants.
 
 ### Added
 
+- `op.Provider.SetLocaleCookie` and `op.Provider.ClearLocaleCookie`, which write
+  and delete the `__Host-oidc_locale` cookie the locale resolver reads at the
+  third step of its priority chain. The chain has always consulted that cookie,
+  and `interaction.Prompt.LocalesAvailable` exists so a Driver can build a
+  language picker from it, but nothing in the library could write the cookie —
+  so a user's pick had no way to survive the prompt it was made on, and the
+  chain step was reachable only by an embedder hand-rolling a `__Host-` cookie
+  against an undocumented value format. The OP still does not write the cookie
+  on its own: a picker is interaction UI, which `interaction.Driver` delegates
+  in full, so the OP never observes the choice. The embedder receives the pick
+  on an endpoint of its own and persists it here. The stored value is the
+  registered tag the input matches — `ja-JP` on an OP registering only `ja`
+  stores `ja` — and a locale matching no registered bundle is refused with the
+  new `op.ErrLocaleNotRegistered` rather than written, because the resolver
+  would otherwise skip the cookie on every later read and leave a picker that
+  reports success and never changes the language. Only an explicit choice
+  belongs in the cookie: writing back whatever the chain resolved would let one
+  RP's `ui_locales` parameter become the user's sticky default at every other
+  RP.
+- `ConsentUI.ContentSecurityPolicy` and `ChooserUI.ContentSecurityPolicy`, which
+  declare the policy sent with a page rendered from an embedder-supplied
+  template, plus `interaction.NormalizeCSP` and `interaction.ErrCSPNotPermitted`
+  behind them. Both screens previously inherited the policy the built-in driver
+  uses, which forbids every subresource — right for markup that loads none, and
+  wrong for the templates, whose reason to exist is branding. A stylesheet, logo
+  or webfont was dropped by the browser with no server-side signal: the OP
+  served 200 and the page rendered unstyled. Leaving the field unset keeps the
+  previous policy exactly. Three directives stay with the OP: `frame-ancestors`
+  and `base-uri` are appended when absent and accepted only as `'none'`, and
+  `form-action` may not be declared at all, because any value blocks the
+  cross-origin redirect that completes a successful consent. `'none'` alongside
+  another source is refused rather than passed through — browsers ignore it in
+  that position, so accepting it would turn "forbid framing" into "allow it".
 - `op.WithMTLSRootCAs`, which installs the trust anchors the OP validates a
   client certificate against before using it for RFC 8705 §3 token binding.
   `internal/mtls` supported chain validation but nothing could reach it, so the
