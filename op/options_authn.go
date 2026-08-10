@@ -400,6 +400,18 @@ type ConsentUI struct {
 	// the option site rejects a nil template so the
 	// misconfiguration surfaces at [New].
 	Template *template.Template
+
+	// ContentSecurityPolicy is the policy sent with the rendered
+	// consent page. Empty keeps the library default, which forbids
+	// every subresource: correct for the markup the built-in driver
+	// emits, but it silently drops the stylesheet, logo or webfont a
+	// branded template loads — the browser blocks them and the OP
+	// never sees a failure. Declare the origins the template uses,
+	// e.g. "default-src 'none'; style-src 'self'; img-src 'self' data:".
+	//
+	// [interaction.NormalizeCSP] validates the value at [New] and
+	// documents which directives are not the embedder's to relax.
+	ContentSecurityPolicy string
 }
 
 // ChooserUI declares the template the [Provider] uses to render the
@@ -420,6 +432,13 @@ type ChooserUI struct {
 	// non-nil; the option site rejects a nil template so the
 	// misconfiguration surfaces at [New].
 	Template *template.Template
+
+	// ContentSecurityPolicy is the policy sent with the rendered
+	// chooser page. It follows the same rules as
+	// [ConsentUI.ContentSecurityPolicy] and is declared separately
+	// because the two screens are independent templates that need not
+	// load from the same origins.
+	ContentSecurityPolicy string
 }
 
 // WithLoginFlow registers the [LoginFlow] the orchestrator drives.
@@ -609,6 +628,8 @@ func validateSPAUIStaticDir(dir string) error {
 // supplying both fails [New] with a structured configuration error.
 // Validation:
 //   - Template MUST be non-nil.
+//   - ContentSecurityPolicy, when set, MUST pass
+//     [interaction.NormalizeCSP].
 //   - Repeated [WithConsentUI] calls are rejected.
 func WithConsentUI(ui ConsentUI) Option {
 	return optionFunc(func(c *config) error {
@@ -630,6 +651,15 @@ func WithConsentUI(ui ConsentUI) Option {
 				Description: "WithConsentUI: Template must not be nil",
 			}
 		}
+		policy, err := interaction.NormalizeCSP(ui.ContentSecurityPolicy)
+		if err != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithConsentUI: ContentSecurityPolicy rejected",
+				Cause:       err,
+			}
+		}
+		ui.ContentSecurityPolicy = policy
 		c.consentUI = ui
 		c.consentUISet = true
 		return nil
@@ -644,6 +674,8 @@ func WithConsentUI(ui ConsentUI) Option {
 // The chooser↔consent relationship is unchanged — both can be set
 // together, both render through the overlay. Validation:
 //   - Template MUST be non-nil.
+//   - ContentSecurityPolicy, when set, MUST pass
+//     [interaction.NormalizeCSP].
 //   - Repeated [WithChooserUI] calls are rejected.
 func WithChooserUI(ui ChooserUI) Option {
 	return optionFunc(func(c *config) error {
@@ -659,6 +691,15 @@ func WithChooserUI(ui ChooserUI) Option {
 				Description: "WithChooserUI: Template must not be nil",
 			}
 		}
+		policy, err := interaction.NormalizeCSP(ui.ContentSecurityPolicy)
+		if err != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithChooserUI: ContentSecurityPolicy rejected",
+				Cause:       err,
+			}
+		}
+		ui.ContentSecurityPolicy = policy
 		c.chooserUI = ui
 		c.chooserUISet = true
 		// In SPA mode the SPA owns the chooser surface via the JSON state

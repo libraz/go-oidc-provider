@@ -120,6 +120,33 @@ func TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet(t *testing.T) {
 	}
 }
 
+// The per-template Content-Security-Policy is validated at the option
+// site and consumed by the overlay driver, so applyDefaults is the only
+// place the two halves meet. A policy that stops here renders the
+// option inert: the page still loads, the browser still drops the
+// assets, and nothing reports it.
+func TestApplyDefaults_CarriesTemplatePoliciesIntoTheOverlay(t *testing.T) {
+	t.Parallel()
+
+	c := &config{
+		consentUISet: true,
+		consentUI:    ConsentUI{ContentSecurityPolicy: "default-src 'none'; img-src https://consent.example"},
+		chooserUISet: true,
+		chooserUI:    ChooserUI{ContentSecurityPolicy: "default-src 'none'; img-src https://chooser.example"},
+	}
+	c.applyDefaults()
+	overlay, ok := c.interactionD.(interaction.TemplateOverlayDriver)
+	if !ok {
+		t.Fatalf("interactionD = %T, want interaction.TemplateOverlayDriver", c.interactionD)
+	}
+	if overlay.ConsentCSP != c.consentUI.ContentSecurityPolicy {
+		t.Errorf("overlay.ConsentCSP = %q, want %q", overlay.ConsentCSP, c.consentUI.ContentSecurityPolicy)
+	}
+	if overlay.ChooserCSP != c.chooserUI.ContentSecurityPolicy {
+		t.Errorf("overlay.ChooserCSP = %q, want %q", overlay.ChooserCSP, c.chooserUI.ContentSecurityPolicy)
+	}
+}
+
 // TestWithStaticClients_StoresSeededClients pins the H1-E aggregate
 // behaviour: every seed projected through [ClientSeed.seed] is
 // appended to [config.staticClients] in the order seeds appear. The

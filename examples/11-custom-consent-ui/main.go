@@ -32,13 +32,14 @@
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 //   - Login flow: one [op.PrimaryPassword] step over the demo user seed. Production embedders compose their own primary factor and MFA rules; the consent wiring is unaffected by that choice.
 //   - User seed: the demo username / password are hard-coded; production embedders enrol users through their own management plane.
-//   - Consent template: inline and minimal; a production embedder uses a real template directory with parsed-once startup, CSP-friendly nonces, and external CSS.
+//   - Consent template: inline and minimal; a production embedder uses a real template directory with parsed-once startup. The stylesheet is served by this example so the page's Content-Security-Policy can name "style-src 'self'"; in production it is whatever origin the asset pipeline publishes to.
 //   - Submission shape: this template approves every requested scope in one click. A real consent UI renders one checkbox per scope and lets the user submit a subset; client-side JS would join the checked names into the hidden `approved_scopes` field before submit.
 package main
 
 import (
 	"context"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 
@@ -50,9 +51,21 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
+// consentStylesheetPath is served by this example on the same origin as
+// the OP, which is what lets the consent page's Content-Security-Policy
+// name "style-src 'self'" instead of allowing inline styles.
+const consentStylesheetPath = "/assets/consent.css"
+
+const consentStylesheet = `body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; color: #1b1b1f; }
+h1 { font-size: 1.4rem; }
+ul { padding-left: 1.2rem; }
+button { padding: .6rem 1.4rem; font-size: 1rem; }
+`
+
 const consentTemplateSrc = `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Authorize {{.Client.Name}}</title></head>
+<head><meta charset="utf-8"><title>Authorize {{.Client.Name}}</title>
+<link rel="stylesheet" href="` + consentStylesheetPath + `"></head>
 <body>
   <h1>{{if .Client.Name}}{{.Client.Name}}{{else}}{{.Client.ClientID}}{{end}} requests access</h1>
   {{if .Client.PolicyURI}}<p><a href="{{.Client.PolicyURI}}" target="_blank" rel="noopener">Privacy policy</a>{{if .Client.TosURI}} · <a href="{{.Client.TosURI}}" target="_blank" rel="noopener">Terms of service</a>{{end}}</p>{{end}}
@@ -104,7 +117,18 @@ func main() {
 		// user has to be signed in before the OP has anyone to ask. A
 		// primary factor is what gets the browser that far.
 		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
-		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
+		// Without a policy the consent page inherits the one the
+		// built-in driver uses, which forbids every subresource — the
+		// stylesheet below would be fetched, blocked by the browser,
+		// and dropped with no server-side signal. Naming the origins
+		// the template actually loads from is what makes a branded
+		// page work. script-src stays absent: the form is a plain
+		// POST, and the page holds the CSRF token and the
+		// continuation reference.
+		op.WithConsentUI(op.ConsentUI{
+			Template:              tmpl,
+			ContentSecurityPolicy: "default-src 'none'; style-src 'self'; img-src 'self' data:",
+		}),
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:           "demo-rp",
@@ -120,6 +144,12 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.Handle(consentStylesheetPath, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		if _, err := io.WriteString(w, consentStylesheet); err != nil {
+			log.Printf("write stylesheet: %v", err)
+		}
+	}))
 	mux.Handle("/", provider)
 
 	log.Printf("custom-consent-ui example listening on %s (issuer %s)", opAddr, issuer)

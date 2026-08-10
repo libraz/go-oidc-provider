@@ -72,6 +72,11 @@ func (c *config) applyDefaults() {
 			Inner:           c.interactionD,
 			ConsentTemplate: c.consentUI.Template,
 			ChooserTemplate: c.chooserUI.Template,
+			// Already normalized by the option site; an unset option
+			// leaves the empty string, which the overlay reads as
+			// "keep the default policy".
+			ConsentCSP: c.consentUI.ContentSecurityPolicy,
+			ChooserCSP: c.chooserUI.ContentSecurityPolicy,
 		}
 	}
 	if c.chooserUIShadowedBySPA {

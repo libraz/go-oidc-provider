@@ -39,9 +39,12 @@ const htmlSubmissionContentType = "application/x-www-form-urlencoded"
 //     timestamps, no map iteration. Keys derived from maps are sorted
 //     before emission so golden tests can pin the byte-for-byte form.
 //
-// Embedders that want branding or CSS replace the driver via
-// [op.WithInteractionDriver]; the canonical examples for that path live
-// under examples/16-custom-interaction/ and 10-react-login/.
+// Embedders that want branding or CSS either override the two
+// templated screens via [op.WithConsentUI] / [op.WithChooserUI] — which
+// carry a per-page [NormalizeCSP] policy so the assets are not blocked
+// — or replace the driver outright via [op.WithInteractionDriver]; the
+// canonical examples for the latter path live under
+// examples/16-custom-interaction/ and 10-react-login/.
 //
 // HTMLDriver is safe for concurrent use. When Translator is non-nil, the
 // function it references MUST also be safe for concurrent use.
@@ -115,13 +118,12 @@ func stampHTMLHeaders(w http.ResponseWriter) {
 	// Referer leakage; the page URL carries only the opaque interaction
 	// uid and loads no subresources.
 	h.Set("Referrer-Policy", "same-origin")
-	// form-action is intentionally not pinned: a successful consent POST
-	// redirects (302) to the relying party's cross-origin redirect_uri,
-	// and browsers enforce form-action against redirect targets, so
-	// form-action 'self' would block flow completion. default-src 'none'
-	// plus the double-submit CSRF token and Origin allowlist remain the
-	// defense.
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+	// The policy and the reasoning behind each directive live on
+	// defaultCSP. Pages rendered from an embedder-supplied template
+	// override it through [TemplateOverlayDriver.ConsentCSP] /
+	// [TemplateOverlayDriver.ChooserCSP]; nothing HTMLDriver itself
+	// emits needs a subresource.
+	h.Set("Content-Security-Policy", defaultCSP)
 }
 
 // ParseSubmission reads at most [maxSubmissionBytes] from r.Body and

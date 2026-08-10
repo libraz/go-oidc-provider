@@ -523,6 +523,65 @@ func TestWithConsentUI_AcceptsValid(t *testing.T) {
 	}
 }
 
+// A policy that would unframe the consent page or block its completing
+// redirect has to fail at New. Accepting it and repairing it silently
+// would leave the embedder believing their template is framed-protected
+// on their own terms.
+func TestWithConsentUI_RejectsAContentSecurityPolicyThatDropsAProtection(t *testing.T) {
+	t.Parallel()
+
+	for name, policy := range map[string]string{
+		"framing allowed": "default-src 'none'; frame-ancestors https://portal.example",
+		"form-action set": "default-src 'none'; form-action 'self'",
+		"base-uri set":    "default-src 'none'; base-uri 'self'",
+	} {
+		tmpl := template.Must(template.New("c").Parse("ok"))
+		_, err := op.New(append(validBaseOpts(t),
+			op.WithConsentUI(op.ConsentUI{Template: tmpl, ContentSecurityPolicy: policy}),
+		)...)
+		if err == nil {
+			t.Errorf("%s: expected error for %q, got nil", name, policy)
+			continue
+		}
+		if !strings.Contains(err.Error(), "ContentSecurityPolicy") {
+			t.Errorf("%s: err = %v, want it to name the field", name, err)
+		}
+	}
+}
+
+func TestWithConsentUI_AcceptsABrandingContentSecurityPolicy(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("c").Parse("ok"))
+	provider, err := op.New(append(validBaseOpts(t),
+		op.WithConsentUI(op.ConsentUI{
+			Template:              tmpl,
+			ContentSecurityPolicy: "default-src 'none'; style-src 'self'; img-src 'self' data:",
+		}),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New with a branding policy: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("expected non-nil Provider")
+	}
+}
+
+func TestWithChooserUI_RejectsAContentSecurityPolicyThatDropsAProtection(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("c").Parse("ok"))
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithChooserUI(op.ChooserUI{Template: tmpl, ContentSecurityPolicy: "default-src 'none'; form-action 'self'"}),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for a form-action policy, got nil")
+	}
+	if !strings.Contains(err.Error(), "ContentSecurityPolicy") {
+		t.Errorf("err = %v, want it to name the field", err)
+	}
+}
+
 func TestWithConsentUI_RejectsSPAUICombination(t *testing.T) {
 	t.Parallel()
 

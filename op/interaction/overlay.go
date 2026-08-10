@@ -62,6 +62,28 @@ type TemplateOverlayDriver struct {
 	// is [ChooserPromptData] using [ChooserTemplateData] as the
 	// template data context.
 	ChooserTemplate *template.Template
+
+	// ConsentCSP is the Content-Security-Policy sent with a page
+	// rendered from ConsentTemplate. Empty selects the library
+	// default, which forbids every subresource — correct for the
+	// markup [HTMLDriver] emits and wrong for a template that carries
+	// branding, since a stylesheet, logo or webfont the default blocks
+	// is dropped by the browser with no server-side signal. Declare
+	// the origins the template actually loads from.
+	//
+	// The value is passed through [NormalizeCSP], which appends the
+	// framing and base-uri protections when absent and rejects
+	// anything that would disable them. A value that fails validation
+	// falls back to the default policy; [op.WithConsentUI] rejects it
+	// at [op.New] instead, so this path is reachable only for a
+	// hand-composed overlay.
+	ConsentCSP string
+
+	// ChooserCSP is the Content-Security-Policy sent with a page
+	// rendered from ChooserTemplate. It follows the same rules as
+	// ConsentCSP and is separate because the two surfaces are
+	// independent templates that need not share an asset origin.
+	ChooserCSP string
 }
 
 // Compile-time confirmation that TemplateOverlayDriver satisfies Driver.
@@ -119,7 +141,7 @@ func (d TemplateOverlayDriver) renderConsent(w http.ResponseWriter, r *http.Requ
 	if err := d.ConsentTemplate.Execute(&body, td); err != nil {
 		return fmt.Errorf("interaction: render consent template: %w", err)
 	}
-	if err := writeOverlayResponse(w, &body); err != nil {
+	if err := writeOverlayResponse(w, &body, d.ConsentCSP); err != nil {
 		return err
 	}
 	return nil
@@ -141,7 +163,7 @@ func (d TemplateOverlayDriver) renderChooser(w http.ResponseWriter, r *http.Requ
 	if err := d.ChooserTemplate.Execute(&body, td); err != nil {
 		return fmt.Errorf("interaction: render chooser template: %w", err)
 	}
-	if err := writeOverlayResponse(w, &body); err != nil {
+	if err := writeOverlayResponse(w, &body, d.ChooserCSP); err != nil {
 		return err
 	}
 	return nil
@@ -150,8 +172,8 @@ func (d TemplateOverlayDriver) renderChooser(w http.ResponseWriter, r *http.Requ
 // writeOverlayResponse commits a successfully rendered template body.
 // Template execution is buffered by the callers so an execution error
 // cannot leak a partial 200 response before the endpoint can react.
-func writeOverlayResponse(w http.ResponseWriter, body *bytes.Buffer) error {
-	stampOverlayHeaders(w)
+func writeOverlayResponse(w http.ResponseWriter, body *bytes.Buffer, policy string) error {
+	stampOverlayHeaders(w, policy)
 	w.WriteHeader(http.StatusOK)
 	if _, err := body.WriteTo(w); err != nil {
 		return fmt.Errorf("interaction: write template response: %w", err)
@@ -160,8 +182,23 @@ func writeOverlayResponse(w http.ResponseWriter, body *bytes.Buffer) error {
 }
 
 // stampOverlayHeaders mirrors the response stamping [HTMLDriver.Render]
-// applies. The headers MUST be set before WriteHeader; the helper
-// keeps consent and chooser dispatch in sync.
-func stampOverlayHeaders(w http.ResponseWriter) {
+// applies, then swaps in the per-template Content-Security-Policy when
+// the embedder declared one. The headers MUST be set before
+// WriteHeader; the helper keeps consent and chooser dispatch in sync.
+//
+// A policy that fails [NormalizeCSP] leaves the strict default in
+// place. The failure modes are directives that would unframe the
+// consent page or block its completing redirect, so falling back to
+// the policy the library can vouch for is the safe direction; the
+// option site catches the same input at [op.New] with a message.
+func stampOverlayHeaders(w http.ResponseWriter, policy string) {
 	stampHTMLHeaders(w)
+	if policy == "" {
+		return
+	}
+	normalized, err := NormalizeCSP(policy)
+	if err != nil {
+		return
+	}
+	w.Header().Set("Content-Security-Policy", normalized)
 }
