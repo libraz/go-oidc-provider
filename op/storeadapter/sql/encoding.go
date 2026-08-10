@@ -60,12 +60,25 @@ func encodeMap(m map[string]any) ([]byte, error) {
 
 // decodeMap deserialises a column written by encodeMap. The literal
 // JSON null decodes to a nil map, mirroring the inmem reference.
+//
+// UseNumber for the same reason [decodeObjectArray] uses it, and it
+// matters more here: these columns hold embedder-supplied claim maps
+// that are re-serialised into ID tokens and /userinfo responses, so a
+// number widened to float64 on the way out of the database is a wrong
+// value delivered to the relying party. Anything past the float64
+// integer-exact range — an upstream account id, an order number — comes
+// back rounded, silently and identically on every read, which is not a
+// shape an embedder can detect downstream. The DynamoDB adapter decodes
+// its whole document this way already; this keeps SQL from being the
+// one backend that corrupts the value.
 func decodeMap(b []byte) (map[string]any, error) {
 	if len(b) == 0 || string(b) == "null" {
 		return nil, nil //nolint:nilnil // empty/null column legitimately maps to (nil, nil); mirrors the inmem reference.
 	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
 	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
+	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("oidcsql: unmarshal map[string]any: %w", err)
 	}
 	return m, nil

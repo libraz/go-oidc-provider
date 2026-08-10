@@ -80,3 +80,61 @@ func TestJSONEncoders_RejectNonJSONValues(t *testing.T) {
 		})
 	}
 }
+
+// TestMap_RoundTrip_NumberFidelity pins the same guarantee for the
+// claim-map columns (user claims, grant claims, refresh-token extras).
+// These feed ID tokens and /userinfo directly, so a value widened to
+// float64 here is a wrong number delivered to the relying party — and
+// because the rounding is deterministic, every read agrees with every
+// other read and nothing downstream can notice.
+func TestMap_RoundTrip_NumberFidelity(t *testing.T) {
+	t.Parallel()
+
+	const bigID = "9007199254740993" // 2^53 + 1: the smallest integer float64 cannot hold.
+	in := map[string]any{"account_id": json.Number(bigID)}
+
+	encoded, err := encodeMap(in)
+	if err != nil {
+		t.Fatalf("encodeMap: %v", err)
+	}
+	out, err := decodeMap(encoded)
+	if err != nil {
+		t.Fatalf("decodeMap: %v", err)
+	}
+	got, ok := out["account_id"].(json.Number)
+	if !ok {
+		t.Fatalf("account_id type=%T want json.Number (default float64 decode loses precision)", out["account_id"])
+	}
+	if got.String() != bigID {
+		t.Errorf("account_id=%q want %q", got.String(), bigID)
+	}
+
+	// The wire form is what the RP actually receives, so assert on it
+	// too: a json.Number that re-marshals to scientific notation would
+	// satisfy the check above and still change the claim.
+	reencoded, err := encodeMap(out)
+	if err != nil {
+		t.Fatalf("re-encodeMap: %v", err)
+	}
+	if want := `{"account_id":` + bigID + `}`; string(reencoded) != want {
+		t.Errorf("re-encoded=%s want %s", reencoded, want)
+	}
+}
+
+// TestMap_RoundTrip_Nil pins that a nil map survives as nil (the "no
+// claims" shape), mirroring the inmem reference.
+func TestMap_RoundTrip_Nil(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := encodeMap(nil)
+	if err != nil {
+		t.Fatalf("encodeMap(nil): %v", err)
+	}
+	out, err := decodeMap(encoded)
+	if err != nil {
+		t.Fatalf("decodeMap: %v", err)
+	}
+	if out != nil {
+		t.Errorf("decoded=%v want nil", out)
+	}
+}
