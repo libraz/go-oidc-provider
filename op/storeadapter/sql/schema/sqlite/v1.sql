@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS oidc_authorization_codes (
     consumed_at INTEGER,
     created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_oidc_authorization_codes_expires ON oidc_authorization_codes(expires_at);
 
 -- oidc_refresh_tokens.id and oidc_refresh_tokens.parent_id store
 -- SHA-256 hex digests (64 ASCII chars) of the refresh-token bearer
@@ -132,6 +133,7 @@ CREATE TABLE IF NOT EXISTS oidc_access_tokens (
     issued_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_grant ON oidc_access_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_expires ON oidc_access_tokens(expires_at);
 
 CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
     token_hash BLOB PRIMARY KEY,
@@ -181,6 +183,10 @@ CREATE TABLE IF NOT EXISTS oidc_grants (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_sub_client ON oidc_grants(subject, client_id, updated_at);
+-- The composite index above leads with subject, so it cannot serve the
+-- client-scoped cascade a client deletion runs
+-- (DELETE FROM oidc_grants WHERE client_id = ?).
+CREATE INDEX IF NOT EXISTS idx_oidc_grants_client ON oidc_grants(client_id);
 
 CREATE TABLE IF NOT EXISTS oidc_sessions (
     id TEXT PRIMARY KEY,
@@ -194,6 +200,7 @@ CREATE TABLE IF NOT EXISTS oidc_sessions (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_sessions_chooser ON oidc_sessions(chooser_group_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_sessions_expires ON oidc_sessions(expires_at);
 
 -- oidc_par_records.uri stores the SHA-256 hex digest (64 ASCII
 -- chars) of the request_uri bearer secret returned to the client by
@@ -208,6 +215,7 @@ CREATE TABLE IF NOT EXISTS oidc_par_records (
     consumed_at INTEGER,
     created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_oidc_par_records_expires ON oidc_par_records(expires_at);
 
 CREATE TABLE IF NOT EXISTS oidc_interactions (
     id TEXT PRIMARY KEY,
@@ -218,11 +226,13 @@ CREATE TABLE IF NOT EXISTS oidc_interactions (
     updated_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_oidc_interactions_expires ON oidc_interactions(expires_at);
 
 CREATE TABLE IF NOT EXISTS oidc_consumed_jtis (
     jti TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_oidc_consumed_jtis_expires ON oidc_consumed_jtis(expires_at);
 
 CREATE TABLE IF NOT EXISTS oidc_users (
     subject TEXT PRIMARY KEY,

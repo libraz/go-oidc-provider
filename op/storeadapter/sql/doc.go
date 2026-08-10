@@ -88,6 +88,17 @@
 // decision rather than plain expiry. Device codes and CIBA requests
 // evict expired rows on their own insert path.
 //
+// Every table any of those sweeps deletes from carries an index on
+// expires_at in the reference DDL, as does the grants table on
+// client_id for the cascade a client deletion runs. Without them the
+// sweep scans, and on MySQL an unindexed DELETE locks the rows it
+// examines rather than the rows it removes — so the reclamation job
+// contends with live traffic in proportion to the backlog it exists to
+// clear. Embedders who applied the DDL before these indexes shipped
+// should add them: re-running the SQLite or PostgreSQL schema picks
+// them up, while MySQL declares indexes inside CREATE TABLE and so
+// needs an explicit ALTER TABLE on an existing database.
+//
 // # Cardinality and PII
 //
 // The adapter never logs row content. Errors returned to the caller

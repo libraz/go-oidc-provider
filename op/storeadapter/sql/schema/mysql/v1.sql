@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS oidc_authorization_codes (
     dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
     expires_at BIGINT NOT NULL,
     consumed_at BIGINT NULL,
-    created_at BIGINT NOT NULL
+    created_at BIGINT NOT NULL,
+    INDEX idx_oidc_authorization_codes_expires (expires_at)
 );
 
 -- oidc_refresh_tokens.id and oidc_refresh_tokens.parent_id store
@@ -128,7 +129,8 @@ CREATE TABLE IF NOT EXISTS oidc_access_tokens (
     revoked TINYINT(1) NOT NULL DEFAULT 0,
     expires_at BIGINT NOT NULL,
     issued_at BIGINT NOT NULL,
-    INDEX idx_oidc_access_tokens_grant (grant_id)
+    INDEX idx_oidc_access_tokens_grant (grant_id),
+    INDEX idx_oidc_access_tokens_expires (expires_at)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
@@ -177,7 +179,11 @@ CREATE TABLE IF NOT EXISTS oidc_grants (
     authorization_details JSON NOT NULL,
     updated_at BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
-    INDEX idx_oidc_grants_sub_client (subject, client_id, updated_at)
+    INDEX idx_oidc_grants_sub_client (subject, client_id, updated_at),
+    -- The composite index above leads with subject, so it cannot serve
+    -- the client-scoped cascade a client deletion runs
+    -- (DELETE FROM oidc_grants WHERE client_id = ?).
+    INDEX idx_oidc_grants_client (client_id)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_sessions (
@@ -190,7 +196,8 @@ CREATE TABLE IF NOT EXISTS oidc_sessions (
     expires_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
-    INDEX idx_oidc_sessions_chooser (chooser_group_id)
+    INDEX idx_oidc_sessions_chooser (chooser_group_id),
+    INDEX idx_oidc_sessions_expires (expires_at)
 );
 
 -- oidc_par_records.uri stores the SHA-256 hex digest (64 ASCII
@@ -204,7 +211,8 @@ CREATE TABLE IF NOT EXISTS oidc_par_records (
     raw_params LONGBLOB NOT NULL,
     expires_at BIGINT NOT NULL,
     consumed_at BIGINT NULL,
-    created_at BIGINT NOT NULL
+    created_at BIGINT NOT NULL,
+    INDEX idx_oidc_par_records_expires (expires_at)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_interactions (
@@ -214,12 +222,14 @@ CREATE TABLE IF NOT EXISTS oidc_interactions (
     raw_state LONGBLOB NOT NULL,
     expires_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
-    created_at BIGINT NOT NULL
+    created_at BIGINT NOT NULL,
+    INDEX idx_oidc_interactions_expires (expires_at)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_consumed_jtis (
     jti VARCHAR(255) NOT NULL PRIMARY KEY,
-    expires_at BIGINT NOT NULL
+    expires_at BIGINT NOT NULL,
+    INDEX idx_oidc_consumed_jtis_expires (expires_at)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_users (
