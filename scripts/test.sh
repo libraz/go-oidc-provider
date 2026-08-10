@@ -9,16 +9,28 @@ source "$SCRIPT_DIR/lib.sh"
 
 cd "$REPO_ROOT"
 
-flags=( -count=1 -timeout=5m )
+# The timeout is a hang detector, not a budget for legitimate work. The
+# Argon2id packages (internal/authn/recovery, op/recoverykit) derive at
+# production parameters on purpose — 64 MiB memory-hard, and the recovery
+# verifier deliberately scans without an early exit — so they are the
+# slowest packages in the tree by a wide margin. Under -race they land
+# within a small factor of a 5m ceiling and then pass or fail depending on
+# what else the machine is doing, which is not a gate. Raising the ceiling
+# only when the detector is on keeps the fast path tight and still catches
+# a deadlock long before a human would wait it out.
+timeout=5m
 cover_args=()
+race=()
 
 for arg in "$@"; do
   case "$arg" in
-    --race)  flags+=( -race ) ;;
+    --race)  race=( -race ); timeout=15m ;;
     --cover) cover_args=( -coverprofile=cover.out -covermode=atomic ) ;;
     *)       die "unknown flag: $arg" ;;
   esac
 done
+
+flags=( -count=1 "-timeout=$timeout" "${race[@]}" )
 
 while IFS=$'\t' read -r mod pkgs tags; do
   # The example verification harnesses are in the inventory so they get vetted,
