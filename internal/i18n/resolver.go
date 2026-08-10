@@ -185,6 +185,20 @@ func (r *Resolver) Resolve(ctx context.Context, in Request) Tag {
 	return r.defTag
 }
 
+// Match reports the registered tag that would serve the supplied tag,
+// applying the same rule [Resolver.Resolve] uses inside the chain: an
+// exact registration wins, and failing that the language subtag is
+// tried so "ja-JP" selects the "ja" bundle. The returned tag is always
+// one of [Resolver.Available]; the boolean is false when nothing
+// matched, which callers persisting a user's choice use to reject a
+// tag the resolver would later skip.
+func (r *Resolver) Match(tag Tag) (Tag, bool) {
+	if r == nil {
+		return "", false
+	}
+	return r.match(tag)
+}
+
 // match resolves tag against the registered bundles. An exact match
 // wins; failing that, the language subtag is tried so "ja-JP" hits
 // the "ja" bundle. An empty input or no match returns ("", false).

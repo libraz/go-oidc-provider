@@ -16,6 +16,14 @@ package scenarios_test
 //   when unset). The same order governs SPA prompts, e-mail and SSR
 //   templates, and the result is always a registered tag.
 //
+//   Locale switch UX — the OP reads the __Host-oidc_locale cookie at
+//   chain step 3 but writes it only through
+//   op.Provider.SetLocaleCookie, which the embedder calls from its own
+//   endpoint. A language picker is interaction UI and belongs to the
+//   Driver, so the OP never observes the choice on its own. The value
+//   stored is the registered tag the input matches; an unmatched
+//   locale is rejected instead of written.
+//
 //   SPA prompt envelope — the interaction prompt carries `locale` (the
 //   resolved tag, always populated), `ui_locales_hint` (the RP's
 //   ui_locales list, split but otherwise verbatim) and
@@ -26,11 +34,14 @@ package scenarios_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -315,10 +326,110 @@ func TestScenario_I18N_013_LocaleFieldsOmitWhenResolverAbsent(t *testing.T) {
 	t.Log("guarded by op/interaction/types_test.go TestPrompt_LocaleFieldsOmitWhenEmpty")
 }
 
-// TestScenario_I18N_020_LocaleCookieWriteEndpoint is OOS — see catalog out_of_scope_reason.
-func TestScenario_I18N_020_LocaleCookieWriteEndpoint(t *testing.T) {
+// TestScenario_I18N_020_SetLocaleCookiePersistsTheSelection pins the
+// locale-switch UX contract end to end: what op.Provider.SetLocaleCookie
+// writes is what chain step 3 reads back on the next authorize hit.
+//
+// The round trip is the point. The writer normalises ("ja-JP" → the
+// registered "ja") and the reader validates the cookie before matching
+// it, so a writer that emitted the raw request tag, or attributes the
+// browser would refuse to return, would leave both halves individually
+// green and the feature broken. Asserting the cookie's shape alone
+// cannot catch that; only feeding the emitted cookie back through
+// /authorize can.
+//
+// Spec: locale switch UX (catalog I18N-020) / locale resolution chain
+// (file header).
+func TestScenario_I18N_020_SetLocaleCookiePersistsTheSelection(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: I18N-020 (see catalog out_of_scope_reason)")
+
+	p := testkit.NewProvider(t)
+
+	rec := httptest.NewRecorder()
+	if err := p.OP.SetLocaleCookie(rec, "ja-JP"); err != nil {
+		t.Fatalf("SetLocaleCookie(ja-JP): %v", err)
+	}
+	written := rec.Result().Cookies()
+	if len(written) != 1 {
+		t.Fatalf("SetLocaleCookie wrote %d cookies, want 1", len(written))
+	}
+	got := written[0]
+	if got.Name != "__Host-oidc_locale" {
+		t.Errorf("cookie name = %q, want __Host-oidc_locale", got.Name)
+	}
+	if got.Value != "ja" {
+		t.Errorf("cookie value = %q, want ja (the registered tag ja-JP matches)", got.Value)
+	}
+	if !got.HttpOnly || !got.Secure || got.SameSite != http.SameSiteLaxMode || got.Path != "/" {
+		t.Errorf(
+			"cookie attributes = HttpOnly:%v Secure:%v SameSite:%v Path:%q; want true/true/Lax/\"/\"",
+			got.HttpOnly, got.Secure, got.SameSite, got.Path,
+		)
+	}
+	if got.MaxAge != int((365 * 24 * time.Hour).Seconds()) {
+		t.Errorf("cookie MaxAge = %d, want one year in seconds", got.MaxAge)
+	}
+
+	// Accept-Language deliberately disagrees: if the cookie were
+	// ignored the prompt would come back "en" and the assertion would
+	// not be able to tell a working cookie from a default fall-back.
+	env := fetchI18nPrompt(t, p, "", got.Value, "en-US")
+	if resolved, _ := env["locale"].(string); resolved != "ja" {
+		t.Errorf("prompt.locale = %v after SetLocaleCookie(ja-JP), want ja", env["locale"])
+	}
+}
+
+// TestScenario_I18N_020_SetLocaleCookieRejectsUnregistered pins the
+// other half of the row: a locale the resolver would skip is refused at
+// the write, not stored. Persisting it would leave a picker that
+// reports success and never changes the language, because chain step 3
+// silently drops an unmatched cookie.
+//
+// Spec: locale switch UX (catalog I18N-020).
+func TestScenario_I18N_020_SetLocaleCookieRejectsUnregistered(t *testing.T) {
+	t.Parallel()
+
+	p := testkit.NewProvider(t)
+
+	rec := httptest.NewRecorder()
+	err := p.OP.SetLocaleCookie(rec, "zz")
+	if !errors.Is(err, op.ErrLocaleNotRegistered) {
+		t.Fatalf("SetLocaleCookie(zz) error = %v, want ErrLocaleNotRegistered", err)
+	}
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("rejected locale still wrote %d cookies", len(cookies))
+	}
+}
+
+// TestScenario_I18N_020_ClearLocaleCookieRestoresTheChain pins the
+// "use my browser's language" path: clearing the cookie hands the
+// decision back to the lower chain steps.
+//
+// Spec: locale switch UX (catalog I18N-020).
+func TestScenario_I18N_020_ClearLocaleCookieRestoresTheChain(t *testing.T) {
+	t.Parallel()
+
+	p := testkit.NewProvider(t)
+
+	rec := httptest.NewRecorder()
+	p.OP.ClearLocaleCookie(rec)
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("ClearLocaleCookie wrote %d cookies, want 1", len(cookies))
+	}
+	if cookies[0].Name != "__Host-oidc_locale" || cookies[0].Value != "" || cookies[0].MaxAge >= 0 {
+		t.Errorf(
+			"clear cookie = %q=%q MaxAge=%d, want __Host-oidc_locale empty with a negative MaxAge",
+			cookies[0].Name, cookies[0].Value, cookies[0].MaxAge,
+		)
+	}
+
+	// With no cookie the chain drops to Accept-Language, which is what
+	// the picker's "auto" entry is asking for.
+	env := fetchI18nPrompt(t, p, "", "", "ja-JP,en;q=0.7")
+	if resolved, _ := env["locale"].(string); resolved != "ja" {
+		t.Errorf("prompt.locale = %v with the cookie cleared, want ja from Accept-Language", env["locale"])
+	}
 }
 
 // TestScenario_I18N_030_LocaleBundleJSONEndpoint is OOS — see catalog out_of_scope_reason.

@@ -120,6 +120,12 @@ type Prompt struct {
 	// SPAs use it to build a language picker without re-fetching
 	// discovery on every prompt. Empty when the orchestrator was
 	// constructed without a resolver.
+	//
+	// The OP does not receive the pick — the picker is part of the UI
+	// this Driver owns. To make a choice outlive the prompt, post it to
+	// an endpoint of your own and persist it with
+	// [op.Provider.SetLocaleCookie], which writes the cookie the
+	// resolver reads on the next request.
 	LocalesAvailable []string `json:"locales_available,omitempty"`
 }
 

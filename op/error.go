@@ -265,6 +265,18 @@ var ErrDynamicRegistrationDisabled = &Error{
 	Description: "WithDynamicRegistration is not configured",
 }
 
+// ErrLocaleNotRegistered is returned by [Provider.SetLocaleCookie] when
+// the supplied locale matches no registered bundle, either exactly or by
+// its language subtag. The library refuses to persist it because the
+// resolver would silently skip the cookie on every later read, leaving a
+// language picker that reports success and never changes the UI. A nil
+// [Provider], or one not constructed by [New], has no registered locales
+// and therefore also returns this error.
+var ErrLocaleNotRegistered = &Error{
+	Code:        codeInvalidRequest,
+	Description: "locale is not registered; pass one of Provider.LocaleResolver().Available()",
+}
+
 // ErrPairwiseSaltTooShort is returned by [New] when [WithPairwiseSubject]
 // receives a salt shorter than the documented minimum (32 bytes / 256
 // bits). The library refuses to derive subject identifiers from a salt

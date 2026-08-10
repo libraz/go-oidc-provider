@@ -128,15 +128,21 @@ rows:
 
   - id: I18N-020
     severity: P1
-    spec: OP locale switch UX — SPA-selected locale persisted in __Host-oidc_locale
+    spec: OP locale switch UX — user-selected locale persisted in __Host-oidc_locale
     behaviour: |
-      The cookie write endpoint POST /oidc/session/locale persists
-      the SPA-selected locale into the __Host-oidc_locale cookie
-      (1y MaxAge, Lax, __Host- prefix) so subsequent authorize hits
-      pick it up at chain step 3.
-    status: out-of-scope
-    out_of_scope_reason: "Cookie write endpoint POST /oidc/session/locale is deferred to a follow-up plan — the catalog row's own notes record this. v1.0's locale resolver reads __Host-oidc_locale at chain step 3 (covered by I18N-003) but the OP exposes no public route to write it; SPAs that want to persist a user-selected locale wire their own POST endpoint that sets the cookie with the matching __Host- prefix attributes. The wire seam to assert ('OP-supplied write route persists with 1y MaxAge / Lax / __Host-') does not exist in v1.0."
-    notes: deferred to follow-up plan; resolver currently reads the cookie but no write endpoint exists.
+      op.Provider.SetLocaleCookie persists a user-selected locale
+      into the __Host-oidc_locale cookie (1y MaxAge, Lax, __Host-
+      prefix, HttpOnly, Secure) so a subsequent authorize hit picks
+      it up at chain step 3. The stored value MUST be the registered
+      tag the input matches, and a locale matching no registered
+      bundle MUST be rejected rather than written.
+    status: active
+    notes: |
+      The OP owns the cookie but not the picker: a language picker is
+      interaction UI, which interaction.Driver delegates to the
+      embedder, so the OP never observes the choice and cannot write
+      the cookie unprompted. The seam is a Provider method the
+      embedder calls from its own endpoint — not an OP route.
 
   - id: I18N-030
     severity: P1

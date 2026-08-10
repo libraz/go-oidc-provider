@@ -3,7 +3,9 @@ package op
 import (
 	"context"
 	"errors"
+	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
@@ -124,6 +126,67 @@ func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
 	})
 }
 
+// SetLocaleCookie records an explicit user locale choice in the
+// __Host-oidc_locale cookie, which is the third link of the priority
+// chain [Resolver.Resolve] walks — below the RP's ui_locales parameter,
+// above the browser's Accept-Language header.
+//
+// The OP reads that cookie but never writes it on its own, because it
+// never observes the choice. A language picker is interaction UI, and
+// [interaction.Driver] delegates the interaction UI to the embedder in
+// full; the OP only supplies the material to build the picker from
+// ([interaction.Prompt.LocalesAvailable]). The embedder receives the
+// pick on an endpoint of its own and calls this method to persist it in
+// the shape the OP will read back.
+//
+// The value stored is the registered tag the supplied locale matches,
+// not the supplied locale verbatim: passing "ja-JP" to an OP that
+// registers only "ja" stores "ja". A locale matching nothing is
+// rejected with [ErrLocaleNotRegistered] rather than written, so a
+// picker cannot report success for a language the resolver will skip on
+// every later read.
+//
+// The cookie is HttpOnly, Secure, SameSite=Lax and __Host- prefixed, so
+// it is confined to the OP's own origin and invisible to script. It
+// outlives the session deliberately — a language choice is a display
+// preference, not authentication state.
+//
+// Only an explicit choice belongs here. Writing back whatever the chain
+// resolved would let an RP's ui_locales parameter become the user's
+// sticky default at every other RP.
+//
+// Stable since v1.1.
+func (p *Provider) SetLocaleCookie(w http.ResponseWriter, locale Locale) error {
+	if p == nil || p.locales == nil {
+		return ErrLocaleNotRegistered
+	}
+	matched, ok := p.locales.Match(i18n.Tag(locale))
+	if !ok {
+		return ErrLocaleNotRegistered
+	}
+	c, err := cookie.Build(cookie.LocaleProfile, string(matched))
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, c)
+	return nil
+}
+
+// ClearLocaleCookie deletes the __Host-oidc_locale cookie, dropping the
+// user back to the rest of the priority chain — in practice the RP's
+// ui_locales parameter or the browser's Accept-Language header. It is
+// the counterpart a picker's "use my browser's language" entry calls.
+//
+// Stable since v1.1.
+func (p *Provider) ClearLocaleCookie(w http.ResponseWriter) {
+	c, err := cookie.Clear(cookie.LocaleProfile)
+	if err != nil {
+		// Unreachable: the profile is a package constant that validates.
+		return
+	}
+	http.SetCookie(w, c)
+}
+
 // Resolver is the public view of the locale resolver the Provider
 // built from [WithLocale] / [WithDefaultLocale] /
 // [WithPreferredLocaleStore]. Embedders fetch it through
@@ -155,7 +218,9 @@ type ResolveRequest struct {
 	UILocales []string
 
 	// Cookie is the value of the __Host-oidc_locale cookie, or empty
-	// when absent.
+	// when absent. The cookie holds an explicit user locale choice and
+	// is written by [Provider.SetLocaleCookie]; nothing else in the OP
+	// writes it.
 	Cookie string
 
 	// AcceptLanguage is the raw Accept-Language header. The resolver

@@ -2,6 +2,8 @@ package op_test
 
 import (
 	"context"
+	"errors"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -199,5 +201,71 @@ func TestWithLocale_RegistersCustomLocale(t *testing.T) {
 	}
 	if provider == nil {
 		t.Fatalf("provider is nil")
+	}
+}
+
+func TestSetLocaleCookie_StoresARegisteredLocaleAddedByOption(t *testing.T) {
+	t.Parallel()
+
+	bundle, err := op.LocaleBundleFromMap("zh-CN", map[string]string{"consent.title": "授权"})
+	if err != nil {
+		t.Fatalf("LocaleBundleFromMap: %v", err)
+	}
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(bundle))...)
+	if err != nil {
+		t.Fatalf("op.New with zh-CN: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	if err := provider.SetLocaleCookie(rec, "zh-CN"); err != nil {
+		t.Fatalf("SetLocaleCookie(zh-CN): %v", err)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value != "zh-CN" {
+		t.Fatalf("cookies = %v, want a single __Host-oidc_locale=zh-CN", cookies)
+	}
+}
+
+// A Provider that never went through op.New has no registered locales,
+// so every locale is unregistered. The guard exists because the zero
+// value is reachable from embedder code (a struct field left unset)
+// and a nil-map read would otherwise panic inside the resolver.
+func TestSetLocaleCookie_RejectsEverythingOnAnUnbuiltProvider(t *testing.T) {
+	t.Parallel()
+
+	for name, provider := range map[string]*op.Provider{
+		"nil provider":  nil,
+		"zero provider": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			if err := provider.SetLocaleCookie(rec, op.LocaleEnglish); !errors.Is(err, op.ErrLocaleNotRegistered) {
+				t.Fatalf("SetLocaleCookie = %v, want ErrLocaleNotRegistered", err)
+			}
+			if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+				t.Errorf("wrote %d cookies on an unbuilt provider", len(cookies))
+			}
+		})
+	}
+}
+
+// SetLocaleCookie must never be reachable as a way to blank the cookie:
+// an empty locale matches nothing, so it is rejected rather than
+// silently clearing the user's choice. Clearing has its own method.
+func TestSetLocaleCookie_RejectsTheEmptyLocale(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(validBaseOpts(t)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	if err := provider.SetLocaleCookie(rec, ""); !errors.Is(err, op.ErrLocaleNotRegistered) {
+		t.Fatalf("SetLocaleCookie(\"\") = %v, want ErrLocaleNotRegistered", err)
+	}
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("empty locale wrote %d cookies", len(cookies))
 	}
 }
