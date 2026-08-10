@@ -382,6 +382,7 @@ func TestIntegration_UserInfo_CustomScopeClaimsAreWired(t *testing.T) {
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
+		userInfoTokenClient(),
 		op.WithScope(op.Scope{
 			Name:   "projects:read",
 			Public: true,
@@ -399,7 +400,7 @@ func TestIntegration_UserInfo_CustomScopeClaimsAreWired(t *testing.T) {
 		Issuer:    validIssuer,
 		Subject:   "user-1",
 		Audience:  []string{validIssuer},
-		ClientID:  "client-1",
+		ClientID:  userInfoTokenClientID,
 		IssuedAt:  time.Now().Add(-time.Minute).Unix(),
 		ExpiresAt: time.Now().Add(time.Hour).Unix(),
 		JTI:       "at-custom-scope",

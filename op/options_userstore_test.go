@@ -35,6 +35,21 @@ func (m *memberStore) FindBySubject(_ context.Context, sub string) (*store.User,
 	return &store.User{Subject: m.subject, Claims: m.claims, UpdatedAt: time.Unix(0, 0)}, nil
 }
 
+// userInfoTokenClient registers the client the self-signed access tokens
+// in this file name. /userinfo requires the token's client to still be
+// registered, which is how a deleted client stops its already-issued JWT
+// access tokens; a token naming an unregistered client describes a state
+// the token endpoint could not have produced.
+func userInfoTokenClient() op.Option {
+	return op.WithStaticClients(op.PublicClient{
+		ID:           userInfoTokenClientID,
+		RedirectURIs: []string{"https://app.example.com/cb"},
+		Scopes:       []string{"openid"},
+	})
+}
+
+const userInfoTokenClientID = "client-1"
+
 // userInfoEmail drives /userinfo with a self-signed access token for
 // subject and returns the "email" claim the OP released.
 func userInfoEmail(tb testing.TB, provider *op.Provider, key op.SigningKey, subject string) any {
@@ -47,7 +62,7 @@ func userInfoEmail(tb testing.TB, provider *op.Provider, key op.SigningKey, subj
 		Issuer:    validIssuer,
 		Subject:   subject,
 		Audience:  []string{validIssuer},
-		ClientID:  "client-1",
+		ClientID:  userInfoTokenClientID,
 		IssuedAt:  time.Now().Add(-time.Minute).Unix(),
 		ExpiresAt: time.Now().Add(time.Hour).Unix(),
 		JTI:       "at-userstore-" + subject,
@@ -100,6 +115,7 @@ func TestWithUserStore_ServesClaimsFromTheSuppliedStore(t *testing.T) {
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
+		userInfoTokenClient(),
 	)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
@@ -129,6 +145,7 @@ func TestWithUserStore_OmittedKeepsTheBackendUsers(t *testing.T) {
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
+		userInfoTokenClient(),
 	)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)

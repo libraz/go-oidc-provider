@@ -209,6 +209,7 @@ func isJWTAccessTokenRevoked(
 	return endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
+		Clients:            deps.Clients,
 		RevocationStrategy: deps.RevocationStrategy,
 	}, claims)
 }

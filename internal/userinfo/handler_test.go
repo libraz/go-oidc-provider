@@ -42,6 +42,7 @@ func newUserInfoFixtureWithOptions(tb testing.TB, opts ...op.Option) *userInfoFi
 	tb.Helper()
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	prov := testkit.NewProvider(tb, testkit.WithClock(clock), testkit.WithOptions(opts...))
+	seedTokenClient(tb, prov)
 	return &userInfoFixture{
 		prov:     prov,
 		endpoint: prov.Server.URL + "/oidc/userinfo",
@@ -52,6 +53,19 @@ func newUserInfoFixtureWithOptions(tb testing.TB, opts ...op.Option) *userInfoFi
 		clock:  clock,
 	}
 }
+
+// seedTokenClient registers the client the fixture's signed tokens name.
+// /userinfo requires the token's client to still exist, so without this
+// every fixture would be describing a state the OP cannot produce: a
+// token bearing a client_id the token endpoint could not have issued to.
+func seedTokenClient(tb testing.TB, prov *testkit.Provider) {
+	tb.Helper()
+	prov.RegisterClient(tb, testkit.ClientFixture{ID: fixtureClientID})
+}
+
+// fixtureClientID is the client_id every fixture-signed access token
+// carries; see signAccessToken.
+const fixtureClientID = "client-1"
 
 // putUser seeds the testkit store with a user record so /userinfo has
 // something to return. The test owns the claim map; the substore takes
@@ -71,7 +85,7 @@ func (f *userInfoFixture) signAccessToken(tb testing.TB, build func(*tokens.Acce
 		Issuer:    f.prov.Issuer,
 		Subject:   "user-1",
 		Audience:  []string{f.prov.Issuer},
-		ClientID:  "client-1",
+		ClientID:  fixtureClientID,
 		IssuedAt:  f.clock.now.Unix(),
 		ExpiresAt: f.clock.now.Add(time.Hour).Unix(),
 		JTI:       "at-1",
@@ -186,14 +200,19 @@ func TestHandler_PairwiseJWTWithoutGrantIDRejected(t *testing.T) {
 	t.Parallel()
 
 	f := newUserInfoFixtureWithOptions(t, op.WithPairwiseSubject([]byte("userinfo-pairwise-fixed-salt-32b")))
+	// A second client, registered as pairwise, rather than a redefinition
+	// of the fixture's default: the token below names it explicitly, so
+	// the pairwise attribute under test is visible at the call site.
+	const pairwiseClientID = "client-1-pairwise"
 	f.prov.RegisterClient(t, testkit.ClientFixture{
-		ID:          "client-1",
+		ID:          pairwiseClientID,
 		SubjectType: "pairwise",
 	})
 	f.putUser(t, "pairwise-user-1", map[string]any{
 		"email": "pairwise@example.com",
 	})
 	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
+		c.ClientID = pairwiseClientID
 		c.Subject = "pairwise-user-1"
 		c.GrantID = ""
 		c.Scope = []string{"openid", "email"}
@@ -278,7 +297,7 @@ func TestHandler_BadToken_ReturnsInvalidToken(t *testing.T) {
 		Issuer:    f.prov.Issuer,
 		Subject:   "user-1",
 		Audience:  []string{f.prov.Issuer},
-		ClientID:  "client-1",
+		ClientID:  fixtureClientID,
 		IssuedAt:  f.clock.now.Unix(),
 		ExpiresAt: f.clock.now.Add(time.Hour).Unix(),
 		JTI:       "rogue",
@@ -440,6 +459,46 @@ func TestHandler_SubjectDeleted_ReturnsInvalidToken(t *testing.T) {
 	assertNoClaimLeak(t, resp)
 }
 
+// TestHandler_DeletedClientRevokesItsAccessToken is the endpoint-side
+// half of the client-deletion cascade. A JWT access token carries no row
+// to revoke, and the tombstone substore is keyed on grant_id, so a
+// deletion — which yields no list of grants — cannot reach it that way.
+// Requiring the client to still be registered is what makes the deletion
+// take effect here.
+//
+// The token is minted before the deletion and presented after, so a
+// handler that only checked the client at issuance would still serve it.
+func TestHandler_DeletedClientRevokesItsAccessToken(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	f.putUser(t, "user-1", map[string]any{"email": "alice@example.com"})
+	token := f.signAccessToken(t, nil)
+
+	// The same token is served before the deletion, so the 401 below
+	// cannot be blamed on anything else about the request.
+	before := f.doRequest(t, f.newGet(t, token))
+	before.Body.Close()
+	if before.StatusCode != http.StatusOK {
+		t.Fatalf("status before deletion=%d want 200", before.StatusCode)
+	}
+
+	if err := f.prov.Store.DeleteClient(context.Background(), fixtureClientID); err != nil {
+		t.Fatalf("DeleteClient: %v", err)
+	}
+
+	resp := f.doRequest(t, f.newGet(t, token))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status after deletion=%d want 401", resp.StatusCode)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); !strings.Contains(got, `error="invalid_token"`) {
+		t.Fatalf("WWW-Authenticate=%q must declare invalid_token", got)
+	}
+	assertNoClaimLeak(t, resp)
+}
+
 func TestHandler_PUT_ReturnsMethodNotAllowed(t *testing.T) {
 	t.Parallel()
 
@@ -540,7 +599,7 @@ func TestHandler_OpaqueAccessToken_HappyPath(t *testing.T) {
 	})
 	rec := &store.OpaqueAccessToken{
 		ID:        "opaque-userinfo-1",
-		ClientID:  "client-1",
+		ClientID:  fixtureClientID,
 		Subject:   "user-opaque",
 		Scope:     []string{"openid", "email"},
 		IssuedAt:  f.clock.now,
@@ -640,7 +699,7 @@ func TestHandler_OpaqueAccessToken_Revoked(t *testing.T) {
 	f.putUser(t, "user-opaque", map[string]any{"email": "alice@example.com"})
 	rec := &store.OpaqueAccessToken{
 		ID:        "opaque-userinfo-revoked",
-		ClientID:  "client-1",
+		ClientID:  fixtureClientID,
 		Subject:   "user-opaque",
 		Scope:     []string{"openid", "email"},
 		IssuedAt:  f.clock.now,
@@ -676,7 +735,7 @@ func TestHandler_OpaqueAccessToken_Expired(t *testing.T) {
 	f.putUser(t, "user-opaque", map[string]any{"email": "alice@example.com"})
 	rec := &store.OpaqueAccessToken{
 		ID:        "opaque-userinfo-expired",
-		ClientID:  "client-1",
+		ClientID:  fixtureClientID,
 		Subject:   "user-opaque",
 		Scope:     []string{"openid", "email"},
 		IssuedAt:  f.clock.now.Add(-2 * time.Hour),
@@ -735,7 +794,7 @@ func TestHandler_OpaqueAccessToken_DPoPMismatch(t *testing.T) {
 	f.putUser(t, "user-opaque", map[string]any{"email": "alice@example.com"})
 	rec := &store.OpaqueAccessToken{
 		ID:        "opaque-userinfo-dpop",
-		ClientID:  "client-1",
+		ClientID:  fixtureClientID,
 		Subject:   "user-opaque",
 		Scope:     []string{"openid"},
 		IssuedAt:  f.clock.now,

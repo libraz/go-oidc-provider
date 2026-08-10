@@ -85,6 +85,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 	if revoked, ok := endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
 		AccessTokens:       h.accessTokens,
 		GrantRevocations:   h.grantRevocations,
+		Clients:            h.clients,
 		RevocationStrategy: h.revocationStrategy,
 	}, claims); !ok {
 		return lookupResult{reason: "registry_error"}, fmt.Errorf("%w: registry lookup failed", errTokenInvalid)

@@ -14,6 +14,7 @@ import (
 type JWTRevocationOpts struct {
 	AccessTokens       store.AccessTokenRegistry
 	GrantRevocations   store.GrantRevocationStore
+	Clients            store.ClientStore
 	RevocationStrategy store.AccessTokenRevocationStrategy
 }
 
@@ -31,6 +32,9 @@ type JWTRevocationOpts struct {
 //     for a grantless token when the tombstone substore reported it
 //     live (the legacy migration window).
 //
+// Every strategy except None first requires the client the token was
+// issued to still to be registered; see [clientDeleted].
+//
 // A missing JTI row is accepted so directly-constructed test tokens and
 // external-issuer registries do not flip the contract. A substore error
 // returns (false, false).
@@ -39,6 +43,18 @@ func JWTAccessTokenRevoked(
 	opts JWTRevocationOpts,
 	claims *tokens.AccessTokenClaims,
 ) (revoked, ok bool) {
+	if opts.RevocationStrategy == store.RevocationStrategyNone {
+		// The strategy is a declaration that no per-token state is
+		// consulted, so the client probe belongs behind it too.
+		return false, true
+	}
+	gone, resolved := clientDeleted(ctx, opts.Clients, claims.ClientID)
+	if !resolved {
+		return false, false
+	}
+	if gone {
+		return true, true
+	}
 	switch opts.RevocationStrategy {
 	case store.RevocationStrategyNone:
 		return false, true
@@ -47,6 +63,41 @@ func JWTAccessTokenRevoked(
 	default:
 		return jwtAccessTokenRevokedByTombstone(ctx, opts, claims)
 	}
+}
+
+// clientDeleted reports whether the client named by the token's
+// client_id claim has left the registry. The second return reports
+// whether the question could be answered at all.
+//
+// This is what makes a client deletion reach a JWT access token. The
+// other two mechanisms cannot: a grant tombstone is keyed on grant_id
+// and deleting a client yields no list of grant IDs to write tombstones
+// for, and a client_credentials token carries no grant at all, so no
+// per-grant cascade could ever cover it. Deriving the answer from the
+// client_id the token already carries needs no enumeration, no new
+// substore, and no write on the delete path.
+//
+// The inference is only available here because the token arrived
+// signed by the OP's own key: the OP issued it, so the client existed
+// at issuance, and its absence now means it was removed. That is a
+// stronger reading than a missing JTI row, which can simply mean the
+// deployment records no rows.
+//
+// A nil registry or an empty client_id skips the probe rather than
+// failing closed — a token minted outside the registry is not evidence
+// of a deletion. A lookup error other than [store.ErrNotFound] is
+// reported as unresolved so the caller applies its own posture.
+func clientDeleted(ctx context.Context, clients store.ClientStore, clientID string) (gone, resolved bool) {
+	if clients == nil || clientID == "" {
+		return false, true
+	}
+	if _, err := clients.GetClient(ctx, clientID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return true, true
+		}
+		return false, false
+	}
+	return false, true
 }
 
 func jwtAccessTokenRevokedByTombstone(

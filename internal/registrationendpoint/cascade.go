@@ -23,17 +23,16 @@ import (
 // the client record is already gone and re-creating it under the
 // same id would clash with the RFC 7591 §3 contract.
 //
-// Open follow-up: under [store.RevocationStrategyGrantTombstone] the
-// JWT verifier reads tombstones from [store.GrantRevocationStore]
-// keyed on grant_id (not client_id). A complete cascade under that
-// strategy would enumerate the affected grant IDs before delete and
-// write a tombstone for each via [GrantRevocationStore.RevokeGrant].
-// The current cascade does not enumerate (no
-// `Grants.ListByClient` exists) and so a freshly-issued JWT AT can
-// remain verifiable until exp on a tombstone-strategy backend even
-// after its client is deleted. The opaque-AT cascade and the
-// JTI-registry strategy are unaffected; the gap is tracked for a
-// v1.x grant enumeration extension.
+// JWT access tokens are deliberately not part of this cascade. They
+// carry no row to revoke, and the two per-token mechanisms cannot be
+// driven from a client_id: a tombstone is keyed on grant_id and a
+// deletion produces no list of grants to write tombstones for, while a
+// client_credentials token has no grant at all. Instead the endpoints
+// that answer for a JWT AT — userinfo, introspection, token exchange —
+// require the token's client to still be registered, so the deletion
+// performed here is itself what closes them. Deleting the client record
+// is the whole cascade for that token class; see the client probe in
+// internal/endpointsupport.
 func cascadeRevokeByClient(ctx context.Context, deps Deps, clientID string) {
 	probeRevokeByClient(ctx, deps, clientID, deps.RefreshTokens, auditevent.AuditDCRCascadeRefreshRevokeFailed)
 	probeRevokeByClient(ctx, deps, clientID, deps.Grants, auditevent.AuditDCRCascadeGrantRevokeFailed)

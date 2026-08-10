@@ -1,6 +1,7 @@
 package introspectendpoint_test
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"testing"
@@ -203,5 +204,30 @@ func TestHandler_DelegationDoesNotCoverRefreshTokens(t *testing.T) {
 	// passing because the record was unreadable for some other reason.
 	if !f.introspectAs(t, tokenClientID, rec.ID) {
 		t.Error("the owning client can no longer introspect its own refresh token")
+	}
+}
+
+// TestHandler_DeletedTokenClientReadsInactive closes the path that made
+// this worth testing at the introspection endpoint at all. Same-client-
+// only already hides a deleted client's token, because a deleted client
+// cannot authenticate to ask about it — but a delegated resource server
+// can, and it authenticates as itself. Without the registry probe the
+// gateway would keep being told the token is active after the operator
+// deleted the application it was issued to.
+func TestHandler_DeletedTokenClientReadsInactive(t *testing.T) {
+	t.Parallel()
+
+	f := newDelegationFixture(t)
+	token := f.jwtFor(t, delegatedResource)
+	if !f.introspectAs(t, gatewayClientID, token) {
+		t.Fatalf("token was not active before the deletion; the assertion below would prove nothing")
+	}
+
+	if err := f.prov.Store.DeleteClient(context.Background(), tokenClientID); err != nil {
+		t.Fatalf("DeleteClient: %v", err)
+	}
+
+	if f.introspectAs(t, gatewayClientID, token) {
+		t.Error("a deleted client's access token still introspects as active")
 	}
 }

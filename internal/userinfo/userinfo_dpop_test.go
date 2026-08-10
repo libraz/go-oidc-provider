@@ -28,6 +28,7 @@ func dpopUserInfoFixture(tb testing.TB) *userInfoFixture {
 		testkit.WithClock(clock),
 		testkit.WithOptions(op.WithFeature(feature.DPoP)),
 	)
+	seedTokenClient(tb, prov)
 	return &userInfoFixture{
 		prov:     prov,
 		endpoint: prov.Server.URL + "/oidc/userinfo",

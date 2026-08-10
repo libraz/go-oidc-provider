@@ -80,6 +80,13 @@ type Config struct {
 	// subject tokens are unaffected.
 	Grants store.GrantStore
 
+	// Clients is the read-only client registry. The lookup path uses it
+	// to reject a JWT subject_token whose client has been deleted; a
+	// deletion leaves no grant IDs to tombstone and a client_credentials
+	// token has no grant at all, so the client_id claim is the only
+	// handle either case shares. A nil value disables that check.
+	Clients store.ClientStore
+
 	// Audit is the structured audit-event sink.
 	Audit audit.Emitter
 
@@ -104,6 +111,7 @@ type Handler struct {
 	revocationStrategy store.AccessTokenRevocationStrategy
 	opaqueAccessTokens store.OpaqueAccessTokenStore
 	grants             store.GrantStore
+	clients            store.ClientStore
 	audit              audit.Emitter
 	clock              interface{ Now() time.Time }
 	maxAccessTTL       time.Duration
@@ -131,6 +139,7 @@ func New(cfg Config) (*Handler, error) {
 		revocationStrategy: cfg.RevocationStrategy,
 		opaqueAccessTokens: cfg.OpaqueAccessTokens,
 		grants:             cfg.Grants,
+		clients:            cfg.Clients,
 		audit:              cfg.Audit,
 		clock:              cfg.Clock,
 		maxAccessTTL:       cfg.MaxAccessTTL,

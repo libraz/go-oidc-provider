@@ -173,7 +173,14 @@ func Handler(deps HandlerDeps) http.Handler {
 		Leeway: deps.Leeway,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveUserInfo(w, r, deps, verifier)
+		// The registry is wrapped per request, not once here: the memo
+		// is only sound for the duration of a single request, and a
+		// handler-lifetime cache would serve a deleted client forever.
+		perRequest := deps
+		if deps.Clients != nil {
+			perRequest.Clients = &requestClientCache{inner: deps.Clients}
+		}
+		serveUserInfo(w, r, perRequest, verifier)
 	})
 }
 
@@ -650,6 +657,7 @@ func enforceRevocationStatus(
 	revoked, ok := endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
+		Clients:            deps.Clients,
 		RevocationStrategy: deps.RevocationStrategy,
 	}, claims)
 	if !ok {

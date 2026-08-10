@@ -34,6 +34,7 @@ func mtlsUserInfoFixture(tb testing.TB) *userInfoFixture {
 		testkit.WithClock(clock),
 		testkit.WithOptions(op.WithFeature(feature.MTLS)),
 	)
+	seedTokenClient(tb, prov)
 	return &userInfoFixture{
 		prov:     prov,
 		endpoint: prov.Server.URL + "/oidc/userinfo",
@@ -53,6 +54,7 @@ func dualFeatureUserInfoFixture(tb testing.TB) *userInfoFixture {
 		testkit.WithClock(clock),
 		testkit.WithOptions(op.WithFeature(feature.DPoP), op.WithFeature(feature.MTLS)),
 	)
+	seedTokenClient(tb, prov)
 	return &userInfoFixture{
 		prov:     prov,
 		endpoint: prov.Server.URL + "/oidc/userinfo",
