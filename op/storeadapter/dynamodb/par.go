@@ -88,8 +88,11 @@ func (s *parStore) Consume(ctx context.Context, uri string) (*store.PushedAuthRe
 	if err != nil {
 		return nil, err
 	}
+	// A nil record on replay, per [store.PushedAuthRequestStore.Consume]:
+	// the record carries the pushed authorization request, and a failed
+	// consume must not hand it back.
 	if rec.ConsumedAt != nil {
-		return rec, store.ErrAlreadyConsumed
+		return nil, store.ErrAlreadyConsumed
 	}
 	now := s.parent.now()
 	digest := digestKey(uri)
@@ -118,9 +121,9 @@ func (s *parStore) Consume(ctx context.Context, uri string) (*store.PushedAuthRe
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
-			if replay, findErr := s.find(ctx, uri); findErr == nil && replay.ConsumedAt != nil {
-				return replay, store.ErrAlreadyConsumed
-			}
+			// The condition can only fail because the row is gone or
+			// already consumed, and both are a replay from the caller's
+			// side. Either way the record is withheld.
 			return nil, store.ErrAlreadyConsumed
 		}
 		return nil, wrapErr("pars.Consume", err)

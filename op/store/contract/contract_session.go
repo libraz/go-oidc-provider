@@ -279,9 +279,15 @@ func parConsumeOnce(t *testing.T, f Factory) {
 	if first.ConsumedAt == nil {
 		t.Fatal("Consume returned ConsumedAt=nil")
 	}
-	_, err = b.Store.PushedAuthRequests().Consume(ctx, "urn:par:2")
+	replay, err := b.Store.PushedAuthRequests().Consume(ctx, "urn:par:2")
 	if !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("second Consume: want ErrAlreadyConsumed, got %v", err)
+	}
+	// The record carries the pushed authorization request. Returning it
+	// alongside the replay error would leave a caller that mishandles
+	// the error holding a usable request, so the contract withholds it.
+	if replay != nil {
+		t.Errorf("second Consume returned a record alongside ErrAlreadyConsumed: %+v", replay)
 	}
 }
 

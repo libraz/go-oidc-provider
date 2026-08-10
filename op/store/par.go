@@ -81,6 +81,16 @@ type PushedAuthRequestStore interface {
 	// compare-and-set fails. The returned record's ConsumedAt MUST be
 	// non-nil on success.
 	//
+	// On [ErrAlreadyConsumed] the returned record MUST be nil. A
+	// replayed request_uri is a failed operation, and the record
+	// carries [PushedAuthRequest.RawParams] — the entire authorization
+	// request the client pushed — so handing it back would let a caller
+	// that mishandles the error proceed on a replayed request. This is
+	// deliberately unlike [AuthorizationCodeStore.Consume], which
+	// returns the record on replay because RFC 9700 §2.1.1 requires the
+	// OP to identify and revoke the grant the replayed code belongs to;
+	// no such cascade exists for a request_uri.
+	//
 	// Consume enforces single-use only; it MUST NOT reject a record
 	// solely because its ExpiresAt has passed. Expiry is gated at
 	// presentation by [PushedAuthRequestStore.Find], which the
