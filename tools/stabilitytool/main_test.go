@@ -132,6 +132,93 @@ func WithThing() {}
 	}
 }
 
+// A package can declare its whole surface exempt. The report has to be able
+// to say so, because its contract is that anything absent is stable.
+func TestScan_CollectsAPackageScopedMarker(t *testing.T) {
+	t.Parallel()
+
+	got := symbolsOf(t, `// Package pkg does a thing.
+//
+// # Status
+//
+// Experimental: the whole surface is still moving.
+package pkg
+
+// Settled is documented but not marked.
+func Settled() {}
+`)
+
+	if len(got) != 1 || got[0] != packageSymbol {
+		t.Errorf("symbols = %v, want [%s]", got, packageSymbol)
+	}
+}
+
+// The convention is described in prose in the very kind of doc comment the
+// scan now reads. Matching that sentence would exempt the entire public API
+// from the SemVer promise while the report still looked generated.
+func TestScan_IgnoresTheConventionDescribedInProse(t *testing.T) {
+	t.Parallel()
+
+	got := symbolsOf(t, `// Package pkg does a thing.
+//
+// # Status
+//
+// The public API follows Semantic Versioning. There is one exemption: a
+// symbol whose godoc begins with "Experimental:" may change in a minor
+// release, and the complete set is generated from those markers.
+package pkg
+
+// Settled is documented but not marked.
+func Settled() {}
+`)
+
+	if len(got) != 0 {
+		t.Errorf("symbols = %v, want none; the marker is named, not applied", got)
+	}
+}
+
+// Same rule on a declaration: naming the marker mid-sentence is not
+// claiming it.
+func TestScan_IgnoresAMarkerThatDoesNotBeginALine(t *testing.T) {
+	t.Parallel()
+
+	got := symbolsOf(t, `package pkg
+
+// WithThing configures a thing. It is not marked "Experimental:" because
+// its shape is settled.
+func WithThing() {}
+`)
+
+	if len(got) != 0 {
+		t.Errorf("symbols = %v, want none", got)
+	}
+}
+
+// A package comment may legally appear in more than one file. The report
+// must depend on the markers, not on how the package is split up.
+func TestScan_EmitsThePackageRowOnce(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	src := `// Package pkg does a thing.
+//
+// Experimental: the whole surface is still moving.
+package pkg
+`
+	for _, name := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(src), 0o600); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+	}
+	entries, err := scan(root, "example.com/pkg")
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("entries = %v, want a single package row", entries)
+	}
+}
+
 func TestScan_SkipsTestFiles(t *testing.T) {
 	t.Parallel()
 

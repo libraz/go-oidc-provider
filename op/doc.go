@@ -13,12 +13,15 @@
 // in CHANGELOG.md.
 //
 // There is one exemption, and it is enumerated rather than described. A symbol
-// whose godoc begins with "Experimental:" may change in a minor release. The
+// whose godoc begins with "Experimental:" may change in a minor release; the
+// same marker on a package doc exempts everything that package declares. The
 // complete set is generated from those markers into api/experimental.txt and
 // diffed by the build, so the exemption cannot grow without the diff showing
 // it. Everything absent from that file is stable. The exempt surface today is
 // the authentication-step seam ([LoginFlow] and the options that populate it),
-// the interaction UI hooks, and Grant Management, which tracks an IETF draft.
+// the interaction UI hooks, and Grant Management, which tracks an IETF draft,
+// plus two packages in full: op/interaction, whose Driver seam is still
+// settling, and the DynamoDB storage adapter.
 //
 // # Quickstart
 //
