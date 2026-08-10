@@ -389,6 +389,27 @@ whose OP serves only machine-to-machine grants.
 - `op.WithJWKSHTTPTransport` reaches the encryption-key fetcher. A deployment
   that supplied a pinned or proxied transport had it applied to signing-key
   fetches only, and encryption-key fetches quietly used the default transport.
+- Deleting a client now stops the JWT access tokens already issued to it.
+  `/userinfo`, `/introspect` and token exchange require the client named by the
+  token's `client_id` claim still to be registered. The deletion cascade could
+  not reach these tokens: a grant tombstone is keyed on `grant_id` and a
+  deletion produces no list of grants to write tombstones for, and a
+  `client_credentials` token carries no grant at all, so it stayed usable until
+  `exp` — including at `/userinfo`, which needs no client authentication and so
+  kept releasing the user's claims to a deleted client's bearer. Deployments on
+  `store.RevocationStrategyNone` are unaffected, as that strategy declares that
+  no per-token state is consulted. Embedders that mint access tokens outside the
+  client registry are also unaffected: an absent `client_id` claim, or a
+  deployment with no client registry wired, skips the check rather than failing
+  closed.
+- `api/experimental.txt` now records exemptions declared on a package doc.
+  `op/interaction` and `op/storeadapter/dynamodb` have each carried an
+  "Experimental:" marker on the package comment since before `v1.0.0`, but the
+  generator only read declarations, so neither appeared in the file — and the
+  file's contract is that anything absent from it is stable. Embedders reading
+  the manifest rather than the package documentation were told the `Driver`
+  seam was covered by the SemVer promise. Both packages are listed now, as a
+  `*` row meaning the marker covers everything the package declares.
 
 ### Changed
 
