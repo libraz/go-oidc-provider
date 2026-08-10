@@ -472,12 +472,22 @@ func originFromRawURL(raw string) (string, bool) {
 // written here: mintAndRedirect commits it together with PAR consumption and
 // authorization-code persistence.
 //
-// The grant subject is the projected (post-[op.SubjectGenerator])
-// value, mirroring what [interaction.go] persists at the end of an
-// interactive consent ceremony. AuthTime / ACR / AMR come from
-// [sessionAuthContext] so the grant reflects the authentication the
-// request was served from, the same context [resolveSilentGrant]
-// stamps on the silent-mint path.
+// The grant subject is the raw OP-internal identifier the session
+// carries, mirroring what interaction.go persists at the end of an
+// interactive consent ceremony and matching [store.Grant.Subject]'s
+// contract. Projection through [op.SubjectGenerator] happens per client
+// at egress — id_token, JWT access token, userinfo, introspection —
+// never at persistence, so that one grant serves every client the
+// subject authorizes and a salt rotation changes what is emitted
+// without rewriting stored rows. Storing a projected value here would
+// be projected a second time downstream and would also break the
+// (Subject, ClientID) grant lookup, which is keyed on the raw subject.
+// The authorize endpoint holds no projector, which is what keeps the
+// mistake from being reachable by accident.
+//
+// AuthTime / ACR / AMR come from [sessionAuthContext] so the grant
+// reflects the authentication the request was served from, the same
+// context [resolveSilentGrant] stamps on the silent-mint path.
 func applyFirstPartySkip(
 	deps resolved,
 	req *authorize.Request,

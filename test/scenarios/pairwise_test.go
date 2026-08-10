@@ -960,6 +960,49 @@ func TestScenario_PW_40_PairwisePromptNoneReusesProjectedGrant(t *testing.T) {
 	}
 }
 
+// A pairwise OP projects the subject per client at every egress point,
+// so the value it persists has to stay raw: the grant is looked up by
+// (Subject, ClientID), one grant serves whichever clients the subject
+// authorizes, and a salt rotation is meant to change what is emitted
+// without rewriting stored rows. A projected subject on the grant would
+// be projected a second time on the way out. Comparing the id_token
+// "sub" against the stored row is what separates the two — every
+// egress-side assertion in this file passes either way.
+func TestScenario_PW_40_GrantStoresTheRawSubjectNotTheProjection(t *testing.T) {
+	t.Parallel()
+	tk := newPairwiseProvider(t)
+	c := pairwiseClient(t, tk, "rp-pw-40-grant-raw", "https://rp.example.com/cb")
+
+	idSub := runPairwiseFlow(t, tk, c, "https://rp.example.com/cb")
+	if idSub == "" || idSub == scenariokit.DefaultSubject {
+		t.Fatalf("id_token sub=%q, want a pairwise value distinct from the raw subject", idSub)
+	}
+
+	grants, err := tk.Store.Grants().ListBySubject(context.Background(), scenariokit.DefaultSubject)
+	if err != nil {
+		t.Fatalf("ListBySubject(raw): %v", err)
+	}
+	if len(grants) == 0 {
+		t.Fatalf("no grant is keyed on the raw subject %q; the flow stored a projected value", scenariokit.DefaultSubject)
+	}
+	for _, g := range grants {
+		if g.Subject != scenariokit.DefaultSubject {
+			t.Errorf("Grant.Subject=%q want the raw %q", g.Subject, scenariokit.DefaultSubject)
+		}
+		if g.Subject == idSub {
+			t.Errorf("Grant.Subject=%q equals the id_token sub; the projection was applied at persistence", g.Subject)
+		}
+	}
+
+	projected, err := tk.Store.Grants().ListBySubject(context.Background(), idSub)
+	if err != nil {
+		t.Fatalf("ListBySubject(projected): %v", err)
+	}
+	if len(projected) != 0 {
+		t.Errorf("%d grant(s) keyed on the projected sub %q; nothing may be stored under a per-client value", len(projected), idSub)
+	}
+}
+
 func TestScenario_PW_40_UserInfoLooksUpRawSubjectAndReturnsPairwiseSub(t *testing.T) {
 	t.Parallel()
 	tk := newPairwiseProvider(t)

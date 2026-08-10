@@ -315,6 +315,13 @@ func testAuthorizeFirstPartySkipsConsentAndMintsCode(t *testing.T, secFetchSite 
 	if g.ClientID != "client-1" {
 		t.Errorf("Grant.ClientID=%q want client-1", g.ClientID)
 	}
+	// The raw session subject, not a per-client projection: the grant is
+	// looked up by (Subject, ClientID) and every egress point projects
+	// again, so a projected value stored here would be projected twice
+	// and would never match the lookup.
+	if g.Subject != "user-fp" {
+		t.Errorf("Grant.Subject=%q want user-fp (the raw OP-internal session subject)", g.Subject)
+	}
 	wantScope := map[string]bool{"openid": true, "profile": true}
 	gotScope := map[string]bool{}
 	for _, s := range g.Scope {
