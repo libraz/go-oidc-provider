@@ -109,7 +109,7 @@ op.WithAllowInsecureBackchannelLogoutForDev(),   // http:// の backchannel_logo
 ```
 
 `WithAllowLocalhostLoopback` が要るのは、配線のどこかを `127.0.0.1` ではなく
-`localhost` と綴らなければならない場合だけです。43 例のうち 7 例が使っており、
+`localhost` と綴らなければならない場合だけです。43 例のうち 9 例が使っており、
 その多くはスタブ RP が `http://localhost:…/callback` を `redirect_uri` として
 登録するためです。[`29-passkey`](examples/29-passkey/main.go) だけは理由が別で、
 WebAuthn の Relying Party ID はドメインである必要があり、ブラウザが IP
@@ -117,8 +117,8 @@ WebAuthn の Relying Party ID はドメインである必要があり、ブラ�
 `localhost` の名前解決が乗っ取られうるためです（RFC 8252 §7.3）。
 
 `WithAllowInsecureBackchannelLogoutForDev` が要るのは、平文 http の
-`backchannel_logout_uri` を登録する場合だけで、これを使う例は
-[`42-back-channel-logout`](examples/42-back-channel-logout/main.go) の 1 つです。
+`backchannel_logout_uri` を登録する場合だけで、これを使うのは 43 例のうち 1 例
+（[`42-back-channel-logout`](examples/42-back-channel-logout/main.go)）です。
 
 どちらも開発・CI 用途に限ったものです。検証ロジックに実際に弾かれたのでない
 限り追加せず、デモを本番スタックへ移植するときは外してください。

@@ -88,7 +88,6 @@ func main() {
 		// way to establish one first: the authorize round-trip that
 		// seeds the session runs through this password step.
 		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
-		op.WithAllowLocalhostLoopback(),
 		// Dev / CI-only: admit the http://127.0.0.1 backchannel_logout_uri
 		// below and disable the deliverer's SSRF gate so the in-process
 		// stub RP receives the logout token POST. Production deployments

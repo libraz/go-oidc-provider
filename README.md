@@ -102,7 +102,7 @@ op.WithAllowInsecureBackchannelLogoutForDev(),   // admit an http:// backchannel
 ```
 
 `WithAllowLocalhostLoopback` is needed only when something in the wiring must
-be spelled `localhost` rather than `127.0.0.1` — 7 of the 43 examples reach for
+be spelled `localhost` rather than `127.0.0.1` — 9 of the 43 examples reach for
 it, mostly because a stub RP registers a `http://localhost:…/callback`
 `redirect_uri`, and [`29-passkey`](examples/29-passkey/main.go) because WebAuthn
 requires a Relying Party ID that is a domain and browsers reject an IP literal
@@ -110,8 +110,8 @@ for it. The textual host is not in the default carve-out because `localhost`
 resolution can be hijacked (RFC 8252 §7.3).
 
 `WithAllowInsecureBackchannelLogoutForDev` is needed only to register a
-plain-http `backchannel_logout_uri`; exactly one example
-([`42-back-channel-logout`](examples/42-back-channel-logout/main.go)) does.
+plain-http `backchannel_logout_uri`, which 1 of the 43 examples does
+([`42-back-channel-logout`](examples/42-back-channel-logout/main.go)).
 
 Both are dev / CI-only. Add neither unless the validator has actually rejected
 your wiring, and drop them when porting a demo into a production stack.
