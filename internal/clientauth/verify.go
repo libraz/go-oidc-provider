@@ -3,6 +3,7 @@ package clientauth
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -172,10 +173,12 @@ func runDummyVerify(creds *Credentials, opts VerifyOpts) {
 	switch creds.Method {
 	case MethodSecretBasic:
 		if opts.SecretVerifier != nil {
+			dummyVerifyRuns.Add(1)
 			dummyVerify(creds.SecretBasic)
 		}
 	case MethodSecretPost:
 		if opts.SecretVerifier != nil {
+			dummyVerifyRuns.Add(1)
 			dummyVerify(creds.SecretPost)
 		}
 	case MethodPrivateKeyJWT:
@@ -186,8 +189,28 @@ func runDummyVerify(creds *Credentials, opts VerifyOpts) {
 		// The shim runs even when AssertionVerifier is nil because the
 		// timing oracle exists independent of the embedder's
 		// configuration choice.
+		dummyVerifyRuns.Add(1)
 		dummyJWTVerify()
 	default:
 		// MethodNone — no cryptographic check on the verify branch.
 	}
 }
+
+// dummyVerifyRuns counts the shims [runDummyVerify] has completed.
+//
+// The shim is unobservable by construction: it consumes a work factor
+// and returns nothing, so no assertion on a response can tell whether
+// it ran. That is precisely why it went missing once — a caller
+// returned before reaching [VerifyClient] and every test still passed.
+// A counter is the only way to pin "this path still pays" without
+// asserting on wall-clock, which would make the check flaky in exactly
+// the conditions (loaded CI) where it matters least.
+//
+//nolint:gochecknoglobals // process-wide by nature: the shim's only observable effect.
+var dummyVerifyRuns atomic.Uint64
+
+// DummyVerifyRuns reports how many dummy-verify shims have run since
+// process start. It exists for tests in sibling internal packages that
+// need to prove a rejection path burned the same work as the accepting
+// one; production code has no reason to read it.
+func DummyVerifyRuns() uint64 { return dummyVerifyRuns.Load() }

@@ -87,7 +87,7 @@ func AuthenticateClient(
 		WriteInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
 		return nil, nil, false
 	}
-	client, err := LookupClient(ctx, opts.Clients, creds.ClientID)
+	client, err := resolveAndVerifyClient(ctx, creds, opts)
 	if err != nil {
 		if onFailure != nil {
 			onFailure(creds, err)
@@ -95,22 +95,52 @@ func AuthenticateClient(
 		WriteAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
+	return client, creds, true
+}
+
+// resolveAndVerifyClient looks the presented client_id up and verifies
+// the credentials against it, returning the registered client on
+// success and a clientauth sentinel on every rejection.
+//
+// Both outcomes cost the caller the same wall-clock. A lookup that
+// cannot name a client is handed to [clientauth.VerifyClient] as a nil
+// client, which is the input its nil-client branch exists to absorb: it
+// burns the work factor the secret or assertion check would have, so an
+// unregistered client_id is indistinguishable from a wrong secret.
+// Returning straight from the failed lookup left that branch
+// unreachable from a served request and turned the difference into a
+// signal anyone can read with a stopwatch, no credential required.
+//
+// Only the "not resolvable" class pays it. A genuine store failure
+// answers with a different status entirely, so there is nothing to
+// hide, and padding it would hand a broken backend a memory-cost
+// amplifier on every request arriving during the outage.
+func resolveAndVerifyClient(
+	ctx context.Context,
+	creds *clientauth.Credentials,
+	opts AuthenticateOpts,
+) (*store.Client, error) {
 	verifier := opts.SecretVerifier
 	if verifier == nil {
 		verifier = &clientauth.Argon2id{}
 	}
-	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
+	verifyOpts := clientauth.VerifyOpts{
 		SecretVerifier:    verifier,
 		AssertionVerifier: opts.AssertionVerifier,
 		AllowedMethods:    opts.AllowedMethods,
-	}); err != nil {
-		if onFailure != nil {
-			onFailure(creds, err)
-		}
-		WriteAuthnError(w, err, usedBasic)
-		return nil, nil, false
 	}
-	return client, creds, true
+
+	client, err := LookupClient(ctx, opts.Clients, creds.ClientID)
+	if err != nil {
+		if errors.Is(err, clientauth.ErrCredentialsInvalid) {
+			_, err = clientauth.VerifyClient(ctx, creds, nil, verifyOpts)
+		}
+		return nil, err
+	}
+	if _, err := clientauth.VerifyClient(ctx, creds, client, verifyOpts); err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 func usedBasicAuth(r *http.Request) bool {

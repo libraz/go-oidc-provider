@@ -65,6 +65,17 @@ whose OP serves only machine-to-machine grants.
 
 ### Security
 
+- Client authentication takes the same wall-clock whether the presented
+  `client_id` is registered or not. Every endpoint that authenticates a client
+  resolves it first, and an unresolvable id used to answer immediately while a
+  registered id with a wrong secret paid the full Argon2id verification — about
+  0.7 ms against 91 ms on a current laptop. The constant-time shim written to
+  close exactly this gap sat behind the credential check and was therefore
+  never reached from a served request, so any caller able to POST to `/token`,
+  `/introspect` or `/revoke` could enumerate registered `client_id` values with
+  a stopwatch and no credential of any kind. Registration-issued identifiers
+  are the ones that matter here: they are unguessable by design, and the timing
+  answer turned enumerating them into a single request each.
 - `/bc-authorize` verifies an inbound `id_token_hint` itself before any
   `HintResolver` runs: the signature against the OP's own keyset, `iss` equal to
   the issuer, and an audience naming the client that authenticated on the same
