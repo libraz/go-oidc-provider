@@ -950,7 +950,7 @@ func TestScenario_RM_EVT_01_RotationEmitsSavedAndDestroyed(t *testing.T) {
 	}
 }
 
-// TestScenario_RM_RAT_01_CrossClientRATAutoDestroyed checks that
+// TestScenario_RM_RAT_01_CrossClientRATRejectedNotDestroyed checks that
 // presenting client A's RAT against client B's
 // /register/{client_id} URL yields 401 invalid_token. The
 // constant-time RAT verifier hashes the bearer and compares to the
@@ -958,8 +958,15 @@ func TestScenario_RM_EVT_01_RotationEmitsSavedAndDestroyed(t *testing.T) {
 // invalid_token envelope, and the leaked-RAT signal stays at the
 // audit layer (dcr.rat.invalid, hash_mismatch).
 //
+// The name states the negative half deliberately. Destroying a RAT the
+// moment it is presented at the wrong URL hands any party who learns it
+// a one-request way to lock the legitimate owner out of its own
+// registration, so this OP rejects the request and keeps the
+// credential. Naming the test for an auto-destroy it does not perform
+// would leave the assertion below reading as a bug.
+//
 // Spec: RFC 7592 §2 + security hardening.
-func TestScenario_RM_RAT_01_CrossClientRATAutoDestroyed(t *testing.T) {
+func TestScenario_RM_RAT_01_CrossClientRATRejectedNotDestroyed(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t,

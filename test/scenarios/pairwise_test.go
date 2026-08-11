@@ -933,7 +933,14 @@ func TestScenario_PW_40_PairwiseSubIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestScenario_PW_40_PairwisePromptNoneReusesProjectedGrant(t *testing.T) {
+// TestScenario_PW_40_PromptNoneReusesTheStoredGrant confirms a second
+// authorize with prompt=none mints a code off the grant the first one
+// left behind, with no interaction. It belongs to the pairwise series
+// because the lookup that has to hit is keyed on the RAW subject —
+// the projected "sub" the client sees never reaches the store — so a
+// projection leaking into persistence surfaces here as a login_required
+// the RP cannot recover from.
+func TestScenario_PW_40_PromptNoneReusesTheStoredGrant(t *testing.T) {
 	t.Parallel()
 	tk := newPairwiseProvider(t)
 	c := pairwiseClient(t, tk, "rp-pw-40-prompt-none", "https://rp.example.com/cb")
