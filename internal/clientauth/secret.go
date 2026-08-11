@@ -11,8 +11,6 @@ import (
 	"math/big"
 	"sync"
 
-	"golang.org/x/crypto/argon2"
-
 	"github.com/libraz/go-oidc-provider/internal/argon2id"
 )
 
@@ -103,9 +101,9 @@ func (a *Argon2id) Hash(secret string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("authn: read salt: %w", err)
 	}
-	key := argon2.IDKey([]byte(secret), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
+	key := argon2id.Key([]byte(secret), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
 	enc := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version,
+		argon2id.Version,
 		p.Memory, p.Iterations, p.Parallelism,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
@@ -180,13 +178,20 @@ var _ SecretVerifier = (*Argon2id)(nil)
 // stored hash. Without this the verifier would short-circuit before the
 // hash work, leaking the existence of the client through timing.
 //
+// The derivation goes through [argon2id.Key] for the same reason the
+// real one does: the shim equalises the two paths only if it queues
+// behind the same gate. Calling the underlying derivation directly
+// would leave the shim free to run while a genuine verify waits for a
+// slot, which restores the latency difference this function exists to
+// erase, on exactly the busy OP where it is easiest to measure.
+//
 // The function is unexported because it is only useful in conjunction
 // with [VerifyClient].
 func dummyVerify(presented string) {
 	// Use the same Argon2id parameter set the verifier would use, so
 	// the timing of the dummy path approximates the real one.
 	p := Argon2idDefaults()
-	_ = argon2.IDKey([]byte(presented), make([]byte, p.SaltLength),
+	_ = argon2id.Key([]byte(presented), make([]byte, p.SaltLength),
 		p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
 }
 

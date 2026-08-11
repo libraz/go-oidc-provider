@@ -76,6 +76,17 @@ whose OP serves only machine-to-machine grants.
   a stopwatch and no credential of any kind. Registration-issued identifiers
   are the ones that matter here: they are unguessable by design, and the timing
   answer turned enumerating them into a single request each.
+- Argon2id derivations are capped at `GOMAXPROCS` running at once, so peak
+  working memory is a constant fixed at start-up instead of a figure the caller
+  sets. One derivation reserves 64 MiB for the ~90 ms it runs, and because a
+  wrong secret deliberately costs what a right one does, an unauthenticated
+  request could commit that memory: peak heap grew linearly with concurrency,
+  measured at 4.6 GiB for 72 simultaneous rejections. The cap admits no fewer
+  derivations than the host has threads to run, so measured throughput is
+  unchanged; callers past the cap wait rather than fail, and the timing shims
+  queue with everything else so a busy OP does not answer an unknown client
+  faster than a known one. Password and recovery-code verification derive
+  through the same gate.
 - `/bc-authorize` verifies an inbound `id_token_hint` itself before any
   `HintResolver` runs: the signature against the OP's own keyset, `iss` equal to
   the issuer, and an audience naming the client that authenticated on the same

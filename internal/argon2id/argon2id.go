@@ -332,7 +332,9 @@ func validateLengthBound(label string, length, minVal, maxVal int) error {
 // Argon2id derivation runs only after [ParsePHC] has accepted the
 // stored value. A hostile or corrupted store cannot drive the
 // derivation cost beyond the policy bounds because the m / t / p /
-// salt / key fields are clamped before [argon2.IDKey] is invoked.
+// salt / key fields are clamped before [Key] is invoked. Policy bounds
+// what one derivation may cost; [Key]'s gate bounds how many may cost
+// it at once.
 func Verify(plain []byte, encoded string, policy Policy) error {
 	parsed, err := ParsePHC(encoded, policy)
 	if err != nil {
@@ -342,7 +344,7 @@ func Verify(plain []byte, encoded string, policy Policy) error {
 	if err != nil {
 		return err
 	}
-	candidate := argon2.IDKey(plain, parsed.Salt, parsed.Iterations, parsed.Memory, parsed.Parallelism, keyLen)
+	candidate := Key(plain, parsed.Salt, parsed.Iterations, parsed.Memory, parsed.Parallelism, keyLen)
 	if subtle.ConstantTimeCompare(candidate, parsed.Hash) != 1 {
 		return ErrMismatch
 	}

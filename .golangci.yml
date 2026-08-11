@@ -133,6 +133,26 @@ linters:
           deny:
             - pkg: crypto/rand
               desc: "crypto/rand is allow-listed; route randomness through internal/keys"
+        # Argon2id derivation is admitted through a concurrency gate in
+        # internal/argon2id, because one derivation reserves 64 MiB for
+        # its duration and an unauthenticated caller can trigger it.
+        # A call site that reached the derivation library directly would
+        # take the memory outside that bound — and if it were one of the
+        # timing shims, would also let a rejection skip the queue a real
+        # verify waits in, rebuilding the client-existence timing
+        # channel out of load. Neither failure changes any test's
+        # result, so the import restriction is the check. Test files are
+        # exempt: fixtures build stored hashes directly, and the gate's
+        # own benchmark has to measure the ungated curve to justify the
+        # capacity.
+        argon2-isolation:
+          list-mode: lax
+          files:
+            - "!**/internal/argon2id/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: golang.org/x/crypto/argon2
+              desc: "derive through internal/argon2id.Key so the derivation stays inside the concurrency gate"
         # go-jose/v4 is the only JOSE primitive in the module. Every
         # signing / verification path is required to route through the
         # closed-type Algorithm allow-list in internal/jose, so a new

@@ -7,8 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"golang.org/x/crypto/argon2"
-
+	"github.com/libraz/go-oidc-provider/internal/argon2id"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -249,9 +248,9 @@ func initDummyHash() {
 		keyLen      uint32 = 32
 	)
 	salt := []byte("op-password-eq16")
-	key := argon2.IDKey([]byte("dummy"), salt, iterations, memory, parallelism, keyLen)
+	key := argon2id.Key([]byte("dummy"), salt, iterations, memory, parallelism, keyLen)
 	dummyHashCache = []byte(fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version,
+		argon2id.Version,
 		memory, iterations, parallelism,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),

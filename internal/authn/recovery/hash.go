@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 
-	"golang.org/x/crypto/argon2"
-
 	"github.com/libraz/go-oidc-provider/internal/argon2id"
 )
 
@@ -127,14 +125,14 @@ func newSalt() ([]byte, error) {
 // the only place in the package that spends the work factor, so the
 // verifier's cost bound is exactly "how many times is this called".
 func deriveKey(plain string, salt []byte, p argon2idParams) []byte {
-	return argon2.IDKey([]byte(normalise(plain)), salt, p.iterations, p.memory, p.parallelism, p.keyLength)
+	return argon2id.Key([]byte(normalise(plain)), salt, p.iterations, p.memory, p.parallelism, p.keyLength)
 }
 
 // encodePHC renders the modular-crypt form
 // `$argon2id$v=...$m=...,t=...,p=...$salt$hash` backends store verbatim.
 func encodePHC(p argon2idParams, salt, key []byte) string {
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version,
+		argon2id.Version,
 		p.memory, p.iterations, p.parallelism,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
