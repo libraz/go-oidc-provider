@@ -26,6 +26,27 @@ type SecretVerifier interface {
 	Verify(presented, stored string) error
 }
 
+// DummyVerifier is the optional half of [SecretVerifier] that lets a
+// verifier state what its own rejection costs.
+//
+// [VerifyClient] burns that cost when it is about to reject for a
+// structural reason — no such client, id mismatch, method not
+// permitted — so the latency of a rejection says nothing about which
+// of those happened, or about whether the client_id resolved at all.
+// The shim is only equalising anything if it spends what the real
+// check spends, and only the verifier knows that figure: an OP whose
+// secrets verify in microseconds needs a microsecond shim, and one
+// deriving argon2id needs the derivation.
+//
+// A [SecretVerifier] that does not implement this interface gets the
+// argon2id shim, which is the library's default cost.
+type DummyVerifier interface {
+	// VerifyDummy consumes the work factor Verify would spend, and
+	// returns nothing. Implementations MUST NOT short-circuit on the
+	// presented value.
+	VerifyDummy(presented string)
+}
+
 // Argon2id is the library's reference SecretVerifier. It accepts hashes
 // in the format produced by [Argon2id.Hash], which mirrors the modular
 // crypt format ($argon2id$...$salt$hash) so embedders can interoperate
@@ -129,14 +150,34 @@ func validateHashParams(p Argon2idParams) error {
 	}
 }
 
-// Verify implements [SecretVerifier]. It rejects malformed encodings,
-// version mismatches, and parameter values that violate
-// [argon2id.DefaultPolicy] (which encodes the OWASP 2024 minima);
-// otherwise it derives the candidate key and compares it in constant
-// time. Every failure path collapses onto [ErrCredentialsInvalid] so
-// an attacker probing with synthetic stored values cannot fingerprint
-// the parser.
+// Verify implements [SecretVerifier]. It dispatches on the stored
+// encoding — a record written by [HashHighEntropySecret] verifies
+// here too — and every failure path collapses onto
+// [ErrCredentialsInvalid] so an attacker probing with synthetic stored
+// values cannot fingerprint the parser.
+//
+// Reading both formats is what lets an OP move between them without
+// stranding clients, and it is safe in this direction: this verifier
+// pays the argon2id cost on its timing shim, so a high-entropy record
+// answering faster than an unknown client_id is a difference in the
+// harmless direction — it makes the shim longer than the check it
+// covers, never shorter.
 func (a *Argon2id) Verify(presented, stored string) error {
+	return verifyStoredSecret(presented, stored)
+}
+
+// VerifyDummy implements [DummyVerifier] at the argon2id work factor,
+// which is what this verifier spends on a record in its own format.
+func (a *Argon2id) VerifyDummy(presented string) {
+	dummyVerify(presented)
+}
+
+// verifyArgon2id is the argon2id half of [verifyStoredSecret]. It
+// rejects malformed encodings, version mismatches, and parameter
+// values that violate [argon2id.DefaultPolicy] (which encodes the
+// OWASP 2024 minima); otherwise it derives the candidate key and
+// compares it in constant time.
+func (a *Argon2id) verifyArgon2id(presented, stored string) error {
 	switch err := argon2id.Verify([]byte(presented), stored, Argon2idPolicy()); {
 	case err == nil:
 		return nil

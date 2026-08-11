@@ -75,6 +75,68 @@ func BenchmarkTokenEndpointClientCredentials(b *testing.B) {
 	}
 }
 
+// BenchmarkTokenEndpointClientCredentialsHighEntropy is the same
+// request as [BenchmarkTokenEndpointClientCredentials] against an OP
+// running [op.WithHighEntropyClientSecrets], and it is what that
+// option is for.
+//
+// Measured on the same host, in-process over loopback, -benchtime=2000x
+// -count=3: 67–73 µs per request against 89 ms. The client_credentials
+// path stops being a KDF benchmark — it now comes in under the
+// refresh-token exchange below (102–105 µs), which is the right
+// ordering, since that one rotates a token and writes to the store
+// while this one only checks a credential and signs.
+//
+// Nothing about the security of the exchange changed. The secret is
+// 256 bits from crypto/rand either way, and no attacker searches that
+// space at any per-guess cost; what the 89 ms was buying was
+// resistance to guessing a secret nobody has to guess.
+//
+// It also serves as the end-to-end proof that a client provisioned
+// through [op.NewClientSecret] actually authenticates — the benchmark
+// fails the run on any status other than 200, so a stored encoding the
+// token endpoint could not read would surface here rather than as a
+// number nobody checked.
+func BenchmarkTokenEndpointClientCredentialsHighEntropy(b *testing.B) {
+	const clientID = "rp-bench-highentropy"
+
+	clientSecret, hash, err := op.NewClientSecret()
+	if err != nil {
+		b.Fatalf("NewClientSecret: %v", err)
+	}
+	tk := testkit.NewProvider(b, testkit.WithOptions(op.WithHighEntropyClientSecrets()))
+	tk.RegisterClient(b, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		Scopes:                  []string{"api"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"client_credentials"},
+	})
+
+	form := url.Values{"grant_type": {"client_credentials"}, "scope": {"api"}}.Encode()
+	client := tk.HTTPClient(nil)
+
+	b.ResetTimer()
+	for range b.N {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			tk.Server.URL+"/oidc/token", strings.NewReader(form))
+		if err != nil {
+			b.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.SetBasicAuth(clientID, clientSecret)
+		resp, err := client.Do(req)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b.Fatalf("status=%d", resp.StatusCode)
+		}
+	}
+}
+
 func BenchmarkTokenEndpointRefreshPublicClient(b *testing.B) {
 	const clientID = "rp-bench-public"
 	const callback = "https://rp.example.com/cb"

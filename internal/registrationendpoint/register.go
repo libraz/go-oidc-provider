@@ -157,7 +157,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 	publicClient := isPublicAuthMethod(m.TokenEndpointAuthMethod)
 	var rawSecret, secretHash string
 	if confidential {
-		rawSecret, secretHash, err = newClientSecret()
+		rawSecret, secretHash, err = newClientSecret(deps.HighEntropyClientSecrets)
 		if err != nil {
 			deps.logger().Error("dcr.client_secret.generate_failed", "err", err)
 			writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
@@ -343,12 +343,23 @@ func isPublicAuthMethod(m string) bool {
 }
 
 // newClientSecret returns a freshly generated client_secret and its
-// argon2id hash, ready to be stored in [store.Client.SecretHash]. The
-// hash format matches the contract documented on
-// [clientauth.SecretVerifier]; verification is delegated to the same
-// adapter the token endpoint uses, so dynamically registered clients
-// authenticate identically to statically provisioned ones.
-func newClientSecret() (raw, hash string, err error) {
+// stored encoding, ready for [store.Client.SecretHash]. Verification
+// is delegated to the same adapter the token endpoint uses, so
+// dynamically registered clients authenticate identically to
+// statically provisioned ones.
+//
+// highEntropy selects the encoding, and must track the OP-wide
+// setting rather than being decided here. Both branches mint 256 bits
+// from crypto/rand, so the secret is beyond guessing either way and
+// the keyed hash is sound for it; what the OP-wide setting fixes is
+// the cost of the timing shim that stands in for a failed
+// verification, and a registration minting the format the shim is not
+// sized for would make its own clients distinguishable from
+// unregistered ones.
+func newClientSecret(highEntropy bool) (raw, hash string, err error) {
+	if highEntropy {
+		return clientauth.NewHighEntropySecret()
+	}
 	raw, err = newOpaqueID(clientSecretBytes)
 	if err != nil {
 		return "", "", err

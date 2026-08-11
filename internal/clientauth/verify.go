@@ -143,7 +143,7 @@ func verifySecret(opts VerifyOpts, presented, stored string) error {
 	if stored == "" {
 		// Run the dummy hash anyway so timing leaks nothing about which
 		// confidential client lacks a hash.
-		dummyVerify(presented)
+		burnSecretVerifyCost(opts.SecretVerifier, presented)
 		return ErrCredentialsInvalid
 	}
 	if err := opts.SecretVerifier.Verify(presented, stored); err != nil {
@@ -174,12 +174,12 @@ func runDummyVerify(creds *Credentials, opts VerifyOpts) {
 	case MethodSecretBasic:
 		if opts.SecretVerifier != nil {
 			dummyVerifyRuns.Add(1)
-			dummyVerify(creds.SecretBasic)
+			burnSecretVerifyCost(opts.SecretVerifier, creds.SecretBasic)
 		}
 	case MethodSecretPost:
 		if opts.SecretVerifier != nil {
 			dummyVerifyRuns.Add(1)
-			dummyVerify(creds.SecretPost)
+			burnSecretVerifyCost(opts.SecretVerifier, creds.SecretPost)
 		}
 	case MethodPrivateKeyJWT:
 		// Fixed-cost ECDSA P-256 verify: matches the work factor a
@@ -194,6 +194,29 @@ func runDummyVerify(creds *Credentials, opts VerifyOpts) {
 	default:
 		// MethodNone — no cryptographic check on the verify branch.
 	}
+}
+
+// burnSecretVerifyCost spends whatever the configured verifier says a
+// secret check costs, and returns nothing.
+//
+// Asking the verifier rather than hard-coding argon2id is what keeps
+// the shim honest across configurations. The cost the shim has to
+// match is the cost of the check it stands in for, and an embedder
+// that swapped the verifier moved that figure — a shim pinned to the
+// library's own default would then be either far longer or far
+// shorter than the thing it is hiding, and a shim of the wrong length
+// is a timing channel, not a defence against one.
+//
+// A verifier that declines to state its cost gets the argon2id
+// derivation, which is the most expensive check the library ships and
+// therefore the safe assumption: a shim longer than the real check
+// leaks nothing, while one shorter than it leaks everything.
+func burnSecretVerifyCost(verifier SecretVerifier, presented string) {
+	if dummy, ok := verifier.(DummyVerifier); ok {
+		dummy.VerifyDummy(presented)
+		return
+	}
+	dummyVerify(presented)
 }
 
 // dummyVerifyRuns counts the shims [runDummyVerify] has completed.

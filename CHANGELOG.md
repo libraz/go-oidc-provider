@@ -601,6 +601,23 @@ whose OP serves only machine-to-machine grants.
 
 ### Added
 
+- `op.WithHighEntropyClientSecrets`, which verifies `client_secret` with a keyed
+  hash instead of Argon2id, together with `op.NewClientSecret`,
+  `op.HashHighEntropyClientSecret` and `op.ConfidentialClient.SecretHash` for
+  provisioning under it. Argon2id's cost buys resistance to offline guessing of
+  a stolen hash, which decides the outcome for a secret a person chose and buys
+  nothing for one drawn from 256 bits of randomness — yet the OP paid it on
+  every request, including for the secrets it mints itself. A
+  `client_credentials` exchange measures 67–73 µs under this option against
+  89 ms without it. The declaration is enforced rather than trusted: `op.New`
+  refuses a static client still stored under Argon2id, and the provisioning
+  helpers refuse a secret short enough to have been typed. It is opt-in and
+  OP-wide because the two costs cannot coexist in one deployment — rejections
+  are padded to the cost of a verification so an unregistered `client_id`
+  cannot be told apart from a wrong secret, and a store holding both formats
+  would make the slower clients distinguishable. Re-provision every client
+  before enabling it; a record already stored cannot be converted, since the OP
+  holds no plaintext to re-hash.
 - `op.Provider.SetLocaleCookie` and `op.Provider.ClearLocaleCookie`, which write
   and delete the `__Host-oidc_locale` cookie the locale resolver reads at the
   third step of its priority chain. The chain has always consulted that cookie,

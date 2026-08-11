@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/protectedresource"
@@ -355,6 +356,9 @@ func (c *config) validateStaticClients() error {
 			}
 		}
 		seen[seed.ID] = struct{}{}
+		if err := c.validateStaticClientSecretFormat(i, seed); err != nil {
+			return err
+		}
 		if err := registrationendpoint.ValidateStaticClient(seed, opts); err != nil {
 			return &Error{
 				Code: codeConfiguration,
@@ -365,6 +369,33 @@ func (c *config) validateStaticClients() error {
 		}
 	}
 	return nil
+}
+
+// validateStaticClientSecretFormat enforces the promise
+// [WithHighEntropyClientSecrets] is built on: with that option set,
+// no client may be stored under the password KDF.
+//
+// The check runs against the projected record rather than the seed's
+// input fields, so it catches a hash that arrived any way at all —
+// [ConfidentialClient.Secret], a pre-computed [ConfidentialClient.SecretHash]
+// produced by the wrong helper, or a builder added later. Refusing at
+// construction is the point: the alternative is an OP that boots, runs,
+// and quietly answers an unknown client_id in microseconds while
+// answering this one in ninety milliseconds.
+func (c *config) validateStaticClientSecretFormat(index int, seed store.Client) error {
+	if !c.highEntropyClientSecrets || seed.SecretHash == "" {
+		return nil
+	}
+	if clientauth.IsHighEntropyEncoding(seed.SecretHash) {
+		return nil
+	}
+	return &Error{
+		Code: codeConfiguration,
+		Description: "WithStaticClients[" + strconv.Itoa(index) +
+			"] (client_id " + seed.ID + "): WithHighEntropyClientSecrets requires a secret " +
+			"provisioned through NewClientSecret or HashHighEntropyClientSecret; " +
+			"ConfidentialClient.Secret hashes with Argon2id, which this option does not admit",
+	}
 }
 
 // staticClientAllowedGrantTypes returns the grant_type whitelist the

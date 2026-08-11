@@ -142,6 +142,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			OpenIDScopeOptional:            cfg.openIDScopeOptional,
 			GrantManagementEnabled:         cfg.grantManagementEnabled,
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
+			SecretVerifier:                 cfg.clientSecretVerifier(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
 			AccessTokens:                   cfg.store.AccessTokens(),
 			OpaqueAccessTokens:             cfg.store.OpaqueAccessTokens(),
@@ -235,9 +236,9 @@ func mountGrantManagementEndpoint(mux *http.ServeMux, cfg *config, assertionVeri
 		RevocationStrategy:       cfg.atRevocation,
 		AccessTokenTTL:           cfg.accessTokenTTL,
 		Audit:                    cfg.effectiveAuditEmitter(),
-		SecretVerifier:           nil, // handler installs the Argon2id default.
 		AssertionVerifier:        assertionVerifier,
 		AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+		SecretVerifier:           cfg.clientSecretVerifier(),
 		QueryEnabled:             cfg.grantManagementActionEnabled(GrantActionQuery),
 		RevokeEnabled:            cfg.grantManagementActionEnabled(GrantActionRevoke),
 		Clock:                    cfg.clock,
@@ -270,6 +271,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		return
 	}
 	deps := registrationendpoint.Deps{
+		HighEntropyClientSecrets:             cfg.highEntropyClientSecrets,
 		Issuer:                               cfg.issuer,
 		MountPrefix:                          cfg.mountPrefix,
 		RegisterPath:                         cfg.endpoints.Register,
@@ -340,6 +342,7 @@ func mountPAREndpoint(
 			DPoPNonces:                    cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
 			AssertionVerifier:             assertionVerifier,
 			AllowedClientAuthMethods:      cfg.allowedClientAuthMethods(),
+			SecretVerifier:                cfg.clientSecretVerifier(),
 			RequirePKCE:                   cfg.requirePKCE(),
 			RequireNonce:                  cfg.requireNonce(),
 			RequireStateOrNonce:           cfg.requireStateOrNonce(),
@@ -384,6 +387,7 @@ func mountIntrospectionEndpoint(
 			SigningKey:                 tokens.FromInternalEntry(keySet.Active()),
 			AssertionVerifier:          assertionVerifier,
 			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
+			SecretVerifier:             cfg.clientSecretVerifier(),
 			RequireSignedIntrospection: cfg.requireSignedIntrospection(),
 			AccessTokens:               cfg.store.AccessTokens(),
 			OpaqueAccessTokens:         cfg.store.OpaqueAccessTokens(),
@@ -418,6 +422,7 @@ func mountRevocationEndpoint(
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			SecretVerifier:           cfg.clientSecretVerifier(),
 			AccessTokens:             cfg.store.AccessTokens(),
 			OpaqueAccessTokens:       cfg.store.OpaqueAccessTokens(),
 			GrantRevocations:         cfg.store.GrantRevocations(),
@@ -608,6 +613,7 @@ func mountDeviceAuthorizationEndpoint(
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			SecretVerifier:           cfg.clientSecretVerifier(),
 			DPoP:                     dpopVerifier,
 			DPoPNonces:               cfg.dpopNonces,
 			MTLS:                     mtlsVerifier,
@@ -716,6 +722,7 @@ func mountBackchannelAuthenticationEndpoint(
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			SecretVerifier:           cfg.clientSecretVerifier(),
 			DPoP:                     dpopVerifier,
 			DPoPNonces:               cfg.dpopNonces,
 			MTLS:                     mtlsVerifier,

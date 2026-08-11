@@ -849,6 +849,24 @@ func (c *config) requireSignedIntrospection() bool {
 	return false
 }
 
+// clientSecretVerifier returns the [clientauth.SecretVerifier] every
+// client-authenticating endpoint installs. Nil means "the endpoint's
+// own default", which is the Argon2id verifier; that is the value
+// returned unless [WithHighEntropyClientSecrets] is set.
+//
+// The verifier is the single place the two linked costs are decided.
+// It answers both "what does checking a secret cost" and, through
+// [clientauth.DummyVerifier], "what does a rejection cost" — and those
+// have to agree, so they are not separate knobs. Returning one object
+// from one place is what keeps a future endpoint from wiring half the
+// pair.
+func (c *config) clientSecretVerifier() clientauth.SecretVerifier { //nolint:ireturn // the Deps field is the interface, and a nil means "endpoint default".
+	if !c.highEntropyClientSecrets {
+		return nil
+	}
+	return clientauth.HighEntropy{}
+}
+
 func (c *config) allowedClientAuthMethods() []clientauth.Method {
 	allowedNames := c.profileAllowedAuthMethodNames()
 	if allowedNames == nil {

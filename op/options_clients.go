@@ -35,6 +35,50 @@ func WithStaticClients(seeds ...ClientSeed) Option {
 	})
 }
 
+// WithHighEntropyClientSecrets declares that every client_secret this
+// OP verifies is a machine-generated value, and switches secret
+// verification off the password KDF onto a keyed hash.
+//
+// The default costs about 90 ms and 64 MiB per verification, because
+// the stored hash is Argon2id. That expense buys resistance to offline
+// guessing of a stolen hash, which is decisive for a secret a person
+// chose and worth nothing for one drawn from 256 bits of randomness —
+// no attacker searches that space at any per-guess cost. An OP whose
+// clients all carry generated secrets is paying a password defence on
+// every machine-to-machine request. With this option a verification is
+// a few microseconds and allocates nothing.
+//
+// # What the OP requires in exchange
+//
+// The declaration is enforced, not trusted. [New] rejects the
+// configuration when a static client still carries an Argon2id hash —
+// which is what [ConfidentialClient.Secret] produces — so adopting the
+// option means provisioning through [NewClientSecret] or
+// [HashHighEntropyClientSecret], both of which refuse a secret short
+// enough to have been typed. Dynamic registration mints in the new
+// format automatically.
+//
+// # The migration hazard
+//
+// A record already in the store cannot be converted: the OP holds no
+// plaintext to re-hash. Such a client keeps authenticating, at the old
+// cost — and that is visible. Rejections are padded to the cost of a
+// verification so an unregistered client_id cannot be told apart from
+// a wrong secret, and with this option that padding is microseconds;
+// a client still on the old format answers in tens of milliseconds
+// and so becomes distinguishable from an unknown one. Re-provision
+// every client before enabling this on a store that predates it.
+//
+// This is exactly why the format is not selected per client. Doing
+// that would put the two costs side by side in every deployment and
+// make the client's own storage format the thing the timing reveals.
+func WithHighEntropyClientSecrets() Option {
+	return optionFunc(func(c *config) error {
+		c.highEntropyClientSecrets = true
+		return nil
+	})
+}
+
 func appendStaticClientSeed(c *config, index int, seed ClientSeed) error {
 	if isNilLike(seed) {
 		return &Error{
@@ -66,12 +110,20 @@ func rememberStaticClientSecret(c *config, id string, seed ClientSeed) {
 	c.staticClientSecrets[id] = secret
 }
 
+// staticClientPlaintext extracts the plaintext a seed carried, if it
+// carried one at all.
+//
+// A [ConfidentialClient] built from SecretHash has no plaintext, and
+// must not be recorded as having an empty one: startup reconciliation
+// treats a remembered plaintext as "compare this against the stored
+// hash", and an empty string would fail that comparison and report the
+// existing record as a configuration conflict.
 func staticClientPlaintext(seed ClientSeed) (string, bool) {
 	switch value := seed.(type) {
 	case ConfidentialClient:
-		return value.Secret, true
+		return value.Secret, value.Secret != ""
 	case *ConfidentialClient:
-		return value.Secret, true
+		return value.Secret, value.Secret != ""
 	default:
 		return "", false
 	}

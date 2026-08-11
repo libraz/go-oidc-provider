@@ -182,7 +182,23 @@ type ConfidentialClient struct {
 	// Secret is the plaintext client_secret. The seed hashes it
 	// through [HashClientSecret]; the library never persists the
 	// raw value.
+	//
+	// Mutually exclusive with SecretHash.
 	Secret string
+
+	// SecretHash is a stored encoding the caller produced itself,
+	// through [NewClientSecret] or [HashHighEntropyClientSecret]. The
+	// seed writes it verbatim, so the plaintext never enters the
+	// configuration at all.
+	//
+	// This is the required form under
+	// [WithHighEntropyClientSecrets]: Secret hashes with Argon2id,
+	// which that option refuses, and the refusal is deliberate — a
+	// secret handed to the library as plaintext is one somebody typed
+	// or pasted, which is the case the fast verifier is not safe for.
+	//
+	// Mutually exclusive with Secret.
+	SecretHash string
 
 	// AuthMethod selects the token-endpoint authentication method.
 	// Empty defaults to [AuthClientSecretBasic].
@@ -236,18 +252,42 @@ type ConfidentialClient struct {
 // resolved [AuthMethod] written verbatim to
 // [store.Client.TokenEndpointAuthMethod], and Source set to
 // [store.ClientSourceStatic].
+// secretHash resolves the stored encoding for the seed, from whichever
+// of the two mutually exclusive fields the caller filled in.
+//
+// Supplying both is rejected rather than resolved by precedence: the
+// two fields disagree about which secret authenticates the client, and
+// silently honouring one would leave the operator holding a plaintext
+// they believe works and a client that cannot authenticate with it.
+func (c ConfidentialClient) secretHash() (string, error) {
+	switch {
+	case c.Secret != "" && c.SecretHash != "":
+		return "", &Error{
+			Code:        codeConfiguration,
+			Description: "ConfidentialClient " + c.ID + ": Secret and SecretHash are mutually exclusive",
+		}
+	case c.SecretHash != "":
+		return c.SecretHash, nil
+	}
+	hash, err := HashClientSecret(c.Secret)
+	if err != nil {
+		return "", &Error{
+			Code:        codeConfiguration,
+			Description: "ConfidentialClient: hashing client secret failed",
+			Cause:       err,
+		}
+	}
+	return hash, nil
+}
+
 func (c ConfidentialClient) seed() (store.Client, error) {
 	method := c.AuthMethod
 	if method == "" {
 		method = AuthClientSecretBasic
 	}
-	hash, err := HashClientSecret(c.Secret)
+	hash, err := c.secretHash()
 	if err != nil {
-		return store.Client{}, &Error{
-			Code:        codeConfiguration,
-			Description: "ConfidentialClient: hashing client secret failed",
-			Cause:       err,
-		}
+		return store.Client{}, err
 	}
 	grants := c.GrantTypes
 	if len(grants) == 0 {

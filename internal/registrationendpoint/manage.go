@@ -141,7 +141,7 @@ func rotateAndUpdate(
 		return rotatedRegistration{}, false
 	}
 	confidential := isConfidentialAuthMethod(m.TokenEndpointAuthMethod)
-	rawSecret, secretHash, err := secretMaterialForUpdate(existing, confidential)
+	rawSecret, secretHash, err := secretMaterialForUpdate(existing, confidential, deps.HighEntropyClientSecrets)
 	if err != nil {
 		deps.logger().Error("dcr.client_secret.generate_failed", "err", err, "client_id", existing.ID)
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
@@ -304,7 +304,7 @@ func validateManageClientSecret(existing *store.Client, raw json.RawMessage) err
 // 7592 response body) and its hash (for persistence). Confidential
 // to confidential updates preserve the existing hash so metadata
 // edits do not silently rotate credentials.
-func secretMaterialForUpdate(existing *store.Client, confidential bool) (raw, hash string, err error) {
+func secretMaterialForUpdate(existing *store.Client, confidential, highEntropy bool) (raw, hash string, err error) {
 	if !confidential {
 		return "", "", nil
 	}
@@ -312,7 +312,7 @@ func secretMaterialForUpdate(existing *store.Client, confidential bool) (raw, ha
 		return "", "", errors.New("registrationendpoint: existing client is required for secret update")
 	}
 	if existing.SecretHash == "" {
-		raw, hash, err := newClientSecret()
+		raw, hash, err := newClientSecret(highEntropy)
 		if err != nil {
 			return "", "", err
 		}

@@ -5,28 +5,44 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
+// TestSecretMaterialForUpdate_PublicToConfidentialMintsSecret covers
+// both stored encodings, because the OP-wide setting the flag carries
+// has to reach this path. A registration minting the format the
+// endpoint's rejection shim is not sized for would leave its own
+// clients answering at a different cost from an unregistered
+// client_id, which is the difference that is supposed to be invisible.
 func TestSecretMaterialForUpdate_PublicToConfidentialMintsSecret(t *testing.T) {
 	t.Parallel()
 
-	raw, hash, err := secretMaterialForUpdate(&store.Client{}, true)
-	if err != nil {
-		t.Fatalf("secretMaterialForUpdate: %v", err)
-	}
-	if raw == "" {
-		t.Fatal("raw secret is empty")
-	}
-	if hash == "" {
-		t.Fatal("hash is empty")
+	for _, highEntropy := range []bool{false, true} {
+		raw, hash, err := secretMaterialForUpdate(&store.Client{}, true, highEntropy)
+		if err != nil {
+			t.Fatalf("secretMaterialForUpdate(highEntropy=%v): %v", highEntropy, err)
+		}
+		if raw == "" {
+			t.Fatalf("highEntropy=%v: raw secret is empty", highEntropy)
+		}
+		if hash == "" {
+			t.Fatalf("highEntropy=%v: hash is empty", highEntropy)
+		}
+		if got := clientauth.IsHighEntropyEncoding(hash); got != highEntropy {
+			t.Fatalf("highEntropy=%v: minted encoding high-entropy=%v; the registration ignored the OP-wide setting",
+				highEntropy, got)
+		}
+		if err := (&clientauth.Argon2id{}).Verify(raw, hash); err != nil {
+			t.Fatalf("highEntropy=%v: the minted secret does not verify: %v", highEntropy, err)
+		}
 	}
 }
 
 func TestSecretMaterialForUpdate_ConfidentialToConfidentialKeepsHash(t *testing.T) {
 	t.Parallel()
 
-	raw, hash, err := secretMaterialForUpdate(&store.Client{SecretHash: "existing-hash"}, true)
+	raw, hash, err := secretMaterialForUpdate(&store.Client{SecretHash: "existing-hash"}, true, false)
 	if err != nil {
 		t.Fatalf("secretMaterialForUpdate: %v", err)
 	}
@@ -105,7 +121,7 @@ func TestValidateManageUpdateRequest_ClientIDMismatchRejected(t *testing.T) {
 func TestValidateManageClientSecret(t *testing.T) {
 	t.Parallel()
 
-	raw, hash, err := newClientSecret()
+	raw, hash, err := newClientSecret(false)
 	if err != nil {
 		t.Fatalf("newClientSecret: %v", err)
 	}

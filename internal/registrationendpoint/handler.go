@@ -210,6 +210,15 @@ type Deps struct {
 	// cascade. A nil substore opts out of the in-tree opaque-AT
 	// cascade.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
+
+	// HighEntropyClientSecrets selects the encoding minted for a
+	// confidential registration, and must carry the same OP-wide
+	// setting that chose the token endpoint's secret verifier. A
+	// registration that minted the other format would leave its client
+	// verifying at a cost the rejection shim is not sized for, which
+	// is the difference an unregistered client_id is supposed to be
+	// indistinguishable from.
+	HighEntropyClientSecrets bool
 }
 
 // Handler returns the HTTP handler the OP mounts at /register and

@@ -357,6 +357,14 @@ type config struct {
 	// regardless of option invocation order.
 	chooserUIShadowedBySPA bool
 
+	// highEntropyClientSecrets records [WithHighEntropyClientSecrets].
+	// It selects the client_secret verifier installed on every endpoint
+	// that authenticates a client, which in turn fixes both the
+	// verification cost and the cost of the timing shim that stands in
+	// for it — the two have to move together or the shim stops hiding
+	// anything.
+	highEntropyClientSecrets bool
+
 	// staticClients carries the [store.Client] records produced by
 	// every [WithStaticClients] call (in invocation order, in seed
 	// order within each call). The slice is the H1-D orchestrator's
