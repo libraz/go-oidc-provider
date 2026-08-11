@@ -558,8 +558,19 @@ func fetchDiscovery(t *testing.T, discoveryURL string, client *http.Client) map[
 // waitDiscovery polls discoveryURL until it responds 200 or the
 // budget runs out. The polling loop replaces a fixed sleep so the
 // test stays correct even when boot is slower than usual under -race.
+// waitDiscoveryTimeout is sized for the slowest legitimate boot, not
+// the typical one. The demo seeds confidential clients, and hashing a
+// client secret is Argon2id at 64 MiB — deliberately expensive. Under
+// -race that instrumentation multiplies the cost, and these tests run
+// in parallel, so several boots derive several keys at once. A 5-second
+// budget covered an untraced single boot with room to spare and left
+// none for the configuration `make verify` actually runs: the suite
+// failed on a stopwatch rather than on behaviour, intermittently and
+// only under -race.
+const waitDiscoveryTimeout = 60 * time.Second
+
 func waitDiscovery(discoveryURL string, client *http.Client) error {
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(waitDiscoveryTimeout)
 	parsed, err := url.Parse(discoveryURL)
 	if err != nil {
 		return err
