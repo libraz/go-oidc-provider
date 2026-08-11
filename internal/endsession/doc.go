@@ -82,17 +82,17 @@
 //
 // # Layering
 // The handler depends on:
-//   - [internal/sessions.Manager] — Resolve / Logout the active session.
-//   - [internal/cookie.Profile] / [internal/cookie.Build] /
-//     [internal/cookie.Clear] — produce the Set-Cookie headers that
-//     install [internal/cookie.LogoutCSRFProfile] and retire
-//     [internal/cookie.SessionProfile].
-//   - [internal/csrf] — mint the double-submit token, compare its two
+//   - internal/sessions.Manager — Resolve / Logout the active session.
+//   - internal/cookie.Profile / internal/cookie.Build /
+//     internal/cookie.Clear — produce the Set-Cookie headers that
+//     install internal/cookie.LogoutCSRFProfile and retire
+//     internal/cookie.SessionProfile.
+//   - internal/csrf — mint the double-submit token, compare its two
 //     halves, and decide whether the confirmation POST's provenance
 //     headers admit it. The decision logic is shared with the
 //     /interaction endpoint so both HTML-facing gates admit the same
 //     request shapes.
-//   - [internal/keys.Set] — verify the id_token_hint's signature
+//   - internal/keys.Set — verify the id_token_hint's signature
 //     against the OP's active and retiring keys.
 //   - [op/store.ClientStore] — resolve the requesting client when
 //     only client_id is supplied.

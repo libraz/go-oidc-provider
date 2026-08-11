@@ -8,7 +8,7 @@ package authn
 // authentication state is structurally distinguishable from a successful
 // AAL1 login. Callers that need the literal NIST mapping use [AAL.ACRURI].
 // The level is computed by the orchestrator from the per-factor
-// [internal/authn.Factor] records emitted during a chain run; it is
+// [Factor] records emitted during a chain run; it is
 // never read from the RP's authorization request. The session's
 // amr_history is the single source of truth for acr / amr claims so a
 // hostile RP cannot influence the asserted assurance level by

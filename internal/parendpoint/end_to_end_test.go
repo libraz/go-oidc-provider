@@ -21,7 +21,7 @@ import (
 // TestEndToEnd_PAR_AuthorizeInteractionToken drives the full
 // /par → /authorize → /interaction → /token flow against a real testkit-
 // backed server. The shape mirrors the equivalent non-PAR end-to-end test
-// inside [internal/authorizeendpoint] so a regression in either path is
+// inside internal/authorizeendpoint so a regression in either path is
 // equally visible.
 func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 	t.Parallel()

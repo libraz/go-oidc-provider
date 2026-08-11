@@ -18,7 +18,7 @@ var (
 	// valid compact-serialised JWS, that its "typ" header is not
 	// "dpop+jwt", that its "alg" is outside the allow-list, or that
 	// the embedded "jwk" header is missing / not a public key. The
-	// taxonomy mirrors [internal/tokens.ErrAccessTokenMalformed]:
+	// taxonomy mirrors internal/tokens.ErrAccessTokenMalformed:
 	// every pre-signature failure converges on this sentinel.
 	ErrProofMalformed = errors.New("dpop: proof malformed")
 

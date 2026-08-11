@@ -41,7 +41,7 @@ const (
 )
 
 // serveAuthorize is the request-scoped entry point for /authorize. It runs
-// the validator from [internal/authorize], resolves the active session,
+// the validator from internal/authorize, resolves the active session,
 // decides whether the request can be served silently or needs an
 // interaction, and dispatches to the matching helper.
 func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
@@ -179,7 +179,7 @@ func applyClientAuthorizeDefaults(req *authorize.Request, client *store.Client) 
 
 // extractAuthorizeValues returns the [url.Values] the request carries,
 // reading the URL query for GET and the form body for POST. It mirrors
-// the unexported helper inside [internal/authorize] so the authorize
+// the unexported helper inside internal/authorize so the authorize
 // endpoint can inspect the values once before deciding whether to honour
 // a request_uri (PAR) or parse the inline parameters.
 func extractAuthorizeValues(r *http.Request) (url.Values, error) {
@@ -264,7 +264,7 @@ func methodAllowed(method string) bool {
 
 // isFormContent reports whether ct is application/x-www-form-urlencoded,
 // tolerating optional parameters (charset, boundary, etc.). Mirrors the
-// helper in [internal/tokenendpoint] so the two endpoints stay aligned.
+// helper in internal/tokenendpoint so the two endpoints stay aligned.
 func isFormContent(ct string) bool {
 	return endpointsupport.IsFormContent(ct)
 }

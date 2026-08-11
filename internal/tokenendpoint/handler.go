@@ -178,7 +178,7 @@ type Deps struct {
 	Keys *keys.Set
 
 	// Clock supplies the current wall-clock reading. A nil Clock falls
-	// back to [internal/timex.SystemClock].
+	// back to [timex.SystemClock].
 	Clock Clock
 
 	// AccessTokenTTL is the lifetime of issued access tokens. Zero or

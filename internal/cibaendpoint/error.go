@@ -11,7 +11,7 @@ import (
 // ("unknown_user_id", "invalid_binding_message", and the OIDC Core
 // "login_required" reuse) that surface only on /bc-authorize.
 // "invalid_client" is emitted from
-// [internal/clientauth/clientauthhttp] so the constant lives there
+// internal/clientauth/clientauthhttp so the constant lives there
 // and is omitted from this list.
 const (
 	errInvalidRequest        = "invalid_request"

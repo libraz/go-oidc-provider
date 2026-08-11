@@ -3,9 +3,9 @@
 //
 // The library reaches RP-controlled URLs from three independent paths:
 //
-//   - JWKS / JAR request_uri fetcher in [internal/jar].
-//   - sector_identifier_uri fetcher in [internal/sector].
-//   - back-channel logout deliverer in [internal/backchannel].
+//   - JWKS / JAR request_uri fetcher in internal/jar.
+//   - sector_identifier_uri fetcher in internal/sector.
+//   - back-channel logout deliverer in internal/backchannel.
 //
 // All three converge here so the deny-list cannot drift between
 // fetchers and so a single audit can locate every outbound socket the

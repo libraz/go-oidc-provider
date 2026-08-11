@@ -165,7 +165,7 @@ type ClientView struct {
 
 // ConsentScope is the slim view of an OAuth scope the consent screen
 // renders. The struct is intentionally a flat copy of the
-// scope-catalog entry: keeping it in [interaction] avoids an import
+// scope-catalog entry: keeping it in this package avoids an import
 // cycle through [op.Scope] (the catalog type) while preserving the
 // fields the SPA needs to render a consent dialogue.
 type ConsentScope struct {

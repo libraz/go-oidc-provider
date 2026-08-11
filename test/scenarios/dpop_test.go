@@ -463,7 +463,7 @@ func accessTokenHashB64(token string) string {
 // RFC 9449 §5.1: when the DPoP feature is enabled the discovery
 // document advertises dpop_signing_alg_values_supported listing the
 // asymmetric algs the OP accepts in proofs (v1.0 ships ES256, PS256,
-// EdDSA, RS256, ES384, ES512 per [internal/discovery] document
+// EdDSA, RS256, ES384, ES512 per internal/discovery document
 // projection).
 //
 // Spec: RFC 9449 §5.1.
@@ -509,7 +509,7 @@ func TestScenario_DPOP_001_DiscoveryAdvertisesDPoPSigningAlgs(t *testing.T) {
 // TestScenario_DPOP_002_AccessTokenRejectsDualBinding is out-of-scope
 // for v1.0. The catalog row asserts that constructing an access token
 // with both jkt and x5t#S256 thumbprints fails at construction time;
-// v1.0's [internal/tokens.AccessTokenClaims.Confirmation] map admits
+// v1.0's internal/tokens.AccessTokenClaims.Confirmation map admits
 // any keys the issuer code populates and never carries both
 // simultaneously because the token-endpoint dispatch reads exactly one
 // channel (DPoP proof OR client cert) per redemption. The hypothetical
@@ -586,7 +586,7 @@ func TestScenario_DPOP_006_BearerSchemeWithDPoPHeaderRejected(t *testing.T) {
 // malformed" at /token (the catalog originally cited 401
 // invalid_dpop_proof + an upstream-specific error_description; the OP
 // collapses the malformed-proof family onto the OAuth invalid_request
-// envelope per [internal/tokenendpoint/dpop.go]).
+// envelope per internal/tokenendpoint/dpop.go).
 //
 // Spec: RFC 9449 §4.2.
 func TestScenario_DPOP_007_ProofTypMustBeDpopJwt(t *testing.T) {
@@ -614,7 +614,7 @@ func TestScenario_DPOP_007_ProofTypMustBeDpopJwt(t *testing.T) {
 // TestScenario_DPOP_008_ProofAlgWhitelistEnforced is out-of-scope. The
 // catalog row tests the alg allow-list (none / HS* / unknown) at the
 // wire. v1.0's allow-list is closed at parse time before signature
-// verification (see [internal/dpop/proof.go]), but driving "alg=none"
+// verification (see internal/dpop/proof.go), but driving "alg=none"
 // or "alg=HS256" through go-jose's signer requires forging the header
 // bytes manually because the library refuses to issue those
 // signatures. The defensive coverage already exists in
@@ -640,7 +640,7 @@ func TestScenario_DPOP_009_ProofJwkHeaderMustBeObject(t *testing.T) {
 
 // TestScenario_DPOP_010_ProofJwkMustBePublic is out-of-scope. Same
 // rationale as DPOP-009: the rule (jwk MUST be public) is enforced
-// inside [internal/dpop/proof.go] (`!jwk.IsPublic()`), but the wire
+// inside internal/dpop/proof.go (`!jwk.IsPublic()`), but the wire
 // shape diverges from the catalog's upstream-quoted code/description.
 // Out-of-scope per scripts/scenario.sh flip.
 func TestScenario_DPOP_010_ProofJwkMustBePublic(t *testing.T) {
@@ -650,7 +650,7 @@ func TestScenario_DPOP_010_ProofJwkMustBePublic(t *testing.T) {
 
 // TestScenario_DPOP_011_ProofJwkRejectsSymmetricKey is out-of-scope.
 // Same rationale as DPOP-009 / DPOP-010: oct-kty rejection is
-// enforced in [internal/dpop/proof.go] (`assertSupportedKeyType`),
+// enforced in internal/dpop/proof.go (`assertSupportedKeyType`),
 // but the catalog text wants the upstream OP's exact wire string. Out-of-scope
 // per scripts/scenario.sh flip.
 func TestScenario_DPOP_011_ProofJwkRejectsSymmetricKey(t *testing.T) {
@@ -665,7 +665,7 @@ func TestScenario_DPOP_011_ProofJwkRejectsSymmetricKey(t *testing.T) {
 // (The catalog row originally cited an upstream-specific error_description
 // "DPoP proof must have a jti string property"; v1.0 collapses every
 // parse-stage failure onto a single description to keep the surface
-// opaque per [internal/dpop/proof.go].)
+// opaque per internal/dpop/proof.go.)
 //
 // Spec: RFC 9449 §4.2.
 func TestScenario_DPOP_012_ProofRequiresJtiClaim(t *testing.T) {
@@ -753,7 +753,7 @@ func TestScenario_DPOP_014_ProofHtuMustMatchURI(t *testing.T) {
 // either side) is rejected with 400 invalid_request "DPoP proof iat
 // outside acceptable window" at /token. No DPoP-Nonce response header
 // is emitted (the use_dpop_nonce challenge is gated on a configured
-// nonce source per [internal/dpop/verify.go]).
+// nonce source per internal/dpop/verify.go).
 //
 // Spec: RFC 9449 §4.3 / §11.1.
 func TestScenario_DPOP_015_IatFreshnessWindowEnforced(t *testing.T) {
@@ -788,7 +788,7 @@ func TestScenario_DPOP_015_IatFreshnessWindowEnforced(t *testing.T) {
 // scope. The catalog row asserts 401 use_dpop_nonce when the iat
 // window fails AND a nonce source is configured; v1.0's verifier
 // orders the iat check ahead of the nonce check (see
-// [internal/dpop/verify.go]'s `withinIatWindow` call before
+// internal/dpop/verify.go's `withinIatWindow` call before
 // `checkNonce`), so an out-of-window proof always surfaces as
 // invalid_request irrespective of the nonce source. The "stale-iat
 // becomes nonce challenge" coupling is upstream-specific behaviour;
@@ -808,7 +808,7 @@ func TestScenario_DPOP_016_IatFailureSurfacesNonceChallenge(t *testing.T) {
 // before the grant validator runs.
 //
 // (Catalog text cited 401 invalid_token; v1.0 emits 400 invalid_request
-// via [internal/tokenendpoint/dpop.go] because the /token endpoint
+// via internal/tokenendpoint/dpop.go because the /token endpoint
 // shares the OAuth wire envelope across DPoP failure modes.)
 //
 // Spec: RFC 9449 §11.1.
@@ -860,11 +860,11 @@ func TestScenario_DPOP_017_ProofReplayDetected(t *testing.T) {
 // The catalog row asserts 401 invalid_token "failed jkt verification"
 // at the resource server when a proof from a different key is
 // presented. v1.0 emits 401 invalid_token "DPoP proof key does not
-// match the bound thumbprint" (see [internal/userinfo/handler.go]
+// match the bound thumbprint" (see internal/userinfo/handler.go
 // `enforceDPoPCnf`). The wire code is identical; the catalog
 // description "failed jkt verification" is upstream wording. The
 // observable behaviour (different-key proof rejected at /userinfo) is
-// exercised end-to-end by [internal/dpop/end_to_end_test.go]
+// exercised end-to-end by internal/dpop/end_to_end_test.go
 // `TestE2E_DPoP_FullFlow`. Out-of-scope per scripts/scenario.sh flip.
 func TestScenario_DPOP_018_JktVerificationAtResource(t *testing.T) {
 	t.Parallel()
@@ -877,7 +877,7 @@ func TestScenario_DPOP_018_JktVerificationAtResource(t *testing.T) {
 // a WWW-Authenticate DPoP challenge AND the upstream-specific "failed
 // jkt verification" description. v1.0's userinfo handler accepts the
 // Bearer scheme as a token-extraction prefix (see
-// [internal/userinfo/handler.go] `bearerFromHeader`), then runs the
+// internal/userinfo/handler.go `bearerFromHeader`), then runs the
 // cnf-binding check which rejects the missing DPoP proof header with
 // 401 invalid_token. The wire code matches but the description differs
 // ("DPoP proof required") because v1.0 reports the missing header
@@ -892,7 +892,7 @@ func TestScenario_DPOP_019_JktVerificationFailsUnderBearer(t *testing.T) {
 // Catalog text demands 401 invalid_dpop_proof + upstream description.
 // v1.0's userinfo handler emits 401 invalid_token "DPoP proof
 // rejected" (the description is collapsed to avoid leaking the
-// sub-cause; see [internal/userinfo/handler.go] `respondDPoPInvalid`).
+// sub-cause; see internal/userinfo/handler.go `respondDPoPInvalid`).
 // The ath-mismatch enforcement IS in place (the verifier returns
 // ErrProofATHMismatch); only the wire description diverges from the
 // catalog. Out-of-scope per scripts/scenario.sh flip.
@@ -915,7 +915,7 @@ func TestScenario_DPOP_021_AthClaimRequiredAtResource(t *testing.T) {
 // a malformed DPoP header value at /token is rejected. The catalog
 // originally cited 400 invalid_dpop_proof + an upstream description; v1.0
 // surfaces this as 400 invalid_request "DPoP proof malformed" via
-// [internal/tokenendpoint/dpop.go] (the wire code is collapsed onto
+// internal/tokenendpoint/dpop.go (the wire code is collapsed onto
 // the OAuth invalid_request envelope, which is what every other
 // /token failure also uses).
 //
@@ -946,7 +946,7 @@ func TestScenario_DPOP_022_MalformedHeaderAtTokenRejected(t *testing.T) {
 // scope. The catalog row asserts a 401 use_dpop_nonce challenge at
 // /userinfo when the proof carries a nonce the server does not
 // recognise, plus a fresh DPoP-Nonce response header. v1.0 honours
-// this on the wire (see [internal/userinfo/handler.go]
+// this on the wire (see internal/userinfo/handler.go
 // `respondUseDPoPNonce`), but the catalog also pins an upstream-style
 // "invalid nonce in DPoP proof" error_description; v1.0 emits a
 // generic message keyed off the use_dpop_nonce code. The observable
@@ -960,7 +960,7 @@ func TestScenario_DPOP_023_InvalidNonceAtUserinfoChallenge(t *testing.T) {
 
 // TestScenario_DPOP_024_InvalidNonceAtTokenChallenge is out-of-scope.
 // Same rationale as DPOP-023: v1.0 emits the use_dpop_nonce challenge
-// at /token (see [internal/tokenendpoint/dpop.go] `writeUseDPoPNonce`),
+// at /token (see internal/tokenendpoint/dpop.go `writeUseDPoPNonce`),
 // but the catalog requires an upstream-specific description string.
 // Out-of-scope per scripts/scenario.sh flip.
 func TestScenario_DPOP_024_InvalidNonceAtTokenChallenge(t *testing.T) {
@@ -1002,7 +1002,7 @@ func TestScenario_DPOP_027_RequiredNonceAtToken(t *testing.T) {
 // when a client supplies a fresh server-issued nonce, the response
 // succeeds (200) and does NOT emit a new DPoP-Nonce response header.
 // v1.0 only stamps DPoP-Nonce on the use_dpop_nonce challenge per
-// [internal/tokenendpoint/dpop.go]; the success path stays free of
+// internal/tokenendpoint/dpop.go; the success path stays free of
 // the header so well-behaved clients do not roll their cached value
 // every redemption.
 //
@@ -1041,7 +1041,7 @@ func TestScenario_DPOP_028_FreshNonceNotRotated(t *testing.T) {
 
 // TestScenario_DPOP_029_IntrospectionSurfacesCnfJkt is OOS — see
 // catalog out_of_scope_reason. v1.0 emits token_type=Bearer for every
-// bearer-shaped token (see [internal/introspectendpoint/handler.go]
+// bearer-shaped token (see internal/introspectendpoint/handler.go
 // `tokenTypeBearer`), so the catalog's token_type=DPoP demand is
 // non-spec residue. The cnf.jkt projection is in place; the row's
 // wire shape just diverges.
@@ -1250,7 +1250,7 @@ func TestScenario_DPOP_034_PARDpopJktMatch(t *testing.T) {
 // when the /par dpop_jkt parameter disagrees with the proof JWK
 // thumbprint, the push is rejected with 400 invalid_request "DPoP
 // proof key does not match the dpop_jkt commitment" (per
-// [internal/parendpoint/par.go] `applyDPoPJKT`).
+// internal/parendpoint/par.go `applyDPoPJKT`).
 //
 // Spec: RFC 9449 §10.
 func TestScenario_DPOP_035_PARDpopJktMismatch(t *testing.T) {
@@ -1464,7 +1464,7 @@ func TestScenario_DPOP_039_CodeGrantWithDpopJktMatch(t *testing.T) {
 // signed by a different key, the redemption is rejected with 400
 // invalid_grant. (The catalog originally pinned an exact upstream
 // description; v1.0 emits a generic message tied to the bound
-// thumbprint per [internal/tokenendpoint] dispatch — the wire code is
+// thumbprint per internal/tokenendpoint dispatch — the wire code is
 // what matters.)
 //
 // Spec: RFC 9449 §10.
@@ -1967,7 +1967,7 @@ func TestScenario_DPOP_046_ClientCredentialsBinding(t *testing.T) {
 // TestScenario_DPOP_047_TokenEndpointErrorShape verifies RFC 9449
 // §5.2: an invalid DPoP header value at /token is rejected with a
 // 400 JSON envelope. v1.0 collapses the malformed-proof family onto
-// the OAuth invalid_request envelope (per [internal/tokenendpoint/dpop.go];
+// the OAuth invalid_request envelope (per internal/tokenendpoint/dpop.go;
 // the catalog originally cited invalid_dpop_proof + an upstream
 // description, but the wire shape on v1.0 is invalid_request +
 // "DPoP proof malformed"). The row's hard contract is the JSON

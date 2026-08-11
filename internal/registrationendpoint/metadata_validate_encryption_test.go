@@ -74,7 +74,7 @@ func jweFamilies() []jweFamily {
 //   - alg=RSA1_5         -> 400 invalid_client_metadata (M5: jose.ParseJWEAlg gate)
 //
 // The RSA1_5 case in particular pins the M5 fix against future drift:
-// the validator must reject any alg the [internal/jose] allow-list
+// the validator must reject any alg the internal/jose allow-list
 // excludes, even one a stale hard-coded list might have admitted.
 func TestRegister_JWEAlgEncPair_Matrix(t *testing.T) {
 	t.Parallel()

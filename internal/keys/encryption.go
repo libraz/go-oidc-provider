@@ -70,8 +70,8 @@ type EncryptionSet struct {
 	// non-nil only on the per-request shallow copies [WithContext]
 	// returns. Carrying a context on a struct is normally a smell; it
 	// is the only route available here because
-	// [internal/jose.EncryptionKeyResolver] is the interface
-	// [internal/jose.Decrypt] consults and its methods take no context.
+	// [jose.EncryptionKeyResolver] is the interface
+	// [jose.Decrypt] consults and its methods take no context.
 	// The field is read for observability alone — no decryption path
 	// branches on it, and no path observes cancellation through it.
 	ctx context.Context
@@ -89,7 +89,7 @@ type EncryptionSet struct {
 // op.AuditKeyRetiredKidPresented event covers both). [WithJWEPolicy]
 // additionally pins the deployment's alg / enc narrowing onto the set,
 // which is what carries the restriction into
-// [internal/jose.Decrypt].
+// [jose.Decrypt].
 func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*EncryptionSet, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("%w: empty keyset", ErrInvalidEncryptionKey)
@@ -135,8 +135,8 @@ func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*Encryption
 	}, nil
 }
 
-// JWEPolicy implements [internal/jose.EncryptionPolicyResolver] so
-// [internal/jose.Decrypt] enforces the deployment's narrowing on every
+// JWEPolicy implements [jose.EncryptionPolicyResolver] so
+// [jose.Decrypt] enforces the deployment's narrowing on every
 // inbound ciphertext this set is asked to decrypt. The value comes from
 // [WithJWEPolicy]; omitting the option leaves the package allow-list in
 // force.
@@ -240,9 +240,9 @@ func isAllowedECDHCurve(name string) bool {
 
 // WithContext returns a shallow copy of the set whose retired-kid
 // notifications carry ctx. It implements
-// [internal/jose.ContextualEncryptionKeyResolver] so a decryption caller
+// [jose.ContextualEncryptionKeyResolver] so a decryption caller
 // holding a request context can pin it onto the resolver before handing
-// the resolver to [internal/jose.Decrypt] / [internal/jose.DecryptChain],
+// the resolver to [jose.Decrypt] / [jose.DecryptChain],
 // whose signatures have no context to thread.
 //
 // Without the pin the retired-kid audit event reaches the embedder's
@@ -276,12 +276,12 @@ func (s *EncryptionSet) observerContext() context.Context {
 // observer-fed retirement gate the signing [Set.Find] uses).
 //
 // The retired-kid notification carries the context [WithContext]
-// pinned onto the set, because [internal/jose.EncryptionKeyResolver]
+// pinned onto the set, because [jose.EncryptionKeyResolver]
 // gives Resolve no context parameter of its own.
 //
 // Decrypt callers MUST treat ok=false as a hard kid-unknown signal
 // and MUST NOT fall back to trial decryption when kid is present —
-// see [internal/jose.Decrypt] for the rationale.
+// see [jose.Decrypt] for the rationale.
 func (s *EncryptionSet) Resolve(keyID string) (any, bool) {
 	for _, e := range s.entries {
 		if e.KeyID != keyID {
@@ -302,7 +302,7 @@ func (s *EncryptionSet) Resolve(keyID string) (any, bool) {
 }
 
 // All returns every live private key in rotation order (as the
-// embedder supplied them). Used by [internal/jose.Decrypt] for the
+// embedder supplied them). Used by [jose.Decrypt] for the
 // kid-absent fallback iteration; retired entries are skipped so the
 // fallback respects the same rotation gate as [Resolve].
 func (s *EncryptionSet) All() []any {

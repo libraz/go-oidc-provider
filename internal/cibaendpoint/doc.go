@@ -13,8 +13,8 @@
 // authentication-device interaction (Approve / Deny callbacks into
 // the substore) is owned by the embedder; the token-endpoint poll
 // side is implemented in
-// [github.com/libraz/go-oidc-provider/internal/grants/ciba] alongside
-// [github.com/libraz/go-oidc-provider/internal/ciba]'s pure
+// internal/grants/ciba alongside
+// internal/ciba's pure
 // validation and polling helpers.
 //
 // Posture choices the handler encodes:
@@ -59,7 +59,7 @@
 //     security argument either: the requesting client authenticated
 //     at the endpoint, and signature plus audience binding are what
 //     identify it and prevent cross-OP and cross-client forgery.
-//     [github.com/libraz/go-oidc-provider/internal/endsession]
+//     internal/endsession
 //     documents the same choice, for the same reason, on
 //     RP-Initiated Logout's id_token_hint.
 //

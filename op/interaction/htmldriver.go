@@ -126,7 +126,7 @@ func stampHTMLHeaders(w http.ResponseWriter) {
 	h.Set("Content-Security-Policy", defaultCSP)
 }
 
-// ParseSubmission reads at most [maxSubmissionBytes] from r.Body and
+// ParseSubmission reads at most 32 KiB from r.Body and
 // decodes a url-encoded form into a [FormSubmission]. The function
 // rejects requests that do not declare
 // "application/x-www-form-urlencoded" with [ErrUnsupportedContentType]

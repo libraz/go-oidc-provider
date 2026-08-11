@@ -14,10 +14,10 @@
 //
 //   - JWT-shaped (three base64 segments separated by "."): treated as a
 //     JWT-formatted access token (RFC 9068). Verified through
-//     [internal/tokens.AccessTokenVerifier] (issuer + signature + exp +
+//     internal/tokens.AccessTokenVerifier (issuer + signature + exp +
 //     iat). On success its claims are projected onto the response;
 //     audience is intentionally NOT validated, mirroring the same choice
-//     made by [internal/userinfo] (the resource server owns the audience
+//     made by internal/userinfo (the resource server owns the audience
 //     policy).
 //   - Otherwise: opaque. Looked up in [op/store.RefreshTokenStore.Find].
 //     A record that is unconsumed and unexpired projects onto the
@@ -79,10 +79,10 @@
 //
 // The package is a thin orchestration over four collaborators:
 //
-//   - [internal/clientauth] for client authentication;
-//   - [internal/tokens.AccessTokenVerifier] for JWT introspection;
+//   - internal/clientauth for client authentication;
+//   - internal/tokens.AccessTokenVerifier for JWT introspection;
 //   - [op/store.RefreshTokenStore] for opaque introspection;
-//   - [internal/timex] (via the package-local Clock) for wall-clock reads.
+//   - internal/timex (via the package-local Clock) for wall-clock reads.
 //
 // A nil [Deps.RefreshTokens] disables the opaque path entirely: opaque
 // tokens always project onto inactive. JWT introspection still functions

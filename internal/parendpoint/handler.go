@@ -89,7 +89,7 @@ type Deps struct {
 	AuthorizationDetailTypes map[string]authorizationdetails.Validator
 
 	// Clock supplies the current wall-clock reading. A nil Clock falls
-	// back to [internal/timex.SystemClock].
+	// back to [timex.SystemClock].
 	Clock Clock
 
 	// SecretVerifier verifies confidential-client secrets. A nil value
@@ -264,7 +264,7 @@ func (d *Deps) now() time.Time {
 
 // isFormContent reports whether ct is application/x-www-form-urlencoded,
 // tolerating optional parameters (charset, boundary, etc.). Mirrors the
-// helper in [internal/tokenendpoint] so the two endpoints stay aligned.
+// helper in internal/tokenendpoint so the two endpoints stay aligned.
 func isFormContent(ct string) bool {
 	return endpointsupport.IsFormContent(ct)
 }

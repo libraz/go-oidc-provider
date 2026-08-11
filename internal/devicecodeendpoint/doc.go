@@ -11,8 +11,8 @@
 // verification ceremony (the user-facing /device page) is owned by
 // the embedder via [op.interaction.Driver]; the token-endpoint
 // poll side is implemented in
-// [github.com/libraz/go-oidc-provider/internal/grants/devicecode]
-// alongside [github.com/libraz/go-oidc-provider/internal/devicecode]'s
+// internal/grants/devicecode
+// alongside internal/devicecode's
 // pure helpers.
 //
 // Posture choices the handler encodes:

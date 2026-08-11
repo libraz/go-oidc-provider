@@ -5,7 +5,7 @@
 //
 // The package is the single source of truth for "given the client and
 // the registered (alg, enc) pair, return the recipient
-// [internal/jose.EncryptionRecipient] [internal/jose.EncryptNestedJWT]
+// internal/jose.EncryptionRecipient internal/jose.EncryptNestedJWT
 // expects". The four outbound-encryption response paths share this
 // resolver so the policy (alg / enc allow-list, JWKS sourcing, key
 // selection) lives in one place.
@@ -23,7 +23,7 @@
 // the caller can map it onto a clean wire-level error rather than a
 // 500.
 //
-// Both shapes are resolved through [internal/rpjwks], the OP's single
+// Both shapes are resolved through internal/rpjwks, the OP's single
 // relying-party JWKS fetcher, so the cache budget, the body and member caps,
 // the tolerance for unrepresentable members, and the negative-cache policy are
 // the same ones the request-object and client-assertion paths apply.
@@ -41,11 +41,11 @@
 // # Algorithm policy
 //
 // The (alg, enc) pair the caller passes MUST match the OP-wide JWE
-// allow-list ([internal/jose.AllowedJWEAlgs] /
-// [internal/jose.AllowedJWEEncs]); anything outside the list is
+// allow-list (internal/jose.AllowedJWEAlgs /
+// internal/jose.AllowedJWEEncs); anything outside the list is
 // rejected with [ErrAlgNotAllowed] before any JWKS lookup runs. The
 // package never registers a new algorithm at runtime; extending the
-// allow-list requires editing [internal/jose].
+// allow-list requires editing internal/jose.
 //
 // # Sentinel errors
 //

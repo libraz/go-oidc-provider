@@ -17,7 +17,7 @@
 //     value.
 //
 //   - [Fetcher], the default JWKSResolver's key source. It binds the
-//     OP-wide relying-party JWKS fetcher ([internal/rpjwks]) to this
+//     OP-wide relying-party JWKS fetcher (internal/rpjwks) to this
 //     package's error taxonomy, so the hard timeout, the max-body and
 //     member caps, the strict content-type check, the SSRF deny-list
 //     (loopback / link-local / RFC 1918), and ETag-driven revalidation
@@ -37,12 +37,12 @@
 //
 // # Algorithm policy
 //
-// The verifier accepts whichever signing algorithms [internal/jose]
+// The verifier accepts whichever signing algorithms internal/jose
 // admits (currently RS256, PS256, ES256, EdDSA). FAPI 2.0 Message
 // Signing prefers PS256 / ES256 / EdDSA; RS256 is allowed for OIDC
 // Core compatibility but operators SHOULD restrict per-client via
 // [op/store.Client.RequestObjectSigningAlg]. The "none" algorithm and
 // the HMAC family are rejected structurally because the input goes
-// through [internal/jose.ParseSigned], which already enforces the
+// through internal/jose.ParseSigned, which already enforces the
 // project allow-list.
 package jar

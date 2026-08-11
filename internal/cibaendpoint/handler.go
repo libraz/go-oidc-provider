@@ -127,7 +127,7 @@ type Deps struct {
 	Keys *keys.Set
 
 	// Clock supplies the current wall-clock reading. A nil Clock
-	// falls back to [internal/timex.SystemClock].
+	// falls back to [timex.SystemClock].
 	Clock Clock
 
 	// SecretVerifier verifies confidential-client secrets. A nil
@@ -517,7 +517,7 @@ func checkedJKT(checked *dpop.Checked) string {
 	return checked.JKT
 }
 
-// writeDPoPError translates a [dpop.Err*] sentinel onto the wire form,
+// writeDPoPError translates a dpop.Err* sentinel onto the wire form,
 // including the RFC 9449 §8 `use_dpop_nonce` challenge. Both proof
 // phases route through it so their boundary mapping cannot drift.
 func writeDPoPError(ctx context.Context, w http.ResponseWriter, deps Deps, err error) {
@@ -1242,7 +1242,7 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 // newAuthReqID returns a freshly generated auth_req_id: 32 bytes
 // of crypto/rand encoded as base64url-no-pad (256 bits of
 // entropy). The body lives in this package rather than
-// [internal/ciba] because the wire-secret path is owned by the
+// internal/ciba because the wire-secret path is owned by the
 // issuer side; the helper packages stay free of HTTP / I/O
 // concerns.
 func newAuthReqID() (string, error) {

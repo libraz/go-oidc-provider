@@ -27,6 +27,6 @@
 // v1.5) is rejected — modern profiles steer RSA toward PSS and the OFCS
 // negative-test pipeline relies on the rejection; symmetric and "none"
 // are rejected structurally because the input goes through
-// [internal/jose.ParseSigned], which already enforces the project
+// internal/jose.ParseSigned, which already enforces the project
 // allow-list. ES384 is reserved for a future jose-package expansion.
 package dpop

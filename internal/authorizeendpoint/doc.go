@@ -1,8 +1,8 @@
 // Package authorizeendpoint hosts the HTTP handler that backs the OP's
 // /authorize and /interaction/{uid} routes. It is the composition root that
-// glues together the pure-validation layer in [internal/authorize] with the
-// session manager in [internal/sessions], the consent / login UI bridge in
-// [op/interaction], and the on-the-wire cookie codec in [internal/cookie].
+// glues together the pure-validation layer in internal/authorize with the
+// session manager in internal/sessions, the consent / login UI bridge in
+// [op/interaction], and the on-the-wire cookie codec in internal/cookie.
 // # Boundary
 // The handler implements the authorization endpoint as defined by RFC 6749
 // §4.1 / OpenID Connect Core 1.0 §3.1.2 plus the OP's own SPA
@@ -21,7 +21,7 @@
 // [Deps] field.
 // # State carriage
 // The validated authorization request is persisted in
-// [op/store.Interaction.RawState] using [internal/authorize.RequestState]
+// [op/store.Interaction.RawState] using internal/authorize.RequestState
 // and recovered on the matching POST. The browser-side binding is carried
 // in the __Host-oidc_interaction cookie, which seals the interaction UID
 // under the AAD "oidc-interaction"; tampering produces an opaque rejection.

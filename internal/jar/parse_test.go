@@ -133,7 +133,7 @@ func TestParse_HappyPath(t *testing.T) {
 func TestParse_RejectsAlgNone(t *testing.T) {
 	t.Parallel()
 
-	// "alg=none" is structurally rejected by [internal/jose.ParseSigned]
+	// "alg=none" is structurally rejected by [jose.ParseSigned]
 	// before Parse even sees the bytes. We hand the parser a minimal
 	// "none"-shaped JWS to confirm the path; the body is the value
 	// jose.ParseSigned would emit on a "none"-shaped header.

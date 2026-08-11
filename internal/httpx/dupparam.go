@@ -22,9 +22,9 @@ import "net/url"
 // duplicate handling is the threat we close. Rejecting uniformly
 // keeps the wire contract crisp.
 //
-// The helper lives in [internal/httpx] (rather than the
-// protocol-aware [internal/endpointsupport] sibling) so the
-// [internal/clientauth] parser can call it without forming an import
+// The helper lives in internal/httpx (rather than the
+// protocol-aware internal/endpointsupport sibling) so the
+// internal/clientauth parser can call it without forming an import
 // cycle through endpointsupport's clientauth-error mapping. The
 // behaviour is identical regardless of which package surfaces it.
 func FirstDuplicateParameter(values url.Values, names []string) (string, bool) {

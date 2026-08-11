@@ -79,7 +79,7 @@ type Deps struct {
 
 	// Clients is the read-only client registry. The handler looks the
 	// authenticated client_id up here before delegating to
-	// [internal/clientauth].
+	// internal/clientauth.
 	Clients store.ClientStore
 
 	// IntrospectionDelegates maps a client_id to the set of
@@ -122,7 +122,7 @@ type Deps struct {
 	Scopes *scoperegistry.Registry
 
 	// Clock supplies the current wall-clock reading. A nil Clock falls
-	// back to [internal/timex.SystemClock].
+	// back to [timex.SystemClock].
 	Clock Clock
 
 	// SecretVerifier verifies confidential-client secrets. A nil value

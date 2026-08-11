@@ -219,7 +219,7 @@ func TestVerify_PassesThroughBareJWS(t *testing.T) {
 // an unsigned / plain inner JWT was accepted as authenticated, letting an
 // attacker holding only the recipient's public encryption key forge a
 // request. The structural property is that every decrypted plaintext is
-// routed through [Parse] -> [internal/jose.ParseSigned], whose closed
+// routed through [Parse] -> [jose.ParseSigned], whose closed
 // signing-alg allow-list rejects "none" before the claim bag is read.
 func TestVerify_RejectsJWEWrappedUnsignedJWT(t *testing.T) {
 	t.Parallel()

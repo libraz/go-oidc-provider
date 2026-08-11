@@ -8,7 +8,7 @@ import (
 )
 
 // TestTTLDefaults_Values pins each canonical TTL default to its exact
-// duration so a silent edit of [internal/timex/ttldefaults.go] (which
+// duration so a silent edit of internal/timex/ttldefaults.go (which
 // every caller now consumes) trips a test failure rather than rolling
 // out a quiet operational regression.
 func TestTTLDefaults_Values(t *testing.T) {

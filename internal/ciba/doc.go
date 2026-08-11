@@ -9,11 +9,11 @@
 // CIBA flow.
 //
 // The package owns no I/O surface and no HTTP handler: the endpoint
-// handler at [github.com/libraz/go-oidc-provider/internal/cibaendpoint]
+// handler at internal/cibaendpoint
 // composes these helpers with the substore at
 // [github.com/libraz/go-oidc-provider/op/store.CIBARequestStore], and
 // the token-endpoint grant at
-// [github.com/libraz/go-oidc-provider/internal/grants/ciba] reuses the
+// internal/grants/ciba reuses the
 // polling discipline at /token poll time.
 //
 // The package implements poll mode only; the push and ping

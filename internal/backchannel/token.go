@@ -27,12 +27,12 @@ const TokenType = "logout+jwt"
 
 // idLength is the entropy in bytes for the JWT identifier (jti). 16
 // random bytes (128 bits) is well above the spec's "unique" threshold
-// and matches the [internal/sessions.IDLength] sizing for OP-issued
+// and matches the internal/sessions.IDLength sizing for OP-issued
 // identifiers.
 const idLength = 16
 
 // SigningKey carries the ES256 signing material used to mint Logout
-// Tokens. The struct mirrors [internal/tokens.SigningKey]; the
+// Tokens. The struct mirrors internal/tokens.SigningKey; the
 // duplication keeps the back-channel package free of the larger
 // id_token / access_token transitive deps.
 type SigningKey struct {

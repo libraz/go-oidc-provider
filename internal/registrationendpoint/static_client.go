@@ -52,7 +52,7 @@ type StaticClientValidationOptions struct {
 	AllowInsecureBackchannelLogoutForDev bool
 
 	// JWEPolicy mirrors [Deps.JWEPolicy]: the JWE alg / enc narrowing
-	// applied below the [internal/jose] allow-list. The zero value
+	// applied below the internal/jose allow-list. The zero value
 	// leaves the full allow-list in force. Applying it here keeps a
 	// static seed that declares an excluded algorithm from booting an
 	// OP whose runtime would refuse every encrypted exchange with it.

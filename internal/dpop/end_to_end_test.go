@@ -97,7 +97,7 @@ func decodeJSONResp(t testing.TB, resp *http.Response) map[string]any {
 
 // pkcePair returns a deterministic PKCE verifier / S256 challenge pair
 // the E2E flow can thread through /authorize and /token. The challenge
-// is computed inline (rather than via [internal/pkce]) so this _test
+// is computed inline (rather than via internal/pkce) so this _test
 // package does not need to grow another internal-namespace import.
 func pkcePair(_ testing.TB) (verifier, challenge string) {
 	verifier = "test-verifier-test-verifier-test-verifier-test-verifier-1234567"

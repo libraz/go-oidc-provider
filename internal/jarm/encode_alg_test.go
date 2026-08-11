@@ -24,7 +24,7 @@ func (fakeSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) { r
 
 // TestNewSigner_RejectsUnsupportedKey closes the H-FAPI-2 vector by
 // surfacing the misconfiguration at construction time. The OP signs
-// with ECDSA P-256 only (see [internal/keys.NewSet]); other key shapes
+// with ECDSA P-256 only (see internal/keys.NewSet); other key shapes
 // MUST fail [NewSigner] rather than reach Sign and emit a JWS with
 // the wrong "alg" header.
 func TestNewSigner_RejectsUnsupportedKey(t *testing.T) {

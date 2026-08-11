@@ -21,7 +21,7 @@
 //
 // Redaction is the embedder's responsibility: when the slog handler
 // is constructed via [op.WithAuditLogger], the op layer wraps it
-// through [internal/redact] before it reaches this package, so
+// through internal/redact before it reaches this package, so
 // secrets named after the canonical OAuth/OIDC keys (access_token,
 // id_token, etc.) are masked even if a regression accidentally
 // includes them in [Event.Extras].

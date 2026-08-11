@@ -45,18 +45,19 @@ if [ -n "$hits" ]; then
   die "state the constraint itself, or cite a public spec"
 fi
 
-# A doc link into internal/ can never resolve: godoc wants a full import
-# path, and even spelled in full the package is absent from pkg.go.dev.
-# The bracket text renders verbatim, so the reader is shown a package
-# name they cannot open and the doc still has not said what it meant.
-# Only the published tree is checked — the same link inside internal/ is
-# read by maintainers who do have the source.
-mapfile -t published < <(git ls-files -- 'op/*.go' | grep -v '_test\.go$')
-internal_links="$(grep -nE '\[[a-z0-9_.,/-]*internal/' "${published[@]}" || true)"
+# A doc link naming an internal/ path can never resolve: godoc wants a
+# full import path, and even spelled in full the package is absent from
+# pkg.go.dev. The bracket text renders verbatim, so the reader is shown
+# a package name they cannot open and the doc still has not said what it
+# meant. Inside internal/ the working form is the imported package's own
+# name — [timex.Clock], which go doc and every editor resolve — so the
+# rule is the same everywhere: never put a path in the brackets.
+mapfile -t go_files < <(git ls-files -- '*.go')
+internal_links="$(grep -nE '\[[a-z0-9_.,/-]*internal/' "${go_files[@]}" || true)"
 if [ -n "$internal_links" ]; then
-  warn "godoc on the published surface links into internal/:"
+  warn "doc links spell an internal/ path instead of a package name:"
   printf '%s\n' "$internal_links" >&2
-  die "state the behaviour instead of naming the internal package"
+  die "use the imported package's name, or state the behaviour without naming the package"
 fi
 
 log "doc references OK ($(printf '%s\n' "${files[@]}" | wc -l | tr -d ' ') tracked files)"

@@ -12,8 +12,8 @@
 // package returns the granted scope set or a typed sentinel that
 // the HTTP layer maps to an OAuth wire code. Token minting, sender
 // constraints (DPoP / mTLS), and persistence stay where they
-// already live in [internal/tokenendpoint] / [internal/tokens] /
-// [internal/grants/refresh] so the decision logic on this grant
+// already live in internal/tokenendpoint / internal/tokens /
+// internal/grants/refresh so the decision logic on this grant
 // can be inspected and tested in isolation.
 //
 // Two specific posture choices the package encodes:

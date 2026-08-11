@@ -3,9 +3,9 @@ package store
 import "fmt"
 
 // AccessTokenRevocationStrategy selects the persistence shape behind
-// JWT access-token revocation. The type lives in the [store] package
+// JWT access-token revocation. The type lives in this package
 // so internal handlers can reference it without taking a dependency
-// on the [op] public package; the public alias
+// on the op public package; the public alias
 // [op.AccessTokenRevocationStrategy] re-exports it for embedders.
 //
 // The strategy is fixed at op.New time and applies uniformly to every

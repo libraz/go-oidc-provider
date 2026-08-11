@@ -31,7 +31,7 @@ type Request struct {
 	// request omitted the parameter. After [Request.Validate] succeeds
 	// the field carries the canonical form (lowercase scheme + host,
 	// default port stripped, trailing slash normalised) per
-	// [internal/resourceindicator.Canonicalize]; the wire-side bytes
+	// internal/resourceindicator.Canonicalize; the wire-side bytes
 	// are not preserved on the validated value.
 	Resource string
 

@@ -24,7 +24,7 @@
 //
 // # SSRF posture
 //
-// The fetcher consolidates its SSRF gate in [internal/netsec]: the
+// The fetcher consolidates its SSRF gate in internal/netsec: the
 // deny-list (loopback / link-local / RFC 1918 / IPv6 ULA / cloud
 // metadata) and the hardened [*http.Client] (re-checking the
 // kernel-resolved address at dial time to defeat DNS rebinding) are

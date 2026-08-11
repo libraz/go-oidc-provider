@@ -164,7 +164,7 @@ func enforceDPoPRefreshBinding(w http.ResponseWriter, deps Deps, out *dpopOutcom
 	return true
 }
 
-// writeDPoPError translates a [dpop.Err*] sentinel onto the wire form.
+// writeDPoPError translates a dpop.Err* sentinel onto the wire form.
 // The package-local helper is a thin wrapper over [dpop.WriteError]
 // so the token / PAR / future endpoints share an identical
 // boundary mapping; see the godoc on [dpop.WriteError] for the wire

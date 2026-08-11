@@ -12,7 +12,7 @@ import (
 // [ProxyConfig] so handlers do not have to thread it through every
 // call site.
 //
-// The shape mirrors [internal/dpop.Verifier] on purpose: a non-nil
+// The shape mirrors internal/dpop.Verifier on purpose: a non-nil
 // pointer is the "feature is enabled" signal everywhere the HTTP
 // layer touches it, and a nil receiver is never expected (callers
 // gate on the field's nilness before invoking any method).

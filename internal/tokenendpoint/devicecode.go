@@ -288,7 +288,7 @@ func deviceCodeAuthErrorCode(err error) string {
 	}
 }
 
-// writeDeviceCodeAuthError translates the [dcgrant.Err*] sentinels
+// writeDeviceCodeAuthError translates the dcgrant.Err* sentinels
 // onto wire codes. The mapping mirrors the comments on the package
 // sentinels (internal/grants/devicecode/devicecode.go):
 //
@@ -564,7 +564,7 @@ func derefTime(t *time.Time) time.Time {
 // emits. Splitting into a struct keeps the [emitDeviceCodeIssued]
 // signature well under the project's parameter-count cap and lines
 // the call site up with the audit catalogue documented in
-// [internal/devicecode.AuditTokenIssued].
+// [devicecode.AuditTokenIssued].
 type deviceCodeIssuedExtras struct {
 	ClientID         string
 	Subject          string
@@ -577,7 +577,7 @@ type deviceCodeIssuedExtras struct {
 // emitDeviceCodeIssued logs a successful device_code redemption.
 // The audit name matches [devicecode.AuditTokenIssued] and the extras
 // agree with the catalogue documented in
-// [internal/devicecode/audit.go].
+// internal/devicecode/audit.go.
 func emitDeviceCodeIssued(ctx context.Context, deps Deps, in deviceCodeIssuedExtras) {
 	deps.audit().Emit(ctx, audit.Event{
 		Name:     devicecode.AuditTokenIssued,

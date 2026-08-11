@@ -322,12 +322,12 @@ func (r *Resolver) doFetch(ctx context.Context, sectorIdentifierURI string) ([]s
 // returns the canonical sector host (lower-cased) on success so the
 // caller does not have to re-parse the URL.
 //
-// The actual deny-list lives in [internal/netsec.AssertSafeURL]; this
+// The actual deny-list lives in [netsec.AssertSafeURL]; this
 // wrapper translates the package-level error into the sector
 // taxonomy ([ErrSectorPrivateAddress] / [ErrSectorFetch]) so callers
 // can branch with [errors.Is] against the existing sentinels.
 //
-// The dial-time check installed by [internal/netsec.NewHTTPClient] re-runs the
+// The dial-time check installed by [netsec.NewHTTPClient] re-runs the
 // same deny-list against the kernel-resolved address, so a TOCTOU
 // rebinding between this gate and [http.Client.Do] cannot escape.
 // Cloud-metadata IPs (169.254.169.254 et al) remain rejected even

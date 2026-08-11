@@ -34,7 +34,7 @@ const AuditEventLooseMethodCaseAdmitted = string(auditevent.AuditDPoPLooseMethod
 const DefaultIatWindow = 60 * time.Second
 
 // Clock is the package-local view of the wall clock. It mirrors the
-// verifier-shaped Clock used in [internal/tokens] so an [op.Clock]
+// verifier-shaped Clock used in internal/tokens so an [op.Clock]
 // value satisfies it without an explicit adapter, and a nil falls
 // back to the system clock.
 type Clock interface {
@@ -108,7 +108,7 @@ type VerifierConfig struct {
 	JTIs store.ConsumedJTIStore
 
 	// Clock supplies the current wall-clock reading. A nil value
-	// falls back to [internal/timex.SystemClock].
+	// falls back to [timex.SystemClock].
 	Clock Clock
 
 	// IatWindow overrides [DefaultIatWindow]. Zero or negative falls

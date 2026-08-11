@@ -41,7 +41,7 @@ const MaxJWEPlaintextSize = 1 << 20
 //
 // The refuse-don't-truncate rule is specific to [Decrypt], where the
 // keyset is the OP's own and an oversized one is an operator error the
-// operator can fix. [internal/clientauth] reuses the same numeric
+// operator can fix. internal/clientauth reuses the same numeric
 // budget against a *client*-published JWKS and does truncate there,
 // because a client can grow its JWKS at will and refusing outright
 // would let any client disable its own authentication.

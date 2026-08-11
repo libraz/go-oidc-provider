@@ -238,7 +238,7 @@ type VerifierConfig struct {
 
 	// EncryptionResolver, when non-nil, enables JWE-shaped request
 	// objects (compact form with five base64url segments). The
-	// verifier decrypts the JWE through [internal/jose.Decrypt],
+	// verifier decrypts the JWE through [jose.Decrypt],
 	// expecting a nested JWS plaintext (`cty=JWT` or absent), and
 	// runs the rest of the pipeline against the decrypted JWS.
 	//
@@ -318,7 +318,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 }
 
 // defaultAllowedAlgs returns the project-wide JWS allow-list. The list
-// mirrors [internal/jose] so JAR widens with every new alg the rest of
+// mirrors internal/jose so JAR widens with every new alg the rest of
 // the codebase admits without a separate audit.
 func defaultAllowedAlgs() []jose.Algorithm {
 	return []jose.Algorithm{

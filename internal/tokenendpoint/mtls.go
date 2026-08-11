@@ -96,7 +96,7 @@ func requireMTLSMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundTh
 	return true
 }
 
-// writeMTLSError translates an [mtls.Err*] sentinel onto the wire
+// writeMTLSError translates an mtls.Err* sentinel onto the wire
 // form. The mapping keeps the same OAuth envelope codes the rest of
 // the token endpoint uses: invalid_request for malformed or conflicting
 // inputs, invalid_grant for a refresh whose binding does not satisfy,

@@ -90,7 +90,7 @@ func opaqueAudience(rec *store.OpaqueAccessToken) []string {
 // userInfoNow returns the wall-clock reading the userinfo handler
 // uses for opaque-token expiry comparisons. The function honours the
 // optional [HandlerDeps.Clock] (also threaded into the JWT verifier)
-// and falls back to [internal/timex.SystemClock] when the field is
+// and falls back to [timex.SystemClock] when the field is
 // nil; the reference matches the boundary discipline of the sibling
 // endpoints (no direct [time.Now] call).
 func userInfoNow(deps HandlerDeps) time.Time {

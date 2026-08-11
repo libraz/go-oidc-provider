@@ -6,7 +6,7 @@
 //
 // # What the fetcher owns
 //
-//   - The SSRF envelope, delegated to [internal/securefetch]: scheme allow-list,
+//   - The SSRF envelope, delegated to internal/securefetch: scheme allow-list,
 //     URL-time and dial-time deny-list, per-request timeout.
 //   - One body cap and one member cap, so a hostile keyset cannot grow the
 //     parse cost or the resident set without bound.

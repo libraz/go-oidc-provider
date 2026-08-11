@@ -582,8 +582,8 @@ func validateRequestObjectSigningAlg(alg string) error {
 }
 
 // validateRequestObjectEncryption pins the JWE alg/enc the client may
-// register against the closed allow-list exposed by [jose.ParseJWEAlg]
-// / [jose.ParseJWEEnc], narrowed by the deployment's policy, so DCR
+// register against the closed allow-list exposed by [internaljose.ParseJWEAlg]
+// / [internaljose.ParseJWEEnc], narrowed by the deployment's policy, so DCR
 // cannot admit a value the verifier would later reject as
 // [jar.ErrEncryptionAlgNotAllowed].
 //
@@ -597,7 +597,7 @@ func validateRequestObjectSigningAlg(alg string) error {
 // registering one half and negotiating the other through the discovery
 // list; this OP does not implement that negotiation (the runtime
 // encryption path requires both values, see
-// [internal/clientencjwks].validateAlgEnc), so DCR rejects mixed
+// internal/clientencjwks.validateAlgEnc), so DCR rejects mixed
 // half-pairs at registration time to close the admit/runtime-reject gap.
 // Both empty is fine — the client takes the unencrypted (signed-only)
 // path.
@@ -645,10 +645,10 @@ func validateIntrospectionResponseEncryption(alg, enc string, policy internaljos
 // labels used in the error description so failures point the embedder
 // at the offending metadata key.
 //
-// The allow-list is sourced verbatim from [jose.ParseJWEAlgPolicy] /
-// [jose.ParseJWEEncPolicy] so the registration validator and the JWE
+// The allow-list is sourced verbatim from [internaljose.ParseJWEAlgPolicy] /
+// [internaljose.ParseJWEEncPolicy] so the registration validator and the JWE
 // verifier cannot drift; adding a new alg/enc requires editing
-// [internal/jose/jweparam.go] only. RSA1_5, dir, A*KW, A*GCMKW and
+// internal/jose/jweparam.go only. RSA1_5, dir, A*KW, A*GCMKW and
 // `none` are deliberately excluded from the JOSE allow-list and are
 // therefore rejected here without any local mention. A value the
 // deployment removed through policy is rejected with the same wording
@@ -659,7 +659,7 @@ func validateIntrospectionResponseEncryption(alg, enc string, policy internaljos
 // client to commit to one half and let the OP negotiate the other from
 // the discovery list, but this OP does not implement that negotiation
 // — the runtime check at
-// [internal/clientencjwks].validateAlgEnc requires both fields, so
+// internal/clientencjwks.validateAlgEnc requires both fields, so
 // admitting a half-pair would surface as a runtime failure on the
 // first encrypted response. Rejecting the mismatch at DCR time closes
 // that admit/runtime-reject gap. Both empty is permitted: the client

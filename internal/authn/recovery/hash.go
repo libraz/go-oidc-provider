@@ -15,7 +15,7 @@ import (
 // argon2idParams carries the parameter set used for every recovery
 // code hashed by this package. The values come from OWASP's 2024
 // password-hashing guidance (m=64MiB, t=3, p=1, salt=16, key=32) and
-// match the [github.com/libraz/go-oidc-provider/internal/authn].Argon2idDefaults
+// match the internal/authn.Argon2idDefaults
 // reference impl used for client_secret hashing — but the recovery
 // package keeps the constants private and intentionally NOT
 // configurable in v1.0. Tunability is a future-version surface; for now

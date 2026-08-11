@@ -21,7 +21,7 @@ var errBadQValue = errors.New("authorizeendpoint: malformed q-value")
 // through another package's catalogue are absent so there is exactly one
 // definition of each: the request-gate codes — RFC 9396 §5's
 // "invalid_authorization_details" among them — come from
-// [internal/authorize]'s sentinels, whose Code
+// internal/authorize's sentinels, whose Code
 // [validateRequestExtensions] renders verbatim.
 const (
 	errInvalidRequest           = "invalid_request"

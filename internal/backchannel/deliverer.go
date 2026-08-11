@@ -127,7 +127,7 @@ type HTTPDeliverer struct {
 // Transport is used: redirect handling, request timeout, and the dial-time
 // deny-list always remain under this deliverer's policy.
 //
-// The dial-time hook in [internal/netsec.NewHTTPClient] re-checks the
+// The dial-time hook in [netsec.NewHTTPClient] re-checks the
 // kernel-resolved address against the same deny-list that fires at
 // the URL gate so a DNS-rebinding peer cannot bypass [assertSafeURL]
 // by handing out a public address at gate-time and a private one at
@@ -216,7 +216,7 @@ var ErrPrivateNetworkBlocked = errors.New("backchannel: target resolves to a den
 // The check delegates to the shared [*securefetch.Client]; the same
 // envelope backs the JAR JWKS fetcher and the sector_identifier_uri
 // fetcher so the OP-side SSRF gates cannot drift apart. The
-// dial-time check installed by [internal/netsec.NewHTTPClient]
+// dial-time check installed by [netsec.NewHTTPClient]
 // re-runs the deny-list against the kernel-resolved address so a DNS
 // rebinding peer cannot pivot between gate and dial.
 //

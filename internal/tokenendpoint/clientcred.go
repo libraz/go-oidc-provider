@@ -64,7 +64,7 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 // indicator on a token request in this profile: the form parser
 // surfaces a wire error when the same parameter occurs more than once
 // with differing values, mirroring the authorize-side single-value
-// posture (see [internal/authorize.singleValue]). Repeated identical
+// posture (see internal/authorize.singleValue). Repeated identical
 // values are tolerated so an HTTP middleware that re-emits the body
 // does not break the handler.
 //
@@ -101,7 +101,7 @@ func parseClientCredsRequest(w http.ResponseWriter, r *http.Request) ([]string, 
 // the client_credentials grant: when the request carries a resource
 // indicator the value MUST appear in [store.Client.Resources]. Empty
 // resource is the no-op path; the issuance helper falls back to the
-// issuer audience. The error code matches [internal/authorize.ErrResourceNotAllowed]
+// issuer audience. The error code matches internal/authorize.ErrResourceNotAllowed
 // verbatim so a client porting a request from /authorize sees the same
 // wire shape on /token.
 //
@@ -159,7 +159,7 @@ func checkTokenScopeAllowlist(
 	return true
 }
 
-// writeClientCredsAuthError translates [clientcred.Err*] sentinels onto
+// writeClientCredsAuthError translates clientcred.Err* sentinels onto
 // the wire form. The mapping is:
 //
 //   - ErrPublicClient, ErrGrantNotPermitted → 400 unauthorized_client.

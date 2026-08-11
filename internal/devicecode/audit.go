@@ -93,7 +93,7 @@ const (
 	// warn-level so a transient substore outage that quietly
 	// defeats the ladder is still visible. Extras carry: client_id,
 	// error (the stringified store error). Mirrors
-	// [github.com/libraz/go-oidc-provider/internal/ciba.AuditPollObservationFailed]
+	// internal/ciba.AuditPollObservationFailed
 	// for the CIBA surface.
 	AuditPollObservationFailed = string(auditevent.AuditDeviceCodePollObservationFailed)
 )

@@ -336,7 +336,7 @@ func isConfidentialAuthMethod(m string) bool {
 // Only "none" qualifies; private_key_jwt clients are confidential
 // (they hold an RP-issued private key the OP never sees), so
 // [store.Client.PublicClient] must be false for them or
-// [internal/clientauth.methodAllowedForClient] would block the
+// [clientauth.methodAllowedForClient] would block the
 // assertion verifier path.
 func isPublicAuthMethod(m string) bool {
 	return m == "none"

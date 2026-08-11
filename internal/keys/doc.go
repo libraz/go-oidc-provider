@@ -14,7 +14,7 @@
 //
 // The OP runs on multiple identifier-minting paths that read from
 // [crypto/rand]: signing-key derivation here, session / chooser_group
-// IDs in [internal/sessions], DPoP nonce rotation in
+// IDs in internal/sessions, DPoP nonce rotation in
 // [op.InMemoryDPoPNonceSource], CSRF / state token derivation, etc.
 // Read failures are exceedingly rare on supported platforms, but
 // [crypto/rand] does report errors and the codebase MUST handle each
@@ -27,7 +27,7 @@
 //     in-flight transaction surfaces a typed failure (HTTP 500 /
 //     internal_error / op.Error) so the operator sees the entropy
 //     outage instead of admitting an attacker-influenced or
-//     predictable value. [internal/sessions.newID] is the
+//     predictable value. internal/sessions.newID is the
 //     reference implementation.
 //
 //   - Best-effort rotations — values whose previous reading remains

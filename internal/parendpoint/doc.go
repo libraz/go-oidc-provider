@@ -13,12 +13,12 @@
 //
 // The package is a thin orchestration over four collaborators:
 //
-//   - [internal/authn] for client authentication (RFC 9126 §2.1 mandates
+//   - internal/authn for client authentication (RFC 9126 §2.1 mandates
 //     it, even for public clients);
-//   - [internal/authorize] for parsing and validating the request (the
+//   - internal/authorize for parsing and validating the request (the
 //     same checks /authorize runs);
 //   - [op/store.PushedAuthRequestStore] for persistence;
-//   - [internal/timex] (via the package-local Clock) for wall-clock reads.
+//   - internal/timex (via the package-local Clock) for wall-clock reads.
 //
 // The handler never touches the wall clock directly; [Deps.Clock] is threaded
 // through every state-changing operation so tests can pin "now"
@@ -31,8 +31,8 @@
 //	{"error": "invalid_request", "error_description": "..."}
 //
 // Cache-Control: no-store is stamped on every response (success + error). The
-// handler maps the sentinels exposed by [internal/authn] and
-// [internal/authorize] onto the wire codes without leaking which sub-case
+// handler maps the sentinels exposed by internal/authn and
+// internal/authorize onto the wire codes without leaking which sub-case
 // triggered the rejection.
 //
 // # Single-use semantics

@@ -146,7 +146,7 @@ func renderJARError(w http.ResponseWriter, r *http.Request, deps resolved, code,
 //     no preregistration means the URI is not honoured.
 //   - The same SSRF deny-list (URL-time + dial-time), body cap, and
 //     content-type policy that backs the JWKS / sector_identifier_uri
-//     fetchers. The implementation goes through [internal/netsec] so
+//     fetchers. The implementation goes through internal/netsec so
 //     a DNS-rebinding peer cannot pivot between the URL gate and the
 //     dial; cloud-metadata IPs remain rejected even when AllowPrivate
 //     is enabled.

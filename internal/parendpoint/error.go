@@ -11,9 +11,9 @@ import (
 // stays auditable. Codes the endpoint emits through another package's
 // catalogue are absent so there is exactly one definition of each:
 // "invalid_client" and "use_dpop_nonce" come from
-// [internal/clientauth/clientauthhttp] and [internal/dpop], and the
+// internal/clientauth/clientauthhttp and internal/dpop, and the
 // request-gate codes — RFC 9396 §5's "invalid_authorization_details"
-// among them — come from [internal/authorize]'s sentinels, whose Code
+// among them — come from internal/authorize's sentinels, whose Code
 // [validateRequestExtensions] renders verbatim.
 const (
 	errInvalidRequest       = "invalid_request"

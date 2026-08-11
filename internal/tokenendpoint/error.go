@@ -9,7 +9,7 @@ import (
 // RFC 6749 §5.2 wire codes the handler emits. The list is closed; ad-hoc
 // codes are forbidden so the discoverable error surface stays auditable.
 // "invalid_client" and "use_dpop_nonce" are emitted from
-// [internal/clientauth/clientauthhttp] and [internal/dpop] respectively
+// internal/clientauth/clientauthhttp and internal/dpop respectively
 // so the constants live there; this list omits them.
 const (
 	errInvalidRequest       = "invalid_request"

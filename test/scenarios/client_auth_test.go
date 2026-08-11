@@ -40,7 +40,7 @@ import (
 // as JSON records into a bytes.Buffer. Tests that assert on emitted
 // audit events build a Provider through this capture so the wire
 // layout observed by an embedder's slog handler is what the test
-// sees. Mirrors the helper in [internal/tokenendpoint/audit_test.go]
+// sees. Mirrors the helper in internal/tokenendpoint/audit_test.go
 // so a reader who knows that suite can navigate here without
 // re-learning the capture surface.
 type scenarioAuditCapture struct {

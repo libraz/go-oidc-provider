@@ -60,7 +60,7 @@ type ACRResolver func(ctx context.Context, in ACRResolveInput) ACRResolveOutput
 
 // Default timing budgets the handler uses when [Deps] does not override
 // them. The interaction cookie lifetime mirrors the cookie profile
-// configured in [internal/cookie]; the authorization-code TTL matches
+// configured in internal/cookie; the authorization-code TTL matches
 // the OAuth code-flow short-lived posture.
 const (
 	// DefaultAuthCodeTTL is the lifetime of an issued authorization code.
@@ -69,7 +69,7 @@ const (
 	DefaultAuthCodeTTL = 60 * time.Second
 
 	// DefaultInteractionTTL is the lifetime of an interaction record.
-	// One hour matches the [internal/cookie.InteractionProfile] MaxAge so
+	// One hour matches the [cookie.InteractionProfile] MaxAge so
 	// the cookie and the store row expire together.
 	DefaultInteractionTTL = time.Hour
 
@@ -91,7 +91,7 @@ const (
 )
 
 // Clock is the structural wall-clock dependency, mirroring the interface in
-// [internal/tokenendpoint] so a value satisfying [op.Clock] flows through
+// internal/tokenendpoint so a value satisfying [op.Clock] flows through
 // without an adapter. A nil [Deps.Clock] falls back to the system clock.
 type Clock interface {
 	Now() time.Time
@@ -276,7 +276,7 @@ type Deps struct {
 	SPAStaticDir string
 
 	// Clock supplies the current wall-clock reading. A nil value falls
-	// back to [internal/timex.SystemClock].
+	// back to [timex.SystemClock].
 	Clock Clock
 
 	// AuthCodeTTL is the lifetime of issued authorization codes. Zero

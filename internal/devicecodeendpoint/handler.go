@@ -98,7 +98,7 @@ type Deps struct {
 	Scopes *scoperegistry.Registry
 
 	// Clock supplies the current wall-clock reading. A nil Clock
-	// falls back to [internal/timex.SystemClock].
+	// falls back to [timex.SystemClock].
 	Clock Clock
 
 	// SecretVerifier verifies confidential-client secrets. A nil
@@ -411,7 +411,7 @@ func checkedJKT(checked *dpop.Checked) string {
 	return checked.JKT
 }
 
-// writeDPoPError translates a [dpop.Err*] sentinel onto the wire form,
+// writeDPoPError translates a dpop.Err* sentinel onto the wire form,
 // including the RFC 9449 §8 `use_dpop_nonce` challenge. Both proof
 // phases route through it so their boundary mapping cannot drift.
 func writeDPoPError(ctx context.Context, w http.ResponseWriter, deps Deps, err error) {
@@ -727,7 +727,7 @@ func errAlreadyExists() error {
 // newDeviceCode returns a freshly generated device_code: 32 bytes
 // of crypto/rand encoded as base64url-no-pad (256 bits of
 // entropy). The body lives in this package rather than
-// [internal/devicecode] because the wire-secret path is owned by
+// internal/devicecode because the wire-secret path is owned by
 // the issuer side; the helper packages stay free of HTTP / I/O
 // concerns.
 func newDeviceCode() (string, error) {
@@ -754,7 +754,7 @@ func bindingLabel(dpopJKT, mtlsThumbprint string) string {
 
 // isFormContent reports whether ct is application/x-www-form-
 // urlencoded, tolerating optional parameters (charset, boundary,
-// etc.). Mirrors the helper in [internal/parendpoint] so the two
+// etc.). Mirrors the helper in internal/parendpoint so the two
 // endpoints stay aligned.
 func isFormContent(ct string) bool {
 	return endpointsupport.IsFormContent(ct)

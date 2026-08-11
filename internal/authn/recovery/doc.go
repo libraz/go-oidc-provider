@@ -9,7 +9,7 @@
 // handlers, and any user-facing display logic live elsewhere. Callers
 // compose the building blocks here into a fall-back authenticator
 // branch. The package does not import any other internal authn code:
-// the existing [github.com/libraz/go-oidc-provider/internal/authn]
+// the existing internal/authn
 // package handles **client** authentication at the token endpoint and
 // is unrelated; the argon2id helpers here intentionally duplicate the
 // minimal subset needed rather than depending on that package.

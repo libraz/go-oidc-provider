@@ -62,13 +62,13 @@ var (
 	ErrAccessTokenTypeMismatch = errors.New("tokens: access token typ header is not at+jwt")
 )
 
-// Clock is the package-local view of [internal/timex.Clock]. It is
+// Clock is the package-local view of [timex.Clock]. It is
 // duplicated here (rather than imported transitively through op/) so
 // this package keeps the same SigningKey/Entry split it already uses
 // for keys: the public op/ namespace converts its [op.Clock] to this
 // type at the boundary. Implementations MUST be safe for concurrent
 // use. A nil [AccessTokenVerifier.Clock] falls back to
-// [internal/timex.SystemClock] — see [AccessTokenVerifier.now].
+// [timex.SystemClock] — see [AccessTokenVerifier.now].
 type Clock interface {
 	Now() time.Time
 }
@@ -89,7 +89,7 @@ type AccessTokenVerifier struct {
 	Issuer string
 
 	// Clock supplies the current wall-clock reading. A nil Clock
-	// falls back to [internal/timex.SystemClock].
+	// falls back to [timex.SystemClock].
 	Clock Clock
 
 	// Leeway is the symmetric tolerance applied to the "exp" and

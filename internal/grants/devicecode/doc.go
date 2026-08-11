@@ -18,8 +18,8 @@
 // alongside any typed sentinel the HTTP layer maps to an OAuth
 // wire code. Token minting, refresh-token issuance, id_token
 // shaping, and persistence stay where they already live in
-// [internal/tokenendpoint] / [internal/tokens] /
-// [internal/grants/refresh] so the decision logic on this grant
+// internal/tokenendpoint / internal/tokens /
+// internal/grants/refresh so the decision logic on this grant
 // can be inspected and tested in isolation.
 //
 // Posture choices the package encodes:

@@ -1,7 +1,7 @@
 // Package argon2id is the in-tree shared argon2id PHC verifier the
 // library's three credential surfaces — client_secret
-// ([internal/clientauth]), password ([internal/authn/password]), and
-// recovery code ([internal/authn/recovery]) — funnel through.
+// (internal/clientauth), password (internal/authn/password), and
+// recovery code (internal/authn/recovery) — funnel through.
 //
 // The package exists for two reasons:
 //

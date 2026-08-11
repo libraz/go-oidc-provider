@@ -12,7 +12,7 @@
 // live elsewhere. Callers compose the building blocks here into a
 // passkey authenticator branch. The package does not import any other
 // internal authn code: the existing
-// [github.com/libraz/go-oidc-provider/internal/authn] package handles
+// internal/authn package handles
 // **client** authentication at the token endpoint and is unrelated.
 // # Attestation policy
 // The default conveyance is "none" ([protocol.PreferNoAttestation]),

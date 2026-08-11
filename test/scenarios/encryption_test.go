@@ -611,15 +611,15 @@ func TestScenario_ENC_032_DefaultJWEInventoryFromKeystore(t *testing.T) {
 
 // TestScenario_ENC_035_NestedJWEDepthCapRejected pins the structural
 // depth ceiling on nested JWE-of-JWE-of-...-of-JWS request objects
-// (see [internal/jose.MaxJOSENestingDepth]). The JAR / PAR verifier
-// budgets [internal/jose.MaxJOSENestingDepth] total JOSE layers; a
+// (see internal/jose.MaxJOSENestingDepth). The JAR / PAR verifier
+// budgets internal/jose.MaxJOSENestingDepth total JOSE layers; a
 // chain whose JWE wrappers + inner JWS exceed that ceiling MUST be
 // rejected with a 400 invalid_request_object envelope (the same wire
 // shape ENC-030 / ENC-031 pin for unsupported alg / enc — the failure
 // class is collapsed so an attacker probing for the cap value via
 // wire-code variation learns nothing).
 //
-// The test wraps a happy-path inner JWS in [internal/jose.MaxJOSENestingDepth]
+// The test wraps a happy-path inner JWS in internal/jose.MaxJOSENestingDepth
 // JWE layers — one over the budget — and asserts the /authorize endpoint
 // responds with a 400 carrying error=invalid_request_object. The pair
 // (cap minus one accepted by ENC-040, cap plus one rejected here)

@@ -14,7 +14,7 @@ import (
 // primitive wiring (TOTP codec, passkey RP origin, hash adapter,
 // email delivery, …) to follow-up waves; built-in Step values such
 // as [op.PrimaryPassword] continue to return this sentinel directly
-// from Begin / Continue. The compiler in [internal/authn] refuses
+// from Begin / Continue. The compiler in internal/authn refuses
 // to compile a [op.LoginFlow] that names a built-in Step until the
 // follow-up lands, so the deferral surfaces at construction time
 // rather than the first request. Update this constant when each

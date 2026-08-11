@@ -72,7 +72,7 @@ type Signer struct {
 }
 
 // SignerConfig is the parameter bundle for [NewSigner]. The shape
-// mirrors the verifier configs in [internal/dpop] / [internal/mtls] so
+// mirrors the verifier configs in internal/dpop / internal/mtls so
 // embedders see a uniform style across the protocol packages.
 type SignerConfig struct {
 	// Key is the active OP signing key. Required. The package signs
@@ -131,7 +131,7 @@ func NewSigner(cfg SignerConfig) (*Signer, error) {
 
 // deriveJWSAlgorithm picks the JWS "alg" header for a [tokens.SigningKey]
 // based on the public key shape. The library signs with ECDSA P-256
-// only, and [internal/keys.NewSet] rejects every other key shape on
+// only, and internal/keys.NewSet rejects every other key shape on
 // construction, so a key reaching this function MUST be a P-256 ECDSA
 // key. Delegating to [jose.KeyShape] keeps the
 // alg/key matrix in one place — the wrapper here surfaces "unknown key
@@ -256,7 +256,7 @@ func validatePayload(p Payload) error {
 // algorithm is supplied by the caller (already derived from the key
 // shape at [NewSigner] construction time via [deriveJWSAlgorithm]) so
 // runtime never reads a stale ES256 default for an RSA / Ed25519 key.
-// The configuration mirrors [internal/tokens.newSigner] so both
+// The configuration mirrors [tokens.newSigner] so both
 // endpoints emit JWTs with identical "kid" / "typ" / "alg" headers;
 // the duplication is preferred over importing the unexported helper. The
 // returned interface is intentional: josev4.Signer is the third-party

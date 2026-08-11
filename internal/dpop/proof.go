@@ -170,7 +170,7 @@ func decodeProofClaims(payload []byte) (proofClaims, error) {
 // the query / fragment removed.
 //
 // The function is tolerant of the transports the OP runs on top of:
-// when [internal/proxy] has rewritten the inbound request through the
+// when internal/proxy has rewritten the inbound request through the
 // trusted-proxy middleware (XFP / XFH), the cloned URL carries the
 // externally-visible scheme and host, and this canonicalisation
 // observes them verbatim. Callers that bypass that middleware MAY pass
@@ -183,7 +183,7 @@ func canonicalRequestURL(r requestURLSource) string {
 		// empty for incoming requests — the test server fills the
 		// host but expects the handler to derive scheme from TLS.
 		// When a trusted reverse proxy terminated TLS the scheme
-		// is already populated by the [internal/proxy] middleware,
+		// is already populated by the internal/proxy middleware,
 		// so this fallback only fires for direct connections.
 		if r.TLS {
 			u.Scheme = "https"

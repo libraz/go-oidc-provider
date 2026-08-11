@@ -94,7 +94,7 @@ func redirectURIMatches(client *store.Client, requested string) bool {
 // allowance for native / public clients (a native app registers
 // http://127.0.0.1/cb but binds an ephemeral port at runtime). It is the
 // shared primitive behind both the redirect_uri check here and the
-// end_session post_logout_redirect_uri check in [internal/endsession], so
+// end_session post_logout_redirect_uri check in internal/endsession, so
 // the two surfaces treat native loopback callbacks identically instead of
 // the logout path enforcing a stricter exact-match than /authorize.
 func LoopbackURIMatches(client *store.Client, registered, requested string) bool {

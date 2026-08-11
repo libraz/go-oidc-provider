@@ -157,7 +157,7 @@ func TestEncryptionSet_RetirementGate(t *testing.T) {
 }
 
 // A *keys.EncryptionSet MUST satisfy the contextual resolver extension,
-// not merely the base resolver: [internal/jar] discovers the context
+// not merely the base resolver: internal/jar discovers the context
 // seam by type-asserting the resolver it was handed, so losing the
 // method would silently drop the encryption-side retired-kid event back
 // to an uncorrelated one with nothing failing to compile at the call
@@ -172,7 +172,7 @@ var _ jose.ContextualEncryptionKeyResolver = (*keys.EncryptionSet)(nil)
 // against the detached fallback and so would not detect the audit event
 // arriving without request correlation.
 //
-// [internal/jose.Decrypt] consults the resolver through an interface
+// [jose.Decrypt] consults the resolver through an interface
 // whose methods take no context, which is why the context is pinned
 // onto a copy of the set rather than passed per lookup.
 func TestEncryptionSet_WithContext_ObserverReceivesCallerContext(t *testing.T) {

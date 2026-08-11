@@ -138,7 +138,7 @@ func (d PollDecision) String() string {
 type PollInput struct {
 	// Now is the wall-clock reading the caller anchors the gate
 	// against. The caller MUST NOT use [time.Now] directly: every
-	// call site routes through [internal/timex.Clock] so the
+	// call site routes through internal/timex.Clock so the
 	// discipline is testable without sleep loops.
 	Now time.Time
 

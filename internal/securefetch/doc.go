@@ -1,6 +1,6 @@
 // Package securefetch hosts the hardened HTTP client envelope every
 // outbound RP-controlled fetcher in the OP shares. The package layers
-// on top of [internal/netsec]: netsec owns the SSRF deny-list and the
+// on top of internal/netsec: netsec owns the SSRF deny-list and the
 // dial-time gate; this package adds the response-side controls every
 // call site re-implemented before consolidation — body cap, accepted
 // content-type list, status check, redirect refusal — and packages

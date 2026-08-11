@@ -19,7 +19,7 @@ import (
 // negative caching. Tests opt into more permissive shapes by setting fields
 // explicitly.
 //
-// Every field forwards to [internal/rpjwks], which is where the OP-wide
+// Every field forwards to internal/rpjwks, which is where the OP-wide
 // relying-party JWKS limits are defined; the outbound-encryption side does not
 // get to introduce SSRF / DoS surface the inbound side does not have.
 type Config struct {
@@ -64,7 +64,7 @@ type Config struct {
 	BaseTransport http.RoundTripper
 
 	// Policy narrows the (alg, enc) pairs this resolver will build a
-	// recipient for, below the [internal/jose] allow-list. The zero
+	// recipient for, below the internal/jose allow-list. The zero
 	// value leaves the full allow-list in force. A pair the policy
 	// removed surfaces [ErrAlgNotAllowed], so an operator restriction
 	// blocks the outbound JWE instead of only shrinking the discovery
@@ -113,8 +113,8 @@ func New(cfg Config) *Resolver {
 //     surfaces [ErrNoEncryptionConfigured] so the caller skips the
 //     JWE wrap.
 //  2. Both alg and enc must be on the OP allow-list
-//     ([internal/jose.JWEAlg.IsAllowed] /
-//     [internal/jose.JWEEnc.IsAllowed]) and must survive
+//     ([jose.JWEAlg.IsAllowed] /
+//     [jose.JWEEnc.IsAllowed]) and must survive
 //     [Config.Policy]; a non-empty value outside either surfaces
 //     [ErrAlgNotAllowed].
 //  3. The JWKS comes from inline JWKs (preferred) or from

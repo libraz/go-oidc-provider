@@ -27,7 +27,7 @@ type rpEncryptionKeypair struct {
 }
 
 // newRPEncryptionKeypair generates a fresh 2048-bit RSA key — the
-// minimum allowed by [internal/clientencjwks] and [internal/jose] —
+// minimum allowed by internal/clientencjwks and internal/jose —
 // and marshals its public half into a JWKS the OP can ingest as
 // [store.Client.JWKs]. Each test calls this helper so parallel tests
 // do not share key material; the cost is acceptable because the

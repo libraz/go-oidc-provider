@@ -3,8 +3,8 @@ package store
 import "fmt"
 
 // AccessTokenFormat selects the wire encoding of issued access
-// tokens. The type lives in the [store] package so internal handlers
-// can reference it without taking a dependency on the [op] public
+// tokens. The type lives in this package so internal handlers
+// can reference it without taking a dependency on the op public
 // package; the public alias [op.AccessTokenFormat] re-exports it for
 // embedders.
 //

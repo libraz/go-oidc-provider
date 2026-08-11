@@ -645,7 +645,7 @@ func mostRecent(sessions []*store.Session) *store.Session {
 // [crypto/rand] read failure propagates to the caller so the
 // in-flight transaction fails closed rather than admitting a
 // predictable identifier; see the entropy-failure policy on
-// [github.com/libraz/go-oidc-provider/internal/keys] for the central
+// internal/keys for the central
 // rule.
 func newID() (string, error) {
 	buf := make([]byte, IDLength)

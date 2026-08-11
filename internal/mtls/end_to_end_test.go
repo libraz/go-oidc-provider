@@ -377,7 +377,7 @@ func TestE2E_MTLS_FullFlow(t *testing.T) {
 
 // pkceForMTLS returns a deterministic PKCE pair the e2e flow can
 // thread through /authorize and /token. The pair shadows the helper
-// in [internal/dpop] so this _test package does not need to import
+// in internal/dpop so this _test package does not need to import
 // the internal pkce machinery.
 func pkceForMTLS() (verifier, challenge string) {
 	verifier = "test-verifier-test-verifier-test-verifier-test-verifier-1234567"
@@ -390,7 +390,7 @@ func pkceForMTLS() (verifier, challenge string) {
 
 // pkceChallenge is the SHA-256 base64url-no-pad transformation RFC
 // 7636 §4.1 prescribes. Inlined to keep this test file independent
-// of [internal/pkce].
+// of internal/pkce.
 func pkceChallenge(v string) string {
 	sum := sha256.Sum256([]byte(v))
 	return base64.RawURLEncoding.EncodeToString(sum[:])

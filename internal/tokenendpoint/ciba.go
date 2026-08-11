@@ -300,7 +300,7 @@ func cibaAuthErrorCode(err error) string {
 	}
 }
 
-// writeCIBAAuthError translates the [cgrant.Err*] sentinels onto
+// writeCIBAAuthError translates the cgrant.Err* sentinels onto
 // wire codes. The mapping mirrors the comments on the package
 // sentinels (internal/grants/ciba/ciba.go):
 //

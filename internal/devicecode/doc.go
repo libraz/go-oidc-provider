@@ -5,11 +5,11 @@
 // audit event names the OP emits across the device flow.
 //
 // The package owns no I/O surface and no HTTP handler: the endpoint
-// handler at [github.com/libraz/go-oidc-provider/internal/devicecodeendpoint]
+// handler at internal/devicecodeendpoint
 // composes these helpers with the substore at
 // [github.com/libraz/go-oidc-provider/op/store.DeviceCodeStore], and the
 // token-endpoint grant at
-// [github.com/libraz/go-oidc-provider/internal/grants/devicecode] reuses
+// internal/grants/devicecode reuses
 // the polling discipline at /token poll time.
 //
 // The package covers user_code generation and normalisation, the

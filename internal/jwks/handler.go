@@ -102,7 +102,7 @@ func HandlerWithOptions(set *keys.Set, opts HandlerOptions) http.Handler {
 // it — so the marshal and the SHA-256 run only when the published key
 // material actually changes.
 //
-// Invalidation rests on two properties of [internal/keys]:
+// Invalidation rests on two properties of internal/keys:
 //
 //   - A [keys.Set] is immutable once [keys.NewSet] returns, and the
 //     handler binds one for its lifetime, so the signing half of the

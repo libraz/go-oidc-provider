@@ -26,17 +26,17 @@ var ErrJWKSNotConfigured = errors.New("clientauth: client has no JWKs configured
 var ErrJWKSURIUnsupported = errors.New("clientauth: JWKsURI is not configured on this resolver")
 
 // URLFetcher fetches a parsed JWK Set from a remote URL. The
-// production wiring backs this with [github.com/libraz/go-oidc-provider/internal/jar.Fetcher],
+// production wiring backs this with internal/jar.Fetcher,
 // which adds caching, singleflight, an SSRF deny-list, and a body cap.
-// The interface stays narrow so [internal/clientauth] does not have
-// to import [internal/jar] (and so embedders can stub it in tests).
+// The interface stays narrow so internal/clientauth does not have
+// to import internal/jar (and so embedders can stub it in tests).
 type URLFetcher interface {
 	Fetch(ctx context.Context, url string) (*josev4.JSONWebKeySet, error)
 }
 
 // freshURLFetcher is the optional extension a [URLFetcher] implements to
 // support a cache-bypassing refetch. The production
-// [github.com/libraz/go-oidc-provider/internal/jar.Fetcher] satisfies it;
+// internal/jar.Fetcher satisfies it;
 // a fetcher that only implements [URLFetcher] simply loses key-rotation
 // recovery (the resolver falls back to the cached keyset).
 type freshURLFetcher interface {

@@ -72,7 +72,7 @@ func (JSONDriver) Render(w http.ResponseWriter, _ *http.Request, prompt Prompt) 
 }
 
 // ParseSubmission implements [Driver]. It reads at most
-// [maxSubmissionBytes] from r.Body, decodes the [FormSubmission]
+// 32 KiB from r.Body, decodes the [FormSubmission]
 // envelope, and returns the result. Unknown fields produce
 // [ErrSubmissionMalformed].
 func (JSONDriver) ParseSubmission(r *http.Request) (FormSubmission, error) {

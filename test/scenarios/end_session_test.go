@@ -67,7 +67,7 @@ func newESProvider(t *testing.T) (*testkit.Provider, *store.Client) {
 // /end_session handler will accept. mutate, when non-nil, can override
 // any claim before serialisation. The default iat / exp are anchored
 // to the current wall clock so the handler's iat-age soft cap (30 days
-// per [internal/endsession.maxIDTokenHintAge]) admits the token.
+// per internal/endsession.maxIDTokenHintAge) admits the token.
 func mintESIDToken(t *testing.T, p *testkit.Provider, mutate func(*esIDTokenClaims)) string {
 	t.Helper()
 	now := time.Now().Unix()

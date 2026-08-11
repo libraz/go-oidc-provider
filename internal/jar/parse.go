@@ -59,7 +59,7 @@ type Object struct {
 // caller looks up the matching keyset.
 //
 // Parse rejects "alg=none", the HMAC family, and any value outside the
-// project allow-list (see [internal/jose.Algorithm]). The check happens
+// project allow-list (see [jose.Algorithm]). The check happens
 // before any signature work so a downgrade attack cannot trick a later
 // verifier into accepting a weaker primitive.
 func Parse(raw string) (*Object, error) {

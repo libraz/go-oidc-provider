@@ -66,7 +66,7 @@ func ValidateBindingMessage(s string) (string, error) {
 // deliberate superset of the RFC 6749 §3.3 separator (ASCII space,
 // 0x20) so a lenient CIBA client that separates scopes with tabs still
 // authenticates. Spec-conformant (0x20-separated) inputs tokenise
-// identically to the wire-facing 0x20-only path in [internal/oidcscope].
+// identically to the wire-facing 0x20-only path in internal/oidcscope.
 func ValidateScope(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, ErrMissingScope

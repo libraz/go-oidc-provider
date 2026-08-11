@@ -13,7 +13,7 @@
 //
 //   - JWT-shaped (three base64 segments separated by "."): treated as a
 //     JWT-formatted access token (RFC 9068). Verified through
-//     [internal/tokens.AccessTokenVerifier] (issuer + signature + exp +
+//     internal/tokens.AccessTokenVerifier (issuer + signature + exp +
 //     iat). On a successful verify the handler matches the token's
 //     "client_id" against the authenticated client; on a match the
 //     revocation is acknowledged but performs NO state mutation. v1.0
@@ -93,8 +93,8 @@
 //
 // The package is a thin orchestration over three collaborators:
 //
-//   - [internal/clientauth] for client authentication;
-//   - [internal/tokens.AccessTokenVerifier] for JWT revocation
+//   - internal/clientauth for client authentication;
+//   - internal/tokens.AccessTokenVerifier for JWT revocation
 //     acknowledgement;
 //   - [op/store.RefreshTokenStore] for refresh-token chain revocation.
 //

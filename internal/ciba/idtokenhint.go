@@ -82,7 +82,7 @@ var (
 // the endpoint, and the signature plus the audience binding are what
 // identify it and prevent cross-OP or cross-client forgery. The same
 // deliberate choice is documented for RP-Initiated Logout's
-// id_token_hint in [github.com/libraz/go-oidc-provider/internal/endsession].
+// id_token_hint in internal/endsession.
 //
 // # Pairwise subjects
 //

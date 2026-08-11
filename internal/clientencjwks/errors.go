@@ -14,8 +14,8 @@ var (
 	ErrNoEncryptionConfigured = errors.New("clientencjwks: client did not register encryption metadata")
 
 	// ErrAlgNotAllowed signals that alg or enc falls outside the
-	// v0.9.1 ship allow-list ([internal/jose.AllowedJWEAlgs] /
-	// [internal/jose.AllowedJWEEncs]). The class is collapsed
+	// v0.9.1 ship allow-list (internal/jose.AllowedJWEAlgs /
+	// internal/jose.AllowedJWEEncs). The class is collapsed
 	// because an attacker probing for sub-causes through the wire
 	// response would learn nothing useful.
 	ErrAlgNotAllowed = errors.New("clientencjwks: alg or enc not allowed")

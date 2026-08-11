@@ -173,7 +173,7 @@ var (
 
 	// ErrRequestObjectInvalid indicates a structural problem with the
 	// JAR "request" parameter (typically malformed JWT). The HTTP
-	// layer maps richer JAR-specific errors via the [internal/jar]
+	// layer maps richer JAR-specific errors via the internal/jar
 	// sentinels; this validator-level sentinel exists so the parser
 	// can surface bare empty / non-JWS values uniformly. Maps to
 	// invalid_request_object.

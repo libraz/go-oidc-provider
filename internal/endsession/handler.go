@@ -120,7 +120,7 @@ type Deps struct {
 	Origins *csrf.Allowlist
 
 	// Clock supplies the current wall-clock reading. A nil Clock
-	// falls back to [internal/timex.SystemClock]; see [Deps.Clock]
+	// falls back to [timex.SystemClock]; see [Deps.Clock]
 	// godoc for why the field exists despite the v1.0 verifier not
 	// consulting it.
 	Clock Clock

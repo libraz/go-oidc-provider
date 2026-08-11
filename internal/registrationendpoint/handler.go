@@ -62,7 +62,7 @@ type Deps struct {
 	RegisterPath string
 
 	// Clock supplies the current wall-clock reading. A nil Clock
-	// falls back to [internal/timex.SystemClock].
+	// falls back to [timex.SystemClock].
 	Clock Clock
 
 	// Clients is the read-write client registry. The registration
@@ -141,7 +141,7 @@ type Deps struct {
 	AllowInsecureBackchannelLogoutForDev bool
 
 	// JWEPolicy narrows the JWE alg / enc values a registration may
-	// declare below the [internal/jose] allow-list. The zero value
+	// declare below the internal/jose allow-list. The zero value
 	// leaves the full allow-list in force. The op layer populates it
 	// from [op.WithSupportedEncryptionAlgs] so a client cannot register
 	// an algorithm the OP has been configured to refuse — which the

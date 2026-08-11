@@ -614,7 +614,7 @@ func TestWithIssuer_RejectsMalformedURL(t *testing.T) {
 // FAPI 2.0 §5.4 carve-out for plain http: it is admitted when the host is a
 // loopback IP literal (127.0.0.0/8 or [::1]) so a development boot can use
 // http://127.0.0.1:port without fronting TLS. The validator delegates to
-// [internal/discovery.ValidateIssuer], so this also pins that the option
+// internal/discovery.ValidateIssuer, so this also pins that the option
 // site and the metadata-build pass agree.
 func TestWithIssuer_AcceptsLoopbackHTTP(t *testing.T) {
 	t.Parallel()

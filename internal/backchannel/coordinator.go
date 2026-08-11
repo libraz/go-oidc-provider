@@ -105,7 +105,7 @@ func (p SessionDurabilityPosture) String() string {
 
 // Coordinator orchestrates back-channel logout fan-out. The
 // embedder constructs one at startup (the op package wires it into
-// [internal/endsession.Deps]) and reuses it across logout events;
+// internal/endsession.Deps) and reuses it across logout events;
 // the struct is safe for concurrent use.
 //
 // The coordinator pulls a bounded, distinct audience page from the

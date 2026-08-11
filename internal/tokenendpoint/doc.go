@@ -19,10 +19,10 @@
 //
 // The handler is a thin orchestration over four collaborators:
 //
-//   - [internal/authn] for client authentication;
-//   - [internal/grants/authcode] and [internal/grants/refresh] for the
+//   - internal/authn for client authentication;
+//   - internal/grants/authcode and internal/grants/refresh for the
 //     state transitions;
-//   - [internal/tokens] for JWS minting (id_token + access_token);
+//   - internal/tokens for JWS minting (id_token + access_token);
 //   - [op/store] substores for persistence.
 //
 // The handler never reads the wall clock directly; the [Deps.Clock] field

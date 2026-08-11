@@ -2,7 +2,7 @@
 // [writeUseDPoPNonce] helper. RFC 9449 §8 defines a distinct wire
 // shape for the use_dpop_nonce challenge — it is not just another
 // invalid_request — so the handler MUST route the two new
-// [dpop.Err*] sentinels off the standard ladder. The cases here lock
+// dpop.Err* sentinels off the standard ladder. The cases here lock
 // the routing without spinning up the full token-endpoint fixture
 // (the public op.WithDPoPNonceSource option that exercises this
 // path end-to-end lands in a follow-up).

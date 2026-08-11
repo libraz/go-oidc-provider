@@ -892,7 +892,7 @@ func TestWithJWKSHTTPTransport_RejectsDouble(t *testing.T) {
 
 // TestWithJWKSHTTPTransport_AcceptsCustom exercises the success path:
 // a non-nil transport on a fresh provider constructs cleanly. The
-// transport itself is exercised by the [internal/jar] fetcher tests;
+// transport itself is exercised by the internal/jar fetcher tests;
 // at the option layer we only need to confirm wiring does not
 // regress.
 func TestWithJWKSHTTPTransport_AcceptsCustom(t *testing.T) {

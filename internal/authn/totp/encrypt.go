@@ -30,7 +30,7 @@ var ErrDecrypt = errors.New("totp: ciphertext failed authentication")
 // Codec encrypts and decrypts TOTP shared secrets at rest using
 // AES-256-GCM. The first key is used for new encryptions; subsequent
 // keys are tried in order during decryption to support graceful
-// rotation. Unlike [github.com/libraz/go-oidc-provider/internal/cookie.Codec],
+// rotation. Unlike internal/cookie.Codec,
 // the rotation history MUST be retained until every TOTP record has
 // been re-encrypted under the current key — an enrolled secret may
 // outlive multiple cookie-key rotations because users do not log in

@@ -31,11 +31,11 @@
 //
 // The per-method primitives live under authn/:
 //
-//   - [internal/authn/totp] — RFC 6238 generator and verifier with
+//   - internal/authn/totp — RFC 6238 generator and verifier with
 //     AES-256-GCM at-rest secret encryption.
-//   - [internal/authn/recovery] — argon2id-hashed single-use recovery
+//   - internal/authn/recovery — argon2id-hashed single-use recovery
 //     codes.
-//   - [internal/authn/passkey] — WebAuthn Level 3 registration and
+//   - internal/authn/passkey — WebAuthn Level 3 registration and
 //     assertion.
 //
 // Each subpackage emits its own per-method record (a [Factor]) when a

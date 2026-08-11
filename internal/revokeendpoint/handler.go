@@ -46,7 +46,7 @@ const (
 
 	// chainWalkLimit caps how far the handler walks parent pointers
 	// when computing the chain root for a refresh-token revocation.
-	// The value mirrors [internal/grants/refresh.chainWalkLimit] so
+	// The value mirrors internal/grants/refresh.chainWalkLimit so
 	// a corrupted store cannot loop forever; production grants
 	// rotate at most once per access-token lifetime, well below the
 	// limit.
@@ -73,7 +73,7 @@ type Deps struct {
 
 	// Clients is the read-only client registry. The handler looks
 	// the authenticated client_id up here before delegating to
-	// [internal/clientauth].
+	// internal/clientauth.
 	Clients store.ClientStore
 
 	// RefreshTokens is the substore for refresh tokens. A nil value

@@ -608,7 +608,7 @@ func applyFeatureEndpoints(in Input, doc *Document) {
 // Wire-shape detail: the library admits "request_uri" only in the
 // RFC 9126 §2.2 PAR form (urn:ietf:params:oauth:request_uri:*); a
 // generic https URL is rejected at the parser
-// ([internal/authorize.ParseValues]) because the OP-side fetcher
+// (internal/authorize.ParseValues) because the OP-side fetcher
 // RFC 9101 §10.2 requires (https-only / size cap / TTL / content-type
 // / SSRF deny-list) is not implemented and FAPI 2.0 mandates PAR
 // anyway. The discovery booleans below stay TRUE because there is no
@@ -632,7 +632,7 @@ func applyJARFeature(in Input, doc *Document) {
 	doc.RequireRequestURIRegistration = true
 	// RFC 9101 §10.1: advertise the JWS alg values the verifier
 	// accepts on request objects. The list mirrors the project-
-	// wide allow-list ([internal/jose]); operators that want to
+	// wide allow-list (internal/jose); operators that want to
 	// pin a narrower set per-client use
 	// [op/store.Client.RequestObjectSigningAlg].
 	doc.RequestObjectSigningAlgValuesSupported = []string{
@@ -871,7 +871,7 @@ func join(issuer, mountPrefix, endpoint string) string {
 // to the v1.0 baseline when the caller does not supply an override. The
 // baseline lists the symmetric secret methods plus private_key_jwt
 // (OIDC Core §9 / RFC 7523 §3) — the OP wiring layer always installs
-// the [internal/clientauth.PrivateKeyJWTVerifier] so a client whose
+// the internal/clientauth.PrivateKeyJWTVerifier so a client whose
 // metadata names "private_key_jwt" can authenticate out of the box.
 func defaultAuthMethods(in []string) []string {
 	if len(in) == 0 {

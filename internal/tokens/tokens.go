@@ -1,7 +1,7 @@
 // Package tokens builds and signs the JWTs the OP issues at the token
 // endpoint: id_token (OIDC Core 1.0 §2) and JWT-formatted access_token
 // (RFC 9068). The package is a pure transformation: it consumes a fully-
-// resolved claims bundle and a key from [internal/keys] and emits a
+// resolved claims bundle and a key from internal/keys and emits a
 // compact-serialised JWS string. It never reads the wall clock, never
 // touches storage, and never mutates its inputs.
 //
@@ -14,7 +14,7 @@
 // # Algorithm policy
 //
 // The OP signs with ES256 and only ES256 (RFC 7518 §3.4). The package routes through
-// [internal/jose] / [internal/keys] so the algorithm allow-list and key
+// internal/jose / internal/keys so the algorithm allow-list and key
 // shape are enforced in one place; supplying a non-ECDSA key fails fast.
 //
 // # Hash claims
@@ -58,7 +58,7 @@ type SigningKey struct {
 	Alg string
 }
 
-// fromInternalEntry converts an [internal/keys.Entry] to the package-
+// fromInternalEntry converts an [keys.Entry] to the package-
 // local [SigningKey]. The conversion is trivial; the helper exists so
 // the HTTP layer can keep the conversion in one place.
 func fromInternalEntry(e keys.Entry) SigningKey {
@@ -463,7 +463,7 @@ func serializeJWT(signer josev4.Signer, claims map[string]any) (string, error) {
 }
 
 // FromInternalEntry is the exported converter the HTTP layer uses to
-// translate an [internal/keys.Entry] into this package's local
+// translate an [keys.Entry] into this package's local
 // [SigningKey]. Inlining the function on every call site would create
 // noise; centralising it here keeps the boundary single-sourced.
 func FromInternalEntry(e keys.Entry) SigningKey { return fromInternalEntry(e) }

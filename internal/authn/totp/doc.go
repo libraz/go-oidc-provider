@@ -8,7 +8,7 @@
 // and the [op.WithMFAEncryptionKeys] option live elsewhere. Callers compose
 // the building blocks here into an authenticator chain. The package does
 // not import any other internal authn code: the existing
-// [github.com/libraz/go-oidc-provider/internal/authn] package handles
+// internal/authn package handles
 // **client** authentication at the token endpoint and is unrelated.
 // # Algorithm
 // The implementation follows RFC 6238 with the interop defaults: SHA-1
@@ -28,7 +28,7 @@
 // The shared secret is wrapped with AES-256-GCM before persistence. The
 // key is supplied at construction by the embedder and rotated through the
 // rotation slot on [Codec], identical in shape to
-// [github.com/libraz/go-oidc-provider/internal/cookie.Codec] but with a
+// internal/cookie.Codec but with a
 // distinct lifecycle: TOTP secrets persist for the lifetime of the
 // enrolment, so the rotation history MUST be retained until every record
 // has been re-encrypted under the current key. Storing a TOTP secret

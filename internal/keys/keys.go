@@ -105,7 +105,7 @@ func WithRetiredKidObserver(obs RetiredKidObserver) SetOption {
 // WithJWEPolicy pins the deployment's JWE narrowing onto an
 // [EncryptionSet] so inbound decryption enforces the same alg / enc
 // subset the discovery document advertises. The zero policy leaves the
-// [internal/jose] allow-list in force.
+// internal/jose allow-list in force.
 //
 // Only [NewEncryptionSet] reads the value: a signing [Set] has no JWE
 // surface, so [NewSet] accepts the option and ignores it rather than

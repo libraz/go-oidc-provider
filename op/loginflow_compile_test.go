@@ -249,7 +249,7 @@ func TestProjectStepToFlow_BuiltinSteps_RejectMissingDeps(t *testing.T) {
 // TestProjectStepToFlow_PrimaryPassword_BuildsSuccessfully pins the
 // PrimaryPassword wiring lands cleanly when the store dependency is
 // supplied. Begin / Continue ceremony semantics are covered by
-// [internal/authn/password]'s own tests; this case only asserts the
+// internal/authn/password's own tests; this case only asserts the
 // op.New compile path accepts the configuration.
 func TestProjectStepToFlow_PrimaryPassword_BuildsSuccessfully(t *testing.T) {
 	t.Parallel()

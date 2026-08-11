@@ -25,7 +25,7 @@
 //     consumption;
 //   - [op/store.RegistrationAccessTokenStore] for RAT rotation and
 //     verification;
-//   - [internal/timex] (via the package-local Clock) for wall-clock
+//   - internal/timex (via the package-local Clock) for wall-clock
 //     reads.
 //
 // The handler never touches the wall clock directly; [Deps.Clock] is
