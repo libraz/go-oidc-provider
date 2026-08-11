@@ -13,9 +13,9 @@ import (
 // thumbprint plus a flag reporting whether a cert was actually
 // presented. The split lets handler code distinguish "no cert,
 // issue bearer token" from "cert present, bind to x5t#S256" without
-// inspecting the verifier directly. The shape mirrors [dpopOutcome]
-// so the orchestration code in [authcode.go] / [refresh.go] reads as
-// a flat composition of two binding mechanisms.
+// inspecting the verifier directly. The shape mirrors dpopOutcome so
+// the authorization_code and refresh_token orchestration reads as a
+// flat composition of two binding mechanisms.
 type mtlsOutcome struct {
 	// Thumbprint is the RFC 8705 §3.1 thumbprint of the leaf cert.
 	// Empty when no cert was presented.

@@ -11,7 +11,7 @@ import (
 // /interaction/{uid}: a populated Prompt round-trips through
 // json.Marshal / Unmarshal with `locale`, `ui_locales_hint`, and
 // `locales_available` populated. The orchestrator stamps these
-// fields before [Driver.Render] (see plan 012); the test exists so a
+// fields before [Driver.Render]; the test exists so a
 // future refactor that drops a tag or renames a field fails loudly
 // rather than silently breaking every embedder SPA.
 func TestPrompt_LocaleEnvelopeRoundtrip(t *testing.T) {

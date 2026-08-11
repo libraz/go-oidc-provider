@@ -40,8 +40,8 @@ type TOTPRecord struct {
 
 	// FailedCount is the cumulative number of wrong codes the user has
 	// entered within the current 24-hour window. It increments on every
-	// [internal/authn/totp.Verifier.Verify] miss and resets on success
-	// or after the 24-hour rollover. Backends MUST persist the field
+	// rejected code and resets on success or after the 24-hour
+	// rollover. Backends MUST persist the field
 	// verbatim; the library updates it through [TOTPStore.CompareAndSwap].
 	FailedCount int
 
@@ -54,9 +54,9 @@ type TOTPRecord struct {
 	FirstFailureAt time.Time
 
 	// LockedUntil is the wall-clock time until which verify is
-	// rejected with [internal/authn/totp.ErrLocked]. The library
-	// stamps a 1-hour lock at FailedCount==30 and a 24-hour lock at
-	// FailedCount==90. A zero value means "not locked".
+	// rejected outright, without even comparing the submitted code.
+	// The library stamps a 1-hour lock at FailedCount==30 and a
+	// 24-hour lock at FailedCount==90. A zero value means "not locked".
 	LockedUntil time.Time
 
 	// LastAcceptedStep is the RFC 6238 step counter the most recent

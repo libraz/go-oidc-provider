@@ -295,13 +295,12 @@ type config struct {
 	// client-assertion verifier, and the outbound-encryption recipient
 	// resolver. All three read the same RP endpoints, so a private CA
 	// that one of them needs is a private CA all of them need. Nil means
-	// "use the package default" — [internal/netsec.NewHTTPClient]
-	// constructs an [http.Transport] backed by Go's system trust
-	// store. Embedders that need a private CA (an internal CA-issued
-	// RP JWKS endpoint, the OFCS conformance harness against a
-	// self-signed runner cert) inject one here. The dial-time SSRF
-	// gate is preserved because [netsec.NewHTTPClient] re-wires
-	// DialContext on the supplied transport.
+	// "use the package default": an [http.Transport] backed by Go's
+	// system trust store. Embedders that need a private CA (an internal
+	// CA-issued RP JWKS endpoint, the OFCS conformance harness against a
+	// self-signed runner cert) inject one here. The dial-time SSRF gate
+	// survives either way, because the fetch layer re-wires DialContext
+	// on whichever transport it ends up with.
 	jwksHTTPTransport http.RoundTripper
 
 	// Login flow / UI / static-clients.
@@ -719,9 +718,10 @@ func (c *config) acrValuesSupportedCopy() []string {
 // in the per-audience map specifically so that branch is unambiguous.
 //
 // Defence in depth: every grant endpoint canonicalises the request's
-// resource value through [internal/resourceindicator.Canonicalize]
-// before the wire layer reaches this lookup. The canonicalisation here
-// is a second pass so an embedder who reaches into the issuance call
+// resource value — lower-cased scheme and host, default port and
+// trailing slash normalised — before the wire layer reaches this
+// lookup. The canonicalisation here is a second pass so an embedder
+// who reaches into the issuance call
 // site directly still gets a correct hit for a request whose verbatim
 // bytes differ from the registered key only by case or trailing slash.
 // A malformed resource (validation should have rejected it before this

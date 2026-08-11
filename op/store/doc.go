@@ -97,8 +97,8 @@
 // # Godoc is normative
 //
 // The interfaces declared here are tiny on purpose; their semantics are
-// carried by the godoc on each method. In particular, the sentinel errors in
-// [errors.go] (for example [ErrNotFound], [ErrAlreadyExists],
+// carried by the godoc on each method. In particular, this package's
+// sentinel errors ([ErrNotFound], [ErrAlreadyExists],
 // [ErrAlreadyConsumed], [ErrConflict], [ErrTxRequired]) form part of the
 // contract: a backend that returns a different error for one of the listed
 // failure modes does not satisfy the interface even if it compiles.

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One-shot verification: format check, vet, lint, build, test.
+# One-shot verification: format check, vet, lint, build, test, plus the
+# catalog / stability / documentation gates.
 # This is the script invoked locally before opening a PR.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -77,6 +78,8 @@ log "scenariotool advisories --check"
 
 log "stabilitytool --check"
 "$SCRIPT_DIR/stability.sh" --check
+
+"$SCRIPT_DIR/check_doc_refs.sh"
 
 "$SCRIPT_DIR/verify_examples.sh"
 

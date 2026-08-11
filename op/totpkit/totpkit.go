@@ -91,11 +91,11 @@ const totpDigits = 6
 // verify-path uses the same value internally.
 const totpStep = 30 * time.Second
 
-// confirmSkew is the ±step window [Confirm] accepts. Matches the
-// verify-path default ([internal/authn/totp.Verifier.Skew] zero-value
-// behaviour) so a code an authenticator app produces for the
-// neighbouring step is accepted at enrolment time too. Widening this
-// value would double the confirm-time brute-force surface.
+// confirmSkew is the ±step window [Confirm] accepts. It matches what
+// the verify path accepts when the embedder configures no skew of its
+// own, so a code an authenticator app produces for the neighbouring
+// step is accepted at enrolment time too. Widening this value would
+// double the confirm-time brute-force surface.
 const confirmSkew = 1
 
 // NewCodec constructs a [Codec] from raw key material. The first

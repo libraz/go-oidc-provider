@@ -83,8 +83,9 @@ import (
 // Clock returns the wall-clock time used to evaluate record expiry. It is
 // declared here rather than imported from [github.com/libraz/go-oidc-provider/op]
 // so that the inmem package can be used by the op package itself without a
-// circular dependency. Any [github.com/libraz/go-oidc-provider/internal/timex.Clock]
-// or [op.Clock] value satisfies the interface structurally.
+// circular dependency. Every clock the library passes around has the same
+// single-method shape, so an [op.Clock] — or anything else with a
+// Now() time.Time method — satisfies this one structurally.
 type Clock interface {
 	Now() time.Time
 }
@@ -297,9 +298,11 @@ func (s *Store) PutUser(_ context.Context, u *store.User) {
 
 // PutUserWithPassword seeds u together with a username→subject mapping
 // and the supplied PHC-encoded password hash so tests can drive the
-// PrimaryPassword Step end-to-end. The password hash is stored verbatim;
-// callers are responsible for encoding (typically via
-// [internal/authn/password.NewHasher]). The helper overwrites any prior
+// PrimaryPassword Step end-to-end. The password hash is stored verbatim
+// and the caller owns the encoding, typically through
+// [github.com/libraz/go-oidc-provider/op.HashPassword]: nothing here
+// hashes on the caller's behalf, so seeding a plaintext value produces
+// a record no login can ever match. The helper overwrites any prior
 // record for the same Subject.
 func (s *Store) PutUserWithPassword(_ context.Context, u *store.User, username string, passwordHash []byte) {
 	s.users.putWithPassword(u, username, passwordHash)

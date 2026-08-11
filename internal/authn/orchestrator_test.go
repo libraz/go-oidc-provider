@@ -202,7 +202,7 @@ func TestTickSinglePasswordSuccess(t *testing.T) {
 	}
 }
 
-// TestTickPropagatesClientView pins the plan 016 §3.2 wiring:
+// TestTickPropagatesClientView pins the client-view wiring:
 // State.Client (the read-only [interaction.ClientView] populated by
 // the HTTP layer) MUST surface verbatim on every BeginInput.Client
 // the orchestrator hands a registered Authenticator. The check is one

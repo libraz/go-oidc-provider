@@ -13,9 +13,10 @@ import (
 //
 // The struct is a flat carrier so backends do not have to model nested
 // objects: every field maps to a single column / document attribute.
-// Re-assembling the nested [internal/authn/passkey.CredentialFlags] /
-// [internal/authn/passkey.AuthenticatorData] views is the caller's job
-// and lives in internal/authn/passkey.
+// Re-assembling the nested authenticator-data and credential-flag
+// views WebAuthn defines is the library's job, not the backend's — a
+// backend that stores and returns these fields unaltered has done
+// everything the format requires of it.
 //
 // Backends MUST treat the byte fields (CredentialID, PublicKey,
 // AAGUID) as opaque. In particular, PublicKey is the COSE_Key encoding

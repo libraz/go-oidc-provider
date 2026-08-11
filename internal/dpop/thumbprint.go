@@ -39,7 +39,7 @@ const minRSAKeyBits = jose.MinRSAKeyBits
 //     the caller threaded its DPoP signing key through a verifier
 //     entry point, which is a programmer bug.
 //   - Only ECDSA P-256, Ed25519, and RSA (≥ [minRSAKeyBits] modulus)
-//     are accepted, mirroring the algorithm allow-list ([proof.go]).
+//     are accepted, mirroring the proof verifier's algorithm allow-list.
 //     Other key types fail closed so a misconfigured client cannot
 //     obtain a thumbprint that the verifier would later refuse to
 //     match.

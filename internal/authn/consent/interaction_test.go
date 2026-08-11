@@ -65,7 +65,7 @@ func TestInteraction_BeginEmitsPromptWithCatalogProjection(t *testing.T) {
 	}
 }
 
-// TestInteraction_BeginPropagatesClient pins the plan 016 §3.2 wiring:
+// TestInteraction_BeginPropagatesClient pins the client-view wiring:
 // the read-only [interaction.ClientView] passed in via BeginInput.Client
 // MUST surface verbatim on [interaction.ConsentScopePromptData.Client]
 // so the overlay's [interaction.ConsentTemplateData] can render

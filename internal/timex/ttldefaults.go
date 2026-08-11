@@ -5,8 +5,8 @@ import "time"
 // This file is the single canonical home for the library-wide default
 // TTL durations. Every package that needs a TTL fall-back imports the
 // constant from here rather than re-declaring its own value, so a
-// change to the operational posture moves through one diff and the pin
-// test in [ttldefaults_test.go] catches a silent regression.
+// change to the operational posture moves through one diff, and this
+// package's pin test catches a silent regression.
 //
 // Each constant documents the spec or operational rationale it
 // inherits. The values are intentionally small, well-known

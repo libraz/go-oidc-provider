@@ -404,12 +404,12 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, cl
 // per-package WithLockout helper before passing it to
 // [ExternalStep.Authenticator].
 //
-// The [Clock] interface in op/ is structurally identical to
-// [internal/timex.Clock]; the [clockShim] adapter forwards the
-// embedder-supplied clock through so the lockout helper observes the
+// The [Clock] interface is structurally identical to the clock the
+// library uses internally, and clockShim forwards the
+// embedder-supplied value through, so the lockout helper observes the
 // same instant the rest of the library uses for token TTLs and audit
-// timestamps. A nil [config.clock] passes nil through and the helper
-// falls back to [timex.SystemClock].
+// timestamps. A nil clock passes nil through and the helper falls back
+// to the system clock.
 func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticator { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if c == nil || isNilLike(c.authnLockoutStore) {
 		return auth
@@ -435,9 +435,9 @@ func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticat
 	}
 }
 
-// clockShim adapts an [op.Clock] value to the [internal/timex.Clock]
-// interface required by the lockout helper. The two interfaces are
-// structurally identical (single Now() time.Time method); the shim
+// clockShim adapts a [Clock] value to the clock interface the lockout
+// helper requires. The two are structurally identical (a single
+// Now() time.Time method); the shim
 // exists solely because Go does not implicitly convert between named
 // interface types.
 type clockShim struct {

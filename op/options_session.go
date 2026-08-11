@@ -420,8 +420,8 @@ func WithAllowInsecureBackchannelLogoutForDev() Option {
 // into the key an encrypted id_token / userinfo / JARM / introspection
 // response is addressed to. They read the same endpoints, so a trust
 // store one of them needs is one all of them need. The default
-// nil leaves [internal/netsec.NewHTTPClient] to construct a transport
-// backed by Go's system trust store; embedders that front their RPs
+// nil leaves the library to construct a transport backed by Go's
+// system trust store; embedders that front their RPs
 // with an internal CA, or run the OP under a conformance harness
 // with a self-signed runner cert, supply a transport with the
 // matching TLSClientConfig.

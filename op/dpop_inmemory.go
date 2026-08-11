@@ -242,11 +242,10 @@ func constantTimeStringEqual(a, b string) int {
 //     successful read still rotates the value.
 //
 // The graceful-degrade posture is the non-critical branch of the
-// project-wide entropy-failure policy documented on
-// [github.com/libraz/go-oidc-provider/internal/keys]: nonce rotation
-// can safely keep serving the previous value for a bounded window,
-// whereas critical mints (session / chooser-group IDs) fail closed
-// instead.
+// library's entropy-failure policy: a nonce can safely keep serving
+// the previous value for a bounded window, because a stale nonce costs
+// a client one extra round-trip. Mints whose uniqueness is load-bearing
+// — session and chooser-group identifiers — fail closed instead.
 func (s *InMemoryDPoPNonceSource) run(ctx context.Context, rotate time.Duration) {
 	ticks := s.ticks
 	if ticks == nil {
