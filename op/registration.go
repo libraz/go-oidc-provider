@@ -123,6 +123,18 @@ type RegistrationOption struct {
 	// be safe for concurrent use; the registration handler is
 	// invoked from every request goroutine.
 	OnClientDeleted func(ctx context.Context, clientID string) error
+
+	// OnClientDeletedSnapshot is an optional custom-store delete-cascade hook.
+	// When the configured grant store implements [store.GrantSubjectLister],
+	// the registration handler snapshots the target client and a bounded list
+	// of its granted subjects before deleting the client, then invokes this
+	// hook with that snapshot (alongside the built-in direct back-channel
+	// coordinator when one is wired). It is intended for custom fan-out that
+	// cannot look the client up after deletion. A nil hook leaves only the
+	// built-in path and [OnClientDeleted] compatibility hook. Errors are logged
+	// and do not change the successful DELETE response, matching
+	// [OnClientDeleted].
+	OnClientDeletedSnapshot func(ctx context.Context, client *store.Client, subjects []string) error
 }
 
 // ClientMetadata is the OpenID Connect Dynamic Client Registration 1.0
@@ -322,6 +334,12 @@ type ClientMetadata struct {
 	//
 	// Stable since v1.0.
 	IntrospectionEncryptedResponseEnc string
+
+	// IntrospectionSignedResponseAlg selects the JWS algorithm for a JWT
+	// introspection response. Empty and "none" are normalized to the JSON
+	// response mode; ES256 selects the JWT response mode and is the only
+	// signed algorithm currently accepted by the provider.
+	IntrospectionSignedResponseAlg string
 
 	// PostLogoutRedirectURIs lists the candidate URIs the client wants
 	// to register for OpenID Connect RP-Initiated Logout 1.0 §3

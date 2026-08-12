@@ -816,7 +816,8 @@ func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestra
 			Description: "WithLoginFlow is mutually exclusive with WithAuthenticators",
 		}
 	}
-	signer, err := authn.NewStateRefSigner(deriveStateRefKey(cfg.cookieKeys[0]))
+	stateRefCurrent, stateRefPrevious := deriveStateRefSigningKeys(cfg.cookieKeys)
+	signer, err := authn.NewStateRefSigner(stateRefCurrent, stateRefPrevious...)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -931,6 +932,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 			GrantManagement:     cfg.endpoints.GrantManagement,
 		},
 		Features:                           buildDiscoveryFeatures(cfg),
+		DynamicRegistrationOpen:            cfg.dcr != nil && cfg.dcr.Open,
 		GrantsSupported:                    grantStrings,
 		ScopesSupported:                    scopes.PublicNames(),
 		ProfileAllowedAuthMethods:          cfg.profileAllowedAuthMethodNames(),

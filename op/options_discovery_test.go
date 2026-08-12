@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 )
 
 // TestWithJWKSRotationActive_FlipsCacheControl pins the wiring from
@@ -422,11 +423,24 @@ func TestWithDiscoveryMetadata_RejectsUnsafeURLs(t *testing.T) {
 				"": "https://mtls.example.com/token",
 			}},
 		},
+		{
+			name: "mtls alias empty hostname",
+			//nolint:gosec // G101: deliberately malformed endpoint URL under test, not a credential.
+			meta: op.DiscoveryMetadata{MTLSEndpointAliases: map[string]string{
+				"token_endpoint": "https://:443/token",
+			}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := op.New(append(validBaseOpts(t), op.WithDiscoveryMetadata(tc.meta))...)
+			// Enable the feature so an invalid alias fails its URL validation,
+			// rather than the independent "aliases require mTLS" configuration
+			// check.
+			_, err := op.New(append(validBaseOpts(t),
+				op.WithFeature(feature.MTLS),
+				op.WithDiscoveryMetadata(tc.meta),
+			)...)
 			if err == nil {
 				t.Fatal("expected configuration error, got nil")
 			}
@@ -442,6 +456,7 @@ func TestWithDiscoveryMetadata_AllowsLoopbackHTTPForDevelopment(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
+		op.WithFeature(feature.MTLS),
 		op.WithDiscoveryMetadata(op.DiscoveryMetadata{
 			ServiceDocumentation: "http://localhost:8080/docs",
 			OPPolicyURI:          "http://127.0.0.1:8080/policy",

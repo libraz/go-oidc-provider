@@ -17,6 +17,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -281,6 +282,36 @@ func TestNew_RecordsBackchannelCoordinator(t *testing.T) {
 	}
 	if provider.cfg.backchannelCoordinator == nil {
 		t.Fatal("op.New did not record the back-channel coordinator; Provider.Shutdown would never drain")
+	}
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown on an idle Provider: %v", err)
+	}
+}
+
+// TestNew_RecordsBackchannelCoordinatorForDCRDeletion keeps the direct
+// client-deletion BCL path reachable even in a token-only deployment where
+// /end_session is intentionally absent. A dynamically registered client may
+// outlive a later switch to client_credentials-only configuration; deleting it
+// must still be able to notify that client's relying-party session.
+func TestNew_RecordsBackchannelCoordinatorForDCRDeletion(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	provider, err := New(
+		WithIssuer(shutdownFixtureIssuer),
+		WithStore(inmem.New()),
+		WithKeyset(Keyset{SigningKey{KeyID: "sig-1", Signer: priv}}),
+		WithGrants(grant.ClientCredentials),
+		WithDynamicRegistration(RegistrationOption{}),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if provider.cfg.backchannelCoordinator == nil {
+		t.Fatal("op.New did not record a coordinator for direct DCR deletion BCL")
 	}
 	if err := provider.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown on an idle Provider: %v", err)

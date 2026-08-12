@@ -192,13 +192,14 @@ type DiscoveryMetadata struct {
 	// "revocation_endpoint", "userinfo_endpoint",
 	// "registration_endpoint",
 	// "device_authorization_endpoint",
-	// "pushed_authorization_request_endpoint"); values are absolute
+	// "pushed_authorization_request_endpoint", or
+	// "backchannel_authentication_endpoint"); values are absolute
 	// URLs that require client-certificate authentication.
 	//
 	// The field is structurally feature-gated: it is published only
-	// when [feature.MTLS] is enabled. Supplying aliases without the
-	// MTLS feature is a no-op so an embedder can keep the option in
-	// place across feature toggles without further branching.
+	// when [feature.MTLS] is enabled. Each alias must also name an
+	// endpoint that is enabled and mounted; op.New rejects an alias
+	// targeting a disabled or absent endpoint.
 	//
 	// Deployments that front a single hostname (the canonical
 	// *_endpoint values are already mTLS-capable) leave this map nil
@@ -287,6 +288,12 @@ func validateDiscoveryMetadataURLs(meta DiscoveryMetadata) error {
 				Description: "WithDiscoveryMetadata: mtls_endpoint_aliases contains an empty key",
 			}
 		}
+		if !isDocumentedMTLSEndpointAlias(key) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDiscoveryMetadata: mtls_endpoint_aliases contains unsupported endpoint key " + key,
+			}
+		}
 		if !isDiscoveryHTTPSURL(raw) {
 			return &Error{
 				Code:        codeConfiguration,
@@ -297,9 +304,20 @@ func validateDiscoveryMetadataURLs(meta DiscoveryMetadata) error {
 	return nil
 }
 
+func isDocumentedMTLSEndpointAlias(key string) bool {
+	switch key {
+	case "token_endpoint", "introspection_endpoint", "revocation_endpoint", "userinfo_endpoint",
+		"registration_endpoint", "device_authorization_endpoint", "pushed_authorization_request_endpoint",
+		"backchannel_authentication_endpoint":
+		return true
+	default:
+		return false
+	}
+}
+
 func isDiscoveryHTTPSURL(raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
 		return false
 	}
 	if u.Scheme == "https" {

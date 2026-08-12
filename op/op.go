@@ -184,6 +184,19 @@ func New(opts ...Option) (*Provider, error) {
 	if err := buildMetricsCollector(cfg); err != nil {
 		return nil, err
 	}
+	// Collector registration mutates the embedder-owned registry before later
+	// fallible constructor stages (keys, locales, router, and static-client
+	// reconciliation). Keep that mutation transactional with New: a failed
+	// construction must not strand descriptors that make a corrected retry on
+	// the same registry fail as an apparent duplicate registration.
+	metricsCommitted := false
+	if cfg.metricsCollector != nil {
+		defer func() {
+			if !metricsCommitted {
+				cfg.metricsCollector.Unregister()
+			}
+		}()
+	}
 	keySet, err := keys.NewSet(
 		toKeyEntries(cfg.keyset),
 		keys.WithClock(keysetClock(cfg)),
@@ -228,6 +241,7 @@ func New(opts ...Option) (*Provider, error) {
 	// posture for a construction that then failed would be worse than
 	// no record at all.
 	cfg.emitStartupProfile(context.Background())
+	metricsCommitted = true
 	return provider, nil
 }
 
@@ -486,6 +500,7 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 		UserInfoEncryptedResponseEnc:      m.UserInfoEncryptedResponseEnc,
 		AuthorizationEncryptedResponseAlg: m.AuthorizationEncryptedResponseAlg,
 		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
+		IntrospectionSignedResponseAlg:    m.IntrospectionSignedResponseAlg,
 		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
 		PostLogoutRedirectURIs:            m.PostLogoutRedirectURIs,
@@ -1284,6 +1299,22 @@ func deriveCSRFKey(cookieKey []byte) []byte {
 	return h.Sum(nil)
 }
 
+// deriveCSRFSigningKeys applies the CSRF domain separation to the active
+// cookie key and every configured decryption-overlap key. The resulting ring
+// lets a newly deployed instance verify an interaction form issued by a
+// still-draining previous instance, while issuance remains pinned to current.
+func deriveCSRFSigningKeys(cookieKeys [][]byte) ([]byte, [][]byte) {
+	if len(cookieKeys) == 0 {
+		return nil, nil
+	}
+	current := deriveCSRFKey(cookieKeys[0])
+	previous := make([][]byte, 0, len(cookieKeys)-1)
+	for _, key := range cookieKeys[1:] {
+		previous = append(previous, deriveCSRFKey(key))
+	}
+	return current, previous
+}
+
 // deriveStateRefKey returns a 32-byte HMAC-SHA256 derivation of
 // cookieKey labelled with [stateRefDerivationLabel] for use as the
 // orchestrator's [authn.StateRefSigner] key.
@@ -1291,6 +1322,22 @@ func deriveStateRefKey(cookieKey []byte) []byte {
 	h := hmac.New(sha256.New, cookieKey)
 	_, _ = h.Write([]byte(stateRefDerivationLabel))
 	return h.Sum(nil)
+}
+
+// deriveStateRefSigningKeys is the StateRef counterpart of
+// [deriveCSRFSigningKeys]. Keeping the derivation label distinct ensures that
+// accepting a previous cookie key for both short-lived form tokens does not
+// make either token type forgeable as the other.
+func deriveStateRefSigningKeys(cookieKeys [][]byte) ([]byte, [][]byte) {
+	if len(cookieKeys) == 0 {
+		return nil, nil
+	}
+	current := deriveStateRefKey(cookieKeys[0])
+	previous := make([][]byte, 0, len(cookieKeys)-1)
+	for _, key := range cookieKeys[1:] {
+		previous = append(previous, deriveStateRefKey(key))
+	}
+	return current, previous
 }
 
 func deriveCompletionKey(cookieKey []byte) []byte {

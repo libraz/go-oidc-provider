@@ -226,6 +226,7 @@ func TestWithStaticClients_NthBatchFailureLeavesStoreUntouched(t *testing.T) {
 	t.Parallel()
 
 	fault := errors.New("injected reconcile failure")
+	registry := prometheus.NewRegistry()
 	backend := inmem.New()
 	st := &nthFailureStaticClientStore{
 		Store:         backend,
@@ -243,6 +244,7 @@ func TestWithStaticClients_NthBatchFailureLeavesStoreUntouched(t *testing.T) {
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
+		op.WithPrometheus(registry),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "batch-a",
@@ -263,6 +265,21 @@ func TestWithStaticClients_NthBatchFailureLeavesStoreUntouched(t *testing.T) {
 		if _, getErr := st.GetClient(context.Background(), id); !errors.Is(getErr, store.ErrNotFound) {
 			t.Errorf("GetClient(%s) err=%v want ErrNotFound", id, getErr)
 		}
+	}
+
+	// Static-client reconciliation is deliberately the final fallible stage
+	// after WithPrometheus registers its collector set. A failure here must
+	// roll that registration back, otherwise this corrected retry on the same
+	// embedder-owned registry would fail with duplicate descriptors.
+	if _, retryErr := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(st),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
+		op.WithPrometheus(registry),
+	); retryErr != nil {
+		t.Fatalf("op.New retry after static-client failure: %v", retryErr)
 	}
 }
 

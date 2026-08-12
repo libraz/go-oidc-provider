@@ -43,9 +43,19 @@ import (
 // handlers, plus the optional endpoints (PAR, introspect, revoke,
 // /register, /end_session) gated on the configured features and
 // grants.
+//
+//nolint:gocognit,cyclop // Router construction keeps every protocol mount and dependency boundary visible together.
 func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scopes *scoperegistry.Registry, locales *i18n.Resolver, proxyTrust *proxy.Trust) (*http.ServeMux, error) {
 	mux := http.NewServeMux()
-	doc := discovery.Build(buildDiscoveryInput(cfg, scopes, locales))
+	discoveryInput := buildDiscoveryInput(cfg, scopes, locales)
+	if err := discovery.ValidateMTLSEndpointAliases(discoveryInput.Metadata, discoveryInput); err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "WithDiscoveryMetadata mTLS endpoint aliases do not match enabled endpoints",
+			Cause:       err,
+		}
+	}
+	doc := discovery.Build(discoveryInput)
 	discHandler, err := discovery.Handler(doc)
 	if err != nil {
 		return nil, &Error{
@@ -169,19 +179,26 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
 	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifiers.Revoke, strictCORS)
 	mountGrantManagementEndpoint(mux, cfg, assertionVerifiers.Revoke, strictCORS)
-	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS)
-	// The back-channel coordinator is only reachable through /end_session,
+	// The back-channel coordinator is normally reached through /end_session,
 	// which mountEndSessionEndpoint skips when the session manager is nil.
-	// Building it only for interactive OPs keeps the GrantClientLister
-	// requirement aligned with the authorize-endpoint predicate: a
-	// machine-to-machine backend need not implement the extension.
+	// DCR deletion has a second, independent path: it sends a direct Logout
+	// Token to the deleted client from a pre-delete subject snapshot. Build the
+	// same coordinator for that path when the store exposes both bounded grant
+	// indexes. A machine-to-machine deployment without those optional indexes
+	// still keeps its documented DCR deletion hook and does not acquire a new
+	// startup requirement.
 	var bcc *backchannel.Coordinator
-	if sessMgr != nil {
+	grants := cfg.store.Grants()
+	_, hasGrantClients := grants.(store.GrantClientLister)
+	_, hasGrantSubjects := grants.(store.GrantSubjectLister)
+	needsDCRDeletionBCL := cfg.dcr != nil && !isNilLike(grants) && hasGrantClients && hasGrantSubjects
+	if sessMgr != nil || needsDCRDeletionBCL {
 		bcc, err = buildBackchannelCoordinator(cfg, keySet)
 		if err != nil {
 			return nil, err
 		}
 	}
+	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS, bcc)
 	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, subjectProjector, strictCORS)
 	return mux, nil
 }
@@ -258,7 +275,13 @@ func mountGrantManagementEndpoint(mux *http.ServeMux, cfg *config, assertionVeri
 // Without the option the routes are absent — discovery already gates
 // the advertisement on the same condition, so the OP cannot tell
 // clients the endpoint exists while quietly serving 404.
-func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry, strictCORS *cors.Strict) {
+func mountRegistrationEndpoint(
+	mux *http.ServeMux,
+	cfg *config,
+	scopes *scoperegistry.Registry,
+	strictCORS *cors.Strict,
+	bcc *backchannel.Coordinator,
+) {
 	if cfg.dcr == nil {
 		return
 	}
@@ -270,6 +293,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 	if !ok {
 		return
 	}
+	grantSubjects, _ := cfg.store.Grants().(store.GrantSubjectLister)
 	deps := registrationendpoint.Deps{
 		HighEntropyClientSecrets:             cfg.highEntropyClientSecrets,
 		Issuer:                               cfg.issuer,
@@ -293,6 +317,9 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		Logger:                               cfg.logger,
 		Audit:                                cfg.effectiveAuditEmitter(),
 		OnClientDeleted:                      cfg.dcr.OnClientDeleted,
+		OnClientDeletedSnapshot:              cfg.dcr.OnClientDeletedSnapshot,
+		Backchannel:                          bcc,
+		GrantSubjects:                        grantSubjects,
 		RefreshTokens:                        cfg.store.RefreshTokens(),
 		Grants:                               cfg.store.Grants(),
 		AccessTokens:                         cfg.store.AccessTokens(),
@@ -464,7 +491,8 @@ func mountAuthorizeHandlers(
 	if err != nil {
 		return nil, err
 	}
-	csrfSigner, err := csrf.NewSigner(deriveCSRFKey(cfg.cookieKeys[0]))
+	csrfCurrent, csrfPrevious := deriveCSRFSigningKeys(cfg.cookieKeys)
+	csrfSigner, err := csrf.NewSigner(csrfCurrent, csrfPrevious...)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -519,7 +547,11 @@ func mountAuthorizeHandlers(
 	if spaLoginMount == "" {
 		mux.Handle(interactionPath+"/{uid}", strictCORS.Handler(handler))
 	} else {
-		mux.Handle(spaLoginMount+"/state/{uid}", strictCORS.Handler(handler))
+		// The external interaction UI is the only cross-origin route that
+		// supports DELETE cancellation. Keep that permission scoped to this
+		// exact mount; every other strict-CORS endpoint retains the default
+		// GET/POST/OPTIONS method set.
+		mux.Handle(spaLoginMount+"/state/{uid}", strictCORS.HandlerWithMethods(handler, http.MethodGet, http.MethodPost, http.MethodDelete))
 		mux.Handle(spaLoginMount+"/{uid}", handler)
 		if spaStaticDir != "" {
 			mux.Handle(spaLoginMount+"/assets/{path...}", handler)
@@ -552,6 +584,7 @@ func mountEndSessionEndpoint(
 			Backchannel:        bcc,
 			Grants:             cfg.store.Grants(),
 			AccessTokens:       cfg.store.AccessTokens(),
+			RefreshTokens:      cfg.store.RefreshTokens(),
 			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
 			AccessTokenTTL:     cfg.accessTokenTTL,
 			GrantRevocations:   cfg.store.GrantRevocations(),
