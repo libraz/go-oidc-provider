@@ -28,8 +28,9 @@ import (
 //  1. Builds a fresh OP via [buildProvider].
 //  2. POSTs /device_authorization with client_id=cli-tool.
 //  3. Asserts 200 + non-empty device_code + non-empty user_code.
-//  4. Verifies and approves using only user_code, mirroring a browser
-//     verification page that must not receive device_code.
+//  4. Verifies and approves using user_code plus an opaque server-side
+//     ceremony key, mirroring a browser verification page that must not
+//     receive device_code.
 //  5. POSTs /token with grant_type=device_code.
 //  6. Asserts 200 + non-empty access_token.
 //
@@ -57,7 +58,11 @@ func selfVerify(logger *slog.Logger) error {
 	logger.Debug("self-verify authorized", slog.String("user_code", authz.UserCode))
 
 	deps := &devicecodekit.Deps{DeviceCodes: st.DeviceCodes()}
-	matched, err := devicecodekit.VerifyUserCodeByUserCode(ctx, deps, authz.UserCode, authz.UserCode)
+	ceremonyKey, err := newVerificationCeremonyKey()
+	if err != nil {
+		return fmt.Errorf("verification ceremony key: %w", err)
+	}
+	matched, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, ceremonyKey, authz.UserCode)
 	if err != nil {
 		return fmt.Errorf("verify user_code: %w", err)
 	}

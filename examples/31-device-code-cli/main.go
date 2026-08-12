@@ -62,10 +62,12 @@
 //     them to type the user_code, displays the requested scopes,
 //     and calls Approve / Deny on the substore via an
 //     embedder-owned handler.
-//   - Brute-force lockout: the verification page is responsible
-//     for IncrementUserCodeStrike + Deny("user_code_lockout") on
-//     repeated mismatches; the library ships the substore method
-//     but not the policy.
+//   - Brute-force lockout: pass a stable, opaque server-side ceremony
+//     key (for example, authenticated browser-session state) to
+//     devicecodekit.VerifyUserCodeByAttemptKey before normalizing or
+//     looking up the user_code. The helper charges malformed and unknown
+//     input against a bounded attempt budget. The embedder still owns
+//     HTTP-level controls such as per-IP rate limiting.
 package main
 
 import (

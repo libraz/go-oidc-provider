@@ -152,6 +152,151 @@ func TestVerifyUserCodeByUserCode_MismatchUsesStrikeGate(t *testing.T) {
 	}
 }
 
+func TestVerifyUserCodeByAttemptKeyChargesMalformedUnknownAndLocksValid(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	makePendingRecord(t, ds, "dev-attempt-key", "ABCDEFGH")
+	limiter := devicecodekit.NewAttemptLimiter(int(devicecodekit.MaxUserCodeStrikes))
+	deps := &devicecodekit.Deps{DeviceCodes: ds, AttemptLimiter: limiter}
+
+	badCodes := []string{"??", "ZZZZ9999", "YYYY9999", "XXXXXXXX", "00000000"}
+	for i, code := range badCodes {
+		matched, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-1", code)
+		if matched {
+			t.Errorf("bad attempt %d (%q) matched=true", i+1, code)
+		}
+		if err == nil && i == 1 {
+			// Unknown codes are deliberately charged but still return the
+			// stable not-found sentinel.
+			t.Errorf("unknown code %q returned nil error", code)
+		}
+		if err != nil && !errors.Is(err, devicecodekit.ErrUnknownDeviceCode) {
+			t.Fatalf("bad attempt %d (%q): err=%v", i+1, code, err)
+		}
+	}
+	matched, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-1", "ABCDEFGH")
+	if matched || !errors.Is(err, devicecodekit.ErrAttemptLocked) {
+		t.Fatalf("sixth valid attempt: matched=%v err=%v, want locked", matched, err)
+	}
+
+	matched, err = devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-2", "abcd-efgh")
+	if err != nil || !matched {
+		t.Fatalf("independent attempt key: matched=%v err=%v, want successful validation", matched, err)
+	}
+}
+
+func TestVerifyUserCodeByAttemptKeyAuditsMalformedAndUnknown(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	makePendingRecord(t, ds, "dev-attempt-audit", "ABCDEFGH")
+	emitter := &captureEmitter{}
+	deps := &devicecodekit.Deps{
+		DeviceCodes:    ds,
+		Audit:          emitter,
+		AttemptLimiter: devicecodekit.NewAttemptLimiter(int(devicecodekit.MaxUserCodeStrikes)),
+	}
+
+	if _, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-audit", "??"); !errors.Is(err, devicecodekit.ErrUnknownDeviceCode) {
+		t.Fatalf("malformed attempt err=%v want ErrUnknownDeviceCode", err)
+	}
+	if _, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-audit", "ZZZZ9999"); !errors.Is(err, devicecodekit.ErrUnknownDeviceCode) {
+		t.Fatalf("unknown attempt err=%v want ErrUnknownDeviceCode", err)
+	}
+	events := emitter.snapshot()
+	if len(events) != 2 {
+		t.Fatalf("audited events=%d want 2: %v", len(events), emitter.names())
+	}
+	for i, event := range events {
+		if event.Name != "device_code.verification.user_code_brute_force" {
+			t.Errorf("event %d name=%q want brute-force evidence", i, event.Name)
+		}
+		if got := event.Extras["strikes"]; got != i+1 {
+			t.Errorf("event %d strikes=%v want %d", i, got, i+1)
+		}
+		if _, leaked := event.Extras["attempt_key"]; leaked {
+			t.Errorf("event %d leaked opaque attempt key", i)
+		}
+	}
+
+	// Unknown/malformed failures consume the same budget and do not prevent a
+	// later validated entry before the ceiling. A valid code consumes the
+	// current key's charge too: an opaque key does not prove ceremony ownership,
+	// so the helper must not reset it based on the code alone.
+	if matched, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-audit", "ABCDEFGH"); err != nil || !matched {
+		t.Fatalf("validated entry after audited failures: matched=%v err=%v", matched, err)
+	}
+	if _, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-audit", "YYYY9999"); err != nil && !errors.Is(err, devicecodekit.ErrUnknownDeviceCode) {
+		t.Fatalf("post-validation mismatch err=%v", err)
+	}
+}
+
+func TestVerifyUserCodeByAttemptKeyDoesNotResetFromUntrustedCode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	makePendingRecord(t, ds, "dev-attempt-reset", "ABCDEFGH")
+	limiter := devicecodekit.NewAttemptLimiter(1)
+	deps := &devicecodekit.Deps{DeviceCodes: ds, AttemptLimiter: limiter}
+
+	if _, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-reset", "ZZZZ9999"); !errors.Is(err, devicecodekit.ErrUnknownDeviceCode) {
+		t.Fatalf("unknown code err=%v want ErrUnknownDeviceCode", err)
+	}
+	if _, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-reset", "ABCDEFGH"); !errors.Is(err, devicecodekit.ErrAttemptLocked) {
+		t.Fatalf("valid code after unknown err=%v want ErrAttemptLocked", err)
+	}
+	// A key at capacity cannot be revived by presenting a valid code. The
+	// caller must mint a fresh authenticated ceremony key, or wait for TTL.
+	if matched, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-success", "ABCDEFGH"); err != nil || !matched {
+		t.Fatalf("successful validation: matched=%v err=%v", matched, err)
+	}
+	if matched, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "browser-session-success", "ABCDEFGH"); matched || !errors.Is(err, devicecodekit.ErrAttemptLocked) {
+		t.Fatalf("repeated valid code after success: matched=%v err=%v, want locked", matched, err)
+	}
+}
+
+func TestInMemoryAttemptLimiterExpiresKeysAndRemainsBounded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clock := &attemptLimiterClock{now: time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)}
+	limiter := devicecodekit.NewAttemptLimiterWithOptions(1, devicecodekit.AttemptLimiterOptions{
+		TTL:   time.Minute,
+		Clock: clock,
+	})
+
+	if allowed, err := limiter.Allow(ctx, "ceremony-0"); err != nil || !allowed {
+		t.Fatalf("first key: allowed=%v err=%v", allowed, err)
+	}
+	for i := 1; i < devicecodekit.DefaultMaxAttemptKeys; i++ {
+		if allowed, err := limiter.Allow(ctx, "ceremony-"+strconv.Itoa(i)); err != nil || !allowed {
+			t.Fatalf("fill key %d: allowed=%v err=%v", i, allowed, err)
+		}
+	}
+	if allowed, err := limiter.Allow(ctx, "ceremony-over-cap"); err != nil || allowed {
+		t.Fatalf("over-cap key: allowed=%v err=%v, want fail-closed", allowed, err)
+	}
+
+	clock.now = clock.now.Add(time.Minute)
+	if allowed, err := limiter.Allow(ctx, "ceremony-after-expiry"); err != nil || !allowed {
+		t.Fatalf("key after TTL expiry: allowed=%v err=%v", allowed, err)
+	}
+	if strikes, err := limiter.Count(ctx, "ceremony-0"); err != nil || strikes != 0 {
+		t.Fatalf("expired key count=%d err=%v, want zero", strikes, err)
+	}
+}
+
+type attemptLimiterClock struct {
+	now time.Time
+}
+
+func (c *attemptLimiterClock) Now() time.Time {
+	return c.now
+}
+
 // TestVerifyUserCode_FourMismatchesStayPending pins the brute-force
 // gate's pre-lockout window: four wrong submissions advance the
 // strike counter but the record stays Pending. The embedder may

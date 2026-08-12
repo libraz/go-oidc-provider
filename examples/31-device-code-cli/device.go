@@ -20,6 +20,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,8 +34,11 @@ import (
 // simulateBrowserApproval drives the same store seam an authentication
 // device's "approve" button would: it waits for [demoApprovalDelay] so
 // the polling loop observes at least one authorization_pending response
-// first, then verifies and approves by user_code only. Production
-// embedders reach this from the user's authenticated browser session.
+// first, then verifies and approves by user_code only. The verification
+// attempt is additionally bound to a fresh opaque ceremony key rather than
+// the user_code itself, so malformed and unknown entries consume one bounded
+// browser-ceremony budget. Production embedders derive this key from their
+// authenticated browser session or other server-side ceremony state.
 func simulateBrowserApproval(ctx context.Context, st store.Store, authz *authorizationResponse, logger *slog.Logger) {
 	select {
 	case <-ctx.Done():
@@ -41,7 +46,12 @@ func simulateBrowserApproval(ctx context.Context, st store.Store, authz *authori
 	case <-time.After(demoApprovalDelay):
 	}
 	deps := &devicecodekit.Deps{DeviceCodes: st.DeviceCodes()}
-	matched, err := devicecodekit.VerifyUserCodeByUserCode(context.Background(), deps, authz.UserCode, authz.UserCode)
+	ceremonyKey, err := newVerificationCeremonyKey()
+	if err != nil {
+		logger.Warn("create verification ceremony key failed", slog.String("err", err.Error()))
+		return
+	}
+	matched, err := devicecodekit.VerifyUserCodeByAttemptKey(context.Background(), deps, ceremonyKey, authz.UserCode)
 	if err != nil || !matched {
 		if err == nil {
 			err = errors.New("user_code mismatch")
@@ -54,4 +64,15 @@ func simulateBrowserApproval(ctx context.Context, st store.Store, authz *authori
 		return
 	}
 	fmt.Printf("[browser] user approved user_code=%s subject=%s\n", authz.UserCode, demoSubject)
+}
+
+// newVerificationCeremonyKey models server-side browser-ceremony state. It
+// intentionally never uses user_code input: that short code is what the user
+// types and therefore cannot be the brute-force limiter's identity.
+func newVerificationCeremonyKey() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }

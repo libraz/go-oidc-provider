@@ -28,6 +28,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -46,6 +47,18 @@ import (
 // catalogue ([op.AuditDeviceCodeUserCodeBruteForce]), and the wire
 // behaviour of the next /token poll on the locked-out record.
 const MaxUserCodeStrikes = devicecode.MaxUserCodeStrikes
+
+// DefaultMaxAttemptKeys bounds the number of opaque ceremony keys retained by
+// the built-in in-memory limiter. Deployments with a shared limiter can use a
+// larger distributed budget, but the local fallback must not turn an attacker
+// supplied attempt_key into an unbounded map.
+const DefaultMaxAttemptKeys = 4096
+
+// DefaultAttemptTTL is the maximum lifetime of an opaque manual-entry
+// ceremony in the built-in limiter. Entries are evicted lazily on the next
+// limiter operation after this deadline; no background goroutine is needed.
+// The default follows the provider's default device-code lifetime.
+const DefaultAttemptTTL = devicecode.DefaultExpiresIn
 
 // Deny reasons the helpers stamp through [store.DeviceCodeStore.Deny]
 // and [store.DeviceCodeStore.Revoke]. The strings are stable and
@@ -108,6 +121,12 @@ var (
 	// it past the boundary should treat it as a 500 in their HTTP
 	// layer.
 	ErrInvalidArgument = errors.New("devicecodekit: invalid argument")
+
+	// ErrAttemptLocked is returned by the opaque-attempt-key manual-entry
+	// helper after that key has consumed its complete atomic budget. The
+	// rejection happens before normalization or lookup, so a correct code
+	// cannot bypass a locked ceremony.
+	ErrAttemptLocked = errors.New("devicecodekit: manual-entry attempt locked")
 
 	// ErrMissingRevocationBackend is returned by [Revoke] when the
 	// selected JWT revocation strategy has no configured persistence
@@ -180,6 +199,185 @@ type Deps struct {
 	// Clock supplies the wall-clock instant written to grant tombstones.
 	// A nil value uses the library system clock.
 	Clock Clock
+
+	// AttemptLimiter is the atomic limiter for the first-entry manual user_code
+	// flow ([VerifyUserCodeByAttemptKey]). A nil value gets a private in-memory
+	// limiter for this dependency bundle with [MaxUserCodeStrikes] attempts and
+	// [DefaultAttemptTTL] key retention.
+	// The pre-bound record APIs do not consult this limiter and retain their
+	// existing per-record strike contract.
+	AttemptLimiter AttemptLimiter
+
+	limiterMu sync.Mutex
+	limiter   AttemptLimiter
+}
+
+// AttemptLimiter atomically charges an opaque manual-entry key. Allow returns
+// false without an error when the key is at capacity. Reset is an explicit
+// ceremony-owner operation; VerifyUserCodeByAttemptKey does not call it
+// because a valid code alone does not authenticate ownership of the opaque
+// key. Implementations backed by a distributed store should make Allow a
+// single compare-and-increment operation; separate read/increment calls are
+// not safe.
+type AttemptLimiter interface {
+	Allow(ctx context.Context, attemptKey string) (bool, error)
+	// Reset is an explicit ceremony-owner operation. The generic verification
+	// helper never calls it because an opaque key alone does not prove that the
+	// caller owns the ceremony; embedders may reset an authenticated ceremony
+	// when they intentionally retire its key.
+	Reset(ctx context.Context, attemptKey string) error
+}
+
+// attemptCountReader is an optional extension used only to enrich the
+// brute-force audit event. Distributed limiters need not implement it; the
+// attempt gate remains correct when the count is unavailable to the caller.
+type attemptCountReader interface {
+	Count(ctx context.Context, attemptKey string) (int, error)
+}
+
+// ManualEntryLimiter is a descriptive alias for [AttemptLimiter]. It is kept
+// as a second spelling so embedder code can name the dependency by flow rather
+// than by its implementation detail.
+type ManualEntryLimiter = AttemptLimiter
+
+// InMemoryAttemptLimiter is a small atomic limiter suitable for a single
+// process or for tests. Production deployments that run multiple instances
+// should provide an AttemptLimiter backed by their shared coordination store.
+type InMemoryAttemptLimiter struct {
+	mu       sync.Mutex
+	max      uint8
+	maxKeys  int
+	ttl      time.Duration
+	clock    Clock
+	attempts map[string]attemptEntry
+}
+
+type attemptEntry struct {
+	strikes   uint8
+	expiresAt time.Time
+}
+
+// AttemptLimiterOptions configures the bounded in-memory implementation.
+// The key capacity remains fixed at [DefaultMaxAttemptKeys] so configuration
+// cannot accidentally turn this fallback into an unbounded map. A non-positive
+// TTL uses [DefaultAttemptTTL]. Clock is primarily useful for deterministic
+// tests; production callers normally leave it nil.
+type AttemptLimiterOptions struct {
+	TTL   time.Duration
+	Clock Clock
+}
+
+// NewAttemptLimiter constructs an in-memory limiter. Non-positive limit values
+// use the library's fixed manual-entry ceiling.
+func NewAttemptLimiter(limit int) *InMemoryAttemptLimiter {
+	return NewAttemptLimiterWithOptions(limit, AttemptLimiterOptions{})
+}
+
+// NewAttemptLimiterWithOptions constructs an in-memory limiter with bounded
+// key retention. It is useful when an embedder wants a shorter ceremony TTL
+// or needs to drive expiry from a deterministic clock in tests.
+func NewAttemptLimiterWithOptions(limit int, options AttemptLimiterOptions) *InMemoryAttemptLimiter {
+	if limit <= 0 {
+		limit = int(MaxUserCodeStrikes)
+	}
+	if limit > 255 {
+		limit = 255
+	}
+	ttl := options.TTL
+	if ttl <= 0 {
+		ttl = DefaultAttemptTTL
+	}
+	return &InMemoryAttemptLimiter{
+		max:      uint8(limit),
+		maxKeys:  DefaultMaxAttemptKeys,
+		ttl:      ttl,
+		clock:    options.Clock,
+		attempts: make(map[string]attemptEntry),
+	}
+}
+
+// NewInMemoryAttemptLimiter is an explicit spelling of [NewAttemptLimiter].
+func NewInMemoryAttemptLimiter(limit int) *InMemoryAttemptLimiter {
+	return NewAttemptLimiter(limit)
+}
+
+// Allow charges one manual user-code attempt to attemptKey and reports whether
+// it remains within the bounded ceremony budget.
+func (l *InMemoryAttemptLimiter) Allow(ctx context.Context, attemptKey string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if l == nil || attemptKey == "" {
+		return false, ErrInvalidArgument
+	}
+	now := l.now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.evictExpiredLocked(now)
+	entry, exists := l.attempts[attemptKey]
+	if !exists && len(l.attempts) >= l.maxKeys {
+		// Fail closed when the local key budget is exhausted. A distributed
+		// limiter can choose a different bounded policy; this fallback must
+		// never grow in response to caller-controlled key material. Expired
+		// ceremonies were evicted above, so a key can become available again
+		// without an unbounded active-key eviction policy.
+		return false, nil
+	}
+	if exists && entry.strikes >= l.max {
+		return false, nil
+	}
+	if !exists {
+		entry.expiresAt = now.Add(l.ttl)
+	}
+	entry.strikes++
+	l.attempts[attemptKey] = entry
+	return true, nil
+}
+
+// Reset removes the bounded attempt budget for attemptKey.
+func (l *InMemoryAttemptLimiter) Reset(ctx context.Context, attemptKey string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if l == nil || attemptKey == "" {
+		return ErrInvalidArgument
+	}
+	l.mu.Lock()
+	delete(l.attempts, attemptKey)
+	l.mu.Unlock()
+	return nil
+}
+
+// Count reports the number of charged attempts for an opaque key. It is an
+// optional observability extension; Allow remains the atomic enforcement
+// operation.
+func (l *InMemoryAttemptLimiter) Count(ctx context.Context, attemptKey string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if l == nil || attemptKey == "" {
+		return 0, ErrInvalidArgument
+	}
+	now := l.now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.evictExpiredLocked(now)
+	return int(l.attempts[attemptKey].strikes), nil
+}
+
+func (l *InMemoryAttemptLimiter) now() time.Time {
+	if l.clock != nil {
+		return l.clock.Now().UTC()
+	}
+	return timex.SystemClock.Now().UTC()
+}
+
+func (l *InMemoryAttemptLimiter) evictExpiredLocked(now time.Time) {
+	for key, entry := range l.attempts {
+		if !entry.expiresAt.After(now) {
+			delete(l.attempts, key)
+		}
+	}
 }
 
 // Clock is the wall-clock surface [Deps] accepts for deterministic
@@ -195,6 +393,19 @@ func (d *Deps) auditEmitter() audit.Emitter {
 		return audit.Discard()
 	}
 	return d.Audit
+}
+
+//nolint:ireturn // The configured limiter is an extension point; the fallback shares its interface.
+func (d *Deps) attemptLimiter() AttemptLimiter {
+	d.limiterMu.Lock()
+	defer d.limiterMu.Unlock()
+	if d.AttemptLimiter != nil {
+		return d.AttemptLimiter
+	}
+	if d.limiter == nil {
+		d.limiter = NewAttemptLimiter(int(MaxUserCodeStrikes))
+	}
+	return d.limiter
 }
 
 func (d *Deps) now() time.Time {
@@ -314,6 +525,89 @@ func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, s
 		return true, nil
 	}
 	return false, recordStrikeByUserCode(ctx, deps, recordCanonical, rec.ClientID)
+}
+
+// VerifyUserCodeByAttemptKey is the first-entry manual user_code path. The
+// caller supplies an opaque, stable attemptKey (for example a browser session
+// or account-scoped ceremony id); the submitted code is never used as the
+// limiter key. Allow is charged before normalization and before the store
+// lookup, so malformed and unknown codes consume the same budget as valid
+// guesses. A key at capacity returns [ErrAttemptLocked], even when the next
+// code is correct, while a different key has an independent budget.
+//
+// A successful normalized lookup and constant-time comparison still consume
+// the current key's charge. The helper cannot prove that an opaque key is an
+// authenticated ceremony owned by the caller, so a valid code must not reset
+// its budget and enable an attacker to loop over newly issued records. The
+// embedder should mint a fresh key for a new authenticated ceremony; stale
+// keys are released by the limiter TTL. Mismatches and all lookup/normalization
+// failures likewise retain the charge. This helper deliberately leaves
+// [VerifyUserCode] and [VerifyUserCodeByUserCode] unchanged for flows that
+// already bind the attempt to a record.
+func VerifyUserCodeByAttemptKey(ctx context.Context, deps *Deps, attemptKey, submittedUserCode string) (matched bool, err error) {
+	if deps == nil || deps.DeviceCodes == nil || attemptKey == "" {
+		return false, ErrInvalidArgument
+	}
+	allowed, err := deps.attemptLimiter().Allow(ctx, attemptKey)
+	if err != nil {
+		return false, err
+	}
+	if !allowed {
+		return false, ErrAttemptLocked
+	}
+
+	canonical, normalizeErr := devicecode.NormaliseUserCode(submittedUserCode)
+	if normalizeErr != nil {
+		emitManualAttemptMismatch(ctx, deps, deps.attemptLimiter(), attemptKey, "")
+		return false, ErrUnknownDeviceCode
+	}
+	rec, lookupErr := deps.DeviceCodes.FindByUserCode(ctx, canonical)
+	if lookupErr != nil {
+		if errors.Is(lookupErr, store.ErrNotFound) {
+			emitManualAttemptMismatch(ctx, deps, deps.attemptLimiter(), attemptKey, "")
+			return false, ErrUnknownDeviceCode
+		}
+		return false, lookupErr
+	}
+	if rec.Status != store.DeviceCodeStatusPending {
+		return false, ErrAlreadyDecided
+	}
+	if !constantTimeStringEqual(canonical, rec.UserCode) {
+		// The lookup key normally equals rec.UserCode, but retain a
+		// defensive constant-time mismatch branch if a backend violates
+		// its key contract. The opaque attempt charge remains consumed.
+		emitManualAttemptMismatch(ctx, deps, deps.attemptLimiter(), attemptKey, rec.ClientID)
+		return false, nil
+	}
+	return true, nil
+}
+
+func emitManualAttemptMismatch(ctx context.Context, deps *Deps, limiter AttemptLimiter, attemptKey, clientID string) {
+	extras := map[string]any{
+		"max_strikes": int(MaxUserCodeStrikes),
+	}
+	if reader, ok := limiter.(attemptCountReader); ok {
+		if strikes, err := reader.Count(ctx, attemptKey); err == nil {
+			extras["strikes"] = strikes
+		}
+	}
+	// The opaque attempt key is deliberately absent: it is caller-controlled
+	// ceremony material and may itself identify a browser session. Unknown and
+	// malformed submissions still produce the same bounded mismatch evidence
+	// as record-bound verification, but never disclose lookup or key material.
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:     devicecode.AuditUserCodeBruteForce,
+		Level:    audit.LevelWarn,
+		Message:  "user_code mismatch on verification page",
+		ClientID: clientID,
+		Extras:   extras,
+	})
+}
+
+// VerifyUserCodeWithAttemptKey is a compatibility spelling for
+// [VerifyUserCodeByAttemptKey].
+func VerifyUserCodeWithAttemptKey(ctx context.Context, deps *Deps, attemptKey, submittedUserCode string) (bool, error) {
+	return VerifyUserCodeByAttemptKey(ctx, deps, attemptKey, submittedUserCode)
 }
 
 // ApproveUserCode transitions a Pending device authorization to
