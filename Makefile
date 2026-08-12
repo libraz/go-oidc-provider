@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 
 .PHONY: tools format lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify clean \
         verify-examples verify-examples-api verify-examples-browser verify-examples-harness \
-        stability stability-check \
+        stability stability-check stability-backfill \
         scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
         scenario-coverage-bindings \
         scenario-coverage-yaml-only scenario-stats scenario-advisories scenario-advisories-strict \
@@ -100,14 +100,23 @@ $(foreach e,$(EXAMPLE_SMOKE),$(eval $(call example_smoke_rule,$(e))))
 
 # Spec Scenario Suite — catalog validation and coverage.
 # api/experimental.txt records the public API exempt from the SemVer
-# promise. It is generated from the "Experimental:" godoc markers, so a
-# marker added or removed shows up as a diff on the report rather than
-# only in the source.
+# promise; api/stability.txt records, per symbol, the release its contract
+# was frozen in. Both are generated from the godoc markers, so a marker
+# added or removed shows up as a diff on a report rather than only in the
+# source. The stable report is also a history check: it refuses a version
+# that rewrites what an already-recorded row says.
 stability:
 	@scripts/stability.sh --write
 
 stability-check:
 	@scripts/stability.sh --check
+
+# Regenerate while admitting a "Stable since" marker newly added to a symbol
+# that shipped unmarked in that release. Marking one late is legitimate — the
+# convention is sparse — but back-dating a symbol that did not exist is not,
+# so this is a separate, deliberate target rather than a default.
+stability-backfill:
+	@scripts/stability.sh --write-backfill
 
 # Catalog source of truth: test/scenarios/catalog/<feature>.yaml.
 # See test/scenarios/catalog/README.md for the schema.

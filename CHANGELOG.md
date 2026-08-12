@@ -477,6 +477,20 @@ whose OP serves only machine-to-machine grants.
   the manifest rather than the package documentation were told the `Driver`
   seam was covered by the SemVer promise. Both packages are listed now, as a
   `*` row meaning the marker covers everything the package declares.
+- Three "Stable since" godoc markers named the wrong release.
+  `recoverykit.Kit` and `recoverykit.Clock` were added after `v1.0.0` and
+  claimed to have been stable since it; `op.WithBackchannelAllowPrivateNetwork`
+  shipped in `v1.0.0` and had been changed to claim a later one. The marker is
+  what an embedder reads to decide whether a symbol can be depended on at a
+  given release, so naming the wrong one answers that question wrongly in both
+  directions — it invites a dependency that cannot be satisfied, and it hides
+  one that can.
+- `api/stability.txt` records every "Stable since" marker together with its
+  version, and the build now rejects two things it previously accepted: a
+  version that differs from the one recorded for that symbol in an earlier
+  release, and a newly marked symbol claiming a release the report already
+  enumerates in full. The report is also derived from struct fields, which the
+  generator did not read before; several documented fields carry markers.
 
 ### Changed
 
@@ -598,6 +612,12 @@ whose OP serves only machine-to-machine grants.
   synchronously on the request goroutine, must not block, and must be safe for
   concurrent use. Behaviour is unchanged; the documentation previously suggested
   remote sinks without saying what that costs.
+- Dependency updates: `prometheus/client_golang` v1.23.2 → v1.24.1,
+  `golang.org/x/crypto` v0.54 → v0.55, `go-webauthn/x` v0.2.6 → v0.2.8. In the
+  storage adapters, `modernc.org/sqlite` v1.53 → v1.56, `redis/go-redis/v9`
+  v9.21 → v9.22, and `aws/aws-sdk-go-v2/service/dynamodb` v1.62 → v1.63. The
+  reference application and the examples move to `coreos/go-oidc/v3` v3.11 →
+  v3.20 and `golang.org/x/oauth2` v0.30 → v0.36.
 
 ### Added
 

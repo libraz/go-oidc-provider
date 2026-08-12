@@ -61,7 +61,7 @@ type Result struct {
 // embedder passes to op.WithClock, so the same value satisfies both
 // without an adapter.
 //
-// Stable since v1.0.
+// Stable since v1.1.
 type Clock interface {
 	Now() time.Time
 }
@@ -77,7 +77,7 @@ type Clock interface {
 // gets a batch dated by the host instead unless it passes its clock
 // here.
 //
-// Stable since v1.0.
+// Stable since v1.1.
 type Kit struct {
 	// Clock stamps [store.RecoveryBatch.GeneratedAt]. A nil value reads
 	// the system clock. Pass the same value handed to op.WithClock so
