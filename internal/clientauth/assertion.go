@@ -176,7 +176,7 @@ func resolveAndVerify(ctx context.Context, resolver JWKSResolver, clientID strin
 		// share a floor. Perfect leveling is impossible (the verify branch
 		// trials 1..MaxKidlessTrialKeys keys), but the gross zero-vs-some
 		// gap is what an attacker measures.
-		dummyJWTVerify()
+		burnJWTVerify()
 		return nil, ErrCredentialsInvalid
 	}
 	if payload, vErr := verifySignature(jws, keys); vErr == nil {

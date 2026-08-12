@@ -256,6 +256,14 @@ func dummyJWTVerify() {
 	_ = ecdsa.Verify(pub, digest[:], dummyECDSAR, dummyECDSAS)
 }
 
+// burnJWTVerify is the fixed-cost callback used by the assertion resolver's
+// no-key path. It remains private because callers must not be able to select
+// or skip the timing floor; tests replace it briefly to count invocations
+// without relying on wall-clock measurements.
+//
+//nolint:gochecknoglobals // Test seam for the fixed-cost process-wide timing shim.
+var burnJWTVerify = dummyJWTVerify
+
 // dummyECDSAKeyOnce / dummyECDSAKeyCache cache the public key the
 // dummy verify uses. Generating a fresh key per call would dominate
 // the dummy's wall-clock cost and violate the "fixed-cost" intent.
