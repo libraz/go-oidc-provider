@@ -207,7 +207,34 @@ func RunCodeFlow(tb testing.TB, p *testkit.Provider, subject string, params Auth
 	}
 	interactionURL := p.Server.URL + location.Path
 
-	// Step 2: GET /interaction/{uid} → 200 JSON prompt + CSRF cookie.
+	// Steps 2 and 3: run the interaction hops to their terminal response.
+	finalResp := completeInteraction(tb, client, interactionURL, p.Issuer, subject)
+	defer func() { _ = finalResp.Body.Close() }()
+	if finalResp.StatusCode != http.StatusFound {
+		body, _ := io.ReadAll(finalResp.Body)
+		tb.Fatalf("scenariokit: final interaction status=%d body=%s", finalResp.StatusCode, string(body))
+	}
+	rpRedirect, err := finalResp.Location()
+	if err != nil {
+		tb.Fatalf("scenariokit: final Location: %v", err)
+	}
+	if result, ok := captureCallback(tb, params.RedirectURI, rpRedirect); ok {
+		return result
+	}
+	tb.Fatalf("scenariokit: callback %s does not match redirect_uri %s", rpRedirect.String(), params.RedirectURI)
+	return CodeFlowResult{}
+}
+
+// completeInteraction drives the interaction hops the OP inserts
+// between /authorize and the terminal authorization response: GET the
+// prompt (which mints the CSRF cookie and the state_ref), POST the
+// subject submission, then approve consent when the OP asks for it.
+//
+// The returned response is the terminal one — a 302 back to the RP for
+// the redirect response modes, a 200 HTML body under form_post — and
+// the caller owns closing its Body.
+func completeInteraction(tb testing.TB, client *http.Client, interactionURL, origin, subject string) *http.Response {
+	tb.Helper()
 	stepResp := mustGet(tb, client, interactionURL)
 	defer func() { _ = stepResp.Body.Close() }()
 	if stepResp.StatusCode != http.StatusOK {
@@ -223,26 +250,11 @@ func RunCodeFlow(tb testing.TB, p *testkit.Provider, subject string, params Auth
 		tb.Fatal("scenariokit: __Host-oidc_csrf cookie missing on interaction prompt")
 	}
 
-	// Step 3: POST subject submission. The OP's testkit
-	// SubjectAuthenticator binds whatever value lands in the
-	// "subject" form field.
-	postResp := postInteraction(tb, client, interactionURL, p.Issuer, csrfCookie, stateRef,
+	// The OP's testkit SubjectAuthenticator binds whatever value lands
+	// in the "subject" form field.
+	postResp := postInteraction(tb, client, interactionURL, origin, csrfCookie, stateRef,
 		map[string]string{testkit.SubjectFieldName: subject})
-	finalResp := completeConsentIfPrompted(tb, client, interactionURL, p.Issuer, csrfCookie, postResp)
-	defer func() { _ = finalResp.Body.Close() }()
-	if finalResp.StatusCode != http.StatusFound {
-		body, _ := io.ReadAll(finalResp.Body)
-		tb.Fatalf("scenariokit: final interaction status=%d body=%s", finalResp.StatusCode, string(body))
-	}
-	rpRedirect, err := finalResp.Location()
-	if err != nil {
-		tb.Fatalf("scenariokit: final Location: %v", err)
-	}
-	if result, ok := captureCallback(tb, params.RedirectURI, rpRedirect); ok {
-		return result
-	}
-	tb.Fatalf("scenariokit: callback %s does not match redirect_uri %s", rpRedirect.String(), params.RedirectURI)
-	return CodeFlowResult{}
+	return completeConsentIfPrompted(tb, client, interactionURL, origin, csrfCookie, postResp)
 }
 
 // captureCallback returns a populated [CodeFlowResult] when location

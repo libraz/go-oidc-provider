@@ -36,18 +36,22 @@ rows:
       the form action attribute. An XSS payload such as
       https://client.example.com/cb"><script>...</script><x=" MUST be
       rendered as escaped text only and never executed.
-    status: out-of-scope
-    out_of_scope_reason: "The XSS precondition is unreachable. redirect_uri is matched for exact equality against the client's registered set before any response is composed, so an attacker-supplied payload URI is refused with invalid_request and never reaches the form writer; the writer additionally escapes the action attribute. There is no wire seam on which to observe the unescaped interpolation this row attacks."
+    status: active
 
   - id: RMO-003
     severity: P0
     spec: OAuth Form Post §2
     behaviour: |
       An error path (for example prompt=none yielding login_required)
-      returns a 400 HTML form posting error=login_required and state to
-      redirect_uri, and emits an authorization.error audit event.
-    status: out-of-scope
-    out_of_scope_reason: "The OP delivers form_post error responses — error, error_description, state and iss as hidden inputs — but with HTTP 200 OK, which is the status the auto-submitting form body carries in every case. The 400 status this row asserts is not the OP's wire behaviour, so the row cannot be bound as written."
+      delivers the error through the selected response_mode rather than
+      as a bare HTTP error: an HTML form posting error, error_description
+      and state to redirect_uri. The status is 200 OK — the form body is
+      a successful delivery of an error response, not an HTTP failure —
+      and no Location header is set, so the error never reaches browser
+      history or an intermediary's request log. Whether the rejection is
+      also reported to the audit stream is not a Form Post concern and is
+      catalogued with the rest of the OP's audit vocabulary.
+    status: active
 
   - id: RMO-004
     severity: P1
@@ -55,8 +59,7 @@ rows:
     behaviour: |
       GET and POST authorization endpoints MUST behave identically when
       response_mode=form_post is selected.
-    status: out-of-scope
-    out_of_scope_reason: "GET and POST /authorize are parsed by one request decoder and reach one emit path, so response_mode handling is method-independent by construction rather than by a per-method branch. There is no method-specific seam for this row to observe; the shared emit path is covered by the form_post rows that do bind."
+    status: active
 
   - id: RMO-010
     severity: P1
