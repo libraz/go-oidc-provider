@@ -170,12 +170,18 @@ func New(lockoutStore store.AuthnLockoutStore, clock timex.Clock) (*Counter, err
 // The counter emits exactly one event, [auditevent.AuditLockoutStalled],
 // and only from [Counter.RecordFailure]'s contention path. Everything
 // else it decides — a lock taking effect, a reset becoming required —
-// is returned to the per-factor adapter, which is where the OP's
-// login.* and mfa.* events are raised; duplicating them here would
-// double-count every failure. The contention path is different because
-// it has no caller-visible verdict to carry the signal: the attempt is
-// rejected without being counted, so the subject's failure budget
-// silently stops advancing and nothing downstream can tell.
+// is returned to the caller in the [Outcome], so the authenticator that
+// owns the factor decides how to report it. The contention path is
+// different because it has no caller-visible verdict to carry the
+// signal: the attempt is rejected without being counted, so the
+// subject's failure budget silently stops advancing and nothing
+// downstream can tell.
+//
+// Reporting a counted failure is therefore the authenticator chain's
+// job rather than this helper's: the orchestrator raises the login.* /
+// mfa.* pair once the factor resolves. Do not route that reporting
+// through here — one event per factor attempt belongs where the attempt
+// is judged, and emitting from both places would double-count.
 func (c *Counter) WithEmitter(e audit.Emitter) *Counter {
 	if e == nil {
 		return c

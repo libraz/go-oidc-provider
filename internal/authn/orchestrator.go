@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	opaudit "github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn/risk"
 	internallog "github.com/libraz/go-oidc-provider/internal/log"
@@ -74,6 +75,20 @@ type Config struct {
 	// The slice is fanned out in registration order.
 	Observers []LoginAttemptObserver
 
+	// AuditEmitter is the OP-wide audit sink the same factor
+	// outcomes are reported to, as the login.* / mfa.* names of the
+	// shared event catalogue.
+	//
+	// It is a second feed rather than a replacement for [Observers]
+	// because the two answer different questions. An observer is a
+	// policy input: it runs inside the attempt so an embedder can
+	// count failures and drive its own lockout. The audit stream is
+	// a record: it is fanned out to logging / metrics / SOC sinks and
+	// is the only one of the two that a Prometheus registry sees.
+	// Nil means the outcomes are recorded nowhere, which is why
+	// [New] substitutes a discard sink rather than leaving it nil.
+	AuditEmitter opaudit.Emitter
+
 	// StateRefSigner signs every [interaction.Prompt.StateRef]. Required.
 	StateRefSigner *StateRefSigner
 
@@ -109,6 +124,7 @@ type Orchestrator struct {
 	cfg            Config
 	logger         *slog.Logger
 	auditObservers []audit.Observer
+	auditEmitter   opaudit.Emitter
 	riskAssessor   risk.Assessor
 }
 
@@ -149,10 +165,15 @@ func New(cfg Config) (*Orchestrator, error) {
 	if logger == nil {
 		logger = slog.New(internallog.DiscardHandler{})
 	}
+	emitter := cfg.AuditEmitter
+	if emitter == nil {
+		emitter = opaudit.Discard()
+	}
 	return &Orchestrator{
 		cfg:            cfg,
 		logger:         logger,
 		auditObservers: wrapAuditObservers(cfg.Observers),
+		auditEmitter:   emitter,
 		riskAssessor:   wrapRiskAssessor(cfg.Risk),
 	}, nil
 }

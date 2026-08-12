@@ -850,6 +850,7 @@ func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestra
 		Risk:           cfg.risk,
 		Captcha:        cfg.captcha,
 		Observers:      cfg.loginObservers,
+		AuditEmitter:   cfg.effectiveAuditEmitter(),
 		StateRefSigner: signer,
 		LoginFlow:      compiled,
 	})
