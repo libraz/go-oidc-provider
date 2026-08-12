@@ -3,10 +3,10 @@ package dpop
 import "errors"
 
 // Sentinel errors returned by [Verifier.Verify] and the underlying proof
-// parser. The HTTP layer maps these onto WWW-Authenticate challenges
-// (RFC 9449 §7.1: error="invalid_dpop_proof" / "invalid_token") rather
-// than echoing the wrapped cause, so the surface visible to the client
-// stays opaque while logs retain full diagnostic detail via
+// parser. The HTTP layer maps these onto its documented OAuth error
+// envelope (normally `invalid_request`; nonce errors use
+// `use_dpop_nonce`) rather than echoing the wrapped cause, so the surface
+// visible to the client stays opaque while logs retain full diagnostic detail via
 // [errors.Unwrap].
 //
 // Callers MUST branch on these via [errors.Is]; string-matching the
