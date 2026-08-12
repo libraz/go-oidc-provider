@@ -59,9 +59,10 @@ OP returned a wrong answer silently: a consent ceremony that never ran, a
 revoked token that kept introspecting as active, an authentication context that
 described an older login than the one being served.
 
-Three deployments need to read the Changed section before upgrading: anyone
-running a BYO `store.PasskeyStore`, anyone on the DynamoDB adapter, and anyone
-whose OP serves only machine-to-machine grants.
+Five deployment classes need to read the Changed section before upgrading:
+anyone running a BYO `store.PasskeyStore` or MFA store, an existing SQL or
+DynamoDB adapter installation, and anyone whose OP serves only
+machine-to-machine grants.
 
 ### Security
 
@@ -160,10 +161,9 @@ whose OP serves only machine-to-machine grants.
   against the string `form_post`, which never matches, so the failure path
   reached the plain-redirect branch and put the code in a URL — in browser
   history, in the `Referer` of whatever the page loaded next, and in every
-  proxy log along the way. The code is now withheld entirely and the RP
-  receives `error=server_error` with
-  `error_description=jarm_response_signing_failed`; the unredeemed code lapses
-  at its TTL.
+  proxy log along the way. The code is now withheld entirely and the OP returns
+  an endpoint-local HTTP 500 with no redirect, state, code, or OAuth error
+  fields; the unredeemed code lapses at its TTL.
 - A DPoP proof presented on a request that then fails client authentication is
   no longer consumed, at `/token` (every grant), `/par`, `/bc-authorize` and
   `/device_authorization` — every endpoint that requires a credential and
@@ -553,6 +553,21 @@ whose OP serves only machine-to-machine grants.
 
 ### Changed
 
+- **BREAKING (BYO MFA stores).** `store.TOTPRecord` and
+  `store.EmailOTPRecord` now carry an opaque, equality-only store-issued
+  `Version` token. Backends use a fresh token for every Put and successful
+  transition that leaves a record stored, including recreation after deletion,
+  so a stale read-modify-write snapshot cannot become valid again across OP
+  processes. Callers must retain it unchanged
+  from `Get` and re-read after `Put`; they must not infer ordering from it.
+  The `json:"-"` tag keeps the token out of the opaque record document, so a
+  JSON-backed store must persist it in separate backend state. Update unkeyed
+  struct literals to keyed literals before upgrading. Existing bundled SQL
+  installations must add both `row_version` columns from
+  `op/storeadapter/sql/schema/MIGRATIONS.md` before starting the new binary.
+  Quiesce and upgrade SQL and DynamoDB MFA writers together: an old SQL writer
+  does not advance the token, while an old DynamoDB `PutItem` writer removes its
+  attribute.
 - **BREAKING (configuration).** `op.New` refuses a configuration that enables
   the `authorization_code` grant while registering neither
   `op.WithAuthenticators` nor `op.WithLoginFlow`. There is no way to establish a
@@ -1367,9 +1382,11 @@ not adopt this release.
   preserved.
 - Preflight RFC 9396 `authorization_details` against the live Grant before the
   refresh `Exchange` consumes the predecessor token (the token snapshot stays
-  the fallback for missing or sparse grants), sharing one transactional view
-  with the later `Consume` so a concurrent grant-management update cannot turn a
-  valid request into a rejection that strands the predecessor.
+  the fallback for missing or sparse grants). The preflight stays outside the
+  write transaction to avoid a stale SQLite WAL snapshot; after `Consume`, the
+  transaction re-reads the Grant and rolls back when its details changed, so a
+  concurrent grant-management update neither mints stale authorization nor
+  strands the predecessor token.
 - Project the originating `GrantID` from opaque access-token records into the
   synthetic `/userinfo` claims so pairwise subject configurations recover the
   OP-internal subject; a legacy opaque record without a `GrantID` is rejected
