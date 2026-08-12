@@ -80,9 +80,16 @@ var (
 // rejected and the primary CIBA use case would not work. Freshness
 // also buys nothing here: the requesting client has authenticated at
 // the endpoint, and the signature plus the audience binding are what
-// identify it and prevent cross-OP or cross-client forgery. The same
-// deliberate choice is documented for RP-Initiated Logout's
-// id_token_hint in internal/endsession.
+// identify it and prevent cross-OP or cross-client forgery.
+//
+// RP-Initiated Logout's id_token_hint verifier makes the same choice
+// about exp but additionally caps the age of iat, and the difference
+// is not an inconsistency: there the hint is what names the client, so
+// a token harvested from a forgotten tab is a standing credential in
+// anyone's hands. Here the hint is bound to a client that has already
+// authenticated on the same request, so an old token is useless to
+// anybody but its rightful holder — and a cap would reject exactly the
+// consumption-device flow CIBA exists for.
 //
 // # Pairwise subjects
 //

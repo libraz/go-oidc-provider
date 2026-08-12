@@ -89,6 +89,14 @@ type hintClaims struct {
 // audience are still sufficient to identify the requesting client
 // without admitting cross-OP forgery.
 //
+// The age cap is what distinguishes this verifier from CIBA's, which
+// verifies an id_token_hint the same way but bounds nothing. The cap
+// belongs here because the hint is the only thing binding the request
+// to a client: the caller is an unauthenticated browser and the client
+// identity is read out of the token. CIBA's hint arrives on a request
+// whose client has already authenticated, so a stale token there is
+// replayable only by the party it was issued to.
+//
 // now is the wall-clock reading the iat comparison uses; callers
 // pass [timex.SystemClock]'s reading or a [Deps.Clock]-derived value
 // so the same instant flows through every subsystem.

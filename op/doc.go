@@ -41,11 +41,10 @@
 //
 // [New] returns a [*Provider], which serves as the [http.Handler] above and
 // carries the one lifecycle seam the library has: [Provider.Shutdown] waits
-// for back-channel
-// logout deliveries that are still in flight. `/end_session` answers the user
-// without waiting for the relying parties to be notified, so a process that
-// exits the moment its listener closes can drop signed Logout Tokens that were
-// already queued. Stop accepting requests first, then drain:
+// for back-channel logout deliveries that are still in flight. /end_session
+// answers the user without waiting for the relying parties to be notified, so
+// a process that exits the moment its listener closes can drop signed Logout
+// Tokens that were already queued. Stop accepting requests first, then drain:
 //
 //	srv.Shutdown(ctx)      // stop accepting
 //	provider.Shutdown(ctx) // then drain
@@ -83,6 +82,6 @@
 // # Standards
 //
 // The library targets OpenID Connect Core 1.0, OAuth 2.0 (RFC 6749) and the
-// OAuth 2.0 Security Best Current Practices (RFC 9700). v1.0 also targets
-// FAPI 2.0 Baseline and Message Signing profiles.
+// OAuth 2.0 Security Best Current Practices (RFC 9700), and the FAPI 2.0
+// Baseline and Message Signing profiles.
 package op
