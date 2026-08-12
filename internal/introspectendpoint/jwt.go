@@ -49,7 +49,7 @@ func shouldEmitJWT(deps Deps, client *store.Client, accept string) bool {
 	if deps.RequireSignedIntrospection {
 		return true
 	}
-	if client.IntrospectionSignedResponseAlg != "" {
+	if client.IntrospectionSignedResponseAlg != "" && client.IntrospectionSignedResponseAlg != "none" {
 		return true
 	}
 	if client.IntrospectionEncryptedResponseAlg != "" {

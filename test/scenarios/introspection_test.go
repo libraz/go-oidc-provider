@@ -1317,8 +1317,8 @@ func TestScenario_INT_018_NonsenseTokenReturnsActiveFalse(t *testing.T) {
 // "wrong owner" onto the inactive envelope so a public probe cannot
 // enumerate live tokens issued to other clients.
 //
-// Spec: RFC 7662 §2.2 (single inactive envelope) plus the OP's
-// same-client-only policy documented in introspectendpoint/doc.go.
+// Spec: RFC 7662 §2.1 plus the OP's confidential-introspection policy
+// documented in introspectendpoint/doc.go.
 func TestScenario_INT_019_PublicClientCannotInspectOtherTokens(t *testing.T) {
 	t.Parallel()
 
@@ -1374,9 +1374,9 @@ func TestScenario_INT_019_PublicClientCannotInspectOtherTokens(t *testing.T) {
 		t.Fatalf("/token status=%d body=%v, want 200 with access_token", tok.StatusCode, tok.Raw)
 	}
 
-	// PROBE the owner's access token from the PUBLIC client. The body
-	// carries client_id (no Authorization header) since the public
-	// client has token_endpoint_auth_method=none.
+	// A public client cannot authenticate an introspection request. Reject it
+	// before token lookup rather than returning an inactive envelope that could
+	// be used as a probing oracle.
 	form := url.Values{
 		"token":     {tok.AccessToken},
 		"client_id": {probe.ID},
@@ -1394,10 +1394,6 @@ func TestScenario_INT_019_PublicClientCannotInspectOtherTokens(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status=%d want 200; body=%s", resp.StatusCode, raw)
-	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
@@ -1406,14 +1402,15 @@ func TestScenario_INT_019_PublicClientCannotInspectOtherTokens(t *testing.T) {
 	if err := json.Unmarshal(body, &env); err != nil {
 		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
 	}
-	if active, _ := env["active"].(bool); active {
-		t.Fatalf("active=true; cross-client introspection MUST collapse onto {active:false}; body=%s", string(body))
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401; body=%s", resp.StatusCode, body)
 	}
-	// Inactive envelope is the canonical single-key body. Any extra
-	// claim (client_id, sub, scope, exp, ...) leaks token existence.
-	for _, leak := range []string{"client_id", "sub", "scope", "iss", "exp", "iat", "token_type", "username"} {
+	if got, _ := env["error"].(string); got != "invalid_client" {
+		t.Errorf("error=%q want invalid_client; body=%s", got, body)
+	}
+	for _, leak := range []string{"active", "client_id", "sub", "scope", "iss", "exp", "iat", "token_type", "username"} {
 		if _, present := env[leak]; present {
-			t.Errorf("inactive body leaks %q=%v (RFC 7662 §2.2 requires bare {active:false})", leak, env[leak])
+			t.Errorf("rejected body leaks %q=%v; body=%s", leak, env[leak], body)
 		}
 	}
 }

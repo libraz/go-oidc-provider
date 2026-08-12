@@ -208,6 +208,29 @@ func TestHandler_NoCredentials(t *testing.T) {
 	}
 }
 
+func TestHandler_PublicClientRejectedEvenWithClientID(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client := f.prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "public-introspector",
+		PublicClient:            true,
+		TokenEndpointAuthMethod: "none",
+	})
+	resp := f.post(t, url.Values{
+		"client_id": {client.ID},
+		"token":     {"opaque-token"},
+	}, "", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_client" {
+		t.Fatalf("error=%v want invalid_client", body["error"])
+	}
+}
+
 func TestHandler_DuplicateTokenRejected(t *testing.T) {
 	t.Parallel()
 

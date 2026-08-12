@@ -2,6 +2,7 @@ package introspectendpoint
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -306,6 +307,17 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 	if !ok {
 		return
 	}
+	if !isConfidentialIntrospectionClient(client) {
+		err := errors.New("introspection requires a confidential client")
+		clientID := ""
+		if client != nil {
+			clientID = client.ID
+		}
+		endpointsupport.EmitAuthnFailure(r.Context(), deps.auditEmitter(), auditIntrospectionError,
+			"introspection client authentication rejected", clientID, err)
+		writeError(w, http.StatusUnauthorized, endpointsupport.ErrInvalidClient, err.Error())
+		return
+	}
 	token := r.PostForm.Get("token")
 	if token == "" {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "token is required")
@@ -318,6 +330,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 		return
 	}
 	writeResponse(w, resp)
+}
+
+func isConfidentialIntrospectionClient(client *store.Client) bool {
+	return client != nil && !client.PublicClient && client.TokenEndpointAuthMethod != "none"
 }
 
 // authenticate resolves the client credentials carried by the request,

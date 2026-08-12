@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -47,8 +48,8 @@ func FuzzIntrospectFormBody(f *testing.F) {
 	})
 }
 
-// FuzzIntrospectAuthenticatedToken authenticates a registered public client
-// before feeding mutated token bytes and hints to the token dispatcher. Its
+// FuzzIntrospectAuthenticatedToken authenticates a registered confidential
+// client before feeding mutated token bytes and hints to the token dispatcher. Its
 // seed corpus pins four independently observable deep paths:
 //
 //   - a live JWT AT must verify, hit the JTI registry, and return active;
@@ -71,8 +72,9 @@ func FuzzIntrospectAuthenticatedToken(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, token, hint string) {
 		form := url.Values{
-			"client_id": {fixture.clientID},
-			"token":     {token},
+			"client_id":     {fixture.clientID},
+			"client_secret": {fuzzClientSecret},
+			"token":         {token},
 		}
 		if hint != "" {
 			form.Set("token_type_hint", hint)
@@ -111,6 +113,8 @@ func FuzzIntrospectAuthenticatedToken(f *testing.F) {
 		}
 	})
 }
+
+const fuzzClientSecret = "fuzz-introspect-secret" //nolint:gosec // G101: fuzz-only fixture credential.
 
 type authenticatedIntrospectFuzzFixture struct {
 	server     *httptest.Server
@@ -253,10 +257,14 @@ func signIntrospectFuzzJWT(
 
 func mustRegisterFuzzClient(tb testing.TB, mem *inmem.Store, clientID string) {
 	tb.Helper()
-	err := mem.RegisterClient(context.Background(), &store.Client{
+	hash, err := (&clientauth.Argon2id{}).Hash(fuzzClientSecret)
+	if err != nil {
+		tb.Fatalf("hash fuzz client secret: %v", err)
+	}
+	err = mem.RegisterClient(context.Background(), &store.Client{
 		ID:                      clientID,
-		PublicClient:            true,
-		TokenEndpointAuthMethod: "none",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_post",
 	})
 	if err != nil {
 		tb.Fatalf("RegisterClient: %v", err)
