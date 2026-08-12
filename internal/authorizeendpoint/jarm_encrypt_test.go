@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -279,44 +280,30 @@ func TestJARMEncrypt_WithMetadataAndKey_EmitsNestedJWE(t *testing.T) {
 	}
 }
 
-func TestJARMEncrypt_MetadataButNoEncKey_SuccessFallsBackToServerError(t *testing.T) {
+func TestJARMEncrypt_MetadataButNoEncKey_SuccessFailsClosedLocally(t *testing.T) {
 	t.Parallel()
 
 	// Client registered alg/enc but JWKs is empty: ResolveRecipient
 	// surfaces ErrJWKSConfigured. Per the documented success-path
 	// policy, the splice MUST NOT downgrade to a plain "?code=..."
 	// redirect (that would leak the code through a channel the client
-	// contracted out of). Instead it emits server_error.
+	// contracted out of). Instead it emits an endpoint-local 500 with no
+	// OAuth error fields.
 	f := newJARMTestFixture(t, true, false)
 	req := f.authorizeRequest("query.jwt")
 	w := dispatchSuccess(f, req, "code-3")
 
-	if w.Code != http.StatusFound {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError || w.Header().Get("Location") != "" {
+		t.Fatalf("status=%d Location=%q want local 500 without redirect; body=%s", w.Code, w.Header().Get("Location"), w.Body.String())
 	}
-	loc, err := url.Parse(w.Header().Get("Location"))
-	if err != nil {
-		t.Fatalf("url.Parse: %v", err)
-	}
-	q := loc.Query()
-	if got := q.Get("error"); got != "server_error" {
-		t.Errorf("error=%q want server_error", got)
-	}
-	if got := q.Get("error_description"); got != "jarm_response_encryption_failed" {
-		t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
-	}
-	if got := q.Get("code"); got != "" {
-		t.Errorf("code leaked on encryption-failure path: %q (Location=%s)", got, loc.String())
-	}
-	if got := q.Get("response"); got != "" {
-		t.Errorf("response param leaked on encryption-failure path: %q", got)
-	}
-	if got := q.Get("state"); got != "state-abc" {
-		t.Errorf("state=%q want state-abc", got)
+	for _, secret := range []string{"server_error", "jarm_response_encryption_failed", "code-3", "state-abc"} {
+		if strings.Contains(w.Body.String(), secret) {
+			t.Errorf("failure exposed %q: %s", secret, w.Body.String())
+		}
 	}
 }
 
-func TestJARMEncrypt_MetadataButWeakEncKey_SuccessFallsBackToServerError(t *testing.T) {
+func TestJARMEncrypt_MetadataButWeakEncKey_SuccessFailsClosedLocally(t *testing.T) {
 	t.Parallel()
 
 	f := newJARMTestFixture(t, true, false)
@@ -324,51 +311,30 @@ func TestJARMEncrypt_MetadataButWeakEncKey_SuccessFallsBackToServerError(t *test
 	req := f.authorizeRequest("query.jwt")
 	w := dispatchSuccess(f, req, "code-weak")
 
-	if w.Code != http.StatusFound {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError || w.Header().Get("Location") != "" {
+		t.Fatalf("status=%d Location=%q want local 500 without redirect; body=%s", w.Code, w.Header().Get("Location"), w.Body.String())
 	}
-	loc, err := url.Parse(w.Header().Get("Location"))
-	if err != nil {
-		t.Fatalf("url.Parse: %v", err)
-	}
-	q := loc.Query()
-	if got := q.Get("error"); got != "server_error" {
-		t.Errorf("error=%q want server_error", got)
-	}
-	if got := q.Get("error_description"); got != "jarm_response_encryption_failed" {
-		t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
-	}
-	if got := q.Get("code"); got != "" {
-		t.Errorf("code leaked on weak-key path: %q (Location=%s)", got, loc.String())
-	}
-	if got := q.Get("response"); got != "" {
-		t.Errorf("response param leaked on weak-key path: %q", got)
+	for _, secret := range []string{"server_error", "jarm_response_encryption_failed", "code-weak", "state-abc"} {
+		if strings.Contains(w.Body.String(), secret) {
+			t.Errorf("failure exposed %q: %s", secret, w.Body.String())
+		}
 	}
 }
 
-func TestJARMEncrypt_MetadataButNoEncKey_ErrorFailsClosed(t *testing.T) {
+func TestJARMEncrypt_MetadataButNoEncKey_ErrorFailsClosedLocally(t *testing.T) {
 	t.Parallel()
 
 	f := newJARMTestFixture(t, true, false)
 	req := f.authorizeRequest("query.jwt")
 	w := dispatchError(f, req, "invalid_scope", "scope rejected")
 
-	if w.Code != http.StatusFound {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError || w.Header().Get("Location") != "" {
+		t.Fatalf("status=%d Location=%q want local 500 without redirect; body=%s", w.Code, w.Header().Get("Location"), w.Body.String())
 	}
-	loc, err := url.Parse(w.Header().Get("Location"))
-	if err != nil {
-		t.Fatalf("url.Parse: %v", err)
-	}
-	q := loc.Query()
-	if got := q.Get("error"); got != "server_error" {
-		t.Errorf("error=%q want server_error", got)
-	}
-	if got := q.Get("error_description"); got != "jarm_response_encryption_failed" {
-		t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
-	}
-	if got := q.Get("response"); got != "" {
-		t.Errorf("signed-only response leaked on encryption-failure path: %q", got)
+	for _, secret := range []string{"server_error", "jarm_response_encryption_failed", "invalid_scope", "scope rejected", "state-abc"} {
+		if strings.Contains(w.Body.String(), secret) {
+			t.Errorf("failure exposed %q: %s", secret, w.Body.String())
+		}
 	}
 }
 
@@ -415,25 +381,17 @@ func TestJARMEncrypt_ClientStoreFault_FailsClosedOverHTTP(t *testing.T) {
 				t.Fatalf("GET /authorize: %v", err)
 			}
 			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusFound {
-				t.Fatalf("status=%d", resp.StatusCode)
+			if resp.StatusCode != http.StatusInternalServerError || resp.Header.Get("Location") != "" {
+				t.Fatalf("status=%d Location=%q want local 500 without redirect", resp.StatusCode, resp.Header.Get("Location"))
 			}
-			loc, err := url.Parse(resp.Header.Get("Location"))
+			body, err := io.ReadAll(resp.Body)
 			if err != nil {
-				t.Fatalf("url.Parse: %v", err)
+				t.Fatalf("read response body: %v", err)
 			}
-			q := loc.Query()
-			if got := q.Get("error"); got != "server_error" {
-				t.Errorf("error=%q want server_error", got)
-			}
-			if got := q.Get("error_description"); got != "jarm_response_encryption_failed" {
-				t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
-			}
-			if got := q.Get("response"); got != "" {
-				t.Errorf("signed-only JARM leaked after client-store fault: %q", got)
-			}
-			if got := q.Get("code"); got != "" {
-				t.Errorf("authorization code leaked after client-store fault: %q", got)
+			for _, secret := range []string{"server_error", "jarm_response_encryption_failed", "code-store-fault", "state-abc"} {
+				if strings.Contains(string(body), secret) {
+					t.Errorf("failure exposed %q", secret)
+				}
 			}
 		})
 	}
@@ -444,10 +402,10 @@ func TestJARMEncrypt_NonJARMResponseMode_IgnoresEncryptionMetadata(t *testing.T)
 
 	// Client registered encryption metadata but the request did not
 	// opt into JARM. The splice MUST NOT engage: encryption is JARM-
-	// scoped, and a legacy response_mode means the OP emits the
+	// scoped, and a plain response_mode means the OP emits the
 	// classic "?code=..." redirect verbatim.
 	f := newJARMTestFixture(t, true, true)
-	req := f.authorizeRequest("") // empty == legacy default for response_type=code
+	req := f.authorizeRequest("") // empty == plain default for response_type=code
 	w := dispatchSuccess(f, req, "code-4")
 
 	if w.Code != http.StatusFound {
@@ -462,7 +420,7 @@ func TestJARMEncrypt_NonJARMResponseMode_IgnoresEncryptionMetadata(t *testing.T)
 		t.Errorf("code=%q want code-4", got)
 	}
 	if got := q.Get("response"); got != "" {
-		t.Errorf("response param leaked on legacy redirect: %q", got)
+		t.Errorf("response param leaked on plain redirect: %q", got)
 	}
 	if got := q.Get("state"); got != "state-abc" {
 		t.Errorf("state=%q want state-abc", got)

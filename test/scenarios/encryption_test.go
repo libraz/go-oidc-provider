@@ -699,6 +699,7 @@ func TestScenario_ENC_036_DCRRejectsHalfPairEncryptionMetadata(t *testing.T) {
 	t.Parallel()
 
 	encKey := scenariokit.NewOPEncryptionKey(t, "op-enc-036")
+	rp := scenariokit.NewRPEncryptionKey(t, "rp-enc-036")
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithDynamicRegistration(op.RegistrationOption{Open: true}),
 		op.WithEncryptionKeyset(op.EncryptionKeyset{encKey}),
@@ -742,11 +743,12 @@ func TestScenario_ENC_036_DCRRejectsHalfPairEncryptionMetadata(t *testing.T) {
 		t.Errorf("error=%q want invalid_client_metadata (env=%v)", got, badEnv)
 	}
 
-	// Positive: both alg+enc set on the closed JOSE allow-list -> 201.
+	// Positive: both alg+enc plus a matching RP encryption key -> 201.
 	bothPairBody := map[string]any{ //nolint:gosec // G101: client-metadata field names are JOSE / OIDC vocabulary, not credentials.
 		"redirect_uris":                   []string{"https://rp.testkit.invalid/cb"},
 		"id_token_encrypted_response_alg": "RSA-OAEP-256",
 		"id_token_encrypted_response_enc": "A256GCM",
+		"jwks":                            rp.JWKS,
 	}
 	respOK := postRegister(t, bothPairBody)
 	defer func() { _ = respOK.Body.Close() }()
@@ -1447,8 +1449,8 @@ func TestScenario_ENC_121_JARMErrorFailsClosed(t *testing.T) {
 	// Drive a /authorize request with response_type=token (not in the
 	// client's registered set and not advertised on the OP). With
 	// response_mode=jwt the OP routes the error through the JARM
-	// emit path; the JWE wrap fails and the function emits only a
-	// generic server_error redirect.
+	// emit path; the JWE wrap fails and the function fails closed at the OP
+	// rather than redirecting an authorization response it cannot protect.
 	values := url.Values{
 		"client_id":     {clientID},
 		"redirect_uri":  {callback},
@@ -1468,41 +1470,21 @@ func TestScenario_ENC_121_JARMErrorFailsClosed(t *testing.T) {
 		t.Fatalf("GET /authorize: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusFound {
+	if resp.StatusCode != http.StatusInternalServerError {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status=%d want 302 (JARM error redirect) body=%s", resp.StatusCode, body)
+		t.Fatalf("status=%d want 500 (local JARM failure) body=%s", resp.StatusCode, body)
 	}
-	loc, err := resp.Location()
+	if got := resp.Header.Get("Location"); got != "" {
+		t.Errorf("JARM encryption failure redirected to %q; want endpoint-local failure", got)
+	}
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("Location: %v", err)
+		t.Fatalf("read local failure body: %v", err)
 	}
-	query := loc.Query()
-	if got := query.Get("error"); got != "server_error" {
-		t.Errorf("error=%q want server_error", got)
-	}
-	if got := query.Get("error_description"); got != "jarm_response_encryption_failed" {
-		t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
-	}
-	if got := query.Get("state"); got != "enc-121-state" {
-		t.Errorf("state=%q want enc-121-state", got)
-	}
-	if got := query.Get("iss"); got != tk.Issuer {
-		t.Errorf("iss=%q want %q", got, tk.Issuer)
-	}
-	if got := query.Get("response"); got != "" {
-		t.Errorf("signed-only JARM leaked in query after JWE failure: %q", got)
-	}
-	if loc.Fragment != "" {
-		fragment, err := url.ParseQuery(loc.Fragment)
-		if err != nil {
-			t.Fatalf("parse redirect fragment: %v", err)
+	for _, forbidden := range []string{"enc-121-state", "response=", "error=", "code="} {
+		if strings.Contains(string(body), forbidden) {
+			t.Errorf("local JARM failure body leaked %q: %s", forbidden, body)
 		}
-		if got := fragment.Get("response"); got != "" {
-			t.Errorf("signed-only JARM leaked in fragment after JWE failure: %q", got)
-		}
-	}
-	if got := query.Get("code"); got != "" {
-		t.Errorf("authorization code leaked after JWE failure: %q", got)
 	}
 }
 

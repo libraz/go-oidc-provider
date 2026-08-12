@@ -1,6 +1,7 @@
 package authorizeendpoint
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/url"
@@ -24,7 +25,7 @@ const formPostResponseMode = "form_post"
 // When the request asks for a JARM mode but [resolved.JARM] is nil
 // (the feature is off), the function still returns the resolved mode
 // so the caller can detect the mismatch and emit the
-// "unsupported_response_mode" error in the legacy redirect mode.
+// "unsupported_response_mode" error through the plain response path.
 func jarmModeForRequest(req *authorize.Request) jarm.ResponseMode {
 	mode, ok := jarm.Parse(req.ResponseMode)
 	if !ok {
@@ -44,8 +45,8 @@ func jarmFeatureRequested(req *authorize.Request) bool {
 // form: the OIDC Core "form_post" mode or the JARM "form_post.jwt"
 // mode, including the bare "jwt" alias when it resolves to the latter.
 //
-// Every fallback that would otherwise emit a redirect MUST consult
-// this predicate rather than comparing against the "form_post" literal.
+// Every plain-response form-post decision MUST consult this predicate
+// rather than comparing against the "form_post" literal.
 // A client picks a form-post mode precisely so the response parameters
 // never enter a URL — where they land in browser history, in the
 // Referer of whatever the landing page loads, and in every proxy log on
@@ -70,18 +71,16 @@ func jarmModeMissing(deps resolved, req *authorize.Request) bool {
 }
 
 // jarmEmitSuccess writes the success response as a JARM JWT in the
-// resolved mode. The function returns an error when JWT signing or
-// dispatch fails; callers translate the error into the legacy redirect
-// path so the RP still receives a determinate outcome.
+// resolved mode. The function returns an error when JWT signing, key
+// lookup, encryption, or dispatch fails; callers convert that failure
+// into an endpoint-local 500 response.
 //
 // When the client registered authorization_encrypted_response_alg /
 // _enc the signed JWT is wrapped in a JWE before dispatch.
-// Encryption failure on the success path is surfaced to the caller
-// so [emitAuthorizeSuccess] can fall through to the legacy
-// "?error=server_error&error_description=jarm_response_encryption_failed"
-// redirect: the OP cannot honour the contracted encrypted-response
-// shape, but stranding the user mid-flow on a 500 is worse than a
-// determinate error redirect.
+// Encryption failure on the success path is surfaced to the caller;
+// [emitAuthorizeSuccess] then fails closed locally rather than
+// exposing a code, state, or unsigned error through a redirect or
+// partial form response.
 func jarmEmitSuccess(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -113,14 +112,14 @@ func jarmEmitSuccess(
 }
 
 // jarmEmitError writes the error response as a JARM JWT in the
-// resolved mode. As with [jarmEmitSuccess], a failure to sign /
-// dispatch is propagated up so the caller can fall back to the legacy
-// redirect emit path.
+// resolved mode. As with [jarmEmitSuccess], a failure to sign, key
+// lookup, encrypt, or dispatch is propagated up so the caller can
+// fail closed with an endpoint-local 500.
 //
 // When the client registered authorization_encrypted_response_alg /
 // _enc the signed error JWT is wrapped in a JWE before dispatch.
 // Client lookup and encryption failures are propagated so the caller
-// can emit a generic server_error without silently downgrading the
+// can emit an endpoint-local 500 without silently downgrading the
 // client's registered confidentiality requirement.
 func jarmEmitError(
 	w http.ResponseWriter,
@@ -163,7 +162,15 @@ func jarmDispatch(
 	redirectURI, jwtToken string,
 ) error {
 	if mode == jarm.ResponseModeFormPostJWT {
-		return jarm.WriteFormPost(w, redirectURI, jwtToken)
+		// jarm.WriteFormPost writes headers and status before it writes the
+		// body. Render into a private buffer first so a renderer failure can
+		// become an OP-local 500 without leaking a partial form or leaving
+		// the real writer committed to a redirect-shaped response.
+		buffer := newBufferedResponseWriter()
+		if err := jarm.WriteFormPost(buffer, redirectURI, jwtToken); err != nil {
+			return err
+		}
+		return buffer.commit(w)
 	}
 	target, err := jarm.BuildRedirect(mode, redirectURI, jwtToken)
 	if err != nil {
@@ -181,14 +188,14 @@ func jarmDispatch(
 // otherwise the function emits the plain "?code=...&state=..." redirect
 // or, for response_mode=form_post, the equivalent auto-submitted form.
 //
-// A JARM emit that fails does NOT fall back to a plain success
-// response. Every plain shape is weaker than what the client
-// contracted for: an unsigned response drops the JARM binding that
-// authenticates the response against a mix-up, and a redirect drops
-// form_post's guarantee that the code never enters a URL. The function
-// emits a determinate error through the transport half of the
-// requested mode instead, and the minted code is simply never
-// delivered — it expires unredeemed on its own TTL.
+// A JARM emit that fails does NOT fall back to a plain success or
+// OAuth-error response. Every such shape is weaker than what the
+// client contracted for: an unsigned response drops the JARM binding
+// that authenticates the response against a mix-up, and a redirect or
+// partial form can expose response data through the wrong channel. The
+// function therefore emits only an endpoint-local 500 with no
+// Location, state, code, or OAuth error fields; the minted code is
+// simply never delivered and expires unredeemed on its own TTL.
 func emitAuthorizeSuccess(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -196,19 +203,20 @@ func emitAuthorizeSuccess(
 	req *authorize.Request,
 	code string,
 ) {
-	if mode := jarmModeForRequest(req); mode != "" && deps.JARM != nil {
+	if mode := jarmModeForRequest(req); mode != "" {
+		if deps.JARM == nil {
+			writeJARMFailure(w)
+			return
+		}
 		err := jarmEmitSuccess(w, r, deps, req, mode, code)
 		if err == nil {
 			return
 		}
-		description := "jarm_response_signing_failed"
-		if errors.Is(err, errJARMEncryptionFailed) {
-			description = "jarm_response_encryption_failed"
-		}
-		emitPlainResponse(w, r, deps, req, url.Values{
-			"error":             {errServerError},
-			"error_description": {description},
-		})
+		// Once JARM was selected, every redirect/form response shape is a
+		// downgrade. Keep signing, key resolution, encryption, and
+		// rendering failures OP-local; do not expose state, code, or even
+		// an unsigned OAuth error to the browser/RP.
+		writeJARMFailure(w)
 		return
 	}
 	emitPlainResponse(w, r, deps, req, url.Values{"code": {code}})
@@ -297,15 +305,12 @@ func emitAuthorizeError(
 // JARM (or the feature is off) and the caller should emit the plain
 // response.
 //
-// A JARM emit that fails still keeps the error on the transport the
-// request chose — [emitPlainResponse] honours form_post.jwt as a form
-// post — because an error envelope carries no credential and the only
-// thing the client loses is the JWT wrapper. The one payload
-// substitution is on encryption failure: the client registered
-// authorization_encrypted_response_alg / _enc and so contracted for a
-// confidential response, and answering with the original code through
-// an unencrypted channel would honour the transport at the expense of
-// the contract. A generic server_error is emitted instead.
+// A failed JARM signing, key lookup, encryption, or rendering operation
+// is terminal for this request. It must not be downgraded to a plain
+// OAuth error, redirect, or partial form: those responses could expose
+// state or error details without the response integrity the client
+// requested. The caller emits only an endpoint-local 500 with no
+// Location, state, code, or OAuth error fields.
 func tryJARMErrorResponse(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -321,12 +326,59 @@ func tryJARMErrorResponse(
 	if err == nil {
 		return true
 	}
-	if errors.Is(err, errJARMEncryptionFailed) {
-		code, description = errServerError, "jarm_response_encryption_failed"
-	}
-	emitPlainResponse(w, r, deps, req, url.Values{
-		"error":             {code},
-		"error_description": {description},
-	})
+	// The request selected JARM, so a failed signed/JWE/form response
+	// cannot be downgraded to a plain OAuth error redirect. Keep the
+	// failure local and avoid reflecting the request's state or error.
+	writeJARMFailure(w)
 	return true
+}
+
+// writeJARMFailure is the fail-closed endpoint-local response for every
+// runtime JARM failure. It intentionally carries no OAuth error fields,
+// state, code, redirect Location, or renderer output.
+func writeJARMFailure(w http.ResponseWriter) {
+	stampNoStore(w)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = w.Write([]byte("authorization response unavailable\n"))
+}
+
+type bufferedResponseWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func newBufferedResponseWriter() *bufferedResponseWriter {
+	return &bufferedResponseWriter{header: make(http.Header)}
+}
+
+func (w *bufferedResponseWriter) Header() http.Header { return w.header }
+
+func (w *bufferedResponseWriter) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *bufferedResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+func (w *bufferedResponseWriter) commit(dst http.ResponseWriter) error {
+	for key, values := range w.header {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		dst.Header()[key] = copied
+	}
+	status := w.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	dst.WriteHeader(status)
+	_, err := dst.Write(w.body.Bytes())
+	return err
 }

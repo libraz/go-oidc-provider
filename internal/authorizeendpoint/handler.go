@@ -350,11 +350,11 @@ type Deps struct {
 
 	// ClientEncJWKs resolves the RP's encryption recipient when the
 	// client registered authorization_encrypted_response_alg / _enc
-	// (JARM with JWE wrap; JARM by default emits a signed JWT). A
-	// nil value disables outbound JARM encryption; clients that
-	// registered the metadata still see signed JARM responses, which
-	// the validator rejects at registration time when both halves are
-	// configured but the OP cannot honour the wrap.
+	// (JARM with JWE wrap; JARM by default emits a signed JWT). A nil
+	// value is a fail-closed runtime error for a client that requested
+	// encryption: the endpoint returns a local 500 rather than downgrading
+	// to a signed-only response. Registration validates the metadata shape,
+	// while runtime resolution validates its recipient key.
 	ClientEncJWKs *clientencjwks.Resolver
 
 	// FirstPartyClients is the set of client_id values the embedder

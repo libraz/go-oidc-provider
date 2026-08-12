@@ -1,11 +1,8 @@
 // White-box tests for what /authorize emits when a JARM response
-// cannot be produced. The contract under test: a failure to sign never
-// downgrades the response to a weaker shape than the one the client
-// contracted for. Concretely, under response_mode=form_post.jwt the
-// authorization code MUST NOT be delivered through a redirect — a 302
-// puts it in browser history, in the Referer of whatever the landing
-// page loads, and in every proxy log on the path, which is the exact
-// exposure a form-post mode exists to avoid.
+// cannot be produced. The contract under test is fail-closed: every
+// signing, key, encryption, or form-rendering failure produces an
+// endpoint-local 500 with no redirect, partial form, state, code, or
+// OAuth error fields.
 //
 //nolint:testpackage // intentional white-box test for unexported emit helpers.
 package authorizeendpoint
@@ -41,33 +38,24 @@ func TestEmitAuthorizeSuccess_FormPostJWTSigningFailure_NeverRedirectsCode(t *te
 	const code = "the-authorization-code"
 	w := dispatchSuccess(f, unsignableRequest(f, "form_post.jwt"), code)
 
-	if w.Code == http.StatusFound {
-		t.Fatalf("status=302 (Location=%q); a form-post request must never be answered with a redirect",
-			w.Header().Get("Location"))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500 (OP-local failure)", w.Code)
 	}
 	if loc := w.Header().Get("Location"); loc != "" {
-		t.Fatalf("Location=%q; no redirect may be emitted for a form-post request", loc)
-	}
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d want 200 (auto-submitted form)", w.Code)
+		t.Fatalf("Location=%q; no redirect may be emitted for a JARM failure", loc)
 	}
 	body := w.Body.String()
-	if strings.Contains(body, code) {
-		t.Fatalf("authorization code leaked into the response body: %s", body)
-	}
-	if !strings.Contains(body, `name="error" value="server_error"`) {
-		t.Fatalf("response is not the determinate server_error envelope: %s", body)
-	}
-	if !strings.Contains(body, "jarm_response_signing_failed") {
-		t.Fatalf("response does not name the failure: %s", body)
+	for _, secret := range []string{code, "server_error", "jarm_response_signing_failed", "state-abc"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("JARM failure exposed %q in response body: %s", secret, body)
+		}
 	}
 }
 
 // TestEmitAuthorizeSuccess_QueryJWTSigningFailure_WithholdsCode covers
-// the redirect-mode half. A redirect is the transport the client chose
-// here, so emitting one is correct — but the payload must be the error,
-// never the unsigned code, because a plain "?code=..." drops the JARM
-// binding the client asked for.
+// the redirect-mode half. JARM failure handling is transport-independent:
+// even though the request selected a redirect-capable JARM mode, the
+// OP must not emit a redirect or reflect the unsigned code/error.
 func TestEmitAuthorizeSuccess_QueryJWTSigningFailure_WithholdsCode(t *testing.T) {
 	t.Parallel()
 
@@ -75,47 +63,47 @@ func TestEmitAuthorizeSuccess_QueryJWTSigningFailure_WithholdsCode(t *testing.T)
 	const code = "the-authorization-code"
 	w := dispatchSuccess(f, unsignableRequest(f, "query.jwt"), code)
 
-	if w.Code != http.StatusFound {
-		t.Fatalf("status=%d want 302 for a redirect-mode request", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500 for a redirect-mode JARM failure", w.Code)
 	}
-	loc := w.Header().Get("Location")
-	if strings.Contains(loc, code) {
-		t.Fatalf("authorization code leaked into the redirect: %s", loc)
+	if loc := w.Header().Get("Location"); loc != "" {
+		t.Fatalf("Location=%q; no redirect may be emitted for a JARM failure", loc)
 	}
-	if !strings.Contains(loc, "error=server_error") {
-		t.Fatalf("redirect is not the determinate server_error envelope: %s", loc)
-	}
-	if !strings.Contains(loc, "jarm_response_signing_failed") {
-		t.Fatalf("redirect does not name the failure: %s", loc)
+	for _, secret := range []string{code, "server_error", "jarm_response_signing_failed", "state-abc"} {
+		if strings.Contains(w.Body.String(), secret) {
+			t.Fatalf("JARM failure exposed %q in response body: %s", secret, w.Body.String())
+		}
 	}
 }
 
-// TestEmitAuthorizeError_FormPostJWTSigningFailure_StaysOnFormPost pins
-// the error-path twin. No credential is at stake here, so the original
-// wire code survives — but the transport the client selected does too,
-// because the string compare that used to pick the transport matched
-// only the literal "form_post" and silently missed "form_post.jwt".
-func TestEmitAuthorizeError_FormPostJWTSigningFailure_StaysOnFormPost(t *testing.T) {
+// TestEmitAuthorizeError_JARMSigningFailure_FailsClosedLocally pins the
+// error-path twin. The original OAuth error, state, and transport are
+// all withheld when its JARM envelope cannot be produced.
+func TestEmitAuthorizeError_JARMSigningFailure_FailsClosedLocally(t *testing.T) {
 	t.Parallel()
 
 	f := newJARMTestFixture(t, false, false)
 	w := dispatchError(f, unsignableRequest(f, "form_post.jwt"), errAccessDenied, "user aborted the interaction")
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d want 200 (auto-submitted form); Location=%q",
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500 (OP-local failure); Location=%q",
 			w.Code, w.Header().Get("Location"))
 	}
-	body := w.Body.String()
-	if !strings.Contains(body, `name="error" value="access_denied"`) {
-		t.Fatalf("original wire code not preserved: %s", body)
+	if loc := w.Header().Get("Location"); loc != "" {
+		t.Fatalf("Location=%q; no redirect may be emitted for a JARM failure", loc)
+	}
+	for _, secret := range []string{"access_denied", "user aborted the interaction", "state-abc"} {
+		if strings.Contains(w.Body.String(), secret) {
+			t.Fatalf("JARM failure exposed %q in response body: %s", secret, w.Body.String())
+		}
 	}
 }
 
 // TestResponseModeUsesFormPost enumerates the modes whose responses are
 // delivered as an auto-submitted form. The predicate is what every
-// fallback consults instead of comparing against the "form_post"
-// literal; a row flipping to false is a redirect the client did not ask
-// for.
+// plain form-post selection consults instead of comparing against the
+// "form_post" literal; a row flipping to false is a redirect the client
+// did not ask for.
 func TestResponseModeUsesFormPost(t *testing.T) {
 	t.Parallel()
 
