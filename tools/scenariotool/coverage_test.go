@@ -8,6 +8,7 @@ import (
 )
 
 func TestScenarioIDFromTestName(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		want   string
@@ -32,6 +33,7 @@ func TestScenarioIDFromTestName(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := scenarioIDFromTestName(tc.name)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v (id=%q)", ok, tc.wantOK, got)
@@ -44,6 +46,7 @@ func TestScenarioIDFromTestName(t *testing.T) {
 }
 
 func TestDiscoverSkipStubs(t *testing.T) {
+	t.Parallel()
 	src := `package scenarios
 
 import "testing"
@@ -98,6 +101,7 @@ func TestScenario_AAA_004B_Asserts(t *testing.T) {
 }
 
 func TestClassifyCoverage(t *testing.T) {
+	t.Parallel()
 	catalog := map[string]rowBinding{
 		"AAA-001": {status: "active"},
 		"AAA-002": {status: "active"},
@@ -124,6 +128,7 @@ func TestClassifyCoverage(t *testing.T) {
 }
 
 func TestClassifyCoverage_Delegation(t *testing.T) {
+	t.Parallel()
 	catalog := map[string]rowBinding{
 		"AAA-001": {status: "active", coveredBy: "internal/thing.TestResolves"},
 		"AAA-002": {status: "active", coveredBy: "internal/thing.TestRenamedAway"},
@@ -156,12 +161,13 @@ func TestClassifyCoverage_Delegation(t *testing.T) {
 }
 
 func TestVerifyDelegations_UnresolvableReferences(t *testing.T) {
+	t.Parallel()
 	rows := map[string]rowBinding{
 		"AAA-001": {status: "active", coveredBy: "malformed"},
 		"AAA-002": {status: "active", coveredBy: "no/such/package.TestNothing"},
 		"AAA-003": {status: "active"}, // no delegation, nothing to resolve
 	}
-	broken, err := verifyDelegations(rows, "")
+	broken, err := verifyDelegations(t.Context(), rows, "")
 	if err != nil {
 		t.Fatalf("verifyDelegations returned an error; unresolvable rows are findings, not failures: %v", err)
 	}

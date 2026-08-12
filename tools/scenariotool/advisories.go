@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -89,11 +90,49 @@ var advisoryRegex = regexp.MustCompile(
 // ("Tracks CVE-... and the broader disclosure") counts the same.
 var trackMarkerRegex = regexp.MustCompile(`\bTracks\b`)
 
+// advisoryIDPattern is the exact CVE / GHSA shape an inventory entry
+// must use as its ID.
+var advisoryIDPattern = regexp.MustCompile(`^(CVE-[0-9]{4}-[0-9]{4,8}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})$`)
+
+// advisoryThreatPattern guards the threat-model reference every entry
+// carries.
+var advisoryThreatPattern = regexp.MustCompile(`^T-[0-9]+$`)
+
 // loadAdvisoryInventory reads _advisories.yaml from dir and validates
 // structural invariants the JSON schema cannot express (severity /
 // status enums, threat pattern, out_of_scope_reason requirement).
 func loadAdvisoryInventory(dir string) (*advisoryInventory, error) {
 	path := filepath.Join(dir, advisoryFileName)
+	inv, err := decodeAdvisoryInventory(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var problems []string
+	inv.byID = make(map[string]*advisoryEntry, len(inv.Advisories))
+	for i, a := range inv.Advisories {
+		where := fmt.Sprintf("%s advisories[%d] (%s)", path, i, a.ID)
+		problems = append(problems, checkAdvisoryEntry(where, a)...)
+		// IDs index the inventory and are what source comments cite, so
+		// a duplicate would make one of the two entries unreachable.
+		if prev, dup := inv.byID[a.ID]; dup {
+			problems = append(problems, fmt.Sprintf("%s: duplicate id %q (first seen as severity=%s)", where, a.ID, prev.Severity))
+		} else {
+			inv.byID[a.ID] = a
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		return nil, fmt.Errorf("advisory inventory invalid (%d issue(s)):\n  %s",
+			len(problems), strings.Join(problems, "\n  "))
+	}
+	return inv, nil
+}
+
+// decodeAdvisoryInventory parses the inventory file and pins its schema
+// version. Unknown keys are rejected so a typo cannot silently drop a
+// field the gate reads.
+func decodeAdvisoryInventory(path string) (*advisoryInventory, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // path is operator-controlled.
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -107,47 +146,50 @@ func loadAdvisoryInventory(dir string) (*advisoryInventory, error) {
 	if inv.SchemaVersion != 1 {
 		return nil, fmt.Errorf("%s: schema_version=%d, want 1", path, inv.SchemaVersion)
 	}
-	inv.byID = make(map[string]*advisoryEntry, len(inv.Advisories))
-	var problems []string
-	idPattern := regexp.MustCompile(`^(CVE-[0-9]{4}-[0-9]{4,8}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})$`)
-	threatPattern := regexp.MustCompile(`^T-[0-9]+$`)
-	for i, a := range inv.Advisories {
-		where := fmt.Sprintf("%s advisories[%d] (%s)", path, i, a.ID)
-		if !idPattern.MatchString(a.ID) {
-			problems = append(problems, fmt.Sprintf("%s: id %q does not match CVE-/GHSA- pattern", where, a.ID))
-		}
-		if a.Severity != "P0" && a.Severity != "P1" && a.Severity != "P2" {
-			problems = append(problems, fmt.Sprintf("%s: severity %q must be P0|P1|P2", where, a.Severity))
-		}
-		if !threatPattern.MatchString(a.Threat) {
-			problems = append(problems, fmt.Sprintf("%s: threat %q must match T-[0-9]+", where, a.Threat))
-		}
-		switch a.Status {
-		case advisoryStatusCovered, advisoryStatusTracking, advisoryStatusOutOfScope:
-		default:
-			problems = append(problems, fmt.Sprintf("%s: status %q must be covered|tracking|out-of-scope", where, a.Status))
-		}
-		if a.Status == advisoryStatusOutOfScope && strings.TrimSpace(a.OutOfScopeReason) == "" {
-			problems = append(problems, fmt.Sprintf("%s: status=out-of-scope requires out_of_scope_reason", where))
-		}
-		if a.Status != advisoryStatusOutOfScope && a.OutOfScopeReason != "" {
-			problems = append(problems, fmt.Sprintf("%s: out_of_scope_reason is only valid when status=out-of-scope", where))
-		}
-		if strings.TrimSpace(a.Source) == "" {
-			problems = append(problems, fmt.Sprintf("%s: source MUST be non-empty", where))
-		}
-		if prev, dup := inv.byID[a.ID]; dup {
-			problems = append(problems, fmt.Sprintf("%s: duplicate id %q (first seen as severity=%s)", where, a.ID, prev.Severity))
-		} else {
-			inv.byID[a.ID] = a
-		}
-	}
-	if len(problems) > 0 {
-		sort.Strings(problems)
-		return nil, fmt.Errorf("advisory inventory invalid (%d issue(s)):\n  %s",
-			len(problems), strings.Join(problems, "\n  "))
-	}
 	return &inv, nil
+}
+
+// checkAdvisoryEntry enforces every field-level invariant of one entry:
+// the ID shape the source scanner matches on, the severity and status
+// enums the dashboard buckets by, the threat reference that ties the
+// entry to the threat model, a non-empty source so the claim is
+// traceable, and the out_of_scope_reason coupling — declaring an
+// advisory out of scope is the one way to drop it from the gate, so it
+// always has to carry the reason that justifies the exclusion.
+func checkAdvisoryEntry(where string, a *advisoryEntry) []string {
+	var problems []string
+	if !advisoryIDPattern.MatchString(a.ID) {
+		problems = append(problems, fmt.Sprintf("%s: id %q does not match CVE-/GHSA- pattern", where, a.ID))
+	}
+	if a.Severity != "P0" && a.Severity != "P1" && a.Severity != "P2" {
+		problems = append(problems, fmt.Sprintf("%s: severity %q must be P0|P1|P2", where, a.Severity))
+	}
+	if !advisoryThreatPattern.MatchString(a.Threat) {
+		problems = append(problems, fmt.Sprintf("%s: threat %q must match T-[0-9]+", where, a.Threat))
+	}
+	if strings.TrimSpace(a.Source) == "" {
+		problems = append(problems, where+": source MUST be non-empty")
+	}
+	return append(problems, checkAdvisoryStatus(where, a)...)
+}
+
+// checkAdvisoryStatus enforces the status enum and its coupling with
+// out_of_scope_reason. A reason left behind on an entry that came back
+// in scope would document an exclusion that no longer applies.
+func checkAdvisoryStatus(where string, a *advisoryEntry) []string {
+	var problems []string
+	switch a.Status {
+	case advisoryStatusCovered, advisoryStatusTracking, advisoryStatusOutOfScope:
+	default:
+		problems = append(problems, fmt.Sprintf("%s: status %q must be covered|tracking|out-of-scope", where, a.Status))
+	}
+	if a.Status == advisoryStatusOutOfScope && strings.TrimSpace(a.OutOfScopeReason) == "" {
+		problems = append(problems, where+": status=out-of-scope requires out_of_scope_reason")
+	}
+	if a.Status != advisoryStatusOutOfScope && a.OutOfScopeReason != "" {
+		problems = append(problems, where+": out_of_scope_reason is only valid when status=out-of-scope")
+	}
+	return problems
 }
 
 // scanSource walks each root recursively, parses every *.go file with
@@ -159,32 +201,59 @@ func loadAdvisoryInventory(dir string) (*advisoryInventory, error) {
 func scanSource(roots []string) ([]advisoryHit, error) {
 	var hits []advisoryHit
 	for _, root := range roots {
-		err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if d.IsDir() {
-				name := d.Name()
-				// Skip vendored and generated trees that we never tag.
-				if name == "vendor" || name == "testdata" || name == ".git" || name == "node_modules" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") {
-				return nil
-			}
-			fhits, err := scanGoFile(path)
-			if err != nil {
-				return err
-			}
-			hits = append(hits, fhits...)
-			return nil
-		})
+		rootHits, err := scanSourceRoot(root)
 		if err != nil {
-			return nil, fmt.Errorf("walk %s: %w", root, err)
+			return nil, err
 		}
+		hits = append(hits, rootHits...)
 	}
+	sortAdvisoryHits(hits)
+	return hits, nil
+}
+
+// scanSourceRoot walks one root and collects the hits of every Go file
+// under it.
+func scanSourceRoot(root string) ([]advisoryHit, error) {
+	var hits []advisoryHit
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		switch {
+		case walkErr != nil:
+			return walkErr
+		case d.IsDir():
+			if isUntaggedTree(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		case !strings.HasSuffix(path, ".go"):
+			return nil
+		}
+		fhits, err := scanGoFile(path)
+		if err != nil {
+			return err
+		}
+		hits = append(hits, fhits...)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk %s: %w", root, err)
+	}
+	return hits, nil
+}
+
+// isUntaggedTree reports whether a directory holds vendored or
+// generated code this repository never tags, and which would otherwise
+// contribute advisory mentions nobody here wrote.
+func isUntaggedTree(name string) bool {
+	switch name {
+	case "vendor", "testdata", ".git", "node_modules":
+		return true
+	}
+	return false
+}
+
+// sortAdvisoryHits orders hits by ID, then file, then line, so the
+// report and the JSON output are stable across runs.
+func sortAdvisoryHits(hits []advisoryHit) {
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].ID != hits[j].ID {
 			return hits[i].ID < hits[j].ID
@@ -194,7 +263,6 @@ func scanSource(roots []string) ([]advisoryHit, error) {
 		}
 		return hits[i].Line < hits[j].Line
 	})
-	return hits, nil
 }
 
 // scanGoFile parses one Go file and returns every advisoryHit found in
@@ -213,12 +281,44 @@ func scanGoFile(path string) ([]advisoryHit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	type funcRange struct {
-		name       string
-		start, end token.Pos
-		asserting  bool
+	ranges := collectFuncRanges(file)
+
+	var out []advisoryHit
+	for _, cg := range file.Comments {
+		// The marker is looked for across the whole group, so a
+		// `Tracks:` header followed by an indented list of IDs marks
+		// every ID under it.
+		marked := trackMarkerRegex.MatchString(cg.Text())
+		for _, c := range cg.List {
+			fn, asserting := ranges.enclosing(c.Pos())
+			out = append(out, advisoryHitsInComment(c.Text, advisoryHit{
+				File:      path,
+				Line:      fset.Position(c.Pos()).Line,
+				Func:      fn,
+				Marked:    marked,
+				Asserting: asserting,
+			})...)
+		}
 	}
-	var ranges []funcRange
+	return out, nil
+}
+
+// funcRange is the source span of one function declaration, widened to
+// include its leading doc comment so a `Tracks:` header written above
+// the func is attributed to it.
+type funcRange struct {
+	name       string
+	start, end token.Pos
+	asserting  bool
+}
+
+// funcRanges is every function span in one file, in declaration order.
+type funcRanges []funcRange
+
+// collectFuncRanges records the span of every function declared in the
+// file together with whether it can fail.
+func collectFuncRanges(file *ast.File) funcRanges {
+	var ranges funcRanges
 	for _, decl := range file.Decls {
 		fd, ok := decl.(*ast.FuncDecl)
 		if !ok {
@@ -235,38 +335,39 @@ func scanGoFile(path string) ([]advisoryHit, error) {
 			asserting: takesTestingParam(fd),
 		})
 	}
-	enclosing := func(pos token.Pos) (string, bool) {
-		for _, r := range ranges {
-			if pos >= r.start && pos <= r.end {
-				return r.name, r.asserting
-			}
+	return ranges
+}
+
+// enclosing returns the name of the function containing pos and whether
+// that function can fail. A comment outside every function is at file
+// scope and reports "" — the shape a doc comment on a package or a
+// const block has.
+func (rs funcRanges) enclosing(pos token.Pos) (name string, asserting bool) {
+	for _, r := range rs {
+		if pos >= r.start && pos <= r.end {
+			return r.name, r.asserting
 		}
-		return "", false
 	}
+	return "", false
+}
+
+// advisoryHitsInComment extracts every distinct advisory ID from one
+// comment, stamping each onto a copy of proto. IDs are deduped within
+// the comment so a line that cites the same advisory three times for
+// emphasis is still one hit.
+func advisoryHitsInComment(text string, proto advisoryHit) []advisoryHit {
 	var out []advisoryHit
-	for _, cg := range file.Comments {
-		marked := trackMarkerRegex.MatchString(cg.Text())
-		for _, c := range cg.List {
-			matches := advisoryRegex.FindAllString(c.Text, -1)
-			if len(matches) == 0 {
-				continue
-			}
-			line := fset.Position(c.Pos()).Line
-			fn, asserting := enclosing(c.Pos())
-			seen := map[string]bool{}
-			for _, m := range matches {
-				if seen[m] {
-					continue // dedupe within the same comment line
-				}
-				seen[m] = true
-				out = append(out, advisoryHit{
-					ID: m, File: path, Line: line, Func: fn,
-					Marked: marked, Asserting: asserting,
-				})
-			}
+	seen := map[string]bool{}
+	for _, m := range advisoryRegex.FindAllString(text, -1) {
+		if seen[m] {
+			continue
 		}
+		seen[m] = true
+		hit := proto
+		hit.ID = m
+		out = append(out, hit)
 	}
-	return out, nil
+	return out
 }
 
 // takesTestingParam reports whether fd accepts a *testing.T, *testing.F
@@ -302,9 +403,9 @@ func takesTestingParam(fd *ast.FuncDecl) bool {
 
 // runAdvisories is the entry point for the `advisories` subcommand. It
 // loads the inventory, scans the source roots, and either prints the
-// human-readable report or emits JSON. When check is true, drift /
-// orphan / mis-status problems exit non-zero.
-func runAdvisories(catalogDir, cwd string, sourceRoots []string, check, asJSON bool) error {
+// human-readable report or emits JSON to out. When check is true, drift
+// / orphan / mis-status problems exit non-zero.
+func runAdvisories(out io.Writer, catalogDir, cwd string, sourceRoots []string, check, asJSON bool) error {
 	inv, err := loadAdvisoryInventory(catalogDir)
 	if err != nil {
 		return err
@@ -317,19 +418,47 @@ func runAdvisories(catalogDir, cwd string, sourceRoots []string, check, asJSON b
 	if err != nil {
 		return err
 	}
-	// Bucket hits by ID, with relative paths for readable output.
+	hitsByID := bucketHitsByID(hits, cwd)
+
+	problems := advisoryStatusDrift(inv, hitsByID)
+	problems = append(problems, advisoryOrphans(inv, hitsByID)...)
+	sort.Strings(problems)
+
+	if asJSON {
+		return emitAdvisoriesJSON(out, inv, hitsByID, problems)
+	}
+	emitAdvisoriesText(out, inv, hitsByID, problems)
+	if check && len(problems) > 0 {
+		return &exitError{code: 1, message: fmt.Sprintf(
+			"scenariotool: advisories gate failed (%d issue(s))", len(problems),
+		)}
+	}
+	return nil
+}
+
+// bucketHitsByID groups hits by advisory ID, rewriting each file path
+// relative to cwd so the report stays readable.
+func bucketHitsByID(hits []advisoryHit, cwd string) map[string][]advisoryHit {
 	hitsByID := map[string][]advisoryHit{}
 	for _, h := range hits {
-		rel := h.File
 		if cwd != "" {
-			if r, err := filepath.Rel(cwd, h.File); err == nil {
-				rel = r
+			if rel, err := filepath.Rel(cwd, h.File); err == nil {
+				h.File = rel
 			}
 		}
-		h.File = rel
 		hitsByID[h.ID] = append(hitsByID[h.ID], h)
 	}
+	return hitsByID
+}
 
+// advisoryStatusDrift reports entries whose declared status disagrees
+// with what the source actually shows. `covered` has to be backed by a
+// marker at a site that can fail, and `tracking` has to not be — an
+// entry left at tracking after the test landed understates the coverage
+// the repository has, which is how a real gap gets lost in the noise.
+// out-of-scope entries carry no drift check beyond the
+// out_of_scope_reason the loader already enforces.
+func advisoryStatusDrift(inv *advisoryInventory, hitsByID map[string][]advisoryHit) []string {
 	var problems []string
 	for _, a := range inv.Advisories {
 		covering := coveringHits(hitsByID[a.ID])
@@ -346,13 +475,17 @@ func runAdvisories(catalogDir, cwd string, sourceRoots []string, check, asJSON b
 				))
 			}
 		case advisoryStatusOutOfScope:
-			// Tags allowed but optional — no drift check beyond the
-			// out_of_scope_reason which the loader already enforces.
 		}
 	}
-	// Orphan detection: source claims to track an ID the inventory does
-	// not list. Only marked hits count — an unrelated advisory named in
-	// passing prose is not a claim that this repository tracks it.
+	return problems
+}
+
+// advisoryOrphans reports source that claims to track an ID the
+// inventory does not list. Only marked hits count — an unrelated
+// advisory named in passing prose is not a claim that this repository
+// tracks it.
+func advisoryOrphans(inv *advisoryInventory, hitsByID map[string][]advisoryHit) []string {
+	var problems []string
 	for id, hs := range hitsByID {
 		if _, ok := inv.byID[id]; ok {
 			continue
@@ -366,18 +499,7 @@ func runAdvisories(catalogDir, cwd string, sourceRoots []string, check, asJSON b
 			id, id, marked[0].File, marked[0].Line, advisoryFileName,
 		))
 	}
-	sort.Strings(problems)
-
-	if asJSON {
-		return emitAdvisoriesJSON(inv, hitsByID, problems)
-	}
-	emitAdvisoriesText(inv, hitsByID, problems)
-	if check && len(problems) > 0 {
-		return &exitError{code: 1, message: fmt.Sprintf(
-			"scenariotool: advisories gate failed (%d issue(s))", len(problems),
-		)}
-	}
-	return nil
+	return problems
 }
 
 // coveringHits narrows hits to the ones that satisfy `status: covered`.
@@ -431,22 +553,11 @@ func describeUncovered(id string, hs []advisoryHit) string {
 }
 
 // emitAdvisoriesText prints the human-readable dashboard.
-func emitAdvisoriesText(inv *advisoryInventory, hitsByID map[string][]advisoryHit, problems []string) {
-	var covered, tracking, oos int
-	for _, a := range inv.Advisories {
-		switch a.Status {
-		case advisoryStatusCovered:
-			covered++
-		case advisoryStatusTracking:
-			tracking++
-		case advisoryStatusOutOfScope:
-			oos++
-		}
-	}
-	fmt.Printf("scenariotool advisories: %d total (covered %d, tracking %d, out-of-scope %d)\n",
+func emitAdvisoriesText(out io.Writer, inv *advisoryInventory, hitsByID map[string][]advisoryHit, problems []string) {
+	covered, tracking, oos := countAdvisoryStatuses(inv)
+	_, _ = fmt.Fprintf(out, "scenariotool advisories: %d total (covered %d, tracking %d, out-of-scope %d)\n",
 		len(inv.Advisories), covered, tracking, oos)
 
-	// Group by status for the dashboard.
 	byStatus := map[string][]*advisoryEntry{}
 	for _, a := range inv.Advisories {
 		byStatus[a.Status] = append(byStatus[a.Status], a)
@@ -457,35 +568,56 @@ func emitAdvisoriesText(inv *advisoryInventory, hitsByID map[string][]advisoryHi
 			continue
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
-		fmt.Printf("\n# %s (%d)\n", st, len(entries))
+		_, _ = fmt.Fprintf(out, "\n# %s (%d)\n", st, len(entries))
 		for _, a := range entries {
-			fmt.Printf("  %s [%s] %s\n", a.ID, a.Severity, a.Threat)
-			for _, h := range hitsByID[a.ID] {
-				// The suffix is the whole point of the listing: a hit
-				// with no marker, or one outside a test, is why an
-				// entry can be cited everywhere and covered nowhere.
-				note := ""
-				if !h.Covers() {
-					note = "  (mention)"
-				}
-				if h.Func != "" {
-					fmt.Printf("      %s:%d  %s%s\n", h.File, h.Line, h.Func, note)
-				} else {
-					fmt.Printf("      %s:%d%s\n", h.File, h.Line, note)
-				}
-			}
+			_, _ = fmt.Fprintf(out, "  %s [%s] %s\n", a.ID, a.Severity, a.Threat)
+			printAdvisoryHits(out, hitsByID[a.ID])
 		}
 	}
 	if len(problems) > 0 {
-		fmt.Printf("\n# drift / orphans (%d)\n", len(problems))
+		_, _ = fmt.Fprintf(out, "\n# drift / orphans (%d)\n", len(problems))
 		for _, p := range problems {
-			fmt.Printf("  %s\n", p)
+			_, _ = fmt.Fprintf(out, "  %s\n", p)
+		}
+	}
+}
+
+// countAdvisoryStatuses tallies the inventory by status for the
+// dashboard header.
+func countAdvisoryStatuses(inv *advisoryInventory) (covered, tracking, oos int) {
+	for _, a := range inv.Advisories {
+		switch a.Status {
+		case advisoryStatusCovered:
+			covered++
+		case advisoryStatusTracking:
+			tracking++
+		case advisoryStatusOutOfScope:
+			oos++
+		}
+	}
+	return covered, tracking, oos
+}
+
+// printAdvisoryHits lists where one entry is cited. The "(mention)"
+// suffix is the whole point of the listing: a hit with no marker, or
+// one outside a test, is why an entry can be cited everywhere and
+// covered nowhere.
+func printAdvisoryHits(out io.Writer, hits []advisoryHit) {
+	for _, h := range hits {
+		note := ""
+		if !h.Covers() {
+			note = "  (mention)"
+		}
+		if h.Func != "" {
+			_, _ = fmt.Fprintf(out, "      %s:%d  %s%s\n", h.File, h.Line, h.Func, note)
+		} else {
+			_, _ = fmt.Fprintf(out, "      %s:%d%s\n", h.File, h.Line, note)
 		}
 	}
 }
 
 // emitAdvisoriesJSON emits a stable shape suitable for CI parsing.
-func emitAdvisoriesJSON(inv *advisoryInventory, hitsByID map[string][]advisoryHit, problems []string) error {
+func emitAdvisoriesJSON(out io.Writer, inv *advisoryInventory, hitsByID map[string][]advisoryHit, problems []string) error {
 	type hitDTO struct {
 		File string `json:"file"`
 		Line int    `json:"line"`
@@ -502,7 +634,7 @@ func emitAdvisoriesJSON(inv *advisoryInventory, hitsByID map[string][]advisoryHi
 		Source   string   `json:"source"`
 		Hits     []hitDTO `json:"hits"`
 	}
-	out := struct {
+	doc := struct {
 		Total    int        `json:"total"`
 		Entries  []entryDTO `json:"entries"`
 		Problems []string   `json:"problems"`
@@ -515,9 +647,9 @@ func emitAdvisoriesJSON(inv *advisoryInventory, hitsByID map[string][]advisoryHi
 		for _, h := range hitsByID[a.ID] {
 			e.Hits = append(e.Hits, hitDTO{File: h.File, Line: h.Line, Func: h.Func, Covers: h.Covers()})
 		}
-		out.Entries = append(out.Entries, e)
+		doc.Entries = append(doc.Entries, e)
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return enc.Encode(doc)
 }

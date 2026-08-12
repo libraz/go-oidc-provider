@@ -3,8 +3,29 @@ package main
 import (
 	"fmt"
 	"sort"
-	"strings"
 )
+
+// severityCell is the active / pending / out-of-scope split for one
+// severity tier.
+type severityCell struct {
+	active, pending, oos int
+}
+
+// featureCell is the per-file breakdown: total rows plus an
+// (active, pending) pair per severity, indexed by severityIndex.
+type featureCell struct {
+	feature string
+	rows    int
+	ap      [3][2]int
+}
+
+// catalogTally is the aggregate runStats renders. It is built in one
+// pass over the catalog so the totals and the per-feature breakdown
+// can never disagree.
+type catalogTally struct {
+	bySeverity map[string]*severityCell
+	perFeature map[string]*featureCell
+}
 
 // runStats prints a severity × status matrix plus a per-feature
 // breakdown sorted by descending P0 pending count. When feature is
@@ -15,61 +36,78 @@ func runStats(dir, feature string) error {
 	if err != nil {
 		return err
 	}
+	tally, matched := tallyCatalog(cat, feature)
+	if feature != "" && !matched {
+		return &exitError{code: 1, message: fmt.Sprintf("scenariotool: no catalog file for feature %q", feature)}
+	}
 
-	type cell struct {
-		active, pending, oos int
+	tally.printTotals(feature)
+	if feature != "" {
+		return nil
 	}
-	bySeverity := map[string]*cell{
-		"P0": {}, "P1": {}, "P2": {},
-	}
-	type featureCell struct {
-		feature string
-		rows    int
-		// per-severity (active, pending) pairs.
-		ap [3][2]int
-	}
-	perFeature := map[string]*featureCell{}
+	tally.printTopP0Pending()
+	tally.printPerFeatureBreakdown()
+	return nil
+}
 
-	matched := false
+// tallyCatalog accumulates every row of the catalog, optionally
+// narrowed to one feature. matched reports whether the requested
+// feature file exists, which the caller turns into an exit code.
+func tallyCatalog(cat *Catalog, feature string) (tally *catalogTally, matched bool) {
+	tally = &catalogTally{
+		bySeverity: map[string]*severityCell{"P0": {}, "P1": {}, "P2": {}},
+		perFeature: map[string]*featureCell{},
+	}
 	for _, ff := range cat.Files {
 		if feature != "" && ff.Feature != feature {
 			continue
 		}
 		matched = true
-		fc := perFeature[ff.Feature]
+		fc := tally.perFeature[ff.Feature]
 		if fc == nil {
 			fc = &featureCell{feature: ff.Feature}
-			perFeature[ff.Feature] = fc
+			tally.perFeature[ff.Feature] = fc
 		}
 		for _, r := range ff.Rows {
-			fc.rows++
-			c, ok := bySeverity[r.Severity]
-			if !ok {
-				continue
-			}
-			sevIdx := severityIndex(r.Severity)
-			switch r.EffectiveStatus() {
-			case "active":
-				c.active++
-				if sevIdx >= 0 {
-					fc.ap[sevIdx][0]++
-				}
-			case "out-of-scope":
-				c.oos++
-			default: // pending or unknown defaults to pending bucket
-				c.pending++
-				if sevIdx >= 0 {
-					fc.ap[sevIdx][1]++
-				}
-			}
+			tally.addRow(fc, r)
 		}
 	}
-	if feature != "" && !matched {
-		return &exitError{code: 1, message: fmt.Sprintf("scenariotool: no catalog file for feature %q", feature)}
-	}
+	return tally, matched
+}
 
+// addRow folds one row into both the severity totals and its feature's
+// breakdown. A row whose severity is outside P0|P1|P2 still counts
+// towards the feature's row total but has no tier to land in; the
+// catalog validator is what rejects it.
+func (t *catalogTally) addRow(fc *featureCell, r *Row) {
+	fc.rows++
+	c, ok := t.bySeverity[r.Severity]
+	if !ok {
+		return
+	}
+	sevIdx := severityIndex(r.Severity)
+	switch r.EffectiveStatus() {
+	case "active":
+		c.active++
+		if sevIdx >= 0 {
+			fc.ap[sevIdx][0]++
+		}
+	case "out-of-scope":
+		c.oos++
+	default: // pending or unknown defaults to pending bucket
+		c.pending++
+		if sevIdx >= 0 {
+			fc.ap[sevIdx][1]++
+		}
+	}
+}
+
+// printTotals renders the severity × status matrix. The percentage is
+// taken over in-scope rows only, so declaring a row out-of-scope moves
+// it out of the denominator rather than counting as progress.
+func (t *catalogTally) printTotals(feature string) {
 	totalActive, totalPending, totalOOS := 0, 0, 0
-	for _, c := range bySeverity {
+	for _, c := range t.bySeverity {
 		totalActive += c.active
 		totalPending += c.pending
 		totalOOS += c.oos
@@ -82,29 +120,30 @@ func runStats(dir, feature string) error {
 
 	header := "catalog totals"
 	if feature != "" {
-		header = fmt.Sprintf("catalog totals — %s", feature)
+		header = "catalog totals — " + feature
 	}
 	fmt.Printf("%s:\n", header)
 	fmt.Printf("  %-6s  %7s  %7s  %4s  %5s\n", "", "active", "pending", "oos", "total")
 	for _, sev := range []string{"P0", "P1", "P2"} {
-		c := bySeverity[sev]
+		c := t.bySeverity[sev]
 		fmt.Printf("  %-6s  %7d  %7d  %4d  %5d\n", sev, c.active, c.pending, c.oos, c.active+c.pending+c.oos)
 	}
 	fmt.Printf("  %-6s  %7d  %7d  %4d  %5d   (%.1f%% active of in-scope)\n",
 		"total", totalActive, totalPending, totalOOS, totalActive+totalPending+totalOOS, pct)
+}
 
-	if feature != "" {
-		return nil
-	}
-
-	// Top P0 pending features.
-	type fp struct {
+// printTopP0Pending lists the features carrying the most unwritten P0
+// rows, capped at ten. It is the pick-up-next view: P0 pending is the
+// only backlog that blocks the suite from claiming a behaviour is
+// covered.
+func (t *catalogTally) printTopP0Pending() {
+	type featurePending struct {
 		name string
 		p0p  int
 	}
-	var top []fp
-	for _, fc := range perFeature {
-		top = append(top, fp{name: fc.feature, p0p: fc.ap[0][1]})
+	top := make([]featurePending, 0, len(t.perFeature))
+	for _, fc := range t.perFeature {
+		top = append(top, featurePending{name: fc.feature, p0p: fc.ap[0][1]})
 	}
 	sort.Slice(top, func(i, j int) bool {
 		if top[i].p0p != top[j].p0p {
@@ -112,6 +151,7 @@ func runStats(dir, feature string) error {
 		}
 		return top[i].name < top[j].name
 	})
+
 	fmt.Println()
 	fmt.Println("top P0 pending features:")
 	shown := 0
@@ -128,18 +168,21 @@ func runStats(dir, feature string) error {
 	if shown == 0 {
 		fmt.Println("  (none — every feature is fully active or has no P0 pending)")
 	}
+}
 
-	// Per-feature breakdown.
+// printPerFeatureBreakdown renders every feature in name order with its
+// active/pending pair per severity.
+func (t *catalogTally) printPerFeatureBreakdown() {
 	fmt.Println()
 	fmt.Println("per-feature breakdown (active/pending per severity):")
 	fmt.Printf("  %-32s  %-7s  %-7s  %-7s  %s\n", "feature", "P0", "P1", "P2", "total")
-	names := make([]string, 0, len(perFeature))
-	for n := range perFeature {
+	names := make([]string, 0, len(t.perFeature))
+	for n := range t.perFeature {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		fc := perFeature[n]
+		fc := t.perFeature[n]
 		fmt.Printf("  %-32s  %-7s  %-7s  %-7s  %5d\n",
 			n,
 			cellStr(fc.ap[0]),
@@ -148,9 +191,10 @@ func runStats(dir, feature string) error {
 			fc.rows,
 		)
 	}
-	return nil
 }
 
+// severityIndex maps a severity tier onto its slot in featureCell.ap,
+// or -1 when the tier is not one the catalog recognises.
 func severityIndex(sev string) int {
 	switch sev {
 	case "P0":
@@ -163,25 +207,11 @@ func severityIndex(sev string) int {
 	return -1
 }
 
+// cellStr renders one (active, pending) pair, collapsing an empty pair
+// to a dash so the table stays scannable.
 func cellStr(ap [2]int) string {
 	if ap[0] == 0 && ap[1] == 0 {
 		return "-"
 	}
 	return fmt.Sprintf("%d/%d", ap[0], ap[1])
-}
-
-// snippet returns the first non-empty line of s, truncated to the
-// supplied width. Used by stats / next to keep output scannable.
-func snippet(s string, width int) string {
-	for _, line := range strings.Split(s, "\n") {
-		t := strings.TrimSpace(line)
-		if t == "" {
-			continue
-		}
-		if len(t) > width {
-			return t[:width-1] + "…"
-		}
-		return t
-	}
-	return ""
 }

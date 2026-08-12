@@ -169,7 +169,10 @@ func run(cfg config) error {
 
 	switch {
 	case cfg.write != "":
-		return os.WriteFile(cfg.write, []byte(report), 0o644)
+		// The report is a generated artefact in the working tree; git
+		// records only the exec bit, so nothing downstream depends on
+		// the group / other bits being set.
+		return os.WriteFile(cfg.write, []byte(report), 0o600)
 	case cfg.check != "":
 		return check(cfg.check, report, cfg.kind)
 	default:
@@ -187,7 +190,7 @@ func fail(err error) {
 // describes the drift in terms of symbols rather than diff hunks, so the
 // failure names what to do about it.
 func check(path, report string, kind reportKind) error {
-	recorded, err := os.ReadFile(path)
+	recorded, err := os.ReadFile(path) //nolint:gosec // path is an operator-supplied build-tool flag.
 	if err != nil {
 		return err
 	}
@@ -231,7 +234,7 @@ func check(path, report string, kind reportKind) error {
 // A missing baseline is not an error: the first write of a report has
 // nothing to contradict.
 func checkHistory(path string, entries []entry, allowBackfill bool) error {
-	recorded, err := os.ReadFile(path)
+	recorded, err := os.ReadFile(path) //nolint:gosec // path is an operator-supplied build-tool flag.
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil

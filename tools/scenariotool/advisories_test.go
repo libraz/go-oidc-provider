@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +10,7 @@ import (
 )
 
 func TestScanGoFile_ResolvesEnclosingFunc(t *testing.T) {
+	t.Parallel()
 	src := `package x
 
 // Helper carries a CVE-2099-12345 reference at file scope.
@@ -57,6 +60,7 @@ func FuzzBeta(f *testing.F) {
 }
 
 func TestScanGoFile_DedupsWithinSameLine(t *testing.T) {
+	t.Parallel()
 	src := `package x
 
 // TestSame redundantly cites CVE-2099-00001 CVE-2099-00001 CVE-2099-00001.
@@ -80,6 +84,7 @@ func TestSame(t *testing.T) {}
 }
 
 func TestScanGoFile_SeparatesCoverageFromMention(t *testing.T) {
+	t.Parallel()
 	src := `package x
 
 import "testing"
@@ -135,6 +140,7 @@ func FuzzBeta(f *testing.F) {}
 }
 
 func TestRunAdvisories_MentionIsNotCoverage(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	catalogDir := filepath.Join(tmp, "catalog")
 	srcDir := filepath.Join(tmp, "src")
@@ -163,18 +169,14 @@ func Guard() {}
 		t.Fatalf("write src: %v", err)
 	}
 
-	r, w, _ := os.Pipe()
-	stdout := os.Stdout
-	os.Stdout = w
-	defer func() { os.Stdout = stdout; _ = r.Close() }()
-
-	err := runAdvisories(catalogDir, tmp, []string{"src"}, true /*check*/, false)
-	_ = w.Close()
+	// The dashboard is captured so the assertion focuses on the
+	// returned error rather than the chatty report.
+	err := runAdvisories(&bytes.Buffer{}, catalogDir, tmp, []string{"src"}, true /*check*/, false)
 	if err == nil {
 		t.Fatal("expected the gate to fail: two mentions, no assertion")
 	}
 	var ev *exitError
-	if !errorsAs(err, &ev) {
+	if !errors.As(err, &ev) {
 		t.Fatalf("expected *exitError, got %T (%v)", err, err)
 	}
 	if !strings.Contains(ev.message, "1 issue(s)") {
@@ -183,6 +185,7 @@ func Guard() {}
 }
 
 func TestLoadAdvisoryInventory_RejectsBadShape(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		body    string
@@ -221,6 +224,7 @@ advisories:
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dir := t.TempDir()
 			if err := os.WriteFile(filepath.Join(dir, advisoryFileName), []byte(tc.body), 0o600); err != nil {
 				t.Fatalf("write: %v", err)
@@ -237,6 +241,7 @@ advisories:
 }
 
 func TestRunAdvisories_DetectsDriftAndOrphans(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	catalogDir := filepath.Join(tmp, "catalog")
 	srcDir := filepath.Join(tmp, "src")
@@ -273,20 +278,14 @@ func TestA(t *testing.T) {}
 		t.Fatalf("write src: %v", err)
 	}
 
-	// Capture stdout to a pipe so the assertion focuses on the
-	// returned error rather than the chatty dashboard.
-	r, w, _ := os.Pipe()
-	stdout := os.Stdout
-	os.Stdout = w
-	defer func() { os.Stdout = stdout; _ = r.Close() }()
-
-	err := runAdvisories(catalogDir, tmp, []string{"src"}, true /*check*/, false)
-	_ = w.Close()
+	// Capture the dashboard so the assertion focuses on the returned
+	// error rather than the chatty report.
+	err := runAdvisories(&bytes.Buffer{}, catalogDir, tmp, []string{"src"}, true /*check*/, false)
 	if err == nil {
 		t.Fatal("expected drift gate to fail, got nil")
 	}
 	var ev *exitError
-	if !errorsAs(err, &ev) {
+	if !errors.As(err, &ev) {
 		t.Fatalf("expected *exitError, got %T (%v)", err, err)
 	}
 	if ev.code != 1 {
@@ -296,22 +295,4 @@ func TestA(t *testing.T) {}
 	if !strings.Contains(ev.message, "3 issue(s)") {
 		t.Errorf("message=%q, expected 3 issues", ev.message)
 	}
-}
-
-// errorsAs is a tiny shim because errors.As reads more clearly inline
-// than importing the package just for one helper.
-func errorsAs(err error, target **exitError) bool {
-	for e := err; e != nil; {
-		if v, ok := e.(*exitError); ok {
-			*target = v
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		u, ok := e.(unwrapper)
-		if !ok {
-			return false
-		}
-		e = u.Unwrap()
-	}
-	return false
 }

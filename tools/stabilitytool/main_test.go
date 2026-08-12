@@ -601,7 +601,7 @@ type Fresh struct{}
 			t.Parallel()
 
 			path := writeStableReport(t, tc.baseline)
-			before, err := os.ReadFile(path)
+			before, err := os.ReadFile(path) //nolint:gosec // path comes from writeStableReport(t.TempDir).
 			if err != nil {
 				t.Fatalf("read baseline: %v", err)
 			}
@@ -618,7 +618,7 @@ type Fresh struct{}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %v, want it to contain %q", err, tc.want)
 			}
-			after, err := os.ReadFile(path)
+			after, err := os.ReadFile(path) //nolint:gosec // path comes from writeStableReport(t.TempDir).
 			if err != nil {
 				t.Fatalf("read baseline: %v", err)
 			}
@@ -656,7 +656,7 @@ type Fresh struct{}
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(path) //nolint:gosec // path comes from writeStableReport(t.TempDir).
 	if err != nil {
 		t.Fatalf("read report: %v", err)
 	}

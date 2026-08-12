@@ -6,6 +6,7 @@ import (
 )
 
 func TestFlipStatusInYAML(t *testing.T) {
+	t.Parallel()
 	const base = `feature: discovery
 prefix: DIS
 title: Discovery endpoints
@@ -33,6 +34,7 @@ rows:
 `
 
 	t.Run("replace existing status", func(t *testing.T) {
+		t.Parallel()
 		got, err := flipStatusInYAML([]byte(base), "DIS-003", "active", "")
 		if err != nil {
 			t.Fatalf("flipStatusInYAML: %v", err)
@@ -47,6 +49,7 @@ rows:
 	})
 
 	t.Run("insert missing status", func(t *testing.T) {
+		t.Parallel()
 		got, err := flipStatusInYAML([]byte(base), "DIS-002", "active", "")
 		if err != nil {
 			t.Fatalf("flipStatusInYAML: %v", err)
@@ -61,6 +64,7 @@ rows:
 	})
 
 	t.Run("flip to out-of-scope adds plain reason", func(t *testing.T) {
+		t.Parallel()
 		got, err := flipStatusInYAML([]byte(base), "DIS-003", "out-of-scope", "embedder concern, see the design notes")
 		if err != nil {
 			t.Fatalf("flipStatusInYAML: %v", err)
@@ -71,6 +75,7 @@ rows:
 	})
 
 	t.Run("flip to out-of-scope quotes risky reason", func(t *testing.T) {
+		t.Parallel()
 		got, err := flipStatusInYAML([]byte(base), "DIS-003", "out-of-scope", "covered by spec: see the design notes")
 		if err != nil {
 			t.Fatalf("flipStatusInYAML: %v", err)
@@ -81,6 +86,7 @@ rows:
 	})
 
 	t.Run("flipping away from out-of-scope drops reason", func(t *testing.T) {
+		t.Parallel()
 		oosFile := strings.Replace(base,
 			"      Embedder-injected extra discovery properties merge into response.\n    status: pending\n",
 			"      Embedder-injected extra discovery properties merge into response.\n    status: out-of-scope\n    out_of_scope_reason: legacy\n",
@@ -98,12 +104,14 @@ rows:
 	})
 
 	t.Run("unknown ID returns error", func(t *testing.T) {
+		t.Parallel()
 		if _, err := flipStatusInYAML([]byte(base), "DIS-999", "active", ""); err == nil {
 			t.Fatalf("expected error for unknown ID")
 		}
 	})
 
 	t.Run("preserves trailing newline", func(t *testing.T) {
+		t.Parallel()
 		out, err := flipStatusInYAML([]byte(base), "DIS-002", "active", "")
 		if err != nil {
 			t.Fatalf("flipStatusInYAML: %v", err)
@@ -115,6 +123,7 @@ rows:
 }
 
 func TestYAMLInlineString(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want string
@@ -137,6 +146,7 @@ func TestYAMLInlineString(t *testing.T) {
 }
 
 func TestResolveTestRoot(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		cwd, root, want string
 	}{

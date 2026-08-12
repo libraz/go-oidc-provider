@@ -148,9 +148,13 @@ var featurePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var prefixPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]+$`)
 
 // validSeverities enumerates the allowed `severity` values.
+//
+//nolint:gochecknoglobals // closed enumeration; declared once and treated as a constant lookup table.
 var validSeverities = map[string]bool{"P0": true, "P1": true, "P2": true}
 
 // validStatuses enumerates the allowed `status` values.
+//
+//nolint:gochecknoglobals // closed enumeration; declared once and treated as a constant lookup table.
 var validStatuses = map[string]bool{"active": true, "pending": true, "out-of-scope": true}
 
 // ValidationOptions tunes Catalog.Validate.
@@ -163,132 +167,18 @@ type ValidationOptions struct {
 
 // Validate runs structural + cross-file checks. The returned error
 // aggregates every failure so the operator sees them all at once.
+//
+// The invariants are grouped one helper per rule family; each helper
+// returns the problems it found rather than failing fast, because a
+// catalog with five mistakes has to be fixable in one pass.
 func (c *Catalog) Validate(opts ValidationOptions) error {
-	var problems []string
-	report := func(format string, args ...any) {
-		problems = append(problems, fmt.Sprintf(format, args...))
-	}
+	problems := c.validateFiles()
 
-	seenPrefix := map[string]string{} // prefix -> first-seen path
-	seenID := map[string]string{}     // id -> first-seen path
-
-	for _, ff := range c.Files {
-		base := strings.TrimSuffix(filepath.Base(ff.Path), ".yaml")
-
-		switch {
-		case ff.Feature == "":
-			report("%s: missing required field 'feature'", ff.Path)
-		case !featurePattern.MatchString(ff.Feature):
-			report("%s: feature %q must match %s", ff.Path, ff.Feature, featurePattern)
-		case ff.Feature != base:
-			report("%s: feature %q must equal filename %q", ff.Path, ff.Feature, base)
-		}
-
-		switch {
-		case ff.Prefix == "":
-			report("%s: missing required field 'prefix'", ff.Path)
-		case !prefixPattern.MatchString(ff.Prefix):
-			report("%s: prefix %q must match %s", ff.Path, ff.Prefix, prefixPattern)
-		default:
-			if prev, dup := seenPrefix[ff.Prefix]; dup {
-				report("%s: prefix %q already used by %s", ff.Path, ff.Prefix, prev)
-			} else {
-				seenPrefix[ff.Prefix] = ff.Path
-			}
-		}
-
-		if ff.Title == "" {
-			report("%s: missing required field 'title'", ff.Path)
-		}
-		if len(ff.Specs) == 0 {
-			report("%s: 'specs' MUST have at least one entry", ff.Path)
-		}
-		if len(ff.Rows) == 0 {
-			report("%s: 'rows' MUST have at least one entry", ff.Path)
-		}
-
-		for i, r := range ff.Rows {
-			where := fmt.Sprintf("%s rows[%d] (%s)", ff.Path, i, r.ID)
-
-			switch {
-			case r.ID == "":
-				report("%s: missing 'id'", where)
-			case !rowIDPattern.MatchString(r.ID):
-				report("%s: id %q must match %s", where, r.ID, rowIDPattern)
-			case ff.Prefix != "" && !strings.HasPrefix(r.ID, ff.Prefix+"-"):
-				report("%s: id %q must start with file prefix %q", where, r.ID, ff.Prefix+"-")
-			default:
-				if prev, dup := seenID[r.ID]; dup {
-					report("%s: id %q already declared in %s", where, r.ID, prev)
-				} else {
-					seenID[r.ID] = ff.Path
-				}
-			}
-
-			if !validSeverities[r.Severity] {
-				report("%s: severity %q must be one of P0|P1|P2", where, r.Severity)
-			}
-			if strings.TrimSpace(r.Spec) == "" {
-				report("%s: 'spec' MUST be non-empty", where)
-			}
-			if strings.TrimSpace(r.Behaviour) == "" {
-				report("%s: 'behaviour' MUST be non-empty", where)
-			}
-			status := r.EffectiveStatus()
-			if !validStatuses[status] {
-				report("%s: status %q must be active|pending|out-of-scope", where, r.Status)
-			}
-			if status == "out-of-scope" && strings.TrimSpace(r.OutOfScopeReason) == "" {
-				report("%s: status=out-of-scope requires 'out_of_scope_reason'", where)
-			}
-			if status != "out-of-scope" && r.OutOfScopeReason != "" {
-				report("%s: 'out_of_scope_reason' is only valid when status=out-of-scope", where)
-			}
-			if r.CoveredBy != "" {
-				if !coveredByPattern.MatchString(r.CoveredBy) {
-					report("%s: covered_by %q must be <package path>.<TestFunc>, e.g. internal/authorizeendpoint.TestAuthorize_MaxAge",
-						where, r.CoveredBy)
-				}
-				// A row is either covered or it is not. Naming the test
-				// that covers a pending row, or one declared
-				// unreachable, states two incompatible things at once.
-				if status != "active" {
-					report("%s: covered_by is only valid when status=active (row is %s)", where, status)
-				}
-			}
-			for j, ref := range r.CrossRefs {
-				if !crossRefPattern.MatchString(ref) {
-					report("%s: cross_refs[%d]=%q must match <feature>#<ID>", where, j, ref)
-				}
-			}
-		}
-	}
-
-	// Cross-ref existence check (second pass — needs full ID index).
-	var dangling []string
-	for _, r := range c.AllRows() {
-		for _, ref := range r.CrossRefs {
-			parts := strings.SplitN(ref, "#", 2)
-			if len(parts) != 2 {
-				continue // already reported by syntactic pass
-			}
-			if c.Lookup(parts[1]) != nil {
-				continue
-			}
-			msg := fmt.Sprintf("%s rows (%s): cross_ref %q points at unknown ID",
-				r.File.Path, r.ID, ref)
-			if opts.LenientCrossRefs {
-				dangling = append(dangling, msg)
-			} else {
-				problems = append(problems, msg)
-			}
-		}
-	}
-
-	if opts.LenientCrossRefs && len(dangling) > 0 {
-		sort.Strings(dangling)
-		fmt.Fprintf(os.Stderr, "scenariotool: %d dangling cross_ref(s) tolerated under --lenient:\n  %s\n",
-			len(dangling), strings.Join(dangling, "\n  "))
+	dangling := c.unresolvedCrossRefs()
+	if opts.LenientCrossRefs {
+		warnDanglingCrossRefs(dangling)
+	} else {
+		problems = append(problems, dangling...)
 	}
 
 	if len(problems) == 0 {
@@ -297,4 +187,224 @@ func (c *Catalog) Validate(opts ValidationOptions) error {
 	sort.Strings(problems)
 	return fmt.Errorf("catalog validation failed (%d issue(s)):\n  %s",
 		len(problems), strings.Join(problems, "\n  "))
+}
+
+// validateFiles walks every feature file and every row in it, carrying
+// the two catalog-wide indexes (prefix and row ID) that make uniqueness
+// checkable across files rather than only within one.
+func (c *Catalog) validateFiles() []string {
+	var problems []string
+	seenPrefix := map[string]string{} // prefix -> first-seen path
+	seenID := map[string]string{}     // id -> first-seen path
+
+	for _, ff := range c.Files {
+		problems = append(problems, validateFeature(ff)...)
+		problems = append(problems, validatePrefix(ff, seenPrefix)...)
+		problems = append(problems, validateFileMetadata(ff)...)
+		for i, r := range ff.Rows {
+			where := fmt.Sprintf("%s rows[%d] (%s)", ff.Path, i, r.ID)
+			problems = append(problems, validateRow(where, ff, r, seenID)...)
+		}
+	}
+	return problems
+}
+
+// validateFeature enforces the feature-identity invariant: every file
+// declares a slug, the slug is a lowercase identifier, and it equals the
+// filename. Feature slugs address files from cross_refs and from the
+// `list` / `next` subcommands, so a slug that disagrees with its
+// filename makes a file reachable under a name it does not have.
+func validateFeature(ff *FeatureFile) []string {
+	base := strings.TrimSuffix(filepath.Base(ff.Path), ".yaml")
+	switch {
+	case ff.Feature == "":
+		return []string{ff.Path + ": missing required field 'feature'"}
+	case !featurePattern.MatchString(ff.Feature):
+		return []string{fmt.Sprintf("%s: feature %q must match %s", ff.Path, ff.Feature, featurePattern)}
+	case ff.Feature != base:
+		return []string{fmt.Sprintf("%s: feature %q must equal filename %q", ff.Path, ff.Feature, base)}
+	}
+	return nil
+}
+
+// validatePrefix enforces the prefix invariant: every file declares an
+// uppercase prefix and no two files share one. The prefix is what makes
+// row IDs unique by construction, so a collision would let two features
+// mint the same ID and silently overwrite each other in the index.
+// seenPrefix accumulates the first file to claim each prefix.
+func validatePrefix(ff *FeatureFile, seenPrefix map[string]string) []string {
+	switch {
+	case ff.Prefix == "":
+		return []string{ff.Path + ": missing required field 'prefix'"}
+	case !prefixPattern.MatchString(ff.Prefix):
+		return []string{fmt.Sprintf("%s: prefix %q must match %s", ff.Path, ff.Prefix, prefixPattern)}
+	}
+	if prev, dup := seenPrefix[ff.Prefix]; dup {
+		return []string{fmt.Sprintf("%s: prefix %q already used by %s", ff.Path, ff.Prefix, prev)}
+	}
+	seenPrefix[ff.Prefix] = ff.Path
+	return nil
+}
+
+// validateFileMetadata enforces that a feature file carries the context
+// a reader needs to act on its rows: a human title, at least one spec it
+// derives from, and at least one row. An empty file is indistinguishable
+// from a forgotten one once the counts are summed.
+func validateFileMetadata(ff *FeatureFile) []string {
+	var problems []string
+	if ff.Title == "" {
+		problems = append(problems, ff.Path+": missing required field 'title'")
+	}
+	if len(ff.Specs) == 0 {
+		problems = append(problems, ff.Path+": 'specs' MUST have at least one entry")
+	}
+	if len(ff.Rows) == 0 {
+		problems = append(problems, ff.Path+": 'rows' MUST have at least one entry")
+	}
+	return problems
+}
+
+// validateRow runs every row-scoped rule family. where is the
+// "<path> rows[<i>] (<id>)" location prefix shared by all of them.
+func validateRow(where string, ff *FeatureFile, r *Row, seenID map[string]string) []string {
+	problems := validateRowID(where, ff, r, seenID)
+	problems = append(problems, validateRowContent(where, r)...)
+	problems = append(problems, validateRowStatus(where, r)...)
+	problems = append(problems, validateRowCoveredBy(where, r)...)
+	problems = append(problems, validateRowCrossRefSyntax(where, r)...)
+	return problems
+}
+
+// validateRowID enforces the row-identity invariant: the ID exists,
+// matches the schema shape, carries its file's prefix, and is unique
+// across the whole catalog. Everything downstream — cross_refs, the
+// Test_<PREFIX>_<NNN>_ binding, the flip subcommand — addresses a row by
+// this ID, so a duplicate makes one of the two rows unaddressable.
+// seenID accumulates the first file to declare each ID.
+func validateRowID(where string, ff *FeatureFile, r *Row, seenID map[string]string) []string {
+	switch {
+	case r.ID == "":
+		return []string{where + ": missing 'id'"}
+	case !rowIDPattern.MatchString(r.ID):
+		return []string{fmt.Sprintf("%s: id %q must match %s", where, r.ID, rowIDPattern)}
+	case ff.Prefix != "" && !strings.HasPrefix(r.ID, ff.Prefix+"-"):
+		return []string{fmt.Sprintf("%s: id %q must start with file prefix %q", where, r.ID, ff.Prefix+"-")}
+	}
+	if prev, dup := seenID[r.ID]; dup {
+		return []string{fmt.Sprintf("%s: id %q already declared in %s", where, r.ID, prev)}
+	}
+	seenID[r.ID] = ff.Path
+	return nil
+}
+
+// validateRowContent enforces that a row says what it is about: a
+// severity the dashboards can bucket, the spec clause it derives from,
+// and the behaviour a test is supposed to assert. A row missing any of
+// the three cannot be turned into a test by anyone but its author.
+func validateRowContent(where string, r *Row) []string {
+	var problems []string
+	if !validSeverities[r.Severity] {
+		problems = append(problems, fmt.Sprintf("%s: severity %q must be one of P0|P1|P2", where, r.Severity))
+	}
+	if strings.TrimSpace(r.Spec) == "" {
+		problems = append(problems, where+": 'spec' MUST be non-empty")
+	}
+	if strings.TrimSpace(r.Behaviour) == "" {
+		problems = append(problems, where+": 'behaviour' MUST be non-empty")
+	}
+	return problems
+}
+
+// validateRowStatus enforces the status enum and its coupling with
+// out_of_scope_reason. Declaring a behaviour unreachable is the one way
+// to remove it from the coverage denominator, so it always has to carry
+// the reason that justifies the exclusion — and a reason left behind on
+// a row that came back in scope would document an exclusion that no
+// longer applies.
+func validateRowStatus(where string, r *Row) []string {
+	var problems []string
+	status := r.EffectiveStatus()
+	if !validStatuses[status] {
+		problems = append(problems, fmt.Sprintf("%s: status %q must be active|pending|out-of-scope", where, r.Status))
+	}
+	if status == "out-of-scope" && strings.TrimSpace(r.OutOfScopeReason) == "" {
+		problems = append(problems, where+": status=out-of-scope requires 'out_of_scope_reason'")
+	}
+	if status != "out-of-scope" && r.OutOfScopeReason != "" {
+		problems = append(problems, where+": 'out_of_scope_reason' is only valid when status=out-of-scope")
+	}
+	return problems
+}
+
+// validateRowCoveredBy enforces the delegation invariant. covered_by
+// names the test that asserts a row from outside the scenario suite, and
+// the coverage gate resolves it with `go test -list`; a value that is
+// not "<package path>.<TestFunc>" cannot be resolved at all, so the row
+// would be counted as covered by a claim nothing checks.
+func validateRowCoveredBy(where string, r *Row) []string {
+	if r.CoveredBy == "" {
+		return nil
+	}
+	var problems []string
+	if !coveredByPattern.MatchString(r.CoveredBy) {
+		problems = append(problems, fmt.Sprintf(
+			"%s: covered_by %q must be <package path>.<TestFunc>, e.g. internal/authorizeendpoint.TestAuthorize_MaxAge",
+			where, r.CoveredBy,
+		))
+	}
+	// A row is either covered or it is not. Naming the test that covers
+	// a pending row, or one declared unreachable, states two
+	// incompatible things at once.
+	if status := r.EffectiveStatus(); status != "active" {
+		problems = append(problems, fmt.Sprintf("%s: covered_by is only valid when status=active (row is %s)", where, status))
+	}
+	return problems
+}
+
+// validateRowCrossRefSyntax enforces the "<feature>#<ID>" shape of every
+// cross_ref. Only the shape is checked here; whether the target exists
+// needs the whole ID index and is settled by unresolvedCrossRefs.
+func validateRowCrossRefSyntax(where string, r *Row) []string {
+	var problems []string
+	for j, ref := range r.CrossRefs {
+		if !crossRefPattern.MatchString(ref) {
+			problems = append(problems, fmt.Sprintf("%s: cross_refs[%d]=%q must match <feature>#<ID>", where, j, ref))
+		}
+	}
+	return problems
+}
+
+// unresolvedCrossRefs enforces cross-reference existence, the one
+// invariant that needs the fully populated ID index and so runs as a
+// second pass. A cross_ref pointing at an ID nobody declares is a link
+// into a row that was renamed or never written; left unchecked it reads
+// like a real relationship. Syntactically malformed refs are skipped
+// because validateRowCrossRefSyntax already reported them.
+func (c *Catalog) unresolvedCrossRefs() []string {
+	var dangling []string
+	for _, r := range c.AllRows() {
+		for _, ref := range r.CrossRefs {
+			parts := strings.SplitN(ref, "#", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			if c.Lookup(parts[1]) != nil {
+				continue
+			}
+			dangling = append(dangling, fmt.Sprintf("%s rows (%s): cross_ref %q points at unknown ID",
+				r.File.Path, r.ID, ref))
+		}
+	}
+	return dangling
+}
+
+// warnDanglingCrossRefs prints the tolerated dangling references to
+// stderr so a lenient run still shows what it let through.
+func warnDanglingCrossRefs(dangling []string) {
+	if len(dangling) == 0 {
+		return
+	}
+	sort.Strings(dangling)
+	fmt.Fprintf(os.Stderr, "scenariotool: %d dangling cross_ref(s) tolerated under --lenient:\n  %s\n",
+		len(dangling), strings.Join(dangling, "\n  "))
 }

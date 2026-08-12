@@ -7,6 +7,7 @@ import (
 )
 
 func TestLocateTest(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	body := `package scenarios_test
 
