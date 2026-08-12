@@ -51,6 +51,12 @@ const (
 	// ceiling exists to bound memory against a malicious or misconfigured peer.
 	DefaultMaxBodyBytes = int64(64 * 1024)
 
+	// DefaultMaxInflight bounds the number of distinct remote URL loads that
+	// may be in flight across all Fetcher instances in this process. The
+	// nonblocking gate fails closed when saturated; callers can retry without
+	// turning a burst of open-DCR URLs into an unbounded socket/goroutine fanout.
+	DefaultMaxInflight = 64
+
 	// MaxKeys bounds how many members a keyset may declare, in addition to the
 	// body cap. It is not configurable: no deployment has a reason to publish
 	// more, and a per-caller override would be exactly the drift this package
@@ -71,6 +77,38 @@ const (
 // ErrFetch is the sentinel a [Fetcher] wraps its failures in when the caller
 // left [Config.FetchError] unset.
 var ErrFetch = errors.New("rpjwks: jwks fetch failed")
+
+// ErrOverloaded identifies a transient refusal caused by the shared
+// in-flight URL-load bound. It is intentionally distinct from an upstream
+// fetch failure so the cache never negative-caches capacity pressure.
+var ErrOverloaded = errors.New("rpjwks: URL-load capacity exhausted")
+
+// TransientError marks a failure that callers should retry rather than treat
+// as evidence that the RP's JWKS document is bad. Overload currently uses this
+// type; the wrapper leaves room for other transient fetch conditions without
+// changing the caller's errors.As contract.
+type TransientError struct {
+	Cause error
+}
+
+func (e *TransientError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "rpjwks: transient fetch failure"
+	}
+	return e.Cause.Error()
+}
+
+func (e *TransientError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// Temporary allows legacy retry loops to recognise the error without
+// depending on the concrete type. It is deliberately not used by the cache;
+// [Config] installs the more precise errors.Is filter below.
+func (*TransientError) Temporary() bool { return true }
 
 // errNoKeySet reports that the cache returned success without a keyset, which
 // would be an internal inconsistency rather than an upstream condition.
@@ -110,6 +148,14 @@ type Config struct {
 	// [DefaultMaxBodyBytes].
 	MaxBodyBytes int64
 
+	// MaxInflight bounds this fetcher's contribution to the process-wide
+	// nonblocking URL-load gate. Zero or a negative value uses
+	// [DefaultMaxInflight]. The shared gate always applies, so increasing this
+	// value cannot raise the process-wide default; values above the default are
+	// clamped, while a smaller value is useful for an individual caller that
+	// needs a tighter budget.
+	MaxInflight int
+
 	// AllowPrivateNetwork lifts the SSRF deny-list so a deployment that
 	// legitimately hosts its RPs on a private LAN can reach them. Cloud-metadata
 	// addresses remain rejected even with this set.
@@ -146,6 +192,7 @@ type Fetcher struct {
 	fetchErr error
 	timeout  time.Duration
 	maxBody  int64
+	inflight chan struct{}
 
 	// clientOnce / client wire the lazy [*securefetch.Client] construction so a
 	// caller can flip the posture setters after [New] returned but before the
@@ -155,6 +202,30 @@ type Fetcher struct {
 
 	allowPrivate  bool
 	baseTransport http.RoundTripper
+}
+
+// globalURLLoadSlots is the process-wide hard ceiling. The per-policy groups
+// below provide tighter local budgets while this channel keeps independently
+// configured components from exceeding the safe process default in aggregate.
+//
+//nolint:gochecknoglobals // one process-wide capacity gate is the contract.
+var (
+	globalURLLoadSlots        = make(chan struct{}, DefaultMaxInflight)
+	globalURLLoadSlotsMu      sync.Mutex
+	globalURLLoadSlotsByLimit = map[int]chan struct{}{
+		DefaultMaxInflight: make(chan struct{}, DefaultMaxInflight),
+	}
+)
+
+func sharedURLLoadSlots(limit int) chan struct{} {
+	globalURLLoadSlotsMu.Lock()
+	defer globalURLLoadSlotsMu.Unlock()
+	if slots := globalURLLoadSlotsByLimit[limit]; slots != nil {
+		return slots
+	}
+	slots := make(chan struct{}, limit)
+	globalURLLoadSlotsByLimit[limit] = slots
+	return slots
 }
 
 // New returns a fetcher with the [Config] defaults applied.
@@ -177,12 +248,27 @@ func New(cfg Config) *Fetcher {
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = DefaultMaxBodyBytes
 	}
+	if cfg.MaxInflight <= 0 {
+		cfg.MaxInflight = DefaultMaxInflight
+	} else if cfg.MaxInflight > DefaultMaxInflight {
+		// Keep the per-policy channel bounded too. The process-wide hard
+		// gate already prevents extra network loads, but accepting an
+		// arbitrarily large caller value here would allocate an avoidable
+		// attacker-sized channel during construction.
+		cfg.MaxInflight = DefaultMaxInflight
+	}
 	return &Fetcher{
 		cache: remotecache.New[*entry](remotecache.Config{
 			Clock:       cfg.Clock,
 			TTL:         cfg.TTL,
 			NegativeTTL: cfg.NegativeTTL,
 			MaxEntries:  cfg.MaxEntries,
+			ShouldCacheError: func(err error) bool {
+				// Capacity pressure is a local transient, not an upstream
+				// document failure. Never let one saturated request suppress
+				// later callers during the negative-cache window.
+				return !errors.Is(err, ErrOverloaded)
+			},
 		}),
 		forced: remotecache.New[struct{}](remotecache.Config{
 			Clock:      cfg.Clock,
@@ -192,6 +278,7 @@ func New(cfg Config) *Fetcher {
 		fetchErr:      cfg.FetchError,
 		timeout:       cfg.Timeout,
 		maxBody:       cfg.MaxBodyBytes,
+		inflight:      sharedURLLoadSlots(cfg.MaxInflight),
 		allowPrivate:  cfg.AllowPrivateNetwork,
 		baseTransport: cfg.BaseTransport,
 	}
@@ -247,7 +334,15 @@ func (f *Fetcher) FetchFresh(ctx context.Context, jwksURI string) (*josev4.JSONW
 	if cached, ok := f.cache.PeekFresh(jwksURI); ok && cached != nil && !f.tryForced(jwksURI) {
 		return cached.keys, nil
 	}
-	return f.result(f.cache.RefreshTTL(ctx, jwksURI, f.load(jwksURI)))
+	keys, err := f.cache.RefreshTTL(ctx, jwksURI, f.load(jwksURI))
+	if errors.Is(err, ErrOverloaded) {
+		// A forced refresh marker is an admission throttle, not a record of
+		// successful work. Capacity pressure leaves the positive cache intact
+		// and must release the marker so the next caller can retry immediately
+		// once a URL-load slot is available.
+		f.clearForced(jwksURI)
+	}
+	return f.result(keys, err)
 }
 
 // ParseKeySet decodes an inline keyset under this fetcher's error taxonomy, so
@@ -274,6 +369,12 @@ func (f *Fetcher) tryForced(url string) bool {
 	}
 	f.forced.Put(url, struct{}{})
 	return true
+}
+
+func (f *Fetcher) clearForced(url string) {
+	f.forcedMu.Lock()
+	f.forced.Delete(url)
+	f.forcedMu.Unlock()
 }
 
 // load returns the cache loader for jwksURI.
@@ -305,6 +406,12 @@ func (f *Fetcher) load(jwksURI string) remotecache.TTLLoader[*entry] {
 // checks are applied here so the 304 branch can short-circuit before the body
 // read.
 func (f *Fetcher) doFetch(ctx context.Context, jwksURI string, cached *entry) (*entry, time.Duration, error) {
+	release, err := f.acquireLoad(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer release()
+
 	req, err := f.secureClient().NewRequest(ctx, http.MethodGet, jwksURI, nil)
 	if err != nil {
 		return nil, 0, err
@@ -342,6 +449,32 @@ func (f *Fetcher) doFetch(ctx context.Context, jwksURI string, cached *entry) (*
 		return nil, 0, err
 	}
 	return &entry{keys: keys, etag: resp.Header.Get("ETag")}, ttlFromResponse(resp), nil
+}
+
+// acquireLoad takes both the process-wide hard ceiling and this fetcher's
+// tighter policy group. The operation is deliberately nonblocking: a
+// saturated attacker-controlled URL population receives a typed transient
+// error rather than queuing goroutines behind a semaphore. The release closure
+// always returns both slots, including every request/parse error path.
+func (f *Fetcher) acquireLoad(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case globalURLLoadSlots <- struct{}{}:
+	default:
+		return nil, &TransientError{Cause: ErrOverloaded}
+	}
+	select {
+	case f.inflight <- struct{}{}:
+		return func() {
+			<-f.inflight
+			<-globalURLLoadSlots
+		}, nil
+	default:
+		<-globalURLLoadSlots
+		return nil, &TransientError{Cause: ErrOverloaded}
+	}
 }
 
 // result maps a cache outcome onto the caller's keyset / sentinel contract.

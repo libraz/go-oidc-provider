@@ -300,6 +300,95 @@ func TestFetch_SingleflightCollapsesConcurrentFetches(t *testing.T) {
 	}
 }
 
+func TestFetch_InFlightLimitShedsDistinctURLsWithoutNegativeCaching(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if block := r.URL.Query().Get("block"); block == "1" || block == "2" {
+			entered <- struct{}{}
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		_, _ = w.Write([]byte(jwksJSON))
+	}))
+	defer srv.Close()
+
+	f := newTestFetcher(t, Config{MaxInflight: 1, NegativeTTL: time.Hour})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := f.Fetch(context.Background(), srv.URL+"?block=1")
+		firstDone <- err
+	}()
+	<-entered
+
+	_, err := f.Fetch(context.Background(), srv.URL+"?block=2")
+	if !errors.Is(err, errSentinel) {
+		t.Fatalf("overloaded fetch err=%v want configured sentinel", err)
+	}
+	var transient *TransientError
+	if !errors.As(err, &transient) || !errors.Is(err, ErrOverloaded) {
+		t.Fatalf("overloaded err=%v want *TransientError wrapping ErrOverloaded", err)
+	}
+	if _, ok, _ := f.cache.Get(srv.URL + "?block=2"); ok {
+		t.Fatal("overload was negative-cached")
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	if _, err := f.Fetch(context.Background(), srv.URL+"?block=2"); err != nil {
+		t.Fatalf("retry after capacity release: %v", err)
+	}
+}
+
+func TestFetch_InFlightLimitIsSharedAcrossFetcherInstances(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if block := r.URL.Query().Get("block"); block == "1" || block == "2" {
+			entered <- struct{}{}
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		_, _ = w.Write([]byte(jwksJSON))
+	}))
+	defer srv.Close()
+
+	// Use a group distinct from the other parallel gate tests; the shared
+	// process-wide property is what this test proves between these two
+	// fetchers, not a fixed numeric value.
+	first := newTestFetcher(t, Config{MaxInflight: 2})
+	second := newTestFetcher(t, Config{MaxInflight: 2})
+	firstDone := make(chan error, 1)
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := first.Fetch(context.Background(), srv.URL+"?block=1")
+		firstDone <- err
+	}()
+	<-entered
+	go func() {
+		_, err := second.Fetch(context.Background(), srv.URL+"?block=2")
+		secondDone <- err
+	}()
+	<-entered
+	third := newTestFetcher(t, Config{MaxInflight: 2})
+	if _, err := third.Fetch(context.Background(), srv.URL+"?block=3"); !errors.Is(err, ErrOverloaded) {
+		t.Fatalf("third fetch err=%v want ErrOverloaded", err)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+}
+
 // TestFetch_NegativeCacheShortCircuitsThenRecovers drives a fetch against a
 // failing upstream and confirms the second fetch inside the negative window
 // does not re-issue the round-trip, then that recovery is observable once the
@@ -474,6 +563,50 @@ func TestFetch_CallerCancellationDoesNotPoisonTheFlight(t *testing.T) {
 	}
 }
 
+func TestFetch_CancellationReleasesConfiguredInFlightSlot(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("block") == "1" {
+			enteredOnce.Do(func() { close(entered) })
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		_, _ = w.Write([]byte(jwksJSON))
+	}))
+	defer srv.Close()
+
+	f := newTestFetcher(t, Config{MaxInflight: 3})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	callerDone := make(chan error, 1)
+	loaderDone := make(chan error, 1)
+	go func() {
+		_, err := f.Fetch(ctx, srv.URL+"?block=1")
+		callerDone <- err
+	}()
+	<-entered
+	cancel()
+	if err := <-callerDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled caller err=%v want context.Canceled", err)
+	}
+	// The detached loader still owns the slot until the upstream returns.
+	go func() {
+		_, err := f.Fetch(context.Background(), srv.URL+"?block=1")
+		loaderDone <- err
+	}()
+	close(release)
+	if err := <-loaderDone; err != nil {
+		t.Fatalf("detached loader: %v", err)
+	}
+	if _, err := f.Fetch(context.Background(), srv.URL+"?block=2"); err != nil {
+		t.Fatalf("fetch after detached loader released slot: %v", err)
+	}
+}
+
 // TestFetch_EvictsLeastRecentlyUsedURL pins that eviction under cardinality
 // pressure is deterministic and drops the least-recently-used URL, so a flood
 // of one-shot registrations cannot displace the keyset of a client the OP is
@@ -635,6 +768,75 @@ func TestFetchFresh_BypassesFreshCacheThenThrottles(t *testing.T) {
 	}
 	if n := hits.Load(); n != 3 {
 		t.Errorf("hits=%d after the throttle window elapsed, want 3", n)
+	}
+}
+
+// TestFetchFresh_OverloadReleasesForcedMarker verifies that capacity pressure
+// does not consume the forced-refresh throttle window. The positive cache must
+// remain available while a slot is unavailable, and the next caller must be
+// able to force a refetch immediately after the slot is released.
+//
+//nolint:paralleltest // It saturates the process-wide fetch-capacity gate to assert overload behavior.
+func TestFetchFresh_OverloadReleasesForcedMarker(t *testing.T) {
+	hits := &atomic.Int32{}
+	version := &atomic.Int32{}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("kind") == "block" {
+			once.Do(func() { close(entered) })
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		w.Header().Set("Cache-Control", "max-age=300")
+		kid := "k1"
+		if r.URL.Query().Get("kind") == "target" {
+			hits.Add(1)
+			if version.Load() != 0 {
+				kid = "k2"
+			}
+		}
+		_, _ = w.Write([]byte(`{"keys":[{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","kid":"` + kid + `"}]}`))
+	}))
+	defer srv.Close()
+
+	f := newTestFetcher(t, Config{MaxInflight: 1})
+	target := srv.URL + "?kind=target"
+	block := srv.URL + "?kind=block"
+	if _, err := f.Fetch(context.Background(), target); err != nil {
+		t.Fatalf("prime target fetch: %v", err)
+	}
+
+	blockDone := make(chan error, 1)
+	go func() {
+		_, err := f.Fetch(context.Background(), block)
+		blockDone <- err
+	}()
+	<-entered
+
+	if _, err := f.FetchFresh(context.Background(), target); !errors.Is(err, ErrOverloaded) {
+		t.Fatalf("overloaded FetchFresh err=%v want ErrOverloaded", err)
+	}
+	cached, ok, cacheErr := f.cache.Get(target)
+	if cacheErr != nil || !ok || cached == nil || len(cached.keys.Keys) != 1 || cached.keys.Keys[0].KeyID != "k1" {
+		t.Fatalf("cached keyset after overload=%+v ok=%t err=%v want fresh k1", cached, ok, cacheErr)
+	}
+
+	version.Store(1)
+	close(release)
+	if err := <-blockDone; err != nil {
+		t.Fatalf("blocking fetch: %v", err)
+	}
+	keys, err := f.FetchFresh(context.Background(), target)
+	if err != nil {
+		t.Fatalf("FetchFresh after capacity release: %v", err)
+	}
+	if len(keys.Keys) != 1 || keys.Keys[0].KeyID != "k2" {
+		t.Fatalf("FetchFresh after capacity release returned kids %v, want [k2]", keyIDs(keys))
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("target round-trips=%d want 2 (prime + immediate retry)", got)
 	}
 }
 

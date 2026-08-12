@@ -18,6 +18,11 @@
 //   - Negative caching of upstream failures, and a per-URL throttle on the
 //     forced refresh, so neither path amplifies inbound requests into outbound
 //     ones.
+//   - A process-wide nonblocking in-flight gate shared by every Fetcher
+//     instance. Distinct RP URLs compete for [DefaultMaxInflight] slots;
+//     capacity pressure is a typed transient error and is never stored in the
+//     negative cache. [Config.MaxInflight] can tighten one component's local
+//     share without widening the process-wide bound.
 //
 // # Caller isolation
 //
