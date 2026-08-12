@@ -390,6 +390,69 @@ func TestCoordinator_FansOutToRegisteredClients(t *testing.T) {
 	}
 }
 
+func TestCoordinator_NotifyClientDeletedUsesPreDeleteSnapshot(t *testing.T) {
+	t.Parallel()
+
+	_, signing := mustKey(t)
+	st := inmem.New()
+	var targetsMu sync.Mutex
+	var gotTargets []backchannel.Target
+	clients := &faultClientStore{ClientStore: st.Clients(), faultID: "deleted-rp", err: errors.New("client already deleted")}
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:  "https://op.example.com",
+		Signing: signing,
+		Clients: clients,
+		Grants:  st.Grants().(store.GrantClientLister),
+		Deliverer: backchannel.DelivererFunc(func(_ context.Context, target backchannel.Target, _ string) error {
+			targetsMu.Lock()
+			gotTargets = append(gotTargets, target)
+			targetsMu.Unlock()
+			return nil
+		}),
+		Clock: fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	client := &store.Client{
+		ID:                   "deleted-rp",
+		BackchannelLogoutURI: "https://rp.example/logout",
+	}
+	saveClient(t, st, client)
+	if err := st.DeleteClient(context.Background(), client.ID); err != nil {
+		t.Fatalf("DeleteClient: %v", err)
+	}
+
+	n, err := coord.NotifyClientDeleted(context.Background(), backchannel.ClientDeletionSnapshot{
+		Client:   client,
+		Subjects: []string{"user-a", "user-a", "user-b"},
+	})
+	if err != nil {
+		t.Fatalf("NotifyClientDeleted: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("NotifyClientDeleted deliveries=%d want 2", n)
+	}
+	targetsMu.Lock()
+	defer targetsMu.Unlock()
+	if len(gotTargets) != 2 {
+		t.Fatalf("deliverer calls=%d want 2", len(gotTargets))
+	}
+	seen := map[string]bool{}
+	for _, target := range gotTargets {
+		if target.ClientID != client.ID || target.URL != client.BackchannelLogoutURI {
+			t.Errorf("target=%+v want client=%q URL=%q", target, client.ID, client.BackchannelLogoutURI)
+		}
+		seen[target.Subject] = true
+	}
+	if !seen["user-a"] || !seen["user-b"] {
+		t.Errorf("subjects=%v want user-a and user-b", seen)
+	}
+	if got := clients.calls.Load(); got != 0 {
+		t.Errorf("post-delete ClientStore lookups=%d want 0", got)
+	}
+}
+
 // TestCoordinator_TwoRPsReceiveSubOnlyTokens exercises the production HTTP
 // deliverer against two real RP endpoints. A browser-session SID supplied
 // for audit correlation must not be disclosed to either RP because the

@@ -116,6 +116,38 @@ func TestValidatePolicy_PrivateKeyJWTAcceptsValidInlineJWKS(t *testing.T) {
 	}
 }
 
+func TestValidatePolicy_OutboundEncryptionRequiresUsableInlineJWKS(t *testing.T) {
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	base := ClientMetadata{ //nolint:gosec // G101: public JWK metadata fixture, not a credential.
+		RedirectURIs:                []string{"https://rp.test.invalid/cb"},
+		IDTokenEncryptedResponseAlg: "RSA-OAEP-256",
+		IDTokenEncryptedResponseEnc: "A256GCM",
+		JWKs: jwksRaw(t, josev4.JSONWebKey{
+			Key:       &key.PublicKey,
+			KeyID:     "enc-1",
+			Algorithm: "RSA-OAEP-256",
+			Use:       "enc",
+		}),
+	}
+	if _, err := validatePolicy(base, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{}); err != nil {
+		t.Fatalf("validatePolicy(valid outbound encryption key): %v", err)
+	}
+	base.JWKs = jwksRaw(t, josev4.JSONWebKey{
+		Key:       &key.PublicKey,
+		KeyID:     "wrong-use",
+		Algorithm: "RSA-OAEP-256",
+		Use:       "sig",
+	})
+	if _, err := validatePolicy(base, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{}); err == nil {
+		t.Fatal("validatePolicy accepted a JWE key marked use=sig")
+	}
+}
+
 // unsupportedMemberJWK is a JWK the JOSE layer cannot turn into a key: an
 // OKP curve outside the Ed25519 it implements. An RP that offers ECDH-ES
 // encryption registers a member of this shape next to the signing key it
@@ -387,6 +419,9 @@ func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
 					RedirectURIs: []string{"https://rp.test.invalid/cb"},
 				}
 				p.set(&m, c.alg, c.enc)
+				if c.alg != "" {
+					m.JWKsURI = "https://rp.test.invalid/jwks.json"
+				}
 				if _, err := validatePolicy(m,
 					[]string{"authorization_code"}, []string{"code"},
 					nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{}); err != nil {
@@ -592,6 +627,27 @@ func TestValidatePostLogoutRedirectURIs(t *testing.T) {
 		},
 		{name: "web-https", uri: "https://rp.example.com/logout", applicationType: "web"},
 		{
+			name:             "web-https-without-authority",
+			uri:              "https:/logout",
+			applicationType:  "web",
+			wantErr:          true,
+			wantDescContains: []string{"post_logout_redirect_uris", "loopback"},
+		},
+		{
+			name:             "web-https-empty-hostname",
+			uri:              "https://:443/logout",
+			applicationType:  "web",
+			wantErr:          true,
+			wantDescContains: []string{"post_logout_redirect_uris", "loopback"},
+		},
+		{
+			name:             "web-https-with-userinfo",
+			uri:              "https://user@rp.example.com/logout",
+			applicationType:  "web",
+			wantErr:          true,
+			wantDescContains: []string{"post_logout_redirect_uris", "loopback"},
+		},
+		{
 			name:             "web-http-public-host",
 			uri:              "http://rp.example.com/logout",
 			applicationType:  "web",
@@ -716,6 +772,48 @@ func TestValidateMetadataURIs_RejectsUserinfo(t *testing.T) {
 	}
 }
 
+func TestValidateMetadataURIs_RejectsEmptyHostname(t *testing.T) {
+	t.Parallel()
+
+	const emptyHostnameURL = "https://:443/value"
+	cases := []struct {
+		name string
+		mut  func(*ClientMetadata)
+	}{
+		{"client_uri", func(m *ClientMetadata) { m.ClientURI = emptyHostnameURL }},
+		{"logo_uri", func(m *ClientMetadata) { m.LogoURI = emptyHostnameURL }},
+		{"policy_uri", func(m *ClientMetadata) { m.PolicyURI = emptyHostnameURL }},
+		{"tos_uri", func(m *ClientMetadata) { m.TosURI = emptyHostnameURL }},
+		{"jwks_uri", func(m *ClientMetadata) { m.JWKsURI = emptyHostnameURL }},
+		{"sector_identifier_uri", func(m *ClientMetadata) { m.SectorIdentifierURI = emptyHostnameURL }},
+		{"initiate_login_uri", func(m *ClientMetadata) { m.InitiateLoginURI = emptyHostnameURL }},
+		{"request_uris", func(m *ClientMetadata) { m.RequestURIs = []string{emptyHostnameURL + "#sha256-xyz"} }},
+		{"backchannel_logout_uri", func(m *ClientMetadata) { m.BackchannelLogoutURI = emptyHostnameURL }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := ClientMetadata{RedirectURIs: []string{"https://rp.test.invalid/cb"}}
+			tc.mut(&m)
+			_, err := validatePolicy(m,
+				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false, internaljose.JWEPolicy{})
+			if err == nil {
+				t.Fatalf("%s: accepted URL with empty hostname %q", tc.name, emptyHostnameURL)
+			}
+			var ve *validationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("%s: error %v is not *validationError", tc.name, err)
+			}
+			if ve.code != codeInvalidClientMetadata {
+				t.Errorf("%s: code=%q want %q", tc.name, ve.code, codeInvalidClientMetadata)
+			}
+			if !strings.Contains(ve.description, "must include a host") {
+				t.Errorf("%s: description=%q want host diagnostic", tc.name, ve.description)
+			}
+		})
+	}
+}
+
 // TestValidateBackchannelLogoutURI pins the rule that DCR / RM
 // MUST validate `backchannel_logout_uri` at registration time so a
 // plaintext / fragment-bearing / userinfo-bearing logout endpoint is
@@ -798,6 +896,14 @@ func TestValidateBackchannelLogoutURI(t *testing.T) {
 				t.Errorf("error %q must contain %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidateBackchannelLogoutURI_RejectsEmptyHostnameInDevMode(t *testing.T) {
+	t.Parallel()
+
+	if err := validateBackchannelLogoutURI("https://:443/logout", true); err == nil {
+		t.Fatal("validateBackchannelLogoutURI accepted an HTTPS authority with an empty hostname")
 	}
 }
 

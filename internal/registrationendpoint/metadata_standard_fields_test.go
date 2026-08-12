@@ -95,6 +95,81 @@ func TestRegister_AcceptsFullStandardMetadataSet(t *testing.T) {
 	}
 }
 
+func TestIntrospectionSignedResponseAlg_RoundTripsAndNormalizesNone(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	body := minimalMetadata()
+	body["introspection_signed_response_alg"] = "ES256"
+	created := f.register(t, body)
+
+	read := f.manage(t, http.MethodGet, created.registrationClientURI, created.registrationAccessToken, nil)
+	if read.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(read.Body)
+		read.Body.Close()
+		t.Fatalf("GET: status=%d want 200 body=%s", read.StatusCode, raw)
+	}
+	readBody := decodeBody(t, read)
+	read.Body.Close()
+	if got := readBody["introspection_signed_response_alg"]; got != "ES256" {
+		t.Fatalf("GET introspection_signed_response_alg=%v want ES256", got)
+	}
+
+	updated := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, map[string]any{
+		"redirect_uris":                     []string{"https://rp.test.invalid/callback"},
+		"introspection_signed_response_alg": "none",
+	})
+	if updated.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(updated.Body)
+		updated.Body.Close()
+		t.Fatalf("PUT none: status=%d want 200 body=%s", updated.StatusCode, raw)
+	}
+	updatedBody := decodeBody(t, updated)
+	updated.Body.Close()
+	if _, ok := updatedBody["introspection_signed_response_alg"]; ok {
+		t.Fatalf("PUT none must normalize to JSON and omit field: %v", updatedBody)
+	}
+	client, err := f.prov.Store.Clients().GetClient(context.Background(), created.clientID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if client.IntrospectionSignedResponseAlg != "" {
+		t.Fatalf("stored IntrospectionSignedResponseAlg=%q want empty", client.IntrospectionSignedResponseAlg)
+	}
+}
+
+func TestIntrospectionSignedResponseAlg_OmittedPUTClearsExistingMetadata(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	created := f.register(t, map[string]any{
+		"redirect_uris":                     []string{"https://rp.test.invalid/callback"},
+		"introspection_signed_response_alg": "ES256",
+	})
+
+	updated := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/callback"},
+	})
+	if updated.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(updated.Body)
+		updated.Body.Close()
+		t.Fatalf("PUT omitted signed alg: status=%d want 200 body=%s", updated.StatusCode, raw)
+	}
+	updatedBody := decodeBody(t, updated)
+	updated.Body.Close()
+	if _, ok := updatedBody["introspection_signed_response_alg"]; ok {
+		t.Fatalf("PUT omission must clear introspection_signed_response_alg in response: %v", updatedBody)
+	}
+
+	client, err := f.prov.Store.Clients().GetClient(context.Background(), created.clientID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if client.IntrospectionSignedResponseAlg != "" {
+		t.Fatalf("stored IntrospectionSignedResponseAlg=%q want empty after omitted PUT", client.IntrospectionSignedResponseAlg)
+	}
+}
+
 // TestRegister_IgnoresUnmodelledMembers pins the RFC 7591 §2 rule
 // directly: a member the OP has no meaning for is dropped, not
 // answered with an error and not echoed back as though it had been

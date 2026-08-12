@@ -69,7 +69,7 @@ func validateRedirectURI(raw, applicationType string, hasImplicit, allowLocalhos
 func validateNativeRedirectURIScheme(u *url.URL) error {
 	switch u.Scheme {
 	case "https":
-		return nil
+		return validateHTTPSRedirectAuthority(u, "redirect_uri")
 	case "http":
 		if !isLoopbackRedirectHost(u.Hostname(), true) {
 			return errInvalidRedirectURI("native client redirect_uri http scheme requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
@@ -108,6 +108,9 @@ func validateNativeCustomScheme(scheme string) error {
 func validateWebRedirectURIScheme(u *url.URL, hasImplicit, allowLocalhostLoopback bool) error {
 	switch u.Scheme {
 	case "https":
+		if err := validateHTTPSRedirectAuthority(u, "redirect_uri"); err != nil {
+			return err
+		}
 		if hasImplicit && isLoopbackRedirectHost(u.Hostname(), true) {
 			return errInvalidRedirectURI("web client with implicit response_types must not use a loopback host as redirect_uri per OIDC Registration §2")
 		}
@@ -185,7 +188,7 @@ func validatePostLogoutRedirectURI(raw, applicationType string, allowLocalhostLo
 func validateNativePostLogoutScheme(u *url.URL) error {
 	switch u.Scheme {
 	case "https":
-		return nil
+		return validateHTTPSRedirectAuthority(u, "post_logout_redirect_uris entry")
 	case "http":
 		if !isLoopbackRedirectHost(u.Hostname(), true) {
 			return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris http scheme for native clients requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
@@ -207,7 +210,7 @@ func validateNativePostLogoutScheme(u *url.URL) error {
 func validateWebPostLogoutScheme(u *url.URL, allowLocalhostLoopback bool) error {
 	switch u.Scheme {
 	case "https":
-		return nil
+		return validateHTTPSRedirectAuthority(u, "post_logout_redirect_uris entry")
 	case "http":
 		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
 			if allowLocalhostLoopback {
@@ -219,6 +222,22 @@ func validateWebPostLogoutScheme(u *url.URL, allowLocalhostLoopback bool) error 
 	default:
 		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris scheme must be https for web clients; loopback http (127.0.0.1, [::1], localhost) and custom URI schemes require application_type=native")
 	}
+}
+
+func validateHTTPSRedirectAuthority(u *url.URL, field string) error {
+	if u.Host == "" || u.Hostname() == "" {
+		if field == "redirect_uri" {
+			return errInvalidRedirectURI("redirect_uri https URL must include an authority")
+		}
+		return errInvalidPostLogoutRedirectURI(field + " https URL must include an authority (loopback http requires an explicit host)")
+	}
+	if u.User != nil {
+		if field == "redirect_uri" {
+			return errInvalidRedirectURI("redirect_uri https URL must not contain userinfo")
+		}
+		return errInvalidPostLogoutRedirectURI(field + " https URL must not contain userinfo (loopback http requires an explicit host)")
+	}
+	return nil
 }
 
 // errInvalidPostLogoutRedirectURI constructs a [validationError] whose

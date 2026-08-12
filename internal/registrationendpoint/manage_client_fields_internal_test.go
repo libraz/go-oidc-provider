@@ -48,12 +48,10 @@ var putFieldDispositions = map[string]putDisposition{
 	// carried-forward value is the one a restamp would write.
 	"Source": dispositionPreserved,
 
-	// Configuration with no member in the registration wire shape. Both
-	// are reachable only through the embedder's own administration path,
-	// so rebuilding the record from the submitted metadata would drop
-	// them.
-	"Resources":                      dispositionPreserved,
-	"IntrospectionSignedResponseAlg": dispositionPreserved,
+	// Configuration with no member in the registration wire shape. The
+	// resource-indicator allow-list is reachable only through the
+	// embedder's own administration path and survives a client update.
+	"Resources": dispositionPreserved,
 
 	// Credentials and the public/confidential split follow the auth
 	// method the update settles on, not a submitted value.
@@ -95,6 +93,7 @@ var putFieldDispositions = map[string]putDisposition{
 	"UserInfoEncryptedResponseEnc":      dispositionMetadata,
 	"AuthorizationEncryptedResponseAlg": dispositionMetadata,
 	"AuthorizationEncryptedResponseEnc": dispositionMetadata,
+	"IntrospectionSignedResponseAlg":    dispositionMetadata,
 	"IntrospectionEncryptedResponseAlg": dispositionMetadata,
 	"IntrospectionEncryptedResponseEnc": dispositionMetadata,
 }

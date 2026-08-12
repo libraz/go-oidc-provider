@@ -17,6 +17,7 @@ var ErrNoUsableJWK = errors.New("jose: JWK set contains no usable key")
 // need for key-shape validation without importing go-jose directly.
 type JWK struct {
 	Algorithm string
+	Use       string
 	Key       crypto.PublicKey
 }
 
@@ -82,7 +83,7 @@ func ParseJWKSet(raw []byte) ([]JWK, error) {
 		if !key.IsPublic() {
 			return nil, ErrUnsupportedKeyShape
 		}
-		out = append(out, JWK{Algorithm: key.Algorithm, Key: key.Key})
+		out = append(out, JWK{Algorithm: key.Algorithm, Use: key.Use, Key: key.Key})
 	}
 	return out, nil
 }

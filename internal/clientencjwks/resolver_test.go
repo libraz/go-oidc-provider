@@ -232,6 +232,22 @@ func TestResolveRecipient_NoJWKsAndNoURI(t *testing.T) {
 	}
 }
 
+func TestResolveRecipient_RejectsBothJWKSources(t *testing.T) {
+	t.Parallel()
+
+	priv := mustRSAKey(t)
+	client := &store.Client{
+		ID:      "rp",
+		JWKs:    inlineJWKs(t, rsaPublicJWK(priv, "inline", "enc", "RSA-OAEP-256")),
+		JWKsURI: "https://rp.example/jwks.json",
+	}
+	r := clientencjwks.New(clientencjwks.Config{})
+	_, err := r.ResolveRecipient(context.Background(), client, "RSA-OAEP-256", "A256GCM")
+	if !errors.Is(err, clientencjwks.ErrJWKSConfigured) {
+		t.Fatalf("err=%v want ErrJWKSConfigured", err)
+	}
+}
+
 func TestResolveRecipient_JWKsURI_500(t *testing.T) {
 	t.Parallel()
 

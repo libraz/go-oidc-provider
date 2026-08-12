@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sector"
@@ -188,6 +189,28 @@ type Deps struct {
 	// would imply a recoverable failure that the embedder cannot retry.
 	OnClientDeleted func(ctx context.Context, clientID string) error
 
+	// OnClientDeletedSnapshot is the optional embedder hook for a custom-store
+	// delete cascade. When GrantSubjects is wired, the handler calls it with
+	// the pre-delete client record and a bounded subject snapshot, alongside
+	// the built-in Coordinator when one is configured.
+	OnClientDeletedSnapshot func(ctx context.Context, client *store.Client, subjects []string) error
+
+	// Backchannel receives a pre-delete snapshot and performs direct logout
+	// fan-out before the 204 response. The op wiring supplies the shared
+	// coordinator when back-channel logout is enabled; a nil value preserves
+	// the custom [OnClientDeleted] fallback.
+	Backchannel *backchannel.Coordinator
+
+	// GrantSubjects is the optional bounded subject index used to build a
+	// client-deletion snapshot. Without it, the handler cannot enumerate
+	// direct BCL targets and invokes only the compatibility hook.
+	GrantSubjects store.GrantSubjectLister
+
+	// MaxDeleteSubjects caps the single subject page captured before a
+	// client delete. Zero selects the back-channel coordinator target cap.
+	// Values larger than the coordinator cap are reduced at runtime.
+	MaxDeleteSubjects int
+
 	// RefreshTokens is the optional refresh-token substore the handler
 	// probes for [store.RevokeByClient] during the delete cascade. A
 	// nil substore opts out of the in-tree cascade for refresh tokens;
@@ -221,6 +244,8 @@ type Deps struct {
 	HighEntropyClientSecrets bool
 }
 
+const defaultMaxDeleteSubjects = 256
+
 // Handler returns the HTTP handler the OP mounts at /register and
 // /register/{client_id}. The returned handler is safe for concurrent
 // use; deps MUST NOT be mutated after the call.
@@ -248,6 +273,9 @@ func resolveDeps(d Deps) Deps {
 	}
 	if len(d.AllowedResponseTypes) == 0 {
 		d.AllowedResponseTypes = []string{"code"}
+	}
+	if d.MaxDeleteSubjects <= 0 || d.MaxDeleteSubjects > defaultMaxDeleteSubjects {
+		d.MaxDeleteSubjects = defaultMaxDeleteSubjects
 	}
 	return d
 }

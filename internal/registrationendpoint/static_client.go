@@ -280,6 +280,7 @@ func staticClientToMetadata(c store.Client) ClientMetadata {
 		AuthorizationEncryptedResponseEnc: c.AuthorizationEncryptedResponseEnc,
 		IntrospectionEncryptedResponseAlg: c.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: c.IntrospectionEncryptedResponseEnc,
+		IntrospectionSignedResponseAlg:    c.IntrospectionSignedResponseAlg,
 		PostLogoutRedirectURIs:            c.PostLogoutRedirectURIs,
 		BackchannelLogoutURI:              c.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired:  c.BackchannelLogoutSessionRequired,

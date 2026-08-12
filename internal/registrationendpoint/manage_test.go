@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +125,58 @@ func TestManage_Read_HappyPath(t *testing.T) {
 		t.Errorf("GET response must not include a registration_access_token, got %q", rat)
 	}
 	assertCacheControl(t, resp)
+}
+
+func TestManage_UpdateRetainsIATScopeCeilingAcrossRATRotation(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{AllowedScopes: []string{"openid"}})
+	createdResp := f.post(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/callback"},
+		"scope":         "openid",
+	}, iat)
+	defer createdResp.Body.Close()
+	if createdResp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(createdResp.Body)
+		t.Fatalf("register: status=%d want 201 body=%s", createdResp.StatusCode, raw)
+	}
+	created := decodeBody(t, createdResp)
+	clientID, _ := created["client_id"].(string)
+	rat, _ := created["registration_access_token"].(string)
+	managementURL := f.endpoint + "/" + clientID
+
+	tooWide := f.manage(t, http.MethodPut, managementURL, rat, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/callback"},
+		"scope":         "profile",
+	})
+	defer tooWide.Body.Close()
+	if tooWide.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(tooWide.Body)
+		t.Fatalf("too-wide PUT: status=%d want 400 body=%s", tooWide.StatusCode, raw)
+	}
+
+	updated := f.manage(t, http.MethodPut, managementURL, rat, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/callback"},
+		"scope":         "openid",
+	})
+	defer updated.Body.Close()
+	if updated.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(updated.Body)
+		t.Fatalf("allowed PUT: status=%d want 200 body=%s", updated.StatusCode, raw)
+	}
+	updatedBody := decodeBody(t, updated)
+	rotated, _ := updatedBody["registration_access_token"].(string)
+	if rotated == "" {
+		t.Fatal("PUT did not return a rotated registration access token")
+	}
+	stored, err := f.prov.Store.RegistrationAccessTokens().GetByClientID(context.Background(), clientID)
+	if err != nil {
+		t.Fatalf("GetByClientID: %v", err)
+	}
+	if len(stored.AllowedScopes) != 1 || stored.AllowedScopes[0] != "openid" {
+		t.Fatalf("rotated RAT AllowedScopes=%v want [openid]", stored.AllowedScopes)
+	}
 }
 
 // TestManage_Read_4xx covers the RAT verification error matrix.
@@ -641,6 +694,50 @@ func TestManage_Delete_HappyPath(t *testing.T) {
 				t.Errorf("%s status=%d want 401", method, subResp.StatusCode)
 			}
 		})
+	}
+}
+
+func TestManage_Delete_DirectBackchannelUsesPreDeleteSnapshot(t *testing.T) {
+	t.Parallel()
+
+	logoutTokens := make(chan string, 1)
+	rp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "malformed form", http.StatusBadRequest)
+			return
+		}
+		logoutTokens <- r.Form.Get("logout_token")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer rp.Close()
+
+	f := newFixture(t, op.RegistrationOption{}, op.WithAllowInsecureBackchannelLogoutForDev())
+	body := minimalMetadata()
+	body["backchannel_logout_uri"] = rp.URL
+	created := f.register(t, body)
+	if err := f.prov.Store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "dcr-delete-bcl-grant",
+		ClientID:  created.clientID,
+		Subject:   "dcr-delete-bcl-subject",
+		CreatedAt: f.clock.now,
+		UpdatedAt: f.clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+
+	resp := f.manage(t, http.MethodDelete, created.registrationClientURI, created.registrationAccessToken, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("DELETE status=%d want 204 body=%s", resp.StatusCode, raw)
+	}
+	select {
+	case token := <-logoutTokens:
+		if token == "" {
+			t.Fatal("direct BCL delivered an empty logout_token")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("direct BCL did not deliver a logout token after client deletion")
 	}
 }
 

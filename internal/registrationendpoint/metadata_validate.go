@@ -3,6 +3,7 @@ package registrationendpoint
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -40,6 +41,10 @@ func validatePolicy(
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
 	}
 	canonical := applyMetadataDefaults(m, allowedGrantTypes, allowedResponseTypes)
+	if err := validateSignedResponseAlg("introspection_signed_response_alg", canonical.IntrospectionSignedResponseAlg); err != nil {
+		return ClientMetadata{}, err
+	}
+	canonical.IntrospectionSignedResponseAlg = normalizeIntrospectionSignedResponseAlg(canonical.IntrospectionSignedResponseAlg)
 	canonical.Scope = defaultScopeIfEmpty(canonical.Scope, iatScopes, openRegistration, openRegistrationDefaultScopes, scopes)
 	checks := []func() error{
 		func() error {
@@ -56,7 +61,6 @@ func validatePolicy(
 		func() error { return validateIDTokenAlg(canonical.IDTokenSignedResponseAlg) },
 		func() error { return validateRequestedScopes(canonical.Scope, iatScopes, scopes) },
 		func() error { return validateMetadataURIs(canonical, allowInsecureBackchannelLogoutForDev) },
-		func() error { return validateJWKSConfiguration(canonical) },
 		func() error { return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg) },
 		func() error {
 			return validateRequestObjectEncryption(canonical.RequestObjectEncryptionAlg, canonical.RequestObjectEncryptionEnc, jwePolicy)
@@ -73,6 +77,7 @@ func validatePolicy(
 		func() error {
 			return validateIntrospectionResponseEncryption(canonical.IntrospectionEncryptedResponseAlg, canonical.IntrospectionEncryptedResponseEnc, jwePolicy)
 		},
+		func() error { return validateJWKSConfiguration(canonical, jwePolicy) },
 		func() error { return validatePairwiseMetadata(canonical) },
 		func() error { return validateDefaultMaxAge(canonical.DefaultMaxAge) },
 		func() error {
@@ -95,15 +100,11 @@ func validatePolicy(
 //
 // The members fall into two groups:
 //
-//   - Response-signing algorithms. Discovery publishes the alg values
-//     the OP signs UserInfo and introspection responses with, so a
-//     client naming one of those values MUST be admitted; naming any
-//     other algorithm MUST be refused, because the OP signs with one
-//     algorithm and would otherwise hand back a JWT the client cannot
-//     verify. The value itself is not persisted: the OP selects the
-//     JWT shape from the request's Accept header (UserInfo) or from the
-//     client's stored introspection switch, and a registration request
-//     sets neither.
+//   - UserInfo response-signing algorithms. Discovery publishes the alg
+//     value the OP signs UserInfo responses with, so a client naming a
+//     different algorithm MUST be refused. Introspection's signed-response
+//     algorithm is persisted on ClientMetadata and is validated by
+//     validatePolicy instead.
 //   - Per-client enforcement flags. Asking the OP to require DPoP
 //     (RFC 9449 §5.2) or pushed authorization requests (RFC 9126 §6.2)
 //     from this client specifically is a hardening the OP applies
@@ -114,9 +115,6 @@ func validatePolicy(
 //     it is.
 func validateUnpersistedMetadata(extras metadataExtras) error {
 	if err := validateSignedResponseAlg("userinfo_signed_response_alg", extras.UserInfoSignedResponseAlg); err != nil {
-		return err
-	}
-	if err := validateSignedResponseAlg("introspection_signed_response_alg", extras.IntrospectionSignedResponseAlg); err != nil {
 		return err
 	}
 	if extras.DPoPBoundAccessTokens {
@@ -146,6 +144,13 @@ func validateSignedResponseAlg(field, alg string) error {
 	default:
 		return errInvalidClientMetadata(field + " " + alg + " is not supported (ES256 only)")
 	}
+}
+
+func normalizeIntrospectionSignedResponseAlg(alg string) string {
+	if alg == "none" {
+		return ""
+	}
+	return alg
 }
 
 func validateDefaultMaxAge(v *int64) error {
@@ -420,7 +425,7 @@ func validateBackchannelLogoutURI(raw string, allowDevLoopback bool) error {
 	if u.Fragment != "" {
 		return errInvalidClientMetadata("backchannel_logout_uri must not contain a fragment")
 	}
-	if u.Host == "" {
+	if u.Host == "" || u.Hostname() == "" {
 		return errInvalidClientMetadata("backchannel_logout_uri must include a host")
 	}
 	if u.User != nil {
@@ -482,7 +487,7 @@ func validateHTTPSAbsoluteURI(field, raw string) error {
 	if u.Fragment != "" {
 		return errInvalidClientMetadata(field + " must not contain a fragment")
 	}
-	if u.Host == "" {
+	if u.Host == "" || u.Hostname() == "" {
 		return errInvalidClientMetadata(field + " must include a host")
 	}
 	if u.User != nil {
@@ -517,7 +522,7 @@ func validateRequestURI(field, raw string) error {
 	if u.Scheme != "https" {
 		return errInvalidClientMetadata(field + " must use https")
 	}
-	if u.Host == "" {
+	if u.Host == "" || u.Hostname() == "" {
 		return errInvalidClientMetadata(field + " must include a host")
 	}
 	if u.User != nil {
@@ -526,24 +531,113 @@ func validateRequestURI(field, raw string) error {
 	return nil
 }
 
-func validateJWKSConfiguration(m ClientMetadata) error {
+//nolint:gocognit,cyclop // Registration validation keeps mutually exclusive key-source and requirement errors precise.
+func validateJWKSConfiguration(m ClientMetadata, jwePolicy internaljose.JWEPolicy) error {
 	if len(m.JWKs) > 0 && m.JWKsURI != "" {
 		return errInvalidClientMetadata("jwks and jwks_uri are mutually exclusive")
 	}
-	if m.TokenEndpointAuthMethod != "private_key_jwt" {
+	if len(m.JWKs) > 0 {
+		if err := validateInlineJWKS(m.JWKs); err != nil {
+			return err
+		}
+	}
+	requirements := jwksRequirements(m)
+	if len(requirements) == 0 {
 		return nil
 	}
 	hasInline := len(m.JWKs) > 0
 	hasURI := m.JWKsURI != ""
 	if hasInline == hasURI {
-		return errInvalidClientMetadata("private_key_jwt requires exactly one of jwks or jwks_uri")
+		if m.TokenEndpointAuthMethod == "private_key_jwt" && len(requirements) == 1 {
+			return errInvalidClientMetadata("private_key_jwt requires exactly one of jwks or jwks_uri")
+		}
+		return errInvalidClientMetadata("client key requirements need exactly one of jwks or jwks_uri")
 	}
-	if hasInline {
-		return validateInlineJWKS(m.JWKs)
+	if hasURI {
+		// jwks_uri is deliberately structural-only at registration time.
+		// Fetching it here would turn DCR into an SSRF-capable network
+		// operation and would still race the key's later rotation. Runtime
+		// clientencjwks / assertion resolution remains fail-closed.
+		return nil
+	}
+	keys, err := internaljose.ParseJWKSet(m.JWKs)
+	if err != nil {
+		return errInvalidClientMetadata("jwks is malformed")
+	}
+	for _, requirement := range requirements {
+		if requirement.kind == jwksSigningRequirement && hasSigningKey(keys, requirement.alg) {
+			continue
+		}
+		if requirement.kind == jwksEncryptionRequirement && hasEncryptionKey(keys, requirement.alg, jwePolicy) {
+			continue
+		}
+		return errInvalidClientMetadata("jwks does not contain a usable key for " + requirement.field)
 	}
 	return nil
 }
 
+const (
+	jwksSigningRequirement = iota
+	jwksEncryptionRequirement
+)
+
+type jwksRequirement struct {
+	kind  int
+	alg   string
+	field string
+}
+
+func jwksRequirements(m ClientMetadata) []jwksRequirement {
+	var out []jwksRequirement
+	if m.TokenEndpointAuthMethod == "private_key_jwt" {
+		out = append(out, jwksRequirement{
+			kind:  jwksSigningRequirement,
+			alg:   m.TokenEndpointAuthSigningAlg,
+			field: "private_key_jwt",
+		})
+	}
+	if len(m.RequestURIs) > 0 || m.RequestObjectSigningAlg != "" {
+		out = append(out, jwksRequirement{
+			kind:  jwksSigningRequirement,
+			alg:   m.RequestObjectSigningAlg,
+			field: "request_object_signing_alg",
+		})
+	}
+	for _, encryption := range []struct {
+		field string
+		alg   string
+	}{
+		{field: "id_token_encrypted_response_alg", alg: m.IDTokenEncryptedResponseAlg},
+		{field: "userinfo_encrypted_response_alg", alg: m.UserInfoEncryptedResponseAlg},
+		{field: "authorization_encrypted_response_alg", alg: m.AuthorizationEncryptedResponseAlg},
+		{field: "introspection_encrypted_response_alg", alg: m.IntrospectionEncryptedResponseAlg},
+	} {
+		if encryption.alg != "" {
+			out = append(out, jwksRequirement{
+				kind:  jwksEncryptionRequirement,
+				alg:   encryption.alg,
+				field: encryption.field,
+			})
+		}
+	}
+	return dedupeJWKSRequirements(out)
+}
+
+func dedupeJWKSRequirements(in []jwksRequirement) []jwksRequirement {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]jwksRequirement, 0, len(in))
+	for _, requirement := range in {
+		key := fmt.Sprintf("%d:%s", requirement.kind, requirement.alg)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, requirement)
+	}
+	return out
+}
+
+//nolint:gocognit // Each JWK shape and use rejection maps to a distinct client-metadata error.
 func validateInlineJWKS(raw json.RawMessage) error {
 	// The parser ignores members whose key type this build does not
 	// understand (RFC 7517 §5), so a client registering a supported signing
@@ -560,7 +654,22 @@ func validateInlineJWKS(raw json.RawMessage) error {
 		return errInvalidClientMetadata("jwks must contain at least one key")
 	}
 	for _, key := range keys {
+		if key.Use != "" && key.Use != "sig" && key.Use != "enc" {
+			return errInvalidClientMetadata("jwks contains an unsupported key use")
+		}
 		if key.Algorithm != "" {
+			if jweAlg, ok := internaljose.ParseJWEAlg(key.Algorithm); ok {
+				if key.Use == "sig" {
+					return errInvalidClientMetadata("jwks JWE key must not use use=sig")
+				}
+				if err := internaljose.AssertJWEAlgKeyShape(jweAlg, key.Key); err != nil {
+					return errInvalidClientMetadata("jwks contains an unsupported key")
+				}
+				continue
+			}
+			if key.Use == "enc" {
+				return errInvalidClientMetadata("jwks signing key must not use use=enc")
+			}
 			if err := internaljose.AssertAlgKeyShape(key.Algorithm, key.Key); err != nil {
 				return errInvalidClientMetadata("jwks contains an unsupported key")
 			}
@@ -571,6 +680,51 @@ func validateInlineJWKS(raw json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+//nolint:gocognit // Key eligibility combines requested, declared, and inferred algorithm shape checks.
+func hasSigningKey(keys []internaljose.JWK, requestedAlg string) bool {
+	for _, key := range keys {
+		if key.Use != "" && key.Use != "sig" {
+			continue
+		}
+		if requestedAlg != "" && key.Algorithm != "" && key.Algorithm != requestedAlg {
+			continue
+		}
+		alg := requestedAlg
+		if alg == "" {
+			alg = key.Algorithm
+		}
+		if alg == "" {
+			if _, _, _, ok := internaljose.KeyShape(key.Key); ok {
+				return true
+			}
+			continue
+		}
+		if internaljose.AssertAlgKeyShape(alg, key.Key) == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEncryptionKey(keys []internaljose.JWK, requestedAlg string, policy internaljose.JWEPolicy) bool {
+	alg, ok := internaljose.ParseJWEAlgPolicy(requestedAlg, policy)
+	if !ok {
+		return false
+	}
+	for _, key := range keys {
+		if key.Use != "" && key.Use != "enc" {
+			continue
+		}
+		if key.Algorithm != "" && key.Algorithm != requestedAlg {
+			continue
+		}
+		if internaljose.AssertJWEAlgKeyShape(alg, key.Key) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRequestObjectSigningAlg(alg string) error {

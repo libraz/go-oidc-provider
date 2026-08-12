@@ -74,6 +74,7 @@ func TestRegister_NarrowedEncryptionAlgs_AdmitsRetainedAlg(t *testing.T) {
 	body := minimalMetadata()
 	body["id_token_encrypted_response_alg"] = "ECDH-ES"
 	body["id_token_encrypted_response_enc"] = "A256GCM"
+	body["jwks_uri"] = "https://rp.test.invalid/jwks.json"
 
 	resp := f.post(t, body, iat)
 	defer resp.Body.Close()
@@ -99,6 +100,7 @@ func TestRegister_UnnarrowedOP_AdmitsEveryShippedAlg(t *testing.T) {
 			body := minimalMetadata()
 			body["id_token_encrypted_response_alg"] = alg
 			body["id_token_encrypted_response_enc"] = "A256GCM"
+			body["jwks_uri"] = "https://rp.test.invalid/jwks.json"
 
 			resp := f.post(t, body, iat)
 			defer resp.Body.Close()

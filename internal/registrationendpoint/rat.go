@@ -16,19 +16,20 @@ import (
 // enumeration), and finally verifies the presented hash against the
 // stored RAT.
 //
-// On success the function returns the resolved client; on any failure
-// it writes the response envelope and returns ok=false.
+// On success the function returns the resolved client and RAT record; on any
+// failure it writes the response envelope and returns ok=false. The RAT record
+// carries the immutable IAT scope ceiling used by management PUT rotations.
 func verifyRAT(
 	ctx context.Context,
 	w http.ResponseWriter,
 	r *http.Request,
 	deps Deps,
 	clientID string,
-) (*store.Client, bool) {
+) (*store.Client, *store.RegistrationAccessToken, bool) {
 	bearer, ok := bearerFromHeader(r.Header.Get("Authorization"))
 	if !ok {
 		writeInvalidToken(w, deps.Issuer, "registration access token is required")
-		return nil, false
+		return nil, nil, false
 	}
 	if clientID == "" {
 		// Defence in depth: the router enforces the path parameter,
@@ -36,7 +37,7 @@ func verifyRAT(
 		// {client_id} wildcard cannot exfiltrate RAT validity through
 		// a 404.
 		writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
-		return nil, false
+		return nil, nil, false
 	}
 	client, err := deps.Clients.GetClient(ctx, clientID)
 	if err != nil {
@@ -49,11 +50,11 @@ func verifyRAT(
 				ClientID: clientID,
 			})
 			writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
-			return nil, false
+			return nil, nil, false
 		}
 		deps.logger().Error("dcr.client.lookup_failed", "err", err, "client_id", clientID)
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
-		return nil, false
+		return nil, nil, false
 	}
 	if !sourceIsDynamic(client.Source) {
 		deps.logger().Warn("dcr.rat.invalid", "reason", "non_dynamic_client", "client_id", clientID)
@@ -64,7 +65,7 @@ func verifyRAT(
 			ClientID: clientID,
 		})
 		writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
-		return nil, false
+		return nil, nil, false
 	}
 	stored, err := deps.RegistrationAccessTokens.GetByClientID(ctx, clientID)
 	if err != nil {
@@ -77,11 +78,11 @@ func verifyRAT(
 				ClientID: clientID,
 			})
 			writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
-			return nil, false
+			return nil, nil, false
 		}
 		deps.logger().Error("dcr.rat.lookup_failed", "err", err, "client_id", clientID)
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
-		return nil, false
+		return nil, nil, false
 	}
 	if !constantTimeEqualString(hashSecret(bearer), stored.HashedValue) {
 		deps.logger().Warn("dcr.rat.invalid", "reason", "hash_mismatch", "client_id", clientID)
@@ -92,9 +93,9 @@ func verifyRAT(
 			ClientID: clientID,
 		})
 		writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
-		return nil, false
+		return nil, nil, false
 	}
-	return client, true
+	return client, stored, true
 }
 
 // sourceIsDynamic reports whether the client was registered via RFC

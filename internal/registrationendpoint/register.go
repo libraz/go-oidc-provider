@@ -58,6 +58,7 @@ type registrationResponse struct {
 	AuthorizationEncryptedResponseEnc string          `json:"authorization_encrypted_response_enc,omitempty"`
 	IntrospectionEncryptedResponseAlg string          `json:"introspection_encrypted_response_alg,omitempty"`
 	IntrospectionEncryptedResponseEnc string          `json:"introspection_encrypted_response_enc,omitempty"`
+	IntrospectionSignedResponseAlg    string          `json:"introspection_signed_response_alg,omitempty"`
 	PostLogoutRedirectURIs            []string        `json:"post_logout_redirect_uris,omitempty"`
 	BackchannelLogoutURI              string          `json:"backchannel_logout_uri,omitempty"`
 	BackchannelLogoutSessionRequired  bool            `json:"backchannel_logout_session_required,omitempty"`
@@ -211,6 +212,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
 		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
+		IntrospectionSignedResponseAlg:    m.IntrospectionSignedResponseAlg,
 		PostLogoutRedirectURIs:            slices.Clone(m.PostLogoutRedirectURIs),
 		BackchannelLogoutURI:              m.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
@@ -221,9 +223,10 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		return
 	}
 	ratRec := &store.RegistrationAccessToken{
-		ClientID:    clientID,
-		HashedValue: hashSecret(rat),
-		CreatedAt:   now,
+		ClientID:      clientID,
+		HashedValue:   hashSecret(rat),
+		AllowedScopes: slices.Clone(iatAllowedScopes(ver)),
+		CreatedAt:     now,
 	}
 	if err := deps.RegistrationAccessTokens.Put(ctx, ratRec); err != nil {
 		deps.logger().Error("dcr.rat.put_failed", "err", err, "client_id", clientID)
@@ -300,6 +303,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
 		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
+		IntrospectionSignedResponseAlg:    m.IntrospectionSignedResponseAlg,
 		PostLogoutRedirectURIs:            m.PostLogoutRedirectURIs,
 		BackchannelLogoutURI:              m.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,

@@ -11,12 +11,11 @@ import (
 
 // TestManage_Update_KeepsOperatorConfiguration walks the path an
 // operator actually takes: a client self-registers, the operator then
-// configures it further through the store (a resource-indicator
-// allow-list and the JWT introspection switch, neither of which the
-// registration wire shape carries), and the client later updates its own
-// display name. The operator's configuration must still be there
-// afterwards — the update is an edit of the submitted metadata, not a
-// re-creation of the record from it.
+// configures it further through the store (a resource-indicator allow-list
+// survives because it is not registration metadata, while the JWT
+// introspection switch is wire-expressed), and the client later updates its
+// own display name. The update preserves only operator-only configuration
+// and clears omitted registration metadata per RFC 7592 §2.2.
 func TestManage_Update_KeepsOperatorConfiguration(t *testing.T) {
 	t.Parallel()
 
@@ -53,8 +52,8 @@ func TestManage_Update_KeepsOperatorConfiguration(t *testing.T) {
 		t.Errorf("Resources=%v after update, want the operator-configured allow-list; the update "+
 			"rebuilt the record from the submitted metadata instead of editing it", stored.Resources)
 	}
-	if stored.IntrospectionSignedResponseAlg != "ES256" {
-		t.Errorf("IntrospectionSignedResponseAlg=%q after update, want ES256",
+	if stored.IntrospectionSignedResponseAlg != "" {
+		t.Errorf("IntrospectionSignedResponseAlg=%q after omitted PUT, want empty",
 			stored.IntrospectionSignedResponseAlg)
 	}
 	// The submitted members are still applied, so the preservation above

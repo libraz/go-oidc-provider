@@ -25,6 +25,7 @@ func TestValidateRedirectURIs_DefaultIPOnly(t *testing.T) {
 	}{
 		{"https-public", "https://rp.example.com/cb", false},
 		{"https-with-port", "https://rp.example.com:8443/cb", false},
+		{"https-empty-hostname", "https://:443/cb", true},
 		{"http-localhost", "http://localhost/cb", true},
 		{"http-localhost-port", "http://localhost:8080/cb", true},
 		{"http-localhost-mixed-case", "http://LocalHost/cb", true},
@@ -152,6 +153,8 @@ func TestValidateRedirectURIs_NativeApplicationType(t *testing.T) {
 		wantErr bool
 	}{
 		{"https", "https://app.example.com/cb", false},
+		{"https-without-authority", "https:/cb", true},
+		{"https-with-userinfo", "https://user@app.example.com/cb", true},
 		{"http-loopback-v4", "http://127.0.0.1:53682/cb", false},
 		{"http-loopback-v6", "http://[::1]:53682/cb", false},
 		{"http-localhost-no-flag", "http://localhost:53682/cb", false},

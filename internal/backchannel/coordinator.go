@@ -329,6 +329,17 @@ type Notice struct {
 	RequestID string
 }
 
+// ClientDeletionSnapshot is the pre-delete input for direct back-channel
+// logout fan-out. The registration endpoint obtains the client metadata and
+// a bounded subject page before removing the client and its grants; the
+// coordinator must not perform a post-delete ClientStore lookup because that
+// lookup is expected to fail. Subjects are de-duplicated and capped again by
+// [Coordinator.NotifyClientDeleted] as a defense in depth.
+type ClientDeletionSnapshot struct {
+	Client   *store.Client
+	Subjects []string
+}
+
 // Notify resolves the audience client list for the supplied notice
 // and dispatches a Logout Token to each one. The function blocks
 // until every delivery has completed (or the parent context has
@@ -360,6 +371,66 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 		}
 		return 0, resolutionErr
 	}
+	return c.dispatchTargets(ctx, targets, notice), resolutionErr
+}
+
+// NotifyClientDeleted delivers Logout Tokens for a client that has just been
+// removed from the registry. It consumes only the caller's pre-delete
+// snapshot, so the method remains usable after the ClientStore and GrantStore
+// rows have been deleted. The operation is synchronous and bounded by the
+// snapshot's subject count, coordinator concurrency, and caller context.
+//
+//nolint:gocognit // This linear target build retains every skip and audit reason beside its condition.
+func (c *Coordinator) NotifyClientDeleted(ctx context.Context, snapshot ClientDeletionSnapshot) (int, error) {
+	if snapshot.Client == nil {
+		return 0, errors.New("backchannel: ClientDeletionSnapshot.Client is nil")
+	}
+	if snapshot.Client.ID == "" {
+		return 0, errors.New("backchannel: ClientDeletionSnapshot.Client.ID is empty")
+	}
+	if snapshot.Client.BackchannelLogoutURI == "" || snapshot.Client.BackchannelLogoutSessionRequired {
+		return 0, nil
+	}
+	seen := make(map[string]struct{}, min(len(snapshot.Subjects), c.maxTargets))
+	targets := make([]Target, 0, min(len(snapshot.Subjects), c.maxTargets))
+	for _, rawSubject := range snapshot.Subjects {
+		if rawSubject == "" {
+			continue
+		}
+		if _, ok := seen[rawSubject]; ok {
+			continue
+		}
+		if len(targets) >= c.maxTargets {
+			break
+		}
+		seen[rawSubject] = struct{}{}
+		subject := rawSubject
+		if c.subjectProjector != nil {
+			projected, err := c.subjectProjector(ctx, rawSubject, snapshot.Client)
+			if err != nil {
+				c.emitResolutionFailure(ctx, Notice{Subject: rawSubject}, snapshot.Client.ID, "subject_projection", err)
+				continue
+			}
+			if projected == "" {
+				err := errors.New("subject projector returned an empty subject")
+				c.emitResolutionFailure(ctx, Notice{Subject: rawSubject}, snapshot.Client.ID, "subject_projection", err)
+				continue
+			}
+			subject = projected
+		}
+		targets = append(targets, Target{
+			ClientID: snapshot.Client.ID,
+			Subject:  subject,
+			URL:      snapshot.Client.BackchannelLogoutURI,
+		})
+	}
+	return c.dispatchTargets(ctx, targets, Notice{}), nil
+}
+
+func (c *Coordinator) dispatchTargets(ctx context.Context, targets []Target, notice Notice) int {
+	if len(targets) == 0 {
+		return 0
+	}
 	now := c.clock.Now().UTC()
 	iat := now.Unix()
 	exp := now.Add(c.tokenTTL).Unix()
@@ -381,7 +452,7 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 	}
 	close(jobs)
 	wg.Wait()
-	return len(targets), resolutionErr
+	return len(targets)
 }
 
 // NotifyDetached runs the [Coordinator.Notify] fan-out on a background

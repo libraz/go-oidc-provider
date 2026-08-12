@@ -139,6 +139,9 @@ func TestRegister_JWEAlgEncPair_Matrix(t *testing.T) {
 					_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 					body := minimalMetadata()
 					tc.mutate(body)
+					if tc.name == "both_set_admitted" {
+						body["jwks_uri"] = "https://rp.test.invalid/jwks.json"
+					}
 					resp := f.post(t, body, iat)
 					defer resp.Body.Close()
 					if resp.StatusCode != tc.wantStatus {

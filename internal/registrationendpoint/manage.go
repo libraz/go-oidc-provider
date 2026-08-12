@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
@@ -23,7 +24,7 @@ import (
 // here.
 func handleRead(w http.ResponseWriter, r *http.Request, deps Deps, clientID string) {
 	ctx := r.Context()
-	client, ok := verifyRAT(ctx, w, r, deps, clientID)
+	client, _, ok := verifyRAT(ctx, w, r, deps, clientID)
 	if !ok {
 		return
 	}
@@ -44,7 +45,7 @@ func handleRead(w http.ResponseWriter, r *http.Request, deps Deps, clientID stri
 // client.
 func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID string) {
 	ctx := r.Context()
-	existing, ok := verifyRAT(ctx, w, r, deps, clientID)
+	existing, rat, ok := verifyRAT(ctx, w, r, deps, clientID)
 	if !ok {
 		return
 	}
@@ -80,9 +81,9 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		metadata,
 		deps.AllowedGrantTypes,
 		deps.AllowedResponseTypes,
-		nil,   // PUT path does not re-check IAT scopes (the IAT was consumed at creation).
-		false, // PUT is RAT-authenticated, never the open-registration flow.
-		nil,   // PUT path does not apply the open-registration default scope.
+		ratAllowedScopes(rat), // immutable IAT ceiling; empty legacy RAT means unrestricted.
+		false,                 // PUT is RAT-authenticated, never the open-registration flow.
+		nil,                   // PUT path does not apply the open-registration default scope.
 		deps.Scopes,
 		deps.PairwiseEnabled,
 		deps.AllowLocalhostLoopback,
@@ -103,7 +104,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 			return
 		}
 	}
-	rotated, ok := rotateAndUpdate(ctx, w, deps, existing, canonical)
+	rotated, ok := rotateAndUpdateWithAllowedScopes(ctx, w, deps, existing, canonical, ratAllowedScopes(rat), extras.IntrospectionSignedResponseAlgPresent)
 	if !ok {
 		return
 	}
@@ -134,6 +135,18 @@ func rotateAndUpdate(
 	existing *store.Client,
 	m ClientMetadata,
 ) (rotatedRegistration, bool) {
+	return rotateAndUpdateWithAllowedScopes(ctx, w, deps, existing, m, nil, false)
+}
+
+func rotateAndUpdateWithAllowedScopes(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	existing *store.Client,
+	m ClientMetadata,
+	allowedScopes []string,
+	_ bool,
+) (rotatedRegistration, bool) {
 	rawRAT, err := newOpaqueID(ratBytes)
 	if err != nil {
 		deps.logger().Error("dcr.rat.generate_failed", "err", err, "client_id", existing.ID)
@@ -163,9 +176,10 @@ func rotateAndUpdate(
 	}
 	now := deps.now().UTC()
 	ratRec := &store.RegistrationAccessToken{
-		ClientID:    existing.ID,
-		HashedValue: hashSecret(rawRAT),
-		CreatedAt:   now,
+		ClientID:      existing.ID,
+		HashedValue:   hashSecret(rawRAT),
+		AllowedScopes: slices.Clone(allowedScopes),
+		CreatedAt:     now,
 	}
 	if err := deps.RegistrationAccessTokens.Put(ctx, ratRec); err != nil {
 		deps.logger().Error("dcr.rat.put_failed", "err", err, "client_id", existing.ID)
@@ -195,12 +209,11 @@ func rotateAndUpdate(
 //
 // Copying first is load-bearing. [store.Client] carries persisted
 // configuration the registration wire shape has no member for — the
-// RFC 8707 resource-indicator allow-list and the JWT-introspection
-// response switch — plus the identity and provenance the OP assigned at
-// creation. Rebuilding the record from the metadata alone would silently
-// discard all of it the first time the RP submits an update, so an
-// operator's out-of-band configuration would survive exactly until the
-// client next edited its own display name.
+// RFC 8707 resource-indicator allow-list — plus the identity and
+// provenance the OP assigned at creation. Rebuilding the record from the
+// metadata alone would silently discard all of it the first time the RP
+// submits an update, so an operator's out-of-band configuration would
+// survive exactly until the client next edited its own display name.
 //
 // The fields that deliberately do not come from the metadata are:
 //
@@ -215,6 +228,11 @@ func rotateAndUpdate(
 //     preserving the secret.
 func applyMetadataToClient(existing *store.Client, m ClientMetadata, secretHash string) *store.Client {
 	updated := *existing
+	// introspection_signed_response_alg is persisted client metadata. RFC
+	// 7592 §2.2 treats an omitted member as a request to clear it, just like
+	// the other metadata fields below; do not carry an operator's old value
+	// through a client-authenticated PUT that omits the member.
+	updated.IntrospectionSignedResponseAlg = normalizeIntrospectionSignedResponseAlg(m.IntrospectionSignedResponseAlg)
 	updated.RedirectURIs = slices.Clone(m.RedirectURIs)
 	updated.GrantTypes = slices.Clone(m.GrantTypes)
 	updated.ResponseTypes = slices.Clone(m.ResponseTypes)
@@ -255,6 +273,16 @@ func applyMetadataToClient(existing *store.Client, m ClientMetadata, secretHash 
 	updated.BackchannelLogoutURI = m.BackchannelLogoutURI
 	updated.BackchannelLogoutSessionRequired = m.BackchannelLogoutSessionRequired
 	return &updated
+}
+
+// ratAllowedScopes projects the immutable scope ceiling from a verified RAT.
+// A nil RAT is treated as unrestricted defensively; the verifier only returns
+// nil on failure, and callers invoke this helper after checking ok.
+func ratAllowedScopes(rat *store.RegistrationAccessToken) []string {
+	if rat == nil || len(rat.AllowedScopes) == 0 {
+		return nil
+	}
+	return slices.Clone(rat.AllowedScopes)
 }
 
 func validateManageUpdateRequest(existing *store.Client, clientID string, extras metadataExtras) error {
@@ -330,11 +358,15 @@ func secretMaterialForUpdate(existing *store.Client, confidential, highEntropy b
 // that maintain those indexes wire the cascade through the hook, whose
 // contract is to revoke every access_token / refresh_token / session
 // the deleted client holds and to deliver Back-Channel Logout.
+//
+//nolint:gocognit // Delete ordering and each non-rollbackable cascade outcome are intentionally explicit.
 func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID string) {
 	ctx := r.Context()
-	if _, ok := verifyRAT(ctx, w, r, deps, clientID); !ok {
+	client, _, ok := verifyRAT(ctx, w, r, deps, clientID)
+	if !ok {
 		return
 	}
+	snapshotClient, snapshotSubjects := snapshotDeletedClient(ctx, deps, client)
 	// Delete the client record first, then the RAT. The reverse
 	// order produces the unrecoverable state "RAT gone, client
 	// alive": the RP gets a 500 but can no longer invoke the
@@ -365,6 +397,21 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	// Backends that do not implement the optional interface fall
 	// through silently, preserving the prior behaviour.
 	cascadeRevokeByClient(ctx, deps, clientID)
+	if snapshotClient != nil {
+		if deps.Backchannel != nil {
+			if _, err := deps.Backchannel.NotifyClientDeleted(ctx, backchannel.ClientDeletionSnapshot{
+				Client:   snapshotClient,
+				Subjects: snapshotSubjects,
+			}); err != nil {
+				deps.logger().Error("dcr.client.backchannel_delete_failed", "err", err, "client_id", clientID)
+			}
+		}
+		if deps.OnClientDeletedSnapshot != nil {
+			if err := deps.OnClientDeletedSnapshot(ctx, snapshotClient, slices.Clone(snapshotSubjects)); err != nil {
+				deps.logger().Error("dcr.client.snapshot_cascade_failed", "err", err, "client_id", clientID)
+			}
+		}
+	}
 	if deps.OnClientDeleted != nil {
 		if err := deps.OnClientDeleted(ctx, clientID); err != nil {
 			// Cascade failure does not roll the deletion back: the
@@ -382,6 +429,44 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	})
 	stampNoStore(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func snapshotDeletedClient(ctx context.Context, deps Deps, client *store.Client) (*store.Client, []string) {
+	if client == nil || deps.GrantSubjects == nil {
+		return nil, nil
+	}
+	snapshot := cloneClientForDeletion(client)
+	page, err := deps.GrantSubjects.ListSubjectsByClient(ctx, client.ID, "", deps.MaxDeleteSubjects)
+	if err != nil {
+		deps.logger().Error("dcr.client.subject_snapshot_failed", "err", err, "client_id", client.ID)
+		return nil, nil
+	}
+	if page.NextCursor != "" {
+		deps.logger().Warn("dcr.client.subject_snapshot_bounded", "client_id", client.ID, "limit", deps.MaxDeleteSubjects)
+	}
+	if len(page.Subjects) > deps.MaxDeleteSubjects {
+		page.Subjects = page.Subjects[:deps.MaxDeleteSubjects]
+	}
+	return snapshot, slices.Clone(page.Subjects)
+}
+
+func cloneClientForDeletion(client *store.Client) *store.Client {
+	snapshot := *client
+	snapshot.RedirectURIs = slices.Clone(client.RedirectURIs)
+	snapshot.PostLogoutRedirectURIs = slices.Clone(client.PostLogoutRedirectURIs)
+	snapshot.GrantTypes = slices.Clone(client.GrantTypes)
+	snapshot.ResponseTypes = slices.Clone(client.ResponseTypes)
+	snapshot.Scopes = slices.Clone(client.Scopes)
+	snapshot.Resources = slices.Clone(client.Resources)
+	snapshot.Contacts = slices.Clone(client.Contacts)
+	snapshot.DefaultACRValues = slices.Clone(client.DefaultACRValues)
+	snapshot.RequestURIs = slices.Clone(client.RequestURIs)
+	snapshot.JWKs = append(json.RawMessage(nil), client.JWKs...)
+	if client.DefaultMaxAge != nil {
+		value := *client.DefaultMaxAge
+		snapshot.DefaultMaxAge = &value
+	}
+	return &snapshot
 }
 
 // clientToResponse projects a [store.Client] back onto the RFC 7591
@@ -432,6 +517,7 @@ func clientToResponse(c *store.Client, deps Deps, rotatedRAT, rawSecret string) 
 		AuthorizationEncryptedResponseEnc: c.AuthorizationEncryptedResponseEnc,
 		IntrospectionEncryptedResponseAlg: c.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: c.IntrospectionEncryptedResponseEnc,
+		IntrospectionSignedResponseAlg:    normalizeIntrospectionSignedResponseAlg(c.IntrospectionSignedResponseAlg),
 		PostLogoutRedirectURIs:            slices.Clone(c.PostLogoutRedirectURIs),
 		BackchannelLogoutURI:              c.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired:  c.BackchannelLogoutSessionRequired,

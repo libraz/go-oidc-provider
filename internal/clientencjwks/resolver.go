@@ -167,6 +167,12 @@ func (r *Resolver) resolveJWKS(
 	ctx context.Context,
 	client *store.Client,
 ) (*josev4.JSONWebKeySet, error) {
+	if len(client.JWKs) > 0 && client.JWKsURI != "" {
+		// DCR rejects the ambiguous pair, but static and legacy stores can
+		// still contain it. Do not silently prefer one source: outbound
+		// encryption requires exactly one key source and must fail closed.
+		return nil, fmt.Errorf("%w: both jwks and jwks_uri are configured", ErrJWKSConfigured)
+	}
 	if len(client.JWKs) > 0 {
 		return r.fetcher.ParseKeySet(client.JWKs)
 	}
