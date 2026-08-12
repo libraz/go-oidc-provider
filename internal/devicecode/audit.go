@@ -34,14 +34,20 @@ const (
 	AuditAuthorizationUnboundRejected = string(auditevent.AuditDeviceAuthorizationUnboundRejected)
 
 	// AuditVerificationApproved is emitted when the verification
-	// page transitions a Pending record to Approved. Extras carry:
-	// client_id, subject, scope, resource.
+	// page transitions a Pending record to Approved, from
+	// devicecodekit.ApproveUserCode once the substore has accepted
+	// the transition. An embedder driving the transition through the
+	// substore directly, rather than through that helper, emits it
+	// itself. Extras carry: subject.
 	AuditVerificationApproved = string(auditevent.AuditDeviceCodeVerificationApproved)
 
 	// AuditVerificationDenied is emitted when the verification page
-	// transitions a Pending record to Denied. Extras carry:
-	// client_id, reason ("user_denied" or
-	// "user_code_lockout" or an embedder-supplied value).
+	// transitions a Pending record to Denied, from either
+	// devicecodekit.DenyUserCode (the user declining) or the
+	// helper's own user_code brute-force lockout. Extras carry:
+	// reason ("user_code_lockout" for the lockout, or the
+	// embedder-supplied value passed to DenyUserCode); the lockout
+	// additionally carries client_id, strikes and max_strikes.
 	AuditVerificationDenied = string(auditevent.AuditDeviceCodeVerificationDenied)
 
 	// AuditUserCodeBruteForce is emitted on each failed user_code

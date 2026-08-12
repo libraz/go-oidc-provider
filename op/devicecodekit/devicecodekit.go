@@ -342,6 +342,17 @@ func ApproveUserCode(ctx context.Context, deps *Deps, userCode, subject string, 
 			return err
 		}
 	}
+	// Emitted only after the substore has accepted the transition, so
+	// the record says "approved" for every event in the log. The
+	// substore's compare-and-swap is what makes this at-most-once: a
+	// second approval of the same record returns ErrConflict above and
+	// never reaches here.
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:    devicecode.AuditVerificationApproved,
+		Level:   audit.LevelInfo,
+		Message: "device_code approved at the verification page",
+		ActorID: subject,
+	})
 	return nil
 }
 
@@ -368,6 +379,16 @@ func DenyUserCode(ctx context.Context, deps *Deps, userCode, reason string) erro
 			return err
 		}
 	}
+	// The brute-force lockout raises the same event from recordStrike.
+	// Both are genuine denials of the same record and only one can win
+	// the substore's compare-and-swap, so the reason extra is what
+	// separates a user declining from the OP locking the record.
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:    devicecode.AuditVerificationDenied,
+		Level:   audit.LevelInfo,
+		Message: "device_code denied at the verification page",
+		Extras:  map[string]any{"reason": reason},
+	})
 	return nil
 }
 

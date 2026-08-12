@@ -38,6 +38,14 @@ func (c *captureEmitter) names() []string {
 	return out
 }
 
+// snapshot returns a copy of the captured events in emission order,
+// for tests that assert on a field rather than just on the name.
+func (c *captureEmitter) snapshot() []audit.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]audit.Event(nil), c.events...)
+}
+
 // containsName reports whether any captured event has the supplied
 // name.
 func (c *captureEmitter) containsName(name string) bool {
