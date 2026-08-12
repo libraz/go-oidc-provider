@@ -273,6 +273,34 @@ whose OP serves only machine-to-machine grants.
 
 ### Fixed
 
+- The godoc on ten catalogued audit events no longer claims they fire. Beyond
+  the four now wired above, `op.AuditMFARequired`, `op.AuditStepUpRequired`,
+  `op.AuditStepUpSuccess`, `op.AuditConsentGrantedDelta`,
+  `op.AuditConsentSkippedExisting`, `op.AuditConsentRevoked`,
+  `op.AuditLogoutRPInitiated`, `op.AuditPKCEViolation`,
+  `op.AuditRedirectURIMismatch` and `op.AuditAlgLegacyUsed` are catalogued
+  vocabulary the OP does not emit, and each now says so along with the signal
+  to use instead where one exists. An absent event among them means "not
+  instrumented", not "did not happen" — the previous wording made the opposite
+  reading reasonable, which is the worse way for an alert to be wrong.
+
+  `op.AuditCIBAAuthDeviceApproved` and `op.AuditCIBAAuthDeviceDenied` are
+  corrected the same way: the authentication device calls
+  `store.CIBARequestStore.Approve` / `Deny` directly and no library code sits
+  between that call and the store, so the OP has nowhere to observe the
+  decision. The names stay catalogued so a deployment raising them from its
+  own authentication device lands in the same vocabulary.
+
+  A test now enforces the distinction mechanically — every catalogued name
+  must either be reached by an in-tree emitter or be declared unemitted with a
+  reason, and a declaration that goes stale because the emitter later lands
+  fails just as loudly as a missing one.
+
+  Step-up is the clearest case: the OP has no step-up state machine at all.
+  `op.StepUpChallenge` builds the RFC 9470 challenge value and the resource
+  server that sends it owns the decision, so the events belong to the
+  embedder's pipeline rather than the OP's.
+
 - A JAR failure gets the same description at every endpoint that consumes a
   signed request object. `/authorize`, `/par` and `/bc-authorize` each carried
   their own copy of the sentinel-to-description table, and the copies had
@@ -651,6 +679,32 @@ whose OP serves only machine-to-machine grants.
   v3.20 and `golang.org/x/oauth2` v0.30 → v0.36.
 
 ### Added
+
+- The authenticator chain now raises `op.AuditLoginSuccess`,
+  `op.AuditLoginFailed`, `op.AuditMFASuccess` and `op.AuditMFAFailed`, one per
+  factor as it resolves — the `login.*` pair for the factor that first
+  identifies the user, the `mfa.*` pair for every factor after it. The four
+  names were catalogued and exported from the first release but nothing ever
+  emitted them, which also left `oidc_login_attempts_total` permanently at
+  zero for deployments using `op.WithPrometheus`: a dashboard watching for
+  brute force showed a flat line whether or not one was under way. Both the
+  legacy authenticator chain and the login-flow path reach the same emission
+  point, so the count is one per resolved factor on either.
+
+  The event carries the subject as `ActorID` on the failure path as well as
+  the success path. The separate `op.LoginAttemptObserver` feed deliberately
+  withholds it there — an observer runs inside the attempt and can steer the
+  response, so populating it would make the hook an enumeration oracle — but
+  the audit stream reaches the deployment's own sink and nothing on the wire.
+
+- `devicecodekit.ApproveUserCode` and `devicecodekit.DenyUserCode` now raise
+  `op.AuditDeviceCodeVerificationApproved` /
+  `op.AuditDeviceCodeVerificationDenied` once the substore has accepted the
+  transition. Only the brute-force lockout emitted before, so the audit stream
+  recorded every device authorization the OP refused and none that a user
+  granted — the log could not answer who authorised a device. The substore's
+  compare-and-swap bounds the emission to one per record, so a resubmitted
+  verification page does not double-count.
 
 - `oidcsql.Store.GC` now sweeps the refresh-token table, reported as
   `GCStats.RefreshTokens`. It was the one table the adapter wrote a row to on
