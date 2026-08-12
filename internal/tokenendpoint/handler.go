@@ -222,7 +222,9 @@ type Deps struct {
 	StrictOfflineAccess bool
 
 	// OpenIDScopeOptional mirrors
-	// [authorizeendpoint.Deps.OpenIDScopeOptional]: the deployment serves
+	// [authorize.Policy.OpenIDScopeOptional], which the authorization
+	// endpoints apply to the request that produced the grant being
+	// exchanged here: the deployment serves
 	// plain OAuth 2.0 clients alongside OIDC ones, so a granted scope
 	// without "openid" is legitimate. The flag lifts the "openid"
 	// precondition from the refresh-token issuance gate, which otherwise

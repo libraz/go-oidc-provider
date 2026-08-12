@@ -448,7 +448,7 @@ func TestAuthorize_FirstParty_AuthorizationDetailsSuppressesSkip(t *testing.T) {
 	t.Parallel()
 
 	h := newFirstPartyHarness(t, func(d *authorizeendpoint.Deps) {
-		d.AuthorizationDetailTypes = map[string]authorizationdetails.Validator{
+		d.ExtensionPolicy.AuthorizationDetailTypes = map[string]authorizationdetails.Validator{
 			"payment_initiation": func(context.Context, map[string]any, *store.Client) error { return nil },
 		}
 	})
@@ -499,7 +499,7 @@ func TestAuthorize_NewAuthorizationDetailsForcesConsent(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, func(d *authorizeendpoint.Deps) {
-		d.AuthorizationDetailTypes = map[string]authorizationdetails.Validator{
+		d.ExtensionPolicy.AuthorizationDetailTypes = map[string]authorizationdetails.Validator{
 			"payment_initiation": func(context.Context, map[string]any, *store.Client) error { return nil },
 		}
 	})

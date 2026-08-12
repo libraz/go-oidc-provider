@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
-	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
@@ -81,12 +81,14 @@ type Deps struct {
 	// intersection still runs.
 	Scopes *scoperegistry.Registry
 
-	// AuthorizationDetailTypes is the RFC 9396 registry (accepted "type"
-	// → validator). When non-empty the handler validates a pushed
-	// authorization_details parameter and stores the validated elements
-	// on the snapshot; the /authorize consumption path then reuses them
-	// without re-parsing. Nil / empty ignores the parameter.
-	AuthorizationDetailTypes map[string]authorizationdetails.Validator
+	// ExtensionPolicy is [authorizeendpoint.Deps.ExtensionPolicy]. RFC
+	// 9126 has the AS validate request parameters when the request_uri
+	// is issued, so the RFC 9396 authorization_details, Grant
+	// Management, and "dpop_jkt" gates all run at push time as well —
+	// against the identical value, because a rule that fires only at
+	// /authorize would let /par mint a request_uri whose one-time value
+	// the client spends on a request the next gate refuses.
+	ExtensionPolicy authorize.ExtensionPolicy
 
 	// Clock supplies the current wall-clock reading. A nil Clock falls
 	// back to [timex.SystemClock].
@@ -163,34 +165,12 @@ type Deps struct {
 	// constructor in [op] enforces that pairing at startup.
 	RequireSignedRequestObject bool
 
-	// RequirePKCE, when true, makes /par reject any request that omits
-	// a code_challenge. The flag mirrors
-	// [authorizeendpoint.Deps.RequirePKCE]; both endpoints share a
-	// validator so a profile that mandates PKCE blocks the same way
-	// regardless of whether the client pushes the request first or
-	// posts the parameters straight to /authorize.
-	RequirePKCE bool
-
-	// RequireNonce, when true, makes /par reject any request that
-	// omits the nonce parameter. The flag mirrors
-	// [authorizeendpoint.Deps.RequireNonce]; both endpoints share a
-	// validator so a profile that mandates nonce blocks the same way
-	// at /par and /authorize.
-	RequireNonce bool
-
-	// RequireStateOrNonce, when true, makes /par reject any request
-	// that carries neither state nor nonce. The flag mirrors
-	// [authorizeendpoint.Deps.RequireStateOrNonce]; the FAPI 2.0
-	// §5.3.2.1.1 "either a state or a nonce" rule is enforced at
-	// both endpoints so a request loses either way.
-	RequireStateOrNonce bool
-
-	// OpenIDScopeOptional mirrors
-	// [authorizeendpoint.Deps.OpenIDScopeOptional]: when true, /par
-	// accepts requests whose scope does not include "openid". The
-	// flag is forwarded verbatim to [authorize.Policy.OpenIDScopeOptional]
-	// so /par and /authorize stay in lock-step.
-	OpenIDScopeOptional bool
+	// RequestPolicy is [authorizeendpoint.Deps.RequestPolicy]. Both
+	// endpoints run the same validator over the same policy, so a
+	// profile that mandates PKCE, a nonce, or state-or-nonce blocks a
+	// request the same way whether the client pushes it first or posts
+	// the parameters straight to /authorize.
+	RequestPolicy authorize.Policy
 
 	// ClaimsParameterEnabled mirrors
 	// [authorizeendpoint.Deps.ClaimsParameterEnabled] for the /par
@@ -208,18 +188,6 @@ type Deps struct {
 	// the wire response — collapsed onto RFC 6749 §5.2
 	// "invalid_client" — deliberately hides.
 	Audit audit.Emitter
-
-	// GrantManagementEnabled / GrantManagementActions /
-	// GrantManagementActionRequired mirror the authorize endpoint so the
-	// Grant Management draft's grant_management_action / grant_id
-	// parameters are validated at push time too (RFC 9126: the AS
-	// validates request parameters when the request_uri is issued), not
-	// only when the request_uri is later consumed at /authorize. The
-	// action set is the wire-string-keyed projection of the configured
-	// authorize-time actions.
-	GrantManagementEnabled        bool
-	GrantManagementActions        map[string]bool
-	GrantManagementActionRequired bool
 }
 
 // auditEmitter returns the configured audit sink, or a [audit.Discard]

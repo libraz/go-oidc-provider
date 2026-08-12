@@ -78,12 +78,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	applyClaimsToggle(req, deps.ClaimsParameterEnabled)
-	if err := req.Validate(client, deps.Scopes, authorize.Policy{
-		PKCERequired:         deps.RequirePKCE,
-		NonceRequired:        deps.RequireNonce,
-		StateOrNonceRequired: deps.RequireStateOrNonce,
-		OpenIDScopeOptional:  deps.OpenIDScopeOptional,
-	}); err != nil {
+	if err := req.Validate(client, deps.Scopes, deps.RequestPolicy); err != nil {
 		writeAuthorizeError(w, err)
 		return
 	}
@@ -96,8 +91,9 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 // validateRequestExtensions runs the RFC 9396 authorization_details, Grant
 // Management draft, and RFC 9449 §10.1 "dpop_jkt" gates at push time.
 //
-// The rules live in [authorize.Request.ValidateExtensions], shared verbatim
-// with the authorization endpoint. That sharing is the point: /par and
+// The rules live in [authorize.Request.ValidateExtensions] and the policy
+// in [Deps.ExtensionPolicy], both shared with the authorization endpoint
+// rather than reassembled here. That sharing is the point: /par and
 // /authorize are consecutive gates on the same request, and a rule that
 // fires at only one of them mints a request_uri whose one-time value the RP
 // spends on a request the next gate refuses, stranding the user with no way
@@ -117,16 +113,7 @@ func validateRequestExtensions(
 	req *authorize.Request,
 	client *store.Client,
 ) bool {
-	rejection := req.ValidateExtensions(r.Context(), client, authorize.ExtensionPolicy{
-		AuthorizationDetailTypes:      deps.AuthorizationDetailTypes,
-		GrantManagementEnabled:        deps.GrantManagementEnabled,
-		GrantManagementActions:        deps.GrantManagementActions,
-		GrantManagementActionRequired: deps.GrantManagementActionRequired,
-		// A nil verifier is exactly "the OP cannot honour a §10.1
-		// commitment": it can neither bind the issued token to the
-		// committed key nor demand proof of possession at /token.
-		DPoPEnabled: deps.DPoP != nil,
-	})
+	rejection := req.ValidateExtensions(r.Context(), client, deps.ExtensionPolicy)
 	if rejection == nil {
 		return true
 	}
@@ -191,54 +178,15 @@ func consumeJARRequestObject(
 // envelope. The taxonomy mirrors the authorize endpoint (alg /
 // signature / claim failures map to invalid_request_object;
 // client_id mismatches map to invalid_request) so embedders see a
-// uniform shape across the two surfaces.
+// uniform shape across the two surfaces. The description comes from
+// [jar.Description] so the two surfaces cannot disagree about the
+// wording either.
 func writeJARError(w http.ResponseWriter, err error) {
 	if errors.Is(err, jar.ErrClientIDMismatch) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "client_id mismatch in request object")
+		writeError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
 		return
 	}
-	writeError(w, http.StatusBadRequest, errInvalidRequestObject, jarDescriptionFor(err))
-}
-
-// jarDescriptions is the sentinel-to-string catalogue [jarDescriptionFor]
-// walks. The order matters: every JAR sentinel may unwrap onto
-// [jar.ErrParse] (via [fmt.Errorf]), so the parse class lives at the
-// tail and a more specific cause wins when the wrapper chain reaches
-// it. Mirrors the authorize-endpoint table — duplicated rather than
-// shared because the parendpoint package does not import
-// authorizeendpoint.
-//
-//nolint:gochecknoglobals // immutable error-to-description catalogue.
-var jarDescriptions = []struct {
-	sentinel error
-	desc     string
-}{
-	{jar.ErrAlgNotAllowed, "request object alg is not allowed"},
-	{jar.ErrSigInvalid, "request object signature is invalid"},
-	{jar.ErrIssMismatch, "request object iss does not match client_id"},
-	{jar.ErrAudMismatch, "request object aud does not match issuer"},
-	{jar.ErrExpired, "request object is expired or too old"},
-	{jar.ErrNotYetValid, "request object is not yet valid"},
-	{jar.ErrNestedRequest, "request object must not contain nested request parameters"},
-	{jar.ErrJWKSFetch, "client jwks fetch failed"},
-	{jar.ErrNoMatchingJWK, "no matching client jwk"},
-	{jar.ErrJWKSConfigured, "client has no JWKs or JWKsURI"},
-	{jar.ErrJTIMissing, "request object missing jti"},
-	{jar.ErrJTIReplayed, "request object jti already consumed"},
-	{jar.ErrEncryptionUnsupported, "encrypted request objects are not supported"},
-	{jar.ErrEncryptionAlgNotAllowed, "request object encryption alg/enc is not allowed"},
-	{jar.ErrDecryptFailed, "request object could not be decrypted"},
-	{jar.ErrParse, "request object is malformed"},
-}
-
-// jarDescriptionFor returns a short description for a JAR sentinel.
-func jarDescriptionFor(err error) string {
-	for _, entry := range jarDescriptions {
-		if errors.Is(err, entry.sentinel) {
-			return entry.desc
-		}
-	}
-	return "request object verification failed"
+	writeError(w, http.StatusBadRequest, errInvalidRequestObject, jar.Description(err))
 }
 
 // authenticateWithDPoP runs DPoP proof verification and client

@@ -7,7 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
-	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
@@ -120,26 +120,15 @@ type Deps struct {
 	// fresh grant when consent succeeds.
 	Grants store.GrantStore
 
-	// AuthorizationDetailTypes is the RFC 9396 registry: accepted
-	// "type" → validator. A non-empty map enables authorization_details
-	// validation at /authorize (feature.RAR). Nil / empty means the
-	// parameter is ignored as an unknown extension.
-	AuthorizationDetailTypes map[string]authorizationdetails.Validator
-
-	// GrantManagementEnabled gates the OAuth 2.0 Grant Management draft.
-	// When false the grant_management_action / grant_id parameters are
-	// ignored as unknown extensions.
-	GrantManagementEnabled bool
-
-	// GrantManagementActions is the accepted action set (the wire
-	// strings "create" / "replace" / "merge" matter at /authorize). A
-	// request naming an unsupported action is rejected.
-	GrantManagementActions map[string]bool
-
-	// GrantManagementActionRequired rejects an authorization request
-	// that omits grant_management_action when true (the draft's
-	// grant_management_action_required).
-	GrantManagementActionRequired bool
+	// ExtensionPolicy configures the gates that run after the request
+	// itself validates: RFC 9396 authorization_details, the Grant
+	// Management draft parameters, and the RFC 9449 §10.1 "dpop_jkt"
+	// commitment. The value is taken whole rather than reassembled from
+	// per-flag fields so /authorize and /par cannot be handed different
+	// policies — they are consecutive gates on the same request, and a
+	// rule that fires at only one of them mints a request_uri the next
+	// gate refuses.
+	ExtensionPolicy authorize.ExtensionPolicy
 
 	// Interactions is the substore for in-progress UI interactions. The
 	// handler writes a record on /authorize → /interaction redirects and
@@ -166,21 +155,6 @@ type Deps struct {
 	// the corresponding metadata is suppressed in discovery. The
 	// library wires this only when the [feature.JAR] flag is enabled.
 	JAR *jar.Verifier
-
-	// DPoPEnabled reports whether the OP can honour an RFC 9449 §10.1
-	// "dpop_jkt" commitment. The authorization endpoint never verifies a
-	// DPoP proof itself — it only records the committed thumbprint on the
-	// authorization code — so it has no verifier of its own to infer the
-	// answer from and the wiring layer MUST set this from the same
-	// condition that decides whether the token endpoint gets a DPoP
-	// verifier. When false, a request carrying "dpop_jkt" is rejected
-	// with invalid_request rather than minting a code the token endpoint
-	// is guaranteed to refuse (see [authorize.ExtensionPolicy.DPoPEnabled]).
-	//
-	// The zero value therefore means "this OP cannot honour dpop_jkt",
-	// which is the correct reading for a handler built without the
-	// field: a deployment that does support DPoP says so explicitly.
-	DPoPEnabled bool
 
 	// Sessions is the chooser-group session manager. The handler reads
 	// the active session via [sessions.Manager.Resolve] before deciding
@@ -302,38 +276,13 @@ type Deps struct {
 	// already opted into JARM.
 	RequireJARMResponseMode bool
 
-	// RequirePKCE, when true, makes /authorize reject any request that
-	// omits a code_challenge. The library's overall posture is OAuth
-	// 2.1 — PKCE is good practice everywhere — but the OpenID Connect
-	// Basic certification profile drives the OP without PKCE, so the
-	// flag is opt-in rather than always-on. Set this whenever an
-	// active [profile.Profile] mandates PKCE (FAPI 2.0); leave it
-	// false to permit the OIDC vanilla path. The flag is forwarded
-	// verbatim to [authorize.Policy.PKCERequired].
-	RequirePKCE bool
-
-	// RequireNonce, when true, makes /authorize reject any request
-	// that omits the nonce parameter. OIDC Core 1.0 makes nonce
-	// OPTIONAL for code-flow. The flag is forwarded verbatim to
-	// [authorize.Policy.NonceRequired].
-	RequireNonce bool
-
-	// RequireStateOrNonce, when true, makes /authorize reject any
-	// request that carries neither state nor nonce. FAPI 2.0
-	// §5.3.2.1.1 ("include either a state or a nonce parameter") is
-	// the canonical source; vanilla OIDC Core leaves this false
-	// because state is RECOMMENDED but not REQUIRED. The flag is
-	// forwarded verbatim to [authorize.Policy.StateOrNonceRequired].
-	RequireStateOrNonce bool
-
-	// OpenIDScopeOptional, when true, makes /authorize accept
-	// requests whose scope does not include "openid". The library
-	// default (false) matches OIDC Core 1.0 §3.1.2.1; embedders flip
-	// this through [op.WithOpenIDScopeOptional] when they intend to
-	// serve plain OAuth 2.0 authorization_code flows alongside (or
-	// instead of) OIDC. The flag is forwarded verbatim to
-	// [authorize.Policy.OpenIDScopeOptional].
-	OpenIDScopeOptional bool
+	// RequestPolicy carries the profile-conditional requirements
+	// [authorize.Request.Validate] enforces: whether PKCE, a nonce, or
+	// at least one of state / nonce is mandatory, and whether the
+	// "openid" scope may be omitted. Like [Deps.ExtensionPolicy] the
+	// value is taken whole so /par validates every request against the
+	// same policy /authorize will apply to it moments later.
+	RequestPolicy authorize.Policy
 
 	// RequirePAR, when true, makes /authorize reject any request that
 	// did not arrive via a [RFC 9126] pushed authorization request_uri.

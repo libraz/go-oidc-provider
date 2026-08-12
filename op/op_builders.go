@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/chooser"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
@@ -266,6 +267,44 @@ func buildOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {
 		}
 	}
 	return allow, nil
+}
+
+// authorizeRequestPolicy renders the profile-conditional requirements
+// [authorize.Request.Validate] enforces. /authorize and /par are handed
+// this one value rather than a policy each reassembles from its own
+// flags: the two are consecutive gates on a single request, so a
+// requirement honoured at only one of them lets /par mint a request_uri
+// whose one-time value the client then spends on a request /authorize
+// refuses. Building the policy once is what makes that divergence
+// impossible to introduce — a new requirement is added here and both
+// gates see it.
+func authorizeRequestPolicy(cfg *config) authorize.Policy {
+	return authorize.Policy{
+		PKCERequired:         cfg.requirePKCE(),
+		NonceRequired:        cfg.requireNonce(),
+		StateOrNonceRequired: cfg.requireStateOrNonce(),
+		OpenIDScopeOptional:  cfg.openIDScopeOptional,
+	}
+}
+
+// authorizeExtensionPolicy renders the gates that run once a request has
+// validated — RFC 9396 authorization_details, the Grant Management draft
+// parameters, and the RFC 9449 §10.1 "dpop_jkt" commitment — for the
+// same two endpoints and for the same reason as [authorizeRequestPolicy].
+//
+// DPoPEnabled is read from the feature flag, not from the constructed
+// verifier. The two answers agree by construction ([buildDPoPVerifier]
+// returns a nil verifier exactly when the flag is off), but /authorize
+// never verifies a proof and so holds no verifier to consult; the flag
+// is the only form of the question both endpoints can ask.
+func authorizeExtensionPolicy(cfg *config) authorize.ExtensionPolicy {
+	return authorize.ExtensionPolicy{
+		AuthorizationDetailTypes:      authorizationDetailRegistry(cfg),
+		GrantManagementEnabled:        cfg.grantManagementEnabled,
+		GrantManagementActions:        grantManagementActionSet(cfg),
+		GrantManagementActionRequired: cfg.grantManagementActionRequired,
+		DPoPEnabled:                   featureEnabled(cfg.features, feature.DPoP),
+	}
 }
 
 // buildDPoPVerifier constructs the RFC 9449 verifier when the [feature.DPoP]

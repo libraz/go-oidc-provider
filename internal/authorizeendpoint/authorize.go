@@ -82,12 +82,7 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		return
 	}
 	applyClientAuthorizeDefaults(req, client)
-	if err := req.Validate(client, deps.Scopes, authorize.Policy{
-		PKCERequired:         deps.RequirePKCE,
-		NonceRequired:        deps.RequireNonce,
-		StateOrNonceRequired: deps.RequireStateOrNonce,
-		OpenIDScopeOptional:  deps.OpenIDScopeOptional,
-	}); err != nil {
+	if err := req.Validate(client, deps.Scopes, deps.RequestPolicy); err != nil {
 		writeAuthorizeValidationError(w, r, req, deps, err)
 		return
 	}
@@ -124,9 +119,10 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 // authorization_details, the Grant Management draft parameters, and the
 // RFC 9449 §10.1 "dpop_jkt" commitment.
 //
-// The rules themselves live in [authorize.Request.ValidateExtensions],
-// shared verbatim with the pushed-authorization-request endpoint so the
-// two consecutive gates on the same request cannot disagree. This
+// The rules live in [authorize.Request.ValidateExtensions] and the
+// policy in [Deps.ExtensionPolicy], both shared with the
+// pushed-authorization-request endpoint so the two consecutive gates on
+// the same request cannot disagree about either. This
 // function only renders: the checks run after [authorize.Request.Validate]
 // so redirect_uri has been matched against the client's registration and
 // the rejection can take the endpoint's normal channel (JARM / form_post
@@ -140,13 +136,7 @@ func validateRequestExtensions(
 	req *authorize.Request,
 	client *store.Client,
 ) bool {
-	rejection := req.ValidateExtensions(r.Context(), client, authorize.ExtensionPolicy{
-		AuthorizationDetailTypes:      deps.AuthorizationDetailTypes,
-		GrantManagementEnabled:        deps.GrantManagementEnabled,
-		GrantManagementActions:        deps.GrantManagementActions,
-		GrantManagementActionRequired: deps.GrantManagementActionRequired,
-		DPoPEnabled:                   deps.DPoPEnabled,
-	})
+	rejection := req.ValidateExtensions(r.Context(), client, deps.ExtensionPolicy)
 	if rejection == nil {
 		return true
 	}

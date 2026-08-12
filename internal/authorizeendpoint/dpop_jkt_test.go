@@ -56,7 +56,7 @@ func TestAuthorize_AcceptsDPoPJKTWhenDPoPEnabled(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t, func(d *authorizeendpoint.Deps) {
-		d.DPoPEnabled = true
+		d.ExtensionPolicy.DPoPEnabled = true
 	})
 	v := goodAuthorizeValues()
 	v.Set("dpop_jkt", authorizeCommittedJKT)
