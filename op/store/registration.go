@@ -124,6 +124,13 @@ type RegistrationAccessToken struct {
 	// layer.
 	HashedValue string
 
+	// AllowedScopes is the immutable scope ceiling inherited from the
+	// Initial Access Token that created the client. An empty slice means
+	// unrestricted (including RATs persisted before this field existed).
+	// RAT rotation must copy this value unchanged; it is never widened by
+	// a management PUT.
+	AllowedScopes []string
+
 	// CreatedAt is the wall-clock time at which the RAT was first
 	// persisted. Rotation overwrites this value with the time of the
 	// rotation, since the previous RAT is revoked atomically.

@@ -174,7 +174,7 @@ func concurrentCIBAConsume(t *testing.T, f Factory) {
 	if err := cr.Save(ctx, newCIBARequest(b.Now(), "ar-race")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := cr.Approve(ctx, "ar-race", "sub-1", "urn:mace:incommon:iap:bronze", b.Now()); err != nil {
+	if err := cr.Approve(ctx, "ar-race", "sub", "urn:mace:incommon:iap:bronze", b.Now()); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 

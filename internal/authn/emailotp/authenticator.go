@@ -481,6 +481,11 @@ func carryVerifyCounters(rec, prior *store.EmailOTPRecord) {
 	if rec == nil || prior == nil {
 		return
 	}
+	// CompareAndSwap requires the exact generation returned by Get. The
+	// replacement deliberately carries the prior's state counters but it must
+	// carry the opaque version as well; otherwise every resend after the first
+	// one is rejected as a stale transition by durable stores.
+	rec.Version = prior.Version
 	rec.FailedCount = prior.FailedCount
 	rec.FirstFailureAt = prior.FirstFailureAt
 	rec.LockedUntil = prior.LockedUntil

@@ -187,6 +187,7 @@ CREATE INDEX IF NOT EXISTS idx_oidc_grants_sub_client ON oidc_grants(subject, cl
 -- client-scoped cascade a client deletion runs
 -- (DELETE FROM oidc_grants WHERE client_id = ?).
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client ON oidc_grants(client_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject ON oidc_grants(client_id, subject, updated_at);
 
 CREATE TABLE IF NOT EXISTS oidc_sessions (
     id TEXT PRIMARY KEY,
@@ -258,6 +259,7 @@ CREATE TABLE IF NOT EXISTS oidc_initial_access_tokens (
 CREATE TABLE IF NOT EXISTS oidc_registration_access_tokens (
     client_id TEXT PRIMARY KEY,
     hashed_value TEXT NOT NULL,
+    allowed_scopes JSONB NULL,
     created_at BIGINT NOT NULL
 );
 
@@ -342,6 +344,7 @@ CREATE INDEX IF NOT EXISTS idx_oidc_ciba_requests_expires ON oidc_ciba_requests(
 CREATE TABLE IF NOT EXISTS oidc_totp_secrets (
     subject TEXT PRIMARY KEY,
     secret_ciphertext BYTEA NOT NULL,
+    row_version BIGINT NOT NULL DEFAULT 1,
     failed_count INTEGER NOT NULL DEFAULT 0,
     last_accepted_step BIGINT NOT NULL DEFAULT 0,
     confirmed_at BIGINT NOT NULL DEFAULT 0,
@@ -389,6 +392,7 @@ CREATE TABLE IF NOT EXISTS oidc_email_otps (
     subject TEXT PRIMARY KEY,
     code_salt BYTEA NOT NULL,
     code_hash BYTEA NOT NULL,
+    row_version BIGINT NOT NULL DEFAULT 1,
     failed_count INTEGER NOT NULL DEFAULT 0,
     send_count INTEGER NOT NULL DEFAULT 0,
     sent_at BIGINT NOT NULL DEFAULT 0,

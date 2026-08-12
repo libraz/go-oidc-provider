@@ -223,11 +223,11 @@ func (s *Store) Schema() string {
 // statement-terminating semicolons exclusively (which the bundled DDL
 // does).
 //
-// After applying the DDL, Migrate re-reads the refresh-token table and
-// fails when a required column is absent, which catches a database
-// still carrying a hand-rolled schema from an earlier version. The
-// check covers that one table; it is a staleness guard rather than a
-// full audit of the applied schema.
+// After applying the DDL, Migrate re-reads the tables whose shape has
+// compatibility-sensitive columns and fails when one is absent. CREATE TABLE
+// IF NOT EXISTS deliberately does not alter an existing table; this check
+// therefore makes a forgotten explicit ALTER fail at startup rather than
+// surfacing as a less actionable query error later.
 func (s *Store) Migrate(ctx context.Context) error {
 	stmts := splitStatements(s.Schema())
 	for _, stmt := range stmts {
@@ -270,12 +270,23 @@ var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema 
 }
 
 func (s *Store) validateSchema(ctx context.Context) error {
-	missing, err := s.missingColumns(ctx, s.names.refreshes, requiredRefreshTokenColumns)
-	if err != nil {
-		return err
+	checks := []struct {
+		table   string
+		columns []string
+	}{
+		{s.names.refreshes, requiredRefreshTokenColumns},
+		{s.names.rats, []string{"allowed_scopes"}},
+		{s.names.totpSecrets, []string{"row_version"}},
+		{s.names.emailOTPs, []string{"row_version"}},
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("oidcsql: schema for %s is missing required columns: %s", s.names.refreshes, strings.Join(missing, ", "))
+	for _, check := range checks {
+		missing, err := s.missingColumns(ctx, check.table, check.columns)
+		if err != nil {
+			return err
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("oidcsql: schema for %s is missing required columns: %s", check.table, strings.Join(missing, ", "))
+		}
 	}
 	return nil
 }

@@ -28,13 +28,18 @@ import (
 // production backends typically run a sweeper, but the reference
 // implementation deliberately omits one to keep the surface tiny.
 type emailOTPStore struct {
-	clock Clock
-	mu    sync.RWMutex
-	m     map[string]*store.EmailOTPRecord
+	clock    Clock
+	mu       sync.RWMutex
+	m        map[string]*store.EmailOTPRecord
+	versions *mfaVersionAllocator
 }
 
-func newEmailOTPStore(c Clock) *emailOTPStore {
-	return &emailOTPStore{clock: c, m: make(map[string]*store.EmailOTPRecord)}
+func newEmailOTPStore(c Clock, versions ...*mfaVersionAllocator) *emailOTPStore {
+	allocator := newMFAVersionAllocator()
+	if len(versions) > 0 && versions[0] != nil {
+		allocator = versions[0]
+	}
+	return &emailOTPStore{clock: c, m: make(map[string]*store.EmailOTPRecord), versions: allocator}
 }
 
 // Get implements [store.EmailOTPStore].
@@ -71,7 +76,13 @@ func (s *emailOTPStore) Put(_ context.Context, r *store.EmailOTPRecord) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.m[r.Subject] = cloneEmailOTPRecord(r)
+	version, err := s.versions.next()
+	if err != nil {
+		return err
+	}
+	stored := cloneEmailOTPRecord(r)
+	stored.Version = version
+	s.m[r.Subject] = stored
 	return nil
 }
 
@@ -87,13 +98,31 @@ func (s *emailOTPStore) CompareAndSwap(_ context.Context, previous, next *store.
 		if ok && !emailOTPExpired(current, s.now()) {
 			return store.ErrAlreadyConsumed
 		}
-		s.m[next.Subject] = cloneEmailOTPRecord(next)
+		version, err := s.versions.next()
+		if err != nil {
+			return err
+		}
+		stored := cloneEmailOTPRecord(next)
+		stored.Version = version
+		s.m[next.Subject] = stored
 		return nil
 	}
-	if !ok || !reflect.DeepEqual(current, previous) {
+	if previous.Subject != next.Subject {
+		return errors.New("inmem: invalid email otp compare-and-swap record")
+	}
+	if next.Version != previous.Version || !validMFARecordVersion(previous.Version) {
 		return store.ErrAlreadyConsumed
 	}
-	s.m[next.Subject] = cloneEmailOTPRecord(next)
+	if !ok || current.Version != previous.Version || !reflect.DeepEqual(current, previous) {
+		return store.ErrAlreadyConsumed
+	}
+	version, err := s.versions.next()
+	if err != nil {
+		return err
+	}
+	stored := cloneEmailOTPRecord(next)
+	stored.Version = version
+	s.m[next.Subject] = stored
 	return nil
 }
 
@@ -102,11 +131,17 @@ func (s *emailOTPStore) Consume(_ context.Context, r *store.EmailOTPRecord) erro
 	if r == nil {
 		return errors.New("inmem: nil email otp record")
 	}
+	if !validMFARecordVersion(r.Version) {
+		return store.ErrAlreadyConsumed
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, ok := s.m[r.Subject]
 	if !ok {
 		return store.ErrNotFound
+	}
+	if current.Version != r.Version {
+		return store.ErrAlreadyConsumed
 	}
 	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(s.now()) {
 		return store.ErrNotFound
@@ -114,11 +149,21 @@ func (s *emailOTPStore) Consume(_ context.Context, r *store.EmailOTPRecord) erro
 	if !current.ConsumedAt.IsZero() {
 		return store.ErrAlreadyConsumed
 	}
+	// Consume receives the record after the verifier has stamped ConsumedAt
+	// and cleared the failed-attempt state. Version plus the immutable code
+	// material bind it to the exact challenge snapshot; requiring every
+	// mutable counter to remain equal would reject a valid code after one
+	// earlier typo.
 	if !slices.Equal(current.CodeSalt, r.CodeSalt) || !slices.Equal(current.CodeHash, r.CodeHash) {
 		return store.ErrAlreadyConsumed
 	}
-	next := cloneEmailOTPRecord(r)
-	s.m[r.Subject] = next
+	stored := cloneEmailOTPRecord(r)
+	version, err := s.versions.next()
+	if err != nil {
+		return err
+	}
+	stored.Version = version
+	s.m[r.Subject] = stored
 	return nil
 }
 

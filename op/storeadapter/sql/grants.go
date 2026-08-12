@@ -129,6 +129,48 @@ func (s *grantStore) ListClientIDsBySubject(
 	return page, nil
 }
 
+// ListSubjectsByClient returns a bounded, distinct keyset page for the
+// client-scoped grant view used by registration deletion fan-out. The
+// limit+1 fetch lets callers detect another page without materialising every
+// grant row or subject in the database.
+func (s *grantStore) ListSubjectsByClient(
+	ctx context.Context,
+	clientID, cursor string,
+	limit int,
+) (store.GrantSubjectPage, error) {
+	if limit <= 0 {
+		return store.GrantSubjectPage{}, errors.New("oidcsql: grant subject page limit must be positive")
+	}
+	rows, err := s.runner().QueryContext(
+		ctx,
+		s.parent.queries.grantListSubjects,
+		clientID,
+		cursor,
+		limit+1,
+	)
+	if err != nil {
+		return store.GrantSubjectPage{}, wrapErr("grants.ListSubjectsByClient", err)
+	}
+	defer rows.Close() //nolint:errcheck // rows.Err below reports iteration failures.
+	subjects := make([]string, 0, limit+1)
+	for rows.Next() {
+		var subject string
+		if err := rows.Scan(&subject); err != nil {
+			return store.GrantSubjectPage{}, wrapErr("grants.ListSubjectsByClient.scan", err)
+		}
+		subjects = append(subjects, subject)
+	}
+	if err := rows.Err(); err != nil {
+		return store.GrantSubjectPage{}, wrapErr("grants.ListSubjectsByClient.iter", err)
+	}
+	page := store.GrantSubjectPage{Subjects: subjects}
+	if len(page.Subjects) > limit {
+		page.Subjects = page.Subjects[:limit]
+		page.NextCursor = page.Subjects[len(page.Subjects)-1]
+	}
+	return page, nil
+}
+
 func (s *grantStore) HasAny(ctx context.Context) (bool, error) {
 	var probe int
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.grantHasAny).Scan(&probe)

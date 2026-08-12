@@ -186,7 +186,11 @@ func TestTOTPStore_AcceptRaceSingleWinner(t *testing.T) {
 	if err := ts.Put(ctx, rec); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	accepted := *rec
+	accepted, err := ts.Get(ctx, rec.Subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	acceptedVersion := accepted.Version
 	accepted.LastAcceptedStep = 12345
 
 	var wins atomic.Int64
@@ -195,7 +199,7 @@ func TestTOTPStore_AcceptRaceSingleWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := ts.Accept(ctx, &accepted)
+			err := ts.Accept(ctx, accepted)
 			switch {
 			case err == nil:
 				wins.Add(1)
@@ -216,6 +220,9 @@ func TestTOTPStore_AcceptRaceSingleWinner(t *testing.T) {
 	if got.LastAcceptedStep != accepted.LastAcceptedStep {
 		t.Fatalf("LastAcceptedStep=%d want %d", got.LastAcceptedStep, accepted.LastAcceptedStep)
 	}
+	if accepted.Version != acceptedVersion {
+		t.Fatalf("Accept mutated caller Version = %d, want %d", accepted.Version, acceptedVersion)
+	}
 }
 
 // TestTOTPStore_CompareAndSwapCannotRollbackAcceptedStep pins the
@@ -226,7 +233,11 @@ func TestTOTPStore_CompareAndSwapCannotRollbackAcceptedStep(t *testing.T) {
 
 	s := inmem.New()
 	ctx := context.Background()
-	rec := &store.TOTPRecord{Subject: "alice", SecretCiphertext: []byte("cipher"), ConfirmedAt: time.Now()}
+	rec := &store.TOTPRecord{
+		Subject:          "alice",
+		SecretCiphertext: []byte("cipher"),
+		ConfirmedAt:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
 	if err := s.TOTPs().Put(ctx, rec); err != nil {
 		t.Fatalf("Put: %v", err)
 	}

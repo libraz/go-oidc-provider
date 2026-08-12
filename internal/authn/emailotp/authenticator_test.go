@@ -3,6 +3,7 @@ package emailotp_test
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -259,6 +260,10 @@ func TestContinueSendCarriesVerifyLockoutCounters(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Put prior record: %v", err)
 	}
+	prior, err := recStore.Get(context.Background(), "sub-1")
+	if err != nil {
+		t.Fatalf("Get prior record: %v", err)
+	}
 
 	if _, err := a.Continue(context.Background(), authn.ContinueInput{
 		Subject: "sub-1",
@@ -280,6 +285,9 @@ func TestContinueSendCarriesVerifyLockoutCounters(t *testing.T) {
 	}
 	if !rec.LockedUntil.Equal(lockedUntil) {
 		t.Fatalf("LockedUntil=%v want %v", rec.LockedUntil, lockedUntil)
+	}
+	if rec.Version == 0 || rec.Version >= math.MaxInt64 || rec.Version == prior.Version {
+		t.Fatalf("Version=%d want a fresh usable token after the resend CAS (prior=%d)", rec.Version, prior.Version)
 	}
 }
 
@@ -449,6 +457,44 @@ func TestContinueVerifyWrongCodeReturnsRetryAndIncrementsCounter(t *testing.T) {
 	}
 	if rec.FailedCount != 1 {
 		t.Errorf("FailedCount = %d, want 1", rec.FailedCount)
+	}
+}
+
+// A correct code remains usable after a typo. This crosses the verifier's
+// wrong-code CAS (which increments FailedCount) with its later Consume
+// transition (which clears it), so it protects the real store sequence rather
+// than merely asserting each operation independently.
+func TestContinueVerifyCorrectCodeAfterWrongCodeConsumesChallenge(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	a, mailer, recStore := newFixture(t, now)
+	code := driveSendStep(t, a, mailer, "sub-1")
+
+	if _, err := a.Continue(context.Background(), authn.ContinueInput{
+		Subject:    "sub-1",
+		Scratch:    emailotp.ScratchVerify,
+		Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: "not-a-code"}},
+	}); !errors.Is(err, emailotp.ErrRetry) {
+		t.Fatalf("Continue (wrong code) err = %v, want emailotp.ErrRetry", err)
+	}
+
+	step, err := a.Continue(context.Background(), authn.ContinueInput{
+		Subject:    "sub-1",
+		Scratch:    emailotp.ScratchVerify,
+		Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: code}},
+	})
+	if err != nil {
+		t.Fatalf("Continue (correct code after retry): %v", err)
+	}
+	if step.Result == nil || step.Result.Subject != "sub-1" {
+		t.Fatalf("Result = %+v, want subject sub-1", step.Result)
+	}
+	rec, err := recStore.Get(context.Background(), "sub-1")
+	if err != nil {
+		t.Fatalf("Get consumed record: %v", err)
+	}
+	if rec.FailedCount != 0 || !rec.FirstFailureAt.IsZero() || rec.ConsumedAt.IsZero() {
+		t.Fatalf("consumed record = %+v, want cleared failures and ConsumedAt", rec)
 	}
 }
 

@@ -35,6 +35,9 @@
 // for development convenience. Production deployments are expected to
 // run migrations through their existing tooling rather than hand
 // control to the adapter.
+// Existing databases are not altered by Store.Migrate; see
+// schema/MIGRATIONS.md for the explicit per-dialect ALTER statements for
+// newly added columns and indexes.
 //
 // # Naming overrides
 //

@@ -171,10 +171,11 @@ func New(opts ...Option) *Store {
 	s.users = newUserStore()
 	s.iats = newIATStore()
 	s.rats = newRATStore()
-	s.totps = newTOTPStore()
+	mfaVersions := newMFAVersionAllocator()
+	s.totps = newTOTPStore(mfaVersions)
 	s.recoveries = newRecoveryStore()
 	s.passkeys = newPasskeyStore()
-	s.emailotps = newEmailOTPStore(s.clock)
+	s.emailotps = newEmailOTPStore(s.clock, mfaVersions)
 	s.authnLockouts = newAuthnLockoutStore(s.clock)
 	s.accessTokens = newAccessTokenStore()
 	s.opaqueAccessTokens = newOpaqueAccessTokenStore()
@@ -844,6 +845,33 @@ func (s *grantStore) ListClientIDsBySubject(
 	return builder.page(), nil
 }
 
+// ListSubjectsByClient implements [store.GrantSubjectLister]. The map scan
+// is unavoidable for the in-memory reference backend, but the builder keeps
+// only the lexicographically-smallest limit distinct subjects after cursor.
+// Deleted grants are removed from the map by RevokeByClient, so revoked
+// consent never leaks through this audience-oriented view.
+func (s *grantStore) ListSubjectsByClient(
+	ctx context.Context,
+	clientID, cursor string,
+	limit int,
+) (store.GrantSubjectPage, error) {
+	if err := ctx.Err(); err != nil {
+		return store.GrantSubjectPage{}, err
+	}
+	if limit <= 0 {
+		return store.GrantSubjectPage{}, errors.New("inmem: grant subject page limit must be positive")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	builder := newGrantSubjectPageBuilder(cursor, limit)
+	for _, rec := range s.m {
+		if rec.ClientID == clientID {
+			builder.add(rec.Subject)
+		}
+	}
+	return builder.page(), nil
+}
+
 // grantClientPageBuilder retains only the lexicographically-smallest limit
 // distinct IDs after cursor. Scanning an in-memory map is unavoidable, but
 // candidate storage remains O(limit) even when every grant has a unique client.
@@ -886,6 +914,47 @@ func (b *grantClientPageBuilder) page() store.GrantClientPage {
 	page := store.GrantClientPage{ClientIDs: b.clientIDs}
 	if b.more {
 		page.NextCursor = b.clientIDs[len(b.clientIDs)-1]
+	}
+	return page
+}
+
+type grantSubjectPageBuilder struct {
+	cursor   string
+	limit    int
+	subjects []string
+	more     bool
+}
+
+func newGrantSubjectPageBuilder(cursor string, limit int) *grantSubjectPageBuilder {
+	return &grantSubjectPageBuilder{cursor: cursor, limit: limit}
+}
+
+func (b *grantSubjectPageBuilder) add(subject string) {
+	if subject == "" || subject <= b.cursor {
+		return
+	}
+	index := sort.SearchStrings(b.subjects, subject)
+	if index < len(b.subjects) && b.subjects[index] == subject {
+		return
+	}
+	if len(b.subjects) < b.limit {
+		b.subjects = append(b.subjects, "")
+		copy(b.subjects[index+1:], b.subjects[index:])
+		b.subjects[index] = subject
+		return
+	}
+	b.more = true
+	if index == len(b.subjects) {
+		return
+	}
+	copy(b.subjects[index+1:], b.subjects[index:len(b.subjects)-1])
+	b.subjects[index] = subject
+}
+
+func (b *grantSubjectPageBuilder) page() store.GrantSubjectPage {
+	page := store.GrantSubjectPage{Subjects: b.subjects}
+	if b.more {
+		page.NextCursor = b.subjects[len(b.subjects)-1]
 	}
 	return page
 }
@@ -1702,6 +1771,7 @@ func cloneRAT(t *store.RegistrationAccessToken) *store.RegistrationAccessToken {
 		return nil
 	}
 	out := *t
+	out.AllowedScopes = slices.Clone(t.AllowedScopes)
 	return &out
 }
 

@@ -40,6 +40,7 @@ type queries struct {
 	// refresh tokens
 	refreshSave                string
 	refreshFind                string
+	refreshFindForUpdate       string
 	refreshParentRevoked       string
 	refreshConsume             string
 	refreshRevokeChainUpdate   string
@@ -83,6 +84,7 @@ type queries struct {
 	grantFindBySubjectClientForUpdate string
 	grantListBySubject                string
 	grantListClientIDs                string
+	grantListSubjects                 string
 	grantDelete                       string
 	grantHasAny                       string
 
@@ -205,9 +207,10 @@ type queries struct {
 
 // The authentication-factor column lists are declared once so the
 // SELECT projection, the INSERT column list, and the compare-and-swap
-// predicate cannot drift apart. Every CAS in this group matches on the
-// full stored tuple rather than on a version counter, because the
-// records the library hands over carry no version field of their own.
+// predicate cannot drift apart. The public records carry a store-issued
+// Version token, which this adapter mirrors with a backend-private
+// row_version column alongside these value columns; every transition
+// matches the token and replaces it with one fresh opaque token.
 //
 //nolint:gochecknoglobals // immutable column manifests.
 var (
@@ -260,6 +263,16 @@ func assignExcluded(d Dialect, cols []string) string {
 		parts[i] = col + " = " + d.excludedRef(col)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// versionedUpsertSet renders an upsert assignment that installs the
+// caller-generated opaque generation token. The token is deliberately not
+// incremented in SQL: deletes followed by recreates must not make an old
+// snapshot valid again, and a legacy signed-maximum token must remain
+// replaceable. The incoming row alias is valid for all three supported
+// dialects (EXCLUDED on SQLite/PostgreSQL, new on MySQL).
+func versionedUpsertSet(d Dialect, cols []string) string {
+	return assignExcluded(d, cols) + ", row_version = " + d.excludedRef("row_version")
 }
 
 // assignPlaceholders renders the "col = ?" assignment list an UPDATE
@@ -364,6 +377,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
 				" FROM " + n.refreshes + " WHERE id IN (?, ?)",
 		),
+		refreshFindForUpdate: d.rebind(
+			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
+				" FROM " + n.refreshes + " WHERE id IN (?, ?)" + d.forUpdate(),
+		),
 		// refreshParentRevoked re-reads a rotation parent's revoked flag
 		// inside the guarded Save transaction. The FOR UPDATE suffix (on
 		// engines that support it) serialises the read against a
@@ -373,7 +390,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT revoked FROM " + n.refreshes + " WHERE id = ?" + d.forUpdate(),
 		),
 		refreshConsume: d.rebind(
-			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL" +
+				" AND (expires_at = 0 OR expires_at >= ?)",
 		),
 		refreshRevokeChainUpdate: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE id = ?",
@@ -544,6 +562,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT DISTINCT client_id FROM " + n.grants +
 				" WHERE subject = ? AND client_id > ? ORDER BY client_id LIMIT ?",
 		),
+		grantListSubjects: d.rebind(
+			"SELECT DISTINCT subject FROM " + n.grants +
+				" WHERE client_id = ? AND subject > ? ORDER BY subject LIMIT ?",
+		),
 		grantDelete: d.rebind(
 			"DELETE FROM " + n.grants + " WHERE id = ?",
 		),
@@ -694,13 +716,14 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// registration access tokens
 		ratPut: d.rebind(
 			"INSERT INTO " + n.rats +
-				" (client_id, hashed_value, created_at) VALUES (?, ?, ?)" + d.upsertAlias() +
+				" (client_id, hashed_value, allowed_scopes, created_at) VALUES (?, ?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("client_id",
 					"hashed_value="+d.excludedRef("hashed_value")+
+						", allowed_scopes="+d.excludedRef("allowed_scopes")+
 						", created_at="+d.excludedRef("created_at")),
 		),
 		ratGetByClientID: d.rebind(
-			"SELECT client_id, hashed_value, created_at FROM " + n.rats + " WHERE client_id = ?",
+			"SELECT client_id, hashed_value, allowed_scopes, created_at FROM " + n.rats + " WHERE client_id = ?",
 		),
 		ratDelete: d.rebind(
 			"DELETE FROM " + n.rats + " WHERE client_id = ?",
@@ -793,8 +816,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT " + cibaCols + " FROM " + n.cibaRequests + " WHERE id = ?",
 		),
 		cibaApprove: d.rebind(
+			// An existing subject is an immutable binding. Empty is the
+			// only value that may be populated by approval.
 			"UPDATE " + n.cibaRequests + " SET status = ?, subject = ?, acr = ?, auth_time = ?" +
-				" WHERE id = ? AND status = ?" + notExpiredGuard,
+				" WHERE id = ? AND status = ? AND (subject = ? OR subject = ?)" + notExpiredGuard,
 		),
 		cibaDeny: d.rebind(
 			"UPDATE " + n.cibaRequests + " SET status = ?, deny_reason = ?" +
@@ -821,30 +846,34 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// TOTP enrolments (RFC 6238)
 		totpGet: d.rebind(
-			"SELECT subject, " + joinColumns(totpValueColumns) +
+			"SELECT subject, row_version, " + joinColumns(totpValueColumns) +
 				" FROM " + n.totpSecrets + " WHERE subject = ?",
 		),
 		totpPut: d.rebind(
 			"INSERT INTO " + n.totpSecrets +
-				" (subject, " + joinColumns(totpValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(1+len(totpValueColumns)) + ")" + d.upsertAlias() +
-				d.upsertOnConflict("subject", assignExcluded(d, totpValueColumns)),
+				" (subject, row_version, " + joinColumns(totpValueColumns) + ")" +
+				" VALUES (" + bindPlaceholders(2+len(totpValueColumns)) + ")" + d.upsertAlias() +
+				d.upsertOnConflict("subject", versionedUpsertSet(d, totpValueColumns)),
 		),
-		// The predicate carries the whole stored tuple: a snapshot that
-		// no longer describes the row loses, which is what keeps a stale
-		// wrong-code write from rewinding LastAcceptedStep.
+		// row_version is the SQL representation of the public opaque Version
+		// token. Matching the token (as well as the value tuple) means two
+		// identical stale records still have exactly one successful writer.
 		totpCompareAndSwap: d.rebind(
 			"UPDATE " + n.totpSecrets +
-				" SET " + assignPlaceholders(totpValueColumns) +
-				" WHERE subject = ? AND " + matchPlaceholders(totpValueColumns),
+				" SET " + assignPlaceholders(totpValueColumns) + ", row_version = ?" +
+				" WHERE subject = ? AND row_version = ? AND " + matchPlaceholders(totpValueColumns),
 		),
 		// Accept is the single-use success transition: it only applies
 		// when the stored step is strictly behind the one being redeemed,
 		// so a replay inside the same 30-second window cannot win twice.
+		// The secret and confirmation timestamp bind the enrollment
+		// identity, preventing a stale verification from restoring an old
+		// secret after a newer Put.
 		totpAccept: d.rebind(
 			"UPDATE " + n.totpSecrets +
-				" SET " + assignPlaceholders(totpValueColumns) +
-				" WHERE subject = ? AND last_accepted_step < ?",
+				" SET " + assignPlaceholders(totpValueColumns) + ", row_version = ?" +
+				" WHERE subject = ? AND last_accepted_step < ?" +
+				" AND secret_ciphertext = ? AND confirmed_at = ? AND row_version = ?",
 		),
 		totpDelete: d.rebind(
 			"DELETE FROM " + n.totpSecrets + " WHERE subject = ?",
@@ -906,14 +935,14 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 
 		// email OTP challenges
 		emailOTPGet: d.rebind(
-			"SELECT subject, " + joinColumns(emailOTPValueColumns) +
+			"SELECT subject, row_version, " + joinColumns(emailOTPValueColumns) +
 				" FROM " + n.emailOTPs + " WHERE subject = ?",
 		),
 		emailOTPPut: d.rebind(
 			"INSERT INTO " + n.emailOTPs +
-				" (subject, " + joinColumns(emailOTPValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(1+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
-				d.upsertOnConflict("subject", assignExcluded(d, emailOTPValueColumns)),
+				" (subject, row_version, " + joinColumns(emailOTPValueColumns) + ")" +
+				" VALUES (" + bindPlaceholders(2+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
+				d.upsertOnConflict("subject", versionedUpsertSet(d, emailOTPValueColumns)),
 		),
 		// The nil-previous form of the compare-and-swap reserves the
 		// first challenge for a subject, and reserving is what bounds
@@ -923,8 +952,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// an empty row, both write, and both deliver a message.
 		emailOTPInsertIfAbsent: d.rebind(
 			"INSERT INTO " + n.emailOTPs +
-				" (subject, " + joinColumns(emailOTPValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(1+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
+				" (subject, row_version, " + joinColumns(emailOTPValueColumns) + ")" +
+				" VALUES (" + bindPlaceholders(2+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
 				d.upsertDoNothingQualified("subject", n.emailOTPs),
 		),
 		// A row past its retention horizon no longer holds the key. The
@@ -933,24 +962,24 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// row another racer has just refreshed reads as live.
 		emailOTPReplaceStale: d.rebind(
 			"UPDATE " + n.emailOTPs +
-				" SET " + assignPlaceholders(emailOTPValueColumns) +
+				" SET row_version = ?, " + assignPlaceholders(emailOTPValueColumns) +
 				" WHERE subject = ?" +
 				" AND ((retain_until > 0 AND retain_until < ?)" +
 				" OR (retain_until = 0 AND expires_at > 0 AND expires_at < ?))",
 		),
 		emailOTPCompareAndSwap: d.rebind(
 			"UPDATE " + n.emailOTPs +
-				" SET " + assignPlaceholders(emailOTPValueColumns) +
-				" WHERE subject = ? AND " + matchPlaceholders(emailOTPValueColumns),
+				" SET " + assignPlaceholders(emailOTPValueColumns) + ", row_version = ?" +
+				" WHERE subject = ? AND row_version = ? AND " + matchPlaceholders(emailOTPValueColumns),
 		),
 		// Consume matches on the code material and on the record still
 		// being unconsumed and unexpired, so a stale success cannot
 		// redeem the challenge that replaced it.
 		emailOTPConsume: d.rebind(
 			"UPDATE " + n.emailOTPs +
-				" SET " + assignPlaceholders(emailOTPValueColumns) +
+				" SET " + assignPlaceholders(emailOTPValueColumns) + ", row_version = ?" +
 				" WHERE subject = ? AND code_salt = ? AND code_hash = ? AND consumed_at = 0" +
-				" AND (expires_at = 0 OR expires_at >= ?)",
+				" AND row_version = ? AND (expires_at = 0 OR expires_at >= ?)",
 		),
 		emailOTPDelete: d.rebind(
 			"DELETE FROM " + n.emailOTPs + " WHERE subject = ?",

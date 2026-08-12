@@ -75,12 +75,11 @@ The case brings the compose stack up itself and drives signup, authenticator
 enrolment, sign-in, and consent through a headless Chrome to the relying
 party's callback. It skips when Docker or Chrome is missing.
 
-**Authentication factors belong to the application.** The bundled SQL
-adapter persists the OIDC substores but not the factors, because their
-schema and key management are deployment decisions. `totpstore.go` is a
-MySQL `store.TOTPStore`: the single-winner transitions are conditional
-`UPDATE`s judged by affected row count, which is what stops a code being
-redeemed twice and a stale snapshot rolling the failure counter back.
+**Authentication factors use the durable SQL adapter.** The sample wires
+`durable.TOTPs()` into the TOTP authenticator, so enrollment and replay
+protection use the same contract-tested schema and opaque CAS tokens as the
+other SQL substores. Application-owned member columns remain separate in
+`members.go`.
 
 **The application's session is its own.** It is a separate cookie from the
 OP's, and the library never touches it. Sessions are held in process here;

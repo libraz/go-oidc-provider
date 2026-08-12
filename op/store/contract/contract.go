@@ -878,6 +878,9 @@ var grantCases = []subtest{
 	{"ListClientIDsBySubject", grantListClientIDsBySubject},
 	{"ListClientIDsBySubjectEmpty", grantListClientIDsBySubjectEmpty},
 	{"ListClientIDsBySubjectRejectsInvalidLimit", grantListClientIDsRejectsInvalidLimit},
+	{"ListSubjectsByClient", grantListSubjectsByClient},
+	{"ListSubjectsByClientEmpty", grantListSubjectsByClientEmpty},
+	{"ListSubjectsByClientRejectsInvalidLimit", grantListSubjectsByClientRejectsInvalidLimit},
 	{"Delete", grantDelete},
 }
 
@@ -1051,6 +1054,80 @@ func grantListClientIDsRejectsInvalidLimit(t *testing.T, f Factory) {
 		0,
 	); err == nil {
 		t.Fatal("ListClientIDsBySubject limit=0: want error")
+	}
+}
+
+func requireGrantSubjectLister(t *testing.T, s store.Store) store.GrantSubjectLister {
+	t.Helper()
+	lister, ok := s.Grants().(store.GrantSubjectLister)
+	if !ok {
+		t.Skipf("backend %T does not implement store.GrantSubjectLister", s.Grants())
+	}
+	return lister
+}
+
+func grantListSubjectsByClient(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	lister := requireGrantSubjectLister(t, b.Store)
+	rows := []*store.Grant{
+		newGrant(b.Now(), "g-s-c", "subject-c", "client"),
+		newGrant(b.Now(), "g-s-a-1", "subject-a", "client"),
+		newGrant(b.Now(), "g-s-a-2", "subject-a", "client"),
+		newGrant(b.Now(), "g-s-b", "subject-b", "client"),
+		newGrant(b.Now(), "g-s-other", "subject-z", "other-client"),
+	}
+	for _, g := range rows {
+		if err := b.Store.Grants().Save(ctx, g); err != nil {
+			t.Fatalf("Save %s: %v", g.ID, err)
+		}
+	}
+	revoked := newGrant(b.Now(), "g-s-revoked", "subject-revoked", "client")
+	if err := b.Store.Grants().Save(ctx, revoked); err != nil {
+		t.Fatalf("Save revoked grant: %v", err)
+	}
+	if err := b.Store.Grants().Delete(ctx, revoked.ID); err != nil {
+		t.Fatalf("Delete revoked grant: %v", err)
+	}
+	first, err := lister.ListSubjectsByClient(ctx, "client", "", 2)
+	if err != nil {
+		t.Fatalf("ListSubjectsByClient first page: %v", err)
+	}
+	if !slices.Equal(first.Subjects, []string{"subject-a", "subject-b"}) {
+		t.Fatalf("first page subjects = %v", first.Subjects)
+	}
+	if first.NextCursor != "subject-b" {
+		t.Fatalf("first page next cursor = %q, want subject-b", first.NextCursor)
+	}
+	second, err := lister.ListSubjectsByClient(ctx, "client", first.NextCursor, 2)
+	if err != nil {
+		t.Fatalf("ListSubjectsByClient second page: %v", err)
+	}
+	if !slices.Equal(second.Subjects, []string{"subject-c"}) {
+		t.Fatalf("second page subjects = %v", second.Subjects)
+	}
+	if second.NextCursor != "" {
+		t.Fatalf("second page next cursor = %q, want empty", second.NextCursor)
+	}
+}
+
+func grantListSubjectsByClientEmpty(t *testing.T, f Factory) {
+	b := f(t)
+	lister := requireGrantSubjectLister(t, b.Store)
+	got, err := lister.ListSubjectsByClient(context.Background(), "absent", "", 2)
+	if err != nil {
+		t.Fatalf("ListSubjectsByClient empty: %v", err)
+	}
+	if len(got.Subjects) != 0 || got.NextCursor != "" {
+		t.Fatalf("ListSubjectsByClient empty: got %+v", got)
+	}
+}
+
+func grantListSubjectsByClientRejectsInvalidLimit(t *testing.T, f Factory) {
+	b := f(t)
+	lister := requireGrantSubjectLister(t, b.Store)
+	if _, err := lister.ListSubjectsByClient(context.Background(), "client", "", 0); err == nil {
+		t.Fatal("ListSubjectsByClient limit=0: want error")
 	}
 }
 

@@ -239,6 +239,19 @@ func (s *refreshStore) findStoredByHandle(ctx context.Context, id string) (*stor
 }
 
 func (s *refreshStore) lookup(ctx context.Context, id string, keys [2]string) (*store.RefreshToken, string, error) {
+	return s.lookupWithQuery(ctx, s.parent.queries.refreshFind, id, keys)
+}
+
+func (s *refreshStore) lookupForUpdate(ctx context.Context, id string, keys [2]string) (*store.RefreshToken, string, error) {
+	return s.lookupWithQuery(ctx, s.parent.queries.refreshFindForUpdate, id, keys)
+}
+
+func (s *refreshStore) lookupWithQuery(
+	ctx context.Context,
+	query string,
+	id string,
+	keys [2]string,
+) (*store.RefreshToken, string, error) {
 	var (
 		t        store.RefreshToken
 		stored   string
@@ -255,7 +268,7 @@ func (s *refreshStore) lookup(ctx context.Context, id string, keys [2]string) (*
 		authTime int64
 		origin   string
 	)
-	err := s.runner().QueryRowContext(ctx, s.parent.queries.refreshFind, keys[0], keys[1]).Scan(
+	err := s.runner().QueryRowContext(ctx, query, keys[0], keys[1]).Scan(
 		&stored, &t.ClientID, &t.Subject, &subPub, &t.GrantID,
 		&scope, &t.Resource, &origin, &authTime, &t.ACR, &amr, &details, &extra,
 		&parent, &consumed, &expires, &created,
@@ -342,15 +355,14 @@ func (s *refreshStore) FindByStoredHandle(ctx context.Context, handle string) (*
 }
 
 func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
-	t, storedID, err := s.findStored(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if t.ConsumedAt != nil {
-		return t, store.ErrAlreadyConsumed
-	}
 	now := s.parent.clock.Now()
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.refreshConsume, timeToInt64(now), storedID)
+	// Consume is intentionally write-first. A snapshot-establishing read
+	// before this conditional update is unsafe under MySQL repeatable-read:
+	// a concurrent rotation can win the write while a stale snapshot still
+	// reports the predecessor as unconsumed. The update itself serialises the
+	// one winner and also rejects naturally expired rows.
+	res, err := s.runner().ExecContext(ctx, s.parent.queries.refreshConsume,
+		timeToInt64(now), patterns.Digest(id), timeToInt64(now))
 	if err != nil {
 		return nil, wrapErr("refreshes.Consume", err)
 	}
@@ -358,14 +370,32 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 	if err != nil {
 		return nil, wrapErr("refreshes.Consume.RowsAffected", err)
 	}
-	if n == 0 {
-		if replay, findErr := s.find(ctx, id); findErr == nil && replay.ConsumedAt != nil {
-			return replay, store.ErrAlreadyConsumed
-		}
-		return nil, store.ErrAlreadyConsumed
+	// A locking read after the write sees the current committed version even
+	// inside a repeatable-read transaction. SQLite has no FOR UPDATE suffix,
+	// but its write lock already serialises this read with another writer.
+	t, _, err := s.lookupForUpdate(ctx, id, refreshCredentialKeys(id))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, store.ErrNotFound
 	}
-	t.ConsumedAt = &now
-	return t, nil
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		// The row was just marked by this call. Keep the exact database
+		// value when available; the fallback covers drivers that scan a
+		// nullable consumed_at as nil immediately after the write.
+		if t.ConsumedAt == nil {
+			t.ConsumedAt = &now
+		}
+		return t, nil
+	}
+	if t.ConsumedAt != nil {
+		return t, store.ErrAlreadyConsumed
+	}
+	if isExpired(t.ExpiresAt, s.parent.clock) {
+		return nil, store.ErrNotFound
+	}
+	return nil, store.ErrAlreadyConsumed
 }
 
 // RevokeChain marks every refresh token in the rotation chain rooted

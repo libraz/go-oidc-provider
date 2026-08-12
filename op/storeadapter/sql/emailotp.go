@@ -1,12 +1,14 @@
 package oidcsql
 
 import (
-	"bytes"
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"fmt"
+	"math"
 	"time"
 
+	internalkeys "github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -43,7 +45,11 @@ func (s *emailOTPStore) Put(ctx context.Context, r *store.EmailOTPRecord) error 
 	if r.Subject == "" {
 		return errors.New("oidcsql: email otp record missing Subject")
 	}
-	args := append([]any{r.Subject}, emailOTPValues(r)...)
+	version, err := internalkeys.RandomInt63Except(0)
+	if err != nil {
+		return fmt.Errorf("oidcsql: emailOTPs.Put: generate Version: %w", err)
+	}
+	args := append([]any{r.Subject, version}, emailOTPValues(r)...)
 	if _, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPPut, args...); err != nil {
 		return wrapErr("emailOTPs.Put", err)
 	}
@@ -60,8 +66,16 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 	if previous.Subject != next.Subject {
 		return errors.New("oidcsql: invalid email otp compare-and-swap record")
 	}
+	if previous.Version == 0 || previous.Version >= math.MaxInt64 || next.Version != previous.Version {
+		return store.ErrAlreadyConsumed
+	}
+	version, err := internalkeys.RandomInt63Except(int64(previous.Version))
+	if err != nil {
+		return fmt.Errorf("oidcsql: emailOTPs.CompareAndSwap: generate Version: %w", err)
+	}
 	args := emailOTPValues(next)
-	args = append(args, previous.Subject)
+	args = append(args, version, previous.Subject)
+	args = append(args, int64(previous.Version))
 	args = append(args, emailOTPValues(previous)...)
 	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPCompareAndSwap, args...)
 	if err != nil {
@@ -74,7 +88,7 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 	if n > 0 {
 		return nil
 	}
-	return s.settleNoOp(ctx, next)
+	return store.ErrAlreadyConsumed
 }
 
 // createIfAbsent handles the nil-previous form of CompareAndSwap, which
@@ -89,7 +103,11 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 // free — nothing stored, or a row whose retention horizon has passed —
 // and each is atomic against a concurrent writer on its own.
 func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTPRecord) error {
-	insertArgs := append([]any{next.Subject}, emailOTPValues(next)...)
+	version, err := internalkeys.RandomInt63Except(0)
+	if err != nil {
+		return fmt.Errorf("oidcsql: emailOTPs.CompareAndSwap: generate Version: %w", err)
+	}
+	insertArgs := append([]any{next.Subject, version}, emailOTPValues(next)...)
 	placed, err := s.execAffects(ctx, s.parent.queries.emailOTPInsertIfAbsent, "emailOTPs.CompareAndSwap.insert", insertArgs)
 	if err != nil {
 		return err
@@ -101,7 +119,14 @@ func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTP
 	// horizon, which is re-checked as part of the UPDATE rather than
 	// beforehand.
 	now := timeToInt64(s.parent.clock.Now())
-	staleArgs := emailOTPValues(next)
+	version, err = internalkeys.RandomInt63Except(0)
+	if err != nil {
+		return fmt.Errorf("oidcsql: emailOTPs.CompareAndSwap: generate stale-reclaim Version: %w", err)
+	}
+	values := emailOTPValues(next)
+	staleArgs := make([]any, 0, 1+len(values)+3)
+	staleArgs = append(staleArgs, version)
+	staleArgs = append(staleArgs, values...)
 	staleArgs = append(staleArgs, next.Subject, now, now)
 	replaced, err := s.execAffects(ctx, s.parent.queries.emailOTPReplaceStale, "emailOTPs.CompareAndSwap.replaceStale", staleArgs)
 	if err != nil {
@@ -110,10 +135,10 @@ func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTP
 	if replaced {
 		return nil
 	}
-	// MySQL reports zero affected rows for an UPDATE that matched but
-	// changed nothing, so fall through to the same settle path the
-	// full-tuple compare-and-swap uses.
-	return s.settleNoOp(ctx, next)
+	// A live row (or a racer that already reclaimed the stale row) means
+	// this nil-previous reservation lost. Never settle by reading values:
+	// an identical next value is still a second writer.
+	return store.ErrAlreadyConsumed
 }
 
 // execAffects runs a conditional statement and reports whether it
@@ -138,11 +163,20 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	if r.Subject == "" {
 		return errors.New("oidcsql: email otp record missing Subject")
 	}
+	if r.Version == 0 || r.Version >= math.MaxInt64 {
+		return store.ErrAlreadyConsumed
+	}
+	version, err := internalkeys.RandomInt63Except(int64(r.Version))
+	if err != nil {
+		return fmt.Errorf("oidcsql: emailOTPs.Consume: generate Version: %w", err)
+	}
 	args := emailOTPValues(r)
 	args = append(args,
+		version,
 		r.Subject,
 		nonNilBytes(r.CodeSalt),
 		nonNilBytes(r.CodeHash),
+		int64(r.Version),
 		timeToInt64(s.parent.clock.Now()))
 	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPConsume, args...)
 	if err != nil {
@@ -193,28 +227,11 @@ func (s *emailOTPStore) Delete(ctx context.Context, subject string) error {
 	return nil
 }
 
-// settleNoOp mirrors [totpStore.settleNoOp]: MySQL reports zero
-// affected rows for an UPDATE that matched but changed nothing, so a
-// stored row already equal to next is a success rather than a lost
-// race.
-func (s *emailOTPStore) settleNoOp(ctx context.Context, next *store.EmailOTPRecord) error {
-	current, err := s.scanOne(ctx, next.Subject)
-	if errors.Is(err, store.ErrNotFound) {
-		return store.ErrAlreadyConsumed
-	}
-	if err != nil {
-		return err
-	}
-	if emailOTPEqual(current, next) {
-		return nil
-	}
-	return store.ErrAlreadyConsumed
-}
-
 //nolint:funlen // one scan target per column; splitting it would only hide the mapping.
 func (s *emailOTPStore) scanOne(ctx context.Context, subject string) (*store.EmailOTPRecord, error) {
 	var (
 		rec       store.EmailOTPRecord
+		version   int64
 		salt      []byte
 		hash      []byte
 		sent      int64
@@ -227,7 +244,7 @@ func (s *emailOTPStore) scanOne(ctx context.Context, subject string) (*store.Ema
 		lastSend  int64
 	)
 	err := s.parent.db.QueryRowContext(ctx, s.parent.queries.emailOTPGet, subject).Scan(
-		&rec.Subject, &salt, &hash, &rec.FailedCount, &rec.SendCount,
+		&rec.Subject, &version, &salt, &hash, &rec.FailedCount, &rec.SendCount,
 		&sent, &expires, &retain, &firstFail, &locked, &consumed, &window, &lastSend,
 	)
 	if errors.Is(err, databasesql.ErrNoRows) {
@@ -236,8 +253,12 @@ func (s *emailOTPStore) scanOne(ctx context.Context, subject string) (*store.Ema
 	if err != nil {
 		return nil, wrapErr("emailOTPs.Get", err)
 	}
+	if version <= 0 {
+		return nil, fmt.Errorf("oidcsql: emailOTPs.Get: invalid row_version %d", version)
+	}
 	rec.CodeSalt = append([]byte(nil), salt...)
 	rec.CodeHash = append([]byte(nil), hash...)
+	rec.Version = uint64(version)
 	rec.SentAt = int64ToTime(sent)
 	rec.ExpiresAt = int64ToTime(expires)
 	rec.RetainUntil = int64ToTime(retain)
@@ -278,22 +299,6 @@ func emailOTPRetentionElapsed(rec *store.EmailOTPRecord, now time.Time) bool {
 		horizon = rec.ExpiresAt
 	}
 	return !horizon.IsZero() && horizon.Before(now)
-}
-
-func emailOTPEqual(a, b *store.EmailOTPRecord) bool {
-	return a.Subject == b.Subject &&
-		bytes.Equal(a.CodeSalt, b.CodeSalt) &&
-		bytes.Equal(a.CodeHash, b.CodeHash) &&
-		a.FailedCount == b.FailedCount &&
-		a.SendCount == b.SendCount &&
-		a.SentAt.Equal(b.SentAt) &&
-		a.ExpiresAt.Equal(b.ExpiresAt) &&
-		a.RetainUntil.Equal(b.RetainUntil) &&
-		a.FirstFailureAt.Equal(b.FirstFailureAt) &&
-		a.LockedUntil.Equal(b.LockedUntil) &&
-		a.ConsumedAt.Equal(b.ConsumedAt) &&
-		a.SendWindowStart.Equal(b.SendWindowStart) &&
-		a.LastSendAttemptAt.Equal(b.LastSendAttemptAt)
 }
 
 var _ store.EmailOTPStore = (*emailOTPStore)(nil)

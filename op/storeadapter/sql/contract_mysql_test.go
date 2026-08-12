@@ -9,10 +9,12 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 	mysqlmod "github.com/testcontainers/testcontainers-go/modules/mysql"
 
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/store/contract"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
@@ -32,6 +34,13 @@ const mysqlImage = "mysql:8.4"
 // `go test` run. RELEASE_CONTRACT_REQUIRED=1 upgrades that absence to
 // a failure for release gates.
 func newMySQLFactory(t *testing.T) contract.Factory {
+	return newMySQLFactoryWithClientFoundRows(t, false)
+}
+
+// newMySQLFactoryWithClientFoundRows is kept separate from the normal
+// contract factory so the affected-row compatibility mode is exercised by an
+// explicit regression without changing the default container configuration.
+func newMySQLFactoryWithClientFoundRows(t *testing.T, clientFoundRows bool) contract.Factory {
 	t.Helper()
 	ctx := context.Background()
 
@@ -81,6 +90,7 @@ func newMySQLFactory(t *testing.T) contract.Factory {
 
 		sub := *baseCfg
 		sub.DBName = dbName
+		sub.ClientFoundRows = clientFoundRows
 		db, err := databasesql.Open("mysql", sub.FormatDSN())
 		if err != nil {
 			t.Fatalf("open %s: %v", dbName, err)
@@ -111,4 +121,68 @@ func TestMySQL_Contract(t *testing.T) {
 	factory := newMySQLFactory(t)
 	contract.Run(t, factory)
 	runMFAContracts(t, factory)
+}
+
+// TestMySQL_ClientFoundRowsMFAPut exercises the driver mode used by services
+// that want UPDATE matched-row counts. Put must not infer a row-version
+// overflow from RowsAffected: it installs a fresh opaque token in the INSERT
+// row itself, so repeating an otherwise identical record remains a successful
+// replacement even when clientFoundRows=true.
+func TestMySQL_ClientFoundRowsMFAPut(t *testing.T) {
+	factory := newMySQLFactoryWithClientFoundRows(t, true)
+	b := factory(t)
+	s, ok := b.Store.(*oidcsql.Store)
+	if !ok {
+		t.Fatalf("factory produced %T, want *oidcsql.Store", b.Store)
+	}
+	ctx := context.Background()
+
+	totp := &store.TOTPRecord{
+		Subject:          "client-found-rows-totp",
+		SecretCiphertext: []byte{0x01, 0x02},
+		ConfirmedAt:      contract.Reference,
+	}
+	if err := s.TOTPs().Put(ctx, totp); err != nil {
+		t.Fatalf("first TOTP Put: %v", err)
+	}
+	totpFirst, err := s.TOTPs().Get(ctx, totp.Subject)
+	if err != nil {
+		t.Fatalf("first TOTP Get: %v", err)
+	}
+	if err := s.TOTPs().Put(ctx, totpFirst); err != nil {
+		t.Fatalf("same-value TOTP Put with clientFoundRows=true: %v", err)
+	}
+	totpSecond, err := s.TOTPs().Get(ctx, totp.Subject)
+	if err != nil {
+		t.Fatalf("second TOTP Get: %v", err)
+	}
+	if totpSecond.Version == 0 || totpSecond.Version == totpFirst.Version {
+		t.Fatalf("TOTP repeated Put Version = %d, want a fresh token after %d", totpSecond.Version, totpFirst.Version)
+	}
+
+	email := &store.EmailOTPRecord{
+		Subject:     "client-found-rows-email",
+		CodeSalt:    []byte{0x03},
+		CodeHash:    []byte{0x04},
+		SentAt:      contract.Reference,
+		ExpiresAt:   contract.Reference.Add(time.Hour),
+		RetainUntil: contract.Reference.Add(24 * time.Hour),
+	}
+	if err := s.EmailOTPs().Put(ctx, email); err != nil {
+		t.Fatalf("first email OTP Put: %v", err)
+	}
+	emailFirst, err := s.EmailOTPs().Get(ctx, email.Subject)
+	if err != nil {
+		t.Fatalf("first email OTP Get: %v", err)
+	}
+	if err := s.EmailOTPs().Put(ctx, emailFirst); err != nil {
+		t.Fatalf("same-value email OTP Put with clientFoundRows=true: %v", err)
+	}
+	emailSecond, err := s.EmailOTPs().Get(ctx, email.Subject)
+	if err != nil {
+		t.Fatalf("second email OTP Get: %v", err)
+	}
+	if emailSecond.Version == 0 || emailSecond.Version == emailFirst.Version {
+		t.Fatalf("email OTP repeated Put Version = %d, want a fresh token after %d", emailSecond.Version, emailFirst.Version)
+	}
 }

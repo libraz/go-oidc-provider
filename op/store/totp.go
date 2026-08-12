@@ -24,6 +24,18 @@ type TOTPRecord struct {
 	// subject.
 	Subject string
 
+	// Version is an opaque, store-issued compare-and-swap token. Zero means the
+	// value has not been persisted. Backends assign a fresh non-zero token on
+	// Put and every successful transition that leaves a record stored. Tokens
+	// are equality-only: a
+	// caller MUST NOT infer ordering or arithmetic from them. In particular, a
+	// backend MUST NOT intentionally reuse a token for the same subject after
+	// replacement, deletion, or re-creation; that prevents an old snapshot
+	// from becoming valid again after an ABA lifecycle. The caller must carry
+	// the value from Get into CompareAndSwap / Accept and must not modify either
+	// input record when the backend assigns the stored successor token.
+	Version uint64 `json:"-"`
+
 	// SecretCiphertext is the encrypted RFC 6238 shared secret. The
 	// blob is produced by internal/authn/totp.Codec.Seal and consumed
 	// by Codec.Open. Its layout (nonce prefix, GCM tag suffix) is an
@@ -85,31 +97,43 @@ type TOTPStore interface {
 	Get(ctx context.Context, subject string) (*TOTPRecord, error)
 
 	// Put creates or replaces the enrolment for r.Subject. Backends
-	// implement upsert semantics. The library uses Put for enrolment
-	// setup; verification transitions use CompareAndSwap or Accept so a
-	// stale snapshot cannot overwrite replay state or counters.
+	// implement upsert semantics and assign a fresh Version to their stored
+	// clone; they ignore r.Version and MUST NOT mutate r. The library uses Put
+	// for enrolment setup; verification transitions use CompareAndSwap or Accept
+	// so a stale snapshot cannot overwrite replay state or counters.
 	Put(ctx context.Context, r *TOTPRecord) error
 
 	// CompareAndSwap replaces previous with next only when the stored
-	// enrolment still exactly matches previous. It returns ErrAlreadyConsumed
-	// when another verification or failure update won the race, preventing
-	// a stale wrong-code write from rolling LastAcceptedStep or counters
-	// backward.
+	// enrolment's Version still equals previous.Version. It returns
+	// ErrAlreadyConsumed when another verification or failure update won the
+	// race, preventing a stale wrong-code write from rolling LastAcceptedStep
+	// or counters backward. next.Version MUST equal previous.Version; the
+	// backend assigns a fresh opaque successor token to its stored clone and
+	// MUST NOT mutate either caller-owned record. A zero, signed-max, or otherwise
+	// malformed generation snapshot is reported as [ErrAlreadyConsumed], the
+	// same retry/conflict signal used for a stale snapshot.
 	CompareAndSwap(ctx context.Context, previous, next *TOTPRecord) error
 
 	// Accept atomically persists a successful verification result. It
 	// MUST succeed for at most one caller for a given TOTP step and
 	// MUST return [ErrAlreadyConsumed] when the stored
 	// LastAcceptedStep is already greater than or equal to
-	// r.LastAcceptedStep. Failed-code counter updates continue to use
-	// CompareAndSwap; Accept exists solely for the single-use success
-	// transition.
+	// r.LastAcceptedStep. In addition to the step monotonicity check, the
+	// stored enrollment identity and generation MUST still match r: at minimum,
+	// SecretCiphertext and ConfirmedAt must be equal. This prevents a
+	// verification that read an old enrollment from replacing a newer one
+	// installed while the code was being checked. A mismatch is reported as
+	// [ErrAlreadyConsumed], the same retry/conflict signal used for a replay.
+	// A zero or signed-max generation is likewise rejected with
+	// [ErrAlreadyConsumed].
+	// Failed-code counter updates continue to use CompareAndSwap; Accept
+	// exists solely for the single-use success transition.
 	Accept(ctx context.Context, r *TOTPRecord) error
 
 	// Delete removes the enrolment for subject. It MUST return
 	// [ErrNotFound] if no such enrolment exists so callers can
-	// distinguish a no-op delete from a successful one. The library
-	// invokes Delete when the user unenrols TOTP from the account
-	// management UI or after a successful recovery-code-driven reset.
+	// distinguish a no-op delete from a successful one. Account-management
+	// and recovery flows implemented by the embedder use it when they remove an
+	// enrolment.
 	Delete(ctx context.Context, subject string) error
 }

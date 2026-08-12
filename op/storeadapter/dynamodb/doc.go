@@ -29,9 +29,10 @@
 // attributes any index or condition expression needs, a TTL attribute,
 // and the record itself as a JSON document under a single attribute.
 // Projecting only the queried attributes keeps the mapping readable and
-// keeps a record-shape change from requiring a table migration; the
-// document is never the target of a condition expression, so nothing
-// depends on its internal encoding.
+// keeps a record-shape change from requiring a table migration. Most
+// transitions use projected attributes; the MFA tables additionally bind
+// the opaque document in their CAS predicates so legacy rows and
+// delete/recreate ABA lifecycles cannot pass an old snapshot.
 //
 // # Expiry
 //
@@ -60,9 +61,10 @@
 //
 // # Atomicity
 //
-// No write in the adapter is a "read, decide, put back": every decision
-// a record encodes is one the OP makes concurrently by design, and a
-// read-modify-write would let the caller that read first write last.
+// No unguarded write in the adapter is a "read, decide, put back": every
+// decision a record encodes is guarded by a conditional write. A bounded
+// read followed by a conditional replacement is used where the predicate
+// needs the complete MFA document, and a stale reader still loses.
 //
 // The brute-force counters — device-code user_code strikes and the
 // poll-violation counters of the device and CIBA flows — are projected

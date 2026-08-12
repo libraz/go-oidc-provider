@@ -250,10 +250,11 @@ type CIBARequestStore interface {
 	// Approve atomically transitions a Pending record to Approved
 	// and stamps the supplied subject, satisfied ACR, and authTime. The library
 	// invokes Approve from the embedder's authentication device
-	// callback; the subject parameter overrides any previously
-	// stored value so an embedder that defers user resolution to
-	// the auth device can stamp the verified identity at the same
-	// point. acr is the authentication context class reference the
+	// callback. If the record already has a non-empty Subject, subject
+	// MUST be identical; a mismatch returns [ErrConflict] and leaves the
+	// record untouched. A legacy/deferred record whose Subject is empty may
+	// be populated exactly once by the approval. acr is the authentication
+	// context class reference the
 	// device actually satisfied; it may be empty when the deployment
 	// has no comparable ACR vocabulary. authTime captures the wall-clock at which the end
 	// user completed the authentication-device interaction; the

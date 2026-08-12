@@ -31,6 +31,16 @@ func encodeStrings(s []string) []byte {
 	return b
 }
 
+// encodeNullableStrings preserves a nil allowlist as SQL NULL. A nil RAT
+// ceiling means unrestricted and is distinct from an explicitly supplied
+// empty JSON array for callers that care about round-trip shape.
+func encodeNullableStrings(s []string) any {
+	if s == nil {
+		return nil
+	}
+	return encodeStrings(s)
+}
+
 // decodeStrings deserialises bytes written by encodeStrings. Empty or
 // JSON-null inputs decode to a nil slice so contract tests that
 // observe equality on (nil) keep their semantics.

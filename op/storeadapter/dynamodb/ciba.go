@@ -92,7 +92,7 @@ func (s *cibaRequestStore) Approve(
 		rec.ACR = acr
 		rec.AuthTime = authTime
 		return nil
-	}, int64(store.CIBARequestStatusPending))
+	}, int64(store.CIBARequestStatusPending), subject)
 }
 
 func (s *cibaRequestStore) Deny(ctx context.Context, authReqID, reason string) error {
@@ -173,15 +173,29 @@ func (s *cibaRequestStore) Consume(ctx context.Context, authReqID string) (*stor
 // alone: it is incremented in place by callers that race this one, and
 // a full item write would roll back whichever increments landed since
 // the record was read.
+//
+//nolint:gocognit // The atomic status and legacy-subject predicates must stay adjacent to the mutation they protect.
 func (s *cibaRequestStore) transition(
 	ctx context.Context,
 	pk string,
 	mutate func(*store.CIBARequest) error,
 	expectStatus int64,
+	expectedSubject ...string,
 ) error {
 	rec, err := s.findLive(ctx, pk)
 	if err != nil {
 		return err
+	}
+	// Keep the identity observed before mutate. Approve deliberately fills
+	// an empty legacy/deferred subject, so inspecting rec.Subject after the
+	// mutation would turn the one allowed population into an equality check
+	// against an attribute that is still absent in the stored item.
+	subjectWasEmpty := false
+	if len(expectedSubject) > 0 {
+		subjectWasEmpty = rec.Subject == ""
+		if !subjectWasEmpty && rec.Subject != expectedSubject[0] {
+			return store.ErrConflict
+		}
 	}
 	if err := mutate(rec); err != nil {
 		return err
@@ -199,6 +213,24 @@ func (s *cibaRequestStore) transition(
 		in.ExpressionAttributeValues[":expected"] = avN(expectStatus)
 	} else {
 		in.ConditionExpression = aws.String("attribute_exists(#pk)")
+	}
+	if len(expectedSubject) > 0 {
+		in.ExpressionAttributeNames["#subject"] = attrSubject
+		// cibaItem omits an empty subject, so a missing projection means
+		// that this is the one legacy/deferred population allowed by the
+		// contract. A non-empty subject must already be projected and is
+		// compared exactly. Deriving the predicate from the strongly
+		// consistent record read also keeps old rows written before the
+		// projection was introduced safe: a non-empty subject with no
+		// projection fails closed instead of being treated as deferred.
+		if subjectWasEmpty {
+			in.ConditionExpression = aws.String(*in.ConditionExpression +
+				" AND attribute_not_exists(#subject)")
+		} else {
+			in.ConditionExpression = aws.String(*in.ConditionExpression +
+				" AND #subject = :subject")
+			in.ExpressionAttributeValues[":subject"] = avS(expectedSubject[0])
+		}
 	}
 
 	if _, err := s.parent.api.UpdateItem(ctx, in); err != nil {
@@ -226,6 +258,7 @@ func cibaItem(req *store.CIBARequest, pk string) (item, error) {
 	}
 	entry.expires(req.ExpiresAt)
 	entry.set(attrClientID, req.ClientID)
+	entry.set(attrSubject, req.Subject)
 	entry.setN(attrStatus, int64(stored.Status))
 	entry.setTime(attrIssuedAt, req.IssuedAt)
 	// The poll-violation counter is projected so it can be incremented

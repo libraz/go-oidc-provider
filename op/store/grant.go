@@ -88,6 +88,16 @@ type GrantClientPage struct {
 	NextCursor string
 }
 
+// GrantSubjectPage is one keyset-paginated page of distinct subjects that
+// currently hold an active grant for a client. Subjects use the backend's
+// stable ascending subject order and never contain duplicates. NextCursor is
+// empty when the page is exhausted; otherwise callers pass it unchanged to
+// the next [GrantSubjectLister.ListSubjectsByClient] call.
+type GrantSubjectPage struct {
+	Subjects   []string
+	NextCursor string
+}
+
 // GrantStore is the substore for persisted consent. It belongs to the
 // atomic-routing cluster because grant updates accompany authorization-code
 // exchanges, refresh-token rotations, and revocation cascades.
@@ -182,4 +192,21 @@ type GrantClientLister interface {
 	// calling ListBySubject and slicing the materialised result, because that
 	// defeats the method's resource bound.
 	ListClientIDsBySubject(ctx context.Context, subject, cursor string, limit int) (GrantClientPage, error)
+}
+
+// GrantSubjectLister extends [GrantStore] with the bounded, keyset-paginated
+// subject enumeration needed when deleting a client. The registration
+// endpoint uses this optional view to snapshot back-channel logout targets
+// before the client's grants are removed. Backends that do not support direct
+// deletion fan-out may omit it and retain the registration endpoint's delete
+// hook as their fallback.
+type GrantSubjectLister interface {
+	GrantStore
+
+	// ListSubjectsByClient returns at most limit distinct subjects for the
+	// client, strictly after cursor in the backend's stable ascending
+	// subject order. limit MUST be positive. Implementations MUST bound
+	// backend work to limit+1 rows (or use an equivalent native cursor) so
+	// callers can detect another page without materialising every grant.
+	ListSubjectsByClient(ctx context.Context, clientID, cursor string, limit int) (GrantSubjectPage, error)
 }

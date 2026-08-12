@@ -4,6 +4,7 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -21,7 +22,7 @@ func (s *ratStore) runner() runner { return pickRunner(s.parent, s.tx) }
 
 func (s *ratStore) Put(ctx context.Context, t *store.RegistrationAccessToken) error {
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.ratPut,
-		t.ClientID, t.HashedValue, timeToInt64(t.CreatedAt))
+		t.ClientID, t.HashedValue, encodeNullableStrings(t.AllowedScopes), timeToInt64(t.CreatedAt))
 	if err != nil {
 		return wrapErr("rats.Put", err)
 	}
@@ -31,10 +32,11 @@ func (s *ratStore) Put(ctx context.Context, t *store.RegistrationAccessToken) er
 func (s *ratStore) GetByClientID(ctx context.Context, clientID string) (*store.RegistrationAccessToken, error) {
 	var (
 		t       store.RegistrationAccessToken
+		scopes  []byte
 		created int64
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.ratGetByClientID, clientID).Scan(
-		&t.ClientID, &t.HashedValue, &created,
+		&t.ClientID, &t.HashedValue, &scopes, &created,
 	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
@@ -42,6 +44,11 @@ func (s *ratStore) GetByClientID(ctx context.Context, clientID string) (*store.R
 	if err != nil {
 		return nil, wrapErr("rats.GetByClientID", err)
 	}
+	dec, err := decodeStrings(scopes)
+	if err != nil {
+		return nil, fmt.Errorf("oidcsql: rats.GetByClientID allowed scopes: %w", err)
+	}
+	t.AllowedScopes = dec
 	t.CreatedAt = int64ToTime(created)
 	return &t, nil
 }

@@ -20,6 +20,18 @@ type EmailOTPRecord struct {
 	// hash via CodeSalt so a record copied across subjects fails verify.
 	Subject string
 
+	// Version is an opaque, store-issued compare-and-swap token. Zero means the
+	// value has not been persisted. Backends assign a fresh non-zero token on
+	// Put and every successful transition that leaves a record stored. Tokens
+	// are equality-only: a
+	// caller MUST NOT infer ordering or arithmetic from them. In particular, a
+	// backend MUST NOT intentionally reuse a token for the same subject after
+	// replacement, deletion, or re-creation; that prevents an old snapshot
+	// from becoming valid again after an ABA lifecycle. The caller must carry
+	// the value from Get into CompareAndSwap / Consume and must not modify either
+	// input record when the backend assigns the stored successor token.
+	Version uint64 `json:"-"`
+
 	// CodeSalt is the 16-byte random salt mixed into CodeHash. The
 	// library generates a fresh salt on every code issuance; backends
 	// store and return the bytes verbatim.
@@ -134,15 +146,23 @@ type EmailOTPStore interface {
 	Get(ctx context.Context, subject string) (*EmailOTPRecord, error)
 
 	// Put creates or replaces the pending challenge for r.Subject.
-	// Backends implement upsert semantics. The library uses Put only
-	// for explicit setup/migration paths; authentication transitions
-	// use CompareAndSwap or Consume so a stale snapshot cannot overwrite
-	// a newer challenge or a successful redemption.
+	// Backends implement upsert semantics and assign a fresh Version to their
+	// stored clone; they ignore r.Version and MUST NOT mutate r. The library uses
+	// Put only for explicit setup/migration paths; authentication transitions use
+	// CompareAndSwap or Consume so a stale snapshot cannot overwrite a newer
+	// challenge or a successful redemption.
 	Put(ctx context.Context, r *EmailOTPRecord) error
 
 	// CompareAndSwap replaces previous with next only when the stored
-	// challenge still exactly matches previous. It returns ErrAlreadyConsumed
-	// when another verification, failure update, or resend won the race.
+	// challenge's Version still equals previous.Version. It returns
+	// ErrAlreadyConsumed when another verification, failure update, or resend
+	// won the race. next.Version MUST equal previous.Version; the backend
+	// assigns a fresh opaque successor token to its stored clone and MUST NOT
+	// mutate either caller-owned record. For a non-nil previous, a zero, signed-max,
+	// or otherwise malformed generation snapshot is reported as
+	// [ErrAlreadyConsumed]. The nil-previous reservation has no snapshot token:
+	// next.Version is conventionally zero, is ignored by the backend, and remains
+	// unchanged in the caller-owned record.
 	// Authenticators use it for every failure counter update and resend
 	// reservation so stale read-modify-write snapshots can never erase a
 	// successful Consume or a newer challenge.
@@ -160,14 +180,22 @@ type EmailOTPStore interface {
 	CompareAndSwap(ctx context.Context, previous, next *EmailOTPRecord) error
 
 	// Consume atomically marks the pending challenge represented by r
-	// as consumed. It MUST succeed for at most one caller observing the
+	// as consumed when the stored Version still equals r.Version. It MUST
+	// succeed for at most one caller observing the
 	// same unconsumed challenge and MUST return [ErrAlreadyConsumed]
 	// when another caller has already consumed it. Backends SHOULD
 	// verify that the stored challenge still matches r.CodeSalt /
 	// r.CodeHash before stamping ConsumedAt so a stale success cannot
 	// consume a newer code issued for the same subject; a mismatch is
 	// reported as [ErrAlreadyConsumed] because the code the caller holds
-	// has been superseded.
+	// has been superseded. A zero or signed-max generation is also rejected
+	// with [ErrAlreadyConsumed].
+	//
+	// r is the successful verifier result, so it may also clear
+	// FailedCount, FirstFailureAt, and LockedUntil while stamping
+	// ConsumedAt. Backends MUST persist that verification-owned transition;
+	// they must not reject it merely because those mutable counters differ
+	// from the pre-verification record.
 	//
 	// A challenge whose [EmailOTPRecord.ExpiresAt] has passed MUST be
 	// rejected with [ErrNotFound] even while the record is still
@@ -177,8 +205,9 @@ type EmailOTPStore interface {
 
 	// Delete removes the pending challenge for subject. It MUST return
 	// [ErrNotFound] if no such challenge exists so callers can
-	// distinguish a no-op delete from a successful one. The library
-	// invokes Delete on a successful verify to enforce the single-use
-	// semantic.
+	// distinguish a no-op delete from a successful one. Embedders use it for
+	// account cleanup or explicit challenge cancellation; successful verification
+	// is persisted through Consume so counters and consumed-state retention remain
+	// available.
 	Delete(ctx context.Context, subject string) error
 }

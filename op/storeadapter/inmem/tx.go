@@ -698,6 +698,25 @@ func (g *txGrants) ListClientIDsBySubject(
 	return builder.page(), nil
 }
 
+func (g *txGrants) ListSubjectsByClient(
+	ctx context.Context,
+	clientID, cursor string,
+	limit int,
+) (store.GrantSubjectPage, error) {
+	if g.tx.closed.Load() {
+		return store.GrantSubjectPage{}, errTxClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return store.GrantSubjectPage{}, err
+	}
+	if limit <= 0 {
+		return store.GrantSubjectPage{}, errors.New("inmem: grant subject page limit must be positive")
+	}
+	builder := newGrantSubjectPageBuilder(cursor, limit)
+	g.tx.grStaging.addSubjectsByClient(clientID, builder)
+	return builder.page(), nil
+}
+
 // collectBySubject is the staging-aware companion to
 // [grantStore.ListBySubject]: it walks the staged-add map and the
 // parent map (already transaction-locked), filtering out deletes and per-tx
@@ -737,6 +756,31 @@ func (s *grantStaging) addClientIDsBySubject(
 	consider := func(rec *store.Grant) {
 		if rec.Subject == subject {
 			builder.add(rec.ClientID)
+		}
+	}
+	for id, rec := range s.added {
+		if _, deleted := s.deleted[id]; !deleted {
+			consider(rec)
+		}
+	}
+	for id, rec := range s.parent.m {
+		if _, deleted := s.deleted[id]; deleted {
+			continue
+		}
+		if _, override := s.added[id]; override {
+			continue
+		}
+		consider(rec)
+	}
+}
+
+func (s *grantStaging) addSubjectsByClient(
+	clientID string,
+	builder *grantSubjectPageBuilder,
+) {
+	consider := func(rec *store.Grant) {
+		if rec.ClientID == clientID {
+			builder.add(rec.Subject)
 		}
 	}
 	for id, rec := range s.added {

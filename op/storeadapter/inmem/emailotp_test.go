@@ -14,12 +14,13 @@ import (
 )
 
 func newEmailOTPRecord(subject string) *store.EmailOTPRecord {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	return &store.EmailOTPRecord{
 		Subject:   subject,
 		CodeSalt:  []byte{0x01, 0x02, 0x03},
 		CodeHash:  []byte{0xaa, 0xbb, 0xcc},
-		SentAt:    time.Now().UTC(),
-		ExpiresAt: time.Now().UTC().Add(time.Hour),
+		SentAt:    now,
+		ExpiresAt: now.Add(time.Hour),
 	}
 }
 
@@ -82,15 +83,19 @@ func TestEmailOTPStore_RetainUntilOutlivesCodeExpiry(t *testing.T) {
 func TestEmailOTPStore_ConsumeRaceSingleWinner(t *testing.T) {
 	t.Parallel()
 
-	s := inmem.New()
+	s := inmem.New(inmem.WithClock(&emailOTPTestClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}))
 	es := s.EmailOTPs()
 	ctx := context.Background()
 	rec := newEmailOTPRecord("user-alice")
 	if err := es.Put(ctx, rec); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	consumed := *rec
-	consumed.ConsumedAt = time.Now().UTC()
+	consumed, err := es.Get(ctx, rec.Subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	consumedVersion := consumed.Version
+	consumed.ConsumedAt = time.Date(2026, 1, 1, 0, 30, 0, 0, time.UTC)
 
 	var wins atomic.Int64
 	var wg sync.WaitGroup
@@ -98,7 +103,7 @@ func TestEmailOTPStore_ConsumeRaceSingleWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := es.Consume(ctx, &consumed)
+			err := es.Consume(ctx, consumed)
 			switch {
 			case err == nil:
 				wins.Add(1)
@@ -118,6 +123,9 @@ func TestEmailOTPStore_ConsumeRaceSingleWinner(t *testing.T) {
 	}
 	if got.ConsumedAt.IsZero() {
 		t.Fatal("ConsumedAt was not persisted")
+	}
+	if consumed.Version != consumedVersion {
+		t.Fatalf("Consume mutated caller Version = %d, want %d", consumed.Version, consumedVersion)
 	}
 }
 
@@ -178,18 +186,22 @@ func TestEmailOTPStore_CompareAndSwapCannotUndoResend(t *testing.T) {
 	if err := s.EmailOTPs().Put(ctx, old); err != nil {
 		t.Fatalf("Put(old): %v", err)
 	}
+	snapshot, err := s.EmailOTPs().Get(ctx, old.Subject)
+	if err != nil {
+		t.Fatalf("Get snapshot: %v", err)
+	}
 
-	newChallenge := *old
+	newChallenge := *snapshot
 	newChallenge.CodeSalt = []byte("new-salt")
 	newChallenge.CodeHash = []byte("new-hash")
 	newChallenge.SendCount = 2
-	if err := s.EmailOTPs().CompareAndSwap(ctx, old, &newChallenge); err != nil {
+	if err := s.EmailOTPs().CompareAndSwap(ctx, snapshot, &newChallenge); err != nil {
 		t.Fatalf("CompareAndSwap(resend): %v", err)
 	}
 
-	staleFailure := *old
+	staleFailure := *snapshot
 	staleFailure.FailedCount = 1
-	if err := s.EmailOTPs().CompareAndSwap(ctx, old, &staleFailure); !errors.Is(err, store.ErrAlreadyConsumed) {
+	if err := s.EmailOTPs().CompareAndSwap(ctx, snapshot, &staleFailure); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("CompareAndSwap(stale failure) = %v, want ErrAlreadyConsumed", err)
 	}
 	got, err := s.EmailOTPs().Get(ctx, old.Subject)
@@ -207,7 +219,7 @@ func TestEmailOTPStore_CompareAndSwapCannotUndoResend(t *testing.T) {
 func TestEmailOTPStore_CompareAndSwapResendSingleWinner(t *testing.T) {
 	t.Parallel()
 
-	s := inmem.New()
+	s := inmem.New(inmem.WithClock(&emailOTPTestClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}))
 	ctx := context.Background()
 	prior := newEmailOTPRecord("alice")
 	if err := s.EmailOTPs().Put(ctx, prior); err != nil {

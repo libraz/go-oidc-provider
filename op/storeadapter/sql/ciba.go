@@ -85,7 +85,7 @@ func (s *cibaRequestStore) Approve(ctx context.Context, authReqID, subject, acr 
 	idDigest := patterns.Digest(authReqID)
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.cibaApprove,
 		int64(store.CIBARequestStatusApproved), subject, acr, timeToInt64(authTime),
-		idDigest, int64(store.CIBARequestStatusPending), s.now())
+		idDigest, int64(store.CIBARequestStatusPending), subject, "", s.now())
 	if err != nil {
 		return wrapErr("ciba.Approve", err)
 	}

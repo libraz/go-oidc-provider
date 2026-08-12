@@ -178,7 +178,7 @@ func run(logger *slog.Logger) error {
 // backend bundles the stores the application wires into the provider.
 type backend struct {
 	members *memberStore
-	totps   *mysqlTOTPStore
+	totps   opstore.TOTPStore
 	storage *composite.Store
 }
 
@@ -218,15 +218,10 @@ func openBackend(ctx context.Context, cfg config, logger *slog.Logger) (backend,
 		closeDB()
 		return backend{}, nil, err
 	}
-	// The bundled SQL adapter does not persist authentication factors, so
-	// the application supplies its own TOTP substore (totpstore.go). That
-	// split is the library's design rather than a gap: factor schemas and
-	// key management are deployment decisions.
-	totps, err := newTOTPStore(ctx, db)
-	if err != nil {
-		closeDB()
-		return backend{}, nil, err
-	}
+	// The durable SQL adapter owns the factor schema and its opaque CAS
+	// token semantics. The sample only wires that contract into the flow;
+	// account-specific columns remain in memberStore.
+	totps := durable.TOTPs()
 
 	volatile, err := newRedis(ctx, cfg, logger)
 	if err != nil {

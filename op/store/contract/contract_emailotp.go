@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -49,15 +51,20 @@ func RunEmailOTPs(t *testing.T, f EmailOTPFactory) {
 		{"RetentionFallsBackToExpiresAt", emailOTPRetentionFallback},
 		{"CompareAndSwapAppliesNext", emailOTPCASApplies},
 		{"CompareAndSwapStaleSnapshotRejected", emailOTPCASStale},
+		{"CompareAndSwapRejectsInvalidVersion", emailOTPCASInvalidVersion},
+		{"CompareAndSwapIdenticalHasOneWinner", emailOTPCASIdentical},
 		{"NilPreviousReservesFirstSend", emailOTPCASReserves},
 		{"NilPreviousRejectsLiveRecord", emailOTPCASReserveOccupied},
 		{"NilPreviousReclaimsRecordPastRetention", emailOTPCASReserveReclaims},
 		{"ConcurrentFirstSendHasOneWinner", emailOTPConcurrentReserve},
 		{"ConsumeStampsConsumedAt", emailOTPConsume},
+		{"ConsumeClearsVerifierFailureState", emailOTPConsumeClearsVerifierFailureState},
 		{"ConsumeTwiceRejected", emailOTPConsumeTwice},
 		{"ConsumeExpiredCodeRejected", emailOTPConsumeExpired},
 		{"ConsumeSupersededCodeRejected", emailOTPConsumeSuperseded},
+		{"ConsumeRejectsInvalidVersion", emailOTPConsumeInvalidVersion},
 		{"DeleteRemovesChallenge", emailOTPDelete},
+		{"DeleteRecreateRejectsStaleSnapshot", emailOTPDeleteRecreateRejectsStaleSnapshot},
 		{"DeleteMissing", emailOTPDeleteMissing},
 		{"DefensiveCopies", emailOTPDefensiveCopies},
 		{"ConcurrentCompareAndSwapHasOneWinner", emailOTPConcurrentCAS},
@@ -81,6 +88,7 @@ func emailOTPRoundTrip(t *testing.T, b EmailOTPBackend) {
 	t.Helper()
 	ctx := context.Background()
 	want := emailOTPContractRecord(b.Now())
+	want.Version = math.MaxInt64
 	if err := b.Store.Put(ctx, want); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -88,6 +96,13 @@ func emailOTPRoundTrip(t *testing.T, b EmailOTPBackend) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
+	if !validEmailOTPVersion(got.Version) {
+		t.Fatalf("Put assigned invalid Version %d", got.Version)
+	}
+	if want.Version != math.MaxInt64 {
+		t.Fatalf("Put mutated caller Version = %d", want.Version)
+	}
+	want.Version = got.Version
 	assertEmailOTPEqual(t, got, want)
 }
 
@@ -168,17 +183,24 @@ func emailOTPCASApplies(t *testing.T, b EmailOTPBackend) {
 	}
 
 	next := *previous
+	next.Version = previous.Version
 	next.FailedCount = previous.FailedCount + 1
 	next.SendCount = previous.SendCount + 1
+	previousBefore, nextBefore := cloneContractEmailOTP(previous), cloneContractEmailOTP(&next)
 	if err := b.Store.CompareAndSwap(ctx, previous, &next); err != nil {
 		t.Fatalf("CompareAndSwap: %v", err)
 	}
+	assertContractEmailOTPUnchanged(t, "CAS previous", previous, previousBefore)
+	assertContractEmailOTPUnchanged(t, "CAS next", &next, nextBefore)
 
 	got, err := b.Store.Get(ctx, seed.Subject)
 	if err != nil {
 		t.Fatalf("Get after swap: %v", err)
 	}
-	assertEmailOTPEqual(t, got, &next)
+	expected := next
+	expected.Version = got.Version
+	assertEmailOTPVersionChanged(t, previous.Version, got.Version)
+	assertEmailOTPEqual(t, got, &expected)
 }
 
 func emailOTPCASStale(t *testing.T, b EmailOTPBackend) {
@@ -194,23 +216,112 @@ func emailOTPCASStale(t *testing.T, b EmailOTPBackend) {
 	}
 
 	winner := *stale
+	winner.Version = stale.Version
 	winner.FailedCount = stale.FailedCount + 1
+	staleBefore, winnerBefore := cloneContractEmailOTP(stale), cloneContractEmailOTP(&winner)
 	if err := b.Store.CompareAndSwap(ctx, stale, &winner); err != nil {
 		t.Fatalf("CompareAndSwap winner: %v", err)
 	}
+	assertContractEmailOTPUnchanged(t, "winner previous", stale, staleBefore)
+	assertContractEmailOTPUnchanged(t, "winner next", &winner, winnerBefore)
 
 	loser := *stale
 	loser.FailedCount = 0
 	loser.SendCount = 0
+	loserBefore := cloneContractEmailOTP(&loser)
 	if err := b.Store.CompareAndSwap(ctx, stale, &loser); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("CompareAndSwap stale error = %v, want ErrAlreadyConsumed", err)
 	}
+	assertContractEmailOTPUnchanged(t, "rejected next", &loser, loserBefore)
 
 	got, err := b.Store.Get(ctx, seed.Subject)
 	if err != nil {
 		t.Fatalf("Get after rejected swap: %v", err)
 	}
-	assertEmailOTPEqual(t, got, &winner)
+	expected := winner
+	expected.Version = got.Version
+	assertEmailOTPVersionChanged(t, stale.Version, got.Version)
+	assertEmailOTPEqual(t, got, &expected)
+}
+
+func emailOTPCASInvalidVersion(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	seed := emailOTPContractRecord(b.Now())
+	if err := b.Store.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	previous, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+
+	unequal := *previous
+	unequal.Version++
+	if err := b.Store.CompareAndSwap(ctx, previous, &unequal); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap unequal Version = %v, want ErrAlreadyConsumed", err)
+	}
+
+	maxed := *previous
+	maxed.Version = math.MaxInt64
+	maxedBefore := cloneContractEmailOTP(&maxed)
+	if err := b.Store.CompareAndSwap(ctx, &maxed, &maxed); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap signed-max Version = %v, want ErrAlreadyConsumed", err)
+	}
+	assertContractEmailOTPUnchanged(t, "invalid CAS input", &maxed, maxedBefore)
+}
+
+func emailOTPCASIdentical(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	seed := emailOTPContractRecord(b.Now())
+	if err := b.Store.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	previous, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		next := *previous
+		next.CodeSalt = bytes.Clone(previous.CodeSalt)
+		next.CodeHash = bytes.Clone(previous.CodeHash)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			<-release
+			errs <- b.Store.CompareAndSwap(ctx, previous, &next)
+		}()
+	}
+	<-ready
+	<-ready
+	close(release)
+	wg.Wait()
+
+	winners := 0
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			winners++
+		case errors.Is(err, store.ErrAlreadyConsumed):
+		default:
+			t.Fatalf("CompareAndSwap identical: %v", err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("successful identical transitions = %d, want 1", winners)
+	}
+	got, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after identical CAS: %v", err)
+	}
+	assertEmailOTPVersionChanged(t, previous.Version, got.Version)
 }
 
 func emailOTPConsume(t *testing.T, b EmailOTPBackend) {
@@ -226,10 +337,13 @@ func emailOTPConsume(t *testing.T, b EmailOTPBackend) {
 		t.Fatalf("Get seed: %v", err)
 	}
 
+	presentedVersion := presented.Version
 	presented.ConsumedAt = now
+	presentedBefore := cloneContractEmailOTP(presented)
 	if err := b.Store.Consume(ctx, presented); err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
+	assertContractEmailOTPUnchanged(t, "Consume input", presented, presentedBefore)
 
 	got, err := b.Store.Get(ctx, seed.Subject)
 	if err != nil {
@@ -238,6 +352,60 @@ func emailOTPConsume(t *testing.T, b EmailOTPBackend) {
 	if !got.ConsumedAt.Equal(now) {
 		t.Fatalf("ConsumedAt = %v, want %v", got.ConsumedAt, now)
 	}
+	assertEmailOTPVersionChanged(t, presentedVersion, got.Version)
+}
+
+// emailOTPConsumeClearsVerifierFailureState mirrors a successful code entry
+// after one or more wrong guesses. The verifier resets those counters and
+// stamps ConsumedAt on the same record it read; Consume must accept that
+// legitimate transition rather than requiring byte-for-byte equality with the
+// pre-verification snapshot.
+func emailOTPConsumeClearsVerifierFailureState(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	now := b.Now()
+	seed := emailOTPContractRecord(now)
+	if err := b.Store.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	previous, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+	failed := *previous
+	failed.Version = previous.Version
+	failed.FailedCount = 2
+	failed.FirstFailureAt = now.Add(-time.Minute)
+	if err := b.Store.CompareAndSwap(ctx, previous, &failed); err != nil {
+		t.Fatalf("CompareAndSwap failed-attempt state: %v", err)
+	}
+
+	presented, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get failed-attempt state: %v", err)
+	}
+	presentedVersion := presented.Version
+	presented.FailedCount = 0
+	presented.FirstFailureAt = time.Time{}
+	presented.LockedUntil = time.Time{}
+	presented.ConsumedAt = now
+	presentedBefore := cloneContractEmailOTP(presented)
+	if err := b.Store.Consume(ctx, presented); err != nil {
+		t.Fatalf("Consume after failed attempts: %v", err)
+	}
+	assertContractEmailOTPUnchanged(t, "Consume after failed attempts input", presented, presentedBefore)
+
+	got, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after consume: %v", err)
+	}
+	if got.FailedCount != 0 || !got.FirstFailureAt.IsZero() || !got.LockedUntil.IsZero() {
+		t.Fatalf("successful consume did not clear verifier state: %+v", got)
+	}
+	if !got.ConsumedAt.Equal(now) {
+		t.Fatalf("ConsumedAt = %v, want %v", got.ConsumedAt, now)
+	}
+	assertEmailOTPVersionChanged(t, presentedVersion, got.Version)
 }
 
 func emailOTPConsumeTwice(t *testing.T, b EmailOTPBackend) {
@@ -252,19 +420,32 @@ func emailOTPConsumeTwice(t *testing.T, b EmailOTPBackend) {
 	if err != nil {
 		t.Fatalf("Get seed: %v", err)
 	}
+	presentedVersion := presented.Version
 	presented.ConsumedAt = now
+	presentedBefore := cloneContractEmailOTP(presented)
 	if err := b.Store.Consume(ctx, presented); err != nil {
 		t.Fatalf("Consume first: %v", err)
 	}
+	assertContractEmailOTPUnchanged(t, "first Consume input", presented, presentedBefore)
+	first, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after first consume: %v", err)
+	}
+	firstVersion := first.Version
+	assertEmailOTPVersionChanged(t, presentedVersion, firstVersion)
 
 	replay, err := b.Store.Get(ctx, seed.Subject)
 	if err != nil {
 		t.Fatalf("Get before replay: %v", err)
 	}
 	replay.ConsumedAt = now.Add(time.Minute)
+	replayVersion := replay.Version
+	replayBefore := cloneContractEmailOTP(replay)
 	if err := b.Store.Consume(ctx, replay); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("Consume replay error = %v, want ErrAlreadyConsumed", err)
 	}
+	_ = replayVersion
+	assertContractEmailOTPUnchanged(t, "rejected Consume input", replay, replayBefore)
 
 	got, err := b.Store.Get(ctx, seed.Subject)
 	if err != nil {
@@ -272,6 +453,9 @@ func emailOTPConsumeTwice(t *testing.T, b EmailOTPBackend) {
 	}
 	if !got.ConsumedAt.Equal(now) {
 		t.Fatalf("ConsumedAt = %v, want the first redemption at %v", got.ConsumedAt, now)
+	}
+	if got.Version != firstVersion {
+		t.Fatalf("Consume replay changed Version = %d, want %d", got.Version, firstVersion)
 	}
 }
 
@@ -342,6 +526,27 @@ func emailOTPConsumeSuperseded(t *testing.T, b EmailOTPBackend) {
 	}
 }
 
+func emailOTPConsumeInvalidVersion(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	now := b.Now()
+	seed := emailOTPContractRecord(now)
+	if err := b.Store.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	presented, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+	presented.Version = math.MaxInt64
+	presented.ConsumedAt = now
+	presentedBefore := cloneContractEmailOTP(presented)
+	if err := b.Store.Consume(ctx, presented); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("Consume signed-max Version = %v, want ErrAlreadyConsumed", err)
+	}
+	assertContractEmailOTPUnchanged(t, "invalid Consume input", presented, presentedBefore)
+}
+
 func emailOTPDelete(t *testing.T, b EmailOTPBackend) {
 	t.Helper()
 	ctx := context.Background()
@@ -357,10 +562,83 @@ func emailOTPDelete(t *testing.T, b EmailOTPBackend) {
 	}
 }
 
+func emailOTPDeleteRecreateRejectsStaleSnapshot(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	seed := emailOTPContractRecord(b.Now())
+	if err := b.Store.Put(ctx, seed); err != nil {
+		t.Fatalf("Put seed: %v", err)
+	}
+	stale, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get stale: %v", err)
+	}
+	if err := b.Store.Delete(ctx, seed.Subject); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// The recreated row deliberately has the same document. The token must
+	// still identify a fresh incarnation after physical/TTL deletion.
+	fresh := *seed
+	fresh.CodeSalt = bytes.Clone(seed.CodeSalt)
+	fresh.CodeHash = bytes.Clone(seed.CodeHash)
+	if err := b.Store.Put(ctx, &fresh); err != nil {
+		t.Fatalf("Put recreated record: %v", err)
+	}
+	recreated, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get recreated record: %v", err)
+	}
+	assertEmailOTPVersionChanged(t, stale.Version, recreated.Version)
+
+	staleNext := *stale
+	staleNext.FailedCount++
+	if err := b.Store.CompareAndSwap(ctx, stale, &staleNext); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("stale CAS after same-value recreate = %v, want ErrAlreadyConsumed", err)
+	}
+	staleConsume := *stale
+	staleConsume.ConsumedAt = b.Now()
+	if err := b.Store.Consume(ctx, &staleConsume); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("stale Consume after same-value recreate = %v, want ErrAlreadyConsumed", err)
+	}
+	got, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after stale transitions: %v", err)
+	}
+	assertEmailOTPEqual(t, got, recreated)
+}
+
 func emailOTPDeleteMissing(t *testing.T, b EmailOTPBackend) {
 	t.Helper()
 	if err := b.Store.Delete(context.Background(), "missing"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Delete(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func assertEmailOTPVersionChanged(t *testing.T, previous, current uint64) {
+	t.Helper()
+	if !validEmailOTPVersion(current) || (previous != 0 && previous == current) {
+		t.Fatalf("Version did not change to a valid opaque token: previous=%d current=%d", previous, current)
+	}
+}
+
+func validEmailOTPVersion(version uint64) bool {
+	return version > 0 && version < uint64(math.MaxInt64)
+}
+
+func cloneContractEmailOTP(r *store.EmailOTPRecord) *store.EmailOTPRecord {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	out.CodeSalt = bytes.Clone(r.CodeSalt)
+	out.CodeHash = bytes.Clone(r.CodeHash)
+	return &out
+}
+
+func assertContractEmailOTPUnchanged(t *testing.T, label string, got, want *store.EmailOTPRecord) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s mutated caller record: got=%+v want=%+v", label, got, want)
 	}
 }
 
@@ -454,6 +732,7 @@ func emailOTPConcurrentCAS(t *testing.T, b EmailOTPBackend) {
 	if got.FailedCount != 8 && got.FailedCount != 9 {
 		t.Fatalf("final FailedCount = %d, want one of the candidate counts", got.FailedCount)
 	}
+	assertEmailOTPVersionChanged(t, current.Version, got.Version)
 }
 
 // emailOTPCASReserves covers the nil-previous form against an empty key,
@@ -462,15 +741,20 @@ func emailOTPCASReserves(t *testing.T, b EmailOTPBackend) {
 	t.Helper()
 	ctx := context.Background()
 	first := emailOTPContractRecord(b.Now())
+	firstBefore := cloneContractEmailOTP(first)
 	if err := b.Store.CompareAndSwap(ctx, nil, first); err != nil {
 		t.Fatalf("CompareAndSwap(nil) on an empty key: %v", err)
 	}
+	assertContractEmailOTPUnchanged(t, "nil reservation input", first, firstBefore)
 
 	got, err := b.Store.Get(ctx, first.Subject)
 	if err != nil {
 		t.Fatalf("Get after reservation: %v", err)
 	}
-	assertEmailOTPEqual(t, got, first)
+	expected := *first
+	expected.Version = got.Version
+	assertEmailOTPVersionChanged(t, first.Version, got.Version)
+	assertEmailOTPEqual(t, got, &expected)
 }
 
 // emailOTPCASReserveOccupied is the case that makes the reservation worth
@@ -499,7 +783,10 @@ func emailOTPCASReserveOccupied(t *testing.T, b EmailOTPBackend) {
 	if err != nil {
 		t.Fatalf("Get after rejected reservation: %v", err)
 	}
-	assertEmailOTPEqual(t, got, held)
+	expected := *held
+	expected.Version = got.Version
+	assertEmailOTPVersionChanged(t, held.Version, got.Version)
+	assertEmailOTPEqual(t, got, &expected)
 }
 
 // emailOTPCASReserveReclaims pins the other half of the boundary: once the
@@ -521,15 +808,20 @@ func emailOTPCASReserveReclaims(t *testing.T, b EmailOTPBackend) {
 
 	fresh := emailOTPContractRecord(now)
 	fresh.SendCount = 1
+	freshBefore := cloneContractEmailOTP(fresh)
 	if err := b.Store.CompareAndSwap(ctx, nil, fresh); err != nil {
 		t.Fatalf("CompareAndSwap(nil) over a record past retention: %v", err)
 	}
+	assertContractEmailOTPUnchanged(t, "reclaim reservation input", fresh, freshBefore)
 
 	got, err := b.Store.Get(ctx, fresh.Subject)
 	if err != nil {
 		t.Fatalf("Get after reclaim: %v", err)
 	}
-	assertEmailOTPEqual(t, got, fresh)
+	expected := *fresh
+	expected.Version = got.Version
+	assertEmailOTPVersionChanged(t, stale.Version, got.Version)
+	assertEmailOTPEqual(t, got, &expected)
 }
 
 // emailOTPConcurrentReserve is the reservation's actual guarantee: two
@@ -624,5 +916,8 @@ func assertEmailOTPEqual(t *testing.T, got, want *store.EmailOTPRecord) {
 	}
 	if got.SendCount != want.SendCount {
 		t.Fatalf("SendCount = %d, want %d", got.SendCount, want.SendCount)
+	}
+	if got.Version != want.Version {
+		t.Fatalf("Version = %d, want %d", got.Version, want.Version)
 	}
 }

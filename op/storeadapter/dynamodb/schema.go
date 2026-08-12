@@ -14,48 +14,56 @@ import (
 // access pattern; the comment on each entry in [TableDefinitions] names
 // the substore method that drives it.
 const (
-	indexBySubject      = "by_subject"
-	indexByGrant        = "by_grant"
-	indexByClient       = "by_client"
-	indexByParent       = "by_parent"
-	indexByHandle       = "by_handle"
-	indexByUsername     = "by_username"
-	indexByChooserGroup = "by_chooser_group"
-	indexByHash         = "by_hash"
+	indexBySubject       = "by_subject"
+	indexByGrant         = "by_grant"
+	indexByClient        = "by_client"
+	indexByClientSubject = "by_client_subject"
+	indexByParent        = "by_parent"
+	indexByHandle        = "by_handle"
+	indexByUsername      = "by_username"
+	indexByChooserGroup  = "by_chooser_group"
+	indexByHash          = "by_hash"
 )
 
 // Projected attribute names. These are the attributes an index or a
 // condition expression reads; everything else lives inside the JSON
 // document.
 const (
-	attrPK              = "pk"
-	attrSubject         = "subject"
-	attrClientID        = "client_id"
-	attrGrantID         = "grant_id"
-	attrParentID        = "parent_id"
-	attrStoredHandle    = "stored_handle"
-	attrUserCode        = "user_code"
-	attrUsername        = "username"
-	attrChooserGroup    = "chooser_group"
-	attrTokenHash       = "token_hash"
-	attrConsumedAt      = "consumed_at"
-	attrRevoked         = "revoked"
-	attrSubjectClient   = "subject_client"
-	attrStatus          = "status"
-	attrIssuedAt        = "issued_at"
-	attrRevokedAt       = "revoked_at"
-	attrValue           = "value"
-	attrRawState        = "raw_state"
-	attrUses            = "uses"
-	attrSlotIndex       = "slot_index"
-	attrCodeHash        = "code_hash"
-	attrRetryResponse   = "retry_response"
-	attrTOTPStep        = "last_accepted_step"
+	attrPK            = "pk"
+	attrSubject       = "subject"
+	attrClientID      = "client_id"
+	attrGrantID       = "grant_id"
+	attrParentID      = "parent_id"
+	attrStoredHandle  = "stored_handle"
+	attrUserCode      = "user_code"
+	attrUsername      = "username"
+	attrChooserGroup  = "chooser_group"
+	attrTokenHash     = "token_hash"
+	attrConsumedAt    = "consumed_at"
+	attrRevoked       = "revoked"
+	attrSubjectClient = "subject_client"
+	attrStatus        = "status"
+	attrIssuedAt      = "issued_at"
+	attrRevokedAt     = "revoked_at"
+	attrValue         = "value"
+	attrRawState      = "raw_state"
+	attrUses          = "uses"
+	attrSlotIndex     = "slot_index"
+	attrCodeHash      = "code_hash"
+	attrRetryResponse = "retry_response"
+	attrTOTPStep      = "last_accepted_step"
+	// attrRecordVersion is deliberately independent from attrDoc. During the
+	// migration, deploy all writers together: an old writer's PutItem omits
+	// this attribute and can reset a newly generated token to the legacy
+	// missing-value state. Mixed old/new writers therefore invalidate the CAS
+	// guarantee and are unsupported.
 	attrRecordVersion   = "record_version"
 	attrMaxUses         = "max_uses"
 	attrUserCodeStrikes = "user_code_strikes"
 	attrPollViolations  = "poll_violations"
 	attrReservedFor     = "reserved_for"
+	attrTOTPSecret      = "totp_secret"
+	attrTOTPConfirmedAt = "totp_confirmed_at"
 )
 
 // TableDefinition describes one table the adapter expects. Embedders
@@ -123,6 +131,14 @@ func gsi(name, partition string) types.GlobalSecondaryIndex {
 	}
 }
 
+func gsiWithSort(name, partition, sort string) types.GlobalSecondaryIndex {
+	return types.GlobalSecondaryIndex{
+		IndexName:  aws.String(name),
+		KeySchema:  compositeKeySchema(partition, sort),
+		Projection: &types.Projection{ProjectionType: types.ProjectionTypeAll},
+	}
+}
+
 // TableDefinitions returns the definition of every table the adapter
 // uses, with any [WithNaming] override already applied.
 //
@@ -164,13 +180,16 @@ func (s *Store) TableDefinitions() []TableDefinition {
 		{
 			// by_subject serves ListBySubject and the paged
 			// ListClientIDsBySubject; subject_client is the composite
-			// FindBySubjectClient looks up directly.
+			// FindBySubjectClient lookup. by_client_subject provides the
+			// bounded subject lister for client deletion with subject as
+			// the sort key.
 			Name:                 n.grants,
 			KeySchema:            keySchema(attrPK),
-			AttributeDefinitions: stringAttr(attrPK, attrSubject, attrSubjectClient),
+			AttributeDefinitions: stringAttr(attrPK, attrSubject, attrSubjectClient, attrClientID),
 			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
 				gsi(indexBySubject, attrSubject),
 				gsi(indexByClient, attrSubjectClient),
+				gsiWithSort(indexByClientSubject, attrClientID, attrSubject),
 			},
 		},
 		{

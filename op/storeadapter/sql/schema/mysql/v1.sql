@@ -184,7 +184,8 @@ CREATE TABLE IF NOT EXISTS oidc_grants (
     -- The composite index above leads with subject, so it cannot serve
     -- the client-scoped cascade a client deletion runs
     -- (DELETE FROM oidc_grants WHERE client_id = ?).
-    INDEX idx_oidc_grants_client (client_id)
+    INDEX idx_oidc_grants_client (client_id),
+    INDEX idx_oidc_grants_client_subject (client_id, subject, updated_at)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_sessions (
@@ -256,6 +257,7 @@ CREATE TABLE IF NOT EXISTS oidc_initial_access_tokens (
 CREATE TABLE IF NOT EXISTS oidc_registration_access_tokens (
     client_id VARCHAR(255) NOT NULL PRIMARY KEY,
     hashed_value VARCHAR(128) NOT NULL,
+    allowed_scopes JSON NULL,
     created_at BIGINT NOT NULL
 );
 
@@ -340,6 +342,7 @@ CREATE TABLE IF NOT EXISTS oidc_ciba_requests (
 CREATE TABLE IF NOT EXISTS oidc_totp_secrets (
     subject VARCHAR(255) NOT NULL PRIMARY KEY,
     secret_ciphertext VARBINARY(512) NOT NULL,
+    row_version BIGINT NOT NULL DEFAULT 1,
     failed_count INT NOT NULL DEFAULT 0,
     last_accepted_step BIGINT NOT NULL DEFAULT 0,
     confirmed_at BIGINT NOT NULL DEFAULT 0,
@@ -390,6 +393,7 @@ CREATE TABLE IF NOT EXISTS oidc_email_otps (
     subject VARCHAR(255) NOT NULL PRIMARY KEY,
     code_salt VARBINARY(64) NOT NULL,
     code_hash VARBINARY(64) NOT NULL,
+    row_version BIGINT NOT NULL DEFAULT 1,
     failed_count INT NOT NULL DEFAULT 0,
     send_count INT NOT NULL DEFAULT 0,
     sent_at BIGINT NOT NULL DEFAULT 0,

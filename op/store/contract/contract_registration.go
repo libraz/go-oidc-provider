@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -202,6 +203,9 @@ func ratPutGet(t *testing.T, f Factory) {
 	if got.ClientID != "client-1" || got.HashedValue != "hash-1" {
 		t.Fatalf("unexpected RAT: %+v", got)
 	}
+	if !slices.Equal(got.AllowedScopes, tok.AllowedScopes) {
+		t.Fatalf("AllowedScopes not round-tripped: %v want %v", got.AllowedScopes, tok.AllowedScopes)
+	}
 }
 
 func ratPutUpsert(t *testing.T, f Factory) {
@@ -303,8 +307,9 @@ func newIAT(now time.Time, id, hash string) *store.InitialAccessToken {
 
 func newRAT(now time.Time, clientID, hash string) *store.RegistrationAccessToken {
 	return &store.RegistrationAccessToken{
-		ClientID:    clientID,
-		HashedValue: hash,
-		CreatedAt:   now,
+		ClientID:      clientID,
+		HashedValue:   hash,
+		AllowedScopes: []string{"openid", "profile"},
+		CreatedAt:     now,
 	}
 }

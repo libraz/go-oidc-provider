@@ -116,6 +116,9 @@ func (s *cibaRequestStore) FindByAuthReqID(_ context.Context, authReqID string) 
 
 func (s *cibaRequestStore) Approve(_ context.Context, authReqID, subject, acr string, authTime time.Time) error {
 	return s.transition(authReqID, func(rec *store.CIBARequest) error {
+		if rec.Subject != "" && rec.Subject != subject {
+			return store.ErrConflict
+		}
 		if rec.Status != store.CIBARequestStatusPending {
 			return store.ErrConflict
 		}

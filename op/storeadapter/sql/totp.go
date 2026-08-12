@@ -1,11 +1,13 @@
 package oidcsql
 
 import (
-	"bytes"
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"fmt"
+	"math"
 
+	internalkeys "github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -34,7 +36,11 @@ func (s *totpStore) Put(ctx context.Context, r *store.TOTPRecord) error {
 	if r.Subject == "" {
 		return errors.New("oidcsql: totp record missing Subject")
 	}
-	args := append([]any{r.Subject}, totpValues(r)...)
+	version, err := internalkeys.RandomInt63Except(0)
+	if err != nil {
+		return fmt.Errorf("oidcsql: totp.Put: generate Version: %w", err)
+	}
+	args := append([]any{r.Subject, version}, totpValues(r)...)
 	if _, err := s.parent.db.ExecContext(ctx, s.parent.queries.totpPut, args...); err != nil {
 		return wrapErr("totp.Put", err)
 	}
@@ -45,8 +51,16 @@ func (s *totpStore) CompareAndSwap(ctx context.Context, previous, next *store.TO
 	if previous == nil || next == nil || previous.Subject == "" || next.Subject != previous.Subject {
 		return errors.New("oidcsql: invalid totp compare-and-swap record")
 	}
+	if previous.Version == 0 || previous.Version >= math.MaxInt64 || next.Version != previous.Version {
+		return store.ErrAlreadyConsumed
+	}
+	version, err := internalkeys.RandomInt63Except(int64(previous.Version))
+	if err != nil {
+		return fmt.Errorf("oidcsql: totp.CompareAndSwap: generate Version: %w", err)
+	}
 	args := totpValues(next)
-	args = append(args, previous.Subject)
+	args = append(args, version, previous.Subject)
+	args = append(args, int64(previous.Version))
 	args = append(args, totpValues(previous)...)
 	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.totpCompareAndSwap, args...)
 	if err != nil {
@@ -59,7 +73,7 @@ func (s *totpStore) CompareAndSwap(ctx context.Context, previous, next *store.TO
 	if n > 0 {
 		return nil
 	}
-	return s.settleNoOp(ctx, next)
+	return store.ErrAlreadyConsumed
 }
 
 func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
@@ -74,8 +88,16 @@ func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 	if r.LastAcceptedStep == 0 {
 		return store.ErrAlreadyConsumed
 	}
+	if r.Version == 0 || r.Version >= math.MaxInt64 {
+		return store.ErrAlreadyConsumed
+	}
+	version, err := internalkeys.RandomInt63Except(int64(r.Version))
+	if err != nil {
+		return fmt.Errorf("oidcsql: totp.Accept: generate Version: %w", err)
+	}
 	args := totpValues(r)
-	args = append(args, r.Subject, r.LastAcceptedStep)
+	args = append(args, version, r.Subject, r.LastAcceptedStep,
+		nonNilBytes(r.SecretCiphertext), timeToInt64(r.ConfirmedAt), int64(r.Version))
 	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.totpAccept, args...)
 	if err != nil {
 		return wrapErr("totp.Accept", err)
@@ -110,36 +132,17 @@ func (s *totpStore) Delete(ctx context.Context, subject string) error {
 	return nil
 }
 
-// settleNoOp resolves a compare-and-swap that reported zero affected
-// rows. MySQL reports zero when an UPDATE matched a row but left every
-// column at its existing value, so "no rows changed" is not by itself
-// proof that the swap lost: the stored row is re-read and a row that
-// already equals next is reported as a success. Anything else means
-// another transition won the race.
-func (s *totpStore) settleNoOp(ctx context.Context, next *store.TOTPRecord) error {
-	current, err := s.scanOne(ctx, next.Subject)
-	if errors.Is(err, store.ErrNotFound) {
-		return store.ErrAlreadyConsumed
-	}
-	if err != nil {
-		return err
-	}
-	if totpEqual(current, next) {
-		return nil
-	}
-	return store.ErrAlreadyConsumed
-}
-
 func (s *totpStore) scanOne(ctx context.Context, subject string) (*store.TOTPRecord, error) {
 	var (
 		rec       store.TOTPRecord
 		secret    []byte
+		version   int64
 		confirmed int64
 		firstFail int64
 		locked    int64
 	)
 	err := s.parent.db.QueryRowContext(ctx, s.parent.queries.totpGet, subject).Scan(
-		&rec.Subject, &secret, &rec.FailedCount, &rec.LastAcceptedStep,
+		&rec.Subject, &version, &secret, &rec.FailedCount, &rec.LastAcceptedStep,
 		&confirmed, &firstFail, &locked,
 	)
 	if errors.Is(err, databasesql.ErrNoRows) {
@@ -148,7 +151,11 @@ func (s *totpStore) scanOne(ctx context.Context, subject string) (*store.TOTPRec
 	if err != nil {
 		return nil, wrapErr("totp.Get", err)
 	}
+	if version <= 0 {
+		return nil, fmt.Errorf("oidcsql: totp.Get: invalid row_version %d", version)
+	}
 	rec.SecretCiphertext = append([]byte(nil), secret...)
+	rec.Version = uint64(version)
 	rec.ConfirmedAt = int64ToTime(confirmed)
 	rec.FirstFailureAt = int64ToTime(firstFail)
 	rec.LockedUntil = int64ToTime(locked)
@@ -166,16 +173,6 @@ func totpValues(r *store.TOTPRecord) []any {
 		timeToInt64(r.FirstFailureAt),
 		timeToInt64(r.LockedUntil),
 	}
-}
-
-func totpEqual(a, b *store.TOTPRecord) bool {
-	return a.Subject == b.Subject &&
-		bytes.Equal(a.SecretCiphertext, b.SecretCiphertext) &&
-		a.FailedCount == b.FailedCount &&
-		a.LastAcceptedStep == b.LastAcceptedStep &&
-		a.ConfirmedAt.Equal(b.ConfirmedAt) &&
-		a.FirstFailureAt.Equal(b.FirstFailureAt) &&
-		a.LockedUntil.Equal(b.LockedUntil)
 }
 
 // nonNilBytes normalises a nil slice to an empty one. The columns are

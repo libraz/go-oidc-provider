@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -20,11 +21,10 @@ import (
 // transactional cluster because their writes are localised to one item
 // and never need to be atomic with token issuance.
 //
-// Their compare-and-swap contracts match on the whole stored record
-// rather than on a version counter, because the record types carry no
-// version. On DynamoDB that is a condition expression over the document
-// attribute: the document is a deterministic JSON encoding of the same
-// struct, so comparing it is exactly comparing every field.
+// Their compare-and-swap contracts use the backend-issued generation stored
+// beside the opaque document. The public records deliberately omit Version
+// from JSON; DynamoDB therefore projects it into attrRecordVersion so a
+// stale snapshot can be rejected without exposing the token in the document.
 
 // totpStore is the SQL-free RFC 6238 enrolment table.
 type totpStore struct {
@@ -43,6 +43,11 @@ func (s *totpStore) Get(ctx context.Context, subject string) (*store.TOTPRecord,
 	if err := unmarshalDoc(found, &rec); err != nil {
 		return nil, err
 	}
+	version, err := mfaVersionFromItem(found)
+	if err != nil {
+		return nil, err
+	}
+	rec.Version = version
 	return &rec, nil
 }
 
@@ -53,11 +58,11 @@ func (s *totpStore) Put(ctx context.Context, r *store.TOTPRecord) error {
 	if r.Subject == "" {
 		return errors.New("oidcdynamo: totp record missing Subject")
 	}
-	entry, err := totpItem(r)
-	if err != nil {
-		return err
-	}
-	if err := s.parent.put(ctx, s.parent.names.totpSecrets, entry); err != nil {
+	if err := s.parent.putMFAVersioned(ctx, s.parent.names.totpSecrets, r.Subject, func(version uint64) (item, error) {
+		stored := *r
+		stored.Version = version
+		return totpItem(&stored)
+	}, nil); err != nil {
 		return wrapErr("totp.Put", err)
 	}
 	return nil
@@ -67,15 +72,24 @@ func (s *totpStore) CompareAndSwap(ctx context.Context, previous, next *store.TO
 	if previous == nil || next == nil || previous.Subject == "" || next.Subject != previous.Subject {
 		return errors.New("oidcdynamo: invalid totp compare-and-swap record")
 	}
-	entry, err := totpItem(next)
+	if next.Version != previous.Version || !validMFARecordVersion(previous.Version) {
+		return store.ErrAlreadyConsumed
+	}
+	version, err := newMFARecordVersion(previous.Version)
 	if err != nil {
 		return err
 	}
-	expected, err := marshalDoc(previous)
+	stored := *next
+	stored.Version = version
+	entry, err := totpItem(&stored)
 	if err != nil {
 		return err
 	}
-	err = s.parent.putIfDocMatches(ctx, s.parent.names.totpSecrets, entry, expected)
+	expectedDoc, err := marshalDoc(previous)
+	if err != nil {
+		return err
+	}
+	err = s.parent.putMFAIfVersion(ctx, s.parent.names.totpSecrets, entry, previous.Version, expectedDoc)
 	if errors.Is(err, store.ErrConflict) {
 		return store.ErrAlreadyConsumed
 	}
@@ -88,6 +102,8 @@ func (s *totpStore) CompareAndSwap(ctx context.Context, previous, next *store.TO
 // Accept is the single-use success transition: it lands only when the
 // stored step is strictly behind the one being redeemed, so replaying a
 // code inside the same 30-second window cannot redeem twice.
+//
+//nolint:gocognit,cyclop // Each predicate maps to a distinct single-use or stale-snapshot failure outcome.
 func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 	if r == nil {
 		return errors.New("oidcdynamo: nil totp record")
@@ -95,20 +111,55 @@ func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 	if r.LastAcceptedStep == 0 {
 		return store.ErrAlreadyConsumed
 	}
-	entry, err := totpItem(r)
+	if !validMFARecordVersion(r.Version) {
+		return store.ErrAlreadyConsumed
+	}
+	current, err := s.Get(ctx, r.Subject)
+	if err != nil {
+		return err
+	}
+	// The generation CAS below makes this read/validate/write sequence
+	// atomic. Reading the identity from the document also keeps Accept
+	// compatible with legacy rows, which predate the projected secret and
+	// confirmation attributes added for this predicate.
+	if current.Version != r.Version ||
+		!bytes.Equal(current.SecretCiphertext, r.SecretCiphertext) ||
+		!current.ConfirmedAt.Equal(r.ConfirmedAt) ||
+		current.LastAcceptedStep >= r.LastAcceptedStep {
+		return store.ErrAlreadyConsumed
+	}
+	version, err := newMFARecordVersion(r.Version)
+	if err != nil {
+		return err
+	}
+	expectedVersion, err := mfaVersionValue(r.Version)
+	if err != nil {
+		return err
+	}
+	stored := *r
+	stored.Version = version
+	entry, err := totpItem(&stored)
+	if err != nil {
+		return err
+	}
+	expectedDoc, err := marshalDoc(current)
 	if err != nil {
 		return err
 	}
 	_, err = s.parent.api.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.parent.names.totpSecrets),
 		Item:                entry,
-		ConditionExpression: aws.String("attribute_exists(#pk) AND #step < :step"),
+		ConditionExpression: aws.String("attribute_exists(#pk) AND " + mfaVersionCondition(r.Version) + " AND #step < :step AND #doc = :expected_doc"),
 		ExpressionAttributeNames: map[string]string{
-			"#pk":   attrPK,
-			"#step": attrTOTPStep,
+			"#pk":      attrPK,
+			"#version": attrRecordVersion,
+			"#step":    attrTOTPStep,
+			"#doc":     attrDoc,
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":step": avN(r.LastAcceptedStep),
+			":version":      expectedVersion,
+			":step":         avN(r.LastAcceptedStep),
+			":expected_doc": expectedDoc,
 		},
 	})
 	if err != nil {
@@ -140,6 +191,13 @@ func totpItem(r *store.TOTPRecord) (item, error) {
 		return nil, err
 	}
 	entry.setN(attrTOTPStep, r.LastAcceptedStep)
+	entry[attrTOTPSecret] = avB(r.SecretCiphertext)
+	entry[attrTOTPConfirmedAt] = avTime(r.ConfirmedAt)
+	version, err := mfaVersionValue(r.Version)
+	if err != nil {
+		return nil, err
+	}
+	entry[attrRecordVersion] = version
 	return entry, nil
 }
 
@@ -177,6 +235,11 @@ func (s *emailOTPStore) load(ctx context.Context, subject string) (*store.EmailO
 	if err := unmarshalDoc(found, &rec); err != nil {
 		return nil, err
 	}
+	version, err := mfaVersionFromItem(found)
+	if err != nil {
+		return nil, err
+	}
+	rec.Version = version
 	return &rec, nil
 }
 
@@ -187,11 +250,11 @@ func (s *emailOTPStore) Put(ctx context.Context, r *store.EmailOTPRecord) error 
 	if r.Subject == "" {
 		return errors.New("oidcdynamo: email otp record missing Subject")
 	}
-	entry, err := emailOTPItem(r)
-	if err != nil {
-		return err
-	}
-	if err := s.parent.put(ctx, s.parent.names.emailOTPs, entry); err != nil {
+	if err := s.parent.putMFAVersioned(ctx, s.parent.names.emailOTPs, r.Subject, func(version uint64) (item, error) {
+		stored := *r
+		stored.Version = version
+		return emailOTPItem(&stored)
+	}, nil); err != nil {
 		return wrapErr("emailOTP.Put", err)
 	}
 	return nil
@@ -207,15 +270,24 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 	if previous.Subject != next.Subject {
 		return errors.New("oidcdynamo: invalid email otp compare-and-swap record")
 	}
-	entry, err := emailOTPItem(next)
+	if next.Version != previous.Version || !validMFARecordVersion(previous.Version) {
+		return store.ErrAlreadyConsumed
+	}
+	version, err := newMFARecordVersion(previous.Version)
 	if err != nil {
 		return err
 	}
-	expected, err := marshalDoc(previous)
+	stored := *next
+	stored.Version = version
+	entry, err := emailOTPItem(&stored)
 	if err != nil {
 		return err
 	}
-	err = s.parent.putIfDocMatches(ctx, s.parent.names.emailOTPs, entry, expected)
+	expectedDoc, err := marshalDoc(previous)
+	if err != nil {
+		return err
+	}
+	err = s.parent.putMFAIfVersion(ctx, s.parent.names.emailOTPs, entry, previous.Version, expectedDoc)
 	if errors.Is(err, store.ErrConflict) {
 		return store.ErrAlreadyConsumed
 	}
@@ -237,16 +309,22 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 // expiry attribute the condition reads, so a retained challenge holds
 // the key and a lapsed one does not.
 func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTPRecord) error {
-	entry, err := emailOTPItem(next)
-	if err != nil {
+	err := s.parent.putMFAVersioned(ctx, s.parent.names.emailOTPs, next.Subject, func(version uint64) (item, error) {
+		stored := *next
+		stored.Version = version
+		return emailOTPItem(&stored)
+	}, func(found item) (bool, error) {
+		var current store.EmailOTPRecord
+		if err := unmarshalDoc(found, &current); err != nil {
+			return false, err
+		}
+		return emailOTPRetentionElapsed(&current, s.parent.now()), nil
+	})
+	if errors.Is(err, store.ErrAlreadyConsumed) {
 		return err
 	}
-	placed, err := s.parent.putIfKeyFree(ctx, s.parent.names.emailOTPs, entry)
 	if err != nil {
 		return wrapErr("emailOTP.CompareAndSwap.create", err)
-	}
-	if !placed {
-		return store.ErrAlreadyConsumed
 	}
 	return nil
 }
@@ -259,6 +337,9 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	if r == nil {
 		return errors.New("oidcdynamo: nil email otp record")
 	}
+	if !validMFARecordVersion(r.Version) {
+		return store.ErrAlreadyConsumed
+	}
 	current, err := s.load(ctx, r.Subject)
 	if err != nil {
 		return err
@@ -270,19 +351,28 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	if !current.ConsumedAt.IsZero() {
 		return store.ErrAlreadyConsumed
 	}
+	if current.Version != r.Version {
+		return store.ErrAlreadyConsumed
+	}
 	if !bytes.Equal(current.CodeSalt, r.CodeSalt) || !bytes.Equal(current.CodeHash, r.CodeHash) {
 		return store.ErrAlreadyConsumed
 	}
 
-	entry, err := emailOTPItem(r)
+	version, err := newMFARecordVersion(r.Version)
 	if err != nil {
 		return err
 	}
-	expected, err := marshalDoc(current)
+	stored := *r
+	stored.Version = version
+	entry, err := emailOTPItem(&stored)
 	if err != nil {
 		return err
 	}
-	err = s.parent.putIfDocMatches(ctx, s.parent.names.emailOTPs, entry, expected)
+	expectedDoc, err := marshalDoc(current)
+	if err != nil {
+		return err
+	}
+	err = s.parent.putMFAIfVersion(ctx, s.parent.names.emailOTPs, entry, r.Version, expectedDoc)
 	if errors.Is(err, store.ErrConflict) {
 		return store.ErrAlreadyConsumed
 	}
@@ -315,6 +405,11 @@ func emailOTPItem(r *store.EmailOTPRecord) (item, error) {
 		horizon = r.ExpiresAt
 	}
 	entry.expires(horizon)
+	version, err := mfaVersionValue(r.Version)
+	if err != nil {
+		return nil, err
+	}
+	entry[attrRecordVersion] = version
 	return entry, nil
 }
 
@@ -324,6 +419,181 @@ func emailOTPRetentionElapsed(rec *store.EmailOTPRecord, now time.Time) bool {
 		horizon = rec.ExpiresAt
 	}
 	return !horizon.IsZero() && horizon.Before(now)
+}
+
+const mfaPutAttempts = 8
+
+// mfaVersionFromItem reads the independent opaque token attribute. Items
+// written before Version was public have no projection and are exposed as
+// token one solely for the one-time legacy transition predicate. A stored
+// signed maximum remains readable for diagnostics but is rejected by
+// conditional caller-snapshot transitions; an explicit Put may replace it
+// with a fresh token.
+func mfaVersionFromItem(found item) (uint64, error) {
+	value, ok := found[attrRecordVersion]
+	if !ok {
+		return 1, nil
+	}
+	number, ok := value.(*types.AttributeValueMemberN)
+	if !ok {
+		return 0, errors.New("oidcdynamo: invalid MFA record version attribute")
+	}
+	parsed, err := parseInt(number.Value)
+	if err != nil {
+		return 0, err
+	}
+	if parsed < 1 {
+		return 0, errors.New("oidcdynamo: invalid MFA record version")
+	}
+	return uint64(parsed), nil
+}
+
+const maxMFARecordVersion = ^uint64(0) >> 1
+
+func validMFARecordVersion(version uint64) bool {
+	return version > 0 && version < maxMFARecordVersion
+}
+
+// newMFARecordVersion generates an opaque signed-63-bit token. A transition
+// excludes its prior token so a stale snapshot cannot accidentally pass the
+// generation predicate after a replacement. Random generation is deliberate:
+// DynamoDB rows may be physically deleted and recreated, so arithmetic
+// versions would make a fresh row look like an old snapshot.
+func newMFARecordVersion(excluded ...uint64) (uint64, error) {
+	var excludedToken uint64
+	if len(excluded) > 0 {
+		excludedToken = excluded[0]
+	}
+	return keys.RandomUint63Except(excludedToken)
+}
+
+//nolint:ireturn // types.AttributeValue is the DynamoDB SDK's own sum type.
+func mfaVersionValue(version uint64) (types.AttributeValue, error) {
+	// This encoder accepts the signed maximum so an explicit Put can match
+	// and heal a terminal stored row. Caller-snapshot transitions gate through
+	// validMFARecordVersion before reaching this representation helper.
+	if version == 0 || version > maxMFARecordVersion {
+		return nil, errors.New("oidcdynamo: invalid MFA record version")
+	}
+	return avN(int64(version)), nil
+}
+
+// mfaVersionCondition returns the version predicate used by all successful
+// state transitions. A missing projection is accepted only for generation
+// one, which is the migration path for legacy rows; every newer generation
+// must carry the exact attribute value.
+func mfaVersionCondition(expected uint64) string {
+	if expected == 1 {
+		return "(attribute_not_exists(#version) OR #version = :version)"
+	}
+	return "#version = :version"
+}
+
+// putMFAIfVersion replaces an existing factor row only when its old opaque
+// token and document still equal the caller's snapshot. The item already
+// contains a newly allocated token.
+func (s *Store) putMFAIfVersion(
+	ctx context.Context,
+	table string,
+	entry item,
+	expected uint64,
+	expectedDoc types.AttributeValue,
+) error {
+	if expectedDoc == nil {
+		return errors.New("oidcdynamo: missing expected MFA document")
+	}
+	version, err := mfaVersionValue(expected)
+	if err != nil {
+		return err
+	}
+	_, err = s.api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(table),
+		Item:                entry,
+		ConditionExpression: aws.String("attribute_exists(#pk) AND " + mfaVersionCondition(expected) + " AND #doc = :expected_doc"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":      attrPK,
+			"#version": attrRecordVersion,
+			"#doc":     attrDoc,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":version":      version,
+			":expected_doc": expectedDoc,
+		},
+	})
+	if err != nil {
+		if isConditionalCheckFailed(err) {
+			return store.ErrConflict
+		}
+		return err
+	}
+	return nil
+}
+
+// putMFAVersioned assigns a fresh token to a Put. Existing records are
+// replaced under a version-plus-document predicate, so a concurrent Put or
+// delete/recreate cannot reuse an old snapshot. canReplace is used by EmailOTP's nil-
+// previous reservation to admit only rows past their retention horizon.
+//
+//nolint:gocognit,cyclop // The bounded retry keeps allocation, conditional write, and conflict handling in their required order.
+func (s *Store) putMFAVersioned(
+	ctx context.Context,
+	table, subject string,
+	build func(uint64) (item, error),
+	canReplace func(item) (bool, error),
+) error {
+	for range mfaPutAttempts {
+		found, err := s.get(ctx, table, subject)
+		exists := err == nil
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		currentVersion := uint64(0)
+		if exists {
+			if canReplace != nil {
+				allowed, checkErr := canReplace(found)
+				if checkErr != nil {
+					return checkErr
+				}
+				if !allowed {
+					return store.ErrAlreadyConsumed
+				}
+			}
+			currentVersion, err = mfaVersionFromItem(found)
+			if err != nil {
+				return err
+			}
+		}
+		nextVersion, err := newMFARecordVersion(currentVersion)
+		if err != nil {
+			return err
+		}
+		entry, err := build(nextVersion)
+		if err != nil {
+			return err
+		}
+		if exists {
+			err = s.putMFAIfVersion(ctx, table, entry, currentVersion, found[attrDoc])
+		} else {
+			_, err = s.api.PutItem(ctx, &dynamodb.PutItemInput{
+				TableName:           aws.String(table),
+				Item:                entry,
+				ConditionExpression: aws.String("attribute_not_exists(#pk)"),
+				ExpressionAttributeNames: map[string]string{
+					"#pk": attrPK,
+				},
+			})
+			if err != nil && isConditionalCheckFailed(err) {
+				err = store.ErrConflict
+			}
+		}
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, store.ErrConflict) {
+			return err
+		}
+	}
+	return store.ErrConflict
 }
 
 // recoveryStore holds recovery-code batches as one item per slot, keyed
@@ -752,10 +1022,9 @@ func (s *authnLockoutStore) CompareAndSwap(
 	return true, nil
 }
 
-// putIfDocMatches writes entry only when the stored document still
-// equals expected. It is the whole-record compare-and-swap the factor
-// substores need: their record types carry no version, so the document
-// itself is the comparison.
+// putIfDocMatches writes entry only when the stored document still equals
+// expected. Passkey assertions retain whole-document CAS because their
+// record has not adopted the MFA generation token.
 func (s *Store) putIfDocMatches(
 	ctx context.Context,
 	table string,

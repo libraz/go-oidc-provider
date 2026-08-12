@@ -49,6 +49,8 @@ var cibaRequestCases = []subtest{
 	{"SaveFind", cibaSaveFind},
 	{"SaveDoesNotMutateInput", cibaSaveDoesNotMutateInput},
 	{"ApproveConsumeOnce", cibaApproveConsumeOnce},
+	{"ApproveRejectsSubjectMismatch", cibaApproveRejectsSubjectMismatch},
+	{"ApprovePopulatesEmptySubject", cibaApprovePopulatesEmptySubject},
 	{"ApproveConflictAfterDeny", cibaApproveConflictAfterDeny},
 	{"ConsumeConflictWhenDenied", cibaConsumeConflictWhenDenied},
 	{"RecordPollStampsTimestamp", cibaRecordPollStamps},
@@ -109,14 +111,14 @@ func cibaApproveConsumeOnce(t *testing.T, f Factory) {
 	if err := cr.Save(ctx, newCIBARequest(b.Now(), "ar-ac")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := cr.Approve(ctx, "ar-ac", "sub-1", "urn:mace:incommon:iap:bronze", b.Now()); err != nil {
+	if err := cr.Approve(ctx, "ar-ac", "sub", "urn:mace:incommon:iap:bronze", b.Now()); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	got, err := cr.FindByAuthReqID(ctx, "ar-ac")
 	if err != nil {
 		t.Fatalf("FindByAuthReqID after approve: %v", err)
 	}
-	if got.Status != store.CIBARequestStatusApproved || got.Subject != "sub-1" || got.ACR != "urn:mace:incommon:iap:bronze" {
+	if got.Status != store.CIBARequestStatusApproved || got.Subject != "sub" || got.ACR != "urn:mace:incommon:iap:bronze" {
 		t.Fatalf("approve did not stamp record: %+v", got)
 	}
 	first, err := cr.Consume(ctx, "ar-ac")
@@ -128,6 +130,48 @@ func cibaApproveConsumeOnce(t *testing.T, f Factory) {
 	}
 	if _, err := cr.Consume(ctx, "ar-ac"); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("second Consume: want ErrAlreadyConsumed, got %v", err)
+	}
+}
+
+func cibaApproveRejectsSubjectMismatch(t *testing.T, f Factory) {
+	b := f(t)
+	cr := requireCIBA(t, b.Store)
+	ctx := context.Background()
+	rec := newCIBARequest(b.Now(), "ar-subject-mismatch")
+	rec.Subject = "bound-subject"
+	if err := cr.Save(ctx, rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := cr.Approve(ctx, rec.ID, "different-subject", "", b.Now()); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("Approve subject mismatch = %v, want ErrConflict", err)
+	}
+	got, err := cr.FindByAuthReqID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("Find after mismatched Approve: %v", err)
+	}
+	if got.Status != store.CIBARequestStatusPending || got.Subject != rec.Subject {
+		t.Fatalf("mismatched Approve changed record: %+v", got)
+	}
+}
+
+func cibaApprovePopulatesEmptySubject(t *testing.T, f Factory) {
+	b := f(t)
+	cr := requireCIBA(t, b.Store)
+	ctx := context.Background()
+	rec := newCIBARequest(b.Now(), "ar-subject-empty")
+	rec.Subject = ""
+	if err := cr.Save(ctx, rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := cr.Approve(ctx, rec.ID, "resolved-subject", "", b.Now()); err != nil {
+		t.Fatalf("Approve deferred subject: %v", err)
+	}
+	got, err := cr.FindByAuthReqID(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("Find after deferred Approve: %v", err)
+	}
+	if got.Status != store.CIBARequestStatusApproved || got.Subject != "resolved-subject" {
+		t.Fatalf("deferred Approve did not populate subject: %+v", got)
 	}
 }
 
