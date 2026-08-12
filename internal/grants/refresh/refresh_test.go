@@ -1017,15 +1017,22 @@ func (s *graceFindFaultStore) RevokeChain(context.Context, string) error {
 
 func (s *graceFindFaultStore) RevokeByGrant(context.Context, string) error { return nil }
 
+// rootLookupFaultStore answers Find for its one record and reports every
+// other id as absent, which is what a chain looks like once its oldest
+// rotation records have been reclaimed. hideRecord makes even that one
+// unresolvable, covering the case where the walk has no node at all to
+// cascade from.
 type rootLookupFaultStore struct {
-	rec     *store.RefreshToken
-	revoked bool
+	rec        *store.RefreshToken
+	hideRecord bool
+	revoked    string
+	revokes    int
 }
 
 func (s *rootLookupFaultStore) Save(context.Context, *store.RefreshToken) error { return nil }
 
 func (s *rootLookupFaultStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
-	if id == s.rec.ID {
+	if id == s.rec.ID && !s.hideRecord {
 		return s.rec, nil
 	}
 	return nil, store.ErrNotFound
@@ -1035,8 +1042,9 @@ func (s *rootLookupFaultStore) Consume(context.Context, string) (*store.RefreshT
 	return s.rec, store.ErrAlreadyConsumed
 }
 
-func (s *rootLookupFaultStore) RevokeChain(context.Context, string) error {
-	s.revoked = true
+func (s *rootLookupFaultStore) RevokeChain(_ context.Context, id string) error {
+	s.revokes++
+	s.revoked = id
 	return nil
 }
 
@@ -1099,23 +1107,29 @@ func TestExchange_ChainRevokeFailure_EmitsAuditEvent(t *testing.T) {
 	}
 }
 
-func TestExchange_ChainRootLookupFailure_EmitsAuditEvent(t *testing.T) {
-	t.Parallel()
+// newRootLookupFixture builds a replayed token whose parent record is
+// gone, which is what a rotation chain looks like once a sweep or a
+// backend TTL has reclaimed its oldest records.
+func newRootLookupFixture(t *testing.T, hideRecord bool) (*rootLookupFaultStore, *recordingEmitter, *refresh.Exchanger, time.Time) {
+	t.Helper()
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	parent := "missing-parent"
 	consumedAt := t0.Add(-2 * refresh.GraceTTLDefault)
-	st := &rootLookupFaultStore{rec: &store.RefreshToken{
-		ID:         "rt-replayed",
-		ClientID:   "client-1",
-		Subject:    "user-1",
-		GrantID:    "grant-1",
-		ParentID:   &parent,
-		Scope:      []string{"openid"},
-		ConsumedAt: &consumedAt,
-		ExpiresAt:  t0.Add(time.Hour),
-		CreatedAt:  t0.Add(-time.Hour),
-	}}
+	st := &rootLookupFaultStore{
+		hideRecord: hideRecord,
+		rec: &store.RefreshToken{
+			ID:         "rt-replayed",
+			ClientID:   "client-1",
+			Subject:    "user-1",
+			GrantID:    "grant-1",
+			ParentID:   &parent,
+			Scope:      []string{"openid"},
+			ConsumedAt: &consumedAt,
+			ExpiresAt:  t0.Add(time.Hour),
+			CreatedAt:  t0.Add(-time.Hour),
+		},
+	}
 	em := &recordingEmitter{}
 	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
 		Store: st,
@@ -1125,20 +1139,70 @@ func TestExchange_ChainRootLookupFailure_EmitsAuditEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExchanger: %v", err)
 	}
+	return st, em, exc, t0
+}
 
-	if _, err := exc.Exchange(context.Background(), refresh.ExchangeInput{Token: "rt-replayed", ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
-		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
-	}
-	if st.revoked {
-		t.Fatal("RevokeChain called even though root lookup failed")
-	}
-	events := em.snapshot()
+func hasChainRevokeFailure(events []audit.Event, reason string) bool {
 	for _, ev := range events {
-		if ev.Name == "refresh.chain_revoke_failed" && ev.Level == audit.LevelWarn && ev.Extras["reason"] == "chain_root_lookup_failed" {
-			return
+		if ev.Name == "refresh.chain_revoke_failed" &&
+			ev.Level == audit.LevelWarn &&
+			ev.Extras["reason"] == reason {
+			return true
 		}
 	}
-	t.Fatalf("expected chain_root_lookup_failed audit event, got %+v", events)
+	return false
+}
+
+// TestExchange_ReplayWithAReclaimedAncestorStillRevokesTheChain covers a
+// replay on a chain whose oldest rotation records have been reclaimed —
+// by a scheduled sweep, or by a backend that expires rows on their own
+// TTL. Records go oldest-first, so every token an attacker could still
+// spend hangs below the boundary the walk reaches, and the cascade must
+// start there. Abandoning the cascade because one ancestor is missing
+// would leave the live descendants usable after the OP had already
+// concluded the chain was compromised — and the chains that lose their
+// oldest records are the long-lived ones.
+func TestExchange_ReplayWithAReclaimedAncestorStillRevokesTheChain(t *testing.T) {
+	t.Parallel()
+
+	st, em, exc, _ := newRootLookupFixture(t, false)
+
+	_, err := exc.Exchange(context.Background(), refresh.ExchangeInput{Token: "rt-replayed", ClientID: "client-1"})
+	if !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+	if st.revokes != 1 {
+		t.Fatalf("RevokeChain called %d times, want exactly one cascade", st.revokes)
+	}
+	if st.revoked != "rt-replayed" {
+		t.Errorf("cascade started from %q, want the deepest resolvable node %q", st.revoked, "rt-replayed")
+	}
+	if hasChainRevokeFailure(em.snapshot(), "chain_root_lookup_failed") {
+		t.Error("a reclaimed ancestor was reported as a failed lookup; the cascade did run")
+	}
+}
+
+// TestExchange_ReplayWithNoResolvableNodeEmitsAuditEvent is the residual
+// hard failure. When the presented token itself cannot be resolved there
+// is no node to cascade from, so the exchanger drops the revocation and
+// says so — the wire response stays at the user-visible ErrTokenReplayed
+// contract, and the warn event is the only way an operator learns the
+// cascade did not happen.
+func TestExchange_ReplayWithNoResolvableNodeEmitsAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	st, em, exc, _ := newRootLookupFixture(t, true)
+
+	_, err := exc.Exchange(context.Background(), refresh.ExchangeInput{Token: "rt-replayed", ClientID: "client-1"})
+	if !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+	if st.revokes != 0 {
+		t.Fatalf("RevokeChain called %d times with no resolvable node to start from", st.revokes)
+	}
+	if !hasChainRevokeFailure(em.snapshot(), "chain_root_lookup_failed") {
+		t.Fatalf("expected chain_root_lookup_failed audit event, got %+v", em.snapshot())
+	}
 }
 
 func TestExchange_Replay_EmitsReplayDetectedAuditEvent(t *testing.T) {

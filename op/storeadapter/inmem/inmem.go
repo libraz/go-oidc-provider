@@ -55,6 +55,16 @@
 // sweep, so a reused request_uri, device_code, user_code, or
 // auth_req_id is never rejected as a duplicate of a dead row.
 //
+// Refresh tokens are deliberately not on that list. Growing the map
+// takes an authenticated token exchange, so it is not a vector an
+// unauthenticated caller can drive, and the records outlive their own
+// expiry on purpose: replay revocation walks a rotation chain from the
+// deepest record it can resolve, and a chain's oldest record is the
+// first to expire. Reclaiming rows on their own expiry alone would
+// shorten the chain a cascade can reach — see the same reasoning behind
+// the SQL adapter's per-grant retention. A long-running process holds
+// the full rotation history of every grant it has issued.
+//
 // A sweep only removes records the lookup paths already treat as
 // absent, so it cannot change what a caller observes. The lockout
 // counters carry no ExpiresAt and are instead retired once their lock

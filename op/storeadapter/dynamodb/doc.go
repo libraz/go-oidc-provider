@@ -42,6 +42,16 @@
 // table, and treating TTL as the enforcement point would leave it
 // redeemable.
 //
+// Refresh-token items carry a TTL at their own expiry, which means the
+// oldest record of an actively rotating chain is reclaimed while its
+// descendants are still redeemable. That is safe because the OP's
+// replay-revocation walk stops at the deepest record it can resolve and
+// cascades from there: records go oldest-first, so every token a replay
+// could still spend hangs below the boundary. The adapter deliberately
+// does not extend the TTL to cover the chain — a chain a client keeps
+// refreshing has no bound, so the only retention that would always
+// suffice is no retention limit at all.
+//
 // # Consistency
 //
 // Every read that feeds a security decision is a strongly consistent
