@@ -445,7 +445,8 @@ func (s deadlineBlindLister) ListClientIDsBySubject(
 	limit int,
 ) (store.GrantClientPage, error) {
 	return s.GrantClientLister.ListClientIDsBySubject(
-		context.WithoutCancel(ctx), subject, cursor, limit)
+		context.WithoutCancel(ctx), subject, cursor, limit,
+	)
 }
 
 type deadlineBlindClients struct {

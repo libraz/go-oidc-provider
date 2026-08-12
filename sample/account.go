@@ -275,6 +275,7 @@ func (a *appUI) startSession(w http.ResponseWriter, subject string) error {
 		return err
 	}
 	a.sessions.put(id, &appSession{Subject: subject, Expires: a.now().Add(12 * time.Hour)})
+	//nolint:gosec // G124: Secure is configuration-driven rather than a literal, which the rule cannot follow.
 	http.SetCookie(w, &http.Cookie{
 		Name:     appSessionCookie,
 		Value:    id,
@@ -290,6 +291,7 @@ func (a *appUI) signOut(w http.ResponseWriter, r *http.Request) {
 	if id, _ := a.current(r); id != "" {
 		a.sessions.drop(id)
 	}
+	//nolint:gosec // G124: Secure is configuration-driven rather than a literal, which the rule cannot follow.
 	http.SetCookie(w, &http.Cookie{
 		Name: appSessionCookie, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteLaxMode,

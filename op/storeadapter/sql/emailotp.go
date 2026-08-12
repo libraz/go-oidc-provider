@@ -228,7 +228,8 @@ func (s *emailOTPStore) scanOne(ctx context.Context, subject string) (*store.Ema
 	)
 	err := s.parent.db.QueryRowContext(ctx, s.parent.queries.emailOTPGet, subject).Scan(
 		&rec.Subject, &salt, &hash, &rec.FailedCount, &rec.SendCount,
-		&sent, &expires, &retain, &firstFail, &locked, &consumed, &window, &lastSend)
+		&sent, &expires, &retain, &firstFail, &locked, &consumed, &window, &lastSend,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

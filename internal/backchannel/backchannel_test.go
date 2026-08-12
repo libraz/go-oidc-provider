@@ -818,7 +818,8 @@ func TestCoordinator_GrantAudienceAndClientLookupsAreBounded(t *testing.T) {
 func TestCoordinator_NoTargetsReturnsZero(t *testing.T) {
 	t.Parallel()
 	coord, _, rec := newCoordinatorFixture(t, backchannel.DelivererFunc(
-		func(context.Context, backchannel.Target, string) error { return nil }))
+		func(context.Context, backchannel.Target, string) error { return nil },
+	))
 	n, err := coord.Notify(context.Background(), backchannel.Notice{Subject: "absent"})
 	if err != nil {
 		t.Fatalf("Notify: %v", err)
@@ -896,7 +897,8 @@ func TestCoordinator_EmitsNoSessionsForSubjectWhenSidProvided(t *testing.T) {
 func TestCoordinator_OmitsNoSessionsEventWhenSidEmpty(t *testing.T) {
 	t.Parallel()
 	coord, _, rec := newCoordinatorFixture(t, backchannel.DelivererFunc(
-		func(context.Context, backchannel.Target, string) error { return nil }))
+		func(context.Context, backchannel.Target, string) error { return nil },
+	))
 	if _, err := coord.Notify(context.Background(), backchannel.Notice{Subject: "absent"}); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
@@ -946,7 +948,8 @@ func TestCoordinator_NoSessionsEventCarriesDurablePosture(t *testing.T) {
 func TestCoordinator_RejectsEmptySubject(t *testing.T) {
 	t.Parallel()
 	coord, _, _ := newCoordinatorFixture(t, backchannel.DelivererFunc(
-		func(context.Context, backchannel.Target, string) error { return nil }))
+		func(context.Context, backchannel.Target, string) error { return nil },
+	))
 	if _, err := coord.Notify(context.Background(), backchannel.Notice{}); err == nil {
 		t.Fatal("expected error on empty Subject")
 	}

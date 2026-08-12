@@ -36,7 +36,8 @@ func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
 		return s.tx.putVersioned(ctx, s.parent.names.grants, g.ID, entry, attrRecordVersion)
 	}
 	if err := s.parent.putBumpingVersion(
-		ctx, s.parent.names.grants, entry, attrRecordVersion); err != nil {
+		ctx, s.parent.names.grants, entry, attrRecordVersion,
+	); err != nil {
 		return wrapErr("grants.Save", err)
 	}
 	return nil
@@ -65,7 +66,8 @@ func (s *grantStore) read(ctx context.Context, pk string) (item, error) {
 // lookup rather than a subject-wide enumeration filtered in memory.
 func (s *grantStore) FindBySubjectClient(ctx context.Context, subject, clientID string) (*store.Grant, error) {
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.grants, indexByClient, attrSubjectClient, subjectClientKey(subject, clientID))
+		ctx, s.parent.names.grants, indexByClient, attrSubjectClient, subjectClientKey(subject, clientID),
+	)
 	if err != nil {
 		return nil, wrapErr("grants.FindBySubjectClient", err)
 	}
@@ -92,7 +94,8 @@ func (s *grantStore) FindBySubjectClient(ctx context.Context, subject, clientID 
 
 func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*store.Grant, error) {
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.grants, indexBySubject, attrSubject, subject)
+		ctx, s.parent.names.grants, indexBySubject, attrSubject, subject,
+	)
 	if err != nil {
 		return nil, wrapErr("grants.ListBySubject", err)
 	}

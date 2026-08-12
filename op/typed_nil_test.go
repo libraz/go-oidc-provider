@@ -56,7 +56,7 @@ func typedNilFrom[T any](t *testing.T, sample T) T {
 
 	value := reflect.ValueOf(sample)
 	switch value.Kind() {
-	case reflect.Ptr, reflect.Func, reflect.Map, reflect.Slice, reflect.Chan, reflect.Interface:
+	case reflect.Pointer, reflect.Func, reflect.Map, reflect.Slice, reflect.Chan, reflect.Interface:
 	default:
 		t.Fatalf("typedNilFrom requires a nil-able concrete sample, got %T", sample)
 	}

@@ -16,18 +16,23 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
 }
 
-# Resolve a tool installed via tools/tools.go. Falls back to PATH.
+# Resolve a tool installed via tools/tools.go. The install directory wins
+# over PATH: tools/go.mod pins the version the repository is checked
+# against, and a system-wide copy (Homebrew, a distro package) is usually
+# a different one. Preferring PATH would silently lint and format against
+# whatever happened to be installed. PATH stays as a fallback so a
+# container image that ships the tools without `make tools` still works.
 tool() {
   local name="$1"
-  if command -v "$name" >/dev/null 2>&1; then
-    command -v "$name"
-    return 0
-  fi
   local gobin
   gobin="$(go env GOBIN)"
   [ -z "$gobin" ] && gobin="$(go env GOPATH)/bin"
   if [ -x "$gobin/$name" ]; then
     printf '%s\n' "$gobin/$name"
+    return 0
+  fi
+  if command -v "$name" >/dev/null 2>&1; then
+    command -v "$name"
     return 0
   fi
   die "tool not installed: $name (run 'make tools')"

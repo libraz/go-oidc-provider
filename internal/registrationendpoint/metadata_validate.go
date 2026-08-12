@@ -122,12 +122,14 @@ func validateUnpersistedMetadata(extras metadataExtras) error {
 	if extras.DPoPBoundAccessTokens {
 		return errInvalidClientMetadata(
 			"dpop_bound_access_tokens true is not supported: the OP binds an access token when the " +
-				"request presents a DPoP proof and does not enforce the requirement per client")
+				"request presents a DPoP proof and does not enforce the requirement per client",
+		)
 	}
 	if extras.RequirePushedAuthorizationRequests {
 		return errInvalidClientMetadata(
 			"require_pushed_authorization_requests true is not supported: the OP requires pushed " +
-				"authorization requests for every client or none, never per client")
+				"authorization requests for every client or none, never per client",
+		)
 	}
 	return nil
 }
@@ -431,7 +433,8 @@ func validateBackchannelLogoutURI(raw string, allowDevLoopback bool) error {
 		return nil
 	}
 	return errInvalidClientMetadata(
-		"backchannel_logout_uri must use https (or http with a loopback host under WithAllowInsecureBackchannelLogoutForDev)")
+		"backchannel_logout_uri must use https (or http with a loopback host under WithAllowInsecureBackchannelLogoutForDev)",
+	)
 }
 
 // isLoopbackHost reports whether host is one of the dev-mode
@@ -456,7 +459,8 @@ func isLoopbackHost(host string) bool {
 func validateBackchannelLogoutCoupling(m ClientMetadata) error {
 	if m.BackchannelLogoutSessionRequired {
 		return errInvalidClientMetadata(
-			"backchannel_logout_session_required is not supported")
+			"backchannel_logout_session_required is not supported",
+		)
 	}
 	return nil
 }
@@ -627,7 +631,8 @@ func validateUserInfoResponseEncryption(alg, enc string, policy internaljose.JWE
 // [validateRequestObjectEncryption].
 func validateAuthorizationResponseEncryption(alg, enc string, policy internaljose.JWEPolicy) error {
 	return validateJWEAlgEncPair(
-		"authorization_encrypted_response_alg", "authorization_encrypted_response_enc", alg, enc, policy)
+		"authorization_encrypted_response_alg", "authorization_encrypted_response_enc", alg, enc, policy,
+	)
 }
 
 // validateIntrospectionResponseEncryption pins the JWE alg/enc the
@@ -637,7 +642,8 @@ func validateAuthorizationResponseEncryption(alg, enc string, policy internaljos
 // [validateRequestObjectEncryption].
 func validateIntrospectionResponseEncryption(alg, enc string, policy internaljose.JWEPolicy) error {
 	return validateJWEAlgEncPair(
-		"introspection_encrypted_response_alg", "introspection_encrypted_response_enc", alg, enc, policy)
+		"introspection_encrypted_response_alg", "introspection_encrypted_response_enc", alg, enc, policy,
+	)
 }
 
 // validateJWEAlgEncPair is the shared allow-list check the encryption

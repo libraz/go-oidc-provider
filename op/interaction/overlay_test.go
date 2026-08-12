@@ -109,7 +109,8 @@ func TestTemplateOverlay_OverrideConsentRendersTemplate(t *testing.T) {
 			`<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">` +
 			`<ul>{{range .Scopes}}<li>{{.Name}}</li>{{end}}</ul>` +
 			`<input type="hidden" name="{{.ApprovedScopesField}}" value="">` +
-			`</form></body></html>`))
+			`</form></body></html>`,
+	))
 	overlay := interaction.TemplateOverlayDriver{
 		Inner:           interaction.HTMLDriver{},
 		ConsentTemplate: tmpl,
@@ -188,7 +189,8 @@ func TestTemplateOverlay_OverrideChooserRendersTemplate(t *testing.T) {
 			`<ul>{{range .Accounts}}<li>{{.Subject}}</li>{{end}}</ul>` +
 			`<a href="{{.AddAccountURL}}">add</a>` +
 			`<input type="hidden" name="{{.SessionIDField}}" value="">` +
-			`</form></body></html>`))
+			`</form></body></html>`,
+	))
 	overlay := interaction.TemplateOverlayDriver{
 		Inner:           interaction.HTMLDriver{},
 		ChooserTemplate: tmpl,

@@ -95,7 +95,8 @@ func (s *opaqueAccessTokenStore) retire(ctx context.Context, pk string) error {
 // and costs one of the transaction's actions per token.
 func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.opaqueAccessTokens, indexByGrant, attrGrantID, grantID)
+		ctx, s.parent.names.opaqueAccessTokens, indexByGrant, attrGrantID, grantID,
+	)
 	if err != nil {
 		return 0, wrapErr("opaqueAccessTokens.RevokeByGrant", err)
 	}
@@ -123,7 +124,8 @@ func (s *opaqueAccessTokenStore) RevokeByClient(ctx context.Context, clientID st
 		return nil
 	}
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.opaqueAccessTokens, indexByClient, attrClientID, clientID)
+		ctx, s.parent.names.opaqueAccessTokens, indexByClient, attrClientID, clientID,
+	)
 	if err != nil {
 		return wrapErr("opaqueAccessTokens.RevokeByClient", err)
 	}

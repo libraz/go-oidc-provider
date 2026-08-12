@@ -291,13 +291,15 @@ func (s *deviceCodeStore) IncrementUserCodeStrikeByUserCode(ctx context.Context,
 // design, and a read-modify-write would record a burst of them as one.
 func (s *deviceCodeStore) incrementStrike(ctx context.Context, pk string) (uint8, error) {
 	return s.parent.incrementCounter(
-		ctx, "deviceCodes.IncrementUserCodeStrike", s.parent.names.deviceCodes, pk, attrUserCodeStrikes)
+		ctx, "deviceCodes.IncrementUserCodeStrike", s.parent.names.deviceCodes, pk, attrUserCodeStrikes,
+	)
 }
 
 func (s *deviceCodeStore) IncrementPollViolation(ctx context.Context, deviceCode string) (uint8, error) {
 	return s.parent.incrementCounter(
 		ctx, "deviceCodes.IncrementPollViolation", s.parent.names.deviceCodes,
-		digestKey(deviceCode), attrPollViolations)
+		digestKey(deviceCode), attrPollViolations,
+	)
 }
 
 // Consume redeems an approved record exactly once.

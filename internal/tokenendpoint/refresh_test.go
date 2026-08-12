@@ -881,7 +881,8 @@ func newKeylessRefreshFixture(t *testing.T, clock movableClock) *keylessRefreshF
 func (f *keylessRefreshFixture) post(t *testing.T, form url.Values) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequestWithContext(
-		context.Background(), http.MethodPost, "/token", strings.NewReader(form.Encode()))
+		context.Background(), http.MethodPost, "/token", strings.NewReader(form.Encode()),
+	)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(f.client.ID, f.secret)
 	rec := httptest.NewRecorder()

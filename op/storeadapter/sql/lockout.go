@@ -27,7 +27,8 @@ func (s *authnLockoutStore) Get(ctx context.Context, subject string) (*store.Aut
 		locked    int64
 	)
 	err := s.parent.db.QueryRowContext(ctx, s.parent.queries.lockoutGet, subject).Scan(
-		&rec.Subject, &rec.FailedCount, &version, &firstFail, &locked)
+		&rec.Subject, &rec.FailedCount, &version, &firstFail, &locked,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

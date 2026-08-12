@@ -387,18 +387,21 @@ func persistAuthnState(
 	encoded, err := encodeAuthnState(next)
 	if err != nil {
 		return nil, authorize.RequestState{}, fmt.Errorf(
-			"authorizeendpoint: encode authn state: %w", err)
+			"authorizeendpoint: encode authn state: %w", err,
+		)
 	}
 	state.Authn = encoded
 	raw, err := authorize.MarshalState(state)
 	if err != nil {
 		return nil, authorize.RequestState{}, fmt.Errorf(
-			"authorizeendpoint: marshal interaction state: %w", err)
+			"authorizeendpoint: marshal interaction state: %w", err,
+		)
 	}
 	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
 	if !ok {
 		return nil, authorize.RequestState{}, errors.New(
-			"authorizeendpoint: interaction store lacks compare-and-swap")
+			"authorizeendpoint: interaction store lacks compare-and-swap",
+		)
 	}
 	nextRec := *rec
 	nextRec.RawState = raw
@@ -408,7 +411,8 @@ func persistAuthnState(
 		return &nextRec, state, nil
 	} else if !errors.Is(err, store.ErrConflict) {
 		return nil, authorize.RequestState{}, fmt.Errorf(
-			"authorizeendpoint: save interaction: %w", err)
+			"authorizeendpoint: save interaction: %w", err,
+		)
 	}
 	current, err := deps.Interactions.Find(ctx, rec.ID)
 	if err == nil && current == nil {
@@ -422,7 +426,8 @@ func persistAuthnState(
 	currentState, err := authorize.UnmarshalState(current.RawState)
 	if err != nil {
 		return nil, authorize.RequestState{}, fmt.Errorf(
-			"authorizeendpoint: decode concurrent interaction state: %w", err)
+			"authorizeendpoint: decode concurrent interaction state: %w", err,
+		)
 	}
 	return current, currentState, store.ErrConflict
 }
@@ -557,11 +562,13 @@ func resolveGrantACRAMR(
 		)
 		if err != nil {
 			return "", nil, time.Time{}, fmt.Errorf(
-				"authorizeendpoint: resolve chooser authentication context: %w", err)
+				"authorizeendpoint: resolve chooser authentication context: %w", err,
+			)
 		}
 		if authCtx.Subject != subject {
 			return "", nil, time.Time{}, errors.New(
-				"authorizeendpoint: chooser authentication context subject mismatch")
+				"authorizeendpoint: chooser authentication context subject mismatch",
+			)
 		}
 		acr = authCtx.ACR
 		amr = authCtx.AMR

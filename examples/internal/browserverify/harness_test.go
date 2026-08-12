@@ -520,7 +520,8 @@ func spaSubmit(ctx context.Context) error {
 	var marked bool
 	if err := chromedp.Run(ctx, chromedp.Evaluate(
 		`(function(){var b=document.querySelector('#prompt-form button[type="submit"]');`+
-			`if(!b){return false;}b.dataset.bvClicked='1';return true;})()`, &marked)); err != nil {
+			`if(!b){return false;}b.dataset.bvClicked='1';return true;})()`, &marked,
+	)); err != nil {
 		return fmt.Errorf("mark submit button: %w", err)
 	}
 	if !marked {
@@ -535,7 +536,8 @@ func spaSubmit(ctx context.Context) error {
 	for time.Now().Before(deadline) {
 		var present bool
 		if err := chromedp.Run(ctx, chromedp.Evaluate(
-			`!!document.querySelector('#prompt-form button[data-bv-clicked]')`, &present)); err != nil {
+			`!!document.querySelector('#prompt-form button[data-bv-clicked]')`, &present,
+		)); err != nil {
 			// The evaluation failed because the document navigated away and
 			// took the marked button with it — the same observation as
 			// querying the live document and not finding it.
@@ -552,7 +554,8 @@ func spaSubmit(ctx context.Context) error {
 	// failure is indistinguishable from a prompt that merely rendered slowly.
 	var status string
 	_ = chromedp.Run(ctx, chromedp.Evaluate(
-		`(document.querySelector('#status')||{}).textContent||''`, &status))
+		`(document.querySelector('#status')||{}).textContent||''`, &status,
+	))
 	href, body := spaDump(ctx)
 	return fmt.Errorf("prompt did not advance after submit; status=%q at %q with body:\n%s", status, href, body)
 }

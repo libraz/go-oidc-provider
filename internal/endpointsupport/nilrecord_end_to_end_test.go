@@ -308,7 +308,7 @@ func (f *nilRecordFixture) do(t *testing.T, req *http.Request) nilRecordResponse
 	client := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	//nolint:gosec // G704: the request targets this test's own httptest server.
+
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", req.Method, req.URL.Path, err)

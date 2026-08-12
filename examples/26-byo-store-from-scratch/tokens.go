@@ -67,7 +67,8 @@ func (s *accessTokenStore) Find(ctx context.Context, jti string) (*store.AccessT
 	)
 	err := s.q.QueryRowContext(ctx, atSelect, jti).Scan(
 		&rec.JTI, &rec.GrantID, &rec.Subject, &rec.ClientID, &scopes,
-		&issued, &expires, &void)
+		&issued, &expires, &void,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, nil //nolint:nilnil // contract permits (nil, nil) for absent records.
 	}

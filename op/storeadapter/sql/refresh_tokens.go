@@ -259,7 +259,8 @@ func (s *refreshStore) lookup(ctx context.Context, id string, keys [2]string) (*
 		&stored, &t.ClientID, &t.Subject, &subPub, &t.GrantID,
 		&scope, &t.Resource, &origin, &authTime, &t.ACR, &amr, &details, &extra,
 		&parent, &consumed, &expires, &created,
-		&t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce, &revoked)
+		&t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce, &revoked,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, "", store.ErrNotFound
 	}

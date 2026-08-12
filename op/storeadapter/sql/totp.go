@@ -140,7 +140,8 @@ func (s *totpStore) scanOne(ctx context.Context, subject string) (*store.TOTPRec
 	)
 	err := s.parent.db.QueryRowContext(ctx, s.parent.queries.totpGet, subject).Scan(
 		&rec.Subject, &secret, &rec.FailedCount, &rec.LastAcceptedStep,
-		&confirmed, &firstFail, &locked)
+		&confirmed, &firstFail, &locked,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

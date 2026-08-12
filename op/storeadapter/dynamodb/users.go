@@ -88,7 +88,8 @@ func (s *userStore) findReservedUsername(ctx context.Context, username string) (
 
 func (s *userStore) findIndexedUsername(ctx context.Context, username string) (*store.User, error) {
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.users, indexByUsername, attrUsername, username)
+		ctx, s.parent.names.users, indexByUsername, attrUsername, username,
+	)
 	if err != nil {
 		return nil, wrapErr("users.FindByUsername", err)
 	}

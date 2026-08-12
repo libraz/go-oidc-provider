@@ -354,7 +354,7 @@ func (c *Client) AssertSafeURLParsed(ctx context.Context, u *url.URL) error {
 // than a silent truncation. The body is fully drained before the
 // function returns so the underlying connection can be re-used.
 func (c *Client) Do(req *http.Request) ([]byte, *http.Response, error) {
-	resp, err := c.http.Do(req) //nolint:gosec // G704: this package is the SSRF-hardened envelope; AssertSafeURL ran in NewRequest.
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

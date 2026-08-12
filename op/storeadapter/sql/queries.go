@@ -324,75 +324,100 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 	q := queries{
 		// clients
 		clientGet: d.rebind(
-			"SELECT " + clientCols + " FROM " + n.clients + " WHERE id = ?"),
+			"SELECT " + clientCols + " FROM " + n.clients + " WHERE id = ?",
+		),
 		clientInsert: d.rebind(
-			"INSERT INTO " + n.clients + " (" + clientCols + ") VALUES (" + clientPlaceholders + ")"),
+			"INSERT INTO " + n.clients + " (" + clientCols + ") VALUES (" + clientPlaceholders + ")",
+		),
 		clientUpdate: d.rebind(
-			"UPDATE " + n.clients + " SET " + clientUpdateSets + " WHERE id = ?"),
+			"UPDATE " + n.clients + " SET " + clientUpdateSets + " WHERE id = ?",
+		),
 		clientDelete: d.rebind(
-			"DELETE FROM " + n.clients + " WHERE id = ?"),
+			"DELETE FROM " + n.clients + " WHERE id = ?",
+		),
 
 		// authorization codes
 		authCodeSave: d.rebind(
 			"INSERT INTO " + n.authCodes +
 				" (id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		),
 		authCodeFind: d.rebind(
 			"SELECT id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, expires_at, consumed_at, created_at" +
-				" FROM " + n.authCodes + " WHERE id = ?"),
+				" FROM " + n.authCodes + " WHERE id = ?",
+		),
 		authCodeConsume: d.rebind(
-			"UPDATE " + n.authCodes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),
+			"UPDATE " + n.authCodes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+		),
 		authCodeGC: d.rebind(
-			"DELETE FROM " + n.authCodes + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.authCodes + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// refresh tokens
 		refreshSave: d.rebind(
 			"INSERT INTO " + n.refreshes +
 				" (id, client_id, grant_id, parent_id, subject, subject_public, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		),
 		refreshFind: d.rebind(
 			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
-				" FROM " + n.refreshes + " WHERE id IN (?, ?)"),
+				" FROM " + n.refreshes + " WHERE id IN (?, ?)",
+		),
 		// refreshParentRevoked re-reads a rotation parent's revoked flag
 		// inside the guarded Save transaction. The FOR UPDATE suffix (on
 		// engines that support it) serialises the read against a
 		// concurrent RevokeChain UPDATE so a rotation cannot slip a live
 		// descendant past a replay cascade (RFC 9700 §2.2.2).
 		refreshParentRevoked: d.rebind(
-			"SELECT revoked FROM " + n.refreshes + " WHERE id = ?" + d.forUpdate()),
+			"SELECT revoked FROM " + n.refreshes + " WHERE id = ?" + d.forUpdate(),
+		),
 		refreshConsume: d.rebind(
-			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),
+			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+		),
 		refreshRevokeChainUpdate: d.rebind(
-			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE id = ?"),
+			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE id = ?",
+		),
 		refreshRevokeChainChildren: d.rebind(
-			"SELECT id FROM " + n.refreshes + " WHERE parent_id = ?"),
+			"SELECT id FROM " + n.refreshes + " WHERE parent_id = ?",
+		),
 		refreshRevokeByGrant: d.rebind(
-			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE grant_id = ?"),
+			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE grant_id = ?",
+		),
 		refreshRevokeByClient: d.rebind(
-			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE client_id = ?"),
+			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE client_id = ?",
+		),
 		refreshRetrySave: d.rebind(
-			"UPDATE " + n.refreshes + " SET retry_response = ? WHERE id = ?"),
+			"UPDATE " + n.refreshes + " SET retry_response = ? WHERE id = ?",
+		),
 		refreshRetryFind: d.rebind(
-			"SELECT retry_response FROM " + n.refreshes + " WHERE id = ? AND retry_response IS NOT NULL"),
+			"SELECT retry_response FROM " + n.refreshes + " WHERE id = ? AND retry_response IS NOT NULL",
+		),
 		grantDeleteByClient: d.rebind(
-			"DELETE FROM " + n.grants + " WHERE client_id = ?"),
+			"DELETE FROM " + n.grants + " WHERE client_id = ?",
+		),
 
 		// access tokens
 		accessTokenRegister: d.rebind(
 			"INSERT INTO " + n.accessTokens +
 				" (jti, grant_id, subject, client_id, scopes, issued_at, expires_at, revoked)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		),
 		accessTokenFind: d.rebind(
 			"SELECT jti, grant_id, subject, client_id, scopes, issued_at, expires_at, revoked" +
-				" FROM " + n.accessTokens + " WHERE jti = ?"),
+				" FROM " + n.accessTokens + " WHERE jti = ?",
+		),
 		accessTokenRevokeByJTI: d.rebind(
-			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE jti = ?"),
+			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE jti = ?",
+		),
 		accessTokenRevokeByGrant: d.rebind(
-			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
+			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0",
+		),
 		accessTokenRevokeByClient: d.rebind(
-			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0"),
+			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0",
+		),
 		accessTokenGC: d.rebind(
-			"DELETE FROM " + n.accessTokens + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.accessTokens + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// opaque access tokens. The PK is the SHA-256 digest of the raw
 		// bearer ID; callers hash before binding so the raw secret never
@@ -400,18 +425,24 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		opaqueAccessTokenSave: d.rebind(
 			"INSERT INTO " + n.opaqueAccessTokens +
 				" (token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		),
 		opaqueAccessTokenFind: d.rebind(
 			"SELECT token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked" +
-				" FROM " + n.opaqueAccessTokens + " WHERE token_hash = ?"),
+				" FROM " + n.opaqueAccessTokens + " WHERE token_hash = ?",
+		),
 		opaqueAccessTokenRevokeByID: d.rebind(
-			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE token_hash = ?"),
+			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE token_hash = ?",
+		),
 		opaqueAccessTokenRevokeByGrant: d.rebind(
-			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
+			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0",
+		),
 		opaqueAccessTokenRevokeByClient: d.rebind(
-			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0"),
+			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0",
+		),
 		opaqueAccessTokenGC: d.rebind(
-			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// grant revocation. Two physical tables share one substore:
 		// oidc_grant_revocations holds per-grant tombstones,
@@ -427,20 +458,26 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" VALUES (?, ?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("grant_id",
 					"revoked_at="+d.greatestExpr(d.excludedRef("revoked_at"), d.existingRef(n.grantTombstones, "revoked_at"))+
-						", expires_at="+d.greatestExpr(d.excludedRef("expires_at"), d.existingRef(n.grantTombstones, "expires_at")))),
+						", expires_at="+d.greatestExpr(d.excludedRef("expires_at"), d.existingRef(n.grantTombstones, "expires_at"))),
+		),
 		grantTombstoneFind: d.rebind(
-			"SELECT revoked_at FROM " + n.grantTombstones + " WHERE grant_id = ?"),
+			"SELECT revoked_at FROM " + n.grantTombstones + " WHERE grant_id = ?",
+		),
 		grantTombstoneGC: d.rebind(
-			"DELETE FROM " + n.grantTombstones + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.grantTombstones + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 		revokedJTIInsert: d.rebind(
 			"INSERT INTO " + n.revokedJTIs +
 				" (jti, grant_id, expires_at)" +
 				" VALUES (?, ?, ?)" + d.upsertAlias() +
-				d.upsertDoNothingQualified("jti", n.revokedJTIs)),
+				d.upsertDoNothingQualified("jti", n.revokedJTIs),
+		),
 		revokedJTIFind: d.rebind(
-			"SELECT expires_at FROM " + n.revokedJTIs + " WHERE jti = ?"),
+			"SELECT expires_at FROM " + n.revokedJTIs + " WHERE jti = ?",
+		),
 		revokedJTIGC: d.rebind(
-			"DELETE FROM " + n.revokedJTIs + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.revokedJTIs + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// grants (upsert keyed on id)
 		grantSave: d.rebind(
@@ -456,29 +493,37 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 						", acr="+d.excludedRef("acr")+
 						", amr="+d.excludedRef("amr")+
 						", authorization_details="+d.excludedRef("authorization_details")+
-						", updated_at="+d.excludedRef("updated_at"))),
+						", updated_at="+d.excludedRef("updated_at")),
+		),
 		grantFind: d.rebind(
 			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
-				" FROM " + n.grants + " WHERE id = ?"),
+				" FROM " + n.grants + " WHERE id = ?",
+		),
 		grantFindForUpdate: d.rebind(
 			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
-				" FROM " + n.grants + " WHERE id = ?" + d.forUpdate()),
+				" FROM " + n.grants + " WHERE id = ?" + d.forUpdate(),
+		),
 		grantFindBySubjectClient: d.rebind(
 			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
 				" FROM " + n.grants +
-				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1"),
+				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1",
+		),
 		grantFindBySubjectClientForUpdate: d.rebind(
 			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
 				" FROM " + n.grants +
-				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1" + d.forUpdate()),
+				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1" + d.forUpdate(),
+		),
 		grantListBySubject: d.rebind(
 			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
-				" FROM " + n.grants + " WHERE subject = ?"),
+				" FROM " + n.grants + " WHERE subject = ?",
+		),
 		grantListClientIDs: d.rebind(
 			"SELECT DISTINCT client_id FROM " + n.grants +
-				" WHERE subject = ? AND client_id > ? ORDER BY client_id LIMIT ?"),
+				" WHERE subject = ? AND client_id > ? ORDER BY client_id LIMIT ?",
+		),
 		grantDelete: d.rebind(
-			"DELETE FROM " + n.grants + " WHERE id = ?"),
+			"DELETE FROM " + n.grants + " WHERE id = ?",
+		),
 		grantHasAny: "SELECT 1 FROM " + n.grants + " LIMIT 1",
 
 		// sessions (upsert keyed on id)
@@ -493,32 +538,42 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 						", acr="+d.excludedRef("acr")+
 						", chooser_group_id="+d.excludedRef("chooser_group_id")+
 						", expires_at="+d.excludedRef("expires_at")+
-						", updated_at="+d.excludedRef("updated_at"))),
+						", updated_at="+d.excludedRef("updated_at")),
+		),
 		sessionFind: d.rebind(
 			"SELECT id, subject, auth_time, amr, acr, chooser_group_id, expires_at, created_at, updated_at" +
-				" FROM " + n.sessions + " WHERE id = ?"),
+				" FROM " + n.sessions + " WHERE id = ?",
+		),
 		sessionTouch: d.rebind(
-			"UPDATE " + n.sessions + " SET expires_at = ?, updated_at = ? WHERE id = ?"),
+			"UPDATE " + n.sessions + " SET expires_at = ?, updated_at = ? WHERE id = ?",
+		),
 		sessionDelete: d.rebind(
-			"DELETE FROM " + n.sessions + " WHERE id = ?"),
+			"DELETE FROM " + n.sessions + " WHERE id = ?",
+		),
 		sessionListByChooserGroup: d.rebind(
 			"SELECT id, subject, auth_time, amr, acr, chooser_group_id, expires_at, created_at, updated_at" +
-				" FROM " + n.sessions + " WHERE chooser_group_id = ?"),
+				" FROM " + n.sessions + " WHERE chooser_group_id = ?",
+		),
 		sessionGC: d.rebind(
-			"DELETE FROM " + n.sessions + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.sessions + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// PAR
 		parSave: d.rebind(
 			"INSERT INTO " + n.pars +
 				" (uri, client_id, raw_params, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?)",
+		),
 		parFind: d.rebind(
 			"SELECT uri, client_id, raw_params, expires_at, consumed_at, created_at" +
-				" FROM " + n.pars + " WHERE uri = ?"),
+				" FROM " + n.pars + " WHERE uri = ?",
+		),
 		parConsume: d.rebind(
-			"UPDATE " + n.pars + " SET consumed_at = ? WHERE uri = ? AND consumed_at IS NULL"),
+			"UPDATE " + n.pars + " SET consumed_at = ? WHERE uri = ? AND consumed_at IS NULL",
+		),
 		parGC: d.rebind(
-			"DELETE FROM " + n.pars + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.pars + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// interactions (upsert keyed on id)
 		interactionSave: d.rebind(
@@ -530,45 +585,59 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 						", step="+d.excludedRef("step")+
 						", raw_state="+d.excludedRef("raw_state")+
 						", expires_at="+d.excludedRef("expires_at")+
-						", updated_at="+d.excludedRef("updated_at"))),
+						", updated_at="+d.excludedRef("updated_at")),
+		),
 		interactionFind: d.rebind(
 			"SELECT id, client_id, step, raw_state, expires_at, created_at, updated_at" +
-				" FROM " + n.interactions + " WHERE id = ?"),
+				" FROM " + n.interactions + " WHERE id = ?",
+		),
 		interactionCompareAndSwap: d.rebind(
 			"UPDATE " + n.interactions +
 				" SET client_id = ?, step = ?, raw_state = ?, expires_at = ?, created_at = ?, updated_at = ?" +
-				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)"),
+				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)",
+		),
 		interactionDeleteIfUnchanged: d.rebind(
 			"DELETE FROM " + n.interactions +
-				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)"),
+				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)",
+		),
 		interactionDelete: d.rebind(
-			"DELETE FROM " + n.interactions + " WHERE id = ?"),
+			"DELETE FROM " + n.interactions + " WHERE id = ?",
+		),
 		interactionGC: d.rebind(
-			"DELETE FROM " + n.interactions + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.interactions + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// consumed JTIs
 		jtiDeleteExpired: d.rebind(
-			"DELETE FROM " + n.jtis + " WHERE jti = ? AND expires_at > 0 AND expires_at <= ?"),
+			"DELETE FROM " + n.jtis + " WHERE jti = ? AND expires_at > 0 AND expires_at <= ?",
+		),
 		jtiMark: d.rebind(
-			"INSERT INTO " + n.jtis + " (jti, expires_at) VALUES (?, ?)"),
+			"INSERT INTO " + n.jtis + " (jti, expires_at) VALUES (?, ?)",
+		),
 		jtiHas: d.rebind(
-			"SELECT expires_at FROM " + n.jtis + " WHERE jti = ?"),
+			"SELECT expires_at FROM " + n.jtis + " WHERE jti = ?",
+		),
 		jtiGC: d.rebind(
-			"DELETE FROM " + n.jtis + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.jtis + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// users
 		userFindBySubject: d.rebind(
-			"SELECT subject, claims, updated_at FROM " + n.users + " WHERE subject = ?"),
+			"SELECT subject, claims, updated_at FROM " + n.users + " WHERE subject = ?",
+		),
 		userFindByUsername: d.rebind(
-			"SELECT subject, claims, updated_at FROM " + n.users + " WHERE username = ?"),
+			"SELECT subject, claims, updated_at FROM " + n.users + " WHERE username = ?",
+		),
 		userReadPasswordHash: d.rebind(
-			"SELECT password_hash FROM " + n.users + " WHERE subject = ?"),
+			"SELECT password_hash FROM " + n.users + " WHERE subject = ?",
+		),
 		userPut: d.rebind(
 			"INSERT INTO " + n.users + " (subject, claims, updated_at) VALUES (?, ?, ?)" +
 				d.upsertAlias() +
 				d.upsertOnConflict("subject",
 					"claims="+d.excludedRef("claims")+
-						", updated_at="+d.excludedRef("updated_at"))),
+						", updated_at="+d.excludedRef("updated_at")),
+		),
 		userPutWithPassword: d.rebind(
 			"INSERT INTO " + n.users + " (subject, claims, updated_at, username, password_hash) VALUES (?, ?, ?, ?, ?)" +
 				d.upsertAlias() +
@@ -576,22 +645,28 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 					"claims="+d.excludedRef("claims")+
 						", updated_at="+d.excludedRef("updated_at")+
 						", username="+d.excludedRef("username")+
-						", password_hash="+d.excludedRef("password_hash"))),
+						", password_hash="+d.excludedRef("password_hash")),
+		),
 
 		// initial access tokens
 		iatPut: d.rebind(
 			"INSERT INTO " + n.iats +
 				" (id, hashed_value, max_uses, uses, allowed_scopes, tag, expires_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		),
 		iatGetByHash: d.rebind(
 			"SELECT id, hashed_value, max_uses, uses, allowed_scopes, tag, expires_at, created_at" +
-				" FROM " + n.iats + " WHERE hashed_value = ?"),
+				" FROM " + n.iats + " WHERE hashed_value = ?",
+		),
 		iatIncrementUsesRead: d.rebind(
-			"SELECT max_uses, uses FROM " + n.iats + " WHERE id = ?"),
+			"SELECT max_uses, uses FROM " + n.iats + " WHERE id = ?",
+		),
 		iatIncrementUsesUpdate: d.rebind(
-			"UPDATE " + n.iats + " SET uses = ? WHERE id = ? AND uses = ?"),
+			"UPDATE " + n.iats + " SET uses = ? WHERE id = ? AND uses = ?",
+		),
 		iatDelete: d.rebind(
-			"DELETE FROM " + n.iats + " WHERE id = ?"),
+			"DELETE FROM " + n.iats + " WHERE id = ?",
+		),
 
 		// registration access tokens
 		ratPut: d.rebind(
@@ -599,67 +674,89 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" (client_id, hashed_value, created_at) VALUES (?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("client_id",
 					"hashed_value="+d.excludedRef("hashed_value")+
-						", created_at="+d.excludedRef("created_at"))),
+						", created_at="+d.excludedRef("created_at")),
+		),
 		ratGetByClientID: d.rebind(
-			"SELECT client_id, hashed_value, created_at FROM " + n.rats + " WHERE client_id = ?"),
+			"SELECT client_id, hashed_value, created_at FROM " + n.rats + " WHERE client_id = ?",
+		),
 		ratDelete: d.rebind(
-			"DELETE FROM " + n.rats + " WHERE client_id = ?"),
+			"DELETE FROM " + n.rats + " WHERE client_id = ?",
+		),
 
 		// op metadata
 		metadataGet: d.rebind(
-			"SELECT meta_value FROM " + n.metadata + " WHERE meta_key = ?"),
+			"SELECT meta_value FROM " + n.metadata + " WHERE meta_key = ?",
+		),
 		metadataSet: d.rebind(
 			"INSERT INTO " + n.metadata + " (meta_key, meta_value) VALUES (?, ?)" + d.upsertAlias() +
-				d.upsertOnConflict("meta_key", "meta_value="+d.excludedRef("meta_value"))),
+				d.upsertOnConflict("meta_key", "meta_value="+d.excludedRef("meta_value")),
+		),
 
 		// device codes (RFC 8628). The id column holds the SHA-256
 		// digest of the wire device_code; the substore hashes before
 		// every bind so the raw bearer secret never reaches the DB.
 		deviceCodeSave: d.rebind(
 			"INSERT INTO " + n.deviceCodes + " (" + deviceCodeCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		),
 		deviceCodeFind: d.rebind(
-			"SELECT " + deviceCodeCols + " FROM " + n.deviceCodes + " WHERE id = ?"),
+			"SELECT " + deviceCodeCols + " FROM " + n.deviceCodes + " WHERE id = ?",
+		),
 		deviceCodeFindByUserCode: d.rebind(
-			"SELECT " + deviceCodeCols + " FROM " + n.deviceCodes + " WHERE user_code = ?"),
+			"SELECT " + deviceCodeCols + " FROM " + n.deviceCodes + " WHERE user_code = ?",
+		),
 		deviceCodeApprove: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET status = ?, subject = ?, auth_time = ?" +
-				" WHERE id = ? AND status = ?" + notExpiredGuard),
+				" WHERE id = ? AND status = ?" + notExpiredGuard,
+		),
 		deviceCodeApproveByUser: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET status = ?, subject = ?, auth_time = ?" +
-				" WHERE user_code = ? AND status = ?" + notExpiredGuard),
+				" WHERE user_code = ? AND status = ?" + notExpiredGuard,
+		),
 		deviceCodeDeny: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET status = ?, deny_reason = ?" +
-				" WHERE id = ? AND status = ?" + notExpiredGuard),
+				" WHERE id = ? AND status = ?" + notExpiredGuard,
+		),
 		deviceCodeDenyByUser: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET status = ?, deny_reason = ?" +
-				" WHERE user_code = ? AND status = ?" + notExpiredGuard),
+				" WHERE user_code = ? AND status = ?" + notExpiredGuard,
+		),
 		deviceCodeRevoke: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET status = ?, deny_reason = ?" +
-				" WHERE id = ? AND status IN (?, ?)" + notExpiredGuard),
+				" WHERE id = ? AND status IN (?, ?)" + notExpiredGuard,
+		),
 		deviceCodeRecordPoll: d.rebind(
 			"UPDATE " + n.deviceCodes +
 				" SET last_polled_at = ?, poll_interval = CASE WHEN ? > poll_interval THEN ? ELSE poll_interval END" +
-				" WHERE id = ?" + notExpiredGuard),
+				" WHERE id = ?" + notExpiredGuard,
+		),
 		deviceCodeConsume: d.rebind(
-			"UPDATE " + n.deviceCodes + " SET status = ? WHERE id = ? AND status = ?" + notExpiredGuard),
+			"UPDATE " + n.deviceCodes + " SET status = ? WHERE id = ? AND status = ?" + notExpiredGuard,
+		),
 		deviceCodeStrikeIncrement: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET user_code_strikes = user_code_strikes + 1" +
-				" WHERE id = ? AND user_code_strikes < 255" + notExpiredGuard),
+				" WHERE id = ? AND user_code_strikes < 255" + notExpiredGuard,
+		),
 		deviceCodeStrikeIncrUser: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET user_code_strikes = user_code_strikes + 1" +
-				" WHERE user_code = ? AND user_code_strikes < 255" + notExpiredGuard),
+				" WHERE user_code = ? AND user_code_strikes < 255" + notExpiredGuard,
+		),
 		deviceCodeStrikeRead: d.rebind(
-			"SELECT user_code_strikes FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard),
+			"SELECT user_code_strikes FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard,
+		),
 		deviceCodeStrikeReadUser: d.rebind(
-			"SELECT user_code_strikes FROM " + n.deviceCodes + " WHERE user_code = ?" + notExpiredGuard),
+			"SELECT user_code_strikes FROM " + n.deviceCodes + " WHERE user_code = ?" + notExpiredGuard,
+		),
 		deviceCodeViolationIncr: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET poll_violations = poll_violations + 1" +
-				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard),
+				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard,
+		),
 		deviceCodeViolationRead: d.rebind(
-			"SELECT poll_violations FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard),
+			"SELECT poll_violations FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard,
+		),
 		deviceCodeGC: d.rebind(
-			"DELETE FROM " + n.deviceCodes + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.deviceCodes + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// CIBA requests (OpenID Connect CIBA Core 1.0). The id column
 		// holds the SHA-256 digest of the wire auth_req_id; the substore
@@ -667,70 +764,88 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// reaches the DB.
 		cibaSave: d.rebind(
 			"INSERT INTO " + n.cibaRequests + " (" + cibaCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		),
 		cibaFind: d.rebind(
-			"SELECT " + cibaCols + " FROM " + n.cibaRequests + " WHERE id = ?"),
+			"SELECT " + cibaCols + " FROM " + n.cibaRequests + " WHERE id = ?",
+		),
 		cibaApprove: d.rebind(
 			"UPDATE " + n.cibaRequests + " SET status = ?, subject = ?, acr = ?, auth_time = ?" +
-				" WHERE id = ? AND status = ?" + notExpiredGuard),
+				" WHERE id = ? AND status = ?" + notExpiredGuard,
+		),
 		cibaDeny: d.rebind(
 			"UPDATE " + n.cibaRequests + " SET status = ?, deny_reason = ?" +
-				" WHERE id = ? AND status = ?" + notExpiredGuard),
+				" WHERE id = ? AND status = ?" + notExpiredGuard,
+		),
 		cibaRecordPoll: d.rebind(
 			"UPDATE " + n.cibaRequests +
 				" SET last_polled_at = ?, poll_interval = CASE WHEN ? > poll_interval THEN ? ELSE poll_interval END" +
-				" WHERE id = ?" + notExpiredGuard),
+				" WHERE id = ?" + notExpiredGuard,
+		),
 		cibaConsume: d.rebind(
-			"UPDATE " + n.cibaRequests + " SET status = ? WHERE id = ? AND status = ?" + notExpiredGuard),
+			"UPDATE " + n.cibaRequests + " SET status = ? WHERE id = ? AND status = ?" + notExpiredGuard,
+		),
 		cibaViolationIncr: d.rebind(
 			"UPDATE " + n.cibaRequests + " SET poll_violations = poll_violations + 1" +
-				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard),
+				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard,
+		),
 		cibaViolationRead: d.rebind(
-			"SELECT poll_violations FROM " + n.cibaRequests + " WHERE id = ?" + notExpiredGuard),
+			"SELECT poll_violations FROM " + n.cibaRequests + " WHERE id = ?" + notExpiredGuard,
+		),
 		cibaGC: d.rebind(
-			"DELETE FROM " + n.cibaRequests + " WHERE expires_at > 0 AND expires_at < ?"),
+			"DELETE FROM " + n.cibaRequests + " WHERE expires_at > 0 AND expires_at < ?",
+		),
 
 		// TOTP enrolments (RFC 6238)
 		totpGet: d.rebind(
 			"SELECT subject, " + joinColumns(totpValueColumns) +
-				" FROM " + n.totpSecrets + " WHERE subject = ?"),
+				" FROM " + n.totpSecrets + " WHERE subject = ?",
+		),
 		totpPut: d.rebind(
 			"INSERT INTO " + n.totpSecrets +
 				" (subject, " + joinColumns(totpValueColumns) + ")" +
 				" VALUES (" + bindPlaceholders(1+len(totpValueColumns)) + ")" + d.upsertAlias() +
-				d.upsertOnConflict("subject", assignExcluded(d, totpValueColumns))),
+				d.upsertOnConflict("subject", assignExcluded(d, totpValueColumns)),
+		),
 		// The predicate carries the whole stored tuple: a snapshot that
 		// no longer describes the row loses, which is what keeps a stale
 		// wrong-code write from rewinding LastAcceptedStep.
 		totpCompareAndSwap: d.rebind(
 			"UPDATE " + n.totpSecrets +
 				" SET " + assignPlaceholders(totpValueColumns) +
-				" WHERE subject = ? AND " + matchPlaceholders(totpValueColumns)),
+				" WHERE subject = ? AND " + matchPlaceholders(totpValueColumns),
+		),
 		// Accept is the single-use success transition: it only applies
 		// when the stored step is strictly behind the one being redeemed,
 		// so a replay inside the same 30-second window cannot win twice.
 		totpAccept: d.rebind(
 			"UPDATE " + n.totpSecrets +
 				" SET " + assignPlaceholders(totpValueColumns) +
-				" WHERE subject = ? AND last_accepted_step < ?"),
+				" WHERE subject = ? AND last_accepted_step < ?",
+		),
 		totpDelete: d.rebind(
-			"DELETE FROM " + n.totpSecrets + " WHERE subject = ?"),
+			"DELETE FROM " + n.totpSecrets + " WHERE subject = ?",
+		),
 
 		// passkeys (W3C WebAuthn Level 3)
 		passkeyGet: d.rebind(
 			"SELECT credential_id, " + joinColumns(passkeyValueColumns) +
-				" FROM " + n.passkeys + " WHERE credential_id = ?"),
+				" FROM " + n.passkeys + " WHERE credential_id = ?",
+		),
 		passkeyGetForUpdate: d.rebind(
 			"SELECT credential_id, " + joinColumns(passkeyValueColumns) +
-				" FROM " + n.passkeys + " WHERE credential_id = ?" + d.forUpdate()),
+				" FROM " + n.passkeys + " WHERE credential_id = ?" + d.forUpdate(),
+		),
 		passkeyListBySubject: d.rebind(
 			"SELECT credential_id, " + joinColumns(passkeyValueColumns) +
-				" FROM " + n.passkeys + " WHERE subject = ? ORDER BY created_at, credential_id"),
+				" FROM " + n.passkeys + " WHERE subject = ? ORDER BY created_at, credential_id",
+		),
 		passkeyPut: d.rebind(
 			"INSERT INTO " + n.passkeys +
 				" (credential_id, " + joinColumns(passkeyValueColumns) + ")" +
 				" VALUES (" + bindPlaceholders(1+len(passkeyValueColumns)) + ")" + d.upsertAlias() +
-				d.upsertOnConflict("credential_id", assignExcluded(d, passkeyValueColumns))),
+				d.upsertOnConflict("credential_id", assignExcluded(d, passkeyValueColumns)),
+		),
 		// Only the assertion-mutable fields are written; registration
 		// state (subject, public_key, aaguid, backup_eligible,
 		// created_at) is untouched by design.
@@ -738,37 +853,45 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.passkeys +
 				" SET sign_count = ?, user_present = ?, user_verified = ?," +
 				" backup_state = ?, clone_warning = ?" +
-				" WHERE credential_id = ?"),
+				" WHERE credential_id = ?",
+		),
 		passkeyDelete: d.rebind(
-			"DELETE FROM " + n.passkeys + " WHERE credential_id = ?"),
+			"DELETE FROM " + n.passkeys + " WHERE credential_id = ?",
+		),
 
 		// recovery codes (one row per slot)
 		recoveryList: d.rebind(
 			"SELECT slot_index, code_hash, consumed_at, generated_at" +
-				" FROM " + n.recoveryCodes + " WHERE subject = ? ORDER BY slot_index"),
+				" FROM " + n.recoveryCodes + " WHERE subject = ? ORDER BY slot_index",
+		),
 		recoveryDeleteAll: d.rebind(
-			"DELETE FROM " + n.recoveryCodes + " WHERE subject = ?"),
+			"DELETE FROM " + n.recoveryCodes + " WHERE subject = ?",
+		),
 		recoveryInsert: d.rebind(
 			"INSERT INTO " + n.recoveryCodes +
 				" (subject, slot_index, code_hash, consumed_at, generated_at)" +
-				" VALUES (?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?)",
+		),
 		// The hash predicate is what makes regenerating a batch revoke
 		// the codes it replaced: a slot whose hash has moved on refuses
 		// the redemption instead of burning a fresh slot.
 		recoveryConsume: d.rebind(
 			"UPDATE " + n.recoveryCodes +
 				" SET consumed_at = ?" +
-				" WHERE subject = ? AND slot_index = ? AND code_hash = ? AND consumed_at = 0"),
+				" WHERE subject = ? AND slot_index = ? AND code_hash = ? AND consumed_at = 0",
+		),
 
 		// email OTP challenges
 		emailOTPGet: d.rebind(
 			"SELECT subject, " + joinColumns(emailOTPValueColumns) +
-				" FROM " + n.emailOTPs + " WHERE subject = ?"),
+				" FROM " + n.emailOTPs + " WHERE subject = ?",
+		),
 		emailOTPPut: d.rebind(
 			"INSERT INTO " + n.emailOTPs +
 				" (subject, " + joinColumns(emailOTPValueColumns) + ")" +
 				" VALUES (" + bindPlaceholders(1+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
-				d.upsertOnConflict("subject", assignExcluded(d, emailOTPValueColumns))),
+				d.upsertOnConflict("subject", assignExcluded(d, emailOTPValueColumns)),
+		),
 		// The nil-previous form of the compare-and-swap reserves the
 		// first challenge for a subject, and reserving is what bounds
 		// how many codes a subject can be sent. It is a conditional
@@ -779,7 +902,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"INSERT INTO " + n.emailOTPs +
 				" (subject, " + joinColumns(emailOTPValueColumns) + ")" +
 				" VALUES (" + bindPlaceholders(1+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
-				d.upsertDoNothingQualified("subject", n.emailOTPs)),
+				d.upsertDoNothingQualified("subject", n.emailOTPs),
+		),
 		// A row past its retention horizon no longer holds the key. The
 		// predicate is evaluated against the current row version, so of
 		// two racers that both saw a stale row only one lands — and a
@@ -789,11 +913,13 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" SET " + assignPlaceholders(emailOTPValueColumns) +
 				" WHERE subject = ?" +
 				" AND ((retain_until > 0 AND retain_until < ?)" +
-				" OR (retain_until = 0 AND expires_at > 0 AND expires_at < ?))"),
+				" OR (retain_until = 0 AND expires_at > 0 AND expires_at < ?))",
+		),
 		emailOTPCompareAndSwap: d.rebind(
 			"UPDATE " + n.emailOTPs +
 				" SET " + assignPlaceholders(emailOTPValueColumns) +
-				" WHERE subject = ? AND " + matchPlaceholders(emailOTPValueColumns)),
+				" WHERE subject = ? AND " + matchPlaceholders(emailOTPValueColumns),
+		),
 		// Consume matches on the code material and on the record still
 		// being unconsumed and unexpired, so a stale success cannot
 		// redeem the challenge that replaced it.
@@ -801,23 +927,28 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.emailOTPs +
 				" SET " + assignPlaceholders(emailOTPValueColumns) +
 				" WHERE subject = ? AND code_salt = ? AND code_hash = ? AND consumed_at = 0" +
-				" AND (expires_at = 0 OR expires_at >= ?)"),
+				" AND (expires_at = 0 OR expires_at >= ?)",
+		),
 		emailOTPDelete: d.rebind(
-			"DELETE FROM " + n.emailOTPs + " WHERE subject = ?"),
+			"DELETE FROM " + n.emailOTPs + " WHERE subject = ?",
+		),
 
 		// cross-factor brute-force counters (version-guarded)
 		lockoutGet: d.rebind(
 			"SELECT subject, failed_count, record_version, first_failure_at, locked_until" +
-				" FROM " + n.authnLockouts + " WHERE subject = ?"),
+				" FROM " + n.authnLockouts + " WHERE subject = ?",
+		),
 		lockoutInsert: d.rebind(
 			"INSERT INTO " + n.authnLockouts +
 				" (subject, failed_count, record_version, first_failure_at, locked_until)" +
 				" VALUES (?, ?, ?, ?, ?)" + d.upsertAlias() +
-				d.upsertDoNothingQualified("subject", n.authnLockouts)),
+				d.upsertDoNothingQualified("subject", n.authnLockouts),
+		),
 		lockoutUpdate: d.rebind(
 			"UPDATE " + n.authnLockouts +
 				" SET failed_count = ?, record_version = ?, first_failure_at = ?, locked_until = ?" +
-				" WHERE subject = ? AND record_version = ?"),
+				" WHERE subject = ? AND record_version = ?",
+		),
 	}
 
 	// Layer 6: scan every produced query for SQL-injection

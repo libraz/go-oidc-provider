@@ -137,7 +137,8 @@ func newDetachHarness(t *testing.T, deliver backchannel.Deliverer) *detachHarnes
 func (h *detachHarness) confirmToken(t *testing.T, cookieValue string) string {
 	t.Helper()
 	req := httptest.NewRequestWithContext(
-		context.Background(), http.MethodGet, h.endSessionPath, http.NoBody)
+		context.Background(), http.MethodGet, h.endSessionPath, http.NoBody,
+	)
 	req.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
 	w := httptest.NewRecorder()
 	h.handler.ServeHTTP(w, req)
@@ -156,7 +157,8 @@ func (h *detachHarness) confirmLogout(t *testing.T, cookieValue, token string) *
 	t.Helper()
 	form := url.Values{"logout_csrf": {token}}
 	req := httptest.NewRequestWithContext(
-		context.Background(), http.MethodPost, h.endSessionPath, strings.NewReader(form.Encode()))
+		context.Background(), http.MethodPost, h.endSessionPath, strings.NewReader(form.Encode()),
+	)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Host = "op.example.com"
 	req.Header.Set("Origin", "https://op.example.com")

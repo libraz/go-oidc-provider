@@ -480,7 +480,7 @@ func readValues(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 			return nil, false
 		}
 		endpointsupport.LimitFormBody(w, r)
-		if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
+		if err := r.ParseForm(); err != nil {
 			writeLogoutError(w, http.StatusBadRequest, descMalformedForm)
 			return nil, false
 		}

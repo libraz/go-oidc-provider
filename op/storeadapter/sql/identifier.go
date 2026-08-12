@@ -40,7 +40,8 @@ func validateIdentifier(name string) error {
 			}
 		default:
 			return fmt.Errorf(
-				"oidcsql: identifier %q contains invalid byte 0x%02x at index %d", name, b, i)
+				"oidcsql: identifier %q contains invalid byte 0x%02x at index %d", name, b, i,
+			)
 		}
 	}
 	return nil
@@ -199,7 +200,8 @@ func (n nameMap) checkCollisions() error {
 		if prior, ok := seen[name]; ok {
 			return fmt.Errorf(
 				"oidcsql: WithNaming collision: logical tables %q and %q both resolve to physical name %q",
-				prior, label, name)
+				prior, label, name,
+			)
 		}
 		seen[name] = label
 	}

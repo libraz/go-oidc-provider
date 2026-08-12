@@ -283,7 +283,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	endpointsupport.LimitFormBody(w, r)
-	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
+	if err := r.ParseForm(); err != nil {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}

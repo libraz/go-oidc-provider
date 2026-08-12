@@ -76,7 +76,8 @@ func NormalizeCSP(policy string) (string, error) {
 			return "", fmt.Errorf(
 				"%w: form-action is applied to redirect targets and would block the "+
 					"cross-origin redirect that completes a successful consent",
-				ErrCSPNotPermitted)
+				ErrCSPNotPermitted,
+			)
 		case "frame-ancestors":
 			if !isNoneOnly(values) {
 				return "", fmt.Errorf("%w: frame-ancestors must be 'none'", ErrCSPNotPermitted)

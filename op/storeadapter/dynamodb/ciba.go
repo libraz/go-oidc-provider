@@ -132,7 +132,8 @@ func (s *cibaRequestStore) RecordPoll(
 func (s *cibaRequestStore) IncrementPollViolation(ctx context.Context, authReqID string) (uint8, error) {
 	return s.parent.incrementCounter(
 		ctx, "cibaRequests.IncrementPollViolation", s.parent.names.cibaRequests,
-		digestKey(authReqID), attrPollViolations)
+		digestKey(authReqID), attrPollViolations,
+	)
 }
 
 // Consume redeems an approved request exactly once. The status guard is

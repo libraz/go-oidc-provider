@@ -87,7 +87,8 @@ func (s *opaqueAccessTokenStore) Find(ctx context.Context, id string) (*store.Op
 		&hashOut, &tok.GrantID, &tok.Subject, &tok.ClientID, &tok.Audience,
 		&scope, &tok.ACR, &amr,
 		&authTime, &tok.DPoPJKT, &tok.MTLSCertThumbprint,
-		&issued, &expires, &revoked)
+		&issued, &expires, &revoked,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

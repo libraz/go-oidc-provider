@@ -151,7 +151,8 @@ func (s *Store) TableDefinitions() []TableDefinition {
 			Name:      n.refreshes,
 			KeySchema: keySchema(attrPK),
 			AttributeDefinitions: stringAttr(
-				attrPK, attrGrantID, attrClientID, attrParentID, attrStoredHandle),
+				attrPK, attrGrantID, attrClientID, attrParentID, attrStoredHandle,
+			),
 			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
 				gsi(indexByGrant, attrGrantID),
 				gsi(indexByClient, attrClientID),

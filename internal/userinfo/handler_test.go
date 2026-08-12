@@ -111,7 +111,7 @@ func (f *userInfoFixture) signAccessToken(tb testing.TB, build func(*tokens.Acce
 // server bound to a localhost listener.
 func (f *userInfoFixture) doRequest(tb testing.TB, req *http.Request) *http.Response {
 	tb.Helper()
-	resp, err := f.prov.HTTPClient(nil).Do(req) //nolint:gosec // req targets the testkit's httptest.Server.
+	resp, err := f.prov.HTTPClient(nil).Do(req)
 	if err != nil {
 		tb.Fatalf("Do: %v", err)
 	}

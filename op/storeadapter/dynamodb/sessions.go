@@ -111,7 +111,8 @@ func (s *sessionStore) ListByChooserGroup(ctx context.Context, groupID string) (
 		return nil, nil
 	}
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.sessions, indexByChooserGroup, attrChooserGroup, groupID)
+		ctx, s.parent.names.sessions, indexByChooserGroup, attrChooserGroup, groupID,
+	)
 	if err != nil {
 		return nil, wrapErr("sessions.ListByChooserGroup", err)
 	}

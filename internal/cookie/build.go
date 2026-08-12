@@ -16,6 +16,7 @@ func Build(p Profile, value string) (*http.Cookie, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
+	//nolint:gosec // G124: Secure and SameSite come from the validated profile rather than a literal, which the rule cannot follow.
 	c := &http.Cookie{
 		Name:     p.Name,
 		Value:    value,
@@ -37,6 +38,7 @@ func Clear(p Profile) (*http.Cookie, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
+	//nolint:gosec // G124: Secure and SameSite come from the validated profile rather than a literal, which the rule cannot follow.
 	return &http.Cookie{
 		Name:     p.Name,
 		Value:    "",

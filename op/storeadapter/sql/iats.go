@@ -42,7 +42,8 @@ func (s *iatStore) GetByHash(ctx context.Context, hash string) (*store.InitialAc
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.iatGetByHash, hash).Scan(
 		&t.ID, &t.HashedValue, &t.MaxUses, &t.Uses,
-		&scopes, &t.Tag, &expires, &created)
+		&scopes, &t.Tag, &expires, &created,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

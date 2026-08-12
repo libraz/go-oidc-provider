@@ -272,7 +272,8 @@ func requireVouchedAttestation(attestationType string) error {
 	default:
 		return fmt.Errorf(
 			"%w: attestation type %q does not authenticate the AAGUID, so it cannot satisfy the allowlist",
-			ErrAttestationInvalid, attestationType)
+			ErrAttestationInvalid, attestationType,
+		)
 	}
 }
 

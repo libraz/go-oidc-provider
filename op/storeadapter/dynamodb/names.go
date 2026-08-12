@@ -27,7 +27,8 @@ func validateTableName(name string) error {
 		case b == '_' || b == '-' || b == '.':
 		default:
 			return fmt.Errorf(
-				"oidcdynamo: table name %q contains invalid byte 0x%02x at index %d", name, b, i)
+				"oidcdynamo: table name %q contains invalid byte 0x%02x at index %d", name, b, i,
+			)
 		}
 	}
 	return nil
@@ -216,7 +217,8 @@ func (n nameMap) checkCollisions() error {
 		if prior, ok := seen[name]; ok {
 			return fmt.Errorf(
 				"oidcdynamo: WithNaming collision: logical tables %q and %q both resolve to physical name %q",
-				prior, label, name)
+				prior, label, name,
+			)
 		}
 		seen[name] = label
 	}

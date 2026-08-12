@@ -205,7 +205,8 @@ func (rp *relyingParty) callback(w http.ResponseWriter, r *http.Request) {
 <h2 class="subtitle">ID token claims</h2>
 <pre class="blob">%s</pre>
 <nav class="links"><a href="/">Start over</a></nav>`,
-		html.EscapeString(idToken.Subject), html.EscapeString(string(pretty))))
+		html.EscapeString(idToken.Subject), html.EscapeString(string(pretty)),
+	))
 }
 
 // checkResponseIssuer compares the authorization response's iss parameter
@@ -230,7 +231,8 @@ func (rp *relyingParty) checkResponseIssuer(iss string) (message string, ok bool
 func (rp *relyingParty) fail(w http.ResponseWriter, status int, message string) {
 	rp.page(w, status, "Sign-in failed", fmt.Sprintf(
 		`<p class="flag flag-bad">%s</p><nav class="links"><a href="/">Try again</a></nav>`,
-		html.EscapeString(message)))
+		html.EscapeString(message),
+	))
 }
 
 // page wraps a fragment in the same chrome the provider's pages use, so

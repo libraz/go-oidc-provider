@@ -79,7 +79,8 @@ func (s *interactionStore) CompareAndSwap(ctx context.Context, previous, next *s
 		TableName: aws.String(s.parent.names.interactions),
 		Item:      entry,
 		ConditionExpression: aws.String(
-			"attribute_exists(#pk) AND #state = :state AND (#exp = :zero OR #exp >= :now)"),
+			"attribute_exists(#pk) AND #state = :state AND (#exp = :zero OR #exp >= :now)",
+		),
 		ExpressionAttributeNames: map[string]string{
 			"#pk":    attrPK,
 			"#state": attrRawState,
@@ -109,7 +110,8 @@ func (s *interactionStore) DeleteIfUnchanged(ctx context.Context, previous *stor
 		TableName: aws.String(s.parent.names.interactions),
 		Key:       key(previous.ID),
 		ConditionExpression: aws.String(
-			"attribute_exists(#pk) AND #state = :state AND (#exp = :zero OR #exp >= :now)"),
+			"attribute_exists(#pk) AND #state = :state AND (#exp = :zero OR #exp >= :now)",
+		),
 		ExpressionAttributeNames: map[string]string{
 			"#pk":    attrPK,
 			"#state": attrRawState,

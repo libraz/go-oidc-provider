@@ -246,6 +246,17 @@ linters:
           - gocognit
           - errcheck
           - forbidigo
+      # G124 wants Secure / HttpOnly / SameSite on every http.Cookie
+      # literal, but a cookie handed to Request.AddCookie is serialised as
+      # a bare name=value Cookie header: the attributes exist only on the
+      # Set-Cookie side and are dropped. Tests build cookies to drive a
+      # request, so the finding is never actionable there. The one place
+      # that does emit Set-Cookie is internal/cookie, which is production
+      # code and stays covered.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "G124"
       - path: examples/
         linters:
           - depguard

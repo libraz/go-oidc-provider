@@ -218,9 +218,10 @@ func (fakeTx) Sessions() store.SessionStore                     { return fakeSes
 func (fakeTx) PushedAuthRequests() store.PushedAuthRequestStore { return fakePARStore{} }
 func (fakeTx) AccessTokens() store.AccessTokenRegistry          { return fakeAccessTokenRegistry{} }
 func (fakeTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return fakeOpaqueAccessTokenStore{} }
-func (fakeTx) GrantRevocations() store.GrantRevocationStore     { return fakeGrantRevocationStore{} }
-func (fakeTx) Commit() error                                    { return nil }
-func (fakeTx) Rollback() error                                  { return nil }
+
+func (fakeTx) GrantRevocations() store.GrantRevocationStore { return fakeGrantRevocationStore{} }
+func (fakeTx) Commit() error                                { return nil }
+func (fakeTx) Rollback() error                              { return nil }
 
 type fakeTransactional struct{ fakeStore }
 
@@ -345,6 +346,7 @@ func (fakeInitialAccessTokenStore) GetByHash(context.Context, string) (*store.In
 func (fakeInitialAccessTokenStore) IncrementUses(context.Context, string) (int, error) {
 	return 0, store.ErrNotFound
 }
+
 func (fakeInitialAccessTokenStore) Delete(context.Context, string) error { return store.ErrNotFound }
 
 var _ store.InitialAccessTokenStore = (*fakeInitialAccessTokenStore)(nil)

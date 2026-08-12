@@ -96,7 +96,8 @@ func (s *iatStore) IncrementUses(ctx context.Context, id string) (int, error) {
 		Key:              key(id),
 		UpdateExpression: aws.String("ADD #uses :one"),
 		ConditionExpression: aws.String(
-			"attribute_exists(#pk) AND (#uses < #max OR (#max = :zero AND #uses = :zero))"),
+			"attribute_exists(#pk) AND (#uses < #max OR (#max = :zero AND #uses = :zero))",
+		),
 		ExpressionAttributeNames: map[string]string{
 			"#pk":   attrPK,
 			"#uses": attrUses,

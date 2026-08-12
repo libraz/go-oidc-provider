@@ -34,7 +34,8 @@ func (s *ratStore) GetByClientID(ctx context.Context, clientID string) (*store.R
 		created int64
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.ratGetByClientID, clientID).Scan(
-		&t.ClientID, &t.HashedValue, &created)
+		&t.ClientID, &t.HashedValue, &created,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

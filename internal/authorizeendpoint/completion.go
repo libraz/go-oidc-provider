@@ -129,12 +129,14 @@ func persistCompletionIntent(
 	raw, err := authorize.MarshalState(state)
 	if err != nil {
 		return nil, authorize.RequestState{}, fmt.Errorf(
-			"authorizeendpoint: marshal completion intent: %w", err)
+			"authorizeendpoint: marshal completion intent: %w", err,
+		)
 	}
 	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
 	if !ok {
 		return nil, authorize.RequestState{}, errors.New(
-			"authorizeendpoint: interaction store lacks compare-and-swap")
+			"authorizeendpoint: interaction store lacks compare-and-swap",
+		)
 	}
 	next := *rec
 	next.RawState = raw
@@ -143,7 +145,8 @@ func persistCompletionIntent(
 		return &next, state, nil
 	} else if !errors.Is(err, store.ErrConflict) {
 		return nil, authorize.RequestState{}, fmt.Errorf(
-			"authorizeendpoint: persist completion intent: %w", err)
+			"authorizeendpoint: persist completion intent: %w", err,
+		)
 	}
 
 	// Another terminal POST won the immutable transition. Resume the winner's
@@ -156,17 +159,20 @@ func persistCompletionIntent(
 	}
 	if err != nil {
 		return nil, authorize.RequestState{}, fmt.Errorf(
-			"authorizeendpoint: reload completion intent after conflict: %w", err)
+			"authorizeendpoint: reload completion intent after conflict: %w", err,
+		)
 	}
 	currentState, err := authorize.UnmarshalState(current.RawState)
 	if err != nil {
 		return nil, authorize.RequestState{}, fmt.Errorf(
-			"authorizeendpoint: decode completion intent after conflict: %w", err)
+			"authorizeendpoint: decode completion intent after conflict: %w", err,
+		)
 	}
 	if currentState.Completion == nil ||
 		currentState.Completion.Version != completionIntentVersion {
 		return nil, authorize.RequestState{}, errors.New(
-			"authorizeendpoint: interaction changed before completion intent claim")
+			"authorizeendpoint: interaction changed before completion intent claim",
+		)
 	}
 	return current, currentState, nil
 }

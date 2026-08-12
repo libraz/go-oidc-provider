@@ -76,7 +76,8 @@ func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interact
 		touched int64
 	)
 	err := s.q.QueryRowContext(ctx, interactionSelect, id).Scan(
-		&i.ID, &i.ClientID, &i.Step, &raw, &expires, &created, &touched)
+		&i.ID, &i.ClientID, &i.Step, &raw, &expires, &created, &touched,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

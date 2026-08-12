@@ -108,7 +108,8 @@ func (s *accessTokenStore) retire(ctx context.Context, pk string) error {
 // costs one of the transaction's actions per token.
 func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.accessTokens, indexByGrant, attrGrantID, grantID)
+		ctx, s.parent.names.accessTokens, indexByGrant, attrGrantID, grantID,
+	)
 	if err != nil {
 		return 0, wrapErr("accessTokens.RevokeByGrant", err)
 	}

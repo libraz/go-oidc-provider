@@ -122,7 +122,8 @@ func TestEndToEnd_ActiveHonoursEveryRevocationInput(t *testing.T) {
 					ExpiresAt: iat.Add(time.Hour).Unix(),
 					JTI:       jti,
 					Scope:     []string{"openid"},
-				})
+				},
+			)
 			if err != nil {
 				t.Fatalf("SignAccessToken: %v", err)
 			}

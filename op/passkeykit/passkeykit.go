@@ -204,7 +204,8 @@ func (r *Registrar) Begin(ctx context.Context, user User) (*CreationOptions, *Se
 		return nil, nil, err
 	}
 	challenge, session, err := r.verifier.BeginRegistration(
-		ctx, user.Subject, user.Name, user.DisplayName, existing)
+		ctx, user.Subject, user.Name, user.DisplayName, existing,
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("passkeykit: begin: %w", err)
 	}
@@ -252,7 +253,8 @@ func (r *Registrar) Finish(ctx context.Context, session *Session, user User, res
 
 	inner := session.inner
 	cred, err := r.verifier.FinishRegistration(
-		ctx, r.store, &inner, user.Subject, user.Name, user.DisplayName, existing, response)
+		ctx, r.store, &inner, user.Subject, user.Name, user.DisplayName, existing, response,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("passkeykit: finish: %w", err)
 	}
@@ -309,7 +311,7 @@ func isNilStore(s store.PasskeyStore) bool {
 	}
 	rv := reflect.ValueOf(s)
 	switch rv.Kind() {
-	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
 		return rv.IsNil()
 	default:
 		return false

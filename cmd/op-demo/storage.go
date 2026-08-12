@@ -67,7 +67,8 @@ func openBackend(ctx context.Context, cfg runConfig, logger *slog.Logger) (demoB
 	default:
 		return demoBackend{}, fmt.Errorf(
 			"op-demo: unknown -store %q (expected one of: %s, %s)",
-			cfg.storeBackend, storeInmem, storeComposite)
+			cfg.storeBackend, storeInmem, storeComposite,
+		)
 	}
 }
 
@@ -185,7 +186,8 @@ func allowPlaintextRedis(dsn string) (bool, error) {
 	if !isLoopbackHost(parsed.Hostname()) {
 		return false, fmt.Errorf(
 			"op-demo: refusing an unencrypted link to %s — point -redis-dsn at a loopback engine or use rediss://",
-			oidcredis.RedactedDSN(dsn))
+			oidcredis.RedactedDSN(dsn),
+		)
 	}
 	return true, nil
 }

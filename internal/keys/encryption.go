@@ -153,7 +153,7 @@ func isNilPrivateKey(key crypto.PrivateKey) bool {
 	}
 	value := reflect.ValueOf(key)
 	switch value.Kind() {
-	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
 		return value.IsNil()
 	default:
 		return false

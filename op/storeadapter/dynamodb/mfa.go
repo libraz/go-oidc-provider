@@ -495,7 +495,8 @@ func (s *passkeyStore) Get(ctx context.Context, credentialID []byte) (*store.Pas
 
 func (s *passkeyStore) ListBySubject(ctx context.Context, subject string) ([]*store.PasskeyRecord, error) {
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.passkeys, indexBySubject, attrSubject, subject)
+		ctx, s.parent.names.passkeys, indexBySubject, attrSubject, subject,
+	)
 	if err != nil {
 		return nil, wrapErr("passkeys.ListBySubject", err)
 	}

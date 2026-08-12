@@ -168,6 +168,7 @@ func (s storeWithoutGrantRevocations) OpaqueAccessTokens() store.OpaqueAccessTok
 }
 func (s storeWithoutGrantRevocations) GrantRevocations() store.GrantRevocationStore { return nil }
 func (s storeWithoutGrantRevocations) Metadata() store.MetadataStore                { return s.inner.Metadata() }
+
 func (s storeWithoutGrantRevocations) DeviceCodes() store.DeviceCodeStore {
 	return s.inner.DeviceCodes()
 }

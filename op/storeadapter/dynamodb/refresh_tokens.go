@@ -132,7 +132,8 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 				Key:              key(parentDigest),
 				UpdateExpression: aws.String("SET #retry = :sealed"),
 				ConditionExpression: aws.String(
-					"attribute_exists(#pk) AND (attribute_not_exists(#revoked) OR #revoked = :false)"),
+					"attribute_exists(#pk) AND (attribute_not_exists(#revoked) OR #revoked = :false)",
+				),
 				ExpressionAttributeNames: map[string]string{
 					"#pk":      attrPK,
 					"#retry":   attrRetryResponse,
@@ -353,7 +354,8 @@ func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
 			return err
 		}
 		children, err := s.parent.queryIndex(
-			ctx, s.parent.names.refreshes, indexByParent, attrParentID, current)
+			ctx, s.parent.names.refreshes, indexByParent, attrParentID, current,
+		)
 		if err != nil {
 			return wrapErr("refreshes.RevokeChain.children", err)
 		}

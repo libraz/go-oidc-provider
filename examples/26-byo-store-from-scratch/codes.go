@@ -105,7 +105,8 @@ func (s *authCodeStore) find(ctx context.Context, id string) (*store.Authorizati
 		&stored, &c.ClientID, &c.Subject, &c.GrantID, &c.RedirectURI,
 		&scope, &c.Resource, &c.CodeChallenge, &c.CodeChallengeMethod,
 		&c.Nonce, &c.State, &c.DPoPJKT,
-		&expires, &consumed, &created)
+		&expires, &consumed, &created,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -437,7 +438,8 @@ func (s *refreshStore) lookup(ctx context.Context, id string, keys [2]string) (*
 		&stored, &t.ClientID, &t.Subject, &t.GrantID, &scope,
 		&t.Resource, &subPub, &origin, &authE, &t.ACR, &amr, &details, &extra,
 		&parent, &t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce, &void,
-		&expires, &consumed, &created)
+		&expires, &consumed, &created,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, "", store.ErrNotFound
 	}

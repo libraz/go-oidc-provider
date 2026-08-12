@@ -79,6 +79,7 @@ func PostConsentApproval(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", origin)
 	req.Header.Set("X-CSRF-Token", csrf)
+	//nolint:gosec // G124: AddCookie serialises name=value only; Set-Cookie attributes never travel on a request.
 	req.AddCookie(&http.Cookie{Name: "__Host-oidc_csrf", Value: csrf})
 	resp, err := client.Do(req)
 	if err != nil {

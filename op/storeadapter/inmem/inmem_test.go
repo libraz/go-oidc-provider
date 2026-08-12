@@ -572,18 +572,24 @@ func TestTx_ClosedAfterCommit(t *testing.T) {
 	// Substore handles obtained from a closed tx must error on use.
 	closed := map[string]error{
 		"AuthorizationCodes.Save": tx.AuthorizationCodes().Save(
-			ctx, &store.AuthorizationCode{ID: "x", ExpiresAt: now.Add(time.Hour)}),
+			ctx, &store.AuthorizationCode{ID: "x", ExpiresAt: now.Add(time.Hour)},
+		),
 		"Grants.Save": tx.Grants().Save(ctx, &store.Grant{ID: "g"}),
 		"RefreshTokens.Save": tx.RefreshTokens().Save(
-			ctx, &store.RefreshToken{ID: "rt", ExpiresAt: now.Add(time.Hour)}),
+			ctx, &store.RefreshToken{ID: "rt", ExpiresAt: now.Add(time.Hour)},
+		),
 		"PushedAuthRequests.Save": tx.PushedAuthRequests().Save(
-			ctx, &store.PushedAuthRequest{URI: "urn:par:x", ExpiresAt: now.Add(time.Hour)}),
+			ctx, &store.PushedAuthRequest{URI: "urn:par:x", ExpiresAt: now.Add(time.Hour)},
+		),
 		"AccessTokens.Register": tx.AccessTokens().Register(
-			ctx, store.AccessTokenRecord{JTI: "jti"}),
+			ctx, store.AccessTokenRecord{JTI: "jti"},
+		),
 		"OpaqueAccessTokens.Save": tx.OpaqueAccessTokens().Save(
-			ctx, &store.OpaqueAccessToken{ID: "oat", ExpiresAt: now.Add(time.Hour)}),
+			ctx, &store.OpaqueAccessToken{ID: "oat", ExpiresAt: now.Add(time.Hour)},
+		),
 		"GrantRevocations.RevokeGrant": tx.GrantRevocations().RevokeGrant(
-			ctx, store.GrantTombstone{GrantID: "g"}),
+			ctx, store.GrantTombstone{GrantID: "g"},
+		),
 	}
 	for name, err := range closed {
 		if !errors.Is(err, store.ErrTxRequired) {

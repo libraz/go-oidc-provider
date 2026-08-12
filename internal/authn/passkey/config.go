@@ -209,7 +209,8 @@ func New(cfg Config) (*Verifier, error) {
 		return nil, fmt.Errorf(
 			"%w: AAGUIDAllowlist requires AttestationPreference %q (got %q); "+
 				"under any other conveyance the AAGUID is self-asserted and the allowlist cannot be enforced",
-			ErrInvalidConfig, protocol.PreferDirectAttestation, pref)
+			ErrInvalidConfig, protocol.PreferDirectAttestation, pref,
+		)
 	}
 	ttl := cfg.SessionTTL
 	if ttl <= 0 {
@@ -287,7 +288,8 @@ func resolveUserVerification(p protocol.UserVerificationRequirement) (protocol.U
 	default:
 		return "", fmt.Errorf(
 			"UserVerification %q is not supported (use %q, %q or %q)",
-			p, protocol.VerificationRequired, protocol.VerificationPreferred, protocol.VerificationDiscouraged)
+			p, protocol.VerificationRequired, protocol.VerificationPreferred, protocol.VerificationDiscouraged,
+		)
 	}
 }
 

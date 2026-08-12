@@ -222,7 +222,7 @@ func TestStore_OutOfScopeAccessorsReturnNil(t *testing.T) {
 			}
 			rv := reflect.ValueOf(tc.got)
 			switch rv.Kind() {
-			case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+			case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
 				if !rv.IsNil() {
 					t.Fatalf("%s: want nil substore, got %T", tc.name, tc.got)
 				}

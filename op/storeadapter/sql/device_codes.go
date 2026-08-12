@@ -357,7 +357,8 @@ func (s *deviceCodeStore) scanOne(ctx context.Context, query string, args ...any
 	err := s.runner().QueryRowContext(ctx, query, args...).Scan(
 		&stored, &c.ClientID, &c.UserCode, &c.Subject, &scope, &resource,
 		&c.DPoPJKT, &c.MTLSCertS256, &interval, &status, &authTime, &c.DenyReason,
-		&strikes, &violations, &lastPolled, &expires, &issued)
+		&strikes, &violations, &lastPolled, &expires, &issued,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, "", store.ErrNotFound
 	}

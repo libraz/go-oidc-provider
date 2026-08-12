@@ -170,6 +170,7 @@ func jarmDispatch(
 		return err
 	}
 	stampNoStore(w)
+	//nolint:gosec // G710: redirectURI already exact-matched a registered entry in authorize.Validate; nothing reaches here on a mismatch.
 	http.Redirect(w, r, target, http.StatusFound)
 	return nil
 }
@@ -252,6 +253,7 @@ func emitPlainResponse(
 		return
 	}
 	stampNoStore(w)
+	//nolint:gosec // G710: req.RedirectURI already exact-matched a registered entry in authorize.Validate; nothing reaches here on a mismatch.
 	http.Redirect(w, r, target, http.StatusFound)
 }
 

@@ -274,7 +274,8 @@ func (s *Store) incrementCounter(ctx context.Context, op, table, pk, attr string
 		UpdateExpression: aws.String("ADD #counter :one"),
 		ConditionExpression: aws.String(
 			"attribute_exists(#pk) AND (#expires = :never OR #expires >= :now) " +
-				"AND (attribute_not_exists(#counter) OR #counter < :max)"),
+				"AND (attribute_not_exists(#counter) OR #counter < :max)",
+		),
 		ExpressionAttributeNames: map[string]string{
 			"#pk":      attrPK,
 			"#expires": attrExpiresAt,

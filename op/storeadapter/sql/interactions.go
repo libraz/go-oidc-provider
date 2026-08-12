@@ -99,7 +99,8 @@ func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interact
 		rawState []byte
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.interactionFind, id).Scan(
-		&i.ID, &i.ClientID, &i.Step, &rawState, &expiry, &created, &updated)
+		&i.ID, &i.ClientID, &i.Step, &rawState, &expiry, &created, &updated,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

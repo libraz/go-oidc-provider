@@ -553,7 +553,7 @@ func bearerFromBody(w http.ResponseWriter, r *http.Request) (string, bool, error
 	// http.MaxBytesReader on the line above so ParseForm reads from a
 	// bounded reader. The MaxBytesError surfaces below so callers map
 	// it to invalid_request / 413.
-	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
+	if err := r.ParseForm(); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			return "", false, &bearerError{tooLarge: true, desc: "request body exceeds the userinfo endpoint size limit"}

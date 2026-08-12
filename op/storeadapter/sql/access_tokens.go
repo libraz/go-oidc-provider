@@ -45,7 +45,8 @@ func (s *accessTokenStore) Find(ctx context.Context, jti string) (*store.AccessT
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.accessTokenFind, jti).Scan(
 		&rec.JTI, &rec.GrantID, &rec.Subject, &rec.ClientID,
-		&scopes, &issued, &expires, &revoked)
+		&scopes, &issued, &expires, &revoked,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, nil //nolint:nilnil // store.AccessTokenRegistry contract: missing JTI yields (nil, nil), distinguishing "absent" from "lookup failed".
 	}

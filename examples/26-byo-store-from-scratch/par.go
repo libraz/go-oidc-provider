@@ -71,7 +71,8 @@ func (s *parStore) find(ctx context.Context, uri string) (*store.PushedAuthReque
 		created  int64
 	)
 	err := s.q.QueryRowContext(ctx, parSelect, d).Scan(
-		&stored, &rec.ClientID, &raw, &expires, &consumed, &created)
+		&stored, &rec.ClientID, &raw, &expires, &consumed, &created,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}

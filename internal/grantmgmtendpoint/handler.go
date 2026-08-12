@@ -174,7 +174,7 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 	// is size-capped first (a GET / DELETE rarely carries one, but the
 	// cap is cheap defence against memory exhaustion).
 	endpointsupport.LimitFormBody(w, r)
-	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
+	if err := r.ParseForm(); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "malformed request")
 		return nil, nil, false
 	}

@@ -342,7 +342,8 @@ func runAdvisories(catalogDir, cwd string, sourceRoots []string, check, asJSON b
 			if len(covering) > 0 {
 				problems = append(problems, fmt.Sprintf(
 					"%s: status=tracking but found %d `Tracks:` reference(s) in a test — flip status to covered (first hit: %s:%d %s)",
-					a.ID, len(covering), covering[0].File, covering[0].Line, covering[0].Func))
+					a.ID, len(covering), covering[0].File, covering[0].Line, covering[0].Func,
+				))
 			}
 		case advisoryStatusOutOfScope:
 			// Tags allowed but optional — no drift check beyond the
@@ -362,7 +363,8 @@ func runAdvisories(catalogDir, cwd string, sourceRoots []string, check, asJSON b
 		}
 		problems = append(problems, fmt.Sprintf(
 			"%s: orphan — `// Tracks: %s` at %s:%d but no entry in %s",
-			id, id, marked[0].File, marked[0].Line, advisoryFileName))
+			id, id, marked[0].File, marked[0].Line, advisoryFileName,
+		))
 	}
 	sort.Strings(problems)
 
@@ -372,7 +374,8 @@ func runAdvisories(catalogDir, cwd string, sourceRoots []string, check, asJSON b
 	emitAdvisoriesText(inv, hitsByID, problems)
 	if check && len(problems) > 0 {
 		return &exitError{code: 1, message: fmt.Sprintf(
-			"scenariotool: advisories gate failed (%d issue(s))", len(problems))}
+			"scenariotool: advisories gate failed (%d issue(s))", len(problems),
+		)}
 	}
 	return nil
 }
@@ -408,11 +411,13 @@ func describeUncovered(id string, hs []advisoryHit) string {
 	switch marked := markedHits(hs); {
 	case len(hs) == 0:
 		return fmt.Sprintf(
-			"%s: status=covered but no `// Tracks: %s` found in source", id, id)
+			"%s: status=covered but no `// Tracks: %s` found in source", id, id,
+		)
 	case len(marked) == 0:
 		return fmt.Sprintf(
 			"%s: status=covered but the %d mention(s) of it carry no `Tracks` marker — a passing reference is not coverage (first: %s:%d)",
-			id, len(hs), hs[0].File, hs[0].Line)
+			id, len(hs), hs[0].File, hs[0].Line,
+		)
 	default:
 		where := marked[0].Func
 		if where == "" {
@@ -420,7 +425,8 @@ func describeUncovered(id string, hs []advisoryHit) string {
 		}
 		return fmt.Sprintf(
 			"%s: status=covered but every `Tracks` marker sits outside a test — %s:%d is in %s, which takes no *testing.T/F/B, so nothing can fail",
-			id, marked[0].File, marked[0].Line, where)
+			id, marked[0].File, marked[0].Line, where,
+		)
 	}
 }
 

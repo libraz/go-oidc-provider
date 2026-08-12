@@ -68,7 +68,8 @@ func (s *grantRevocationStore) widenRevokedAt(ctx context.Context, pk string, t 
 		Key:              key(pk),
 		UpdateExpression: aws.String("SET #doc = :doc, #revoked = :revoked"),
 		ConditionExpression: aws.String(
-			"attribute_not_exists(#pk) OR attribute_not_exists(#revoked) OR #revoked < :revoked"),
+			"attribute_not_exists(#pk) OR attribute_not_exists(#revoked) OR #revoked < :revoked",
+		),
 		ExpressionAttributeNames: map[string]string{
 			"#pk":      attrPK,
 			"#doc":     attrDoc,
@@ -105,13 +106,15 @@ func (s *grantRevocationStore) widenLifetime(ctx context.Context, pk string, at 
 	if at.IsZero() {
 		in.UpdateExpression = aws.String("SET #expires = :never REMOVE #ttl")
 		in.ConditionExpression = aws.String(
-			"attribute_not_exists(#pk) OR attribute_not_exists(#expires) OR #expires <> :never")
+			"attribute_not_exists(#pk) OR attribute_not_exists(#expires) OR #expires <> :never",
+		)
 	} else {
 		ttl, _ := avTTL(at)
 		in.UpdateExpression = aws.String("SET #expires = :expires, #ttl = :ttl")
 		in.ConditionExpression = aws.String(
 			"attribute_not_exists(#pk) OR attribute_not_exists(#expires) OR " +
-				"(#expires <> :never AND #expires < :expires)")
+				"(#expires <> :never AND #expires < :expires)",
+		)
 		in.ExpressionAttributeValues[":expires"] = avTime(at)
 		in.ExpressionAttributeValues[":ttl"] = ttl
 	}
@@ -147,7 +150,8 @@ func (s *grantRevocationStore) revokeGrantStaged(ctx context.Context, pk string,
 	entry.expires(t.ExpiresAt)
 	entry.setTime(attrRevokedAt, t.RevokedAt)
 	return s.tx.putGuarded(
-		ctx, s.parent.names.grantTombstones, pk, entry, attrRevokedAt, attrExpiresAt)
+		ctx, s.parent.names.grantTombstones, pk, entry, attrRevokedAt, attrExpiresAt,
+	)
 }
 
 // RevokeJTI denylists one access token by id.

@@ -147,7 +147,8 @@ func enrolPasskeyInBrowser(ctx context.Context) (string, error) {
 	var status string
 	for time.Now().Before(deadline) {
 		if err := chromedp.Run(ctx, chromedp.Evaluate(
-			`(document.querySelector('#status')||{}).textContent||''`, &status)); err != nil {
+			`(document.querySelector('#status')||{}).textContent||''`, &status,
+		)); err != nil {
 			return "", fmt.Errorf("read the enrolment status: %w", err)
 		}
 		if id, ok := strings.CutPrefix(status, prefix); ok {
@@ -155,7 +156,8 @@ func enrolPasskeyInBrowser(ctx context.Context) (string, error) {
 		}
 		var failed bool
 		if err := chromedp.Run(ctx, chromedp.Evaluate(
-			`!!(document.querySelector('#status')||{}).dataset?.error`, &failed)); err == nil && failed {
+			`!!(document.querySelector('#status')||{}).dataset?.error`, &failed,
+		)); err == nil && failed {
 			return "", fmt.Errorf("the page reported an enrolment failure: %s", status)
 		}
 		time.Sleep(150 * time.Millisecond)

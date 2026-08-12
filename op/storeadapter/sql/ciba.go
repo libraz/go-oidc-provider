@@ -226,7 +226,8 @@ func (s *cibaRequestStore) scanOne(ctx context.Context, query string, args ...an
 		&stored, &c.ClientID, &c.Subject, &scope, &resource, &acrValues, &c.ACR,
 		&c.BindingMessage, &c.UserCode, &c.DPoPJKT, &c.MTLSCertS256,
 		&interval, &status, &authTime, &c.DenyReason, &violations,
-		&lastPolled, &expires, &issued)
+		&lastPolled, &expires, &issued,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, "", store.ErrNotFound
 	}

@@ -77,7 +77,8 @@ func (s *authCodeStore) find(ctx context.Context, id string) (*store.Authorizati
 		&stored, &c.ClientID, &c.GrantID, &c.Subject, &c.RedirectURI,
 		&scope, &c.Resource, &c.CodeChallenge, &c.CodeChallengeMethod,
 		&c.Nonce, &c.State, &c.DPoPJKT,
-		&expires, &consumed, &created)
+		&expires, &consumed, &created,
+	)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
