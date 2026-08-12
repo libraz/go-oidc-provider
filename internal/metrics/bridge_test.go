@@ -106,7 +106,13 @@ func TestBridge_TokenIssued_StaticClientLabelEmitted(t *testing.T) {
 	b.Emit(context.Background(), audit.Event{
 		Name:     "token.issued",
 		ClientID: "client-1",
-		Extras:   map[string]any{"grant_type": "authorization_code"},
+		// This is the production auth-code shape: grant_type is fixed by
+		// the catalog, while Extras carries only audit context.
+		Extras: map[string]any{
+			"grant_id":       "grant-1",
+			"offline_access": false,
+			"ttl_bucket":     "default",
+		},
 	})
 
 	families, err := reg.Gather()
@@ -136,7 +142,11 @@ func TestBridge_TokenIssued_DynamicClientCollapsesToEmpty(t *testing.T) {
 	b.Emit(context.Background(), audit.Event{
 		Name:     "token.issued",
 		ClientID: "dynamic-99",
-		Extras:   map[string]any{"grant_type": "authorization_code"},
+		Extras: map[string]any{
+			"grant_id":       "grant-2",
+			"offline_access": true,
+			"ttl_bucket":     "offline",
+		},
 	})
 
 	families, _ := reg.Gather()
@@ -156,6 +166,32 @@ func TestBridge_TokenIssued_DynamicClientCollapsesToEmpty(t *testing.T) {
 	}
 }
 
+func TestBridge_TokenIssued_IgnoresStaleGrantTypeExtra(t *testing.T) {
+	t.Parallel()
+
+	c, reg := newTestCollector(t, metrics.Options{})
+	metrics.NewBridge(c, nil).Emit(context.Background(), audit.Event{
+		Name:   "token.issued",
+		Extras: map[string]any{"grant_type": "refresh_token"},
+	})
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	if got := counterValue(t, families, "oidc_token_issued_total", map[string]string{
+		"grant_type": "authorization_code",
+		"client_id":  "",
+	}); got != 1 {
+		t.Fatalf("fixed grant_type counter=%v want 1", got)
+	}
+	if got := counterValue(t, families, "oidc_token_issued_total", map[string]string{
+		"grant_type": "refresh_token",
+		"client_id":  "",
+	}); got != 0 {
+		t.Fatalf("stale grant_type counter=%v want 0", got)
+	}
+}
+
 func TestBridge_LoginAttempts_TableDriven(t *testing.T) {
 	t.Parallel()
 
@@ -163,25 +199,25 @@ func TestBridge_LoginAttempts_TableDriven(t *testing.T) {
 		name       string
 		event      audit.Event
 		wantResult string
-		wantAuth   string
+		wantFactor string
 	}{
 		{
-			name: "success_with_authenticator",
+			name: "success_with_factor",
 			event: audit.Event{
 				Name:   "login.success",
-				Extras: map[string]any{"authenticator": "password"},
+				Extras: map[string]any{"factor": "password"},
 			},
 			wantResult: "success",
-			wantAuth:   "password",
+			wantFactor: "password",
 		},
 		{
-			name: "failed_with_authenticator",
+			name: "failed_with_factor",
 			event: audit.Event{
 				Name:   "login.failed",
-				Extras: map[string]any{"authenticator": "totp"},
+				Extras: map[string]any{"factor": "totp"},
 			},
 			wantResult: "failed",
-			wantAuth:   "totp",
+			wantFactor: "totp",
 		},
 		{
 			name: "success_without_extras",
@@ -189,7 +225,7 @@ func TestBridge_LoginAttempts_TableDriven(t *testing.T) {
 				Name: "login.success",
 			},
 			wantResult: "success",
-			wantAuth:   "",
+			wantFactor: "",
 		},
 	}
 	for _, tc := range cases {
@@ -201,13 +237,41 @@ func TestBridge_LoginAttempts_TableDriven(t *testing.T) {
 
 			families, _ := reg.Gather()
 			got := counterValue(t, families, "oidc_login_attempts_total", map[string]string{
-				"result":        tc.wantResult,
-				"authenticator": tc.wantAuth,
+				"factor": tc.wantFactor,
+				"result": tc.wantResult,
 			})
 			if got != 1 {
 				t.Fatalf("counter = %v, want 1", got)
 			}
 		})
+	}
+}
+
+func TestBridge_MFAAttemptsUseSameLoginCounter(t *testing.T) {
+	t.Parallel()
+
+	c, reg := newTestCollector(t, metrics.Options{})
+	b := metrics.NewBridge(c, nil)
+	b.Emit(context.Background(), audit.Event{
+		Name:   string(auditevent.AuditMFASuccess),
+		Extras: map[string]any{"factor": "totp"},
+	})
+	b.Emit(context.Background(), audit.Event{
+		Name:   string(auditevent.AuditMFAFailed),
+		Extras: map[string]any{"factor": "totp"},
+	})
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, result := range []string{"success", "failed"} {
+		if got := counterValue(t, families, "oidc_login_attempts_total", map[string]string{
+			"factor": "totp",
+			"result": result,
+		}); got != 1 {
+			t.Errorf("MFA %s counter = %v, want 1", result, got)
+		}
 	}
 }
 
@@ -467,10 +531,10 @@ func TestBridge_CatalogMetricProjectionIsUnique(t *testing.T) {
 			bridge.Emit(context.Background(), audit.Event{
 				Name: string(definition.Name),
 				Extras: map[string]any{
-					"grant_type":    "authorization_code",
-					"authenticator": "password",
-					"method":        "client_secret_basic",
-					"reason":        "invalid_client_credentials",
+					"grant_type": "authorization_code",
+					"factor":     "password",
+					"method":     "client_secret_basic",
+					"reason":     "invalid_client_credentials",
 				},
 			})
 
@@ -497,7 +561,7 @@ func catalogMetricLabels(definition auditevent.Definition) map[string]string {
 	case auditevent.MetricTokensRefreshed:
 		return map[string]string{"client_id": ""}
 	case auditevent.MetricLoginAttempts:
-		return map[string]string{"result": definition.Label, "authenticator": "password"}
+		return map[string]string{"factor": "password", "result": definition.Label}
 	case auditevent.MetricClientAuthnFailures:
 		return map[string]string{"auth_method": "client_secret_basic", "reason": "invalid_client_credentials"}
 	case auditevent.MetricDCR,

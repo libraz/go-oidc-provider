@@ -80,11 +80,15 @@ func (b *Bridge) update(ev audit.Event) {
 func (b *Bridge) updateFlowMetric(definition auditevent.Definition, ev audit.Event) bool {
 	switch definition.Metric {
 	case auditevent.MetricTokenIssued:
-		b.c.tokenIssued.WithLabelValues(stringExtra(ev.Extras, "grant_type"), b.c.clientIDLabel(ev.ClientID)).Inc()
+		// This event is emitted only when an authorization-code exchange
+		// actually persists a first refresh token. Keep the grant dimension
+		// fixed here instead of trusting caller-controlled Extras (refresh
+		// rotation has its own event and metric).
+		b.c.tokenIssued.WithLabelValues("authorization_code", b.c.clientIDLabel(ev.ClientID)).Inc()
 	case auditevent.MetricTokensRefreshed:
 		b.c.tokensRefreshed.WithLabelValues(b.c.clientIDLabel(ev.ClientID)).Inc()
 	case auditevent.MetricLoginAttempts:
-		b.c.loginAttempts.WithLabelValues(definition.Label, stringExtra(ev.Extras, "authenticator")).Inc()
+		b.c.loginAttempts.WithLabelValues(stringExtra(ev.Extras, "factor"), definition.Label).Inc()
 	case auditevent.MetricRefreshReplay:
 		b.c.refreshReplay.Inc()
 	case auditevent.MetricCodeReplay:

@@ -3,6 +3,7 @@ package tokenendpoint_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -43,6 +44,31 @@ func (s opaqueRevokeFailStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore
 	return revokeFailsOpaqueAccessTokenStore{OpaqueAccessTokenStore: s.Store.OpaqueAccessTokens()}
 }
 
+// opaqueRevokeFailTransactionalStore keeps the real in-memory transaction
+// semantics while injecting the same opaque-AT revoke fault into the
+// transaction-bound substore. This lets the retryability test distinguish a
+// committed non-Tx Consume from a rollbackable Tx Consume.
+type opaqueRevokeFailTransactionalStore struct {
+	store.Store
+	transactional store.Transactional
+}
+
+func (s opaqueRevokeFailTransactionalStore) BeginTx(ctx context.Context) (store.Tx, error) {
+	tx, err := s.transactional.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return opaqueRevokeFailTx{Tx: tx}, nil
+}
+
+type opaqueRevokeFailTx struct {
+	store.Tx
+}
+
+func (t opaqueRevokeFailTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return revokeFailsOpaqueAccessTokenStore{OpaqueAccessTokenStore: t.Tx.OpaqueAccessTokens()}
+}
+
 // failOnceGrantStore is a deterministic fault-injection decorator over the
 // real in-memory GrantStore. It fails the first Find only; all persistence and
 // subsequent reads remain owned by the reference adapter.
@@ -60,11 +86,22 @@ func (s *failOnceGrantStore) Find(ctx context.Context, id string) (*store.Grant,
 
 type grantFindFailsOnceStore struct {
 	store.Store
-	grants store.GrantStore
+	grants        store.GrantStore
+	transactional store.Transactional
+	beginCount    *atomic.Int32
+	beforeBegin   func()
 }
 
 func (s grantFindFailsOnceStore) Grants() store.GrantStore {
 	return s.grants
+}
+
+func (s grantFindFailsOnceStore) BeginTx(ctx context.Context) (store.Tx, error) {
+	s.beginCount.Add(1)
+	if s.beforeBegin != nil {
+		s.beforeBegin()
+	}
+	return s.transactional.BeginTx(ctx)
 }
 
 // refreshForm builds the canonical refresh_token form body. scope is
@@ -441,18 +478,39 @@ func TestRefresh_AuthorizationDetailsStaleSnapshotMismatchDoesNotConsume(t *test
 	}
 }
 
-func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T) {
+func TestRefresh_AuthorizationDetailsGrantLookupFaultAndTxBarrierDoNotConsume(t *testing.T) {
 	t.Parallel()
 
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	backing := inmem.New(inmem.WithClock(clock))
 	faultingGrants := &failOnceGrantStore{GrantStore: backing.Grants()}
+	var beginCount atomic.Int32
+	var narrowAtBegin atomic.Bool
+	beforeBegin := func() {
+		if !narrowAtBegin.CompareAndSwap(false, true) {
+			return
+		}
+		grant, err := backing.Grants().Find(context.Background(), "grant-rar-grant-fault")
+		if err != nil {
+			panic(fmt.Sprintf("barrier grant lookup: %v", err))
+		}
+		grant.AuthorizationDetails = []map[string]any{{"type": "payment", "amount": "200"}}
+		if err := backing.Grants().Save(context.Background(), grant); err != nil {
+			panic(fmt.Sprintf("barrier grant narrow: %v", err))
+		}
+	}
 	provider, err := op.New(testkit.MinimalOptions(t,
-		op.WithStore(grantFindFailsOnceStore{Store: backing, grants: faultingGrants}),
+		op.WithStore(grantFindFailsOnceStore{
+			Store:         backing,
+			grants:        faultingGrants,
+			transactional: backing,
+			beginCount:    &beginCount,
+			beforeBegin:   beforeBegin,
+		}),
 		op.WithClock(clock),
-		// Keep this fixture on the non-transactional refresh path. The
-		// authorization-code grant correctly requires Transactional,
-		// which this fault decorator intentionally does not advertise.
+		// Keep this fixture on the transactional refresh path. The
+		// authorization-details preflight must fail before BeginTx, so a
+		// transient grant lookup fault cannot establish a stale SQL snapshot.
 		op.WithGrants(grant.RefreshToken),
 		paymentAuthorizationDetailsOption(),
 	)...)
@@ -479,7 +537,10 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T
 
 	const refreshID = "rt-rar-grant-fault"
 	const grantID = "grant-rar-grant-fault"
-	details := []map[string]any{{"type": "payment", "amount": "100"}}
+	details := []map[string]any{
+		{"type": "payment", "amount": "100"},
+		{"type": "payment", "amount": "200"},
+	}
 	if err := backing.Grants().Save(context.Background(), &store.Grant{
 		ID:                   grantID,
 		Subject:              "user-rar-grant-fault",
@@ -535,6 +596,9 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T
 	if got := body["error"]; got != "server_error" {
 		t.Fatalf("fault error=%v want server_error", got)
 	}
+	if got := beginCount.Load(); got != 0 {
+		t.Fatalf("BeginTx called before authorization-details preflight failed: %d", got)
+	}
 	rejected, err := backing.RefreshTokens().Find(context.Background(), refreshID)
 	if err != nil {
 		t.Fatalf("RefreshTokens.Find(after fault): %v", err)
@@ -543,10 +607,35 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T
 		t.Fatalf("grant lookup fault consumed predecessor at %v", rejected.ConsumedAt)
 	}
 
+	// The next attempt passes the outer preflight, then narrows the Grant
+	// before BeginTx/Consume. The in-transaction barrier must reject the
+	// stale requested detail and roll Consume back, rather than committing a
+	// response based on the preflight snapshot.
 	retry := post(form)
 	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusBadRequest {
+		t.Fatalf("barrier retry status=%d want 400 body=%v", retry.StatusCode, decodeJSON(t, retry))
+	}
+	barrierBody := decodeJSON(t, retry)
+	if barrierBody["error"] != "invalid_authorization_details" {
+		t.Fatalf("barrier error=%v want invalid_authorization_details", barrierBody["error"])
+	}
+	rejected, err = backing.RefreshTokens().Find(context.Background(), refreshID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(after barrier): %v", err)
+	}
+	if rejected.ConsumedAt != nil {
+		t.Fatalf("authorization-details barrier consumed predecessor at %v", rejected.ConsumedAt)
+	}
+
+	// The current Grant now authorizes amount=200. A matching retry proves
+	// the rollback left the predecessor usable and the barrier did not leak
+	// a partial rotation.
+	form.Set("authorization_details", `[{"type":"payment","amount":"200"}]`)
+	retry = post(form)
+	defer retry.Body.Close()
 	if retry.StatusCode != http.StatusOK {
-		t.Fatalf("retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
+		t.Fatalf("conforming retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
 	}
 }
 
@@ -1408,9 +1497,11 @@ func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
 
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	backing := inmem.New(inmem.WithClock(clock))
+	capture := newAuditCapture()
 	provider, err := op.New(testkit.MinimalOptions(t,
 		op.WithStore(opaqueRevokeFailStore{Store: backing}),
 		op.WithClock(clock),
+		op.WithAuditLogger(capture.logger()),
 		// Exercise the non-transactional fault decorator. Enabling the
 		// browser authorization-code flow would correctly require the
 		// wrapper to advertise store.Transactional.
@@ -1490,6 +1581,126 @@ func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
 	}
 	if prior.Revoked {
 		t.Error("injected revoke failure must not claim the prior token was revoked")
+	}
+	rec := capture.findEvent(t, "refresh.prior_access_token_revoke_failed")
+	if rec == nil {
+		t.Fatalf("prior access-token revoke failure audit event missing: %s", capture.buf.String())
+	}
+	extras, _ := rec["extras"].(map[string]any)
+	if extras == nil || extras["failure_stage"] != "prior_access_token_revoke" || extras["retryable"] != false {
+		t.Fatalf("failure audit extras=%v want fixed stage/retryable=false on committed non-Tx consume", extras)
+	}
+	for key := range extras {
+		if key == "error" || strings.Contains(key, "token") || strings.Contains(key, "secret") {
+			t.Errorf("failure audit carries sensitive extra %q", key)
+		}
+	}
+}
+
+// TestRefresh_OpaqueRevokeFailureInTxIsRetryable pins the transactional
+// counterpart: the prior opaque-AT revoke fails after Consume, but the whole
+// exchange is still staged. The deferred rollback leaves the predecessor
+// redeemable, so the audit event may truthfully mark recovery as retryable.
+func TestRefresh_OpaqueRevokeFailureInTxIsRetryable(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	backing := inmem.New(inmem.WithClock(clock))
+	capture := newAuditCapture()
+	provider, err := op.New(testkit.MinimalOptions(t,
+		op.WithStore(opaqueRevokeFailTransactionalStore{
+			Store:         backing,
+			transactional: backing,
+		}),
+		op.WithClock(clock),
+		op.WithAuditLogger(capture.logger()),
+		op.WithGrants(grant.RefreshToken),
+		op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	server := httptest.NewServer(provider)
+	t.Cleanup(server.Close)
+
+	const secret = "opaque-revoke-failure-tx-secret" //nolint:gosec // G101: test fixture credential.
+	hash, err := (&clientauth.Argon2id{}).Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := &store.Client{
+		ID:                      "client-opaque-revoke-failure-tx",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  []string{"openid"},
+	}
+	if err := backing.RegisterClient(context.Background(), client); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	const grantID = "grant-opaque-revoke-failure-tx"
+	const refreshID = "rt-opaque-revoke-failure-tx"
+	const priorAT = "prior-opaque-revoke-failure-tx-token-123456"
+	if err := backing.Grants().Save(context.Background(), &store.Grant{
+		ID: grantID, Subject: "user-opaque-revoke-failure-tx", ClientID: client.ID,
+		Scope: []string{"openid"}, CreatedAt: clock.now, UpdatedAt: clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+	if err := backing.RefreshTokens().Save(context.Background(), &store.RefreshToken{
+		ID: refreshID, ClientID: client.ID, Subject: "user-opaque-revoke-failure-tx",
+		GrantID: grantID, Scope: []string{"openid"}, CreatedAt: clock.now,
+		ExpiresAt: clock.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("RefreshTokens.Save: %v", err)
+	}
+	if err := backing.OpaqueAccessTokens().Save(context.Background(), &store.OpaqueAccessToken{
+		ID: priorAT, GrantID: grantID, Subject: "user-opaque-revoke-failure-tx",
+		ClientID: client.ID, Scope: []string{"openid"}, Audience: testkit.DefaultIssuer,
+		IssuedAt: clock.now, ExpiresAt: clock.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("OpaqueAccessTokens.Save: %v", err)
+	}
+
+	form := refreshForm(refreshID, "")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(client.ID, secret)
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	if body := decodeJSON(t, resp); body["access_token"] != nil {
+		t.Fatalf("response must not contain a fresh access_token: %v", body)
+	}
+	rec, err := backing.RefreshTokens().Find(context.Background(), refreshID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(predecessor): %v", err)
+	}
+	if rec.ConsumedAt != nil {
+		t.Fatalf("transactional revoke failure consumed predecessor at %v", rec.ConsumedAt)
+	}
+	prior, err := backing.OpaqueAccessTokens().Find(context.Background(), priorAT)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.Find(prior): %v", err)
+	}
+	if prior.Revoked {
+		t.Fatal("rolled-back revoke failure must not claim the prior token was revoked")
+	}
+	record := capture.findEvent(t, "refresh.prior_access_token_revoke_failed")
+	if record == nil {
+		t.Fatalf("prior access-token revoke failure audit event missing: %s", capture.buf.String())
+	}
+	extras, _ := record["extras"].(map[string]any)
+	if extras == nil || extras["failure_stage"] != "prior_access_token_revoke" || extras["retryable"] != true {
+		t.Fatalf("failure audit extras=%v want fixed stage/retryable=true in Tx", extras)
 	}
 }
 

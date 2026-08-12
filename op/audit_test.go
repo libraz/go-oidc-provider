@@ -21,6 +21,8 @@ func TestAuditEventCatalog_ContainsOperationalAndCustomGrantEvents(t *testing.T)
 		op.AuditDCRCascadeGrantRevokeFailed:             false,
 		op.AuditDCRCascadeAccessTokenRevokeFailed:       false,
 		op.AuditDCRCascadeOpaqueAccessTokenRevokeFailed: false,
+		op.AuditGrantManagementRevokeFailed:             false,
+		op.AuditRefreshPriorAccessTokenRevokeFailed:     false,
 		op.AuditCustomGrantRequested:                    false,
 		op.AuditCustomGrantFailed:                       false,
 		op.AuditCustomGrantRefreshDropped:               false,
@@ -109,7 +111,8 @@ func TestAuditEvent_GrantManagementMirror(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]op.AuditEvent{
-		"grant_management.revoked": op.AuditGrantManagementRevoked,
+		"grant_management.revoked":       op.AuditGrantManagementRevoked,
+		"grant_management.revoke_failed": op.AuditGrantManagementRevokeFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -129,8 +132,9 @@ func TestAuditEvent_RefreshChainRevokeMirror(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]op.AuditEvent{
-		"refresh.chain_revoke_failed": op.AuditRefreshChainRevokeFailed,
-		"refresh.grant_revoke_failed": op.AuditRefreshGrantRevokeFailed,
+		"refresh.chain_revoke_failed":              op.AuditRefreshChainRevokeFailed,
+		"refresh.grant_revoke_failed":              op.AuditRefreshGrantRevokeFailed,
+		"refresh.prior_access_token_revoke_failed": op.AuditRefreshPriorAccessTokenRevokeFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {

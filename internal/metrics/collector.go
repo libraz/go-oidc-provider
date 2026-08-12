@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -39,6 +40,9 @@ type Options struct {
 // of the [op.Provider]; mutation after construction is forbidden.
 type Collector struct {
 	opts                      Options
+	registry                  *prometheus.Registry
+	registered                []prometheus.Collector
+	unregisterOnce            sync.Once
 	tokenIssued               *prometheus.CounterVec
 	tokensRefreshed           *prometheus.CounterVec
 	loginAttempts             *prometheus.CounterVec
@@ -75,11 +79,12 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 	}
 	constLabels := prometheus.Labels{issuerLabel: opts.Issuer}
 	c := &Collector{
-		opts: opts,
+		opts:     opts,
+		registry: reg,
 		tokenIssued: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name:        "oidc_token_issued_total",
-				Help:        "Number of access / refresh / id tokens issued by the OP, partitioned by grant_type and (static-seed) client_id.",
+				Help:        "Number of refresh tokens initially issued from authorization-code exchanges, partitioned by grant_type and (static-seed) client_id.",
 				ConstLabels: constLabels,
 			},
 			[]string{"grant_type", "client_id"},
@@ -95,10 +100,10 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 		loginAttempts: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name:        "oidc_login_attempts_total",
-				Help:        "Number of login attempts processed by the authenticator chain, partitioned by result and authenticator label.",
+				Help:        "Number of login and MFA attempts processed by the authentication flow, partitioned by result and factor.",
 				ConstLabels: constLabels,
 			},
-			[]string{"result", "authenticator"},
+			[]string{"factor", "result"},
 		),
 		refreshReplay: prometheus.NewCounter(
 			prometheus.CounterOpts{
@@ -196,7 +201,7 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 		tokenRevokeFailures: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name:        "oidc_token_revoke_failures_total",
-				Help:        "Silent token-revocation failures (token, refresh chain, refresh grant) where the wire response succeeded but the side effect did not.",
+				Help:        "Token-revocation side-effect failures, partitioned by failed stage (token, refresh chain, refresh grant, or prior access token).",
 				ConstLabels: constLabels,
 			},
 			[]string{"kind"},
@@ -249,7 +254,34 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 		}
 		registered = append(registered, col)
 	}
+	c.registered = registered
 	return c, nil
+}
+
+// Unregister removes every collector registered by c from the registry it
+// owns. It is safe to call more than once (including from competing rollback
+// paths); only the first call attempts removal and returns whether at least
+// one collector was removed. A false return means that c was already cleaned
+// up, or that none of its collectors were still registered.
+//
+// The op constructor should call c.Unregister from its rollback path after a
+// later construction step fails. Collectors owned by another constructor are
+// never touched because this method only retains c's exact collector values.
+func (c *Collector) Unregister() (removed bool) {
+	if c == nil {
+		return false
+	}
+	c.unregisterOnce.Do(func() {
+		if c.registry == nil {
+			return
+		}
+		for _, collector := range c.registered {
+			if c.registry.Unregister(collector) {
+				removed = true
+			}
+		}
+	})
+	return removed
 }
 
 // clientIDLabel returns id when it is a known static client and ""

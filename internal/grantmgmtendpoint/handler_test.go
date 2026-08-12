@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,10 +30,13 @@ func (c fixedClock) Now() time.Time { return c.now }
 const gmSecret = "grant-mgmt-secret" //nolint:gosec // G101: test fixture credential.
 
 type recordingAudit struct {
+	mu     sync.Mutex
 	events []audit.Event
 }
 
 func (r *recordingAudit) Emit(_ context.Context, ev audit.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, ev)
 }
 
@@ -287,6 +293,57 @@ func (s revokeFailsRefreshStore) RevokeByGrant(context.Context, string) error {
 	return errors.New("simulated refresh revoke failure")
 }
 
+type selectiveRevokeFailsRefreshStore struct {
+	store.RefreshTokenStore
+	failGrantID string
+}
+
+func (s selectiveRevokeFailsRefreshStore) RevokeByGrant(ctx context.Context, grantID string) error {
+	if grantID == s.failGrantID {
+		return errors.New("simulated sibling refresh revoke failure")
+	}
+	return s.RefreshTokenStore.RevokeByGrant(ctx, grantID)
+}
+
+// concurrentDeleteGrantStore holds both DELETE requests after their
+// resolve/list phase, then lets one underlying delete complete before the
+// other attempts the same delete. The second call therefore receives the
+// backend's ErrNotFound and exercises the endpoint's idempotent success path.
+type concurrentDeleteGrantStore struct {
+	store.GrantStore
+	listCalls       atomic.Int32
+	listRelease     chan struct{}
+	listReleaseOnce sync.Once
+	deleteClaimed   atomic.Bool
+	firstDeleteDone chan struct{}
+}
+
+func newConcurrentDeleteGrantStore(grants store.GrantStore) *concurrentDeleteGrantStore {
+	return &concurrentDeleteGrantStore{
+		GrantStore:      grants,
+		listRelease:     make(chan struct{}),
+		firstDeleteDone: make(chan struct{}),
+	}
+}
+
+func (s *concurrentDeleteGrantStore) ListBySubject(ctx context.Context, subject string) ([]*store.Grant, error) {
+	if s.listCalls.Add(1) == 2 {
+		s.listReleaseOnce.Do(func() { close(s.listRelease) })
+	}
+	<-s.listRelease
+	return s.GrantStore.ListBySubject(ctx, subject)
+}
+
+func (s *concurrentDeleteGrantStore) Delete(ctx context.Context, grantID string) error {
+	if s.deleteClaimed.CompareAndSwap(false, true) {
+		err := s.GrantStore.Delete(ctx, grantID)
+		close(s.firstDeleteDone)
+		return err
+	}
+	<-s.firstDeleteDone
+	return s.GrantStore.Delete(ctx, grantID)
+}
+
 type revokeFailsOpaqueAccessTokenStore struct {
 	store.OpaqueAccessTokenStore
 }
@@ -385,10 +442,148 @@ func TestHandler_RevokeSecurityCascadeFailure_Returns500(t *testing.T) {
 			if _, err := f.store.Grants().Find(context.Background(), "grant-stuck"); err != nil {
 				t.Errorf("grant should remain retryable after failed cascade: %v", err)
 			}
-			if got := len(f.audit.events); got != 0 {
-				t.Errorf("success audit events=%d want 0", got)
+			if got := len(f.audit.events); got != 1 {
+				t.Fatalf("audit events=%d want 1 failure event", got)
+			}
+			ev := f.audit.events[0]
+			if ev.Name != "grant_management.revoke_failed" {
+				t.Fatalf("event name=%q want grant_management.revoke_failed", ev.Name)
+			}
+			if ev.Extras["failure_stage"] != "grant_cascade" {
+				t.Errorf("failure_stage=%v want grant_cascade", ev.Extras["failure_stage"])
+			}
+			if ev.Extras["retryable"] != true {
+				t.Errorf("retryable=%v want true", ev.Extras["retryable"])
+			}
+			for key := range ev.Extras {
+				if key == "error" || strings.Contains(key, "token") || strings.Contains(key, "secret") {
+					t.Errorf("failure event carries sensitive extra %q", key)
+				}
 			}
 		})
+	}
+}
+
+// TestHandler_RevokeSiblingFailureKeepsRequestedAnchor pins the multi-grant
+// retry contract. The requested grant is the endpoint's authenticated anchor;
+// a sibling cascade failure must happen before that anchor is deleted so the
+// failure event's retryable=true remains truthful.
+func TestHandler_RevokeSiblingFailureKeepsRequestedAnchor(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.RevokeEnabled = true
+		d.RefreshTokens = selectiveRevokeFailsRefreshStore{
+			RefreshTokenStore: d.RefreshTokens,
+			failGrantID:       "grant-z-sibling",
+		}
+	})
+	requested := "grant-a-requested"
+	sibling := "grant-z-sibling"
+	f.seedGrant(t, requested)
+	f.seedGrant(t, sibling)
+
+	resp := f.do(t, http.MethodDelete, requested)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500", resp.StatusCode)
+	}
+	if body := decodeError(t, resp); body["error"] != "server_error" {
+		t.Fatalf("error=%v want server_error", body["error"])
+	}
+	for _, id := range []string{requested, sibling} {
+		if _, err := f.store.Grants().Find(context.Background(), id); err != nil {
+			t.Errorf("%s missing after sibling failure: %v", id, err)
+		}
+	}
+	if len(f.audit.events) != 1 {
+		t.Fatalf("audit events=%d want 1", len(f.audit.events))
+	}
+	ev := f.audit.events[0]
+	if ev.Name != "grant_management.revoke_failed" {
+		t.Fatalf("audit name=%q want grant_management.revoke_failed", ev.Name)
+	}
+	if ev.Extras["retryable"] != true {
+		t.Fatalf("retryable=%v want true while requested anchor remains", ev.Extras["retryable"])
+	}
+}
+
+// TestHandler_ConcurrentRevokeTreatsDeleteNotFoundAsSuccess pins the
+// idempotent DELETE contract. Both requests resolve and enumerate the anchor
+// before either delete is allowed to proceed; one wins the backend delete and
+// the other observes ErrNotFound. Neither request should turn the already
+// achieved absent state into a retryable 500.
+func TestHandler_ConcurrentRevokeTreatsDeleteNotFoundAsSuccess(t *testing.T) {
+	t.Parallel()
+
+	var concurrent *concurrentDeleteGrantStore
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.RevokeEnabled = true
+		concurrent = newConcurrentDeleteGrantStore(d.Grants)
+		d.Grants = concurrent
+	})
+	const grantID = "grant-concurrent-delete"
+	f.seedGrant(t, grantID)
+
+	type result struct {
+		status int
+		body   string
+		err    error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			req, err := http.NewRequestWithContext(
+				context.Background(),
+				http.MethodDelete,
+				f.endpoint+"/"+grantID,
+				http.NoBody,
+			)
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			req.SetBasicAuth(f.client.ID, gmSecret)
+			resp, err := f.server.Client().Do(req)
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			closeErr := resp.Body.Close()
+			if readErr != nil {
+				results <- result{err: readErr}
+				return
+			}
+			if closeErr != nil {
+				results <- result{err: closeErr}
+				return
+			}
+			results <- result{status: resp.StatusCode, body: string(body)}
+		}()
+	}
+	for i := range 2 {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("concurrent DELETE %d: %v", i, got.err)
+		}
+		if got.status != http.StatusNoContent {
+			t.Fatalf("concurrent DELETE %d status=%d body=%s, want 204", i, got.status, got.body)
+		}
+	}
+	if got := concurrent.listCalls.Load(); got != 2 {
+		t.Fatalf("ListBySubject calls=%d want 2 before delete barrier", got)
+	}
+	if _, err := f.store.Grants().Find(context.Background(), grantID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("grant after concurrent revoke: err=%v want ErrNotFound", err)
+	}
+	if len(f.audit.events) != 2 {
+		t.Fatalf("audit events=%d want two successful revoke events", len(f.audit.events))
+	}
+	for i, event := range f.audit.events {
+		if event.Name != "grant_management.revoked" {
+			t.Errorf("audit event %d name=%q want grant_management.revoked", i, event.Name)
+		}
 	}
 }
 

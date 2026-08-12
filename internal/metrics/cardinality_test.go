@@ -16,14 +16,14 @@ import (
 // below fails so the cardinality posture is reviewed before the
 // label lands in production scrapes.
 var labelAllowlist = map[string]struct{}{
-	"grant_type":    {},
-	"client_id":     {},
-	"result":        {},
-	"authenticator": {},
-	"auth_method":   {},
-	"reason":        {},
-	"event":         {},
-	"kind":          {},
+	"grant_type":  {},
+	"client_id":   {},
+	"factor":      {},
+	"result":      {},
+	"auth_method": {},
+	"reason":      {},
+	"event":       {},
+	"kind":        {},
 	// issuer is a constant label sourced from configuration, not from
 	// request input; its cardinality is the number of Providers in the
 	// process.
@@ -52,7 +52,7 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 			Name:     "token.issued",
 			ClientID: "dynamic-deadbeef-1234",
 			Extras: map[string]any{
-				"grant_type": "authorization_code",
+				"grant_type": "refresh_token", // ignored by the fixed event mapping.
 				"sub":        "user-abc",
 				"ip":         "203.0.113.7",
 			},
@@ -66,11 +66,11 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 			Name:     "login.success",
 			ClientID: "dynamic-deadbeef-1234",
 			ActorID:  "user-xyz",
-			Extras:   map[string]any{"authenticator": "password"},
+			Extras:   map[string]any{"factor": "password"},
 		},
 		{
 			Name:   "login.failed",
-			Extras: map[string]any{"authenticator": "totp"},
+			Extras: map[string]any{"factor": "totp"},
 		},
 		{Name: "refresh.replay_detected"},
 		{Name: "code.replay_detected"},

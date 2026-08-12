@@ -144,9 +144,13 @@ const (
 )
 
 // Grant-management events. Fire from the OAuth 2.0 Grant Management
-// endpoint after a client successfully revokes one of its own grants.
+// endpoint after a client successfully revokes one of its own grants,
+// or when the revoke side effect fails after the request has been
+// authenticated. The failure event contains only fixed-stage evidence;
+// it never carries a token or storage error body.
 const (
-	AuditGrantManagementRevoked = AuditEvent(auditevent.AuditGrantManagementRevoked)
+	AuditGrantManagementRevoked      = AuditEvent(auditevent.AuditGrantManagementRevoked)
+	AuditGrantManagementRevokeFailed = AuditEvent(auditevent.AuditGrantManagementRevokeFailed)
 )
 
 // Code / token events. Fire from the authorize-code issuance path
@@ -165,16 +169,17 @@ const (
 // rotation chain intact even though the wire response indicated
 // rejection, which is the audit gap these events close.
 const (
-	AuditCodeIssued               = AuditEvent(auditevent.AuditCodeIssued)
-	AuditCodeConsumed             = AuditEvent(auditevent.AuditCodeConsumed)
-	AuditCodeReplayDetected       = AuditEvent(auditevent.AuditCodeReplayDetected)
-	AuditTokenIssued              = AuditEvent(auditevent.AuditTokenIssued)
-	AuditTokenRefreshed           = AuditEvent(auditevent.AuditTokenRefreshed)
-	AuditTokenRevoked             = AuditEvent(auditevent.AuditTokenRevoked)
-	AuditTokenRevokeFailed        = AuditEvent(auditevent.AuditTokenRevokeFailed)
-	AuditRefreshReplayDetected    = AuditEvent(auditevent.AuditRefreshReplayDetected)
-	AuditRefreshChainRevokeFailed = AuditEvent(auditevent.AuditRefreshChainRevokeFailed)
-	AuditRefreshGrantRevokeFailed = AuditEvent(auditevent.AuditRefreshGrantRevokeFailed)
+	AuditCodeIssued                          = AuditEvent(auditevent.AuditCodeIssued)
+	AuditCodeConsumed                        = AuditEvent(auditevent.AuditCodeConsumed)
+	AuditCodeReplayDetected                  = AuditEvent(auditevent.AuditCodeReplayDetected)
+	AuditTokenIssued                         = AuditEvent(auditevent.AuditTokenIssued)
+	AuditTokenRefreshed                      = AuditEvent(auditevent.AuditTokenRefreshed)
+	AuditTokenRevoked                        = AuditEvent(auditevent.AuditTokenRevoked)
+	AuditTokenRevokeFailed                   = AuditEvent(auditevent.AuditTokenRevokeFailed)
+	AuditRefreshReplayDetected               = AuditEvent(auditevent.AuditRefreshReplayDetected)
+	AuditRefreshChainRevokeFailed            = AuditEvent(auditevent.AuditRefreshChainRevokeFailed)
+	AuditRefreshGrantRevokeFailed            = AuditEvent(auditevent.AuditRefreshGrantRevokeFailed)
+	AuditRefreshPriorAccessTokenRevokeFailed = AuditEvent(auditevent.AuditRefreshPriorAccessTokenRevokeFailed)
 )
 
 // Session / logout events. Fire from the session manager and the

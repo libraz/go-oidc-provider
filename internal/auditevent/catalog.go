@@ -69,23 +69,25 @@ const (
 	AuditStepUpRequired Name = "step_up.required"
 	AuditStepUpSuccess  Name = "step_up.success"
 
-	AuditConsentGranted           Name = "consent.granted"
-	AuditConsentGrantedFirstParty Name = "consent.granted.first_party"
-	AuditConsentGrantedDelta      Name = "consent.granted.delta"
-	AuditConsentSkippedExisting   Name = "consent.skipped.existing"
-	AuditConsentRevoked           Name = "consent.revoked"
-	AuditGrantManagementRevoked   Name = "grant_management.revoked"
+	AuditConsentGranted              Name = "consent.granted"
+	AuditConsentGrantedFirstParty    Name = "consent.granted.first_party"
+	AuditConsentGrantedDelta         Name = "consent.granted.delta"
+	AuditConsentSkippedExisting      Name = "consent.skipped.existing"
+	AuditConsentRevoked              Name = "consent.revoked"
+	AuditGrantManagementRevoked      Name = "grant_management.revoked"
+	AuditGrantManagementRevokeFailed Name = "grant_management.revoke_failed"
 
-	AuditCodeIssued               Name = "code.issued"
-	AuditCodeConsumed             Name = "code.consumed"
-	AuditCodeReplayDetected       Name = "code.replay_detected"
-	AuditTokenIssued              Name = "token.issued"
-	AuditTokenRefreshed           Name = "token.refreshed"
-	AuditTokenRevoked             Name = "token.revoked"
-	AuditTokenRevokeFailed        Name = "token.revoke_failed"
-	AuditRefreshReplayDetected    Name = "refresh.replay_detected"
-	AuditRefreshChainRevokeFailed Name = "refresh.chain_revoke_failed"
-	AuditRefreshGrantRevokeFailed Name = "refresh.grant_revoke_failed"
+	AuditCodeIssued                          Name = "code.issued"
+	AuditCodeConsumed                        Name = "code.consumed"
+	AuditCodeReplayDetected                  Name = "code.replay_detected"
+	AuditTokenIssued                         Name = "token.issued"
+	AuditTokenRefreshed                      Name = "token.refreshed"
+	AuditTokenRevoked                        Name = "token.revoked"
+	AuditTokenRevokeFailed                   Name = "token.revoke_failed"
+	AuditRefreshReplayDetected               Name = "refresh.replay_detected"
+	AuditRefreshChainRevokeFailed            Name = "refresh.chain_revoke_failed"
+	AuditRefreshGrantRevokeFailed            Name = "refresh.grant_revoke_failed"
+	AuditRefreshPriorAccessTokenRevokeFailed Name = "refresh.prior_access_token_revoke_failed"
 
 	AuditSessionCreated       Name = "session.created"
 	AuditSessionDestroyed     Name = "session.destroyed"
@@ -204,8 +206,8 @@ var definitions = []Definition{
 	{Name: AuditLoginFailed, Metric: MetricLoginAttempts, Label: "failed"},
 	{Name: AuditLockoutStalled},
 	{Name: AuditMFARequired},
-	{Name: AuditMFASuccess},
-	{Name: AuditMFAFailed},
+	{Name: AuditMFASuccess, Metric: MetricLoginAttempts, Label: "success"},
+	{Name: AuditMFAFailed, Metric: MetricLoginAttempts, Label: "failed"},
 	{Name: AuditStepUpRequired},
 	{Name: AuditStepUpSuccess},
 	{Name: AuditConsentGranted},
@@ -214,6 +216,7 @@ var definitions = []Definition{
 	{Name: AuditConsentSkippedExisting},
 	{Name: AuditConsentRevoked},
 	{Name: AuditGrantManagementRevoked},
+	{Name: AuditGrantManagementRevokeFailed},
 	{Name: AuditCodeIssued},
 	{Name: AuditCodeConsumed},
 	{Name: AuditCodeReplayDetected, Metric: MetricCodeReplay},
@@ -224,6 +227,7 @@ var definitions = []Definition{
 	{Name: AuditRefreshReplayDetected, Metric: MetricRefreshReplay},
 	{Name: AuditRefreshChainRevokeFailed, Metric: MetricTokenRevokeFailures, Label: "refresh_chain"},
 	{Name: AuditRefreshGrantRevokeFailed, Metric: MetricTokenRevokeFailures, Label: "refresh_grant"},
+	{Name: AuditRefreshPriorAccessTokenRevokeFailed, Metric: MetricTokenRevokeFailures, Label: "prior_access_token"},
 	{Name: AuditSessionCreated},
 	{Name: AuditSessionDestroyed},
 	{Name: AuditSessionAlreadyAbsent},

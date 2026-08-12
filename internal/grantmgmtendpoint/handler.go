@@ -17,6 +17,7 @@ package grantmgmtendpoint
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -85,7 +86,11 @@ type Deps struct {
 	Clock Clock
 }
 
-const auditGrantManagementRevoked = string(auditevent.AuditGrantManagementRevoked)
+const (
+	auditGrantManagementRevoked      = string(auditevent.AuditGrantManagementRevoked)
+	auditGrantManagementRevokeFailed = string(auditevent.AuditGrantManagementRevokeFailed)
+	failureStageGrantRevoke          = "grant_cascade"
+)
 
 func (d *Deps) now() time.Time {
 	if d.Clock != nil {
@@ -237,9 +242,21 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 	}
 	revokedGrantIDs, err := revokeSubjectClientCascade(r.Context(), deps, g)
 	if err != nil {
-		// The grant record could not be deleted, so it is still live and
-		// queryable; reporting 204 would be a false success. Surface a
-		// server_error and let the client retry.
+		// revokeSubjectClientCascade processes the requested grant last, so
+		// every sibling failure leaves this authenticated anchor live and
+		// queryable. Reporting 204 would be a false success; surface a
+		// server_error and let the client retry the cascade.
+		deps.audit().Emit(r.Context(), audit.Event{
+			Name:     auditGrantManagementRevokeFailed,
+			Level:    audit.LevelError,
+			Message:  "grant management grant revoke failed",
+			ActorID:  g.Subject,
+			ClientID: client.ID,
+			Extras: map[string]any{
+				"failure_stage": failureStageGrantRevoke,
+				"retryable":     true,
+			},
+		})
 		writeError(w, http.StatusInternalServerError, "server_error", "could not revoke grant")
 		return
 	}
@@ -275,7 +292,21 @@ func revokeSubjectClientCascade(ctx context.Context, deps Deps, g *store.Grant) 
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	for _, id := range ids {
+	// Keep the requested grant as the anchor until every sibling has passed
+	// its security-state cascade. The endpoint authenticates and reports the
+	// requested grant, so a sibling failure must leave that anchor queryable
+	// for a truthful retryable failure. Keep the returned ids sorted for audit
+	// compatibility, but process a separate order with the anchor last.
+	processIDs := append([]string(nil), ids...)
+	for i, id := range processIDs {
+		if id != g.ID {
+			continue
+		}
+		copy(processIDs[i:], processIDs[i+1:])
+		processIDs[len(processIDs)-1] = id
+		break
+	}
+	for _, id := range processIDs {
 		if err := revokeGrantCascade(ctx, deps, id); err != nil {
 			return nil, err
 		}
@@ -308,7 +339,14 @@ func revokeGrantCascade(ctx context.Context, deps Deps, grantID string) error {
 			return fmt.Errorf("grant management: revoke refresh tokens: %w", err)
 		}
 	}
-	return deps.Grants.Delete(ctx, grantID)
+	if err := deps.Grants.Delete(ctx, grantID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	// DELETE is an idempotent security operation. A concurrent cascade may
+	// have removed this grant after resolve/list but before this request's
+	// final delete; ErrNotFound then means the desired absent state already
+	// holds, not that the cascade failed.
+	return nil
 }
 
 // stampNoStore sets the no-cache headers every grant management response

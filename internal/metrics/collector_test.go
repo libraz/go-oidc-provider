@@ -68,6 +68,34 @@ func TestCollector_New_RegistersExpectedMetrics(t *testing.T) {
 	}
 }
 
+func TestCollector_TokenRevokeFailuresHelpCoversAllStages(t *testing.T) {
+	t.Parallel()
+
+	reg := prometheus.NewRegistry()
+	c, err := metrics.New(reg, metrics.Options{Issuer: testIssuer})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	metrics.NewBridge(c, nil).Emit(context.Background(), audit.Event{
+		Name: "refresh.prior_access_token_revoke_failed",
+	})
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "oidc_token_revoke_failures_total" {
+			continue
+		}
+		const want = "Token-revocation side-effect failures, partitioned by failed stage (token, refresh chain, refresh grant, or prior access token)."
+		if family.GetHelp() != want {
+			t.Fatalf("Help=%q want %q", family.GetHelp(), want)
+		}
+		return
+	}
+	t.Fatal("oidc_token_revoke_failures_total family missing")
+}
+
 func TestCollector_New_DoubleRegistrationSurfacesAlreadyRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +110,44 @@ func TestCollector_New_DoubleRegistrationSurfacesAlreadyRegistered(t *testing.T)
 	var already prometheus.AlreadyRegisteredError
 	if !errors.As(err, &already) {
 		t.Fatalf("err type = %T, want AlreadyRegisteredError", err)
+	}
+}
+
+func TestCollector_UnregisterIsIdempotentAndOwnsOnlyItsCollectors(t *testing.T) {
+	t.Parallel()
+
+	reg := prometheus.NewRegistry()
+	c, err := metrics.New(reg, metrics.Options{Issuer: testIssuer})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !c.Unregister() {
+		t.Fatal("first Unregister returned false")
+	}
+	if c.Unregister() {
+		t.Fatal("second Unregister returned true")
+	}
+	if _, err := metrics.New(reg, metrics.Options{Issuer: testIssuer}); err != nil {
+		t.Fatalf("New after cleanup: %v", err)
+	}
+
+	// A collector registered by another owner survives cleanup of c.
+	otherReg := prometheus.NewRegistry()
+	other := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "oidc_refresh_replay_detected_total",
+		Help:        "other owner",
+		ConstLabels: prometheus.Labels{"issuer": "other"},
+	})
+	if err := otherReg.Register(other); err != nil {
+		t.Fatalf("register other owner: %v", err)
+	}
+	otherCollector, err := metrics.New(otherReg, metrics.Options{Issuer: testIssuer})
+	if err == nil {
+		otherCollector.Unregister()
+		t.Fatal("expected collision with the other owner's collector")
+	}
+	if !otherReg.Unregister(other) {
+		t.Fatal("other owner's collector was removed or unavailable")
 	}
 }
 

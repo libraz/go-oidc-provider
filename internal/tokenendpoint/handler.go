@@ -33,12 +33,14 @@ import (
 // constant in [clientauthhttp] so the boundary helper and local emission sites
 // cannot drift.
 const (
-	auditTokenIssued        = string(auditevent.AuditTokenIssued)
-	auditTokenRefreshed     = string(auditevent.AuditTokenRefreshed)
-	auditTokenRevokeFailed  = string(auditevent.AuditTokenRevokeFailed)
-	auditCodeConsumed       = string(auditevent.AuditCodeConsumed)
-	auditCodeReplayDetected = string(auditevent.AuditCodeReplayDetected)
-	auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
+	auditTokenIssued                         = string(auditevent.AuditTokenIssued)
+	auditTokenRefreshed                      = string(auditevent.AuditTokenRefreshed)
+	auditRefreshPriorAccessTokenRevokeFailed = string(auditevent.AuditRefreshPriorAccessTokenRevokeFailed)
+	auditTokenRevokeFailed                   = string(auditevent.AuditTokenRevokeFailed)
+	auditCodeConsumed                        = string(auditevent.AuditCodeConsumed)
+	auditCodeReplayDetected                  = string(auditevent.AuditCodeReplayDetected)
+	auditClientAuthnFailure                  = clientauthhttp.EventClientAuthnFailure
+	failureStagePriorAccessTokenRevoke       = "prior_access_token_revoke"
 )
 
 // ttlBucketDefault / ttlBucketOffline name the two refresh-token TTL

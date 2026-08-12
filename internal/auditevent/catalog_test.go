@@ -80,6 +80,15 @@ func TestCatalog_OperationalMetricMappings(t *testing.T) {
 			Metric: auditevent.MetricDCR,
 			Label:  "cascade.opaque_access_token_revoke_failed",
 		},
+		auditevent.AuditGrantManagementRevokeFailed: {
+			Name:   auditevent.AuditGrantManagementRevokeFailed,
+			Metric: auditevent.MetricNone,
+		},
+		auditevent.AuditRefreshPriorAccessTokenRevokeFailed: {
+			Name:   auditevent.AuditRefreshPriorAccessTokenRevokeFailed,
+			Metric: auditevent.MetricTokenRevokeFailures,
+			Label:  "prior_access_token",
+		},
 	}
 	for name, want := range expected {
 		got, ok := auditevent.Lookup(string(name))

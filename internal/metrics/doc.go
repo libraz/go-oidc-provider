@@ -21,7 +21,7 @@
 //     internal/auditevent, the same typed registry projected by
 //     op.AuditEventCatalog; unknown extension names remain audit-only.
 //   - Cardinality safety: every label value drawn from caller-
-//     controlled input (client_id, authenticator name) is gated
+//     controlled input (client_id, factor name) is gated
 //     through a closed allowlist before being emitted. Dynamic
 //     clients without a static-seed entry collapse onto the empty
 //     client_id label. PII labels (subject, IP, user-agent) are never

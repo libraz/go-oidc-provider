@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -54,10 +55,12 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !preflightRefreshBeforeConsume(ctx, w, r, deps, client.ID, in, dpopOut) {
 		return
 	}
-	if deps.Transactions != nil {
-		handleRefreshTokenTransaction(ctx, w, r, deps, client, in, dpopOut, authorizationDetails)
-		return
-	}
+	// Resolve authorization_details before opening the transaction. A SQL
+	// transaction begins a read snapshot on its first lookup; doing this
+	// preflight through the transaction immediately before Consume can leave
+	// SQLite's WAL writer with a stale snapshot and produce SQLITE_BUSY_SNAPSHOT.
+	// The effective details are immutable request state by the time Consume
+	// starts, so both paths can reuse the same result.
 	effectiveAuthorizationDetails, ok := preflightRefreshAuthorizationDetails(
 		ctx,
 		w,
@@ -68,12 +71,26 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
+	if deps.Transactions != nil {
+		handleRefreshTokenTransaction(
+			ctx,
+			w,
+			r,
+			deps,
+			client,
+			in,
+			dpopOut,
+			authorizationDetails,
+			effectiveAuthorizationDetails,
+		)
+		return
+	}
 	// No transaction to settle behind, but the response is still staged so a
 	// replayed chain is retired before the client is told its token was
 	// refused — the same ordering the transactional path gives.
 	var cascade replayCascade
 	staged := newStagedResponseWriter()
-	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, effectiveAuthorizationDetails, &cascade)
+	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, nil, effectiveAuthorizationDetails, false, false, &cascade)
 	cascade.run(ctx, deps)
 	staged.copyTo(w)
 }
@@ -86,33 +103,51 @@ func completeRefreshToken(
 	client *store.Client,
 	in refreshInputs,
 	dpopOut *dpopOutcome,
+	requestedAuthorizationDetails []map[string]any,
 	authorizationDetails []map[string]any,
+	revalidateAuthorizationDetails bool,
+	transactional bool,
 	cascade *replayCascade,
-) {
+) (rollback bool) {
 	exchanged, ok := exchangeRefresh(ctx, w, deps, client.ID, in, cascade)
 	if !ok {
-		return
+		return rollback
+	}
+	if revalidateAuthorizationDetails && !revalidateRefreshAuthorizationDetails(
+		ctx,
+		w,
+		deps,
+		exchanged,
+		requestedAuthorizationDetails,
+		authorizationDetails,
+	) {
+		// The response is a protocol rejection, but the Consume that
+		// preceded this barrier must not become durable. The transaction
+		// caller uses this result to roll back rather than committing the
+		// stale authorization-details decision.
+		return true
 	}
 	if !checkTokenScopeAllowlist(w, deps, client.ID, exchanged.Scope) {
-		return
+		return rollback
 	}
 	if !enforceStrictOfflineAccess(w, deps, exchanged.Scope, exchanged.Origin) {
-		return
+		return rollback
 	}
 	if !enforceDPoPRefreshBinding(w, deps, dpopOut, exchanged.DPoPJKT) {
-		return
+		return rollback
 	}
 	if !requireMTLSMatch(w, r, deps, exchanged.MTLSCertThumbprint) {
-		return
+		return rollback
 	}
 	binding := tokenBinding{
 		DPoPJKT:        dpopOut.JKT,
 		MTLSThumbprint: exchanged.MTLSCertThumbprint,
 	}
 	if !enforceSenderConstraint(w, deps, binding) {
-		return
+		return rollback
 	}
-	issueRefreshResponse(ctx, w, deps, client, exchanged, binding, authorizationDetails)
+	issueRefreshResponse(ctx, w, deps, client, exchanged, binding, authorizationDetails, transactional)
+	return false
 }
 
 // handleRefreshTokenTransaction stages every post-preflight refresh mutation
@@ -133,10 +168,21 @@ func handleRefreshTokenTransaction(
 	client *store.Client,
 	in refreshInputs,
 	dpopOut *dpopOutcome,
+	requestedAuthorizationDetails []map[string]any,
 	authorizationDetails []map[string]any,
 ) {
 	var cascade replayCascade
-	staged, ok := runRefreshTokenTransaction(ctx, r, deps, client, in, dpopOut, authorizationDetails, &cascade)
+	staged, ok := runRefreshTokenTransaction(
+		ctx,
+		r,
+		deps,
+		client,
+		in,
+		dpopOut,
+		requestedAuthorizationDetails,
+		authorizationDetails,
+		&cascade,
+	)
 	// The transaction has settled by the time the helper returns, so the direct
 	// substore handles are free and a replayed chain is retired here — before
 	// the client is told anything, and in both settle directions.
@@ -163,6 +209,7 @@ func runRefreshTokenTransaction(
 	client *store.Client,
 	in refreshInputs,
 	dpopOut *dpopOutcome,
+	requestedAuthorizationDetails []map[string]any,
 	authorizationDetails []map[string]any,
 	cascade *replayCascade,
 ) (*stagedResponseWriter, bool) {
@@ -179,23 +226,26 @@ func runRefreshTokenTransaction(
 	txDeps.OpaqueAccessTokens = tx.OpaqueAccessTokens()
 	txDeps.GrantRevocations = tx.GrantRevocations()
 	staged := newStagedResponseWriter()
-	effectiveAuthorizationDetails, ok := preflightRefreshAuthorizationDetails(
+	rollback := completeRefreshToken(
 		ctx,
 		staged,
+		r,
 		txDeps,
-		in.Token,
+		client,
+		in,
+		dpopOut,
+		requestedAuthorizationDetails,
 		authorizationDetails,
+		true,
+		true,
+		cascade,
 	)
-	if !ok {
-		return staged, true
-	}
-	completeRefreshToken(ctx, staged, r, txDeps, client, in, dpopOut, effectiveAuthorizationDetails, cascade)
 	// Preserve OAuth rejection semantics that intentionally finalize token
 	// state (notably tombstoned-grant mint refusal, which rejects only after
 	// Consume has spent the presented token) while rolling back server-side
 	// failures in token assembly/persistence. Request-shape and narrowing
 	// rejections are handled before Exchange.
-	if staged.status >= http.StatusInternalServerError || staged.status == 0 {
+	if rollback || staged.status >= http.StatusInternalServerError || staged.status == 0 {
 		return staged, true
 	}
 	if err := tx.Commit(); err != nil {
@@ -316,12 +366,14 @@ func preflightRefreshScope(w http.ResponseWriter, granted, requested []string) (
 // authorization_details before Exchange consumes the predecessor refresh
 // token. The live Grant is authoritative while it carries details; the
 // refresh-token snapshot remains the fallback for missing or deliberately
-// sparse grants. When called with transaction-bound deps, this selection and
-// the later Consume share the same transactional view.
+// sparse grants. The caller performs this read before opening any write
+// transaction and passes the resulting immutable selection through to
+// issuance.
 //
-// The returned effective details are passed unchanged into issuance. Repeating
-// the subset check after Consume would let a concurrent Grant Management update
-// turn a valid preflight into a protocol rejection that strands the predecessor.
+// The returned effective details are passed unchanged into issuance. A
+// transactional path revalidates the selection after its Consume and rolls
+// that transition back when the Grant changed; the non-transactional path has
+// no cross-store rollback and therefore retains this preflight selection.
 func preflightRefreshAuthorizationDetails(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -370,6 +422,61 @@ func preflightRefreshAuthorizationDetails(
 	}
 
 	return reduceAuthorizationDetails(w, requested, granted)
+}
+
+// revalidateRefreshAuthorizationDetails closes the gap between the
+// request-side preflight and the transactional Consume. The preflight must
+// stay outside the transaction because a read before Consume can establish a
+// stale SQLite WAL snapshot. Once Consume has performed the write, however,
+// the transaction can safely read the authoritative Grant and verify that the
+// effective details selected before BeginTx are still valid at the write's
+// serialization point.
+//
+// A Grant with no authorization_details (or a grant that disappeared) keeps
+// the refresh-token snapshot fallback used by the preflight. A populated live
+// Grant is authoritative: for an explicit request, the requested subset must
+// still be present; for an omitted request, the complete live set must match
+// the effective set selected before Consume. A mismatch is a 400 rejection,
+// and the caller rolls the transaction back so the predecessor remains
+// redeemable for a retry against the current Grant.
+func revalidateRefreshAuthorizationDetails(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	exchanged *refresh.Exchanged,
+	requested []map[string]any,
+	effective []map[string]any,
+) bool {
+	if exchanged == nil || exchanged.InGrace || deps.Grants == nil || exchanged.GrantID == "" {
+		return true
+	}
+	grant, err := deps.Grants.Find(ctx, exchanged.GrantID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			grant = nil
+		} else {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return false
+		}
+	}
+	if err == nil && grant == nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return false
+	}
+	granted := exchanged.AuthorizationDetails
+	if grant != nil && len(grant.AuthorizationDetails) > 0 {
+		granted = grant.AuthorizationDetails
+	}
+	want, ok := reduceAuthorizationDetails(w, requested, granted)
+	if !ok {
+		return false
+	}
+	if !reflect.DeepEqual(want, effective) {
+		writeError(w, http.StatusBadRequest, errInvalidAuthzDetails,
+			"authorization_details changed while refresh was in flight")
+		return false
+	}
+	return true
 }
 
 // refreshInputs is the de-structured view of the form parameters the
@@ -607,6 +714,7 @@ func issueRefreshResponse(
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
 	authorizationDetails []map[string]any,
+	transactional bool,
 ) {
 	if exchanged.InGrace {
 		serveGraceRetry(ctx, w, deps, client, exchanged, binding)
@@ -629,6 +737,17 @@ func issueRefreshResponse(
 	// (impossible-by-construction with 256-bit entropy) cannot leave the
 	// chain in a half-revoked state.
 	if err := revokePriorOpaqueAT(ctx, deps, exchanged.Resource, exchanged.GrantID); err != nil {
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     auditRefreshPriorAccessTokenRevokeFailed,
+			Level:    audit.LevelError,
+			Message:  "prior access-token revoke failed during refresh rotation",
+			ActorID:  exchanged.Subject,
+			ClientID: client.ID,
+			Extras: map[string]any{
+				"failure_stage": failureStagePriorAccessTokenRevoke,
+				"retryable":     transactional,
+			},
+		})
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}

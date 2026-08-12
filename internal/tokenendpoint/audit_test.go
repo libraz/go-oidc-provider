@@ -220,6 +220,9 @@ func TestAudit_TokenIssued_LaxDefaultIssuesRefreshWithoutOfflineAccess(t *testin
 	if got := extras["offline_access"]; got != false {
 		t.Errorf("extras.offline_access=%v want false", got)
 	}
+	if _, ok := extras["grant_type"]; ok {
+		t.Errorf("production token.issued extras must not supply grant_type: %v", extras)
+	}
 }
 
 func TestAudit_CodeConsumed_OnAuthCodeExchange(t *testing.T) {
