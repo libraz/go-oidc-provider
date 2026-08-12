@@ -200,6 +200,53 @@ func TestSigner_Verify_RejectsKeyMismatch(t *testing.T) {
 	}
 }
 
+func TestSigner_KeyRotationAcceptsPreviousAndIssuesCurrent(t *testing.T) {
+	t.Parallel()
+
+	current := newKey(t)
+	previous := newKey(t)
+	old, err := csrf.NewSigner(previous)
+	if err != nil {
+		t.Fatalf("old NewSigner: %v", err)
+	}
+	ring, err := csrf.NewSigner(current, previous)
+	if err != nil {
+		t.Fatalf("ring NewSigner: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	oldToken, err := old.Issue("session", now)
+	if err != nil {
+		t.Fatalf("old Issue: %v", err)
+	}
+	if err := ring.Verify(oldToken, "session", now, time.Hour); err != nil {
+		t.Fatalf("ring rejected previous-key token: %v", err)
+	}
+	newToken, err := ring.Issue("session", now)
+	if err != nil {
+		t.Fatalf("ring Issue: %v", err)
+	}
+	if err := old.Verify(newToken, "session", now, time.Hour); !errors.Is(err, csrf.ErrTokenInvalid) {
+		t.Fatalf("old signer accepted current-key token: %v", err)
+	}
+}
+
+func TestSigner_Verify_RejectsFutureIssuedToken(t *testing.T) {
+	t.Parallel()
+
+	s, err := csrf.NewSigner(newKey(t))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	issued := time.Date(2026, 4, 26, 13, 0, 0, 0, time.UTC)
+	tok, err := s.Issue("session", issued)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := s.Verify(tok, "session", issued.Add(-time.Minute), time.Hour); !errors.Is(err, csrf.ErrTokenInvalid) {
+		t.Errorf("future-issued token err=%v want ErrTokenInvalid", err)
+	}
+}
+
 func TestSigner_LengthPrefix_PreventsBoundaryShift(t *testing.T) {
 	t.Parallel()
 

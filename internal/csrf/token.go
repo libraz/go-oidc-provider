@@ -45,19 +45,29 @@ var ErrTokenInvalid = errors.New("csrf: token failed verification")
 // Signer issues and verifies CSRF tokens bound to a session identifier. A
 // Signer is immutable and safe for concurrent use.
 type Signer struct {
-	key []byte
+	// keys is ordered current first, then previous rotation keys. The
+	// signer always issues with keys[0], while verification accepts the
+	// whole overlap window.
+	keys [][]byte
 }
 
-// NewSigner builds a [Signer] from a 32-byte HMAC key. The key should come
-// from a KMS / Vault and be rotated by deploying a new build; the CSRF
-// surface is small enough that we don't bother with multi-key acceptance.
-func NewSigner(key []byte) (*Signer, error) {
-	if len(key) != keyLen {
+// NewSigner builds a [Signer] from a 32-byte current HMAC key and optional
+// previous keys. The key ring is immutable after construction: issuance uses
+// the current key only, while verification tries current then previous keys
+// so a rolling deployment does not invalidate an in-flight interaction.
+func NewSigner(current []byte, previous ...[]byte) (*Signer, error) {
+	if len(current) != keyLen {
 		return nil, ErrInvalidKey
 	}
-	cp := make([]byte, keyLen)
-	copy(cp, key)
-	return &Signer{key: cp}, nil
+	keys := make([][]byte, 0, 1+len(previous))
+	keys = append(keys, cloneKey(current))
+	for _, key := range previous {
+		if len(key) != keyLen {
+			return nil, ErrInvalidKey
+		}
+		keys = append(keys, cloneKey(key))
+	}
+	return &Signer{keys: keys}, nil
 }
 
 // Issue mints a fresh token bound to sessionID and stamped at issuedAt. The
@@ -82,7 +92,7 @@ func (s *Signer) IssueScoped(sessionID, scope string, issuedAt time.Time) (strin
 		return "", fmt.Errorf("csrf: read nonce: %w", err)
 	}
 	iat := issuedAt.UTC().Unix()
-	mac := s.compute(sessionID, nonce, iat, scope)
+	mac := s.compute(s.keys[0], sessionID, nonce, iat, scope)
 	return strings.Join([]string{
 		base64.RawURLEncoding.EncodeToString(nonce),
 		strconv.FormatInt(iat, 10),
@@ -118,13 +128,26 @@ func (s *Signer) VerifyScoped(token, sessionID, scope string, now time.Time, max
 	if err != nil {
 		return ErrTokenInvalid
 	}
-	want := s.compute(sessionID, nonce, iat, scope)
-	if !hmac.Equal(got, want) {
+	valid := false
+	for _, key := range s.keys {
+		want := s.compute(key, sessionID, nonce, iat, scope)
+		// Do not return on the first match. Keeping the verification pass
+		// at a stable key-count avoids making the active key identifiable
+		// through timing during the rotation overlap window.
+		if hmac.Equal(got, want) {
+			valid = true
+		}
+	}
+	if !valid {
+		return ErrTokenInvalid
+	}
+	issued := time.Unix(iat, 0).UTC()
+	age := now.UTC().Sub(issued)
+	if age < 0 {
 		return ErrTokenInvalid
 	}
 	if maxAge > 0 {
-		issued := time.Unix(iat, 0).UTC()
-		if now.UTC().Sub(issued) > maxAge {
+		if age > maxAge {
 			return ErrTokenInvalid
 		}
 	}
@@ -141,8 +164,8 @@ func (s *Signer) VerifyScoped(token, sessionID, scope string, now time.Time, max
 // concatenation now produce different inputs because the two length prefixes
 // disagree. Adding the optional [Issue]-time binding keeps a single MAC
 // implementation across both APIs.
-func (s *Signer) compute(sessionID string, nonce []byte, iat int64, binding string) []byte {
-	h := hmac.New(sha256.New, s.key)
+func (s *Signer) compute(key []byte, sessionID string, nonce []byte, iat int64, binding string) []byte {
+	h := hmac.New(sha256.New, key)
 	var lenBuf [4]byte
 	sid := []byte(sessionID)
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(sid))) //nolint:gosec // len fits in uint32 by construction.
@@ -159,6 +182,12 @@ func (s *Signer) compute(sessionID string, nonce []byte, iat int64, binding stri
 	_, _ = h.Write(lenBuf[:])
 	_, _ = h.Write(bind)
 	return h.Sum(nil)
+}
+
+func cloneKey(key []byte) []byte {
+	cp := make([]byte, len(key))
+	copy(cp, key)
+	return cp
 }
 
 // NewRandomToken mints an opaque, cryptographically random double-submit

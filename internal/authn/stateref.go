@@ -103,19 +103,30 @@ type StateRefPayload struct {
 // in the payload, single-use, short TTL, and rejection of replays
 // across interactions and across factors.
 type StateRefSigner struct {
-	key []byte
+	// keys is ordered current first, then previous rotation keys. The
+	// signer issues with keys[0] and verifies against the complete
+	// overlap window.
+	keys [][]byte
 }
 
-// NewStateRefSigner constructs a [StateRefSigner] from the supplied
-// 32-byte HMAC key. The key MUST be the output of a CSPRNG. Returns
-// [ErrStateRefKeyLength] when len(key) != 32.
-func NewStateRefSigner(key []byte) (*StateRefSigner, error) {
-	if len(key) != stateRefKeyLen {
+// NewStateRefSigner constructs a [StateRefSigner] from the supplied current
+// 32-byte HMAC key and optional previous rotation keys. The key MUST be the
+// output of a CSPRNG. Returns [ErrStateRefKeyLength] when any key is not
+// exactly 32 bytes. Issuance uses the current key; verification accepts the
+// current and previous keys for the rotation overlap window.
+func NewStateRefSigner(current []byte, previous ...[]byte) (*StateRefSigner, error) {
+	if len(current) != stateRefKeyLen {
 		return nil, ErrStateRefKeyLength
 	}
-	cp := make([]byte, stateRefKeyLen)
-	copy(cp, key)
-	return &StateRefSigner{key: cp}, nil
+	keys := make([][]byte, 0, 1+len(previous))
+	keys = append(keys, cloneStateRefKey(current))
+	for _, key := range previous {
+		if len(key) != stateRefKeyLen {
+			return nil, ErrStateRefKeyLength
+		}
+		keys = append(keys, cloneStateRefKey(key))
+	}
+	return &StateRefSigner{keys: keys}, nil
 }
 
 // Issue signs an [interaction.Prompt.StateRef] for the supplied attempt
@@ -134,6 +145,9 @@ func (s *StateRefSigner) Issue(uid, tag string, step int, expiresAt time.Time) (
 		StepCounter: step,
 		ExpiresAt:   expiresAt.Unix(),
 		Nonce:       hex.EncodeToString(nonceBytes),
+	}
+	if err := validateStateRefPayload(p); err != nil {
+		return "", err
 	}
 	body, err := json.Marshal(p)
 	if err != nil {
@@ -157,6 +171,9 @@ func (s *StateRefSigner) Verify(token, expectedUID string, expectedStep int, now
 	if err := json.Unmarshal(body, &p); err != nil {
 		return StateRefPayload{}, ErrStateRefMalformed
 	}
+	if err := validateStateRefPayload(p); err != nil {
+		return StateRefPayload{}, err
+	}
 	if p.UID != expectedUID {
 		return StateRefPayload{}, ErrStateRefUIDMismatch
 	}
@@ -172,7 +189,7 @@ func (s *StateRefSigner) Verify(token, expectedUID string, expectedStep int, now
 // encode formats the payload bytes plus the HMAC tag into the wire
 // `<payload>.<mac>` shape.
 func (s *StateRefSigner) encode(body []byte) string {
-	mac := hmac.New(sha256.New, s.key)
+	mac := hmac.New(sha256.New, s.keys[0])
 	_, _ = mac.Write(body)
 	tag := mac.Sum(nil)
 	return base64.RawURLEncoding.EncodeToString(body) + "." + base64.RawURLEncoding.EncodeToString(tag)
@@ -195,11 +212,39 @@ func (s *StateRefSigner) verifyEnvelope(token string) ([]byte, error) {
 	if err != nil {
 		return nil, ErrStateRefMalformed
 	}
-	mac := hmac.New(sha256.New, s.key)
-	_, _ = mac.Write(body)
-	want := mac.Sum(nil)
-	if !hmac.Equal(gotTag, want) {
+	valid := false
+	for _, key := range s.keys {
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write(body)
+		want := mac.Sum(nil)
+		// Run the complete key ring before deciding. This avoids making
+		// the active key observable through the overlap verification
+		// timing profile.
+		if hmac.Equal(gotTag, want) {
+			valid = true
+		}
+	}
+	if !valid {
 		return nil, ErrStateRefSignature
 	}
 	return body, nil
+}
+
+func validateStateRefPayload(p StateRefPayload) error {
+	if p.UID == "" || p.Tag == "" || p.StepCounter < 0 || p.ExpiresAt <= 0 {
+		return ErrStateRefMalformed
+	}
+	if len(p.Nonce) != stateRefNonceLen*2 {
+		return ErrStateRefMalformed
+	}
+	if _, err := hex.DecodeString(p.Nonce); err != nil {
+		return ErrStateRefMalformed
+	}
+	return nil
+}
+
+func cloneStateRefKey(key []byte) []byte {
+	cp := make([]byte, len(key))
+	copy(cp, key)
+	return cp
 }
