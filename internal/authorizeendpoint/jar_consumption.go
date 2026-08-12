@@ -339,55 +339,15 @@ func isPreregisteredRequestURI(c *store.Client, uri string) bool {
 // JWKS-resolution failures map to the same code (the OP cannot
 // distinguish a bad request from a misconfigured client without
 // helping an attacker enumerate clients).
+//
+// The description is [jar.Description]'s, shared with /par and the
+// back-channel authentication endpoint. Only the wire code is decided
+// here: the endpoints legitimately differ on that and on nothing else.
 func writeJAREnvelopeError(w http.ResponseWriter, r *http.Request, deps resolved, err error, state string) {
 	switch {
 	case errors.Is(err, jar.ErrClientIDMismatch):
-		renderJARError(w, r, deps, errInvalidRequest, "client_id mismatch in request object", state)
+		renderJARError(w, r, deps, errInvalidRequest, jar.Description(err), state)
 	default:
-		renderJARError(w, r, deps, errInvalidRequestObject, sanitiseJARDescription(err), state)
+		renderJARError(w, r, deps, errInvalidRequestObject, jar.Description(err), state)
 	}
-}
-
-// sanitiseJARDescription returns a short operator-friendly description
-// derived from err. We never echo the wrapped third-party error to the
-// client; the description is one of a small closed set so log readers
-// can correlate the wire response with the sentinel without a full
-// stack trace.
-//
-// The mapping is split between a sentinel→string table (the bulk of
-// the catalogue) and a literal switch for [jar.ErrParse], which is
-// checked last because every other JAR sentinel may unwrap onto it
-// via [fmt.Errorf]. Walking the table top-down would otherwise resolve
-// every JAR error to "malformed" and hide the more specific cause.
-//
-//nolint:gochecknoglobals // immutable error-to-description catalogue.
-var jarDescriptions = []struct {
-	sentinel error
-	desc     string
-}{
-	{jar.ErrAlgNotAllowed, "request object alg is not allowed"},
-	{jar.ErrSigInvalid, "request object signature is invalid"},
-	{jar.ErrIssMismatch, "request object iss does not match client_id"},
-	{jar.ErrAudMismatch, "request object aud does not match issuer"},
-	{jar.ErrExpired, "request object is expired or too old"},
-	{jar.ErrNotYetValid, "request object is not yet valid"},
-	{jar.ErrNestedRequest, "request object must not contain nested request parameters"},
-	{jar.ErrJWKSFetch, "client jwks fetch failed"},
-	{jar.ErrNoMatchingJWK, "no matching client jwk"},
-	{jar.ErrJWKSConfigured, "client has no JWKs or JWKsURI"},
-	{jar.ErrJTIMissing, "request object missing jti"},
-	{jar.ErrJTIReplayed, "request object jti already consumed"},
-	{jar.ErrEncryptionUnsupported, "encrypted request objects are not supported"},
-	{jar.ErrEncryptionAlgNotAllowed, "request object encryption alg/enc is not allowed"},
-	{jar.ErrDecryptFailed, "request object could not be decrypted"},
-	{jar.ErrParse, "request object is malformed"},
-}
-
-func sanitiseJARDescription(err error) string {
-	for _, entry := range jarDescriptions {
-		if errors.Is(err, entry.sentinel) {
-			return entry.desc
-		}
-	}
-	return "request object verification failed"
 }

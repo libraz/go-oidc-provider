@@ -708,49 +708,10 @@ func consumeJARRequestObject(
 // /authorize endpoint, which does). Every JAR failure therefore
 // surfaces as "invalid_request" so OFCS' CIBA-13 negative tests see
 // the spec-mandated code; the human-readable description carries
-// the precise sentinel detail.
+// the precise sentinel detail, drawn from the [jar.Description]
+// catalogue the other JAR-consuming endpoints render from.
 func writeJARError(w http.ResponseWriter, err error) {
-	writeError(w, http.StatusBadRequest, errInvalidRequest,
-		jarDescriptionFor(err))
-}
-
-// jarDescriptions is the sentinel-to-string catalogue
-// [jarDescriptionFor] walks. Mirrors the parendpoint table —
-// duplicated rather than shared because the cibaendpoint package
-// does not import parendpoint.
-//
-//nolint:gochecknoglobals // immutable error-to-description catalogue.
-var jarDescriptions = []struct {
-	sentinel error
-	desc     string
-}{
-	{jar.ErrAlgNotAllowed, "request object alg is not allowed"},
-	{jar.ErrSigInvalid, "request object signature is invalid"},
-	{jar.ErrIssMismatch, "request object iss does not match client_id"},
-	{jar.ErrAudMismatch, "request object aud does not match issuer"},
-	{jar.ErrExpired, "request object is expired or too old"},
-	{jar.ErrNotYetValid, "request object is not yet valid"},
-	{jar.ErrNestedRequest, "request object must not contain nested request parameters"},
-	{jar.ErrJWKSFetch, "client jwks fetch failed"},
-	{jar.ErrNoMatchingJWK, "no matching client jwk"},
-	{jar.ErrJWKSConfigured, "client has no JWKs or JWKsURI"},
-	{jar.ErrJTIMissing, "request object missing jti"},
-	{jar.ErrJTIReplayed, "request object jti already consumed"},
-	{jar.ErrIATMissing, "request object missing iat"},
-	{jar.ErrEncryptionUnsupported, "encrypted request objects are not supported"},
-	{jar.ErrEncryptionAlgNotAllowed, "request object encryption alg/enc is not allowed"},
-	{jar.ErrDecryptFailed, "request object could not be decrypted"},
-	{jar.ErrParse, "request object is malformed"},
-}
-
-// jarDescriptionFor returns a short description for a JAR sentinel.
-func jarDescriptionFor(err error) string {
-	for _, entry := range jarDescriptions {
-		if errors.Is(err, entry.sentinel) {
-			return entry.desc
-		}
-	}
-	return "request object verification failed"
+	writeError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
 }
 
 // classifyHint dispatches to [ciba.ClassifyHint] and maps the
