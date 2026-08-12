@@ -198,6 +198,96 @@ func TestManager_Touch_ExtendsExpiry(t *testing.T) {
 	}
 }
 
+func TestManager_TouchAndReissue_CapsIdleCookieAtAbsoluteExpiry(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cur := t0
+	st := newSessionStore(t, inmem.WithClock(clockFunc(func() time.Time { return cur })))
+	mgr, err := sessions.NewManager(sessions.Config{
+		Codec:       newSessionCodec(t),
+		Store:       st,
+		Clock:       func() time.Time { return cur },
+		IdleTTL:     24 * time.Hour,
+		AbsoluteTTL: 2 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: t0})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	active, err := mgr.Resolve(context.Background(), out.Cookie)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	cur = t0.Add(90 * time.Minute)
+	touch, err := mgr.TouchAndReissue(context.Background(), active)
+	if err != nil {
+		t.Fatalf("TouchAndReissue: %v", err)
+	}
+	wantExpiry := t0.Add(2 * time.Hour)
+	if !touch.ExpiresAt.Equal(wantExpiry) {
+		t.Errorf("ExpiresAt=%v want absolute cap %v", touch.ExpiresAt, wantExpiry)
+	}
+	if !touch.UpdatedAt.Equal(cur) {
+		t.Errorf("UpdatedAt=%v want touch time %v", touch.UpdatedAt, cur)
+	}
+	if touch.Cookie == out.Cookie {
+		t.Error("TouchAndReissue returned the original cookie instead of re-sealing it")
+	}
+	reissued, err := mgr.Resolve(context.Background(), touch.Cookie)
+	if err != nil {
+		t.Fatalf("Resolve reissued cookie: %v", err)
+	}
+	if reissued.Session.ID != out.SessionID || reissued.Payload.ChooserGroupID != out.ChooserGroupID {
+		t.Errorf("reissued payload changed session identity: %+v", reissued)
+	}
+	got, err := st.Find(context.Background(), out.SessionID)
+	if err != nil {
+		t.Fatalf("Find stored session: %v", err)
+	}
+	if !got.ExpiresAt.Equal(wantExpiry) {
+		t.Errorf("stored expiry=%v want %v", got.ExpiresAt, wantExpiry)
+	}
+	if !got.UpdatedAt.Equal(touch.UpdatedAt) {
+		t.Errorf("stored UpdatedAt=%v want TouchOutcome UpdatedAt=%v", got.UpdatedAt, touch.UpdatedAt)
+	}
+}
+
+func TestManager_TouchAndReissue_RejectsAbsoluteExpired(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cur := t0
+	st := newSessionStore(t, inmem.WithClock(clockFunc(func() time.Time { return cur })))
+	mgr, err := sessions.NewManager(sessions.Config{
+		Codec:       newSessionCodec(t),
+		Store:       st,
+		Clock:       func() time.Time { return cur },
+		AbsoluteTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: t0})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	active, err := mgr.Resolve(context.Background(), out.Cookie)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	cur = t0.Add(time.Hour + time.Nanosecond)
+	if _, err := mgr.TouchAndReissue(context.Background(), active); !errors.Is(err, sessions.ErrCurrentSessionExpired) {
+		t.Fatalf("TouchAndReissue err=%v want ErrCurrentSessionExpired", err)
+	}
+	if _, err := st.Find(context.Background(), out.SessionID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("absolute-expired session remains: %v", err)
+	}
+}
+
 func TestManager_Touch_OnMissingSession(t *testing.T) {
 	t.Parallel()
 
@@ -400,16 +490,10 @@ func TestManager_Touch_AbsoluteTTLExpiresSession(t *testing.T) {
 		t.Errorf("Touch within cap rejected: %v", err)
 	}
 
-	// At the boundary (delta == cap): still alive (strict greater-than).
+	// At the boundary (delta == cap): expired; the cap is exclusive.
 	cur = t0.Add(24 * time.Hour)
-	if err := mgr.Touch(context.Background(), out.SessionID); err != nil {
-		t.Errorf("Touch at boundary rejected: %v", err)
-	}
-
-	// One nanosecond past the cap: expired and tear down.
-	cur = t0.Add(24*time.Hour + time.Nanosecond)
 	if err := mgr.Touch(context.Background(), out.SessionID); !errors.Is(err, sessions.ErrCurrentSessionExpired) {
-		t.Errorf("err=%v want ErrCurrentSessionExpired past cap", err)
+		t.Errorf("Touch at boundary err=%v want ErrCurrentSessionExpired", err)
 	}
 	if _, err := store0.Sessions().Find(context.Background(), out.SessionID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("session still in store after absolute-TTL expiry: %v", err)

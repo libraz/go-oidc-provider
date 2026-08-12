@@ -156,6 +156,7 @@ func (h *detachHarness) confirmToken(t *testing.T, cookieValue string) string {
 func (h *detachHarness) confirmLogout(t *testing.T, cookieValue, token string) *http.Response {
 	t.Helper()
 	form := url.Values{"logout_csrf": {token}}
+	addConfirmationGroup(t, h.harness, form, cookieValue)
 	req := httptest.NewRequestWithContext(
 		context.Background(), http.MethodPost, h.endSessionPath, strings.NewReader(form.Encode()),
 	)

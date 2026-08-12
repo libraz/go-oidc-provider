@@ -1,9 +1,10 @@
 // Package endsession implements the OpenID Connect RP-Initiated Logout 1.0
 // endpoint mounted at /end_session. The handler accepts GET or POST,
-// validates the request, terminates the active browser session, and
-// either redirects the browser to a preregistered
-// post_logout_redirect_uri or renders a minimal logout-confirmation
-// page.
+// validates the request, terminates every browser session in the active
+// chooser group by default (or only the active session for
+// logout_scope=current), and either redirects the browser to a
+// preregistered post_logout_redirect_uri or renders a minimal
+// logout-confirmation page.
 // # Spec reference
 // OpenID Connect RP-Initiated Logout 1.0 (final). Section 2 enumerates
 // the request parameters; Section 3 covers redirection back to the RP.
@@ -22,6 +23,10 @@
 //     [op/store.Client.PostLogoutRedirectURIs].
 //   - state (OPTIONAL): opaque string echoed in the redirect query
 //     string when post_logout_redirect_uri is present.
+//   - logout_scope (OPTIONAL): the only accepted explicit value is
+//     "current", which removes only the active account session. When absent,
+//     logout is group-wide and removes every browser account in the chooser
+//     group. Empty, unknown, duplicate, or other values are rejected.
 //   - logout_hint (OPTIONAL, IGNORED): a hint about the user the spec
 //     allows the OP to consume to render a chooser. The OP has no
 //     chooser UX surface here, so the parameter is parsed and
@@ -42,12 +47,13 @@
 //     [op/store.Client.PostLogoutRedirectURIs] allowlist.
 //   - post_logout_redirect_uri without a resolvable client (no
 //     id_token_hint, no client_id).
+//   - logout_scope that is empty, unknown, duplicated, or not "current".
 //
 // The error response is a small static text/html body with a strict
 // Content-Security-Policy header. The OP never redirects to an
 // unvetted URI on the error path.
 // # User-visible policy choices
-// The implementation makes four choices that diverge from a purely
+// The implementation makes five choices that diverge from a purely
 // permissive reading of the spec; each is intentional and documented
 // here so future regressions surface in code review.
 //   - Expired id_tokens are accepted. The user wants to log out from
@@ -74,6 +80,15 @@
 //     mount their own handler in front of /end_session; the library
 //     exposes the /end_session URL through discovery either way so
 //     the wire posture stays uniform.
+//   - Logout confirmation defaults to all browser accounts in the chooser
+//     group. The confirmation form binds that group-wide decision and the
+//     optional "current" decision across its GET → POST round-trip, so a
+//     forged or stale form cannot silently widen or narrow the destructive
+//     scope. Group-wide logout snapshots the group before deletion, dedupes
+//     subjects for JWT / opaque access-token and refresh-chain revocation,
+//     and sends back-channel logout for every snapshotted session. Explicit
+//     "current" logout removes only the active session and rebinds the
+//     cookie to a surviving sibling when one remains.
 //   - post_logout_redirect_uri is rejected when no client can be
 //     resolved. Validating the URI without a client would require
 //     either trusting the parameter (a redirect oracle) or accepting
@@ -82,7 +97,9 @@
 //
 // # Layering
 // The handler depends on:
-//   - internal/sessions.Manager — Resolve / Logout the active session.
+//   - internal/sessions.Manager — Resolve the active session; snapshot and
+//     delete a chooser group for default logout; or remove one current
+//     session and report a surviving sibling for the "current" scope.
 //   - internal/cookie.Profile / internal/cookie.Build /
 //     internal/cookie.Clear — produce the Set-Cookie headers that
 //     install internal/cookie.LogoutCSRFProfile and retire

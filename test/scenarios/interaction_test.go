@@ -20,6 +20,31 @@ import (
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
+// interactionCSRFCookie drives the GET prompt that mints the scoped
+// double-submit token required by an authenticated interaction DELETE.
+func interactionCSRFCookie(t *testing.T, client *http.Client, interactionURL string) *http.Cookie {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, interactionURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET interaction prompt: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET interaction prompt: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET interaction prompt status=%d want 200", resp.StatusCode)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == "__Host-oidc_csrf" && c.Value != "" {
+			return c
+		}
+	}
+	t.Fatal("GET interaction prompt did not set __Host-oidc_csrf")
+	return nil
+}
+
 func TestScenario_ITX_001_MissingInteractionCookieReturnsSessionNotFound(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: ITX-001 (see catalog out_of_scope_reason)")
@@ -225,11 +250,15 @@ func TestScenario_ITX_040_AbortReturnsAccessDeniedToClient(t *testing.T) {
 		t.Fatalf("/authorize redirected to %q, want /oidc/interaction/...", loc.Path)
 	}
 	interactionURL := tk.Server.URL + loc.Path
+	csrfCookie := interactionCSRFCookie(t, client, interactionURL)
 
 	delReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, interactionURL, http.NoBody)
 	if err != nil {
 		t.Fatalf("build DELETE: %v", err)
 	}
+	delReq.Header.Set("Origin", tk.Issuer)
+	delReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	delReq.AddCookie(csrfCookie)
 	delResp, err := client.Do(delReq)
 	if err != nil {
 		t.Fatalf("DELETE /interaction: %v", err)
@@ -372,11 +401,15 @@ func TestScenario_ITX_065_ErrorRedirectsRoundTripState(t *testing.T) {
 		t.Fatalf("/authorize Location: %v", err)
 	}
 	interactionURL := tk.Server.URL + loc.Path
+	csrfCookie := interactionCSRFCookie(t, client, interactionURL)
 
 	delReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, interactionURL, http.NoBody)
 	if err != nil {
 		t.Fatalf("build DELETE: %v", err)
 	}
+	delReq.Header.Set("Origin", tk.Issuer)
+	delReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	delReq.AddCookie(csrfCookie)
 	delResp, err := client.Do(delReq)
 	if err != nil {
 		t.Fatalf("DELETE: %v", err)

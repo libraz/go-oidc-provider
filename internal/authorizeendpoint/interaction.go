@@ -20,6 +20,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
+	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -131,9 +132,18 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 // the access_denied redirect when a redirect target is available;
 // otherwise it returns 204 so the SPA can treat the call as a
 // best-effort cancel.
+//
+//nolint:gocognit // The validation and conflict branches preserve the protocol's response distinctions.
 func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
+	if err := csrf.CheckOrigin(r, deps.InteractionOrigins); err != nil {
+		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "origin not allowed")
+		return
+	}
 	rec, state, ok := loadInteraction(w, r, deps, uid)
 	if !ok {
+		return
+	}
+	if !verifyCSRFToken(w, r, deps, uid, rec.Step) {
 		return
 	}
 	if state.Completion != nil {
@@ -774,11 +784,29 @@ func emitSessionCreated(ctx context.Context, deps resolved, subject, sessionID, 
 	})
 }
 
-// setSessionCookie builds and writes the __Host-oidc_session cookie
-// from value. Centralised so the three paths in [pickSessionOutcome]
-// share one error string and one Set-Cookie call.
-func setSessionCookie(w http.ResponseWriter, value string) error {
-	c, err := cookie.Build(cookie.SessionProfile, value)
+// setSessionCookieWithMaxAge writes the encrypted browser-session cookie. A
+// non-zero expiresAt is used to cap the browser idle lifetime at the same
+// absolute expiry the session manager enforced server-side.
+func setSessionCookieWithMaxAge(w http.ResponseWriter, value string, expiresAt, now time.Time) error {
+	profile := cookie.SessionProfile
+	if !expiresAt.IsZero() {
+		remaining := expiresAt.UTC().Sub(now.UTC())
+		if remaining <= 0 {
+			return sessions.ErrCurrentSessionExpired
+		}
+		if remaining < profile.MaxAge {
+			// Cookie Max-Age is expressed in whole seconds. Preserve a
+			// positive sub-second server-side lifetime as one second rather
+			// than truncating it to zero, which would silently turn the
+			// authenticated cookie into a browser-session cookie.
+			seconds := remaining / time.Second
+			if remaining%time.Second != 0 {
+				seconds++
+			}
+			profile.MaxAge = seconds * time.Second
+		}
+	}
+	c, err := cookie.Build(profile, value)
 	if err != nil {
 		return fmt.Errorf("authorizeendpoint: build session cookie: %w", err)
 	}

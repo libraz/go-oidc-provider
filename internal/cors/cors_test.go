@@ -109,6 +109,39 @@ func TestStrict_Preflight_Allowed(t *testing.T) {
 	}
 }
 
+func TestStrict_HandlerWithMethods_OnlyOptedInRouteAllowsDELETE(t *testing.T) {
+	t.Parallel()
+
+	allow := newAllow(t, "https://app.example.com")
+	defaultHandler := cors.NewStrict(allow, nil).Handler(nextOK())
+	deleteHandler := cors.NewStrict(allow, nil).HandlerWithMethods(nextOK(), http.MethodGet, http.MethodPost, http.MethodDelete)
+
+	for _, tc := range []struct {
+		name    string
+		handler http.Handler
+		want    int
+		methods string
+	}{
+		{name: "default", handler: defaultHandler, want: http.StatusForbidden, methods: "GET, POST, OPTIONS"},
+		{name: "delete-route", handler: deleteHandler, want: http.StatusNoContent, methods: "GET, POST, DELETE, OPTIONS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newReq(t, http.MethodOptions, "/interaction/u/cancel")
+			r.Header.Set("Origin", "https://app.example.com")
+			r.Header.Set("Access-Control-Request-Method", http.MethodDelete)
+			rec := httptest.NewRecorder()
+			tc.handler.ServeHTTP(rec, r)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d want %d", rec.Code, tc.want)
+			}
+			if tc.want == http.StatusNoContent && rec.Header().Get("Access-Control-Allow-Methods") != tc.methods {
+				t.Errorf("ACAM=%q want %q", rec.Header().Get("Access-Control-Allow-Methods"), tc.methods)
+			}
+		})
+	}
+}
+
 // TestStrict_Preflight_CSRFTokenHeaderSurvivesIntersection pins the header
 // name the interaction handler actually reads. The documented SPA pattern
 // echoes the token in X-CSRF-Token, so a preflight requesting that header must

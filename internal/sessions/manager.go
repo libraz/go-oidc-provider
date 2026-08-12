@@ -150,6 +150,19 @@ type Outcome struct {
 	SessionID string
 }
 
+// TouchOutcome is the result of refreshing an active session. Cookie is
+// sealed with the current session-cookie key and ExpiresAt is the new
+// server-side idle expiry, already capped by the configured absolute TTL.
+// The HTTP layer uses ExpiresAt to avoid issuing a browser cookie that lives
+// past the server-side session's absolute lifetime. UpdatedAt is the exact
+// timestamp persisted by the store during the refresh; resumable completion
+// intents must carry it forward when Establish validates the full record.
+type TouchOutcome struct {
+	Cookie    string
+	ExpiresAt time.Time
+	UpdatedAt time.Time
+}
+
 // Issue creates a brand-new chooser group and a session inside it for the
 // supplied login. It is the operation invoked at the end of a "fresh login"
 // interaction (no prior cookie or after [Manager.LogoutAll]).
@@ -235,7 +248,7 @@ func (m *Manager) Resolve(ctx context.Context, cookieValue string) (*Active, err
 }
 
 func sessionExpired(expiresAt, now time.Time) bool {
-	return !expiresAt.IsZero() && expiresAt.UTC().Before(now.UTC())
+	return !expiresAt.IsZero() && !expiresAt.UTC().After(now.UTC())
 }
 
 // findSession reads one session record and normalises the lookup outcome the
@@ -272,26 +285,71 @@ func (m *Manager) findSession(ctx context.Context, id string) (*store.Session, e
 // — a backend hiccup must not silently keep an over-aged session alive.
 func (m *Manager) Touch(ctx context.Context, sessionID string) error {
 	now := m.clock().UTC()
+	sess, err := m.findSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	expiresAt := now.Add(m.idleTTL)
 	if m.absoluteTTL > 0 {
-		sess, err := m.findSession(ctx, sessionID)
-		if err != nil {
-			return err
-		}
-		if now.Sub(sess.CreatedAt) > m.absoluteTTL {
+		absoluteExpiry := sess.CreatedAt.UTC().Add(m.absoluteTTL)
+		// The absolute cap applies to the refreshed expiry too. At the
+		// cap itself there is no remaining lifetime, so retire the row
+		// before touching it rather than granting one final idle window.
+		if !absoluteExpiry.After(now) {
 			// Best-effort delete: ignore not-found, surface only real errors.
 			if derr := m.store.Delete(ctx, sessionID); derr != nil && !errors.Is(derr, store.ErrNotFound) {
 				return fmt.Errorf("sessions: delete absolute-expired: %w", derr)
 			}
 			return ErrCurrentSessionExpired
 		}
+		if expiresAt.After(absoluteExpiry) {
+			expiresAt = absoluteExpiry
+		}
 	}
-	if err := m.store.Touch(ctx, sessionID, now.Add(m.idleTTL), now); err != nil {
+	if err := m.store.Touch(ctx, sessionID, expiresAt, now); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrCurrentSessionExpired
 		}
 		return fmt.Errorf("sessions: touch: %w", err)
 	}
 	return nil
+}
+
+// TouchAndReissue refreshes active and re-seals its browser cookie with the
+// current key. The cookie payload stays the same chooser/current pair, but
+// its issuance time and browser Max-Age are renewed by the caller. The
+// returned expiry and update timestamp are the values read back after the
+// store applies the idle/absolute-TTL calculation.
+func (m *Manager) TouchAndReissue(ctx context.Context, active *Active) (TouchOutcome, error) {
+	if active == nil || active.Session == nil {
+		return TouchOutcome{}, errors.New("sessions: TouchAndReissue requires active session")
+	}
+	if active.Payload.ChooserGroupID == "" || active.Payload.CurrentSessionID == "" ||
+		active.Session.ID != active.Payload.CurrentSessionID ||
+		active.Session.ChooserGroupID != active.Payload.ChooserGroupID {
+		return TouchOutcome{}, ErrCookieInvalid
+	}
+	if err := m.Touch(ctx, active.Session.ID); err != nil {
+		return TouchOutcome{}, err
+	}
+	sess, err := m.findSession(ctx, active.Session.ID)
+	if err != nil {
+		return TouchOutcome{}, err
+	}
+	now := m.clock().UTC()
+	value, err := m.codec.Encode(Payload{
+		ChooserGroupID:   active.Payload.ChooserGroupID,
+		CurrentSessionID: active.Payload.CurrentSessionID,
+		IssuedAt:         now.Unix(),
+	})
+	if err != nil {
+		return TouchOutcome{}, err
+	}
+	return TouchOutcome{
+		Cookie:    value,
+		ExpiresAt: sess.ExpiresAt,
+		UpdatedAt: sess.UpdatedAt,
+	}, nil
 }
 
 // Rotate reissues a fresh session ID for the record currently keyed by
@@ -572,6 +630,13 @@ func (m *Manager) Remove(ctx context.Context, chooserGroupID, currentSessionID, 
 	if chooserGroupID == "" || removeID == "" {
 		return Removal{}, errors.New("sessions: Remove requires ChooserGroupID and removeID")
 	}
+	target, err := m.store.Find(ctx, removeID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return Removal{}, fmt.Errorf("sessions: find remove target: %w", err)
+	}
+	if err == nil && target != nil && target.ChooserGroupID != chooserGroupID {
+		return Removal{}, ErrCookieInvalid
+	}
 	if err := m.store.Delete(ctx, removeID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return Removal{}, fmt.Errorf("sessions: delete: %w", err)
 	}
@@ -608,16 +673,48 @@ func (m *Manager) LogoutAll(ctx context.Context, chooserGroupID string) error {
 	if chooserGroupID == "" {
 		return errors.New("sessions: LogoutAll requires ChooserGroupID")
 	}
-	sessions, err := m.store.ListByChooserGroup(ctx, chooserGroupID)
+	sessions, err := m.SnapshotGroup(ctx, chooserGroupID)
 	if err != nil {
-		return fmt.Errorf("sessions: list: %w", err)
+		return err
 	}
-	for _, s := range sessions {
-		if err := m.store.Delete(ctx, s.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("sessions: delete %s: %w", s.ID, err)
+	return m.LogoutAllSnapshot(ctx, sessions)
+}
+
+// SnapshotGroup returns a defensive copy of every live session in a chooser
+// group. Callers that need a stable logout fan-out must take this snapshot
+// before deleting any row; later backend failures cannot erase the identity
+// needed for token revocation or Back-Channel Logout delivery.
+func (m *Manager) SnapshotGroup(ctx context.Context, chooserGroupID string) ([]*store.Session, error) {
+	if chooserGroupID == "" {
+		return nil, errors.New("sessions: SnapshotGroup requires ChooserGroupID")
+	}
+	rows, err := m.store.ListByChooserGroup(ctx, chooserGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: list: %w", err)
+	}
+	out := make([]*store.Session, 0, len(rows))
+	for _, row := range rows {
+		if row != nil {
+			out = append(out, cloneSession(row))
 		}
 	}
-	return nil
+	return out, nil
+}
+
+// LogoutAllSnapshot deletes exactly the rows captured in snapshot. It is
+// idempotent and aggregates independent backend failures so one broken row
+// cannot prevent the remaining group members from being retired.
+func (m *Manager) LogoutAllSnapshot(ctx context.Context, snapshot []*store.Session) error {
+	var errs []error
+	for _, sess := range snapshot {
+		if sess == nil || sess.ID == "" {
+			continue
+		}
+		if err := m.store.Delete(ctx, sess.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+			errs = append(errs, fmt.Errorf("sessions: delete %s: %w", sess.ID, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func remainingIDs(sessions []*store.Session) []string {

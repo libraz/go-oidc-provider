@@ -275,6 +275,7 @@ func TestInteractionPost_AcceptsCSRFTokenViaFormBody(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, h.interactionPth+"/"+start.uid, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "https://op.example.com")
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
 	req.AddCookie(start.interactionCk)
 	req.AddCookie(csrfCookie)
 	rr := httptest.NewRecorder()
@@ -331,9 +332,15 @@ func TestInteractionDelete_Cancels_RedirectsAccessDenied(t *testing.T) {
 
 	h := newHarness(t)
 	start := startInteractionFlow(t, h)
+	getResp := doInteractionGet(t, h, start)
+	_, csrfCookie := readPromptStateRef(t, getResp)
+	getResp.Body.Close()
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodDelete, h.interactionPth+"/"+start.uid, nil)
+	req.Header.Set("Origin", "https://op.example.com")
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
 	req.AddCookie(start.interactionCk)
+	req.AddCookie(csrfCookie)
 	rr := httptest.NewRecorder()
 	h.handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusFound {
@@ -342,6 +349,46 @@ func TestInteractionDelete_Cancels_RedirectsAccessDenied(t *testing.T) {
 	loc := rr.Header().Get("Location")
 	if !strings.Contains(loc, "error=access_denied") {
 		t.Errorf("Location=%q want access_denied", loc)
+	}
+}
+
+func TestInteractionDelete_OriginAndCSRFFailuresDoNotMutate(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		origin string
+		token  string
+	}{
+		{name: "foreign-origin", origin: "https://attacker.example", token: ""},
+		{name: "wrong-step-token", origin: "https://op.example.com", token: "wrong"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			start := startInteractionFlow(t, h)
+			getResp := doInteractionGet(t, h, start)
+			_, csrfCookie := readPromptStateRef(t, getResp)
+			getResp.Body.Close()
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodDelete, h.interactionPth+"/"+start.uid, http.NoBody)
+			req.Header.Set("Origin", tc.origin)
+			req.AddCookie(start.interactionCk)
+			req.AddCookie(csrfCookie)
+			if tc.token != "" {
+				req.Header.Set("X-CSRF-Token", tc.token)
+			} else if tc.origin == "https://op.example.com" {
+				req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+			}
+			rr := httptest.NewRecorder()
+			h.handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("status=%d want 403 body=%s", rr.Code, rr.Body.String())
+			}
+			if _, err := h.store.Interactions().Find(context.Background(), start.uid); err != nil {
+				t.Fatalf("failed DELETE mutated interaction: %v", err)
+			}
+		})
 	}
 }
 
@@ -1025,7 +1072,10 @@ func TestInteractionCompletion_WinsRaceWithStaleCancel(t *testing.T) {
 		h.interactionPth+"/"+start.uid,
 		http.NoBody,
 	)
+	deleteReq.Header.Set("Origin", "https://op.example.com")
+	deleteReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
 	deleteReq.AddCookie(start.interactionCk)
+	deleteReq.AddCookie(csrfCookie)
 	deleteResponse := httptest.NewRecorder()
 	deleteDone := make(chan struct{})
 	go func() {

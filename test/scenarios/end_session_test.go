@@ -265,6 +265,8 @@ func TestScenario_ES_005_RedirectViaClientID(t *testing.T) {
 		"client_id":                {esClientID},
 		"post_logout_redirect_uri": {esPostLogout},
 		"logout_csrf":              {csrfCookie.Value},
+		"logout_scope_fingerprint": {"all"},
+		"chooser_group_id":         {""},
 	}
 	target := tk.Server.URL + "/oidc/end_session"
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, target, strings.NewReader(form.Encode()))

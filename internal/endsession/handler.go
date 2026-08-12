@@ -38,8 +38,16 @@ var endSessionSingleValuedParams = []string{
 	"state",
 	"logout_hint",
 	"ui_locales",
+	"logout_scope",
+	"logout_scope_fingerprint",
+	"chooser_group_id",
 	confirmTokenField,
 }
+
+const (
+	logoutScopeAll     = "all"
+	logoutScopeCurrent = "current"
+)
 
 // maxQueryBytes caps the byte-length of [http.Request.URL.RawQuery] on
 // the GET branch of /end_session. RFC 9700 §2.4 recommends keeping
@@ -150,6 +158,11 @@ type Deps struct {
 	// [op.New].
 	AccessTokens store.AccessTokenRegistry
 
+	// RefreshTokens revokes every refresh-token chain belonging to each
+	// grant in the terminating subject snapshot. A nil value disables this
+	// branch, preserving deployments that do not issue refresh tokens.
+	RefreshTokens store.RefreshTokenStore
+
 	// OpaqueAccessTokens cascades the per-grant opaque-format access
 	// tokens alongside the JWT cascade. The two cascades run
 	// independently because they belong to different substores; failures
@@ -245,10 +258,13 @@ func resolveOrigins(deps Deps) *csrf.Allowlist {
 // see the package godoc for why). Adding the ignored fields back is
 // purely additive when the library grows a chooser UX surface.
 type request struct {
-	idTokenHint string
-	clientID    string
-	postLogout  string
-	state       string
+	idTokenHint      string
+	clientID         string
+	postLogout       string
+	state            string
+	logoutScope      string
+	scopeFingerprint string
+	chooserGroupID   string
 }
 
 // flow is the per-request snapshot every step after parsing shares:
@@ -270,8 +286,9 @@ type flow struct {
 // resolvable session", which every downstream step treats as "nothing
 // to terminate".
 type sessionFingerprint struct {
-	sessionID string
-	subject   string
+	sessionID      string
+	subject        string
+	chooserGroupID string
 }
 
 // serve is the request-scoped entry point. It validates the shape,
@@ -307,6 +324,9 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	f := flow{req: parseRequest(values)}
+	if !validateLogoutScope(w, values, f.req.logoutScope) {
+		return
+	}
 	if !validateRequestBounds(w, f.req) {
 		return
 	}
@@ -323,7 +343,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !enforceCSRFGate(w, r, deps, f) {
 		return
 	}
-	terminateSession(w, r, deps, f.session)
+	terminateSessionForScope(w, r, deps, f.session, f.req.logoutScope)
 	emitResponse(w, r, f.req)
 }
 
@@ -383,6 +403,14 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, deps Deps, f flow) 
 		return false
 	}
 	if !validateOriginOrReferer(r, deps.Origins) {
+		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
+		return false
+	}
+	if f.req.scopeFingerprint != f.req.logoutScope {
+		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
+		return false
+	}
+	if f.session.sessionID != "" && f.req.chooserGroupID != f.session.chooserGroupID {
 		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
 		return false
 	}
@@ -500,12 +528,30 @@ func readValues(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 // values would only invite a future regression that surfaces them
 // through a log line or audit record without sanitisation.
 func parseRequest(v url.Values) request {
-	return request{
-		idTokenHint: v.Get("id_token_hint"),
-		clientID:    v.Get("client_id"),
-		postLogout:  v.Get("post_logout_redirect_uri"),
-		state:       v.Get("state"),
+	scope := logoutScopeAll
+	if raw, ok := v["logout_scope"]; ok && len(raw) == 1 {
+		scope = raw[0]
 	}
+	return request{
+		idTokenHint:      v.Get("id_token_hint"),
+		clientID:         v.Get("client_id"),
+		postLogout:       v.Get("post_logout_redirect_uri"),
+		state:            v.Get("state"),
+		logoutScope:      scope,
+		scopeFingerprint: v.Get("logout_scope_fingerprint"),
+		chooserGroupID:   v.Get("chooser_group_id"),
+	}
+}
+
+func validateLogoutScope(w http.ResponseWriter, values url.Values, scope string) bool {
+	if _, present := values["logout_scope"]; !present {
+		return true
+	}
+	if scope == logoutScopeCurrent {
+		return true
+	}
+	writeLogoutError(w, http.StatusBadRequest, descInvalidLogoutScope)
+	return false
 }
 
 // verifyHint validates id_token_hint when the request carries one and
@@ -633,36 +679,139 @@ func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout 
 // the session that gets destroyed is exactly the one the gate
 // authorised.
 func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, sess sessionFingerprint) {
-	sid, subject := sess.sessionID, sess.subject
-	if sid != "" {
-		err := deps.Sessions.Logout(r.Context(), sid)
-		switch {
-		case err == nil:
-			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditSessionDestroyed), Level: audit.LevelInfo, Message: "session destroyed", ActorID: subject, SessionID: sid})
-		case errors.Is(err, store.ErrNotFound):
-			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditSessionAlreadyAbsent), Level: audit.LevelInfo, Message: "session was already absent", ActorID: subject, SessionID: sid})
-		default:
-			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditSessionDestroyFailed), Level: audit.LevelError, Message: "session logout persistence failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
+	terminateSessionForScope(w, r, deps, sess, logoutScopeAll)
+}
+
+// terminateSessionForScope performs the destructive part of /end_session.
+// The all-scope branch snapshots the chooser group before deleting anything;
+// the snapshot is the source of truth for both the revocation and BCL
+// cascades. The current-scope branch removes only the active row and lets the
+// session manager rebind the cookie to a surviving sibling.
+//
+//nolint:gocognit,cyclop // The destructive workflow keeps failure audit, revocation, and cookie ordering explicit.
+func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps, sess sessionFingerprint, scope string) {
+	ctx := r.Context()
+	if scope == "" {
+		scope = logoutScopeAll
+	}
+
+	if sess.sessionID == "" {
+		clearSessionCookie(w)
+		return
+	}
+
+	snapshot := make([]*store.Session, 0, 1)
+	var sessionErr error
+	var removal sessions.Removal
+	switch scope {
+	case logoutScopeCurrent:
+		// The session fingerprint was resolved immediately before the CSRF
+		// gate. Preserve it even when the row disappears during the gate so
+		// token and BCL cascades still describe the operation the user
+		// confirmed.
+		snapshot = append(snapshot, &store.Session{
+			ID:             sess.sessionID,
+			Subject:        sess.subject,
+			ChooserGroupID: sess.chooserGroupID,
+		})
+		if sess.chooserGroupID == "" {
+			sessionErr = deps.Sessions.Logout(ctx, sess.sessionID)
+		} else {
+			removal, sessionErr = deps.Sessions.Remove(ctx, sess.chooserGroupID, sess.sessionID, sess.sessionID)
+		}
+	default:
+		if sess.chooserGroupID == "" {
+			sessionErr = errors.New("endsession: active session has no chooser group")
+		} else {
+			var err error
+			snapshot, err = deps.Sessions.SnapshotGroup(ctx, sess.chooserGroupID)
+			if err != nil {
+				sessionErr = err
+				// Keep the active row in the cascade and make one best-effort
+				// deletion attempt. A failed snapshot cannot safely be claimed
+				// as group-wide success, but leaving the active row untouched is
+				// worse for the browser that explicitly confirmed logout.
+				snapshot = append(snapshot, &store.Session{
+					ID:             sess.sessionID,
+					Subject:        sess.subject,
+					ChooserGroupID: sess.chooserGroupID,
+				})
+				if logoutErr := deps.Sessions.Logout(ctx, sess.sessionID); logoutErr != nil && !errors.Is(logoutErr, store.ErrNotFound) {
+					sessionErr = errors.Join(sessionErr, logoutErr)
+				}
+			} else {
+				sessionErr = deps.Sessions.LogoutAllSnapshot(ctx, snapshot)
+			}
 		}
 	}
-	if subject != "" {
-		if err := revokeAccessTokens(r.Context(), deps, subject); err != nil {
-			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditLogoutTokenRevokeFailed), Level: audit.LevelError, Message: "logout token revocation failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
+	if scope != logoutScopeCurrent && len(snapshot) == 0 && sessionErr == nil {
+		// The active cookie was valid when the request entered the flow,
+		// but the chooser group was already empty by the time the
+		// destructive snapshot ran. Treat this as an idempotent logout
+		// outcome and retain the explicit audit distinction from a live
+		// row that failed to delete.
+		deps.audit().Emit(ctx, audit.Event{
+			Name:      string(auditevent.AuditSessionAlreadyAbsent),
+			Level:     audit.LevelInfo,
+			Message:   "session was already absent",
+			ActorID:   sess.subject,
+			SessionID: sess.sessionID,
+		})
+	}
+
+	for _, row := range snapshot {
+		if row == nil || row.ID == "" {
+			continue
 		}
-		if deps.Backchannel != nil {
-			// Back-channel fan-out is detached from the request. The
-			// session is already gone by this point, so the browser can
-			// be answered immediately while delivery continues under
-			// the coordinator's own deadline; a relying party that
-			// never answers therefore cannot hold the end-user's logout
-			// open. Every outcome — per-RP delivery, target-resolution
-			// faults, capacity shedding — is recorded as an audit event
-			// inside the coordinator, which is what replaces the return
-			// value the synchronous call used to hand back.
-			deps.Backchannel.NotifyDetached(r.Context(), backchannel.Notice{
-				Subject:   subject,
-				SessionID: sid,
+		if sessionErr == nil {
+			deps.audit().Emit(ctx, audit.Event{
+				Name:      string(auditevent.AuditSessionDestroyed),
+				Level:     audit.LevelInfo,
+				Message:   "session destroyed",
+				ActorID:   row.Subject,
+				SessionID: row.ID,
 			})
+		} else {
+			deps.audit().Emit(ctx, audit.Event{
+				Name:      string(auditevent.AuditSessionDestroyFailed),
+				Level:     audit.LevelError,
+				Message:   "session logout persistence failed",
+				ActorID:   row.Subject,
+				SessionID: row.ID,
+				Extras:    map[string]any{"error": sessionErr.Error()},
+			})
+		}
+	}
+
+	if err := revokeAccessTokensForSnapshot(ctx, deps, snapshot); err != nil {
+		deps.audit().Emit(ctx, audit.Event{
+			Name:    string(auditevent.AuditLogoutTokenRevokeFailed),
+			Level:   audit.LevelError,
+			Message: "logout token revocation failed",
+			Extras:  map[string]any{"error": err.Error()},
+		})
+	}
+	if deps.Backchannel != nil {
+		seen := make(map[string]struct{}, len(snapshot))
+		for _, row := range snapshot {
+			if row == nil || row.Subject == "" || row.ID == "" {
+				continue
+			}
+			key := row.ID
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			deps.Backchannel.NotifyDetached(ctx, backchannel.Notice{
+				Subject:   row.Subject,
+				SessionID: row.ID,
+			})
+		}
+	}
+
+	if scope == logoutScopeCurrent && sessionErr == nil && removal.Cookie != "" && len(removal.Remaining) > 0 {
+		if err := setSessionCookie(w, removal.Cookie); err == nil {
+			return
 		}
 	}
 	clearSessionCookie(w)
@@ -695,6 +844,8 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, sess se
 // has not opted into the registry surface. The caller keeps logout
 // user-visible-successful, but receives any store errors to emit an accurate
 // audit event.
+//
+//nolint:gocognit // The cascade deliberately records independent JWT, opaque, and refresh outcomes per grant.
 func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 	if deps.Grants == nil {
 		return nil
@@ -716,6 +867,34 @@ func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 			if _, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, g.ID); err != nil {
 				errs = append(errs, fmt.Errorf("grant %s opaque: %w", g.ID, err))
 			}
+		}
+		if deps.RefreshTokens != nil {
+			if err := deps.RefreshTokens.RevokeByGrant(ctx, g.ID); err != nil {
+				errs = append(errs, fmt.Errorf("grant %s refresh: %w", g.ID, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// revokeAccessTokensForSnapshot runs the token cascade once per distinct
+// subject represented by the pre-delete session snapshot. A chooser group
+// can contain several browser sessions for the same subject; repeating the
+// grant and refresh-token walks would be both wasteful and capable of turning
+// an otherwise harmless idempotent logout into a backend error storm.
+func revokeAccessTokensForSnapshot(ctx context.Context, deps Deps, snapshot []*store.Session) error {
+	seen := make(map[string]struct{}, len(snapshot))
+	var errs []error
+	for _, row := range snapshot {
+		if row == nil || row.Subject == "" {
+			continue
+		}
+		if _, ok := seen[row.Subject]; ok {
+			continue
+		}
+		seen[row.Subject] = struct{}{}
+		if err := revokeAccessTokens(ctx, deps, row.Subject); err != nil {
+			errs = append(errs, fmt.Errorf("subject %s: %w", row.Subject, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -774,7 +953,11 @@ func readSessionFingerprint(r *http.Request, deps Deps) sessionFingerprint {
 	if err != nil || active == nil || active.Session == nil {
 		return sessionFingerprint{}
 	}
-	return sessionFingerprint{sessionID: active.Session.ID, subject: active.Session.Subject}
+	return sessionFingerprint{
+		sessionID:      active.Session.ID,
+		subject:        active.Session.Subject,
+		chooserGroupID: active.Session.ChooserGroupID,
+	}
 }
 
 // clearSessionCookie writes a Set-Cookie header that retires the
@@ -786,6 +969,18 @@ func clearSessionCookie(w http.ResponseWriter) {
 	if c, err := cookie.Clear(cookie.SessionProfile); err == nil {
 		http.SetCookie(w, c)
 	}
+}
+
+// setSessionCookie writes a newly sealed session payload. It is used by the
+// current-session logout path when the manager has rebound the browser to a
+// surviving chooser sibling.
+func setSessionCookie(w http.ResponseWriter, value string) error {
+	c, err := cookie.Build(cookie.SessionProfile, value)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, c)
+	return nil
 }
 
 // emitResponse writes the success response: a 302 to the post-logout

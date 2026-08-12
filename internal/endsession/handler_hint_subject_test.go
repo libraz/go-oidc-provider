@@ -55,6 +55,7 @@ func pairwiseProjector(_ context.Context, raw string, client *store.Client) (str
 // empty cookie argument omits the corresponding header.
 func confirmPOST(t *testing.T, h *harness, form url.Values, sessionCookie, csrf string) *http.Response {
 	t.Helper()
+	addConfirmationGroup(t, h, form, sessionCookie)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,

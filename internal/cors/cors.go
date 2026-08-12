@@ -102,6 +102,20 @@ var allowedMethods = []string{
 // The wrapper never modifies the request body or methods; it only writes
 // response headers.
 func (s *Strict) Handler(next http.Handler) http.Handler {
+	return s.HandlerWithMethods(next, allowedMethods...)
+}
+
+// HandlerWithMethods wraps next with the strict credentialed-CORS profile and
+// an endpoint-specific method set. The default [Strict.Handler] deliberately
+// excludes DELETE; callers mounting an external SPA interaction cancellation
+// route must opt in on that exact route only. OPTIONS is always included so
+// the preflight itself remains usable.
+func (s *Strict) HandlerWithMethods(next http.Handler, methods ...string) http.Handler {
+	allowed := normalizeMethods(methods)
+	return s.handler(next, allowed)
+}
+
+func (s *Strict) handler(next http.Handler, allowedMethodsForEndpoint []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin == "" {
@@ -125,7 +139,7 @@ func (s *Strict) Handler(next http.Handler) http.Handler {
 		// into Access-Control-Allow-Origin — a value the OP never
 		// actually admitted.
 		if isPreflight(r) {
-			s.servePreflight(w, r, canon, allowed)
+			s.servePreflight(w, r, canon, allowed, allowedMethodsForEndpoint)
 			return
 		}
 		if allowed {
@@ -152,15 +166,22 @@ func (s *Strict) Handler(next http.Handler) http.Handler {
 // the configured emitter so SOC tooling sees the short-circuit even
 // when the embedder's outer middleware (rate-limit, audit) is mounted
 // inside the CORS wrapper and would otherwise miss the request.
-func (s *Strict) servePreflight(w http.ResponseWriter, r *http.Request, origin string, allowed bool) {
-	if !allowed {
+func (s *Strict) servePreflight(
+	w http.ResponseWriter,
+	r *http.Request,
+	origin string,
+	originAllowed bool,
+	allowedMethodsForEndpoint []string,
+) {
+	methodAllowed := containsMethod(allowedMethodsForEndpoint, r.Header.Get("Access-Control-Request-Method"))
+	if !originAllowed || !methodAllowed {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", origin)
 	h.Set("Access-Control-Allow-Credentials", "true")
-	h.Set("Access-Control-Allow-Methods", strings.Join(allowedMethods, ", "))
+	h.Set("Access-Control-Allow-Methods", strings.Join(allowedMethodsForEndpoint, ", "))
 	h.Set("Access-Control-Allow-Headers", intersectAllowedHeaders(r.Header.Get("Access-Control-Request-Headers")))
 	h.Set("Access-Control-Max-Age", strconv.Itoa(int(preflightMaxAge.Seconds())))
 	w.WriteHeader(http.StatusNoContent)
@@ -174,6 +195,39 @@ func (s *Strict) servePreflight(w http.ResponseWriter, r *http.Request, origin s
 			"path":           r.URL.Path,
 		},
 	})
+}
+
+func normalizeMethods(methods []string) []string {
+	if len(methods) == 0 {
+		methods = allowedMethods
+	}
+	out := make([]string, 0, len(methods)+1)
+	seen := make(map[string]struct{}, len(methods)+1)
+	for _, method := range methods {
+		method = strings.ToUpper(strings.TrimSpace(method))
+		if method == "" {
+			continue
+		}
+		if _, ok := seen[method]; ok {
+			continue
+		}
+		seen[method] = struct{}{}
+		out = append(out, method)
+	}
+	if _, ok := seen[http.MethodOptions]; !ok {
+		out = append(out, http.MethodOptions)
+	}
+	return out
+}
+
+func containsMethod(methods []string, method string) bool {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	for _, candidate := range methods {
+		if candidate == method {
+			return true
+		}
+	}
+	return false
 }
 
 // emitContext returns the request's context, falling back to a fresh

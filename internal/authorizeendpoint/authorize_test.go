@@ -486,6 +486,23 @@ func TestAuthorize_ExistingSessionTouchesIdleExpiry(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
+	var refreshed *http.Cookie
+	for _, candidate := range resp.Cookies() {
+		if candidate.Name == cookie.SessionProfile.Name && candidate.Value != "" {
+			refreshed = candidate
+			break
+		}
+	}
+	if refreshed == nil {
+		t.Fatalf("successful authorize did not reissue session cookie: %v", resp.Cookies())
+	}
+	if refreshed.Value == out.Cookie {
+		t.Fatal("successful authorize reused the old session cookie instead of re-sealing it")
+	}
+	wantMaxAge := int(sessions.IdleTTLDefault / time.Second)
+	if refreshed.MaxAge != wantMaxAge {
+		t.Errorf("refreshed session MaxAge=%d want %d", refreshed.MaxAge, wantMaxAge)
+	}
 	got, err := h.store.Sessions().Find(context.Background(), out.SessionID)
 	if err != nil {
 		t.Fatalf("Find session: %v", err)

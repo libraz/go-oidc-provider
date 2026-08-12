@@ -35,7 +35,7 @@ func prepareCompletionIntent(
 	if len(deps.CompletionKey) < 32 {
 		return nil, errors.New("authorizeendpoint: completion key unavailable")
 	}
-	active, err := resolveSession(r, deps)
+	active, err := resolveSessionWithoutTouch(r, deps)
 	if err != nil {
 		if !errors.Is(err, sessions.ErrCurrentSessionExpired) && !errors.Is(err, sessions.ErrCookieInvalid) {
 			return nil, fmt.Errorf("authorizeendpoint: resolve session for completion intent: %w", err)
@@ -189,6 +189,10 @@ func resumeInteractionCompletion(
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "authorization completion intent is invalid")
 		return
 	}
+	if err := refreshCompletionSession(w, r, deps, intent); err != nil {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not refresh session")
+		return
+	}
 	req := state.Library.ToRequest()
 	code, _, err := ensureDurableCompletion(r.Context(), deps, req, intent)
 	if err != nil {
@@ -215,7 +219,7 @@ func resumeInteractionCompletion(
 		return
 	}
 	if out.Cookie != "" {
-		if err := setSessionCookie(w, out.Cookie); err != nil {
+		if err := setSessionCookieWithMaxAge(w, out.Cookie, intent.Session.ExpiresAt, deps.now()); err != nil {
 			renderJSONError(w, http.StatusInternalServerError, errServerError, "could not establish session")
 			return
 		}
@@ -235,6 +239,46 @@ func resumeInteractionCompletion(
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
 	emitAuthorizeSuccess(w, r, deps, req, code.ID)
+}
+
+// refreshCompletionSession applies the sliding-idle policy to the session
+// that the persisted completion intent will leave current. Reuse emits the
+// TouchAndReissue cookie directly because Establish(Reuse) intentionally has
+// no cookie output. Chooser switching touches the selected sibling first and
+// then lets Establish(Switch) issue its payload, with the updated expiry
+// carried into the cookie Max-Age cap below. Issue/add-account/rotate create a
+// fresh record and therefore do not touch the pre-interaction session.
+func refreshCompletionSession(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	intent *authorize.CompletionIntent,
+) error {
+	switch sessions.EstablishMode(intent.Session.Mode) {
+	case sessions.EstablishReuse:
+		_, err := resolveSession(w, r, deps)
+		return err
+	case sessions.EstablishIssue, sessions.EstablishRotate, sessions.EstablishAddAccount:
+		return nil
+	case sessions.EstablishSwitch:
+		record := decodeCompletionSession(intent.Session).Record
+		active := &sessions.Active{
+			Payload: sessions.Payload{
+				ChooserGroupID:   record.ChooserGroupID,
+				CurrentSessionID: record.ID,
+			},
+			Session: &record,
+		}
+		touch, err := deps.Sessions.TouchAndReissue(r.Context(), active)
+		if err != nil {
+			return err
+		}
+		intent.Session.ExpiresAt = touch.ExpiresAt
+		intent.Session.UpdatedAt = touch.UpdatedAt
+		return nil
+	default:
+		return fmt.Errorf("authorizeendpoint: unsupported completion establishment mode %q", intent.Session.Mode)
+	}
 }
 
 func deleteCompletionAnchor(

@@ -56,10 +56,14 @@ func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, f flow) {
 	// htmlEscapeASCII; the static template carries no script tags and
 	// no caller-controlled URLs.
 	_, _ = w.Write([]byte(buildConfirmationBody(token, confirmationForm{
-		action:     formActionPath(r),
-		clientID:   confirmationClientID(f),
-		postLogout: f.req.postLogout,
-		state:      f.req.state,
+		action:           formActionPath(r),
+		clientID:         confirmationClientID(f),
+		postLogout:       f.req.postLogout,
+		state:            f.req.state,
+		logoutScope:      f.req.logoutScope,
+		scopeFingerprint: f.req.logoutScope,
+		chooserGroupID:   f.session.chooserGroupID,
+		scopeMessage:     confirmationScopeMessage(f.req.logoutScope),
 	})))
 }
 
@@ -67,10 +71,21 @@ func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, f flow) {
 // interpolates. The struct exists so the substitution order in
 // [buildConfirmationBody] is keyed by name rather than by position.
 type confirmationForm struct {
-	action     string
-	clientID   string
-	postLogout string
-	state      string
+	action           string
+	clientID         string
+	postLogout       string
+	state            string
+	logoutScope      string
+	scopeFingerprint string
+	chooserGroupID   string
+	scopeMessage     string
+}
+
+func confirmationScopeMessage(scope string) string {
+	if scope == logoutScopeCurrent {
+		return "You are about to sign out of this account. Continue?"
+	}
+	return "You are about to sign out of all browser accounts in this chooser group. Continue?"
 }
 
 // confirmationClientID returns the client_id the confirmation form
@@ -168,7 +183,12 @@ func clearConfirmCookie(w http.ResponseWriter) {
 //
 // {TOKEN} carries the opaque CSRF token; {CLIENT_ID}, {STATE} and
 // {POST_LOGOUT} carry the request parameters the POST round-trip has
-// to preserve so the eventual redirect still validates. {ACTION} is
+// to preserve so the eventual redirect still validates. {LOGOUT_SCOPE_FIELD}
+// carries the destructive-scope decision so a confirmation POST cannot
+// silently widen/narrow the GET operation. {LOGOUT_SCOPE_FINGERPRINT} binds
+// the default all-scope decision even when the optional logout_scope field
+// is absent. {CHOOSER_GROUP_ID} binds the confirmation fingerprint to the
+// chooser group seen on GET. {ACTION} is
 // the request path without query — the browser POSTs back to the same
 // endpoint.
 const confirmationBodyTemplate = `<!DOCTYPE html>
@@ -178,12 +198,15 @@ const confirmationBodyTemplate = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 </head><body>
 <h1>Confirm sign-out</h1>
-<p>You are about to sign out of this account. Continue?</p>
+<p>{SCOPE_MESSAGE}</p>
 <form method="post" action="{ACTION}">
 <input type="hidden" name="logout_csrf" value="{TOKEN}">
 <input type="hidden" name="client_id" value="{CLIENT_ID}">
 <input type="hidden" name="state" value="{STATE}">
 <input type="hidden" name="post_logout_redirect_uri" value="{POST_LOGOUT}">
+{LOGOUT_SCOPE_FIELD}
+<input type="hidden" name="logout_scope_fingerprint" value="{LOGOUT_SCOPE_FINGERPRINT}">
+<input type="hidden" name="chooser_group_id" value="{CHOOSER_GROUP_ID}">
 <button type="submit">Sign out</button>
 </form>
 </body></html>
@@ -203,6 +226,14 @@ func buildConfirmationBody(token string, form confirmationForm) string {
 	body = replaceFirst(body, "{CLIENT_ID}", htmlEscapeASCII(form.clientID))
 	body = replaceFirst(body, "{STATE}", htmlEscapeASCII(form.state))
 	body = replaceFirst(body, "{POST_LOGOUT}", htmlEscapeASCII(form.postLogout))
+	body = replaceFirst(body, "{SCOPE_MESSAGE}", htmlEscapeASCII(form.scopeMessage))
+	scopeField := ""
+	if form.logoutScope == logoutScopeCurrent {
+		scopeField = `<input type="hidden" name="logout_scope" value="` + htmlEscapeASCII(form.logoutScope) + `">`
+	}
+	body = replaceFirst(body, "{LOGOUT_SCOPE_FIELD}", scopeField)
+	body = replaceFirst(body, "{LOGOUT_SCOPE_FINGERPRINT}", htmlEscapeASCII(form.scopeFingerprint))
+	body = replaceFirst(body, "{CHOOSER_GROUP_ID}", htmlEscapeASCII(form.chooserGroupID))
 	return body
 }
 

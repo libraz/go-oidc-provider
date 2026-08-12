@@ -74,4 +74,9 @@ const (
 	// duplicate-parameter rejection installed at the token / PAR /
 	// CIBA endpoints so the input-shape policy is uniform.
 	descDuplicateParameter = "duplicate single-valued parameter"
+
+	// descInvalidLogoutScope is rendered when logout_scope is present but
+	// empty or not the sole supported explicit scope (current). Absence is
+	// the intentional group-wide default.
+	descInvalidLogoutScope = "invalid logout_scope"
 )

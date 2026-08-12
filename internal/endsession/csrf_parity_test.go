@@ -61,6 +61,7 @@ func confirmedLogoutPOST(t *testing.T, h *harness, host string, headers map[stri
 	}
 
 	form := url.Values{"logout_csrf": {token}}
+	addConfirmationGroup(t, h, form, sessionCookie)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
@@ -245,6 +246,7 @@ func TestCSRFGateParity_DoubleSubmitHalves(t *testing.T) {
 			if formValue != "" {
 				form.Set("logout_csrf", formValue)
 			}
+			addConfirmationGroup(t, h, form, sessionCookie)
 			r := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,

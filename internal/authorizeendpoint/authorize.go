@@ -313,7 +313,7 @@ func dispatchAuthorize(
 	client *store.Client,
 ) {
 	now := deps.now()
-	active, sessErr := resolveSession(r, deps)
+	active, sessErr := resolveSession(w, r, deps)
 	if sessErr != nil && !errors.Is(sessErr, sessions.ErrCookieInvalid) && !errors.Is(sessErr, sessions.ErrCurrentSessionExpired) {
 		// Underlying store fault — surface a server_error redirect so the
 		// RP knows the failure was on the OP's side. The redirect_uri is
@@ -512,7 +512,34 @@ type authorizeHint struct {
 // resolveSession reads the __Host-oidc_session cookie and asks the manager
 // to resolve it. A missing cookie yields (nil, nil). Cookie failures are
 // returned to the caller so it can clear the cookie when appropriate.
-func resolveSession(r *http.Request, deps resolved) (*sessions.Active, error) {
+func resolveSession(w http.ResponseWriter, r *http.Request, deps resolved) (*sessions.Active, error) {
+	active, err := resolveSessionWithoutTouch(r, deps)
+	if err != nil || active == nil {
+		return active, err
+	}
+	touch, err := deps.Sessions.TouchAndReissue(r.Context(), active)
+	if err != nil {
+		return nil, err
+	}
+	// TouchAndReissue refreshes the store row after Resolve returned its
+	// snapshot. Keep the in-memory view aligned for decision paths that
+	// carry Active into a later establishment plan.
+	now := deps.now().UTC()
+	active.Session.ExpiresAt = touch.ExpiresAt
+	active.Session.UpdatedAt = touch.UpdatedAt
+	if w != nil {
+		if err := setSessionCookieWithMaxAge(w, touch.Cookie, touch.ExpiresAt, now); err != nil {
+			return nil, err
+		}
+	}
+	return active, nil
+}
+
+// resolveSessionWithoutTouch validates and loads the browser session without
+// extending its idle lifetime. Completion first needs a stable snapshot to
+// plan reuse, rotation, or chooser switching; the terminal path then touches
+// only the session that will remain current and emits the matching cookie.
+func resolveSessionWithoutTouch(r *http.Request, deps resolved) (*sessions.Active, error) {
 	c, err := r.Cookie(cookie.SessionProfile.Name)
 	if err != nil {
 		// http.ErrNoCookie is the only documented error from r.Cookie;
@@ -525,9 +552,6 @@ func resolveSession(r *http.Request, deps resolved) (*sessions.Active, error) {
 	}
 	active, err := deps.Sessions.Resolve(r.Context(), c.Value)
 	if err != nil {
-		return nil, err
-	}
-	if err := deps.Sessions.Touch(r.Context(), active.Session.ID); err != nil {
 		return nil, err
 	}
 	return active, nil

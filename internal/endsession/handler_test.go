@@ -146,14 +146,15 @@ func newHarness(t *testing.T) *harness {
 
 	auditRecorder := &endSessionAuditRecorder{}
 	deps := endsession.Deps{
-		Issuer:       "https://op.example.com",
-		Clients:      st.Clients(),
-		Sessions:     mgr,
-		Keys:         keySet,
-		Clock:        clock,
-		Grants:       st.Grants(),
-		AccessTokens: st.AccessTokens(),
-		Audit:        auditRecorder,
+		Issuer:        "https://op.example.com",
+		Clients:       st.Clients(),
+		Sessions:      mgr,
+		Keys:          keySet,
+		Clock:         clock,
+		Grants:        st.Grants(),
+		AccessTokens:  st.AccessTokens(),
+		RefreshTokens: st.RefreshTokens(),
+		Audit:         auditRecorder,
 	}
 	mux := http.NewServeMux()
 	const endSessionPath = "/oidc/end_session"
@@ -378,6 +379,7 @@ func TestHandler_POSTLogoutNoHintCSRF(t *testing.T) {
 	}
 
 	form := url.Values{"logout_csrf": {tok}}
+	addConfirmationGroup(t, h, form, cookieValue)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
@@ -468,6 +470,7 @@ func TestHandler_POSTLogoutNoHintForeignOrigin(t *testing.T) {
 	}
 
 	form := url.Values{"logout_csrf": {tok}}
+	addConfirmationGroup(t, h, form, cookieValue)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
@@ -501,6 +504,7 @@ func TestHandler_POSTLogoutNoHintNullOriginRejected(t *testing.T) {
 	}
 
 	form := url.Values{"logout_csrf": {tok}}
+	addConfirmationGroup(t, h, form, cookieValue)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
@@ -537,6 +541,7 @@ func TestHandler_POSTLogoutNoHintMissingOriginAndReferer(t *testing.T) {
 	}
 
 	form := url.Values{"logout_csrf": {tok}}
+	addConfirmationGroup(t, h, form, cookieValue)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
@@ -972,6 +977,7 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 	}
 
 	form := url.Values{"logout_csrf": {tok}}
+	addConfirmationGroup(t, h, form, cookieValue)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
@@ -1053,6 +1059,7 @@ func TestHandler_RevokesAccessTokensOnLogout(t *testing.T) {
 		t.Fatal("interstitial GET did not set the confirmation cookie")
 	}
 	form := url.Values{"logout_csrf": {tok}}
+	addConfirmationGroup(t, h, form, cookieValue)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
@@ -1138,6 +1145,7 @@ func TestHandler_AccessTokenCascadeNoCascadeWithoutDeps(t *testing.T) {
 		t.Fatal("interstitial GET did not set the confirmation cookie")
 	}
 	form := url.Values{"logout_csrf": {tok}}
+	addConfirmationGroup(t, h, form, cookieValue)
 	r := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
@@ -1277,6 +1285,8 @@ func TestHandler_DuplicateSingleValuedParameter(t *testing.T) {
 		{name: "state", key: "state", v1: "s1", v2: "s2"},
 		{name: "logout_hint", key: "logout_hint", v1: "h1", v2: "h2"},
 		{name: "ui_locales", key: "ui_locales", v1: "en", v2: "ja"},
+		{name: "logout_scope", key: "logout_scope", v1: "current", v2: "current"},
+		{name: "chooser_group_id", key: "chooser_group_id", v1: "group-a", v2: "group-b"},
 	}
 
 	for _, tc := range cases {

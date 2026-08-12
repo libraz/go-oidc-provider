@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,32 @@ import (
 // running provider's session cookie codec round-trips with.
 const chooserCookieKey = "0123456789abcdef0123456789abcdef"
 
+type monotonicChooserClock struct {
+	mu   sync.Mutex
+	now  time.Time
+	step time.Duration
+}
+
+func (c *monotonicChooserClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now
+	c.now = c.now.Add(c.step)
+	return now
+}
+
+func (c *monotonicChooserClock) Current() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *monotonicChooserClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
 // TestEndToEnd_ChooserSelectAccount_HappyPath drives the chooser flow
 // end-to-end. Two accounts are seeded into the same chooser group via a
 // parallel [sessions.Manager]; /authorize?prompt=select_account routes
@@ -36,7 +63,13 @@ const chooserCookieKey = "0123456789abcdef0123456789abcdef"
 // [sessions.Manager.Switch]) and the picked SessionID.
 func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	t.Parallel()
-	clock := fakeClock{now: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)}
+	// Every clock read advances slightly, like separate system-clock reads
+	// during one request. The terminal switch must carry the manager's exact
+	// persisted UpdatedAt into Establish rather than an earlier stale read.
+	clock := &monotonicChooserClock{
+		now:  time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC),
+		step: time.Microsecond,
+	}
 	cookieKey := []byte(chooserCookieKey)
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
@@ -58,13 +91,13 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 
 	mgr, sessCodec := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
-	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.now})
+	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.Current()})
 	if err != nil {
 		t.Fatalf("Issue user-A: %v", err)
 	}
 	sessB, err := mgr.AddAccount(ctx, sessA.ChooserGroupID, sessions.Login{
 		Subject:  "user-B",
-		AuthTime: clock.now,
+		AuthTime: clock.Current(),
 	})
 	if err != nil {
 		t.Fatalf("AddAccount user-B: %v", err)
@@ -177,6 +210,12 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	}
 	defer postResp.Body.Close()
 
+	// Advance the fake clock while the consent step is in flight. The
+	// selected sibling must be touched at terminal completion, and the
+	// final cookie Max-Age must match that refreshed store expiry rather
+	// than the original fixed issuance window.
+	clock.Advance(2 * time.Minute)
+
 	// completeConsentIfPrompted walks the consent screen with every
 	// requested scope approved. The picked subject (user-B) has no
 	// cached grant for this client, so the chain pauses at consent.
@@ -212,6 +251,26 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	if payload.CurrentSessionID != sessB.SessionID {
 		t.Errorf("CurrentSessionID = %q, want %q (picked account)",
 			payload.CurrentSessionID, sessB.SessionID)
+	}
+	selected, err := tk.Store.Sessions().Find(ctx, sessB.SessionID)
+	if err != nil {
+		t.Fatalf("find selected session after completion: %v", err)
+	}
+	now := clock.Current()
+	ceilSeconds := func(d time.Duration) int {
+		seconds := d / time.Second
+		if d%time.Second != 0 {
+			seconds++
+		}
+		return int(seconds)
+	}
+	wantMaxAge := ceilSeconds(selected.ExpiresAt.Sub(now))
+	if sessionCookie.MaxAge != wantMaxAge {
+		t.Errorf("final session cookie MaxAge=%d want store remaining lifetime %d", sessionCookie.MaxAge, wantMaxAge)
+	}
+	absoluteRemaining := ceilSeconds(selected.CreatedAt.Add(sessions.AbsoluteTTLDefault).Sub(now))
+	if sessionCookie.MaxAge > absoluteRemaining {
+		t.Errorf("final session cookie MaxAge=%d exceeds absolute cap remaining %d", sessionCookie.MaxAge, absoluteRemaining)
 	}
 
 	// Token exchange MUST mint an id_token whose sub is user-B.
@@ -873,7 +932,7 @@ func TestEndToEnd_SelectAccount_NoSession_FallsBackToLogin(t *testing.T) {
 // shares the in-memory [store.SessionStore] with the running provider
 // so seeded accounts are visible to the chooser interaction at request
 // time.
-func newChooserSessionsManager(tb testing.TB, sessStore store.SessionStore, key []byte, clock fakeClock) (*sessions.Manager, *sessions.Codec) {
+func newChooserSessionsManager(tb testing.TB, sessStore store.SessionStore, key []byte, clock op.Clock) (*sessions.Manager, *sessions.Codec) {
 	tb.Helper()
 	cookieCodec, err := cookie.NewCodec(key)
 	if err != nil {
@@ -886,7 +945,7 @@ func newChooserSessionsManager(tb testing.TB, sessStore store.SessionStore, key 
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: sessCodec,
 		Store: sessStore,
-		Clock: func() time.Time { return clock.now },
+		Clock: clock.Now,
 	})
 	if err != nil {
 		tb.Fatalf("sessions.NewManager: %v", err)
