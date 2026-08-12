@@ -48,6 +48,7 @@ type queries struct {
 	refreshRevokeByClient      string
 	refreshRetrySave           string
 	refreshRetryFind           string
+	refreshGC                  string
 	grantDeleteByClient        string
 
 	// access tokens
@@ -391,6 +392,28 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		),
 		refreshRetryFind: d.rebind(
 			"SELECT retry_response FROM " + n.refreshes + " WHERE id = ? AND retry_response IS NOT NULL",
+		),
+		// refreshGC deletes expired rotation records, but only from
+		// chains that are wholly dead. A row's own expiry is not
+		// sufficient: replay revocation (RFC 9700 §2.2.2) resolves the
+		// chain root before cascading, and the root is the oldest token
+		// in the chain and therefore the first to expire. Deleting it
+		// while a descendant is still redeemable would leave every later
+		// replay on that chain unresolvable — detection would be lost
+		// exactly when it is needed. The retry-response grace window
+		// reads the consumed predecessor by id and has the same
+		// requirement.
+		//
+		// Liveness is decided per grant rather than per chain. The table
+		// carries no chain root, but every token in a chain inherits the
+		// grant it was issued under, and grant_id is indexed. Grouping
+		// that way retains a dead chain for as long as a sibling chain
+		// on the same grant lives, which over-retains and never
+		// under-retains.
+		refreshGC: d.rebind(
+			"DELETE FROM " + n.refreshes + " WHERE expires_at > 0 AND expires_at < ?" +
+				" AND grant_id NOT IN (SELECT grant_id FROM (SELECT grant_id FROM " + n.refreshes +
+				" WHERE expires_at = 0 OR expires_at >= ?) AS live)",
 		),
 		grantDeleteByClient: d.rebind(
 			"DELETE FROM " + n.grants + " WHERE client_id = ?",

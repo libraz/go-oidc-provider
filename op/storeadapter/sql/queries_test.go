@@ -245,6 +245,7 @@ func TestBuildQueries_GCQueriesPreserveZeroExpiry(t *testing.T) {
 		"parGC":               q.parGC,
 		"interactionGC":       q.interactionGC,
 		"sessionGC":           q.sessionGC,
+		"refreshGC":           q.refreshGC,
 	} {
 		if !strings.Contains(query, "expires_at > 0 AND expires_at <") {
 			t.Errorf("%s query must preserve zero-expiry rows, got %q", name, query)

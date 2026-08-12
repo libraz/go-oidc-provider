@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_parent ON oidc_refresh_tokens(parent_id);
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_grant ON oidc_refresh_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_expires ON oidc_refresh_tokens(expires_at);
 
 CREATE TABLE IF NOT EXISTS oidc_access_tokens (
     jti TEXT PRIMARY KEY,

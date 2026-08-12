@@ -117,7 +117,8 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     created_at BIGINT NOT NULL,
     retry_response LONGBLOB NULL,
     INDEX idx_oidc_refresh_tokens_parent (parent_id),
-    INDEX idx_oidc_refresh_tokens_grant (grant_id)
+    INDEX idx_oidc_refresh_tokens_grant (grant_id),
+    INDEX idx_oidc_refresh_tokens_expires (expires_at)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_access_tokens (
