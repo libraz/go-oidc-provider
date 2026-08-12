@@ -37,9 +37,8 @@
 //  1. Open http://127.0.0.1:8080/.well-known/openid-configuration
 //     to confirm the OP is serving.
 //  2. Drive /authorize with client_id=first-party-app and watch
-//     the audit log: only AuditLoginSuccess (the password step) fires;
-//     no consent prompt is rendered. AuditConsentGrantedFirstParty
-//     fires alongside the code mint.
+//     the audit log: no consent prompt is rendered, and
+//     AuditConsentGrantedFirstParty fires alongside the code mint.
 //  3. Drive /authorize with client_id=third-party-integration: the
 //     consent screen renders as usual.
 //

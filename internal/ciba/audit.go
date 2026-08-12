@@ -36,17 +36,24 @@ const (
 	// client_id, profile, reason="unbound_request".
 	AuditAuthorizationUnboundRejected = string(auditevent.AuditCIBAAuthorizationUnboundRejected)
 
-	// AuditAuthDeviceApproved is emitted when the embedder's
-	// authentication device transitions a Pending record to
-	// Approved. Extras carry: client_id, subject, scope, resource.
+	// AuditAuthDeviceApproved and AuditAuthDeviceDenied name the
+	// authentication device's own decision. The OP does not emit
+	// them: the approval and denial transitions are made by the
+	// embedder calling CIBARequestStore.Approve / Deny directly, and
+	// no library code path sits between that call and the store, so
+	// there is nowhere for the OP to observe the decision. The names
+	// exist so a deployment that raises them from its authentication
+	// device lands in the same vocabulary as the events the OP does
+	// raise for the same request.
+	//
+	// Suggested extras, for consistency with the OP-emitted CIBA
+	// events: client_id, subject, scope and resource on approval;
+	// client_id and reason on denial. A denial the OP makes on its
+	// own — the poll-abuse lockout — carries
+	// [AuditPollAbuseLockout] instead, so the two are separable in
+	// the log.
 	AuditAuthDeviceApproved = string(auditevent.AuditCIBAAuthDeviceApproved)
-
-	// AuditAuthDeviceDenied is emitted when the embedder's
-	// authentication device transitions a Pending record to Denied.
-	// Extras carry: client_id, reason ("user_denied",
-	// "auth_device_timeout", "poll_abuse", or an embedder-supplied
-	// value).
-	AuditAuthDeviceDenied = string(auditevent.AuditCIBAAuthDeviceDenied)
+	AuditAuthDeviceDenied   = string(auditevent.AuditCIBAAuthDeviceDenied)
 
 	// AuditPollAbuseLockout is emitted when the poll-violation
 	// counter reaches [MaxPollViolations] and the token endpoint

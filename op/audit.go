@@ -68,14 +68,40 @@ const (
 	AuditAccountFederationUnlinked  = AuditEvent(auditevent.AuditAccountFederationUnlinked)
 )
 
-// Login / MFA / step-up events. Fire from the authenticator chain
-// after each factor resolves.
+// Login / MFA events. One fires from the authenticator chain each
+// time a factor resolves: the login.* pair for the factor that first
+// identifies the user, the mfa.* pair for every factor after it. The
+// event carries the subject as ActorID on the failure path as well as
+// the success path — the [LoginAttemptObserver] feed withholds it
+// there so a policy hook cannot be turned into an enumeration oracle,
+// but this stream reaches the deployment's own audit sink and nothing
+// on the wire, and a failed-login record without the account being
+// guessed at answers no question worth asking.
 const (
-	AuditLoginSuccess   = AuditEvent(auditevent.AuditLoginSuccess)
-	AuditLoginFailed    = AuditEvent(auditevent.AuditLoginFailed)
+	AuditLoginSuccess = AuditEvent(auditevent.AuditLoginSuccess)
+	AuditLoginFailed  = AuditEvent(auditevent.AuditLoginFailed)
+	AuditMFASuccess   = AuditEvent(auditevent.AuditMFASuccess)
+	AuditMFAFailed    = AuditEvent(auditevent.AuditMFAFailed)
+
+	// AuditMFARequired, AuditStepUpRequired and AuditStepUpSuccess are
+	// reserved vocabulary: the OP defines the names so a deployment's
+	// audit pipeline can carry them consistently, but does not emit
+	// them itself.
+	//
+	// Step-up is the embedder's decision. [StepUpChallenge] builds the
+	// RFC 9470 WWW-Authenticate value, and the resource server that
+	// sends it is the only party that knows which request needed a
+	// stronger authentication and whether the one that came back
+	// satisfied it; the OP sees an ordinary authorization request.
+	//
+	// AuditMFARequired has no once-per-attempt point to fire from. The
+	// chain does not decide "MFA is now required" separately from
+	// prompting for the next factor, and a prompt is re-emitted on
+	// every retry of that factor, so emitting here would count a user
+	// mistyping one code as several demands for a second factor.
+	// [AuditMFASuccess] and [AuditMFAFailed] carry the same
+	// information without that ambiguity.
 	AuditMFARequired    = AuditEvent(auditevent.AuditMFARequired)
-	AuditMFASuccess     = AuditEvent(auditevent.AuditMFASuccess)
-	AuditMFAFailed      = AuditEvent(auditevent.AuditMFAFailed)
 	AuditStepUpRequired = AuditEvent(auditevent.AuditStepUpRequired)
 	AuditStepUpSuccess  = AuditEvent(auditevent.AuditStepUpSuccess)
 
@@ -90,17 +116,31 @@ const (
 	AuditLockoutStalled = AuditEvent(auditevent.AuditLockoutStalled)
 )
 
-// Consent events. AuditConsentSkippedExisting fires when the existing
-// grant already covers the requested scope set; AuditConsentGrantedFirstParty
-// fires when first-party auto-consent applies; AuditConsentGrantedDelta
-// fires when delta-consent forces a re-prompt for a newly requested
-// sensitive scope.
+// Consent events. AuditConsentGranted fires when the user approves a
+// consent prompt; AuditConsentGrantedFirstParty fires instead when
+// first-party auto-consent applies, so a grant recorded without the
+// user seeing a screen is distinguishable in the log from one they
+// approved.
 const (
 	AuditConsentGranted           = AuditEvent(auditevent.AuditConsentGranted)
 	AuditConsentGrantedFirstParty = AuditEvent(auditevent.AuditConsentGrantedFirstParty)
-	AuditConsentGrantedDelta      = AuditEvent(auditevent.AuditConsentGrantedDelta)
-	AuditConsentSkippedExisting   = AuditEvent(auditevent.AuditConsentSkippedExisting)
-	AuditConsentRevoked           = AuditEvent(auditevent.AuditConsentRevoked)
+
+	// AuditConsentGrantedDelta, AuditConsentSkippedExisting and
+	// AuditConsentRevoked are catalogued vocabulary the OP does not
+	// currently emit. They name real distinctions — a re-prompt forced
+	// by a newly requested sensitive scope, a prompt skipped because
+	// the stored grant already covered the request, and a consent
+	// withdrawal — and a deployment is free to carry them from its own
+	// account-management plane, but no code path in the library raises
+	// one today. Do not build an alert that assumes their absence
+	// means the situation did not occur.
+	//
+	// A withdrawal driven through the OAuth 2.0 Grant Management
+	// endpoint does raise [AuditGrantManagementRevoked], which is the
+	// signal to use for the revocation case.
+	AuditConsentGrantedDelta    = AuditEvent(auditevent.AuditConsentGrantedDelta)
+	AuditConsentSkippedExisting = AuditEvent(auditevent.AuditConsentSkippedExisting)
+	AuditConsentRevoked         = AuditEvent(auditevent.AuditConsentRevoked)
 )
 
 // Grant-management events. Fire from the OAuth 2.0 Grant Management
@@ -144,12 +184,18 @@ const (
 	AuditSessionDestroyed               = AuditEvent(auditevent.AuditSessionDestroyed)
 	AuditSessionAlreadyAbsent           = AuditEvent(auditevent.AuditSessionAlreadyAbsent)
 	AuditSessionDestroyFailed           = AuditEvent(auditevent.AuditSessionDestroyFailed)
-	AuditLogoutRPInitiated              = AuditEvent(auditevent.AuditLogoutRPInitiated)
 	AuditLogoutTokenRevokeFailed        = AuditEvent(auditevent.AuditLogoutTokenRevokeFailed)
 	AuditLogoutBackChannelDelivered     = AuditEvent(auditevent.AuditLogoutBackChannelDelivered)
 	AuditLogoutBackChannelFailed        = AuditEvent(auditevent.AuditLogoutBackChannelFailed)
 	AuditLogoutBackChannelResolveFailed = AuditEvent(auditevent.AuditLogoutBackChannelResolveFailed)
 	AuditLogoutBackChannelOverflow      = AuditEvent(auditevent.AuditLogoutBackChannelOverflow)
+
+	// AuditLogoutRPInitiated is catalogued vocabulary the OP does not
+	// currently emit. /end_session records what it did to the session
+	// — [AuditSessionDestroyed], [AuditSessionAlreadyAbsent] or
+	// [AuditSessionDestroyFailed] — rather than the fact that an RP
+	// asked; those three are the signals to correlate on.
+	AuditLogoutRPInitiated = AuditEvent(auditevent.AuditLogoutRPInitiated)
 
 	// AuditBCLNoSessionsForSubject fires when /end_session or
 	// Provider.Logout names a session_id-bearing subject but the
@@ -180,8 +226,22 @@ const (
 	// audit pipelines can ingest embedder-side throttle decisions
 	// under a vocabulary consistent with the rest of the OIDC
 	// audit catalog.
-	AuditRateLimitExceeded   = AuditEvent(auditevent.AuditRateLimitExceeded)
-	AuditRateLimitBypassed   = AuditEvent(auditevent.AuditRateLimitBypassed)
+	AuditRateLimitExceeded = AuditEvent(auditevent.AuditRateLimitExceeded)
+	AuditRateLimitBypassed = AuditEvent(auditevent.AuditRateLimitBypassed)
+
+	// AuditPKCEViolation, AuditRedirectURIMismatch and
+	// AuditAlgLegacyUsed are catalogued vocabulary the OP does not
+	// currently emit. Each names a rejection the OP does perform — a
+	// code exchanged with the wrong verifier, a redirect_uri that is
+	// not the registered one, a request selecting a legacy algorithm —
+	// but the rejection is reported to the client on the wire and is
+	// not raised on the audit stream. An absent event here therefore
+	// means "not instrumented", not "did not happen"; the request log
+	// is where those rejections are currently visible.
+	//
+	// These three sit in this block because they are unemitted, not
+	// because they are the embedder's to raise like the two above.
+	// The distinction matters if you are deciding what to alert on.
 	AuditPKCEViolation       = AuditEvent(auditevent.AuditPKCEViolation)
 	AuditRedirectURIMismatch = AuditEvent(auditevent.AuditRedirectURIMismatch)
 	AuditAlgLegacyUsed       = AuditEvent(auditevent.AuditAlgLegacyUsed)
