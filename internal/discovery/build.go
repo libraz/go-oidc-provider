@@ -44,9 +44,18 @@ type Input struct {
 	GrantsSupported []string
 
 	// AuthMethodsSupported lists the token-endpoint client
-	// authentication methods. Empty means the OP advertises a default
-	// set (client_secret_basic, client_secret_post).
+	// authentication methods. Empty means the OP advertises the default
+	// set (client_secret_basic, client_secret_post, private_key_jwt,
+	// none). The token endpoint accepts public clients registered with
+	// token_endpoint_auth_method=none; endpoint-specific mirrors filter
+	// that method where it is not allowed.
 	AuthMethodsSupported []string
+
+	// DynamicRegistrationOpen reports whether RFC 7591 POST /register
+	// accepts an unauthenticated request. Open registration advertises the
+	// "none" method in addition to the IAT method; closed registration does
+	// not claim an unauthenticated path.
+	DynamicRegistrationOpen bool
 
 	// ProfileAllowedAuthMethods, when non-empty, filters the advertised
 	// token_endpoint_auth_methods_supported (and the mirrored
@@ -163,7 +172,8 @@ type Metadata struct {
 	// they appear on the wire (e.g. "token_endpoint",
 	// "introspection_endpoint", "revocation_endpoint",
 	// "userinfo_endpoint", "registration_endpoint",
-	// "device_authorization_endpoint", "pushed_authorization_request_endpoint");
+	// "device_authorization_endpoint", "pushed_authorization_request_endpoint",
+	// or "backchannel_authentication_endpoint");
 	// the values are the alternative URLs that require client-
 	// certificate authentication. Nil and empty are equivalent (the
 	// field is omitted). The discovery builder ignores this map
@@ -249,6 +259,55 @@ type Features struct {
 	// being non-empty, plus their own protocol feature where one
 	// applies (JARM, Introspect).
 	EncryptionInbound bool
+}
+
+// ValidateMTLSEndpointAliases verifies that every documented mTLS alias names
+// an endpoint enabled by the resolved discovery input. URL shape and key-name
+// validation happen at the public option boundary; this check belongs beside
+// the final endpoint/feature wiring because option order cannot otherwise tell
+// whether a surface is mounted. The op layer should call it during
+// construction and surface the returned error as a configuration error.
+func ValidateMTLSEndpointAliases(meta Metadata, in Input) error {
+	if len(meta.MTLSEndpointAliases) == 0 {
+		return nil
+	}
+	if !in.Features.MTLS {
+		return errors.New("discovery: mtls endpoint aliases require the MTLS feature")
+	}
+	for key := range meta.MTLSEndpointAliases {
+		if !mtlsAliasEndpointEnabled(key, in) {
+			return fmt.Errorf("discovery: mtls endpoint alias %q names an endpoint that is not enabled or mounted", key)
+		}
+	}
+	return nil
+}
+
+//nolint:cyclop // Each supported alias has an explicit endpoint and feature gate.
+func mtlsAliasEndpointEnabled(key string, in Input) bool {
+	switch key {
+	case "token_endpoint":
+		return in.Endpoints.Token != ""
+	case "introspection_endpoint":
+		return in.Features.Introspect && in.Endpoints.Introspect != ""
+	case "revocation_endpoint":
+		return in.Features.Revoke && in.Endpoints.Revoke != ""
+	case "userinfo_endpoint":
+		// /userinfo is mounted independently of the browser authorization
+		// flow (for example, a client-credentials-only OP can still expose
+		// it for bearer access tokens), so do not couple this alias to
+		// AuthorizeEndpoint.
+		return in.Endpoints.UserInfo != ""
+	case "registration_endpoint":
+		return in.Features.DynamicRegistration && in.Endpoints.Register != ""
+	case "device_authorization_endpoint":
+		return in.Features.DeviceCodeGrant && in.Endpoints.DeviceAuthorization != ""
+	case "pushed_authorization_request_endpoint":
+		return in.Features.PAR && in.Endpoints.PAR != ""
+	case "backchannel_authentication_endpoint":
+		return in.Features.CIBAGrant && in.Endpoints.Backchannel != ""
+	default:
+		return false
+	}
 }
 
 // ValidateIssuer enforces the OIDC Discovery 1.0 §3 / FAPI 2.0 §5.4
@@ -697,6 +756,9 @@ func applyDynamicRegistration(in Input, doc *Document) {
 	}
 	doc.RegistrationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Register)
 	doc.RegistrationEndpointAuthMethodsSupported = []string{"initial_access_token"}
+	if in.DynamicRegistrationOpen {
+		doc.RegistrationEndpointAuthMethodsSupported = append(doc.RegistrationEndpointAuthMethodsSupported, "none")
+	}
 }
 
 // applyJARMFeature publishes the four *.jwt response modes plus the
@@ -723,8 +785,9 @@ func applyJARMFeature(in Input, doc *Document) {
 // the lists in lock-step.
 func applyEndpointAuthMirrors(in Input, doc *Document) {
 	if in.Features.Introspect {
-		doc.IntrospectionEndpointAuthMethodsSupported = append([]string(nil),
-			doc.TokenEndpointAuthMethodsSupported...)
+		doc.IntrospectionEndpointAuthMethodsSupported = confidentialAuthMethods(
+			doc.TokenEndpointAuthMethodsSupported,
+		)
 		// RFC 9701 §6: advertise the alg values the OP signs JWT-
 		// formatted introspection responses with. The list mirrors
 		// the ID-token / JARM posture (ES256 only) because the
@@ -740,6 +803,17 @@ func applyEndpointAuthMirrors(in Input, doc *Document) {
 			"RS256", "PS256", "ES256", "EdDSA",
 		}
 	}
+}
+
+func confidentialAuthMethods(methods []string) []string {
+	out := make([]string, 0, len(methods))
+	for _, method := range methods {
+		if method == "none" {
+			continue
+		}
+		out = append(out, method)
+	}
+	return out
 }
 
 // applyClaimsSupported copies the embedder-supplied claims_supported
@@ -869,13 +943,16 @@ func join(issuer, mountPrefix, endpoint string) string {
 
 // defaultAuthMethods returns the auth-method advertisement, falling back
 // to the v1.0 baseline when the caller does not supply an override. The
-// baseline lists the symmetric secret methods plus private_key_jwt
-// (OIDC Core §9 / RFC 7523 §3) — the OP wiring layer always installs
-// the internal/clientauth.PrivateKeyJWTVerifier so a client whose
-// metadata names "private_key_jwt" can authenticate out of the box.
+// baseline lists the symmetric secret methods, private_key_jwt, and the
+// public-client "none" method (OIDC Core §9 / RFC 7523 §3) — the OP
+// wiring layer always installs the internal/clientauth.PrivateKeyJWTVerifier
+// so a client whose metadata names "private_key_jwt" can authenticate out of
+// the box. The token endpoint accepts "none" for clients registered as
+// public; endpoint-specific mirrors remove it where public callers are not
+// permitted.
 func defaultAuthMethods(in []string) []string {
 	if len(in) == 0 {
-		return []string{"client_secret_basic", "client_secret_post", "private_key_jwt"}
+		return []string{"client_secret_basic", "client_secret_post", "private_key_jwt", "none"}
 	}
 	out := make([]string, len(in))
 	copy(out, in)

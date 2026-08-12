@@ -2323,7 +2323,7 @@ func caDiscoveryStrings(doc map[string]any, key string) (out []string, ok bool) 
 // TestScenario_CA_DISC_01_OnlyEnabledMethodsAdvertised verifies that the
 // default discovery document advertises exactly the client authentication
 // methods the OP actually supports at /token: client_secret_basic,
-// client_secret_post, and private_key_jwt. client_secret_jwt is
+// client_secret_post, private_key_jwt, and none for public clients. client_secret_jwt is
 // intentionally NEVER advertised: a shared-secret JWT assertion makes
 // the OP and the client hold the same signing key, so a leak on either
 // side forges assertions in both directions. The OP ships only the
@@ -2345,6 +2345,7 @@ func TestScenario_CA_DISC_01_OnlyEnabledMethodsAdvertised(t *testing.T) {
 		"client_secret_basic": true,
 		"client_secret_post":  true,
 		"private_key_jwt":     true,
+		"none":                true,
 	}
 	got := make(map[string]bool, len(methods))
 	for _, m := range methods {
@@ -2449,13 +2450,10 @@ func TestScenario_CA_DISC_04_PrivateKeyJWTPublishesAsymmetricOnly(t *testing.T) 
 }
 
 // TestScenario_CA_DISC_06_RevocationIntrospectionMethodsParity verifies
-// that revocation_endpoint_auth_methods_supported and
-// introspection_endpoint_auth_methods_supported are in lock-step with
-// token_endpoint_auth_methods_supported when the matching feature is
-// enabled. RFC 8414 §2 advertises the three lists separately so
-// deployments may, in principle, accept different methods at each;
-// v1.0 reuses the same client-auth machinery at all three endpoints, so
-// the lists must be identical (set equality).
+// that revocation_endpoint_auth_methods_supported mirrors
+// token_endpoint_auth_methods_supported, while introspection advertises only
+// the confidential subset. RFC 8414 §2 advertises the lists separately; an
+// unauthenticated public client cannot safely inspect token state.
 //
 // Spec: RFC 7009 §4.1 / RFC 7662 §2 / RFC 8414 §2.
 func TestScenario_CA_DISC_06_RevocationIntrospectionMethodsParity(t *testing.T) {
@@ -2463,8 +2461,7 @@ func TestScenario_CA_DISC_06_RevocationIntrospectionMethodsParity(t *testing.T) 
 
 	// Revoke is enabled by default (op.WithFeature(feature.Revoke) is
 	// implicit on the testkit baseline); Introspect is opt-in so we add
-	// it here. Both endpoints must advertise their auth-method list with
-	// the same membership as the token endpoint.
+	// it here.
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithFeature(feature.Introspect),
 		op.WithFeature(feature.Revoke),
@@ -2484,9 +2481,8 @@ func TestScenario_CA_DISC_06_RevocationIntrospectionMethodsParity(t *testing.T) 
 		t.Fatalf("discovery doc missing revocation_endpoint_auth_methods_supported (Revoke feature is enabled)")
 	}
 
-	// Set equality: convert each list to a string-set and compare. The
-	// builder copies the token-endpoint list verbatim so order should
-	// match too, but the contract is membership rather than ordering.
+	// Convert each list to a string-set. Revocation mirrors the token list;
+	// introspection removes only the public-client `none` method.
 	asSet := func(in []string) map[string]struct{} {
 		out := make(map[string]struct{}, len(in))
 		for _, v := range in {
@@ -2498,23 +2494,38 @@ func TestScenario_CA_DISC_06_RevocationIntrospectionMethodsParity(t *testing.T) 
 	introspectSet := asSet(introspectMethods)
 	revokeSet := asSet(revokeMethods)
 
-	if len(tokenSet) != len(introspectSet) {
-		t.Errorf("introspection_endpoint_auth_methods_supported=%v has different cardinality than token_endpoint_auth_methods_supported=%v",
-			introspectMethods, tokenMethods)
-	}
 	for m := range tokenSet {
-		if _, ok := introspectSet[m]; !ok {
-			t.Errorf("introspection_endpoint_auth_methods_supported=%v missing %q from token list %v",
-				introspectMethods, m, tokenMethods)
+		if m != "none" {
+			if _, ok := introspectSet[m]; !ok {
+				t.Errorf("introspection_endpoint_auth_methods_supported=%v missing confidential method %q from token list %v",
+					introspectMethods, m, tokenMethods)
+			}
 		}
 		if _, ok := revokeSet[m]; !ok {
 			t.Errorf("revocation_endpoint_auth_methods_supported=%v missing %q from token list %v",
 				revokeMethods, m, tokenMethods)
 		}
 	}
+	if _, ok := introspectSet["none"]; ok {
+		t.Errorf("introspection_endpoint_auth_methods_supported=%v must not advertise none", introspectMethods)
+	}
+	wantIntrospectionLen := len(tokenSet)
+	if _, tokenAllowsNone := tokenSet["none"]; tokenAllowsNone {
+		wantIntrospectionLen--
+	}
+	if len(introspectSet) != wantIntrospectionLen {
+		t.Errorf("introspection_endpoint_auth_methods_supported=%v has %d methods, want %d from confidential token methods %v",
+			introspectMethods, len(introspectSet), wantIntrospectionLen, tokenMethods)
+	}
 	if len(tokenSet) != len(revokeSet) {
 		t.Errorf("revocation_endpoint_auth_methods_supported=%v has different cardinality than token_endpoint_auth_methods_supported=%v",
 			revokeMethods, tokenMethods)
+	}
+	for m := range introspectSet {
+		if _, ok := tokenSet[m]; !ok {
+			t.Errorf("introspection_endpoint_auth_methods_supported=%v contains non-token method %q",
+				introspectMethods, m)
+		}
 	}
 }
 
@@ -2570,6 +2581,9 @@ func TestScenario_CA_DISC_07_MTLSEndpointAliasesGated(t *testing.T) {
 		tk := testkit.NewProvider(t,
 			testkit.WithOptions(
 				op.WithFeature(feature.MTLS),
+				op.WithFeature(feature.Introspect),
+				op.WithFeature(feature.Revoke),
+				op.WithDynamicRegistration(op.RegistrationOption{}),
 				op.WithDiscoveryMetadata(op.DiscoveryMetadata{
 					MTLSEndpointAliases: aliases,
 				}),
@@ -2600,27 +2614,18 @@ func TestScenario_CA_DISC_07_MTLSEndpointAliasesGated(t *testing.T) {
 		}
 	})
 
-	t.Run("AliasesWithoutMTLSStayAbsent", func(t *testing.T) {
+	t.Run("AliasesWithoutMTLSAreRejected", func(t *testing.T) {
 		t.Parallel()
-		// The option carries aliases but MTLS is off; the discovery
-		// builder structurally drops the map so the field never lands
-		// on the wire. This keeps the option safe to leave in place
-		// across feature toggles without an extra branch in embedder
-		// configuration.
-		tk := testkit.NewProvider(t,
-			testkit.WithOptions(
-				op.WithDiscoveryMetadata(op.DiscoveryMetadata{
-					//nolint:gosec // G101 false positive: RFC 8705 §5 metadata key name, not a credential.
-					MTLSEndpointAliases: map[string]string{
-						"token_endpoint": "https://mtls.op.testkit.invalid/oidc/token",
-					},
-				}),
-			),
-		)
-		doc := caFetchDiscovery(t, tk)
-		if _, ok := doc["mtls_endpoint_aliases"]; ok {
-			t.Errorf("mtls_endpoint_aliases must be absent when MTLS feature is disabled; got %v",
-				doc["mtls_endpoint_aliases"])
+		_, err := op.New(testkit.MinimalOptions(t,
+			op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+				//nolint:gosec // G101: RFC 8705 metadata fixture URL, not a credential.
+				MTLSEndpointAliases: map[string]string{
+					"token_endpoint": "https://mtls.op.testkit.invalid/oidc/token",
+				},
+			}),
+		)...)
+		if err == nil {
+			t.Fatal("op.New accepted mTLS aliases while the MTLS feature is disabled")
 		}
 	})
 }

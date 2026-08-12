@@ -190,6 +190,70 @@ func TestBuild_EmitsEndpointsWhenFeaturesEnabled(t *testing.T) {
 	}
 }
 
+func TestBuild_DynamicRegistrationAuthMethodsReflectOpenMode(t *testing.T) {
+	t.Parallel()
+
+	base := discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints: discovery.EndpointPaths{
+			JWKS:     "/jwks",
+			Token:    "/token",
+			Register: "/register",
+		},
+		Features: discovery.Features{DynamicRegistration: true},
+	}
+	closed := discovery.Build(base)
+	if got := closed.RegistrationEndpointAuthMethodsSupported; len(got) != 1 || got[0] != "initial_access_token" {
+		t.Fatalf("closed registration auth methods=%v want [initial_access_token]", got)
+	}
+	base.DynamicRegistrationOpen = true
+	open := discovery.Build(base)
+	if got := open.RegistrationEndpointAuthMethodsSupported; len(got) != 2 || got[0] != "initial_access_token" || got[1] != "none" {
+		t.Fatalf("open registration auth methods=%v want [initial_access_token none]", got)
+	}
+}
+
+func TestValidateMTLSEndpointAliasesRequiresMountedEndpoint(t *testing.T) {
+	t.Parallel()
+
+	meta := discovery.Metadata{MTLSEndpointAliases: map[string]string{
+		"userinfo_endpoint":      "https://mtls.example.com/userinfo",
+		"introspection_endpoint": "https://mtls.example.com/introspect",
+	}}
+	in := discovery.Input{
+		Endpoints: discovery.EndpointPaths{
+			UserInfo:   "/userinfo",
+			Introspect: "/introspect",
+		},
+		Features: discovery.Features{Introspect: false, MTLS: true},
+	}
+	if err := discovery.ValidateMTLSEndpointAliases(meta, in); err == nil {
+		t.Fatal("ValidateMTLSEndpointAliases accepted an alias for disabled introspection")
+	}
+	delete(meta.MTLSEndpointAliases, "introspection_endpoint")
+	if err := discovery.ValidateMTLSEndpointAliases(meta, in); err != nil {
+		t.Fatalf("ValidateMTLSEndpointAliases rejected mounted userinfo: %v", err)
+	}
+}
+
+func TestValidateMTLSEndpointAliasesRequiresMTLSFeature(t *testing.T) {
+	t.Parallel()
+
+	meta := discovery.Metadata{
+		//nolint:gosec // G101: Alias URL is a public test fixture, not a credential.
+		MTLSEndpointAliases: map[string]string{
+			"token_endpoint": "https://mtls.example.com/token",
+		},
+	}
+	in := discovery.Input{
+		Endpoints: discovery.EndpointPaths{Token: "/token"},
+	}
+	if err := discovery.ValidateMTLSEndpointAliases(meta, in); err == nil {
+		t.Fatal("ValidateMTLSEndpointAliases accepted aliases while MTLS is disabled")
+	}
+}
+
 func TestBuild_EmitsRequirePARWhenConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +451,40 @@ func TestBuild_NoProfileLeavesAuthMethodsAlone(t *testing.T) {
 	if !hasBasic {
 		t.Errorf("token_endpoint_auth_methods_supported = %v, want it to retain client_secret_basic when no profile is set",
 			doc.TokenEndpointAuthMethodsSupported)
+	}
+	hasNone := false
+	for _, m := range doc.TokenEndpointAuthMethodsSupported {
+		if m == "none" {
+			hasNone = true
+			break
+		}
+	}
+	if !hasNone {
+		t.Errorf("token_endpoint_auth_methods_supported = %v, want it to advertise none for public clients",
+			doc.TokenEndpointAuthMethodsSupported)
+	}
+}
+
+func TestBuild_IntrospectionAuthMethodsExcludeNone(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints: discovery.EndpointPaths{
+			JWKS:       "/jwks",
+			Token:      "/token",
+			Introspect: "/introspect",
+		},
+		Features: discovery.Features{Introspect: true},
+	})
+	for _, method := range doc.IntrospectionEndpointAuthMethodsSupported {
+		if method == "none" {
+			t.Fatalf("introspection_endpoint_auth_methods_supported=%v must not advertise none", doc.IntrospectionEndpointAuthMethodsSupported)
+		}
+	}
+	if len(doc.IntrospectionEndpointAuthMethodsSupported) == 0 {
+		t.Fatal("introspection_endpoint_auth_methods_supported is empty")
 	}
 }
 
