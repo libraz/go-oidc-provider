@@ -65,6 +65,21 @@ whose OP serves only machine-to-machine grants.
 
 ### Security
 
+- Replay revocation no longer gives up when a rotation chain has lost its
+  oldest records. Detecting a replayed refresh token makes the OP walk the
+  chain to a node it can cascade from (RFC 9700 §2.2.2), and that walk
+  abandoned the whole cascade if any ancestor was missing — so a chain whose
+  earliest rotation record had been reclaimed kept every live descendant usable
+  after the OP had already concluded it was compromised. Records are reclaimed
+  oldest-first, so a long-lived chain — the kind an attacker has had the most
+  time to work with — was the first to lose the cascade. The DynamoDB adapter
+  reached this state on its own: it stamps each refresh record with a TTL at
+  that record's own expiry, and the oldest record in an active chain expires
+  while its descendants are still redeemable. The walk now stops at the deepest
+  node it can resolve and cascades from there, which retires exactly the tokens
+  a replay could still spend. A presented token that resolves to nothing, and a
+  chain whose records name different clients, remain hard failures.
+
 - Client authentication takes the same wall-clock whether the presented
   `client_id` is registered or not. Every endpoint that authenticates a client
   resolves it first, and an unresolvable id used to answer immediately while a
@@ -258,6 +273,22 @@ whose OP serves only machine-to-machine grants.
 
 ### Fixed
 
+- A JAR failure gets the same description at every endpoint that consumes a
+  signed request object. `/authorize`, `/par` and `/bc-authorize` each carried
+  their own copy of the sentinel-to-description table, and the copies had
+  already drifted: only one described a request object missing `iat`, and none
+  described a rejected `typ` header, so those failures reached operators as a
+  bare "request object verification failed" with the actual cause discarded.
+  The catalogue now lives beside the sentinels it describes and a test fails
+  when a sentinel has no entry. The wire code is still each endpoint's own —
+  CIBA Core §13 has no `invalid_request_object` to return.
+- `/authorize` and `/par` are handed one request-validation policy rather than
+  each assembling its own from eight separate flags. The two are consecutive
+  gates on a single request, so a requirement honoured at only one of them
+  lets `/par` mint a `request_uri` whose one-time value the client then spends
+  on a request `/authorize` refuses, stranding the user with no way forward.
+  The endpoints had not diverged, but nothing prevented it: adding a policy
+  bit meant editing five places and any four of them was a silent partial fix.
 - The SQL adapter preserves integer fidelity when reading claim maps back out
   of the database. `decodeObjectArray` used `json.Decoder`+`UseNumber` for the
   `authorization_details` column, but `decodeMap` — which reads user claims,
@@ -620,6 +651,32 @@ whose OP serves only machine-to-machine grants.
   v3.20 and `golang.org/x/oauth2` v0.30 → v0.36.
 
 ### Added
+
+- `oidcsql.Store.GC` now sweeps the refresh-token table, reported as
+  `GCStats.RefreshTokens`. It was the one table the adapter wrote a row to on
+  every rotation and never reclaimed. Retention is decided per grant rather
+  than per row: a record is deleted only once no refresh token issued under the
+  same grant is still live, because a chain's oldest record is the first to
+  expire and the OP walks the chain from there when it cascades a replay
+  revocation. That is coarser than the chain — one grant can carry several —
+  which over-retains and never under-retains. A client that keeps refreshing
+  holds its whole rotation history; the history is reclaimed when it stops. The
+  condition is a per-grant anti-join rather than a range scan, so it is the
+  more expensive of the five sweeps. The bundled DDL gains an
+  `expires_at` index on the refresh table; a deployment running the v1.0.0
+  schema should add it before scheduling the sweep.
+
+- `op.AuditLockoutStalled`, raised when the cross-factor brute-force counter
+  abandons a failed attempt because its compare-and-swap lost every retry. The
+  attempt is rejected but not counted, so the subject's failure budget stops
+  advancing and the lockout threshold recedes for as long as the contention
+  lasts. Only the one caller whose attempt was dropped saw the error, and it
+  reads to that caller as an ordinary rejection; nothing downstream could tell
+  that the gate had stopped counting. Sustained emissions for one actor are the
+  signal — an isolated one is contention under load. The counter is wired to
+  the OP's audit chain by `op.WithAuthnLockoutStore`; an authenticator built
+  through `op.NewEmailOTPAuthenticator` with its own `LockoutStore` predates
+  the provider and stays silent.
 
 - `op.WithHighEntropyClientSecrets`, which verifies `client_secret` with a keyed
   hash instead of Argon2id, together with `op.NewClientSecret`,
