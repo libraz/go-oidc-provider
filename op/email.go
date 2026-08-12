@@ -177,6 +177,12 @@ func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nol
 // per-record counter alone; a typed-nil store is a configuration
 // mistake rather than an opt-out, and is refused here instead of
 // silently disabling the gate at the first guess.
+//
+// The counter is built without an audit emitter: this constructor runs
+// before any [Provider] exists, so there is no OP audit chain to attach
+// to and [op.AuditLockoutStalled] cannot fire from it. Wiring the store
+// through [WithAuthnLockoutStore] instead builds the counter inside
+// op.New, where the emitter is available and the event does fire.
 func emailOTPLockout(lockoutStore store.AuthnLockoutStore, clk timex.Clock) (*lockout.Counter, error) {
 	if lockoutStore == nil {
 		return nil, nil //nolint:nilnil // documented "no cross-factor counter" signal

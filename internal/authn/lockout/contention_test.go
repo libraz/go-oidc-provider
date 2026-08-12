@@ -3,12 +3,16 @@ package lockout_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // contendedStore answers every Get with a fresh versioned record and
@@ -96,6 +100,125 @@ func TestCounter_RecordFailureGivesUpUnderSustainedContention(t *testing.T) {
 	}
 	if gets := st.gets.Load(); gets != swaps {
 		t.Fatalf("gets = %d, swaps = %d, want one read per swap attempt", gets, swaps)
+	}
+}
+
+// recordingEmitter collects every audit event the counter raises.
+type recordingEmitter struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (e *recordingEmitter) Emit(_ context.Context, ev audit.Event) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.events = append(e.events, ev)
+}
+
+func (e *recordingEmitter) snapshot() []audit.Event {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]audit.Event(nil), e.events...)
+}
+
+// TestCounter_AbandonedAttemptReachesTheAuditStream covers what the
+// returned error cannot. An abandoned attempt is rejected without being
+// counted, so the subject's failure budget stops advancing and no
+// downstream verdict carries that fact — only the one caller whose
+// attempt was dropped ever sees ErrSwapContention. An operator watching
+// for a stalled brute-force gate needs the event.
+func TestCounter_AbandonedAttemptReachesTheAuditStream(t *testing.T) {
+	t.Parallel()
+
+	emitter := &recordingEmitter{}
+	c, err := lockout.New(&contendedStore{}, &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	c = c.WithEmitter(emitter)
+
+	if _, err := c.RecordFailure(context.Background(), "alice"); !errors.Is(err, lockout.ErrSwapContention) {
+		t.Fatalf("RecordFailure err = %v, want lockout.ErrSwapContention", err)
+	}
+
+	events := emitter.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("emitted %d events, want exactly one for one abandoned attempt", len(events))
+	}
+	got := events[0]
+	if got.Name != string(auditevent.AuditLockoutStalled) {
+		t.Errorf("event name = %q, want %q", got.Name, auditevent.AuditLockoutStalled)
+	}
+	if got.Level != audit.LevelWarn {
+		t.Errorf("event level = %v, want LevelWarn: a gate that cannot count is not routine", got.Level)
+	}
+	if got.ActorID != "alice" {
+		t.Errorf("event ActorID = %q, want the contended subject; without it the signal cannot be correlated", got.ActorID)
+	}
+}
+
+// TestCounter_CommittedFailureIsNotAudited keeps the event scoped to the
+// path that has no other way to report itself. A failure the counter
+// records is already surfaced through the Outcome the per-factor adapter
+// turns into login.failed / mfa.failed; raising an event here too would
+// double-count every wrong guess.
+func TestCounter_CommittedFailureIsNotAudited(t *testing.T) {
+	t.Parallel()
+
+	emitter := &recordingEmitter{}
+	c, err := lockout.New(inmem.New().AuthnLockouts(), &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	c = c.WithEmitter(emitter)
+
+	if _, err := c.RecordFailure(context.Background(), "alice"); err != nil {
+		t.Fatalf("RecordFailure: %v", err)
+	}
+	if events := emitter.snapshot(); len(events) != 0 {
+		t.Fatalf("emitted %d events on the committed path, want none: %+v", len(events), events)
+	}
+}
+
+// TestCounter_WithEmitterLeavesTheOriginalSilent pins the copy-on-write
+// shape the constructor advertises: a Counter is immutable after New, so
+// attaching a sink must not reach through to the value it was derived
+// from.
+func TestCounter_WithEmitterLeavesTheOriginalSilent(t *testing.T) {
+	t.Parallel()
+
+	emitter := &recordingEmitter{}
+	base, err := lockout.New(&contendedStore{}, &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	derived := base.WithEmitter(emitter)
+	if derived == base {
+		t.Fatal("WithEmitter returned the receiver; the counter is meant to be immutable after New")
+	}
+
+	if _, err := base.RecordFailure(context.Background(), "alice"); !errors.Is(err, lockout.ErrSwapContention) {
+		t.Fatalf("RecordFailure err = %v, want lockout.ErrSwapContention", err)
+	}
+	if events := emitter.snapshot(); len(events) != 0 {
+		t.Fatalf("the original counter emitted %d events through a sink it was never given", len(events))
+	}
+}
+
+// TestCounter_WithNilEmitterStaysUsable keeps the optional-sink contract
+// honest: callers thread an emitter through unconditionally, so a nil
+// one must leave a working counter rather than a silent nil-deref.
+func TestCounter_WithNilEmitterStaysUsable(t *testing.T) {
+	t.Parallel()
+
+	c, err := lockout.New(&contendedStore{}, &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	c = c.WithEmitter(nil)
+
+	if _, err := c.RecordFailure(context.Background(), "alice"); !errors.Is(err, lockout.ErrSwapContention) {
+		t.Fatalf("RecordFailure err = %v, want lockout.ErrSwapContention", err)
 	}
 }
 

@@ -62,6 +62,7 @@ const (
 
 	AuditLoginSuccess   Name = "login.success"
 	AuditLoginFailed    Name = "login.failed"
+	AuditLockoutStalled Name = "lockout.stalled"
 	AuditMFARequired    Name = "mfa.required"
 	AuditMFASuccess     Name = "mfa.success"
 	AuditMFAFailed      Name = "mfa.failed"
@@ -201,6 +202,7 @@ var definitions = []Definition{
 	{Name: AuditAccountFederationUnlinked},
 	{Name: AuditLoginSuccess, Metric: MetricLoginAttempts, Label: "success"},
 	{Name: AuditLoginFailed, Metric: MetricLoginAttempts, Label: "failed"},
+	{Name: AuditLockoutStalled},
 	{Name: AuditMFARequired},
 	{Name: AuditMFASuccess},
 	{Name: AuditMFAFailed},

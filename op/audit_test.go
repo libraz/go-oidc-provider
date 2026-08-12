@@ -308,6 +308,26 @@ func TestAuditEvent_ClientAuthnMirror(t *testing.T) {
 	}
 }
 
+// TestAuditEvent_LockoutStalledMirror pins the public constant to the
+// wire string the cross-factor brute-force counter emits. The counter
+// lives under internal/authn/lockout and cannot import op/, so an
+// embedder filtering its audit stream on op.AuditLockoutStalled is
+// matching against a value only this test keeps aligned. A silent drift
+// would leave the filter matching nothing — and the event it exists to
+// catch reports a brute-force gate that has stopped counting.
+func TestAuditEvent_LockoutStalledMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"lockout.stalled": op.AuditLockoutStalled,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_FirstPartyMirror keeps the public
 // op.AuditConsentGrantedFirstParty constant aligned with the raw
 // string the authorize endpoint emits when the [WithFirstPartyClients]

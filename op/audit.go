@@ -78,6 +78,16 @@ const (
 	AuditMFAFailed      = AuditEvent(auditevent.AuditMFAFailed)
 	AuditStepUpRequired = AuditEvent(auditevent.AuditStepUpRequired)
 	AuditStepUpSuccess  = AuditEvent(auditevent.AuditStepUpSuccess)
+
+	// AuditLockoutStalled fires when the cross-factor brute-force
+	// counter abandoned a failed attempt because its compare-and-swap
+	// lost too many times in a row. The attempt was rejected, but it
+	// was NOT counted: the subject's failure budget did not advance,
+	// so a party that can sustain the contention can keep guessing
+	// without ever reaching the lockout threshold. Sustained emissions
+	// for one ActorID are the signal that matters — an isolated one is
+	// ordinary contention under load.
+	AuditLockoutStalled = AuditEvent(auditevent.AuditLockoutStalled)
 )
 
 // Consent events. AuditConsentSkippedExisting fires when the existing

@@ -20,6 +20,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -82,8 +84,10 @@ var (
 	// The failure has NOT been counted, so the caller MUST fail the
 	// attempt closed rather than treat it as a soft retry: a counter
 	// that cannot commit is a counter that cannot defend, and sustained
-	// contention on one subject's row is itself an attack signal worth
-	// surfacing.
+	// contention on one subject's row is itself an attack signal. The
+	// counter raises [auditevent.AuditLockoutStalled] on the same path
+	// so that signal reaches an operator, because the returned error
+	// only reaches the one caller whose attempt was abandoned.
 	ErrSwapContention = errors.New("lockout: failure counter contended, attempt not recorded")
 )
 
@@ -139,8 +143,9 @@ type Outcome struct {
 //
 // The zero value is not usable: callers MUST go through [New].
 type Counter struct {
-	store store.AuthnLockoutStore
-	clock timex.Clock
+	store   store.AuthnLockoutStore
+	clock   timex.Clock
+	emitter audit.Emitter
 }
 
 // New constructs a [Counter] backed by lockoutStore. clock supplies the
@@ -155,7 +160,29 @@ func New(lockoutStore store.AuthnLockoutStore, clock timex.Clock) (*Counter, err
 	if clock == nil {
 		clock = timex.SystemClock
 	}
-	return &Counter{store: lockoutStore, clock: clock}, nil
+	return &Counter{store: lockoutStore, clock: clock, emitter: audit.Discard()}, nil
+}
+
+// WithEmitter returns a copy of c that reports abandoned attempts to e.
+// A nil emitter leaves the counter silent, so callers can pass an
+// optional sink through unconditionally.
+//
+// The counter emits exactly one event, [auditevent.AuditLockoutStalled],
+// and only from [Counter.RecordFailure]'s contention path. Everything
+// else it decides — a lock taking effect, a reset becoming required —
+// is returned to the per-factor adapter, which is where the OP's
+// login.* and mfa.* events are raised; duplicating them here would
+// double-count every failure. The contention path is different because
+// it has no caller-visible verdict to carry the signal: the attempt is
+// rejected without being counted, so the subject's failure budget
+// silently stops advancing and nothing downstream can tell.
+func (c *Counter) WithEmitter(e audit.Emitter) *Counter {
+	if e == nil {
+		return c
+	}
+	next := *c
+	next.emitter = e
+	return &next
 }
 
 // GuardBegin returns [ErrLocked] when the cross-factor LockedUntil
@@ -229,6 +256,12 @@ func (c *Counter) RecordFailure(ctx context.Context, subject string) (Outcome, e
 			return Outcome{}, err
 		}
 		if attempt == maxSwapAttempts {
+			c.emitter.Emit(ctx, audit.Event{
+				Name:    string(auditevent.AuditLockoutStalled),
+				Level:   audit.LevelWarn,
+				Message: "cross-factor lockout counter abandoned an attempt after losing every compare-and-swap; the failure was not counted",
+				ActorID: subject,
+			})
 			return Outcome{}, ErrSwapContention
 		}
 		expectedVersion, next, err := c.failureBase(ctx, subject)

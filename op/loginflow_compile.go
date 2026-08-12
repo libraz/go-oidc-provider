@@ -418,6 +418,7 @@ func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticat
 	if err != nil || counter == nil {
 		return auth
 	}
+	counter = counter.WithEmitter(c.effectiveAuditEmitter())
 	switch t := auth.(type) {
 	case *totp.Authenticator:
 		return t.WithLockout(counter)
