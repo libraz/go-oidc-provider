@@ -2,12 +2,11 @@ package endsession
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/idtokenhint"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
@@ -72,27 +71,29 @@ type hintClaims struct {
 	subject string
 }
 
-// verifyIDTokenHint parses raw, verifies the signature against the OP
-// keyset, asserts the iss claim matches the configured issuer, and
-// returns the requesting client_id (azp when present, otherwise the
-// first audience) together with the token's subject. The function does
-// NOT enforce "exp": OIDC RP-Initiated Logout 1.0 lets the user sign
-// out from a stale tab, and the spec does not require freshness
-// through "exp".
+// verifyIDTokenHint establishes that raw is an ID Token this OP issued
+// — [idtokenhint.Verify] covers the parse, key resolution, signature,
+// and issuer checks, shared with the CIBA endpoint — and then applies
+// the rules that belong to logout specifically: the age cap below, and
+// the derivation of the requesting client_id from azp when present and
+// otherwise from the first audience.
 //
-// The function DOES enforce a soft "iat" age cap of
-// [maxIDTokenHintAge] when the claim is present. Tokens older than
-// that are rejected so an attacker who exfiltrates a long-forgotten
-// id_token (browser history, proxy log, or leaked debug dump) cannot
-// replay it indefinitely against the logout endpoint. Tokens without
-// "iat" fall through to the legacy posture; issuer / signature /
-// audience are still sufficient to identify the requesting client
-// without admitting cross-OP forgery.
+// The function does NOT enforce "exp": OIDC RP-Initiated Logout 1.0
+// lets the user sign out from a stale tab, and the spec does not
+// require freshness through "exp".
+//
+// It DOES enforce a soft "iat" age cap of [maxIDTokenHintAge] when the
+// claim is present. Tokens older than that are rejected so an attacker
+// who exfiltrates a long-forgotten id_token (browser history, proxy
+// log, or leaked debug dump) cannot replay it indefinitely against the
+// logout endpoint. Tokens without "iat" fall through to the legacy
+// posture; issuer / signature / audience are still sufficient to
+// identify the requesting client without admitting cross-OP forgery.
 //
 // The age cap is what distinguishes this verifier from CIBA's, which
-// verifies an id_token_hint the same way but bounds nothing. The cap
-// belongs here because the hint is the only thing binding the request
-// to a client: the caller is an unauthenticated browser and the client
+// establishes the same provenance but bounds nothing. The cap belongs
+// here because the hint is the only thing binding the request to a
+// client: the caller is an unauthenticated browser and the client
 // identity is read out of the token. CIBA's hint arrives on a request
 // whose client has already authenticated, so a stale token there is
 // replayable only by the party it was issued to.
@@ -105,61 +106,54 @@ type hintClaims struct {
 // travels only so the keyset's retired-kid audit event can name the
 // request that presented a hint signed by a key the OP has retired.
 func verifyIDTokenHint(ctx context.Context, set *keys.Set, issuer, raw string, now time.Time) (hintClaims, error) {
-	jws, _, err := jose.ParseSigned(raw)
+	claims, err := idtokenhint.Verify(ctx, set, issuer, raw)
 	if err != nil {
-		return hintClaims{}, fmt.Errorf("%w: %w", errIDTokenMalformed, err)
+		return hintClaims{}, translateVerifyError(err)
 	}
-	kid := jws.Signatures[0].Header.KeyID
-	if kid == "" {
-		return hintClaims{}, errIDTokenSignature
-	}
-	entry, ok := set.Find(ctx, kid)
-	if !ok {
-		return hintClaims{}, errIDTokenSignature
-	}
-	payload, err := jws.Verify(entry.Signer.Public())
-	if err != nil {
-		return hintClaims{}, fmt.Errorf("%w: %w", errIDTokenSignature, err)
-	}
-	var wire struct {
-		Issuer   string          `json:"iss"`
-		Subject  string          `json:"sub"`
-		Audience json.RawMessage `json:"aud"`
-		AZP      string          `json:"azp"`
-		IssuedAt int64           `json:"iat"`
-	}
-	if err := json.Unmarshal(payload, &wire); err != nil {
-		return hintClaims{}, fmt.Errorf("%w: %w", errIDTokenMalformed, err)
-	}
-	if issuer != "" && wire.Issuer != issuer {
-		return hintClaims{}, errIDTokenIssuer
-	}
-	if wire.IssuedAt > 0 {
+	if claims.IssuedAt > 0 {
 		// "iat" is a NumericDate (seconds since the Unix epoch). Convert
 		// and compare against the cap. A token whose iat is in the
 		// future is admitted: the spec does not forbid pre-dated tokens
 		// and a small clock skew is the most common cause; the bound
 		// here is one-sided so freshness skew never blocks a logout.
-		issued := time.Unix(wire.IssuedAt, 0).UTC()
+		issued := time.Unix(claims.IssuedAt, 0).UTC()
 		if now.Sub(issued) > maxIDTokenHintAge {
 			return hintClaims{}, errIDTokenStale
 		}
 	}
-	aud, err := decodeAudienceFirst(wire.Audience)
+	aud, err := idtokenhint.First(claims.Audience)
 	if err != nil {
-		return hintClaims{}, err
+		return hintClaims{}, errIDTokenMalformed
 	}
-	if wire.AZP != "" {
+	if claims.AZP != "" {
 		// OIDC Core 1.0 §2: when azp is present it identifies the
 		// party the token was issued for. Use it as the requesting
 		// client_id and verify it appears among the aud entries so a
 		// stolen multi-aud token cannot escape its azp binding.
-		if !audienceContains(wire.Audience, wire.AZP) {
+		if !idtokenhint.Contains(claims.Audience, claims.AZP) {
 			return hintClaims{}, errIDTokenAZP
 		}
-		return hintClaims{clientID: wire.AZP, subject: wire.Subject}, nil
+		return hintClaims{clientID: claims.AZP, subject: claims.Subject}, nil
 	}
-	return hintClaims{clientID: aud, subject: wire.Subject}, nil
+	return hintClaims{clientID: aud, subject: claims.Subject}, nil
+}
+
+// translateVerifyError restates an [idtokenhint] sentinel in this
+// package's vocabulary, keeping the original as the wrapped cause so a
+// log reader still sees which JOSE step failed. A nil keyset reaches
+// this endpoint only through a wiring fault, and the handler has no
+// server_error channel on a logout page, so it is reported as a
+// signature failure: the OP could not establish that it signed the
+// token, which is what the caller is told either way.
+func translateVerifyError(err error) error {
+	switch {
+	case errors.Is(err, idtokenhint.ErrIssuer):
+		return errIDTokenIssuer
+	case errors.Is(err, idtokenhint.ErrSignature), errors.Is(err, idtokenhint.ErrUnverifiable):
+		return fmt.Errorf("%w: %w", errIDTokenSignature, err)
+	default:
+		return fmt.Errorf("%w: %w", errIDTokenMalformed, err)
+	}
 }
 
 // hintNow returns the wall-clock reading used by [verifyIDTokenHint]
@@ -173,55 +167,4 @@ func hintNow(c Clock) time.Time {
 		return c.Now().UTC()
 	}
 	return timex.SystemClock.Now().UTC()
-}
-
-// audienceContains reports whether raw (a JSON aud value, either a
-// bare string or an array of strings) includes want. Empty raw or a
-// decode error returns false; the audience caller has already checked
-// that decodeAudienceFirst accepts the shape, so a mid-call decode
-// failure here can only be a malformed payload.
-func audienceContains(raw json.RawMessage, want string) bool {
-	if want == "" || len(raw) == 0 {
-		return false
-	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		return single == want
-	}
-	var multi []string
-	if err := json.Unmarshal(raw, &multi); err != nil {
-		return false
-	}
-	for _, a := range multi {
-		if a == want {
-			return true
-		}
-	}
-	return false
-}
-
-// decodeAudienceFirst returns the first audience value from a JWT aud
-// claim that may be either a bare string or a JSON array of strings
-// per RFC 7519 §4.1.3. Empty arrays / a missing claim / an empty
-// string yield [errIDTokenMalformed] — the OP cannot identify the
-// requesting client from a tokenless audience.
-func decodeAudienceFirst(raw json.RawMessage) (string, error) {
-	if len(raw) == 0 {
-		return "", errIDTokenMalformed
-	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		if single == "" {
-			return "", errIDTokenMalformed
-		}
-		return single, nil
-	}
-	var multi []string
-	if err := json.Unmarshal(raw, &multi); err != nil {
-		return "", fmt.Errorf("%w: %w", errIDTokenMalformed, err)
-	}
-	if len(multi) == 0 || multi[0] == "" {
-		return "", errIDTokenMalformed
-	}
-	return multi[0], nil
 }

@@ -2,11 +2,10 @@ package ciba
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
-	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/idtokenhint"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
@@ -67,6 +66,13 @@ var (
 //   - aud contains clientID, and azp — when present — equals clientID;
 //   - sub is non-empty.
 //
+// The first three are [idtokenhint.Verify], shared with RP-Initiated
+// Logout's verifier so the provenance question the two endpoints ask is
+// answered by one implementation. The last two are this endpoint's own:
+// they read the token against a client_id the request already
+// established, which is the opposite direction from logout, where the
+// token is what names the client.
+//
 // clientID MUST be the client the request already authenticated as.
 // Passing an empty clientID fails with [ErrIDTokenHintAudience] rather
 // than admitting an unbound token.
@@ -82,11 +88,11 @@ var (
 // the endpoint, and the signature plus the audience binding are what
 // identify it and prevent cross-OP or cross-client forgery.
 //
-// RP-Initiated Logout's id_token_hint verifier makes the same choice
-// about exp but additionally caps the age of iat, and the difference
-// is not an inconsistency: there the hint is what names the client, so
-// a token harvested from a forgotten tab is a standing credential in
-// anyone's hands. Here the hint is bound to a client that has already
+// RP-Initiated Logout's verifier makes the same choice about exp but
+// additionally caps the age of iat, and the difference is not an
+// inconsistency: there the hint is what names the client, so a token
+// harvested from a forgotten tab is a standing credential in anyone's
+// hands. Here the hint is bound to a client that has already
 // authenticated on the same request, so an old token is useless to
 // anybody but its rightful holder — and a cap would reject exactly the
 // consumption-device flow CIBA exists for.
@@ -104,77 +110,51 @@ var (
 // the keyset's retired-kid audit event can name the request that
 // presented a hint signed by a key the OP has retired.
 func VerifyIDTokenHint(ctx context.Context, set *keys.Set, issuer, clientID, raw string) (string, error) {
+	// The wiring fault is reported ahead of the caller's own mistake:
+	// an OP that cannot verify anything is a different problem from a
+	// request that named no client, and the handler routes them to
+	// different responses.
 	if set == nil {
 		return "", ErrIDTokenHintUnverifiable
 	}
 	if clientID == "" {
 		return "", ErrIDTokenHintAudience
 	}
-	jws, _, err := jose.ParseSigned(raw)
+	claims, err := idtokenhint.Verify(ctx, set, issuer, raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrIDTokenHintMalformed, err)
+		return "", translateVerifyError(err)
 	}
-	kid := jws.Signatures[0].Header.KeyID
-	if kid == "" {
-		return "", ErrIDTokenHintSignature
-	}
-	entry, ok := set.Find(ctx, kid)
-	if !ok {
-		return "", ErrIDTokenHintSignature
-	}
-	payload, err := jws.Verify(entry.Signer.Public())
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrIDTokenHintSignature, err)
-	}
-	var wire struct {
-		Issuer   string          `json:"iss"`
-		Subject  string          `json:"sub"`
-		Audience json.RawMessage `json:"aud"`
-		AZP      string          `json:"azp"`
-	}
-	if err := json.Unmarshal(payload, &wire); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrIDTokenHintMalformed, err)
-	}
-	if issuer != "" && wire.Issuer != issuer {
-		return "", ErrIDTokenHintIssuer
-	}
-	if !audienceContains(wire.Audience, clientID) {
+	if !idtokenhint.Contains(claims.Audience, clientID) {
 		return "", ErrIDTokenHintAudience
 	}
 	// OIDC Core 1.0 §2: when azp is present it names the party the
 	// token was issued for. A multi-audience token that lists the
 	// requesting client but was minted for someone else must not pass
 	// as that client's hint.
-	if wire.AZP != "" && wire.AZP != clientID {
+	if claims.AZP != "" && claims.AZP != clientID {
 		return "", ErrIDTokenHintAudience
 	}
-	if wire.Subject == "" {
+	if claims.Subject == "" {
 		return "", ErrIDTokenHintSubject
 	}
-	return wire.Subject, nil
+	return claims.Subject, nil
 }
 
-// audienceContains reports whether raw — a JWT aud claim, which RFC
-// 7519 §4.1.3 allows to be either a bare string or an array of strings
-// — includes want. An empty want, an absent claim, or a payload shape
-// that decodes as neither form returns false, so an unparseable
-// audience fails closed.
-func audienceContains(raw json.RawMessage, want string) bool {
-	if want == "" || len(raw) == 0 {
-		return false
+// translateVerifyError restates an [idtokenhint] sentinel in this
+// package's vocabulary, keeping the original as the wrapped cause so a
+// log reader still sees which JOSE step failed. The mapping is
+// one-to-one: this endpoint has a server_error channel, so a nil keyset
+// keeps its own sentinel rather than being folded into a client-facing
+// failure.
+func translateVerifyError(err error) error {
+	switch {
+	case errors.Is(err, idtokenhint.ErrUnverifiable):
+		return ErrIDTokenHintUnverifiable
+	case errors.Is(err, idtokenhint.ErrIssuer):
+		return ErrIDTokenHintIssuer
+	case errors.Is(err, idtokenhint.ErrSignature):
+		return fmt.Errorf("%w: %w", ErrIDTokenHintSignature, err)
+	default:
+		return fmt.Errorf("%w: %w", ErrIDTokenHintMalformed, err)
 	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		return single == want
-	}
-	var multi []string
-	if err := json.Unmarshal(raw, &multi); err != nil {
-		return false
-	}
-	for _, a := range multi {
-		if a == want {
-			return true
-		}
-	}
-	return false
 }
