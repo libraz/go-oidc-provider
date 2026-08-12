@@ -36,6 +36,11 @@ while IFS=$'\t' read -r mod pkgs tags; do
   fi
 done < <(public_modules)
 
+while IFS=$'\t' read -r mod pkgs; do
+  log "go vet $pkgs ($mod)"
+  (cd "$mod" && GOWORK=off go vet "$pkgs")
+done < <(tool_modules)
+
 "$SCRIPT_DIR/lint.sh"
 
 while IFS=$'\t' read -r mod pkgs tags; do
@@ -53,12 +58,10 @@ done < <(public_modules)
 # The gates below are only worth as much as the tools behind them, and the
 # tools live in modules the shipping inventory deliberately excludes, so
 # their own tests would otherwise never run here.
-for tool_mod in scenariotool stabilitytool; do
-  if [ -f "$REPO_ROOT/tools/$tool_mod/go.mod" ]; then
-    log "go test ./... (tools/$tool_mod)"
-    (cd "$REPO_ROOT/tools/$tool_mod" && GOWORK=off go test ./...)
-  fi
-done
+while IFS=$'\t' read -r mod pkgs; do
+  log "go test $pkgs ($mod)"
+  (cd "$mod" && GOWORK=off go test "$pkgs")
+done < <(tool_modules)
 
 log "scenariotool validate"
 "$SCRIPT_DIR/scenario.sh" validate

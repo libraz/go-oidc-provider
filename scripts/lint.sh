@@ -19,3 +19,11 @@ while IFS=$'\t' read -r mod pkgs tags; do
     (cd "$mod" && "$LINT" run "$pkgs")
   fi
 done < <(public_modules)
+
+# The build tools behind the repository's own gates. --config is explicit
+# because golangci-lint resolves a relative config against the directory
+# it runs in, and these modules sit two levels below the one that holds it.
+while IFS=$'\t' read -r mod pkgs; do
+  log "golangci-lint run $pkgs ($mod)"
+  (cd "$mod" && GOWORK=off "$LINT" run --config "$REPO_ROOT/.golangci.yml" "$pkgs")
+done < <(tool_modules)

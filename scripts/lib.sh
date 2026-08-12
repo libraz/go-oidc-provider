@@ -124,6 +124,31 @@ verify_harness_modules() {
   fi
 }
 
+# The build tools that back the repository's own gates: the scenario
+# catalog validator and the stability reporter. They are separate modules
+# so their parsing dependencies stay out of the library's go.sum, and they
+# are deliberately not part of public_modules — nothing here ships, and an
+# untagged entry there would also enrol them in go.work.
+#
+# They are still first-class code: a gate is worth no more than the tool
+# behind it, so they carry the same lint and vet bar as everything else.
+# The inventory is a function rather than a literal list at each call site
+# so a tool added later is picked up by every consumer at once.
+#
+# Output format matches public_modules, minus the tag field: these modules
+# have no build-tagged files. Callers must run `go`/golangci-lint with
+# GOWORK=off — go.work lists neither module, and a workspace that does not
+# contain the directory makes golangci-lint report no findings at all
+# rather than fail, which is how these two went unlinted.
+tool_modules() {
+  local d
+  for d in scenariotool stabilitytool; do
+    if [ -f "$REPO_ROOT/tools/$d/go.mod" ]; then
+      printf '%s\t./...\n' "$REPO_ROOT/tools/$d"
+    fi
+  done
+}
+
 # is_verify_harness_module reports whether a module directory is one of the
 # entries verify_harness_modules emits.
 is_verify_harness_module() {
