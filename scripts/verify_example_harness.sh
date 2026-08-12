@@ -24,6 +24,8 @@
 # EXAMPLE_HARNESS_TIMEOUT overrides the per-harness `go test -timeout` (the go
 # default of 10m is not enough: each case builds and boots an example, and
 # browserverify budgets up to 90s of browser work per case).
+# GO_TEST_PARALLEL caps package work and concurrent harness cases. It defaults
+# to 2 so a browser verification does not launch every example at once.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
@@ -32,6 +34,9 @@ source "$SCRIPT_DIR/lib.sh"
 cd "$REPO_ROOT"
 
 timeout="${EXAMPLE_HARNESS_TIMEOUT:-45m}"
+test_parallel="$(go_test_parallelism)"
+go_max_procs="${GOMAXPROCS:-$test_parallel}"
+log "example-harness parallelism: packages/cases=$test_parallel, GOMAXPROCS=$go_max_procs (override GO_TEST_PARALLEL or GOMAXPROCS)"
 
 mode="all"
 if [ "$#" -gt 0 ]; then
@@ -48,7 +53,7 @@ run_harness() {
   shift 2
   [ -f "$dir/go.mod" ] || die "harness module not found: $dir/go.mod"
   log "go test -tags $tag ./... ($dir)"
-  (cd "$dir" && GOWORK=off go test -count=1 -timeout="$timeout" -tags "$tag" "$@" ./...)
+  (cd "$dir" && GOWORK=off GOMAXPROCS="$go_max_procs" go test -count=1 -timeout="$timeout" -p "$test_parallel" "-parallel=$test_parallel" -tags "$tag" "$@" ./...)
 }
 
 api_dir="$REPO_ROOT/examples/internal/apiverify"

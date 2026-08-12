@@ -11,6 +11,22 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m==>\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Test commands must stay usable on a developer workstation as well as in CI.
+# `go test` otherwise defaults both its package work and t.Parallel scheduling
+# to the machine CPU count, which makes a -race run capable of monopolising a
+# large workstation. Keep the local default deliberately conservative; CI (or
+# a developer who has measured their machine) can opt into a higher value.
+go_test_parallelism() {
+  local value="${GO_TEST_PARALLEL:-2}"
+  case "$value" in
+    '' | *[!0-9]*) die "GO_TEST_PARALLEL must be a positive integer (got: $value)" ;;
+  esac
+  if [ "$value" -lt 1 ]; then
+    die "GO_TEST_PARALLEL must be a positive integer (got: $value)"
+  fi
+  printf '%s\n' "$value"
+}
+
 require_cmd() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"

@@ -15,11 +15,15 @@ source "$SCRIPT_DIR/lib.sh"
 
 cd "$REPO_ROOT"
 
+test_parallel="$(go_test_parallelism)"
+go_max_procs="${GOMAXPROCS:-$test_parallel}"
+log "example-build parallelism: packages=$test_parallel, GOMAXPROCS=$go_max_procs (override GO_TEST_PARALLEL or GOMAXPROCS)"
+
 log "go build -tags example ./examples/..."
-GOWORK=off go build -tags example ./examples/...
+GOWORK=off GOMAXPROCS="$go_max_procs" go build -p "$test_parallel" -tags example ./examples/...
 
 log "go vet -tags example ./examples/..."
-GOWORK=off go vet -tags example ./examples/...
+GOWORK=off GOMAXPROCS="$go_max_procs" go vet -p "$test_parallel" -tags example ./examples/...
 
 "$SCRIPT_DIR/check_example_endpoints.sh"
 "$SCRIPT_DIR/check_example_pkce.sh"

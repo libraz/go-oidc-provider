@@ -27,24 +27,33 @@ mapfile -t members < <("$SCRIPT_DIR/workspace.sh" --members)
 )
 export GOWORK="$workspace_dir/go.work"
 
+test_parallel="$(go_test_parallelism)"
+go_max_procs="${GOMAXPROCS:-$test_parallel}"
+log "contract-test parallelism: packages=$test_parallel, GOMAXPROCS=$go_max_procs (Dynamo subtests=1)"
+
 run_contracts() {
   local module="$1"
+  local subtest_parallel="${2:-$test_parallel}"
+  local -a args=(-count=1 -timeout=15m -p "$test_parallel" "-parallel=$subtest_parallel" -tags=testcontainers ./...)
   log "go test -tags=testcontainers ./... ($module; required containers)"
   (
     cd "$module"
     RELEASE_CONTRACT_REQUIRED=1 \
-      go test -count=1 -timeout=15m -tags=testcontainers ./...
+      GOMAXPROCS="$go_max_procs" go test "${args[@]}"
   )
 }
 
 run_contracts "$REPO_ROOT/op/storeadapter/sql"
 run_contracts "$REPO_ROOT/op/storeadapter/redis"
-run_contracts "$REPO_ROOT/op/storeadapter/dynamodb"
+# DynamoDB Local serializes table-definition work internally. The full
+# contract suite creates isolated table sets, so unrestricted Go test
+# parallelism can starve the emulator and hit the release-gate timeout.
+run_contracts "$REPO_ROOT/op/storeadapter/dynamodb" 1
 
 # The composite RFC 7592 HTTP E2E additionally imports the root module's
 # internal endpoint, which the shared workspace above already provides.
 log "go test -tags=compositee2e ./... ($REPO_ROOT/op/storeadapter/sql; composite RFC 7592 HTTP E2E)"
 (
   cd "$REPO_ROOT/op/storeadapter/sql"
-  go test -count=1 -timeout=5m -tags=compositee2e ./...
+  GOMAXPROCS="$go_max_procs" go test -count=1 -timeout=5m -p "$test_parallel" "-parallel=$test_parallel" -tags=compositee2e ./...
 )

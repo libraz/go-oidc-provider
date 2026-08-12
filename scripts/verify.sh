@@ -9,6 +9,10 @@ source "$SCRIPT_DIR/lib.sh"
 
 cd "$REPO_ROOT"
 
+test_parallel="$(go_test_parallelism)"
+go_max_procs="${GOMAXPROCS:-$test_parallel}"
+log "verification parallelism: packages/tests=$test_parallel, GOMAXPROCS=$go_max_procs (override GO_TEST_PARALLEL or GOMAXPROCS)"
+
 GOFUMPT="$(tool gofumpt)"
 GOIMPORTS="$(tool goimports)"
 
@@ -30,15 +34,15 @@ while IFS=$'\t' read -r mod pkgs tags; do
   args="$(go_args_for "$tags")"
   log "go vet $args $pkgs ($mod)"
   if [ -n "$args" ]; then
-    (cd "$mod" && GOWORK=off go vet "$args" "$pkgs")
+    (cd "$mod" && GOWORK=off GOMAXPROCS="$go_max_procs" go vet -p "$test_parallel" "$args" "$pkgs")
   else
-    (cd "$mod" && go vet "$pkgs")
+    (cd "$mod" && GOMAXPROCS="$go_max_procs" go vet -p "$test_parallel" "$pkgs")
   fi
 done < <(public_modules)
 
 while IFS=$'\t' read -r mod pkgs; do
   log "go vet $pkgs ($mod)"
-  (cd "$mod" && GOWORK=off go vet "$pkgs")
+  (cd "$mod" && GOWORK=off GOMAXPROCS="$go_max_procs" go vet -p "$test_parallel" "$pkgs")
 done < <(tool_modules)
 
 "$SCRIPT_DIR/lint.sh"
@@ -47,9 +51,9 @@ while IFS=$'\t' read -r mod pkgs tags; do
   args="$(go_args_for "$tags")"
   log "go build $args $pkgs ($mod)"
   if [ -n "$args" ]; then
-    (cd "$mod" && GOWORK=off go build "$args" "$pkgs")
+    (cd "$mod" && GOWORK=off GOMAXPROCS="$go_max_procs" go build -p "$test_parallel" "$args" "$pkgs")
   else
-    (cd "$mod" && go build "$pkgs")
+    (cd "$mod" && GOMAXPROCS="$go_max_procs" go build -p "$test_parallel" "$pkgs")
   fi
 done < <(public_modules)
 
@@ -60,7 +64,7 @@ done < <(public_modules)
 # their own tests would otherwise never run here.
 while IFS=$'\t' read -r mod pkgs; do
   log "go test $pkgs ($mod)"
-  (cd "$mod" && GOWORK=off go test "$pkgs")
+  (cd "$mod" && GOWORK=off GOMAXPROCS="$go_max_procs" go test -p "$test_parallel" "-parallel=$test_parallel" "$pkgs")
 done < <(tool_modules)
 
 log "scenariotool validate"

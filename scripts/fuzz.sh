@@ -13,6 +13,9 @@ source "$SCRIPT_DIR/lib.sh"
 cd "$REPO_ROOT"
 
 duration="${1:-30s}"
+test_parallel="$(go_test_parallelism)"
+go_max_procs="${GOMAXPROCS:-$test_parallel}"
+log "fuzz parallelism: workers=$test_parallel, GOMAXPROCS=$go_max_procs (override GO_TEST_PARALLEL or GOMAXPROCS)"
 
 # mod_go runs a go subcommand inside a module of the inventory, applying that
 # module's build tags. Tagged modules (examples, harnesses, sample) resolve the
@@ -24,9 +27,9 @@ mod_go() {
   local mod="$1" tags="$2" sub="$3"
   shift 3
   if [ -n "$tags" ]; then
-    (cd "$mod" && GOWORK=off go "$sub" "-tags=$tags" "$@")
+    (cd "$mod" && GOWORK=off GOMAXPROCS="$go_max_procs" go "$sub" "-tags=$tags" "$@")
   else
-    (cd "$mod" && go "$sub" "$@")
+    (cd "$mod" && GOMAXPROCS="$go_max_procs" go "$sub" "$@")
   fi
 }
 
@@ -53,7 +56,7 @@ total=0
 while IFS=$'\t' read -r mod pkgs tags; do
   while IFS=$'\t' read -r pkg fn; do
     log "fuzz $pkg.$fn for $duration"
-    mod_go "$mod" "$tags" test -run='^$' -fuzz="^${fn}\$" -fuzztime="$duration" "$pkg" </dev/null
+    mod_go "$mod" "$tags" test -p "$test_parallel" "-parallel=$test_parallel" -run='^$' -fuzz="^${fn}\$" -fuzztime="$duration" "$pkg" </dev/null
     total=$((total + 1))
   done < <(fuzz_targets "$mod" "$pkgs" "$tags")
 done < <(public_modules)
