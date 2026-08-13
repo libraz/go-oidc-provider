@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,6 +70,28 @@ const (
 	jtiByteLength = 16
 )
 
+// The wire grant_type values the built-in handlers implement. They are
+// named constants because three separate gates key on them — dispatch,
+// the Provider-level enabled-grant set, and the per-client
+// [store.Client.GrantTypes] check — and a literal that drifts in one of
+// them fails open rather than loudly.
+const (
+	grantTypeAuthorizationCode = "authorization_code"
+	grantTypeRefreshToken      = "refresh_token"
+	grantTypeClientCredentials = "client_credentials"
+	grantTypeDeviceCode        = "urn:ietf:params:oauth:grant-type:device_code"
+	grantTypeCIBA              = "urn:openid:params:grant-type:ciba"
+)
+
+// grantEnabled reports whether the Provider accepts grantType. A nil
+// [Deps.EnabledGrants] disables the gate; see the field's godoc.
+func (d *Deps) grantEnabled(grantType string) bool {
+	if d.EnabledGrants == nil {
+		return true
+	}
+	return slices.Contains(d.EnabledGrants, grantType)
+}
+
 // tokenSingleValuedParams is the closed list of /token form parameters
 // RFC 6749 §3.2 forbids from appearing more than once. The list spans
 // every grant the dispatcher routes (authorization_code, refresh_token,
@@ -78,9 +101,18 @@ const (
 // grant the request claims.
 //
 // "resource" is intentionally absent — RFC 8707 §2 allows the resource
-// indicator to repeat — and any unknown form key is silently tolerated
-// so a future profile that adds a multi-valued parameter does not have
-// to plumb through a separate allow-list.
+// indicator to repeat, and the client_credentials path reads it as a
+// slice rather than through Get — and any unknown form key is silently
+// tolerated so a future profile that adds a multi-valued parameter does
+// not have to plumb through a separate allow-list. The custom-grant
+// dispatcher hands the whole form to an embedder-supplied handler, so
+// parameters private to such a grant are outside this contract too.
+//
+// The list must stay in step with what the package actually reads:
+// every parameter consumed through PostForm.Get is single-valued by
+// construction, and one that is missing here resolves silently to one
+// occurrence instead of being rejected. A source-level guard in the
+// package tests derives the read set mechanically and fails on drift.
 //
 //nolint:gochecknoglobals // closed allow-list, intentional package state.
 var tokenSingleValuedParams = []string{
@@ -96,6 +128,7 @@ var tokenSingleValuedParams = []string{
 	"scope",
 	"device_code",
 	"auth_req_id",
+	"authorization_details",
 }
 
 // Clock is the package-local view of the wall clock. It mirrors the
@@ -241,6 +274,19 @@ type Deps struct {
 	// grant_id (the Grant Management draft). Off by default so the
 	// non-GM response shape is unchanged.
 	GrantManagementEnabled bool
+
+	// ClaimsParameterEnabled mirrors
+	// [authorizeendpoint.Deps.ClaimsParameterEnabled] for the issuance
+	// side: when false the endpoint ignores any OIDC Core 1.0 §5.5
+	// payload persisted on the grant it is exchanging and derives the
+	// id_token from the granted scopes alone. The gate reads the grant
+	// rather than the request, so turning the parameter off also stops
+	// grants established while it was still on — including the ones
+	// reached through refresh rotation, which would otherwise keep
+	// projecting indefinitely. The stored payload is left intact as
+	// the record of what the user consented to. Zero value is false so
+	// a Deps assembled without the flag fails closed.
+	ClaimsParameterEnabled bool
 
 	// SecretVerifier verifies confidential-client secrets. A nil value
 	// installs the library default ([clientauth.Argon2id]) so deployments
@@ -428,6 +474,19 @@ type Deps struct {
 	// ([ciba.MaxPollViolations], currently 5).
 	CIBAMaxPollViolations uint8
 
+	// EnabledGrants is the set of wire grant_type values the Provider
+	// accepts, in the same membership the discovery document advertises
+	// through grant_types_supported (built-ins plus registered custom
+	// grant names). A grant_type outside the set is rejected with
+	// unsupported_grant_type before dispatch, so no handler runs and no
+	// credential record is read, consumed or mutated.
+	//
+	// A nil set disables the gate. The op layer always populates it from
+	// the same projection that feeds discovery, which is what keeps the
+	// two from disagreeing; the nil arm exists for the in-package tests
+	// that assemble Deps by hand around one grant.
+	EnabledGrants []string
+
 	// ClientEncJWKs resolves the RP's encryption recipient when the
 	// client registered id_token_encrypted_response_alg / _enc. The
 	// resolver wraps an issued id_token in a JWE addressed to the
@@ -446,44 +505,61 @@ func Handler(deps Deps) http.Handler {
 	})
 }
 
-// serve is the request-scoped entry point. It validates the request
-// shape, parses the form body, dispatches on grant_type, and writes the
-// response. Decomposing the body keeps the function under cyclop's
-// max-complexity gate while remaining readable.
-func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
+// acceptTokenRequest applies every check that precedes grant dispatch:
+// the request shape, the form body, the single-valued parameter rule and
+// the configured grant set. It reports the requested grant_type and
+// whether dispatch may proceed, having already written the error
+// response when it may not.
+func acceptTokenRequest(w http.ResponseWriter, r *http.Request, deps Deps) (string, bool) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeError(w, http.StatusMethodNotAllowed, errInvalidRequest, "method not allowed")
-		return
+		return "", false
 	}
 	if !isFormContent(r.Header.Get("Content-Type")) {
 		writeError(w, http.StatusBadRequest, errInvalidRequest,
 			"content-type must be application/x-www-form-urlencoded")
-		return
+		return "", false
 	}
 	endpointsupport.LimitFormBody(w, r)
 	if err := r.ParseForm(); err != nil {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
-		return
+		return "", false
 	}
 	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, tokenSingleValuedParams); !ok {
 		writeError(w, http.StatusBadRequest, errInvalidRequest,
 			"parameter "+name+" must not be repeated")
-		return
+		return "", false
 	}
 	grantType := r.PostForm.Get("grant_type")
+	if grantType != "" && !deps.grantEnabled(grantType) {
+		writeError(w, http.StatusBadRequest, errUnsupportedGrantType,
+			"grant_type is not supported")
+		return "", false
+	}
+	return grantType, true
+}
+
+// serve is the request-scoped entry point. It admits the request through
+// [acceptTokenRequest], dispatches on grant_type, and writes the
+// response.
+func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
+	grantType, ok := acceptTokenRequest(w, r, deps)
+	if !ok {
+		return
+	}
 	switch grantType {
 	case "":
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_type is required")
-	case "authorization_code":
+	case grantTypeAuthorizationCode:
 		handleAuthorizationCode(w, r, deps)
-	case "refresh_token":
+	case grantTypeRefreshToken:
 		handleRefreshToken(w, r, deps)
-	case "client_credentials":
+	case grantTypeClientCredentials:
 		handleClientCredentials(w, r, deps)
-	case "urn:ietf:params:oauth:grant-type:device_code":
+	case grantTypeDeviceCode:
 		handleDeviceCode(w, r, deps)
-	case "urn:openid:params:grant-type:ciba":
+	case grantTypeCIBA:
 		handleCIBA(w, r, deps)
 	default:
 		if deps.CustomGrants != nil && deps.CustomGrants.HasHandler(grantType) {
@@ -656,12 +732,26 @@ func clientPermitsRefresh(c *store.Client, scope []string, policy refreshScopePo
 	if policy.StrictOfflineAccess && !oidcscope.ContainsOfflineAccess(scope) {
 		return false
 	}
-	for _, g := range c.GrantTypes {
-		if g == "refresh_token" {
-			return true
-		}
-	}
-	return false
+	return clientRegisteredForRefresh(c)
+}
+
+// clientRegisteredForRefresh is the registration half of the refresh
+// eligibility test, without the scope policy. Rotation re-applies it:
+// the client's registration can be narrowed while a chain is live, and
+// a successor minted after that narrowing would extend a grant the
+// operator has just withdrawn.
+func clientRegisteredForRefresh(c *store.Client) bool {
+	return c != nil && slices.Contains(c.GrantTypes, grantTypeRefreshToken)
+}
+
+// refreshIssuanceEnabled reports whether this Provider may mint refresh
+// tokens for the client at all — the provider-level grant set and the
+// client's registration must both include refresh_token. It gates both
+// first issuance (every grant that can attach one) and rotation, so
+// removing the grant stops an existing chain rather than only stopping
+// new ones.
+func (d *Deps) refreshIssuanceEnabled(c *store.Client) bool {
+	return d.grantEnabled(grantTypeRefreshToken) && clientRegisteredForRefresh(c)
 }
 
 // pickRefreshTokenTTL returns the TTL the handler uses for a refresh

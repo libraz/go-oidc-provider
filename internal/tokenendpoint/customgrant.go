@@ -28,7 +28,7 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 	// Proof verification, client authentication, and the proof's
 	// replay marking run in the order [authenticateWithDPoP] documents.
 	ctx := r.Context()
-	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps, grantType)
 	if !ok {
 		return
 	}
@@ -203,12 +203,7 @@ func customGrantAccessTokenExtra(resp customgrant.Response) map[string]any {
 // require openid / offline_access, because delegation-style custom grants
 // (token-exchange) legitimately issue refresh tokens with no OIDC scope.
 func customGrantPermitsRefresh(c *store.Client) bool {
-	for _, g := range c.GrantTypes {
-		if g == "refresh_token" {
-			return true
-		}
-	}
-	return false
+	return clientRegisteredForRefresh(c)
 }
 
 // customGrantRefreshSubject picks the subject persisted on the

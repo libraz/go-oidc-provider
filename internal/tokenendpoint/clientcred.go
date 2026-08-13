@@ -24,7 +24,7 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	// Proof verification, client authentication, and the proof's
 	// replay marking run in the order [authenticateWithDPoP] documents.
 	ctx := r.Context()
-	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps, grantTypeClientCredentials)
 	if !ok {
 		return
 	}

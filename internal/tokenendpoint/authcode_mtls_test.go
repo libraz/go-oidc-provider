@@ -34,7 +34,10 @@ func mtlsFixture(tb testing.TB) *fixture {
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	prov := testkit.NewProvider(tb,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithFeature(feature.MTLS)),
+		testkit.WithOptions(
+			op.WithFeature(feature.MTLS),
+			clientCredsGrantsOption(),
+		),
 	)
 	return &fixture{
 		prov:     prov,

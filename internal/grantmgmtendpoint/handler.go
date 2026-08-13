@@ -12,6 +12,15 @@
 // authenticated client — a grant_id owned by a different client is
 // reported as 404 (not 403) so the endpoint does not confirm the
 // existence of another client's grant.
+//
+// A grant_id addresses exactly one grant. DELETE therefore revokes the
+// addressed grant and the tokens issued under it, and nothing else: a
+// (subject, client) pair may legitimately hold several independent
+// grants, because grant_management_action=create mints a fresh grant_id
+// on every use. Widening the delete to every grant of the same
+// (subject, client) would let one client's revoke silently destroy
+// grants the client still manages, behind a 204 that reads as though a
+// single grant was removed.
 package grantmgmtendpoint
 
 import (
@@ -20,7 +29,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -240,12 +248,10 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	revokedGrantIDs, err := revokeSubjectClientCascade(r.Context(), deps, g)
-	if err != nil {
-		// revokeSubjectClientCascade processes the requested grant last, so
-		// every sibling failure leaves this authenticated anchor live and
-		// queryable. Reporting 204 would be a false success; surface a
-		// server_error and let the client retry the cascade.
+	if err := revokeGrantCascade(r.Context(), deps, g.ID); err != nil {
+		// The cascade deletes the grant record last, so a failure leaves it
+		// live and queryable. Reporting 204 would be a false success; surface
+		// a server_error and let the client retry the cascade.
 		deps.audit().Emit(r.Context(), audit.Event{
 			Name:     auditGrantManagementRevokeFailed,
 			Level:    audit.LevelError,
@@ -267,59 +273,26 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 		ActorID:  g.Subject,
 		ClientID: client.ID,
 		Extras: map[string]any{
-			"grant_id":          g.ID,
-			"revoked_grant_ids": revokedGrantIDs,
+			"grant_id": g.ID,
 		},
 	})
 	stampNoStore(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func revokeSubjectClientCascade(ctx context.Context, deps Deps, g *store.Grant) ([]string, error) {
-	targets := map[string]struct{}{g.ID: {}}
-	grants, err := deps.Grants.ListBySubject(ctx, g.Subject)
-	if err != nil {
-		return nil, err
-	}
-	for _, cand := range grants {
-		if cand == nil || cand.Subject != g.Subject || cand.ClientID != g.ClientID {
-			continue
-		}
-		targets[cand.ID] = struct{}{}
-	}
-	ids := make([]string, 0, len(targets))
-	for id := range targets {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	// Keep the requested grant as the anchor until every sibling has passed
-	// its security-state cascade. The endpoint authenticates and reports the
-	// requested grant, so a sibling failure must leave that anchor queryable
-	// for a truthful retryable failure. Keep the returned ids sorted for audit
-	// compatibility, but process a separate order with the anchor last.
-	processIDs := append([]string(nil), ids...)
-	for i, id := range processIDs {
-		if id != g.ID {
-			continue
-		}
-		copy(processIDs[i:], processIDs[i+1:])
-		processIDs[len(processIDs)-1] = id
-		break
-	}
-	for _, id := range processIDs {
-		if err := revokeGrantCascade(ctx, deps, id); err != nil {
-			return nil, err
-		}
-	}
-	return ids, nil
-}
-
-// revokeGrantCascade tears the grant down: it tombstones / denylists the
+// revokeGrantCascade tears one grant down: it tombstones / denylists the
 // JWT access tokens, revokes the opaque access tokens and refresh tokens
-// bound to the grant, then deletes the grant record so a subsequent query
-// reports it gone. Mirrors the token endpoint's grant teardown. Every
-// security-state write must succeed before deletion: otherwise the caller
-// receives a server error and can retry while the grant remains queryable.
+// bound to that grant id, then deletes the grant record so a subsequent
+// query reports it gone. Mirrors the token endpoint's grant teardown.
+// Every security-state write must succeed before deletion: otherwise the
+// caller receives a server error and can retry while the grant remains
+// queryable.
+//
+// Every store call is keyed by grantID, so the request's blast radius is
+// the grant the caller addressed. serveRevoke never enumerates the
+// subject's other grants: the endpoint has no way to tell a stale
+// duplicate from a grant the client created deliberately, and only the
+// addressed grant_id was authenticated against the client.
 func revokeGrantCascade(ctx context.Context, deps Deps, grantID string) error {
 	now := deps.now().UTC()
 	if err := endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{

@@ -26,6 +26,7 @@ const grantTypeWire = "urn:ietf:params:oauth:grant-type:device_code"
 //     state to the matching RFC 8628 §3.5 wire code).
 //   - ErrDenied                   → access_denied.
 //   - ErrExpiredOrConsumed        → expired_token.
+//   - ErrSubjectMissing           → invalid_grant.
 var (
 	// ErrGrantNotPermitted indicates the client is not registered
 	// for the device_code grant. The check guards against a
@@ -69,6 +70,18 @@ var (
 	// the user approved, or the record was already consumed by an
 	// earlier successful poll.
 	ErrExpiredOrConsumed = errors.New("devicecode: device_code expired or already consumed")
+
+	// ErrSubjectMissing indicates the record reached the Approved
+	// state without an end-user subject. OIDC Core 1.0 §2 makes "sub"
+	// REQUIRED, so a verification ceremony that was never tied to a
+	// user cannot produce a credential: an id_token with an empty
+	// "sub" is an anonymous assertion a relying party may map onto the
+	// empty-string key and confuse with another account. The record is
+	// refused outright rather than issued with a placeholder, and the
+	// refusal is independent of scope, refresh eligibility, and the
+	// embedder's subject projection so the same wire code comes back on
+	// every configuration.
+	ErrSubjectMissing = errors.New("devicecode: approved record has no subject")
 )
 
 // AuthorizeInput is the parameter bundle [Authorize] consumes.
@@ -132,11 +145,13 @@ type Authorized struct {
 //  2. Record state must be Approved (Pending → pending wire code,
 //     Denied → denied, Expired/Consumed → expired_token; Authorize
 //     surfaces the cause via the matching sentinel).
-//  3. cnf binding presented at /token must match the binding the
+//  3. The record must name a subject; an approval without one cannot
+//     certify anyone (ErrSubjectMissing).
+//  4. cnf binding presented at /token must match the binding the
 //     device committed to at /device_authorization. Empty matches
 //     empty (bearer flow); a record-side binding without a request-
 //     side one is a silent downgrade attempt.
-//  4. The record's scope is the binding ceiling; Authorize re-checks
+//  5. The record's scope is the binding ceiling; Authorize re-checks
 //     the subset relationship against the client's registered
 //     Scopes so a post-issue client mutation cannot widen the grant.
 //
@@ -155,6 +170,9 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 	}
 	if err := mapStatusToError(in.Record.Status); err != nil {
 		return nil, err
+	}
+	if in.Record.Subject == "" {
+		return nil, ErrSubjectMissing
 	}
 	binding, err := matchCnfBinding(in)
 	if err != nil {

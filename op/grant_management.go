@@ -34,7 +34,11 @@ const (
 	GrantActionQuery GrantManagementAction = "query"
 
 	// GrantActionRevoke is the delete operation on the grant management
-	// endpoint (DELETE {endpoint}/{grant_id}).
+	// endpoint (DELETE {endpoint}/{grant_id}). It revokes the grant the
+	// grant_id names and the tokens issued under it, and nothing else:
+	// GrantActionCreate mints a fresh grant_id on every use, so the same
+	// (subject, client) pair may hold further grants that the delete
+	// leaves usable.
 	GrantActionRevoke GrantManagementAction = "revoke"
 )
 

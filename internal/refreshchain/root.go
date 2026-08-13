@@ -4,7 +4,6 @@ package refreshchain
 
 import (
 	"context"
-	"errors"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -21,21 +20,26 @@ import (
 // the public Find/Consume credential path hash-only — a leaked digest is never
 // redeemable — while the chain walk still follows the hashed pointers.
 //
-// # A missing ancestor is not a failed walk
+// # An unresolvable ancestor is not a failed walk
 //
 // The walk stops at the deepest node it can resolve rather than giving up when
-// an ancestor has gone. Rotation records are reclaimed oldest-first — by a
-// scheduled sweep, or by a backend TTL, or by an operator's own retention — so
-// the records that go missing are always a prefix of the chain, and every token
-// that is still redeemable hangs below the boundary the walk stopped at.
-// Revoking from there retires exactly the tokens a replay could still spend.
+// an ancestor cannot be fetched, whatever the reason: the record is gone, the
+// backend timed out, or it answered with a contract-violating nil. Rotation
+// records are reclaimed oldest-first — by a scheduled sweep, or by a backend
+// TTL, or by an operator's own retention — so the records that go missing are
+// always a prefix of the chain, and every token that is still redeemable hangs
+// below the boundary the walk stopped at. Revoking from there retires exactly
+// the tokens a replay could still spend.
 //
 // Treating the gap as a failed walk would be strictly worse than useless:
 // [store.RefreshTokenStore.RevokeChain] would never be called, so a chain whose
 // oldest record had aged out would keep every live descendant alive after a
 // replay was detected on it — and it is the long-lived chains, the ones an
 // attacker has had the most time to work with, that lose their oldest records
-// first.
+// first. A transport fault deserves the same treatment for a sharper reason:
+// the cascade is armed once, at the moment a replay is detected, and is never
+// retried, so a momentary store timeout on an ancestor lookup would drop the
+// revocation permanently.
 //
 // Two failures stay hard, because neither has a safe node to fall back to:
 // startID itself not resolving (there is nothing to cascade from), and a record
@@ -52,7 +56,10 @@ func FindRoot(ctx context.Context, tokens store.RefreshTokenStore, startID strin
 	for i := range limit {
 		rec, err := lookup(ctx, tokens, current, i == 0)
 		if err != nil || rec == nil {
-			if deepest != "" && errors.Is(err, store.ErrNotFound) {
+			// deepest is only ever set once a hop has been resolved, so a
+			// non-empty value means the failure is on an ancestor and the
+			// walk has a node worth cascading from.
+			if deepest != "" {
 				return deepest, true
 			}
 			return "", false

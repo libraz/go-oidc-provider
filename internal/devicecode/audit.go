@@ -38,7 +38,8 @@ const (
 	// devicecodekit.ApproveUserCode once the substore has accepted
 	// the transition. An embedder driving the transition through the
 	// substore directly, rather than through that helper, emits it
-	// itself. Extras carry: subject.
+	// itself. The approving subject rides on Event.ActorID; the
+	// event carries no Extras.
 	AuditVerificationApproved = string(auditevent.AuditDeviceCodeVerificationApproved)
 
 	// AuditVerificationDenied is emitted when the verification page

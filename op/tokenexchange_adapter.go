@@ -35,6 +35,10 @@ func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispat
 			Audit:              cfg.effectiveAuditEmitter(),
 			Clock:              clock,
 			MaxAccessTTL:       cfg.accessTokenTTL,
+			// The same tolerance /userinfo is wired with, so a
+			// subject_token the resource-server surfaces still accept is
+			// not rejected here under clock skew.
+			Leeway: defaultUserInfoLeeway,
 		})
 		if err == nil {
 			extras = append(extras, h)

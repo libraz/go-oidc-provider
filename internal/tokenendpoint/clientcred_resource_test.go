@@ -131,7 +131,7 @@ func TestClientCredentials_Resource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t)
+			f := newClientCredsFixture(t)
 			client, secret := clientCredsClientWithResources(
 				t, f.prov, tc.clientID,
 				[]string{"read"},
@@ -261,7 +261,7 @@ func TestClientCredentials_Resource_Canonicalisation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t)
+			f := newClientCredsFixture(t)
 			client, secret := clientCredsClientWithResources(
 				t, f.prov, tc.clientID,
 				[]string{"read"},
@@ -317,7 +317,7 @@ func TestClientCredentials_Resource_RegisteredNonCanonical(t *testing.T) {
 	t.Parallel()
 
 	const canonical = "https://api.example.com/orders"
-	f := newFixture(t)
+	f := newClientCredsFixture(t)
 	client, secret := clientCredsClientWithResources(
 		t, f.prov, "client-cc-legacy-registered",
 		[]string{"read"},

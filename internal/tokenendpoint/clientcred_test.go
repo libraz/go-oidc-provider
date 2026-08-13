@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -59,10 +60,28 @@ func clientCredsClient(tb testing.TB, prov *testkit.Provider, scopes []string) (
 // The response body MUST carry a JWT-shaped access_token,
 // token_type=Bearer, expires_in > 0, and the joined scope. It MUST
 // NOT carry refresh_token or id_token (§4.4.3 + no end-user).
+// newClientCredsFixture builds a fixture whose Provider actually enables
+// the client_credentials grant. The default grant set is
+// authorization_code + refresh_token, and the token endpoint rejects a
+// grant_type outside the configured set before dispatch, so a
+// client_credentials test that skipped this option would be asserting
+// against unsupported_grant_type rather than the grant it means to
+// exercise.
+func newClientCredsFixture(tb testing.TB, opts ...op.Option) *fixture {
+	tb.Helper()
+	return newFixtureWithOptions(tb, append([]op.Option{clientCredsGrantsOption()}, opts...)...)
+}
+
+// clientCredsGrantsOption enables client_credentials alongside the
+// library defaults.
+func clientCredsGrantsOption() op.Option {
+	return op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials)
+}
+
 func TestClientCredentials_HappyPath(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newClientCredsFixture(t)
 	client, secret := clientCredsClient(t, f.prov, []string{"read", "write"})
 
 	resp := f.post(t, clientCredsForm(""), client.ID, secret)
@@ -116,7 +135,7 @@ func TestClientCredentials_HappyPath(t *testing.T) {
 func TestClientCredentials_AuthorizationDetailsAcceptedAndEchoed(t *testing.T) {
 	t.Parallel()
 
-	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
+	f := newClientCredsFixture(t, paymentAuthorizationDetailsOption())
 	client, secret := clientCredsClient(t, f.prov, []string{"payments"})
 
 	form := clientCredsForm("payments")
@@ -149,7 +168,7 @@ func TestClientCredentials_AuthorizationDetailsAcceptedAndEchoed(t *testing.T) {
 func TestClientCredentials_RequestedScopeSubset(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newClientCredsFixture(t)
 	client, secret := clientCredsClient(t, f.prov, []string{"read", "write", "delete"})
 
 	resp := f.post(t, clientCredsForm("read write"), client.ID, secret)
@@ -170,7 +189,7 @@ func TestClientCredentials_RequestedScopeSubset(t *testing.T) {
 func TestClientCredentials_ScopeOutsideRegistered(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newClientCredsFixture(t)
 	client, secret := clientCredsClient(t, f.prov, []string{"read"})
 
 	resp := f.post(t, clientCredsForm("read write"), client.ID, secret)
@@ -215,7 +234,7 @@ func TestClientCredentials_ScopeAllowedClientsRejected(t *testing.T) {
 func TestClientCredentials_OpenIDScopeRejected(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newClientCredsFixture(t)
 	client, secret := clientCredsClient(t, f.prov, []string{"openid", "read"})
 
 	resp := f.post(t, clientCredsForm("openid"), client.ID, secret)
@@ -244,7 +263,7 @@ func TestClientCredentials_OpenIDScopeRejected(t *testing.T) {
 func TestClientCredentials_PublicClient_UnauthorizedClient(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newClientCredsFixture(t)
 	client := f.prov.RegisterClient(t, testkit.ClientFixture{
 		ID:           "client-cc-pub",
 		PublicClient: true,
@@ -278,7 +297,7 @@ func TestClientCredentials_PublicClient_UnauthorizedClient(t *testing.T) {
 func TestClientCredentials_GrantNotInClientGrantTypes(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newClientCredsFixture(t)
 	// f.confidentialClientFixture defaults to authorization_code +
 	// refresh_token in GrantTypes, which is exactly the configuration
 	// this test wants to exercise.
@@ -450,7 +469,7 @@ func clientCredsMTLSClient(tb testing.TB, prov *testkit.Provider) (*store.Client
 func TestClientCredentials_GidClaim_AbsentForSyntheticGrant(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	f := newClientCredsFixture(t)
 	client, secret := clientCredsClient(t, f.prov, []string{"read"})
 
 	resp := f.post(t, clientCredsForm("read"), client.ID, secret)
@@ -489,7 +508,10 @@ func TestClientCredentials_OpaqueFormat_PersistsRow(t *testing.T) {
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	prov := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithAccessTokenFormat(op.AccessTokenFormatOpaque)),
+		testkit.WithOptions(
+			clientCredsGrantsOption(),
+			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
+		),
 	)
 	f := &fixture{
 		prov:     prov,

@@ -31,7 +31,10 @@ func dpopFixture(tb testing.TB) *fixture {
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	prov := testkit.NewProvider(tb,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithFeature(feature.DPoP)),
+		testkit.WithOptions(
+			op.WithFeature(feature.DPoP),
+			clientCredsGrantsOption(),
+		),
 	)
 	return &fixture{
 		prov:     prov,

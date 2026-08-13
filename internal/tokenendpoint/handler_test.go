@@ -343,7 +343,10 @@ func TestHandler_UnknownGrantType(t *testing.T) {
 // [tokenendpoint.tokenSingleValuedParams] (asserted indirectly: a
 // regression that drops a row stops failing this row but the wire
 // shape it allows is exactly the parser-confusion vector this
-// guard exists to close).
+// guard exists to close). The list itself is held to the package's
+// actual form reads by a source-level guard in the package tests, so
+// a parameter that reaches a grant handler without a row here fails
+// there rather than passing unnoticed.
 func TestHandler_DuplicateSingleValuedParameter(t *testing.T) {
 	t.Parallel()
 
@@ -366,6 +369,7 @@ func TestHandler_DuplicateSingleValuedParameter(t *testing.T) {
 		{"scope", "scope"},
 		{"device_code", "device_code"},
 		{"auth_req_id", "auth_req_id"},
+		{"authorization_details", "authorization_details"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

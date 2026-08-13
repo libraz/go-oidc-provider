@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	josev4 "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
+
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -40,6 +43,25 @@ func signHint(t *testing.T, key tokens.SigningKey, claims tokens.IDTokenClaims) 
 	raw, err := tokens.SignIDToken(key, claims)
 	if err != nil {
 		t.Fatalf("tokens.SignIDToken: %v", err)
+	}
+	return raw
+}
+
+// signRawHint serialises an arbitrary claim map as an id_token-shaped
+// JWS. It exists for the claim sets [tokens.SignIDToken] refuses to
+// produce, which a hint verifier still has to reject on its own.
+func signRawHint(t *testing.T, key tokens.SigningKey, claims map[string]any) string {
+	t.Helper()
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.ES256, Key: key.Signer},
+		(&josev4.SignerOptions{}).WithHeader("kid", key.KeyID).WithType("JWT"),
+	)
+	if err != nil {
+		t.Fatalf("josev4.NewSigner: %v", err)
+	}
+	raw, err := jwt.Signed(signer).Claims(claims).Serialize()
+	if err != nil {
+		t.Fatalf("jwt.Serialize: %v", err)
 	}
 	return raw
 }
@@ -122,8 +144,15 @@ func TestVerifyIDTokenHint_Rejections(t *testing.T) {
 	foreignIssuer := baseHintClaims(now)
 	foreignIssuer.Issuer = "https://other-op.example"
 
-	noSubject := baseHintClaims(now)
-	noSubject.Subject = ""
+	// A subject-less hint cannot come from this OP's signer, which
+	// refuses to emit one; it is assembled by hand because the hint is
+	// attacker-supplied input that any producer could have minted.
+	noSubject := signRawHint(t, key, map[string]any{
+		"iss": hintIssuer,
+		"aud": hintClientID,
+		"iat": now.Unix(),
+		"exp": now.Add(10 * time.Minute).Unix(),
+	})
 
 	cases := []struct {
 		name     string
@@ -178,7 +207,7 @@ func TestVerifyIDTokenHint_Rejections(t *testing.T) {
 			name:     "no subject",
 			set:      set,
 			clientID: hintClientID,
-			raw:      signHint(t, key, noSubject),
+			raw:      noSubject,
 			want:     ciba.ErrIDTokenHintSubject,
 		},
 	}

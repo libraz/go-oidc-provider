@@ -16,9 +16,11 @@
 //
 //   - Replay defence: when [store.RefreshTokenStore.Consume] reports
 //     [store.ErrAlreadyConsumed], the caller sees [ErrTokenReplayed] and
-//     the rotation chain is retired — walked to its root, then passed to
-//     [store.RefreshTokenStore.RevokeChain] together with a matching grant
-//     tombstone. Who runs that cascade is decided by
+//     the rotation history is retired — walked to its chain root and passed
+//     to [store.RefreshTokenStore.RevokeChain], or, when no root resolves,
+//     retired grant-wide through [store.RefreshTokenStore.RevokeByGrant] —
+//     together with a matching grant tombstone. Who runs that cascade is
+//     decided by
 //     [ExchangerConfig.DeferReplayCascade]: by default the Exchanger runs
 //     it inline, and a caller that wraps Exchange in a [store.Tx] sets the
 //     flag and calls [Exchanger.RevokeReplayedChain] itself once the
@@ -94,9 +96,11 @@ var (
 	// ErrTokenReplayed indicates the token was consumed previously.
 	// Unless the caller took ownership of the cascade through
 	// [ExchangerConfig.DeferReplayCascade], the exchanger has already
-	// invoked [store.RefreshTokenStore.RevokeChain] on the chain root by
-	// the time this error is returned; a caller that did opt in MUST call
-	// [Exchanger.RevokeReplayedChain] with the presented token.
+	// retired the rotation history by the time this error is returned —
+	// through [store.RefreshTokenStore.RevokeChain] on the chain root, or
+	// [store.RefreshTokenStore.RevokeByGrant] when no root resolves; a
+	// caller that did opt in MUST call [Exchanger.RevokeReplayedChain]
+	// with the presented token.
 	ErrTokenReplayed = errors.New("refresh: token already consumed")
 
 	// ErrClientMismatch indicates the authenticated client does not match
@@ -110,10 +114,15 @@ var (
 )
 
 // chainWalkLimit caps how far [Exchanger] walks parent pointers when
-// computing a chain root after a replay detection. The limit is
-// intentionally generous — production grants rotate at most once per
-// access-token lifetime — but it prevents a corrupted store from looping
-// forever.
+// computing a chain root after a replay detection. It is a resource guard
+// against a pointer graph that loops or is otherwise corrupted, not a depth
+// an honest rotation history cannot reach: nothing bounds the length of a
+// legitimate chain, because every rotation slides the refresh-token expiry
+// forward, so a grant that keeps being refreshed grows one node per refresh
+// for as long as the client keeps refreshing it. Reaching the limit
+// therefore MUST NOT weaken the RFC 9700 §2.2.2 cascade — see
+// [Exchanger.revokeChainBestEffort], which falls back to the grant-scoped
+// revocation, a superset of the chain.
 const chainWalkLimit = 1024
 
 // Issuer mints refresh tokens and persists them via a
@@ -673,13 +682,22 @@ func (e *Exchanger) RevokeReplayedChain(ctx context.Context, presentedToken stri
 // raw value: the token is the bearer secret itself, and a custom
 // [audit.Emitter] the embedder wires in has no guarantee of routing
 // through the key-name redaction the built-in Slog emitter applies.
+//
+// The key deliberately avoids the word "token". Key-name redaction
+// masks any attribute whose name contains it, and this event's only
+// correlation field is what tells an operator which rotation chain
+// was replayed — the single most security-relevant record the OP
+// writes would otherwise reach the sink as the redaction sentinel.
+// Exempting a token-shaped key name would instead carve a hole that
+// any future caller could put a raw token through; naming the field
+// after what it actually holds keeps both properties.
 func (e *Exchanger) emitReplayDetected(ctx context.Context, presentedID string) {
 	e.audit.Emit(ctx, audit.Event{
 		Name:    auditRefreshReplayDetected,
 		Level:   audit.LevelWarn,
 		Message: "refresh-token replay detected",
 		Extras: map[string]any{
-			"refresh_token_id": audit.Fingerprint(presentedID),
+			"refresh_chain_fingerprint": audit.Fingerprint(presentedID),
 		},
 	})
 }
@@ -750,65 +768,114 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 	return elapsed >= 0 && elapsed <= e.graceTTL
 }
 
-// revokeChainBestEffort walks parent pointers from presentedID up to the
-// chain root and calls [store.RefreshTokenStore.RevokeChain] on it. It is
-// reached from [Exchanger.onReplayDetected] in the inline mode and from
-// [Exchanger.RevokeReplayedChain] when the caller deferred the cascade.
-// When the [Exchanger] was wired with a [store.GrantRevocationStore],
-// the cascade also writes a [store.GrantTombstone] keyed by the chain
-// root's GrantID so JWT access tokens descended from the replayed
-// chain are blocked at userinfo / introspection / mint time.
+// revokeChainBestEffort retires the rotation history behind a detected
+// replay. It is reached from [Exchanger.onReplayDetected] in the inline mode
+// and from [Exchanger.RevokeReplayedChain] when the caller deferred the
+// cascade.
 //
-// The "best effort" qualifier reflects the failure modes: if the
-// consumed record is no longer findable (already garbage-collected,
-// store hiccup) we cannot compute a root and quietly drop the
-// revocation. Transport faults on RevokeChain or RevokeGrant are
-// surfaced as warn-level audit events (auditRefreshChainRevokeFailed
-// / auditRefreshGrantRevokeFailed) so SOC tooling can spot a silent
-// failure even though the wire response stays at the user-visible
-// invalid_grant contract via [ErrTokenReplayed].
+// The cascade has two rungs, and it takes the second whenever the first
+// cannot be shown to have run:
+//
+//   - Walk parent pointers to the chain root and call
+//     [store.RefreshTokenStore.RevokeChain] on it. This retires exactly the
+//     replayed chain.
+//   - Otherwise call [store.RefreshTokenStore.RevokeByGrant] on the grant the
+//     presented token was issued under. Every token in a chain inherits the
+//     grant it was issued under, so the grant is a superset of the chain: the
+//     fallback may retire sibling chains issued under the same consent, but it
+//     cannot leave a live successor of the replayed chain behind.
+//
+// The second rung is what keeps [chainWalkLimit] from being load-bearing. A
+// chain longer than the limit resolves no root, and a chain that long is the
+// ordinary outcome of a client that has simply kept refreshing — the exact
+// case where an attacker holding a live successor has had the most time to
+// work with it. Retiring the whole grant is the safe direction there: RFC 9700
+// §2.2.2 requires the compromised chain to die, and a warn-level log is not a
+// revocation.
+//
+// When the [Exchanger] was wired with a [store.GrantRevocationStore] the
+// cascade also writes a [store.GrantTombstone] keyed by that same grant, so
+// JWT access tokens descended from the replayed chain are blocked at
+// userinfo / introspection / mint time.
+//
+// The "best effort" qualifier covers the one state neither rung can act on:
+// the presented record no longer resolves at all (already garbage-collected,
+// store hiccup), leaving neither a chain root nor a grant to key on. That, and
+// transport faults on either rung, are surfaced as warn-level audit events
+// (auditRefreshChainRevokeFailed / auditRefreshGrantRevokeFailed) so SOC
+// tooling can spot a silent failure even though the wire response stays at the
+// user-visible invalid_grant contract via [ErrTokenReplayed].
 func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) {
+	// The grant is resolved before anything is revoked. Both the fallback
+	// rung and the tombstone key on it, and either cascade rewrites the
+	// records it would otherwise have to be read back from.
+	grantID := e.presentedGrantID(ctx, presentedID)
+	if !e.revokeChainFromRoot(ctx, presentedID) {
+		e.revokeWholeGrant(ctx, grantID)
+	}
+	e.tombstoneGrant(ctx, grantID)
+}
+
+// presentedGrantID resolves the grant the replayed token was issued under.
+// presentedID is the bearer value the client sent, so it goes through the
+// hash-only credential path rather than the chain-handle path. An empty
+// result means the record could not be read at all; callers treat that as
+// "no grant to cascade onto" rather than revoking the zero value.
+func (e *Exchanger) presentedGrantID(ctx context.Context, presentedID string) string {
+	rec, err := e.store.Find(ctx, presentedID)
+	if err != nil || rec == nil {
+		return ""
+	}
+	return rec.GrantID
+}
+
+// revokeChainFromRoot runs the chain-scoped rung and reports whether it
+// completed. A false result means the replayed chain still has redeemable
+// successors — the walk produced no root, or the store rejected the cascade —
+// so the caller MUST run the grant-scoped rung.
+func (e *Exchanger) revokeChainFromRoot(ctx context.Context, presentedID string) bool {
 	rootID, ok := e.findChainRoot(ctx, presentedID)
 	if !ok {
-		e.audit.Emit(ctx, audit.Event{
-			Name:    auditRefreshChainRevokeFailed,
-			Level:   audit.LevelWarn,
-			Message: "refresh chain root lookup failed after replay detection",
-			Extras: map[string]any{
-				"reason": "chain_root_lookup_failed",
-			},
-		})
-		return
+		e.emitChainRevokeFailed(ctx,
+			"refresh chain root lookup failed after replay detection", "chain_root_lookup_failed")
+		return false
 	}
 	if err := e.store.RevokeChain(ctx, rootID); err != nil {
-		e.audit.Emit(ctx, audit.Event{
-			Name:    auditRefreshChainRevokeFailed,
-			Level:   audit.LevelWarn,
-			Message: "refresh chain revoke failed after replay detection",
-			Extras: map[string]any{
-				"reason": err.Error(),
-			},
-		})
-		// Continue to the grant tombstone path: a failed RT cascade
-		// does not block the JWT-AT cascade, and the embedder may
-		// have wired the two against different backends.
+		e.emitChainRevokeFailed(ctx,
+			"refresh chain revoke failed after replay detection", err.Error())
+		return false
 	}
-	if e.grantRevocations == nil {
+	return true
+}
+
+// revokeWholeGrant runs the grant-scoped rung of the cascade. An empty
+// grantID is reported rather than ignored: it is the only state in which the
+// OP has confirmed a replay and retired nothing.
+func (e *Exchanger) revokeWholeGrant(ctx context.Context, grantID string) {
+	if grantID == "" {
+		e.emitChainRevokeFailed(ctx,
+			"refresh grant lookup failed after replay detection", "grant_lookup_failed")
 		return
 	}
-	// rootID is the chain handle returned by findChainRoot, not a bearer
-	// credential, so resolve it through the chain-walk helper rather than the
-	// hash-only public Find (which a hash-on-store backend would miss).
-	rootRec, ferr := refreshchain.FindByHandle(ctx, e.store, rootID)
-	if ferr != nil || rootRec == nil || rootRec.GrantID == "" {
-		// Nothing more to do: the chain root is unfindable or carries
-		// no GrantID. JWT-AT revocation is grant-keyed, so without a
-		// GrantID we cannot tombstone the descendants.
+	if err := e.store.RevokeByGrant(ctx, grantID); err != nil {
+		e.emitChainRevokeFailed(ctx,
+			"refresh grant revoke failed after replay detection", err.Error())
+	}
+}
+
+// tombstoneGrant writes the [store.GrantTombstone] that blocks JWT access
+// tokens descended from the replayed chain. It is a no-op without a
+// configured [store.GrantRevocationStore] — the refresh cascade then still
+// runs, but outstanding JWT access tokens stay redeemable until their natural
+// expiry — and without a grant to key on, since JWT-AT revocation is
+// grant-keyed.
+func (e *Exchanger) tombstoneGrant(ctx context.Context, grantID string) {
+	if e.grantRevocations == nil || grantID == "" {
 		return
 	}
 	now := e.clock().UTC()
 	tomb := store.GrantTombstone{
-		GrantID:   rootRec.GrantID,
+		GrantID:   grantID,
 		RevokedAt: now,
 		Reason:    chainRevokeReason,
 	}
@@ -821,16 +888,31 @@ func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID strin
 			Level:   audit.LevelWarn,
 			Message: "grant tombstone write failed after refresh replay detection",
 			Extras: map[string]any{
-				"grant_id": rootRec.GrantID,
+				"grant_id": grantID,
 				"reason":   err.Error(),
 			},
 		})
 	}
 }
 
+// emitChainRevokeFailed raises the warn-level signal that one rung of the
+// post-replay cascade did not run. reason carries either a transport error or
+// the name of the resolution step that produced nothing, so an operator can
+// tell an unreachable backend from an unresolvable chain.
+func (e *Exchanger) emitChainRevokeFailed(ctx context.Context, message, reason string) {
+	e.audit.Emit(ctx, audit.Event{
+		Name:    auditRefreshChainRevokeFailed,
+		Level:   audit.LevelWarn,
+		Message: message,
+		Extras: map[string]any{
+			"reason": reason,
+		},
+	})
+}
+
 // findChainRoot follows parent pointers up to the chain's root or returns
-// ok=false if the walk fails / loops. The walk terminates at the first
-// record whose ParentID is nil; chainWalkLimit caps the iteration count.
+// ok=false if the walk fails / loops / exceeds [chainWalkLimit]. The walk
+// terminates at the first record whose ParentID is nil.
 func (e *Exchanger) findChainRoot(ctx context.Context, startID string) (string, bool) {
 	return refreshchain.FindRoot(ctx, e.store, startID, chainWalkLimit)
 }

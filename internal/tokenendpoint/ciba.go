@@ -40,7 +40,7 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 	}
 	// Proof verification, client authentication, and the proof's
 	// replay marking run in the order [authenticateWithDPoP] documents.
-	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps, grantTypeCIBA)
 	if !ok {
 		return
 	}
@@ -71,7 +71,7 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 		emitCIBAReject(ctx, deps, client.ID, reason)
 		return
 	}
-	issued, err := prepareCIBAResponse(ctx, deps, client, rec, authorized, binding)
+	issued, err := prepareCIBAResponse(ctx, deps, client, authorized, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -293,7 +293,8 @@ func cibaAuthErrorCode(err error) string {
 		return errExpiredToken
 	case errors.Is(err, cgrant.ErrCnfBindingMismatch),
 		errors.Is(err, cgrant.ErrCnfBindingMissing),
-		errors.Is(err, cgrant.ErrAlreadyRedeemed):
+		errors.Is(err, cgrant.ErrAlreadyRedeemed),
+		errors.Is(err, cgrant.ErrSubjectMissing):
 		return errInvalidGrant
 	default:
 		return errServerError
@@ -313,6 +314,8 @@ func cibaAuthErrorCode(err error) string {
 //   - ErrDenied                → access_denied (same defensive note).
 //   - ErrExpired               → expired_token (CIBA Core §11; TTL).
 //   - ErrAlreadyRedeemed       → invalid_grant (RFC 6749 §5.2; replay).
+//   - ErrSubjectMissing        → invalid_grant (OIDC Core 1.0 §2; the
+//     approval names no end user, so no credential can be minted).
 //   - default                  → server_error (programmer bug).
 func writeCIBAAuthError(w http.ResponseWriter, err error) {
 	switch {
@@ -338,6 +341,9 @@ func writeCIBAAuthError(w http.ResponseWriter, err error) {
 	case errors.Is(err, cgrant.ErrAlreadyRedeemed):
 		writeError(w, http.StatusBadRequest, errInvalidGrant,
 			"auth_req_id was already redeemed")
+	case errors.Is(err, cgrant.ErrSubjectMissing):
+		writeError(w, http.StatusBadRequest, errInvalidGrant,
+			"authorization request is not associated with an end user")
 	default:
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 	}
@@ -417,15 +423,26 @@ func (p preparedCIBAResponse) cleanup(ctx context.Context, deps Deps) {
 // prepareCIBAResponse completes every fallible token-assembly step before
 // CIBARequestStore.Consume makes the authorization irrevocable. This keeps an
 // approved CIBA ceremony retryable after signing, JWE, or persistence faults.
+//
+// The bc-authorize record is deliberately not a parameter: its ID is the raw
+// auth_req_id, which is a bearer secret the substore contract requires
+// backends to keep hashed at rest. Reusing it as the grant identifier would
+// republish it in the access token's "gid" claim, on the access-token /
+// refresh-token rows, and in the audit stream. Redemption therefore allocates
+// its own grant identifier, which is safe to disclose because it authorises
+// nothing on its own.
 func prepareCIBAResponse(
 	ctx context.Context,
 	deps Deps,
 	client *store.Client,
-	record *store.CIBARequest,
 	authorized *cgrant.Authorized,
 	binding tokenBinding,
 ) (out preparedCIBAResponse, err error) {
 	now := deps.now().UTC()
+	grantID, err := newJTI()
+	if err != nil {
+		return preparedCIBAResponse{}, err
+	}
 	resource := ""
 	if len(authorized.Audience) > 0 {
 		resource = authorized.Audience[0]
@@ -463,7 +480,7 @@ func prepareCIBAResponse(
 		authorized.Subject,
 		publicSubject,
 		client.ID,
-		record.ID,
+		grantID,
 		authorized.Scope,
 		resource,
 		now,
@@ -496,7 +513,7 @@ func prepareCIBAResponse(
 		deps,
 		client,
 		authorized.Subject,
-		record.ID,
+		grantID,
 		authorized.Scope,
 		resource,
 		"",

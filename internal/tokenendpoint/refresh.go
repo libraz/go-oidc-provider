@@ -37,7 +37,7 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	// token was DPoP-bound, jkt match) depend on the exchange outcome
 	// and are enforced post-exchange via [enforceDPoPRefreshBinding].
 	ctx := r.Context()
-	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps, grantTypeRefreshToken)
 	if !ok {
 		return
 	}
@@ -667,6 +667,7 @@ func serveGraceRetry(
 	client *store.Client,
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
+	transactional bool,
 ) {
 	response, found, err := loadRefreshRetryResponse(ctx, deps, exchanged.ConsumedID)
 	if err != nil {
@@ -699,8 +700,12 @@ func serveGraceRetry(
 	// hand back one the client can no longer use. Re-mint the access
 	// token against the current binding while keeping the idempotent
 	// successor refresh token and id_token.
+	//
+	// The bearer branch below mints nothing, so it leaves the single live
+	// access token the original rotation produced exactly as it is; the
+	// re-minting branch owes the prior-token cascade.
 	if binding.constrained() {
-		reissueGraceAccessToken(ctx, w, deps, client, exchanged, binding, &response)
+		reissueGraceAccessToken(ctx, w, deps, client, exchanged, binding, &response, transactional)
 		return
 	}
 	writeSuccess(w, response)
@@ -717,7 +722,7 @@ func issueRefreshResponse(
 	transactional bool,
 ) {
 	if exchanged.InGrace {
-		serveGraceRetry(ctx, w, deps, client, exchanged, binding)
+		serveGraceRetry(ctx, w, deps, client, exchanged, binding, transactional)
 		return
 	}
 	now := deps.now().UTC()
@@ -726,29 +731,7 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
 	}
-	// Opaque-format chains revoke the prior access token atomically with
-	// the new mint. Resource servers calling /oidc/introspect on every
-	// request observe the revocation immediately, so the
-	// stolen-but-still-valid window collapses to clock-skew. The JWT
-	// path deliberately leaves prior tokens alive: doing otherwise would
-	// force every JWT verification through introspection, defeating the
-	// JWT optimisation that motivated the registry design. Revocation
-	// runs BEFORE the new mint so a colliding hash on Save
-	// (impossible-by-construction with 256-bit entropy) cannot leave the
-	// chain in a half-revoked state.
-	if err := revokePriorOpaqueAT(ctx, deps, exchanged.Resource, exchanged.GrantID); err != nil {
-		deps.audit().Emit(ctx, audit.Event{
-			Name:     auditRefreshPriorAccessTokenRevokeFailed,
-			Level:    audit.LevelError,
-			Message:  "prior access-token revoke failed during refresh rotation",
-			ActorID:  exchanged.Subject,
-			ClientID: client.ID,
-			Extras: map[string]any{
-				"failure_stage": failureStagePriorAccessTokenRevoke,
-				"retryable":     transactional,
-			},
-		})
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+	if !retirePriorOpaqueAccessTokens(ctx, w, deps, client, exchanged, transactional) {
 		return
 	}
 	// Mint refusal under a tombstoned grant: under the
@@ -847,9 +830,14 @@ func issueRefreshResponse(
 // token bound to a key the client may no longer hold, so every resource
 // call would fail with an invalid_token thumbprint mismatch. The refresh
 // token stays fixed; only the access token is minted afresh against the
-// current binding, and the grant-tombstone mint-refusal guard runs
-// exactly as it does on a first-issue refresh so a replay cannot slip a
-// fresh access token past a grant that has since been revoked.
+// current binding, and the guards a first-issue refresh runs before its
+// mint run here too: the grant-tombstone mint refusal, so a replay cannot
+// slip a fresh access token past a grant that has since been revoked, and
+// the prior-opaque-access-token cascade, so the retry does not leave the
+// access token from the original rotation live alongside the one it hands
+// back. Both are re-runs of idempotent work — the cascade revokes by grant
+// and the tombstone check only reads — so recovering a lost response costs
+// the client nothing extra.
 func reissueGraceAccessToken(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -858,8 +846,12 @@ func reissueGraceAccessToken(
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
 	response *successResponse,
+	transactional bool,
 ) {
 	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
+		return
+	}
+	if !retirePriorOpaqueAccessTokens(ctx, w, deps, client, exchanged, transactional) {
 		return
 	}
 	now := deps.now().UTC()
@@ -1004,6 +996,14 @@ func rotateRefreshToken(
 	binding tokenBinding,
 	response *successResponse,
 ) error {
+	// Re-check eligibility at rotation, not only at chain start: a
+	// client whose registration loses refresh_token (or a Provider
+	// reconfigured to drop the grant) must not have the chain extended
+	// by a successor. The consumed token is already spent, so the
+	// chain simply ends here — no successor row is persisted.
+	if !deps.refreshIssuanceEnabled(client) {
+		return nil
+	}
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
 		Clock: deps.clockFunc(),
@@ -1195,6 +1195,55 @@ func enforceGrantTombstoneMintRefusal(
 // This fail-closed ordering prevents a backend fault from creating a fresh
 // bearer credential while a prior opaque credential remains active. The
 // refresh-token grace path can safely retry the same idempotent cascade.
+// retirePriorOpaqueAccessTokens runs the prior-access-token cascade that
+// every refresh exit path minting an opaque-format access token owes, and
+// reports whether the caller may go on to mint. It is the single
+// implementation of that step: a refresh answers 200 with a freshly minted
+// access token from two places — the rotation itself and the
+// sender-constrained re-mint of an RFC 9700 §2.2.2 grace retry — and both
+// have to leave exactly one live opaque access token under the grant.
+// Calling this immediately before the mint is the whole contract; anything
+// added here reaches both paths.
+//
+// Opaque-format chains revoke the prior access token atomically with the new
+// mint. Resource servers calling /oidc/introspect on every request observe
+// the revocation immediately, so the stolen-but-still-valid window collapses
+// to clock-skew. The JWT path deliberately leaves prior tokens alive: doing
+// otherwise would force every JWT verification through introspection,
+// defeating the JWT optimisation that motivated the registry design.
+// Revocation runs BEFORE the new mint so a colliding hash on Save
+// (impossible-by-construction with 256-bit entropy) cannot leave the chain
+// in a half-revoked state, and a failed cascade ends the request rather than
+// returning a success that left two live credentials behind.
+//
+// transactional reports whether the caller's mutations are still staged, so
+// the failure audit can say truthfully whether the client may retry.
+func retirePriorOpaqueAccessTokens(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	client *store.Client,
+	exchanged *refresh.Exchanged,
+	transactional bool,
+) bool {
+	if err := revokePriorOpaqueAT(ctx, deps, exchanged.Resource, exchanged.GrantID); err != nil {
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     auditRefreshPriorAccessTokenRevokeFailed,
+			Level:    audit.LevelError,
+			Message:  "prior access-token revoke failed during refresh rotation",
+			ActorID:  exchanged.Subject,
+			ClientID: client.ID,
+			Extras: map[string]any{
+				"failure_stage": failureStagePriorAccessTokenRevoke,
+				"retryable":     transactional,
+			},
+		})
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return false
+	}
+	return true
+}
+
 func revokePriorOpaqueAT(ctx context.Context, deps Deps, resource, grantID string) error {
 	if deps.OpaqueAccessTokens == nil || grantID == "" {
 		return nil

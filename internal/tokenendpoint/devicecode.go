@@ -49,7 +49,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	}
 	// Proof verification, client authentication, and the proof's
 	// replay marking run in the order [authenticateWithDPoP] documents.
-	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps, grantTypeDeviceCode)
 	if !ok {
 		return
 	}
@@ -80,7 +80,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 		emitDeviceCodeReject(ctx, deps, client.ID, reason)
 		return
 	}
-	issued, err := prepareDeviceCodeResponse(ctx, deps, client, rec, authorized, binding)
+	issued, err := prepareDeviceCodeResponse(ctx, deps, client, authorized, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -281,7 +281,8 @@ func deviceCodeAuthErrorCode(err error) string {
 	case errors.Is(err, dcgrant.ErrExpiredOrConsumed):
 		return errExpiredToken
 	case errors.Is(err, dcgrant.ErrCnfBindingMismatch),
-		errors.Is(err, dcgrant.ErrCnfBindingMissing):
+		errors.Is(err, dcgrant.ErrCnfBindingMissing),
+		errors.Is(err, dcgrant.ErrSubjectMissing):
 		return errInvalidGrant
 	default:
 		return errServerError
@@ -296,6 +297,8 @@ func deviceCodeAuthErrorCode(err error) string {
 //   - ErrScopeForbidden        → invalid_scope.
 //   - ErrCnfBindingMismatch /
 //     ErrCnfBindingMissing     → invalid_grant.
+//   - ErrSubjectMissing        → invalid_grant (OIDC Core 1.0 §2; the
+//     approval names no end user, so no credential can be minted).
 //   - ErrPendingApproval       → authorization_pending (defensive;
 //     [DecidePoll] should have caught this case already).
 //   - ErrDenied                → access_denied (same defensive note).
@@ -313,6 +316,9 @@ func writeDeviceCodeAuthError(w http.ResponseWriter, err error) {
 		errors.Is(err, dcgrant.ErrCnfBindingMissing):
 		writeError(w, http.StatusBadRequest, errInvalidGrant,
 			"sender-constraint binding does not match the device-authorization record")
+	case errors.Is(err, dcgrant.ErrSubjectMissing):
+		writeError(w, http.StatusBadRequest, errInvalidGrant,
+			"device authorization is not associated with an end user")
 	case errors.Is(err, dcgrant.ErrPendingApproval):
 		writeError(w, http.StatusBadRequest, errAuthorizationPending,
 			"authorization request is still pending")
@@ -388,15 +394,26 @@ func (p preparedDeviceCodeResponse) cleanup(ctx context.Context, deps Deps) {
 // prepareDeviceCodeResponse completes every fallible token-assembly step
 // before the irreversible DeviceCodeStore.Consume CAS. A signing, JWE, opaque
 // save, or refresh save fault therefore leaves the approved ceremony retryable.
+//
+// The device-authorization record is deliberately not a parameter: its ID
+// is the raw device_code, which is a bearer secret the substore contract
+// requires backends to keep hashed at rest. Reusing it as the grant
+// identifier would republish it in the access token's "gid" claim, on the
+// access-token / refresh-token rows, and in the audit stream. Redemption
+// therefore allocates its own grant identifier, which is safe to disclose
+// because it authorises nothing on its own.
 func prepareDeviceCodeResponse(
 	ctx context.Context,
 	deps Deps,
 	client *store.Client,
-	record *store.DeviceCode,
 	authorized *dcgrant.Authorized,
 	binding tokenBinding,
 ) (out preparedDeviceCodeResponse, err error) {
 	now := deps.now().UTC()
+	grantID, err := newJTI()
+	if err != nil {
+		return preparedDeviceCodeResponse{}, err
+	}
 	resource := ""
 	if len(authorized.Audience) > 0 {
 		resource = authorized.Audience[0]
@@ -434,7 +451,7 @@ func prepareDeviceCodeResponse(
 		authorized.Subject,
 		publicSubject,
 		client.ID,
-		record.ID,
+		grantID,
 		authorized.Scope,
 		resource,
 		now,
@@ -466,7 +483,7 @@ func prepareDeviceCodeResponse(
 		deps,
 		client,
 		authorized.Subject,
-		record.ID,
+		grantID,
 		authorized.Scope,
 		resource,
 		"",

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
@@ -26,7 +27,7 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	ctx := r.Context()
 	// Proof verification, client authentication, and the proof's
 	// replay marking run in the order [authenticateWithDPoP] documents.
-	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps)
+	dpopOut, client, ok := authenticateWithDPoP(ctx, w, r, deps, grantTypeAuthorizationCode)
 	if !ok {
 		return
 	}
@@ -503,7 +504,15 @@ type mintIDTokenInput struct {
 	Extra map[string]any
 }
 
+// projectPublicSubject maps the OP-internal subject onto the per-client
+// value egress representations carry. An empty raw subject never reaches
+// the projector: the projection is defined over an authenticated end
+// user (OIDC Core 1.0 §8.1), and forwarding the empty string would let an
+// embedder's projector invent a subject for a grant that certifies nobody.
 func projectPublicSubject(ctx context.Context, deps Deps, raw string, client *store.Client) (string, error) {
+	if raw == "" {
+		return "", errors.New("tokenendpoint: cannot project an empty subject")
+	}
 	if deps.SubjectProjector == nil {
 		return raw, nil
 	}
@@ -828,6 +837,9 @@ func maybeIssueRefreshToken(
 	subjectPublic bool,
 	authCtx authContext,
 ) (string, error) {
+	if !deps.refreshIssuanceEnabled(client) {
+		return "", nil
+	}
 	if !clientPermitsRefresh(client, scope, deps.refreshPolicy()) {
 		return "", nil
 	}
@@ -868,6 +880,11 @@ func maybeIssueRefreshToken(
 			"grant_id":       grantID,
 			"offline_access": oidcscope.ContainsOfflineAccess(scope),
 			"ttl_bucket":     ttlBucketFor(deps, scope),
+			// The origin rides as the typed store value, not as a string:
+			// it is the same value persisted on the chain, and consumers
+			// that project it onto a label resolve it by type so no
+			// request-derived string can stand in for a grant.
+			auditevent.ExtraRefreshOrigin: origin,
 		},
 	})
 	return token, nil
@@ -918,6 +935,11 @@ func (c authContext) withAuthorizationDetails(details []map[string]any) authCont
 // source so both grant paths agree. AuthTime falls back to the grant's
 // UpdatedAt when the explicit field was not populated (records
 // persisted before the field was added still produce a useful claim).
+//
+// This is also the only place the token endpoint reads the grant's
+// OIDC Core 1.0 §5.5 payload, so [Deps.ClaimsParameterEnabled] gates
+// every id_token the endpoint issues from a grant — the first code
+// exchange and every subsequent refresh alike.
 func lookupAuthContext(ctx context.Context, deps Deps, grantID string) authContext {
 	if grantID == "" {
 		return authContext{}
@@ -935,7 +957,9 @@ func lookupAuthContext(ctx context.Context, deps Deps, grantID string) authConte
 	if len(g.AMR) > 0 {
 		out.AMR = append([]string(nil), g.AMR...)
 	}
-	out.Claims = authorize.DecodeClaimsFromGrant(g.Claims)
+	if deps.ClaimsParameterEnabled {
+		out.Claims = authorize.DecodeClaimsFromGrant(g.Claims)
+	}
 	out.AuthorizationDetails = g.AuthorizationDetails
 	return out
 }

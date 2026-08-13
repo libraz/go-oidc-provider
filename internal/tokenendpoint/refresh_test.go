@@ -529,6 +529,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultAndTxBarrierDoNotConsume(t 
 		ID:                      "client-rar-grant-fault",
 		SecretHash:              hash,
 		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grant.RefreshToken.String()},
 		Scopes:                  []string{"openid", "offline_access"},
 	}
 	if err := backing.RegisterClient(context.Background(), client); err != nil {
@@ -1108,11 +1109,14 @@ func scopedFixture(tb testing.TB) *fixture {
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	prov := testkit.NewProvider(tb,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithScope(op.Scope{
-			Name:           "billing:write",
-			Public:         true,
-			AllowedClients: []string{"svc-billing"},
-		})),
+		testkit.WithOptions(
+			clientCredsGrantsOption(),
+			op.WithScope(op.Scope{
+				Name:           "billing:write",
+				Public:         true,
+				AllowedClients: []string{"svc-billing"},
+			}),
+		),
 	)
 	return &fixture{
 		prov:     prov,
@@ -1523,6 +1527,7 @@ func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
 		ID:                      "client-opaque-revoke-failure",
 		SecretHash:              hash,
 		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grant.RefreshToken.String()},
 		Scopes:                  []string{"openid"},
 	}
 	if err := backing.RegisterClient(context.Background(), client); err != nil {
@@ -1632,6 +1637,7 @@ func TestRefresh_OpaqueRevokeFailureInTxIsRetryable(t *testing.T) {
 		ID:                      "client-opaque-revoke-failure-tx",
 		SecretHash:              hash,
 		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grant.RefreshToken.String()},
 		Scopes:                  []string{"openid"},
 	}
 	if err := backing.RegisterClient(context.Background(), client); err != nil {

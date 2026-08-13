@@ -3,6 +3,7 @@ package tokenendpoint
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -58,6 +59,15 @@ type dpopOutcome struct {
 // reaches the commit is refused with the same ErrProofReplayed it
 // would have seen under the single-phase verifier.
 //
+// grantType is the wire grant_type the calling handler implements. The
+// per-client authorization gate ([store.Client.GrantTypes]) runs here,
+// after the identity is known and before the handler touches any
+// credential record, so a client that is not registered for the grant
+// cannot consume a code, rotate a refresh chain, or burn a device_code.
+// Threading it through this one entry point is deliberate: a new grant
+// handler has to name its grant_type to authenticate at all, so the
+// gate cannot be forgotten the way a per-handler `if` can.
+//
 // The function writes the response on every failure path; the caller
 // only checks the bool.
 func authenticateWithDPoP(
@@ -65,6 +75,7 @@ func authenticateWithDPoP(
 	w http.ResponseWriter,
 	r *http.Request,
 	deps Deps,
+	grantType string,
 ) (*dpopOutcome, *store.Client, bool) {
 	out, ok := verifyTokenDPoP(w, r, deps)
 	if !ok {
@@ -74,10 +85,34 @@ func authenticateWithDPoP(
 	if !ok {
 		return nil, nil, false
 	}
+	if !clientPermitsGrant(w, client, grantType) {
+		return nil, nil, false
+	}
 	if !commitTokenDPoP(ctx, w, deps, out) {
 		return nil, nil, false
 	}
 	return out, client, true
+}
+
+// clientPermitsGrant enforces [store.Client.GrantTypes]. An empty list
+// means the client may not call the token endpoint at all, so the gate
+// is a plain membership test with no "unset means everything" arm —
+// that reading would make narrowing a compromised client's registration
+// a no-op.
+//
+// The per-client set is an additional restriction on top of the
+// provider's enabled grants, never a substitute for it: both gates run.
+func clientPermitsGrant(w http.ResponseWriter, client *store.Client, grantType string) bool {
+	if client == nil {
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "client is required")
+		return false
+	}
+	if slices.Contains(client.GrantTypes, grantType) {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, errUnauthorizedClient,
+		"the client is not authorized to use this grant type")
+	return false
 }
 
 // verifyTokenDPoP runs the stateless DPoP gates over the inbound

@@ -190,6 +190,68 @@ func TestFindRootStopsAtTheDeepestResolvableAncestor(t *testing.T) {
 		}
 	})
 
+	t.Run("ancestor lookup times out", func(t *testing.T) {
+		t.Parallel()
+
+		// The cascade is armed once, when a replay is detected, and is
+		// never retried. A momentary store fault on an ancestor lookup
+		// therefore has to degrade to the deepest node already in hand:
+		// abandoning the walk would drop the revocation for good, and the
+		// descendants that a replay can still spend all hang below that
+		// node anyway.
+		parent := "parent"
+		tokens := &recordingRefreshStore{
+			byCredential: map[string]*store.RefreshToken{
+				"leaf": refresh("leaf", "client", ptr(parent)),
+			},
+			handleErr: map[string]error{
+				parent: context.DeadlineExceeded,
+			},
+		}
+
+		got, ok := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8)
+		if !ok {
+			t.Fatal("FindRoot gave up on a transport fault; the cascade would never run")
+		}
+		if got != "leaf" {
+			t.Fatalf("FindRoot = %q, want the deepest resolved node %q", got, "leaf")
+		}
+	})
+
+	t.Run("ancestor resolves to a contract-violating nil", func(t *testing.T) {
+		t.Parallel()
+
+		// A backend answering (nil, nil) is broken, not authoritative:
+		// there is no evidence the ancestor is absent, so the walk keeps
+		// the node it did resolve rather than discarding the cascade.
+		parent := "parent"
+		tokens := &recordingRefreshStore{
+			byCredential: map[string]*store.RefreshToken{
+				"leaf": refresh("leaf", "client", ptr(parent)),
+			},
+			nilHandles: map[string]bool{parent: true},
+		}
+
+		got, ok := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8)
+		if !ok || got != "leaf" {
+			t.Fatalf("FindRoot = (%q, %v), want (\"leaf\", true)", got, ok)
+		}
+	})
+
+	t.Run("presented token lookup fault stays hard", func(t *testing.T) {
+		t.Parallel()
+
+		// Nothing was resolved, so there is no node to cascade from and
+		// the fallback must not invent one.
+		tokens := &recordingRefreshStore{
+			credentialErr: map[string]error{"leaf": context.DeadlineExceeded},
+		}
+
+		if got, ok := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8); ok || got != "" {
+			t.Fatalf("FindRoot = (%q, %v), want empty/false", got, ok)
+		}
+	})
+
 	t.Run("mixed client still fails past a reclaimed ancestor", func(t *testing.T) {
 		t.Parallel()
 
@@ -242,8 +304,15 @@ func TestFindByHandleUsesStoredHandleResolver(t *testing.T) {
 type recordingRefreshStore struct {
 	byCredential map[string]*store.RefreshToken
 	byHandle     map[string]*store.RefreshToken
-	findCalls    []string
-	handleCalls  []string
+	// credentialErr and handleErr inject a transport-shaped failure for a
+	// specific id, distinct from the ErrNotFound a reclaimed record gives.
+	credentialErr map[string]error
+	handleErr     map[string]error
+	// nilHandles make the resolver answer (nil, nil), the store-contract
+	// violation the walk has to survive without dereferencing anything.
+	nilHandles  map[string]bool
+	findCalls   []string
+	handleCalls []string
 }
 
 func (s *recordingRefreshStore) Save(context.Context, *store.RefreshToken) error {
@@ -252,6 +321,9 @@ func (s *recordingRefreshStore) Save(context.Context, *store.RefreshToken) error
 
 func (s *recordingRefreshStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
 	s.findCalls = append(s.findCalls, id)
+	if err, ok := s.credentialErr[id]; ok {
+		return nil, err
+	}
 	rec, ok := s.byCredential[id]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -273,6 +345,12 @@ func (s *recordingRefreshStore) RevokeByGrant(context.Context, string) error {
 
 func (s *recordingRefreshStore) FindByStoredHandle(_ context.Context, handle string) (*store.RefreshToken, error) {
 	s.handleCalls = append(s.handleCalls, handle)
+	if err, ok := s.handleErr[handle]; ok {
+		return nil, err
+	}
+	if s.nilHandles[handle] {
+		return nil, nil //nolint:nilnil // deliberate store-contract violation the walk must survive.
+	}
 	rec, ok := s.byHandle[handle]
 	if !ok {
 		return nil, store.ErrNotFound
