@@ -41,6 +41,10 @@ func TestExample29Passkey(t *testing.T) {
 	p := buildAndStart(t, "../../29-passkey")
 	defer p.kill()
 	pollHTTP(t, p, pkOPBase+"/.well-known/openid-configuration", 30*time.Second)
+	// The example binds the RP listener after the OP's, so waiting only on
+	// discovery leaves the first /login racing the RP's bind — intermittently,
+	// and only on a machine fast enough to get there first.
+	pollHTTP(t, p, pkRPBase+"/", 30*time.Second)
 
 	key, err := softkey.New()
 	if err != nil {
@@ -163,14 +167,24 @@ func answerPrompt(prompt map[string]any, key *softkey.Key) (map[string]string, e
 		return map[string]string{"response": string(assertion)}, nil
 
 	case "consent.scope":
+		// interaction.ConsentScopePromptData carries no JSON tags, so the
+		// envelope spells its members with the Go field names — "Scopes"
+		// and "Name", the same reason the challenge above is "Challenge".
 		data, _ := prompt["data"].(map[string]any)
-		scopes, _ := data["scopes"].([]any)
+		scopes, _ := data["Scopes"].([]any)
 		names := make([]string, 0, len(scopes))
 		for _, s := range scopes {
 			entry, _ := s.(map[string]any)
-			if name, ok := entry["name"].(string); ok {
+			if name, ok := entry["Name"].(string); ok {
 				names = append(names, name)
 			}
+		}
+		// Approving nothing is a valid answer the OP records as such, so a
+		// misread envelope would otherwise surface three steps later as a
+		// login that completed without "openid" and an RP holding no ID
+		// Token. Fail where the cause is.
+		if len(names) == 0 {
+			return nil, fmt.Errorf("consent prompt presented no resolvable scope: %v", data)
 		}
 		return map[string]string{"approved_scopes": strings.Join(names, " ")}, nil
 
@@ -235,7 +249,14 @@ func followToMe(t *testing.T, client *http.Client, location string) string {
 	if err != nil {
 		t.Fatalf("follow callback: %v", err)
 	}
+	callbackBody, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	// The RP reports a refused callback here — a bad iss, an OP error
+	// response, an unknown state. Reading it as success turns every one of
+	// those into an unexplained 401 from /me further down.
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("RP callback returned %d:\n%s", resp.StatusCode, callbackBody)
+	}
 
 	resp, err = client.Get(pkRPBase + "/me") //nolint:noctx // harness request, bounded by the client timeout
 	if err != nil {
