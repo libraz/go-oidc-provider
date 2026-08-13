@@ -57,8 +57,17 @@ import (
 //     profile if it is missing.
 //   - op.WithFeature(feature.MTLS) — sender constraint; required by
 //     fapi-ciba-id1's hardcoded cert-bound check.
-//   - op.WithGrants(grant.CIBA, grant.RefreshToken) — advertises both
-//     the CIBA polling grant and refresh-token rotation in discovery.
+//   - op.WithGrants(grant.AuthorizationCode, grant.CIBA,
+//     grant.RefreshToken) — advertises the CIBA polling grant and
+//     refresh-token rotation in discovery. authorization_code is present
+//     so the OP mounts and advertises an authorization endpoint: the OP
+//     omits both when no configured grant uses one, and the FAPI-CIBA
+//     plan's shared pre-conditions TLS-probe authorization_endpoint
+//     before the CIBA exchange they actually test
+//     (EnsureTLS12WithFAPICiphers). It also keeps the document complete
+//     against OpenID Connect Discovery 1.0 §3, which lists the member as
+//     REQUIRED with no CIBA-only exemption. The seeded clients stay
+//     CIBA-only — this is a provider-level grant, not a client one.
 //   - op.WithCIBA(WithCIBAHintResolver(...), WithCIBAPollInterval(1s),
 //     WithCIBAMaxPollViolations(50)) — 1 s poll keeps the OFCS plan
 //     moving; the auto-approve delay (cfg.cibaAutoApproveDelay) is
@@ -71,7 +80,7 @@ func fapiCIBAOptions() []op.Option {
 	return []op.Option{
 		op.WithProfile(profile.FAPICIBA),
 		op.WithFeature(feature.MTLS),
-		op.WithGrants(opgrant.CIBA, opgrant.RefreshToken),
+		op.WithGrants(opgrant.AuthorizationCode, opgrant.CIBA, opgrant.RefreshToken),
 		op.WithCIBA(
 			op.WithCIBAHintResolver(demoHintResolver()),
 			op.WithCIBAPollInterval(time.Second),
