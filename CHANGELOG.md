@@ -59,12 +59,39 @@ OP returned a wrong answer silently: a consent ceremony that never ran, a
 revoked token that kept introspecting as active, an authentication context that
 described an older login than the one being served.
 
-Five deployment classes need to read the Changed section before upgrading:
+Seven deployment classes need to read the Changed section before upgrading:
 anyone running a BYO `store.PasskeyStore` or MFA store, an existing SQL or
-DynamoDB adapter installation, and anyone whose OP serves only
-machine-to-machine grants.
+DynamoDB adapter installation, anyone whose OP serves only machine-to-machine
+grants, anyone whose relying parties reconcile their registration through
+`PUT /register/{client_id}`, and anyone serving the device-code or CIBA grant.
 
 ### Security
+
+- A JWT access token with no `jti` is no longer treated as unrevoked by any of
+  the four surfaces that verify one — `/userinfo`, `/introspect`, `/revoke` and
+  the token-exchange `subject_token` lookup. Under a revocation strategy that
+  keys on `jti` (registry or denylist) the OP cannot tell a revoked token from
+  a fresh one without that claim, so accepting it bypassed revocation
+  altogether. All four now derive the requirement from the configured strategy
+  through one predicate rather than each spelling it out.
+
+- The clock tolerance applied to an access token is the same at all four of
+  those surfaces. Token exchange applied none, so a deployment with clock skew
+  saw one token accepted at `/userinfo` and refused at exchange — under exactly
+  the condition the tolerance exists to absorb. The three surfaces that did
+  agree agreed by coincidence: each defined its own 30-second literal, and two
+  of them documented themselves as mirroring a third with no mechanism doing
+  the mirroring. There is now one source. The wider tolerance applied to client
+  assertions is deliberately separate and unchanged: an assertion is minted by
+  a peer whose clock this OP neither controls nor corrects, which is a
+  different question from one it minted itself.
+
+- An unresolvable client address no longer reaches a policy or an audit record
+  as the string `"invalid IP"`. That is `netip.Addr`'s rendering of its zero
+  value — a plausible-looking but meaningless address — where `op.LoginContext`
+  and `audit.Event.IP` both document the absence of an address as empty. A
+  policy comparing against it, or an operator reading it in an audit trail,
+  was being shown a value that never belonged to anyone.
 
 - Replay revocation no longer gives up when a rotation chain has lost its
   oldest records. Detecting a replayed refresh token makes the OP walk the
@@ -271,7 +298,317 @@ machine-to-machine grants.
   than transcribed by hand, and a test fails if a natively routed grant_type
   goes missing from it.
 
+- An authorization request that demands fresh authentication gets it. A live
+  session cookie made `prompt=login` and `max_age` no-ops on the recommended
+  login-flow seam: the orchestrator read the subject the HTTP layer had
+  pre-seeded from the cookie, concluded identity was already established, and
+  returned a terminal result without a single credential being presented. The
+  id_token then carried an `auth_time` of "now" — the moment the interaction
+  record was created — with an empty `acr` and no `amr` at all, so an RP using
+  `max_age` as a step-up gate before a sensitive operation was told the user had
+  just re-authenticated when nobody had. Whether the chain runs is now decided by
+  whether this chain bound the subject, the requirement travels from the request
+  matrix into the orchestrator state, and the single terminal both surfaces share
+  fails closed rather than emitting a result with no factors behind it.
+
+- Picking a different account no longer bypasses the request's freshness and
+  authentication-context constraints. The account chooser copies the selected
+  session's assurance onto the response, but `max_age` and `acr_values` had been
+  evaluated at entry against the *cookie* session — a different session from the
+  one the chooser binds — so selecting an older or weaker account yielded an
+  authorization code carrying an `auth_time` days in the past and an `acr` below
+  what the request required. The constraints are now re-applied to the session
+  that actually backs the response, using the dispatcher's own predicates so the
+  two gates cannot drift; a stale pick ends in `login_required`, a too-weak one
+  in `unmet_authentication_requirements`, and `prompt=login` runs the factor
+  chain instead.
+
+- Scopes removed at a re-consent screen are removed from the grant. Unchecking
+  a scope narrowed the authorization code but left the stored grant wide, so the
+  next request for the same scopes was covered by that grant, skipped the consent
+  screen entirely and issued a code including the scope the user had just
+  withdrawn. Consent decisions now amend the grant in both directions; silent
+  re-stamping and first-party auto-grant stay widen-only. An empty approval is
+  recorded as an approval of nothing rather than read as "no ceremony ran".
+
+- `/token` enforces both the Provider's configured grant set and the
+  authenticated client's own `GrantTypes`. Neither was consulted: narrowing a
+  compromised client's registration left its outstanding authorization codes
+  redeemable and its refresh chain rotating indefinitely, and a grant left out of
+  `op.WithGrants` was accepted by the endpoint while discovery advertised the
+  smaller set. Both gates now run before any credential record is read, so a
+  refused request consumes nothing, and the advertised set and the accepted set
+  are one projection.
+
+- A DPoP proof cannot carry an `iat` far enough into the future to escape the
+  freshness window (RFC 9449 §11.1). The check took the difference between now
+  and the claim, and that subtraction saturates: a timestamp beyond the
+  representable range produced a "distance" smaller than any window, so a proof
+  minted with a year-9999 `iat` was accepted indefinitely. The same unchecked
+  value also set how long the replay marker was retained, which on a persistent
+  JTI store meant an entry that never expired. The window now compares instants,
+  and marker retention is bounded by what the window itself can admit.
+
+- `/userinfo` resolves the OIDC Core 1.0 §5.5 `claims` payload from the grant the
+  presented access token descends from, not from whichever grant is currently
+  active for the same (subject, client_id) pair. A client holding several grants
+  for one user — Grant Management's `create` action mints a new grant per
+  authorization — could read claims authorized only on a sibling grant. Applies
+  to the JSON and JWT response shapes, to JWT and opaque access tokens, with and
+  without pairwise subjects.
+
+- A relying party's `Cache-Control: max-age` on its JWKS may now only shorten how
+  long the OP caches that keyset, never extend it. An RP advertising a year meant
+  a key it had withdrawn stayed valid for `client_assertion` authentication, and
+  stayed in use as an outbound JWE recipient, until the OP process restarted. The
+  ceiling is applied where the freshness hint is read and again where the cache
+  stores it, so one edit cannot reopen it.
+
+- `PUT /register/{client_id}` no longer fills an omitted `scope` member with the
+  OP's entire public scope catalogue. A dynamic client registered for `openid`
+  acquired every catalogued scope by submitting one update that simply left the
+  member out, and could then obtain tokens for scopes it had never been granted.
+  The shared metadata validator can no longer enlarge what was submitted; see
+  **Changed** for what an omitted `scope` does now.
+
+- A detected refresh-token replay retires the chain even when the OP cannot
+  walk it. Resolving the chain root climbs parent pointers under a limit meant
+  as a defence against a corrupted pointer graph, but nothing bounded an honest
+  rotation history — refreshing every five minutes reaches the limit in a few
+  days — and past it the cascade did nothing at all: the request answered
+  `invalid_grant` while every live successor of the compromised chain stayed
+  spendable, and the grant tombstone that would have stopped its JWT access
+  tokens was skipped along with it. Any outcome in which the chain-scoped
+  cascade cannot be shown to have run now escalates to revoking every refresh
+  token issued under the grant, and the tombstone is written from the presented
+  token's own grant rather than from a root the walk may never reach.
+
+- The Redis session adapter decides chooser-group membership from the session
+  record rather than from the secondary index. A session that moved to another
+  chooser group was still listed under the group it left whenever the
+  cross-group index eviction did not land — and that eviction was a bare command
+  whose error was discarded — so another user's account could appear in the
+  chooser, and "sign out everywhere" could destroy their session and fire
+  back-channel logout for it. Rejected entries are now dropped from the index on
+  read, and the eviction is issued inside the same transaction as the new
+  group's index write, so a failure is reported instead of ignored.
+
+- Device-code and CIBA redemptions no longer use the redemption secret as the
+  grant's identity. `device_code` and `auth_req_id` are bearer credentials the
+  store contract requires backends to keep hashed, but the redeemed record's ID
+  was passed downstream as the grant identifier — so the raw value landed in the
+  `gid` claim of a signed, unencrypted access token, in three storage columns as
+  plaintext, and in the audit stream. The value was already consumed and could
+  not be replayed, but it reached resource-server logs, APM traces and SIEMs, in
+  the exact form the hash-on-store contract exists to prevent.
+
+- A device-code or CIBA record approved without a subject can no longer produce
+  a token. Such a record yielded a `200` carrying an id_token with `"sub": ""` —
+  which a relying party that checks only signature, issuer and audience accepts,
+  then maps to the empty-string key, conflating accounts — while a
+  refresh-eligible client on the same record got a `500` instead, so the outcome
+  depended on the client's registration. Rejection is now uniform, and the
+  signing routines refuse an empty subject regardless of which grant asked, so a
+  future grant that skips its own check cannot mint one either.
+
+- A pushed authorization request selecting a JARM `response_mode` on an OP with
+  no JARM signer is refused at `/par`, and so is a request that omits
+  `response_mode` under FAPI 2.0 Message Signing. Both were previously answered
+  with `201` and a `request_uri` that `/authorize` then refused, after the
+  browser had already left — the relying party pushed precisely to learn this
+  synchronously (RFC 9126 §2.3). The two endpoints now read one shared policy
+  rather than each holding its own flag.
+
+- The interaction ceremony routes answer cross-origin requests only for the
+  OP's own issuer origin and origins passed to `op.WithCORSOrigins`. State
+  changes on those routes were already guarded by that narrow list, but the CORS
+  layer wrapping the same routes used the widest one — every registered
+  redirect_uri origin — and returned `Access-Control-Allow-Credentials: true`,
+  so a client registered on a sibling subdomain could make a credentialed fetch
+  to another client's in-flight ceremony and read its CSRF token and account
+  list. `SameSite=Lax` does not stop a same-site cross-origin read. The token,
+  userinfo, introspection, revocation and PAR endpoints keep the wide list.
+
+- `/end_session` no longer reports a sign-out it never performed. When the
+  session store could not answer the lookup, the failure was indistinguishable
+  from "this browser has no session": the OP cleared the cookie, rendered the
+  signed-out page or redirected to `post_logout_redirect_uri`, raised no audit
+  event, and — on a request carrying an `id_token_hint` — skipped the CSRF gate
+  on the strength of having nothing to terminate. The session row and the
+  subject's tokens survived behind a successful-looking logout. Such a request
+  now answers 503, records `session.destroy_failed`, and keeps the cookie so a
+  retry can still name the session.
+
+- An authenticator failing because its backend is down is no longer recorded as
+  a rejected credential. A store timeout or a misconfigured codec reached the
+  same path as a wrong password, so `login.failed` / `mfa.failed` fired and the
+  attempt was published to `op.LoginAttemptObserver` — during an outage a
+  deployment driving lockout from that feed locked its users out, and the audit
+  stream read as credential stuffing. Only a credential the OP actually judged
+  is reported; a fault is logged and surfaced unchanged.
+
+- The DynamoDB adapter decides replay-marker and backchannel-request ownership
+  in a single conditional write. Taking over an expired marker was a read, a
+  decision and an unconditional put, so two concurrent callers seeing the same
+  expired record were both told they had succeeded — accepting one DPoP proof,
+  or one `private_key_jwt` / `client_secret_jwt` assertion, twice. At most one
+  caller now succeeds; the rest get `ErrAlreadyConsumed` / `ErrAlreadyExists`.
+
+- A sealed refresh retry response stops being readable once the predecessor
+  refresh token's own expiry has passed. The response is the token payload the
+  OP replays inside the rotation grace window, and the store contract requires
+  it to be retained no longer than the token it was cached against — but the
+  in-memory adapter had no reclamation path for a committed entry at all, so a
+  long-running process accumulated one encrypted token response per rotation
+  forever, and the SQL adapter kept serving one for as long as any sibling
+  chain under the same grant stayed live. A client presenting a predecessor
+  that expired during the window now takes the ordinary expired-token path.
+
+- The refresh-token replay event reaches the log with the field that identifies
+  which rotation chain was replayed. The value is an irreversible fingerprint,
+  but its key name contained "token", so key-name redaction replaced it with the
+  sentinel and the OP's most security-relevant event arrived with nothing to
+  correlate on. The same collision blanked the device-code revocation record's
+  cascade tallies. Separately, the URL masker did not treat `#` as a pair
+  boundary, so the first — and most sensitive — parameter of every
+  fragment-mode redirect survived masking verbatim.
+
+- `op.WithAllowInsecureBackchannelLogoutForDev` reaches loopback and nothing
+  else. The option is documented as flipping both the registration rule and the
+  delivery gate for `127.0.0.1`, `[::1]` and `localhost` only, but it lifted the
+  deliverer's deny-list outright, so a client registered with
+  `backchannel_logout_uri = "https://10.0.5.12/logout"` had a signed Logout
+  Token POSTed into RFC 1918 space — a dev convenience that handed anyone able
+  to register a client an SSRF probe against the OP's internal network. Link-
+  local, RFC 1918, IPv6 ULA and the unspecified address are now refused under
+  this option at the URL check, the DNS lookup, the dial and every redirect hop,
+  and a registered `localhost` is admitted only while it resolves to a loopback
+  address. Reaching a relying party on a private network remains available, as
+  before, through `op.WithBackchannelAllowPrivateNetwork`; deployments that were
+  relying on the dev option for that reach must name it explicitly.
+- A recovery code that `store.RecoveryStore.Consume` reports as spent is
+  actually spent. The bundled SQL, in-memory and DynamoDB implementations used
+  the caller-supplied `ConsumedAt` as both the "still unconsumed" predicate and
+  the value written, so a batch reaching `Consume` without a stamp left the slot
+  redeemable while the caller was told it had been used — the same single-use
+  code kept working for anyone holding it. The engines did not even agree on
+  the answer: SQLite and PostgreSQL returned success and left the slot open,
+  MySQL reported `store.ErrAlreadyConsumed` against a slot nobody had ever
+  consumed, and DynamoDB's conditional write stored the zero its own condition
+  required the slot to already hold. The same shape reached
+  `store.EmailOTPStore.Consume`, which carries the same post-condition: a
+  challenge written back unstamped still read as pending, and the generation the
+  write advanced did not stop the next reader from redeeming it again. Each
+  implementation now stamps the record itself, honouring a caller-supplied
+  reading and falling back to its own clock, which also removes the dependency
+  on whether a backend counts matched or changed rows. Both `Consume` contracts
+  state the guarantee: a nil return means the stored record carries a non-zero
+  `ConsumedAt`.
+
+- A risk assessor's `RiskRequire` directive demands its named factors on the
+  `op.WithLoginFlow` surface. Only `Decision` and `Score` were read there, so
+  `RequiredFactors` was dropped without a warning: an assessor that answered a
+  suspicious sign-in by demanding a second factor got a session issued on the
+  password alone, at exactly the assurance it had refused. The legacy
+  `op.WithAuthenticators` chain has always honoured the directive, which made
+  this a silent loss of step-up for anyone who migrated to the recommended
+  seam. The demand is now recorded when the assessor is consulted and
+  discharged at the single point every LoginFlow grant passes through, so an
+  embedder `Decider` answering `Allow` cannot release a chain that still owes a
+  factor. When no declared step can produce a demanded factor type the attempt
+  fails closed with `authn.ErrNoEligibleAuthenticator`. `RiskOutcome.MinAAL`
+  remains non-applicable on this surface and its godoc says so.
+
 ### Fixed
+
+- `op/storeadapter/sql/schema/MIGRATIONS.md` names every index the current
+  schema carries. Eight added since `v1.0.0` — seven on `expires_at` columns
+  and one on `oidc_grants(client_id)` — were only ever created by a fresh
+  install. SQLite and PostgreSQL declare their indexes as separate
+  `CREATE INDEX IF NOT EXISTS` statements and so acquire them on the next
+  `Migrate()`, but MySQL declares them inline in `CREATE TABLE`, which
+  `CREATE TABLE IF NOT EXISTS` skips outright: an existing MySQL installation
+  never acquired them and had no self-healing path, leaving the retention
+  sweeps and the client-scoped grant lookups running without an index. The
+  document now carries the dialect-specific statement for each, and states
+  that on MySQL it is the only path.
+
+- A remote fetch collapsed behind the shared cache outlives the caller that
+  abandoned it. The loader ran on the context of whichever caller won the
+  race, so that caller navigating away cancelled the fetch for every other
+  request waiting on the same result — they all received `context.Canceled`
+  for work none of them had abandoned. The cache detaches cancellation itself
+  now rather than leaving it to each caller to remember, which is what the
+  sector resolver had not: the JWKS fetcher carried its own detachment and the
+  sector fetcher did not. Both keep their own request timeouts.
+
+- `/authorize` requests carrying a `request_uri` share one HTTP client. The JAR
+  fetcher built a client, transport and connection pool inside the request
+  path, so every such request opened a fresh connection to the relying party
+  and discarded the pool afterwards. It now runs through the same guarded fetch
+  envelope the JWKS and sector fetchers use, built once when the handler is
+  mounted. Every gate is unchanged — SSRF checks at URL and dial time,
+  HTTPS-only, no redirects, 2xx only, and the body cap — and the media-type
+  rule stays at the call site because this endpoint must admit a response with
+  no `Content-Type` at all, which an allow-list cannot express.
+
+- Dynamic client registration parses the request body once. A second full
+  decode into a generic map ran on every registration and update to answer a
+  question nothing read, so an unauthenticated caller could charge the OP one
+  allocation per member of a body they sized themselves.
+
+- `patterns.Paginate` returns a page that does not alias the caller's slice.
+  Sorting or otherwise writing to a returned page reordered the input it was
+  taken from.
+
+- The account chooser renders as a usable page on the zero-configuration HTML
+  surface. `prompt=select_account` reaches an interaction the default
+  `op/interaction.HTMLDriver` had no branch for, so the RP's user was served a
+  page listing no accounts at all and asking them to type an opaque
+  `session_id` they have never seen, labelled with a raw message key because
+  the shipped locale bundles had no entry for it, under a heading that was the
+  raw prompt identifier. `AddAccountURL` was not rendered, leaving an account
+  outside the group unreachable. The page now emits one submit control per
+  account carrying that account's session identifier, an add-account link when
+  the OP would honour one, and an explanatory line instead of an empty form
+  when the chooser group has no members. `ChooserAccount.DisplayName` is
+  resolved from the `name` claim on the matching `store.User` — the same claim
+  the `profile` scope releases at `/userinfo` — so the label a user picks by
+  matches the one the RP will see; a row whose label cannot be resolved is
+  still listed. The bundled `en` and `ja` catalogues gained the chooser and
+  consent entries they were missing, and the captcha field key they carried
+  under a name no field emits was corrected to the emitted one.
+
+- `op.New` warns when `WithMTLSProxy` or `WithMTLSRootCAs` is set without
+  `feature.MTLS`. Neither option is read in that combination, so the OP issues
+  plain bearer tokens while the configuration reads as certificate-bound. The
+  godoc on both options now names the dependency; the constants
+  `op.AuthTLSClientAuth` and `op.AuthSelfSignedTLSClientAuth` now say they
+  cannot be selected in this release and point at `op.AuthPrivateKeyJWT`.
+  `AuthMethod.Valid()` is unchanged — it reports whether a name is one this
+  type enumerates, which is a different question from whether this OP can
+  negotiate it.
+
+- `op.WithClaimsParameterSupported(false)` now stops the OIDC Core §5.5
+  projection it always said it stopped. Discovery and the request parsers
+  honoured the flag, but a grant established while the parameter was enabled
+  kept releasing the claims it had recorded — into `/userinfo` and into every
+  id_token, through refresh rotation, indefinitely. An operator turning the
+  parameter off after an incident therefore changed nothing for the
+  authorizations that already existed, which is the case the switch is for.
+  The gate is on the read path: the claims stay on the grant as the record of
+  what the user consented to, and turning the option back on restores the
+  projection. Claims released because a scope grants them are unaffected.
+
+- `/token` rejects a repeated `authorization_details` with `invalid_request`
+  instead of resolving it to the first occurrence. RFC 6749 §3.1 forbids
+  sending a parameter more than once, and the endpoint enforced that through a
+  list the parameter was missing from, so a request carrying two payloads was
+  answered with an access token stamped from one of them — the differential an
+  intermediary reading the other occurrence relies on. `/authorize` and pushed
+  authorization requests were never affected; they parse through a shared
+  table that already covered it. `resource` stays repeatable, as RFC 8707 §2
+  requires.
 
 - The godoc on ten catalogued audit events no longer claims they fire. Beyond
   the four now wired above, `op.AuditMFARequired`, `op.AuditStepUpRequired`,
@@ -348,6 +685,20 @@ machine-to-machine grants.
   databases do not gain the indexes automatically: re-running the SQLite or
   PostgreSQL schema adds them, while MySQL declares indexes inside
   `CREATE TABLE` and needs an explicit `ALTER TABLE`.
+- Deleting a dynamically registered client on the DynamoDB backend leaves
+  nothing live bound to it. The adapter implemented `store.RevokeByClient` on
+  refresh tokens only, and the endpoint runs the cascade by probing each
+  client-keyed substore for that extension — so the grant rows and the JWT
+  access-token registry rows were skipped without a word. The grants table is
+  the one table with no TTL, so those rows outlived the client indefinitely and
+  kept a deleted application listed in every "applications you have authorized"
+  view built on `store.GrantStore.ListBySubject`. Grants and both access-token
+  registries now implement the extension. `CreateTables` adds the secondary
+  index the new access-token cascade queries to a table that predates it, so an
+  existing deployment converges by re-running it rather than by provisioning the
+  index by hand. The shared contract suite now fails a backend that implements
+  the extension on some of its client-keyed substores and not others, instead of
+  skipping the substores it cannot reach.
 - The DynamoDB adapter returns an expired Initial Access Token from
   `GetByHash` instead of reporting it absent. Its lookup went through the
   adapter's expiry-filtering read, so a lapsed IAT was indistinguishable from
@@ -551,7 +902,201 @@ machine-to-machine grants.
   enumerates in full. The report is also derived from struct fields, which the
   generator did not read before; several documented fields carry markers.
 
+- Submissions are validated against the outstanding prompt's declared fields
+  before any authenticator or interaction sees them. `FieldSpec`'s `Required`,
+  `MinLen`, `MaxLen` and `Pattern` were documented as orchestrator-enforced in
+  six places and enforced nowhere, so a custom authenticator — written against
+  that promise — received whatever fitted inside the driver's 32 KiB body cap.
+  The check runs from the field list persisted with the issued prompt rather
+  than from anything the client sends, at one point ahead of all four dispatch
+  routes.
+
+- An issuer that carries a path serves its discovery document at
+  `<issuer>/.well-known/openid-configuration` as well as at
+  `/.well-known/openid-configuration/<issuer-path>`. Only the second form was
+  mounted, so a relying-party library or conformance suite that appends the
+  well-known suffix to the issuer — which is what OpenID Connect Discovery 1.0
+  §4 specifies — received a 404 from every multi-tenant path-issuer
+  deployment, with no way around it through the public option surface. Both
+  forms serve one cached document. Bare-host issuers are unchanged.
+
+- `oidc_token_issued_total` labels each issuance with the grant that actually
+  produced it. A refresh token minted through the device-code or CIBA grant was
+  counted as `grant_type="authorization_code"`, which the metric's own Help text
+  and the bridge's comment both asserted was impossible. The label is now
+  derived from the chain origin the OP persists, through a closed projection —
+  a value of any other shape, including anything a request could supply, maps to
+  `unknown` rather than falling back to a grant name.
+
+- The counter inventory in the Prometheus example lists every metric the library
+  registers. Two were missing — `oidc_custom_grant_events_total` and
+  `oidc_logout_failures_total` — and that inventory is the only place an
+  operator can discover them, so nobody could alert on custom-grant outcomes or
+  on logout persistence failures. The example's list, the public boundary test
+  and the registered set are now held equal by a test rather than by hand.
+
+- A cross-factor lock that has expired stops being re-applied. After the
+  24-hour failure window rolled over, the transition wrote back a lock stamp
+  that had lapsed hours or days earlier, and the factors read that field with a
+  zero test rather than a time test — so a user whose lock had long expired was
+  told the account was locked on the next mistyped second-factor code, and
+  stayed told until they entered a correct one. A lock still running is
+  unaffected: it is preserved across a rollover and never shortened.
+
+- A sender-constrained refresh retried inside the rotation grace window retires
+  the opaque access tokens already issued under the grant before minting the
+  re-bound one. The first rotation did this; the grace re-mint did not, so two
+  live opaque access tokens could exist under one grant — against the stated
+  property that a stolen token's window collapses to clock skew. A failed
+  cascade now ends the request rather than answering 200 with both credentials
+  live.
+
+- The refresh-chain revocation cascade starts from the deepest node it could
+  resolve whenever an ancestor lookup fails, not only when the record was
+  reclaimed. A store timeout on any hop discarded the whole walk, and the
+  cascade is armed once at replay detection and never retried — so a momentary
+  outage dropped the revocation permanently.
+
+- An authorization code minted without an interaction retries a lost
+  optimistic-lock conflict on the grant record from a fresh read. Only the
+  interactive completion path did, so on a backend that versions grants, two
+  tabs opening the same first-party application raced and one received
+  `server_error`. One code is persisted per request and a `request_uri` is still
+  redeemed at most once.
+
+- A grant-management DELETE revokes the grant its `grant_id` names, and nothing
+  else. It enumerated every grant the same subject held with the same client and
+  revoked and deleted all of them — including grants created deliberately with
+  `grant_management_action=create`, whose whole purpose is to be managed
+  independently — while answering 204 as though it had removed one. A repeat
+  authorization that widens scope now amends the grant the consent screen shows
+  instead of minting a second record, so the superseded row and its live refresh
+  chain no longer accumulate out of the user's reach.
+
+- `/end_session` enforces the same Origin allowlist as the interaction ceremony
+  — the issuer origin plus whatever `op.WithCORSOrigins` names — and its CORS
+  layer is narrowed to match. The confirmation page returns HTML carrying a
+  double-submit token, so admitting a client's `redirect_uri` origin to read it
+  cross-origin hands out the one secret that scheme protects; a sibling
+  subdomain is cross-origin and same-site, which `SameSite` does not stop. The
+  two gates now reach the same verdict for the same origin, where the CORS layer
+  previously admitted origins the CSRF gate then refused with 400.
+
+- A session cookie rebound to a sibling account carries a `Max-Age` no longer
+  than the session's remaining server-side lifetime, and is cleared rather than
+  rebound when that lifetime has elapsed. The rebind stamped the profile default
+  — up to 14 days — regardless of when the session itself expires.
+
+- An authorization request that only reads the session no longer writes the
+  account selection back on every pass. It re-sealed the cookie from the payload
+  it read at entry, so a tab that switched accounts in between was silently
+  reverted and the next `prompt=none` request minted for the subject the user
+  had left. The cookie is re-sealed once its browser lifetime has aged enough to
+  be worth extending; the server-side idle touch is unchanged.
+
+- Every store adapter fails a call made through a committed or rolled-back
+  `store.Tx` with an error satisfying `errors.Is(err, store.ErrTxRequired)`,
+  lookups included. The DynamoDB adapter answered such a lookup from the live
+  table with a nil error, so a caller holding a leaked handle believed it was
+  still inside its transaction, and its index-backed grant enumerations
+  (`FindBySubjectClient`, `ListBySubject`, `HasAny`, `ListClientIDsBySubject`,
+  `ListSubjectsByClient`) reported an empty result with a nil error —
+  indistinguishable, to a consent-management screen, from a subject who has
+  authorised nothing. Its bulk revocations resolve their targets the same way,
+  through an index that cannot see staged writes, so `RevokeChain`,
+  `RevokeByGrant` and `RevokeByClient` answered a leaked handle with a completed
+  revocation whenever the index matched nothing. The SQL adapter surfaced
+  `database/sql.ErrTxDone` verbatim, which a caller could not tell from a
+  transport fault and would therefore retry forever. Adapters are held to this
+  by the shared contract suite. Error strings on that path now name the backend;
+  the sentinel callers match on is unchanged.
+
+- `/interaction/{uid}` and the pre-redirect `/authorize` error page carry
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: same-origin` whatever Driver is configured. Only the bundled
+  HTML driver set them, so a custom Driver or the SPA path served the consent
+  ceremony — one click from a grant, holding the CSRF token and the continuation
+  reference — with no framing or referrer protection, and so did the endpoint's
+  own 404 / 403 / 409 / 500 responses, which no Driver ever sees. `Driver.Render`
+  now states that implementations must not weaken them; Content-Security-Policy
+  stays the Driver's obligation, since only it knows its asset origins.
+
+- The built-in HTML interaction surface renders a required hidden field as a
+  labelled text input. That driver ships no script, so nothing on the page could
+  populate such a field, while the orchestrator rejects a submission that omits
+  a required one — wiring `op.WithCaptchaVerifier` behind it therefore locked
+  out every user who reached the challenge, with the chain aborting once the
+  attempts ran out. A start-up warning now covers the case the library cannot
+  decide: a captcha whose token only a browser widget can mint, and a passkey
+  ceremony, neither of which a user can type.
+
+- Wrapping a Driver with `op.WithConsentUI` or `op.WithChooserUI` no longer
+  turns pre-redirect authorization errors into a raw JSON envelope. The
+  library's own overlay did not carry `ErrorRenderer` through, so adding one
+  branding template silently cost an OP the HTML or SPA error page its Driver
+  already rendered.
+
+- The in-memory PAR substore keeps a pushed request redeemable through a slow
+  interactive login. Its sweep reclaimed records on expiry, but the store
+  contract requires `Consume` to enforce single use only — expiry is judged at
+  presentation — so a login that took longer than the `request_uri` lifetime
+  turned into `access_denied` once enough unrelated pushes had accumulated to
+  trigger a sweep. A load-dependent, intermittent failure. Reclamation now runs
+  on a retention window past expiry, through one predicate every reclamation
+  path shares.
+
+- The SQL adapter reports `ErrNotFound` from `UpdateClient` only when no row
+  carries the client ID. It had read that verdict off the affected-row count, so
+  on MySQL and MariaDB — which report zero rows changed when an update writes
+  the values already stored — a client re-submitting its current metadata, the
+  normal behaviour of a configuration reconcile loop, got `ErrNotFound` and a
+  `401 invalid_token` from `PUT /register/{client_id}`. PostgreSQL and SQLite
+  returned 200 for the same request.
+
+- The shipped example SPA renders the consent screen. It read the scope list
+  under member names the JSON driver does not emit, so the dialogue appeared
+  empty, and submitting it approved nothing while the server read the empty
+  approval as "no ceremony ran". The account chooser had no renderer at all and
+  fell through to the generic field loop, which drew a bare Continue button
+  because the chooser's only input is hidden. The server half is covered by the
+  consent fix under **Security**.
+
+- The dependency licence gate fails on a dependency it cannot positively
+  classify. It matched a list of forbidden families against the whole CSV row,
+  which never reached the licence column, left unclassifiable dependencies
+  passing, and could not distinguish a pattern that matches nothing from one
+  that matches nothing *yet*. Classification is now an allowlist compared
+  against the licence column alone, and the published index carries no
+  unclassified row.
+
+- A region-qualified locale bundle can be selected. `op.LocaleBundleFromMap`
+  registered the tag exactly as written while the resolver folded every
+  inbound signal — `ui_locales`, the `__Host-oidc_locale` cookie,
+  `Accept-Language`, a `PreferredLocaleStore` answer — to lowercase, so a
+  bundle registered as `pt-BR` or `zh-Hant` matched nothing from any route
+  and was unreachable however the request spelled it. `Provider.SetLocaleCookie`
+  compounded it: passing the tag in its registration casing returned no error
+  and wrote the cookie, and the next request discarded that cookie and served
+  the default. Registration, the default-locale option, the cookie, the
+  matcher and the `ui_locales_supported` advertisement now share one
+  canonicalisation, and matching follows the RFC 4647 lookup rule, so
+  `zh-Hant-TW` reaches a `zh-Hant` bundle and `pt-BR` reaches a `pt` one.
+
+- A partial locale bundle no longer renders blank UI when it is also the
+  configured default. Message lookup ran two tiers — the selected locale, then
+  the default — which left the default itself with nothing above it, so every
+  key an incomplete default translation omitted resolved to the empty string.
+  Lookup now walks the selected tag's own fallback chain, the default's, and
+  finally the seed English catalogue.
+
 ### Changed
+
+- `op.New` rejects a configuration that sets `op.WithRiskAssessor` alongside a
+  `LoginFlow.Risk` assessor. The LoginFlow surface consults one assessor per
+  chain, and the option-supplied one was never reached, so a deployment that
+  named both silently ran only the flow's — losing every `Deny` the other would
+  have returned. Setting either alone is unchanged: the option now feeds the
+  flow's assessor when `LoginFlow.Risk` is absent.
 
 - **BREAKING (BYO MFA stores).** `store.TOTPRecord` and
   `store.EmailOTPRecord` now carry an opaque, equality-only store-issued
@@ -693,7 +1238,178 @@ machine-to-machine grants.
   reference application and the examples move to `coreos/go-oidc/v3` v3.11 →
   v3.20 and `golang.org/x/oauth2` v0.30 → v0.36.
 
+- `client_credentials` must be enabled with `op.WithGrants` to be served. The
+  endpoint previously accepted it whether or not it was configured, so a
+  deployment relying on that now receives `unsupported_grant_type` until the
+  grant is named. Clients must also carry the grant in their own registration.
+
+- An omitted `scope` member on `PUT /register/{client_id}` clears the client's
+  scopes, the way RFC 7592 §2.2 treats every other omitted member. A client that
+  wants to keep its scopes names them in the update; one that cleared them
+  restores them with a later update. `POST /register` defaults are unchanged.
+
+- The refresh-token replay audit event names its correlation field
+  `refresh_chain_fingerprint`. Under the previous name the value never reached
+  a sink unmasked, so the practical change is that the field becomes readable.
+
+- After a refresh-token replay whose chain root cannot be resolved, or whose
+  chain revocation fails, the OP revokes every refresh token issued under the
+  grant. A client holding several concurrent refresh chains under one grant may
+  see sibling chains retired together on that path; over-revoking is the
+  fail-secure direction, and the alternative is leaving a live successor of a
+  chain the OP has already concluded is compromised.
+
+- **BREAKING (device-code / CIBA deployments).** The `gid` private claim on
+  access tokens issued through the device-code and CIBA grants is now a fresh
+  random identifier allocated at redemption, not the raw `device_code` /
+  `auth_req_id`. Anything correlating a token's `gid` back to a
+  device-authorization or bc-authorize row stops matching, and grant-tombstone
+  revocation for those flows must key on the new identifier. Refresh rows issued
+  before the upgrade keep their stored value and keep rotating, so live chains
+  are unaffected. `gid` is unchanged for `authorization_code`,
+  `client_credentials` and custom grants.
+
+- A device-code or CIBA record approved with no subject is refused with
+  `400 invalid_grant` on every client shape. The record is not consumed, so an
+  embedder that repairs the approval can retry the poll.
+
+- A login or consent UI hosted on a client's `redirect_uri` origin must name
+  that origin in `op.WithCORSOrigins` to drive the interaction ceremony
+  cross-origin. Being a registered redirect_uri is no longer sufficient for the
+  ceremony routes; the ceremony's CSRF gate has always required the same for
+  state-changing requests, so such a deployment could not previously complete a
+  submission either.
+
+- `/end_session` answers 503 with the static error page when the session store
+  cannot answer, where it previously answered 200 or redirected. Deployments
+  that treated a logout response as unconditionally successful will see failures
+  surface during a session-store outage; deployments that alerted on
+  failed-login noise during backend outages will see that noise stop.
+
+- `Store.GC` on the SQL adapter also clears the cached retry response on rows it
+  retains for chain resolution. No row is removed by that step, so `GCStats` and
+  `Total()` are unchanged. Storage adapters are held to the retention bound by
+  the shared contract suite, so a third-party backend that kept the response
+  longer will start failing `RefreshTokenStore/RetryResponseDiesWithPredecessor`.
+
+- A configuration whose endpoint override occupies the issuer-relative
+  well-known path is rejected at construction with a configuration error naming
+  the contested path, instead of silently shadowing the discovery document.
+
+- **Dashboards and alert rules on `oidc_token_issued_total` need updating.**
+  Device-code and CIBA redemptions leave the `grant_type="authorization_code"`
+  series and appear under `device_code` and `ciba`; an issuance whose origin
+  cannot be resolved appears under `unknown`. The existing series drops by that
+  volume and the new ones start unwatched. The metric's Help text changed to
+  match. The `token.issued` audit record gained a `refresh_origin` field.
+
+- `op/testkit.ApproveAllScopes` is deprecated. Its value is the empty
+  approved-scopes payload, which the OP now records as an approval of nothing
+  rather than an approval of everything — an embedder test using it approves no
+  scope and receives a code without `openid`. `testkit.ApprovedScopesFrom`
+  builds the payload that approves what the consent screen actually presented,
+  read out of the prompt envelope, and fails the test if the envelope carries
+  no scopes.
+
+- A client that relied on one grant-management DELETE clearing a subject's whole
+  relationship must now delete each `grant_id` it holds. The
+  `grant_management.revoked` audit event no longer carries a `revoked_grant_ids`
+  extra; `grant_id` names the single revoked grant.
+
+- An embedder driving `/end_session` cross-origin from a client's
+  `redirect_uri` origin must name that origin in `op.WithCORSOrigins`. Being a
+  registered redirect_uri is no longer sufficient there, matching the
+  interaction ceremony.
+
+- **Dynamic registrations naming a signing algorithm the OP will not use are
+  refused.** A `*_signed_response_alg` member may now only name a response shape
+  its surface actually puts on the wire for that client; anything else is
+  `invalid_client_metadata`. Concretely, registrations that previously returned
+  201 and now return 400: `authorization_signed_response_alg` other than
+  `ES256` (it was parsed and dropped while every JARM response was ES256-signed);
+  `userinfo_signed_response_alg` on a client that registered no UserInfo
+  response encryption (the signed shape is requested per call with
+  `Accept: application/jwt`, never selected at registration); and
+  `userinfo_signed_response_alg: "none"` on a client that did register it (those
+  responses are signed before they are encrypted). Accepting a value the OP then
+  ignores leaves the relying party's JOSE stack expecting a JWS and receiving
+  JSON, which fails every login with nothing to diagnose.
+
+- The in-memory PAR substore returns `ErrAlreadyExists` when a `Save` collides
+  with a record still inside its retention window, instead of silently replacing
+  it.
+
+- `FieldSpec.Required` means present **and** non-empty, `FieldSpec.Pattern` is
+  matched against the whole value rather than any substring of it, and
+  `FieldSpec.MaxLen: 0` resolves to a per-`FieldKind` default ceiling instead of
+  being unbounded. A pattern that does not compile rejects submissions for that
+  field rather than passing them through unchecked. A submission may carry at
+  most four entries beyond the declared fields — room for `csrf_token` and
+  template-specific hidden markers — and at most 32 KiB of keys and values.
+  A field whose empty value is a meaningful answer must not be marked
+  `Required`; use `MinLen` for "must send something". The built-in consent
+  prompt's `approved_scopes` is no longer advertised as required for exactly
+  that reason: approving nothing is an answer.
+
+- `op/devicecodekit.Deps` carries a mutex and is no longer copyable; `go vet`'s
+  copylocks check rejects passing it by value. Hold it behind a pointer, which is
+  what every helper in the package already takes. The package also gained
+  `AttemptLimiter` and the surrounding user-code attempt-budget API.
+
+- Locale tags are reported in canonical BCP 47 form — lowercase,
+  hyphen-separated — wherever the OP names one back to the embedder or the
+  wire: `LocaleBundle.Locale`, `Resolver.Available`, `Resolver.Default`,
+  `Resolver.Resolve`, the value `Provider.SetLocaleCookie` writes, and
+  `ui_locales_supported`. Embedders that compare a resolved locale against a
+  literal, or read the cookie themselves, should compare case-insensitively or
+  spell their constants in canonical form; a bundle registered as `pt-BR` now
+  reports as `pt-br`. Tags are still accepted in any casing and with either
+  separator on the way in.
+
+- `WithDiscoveryMetadata` rejects a `UILocalesSupported` entry that no
+  registered bundle serves, rather than advertising it. `ui_locales_supported`
+  tells relying parties which values `ui_locales` accepts, and an entry the
+  resolver cannot match sent every RP that honoured the advertisement to the
+  default locale instead. Narrowing the advertised list to a subset of the
+  registered locales still works; naming a locale that was never registered is
+  now a construction-time configuration error.
+
+- Every error `op.New` can return is now a `*op.Error`, so `op.IsServerError`
+  and `op.IsClientError` partition the construction failures between them.
+  Several locale-related options and one builder returned a plain error, for
+  which both predicates answered false — code branching on them fell through
+  every arm and treated a misconfiguration as a success or an unclassified
+  crash, depending on which way the caller had written the fallback.
+
 ### Added
+
+- `op.CaptchaWidgetDescriber`, which a `op.CaptchaVerifier` may also implement
+  to describe the widget its provider needs bootstrapped. The
+  `CaptchaPromptData.Provider` and `.SiteKey` fields a prompt carries were
+  never filled by either emission point, so an SPA had nothing to instantiate
+  the widget from and the shipped example's guard was a dead branch.
+- `op.RiskOutcome.NewDevice`, the verdict `op.RuleNewDevice` reads. The rule is
+  the way "step up when the browser is new" is written, and its predicate was
+  structurally always false: nothing set the field it tests, so the rule
+  matched nothing and the step-up never fired — with no error and no warning.
+  A risk assessor now supplies the verdict on its once-per-chain consult, and
+  the rule's godoc states that it stays false when no assessor is wired.
+- `op.ContinueInput.RemoteIP`, so an embedder driving the interaction loop can
+  supply the address for the surfaces that take one.
+- An example that configures no interaction driver at all, so login, consent
+  and the `prompt=select_account` chooser are all served by the surface
+  `op.New` falls back to. Every other example replaces that driver before it
+  reaches a chooser, which is how a default surface that could not render one
+  stayed shipped: "works with zero configuration" was the one claim nothing
+  exercised.
+
+- `devicecodekit.Deps.AuditLogger *slog.Logger` routes the device-code
+  verification and revocation audit events to an embedder-supplied slog handler,
+  redact-wrapped the same way the provider's own audit stream is. The four
+  events had no sink an embedder could configure: the existing `Deps.Audit`
+  field is typed with an interface whose method takes a package-internal event
+  type, so no code outside this module can implement it, and the events were
+  discarded everywhere except the library's own tests.
 
 - The authenticator chain now raises `op.AuditLoginSuccess`,
   `op.AuditLoginFailed`, `op.AuditMFASuccess` and `op.AuditMFAFailed`, one per
@@ -884,6 +1600,12 @@ machine-to-machine grants.
 
 ### Deprecated
 
+- `devicecodekit.Deps.Audit` — its interface type takes a package-internal
+  event type, so it cannot be implemented outside this module. Use
+  `devicecodekit.Deps.AuditLogger`. The field is still honoured and still takes
+  precedence when both are set.
+
+
 Nothing listed here is removed, and none of it changes behaviour. Each symbol
 turned out to do less than its documentation claimed, and the godoc now says
 what it actually does.
@@ -900,6 +1622,40 @@ what it actually does.
   discovery document does not advertise it. Setting it only changes which paths
   `op.New` reports as colliding. Session state is served under `Interaction`,
   or under `SPAUI.LoginMount` when an SPA owns rendering.
+
+### Removed
+
+Each symbol below could not be set by any caller: no code path in the library
+filled it, and the public surface offered no way for an embedder to fill it
+either. Nothing that was reachable stops working.
+
+- **BREAKING:** `op.FederatedSubject`, `subject.FederatedSubject` and
+  `subject.GeneratorInput.Federated`. A `SubjectGenerator` never saw a
+  populated `Federated` value, because the library has no typed federation
+  surface to produce one from. The capability itself is unaffected and needs no
+  new API: an embedder that authenticates against an upstream returns the
+  external identity as the subject (`interaction.Result{Subject:
+  "provider:external-id"}`), and it arrives as `GeneratorInput.InternalUserID`.
+  Making the identifier say which upstream a user came from is the embedder's
+  to do; the generator's guarantee is that identifiers which do differ never
+  project onto one `sub` within a sector.
+- **BREAKING:** `op.CaptchaInput.Action`. No caller set it, so a
+  `CaptchaVerifier` reading it always saw the empty string. Removing it is also
+  what makes the two captcha surfaces agree: the `StepCaptcha` path left
+  `RemoteIP` empty as well, so the same verifier was handed a different field
+  set depending on which surface invoked it. Both now fill `Token` and
+  `RemoteIP` identically.
+- **BREAKING:** `subject.ErrInputBothSet`, which reported that both
+  `InternalUserID` and `Federated` were set. With one field left there is no
+  such state; an empty input still returns `subject.ErrInputEmpty`.
+
+The godoc on `SubjectGenerator` described the wrong call contract and has been
+corrected: `Generate` is called once per request that releases a `sub` — token
+issuance, `/userinfo`, introspection, end-session and back-channel logout —
+not once per `(user, client)` pair. A grant records the OP-internal subject and
+the value is projected again on each of those surfaces, so a generator whose
+work is priced per call pays it per release. Determinism is therefore
+load-bearing rather than an optimisation.
 
 ## [v1.0.0] — 2026-07-27
 
