@@ -56,32 +56,43 @@
 // The adapter implements [store.Transactional]. A [store.Tx] obtained
 // from [Store.BeginTx] holds a single underlying [database/sql.Tx]
 // which is shared by every substore handle the Tx returns. Commit /
-// Rollback finalise the underlying transaction; subsequent calls on
-// the substore handles return [store.ErrTxRequired].
+// Rollback finalise the underlying transaction; every later call
+// through the handle — a lookup as much as a write, and a second Commit
+// — fails with an error satisfying errors.Is(err,
+// [store.ErrTxRequired]). The driver's own database/sql.ErrTxDone is
+// translated to it so a retained handle is distinguishable from a
+// transport fault rather than being retried as one.
 //
 // # Retention
 //
 // Most OP tables hold short-lived rows, and nothing in the request path
 // deletes them once they expire: an authorization code that was never
 // redeemed, a PAR record whose client walked away, an interaction the
-// user abandoned, and a session that timed out all stay on disk. One
+// user abandoned, a session that timed out, and the rotation record
+// behind a refresh token nobody redeemed all stay on disk. One
 // authorization request writes one row, and an unauthenticated caller
 // can drive that loop, so a deployment that never reclaims them grows
 // until the disk or the index does. Operating this adapter includes
 // scheduling the reclamation.
 //
 // [Store.GC] is the entry point. It deletes expired authorization
-// codes, PAR records, interactions and sessions in one call, returns
-// per-table counts as [GCStats], and runs on the *sql.DB the Store
-// already holds — a cron job or worker needs nothing but a handle to
-// the same Store. The adapter starts no goroutine of its own: when the
-// sweep runs, how often, and on which replica are the embedder's
-// decisions, not the library's.
+// codes, PAR records, interactions, sessions and refresh-token rotation
+// records in one call, returns per-table counts as [GCStats], and runs
+// on the *sql.DB the Store already holds — a cron job or worker needs
+// nothing but a handle to the same Store. The adapter starts no
+// goroutine of its own: when the sweep runs, how often, and on which
+// replica are the embedder's decisions, not the library's.
 //
 //	stats, err := store.GC(ctx, time.Now())
 //
 // Passing an earlier cutoff keeps a grace window; rows whose expires_at
 // is zero opt out of the sweep entirely.
+//
+// The five sweeps do not cost the same. Four are range scans on
+// expires_at; the refresh-token one is a per-grant anti-join, because a
+// rotation record stays needed until every refresh token issued under
+// its grant has expired (see [Store.GC] for why). Size the schedule
+// against that sweep rather than against the row counts.
 //
 // The remaining expiring tables are already covered elsewhere and do
 // not need to be added to the schedule twice. Access tokens, opaque

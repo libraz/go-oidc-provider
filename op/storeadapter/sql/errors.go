@@ -60,6 +60,61 @@ func isDuplicate(err error) bool {
 		strings.Contains(msg, "violates unique") // postgres alternate (English server)
 }
 
+// pgSerializationFailure and pgDeadlockDetected are the SQLSTATEs
+// PostgreSQL assigns to a transaction the server aborted so another one
+// could proceed. pgx renders both as "(SQLSTATE <code>)" client-side.
+const (
+	pgSerializationFailure = "40001"
+	pgDeadlockDetected     = "40P01"
+)
+
+// isLockConflict reports whether err describes a write the engine
+// refused because a concurrent transaction had already changed, or was
+// holding, what this one read.
+//
+// The three engines answer that situation in three unrelated ways, and
+// the difference is not one an embedder should be able to feel.
+// PostgreSQL aborts with a serialization failure or a deadlock,
+// MySQL/InnoDB reports a deadlock or a lock-wait timeout, and SQLite —
+// which has no row lock to wait on — fails the write outright once
+// another transaction has committed since the reader's snapshot. All
+// three mean the same thing to a caller amending a record: the basis it
+// read is no longer current, and re-reading reproduces the amendment.
+// Reporting them as [store.ErrConflict] is what
+// [store.GrantStore.Save] permits in place of holding a row lock, and it
+// is what keeps a retried cycle from turning into a 500 on one engine
+// and succeeding on another.
+//
+// The identification follows [isDuplicate]: the numeric identity the
+// driver renders itself is load-bearing, and the English phrases are a
+// fall-back for drivers that surface neither. SQLite is matched on the
+// engine's compiled-in constant, which has no message catalogue to
+// localise, so both the modernc and the cgo driver render it verbatim.
+func isLockConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	root := strings.ToLower(rootError(err).Error())
+	// ER_LOCK_DEADLOCK and ER_LOCK_WAIT_TIMEOUT.
+	if hasMySQLErrorNumber(root, "1213") || hasMySQLErrorNumber(root, "1205") {
+		return true
+	}
+	// The needles are lowered alongside the message: unlike the
+	// unique-violation code, 40P01 carries a letter, and comparing the
+	// canonical spelling against a lowered message would never match.
+	if strings.Contains(msg, "sqlstate "+strings.ToLower(pgSerializationFailure)) ||
+		strings.Contains(msg, "sqlstate "+strings.ToLower(pgDeadlockDetected)) {
+		return true
+	}
+	return strings.Contains(msg, "database is locked") || // sqlite (SQLITE_BUSY and its snapshot variant)
+		strings.Contains(msg, "database table is locked") || // sqlite (SQLITE_LOCKED)
+		strings.Contains(msg, "could not serialize access") || // postgres (English server)
+		strings.Contains(msg, "deadlock detected") || // postgres (English server)
+		strings.Contains(msg, "deadlock found") || // mysql (English server)
+		strings.Contains(msg, "lock wait timeout exceeded") // mysql (English server)
+}
+
 // hasMySQLErrorNumber reports whether msg opens with go-sql-driver's
 // rendering of the supplied MySQL server error number. The driver
 // formats "Error <number> (<sqlstate>): <message>", or "Error

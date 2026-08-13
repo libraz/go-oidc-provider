@@ -172,6 +172,26 @@ func (d Dialect) forUpdate() string {
 	return " FOR UPDATE"
 }
 
+// serializesTransactions reports whether the adapter has to admit one
+// transaction at a time on this engine.
+//
+// The rule [Dialect.forUpdate] relies on covers a transaction that
+// writes first. A read-amend-write cycle — which is what
+// [store.GrantStore.Save] is documented to be, and what a repeat
+// authorization runs — reads first, and SQLite cannot then give it the
+// write lock while any other connection is still reading: it refuses
+// the write outright rather than making it wait, because waiting would
+// deadlock. Several such cycles retrying in step starve one another
+// indefinitely, and "every writer is refused, forever" is neither of
+// the two answers the store contract permits.
+//
+// Admitting one transaction at a time supplies the row lock the engine
+// has none of, and costs no throughput: SQLite already allows a single
+// writer. The gate is per-process, which matches the deployment shape
+// this adapter's SQLite support targets — one process against one file.
+// PostgreSQL and MySQL take a real row lock and need nothing here.
+func (d Dialect) serializesTransactions() bool { return d.name == "sqlite" }
+
 // greatestExpr returns the dialect-appropriate two-argument max-of
 // scalar expression. SQLite exposes MAX as a variadic scalar function;
 // PostgreSQL and MySQL spell the same shape GREATEST. The grant

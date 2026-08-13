@@ -80,6 +80,7 @@ func TestSQLite_Contract(t *testing.T) {
 	factory := newSQLiteFactory(t)
 	contract.Run(t, factory)
 	runMFAContracts(t, factory)
+	runClientUpdateContracts(t, factory)
 }
 
 func TestSQLite_MigrateDetectsLegacyRefreshSchema(t *testing.T) {

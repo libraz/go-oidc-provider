@@ -3,6 +3,7 @@ package oidcsql_test
 import (
 	"context"
 	databasesql "database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -71,6 +72,19 @@ func (f refreshGCFixture) refreshCount(t *testing.T) int {
 	if err := f.db.QueryRowContext(context.Background(),
 		"SELECT COUNT(*) FROM oidc_refresh_tokens").Scan(&n); err != nil {
 		t.Fatalf("count refresh tokens: %v", err)
+	}
+	return n
+}
+
+// retryResponseCount reports how many rows still carry a sealed retry
+// response, which is what the column-clearing half of the sweep changes:
+// no row leaves the table, so a row count cannot observe it.
+func (f refreshGCFixture) retryResponseCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := f.db.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM oidc_refresh_tokens WHERE retry_response IS NOT NULL").Scan(&n); err != nil {
+		t.Fatalf("count cached retry responses: %v", err)
 	}
 	return n
 }
@@ -218,6 +232,56 @@ func TestSQLite_GC_LeavesASurvivingChainRevocable(t *testing.T) {
 	}
 	if !tip.Revoked {
 		t.Error("the cascade did not reach the live descendant; the chain graph did not survive the sweep")
+	}
+}
+
+// TestSQLite_GC_ClearsRetryResponseOnARetainedRow covers the one piece
+// of a refresh row that is not retained on the grant's liveness. The
+// sealed retry response may be re-delivered no longer than its own
+// predecessor's lifetime, and that predecessor's row lives on for as
+// long as any chain on the same grant does — so an encrypted token
+// response would otherwise sit in the table long after anything could
+// legitimately read it.
+func TestSQLite_GC_ClearsRetryResponseOnARetainedRow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	f := newRefreshGCFixture(t)
+	f.save(t, "rt-retry-parent", "grant-shared", "", f.cutoff.Add(-time.Hour))
+	f.save(t, "rt-sibling", "grant-shared", "", f.cutoff.Add(time.Hour))
+	retries, ok := f.store.RefreshTokens().(store.RefreshRetryResponseStore)
+	if !ok {
+		t.Fatalf("refresh substore %T does not implement store.RefreshRetryResponseStore", f.store.RefreshTokens())
+	}
+	parent := "rt-retry-parent"
+	if err := retries.SaveRotationWithRetry(ctx, &store.RefreshToken{
+		ID: "rt-retry-child", ClientID: "client-1", GrantID: "grant-shared", Subject: "subject-1",
+		ParentID: &parent, Scope: []string{"openid"},
+		ExpiresAt: f.cutoff.Add(time.Hour), CreatedAt: f.cutoff.Add(-time.Hour),
+	}, []byte("already-encrypted-retry-response")); err != nil {
+		t.Fatalf("SaveRotationWithRetry: %v", err)
+	}
+	if got := f.retryResponseCount(t); got != 1 {
+		t.Fatalf("cached retry responses before the sweep = %d, want 1", got)
+	}
+	// The read bound is already in force: the predecessor expired, so the
+	// grace window must not answer for it whatever the table still holds.
+	if _, err := retries.LoadRetryResponse(ctx, parent); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("LoadRetryResponse for an expired predecessor: want ErrNotFound, got %v", err)
+	}
+
+	stats, err := f.store.GC(ctx, f.cutoff)
+	if err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+	if stats.RefreshTokens != 0 {
+		t.Errorf("GC deleted %d rows from a grant that still has a live token, want 0", stats.RefreshTokens)
+	}
+	if got := f.refreshCount(t); got != 3 {
+		t.Errorf("refresh rows = %d, want all 3 retained for chain resolution", got)
+	}
+	if got := f.retryResponseCount(t); got != 0 {
+		t.Errorf("cached retry responses after the sweep = %d, want the sealed bytes cleared", got)
 	}
 }
 

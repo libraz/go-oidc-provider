@@ -8,9 +8,19 @@ or schema version — including the prior v1.0.0 shape — must apply the requir
 `ALTER` statements through their normal migration tool, then run the adapter's
 schema check.
 
-The following columns and index are additions covered by this schema revision.
-Use the physical table names configured with `WithNaming` when they differ
-from the defaults.
+The following columns and indexes are additions covered by this schema
+revision. Use the physical table names configured with `WithNaming` when they
+differ from the defaults.
+
+On SQLite and PostgreSQL the index statements are the same ones `v1.sql`
+carries, so a `Store.Migrate` run adds them to an existing database on its
+own; they are repeated here because a deployment that never runs `Migrate`
+still needs them. **On MySQL they are the only way to get the indexes.** MySQL
+has no `CREATE INDEX IF NOT EXISTS`, so `v1.sql` declares every index inline in
+its `CREATE TABLE` — and `CREATE TABLE IF NOT EXISTS` does nothing to a table
+that already exists. A MySQL database created by an earlier release therefore
+never acquires a later index unless these `ALTER` statements are applied by
+hand.
 
 SQLite:
 
@@ -23,6 +33,22 @@ ALTER TABLE oidc_email_otps
     ADD COLUMN row_version INTEGER NOT NULL DEFAULT 1;
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
     ON oidc_grants(client_id, subject, updated_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
+    ON oidc_grants(client_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_authorization_codes_expires
+    ON oidc_authorization_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_expires
+    ON oidc_refresh_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_expires
+    ON oidc_access_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_sessions_expires
+    ON oidc_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_par_records_expires
+    ON oidc_par_records(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_interactions_expires
+    ON oidc_interactions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_consumed_jtis_expires
+    ON oidc_consumed_jtis(expires_at);
 ```
 
 MySQL/MariaDB:
@@ -36,6 +62,22 @@ ALTER TABLE oidc_email_otps
     ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE oidc_grants
     ADD INDEX idx_oidc_grants_client_subject (client_id, subject, updated_at);
+ALTER TABLE oidc_grants
+    ADD INDEX idx_oidc_grants_client (client_id);
+ALTER TABLE oidc_authorization_codes
+    ADD INDEX idx_oidc_authorization_codes_expires (expires_at);
+ALTER TABLE oidc_refresh_tokens
+    ADD INDEX idx_oidc_refresh_tokens_expires (expires_at);
+ALTER TABLE oidc_access_tokens
+    ADD INDEX idx_oidc_access_tokens_expires (expires_at);
+ALTER TABLE oidc_sessions
+    ADD INDEX idx_oidc_sessions_expires (expires_at);
+ALTER TABLE oidc_par_records
+    ADD INDEX idx_oidc_par_records_expires (expires_at);
+ALTER TABLE oidc_interactions
+    ADD INDEX idx_oidc_interactions_expires (expires_at);
+ALTER TABLE oidc_consumed_jtis
+    ADD INDEX idx_oidc_consumed_jtis_expires (expires_at);
 ```
 
 PostgreSQL:
@@ -49,6 +91,22 @@ ALTER TABLE oidc_email_otps
     ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
     ON oidc_grants(client_id, subject, updated_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
+    ON oidc_grants(client_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_authorization_codes_expires
+    ON oidc_authorization_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_expires
+    ON oidc_refresh_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_expires
+    ON oidc_access_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_sessions_expires
+    ON oidc_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_par_records_expires
+    ON oidc_par_records(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_interactions_expires
+    ON oidc_interactions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_consumed_jtis_expires
+    ON oidc_consumed_jtis(expires_at);
 ```
 
 The `allowed_scopes` column is nullable intentionally: `NULL` represents an
@@ -60,9 +118,14 @@ persisted; every successful Put or conditional transition installs a fresh,
 opaque signed-63-bit generation token. Tokens are equality-only: they must
 never be incremented, reused after delete/recreate, or assigned semantic
 meaning by an application.
-The grant index bounds distinct subject enumeration during client deletion; the
-pre-existing `(subject, client_id, updated_at)` index serves the opposite
-direction.
+`idx_oidc_grants_client_subject` bounds distinct subject enumeration during
+client deletion; the pre-existing `(subject, client_id, updated_at)` index
+serves the opposite direction. `idx_oidc_grants_client` serves the client-scoped
+cascade, which filters on `client_id` alone and cannot use either composite.
+The `expires_at` indexes bound the retention sweep: a `DELETE` filtered on an
+unindexed column scans the table, and on MySQL it takes a lock per row it
+examines rather than per row it removes, so the cost grows with the data the
+sweep exists to bound.
 
 ## Deployment order and writer compatibility
 

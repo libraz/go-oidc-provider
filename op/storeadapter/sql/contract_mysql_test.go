@@ -121,6 +121,7 @@ func TestMySQL_Contract(t *testing.T) {
 	factory := newMySQLFactory(t)
 	contract.Run(t, factory)
 	runMFAContracts(t, factory)
+	runClientUpdateContracts(t, factory)
 }
 
 // TestMySQL_ClientFoundRowsMFAPut exercises the driver mode used by services

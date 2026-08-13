@@ -1,0 +1,401 @@
+-- v1 schema for github.com/libraz/go-oidc-provider/op/storeadapter/sql
+-- when configured with oidcsql.MySQL(). Targets MySQL 8.0.20+ (so the
+-- INSERT ... AS new ON DUPLICATE KEY UPDATE alias is available) and
+-- MariaDB 10.5+.
+--
+-- Conventions:
+--   * VARCHAR(255) is used for opaque identifiers; fits in a UTF8MB4
+--     btree (255*4 = 1020 bytes) without hitting the prefix-length cap.
+--   * JSON is stored in JSON columns; the application still encodes
+--     and decodes itself so behaviour is identical across engines.
+--   * Booleans use TINYINT(1) for portability with the other dialects.
+--   * Timestamps use BIGINT (unix nanoseconds).
+--   * Column order follows the project convention:
+--     id > *_id (foreign keys) > data columns > notes >
+--     updated_at > created_at.
+-- Apply once before opening the adapter.
+
+CREATE TABLE IF NOT EXISTS oidc_clients (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    client_id_issued_at BIGINT NOT NULL DEFAULT 0,
+    redirect_uris JSON NOT NULL,
+    post_logout_redirect_uris JSON NOT NULL,
+    backchannel_logout_uri TEXT NOT NULL,
+    backchannel_logout_session_required TINYINT(1) NOT NULL DEFAULT 0,
+    grant_types JSON NOT NULL,
+    response_types JSON NOT NULL,
+    scopes JSON NOT NULL,
+    resources JSON NOT NULL,
+    token_endpoint_auth_method VARCHAR(64) NOT NULL DEFAULT '',
+    token_endpoint_auth_signing_alg VARCHAR(16) NOT NULL DEFAULT '',
+    secret_hash TEXT NOT NULL,
+    public_client TINYINT(1) NOT NULL DEFAULT 0,
+    source VARCHAR(32) NOT NULL DEFAULT '',
+    application_type VARCHAR(32) NOT NULL DEFAULT '',
+    subject_type VARCHAR(32) NOT NULL DEFAULT '',
+    id_token_signed_response_alg VARCHAR(16) NOT NULL DEFAULT '',
+    introspection_signed_response_alg VARCHAR(16) NOT NULL DEFAULT '',
+    sector_identifier_uri TEXT NOT NULL,
+    client_name VARCHAR(255) NOT NULL DEFAULT '',
+    client_uri TEXT NOT NULL,
+    logo_uri TEXT NOT NULL,
+    policy_uri TEXT NOT NULL,
+    tos_uri TEXT NOT NULL,
+    jwks_uri TEXT NOT NULL,
+    jwks BLOB,
+    contacts JSON NOT NULL,
+    default_max_age BIGINT NULL,
+    require_auth_time TINYINT(1) NOT NULL DEFAULT 0,
+    default_acr_values JSON NOT NULL,
+    initiate_login_uri TEXT NOT NULL,
+    request_uris JSON NOT NULL,
+    request_object_signing_alg VARCHAR(16) NOT NULL DEFAULT '',
+    request_object_encryption_alg VARCHAR(32) NOT NULL DEFAULT '',
+    request_object_encryption_enc VARCHAR(16) NOT NULL DEFAULT '',
+    id_token_encrypted_response_alg VARCHAR(32) NOT NULL DEFAULT '',
+    id_token_encrypted_response_enc VARCHAR(16) NOT NULL DEFAULT '',
+    userinfo_encrypted_response_alg VARCHAR(32) NOT NULL DEFAULT '',
+    userinfo_encrypted_response_enc VARCHAR(16) NOT NULL DEFAULT '',
+    authorization_encrypted_response_alg VARCHAR(32) NOT NULL DEFAULT '',
+    authorization_encrypted_response_enc VARCHAR(16) NOT NULL DEFAULT '',
+    introspection_encrypted_response_alg VARCHAR(32) NOT NULL DEFAULT '',
+    introspection_encrypted_response_enc VARCHAR(16) NOT NULL DEFAULT ''
+);
+
+-- oidc_authorization_codes.id stores the SHA-256 hex digest (64
+-- ASCII chars) of the authorization-code bearer secret the client
+-- redeems at the token endpoint; the raw value is never persisted.
+-- The adapter computes the digest on Save / Find / Consume via the
+-- shared op/storeadapter/patterns.Digest helper.
+CREATE TABLE IF NOT EXISTS oidc_authorization_codes (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    grant_id VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    scope JSON NOT NULL,
+    resource TEXT NOT NULL,
+    code_challenge VARCHAR(255) NOT NULL DEFAULT '',
+    code_challenge_method VARCHAR(16) NOT NULL DEFAULT '',
+    nonce VARCHAR(255) NOT NULL DEFAULT '',
+    state VARCHAR(255) NOT NULL DEFAULT '',
+    dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
+    expires_at BIGINT NOT NULL,
+    consumed_at BIGINT NULL,
+    created_at BIGINT NOT NULL
+);
+
+-- oidc_refresh_tokens.id and oidc_refresh_tokens.parent_id store
+-- SHA-256 hex digests (64 ASCII chars) of the refresh-token bearer
+-- secrets; the raw values are never persisted. RevokeChain walks
+-- the parent_id graph entirely in the digest space so the rotation
+-- chain is internally consistent without ever materialising a raw
+-- secret. The adapter computes the digest on Save / Find / Consume
+-- via the shared op/storeadapter/patterns.Digest helper.
+CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    grant_id VARCHAR(255) NOT NULL,
+    parent_id VARCHAR(64) NULL,
+    subject VARCHAR(255) NOT NULL,
+    subject_public TINYINT(1) NOT NULL DEFAULT 0,
+    scope JSON NOT NULL,
+    resource TEXT NOT NULL,
+    origin VARCHAR(32) NOT NULL DEFAULT '',
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    acr VARCHAR(255) NOT NULL DEFAULT '',
+    amr JSON NOT NULL,
+    authorization_details JSON NOT NULL,
+    access_token_extra JSON NOT NULL,
+    dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
+    mtls_cert_thumbprint VARCHAR(64) NOT NULL DEFAULT '',
+    nonce VARCHAR(255) NOT NULL DEFAULT '',
+    revoked TINYINT(1) NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL,
+    consumed_at BIGINT NULL,
+    created_at BIGINT NOT NULL,
+    retry_response LONGBLOB NULL,
+    INDEX idx_oidc_refresh_tokens_parent (parent_id),
+    INDEX idx_oidc_refresh_tokens_grant (grant_id)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_access_tokens (
+    jti VARCHAR(255) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    grant_id VARCHAR(255) NOT NULL DEFAULT '',
+    subject VARCHAR(255) NOT NULL DEFAULT '',
+    scopes JSON NOT NULL,
+    revoked TINYINT(1) NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL,
+    issued_at BIGINT NOT NULL,
+    INDEX idx_oidc_access_tokens_grant (grant_id)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
+    token_hash VARBINARY(32) NOT NULL PRIMARY KEY,
+    grant_id VARCHAR(255) NOT NULL DEFAULT '',
+    subject VARCHAR(255) NOT NULL DEFAULT '',
+    client_id VARCHAR(255) NOT NULL,
+    audience TEXT NOT NULL,
+    scope JSON NOT NULL,
+    acr VARCHAR(64) NOT NULL DEFAULT '',
+    amr JSON NOT NULL,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
+    mtls_cert_thumb VARCHAR(64) NOT NULL DEFAULT '',
+    issued_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    revoked TINYINT(1) NOT NULL DEFAULT 0,
+    INDEX idx_oidc_opaque_access_tokens_grant (grant_id),
+    INDEX idx_oidc_opaque_access_tokens_expires (expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_grant_revocations (
+    grant_id VARCHAR(255) NOT NULL PRIMARY KEY,
+    revoked_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    reason VARCHAR(64) NOT NULL DEFAULT '',
+    INDEX idx_oidc_grant_revocations_expires (expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_revoked_jtis (
+    jti VARCHAR(255) NOT NULL PRIMARY KEY,
+    grant_id VARCHAR(255) NOT NULL DEFAULT '',
+    expires_at BIGINT NOT NULL,
+    INDEX idx_oidc_revoked_jtis_expires (expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_grants (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) NOT NULL,
+    scope JSON NOT NULL,
+    claims JSON NOT NULL,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    acr VARCHAR(64) NOT NULL DEFAULT '',
+    amr JSON NOT NULL,
+    authorization_details JSON NOT NULL,
+    updated_at BIGINT NOT NULL,
+    created_at BIGINT NOT NULL,
+    INDEX idx_oidc_grants_sub_client (subject, client_id, updated_at)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_sessions (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    chooser_group_id VARCHAR(255) NOT NULL DEFAULT '',
+    subject VARCHAR(255) NOT NULL,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    amr JSON NOT NULL,
+    acr VARCHAR(64) NOT NULL DEFAULT '',
+    expires_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    created_at BIGINT NOT NULL,
+    INDEX idx_oidc_sessions_chooser (chooser_group_id)
+);
+
+-- oidc_par_records.uri stores the SHA-256 hex digest (64 ASCII
+-- chars) of the request_uri bearer secret returned to the client by
+-- the PAR endpoint; the raw value is never persisted. The adapter
+-- computes the digest on Save / Find / Consume via the shared
+-- op/storeadapter/patterns.Digest helper.
+CREATE TABLE IF NOT EXISTS oidc_par_records (
+    uri VARCHAR(64) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    raw_params LONGBLOB NOT NULL,
+    expires_at BIGINT NOT NULL,
+    consumed_at BIGINT NULL,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oidc_interactions (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    step VARCHAR(64) NOT NULL,
+    raw_state LONGBLOB NOT NULL,
+    expires_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oidc_consumed_jtis (
+    jti VARCHAR(255) NOT NULL PRIMARY KEY,
+    expires_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oidc_users (
+    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    claims JSON NOT NULL,
+    updated_at BIGINT NOT NULL,
+    username VARCHAR(255) NULL,
+    password_hash VARBINARY(512) NULL,
+    UNIQUE KEY oidc_users_username (username)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_initial_access_tokens (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    hashed_value VARCHAR(128) NOT NULL UNIQUE,
+    max_uses INT NOT NULL DEFAULT 0,
+    uses INT NOT NULL DEFAULT 0,
+    allowed_scopes JSON NOT NULL,
+    tag VARCHAR(255) NOT NULL DEFAULT '',
+    expires_at BIGINT NOT NULL,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oidc_registration_access_tokens (
+    client_id VARCHAR(255) NOT NULL PRIMARY KEY,
+    hashed_value VARCHAR(128) NOT NULL,
+    created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oidc_op_metadata (
+    meta_key VARCHAR(64) PRIMARY KEY,
+    meta_value LONGTEXT NOT NULL
+);
+
+-- oidc_device_codes.id stores the SHA-256 hex digest (64 ASCII chars)
+-- of the RFC 8628 device_code bearer secret the device polls with at
+-- the token endpoint; the raw value is never persisted. The adapter
+-- computes the digest on Save / Find / state transitions via the
+-- shared op/storeadapter/patterns.Digest helper. user_code is the
+-- human-read-aloud value gated by the package's brute-force lockout,
+-- so it is stored canonicalised (uppercase, separators stripped) and
+-- carries a UNIQUE constraint so a fresh user_code never collides with
+-- a live record.
+CREATE TABLE IF NOT EXISTS oidc_device_codes (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    user_code VARCHAR(64) NOT NULL,
+    subject VARCHAR(255) NOT NULL DEFAULT '',
+    scope JSON NOT NULL,
+    resource JSON NOT NULL,
+    dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
+    mtls_cert_thumbprint VARCHAR(64) NOT NULL DEFAULT '',
+    poll_interval BIGINT NOT NULL DEFAULT 0,
+    status SMALLINT NOT NULL DEFAULT 0,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    deny_reason VARCHAR(64) NOT NULL DEFAULT '',
+    user_code_strikes SMALLINT NOT NULL DEFAULT 0,
+    poll_violations SMALLINT NOT NULL DEFAULT 0,
+    last_polled_at BIGINT NULL,
+    expires_at BIGINT NOT NULL,
+    issued_at BIGINT NOT NULL,
+    UNIQUE KEY oidc_device_codes_user_code (user_code),
+    INDEX idx_oidc_device_codes_expires (expires_at)
+);
+
+-- oidc_ciba_requests.id stores the SHA-256 hex digest (64 ASCII chars)
+-- of the OIDC CIBA auth_req_id bearer secret the client polls with at
+-- the token endpoint; the raw value is never persisted. The adapter
+-- computes the digest on Save / Find / state transitions via the
+-- shared op/storeadapter/patterns.Digest helper.
+CREATE TABLE IF NOT EXISTS oidc_ciba_requests (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) NOT NULL DEFAULT '',
+    scope JSON NOT NULL,
+    resource JSON NOT NULL,
+    acr_values JSON NOT NULL,
+    acr VARCHAR(255) NOT NULL DEFAULT '',
+    binding_message VARCHAR(255) NOT NULL DEFAULT '',
+    user_code VARCHAR(64) NOT NULL DEFAULT '',
+    dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
+    mtls_cert_thumbprint VARCHAR(64) NOT NULL DEFAULT '',
+    poll_interval BIGINT NOT NULL DEFAULT 0,
+    status SMALLINT NOT NULL DEFAULT 0,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    deny_reason VARCHAR(64) NOT NULL DEFAULT '',
+    poll_violations SMALLINT NOT NULL DEFAULT 0,
+    last_polled_at BIGINT NULL,
+    expires_at BIGINT NOT NULL,
+    issued_at BIGINT NOT NULL,
+    INDEX idx_oidc_ciba_requests_expires (expires_at)
+);
+
+-- Authentication-factor substores.
+--
+-- These five tables back the factor stores a login flow requires
+-- (op.StepTOTP, op.PrimaryPasskey, recovery codes, email OTP, and the
+-- cross-factor brute-force counter). They are keyed by subject rather
+-- than by a token identifier and carry no foreign key to the embedder's
+-- user table: the adapter never joins against it.
+--
+-- Secret material is stored exactly as the library hands it over.
+-- oidc_totp_secrets.secret_ciphertext is an AES-256-GCM blob, the
+-- recovery code_hash values are argon2id modular-crypt encodings, and
+-- the email-OTP salt / hash are the authenticator's opaque bytes.
+-- Nothing here may be logged or parsed by the backend.
+
+CREATE TABLE IF NOT EXISTS oidc_totp_secrets (
+    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    secret_ciphertext VARBINARY(512) NOT NULL,
+    failed_count INT NOT NULL DEFAULT 0,
+    last_accepted_step BIGINT NOT NULL DEFAULT 0,
+    confirmed_at BIGINT NOT NULL DEFAULT 0,
+    first_failure_at BIGINT NOT NULL DEFAULT 0,
+    locked_until BIGINT NOT NULL DEFAULT 0
+);
+
+-- credential_id is VARBINARY rather than a BLOB so it can carry the
+-- primary key; 512 bytes is well beyond the sizes authenticators
+-- actually emit while staying inside InnoDB's index-length ceiling.
+CREATE TABLE IF NOT EXISTS oidc_passkeys (
+    credential_id VARBINARY(512) NOT NULL PRIMARY KEY,
+    subject VARCHAR(255) NOT NULL,
+    public_key VARBINARY(1024) NOT NULL,
+    aaguid VARBINARY(64) NOT NULL,
+    sign_count BIGINT NOT NULL DEFAULT 0,
+    attestation_type VARCHAR(64) NOT NULL DEFAULT '',
+    transports JSON NOT NULL,
+    attachment VARCHAR(32) NOT NULL DEFAULT '',
+    user_present TINYINT(1) NOT NULL DEFAULT 0,
+    user_verified TINYINT(1) NOT NULL DEFAULT 0,
+    backup_eligible TINYINT(1) NOT NULL DEFAULT 0,
+    backup_state TINYINT(1) NOT NULL DEFAULT 0,
+    clone_warning TINYINT(1) NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL DEFAULT 0,
+    INDEX idx_oidc_passkeys_subject (subject)
+);
+
+-- One row per recovery-code slot rather than one row per batch: the
+-- single-use guarantee is then a conditional UPDATE on the slot itself,
+-- so two concurrent redemptions of the same code cannot both win.
+-- generated_at is denormalised across the batch's rows because the
+-- library reads and writes the batch as a unit.
+CREATE TABLE IF NOT EXISTS oidc_recovery_codes (
+    subject VARCHAR(255) NOT NULL,
+    slot_index INT NOT NULL,
+    code_hash VARCHAR(255) NOT NULL,
+    consumed_at BIGINT NOT NULL DEFAULT 0,
+    generated_at BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (subject, slot_index)
+);
+
+-- retain_until governs row retention independently of expires_at: the
+-- rate-limit and brute-force counters have to outlive the code they
+-- were accumulated against, otherwise pacing sends to the code TTL
+-- silently resets them.
+CREATE TABLE IF NOT EXISTS oidc_email_otps (
+    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    code_salt VARBINARY(64) NOT NULL,
+    code_hash VARBINARY(64) NOT NULL,
+    failed_count INT NOT NULL DEFAULT 0,
+    send_count INT NOT NULL DEFAULT 0,
+    sent_at BIGINT NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL DEFAULT 0,
+    retain_until BIGINT NOT NULL DEFAULT 0,
+    first_failure_at BIGINT NOT NULL DEFAULT 0,
+    locked_until BIGINT NOT NULL DEFAULT 0,
+    consumed_at BIGINT NOT NULL DEFAULT 0,
+    send_window_start BIGINT NOT NULL DEFAULT 0,
+    last_send_attempt_at BIGINT NOT NULL DEFAULT 0,
+    INDEX idx_oidc_email_otps_retain (retain_until)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_authn_lockouts (
+    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    failed_count INT NOT NULL DEFAULT 0,
+    record_version BIGINT NOT NULL DEFAULT 0,
+    first_failure_at BIGINT NOT NULL DEFAULT 0,
+    locked_until BIGINT NOT NULL DEFAULT 0
+);

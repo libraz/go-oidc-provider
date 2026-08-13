@@ -143,3 +143,85 @@ func TestIsDuplicate_IgnoresTheNumberInsideAMessage(t *testing.T) {
 		t.Errorf("isDuplicate(%q) = true; the number belongs to the message, not the driver prefix", err.Error())
 	}
 }
+
+// A grant amendment that lost its basis must be recognisable on every
+// engine, in whatever language the server speaks. The engines disagree
+// on how they say it — PostgreSQL aborts the transaction, MySQL reports
+// a deadlock or a lock-wait timeout, SQLite refuses the write — and the
+// caller retries the cycle on all three or on none.
+func TestIsLockConflict_AcrossEngines(t *testing.T) {
+	t.Parallel()
+
+	for name, err := range map[string]error{
+		"mysql deadlock, Japanese server": &mysql.MySQLError{
+			Number:   1213,
+			SQLState: [5]byte{'4', '0', '0', '0', '1'},
+			Message:  "デッドロックを検出しました",
+		},
+		"mysql lock wait timeout, Japanese server": &mysql.MySQLError{
+			Number:   1205,
+			SQLState: [5]byte{'H', 'Y', '0', '0', '0'},
+			Message:  "ロック待ちがタイムアウトしました",
+		},
+		"postgres serialization failure": &pgconn.PgError{
+			Severity: "ОШИБКА",
+			Code:     "40001",
+			Message:  "не удалось сериализовать доступ",
+		},
+		"postgres deadlock": &pgconn.PgError{
+			Severity: "ОШИБКА",
+			Code:     "40P01",
+			Message:  "обнаружена взаимоблокировка",
+		},
+		"sqlite busy":          errors.New("database is locked (5) (SQLITE_BUSY)"),
+		"sqlite busy snapshot": errors.New("database is locked (517)"),
+		"sqlite table locked":  errors.New("database table is locked"),
+		"wrapped": wrapErr("grants.Save", &pgconn.PgError{
+			Code:    "40001",
+			Message: "could not serialize access due to concurrent update",
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if !isLockConflict(err) {
+				t.Errorf("isLockConflict(%v) = false, want true", err)
+			}
+		})
+	}
+}
+
+// Reporting an ordinary failure as a conflict is worse than missing
+// one: the caller re-drives the whole cycle against a fault no re-read
+// can clear, and the amendment it carries is applied twice as often as
+// it was asked for.
+func TestIsLockConflict_RejectsOtherDriverErrors(t *testing.T) {
+	t.Parallel()
+
+	for name, err := range map[string]error{
+		"nil": nil,
+		"mysql duplicate entry": &mysql.MySQLError{
+			Number:   1062,
+			SQLState: [5]byte{'2', '3', '0', '0', '0'},
+			Message:  "キー 'PRIMARY' に対して重複エントリー 'g-1' です",
+		},
+		"postgres unique violation": &pgconn.PgError{
+			Code:    "23505",
+			Message: "duplicate key value violates unique constraint",
+		},
+		"plain error": errors.New("oidcsql: connection refused"),
+		"the number inside a message": &mysql.MySQLError{
+			Number:   1062,
+			SQLState: [5]byte{'2', '3', '0', '0', '0'},
+			Message:  "duplicate entry for error 1213 (40001) sample text",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if isLockConflict(err) {
+				t.Errorf("isLockConflict(%v) = true, want false", err)
+			}
+		})
+	}
+}

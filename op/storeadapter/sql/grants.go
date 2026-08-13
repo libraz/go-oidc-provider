@@ -36,6 +36,17 @@ func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
 		details,
 		timeToInt64(g.CreatedAt), timeToInt64(g.UpdatedAt))
 	if err != nil {
+		// A grant is amended rather than replaced, so the write that
+		// lands here carries a basis the caller read earlier. The
+		// engines that cannot hold that basis under a row lock refuse
+		// the write instead, and [store.GrantStore.Save] names
+		// [store.ErrConflict] as the answer that tells the caller to
+		// re-read and re-apply. Anything else reaches the user as a
+		// 500 on one engine while another engine's row lock made the
+		// same pair of authorizations succeed.
+		if isLockConflict(err) {
+			return fmt.Errorf("oidcsql: grants.Save: %w: %w", store.ErrConflict, err)
+		}
 		return wrapErr("grants.Save", err)
 	}
 	return nil

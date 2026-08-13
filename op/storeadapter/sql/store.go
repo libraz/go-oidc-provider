@@ -85,6 +85,11 @@ type Store struct {
 	names   nameMap
 	queries queries
 
+	// txGate admits one transaction at a time on engines that need
+	// them serialised, and is nil on the engines that do not. See
+	// [Dialect.serializesTransactions].
+	txGate chan struct{}
+
 	clientsImpl            *clientStore
 	authCodesImpl          *authCodeStore
 	refreshesImpl          *refreshStore
@@ -145,6 +150,9 @@ func New(db *databasesql.DB, dialect Dialect, opts ...Option) (*Store, error) {
 		clock:   cfg.clock,
 		names:   cfg.naming,
 		queries: q,
+	}
+	if dialect.serializesTransactions() {
+		s.txGate = make(chan struct{}, 1)
 	}
 	s.attachSubstores()
 	return s, nil
@@ -534,8 +542,13 @@ func (s *Store) DeleteClient(ctx context.Context, id string) error {
 // runner abstracts *sql.DB and *sql.Tx so substores can use the same
 // query path inside and outside a transaction. It is intentionally
 // the smallest possible surface: ExecContext and QueryContext.
+//
+// A single-row query returns a [scanner] rather than *sql.Row because
+// *sql.Row carries its failure in an unexported field: a transaction
+// that has already settled has no way to report itself through one.
+// [pickRunner] supplies the implementations.
 type runner interface {
 	ExecContext(ctx context.Context, query string, args ...any) (databasesql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*databasesql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *databasesql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) scanner
 }

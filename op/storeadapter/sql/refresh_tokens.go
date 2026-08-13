@@ -56,7 +56,7 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 		return wrapErr("refreshes.Save.begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.saveRotation(ctx, tx, t); err != nil {
+	if err := s.saveRotation(ctx, txRunner{tx: tx}, t); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -81,7 +81,7 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 		return wrapErr("refreshes.SaveRotationWithRetry.begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.saveRotationWithRetry(ctx, tx, t, sealed); err != nil {
+	if err := s.saveRotationWithRetry(ctx, txRunner{tx: tx}, t, sealed); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -108,9 +108,16 @@ func (s *refreshStore) saveRotationWithRetry(ctx context.Context, run runner, t 
 	return nil
 }
 
+// LoadRetryResponse returns the sealed response cached against
+// predecessorID. A response whose predecessor has expired reads as
+// [store.ErrNotFound]: the row that carries it is retained on the
+// liveness of the whole grant (see [Store.GC]), which says nothing about
+// this predecessor, and the grace window may only re-deliver a response
+// for a token the endpoint would still accept.
 func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
 	var sealed []byte
-	err := s.runner().QueryRowContext(ctx, s.parent.queries.refreshRetryFind, patterns.Digest(predecessorID)).Scan(&sealed)
+	err := s.runner().QueryRowContext(ctx, s.parent.queries.refreshRetryFind,
+		patterns.Digest(predecessorID), timeToInt64(s.parent.clock.Now())).Scan(&sealed)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -401,8 +408,7 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 // RevokeChain marks every refresh token in the rotation chain rooted
 // at rootID as consumed. Backends that delete or mark equivalently
 // satisfy the contract; the SQL adapter marks (preserving the audit
-// trail). The walk is bounded by the chain depth, which the library
-// caps at the refresh-token TTL by construction.
+// trail).
 //
 // The walk operates entirely in the stored-ID space: rootID may be a raw
 // bearer secret or a digest returned from Find, and findStored resolves it
@@ -410,12 +416,20 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 // compares parent_id against those stored digest values, keeping the graph
 // internally consistent without ever persisting raw parent secrets.
 //
+// Cost: the BFS visits one row per retained rotation record, and nothing
+// caps that count. A refresh-token expiry is not a ceiling on chain depth —
+// every rotation slides it forward — and [Store.GC] reclaims a grant's
+// history only once no token under that grant is live, so a client that
+// keeps refreshing keeps its whole rotation history. Chain length therefore
+// tracks how long the grant has been refreshed, not the TTL.
+//
 // Atomicity: when the substore is not already running inside a
 // caller-owned transaction the BFS auto-wraps itself in a fresh
 // transaction so a concurrent rotation cannot interleave a refresh
-// Save between the parent's mark and its children-lookup. The chain
-// depth is bounded by the rotation TTL, so the auto-Tx stays short
-// even on aggressively rotated grants.
+// Save between the parent's mark and its children-lookup. That
+// transaction spans the whole retained history, so on a long-lived,
+// aggressively rotated grant it is a long transaction; wrap the call in a
+// caller-owned [store.Tx] to control that scope explicitly.
 func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
 	if s.tx == nil {
 		tx, err := s.parent.db.BeginTx(ctx, nil)

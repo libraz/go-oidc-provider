@@ -170,7 +170,16 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	if err != nil {
 		return fmt.Errorf("oidcsql: emailOTPs.Consume: generate Version: %w", err)
 	}
-	args := emailOTPValues(r)
+	// Marking the challenge is this method's job. The statement's
+	// predicate is "consumed_at = 0", so writing the presented value
+	// through unexamined sets the column to the value it is required to
+	// already hold whenever the caller left it unstamped: the row
+	// version rotates, the UPDATE reports success, and the challenge
+	// stays redeemable for anyone who re-reads it. Mirrors
+	// [recoveryStore.stampFor], which carries the same post-condition.
+	stamped := *r
+	stamped.ConsumedAt = s.stampFor(r.ConsumedAt)
+	args := emailOTPValues(&stamped)
 	args = append(args,
 		version,
 		r.Subject,
@@ -190,6 +199,18 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 		return nil
 	}
 	return s.explainRejectedConsume(ctx, r)
+}
+
+// stampFor resolves the ConsumedAt a redemption writes onto the record.
+// A caller that already stamped keeps its value — it is the OP's own
+// clock reading for the verification that just succeeded — while an
+// unstamped record is stamped from the adapter's clock so a nil return
+// always means the challenge is spent.
+func (s *emailOTPStore) stampFor(presented time.Time) time.Time {
+	if !presented.IsZero() {
+		return presented
+	}
+	return s.parent.clock.Now()
 }
 
 // explainRejectedConsume separates the three ways a redemption can be

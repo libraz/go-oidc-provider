@@ -67,6 +67,13 @@ func (s GCStats) Total() int64 {
 // per-grant anti-join rather than a range scan on expires_at. Schedule
 // it accordingly on a large table.
 //
+// A refresh-token row retained that way may still carry the sealed
+// response the RFC 9700 delivery grace window cached against it. That
+// response is bounded by the predecessor's own expiry, not by the
+// grant's, so GC clears the column on the row's own expiry rather than
+// waiting for the row to go. Clearing it removes no row and therefore
+// contributes to no count.
+//
 // The adapter does not sweep on its own. It starts no goroutine and
 // owns no timer, because a library that is handed a *sql.DB has no
 // standing to decide when the process it lives in should do background
@@ -114,6 +121,11 @@ func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 			return stats, wrapErr("gc."+sweep.name, err)
 		}
 		*sweep.count = n
+	}
+	// Clearing the cached retry responses runs after the deletes so it
+	// only touches rows the refresh sweep decided to keep.
+	if _, err := s.sweep(ctx, s.queries.refreshRetryGC, []any{timeToInt64(cutoff)}); err != nil {
+		return stats, wrapErr("gc.refreshRetryResponses", err)
 	}
 	return stats, nil
 }

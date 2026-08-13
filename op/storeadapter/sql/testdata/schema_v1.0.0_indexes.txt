@@ -1,0 +1,58 @@
+# Index names present in schema/<dialect>/v1.sql at release tag v1.0.0.
+#
+# This is a frozen historical record, not a list to keep current: it names
+# what a database created by v1.0.0 already has, so the migration-coverage
+# test can compute which indexes a pre-existing database is missing and
+# require a MIGRATIONS.md statement for each. Editing it to match a newer
+# schema would silence exactly the check it feeds. It changes only if the
+# v1.0.0 tag is re-cut, which cannot happen.
+#
+# Verify (never update) with:
+#   git show v1.0.0:op/storeadapter/sql/schema/<dialect>/v1.sql
+#
+# Format: <dialect> <index name>, sorted.
+sqlite idx_oidc_access_tokens_grant
+sqlite idx_oidc_ciba_requests_expires
+sqlite idx_oidc_device_codes_expires
+sqlite idx_oidc_email_otps_retain
+sqlite idx_oidc_grant_revocations_expires
+sqlite idx_oidc_grants_sub_client
+sqlite idx_oidc_opaque_access_tokens_expires
+sqlite idx_oidc_opaque_access_tokens_grant
+sqlite idx_oidc_passkeys_subject
+sqlite idx_oidc_refresh_tokens_grant
+sqlite idx_oidc_refresh_tokens_parent
+sqlite idx_oidc_revoked_jtis_expires
+sqlite idx_oidc_sessions_chooser
+sqlite oidc_device_codes_user_code
+sqlite oidc_users_username
+mysql idx_oidc_access_tokens_grant
+mysql idx_oidc_ciba_requests_expires
+mysql idx_oidc_device_codes_expires
+mysql idx_oidc_email_otps_retain
+mysql idx_oidc_grant_revocations_expires
+mysql idx_oidc_grants_sub_client
+mysql idx_oidc_opaque_access_tokens_expires
+mysql idx_oidc_opaque_access_tokens_grant
+mysql idx_oidc_passkeys_subject
+mysql idx_oidc_refresh_tokens_grant
+mysql idx_oidc_refresh_tokens_parent
+mysql idx_oidc_revoked_jtis_expires
+mysql idx_oidc_sessions_chooser
+mysql oidc_device_codes_user_code
+mysql oidc_users_username
+postgres idx_oidc_access_tokens_grant
+postgres idx_oidc_ciba_requests_expires
+postgres idx_oidc_device_codes_expires
+postgres idx_oidc_email_otps_retain
+postgres idx_oidc_grant_revocations_expires
+postgres idx_oidc_grants_sub_client
+postgres idx_oidc_opaque_access_tokens_expires
+postgres idx_oidc_opaque_access_tokens_grant
+postgres idx_oidc_passkeys_subject
+postgres idx_oidc_refresh_tokens_grant
+postgres idx_oidc_refresh_tokens_parent
+postgres idx_oidc_revoked_jtis_expires
+postgres idx_oidc_sessions_chooser
+postgres oidc_device_codes_user_code
+postgres oidc_users_username

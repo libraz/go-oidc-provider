@@ -3,6 +3,7 @@ package oidcsql
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -93,7 +94,7 @@ func (s *recoveryStore) Consume(ctx context.Context, b *store.RecoveryBatch, ind
 	}
 	slot := b.Codes[index]
 	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.recoveryConsume,
-		timeToInt64(slot.ConsumedAt), b.Subject, index, slot.Hash)
+		timeToInt64(s.stampFor(slot)), b.Subject, index, slot.Hash)
 	if err != nil {
 		return wrapErr("recoveryCodes.Consume", err)
 	}
@@ -105,6 +106,29 @@ func (s *recoveryStore) Consume(ctx context.Context, b *store.RecoveryBatch, ind
 		return nil
 	}
 	return s.explainRejectedConsume(ctx, b.Subject, index)
+}
+
+// stampFor resolves the timestamp a redemption writes onto the slot.
+// A slot the caller already stamped keeps that value — it is the OP's
+// own clock reading for the verification that just succeeded — while an
+// unstamped one is stamped here from the adapter's clock.
+//
+// A zero value must never reach the UPDATE. The statement's predicate is
+// "consumed_at = 0", so writing zero sets the column to the value it is
+// required to already hold: the row matches, nothing changes, and the
+// slot stays redeemable. Whether that surfaces as one affected row or
+// none is then a per-engine choice — MySQL counts changed rows while
+// SQLite and PostgreSQL count matched ones — so the same call reports
+// success on one engine and refusal on another, and the success is the
+// dangerous half: a single-use code the caller was told it had spent.
+// Stamping makes the write a real transition on every engine, which
+// collapses matched-rows and changed-rows onto the same answer and
+// makes a nil return mean the slot is spent.
+func (s *recoveryStore) stampFor(slot store.RecoveryCode) time.Time {
+	if !slot.ConsumedAt.IsZero() {
+		return slot.ConsumedAt
+	}
+	return s.parent.clock.Now()
 }
 
 // explainRejectedConsume distinguishes "no batch at all" from "the slot

@@ -131,4 +131,5 @@ func TestPostgres_Contract(t *testing.T) {
 	factory := newPostgresFactory(t)
 	contract.Run(t, factory)
 	runMFAContracts(t, factory)
+	runClientUpdateContracts(t, factory)
 }

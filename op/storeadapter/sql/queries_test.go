@@ -246,9 +246,37 @@ func TestBuildQueries_GCQueriesPreserveZeroExpiry(t *testing.T) {
 		"interactionGC":       q.interactionGC,
 		"sessionGC":           q.sessionGC,
 		"refreshGC":           q.refreshGC,
+		"refreshRetryGC":      q.refreshRetryGC,
 	} {
 		if !strings.Contains(query, "expires_at > 0 AND expires_at <") {
 			t.Errorf("%s query must preserve zero-expiry rows, got %q", name, query)
 		}
+	}
+}
+
+// Which engines the adapter serialises transactions on is a
+// throughput decision as much as a correctness one. SQLite needs it
+// because it has no row lock to give a read-amend-write cycle;
+// extending it to an engine that does would quietly turn a pool of
+// concurrent writers into a single-file queue, and nothing else in the
+// suite would notice.
+func TestSerializesTransactions(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		dialect Dialect
+		want    bool
+	}{
+		{SQLite(), true},
+		{MySQL(), false},
+		{Postgres(), false},
+	} {
+		t.Run(tc.dialect.Name(), func(t *testing.T) {
+			t.Parallel()
+
+			if got := tc.dialect.serializesTransactions(); got != tc.want {
+				t.Errorf("serializesTransactions() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

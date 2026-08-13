@@ -272,7 +272,27 @@ func (s *clientStore) Update(ctx context.Context, c *store.Client) error {
 		return wrapErr("clients.Update.RowsAffected", err)
 	}
 	if n == 0 {
+		// MySQL counts changed rows rather than matched rows, so an
+		// update that rewrites a client with the metadata it already
+		// carries reports zero. Only a missing row may be reported as
+		// ErrNotFound, so decide presence by reading it.
+		return s.exists(ctx, c.ID)
+	}
+	return nil
+}
+
+// exists returns nil when a client row carries id and store.ErrNotFound
+// when none does. It disambiguates the zero-affected-rows outcome of
+// [clientStore.Update], which is reached both by a no-op update and by
+// an update against an absent client.
+func (s *clientStore) exists(ctx context.Context, id string) error {
+	var probe int
+	err := s.runner().QueryRowContext(ctx, s.parent.queries.clientExists, id).Scan(&probe)
+	if errors.Is(err, databasesql.ErrNoRows) {
 		return store.ErrNotFound
+	}
+	if err != nil {
+		return wrapErr("clients.Update.Exists", err)
 	}
 	return nil
 }

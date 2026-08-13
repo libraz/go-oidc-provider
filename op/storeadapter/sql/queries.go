@@ -27,6 +27,7 @@ import (
 type queries struct {
 	// clients
 	clientGet    string
+	clientExists string
 	clientInsert string
 	clientUpdate string
 	clientDelete string
@@ -49,6 +50,7 @@ type queries struct {
 	refreshRevokeByClient      string
 	refreshRetrySave           string
 	refreshRetryFind           string
+	refreshRetryGC             string
 	refreshGC                  string
 	grantDeleteByClient        string
 
@@ -340,6 +342,12 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		clientGet: d.rebind(
 			"SELECT " + clientCols + " FROM " + n.clients + " WHERE id = ?",
 		),
+		// clientExists decides row presence without decoding the record,
+		// which is what an UPDATE reporting zero affected rows needs: on
+		// MySQL that count reflects changed rows, not matched ones.
+		clientExists: d.rebind(
+			"SELECT 1 FROM " + n.clients + " WHERE id = ?",
+		),
 		clientInsert: d.rebind(
 			"INSERT INTO " + n.clients + " (" + clientCols + ") VALUES (" + clientPlaceholders + ")",
 		),
@@ -408,8 +416,27 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		refreshRetrySave: d.rebind(
 			"UPDATE " + n.refreshes + " SET retry_response = ? WHERE id = ?",
 		),
+		// refreshRetryFind is bounded by the predecessor's own expiry as
+		// well as by the presence of a cached response. The row outlives
+		// that expiry — refreshGC keeps a dead chain for as long as any
+		// sibling chain on the same grant is live — so the row being
+		// there says nothing about whether the sealed response may still
+		// be served, and [store.RefreshRetryResponseStore] forbids
+		// retaining it past the predecessor's refresh-token lifetime.
 		refreshRetryFind: d.rebind(
-			"SELECT retry_response FROM " + n.refreshes + " WHERE id = ? AND retry_response IS NOT NULL",
+			"SELECT retry_response FROM " + n.refreshes +
+				" WHERE id = ? AND retry_response IS NOT NULL" +
+				" AND (expires_at = 0 OR expires_at >= ?)",
+		),
+		// refreshRetryGC drops the sealed responses the read above has
+		// stopped serving. It clears a column instead of deleting the
+		// row: the record itself is still needed to resolve a chain root
+		// for replay revocation, but the encrypted token response
+		// attached to it is dead weight the moment its predecessor
+		// expires.
+		refreshRetryGC: d.rebind(
+			"UPDATE " + n.refreshes + " SET retry_response = NULL" +
+				" WHERE retry_response IS NOT NULL AND expires_at > 0 AND expires_at < ?",
 		),
 		// refreshGC deletes expired rotation records, but only from
 		// chains that are wholly dead. A row's own expiry is not
@@ -489,10 +516,12 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// oidc_grant_revocations holds per-grant tombstones,
 		// oidc_revoked_jtis holds the per-JTI denylist for RFC 7009
 		// single-AT revocation. RevokeGrant is idempotent — a second call
-		// against the same grant_id extends expires_at to max(existing,
-		// supplied) and leaves revoked_at unchanged so the verifier's iat
-		// <= revoked_at rule keeps its meaning across retries. RevokeJTI is
-		// idempotent in the simpler shape (a second insert is a no-op).
+		// against the same grant_id extends both revoked_at and expires_at
+		// to max(existing, supplied), so a later cascade on a grant that
+		// was reused across repeat /authorize flows still covers the tokens
+		// minted since the previous one under the verifier's iat <=
+		// revoked_at rule. RevokeJTI is idempotent in the simpler shape (a
+		// second insert is a no-op).
 		grantTombstoneUpsert: d.rebind(
 			"INSERT INTO " + n.grantTombstones +
 				" (grant_id, revoked_at, expires_at, reason)" +
