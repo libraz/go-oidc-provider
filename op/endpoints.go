@@ -157,11 +157,42 @@ func protocolEndpointPath(c *config, endpoint string) string {
 }
 
 // discoveryEndpointPath returns the request path for the discovery document.
-// OpenID Connect Discovery 1.0 §4 inserts the well-known suffix before an
-// issuer path, so issuer https://idp.example.com/tenant is discovered at
+// RFC 8414 §3 inserts the well-known suffix before an issuer path, so issuer
+// https://idp.example.com/tenant is discovered at
 // /.well-known/openid-configuration/tenant.
 func discoveryEndpointPath(c *config) string {
 	return joinPath(c.endpoints.Discovery, issuerPath(c.issuer))
+}
+
+// discoveryConcatenatedPath returns the second request path an issuer with a
+// path is discovered at, or "" when no second mount is needed. OpenID Connect
+// Discovery 1.0 §4 appends the well-known suffix to the issuer, so issuer
+// https://idp.example.com/tenant is also discovered at
+// /tenant/.well-known/openid-configuration — the URL a conformant relying
+// party derives. A bare-host issuer produces the same path under both rules
+// and must be mounted once, because http.ServeMux panics when one pattern
+// is registered twice.
+func discoveryConcatenatedPath(c *config) string {
+	base := issuerPath(c.issuer)
+	if base == "" {
+		return ""
+	}
+	return joinPath(base, c.endpoints.Discovery)
+}
+
+// conflictingRouteName reports the active route that path would collide with,
+// if any. The construction-time collision check reasons about the configured
+// endpoints alone; the concatenated discovery path is derived from the issuer
+// and the mount prefix together, so the router checks it separately rather
+// than letting http.ServeMux panic.
+func conflictingRouteName(c *config, path string) (string, bool) {
+	candidate := routeReservation{path: path}
+	for _, reserved := range c.activeRouteReservations() {
+		if routesConflict(candidate, reserved) {
+			return reserved.name, true
+		}
+	}
+	return "", false
 }
 
 // routingMountPrefix combines the issuer path and the embedder-selected mount

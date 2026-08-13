@@ -503,9 +503,9 @@ func Build(in Input) Document {
 // mount prefix + endpoint path the same way the other endpoints are.
 // The token delivery modes list is fixed at ["poll"] because the OP
 // implements poll mode only; ping and push are reserved for a future
-// release. The user-code support flag is false because the library
-// accepts the parameter on the wire but does not pre-validate against
-// an OP-managed code registry. The request-object signing alg list is
+// release. The user-code support flag is false because the library has
+// no OP-managed code registry to validate against; the endpoint refuses
+// a non-empty user_code to match what this flag advertises. The request-object signing alg list is
 // emitted only when JAR is also enabled because a CIBA request object
 // shares the JAR verifier; the list mirrors the JAR alg posture so a
 // single rotation flows to both surfaces.
@@ -664,30 +664,32 @@ func applyFeatureEndpoints(in Input, doc *Document) {
 // applyJARFeature publishes the RFC 9101 request-object metadata when
 // JAR is enabled.
 //
-// Wire-shape detail: the library admits "request_uri" only in the
-// RFC 9126 §2.2 PAR form (urn:ietf:params:oauth:request_uri:*); a
-// generic https URL is rejected at the parser
-// (internal/authorize.ParseValues) because the OP-side fetcher
-// RFC 9101 §10.2 requires (https-only / size cap / TTL / content-type
-// / SSRF deny-list) is not implemented and FAPI 2.0 mandates PAR
-// anyway. The discovery booleans below stay TRUE because there is no
-// metadata key reserved for "PAR-only" — RPs discover the constraint
-// by looking at pushed_authorization_request_endpoint and inspecting
-// the URN prefix on the wire. Embedders that want a narrower
-// advertisement override the document via [op.WithDiscoveryMetadata].
+// Wire-shape detail: "request_uri" is honoured in two forms. The
+// RFC 9126 §2.2 PAR form (urn:ietf:params:oauth:request_uri:*) is
+// resolved from the pushed record, and a generic https URL is fetched
+// by the authorize endpoint under the RFC 9101 §10.2 posture —
+// https-only (http behind the private-network opt-in), cloud-metadata
+// and private-range SSRF deny-list at both URL and dial time, no
+// redirects, JWS media types only, bounded body and timeout. Both
+// discovery booleans below are therefore TRUE on their own terms.
+// Embedders that want a narrower advertisement override the document
+// via [op.WithDiscoveryMetadata].
 func applyJARFeature(in Input, doc *Document) {
 	if !in.Features.JAR {
 		return
 	}
 	doc.RequestParameterSupported = true
 	doc.RequestURIParameterSupported = true
-	// RFC 9101 §5.2.2 leaves the registration policy to the OP;
-	// the library is strict (FAPI 2.0 Message Signing posture)
-	// and refuses any request_uri the client has not preregistered.
-	// The PAR-only stance documented above makes this advertisement
-	// effectively trivial — every accepted request_uri is one the OP
-	// itself minted at /par — but the field stays TRUE for parity
-	// with conformance suites that probe it.
+	// RFC 9101 §5.2.2 leaves the registration policy to the OP; the
+	// library is strict (FAPI 2.0 Message Signing posture) and refuses
+	// any fetched request_uri the client has not preregistered — a
+	// byte-equal match against its registered list, no prefix or pattern
+	// matching. That allowlist is what bounds the by-reference fetch
+	// described above to destinations the operator accepted at
+	// registration time, so the advertisement names an enforced
+	// constraint. PAR URNs are outside it by construction: the OP minted
+	// them itself at /par and resolves them from its own store without
+	// any outbound request.
 	doc.RequireRequestURIRegistration = true
 	// RFC 9101 §10.1: advertise the JWS alg values the verifier
 	// accepts on request objects. The list mirrors the project-

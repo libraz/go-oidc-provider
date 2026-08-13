@@ -128,6 +128,15 @@ func WithACRValuesSupported(values ...string) Option {
 // par parsers silently drop the parameter (no invalid_request), and
 // disables the userinfo / id_token projection.
 //
+// The projection is gated on the grant being read, not on the request
+// being parsed, so turning the parameter off also silences grants that
+// were established while it was still on — including the ones reached
+// through refresh rotation, which would otherwise keep releasing the
+// requested claims for the life of the refresh chain. Claims the
+// granted scopes release are unaffected. The persisted payload itself
+// is left on the grant as the record of what the user consented to, so
+// turning the parameter back on restores the projection.
+//
 // The toggle is provided so an embedder that does not want to expose
 // per-claim consent (e.g. a deployment whose RPs already negotiate
 // claims out-of-band) can match the ory/hydra posture without losing

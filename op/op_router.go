@@ -84,14 +84,36 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if err != nil {
 		return nil, err
 	}
+	// Narrower than the CORS allowlist by design — see
+	// [buildInteractionOriginAllowlist]. Every browser-facing ceremony
+	// reads this one value: the /interaction routes and the /end_session
+	// confirmation both enforce it as their CSRF allowlist and run behind
+	// the CORS layer built from it, so no origin can be admitted by one
+	// layer and refused by the other.
+	//
+	// A page whose origin is known to the OP only because some client
+	// registered it as a redirect_uri belongs on the router-wide CORS
+	// allowlist — it calls /token and /userinfo from its callback page —
+	// but it is not a ceremony participant. Stamping
+	// Access-Control-Allow-Credentials for it here would let it read
+	// another client's CSRF token, account list, or logout confirmation
+	// out of an in-flight ceremony. Same-site cookies do not stop that: a
+	// sibling subdomain is cross-origin but same-site.
+	interactionOrigins, err := buildInteractionOriginAllowlist(cfg)
+	if err != nil {
+		return nil, err
+	}
 	publicCORS := cors.NewPublic()
 	strictCORS := cors.NewStrict(originAllow, cfg.effectiveAuditEmitter())
+	ceremonyCORS := cors.NewStrict(interactionOrigins, cfg.effectiveAuditEmitter())
 	encResolver := buildClientEncryptionResolver(cfg)
 	var subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 	if cfg.subjectGeneratorSource != "" {
 		subjectProjector = buildSubjectProjector(cfg)
 	}
-	mux.Handle(discoveryEndpointPath(cfg), publicCORS.Handler(discHandler))
+	if err := mountDiscovery(mux, cfg, publicCORS, discHandler); err != nil {
+		return nil, err
+	}
 	if err := mountProtectedResourceMetadata(mux, cfg, publicCORS); err != nil {
 		return nil, err
 	}
@@ -105,23 +127,26 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	mux.Handle(
 		protocolEndpointPath(cfg, cfg.endpoints.UserInfo),
 		strictCORS.Handler(userinfo.Handler(userinfo.HandlerDeps{
-			Keys:               keySet,
-			Issuer:             cfg.issuer,
-			Clients:            cfg.store.Clients(),
-			UserStore:          cfg.effectiveUserStore(),
-			Grants:             cfg.store.Grants(),
-			SubjectProjector:   subjectProjector,
-			Clock:              cfg.clock,
-			Leeway:             defaultUserInfoLeeway,
-			CustomScopeClaims:  customScopeClaims(cfg.scopes),
-			DPoP:               dpopVerifier,
-			DPoPNonces:         cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
-			MTLS:               mtlsVerifier,
-			AccessTokens:       cfg.store.AccessTokens(),
-			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
-			GrantRevocations:   cfg.store.GrantRevocations(),
-			RevocationStrategy: cfg.atRevocation,
-			ClientEncJWKs:      encResolver,
+			Keys:              keySet,
+			Issuer:            cfg.issuer,
+			Clients:           cfg.store.Clients(),
+			UserStore:         cfg.effectiveUserStore(),
+			Grants:            cfg.store.Grants(),
+			SubjectProjector:  subjectProjector,
+			Clock:             cfg.clock,
+			Leeway:            defaultUserInfoLeeway,
+			CustomScopeClaims: customScopeClaims(cfg.scopes),
+			// Gates the §5.5 projection on the response side; the
+			// authorize / par parsers read the same accessor.
+			ClaimsParameterEnabled: cfg.claimsParameterSupported(),
+			DPoP:                   dpopVerifier,
+			DPoPNonces:             cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
+			MTLS:                   mtlsVerifier,
+			AccessTokens:           cfg.store.AccessTokens(),
+			OpaqueAccessTokens:     cfg.store.OpaqueAccessTokens(),
+			GrantRevocations:       cfg.store.GrantRevocations(),
+			RevocationStrategy:     cfg.atRevocation,
+			ClientEncJWKs:          encResolver,
 		})),
 	)
 	mux.Handle(
@@ -151,6 +176,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			StrictOfflineAccess:            cfg.strictOfflineAccess,
 			OpenIDScopeOptional:            cfg.openIDScopeOptional,
 			GrantManagementEnabled:         cfg.grantManagementEnabled,
+			ClaimsParameterEnabled:         cfg.claimsParameterSupported(),
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			SecretVerifier:                 cfg.clientSecretVerifier(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
@@ -161,6 +187,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			RevocationStrategy:             cfg.atRevocation,
 			Audit:                          cfg.effectiveAuditEmitter(),
 			CustomGrants:                   buildExtensionDispatcher(cfg, keySet),
+			EnabledGrants:                  enabledGrantWireNames(cfg),
 			DeviceCodes:                    deviceCodesFor(cfg),
 			CIBARequests:                   cibaRequestsFor(cfg),
 			CIBAMaxPollViolations:          cfg.cibaMaxPollViolations,
@@ -169,7 +196,12 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)
 	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifier, strictCORS)
-	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encResolver, jarVerifier, strictCORS, locales, proxyTrust)
+	// The interaction mount is deliberately not handed strictCORS: its
+	// routes run on the narrower ceremony allowlist.
+	sessMgr, err := mountAuthorizeHandlers(
+		mux, cfg, scopes, keySet, encResolver, jarVerifier, locales, proxyTrust,
+		interactionOrigins, ceremonyCORS,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -199,8 +231,39 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		}
 	}
 	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS, bcc)
-	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, subjectProjector, strictCORS)
+	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, subjectProjector, locales, interactionOrigins, ceremonyCORS)
 	return mux, nil
+}
+
+// mountDiscovery registers the discovery document at every request path the
+// configured issuer is discovered at. An issuer that carries a path is
+// reachable two ways: RFC 8414 §3 inserts the well-known suffix ahead of the
+// issuer path, while OpenID Connect Discovery 1.0 §4 appends it to the issuer,
+// which is the form standard relying-party libraries derive. Both mounts serve
+// the one handler built from the one document, so the second form costs a
+// route entry and nothing else. A bare-host issuer derives a single path from
+// both rules and is therefore mounted once.
+//
+// The concatenated path lands inside the issuer path, alongside the protocol
+// endpoints, so an endpoint override can occupy it. That combination is
+// rejected at construction time instead of shadowing the discovery document or
+// panicking the router.
+func mountDiscovery(mux *http.ServeMux, cfg *config, publicCORS *cors.Public, discHandler http.Handler) error {
+	handler := publicCORS.Handler(discHandler)
+	mux.Handle(discoveryEndpointPath(cfg), handler)
+	concatenated := discoveryConcatenatedPath(cfg)
+	if concatenated == "" {
+		return nil
+	}
+	if name, conflict := conflictingRouteName(cfg, concatenated); conflict {
+		return &Error{
+			Code: codeConfiguration,
+			Description: name + " occupies " + concatenated +
+				", the discovery URL relying parties derive from the issuer",
+		}
+	}
+	mux.Handle(concatenated, handler)
+	return nil
 }
 
 // mountProtectedResourceMetadata registers one read-only RFC 9728
@@ -458,6 +521,14 @@ func mountRevocationEndpoint(
 // Returns a [*sessions.Manager] reused by [mountEndSessionEndpoint], or
 // nil when the configured grants do not require the authorize endpoint.
 //
+// The function does not receive the router-wide strict CORS layer. Every
+// cross-origin surface it mounts belongs to the interaction ceremony and
+// therefore runs on ceremonyCORS, built from the same narrow allowlist
+// the /interaction CSRF gate enforces. Keeping the wide allowlist out of
+// scope is what makes the narrow list the default for this mount: a
+// route added here later cannot pick up the wide list by accident,
+// because no name in this function is bound to it.
+//
 // The JAR verifier is built once at the router scope (see
 // [buildRouter]) so /par, /authorize, and /bc-authorize share the
 // same instance. A nil verifier signals that [feature.JAR] is off;
@@ -470,18 +541,13 @@ func mountAuthorizeHandlers(
 	keySet *keys.Set,
 	encResolver *clientencjwks.Resolver,
 	jarVerifier *jar.Verifier,
-	strictCORS *cors.Strict,
 	locales *i18n.Resolver,
 	proxyTrust *proxy.Trust,
+	interactionOrigins *csrf.Allowlist,
+	ceremonyCORS *cors.Strict,
 ) (*sessions.Manager, error) {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
 		return nil, nil //nolint:nilnil // documented "no manager needed" sentinel.
-	}
-	// Narrower than the CORS allowlist by design — see
-	// [buildInteractionOriginAllowlist].
-	interactionOrigins, err := buildInteractionOriginAllowlist(cfg)
-	if err != nil {
-		return nil, err
 	}
 	jarmSigner, err := buildJARMSigner(cfg, keySet)
 	if err != nil {
@@ -508,59 +574,72 @@ func mountAuthorizeHandlers(
 	interactionPath := protocolEndpointPath(cfg, cfg.endpoints.Interaction)
 	spaLoginMount, spaStaticDir := spaWiringFor(cfg)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
-		Clients:                 cfg.store.Clients(),
-		Codes:                   cfg.store.AuthorizationCodes(),
-		Grants:                  cfg.store.Grants(),
-		Transactions:            transactionalStore(cfg.store),
-		RequestPolicy:           authorizeRequestPolicy(cfg),
-		ExtensionPolicy:         authorizeExtensionPolicy(cfg),
-		Interactions:            cfg.store.Interactions(),
-		PARs:                    authorizePARStore(cfg),
-		JARM:                    jarmSigner,
-		JAR:                     jarVerifier,
-		Sessions:                sessMgr,
-		CookieCodec:             cookieCodec,
-		CSRF:                    csrfSigner,
-		InteractionOrigins:      interactionOrigins,
-		Driver:                  cfg.interactionD,
-		Authn:                   orchestrator,
-		Scopes:                  scopes,
-		AuthorizePath:           authorizePath,
-		InteractionPath:         interactionPath,
-		SPALoginMount:           spaLoginMount,
-		SPAStaticDir:            spaStaticDir,
-		Clock:                   cfg.clock,
-		CompletionKey:           deriveCompletionKey(cfg.cookieKeys[0]),
-		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
-		RequirePAR:              cfg.requirePAR(),
-		Issuer:                  cfg.issuer,
-		AllowPrivateNetworkJAR:  cfg.allowPrivateNetworkJAR,
-		ClaimsParameterEnabled:  cfg.claimsParameterSupported(),
-		ACRResolver:             newACRResolver(cfg),
-		LocaleResolver:          locales,
-		ProxyTrust:              proxyTrust,
-		ClientEncJWKs:           encResolver,
-		FirstPartyClients:       firstPartyClientSet(cfg),
-		Audit:                   cfg.effectiveAuditEmitter(),
+		Clients:                cfg.store.Clients(),
+		Codes:                  cfg.store.AuthorizationCodes(),
+		Grants:                 cfg.store.Grants(),
+		Transactions:           transactionalStore(cfg.store),
+		RequestPolicy:          authorizeRequestPolicy(cfg),
+		ExtensionPolicy:        authorizeExtensionPolicy(cfg),
+		Interactions:           cfg.store.Interactions(),
+		PARs:                   authorizePARStore(cfg),
+		JARM:                   jarmSigner,
+		JAR:                    jarVerifier,
+		Sessions:               sessMgr,
+		CookieCodec:            cookieCodec,
+		CSRF:                   csrfSigner,
+		InteractionOrigins:     interactionOrigins,
+		Driver:                 cfg.interactionD,
+		Authn:                  orchestrator,
+		Scopes:                 scopes,
+		AuthorizePath:          authorizePath,
+		InteractionPath:        interactionPath,
+		SPALoginMount:          spaLoginMount,
+		SPAStaticDir:           spaStaticDir,
+		Clock:                  cfg.clock,
+		CompletionKey:          deriveCompletionKey(cfg.cookieKeys[0]),
+		RequirePAR:             cfg.requirePAR(),
+		Issuer:                 cfg.issuer,
+		AllowPrivateNetworkJAR: cfg.allowPrivateNetworkJAR,
+		ClaimsParameterEnabled: cfg.claimsParameterSupported(),
+		ACRResolver:            newACRResolver(cfg),
+		LocaleResolver:         locales,
+		ProxyTrust:             proxyTrust,
+		ClientEncJWKs:          encResolver,
+		FirstPartyClients:      firstPartyClientSet(cfg),
+		Audit:                  cfg.effectiveAuditEmitter(),
 	})
+	// /authorize and the SPA shell are top-level navigation targets, not
+	// fetch surfaces, so they carry no CORS layer at all.
 	mux.Handle(authorizePath, handler)
 	if spaLoginMount == "" {
-		mux.Handle(interactionPath+"/{uid}", strictCORS.Handler(handler))
+		mux.Handle(interactionPath+"/{uid}", ceremonyCORS.Handler(handler))
 	} else {
 		// The external interaction UI is the only cross-origin route that
 		// supports DELETE cancellation. Keep that permission scoped to this
 		// exact mount; every other strict-CORS endpoint retains the default
 		// GET/POST/OPTIONS method set.
-		mux.Handle(spaLoginMount+"/state/{uid}", strictCORS.HandlerWithMethods(handler, http.MethodGet, http.MethodPost, http.MethodDelete))
+		mux.Handle(spaLoginMount+"/state/{uid}", ceremonyCORS.HandlerWithMethods(handler, http.MethodGet, http.MethodPost, http.MethodDelete))
 		mux.Handle(spaLoginMount+"/{uid}", handler)
 		if spaStaticDir != "" {
-			mux.Handle(spaLoginMount+"/assets/{path...}", handler)
+			// A login UI hosted off-issuer loads the bundle's module
+			// scripts cross-origin, which needs the same allowlist the
+			// rest of the ceremony runs on.
+			mux.Handle(spaLoginMount+"/assets/{path...}", ceremonyCORS.Handler(handler))
 		}
 	}
 	return sessMgr, nil
 }
 
 // mountEndSessionEndpoint registers the /end_session handler.
+//
+// The endpoint is a browser-facing ceremony, not an API surface: its
+// confirmation step renders an HTML form carrying a double-submit CSRF
+// token and posts back to the OP. It therefore runs on the same narrow
+// ceremony allowlist the /interaction routes do, at both layers — as the
+// allowlist the confirmation POST's CSRF gate enforces, and as the
+// allowlist of the CORS layer wrapping the route. Handing it the
+// router-wide list on either layer would admit a client's redirect_uri
+// origin to a ceremony it does not participate in.
 func mountEndSessionEndpoint(
 	mux *http.ServeMux,
 	cfg *config,
@@ -568,19 +647,23 @@ func mountEndSessionEndpoint(
 	sessMgr *sessions.Manager,
 	bcc *backchannel.Coordinator,
 	subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error),
-	strictCORS *cors.Strict,
+	locales *i18n.Resolver,
+	ceremonyOrigins *csrf.Allowlist,
+	ceremonyCORS *cors.Strict,
 ) {
 	if sessMgr == nil {
 		return
 	}
 	mux.Handle(
 		protocolEndpointPath(cfg, cfg.endpoints.EndSession),
-		strictCORS.Handler(endsession.Handler(endsession.Deps{
+		ceremonyCORS.Handler(endsession.Handler(endsession.Deps{
 			Issuer:             cfg.issuer,
+			Origins:            ceremonyOrigins,
 			Clients:            cfg.store.Clients(),
 			Sessions:           sessMgr,
 			Keys:               keySet,
 			Clock:              cfg.clock,
+			LocaleResolver:     locales,
 			Backchannel:        bcc,
 			Grants:             cfg.store.Grants(),
 			AccessTokens:       cfg.store.AccessTokens(),

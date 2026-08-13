@@ -126,11 +126,11 @@ type Document struct {
 
 	// BackchannelUserCodeParameterSupported reports whether the OP
 	// honours the CIBA Core 1.0 §7.1 "user_code" parameter on
-	// /bc-authorize. The library accepts the parameter on the wire
-	// and persists it onto the record, but does not pre-validate
-	// against an OP-managed user-code registry; the value is therefore
-	// false. The field is emitted only when the CIBA grant is
-	// configured.
+	// /bc-authorize. The library has no OP-managed user-code registry
+	// to validate against, so the value is false and the endpoint
+	// refuses a non-empty user_code with invalid_request rather than
+	// storing a value nothing downstream would enforce. The field is
+	// emitted only when the CIBA grant is configured.
 	BackchannelUserCodeParameterSupported bool `json:"backchannel_user_code_parameter_supported,omitempty"`
 
 	// BackchannelAuthenticationRequestSigningAlgValuesSupported lists
