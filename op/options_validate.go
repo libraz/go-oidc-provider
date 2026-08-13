@@ -665,22 +665,6 @@ func checkExternalStepKind(where string, ext ExternalStep) error {
 // profiles. Centralising the check lets future first-party / FAPI
 // interactions extend the predicate without scattering profile
 // enumerations across the option layer.
-// hasFAPI2Profile reports whether any profile the embedder declared is
-// one of the FAPI 2.0 profiles. Callers that need the profile-driven
-// default rather than the validation verdict use this, so the two stay
-// derived from the same predicate.
-func (c *config) hasFAPI2Profile() bool {
-	if c == nil {
-		return false
-	}
-	for _, p := range c.profiles {
-		if isFAPI2Profile(p) {
-			return true
-		}
-	}
-	return false
-}
-
 func isFAPI2Profile(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
