@@ -291,18 +291,17 @@ func WithRefreshGracePeriod(d time.Duration) Option {
 // [WithRefreshGracePeriod] when called, else returns 0 so the internal
 // exchanger falls back to its [refresh.GraceTTLDefault].
 //
-// A FAPI 2.0 profile is the exception: it resolves to a strict zero
-// when the option is absent. FAPI 2.0 §3.1.7 forbids a replay-tolerant
-// window for a replayed refresh token, and [New] already refuses an
-// explicit non-zero one under that profile — so without this the
-// profile would be honoured only for the embedder who asked for the
-// wrong thing out loud, and silently violated for the one who said
-// nothing, which is every deployment that simply declares the profile.
+// A FAPI 2.0 profile does not narrow the default to a strict zero. The
+// grace window is what makes a rotation survive the client's network
+// retry, and the FAPI 2.0 conformance suite tests for exactly that: its
+// refresh-token module redeems the rotated predecessor a second time and
+// requires a 200. Because [New] separately refuses an explicit non-zero
+// window under this profile, resolving the default to zero would leave a
+// FAPI 2.0 deployment with no configuration at all that passes
+// certification. RFC 9700 §2.2.2 permits the window; the replay defence
+// it coexists with is the chain-wide cascade, which is unconditional.
 func (c *config) effectiveRefreshGrace() time.Duration {
 	if !c.refreshGracePeriodSet {
-		if c.hasFAPI2Profile() {
-			return -1
-		}
 		return 0
 	}
 	if c.refreshGracePeriodIsZero {

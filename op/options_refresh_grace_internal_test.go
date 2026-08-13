@@ -7,22 +7,22 @@ import (
 	"github.com/libraz/go-oidc-provider/op/profile"
 )
 
-// TestEffectiveRefreshGrace_FAPI2DefaultsToStrictZero pins the
-// resolution [New] hands the token endpoint, which is where the FAPI
-// 2.0 §3.1.7 guarantee is actually decided.
+// TestEffectiveRefreshGrace_FAPI2KeepsTheDefaultWindow pins the
+// resolution [New] hands the token endpoint for a FAPI 2.0 deployment
+// that does not set the option: the ordinary default, not a strict zero.
 //
-// The check that already existed refused an explicit non-zero grace
-// under a FAPI 2.0 profile. On its own that honoured the profile only
-// for the embedder who asked for the forbidden thing out loud: leaving
-// the option off resolved to 0, which the exchanger reads as "use the
-// default" — a 60-second replay-tolerant window — so the profile was
-// silently violated by the configuration every FAPI deployment
-// actually writes.
+// Narrowing it to zero here is the one thing this function must not do.
+// [New] separately refuses an explicit non-zero window under a FAPI 2.0
+// profile, so a zero default would leave no configuration whatsoever
+// that passes certification: the suite's
+// fapi2-security-profile-id2-refresh-token module redeems the rotated
+// predecessor a second time and requires a 200, which is the retry the
+// window exists to absorb (RFC 9700 §2.2.2). A profile the OP cannot be
+// certified under is not a stricter profile, it is a broken one.
 //
-// The negative sentinel is what distinguishes "the embedder said zero"
-// from "the embedder said nothing"; the exchanger's own tests cover
-// what it does with each.
-func TestEffectiveRefreshGrace_FAPI2DefaultsToStrictZero(t *testing.T) {
+// The replay defence that does apply unconditionally is the chain-wide
+// cascade, which no profile setting can switch off.
+func TestEffectiveRefreshGrace_FAPI2KeepsTheDefaultWindow(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -33,12 +33,12 @@ func TestEffectiveRefreshGrace_FAPI2DefaultsToStrictZero(t *testing.T) {
 		{
 			name:     "FAPI 2.0 Baseline with the option absent",
 			profiles: []profile.Profile{profile.FAPI2Baseline},
-			want:     -1,
+			want:     0,
 		},
 		{
 			name:     "FAPI 2.0 Message Signing with the option absent",
 			profiles: []profile.Profile{profile.FAPI2MessageSigning},
-			want:     -1,
+			want:     0,
 		},
 		{
 			name:     "no profile declared",
@@ -65,9 +65,10 @@ func TestEffectiveRefreshGrace_FAPI2DefaultsToStrictZero(t *testing.T) {
 }
 
 // TestEffectiveRefreshGrace_ExplicitValueSurvivesTheProfileDefault
-// pins that the profile default only fills a gap. An embedder running
-// without a FAPI profile who asks for a window still gets it, and an
-// explicit zero is still distinguishable from an absent option.
+// pins that an embedder who asks for a window gets it, and that an
+// explicit zero stays distinguishable from an absent option — the
+// sentinel is what lets the exchanger tell "the embedder said zero"
+// from "the embedder said nothing".
 func TestEffectiveRefreshGrace_ExplicitValueSurvivesTheProfileDefault(t *testing.T) {
 	t.Parallel()
 
