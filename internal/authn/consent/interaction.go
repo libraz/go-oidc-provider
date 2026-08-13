@@ -44,9 +44,11 @@ var (
 	ErrSubjectRequired = errors.New("consent: subject is required")
 
 	// ErrApprovedScopesMissing is returned when the SPA submission
-	// omits [ApprovedScopesField]. The orchestrator's [interaction.FieldSpec]
-	// validation should already have caught this; the interaction
-	// re-checks at the trust boundary.
+	// omits [ApprovedScopesField] entirely. Presence is this
+	// interaction's own check rather than the orchestrator's: the
+	// prompt cannot declare the field required, because an empty value
+	// is the user approving nothing, and the orchestrator's required
+	// rule rejects empty values.
 	ErrApprovedScopesMissing = errors.New("consent: approved_scopes field is missing")
 
 	// ErrApprovedScopeNotRequested is returned when the SPA submits a
@@ -119,11 +121,17 @@ func (i *Interaction) Begin(_ context.Context, in authn.BeginInput) (interaction
 				Scopes: scopes,
 			},
 			Inputs: []interaction.FieldSpec{{
-				Name:     ApprovedScopesField,
-				Kind:     interaction.FieldText,
-				Label:    "consent.approved_scopes",
-				Required: true,
-				MaxLen:   approvedScopesMaxLen,
+				Name:  ApprovedScopesField,
+				Kind:  interaction.FieldText,
+				Label: "consent.approved_scopes",
+				// Not marked Required: the orchestrator reads that flag
+				// as "must be present and carry a value", and approving
+				// nothing is a legitimate answer that arrives as an
+				// empty string. The stronger rule — the field must be
+				// present at all, so that a form the user never saw
+				// cannot pass for a decision — is enforced by Continue,
+				// which tells an absent field from an empty one.
+				MaxLen: approvedScopesMaxLen,
 			}},
 		},
 	}, nil

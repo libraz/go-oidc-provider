@@ -77,9 +77,9 @@ type Input struct {
 }
 
 // Outcome mirrors authn.RiskOutcome. The helpers in this package
-// interpret Decision, RequiredFactors, Score, and MinAAL; Reason is
-// omitted because it is an audit-only field the parent reads directly
-// off authn.RiskOutcome and never routes through this seam.
+// interpret Decision, RequiredFactors, Score, MinAAL, and NewDevice;
+// Reason is omitted because it is an audit-only field the parent reads
+// directly off authn.RiskOutcome and never routes through this seam.
 //
 // MinAAL constrains RequiredFactors: on a Require decision the parent
 // admits only factors whose Authenticator.AAL meets MinAAL. When
@@ -90,6 +90,7 @@ type Outcome struct {
 	RequiredFactors []string
 	Score           Score
 	MinAAL          AAL
+	NewDevice       bool
 }
 
 // Assessor is the duck-typed authn.RiskAssessor. The parent passes its
@@ -154,21 +155,35 @@ type LoginFlowResult struct {
 	// Score is the cached value the orchestrator stamps onto
 	// State.RiskScoreCached. ScoreNone means "do not update".
 	Score Score
+	// Required is the OR-set of factor types a [Require] outcome
+	// demands. Empty on every other decision, and empty on Require
+	// when the assessor named no candidate — the directive then
+	// carries no step-up, only the elevated Score.
+	Required []string
+	// NewDevice is the device-familiarity signal, carried through on
+	// every decision. It is orthogonal to Decision: an assessor may
+	// report an unfamiliar device and still Allow, leaving the flow's
+	// rules to decide what that warrants.
+	NewDevice bool
 	// Denied reports whether the chain is denied.
 	Denied bool
 }
 
 // RunOnceForLoginFlow consults assessor at AuthorizeEntry. The
-// LoginFlow path caches the resulting Score on State.RiskScoreCached;
-// this helper computes the value from the [Outcome.Decision] /
-// [Outcome.Score] pair so the budget invariant ("Risk.Assess at most
-// once per chain") stays in one place.
+// LoginFlow path caches the resulting Score on State.RiskScoreCached
+// and the required-factor set on State.RiskRequiredFactors; this helper
+// computes both from the [Outcome] so the budget invariant
+// ("Risk.Assess at most once per chain") stays in one place.
 //
 // Mapping:
 //   - Outcome.Score non-zero — used verbatim.
 //   - Score zero, Decision = Allow — ScoreLow.
 //   - Score zero, Decision = Require — ScoreHigh.
+//   - Decision = Require — RequiredFactors carried through verbatim,
+//     independently of which branch produced the Score.
 //   - Decision = Deny — Denied flag set, score unchanged.
+//   - NewDevice — carried through on every decision, Deny included, so
+//     the signal does not depend on which verdict accompanied it.
 func RunOnceForLoginFlow(ctx context.Context, assessor Assessor, in Input) (LoginFlowResult, error) {
 	if assessor == nil {
 		return LoginFlowResult{}, nil
@@ -178,19 +193,21 @@ func RunOnceForLoginFlow(ctx context.Context, assessor Assessor, in Input) (Logi
 	if err != nil {
 		return LoginFlowResult{}, err
 	}
+	res := LoginFlowResult{NewDevice: out.NewDevice}
 	switch out.Decision {
 	case Deny:
-		return LoginFlowResult{Denied: true}, nil
+		res.Denied = true
 	case Require:
-		if out.Score != ScoreNone {
-			return LoginFlowResult{Score: out.Score}, nil
+		res.Required = out.RequiredFactors
+		res.Score = out.Score
+		if res.Score == ScoreNone {
+			res.Score = ScoreHigh
 		}
-		return LoginFlowResult{Score: ScoreHigh}, nil
 	case Allow:
-		if out.Score != ScoreNone {
-			return LoginFlowResult{Score: out.Score}, nil
+		res.Score = out.Score
+		if res.Score == ScoreNone {
+			res.Score = ScoreLow
 		}
-		return LoginFlowResult{Score: ScoreLow}, nil
 	}
-	return LoginFlowResult{}, nil
+	return res, nil
 }

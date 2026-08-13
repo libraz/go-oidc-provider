@@ -59,7 +59,13 @@ func (o *Orchestrator) advanceOnce(ctx context.Context, st State, in Input) (Sta
 		// the prompt, but it leaves ChooserBoundSubject false. The
 		// flag is the unambiguous "factor chain has been replaced"
 		// signal.
-		if transition && next.Phase == PhaseAuthn && next.ChooserBoundSubject {
+		//
+		// Replacing the factor chain is only legitimate when the
+		// picked session's authentication may serve the request.
+		// [State.ReauthRequired] says it may not, so the chain runs
+		// the factors against the subject the chooser bound rather
+		// than inheriting that session's auth_time / acr / amr.
+		if transition && next.Phase == PhaseAuthn && next.ChooserBoundSubject && !next.ReauthRequired {
 			next.Phase = PhaseAfterAuthn
 		}
 		return next, step, transition, err
@@ -273,9 +279,10 @@ func (o *Orchestrator) emitCaptchaPrompt(st State, now time.Time) (State, intera
 	if err != nil {
 		return st, interaction.Step{}, err
 	}
+	provider, siteKey := CaptchaWidgetFor(o.cfg.Captcha)
 	prompt := interaction.Prompt{
 		Type: "captcha",
-		Data: interaction.CaptchaPromptData{},
+		Data: interaction.CaptchaPromptData{Provider: provider, SiteKey: siteKey},
 		Inputs: []interaction.FieldSpec{{
 			Name:     CaptchaTokenField,
 			Kind:     interaction.FieldHidden,
@@ -285,6 +292,7 @@ func (o *Orchestrator) emitCaptchaPrompt(st State, now time.Time) (State, intera
 		}},
 		StateRef: ref,
 	}
+	st = stampActiveInputs(st, prompt.Inputs)
 	return st, interaction.Step{Prompt: &prompt}, nil
 }
 
@@ -301,6 +309,7 @@ func (o *Orchestrator) emitFactorPrompt(st State, auth Authenticator, step inter
 	prompt := *step.Prompt
 	prompt.StateRef = ref
 	st.FactorScratch = step.Scratch
+	st = stampActiveInputs(st, prompt.Inputs)
 	return st, interaction.Step{Prompt: &prompt}, nil
 }
 
@@ -315,6 +324,7 @@ func (o *Orchestrator) emitInteractionPrompt(st State, ix Interaction, prompt in
 	}
 	prompt.StateRef = ref
 	st.ActiveInteractionName = ix.Name()
+	st = stampActiveInputs(st, prompt.Inputs)
 	return st, interaction.Step{Prompt: &prompt}, nil
 }
 
@@ -323,7 +333,16 @@ func (o *Orchestrator) emitInteractionPrompt(st State, ix Interaction, prompt in
 // AuthTime of the last factor, and the consent-approved scope subset
 // the orchestrator stamped onto [State.ApprovedScopes] (empty when no
 // consent-shaped Interaction ran).
+//
+// It is the single terminal exit of every surface (legacy
+// Authenticators, LoginFlow, chooser), which is why the
+// [State.ReauthRequired] backstop lives here rather than in each
+// dispatch branch: a request that demanded a fresh authentication
+// never leaves with a factor-less Result.
 func (o *Orchestrator) emitTerminal(st State) (State, interaction.Step, error) {
+	if st.ReauthRequired && len(st.Factors) == 0 {
+		return st, interaction.Step{}, ErrReauthNotPerformed
+	}
 	res := interaction.Result{
 		Subject:  st.Subject,
 		AuthTime: st.AuthTime,

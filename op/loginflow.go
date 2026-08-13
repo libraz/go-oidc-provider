@@ -40,11 +40,23 @@ type LoginFlow struct {
 	// single seam rather than forcing a custom [Authenticator].
 	Decider Decider
 
-	// Risk, when non-nil, is invoked by the orchestrator at well-
-	// defined [RiskStage] points and the resulting score is exposed
-	// to rule predicates through [LoginContext.RiskScore]. RuleRisk
-	// silently no-ops when Risk is nil, so an embedder can register a
-	// [RuleRisk] without first wiring an assessor.
+	// Risk, when non-nil, is consulted exactly once per login chain,
+	// at [RiskAuthorizeEntry], before Primary runs. The resulting
+	// score is cached for the lifetime of the attempt and exposed to
+	// rule predicates through [LoginContext.RiskScore]; RuleRisk
+	// silently no-ops when no assessor is wired, so an embedder can
+	// register a [RuleRisk] without first wiring one.
+	//
+	// The returned [RiskOutcome] is applied as follows: [RiskDeny]
+	// terminates the chain, [RiskRequire] raises the cached score and
+	// — when it names [RiskOutcome.RequiredFactors] — obliges the chain
+	// to complete a Step whose [Authenticator] reports one of those
+	// factor types before authentication is granted. A flow that
+	// declares no such Step fails the attempt closed rather than
+	// granting at the assurance the assessor refused.
+	//
+	// Risk and [WithRiskAssessor] are two spellings of the same seam.
+	// Setting both fails [New]; setting either one alone wires it here.
 	Risk RiskAssessor
 }
 
@@ -83,11 +95,14 @@ const (
 //   - FailedAttempts is the cumulative count of rejected submissions
 //     in this attempt, sourced from the configured login-attempt
 //     observer.
-//   - RiskScore is the [LoginFlow.Risk] assessor's last verdict; the
-//     orchestrator invokes [RiskAssessor.Assess] once per evaluation
-//     pass so external API costs stay bounded.
-//   - NewDevice is true when the device-trust cookie is absent or
-//     does not match a known fingerprint.
+//   - RiskScore is the [LoginFlow.Risk] assessor's verdict; the
+//     orchestrator invokes [RiskAssessor.Assess] once per login chain
+//     (at chain start, before Primary) and every subsequent evaluation
+//     pass reads the cached value, so external API costs stay bounded
+//     and a predicate cannot see the score change mid-attempt.
+//   - NewDevice is the [RiskOutcome.NewDevice] verdict from the same
+//     once-per-chain consult that produced RiskScore, cached alongside
+//     it. The assessor is its only source; false when none is wired.
 //   - CompletedSteps is the ordered list of [StepKind] values that
 //     have already produced a [interaction.Result].
 //   - ACRValues is the OIDC Core 1.0 §3.1.2.1 acr_values parameter
@@ -118,7 +133,9 @@ type LoginContext struct {
 	RiskScore RiskScore
 
 	// NewDevice reports whether the request originates from a device
-	// that has not been trusted before.
+	// the user has not been seen on before, as reported by the
+	// configured [RiskAssessor] through [RiskOutcome.NewDevice]. False
+	// when no assessor is wired; see [RuleNewDevice].
 	NewDevice bool
 
 	// CompletedSteps is the [StepKind] history of this attempt in

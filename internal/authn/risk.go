@@ -154,7 +154,21 @@ type RiskOutcome struct {
 
 	// RequiredFactors is the OR-set of [FactorType] candidates the
 	// orchestrator must satisfy when [RiskOutcome.Decision] is
-	// [RiskRequire]. Ignored otherwise.
+	// [RiskRequire]. Ignored otherwise; an empty set on a Require
+	// outcome raises the risk score without demanding any specific
+	// factor.
+	//
+	// Both authentication surfaces honour it, and both fail the attempt
+	// closed when no configured factor can satisfy the set — granting
+	// would mint a session at the assurance the assessor refused:
+	//
+	//   - The [Config.Authenticators] chain narrows its candidate set to
+	//     these types before picking the next factor.
+	//   - The [Config.LoginFlow] path matches the set against the
+	//     [Authenticator.Type] behind each declared Step and runs the
+	//     first match that has not completed yet, before the chain is
+	//     allowed to leave the authentication phase. A captcha-shaped
+	//     Step never matches: it contributes no [Factor].
 	RequiredFactors []FactorType
 
 	// MinAAL filters [RiskOutcome.RequiredFactors]: only factors
@@ -164,13 +178,31 @@ type RiskOutcome struct {
 	//
 	// MinAAL is honoured only on the legacy [Config.Authenticators]
 	// chain path (the orchestrator's eligible-authenticator filter).
-	// The [Config.LoginFlow] path does not consult MinAAL: factor
-	// selection there is driven by the compiled rules / decider, and
-	// the once-per-chain Risk consult reads only Decision and Score.
-	// A deployment that needs an assurance floor under LoginFlow
-	// encodes it as an explicit rule (a step whose Authenticator meets
-	// the floor) rather than through this field.
+	// The [Config.LoginFlow] path does not consult MinAAL: the Steps a
+	// flow declares are named individually, so an assurance floor over
+	// an unenumerated candidate set has nothing to filter there. A
+	// deployment that needs one under LoginFlow encodes it as an
+	// explicit rule (a step whose Authenticator meets the floor), or
+	// names the qualifying factors in [RiskOutcome.RequiredFactors],
+	// which that path does honour.
 	MinAAL AAL
+
+	// NewDevice reports that the request comes from a device this
+	// user has not been seen on before. It is the signal
+	// [op.RuleNewDevice] thresholds against, and the assessor is its
+	// only source: the library keeps no device-trust cookie and no
+	// fingerprint store, so nothing else in the OP can answer the
+	// question. An assessor that does not set it leaves the rule
+	// dormant, the same way a [RiskAssessor]-less deployment leaves
+	// [op.RuleRisk] dormant.
+	//
+	// The field is read on the [Config.LoginFlow] path only, and only
+	// from the once-per-chain consult; the value is then cached for the
+	// lifetime of the attempt so a predicate cannot see it flip between
+	// evaluation passes. It is independent of Decision: an assessor
+	// reporting a new device without wanting a step-up returns
+	// [RiskAllow] with NewDevice set and lets the flow's rules decide.
+	NewDevice bool
 
 	// Reason is the audit reason code. Free-form is forbidden by
 	// convention — pick a stable enum-like prefix

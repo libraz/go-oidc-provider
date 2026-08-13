@@ -11,7 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-// stubMailer is the [op.EmailDelivery] used in the H1-D2 wiring tests.
+// stubMailer is the [op.EmailDelivery] used in the step-wiring tests.
 // The Send hook is a no-op: the tests exercise the builder path
 // (construction + dependency-presence checks), not the delivery
 // behaviour.
@@ -19,7 +19,7 @@ type stubMailer struct{}
 
 func (stubMailer) Send(_ context.Context, _, _ string) error { return nil }
 
-// stubCaptchaVerifier is the [op.CaptchaVerifier] used in the H1-D2
+// stubCaptchaVerifier is the [op.CaptchaVerifier] used in the step-
 // wiring tests. Verify always succeeds; the builder path that the
 // tests cover does not run the verifier.
 type stubCaptchaVerifier struct{}
@@ -27,14 +27,15 @@ type stubCaptchaVerifier struct{}
 func (stubCaptchaVerifier) Verify(_ context.Context, _ op.CaptchaInput) error { return nil }
 
 // TestProjectStepToFlow_BuiltinSteps_BuildSuccessfully covers the
-// happy path for every built-in [op.Step] H1-D2 wires:
-// PrimaryPasskey, StepTOTP, StepEmailOTP, StepRecoveryCode,
-// StepCaptcha. The test runs each Step through op.New (which invokes
-// projectStepToFlow internally) and asserts the construction succeeds.
+// happy path for every built-in [op.Step]: PrimaryPasskey, StepTOTP,
+// StepEmailOTP, StepRecoveryCode and StepCaptcha. The test runs each
+// Step through op.New (which invokes projectStepToFlow internally) and
+// asserts the construction succeeds.
 //
-// PrimaryPassword is intentionally omitted: H1-D2 documents the
-// password-credential store contract as deferred and the builder
-// returns op.Error wrapping authn.ErrBuiltinStepNotWired.
+// PrimaryPassword builds through its own fixture elsewhere because it
+// needs a seeded credential store; the point of this test is that no
+// built-in Step falls through to authn.ErrBuiltinStepNotWired, which
+// is reserved for a Step shape the projector does not recognise.
 func TestProjectStepToFlow_BuiltinSteps_BuildSuccessfully(t *testing.T) {
 	t.Parallel()
 

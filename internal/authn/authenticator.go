@@ -2,6 +2,7 @@ package authn
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -176,6 +177,16 @@ type ContinueInput struct {
 	// rebinding the session cookie. Other interactions ignore
 	// the field.
 	ChooserGroupID string
+
+	// RemoteIP is the client IP of the request that started the
+	// chain, normalised through the trusted-proxy chain. It is the
+	// same value [CaptchaInput.RemoteIP] and [RiskInput.RemoteIP]
+	// carry, exposed here because an adapter that forwards a
+	// submission to an upstream service — the [op.StepCaptcha]
+	// adapter is the built-in case — otherwise has no way to reach
+	// it. Invalid when the HTTP layer could not resolve a trusted
+	// address; check [netip.Addr.IsValid] before rendering it.
+	RemoteIP netip.Addr
 }
 
 // Authenticator is the protocol-side state machine for a single

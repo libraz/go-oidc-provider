@@ -2,6 +2,7 @@ package authn_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -577,6 +578,132 @@ func TestAuditAttemptFailureCarriesSubject(t *testing.T) {
 			"and never the wire, and which account was being guessed at is the one question a failed-login audit exists to "+
 			"answer. Dropping it to match the observer feed would empty the record of its purpose", records[0].ActorID, "user-1")
 	}
+}
+
+// faultingAuthenticator emits a prompt on Begin and fails every
+// submission with a backend fault rather than a credential rejection.
+// The error deliberately does NOT wrap [authn.ErrFactorRetry]: that
+// sentinel is how an authenticator says "the credential was wrong", and
+// a store that timed out never got far enough to have an opinion.
+func faultingAuthenticator(typeID op.FactorType, aal op.AAL, amr string, fault error) *stubAuthenticator {
+	prompt := promptForFactor(typeID)
+	return &stubAuthenticator{
+		typeID:  typeID,
+		aal:     aal,
+		amr:     amr,
+		prompts: []string{prompt.Type},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &prompt}, nil
+		},
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{}, fault
+		},
+	}
+}
+
+// TestAuditAttemptBackendFaultIsNotACredentialFailure pins the rule that
+// separates a judgement from an outage: both feeds a failed factor
+// reaches exist to record what happened to a presented credential, and
+// an authenticator whose user store timed out never evaluated one.
+//
+// The consequences of getting this wrong are asymmetric, which is why
+// both feeds are asserted. On the audit stream a fault filed as
+// login.failed / mfa.failed inflates the failed-login counter, so a
+// database outage reads as a credential-stuffing campaign. On the
+// observer feed it is worse than misleading: the feed is a policy input,
+// so an embedder driving lockout from it locks real users out of their
+// accounts precisely while the backend is unable to authenticate anyone.
+//
+// Both chain implementations are driven because each has its own failure
+// call site; a fix applied to one alone would leave the other silently
+// mis-filing.
+func TestAuditAttemptBackendFaultIsNotACredentialFailure(t *testing.T) {
+	t.Parallel()
+
+	// A deadline is the canonical shape of "the store did not answer".
+	fault := fmt.Errorf("password: user store: %w", context.DeadlineExceeded)
+
+	// assertNothingRecorded checks the outcome shared by both chains:
+	// the fault reaches the HTTP layer intact and neither feed saw an
+	// attempt.
+	assertNothingRecorded := func(t *testing.T, err error, emitter *recordingAuditEmitter, obs *recordingObserver) {
+		t.Helper()
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("submission Tick err = %v, want the injected store fault to surface unchanged", err)
+		}
+		// The observer feed is checked first, and without a Fatal, so a
+		// regression reports both feeds in one run: the audit record is
+		// the misleading one, the observer event is the harmful one.
+		if attempts := obs.snapshot(); len(attempts) != 0 {
+			t.Errorf("observer saw %d attempt(s) = %+v, want none: an embedder driving lockout off this feed "+
+				"would lock accounts out for the duration of a backend outage", len(attempts), attempts)
+		}
+		assertAuditEvents(t, emitter.snapshot(), nil)
+	}
+
+	t.Run("legacy-chain", func(t *testing.T) {
+		t.Parallel()
+
+		emitter := &recordingAuditEmitter{}
+		obs := &recordingObserver{}
+		o, err := authn.New(authn.Config{
+			Authenticators: []op.Authenticator{faultingAuthenticator(op.FactorPassword, op.AAL1, "pwd", fault)},
+			Observers:      []op.LoginAttemptObserver{obs},
+			AuditEmitter:   emitter,
+			StateRefSigner: newSigner(t),
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		state := initialState()
+		state.Subject = "user-1"
+		st, step, err := o.Tick(context.Background(), state, authn.Input{Now: fakeNow()})
+		if err != nil {
+			t.Fatalf("first Tick: %v", err)
+		}
+		_, _, err = o.Tick(context.Background(), st, authn.Input{
+			Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "hunter2"}},
+			Now:        fakeNow(),
+		})
+		assertNothingRecorded(t, err, emitter, obs)
+	})
+
+	t.Run("login-flow", func(t *testing.T) {
+		t.Parallel()
+
+		emitter := &recordingAuditEmitter{}
+		obs := &recordingObserver{}
+		flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+			Primary: authn.LoginFlowStep{
+				Kind:          "myorg.password",
+				Authenticator: faultingAuthenticator(op.FactorPassword, op.AAL1, "pwd", fault),
+			},
+		})
+		if err != nil {
+			t.Fatalf("CompileLoginFlow: %v", err)
+		}
+		o, err := authn.New(authn.Config{
+			LoginFlow:      flow,
+			Observers:      []op.LoginAttemptObserver{obs},
+			AuditEmitter:   emitter,
+			StateRefSigner: newSigner(t),
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+		if err != nil {
+			t.Fatalf("first Tick: %v", err)
+		}
+		_, _, err = o.Tick(context.Background(), st, authn.Input{
+			Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "hunter2"}},
+			Now:        fakeNow(),
+		})
+		assertNothingRecorded(t, err, emitter, obs)
+	})
 }
 
 // TestAuditAttemptNilEmitter asserts an orchestrator built without an

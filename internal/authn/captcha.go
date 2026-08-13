@@ -25,6 +25,15 @@ const captchaTokenMaxLen = 4 * 1024
 // are derived by the orchestrator: the SPA cannot influence them
 // beyond the Token bytes itself, which the verifier MUST validate
 // against the upstream provider server-side.
+//
+// The struct deliberately carries no provider-specific context field
+// (reCAPTCHA v3's "action", Turnstile's "cdata"). Those are properties
+// of the verifier's own upstream configuration, and the verifier is the
+// only thing that consumes them, so routing them through the OP would
+// hand an implementation back its own settings. A verifier that needs
+// such a value holds it directly; one that wants to *check* it needs
+// the same string to have reached the client widget, which is the
+// embedder's own bootstrap contract with its provider.
 type CaptchaInput struct {
 	// Token is the captcha token the SPA collected from the upstream
 	// provider's client SDK and posted to the orchestrator.
@@ -35,11 +44,6 @@ type CaptchaInput struct {
 	// X-Forwarded-* header value here — verifiers can rely on
 	// RemoteIP being the post-trust-evaluation address.
 	RemoteIP netip.Addr
-
-	// Action is the upstream-provider-specific action / page
-	// context (reCAPTCHA v3 "action", Turnstile "cdata"). Empty when
-	// the provider does not consume it.
-	Action string
 }
 
 // CaptchaVerifier validates a captcha token against the upstream
@@ -63,4 +67,41 @@ type CaptchaVerifier interface {
 	// treats any non-nil error as "challenge failed" without
 	// distinguishing the cause to the SPA.
 	Verify(ctx context.Context, in CaptchaInput) error
+}
+
+// CaptchaWidgetDescriber is the optional interface a
+// [CaptchaVerifier] may implement to describe the client-side widget
+// the SPA must bootstrap before it can produce a token. The
+// orchestrator copies the returned pair onto every captcha
+// [interaction.Prompt] it emits, on both the [Config.LoginFlow] and
+// the legacy threshold-triggered path.
+//
+// The verifier is the seam because it is the only object that knows
+// which upstream service it talks to: the site key is the public half
+// of the same credential pair as the verifier's own secret, so any
+// other source could be configured to disagree with it. A verifier
+// that does not implement the interface emits a prompt with both
+// fields empty, which is what a driver rendering its own challenge
+// UI (or a deployment with no widget at all) wants.
+type CaptchaWidgetDescriber interface {
+	// CaptchaWidget returns the upstream provider identifier
+	// (stable values: "turnstile", "hcaptcha", "recaptcha_v3") and
+	// the public site key registered with it. Both are copied onto
+	// the prompt verbatim; returning empty strings is equivalent to
+	// not implementing the interface.
+	CaptchaWidget() (provider, siteKey string)
+}
+
+// CaptchaWidgetFor reads the widget descriptor off v when it
+// implements [CaptchaWidgetDescriber]. Centralising the type assertion
+// keeps the two prompt-emission points from drifting: the legacy
+// threshold path in this package and the [op.StepCaptcha] adapter in
+// op/ both call it, so a verifier that describes a widget describes it
+// identically on either path. A nil verifier yields empty strings.
+func CaptchaWidgetFor(v CaptchaVerifier) (provider, siteKey string) {
+	d, ok := v.(CaptchaWidgetDescriber)
+	if !ok {
+		return "", ""
+	}
+	return d.CaptchaWidget()
 }

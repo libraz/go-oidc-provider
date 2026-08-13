@@ -256,6 +256,16 @@ func (o *Orchestrator) consumeSubmission(ctx context.Context, st State, in Input
 	if err != nil {
 		return st, interaction.Step{}, ErrInvalidStateRef
 	}
+	// Every branch below hands FormSubmission.Values to an
+	// Authenticator or an Interaction, so the field constraints the
+	// outstanding prompt declared are enforced here, once, ahead of the
+	// routing switch: a submission route added later cannot skip the
+	// gate by construction. The check runs after the StateRef verifies
+	// so an unauthenticated caller cannot spend the orchestrator's
+	// pattern-matching budget.
+	if verr := validateSubmission(st.ActiveInputs, in.Submission.Values); verr != nil {
+		return st, interaction.Step{}, verr
+	}
 	switch {
 	case payload.Tag == tagCaptcha:
 		return o.handleCaptchaSubmission(ctx, st, in)
@@ -335,20 +345,27 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 		Scratch:         st.FactorScratch,
 		RequestedScopes: st.RequestedScopes,
 		ChooserGroupID:  st.ChooserGroupID,
+		RemoteIP:        st.RemoteIP,
 	})
 	if err != nil {
-		o.observeFailure(ctx, st, in.Now, auth.Type())
-		// Soft failures wrap [ErrFactorRetry]; observe the failure
-		// (already done), advance the brute-force counter, and
-		// re-emit the factor's prompt so the SPA can offer a retry —
-		// or defer to the dispatcher when the counter reached the
-		// captcha threshold, so the challenge runs first.
-		// Hard failures bubble up so the HTTP layer can surface 5xx /
-		// 4xx unchanged. Scratch is cleared only on the hard-failure
-		// path; the retry helper decides whether to preserve it (a
-		// multi-step factor re-showing its current sub-step) or reset
-		// it (a single-step factor restarting via Begin).
-		if errors.Is(err, ErrFactorRetry) {
+		// One classification drives both what gets recorded and where
+		// the chain goes, so the two can never disagree: a failure
+		// reported as a rejected credential is exactly a failure that
+		// earns a retry prompt.
+		//
+		// Soft failures wrap [ErrFactorRetry]; they are observed,
+		// advance the brute-force counter, and re-emit the factor's
+		// prompt so the SPA can offer a retry — or defer to the
+		// dispatcher when the counter reached the captcha threshold, so
+		// the challenge runs first. Hard failures bubble up so the HTTP
+		// layer can surface 5xx / 4xx unchanged. Scratch is cleared only
+		// on the hard-failure path; the retry helper decides whether to
+		// preserve it (a multi-step factor re-showing its current
+		// sub-step) or reset it (a single-step factor restarting via
+		// Begin).
+		verdict := classifyFactorError(err)
+		o.recordFactorFailure(ctx, st, in.Now, auth.Type(), verdict, err)
+		if verdict == credentialRejected {
 			return o.softRetryAuthFactor(ctx, st, auth, step, in.Now, err)
 		}
 		st = retireActiveFactorToken(st)
@@ -474,6 +491,7 @@ func (o *Orchestrator) handleInteractionSubmission(ctx context.Context, st State
 		Submission:      *in.Submission,
 		RequestedScopes: st.RequestedScopes,
 		ChooserGroupID:  st.ChooserGroupID,
+		RemoteIP:        st.RemoteIP,
 	})
 	if err != nil {
 		return st, interaction.Step{}, err
@@ -514,8 +532,15 @@ func (o *Orchestrator) handleInteractionSubmission(ctx context.Context, st State
 // orchestrator gates Subject propagation on the reserved chooser
 // name to enforce this in code.
 func recordInteractionResult(st State, name string, res interaction.Result) State {
-	if len(res.Scope) > 0 {
+	// A scope decision is recorded whenever a consent-shaped
+	// Interaction answers — including an answer of "nothing". Keying
+	// on len(res.Scope) > 0 instead would collapse "the user approved
+	// none of the presented scopes" into "no ceremony ran", and the
+	// HTTP layer's fallback for the latter is the full requested set:
+	// an empty approval would silently become a total one.
+	if res.Scope != nil || name == BuiltinConsentName {
 		st.ApprovedScopes = append([]string(nil), res.Scope...)
+		st.ScopeApprovalRecorded = true
 	}
 	if res.Subject != "" && name == BuiltinChooserName {
 		st.Subject = res.Subject
@@ -532,6 +557,14 @@ func recordInteractionResult(st State, name string, res interaction.Result) Stat
 // package (rather than internal/authn/chooser) so the orchestrator
 // can reference it without an import cycle.
 const BuiltinChooserName = "chooser"
+
+// BuiltinConsentName is the [Interaction.Name] the built-in consent
+// screen registers under. The orchestrator references it so a consent
+// answer is recognised as a scope decision even when the approved
+// subset is empty. The constant is duplicated here (rather than
+// imported from internal/authn/consent) for the same reason as
+// [BuiltinChooserName]: the consent package imports this one.
+const BuiltinConsentName = "consent"
 
 // ChooserSessionIDField is the [interaction.FormSubmission] field name
 // the chooser screen submits the picked SessionID under. The orchestrator

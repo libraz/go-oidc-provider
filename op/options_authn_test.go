@@ -48,37 +48,37 @@ func TestWithInteractionDriver_AcceptsCustomDriver(t *testing.T) {
 	}
 }
 
-// stagedH1DStep is a [op.Step] used purely to give a test [op.LoginFlow]
-// a non-nil Primary or rule target. The ceremony body is irrelevant
-// here: H1-E only verifies option-level validation, the Begin /
-// Continue paths are exercised by H1-D.
-type stagedH1DStep struct {
+// foreignStep is a [op.Step] shape the projector does not recognise: it
+// reports a built-in [op.StepKind] but is not one of the built-in Step
+// types, which is exactly the case op.New must refuse. The ceremony
+// body is irrelevant — these tests only exercise construction-time
+// validation; the Begin / Continue paths are covered by the
+// orchestrator tests.
+type foreignStep struct {
 	kind op.StepKind
 }
 
-func (s stagedH1DStep) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+func (s foreignStep) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
 	return interaction.Step{}, nil
 }
 
-func (s stagedH1DStep) Continue(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+func (s foreignStep) Continue(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
 	return interaction.Step{}, nil
 }
 
-func (s stagedH1DStep) Kind() op.StepKind { return s.kind }
+func (s foreignStep) Kind() op.StepKind { return s.kind }
 
-// TestWithLoginFlow_BuiltinStepRejectedAtNew covers the H1-D wiring
-// state: the LoginFlow seam is integrated into the orchestrator, but
-// built-in [op.Step] values (PrimaryPassword / StepTOTP / …) are not
-// yet wired to internal Authenticator primitives — their
-// construction-time dependencies (TOTP encryption codec, passkey RP
-// origin, hash adapter) are exposed by follow-up options. Until those
-// land embedders adopt the seam through [op.ExternalStep]; passing a
-// built-in Step at op.New surfaces a clear configuration error that
-// points to the workaround.
-func TestWithLoginFlow_BuiltinStepRejectedAtNew(t *testing.T) {
+// TestWithLoginFlow_UnrecognisedStepRejectedAtNew pins the projector's
+// closed set: a value that satisfies [op.Step] and reports a built-in
+// [op.StepKind], but is not one of the built-in Step types, cannot be
+// compiled into an authenticator. op.New refuses it at construction
+// with an error pointing at [op.ExternalStep], which is the seam for a
+// factor this package does not implement — rather than accepting it and
+// failing on the first authorization request.
+func TestWithLoginFlow_UnrecognisedStepRejectedAtNew(t *testing.T) {
 	t.Parallel()
 
-	flow := op.LoginFlow{Primary: stagedH1DStep{kind: op.StepKindPassword}}
+	flow := op.LoginFlow{Primary: foreignStep{kind: op.StepKindPassword}}
 	_, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(flow))...)
 	if err == nil {
 		t.Fatal("expected built-in Step error from op.New, got nil")
@@ -91,17 +91,16 @@ func TestWithLoginFlow_BuiltinStepRejectedAtNew(t *testing.T) {
 	}
 }
 
-// TestWithLoginFlow_ExternalStepConstructs confirms the H1-D wiring is
-// complete for the production-supported path: a LoginFlow whose Steps
-// are [op.ExternalStep] wrappers around an embedder's [op.Authenticator]
-// constructs cleanly. Built-in Step primitives remain deferred — the
-// matching options ship in follow-up Waves.
+// TestWithLoginFlow_ExternalStepConstructs confirms the wrapper path:
+// a LoginFlow whose Steps are [op.ExternalStep] wrappers around an
+// embedder's [op.Authenticator] constructs cleanly. Built-in Steps
+// construct through their own compilation path, covered separately.
 func TestWithLoginFlow_ExternalStepConstructs(t *testing.T) {
 	t.Parallel()
 
 	flow := op.LoginFlow{
 		Primary: op.ExternalStep{
-			Authenticator: &h1dStubAuth{
+			Authenticator: &stubAuth{
 				typeID:  op.FactorPassword,
 				aal:     op.AAL1,
 				amr:     "pwd",
@@ -125,13 +124,13 @@ func TestWithLoginFlow_RejectsAuthenticatorCombo(t *testing.T) {
 
 	flow := op.LoginFlow{
 		Primary: op.ExternalStep{
-			Authenticator: &h1dStubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
+			Authenticator: &stubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
 			KindLabel:     op.StepKind("myorg.password"),
 		},
 	}
 	_, err := op.New(append(validBaseOptsNoAuthn(t),
 		op.WithLoginFlow(flow),
-		op.WithAuthenticators(&h1dStubAuth{typeID: op.FactorTOTP, aal: op.AAL2, amr: "otp"}),
+		op.WithAuthenticators(&stubAuth{typeID: op.FactorTOTP, aal: op.AAL2, amr: "otp"}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error for WithLoginFlow + WithAuthenticators, got nil")
@@ -151,7 +150,7 @@ func TestWithLoginFlow_RejectsExternalStepBuiltinKindLabel(t *testing.T) {
 
 	flow := op.LoginFlow{
 		Primary: op.ExternalStep{
-			Authenticator: &h1dStubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
+			Authenticator: &stubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
 			KindLabel:     op.StepKindPassword, // collides with built-in
 		},
 	}
@@ -174,7 +173,7 @@ func TestWithLoginFlow_RejectsExternalStepBareKindLabel(t *testing.T) {
 
 	flow := op.LoginFlow{
 		Primary: op.ExternalStep{
-			Authenticator: &h1dStubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
+			Authenticator: &stubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
 			KindLabel:     op.StepKind("myfactor"), // bare, no dot
 		},
 	}
@@ -187,27 +186,27 @@ func TestWithLoginFlow_RejectsExternalStepBareKindLabel(t *testing.T) {
 	}
 }
 
-// h1dStubAuth is a minimal op.Authenticator used by H1-D option-layer
-// tests. The Begin / Continue methods return zero values because the
-// H1-D test surface only exercises construction-time validation; the
+// stubAuth is a minimal op.Authenticator used by the option-layer
+// tests. The Begin / Continue methods return zero values because this
+// surface only exercises construction-time validation; the
 // orchestrator-level integration tests live in
 // internal/authn/orchestrator_test.go.
-type h1dStubAuth struct {
+type stubAuth struct {
 	typeID  op.FactorType
 	aal     op.AAL
 	amr     string
 	prompts []string
 }
 
-func (s *h1dStubAuth) Type() op.FactorType { return s.typeID }
-func (s *h1dStubAuth) AAL() op.AAL         { return s.aal }
-func (s *h1dStubAuth) AMR() string         { return s.amr }
-func (s *h1dStubAuth) Prompts() []string   { return s.prompts }
-func (s *h1dStubAuth) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+func (s *stubAuth) Type() op.FactorType { return s.typeID }
+func (s *stubAuth) AAL() op.AAL         { return s.aal }
+func (s *stubAuth) AMR() string         { return s.amr }
+func (s *stubAuth) Prompts() []string   { return s.prompts }
+func (s *stubAuth) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
 	return interaction.Step{}, nil
 }
 
-func (s *h1dStubAuth) Continue(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+func (s *stubAuth) Continue(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
 	return interaction.Step{}, nil
 }
 
@@ -226,7 +225,7 @@ func TestWithLoginFlow_RejectsNilPrimary(t *testing.T) {
 func TestWithLoginFlow_RejectsDuplicate(t *testing.T) {
 	t.Parallel()
 
-	flow := op.LoginFlow{Primary: stagedH1DStep{kind: op.StepKindPassword}}
+	flow := op.LoginFlow{Primary: foreignStep{kind: op.StepKindPassword}}
 	_, err := op.New(append(validBaseOptsNoAuthn(t),
 		op.WithLoginFlow(flow),
 		op.WithLoginFlow(flow),
@@ -243,10 +242,10 @@ func TestWithLoginFlow_RejectsDuplicateRuleKinds(t *testing.T) {
 	t.Parallel()
 
 	flow := op.LoginFlow{
-		Primary: stagedH1DStep{kind: op.StepKindPassword},
+		Primary: foreignStep{kind: op.StepKindPassword},
 		Rules: []op.Rule{
-			{When: func(op.LoginContext) bool { return true }, Then: stagedH1DStep{kind: op.StepKindTOTP}},
-			{When: func(op.LoginContext) bool { return true }, Then: stagedH1DStep{kind: op.StepKindTOTP}},
+			{When: func(op.LoginContext) bool { return true }, Then: foreignStep{kind: op.StepKindTOTP}},
+			{When: func(op.LoginContext) bool { return true }, Then: foreignStep{kind: op.StepKindTOTP}},
 		},
 	}
 	_, err := op.New(append(validBaseOptsNoAuthn(t), op.WithLoginFlow(flow))...)
@@ -299,7 +298,7 @@ func TestNew_AuthenticatorsSatisfyTheAuthorizationCodeRequirement(t *testing.T) 
 	t.Parallel()
 
 	if _, err := op.New(append(validBaseOptsNoAuthn(t),
-		op.WithAuthenticators(&h1dStubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"}),
+		op.WithAuthenticators(&stubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"}),
 	)...); err != nil {
 		t.Fatalf("op.New with WithAuthenticators: %v", err)
 	}
@@ -314,7 +313,7 @@ func TestNew_LoginFlowSatisfiesTheAuthorizationCodeRequirement(t *testing.T) {
 
 	flow := op.LoginFlow{
 		Primary: op.ExternalStep{
-			Authenticator: &h1dStubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
+			Authenticator: &stubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
 			KindLabel:     op.StepKind("myorg.password"),
 		},
 	}

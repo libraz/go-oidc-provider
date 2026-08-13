@@ -211,10 +211,11 @@ func (captchaStepAdapter) Prompts() []string { return []string{"captcha"} }
 // token. The prompt shape mirrors the orchestrator's legacy
 // [emitCaptchaPrompt] so a SPA written for one path renders the other
 // without modification.
-func (captchaStepAdapter) Begin(_ context.Context, _ authn.BeginInput) (interaction.Step, error) {
+func (a captchaStepAdapter) Begin(_ context.Context, _ authn.BeginInput) (interaction.Step, error) {
+	provider, siteKey := authn.CaptchaWidgetFor(a.verifier)
 	prompt := &interaction.Prompt{
 		Type: "captcha",
-		Data: interaction.CaptchaPromptData{},
+		Data: interaction.CaptchaPromptData{Provider: provider, SiteKey: siteKey},
 		Inputs: []interaction.FieldSpec{{
 			Name:     CaptchaSubmissionFieldName,
 			Kind:     interaction.FieldHidden,
@@ -240,7 +241,10 @@ func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput
 	if !ok || token == "" {
 		return interaction.Step{}, errCaptchaTokenMissing
 	}
-	if err := a.verifier.Verify(ctx, CaptchaInput{Token: token}); err != nil {
+	if err := a.verifier.Verify(ctx, CaptchaInput{
+		Token:    token,
+		RemoteIP: in.RemoteIP,
+	}); err != nil {
 		return interaction.Step{}, err
 	}
 	return interaction.Step{Result: &interaction.Result{
@@ -399,10 +403,11 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, cl
 // a no-op and auth is returned as-is. The function is internal to the
 // op package and consumed by the orchestrator wiring layer when a
 // built-in second-factor [Step] is compiled into its authenticator.
-// Embedders constructing factors directly through [ExternalStep]
-// reach the same invariant by wrapping their authenticator with the
-// per-package WithLockout helper before passing it to
-// [ExternalStep.Authenticator].
+// The per-factor WithLockout wrappers it dispatches to are methods on
+// the internal factor types, so an [ExternalStep] authenticator cannot
+// be opted in from embedder code; a custom factor's guessing budget
+// stays with the implementation behind it (see the
+// [WithAuthnLockoutStore] godoc).
 //
 // The [Clock] interface is structurally identical to the clock the
 // library uses internally, and clockShim forwards the

@@ -38,13 +38,13 @@ func (f testEmailDeliveryFunc) Send(ctx context.Context, address, code string) e
 	return f(ctx, address, code)
 }
 
-// TestProjectBuiltinStep_ThreadsWithClockToFactor pins #17: the clock
-// supplied through WithClock must reach the built-in factor verifiers, not
+// TestProjectBuiltinStep_ThreadsWithClockToFactor pins that the clock
+// supplied through WithClock reaches the built-in factor verifiers, not
 // only the cross-factor lockout counter. Observed through email-OTP — the
 // persisted challenge's timestamps are stamped from the factor's clock, so
 // a threaded WithClock makes them land in the injected year rather than
-// wall time. Before the fix, buildStepEmailOTP dropped cfg.clock and the
-// verifier fell back to SystemClock.
+// wall time. Drop the clock in buildStepEmailOTP and the verifier falls
+// back to SystemClock, which no test can pin.
 func TestProjectBuiltinStep_ThreadsWithClockToFactor(t *testing.T) {
 	t.Parallel()
 

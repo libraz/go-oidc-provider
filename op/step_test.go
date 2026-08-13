@@ -8,17 +8,14 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 )
 
-// stepNotWiredMessage is the substring every built-in Step's
-// placeholder error MUST contain. H1-D ships the orchestrator
-// integration and the [op.ExternalStep] seam but defers per-Step
-// primitive wiring (TOTP codec, passkey RP origin, hash adapter,
-// email delivery, …) to follow-up waves; built-in Step values such
-// as [op.PrimaryPassword] continue to return this sentinel directly
-// from Begin / Continue. The compiler in internal/authn refuses
-// to compile a [op.LoginFlow] that names a built-in Step until the
-// follow-up lands, so the deferral surfaces at construction time
-// rather than the first request. Update this constant when each
-// built-in Step's primitive becomes reachable.
+// stepNotWiredMessage is the substring a built-in Step's placeholder
+// error MUST contain. A built-in [op.Step] is a declaration, not an
+// authenticator: its construction-time dependencies (TOTP codec,
+// passkey RP origin, hash adapter, email delivery) are resolved when
+// [op.New] compiles the [op.LoginFlow], so calling Begin / Continue on
+// the bare value — outside that compilation — has nothing to
+// authenticate against and says so rather than failing obscurely
+// later.
 const stepNotWiredMessage = "built-in Step requires LoginFlow compilation"
 
 // TestStepKinds pins that every built-in [op.Step] reports the

@@ -135,18 +135,25 @@ type LoginFlowContext struct {
 // Once compiled the structure is immutable; the orchestrator reads it
 // concurrently across requests without locking.
 type CompiledLoginFlow struct {
-	primary compiledStep
-	rules   []compiledRule
-	decider LoginFlowDecider
-	risk    RiskAssessor
-	byKind  map[string]compiledStep
+	primary  compiledStep
+	rules    []compiledRule
+	decider  LoginFlowDecider
+	risk     RiskAssessor
+	byKind   map[string]compiledStep
+	byFactor map[FactorType]compiledStep
 }
 
 // compiledStep is the orchestrator-side view of a LoginFlowStep with
 // the kind cached for fast dedup lookups.
 type compiledStep struct {
-	kind      string
-	auth      Authenticator
+	kind string
+	auth Authenticator
+	// factor is auth.Type() resolved once at compile time. It is the
+	// join key between a [RiskOutcome.RequiredFactors] entry (a
+	// FactorType) and the Step that can satisfy it — StepKind and
+	// FactorType are separate namespaces, so the risk directive can
+	// only be honoured through the authenticator's own type.
+	factor    FactorType
 	isCaptcha bool
 }
 
@@ -180,7 +187,12 @@ var ErrBuiltinStepNotWired = errors.New("authn: built-in Step requires construct
 //
 // On success the compiler returns a *CompiledLoginFlow whose byKind
 // index maps every declared StepKind to its [compiledStep]; the
-// orchestrator's Decider.Require lookup uses it for O(1) routing.
+// orchestrator's Decider.Require lookup uses it for O(1) routing. The
+// parallel byFactor index maps each non-captcha step's [FactorType] to
+// the same value so a [RiskOutcome.RequiredFactors] entry can be routed
+// to the Step that satisfies it. Declaration order wins on a collision
+// (two Steps wrapping the same factor type), matching the "first
+// candidate wins" rule the legacy chain path applies.
 func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 	if spec.Primary.Authenticator == nil {
 		return nil, errors.New("authn: LoginFlow.Primary is nil")
@@ -194,9 +206,12 @@ func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 	primary := compiledStep{
 		kind:      spec.Primary.Kind,
 		auth:      spec.Primary.Authenticator,
+		factor:    spec.Primary.Authenticator.Type(),
 		isCaptcha: spec.Primary.IsCaptcha,
 	}
 	byKind := map[string]compiledStep{primary.kind: primary}
+	byFactor := map[FactorType]compiledStep{}
+	indexFactor(byFactor, primary)
 	rules := make([]compiledRule, 0, len(spec.Rules))
 	for i, r := range spec.Rules {
 		if r.Then.Authenticator == nil {
@@ -211,9 +226,11 @@ func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 		step := compiledStep{
 			kind:      r.Then.Kind,
 			auth:      r.Then.Authenticator,
+			factor:    r.Then.Authenticator.Type(),
 			isCaptcha: r.Then.IsCaptcha,
 		}
 		byKind[step.kind] = step
+		indexFactor(byFactor, step)
 		when := r.When
 		if when == nil {
 			when = func(LoginFlowContext) bool { return false }
@@ -221,12 +238,27 @@ func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 		rules = append(rules, compiledRule{when: when, then: step})
 	}
 	return &CompiledLoginFlow{
-		primary: primary,
-		rules:   rules,
-		decider: spec.Decider,
-		risk:    spec.Risk,
-		byKind:  byKind,
+		primary:  primary,
+		rules:    rules,
+		decider:  spec.Decider,
+		risk:     spec.Risk,
+		byKind:   byKind,
+		byFactor: byFactor,
 	}, nil
+}
+
+// indexFactor records step under its [FactorType] unless the slot is
+// already taken (first declaration wins) or the step is captcha-shaped.
+// A captcha clears a bot challenge; it contributes no [Factor] and
+// therefore can never satisfy a risk-required factor set.
+func indexFactor(byFactor map[FactorType]compiledStep, step compiledStep) {
+	if step.isCaptcha || step.factor == "" {
+		return
+	}
+	if _, taken := byFactor[step.factor]; taken {
+		return
+	}
+	byFactor[step.factor] = step
 }
 
 // containsString reports whether v is in haystack. Used by the
@@ -282,6 +314,13 @@ func recoverDecider(ctx context.Context, logger *slog.Logger, decider LoginFlowD
 // State, so a Tick that re-enters the loop after a sub-step completion
 // sees the same lc shape — modulo the freshly-appended CompletedKind
 // from the previous step.
+//
+// Every field the public [op.LoginContext] exposes is populated here.
+// The same public value is also assembled by the ACR resolver from the
+// terminal request, and a rule predicate cannot tell which face built
+// the context it is reading, so a field left empty on one side is a
+// predicate that silently behaves differently depending on where in the
+// chain it runs.
 func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 	completed := append([]string(nil), st.CompletedStepKinds...)
 	scopes := append([]string(nil), st.RequestedScopes...)
@@ -292,18 +331,26 @@ func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 		RequestedScopes: scopes,
 		FailedAttempts:  st.LastFailures,
 		RiskScore:       st.RiskScoreCached,
+		NewDevice:       st.NewDeviceCached,
 		CompletedKinds:  completed,
 		ACRValues:       acrValues,
-		RemoteIP:        st.RemoteIP.String(),
+		RemoteIP:        st.RemoteIPString(),
 		UserAgent:       st.UserAgent,
+		AcceptLanguage:  st.AcceptLanguage,
 	}
 }
 
 // runRiskOnceForLoginFlow consults Risk at chain start when no step has
-// completed yet, caches the score on st.RiskScoreCached, and returns
-// whether the chain is denied. Subsequent calls during the same chain
-// are no-ops; this is the §3.1 budget invariant ("Risk.Assess at most
-// once per chain").
+// completed yet, caches the score on st.RiskScoreCached and the
+// required-factor set on st.RiskRequiredFactors, and returns whether the
+// chain is denied. Subsequent calls during the same chain are no-ops;
+// this is the §3.1 budget invariant ("Risk.Assess at most once per
+// chain").
+//
+// A [RiskRequire] outcome that names factors is recorded rather than
+// acted on here: the consult happens before Primary has even run, so the
+// obligation has to survive until the chain would otherwise grant. See
+// [Orchestrator.transitionToAfterAuthn] for where it is discharged.
 //
 // The mapping from [RiskOutcome] onto [State.RiskScoreCached]:
 //
@@ -338,6 +385,8 @@ func (o *Orchestrator) runRiskOnceForLoginFlow(ctx context.Context, st State, fl
 	if res.Score != risk.ScoreNone {
 		st.RiskScoreCached = riskScoreFromPkg(res.Score)
 	}
+	st.RiskRequiredFactors = factorTypesFromStrings(res.Required)
+	st.NewDeviceCached = res.NewDevice
 	return st, false, nil
 }
 
@@ -378,7 +427,8 @@ func describeStepKind(kind string) string {
 //     through to rules.
 //  5. Rules iteration (declaration order): first When → true && kind
 //     not in CompletedStepKinds wins.
-//  6. No rule matches → grant (transition to PhaseAfterAuthn).
+//  6. No rule matches → grant (transition to PhaseAfterAuthn), which
+//     first discharges any pending risk step-up obligation.
 func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.Time) (State, interaction.Step, error) {
 	flow := o.cfg.LoginFlow
 	if flow == nil {
@@ -404,7 +454,14 @@ func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.
 	// than CompletedStepKinds so a pre-Primary captcha that has
 	// already cleared does not flip the chain into the post-Primary
 	// rules pass before the credential factor has bound a subject.
-	if st.Subject == "" {
+	//
+	// A Subject the chain did not bind itself is only allowed to
+	// stand in for Primary when the request may be served from the
+	// existing session. When [State.ReauthRequired] is set the HTTP
+	// layer has already established that it may not (prompt=login,
+	// max_age expiry, unsatisfied acr_values), so the decision falls
+	// back to "has Primary actually completed during this attempt".
+	if st.Subject == "" || (st.ReauthRequired && !containsString(st.CompletedStepKinds, flow.primary.kind)) {
 		if o.captchaRequired(st) {
 			return o.emitCaptchaPrompt(st, now)
 		}
@@ -431,7 +488,7 @@ func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.
 	}
 
 	// No rule matched and Decider did not short-circuit → grant.
-	return o.transitionToAfterAuthn(st)
+	return o.transitionToAfterAuthn(ctx, st, flow, now)
 }
 
 // evalLoginFlowDecider consults the Decider once and dispatches the
@@ -443,7 +500,7 @@ func (o *Orchestrator) evalLoginFlowDecider(ctx context.Context, st State, flow 
 	decision := recoverDecider(ctx, o.logger, flow.decider, lc)
 	switch d := decision.(type) {
 	case LoginFlowAllow:
-		ns, step, err := o.transitionToAfterAuthn(st)
+		ns, step, err := o.transitionToAfterAuthn(ctx, st, flow, now)
 		return true, ns, step, err
 	case LoginFlowDeny:
 		o.logger.Info("authn: LoginFlow denied",
@@ -560,10 +617,74 @@ func (o *Orchestrator) evalLoginFlowRules(ctx context.Context, st State, flow *C
 // transitionToAfterAuthn moves the chain to PhaseAfterAuthn so the
 // existing post-authn interaction queue (consent, KYC) runs. Returning
 // a zero interaction.Step keeps the dispatcher loop driving forward.
-func (o *Orchestrator) transitionToAfterAuthn(st State) (State, interaction.Step, error) {
+//
+// It is also the single choke point for the pending risk step-up
+// obligation: every LoginFlow exit that grants authentication — the
+// no-rule-matched fall-through and the Decider's Allow verdict alike —
+// routes through here, so a [RiskRequire] outcome that named factors
+// cannot be bypassed by an embedder policy that answers Allow first.
+func (o *Orchestrator) transitionToAfterAuthn(ctx context.Context, st State, flow *CompiledLoginFlow, now time.Time) (State, interaction.Step, error) {
+	if handled, ns, step, err := o.enforceRiskStepUp(ctx, st, flow, now); handled {
+		return ns, step, err
+	}
 	st.Phase = PhaseAfterAuthn
 	st.ActiveStepKind = ""
 	return st, interaction.Step{}, nil
+}
+
+// enforceRiskStepUp discharges [State.RiskRequiredFactors] before the
+// chain is allowed to leave PhaseAuthn. The bool return reports whether
+// the caller must stop and return the triple: true when a step-up factor
+// was interposed (or a captcha has to clear first), and true with an
+// error when the demand cannot be met.
+//
+// Three outcomes:
+//
+//   - No demand, or a completed [Factor] already carries one of the
+//     demanded types — not handled; the caller grants.
+//   - A declared Step wraps an [Authenticator] of a demanded type and
+//     has not run yet — that Step is driven, exactly as a matching
+//     [LoginFlowRule] would have driven it.
+//   - No declared Step can satisfy the demand —
+//     [ErrNoEligibleAuthenticator], the same fail-closed sentinel the
+//     legacy chain path returns when its risk-filtered candidate set
+//     comes back empty. Granting instead would hand out a session at
+//     the assurance the assessor just refused.
+func (o *Orchestrator) enforceRiskStepUp(ctx context.Context, st State, flow *CompiledLoginFlow, now time.Time) (bool, State, interaction.Step, error) {
+	if len(st.RiskRequiredFactors) == 0 || riskStepUpSatisfied(st) {
+		return false, st, interaction.Step{}, nil
+	}
+	for _, want := range st.RiskRequiredFactors {
+		step, ok := flow.byFactor[want]
+		if !ok || containsString(st.CompletedStepKinds, step.kind) {
+			continue
+		}
+		if o.captchaRequired(st) {
+			ns, sstep, err := o.emitCaptchaPrompt(st, now)
+			return true, ns, sstep, err
+		}
+		ns, sstep, err := o.runLoginFlowStep(ctx, st, step, now)
+		return true, ns, sstep, err
+	}
+	o.logger.Error("authn: risk-required factor is not reachable in this LoginFlow",
+		slog.String("required_factors", strings.Join(factorTypesToStrings(st.RiskRequiredFactors), " ")),
+		slog.String("subject", st.Subject),
+		slog.String("client_id", st.ClientID),
+	)
+	return true, st, interaction.Step{}, ErrNoEligibleAuthenticator
+}
+
+// riskStepUpSatisfied reports whether any factor recorded during this
+// attempt carries one of the risk-demanded types. The set has OR
+// semantics ([RiskOutcome.RequiredFactors]), so one match discharges the
+// whole obligation.
+func riskStepUpSatisfied(st State) bool {
+	for _, f := range st.Factors {
+		if containsFactor(st.RiskRequiredFactors, f.Type) {
+			return true
+		}
+	}
+	return false
 }
 
 // runLoginFlowStep drives step.auth.Begin for the supplied compiledStep
@@ -618,6 +739,7 @@ func (o *Orchestrator) emitLoginFlowPrompt(st State, kind string, prompt interac
 		return st, interaction.Step{}, err
 	}
 	prompt.StateRef = ref
+	st = stampActiveInputs(st, prompt.Inputs)
 	return st, interaction.Step{Prompt: &prompt}, nil
 }
 
@@ -670,17 +792,23 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 		Submission:      *in.Submission,
 		Scratch:         st.FactorScratch,
 		RequestedScopes: st.RequestedScopes,
+		RemoteIP:        st.RemoteIP,
 	})
 	if err != nil {
+		// The same classification decides what is recorded and where the
+		// chain goes, exactly as on the legacy-chain path. Captcha steps
+		// record nothing either way — a bot check is out-of-band from
+		// the credential feed — but they still follow the retry branch.
+		verdict := classifyFactorError(err)
 		if !step.isCaptcha {
-			o.observeFailure(ctx, st, in.Now, step.auth.Type())
+			o.recordFactorFailure(ctx, st, in.Now, step.auth.Type(), verdict, err)
 		}
 		// Soft failures (wrong password, etc.) advance the failure
 		// counter and re-emit the same factor's prompt so the SPA
 		// can let the user retry. Hard failures (store outage,
 		// codec misconfiguration) skip this branch and surface to
 		// the HTTP layer as 5xx / 4xx unchanged.
-		if errors.Is(err, ErrFactorRetry) {
+		if verdict == credentialRejected {
 			if !step.isCaptcha {
 				st.LastFailures++
 			}

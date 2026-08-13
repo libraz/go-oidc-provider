@@ -549,8 +549,12 @@ func TestTickCaptchaAfterThreeFailures(t *testing.T) {
 	t.Parallel()
 
 	pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
+	var seenToken string
 	verifier := &stubCaptcha{
-		verify: func(_ context.Context, _ op.CaptchaInput) error { return nil },
+		verify: func(_ context.Context, in op.CaptchaInput) error {
+			seenToken = in.Token
+			return nil
+		},
 	}
 	o, err := authn.New(authn.Config{
 		Authenticators: []op.Authenticator{pw},
@@ -572,10 +576,17 @@ func TestTickCaptchaAfterThreeFailures(t *testing.T) {
 		t.Fatalf("expected captcha prompt, got %+v", captchaStep.Prompt)
 	}
 
-	// Solve captcha; expect to land on the password prompt.
+	// Solve captcha; expect to land on the password prompt. The token
+	// travels in the field the prompt declares — the route every Driver
+	// uses, and the one the orchestrator's field validation requires —
+	// while Input.CaptchaToken carries a different value so the
+	// submission-wins precedence stays covered.
 	_, pwStep, err := o.Tick(context.Background(), st, authn.Input{
-		Submission:   &interaction.FormSubmission{StateRef: captchaStep.Prompt.StateRef},
-		CaptchaToken: "ok",
+		Submission: &interaction.FormSubmission{
+			StateRef: captchaStep.Prompt.StateRef,
+			Values:   map[string]string{authn.CaptchaTokenField: "ok"},
+		},
+		CaptchaToken: "overridden",
 		Now:          fakeNow(),
 	})
 	if err != nil {
@@ -583,6 +594,9 @@ func TestTickCaptchaAfterThreeFailures(t *testing.T) {
 	}
 	if pwStep.Prompt == nil || pwStep.Prompt.Type != "auth.password" {
 		t.Fatalf("expected password prompt, got %+v", pwStep.Prompt)
+	}
+	if seenToken != "ok" {
+		t.Errorf("CaptchaInput.Token = %q, want the submitted value", seenToken)
 	}
 }
 
@@ -617,9 +631,11 @@ func TestTickCaptchaFailureReemits(t *testing.T) {
 	}
 
 	_, retryStep, err := o.Tick(context.Background(), st, authn.Input{
-		Submission:   &interaction.FormSubmission{StateRef: captchaStep.Prompt.StateRef},
-		CaptchaToken: "wrong",
-		Now:          fakeNow(),
+		Submission: &interaction.FormSubmission{
+			StateRef: captchaStep.Prompt.StateRef,
+			Values:   map[string]string{authn.CaptchaTokenField: "wrong"},
+		},
+		Now: fakeNow(),
 	})
 	if err != nil {
 		t.Fatalf("retry tick: %v", err)

@@ -67,10 +67,17 @@ func RuleRisk(threshold RiskScore, then Step) Rule {
 }
 
 // RuleNewDevice returns a [Rule] that matches when
-// [LoginContext.NewDevice] is true. The orchestrator marks a device
-// as new when no device-trust cookie is present or the cookie does
-// not bind to a known fingerprint; embedders typically chain the rule
-// to a stronger factor on first sign-in from a fresh browser.
+// [LoginContext.NewDevice] is true — typically chained to a stronger
+// factor on first sign-in from a fresh browser.
+//
+// The signal comes from the configured [RiskAssessor], which sets
+// [RiskOutcome.NewDevice] on the once-per-chain consult; the library
+// keeps no device-trust cookie and no fingerprint store of its own, so
+// there is nothing else that could answer the question. Like [RuleRisk],
+// the rule therefore never fires when no assessor is wired, or when the
+// wired assessor leaves the field alone — a deployment that wants this
+// step-up supplies the signal from whatever device history it already
+// keeps.
 func RuleNewDevice(then Step) Rule {
 	return Rule{
 		When: func(lc LoginContext) bool { return lc.NewDevice },

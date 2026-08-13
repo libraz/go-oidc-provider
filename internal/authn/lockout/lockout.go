@@ -127,7 +127,12 @@ type Outcome struct {
 	FailedCount int
 
 	// LockedUntil is the wall-clock time the cross-factor lock expires.
-	// Zero when the count has not crossed any threshold.
+	// It is either zero or strictly after the clock reading the
+	// transition was evaluated against: an already-expired lock is
+	// reported as zero, never as a past time. Callers may therefore read
+	// "the subject is locked right now" from a non-zero value alone.
+	// Zero when the count has not crossed any threshold and no earlier
+	// lock is still running.
 	LockedUntil time.Time
 
 	// ResetRequired reports whether the count crossed the long
@@ -299,6 +304,13 @@ func (c *Counter) failureBase(ctx context.Context, subject string) (uint64, *sto
 	return prior.Version, prior, nil
 }
 
+// applyFailure folds one failure into next and reports the verdict. It
+// is the only writer of a non-zero LockedUntil on the failure path, and
+// it upholds the same invariant on both sides of the transition: the
+// stamp it leaves on the [Outcome] and on the record handed to the
+// compare-and-swap is either zero or strictly after now. A record whose
+// lock has run out therefore loses the stamp on its next transition
+// rather than carrying it until the row is reclaimed.
 func applyFailure(next *store.AuthnLockoutRecord, now time.Time) Outcome {
 	windowExpired := !next.FirstFailureAt.IsZero() &&
 		now.Sub(next.FirstFailureAt) > counterWindow
@@ -322,7 +334,14 @@ func applyFailure(next *store.AuthnLockoutRecord, now time.Time) Outcome {
 	case next.FailedCount >= thresholdShort:
 		out.LockedUntil = now.Add(durationShort)
 	}
-	if next.LockedUntil.After(out.LockedUntil) {
+	// Carry an existing stamp forward only while it is still in force at
+	// now: a later failure must never shorten a running lock, but an
+	// elapsed stamp is spent state. Comparing against out.LockedUntil
+	// alone is not enough — a window rollover resets the count to 1 and
+	// crosses no threshold, so out.LockedUntil is the zero time and every
+	// non-zero stamp, however old, sorts after it. Dropping the elapsed
+	// stamp here is what keeps a rollover from re-locking the subject.
+	if next.LockedUntil.After(now) && next.LockedUntil.After(out.LockedUntil) {
 		out.LockedUntil = next.LockedUntil
 	}
 	next.LockedUntil = out.LockedUntil

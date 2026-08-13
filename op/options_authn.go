@@ -111,9 +111,13 @@ const mfaEncryptionKeyLen = 32
 // embedder's user store (which owns the password hash, its own attempt
 // throttling, and account-lock policy), and a custom factor's guessing
 // budget is owned by whatever the embedder wraps behind [ExternalStep].
-// An embedder that wants the primary or a custom factor to share this
-// cross-factor counter wraps its authenticator with the factor package's
-// own WithLockout helper before registering it.
+// There is no library-side opt-in that extends the counter to those two.
+// The wrapper the built-ins receive is applied inside this package to
+// the concrete factor types it constructs itself and is not exported, so
+// an embedder that wants the primary or a custom factor to hold a
+// guessing budget owns that budget in its own implementation — the user
+// store behind the primary credential, or whatever backs the
+// [ExternalStep.Authenticator].
 //
 // The attachment is to the [Step], not to the factor. An authenticator
 // built directly — [NewEmailOTPAuthenticator] with an
@@ -258,10 +262,18 @@ func WithCaptchaVerifier(v CaptchaVerifier) Option {
 	})
 }
 
-// WithRiskAssessor wires the [RiskAssessor] consulted at each
-// [RiskStage]. At most one assessor is permitted; a second
-// [WithRiskAssessor] call fails [New] with a structured configuration
-// error.
+// WithRiskAssessor wires the [RiskAssessor] the orchestrator consults.
+// At most one assessor is permitted; a second [WithRiskAssessor] call
+// fails [New] with a structured configuration error.
+//
+// The consult points depend on which authentication surface is
+// configured. With [WithAuthenticators] the assessor is called at
+// [RiskPreFactor] and [RiskPostFactor] around every factor. With
+// [WithLoginFlow] it is the flow's assessor — called once per chain at
+// [RiskAuthorizeEntry], exactly as if it had been assigned to
+// [LoginFlow.Risk]. Assigning both that field and this option fails
+// [New]: the LoginFlow path consults one assessor per chain, so the
+// second would never run.
 // Experimental: the assessor contract is settled; the orchestrator
 // trigger points around it MAY change in a minor release.
 func WithRiskAssessor(a RiskAssessor) Option {
@@ -348,6 +360,55 @@ func WithInteractions(i ...Interaction) Option {
 // Experimental: the field set MAY gain optional members in a minor
 // release. Embedders SHOULD construct [SPAUI] with named field
 // initialisation so future additions remain source-compatible.
+//
+// # State-route contract
+//
+// The front end drives the ceremony against LoginMount/state/{uid} —
+// GET to read the current prompt, POST to submit a reply, DELETE to
+// cancel — and MUST branch on the HTTP status before it parses a body:
+//
+//   - 200: a JSON object, either the next prompt or a terminal
+//     envelope. Its "type" member tells the two apart.
+//   - 204: the interaction was cancelled and the request carried no
+//     redirect_uri, so there is nothing to deliver to the client.
+//   - anything else: the ceremony cannot continue. The body is
+//     normally the JSON error envelope ({"error", "error_description"}),
+//     but it is not guaranteed to be JSON: a response the OP cannot
+//     produce safely — a JARM envelope it failed to sign, say — fails
+//     closed as text/plain carrying no protocol fields at all, because
+//     the alternative is emitting a weaker response shape than the
+//     client contracted for. A front end that parses before it checks
+//     the status raises on those instead of reporting them.
+//
+// A 200 whose "type" is one of the two terminal values below is the
+// authorization response itself, and the front end is what delivers it
+// to the client: both arrive on the state route precisely because a
+// fetch() can neither follow a cross-origin redirect nor execute an
+// HTML document, so the OP cannot deliver either one through its own
+// response.
+//
+//	{"type":"redirect","location":"<url>"}
+//
+// Navigate the document to location (window.location.href). This is the
+// terminal for response_mode=query and for the JARM query.jwt /
+// fragment.jwt modes.
+//
+//	{"type":"form_post","action":"<redirect_uri>","fields":{"<name>":"<value>"}}
+//
+// Build a form with method="post" and the given action, add one hidden
+// input per fields entry, and submit it at document level. This is the
+// terminal for response_mode=form_post — fields carries code / state /
+// iss on success and error / error_description / state on failure — and
+// for the JARM form_post.jwt mode, where fields carries a single
+// "response" JWT. Submitting it is exactly what the page the OP renders
+// on the non-SPA surface auto-submits; a front end that skips it strands
+// the flow with the client never receiving a response.
+//
+// Any other "type" is the next prompt ([interaction.Prompt]): render it
+// and POST the reply. "redirect" and "form_post" are reserved for the
+// terminals, so a custom prompt MUST NOT take either name — the
+// [interaction.Prompt] namespace rule, which requires an org-prefixed
+// dotted name, already keeps them apart.
 type SPAUI struct {
 	// LoginMount is the URL path the SPA's login entry HTML lives
 	// under (typically "/login"). MUST be non-empty and MUST start
@@ -458,13 +519,14 @@ type ChooserUI struct {
 //   - WithLoginFlow is mutually exclusive with [WithAuthenticators];
 //     combining the two surfaces would silently reorder factors.
 //
-// Built-in [Step] values (PrimaryPassword, StepTOTP, …) carry
-// configuration-time dependencies (TOTP encryption codec, passkey RP
-// origin, hash adapter) that are exposed through follow-up options;
-// until those land embedders adopt the seam through [ExternalStep],
-// which wraps an already-constructed [Authenticator]. Passing a
-// built-in Step directly fails [New] with a clear pointer to the
-// workaround.
+// Built-in [Step] values (PrimaryPassword, PrimaryPasskey, StepTOTP,
+// StepEmailOTP, StepRecoveryCode, StepCaptcha) are wired: pass them
+// directly and [New] builds the authenticator, including the
+// cross-factor lockout counter [WithAuthnLockoutStore] attaches.
+// [ExternalStep] wraps an already-constructed [Authenticator] and is
+// the seam for factors this package does not implement — a step taken
+// through it does not receive that counter, so reach for it only when
+// no built-in Step covers the factor.
 // Experimental: field names and evaluation order MAY change in a
 // minor release; see [LoginFlow] for why the seam is not frozen.
 func WithLoginFlow(flow LoginFlow) Option {
@@ -510,6 +572,14 @@ func WithLoginFlow(flow LoginFlow) Option {
 // rendering; the OP falls back to [interaction.JSONDriver] for the
 // /interaction state endpoint. Mutually exclusive with [WithConsentUI];
 // supplying both fails [New].
+//
+// The front end is fully replaceable, so the wire contract it has to
+// implement is part of this option's surface rather than a property of
+// the bundle shipped with the examples: the prompt envelope, the two
+// terminal envelopes the front end delivers to the client itself, and
+// the rule that a non-200 body may not be JSON at all are documented
+// under "State-route contract" on [SPAUI].
+//
 // Validation:
 //   - LoginMount MUST be non-empty and MUST start with "/". It is the
 //     only mount the router acts on.

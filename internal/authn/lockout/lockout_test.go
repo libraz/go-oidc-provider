@@ -153,6 +153,14 @@ func TestCounter_Reset(t *testing.T) {
 	}
 }
 
+// TestCounter_WindowRollover drives the rolling window past its 24-hour
+// edge twice: once from a sub-threshold count, and once from a count
+// that crossed the short threshold and left a lock stamp behind. The
+// second half is the one that matters — a rollover resets the count to
+// 1 and so crosses no threshold, and the transition must not re-adopt
+// the stamp of a lock that already ran out. If it does, the subject is
+// locked again by the very attempt that should have started a fresh
+// budget, and stays locked until they happen to enter a correct code.
 func TestCounter_WindowRollover(t *testing.T) {
 	t.Parallel()
 	c, clock := newFixture(t)
@@ -169,6 +177,140 @@ func TestCounter_WindowRollover(t *testing.T) {
 	}
 	if out.FailedCount != 1 {
 		t.Fatalf("FailedCount after rollover=%d want 1", out.FailedCount)
+	}
+
+	// Climb to the short threshold so the record carries a real lock
+	// stamp, then let both the lock and the window elapse.
+	for i := 2; i <= 30; i++ {
+		out, err = c.RecordFailure(context.Background(), "alice")
+		if err != nil {
+			t.Fatalf("threshold attempt %d: %v", i, err)
+		}
+	}
+	if out.LockedUntil.IsZero() {
+		t.Fatalf("LockedUntil zero at FailedCount=%d; want the short-threshold stamp", out.FailedCount)
+	}
+	locked := out.LockedUntil
+
+	clock.advance(25 * time.Hour)
+	now := clock.Now()
+	if locked.After(now) {
+		t.Fatalf("test setup: lock %v still in force at %v", locked, now)
+	}
+	out, err = c.RecordFailure(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("RecordFailure after lock expiry and rollover: %v", err)
+	}
+	if out.FailedCount != 1 {
+		t.Fatalf("FailedCount after second rollover=%d want 1", out.FailedCount)
+	}
+	if !out.LockedUntil.IsZero() {
+		t.Fatalf("rollover resurrected the expired lock stamp: LockedUntil=%v (expired %v ago), want zero",
+			out.LockedUntil, now.Sub(out.LockedUntil))
+	}
+	if err := c.GuardBegin(context.Background(), "alice"); err != nil {
+		t.Fatalf("GuardBegin after lock expiry and rollover: %v; want the subject unlocked", err)
+	}
+}
+
+// TestCounter_RecordFailureNeverPersistsElapsedLock pins the storage
+// side of the same invariant. A stamp that is only dropped on the way
+// out of RecordFailure but written back to the row would resurrect on
+// the next read, so the assertion is made against what the store holds,
+// not only against the returned Outcome. The elapsed stamp is seeded
+// directly through the store so the case is reachable however the row
+// acquired it — a rollover, an operator edit, or a backend that
+// restored an old snapshot.
+func TestCounter_RecordFailureNeverPersistsElapsedLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)}
+	base := inmem.New().AuthnLockouts()
+	c, err := lockout.New(base, clock)
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+
+	now := clock.Now()
+	seeded := &store.AuthnLockoutRecord{
+		Subject:        "alice",
+		FailedCount:    30,
+		FirstFailureAt: now.Add(-30 * time.Hour),
+		LockedUntil:    now.Add(-29 * time.Hour),
+	}
+	swapped, err := base.CompareAndSwap(ctx, 0, seeded)
+	if err != nil {
+		t.Fatalf("seed CompareAndSwap: %v", err)
+	}
+	if !swapped {
+		t.Fatal("seed CompareAndSwap did not commit")
+	}
+
+	out, err := c.RecordFailure(ctx, "alice")
+	if err != nil {
+		t.Fatalf("RecordFailure: %v", err)
+	}
+	if !out.LockedUntil.IsZero() {
+		t.Fatalf("Outcome carries an elapsed lock: LockedUntil=%v, now=%v", out.LockedUntil, now)
+	}
+	got, err := base.Get(ctx, "alice")
+	if err != nil {
+		t.Fatalf("Get after RecordFailure: %v", err)
+	}
+	if !got.LockedUntil.IsZero() {
+		t.Fatalf("stored record kept an elapsed lock: LockedUntil=%v, now=%v", got.LockedUntil, now)
+	}
+}
+
+// TestCounter_RunningLockSurvivesWindowRollover is the counterweight to
+// the two tests above: dropping an elapsed stamp must not turn into
+// dropping a live one. The long threshold stamps a 24-hour lock, which
+// outlives the 24-hour counter window, so the next failure arrives after
+// a rollover while the lock is still in force and must neither shorten
+// nor clear it.
+func TestCounter_RunningLockSurvivesWindowRollover(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)}
+	base := inmem.New().AuthnLockouts()
+	c, err := lockout.New(base, clock)
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+
+	// Anchor the window, then cross the long threshold a day later so
+	// the 24-hour lock reaches past the window's edge.
+	if _, err := c.RecordFailure(ctx, "alice"); err != nil {
+		t.Fatalf("anchor RecordFailure: %v", err)
+	}
+	clock.advance(23 * time.Hour)
+	var out lockout.Outcome
+	for i := 2; i <= 90; i++ {
+		out, err = c.RecordFailure(ctx, "alice")
+		if err != nil {
+			t.Fatalf("threshold attempt %d: %v", i, err)
+		}
+	}
+	if !out.ResetRequired {
+		t.Fatalf("ResetRequired=false at FailedCount=%d; want the long threshold crossed", out.FailedCount)
+	}
+	held := out.LockedUntil
+
+	// Two more hours: the window (anchored 25 hours ago) has rolled over
+	// but the lock still has 22 hours to run.
+	clock.advance(2 * time.Hour)
+	out, err = c.RecordFailure(ctx, "alice")
+	if err != nil {
+		t.Fatalf("RecordFailure after rollover: %v", err)
+	}
+	if out.FailedCount != 1 {
+		t.Fatalf("FailedCount after rollover=%d want 1", out.FailedCount)
+	}
+	if !out.LockedUntil.Equal(held) {
+		t.Fatalf("running lock changed across rollover: LockedUntil=%v want %v", out.LockedUntil, held)
+	}
+	if err := c.GuardBegin(ctx, "alice"); !errors.Is(err, lockout.ErrLocked) {
+		t.Fatalf("GuardBegin during a running lock: err=%v want ErrLocked", err)
 	}
 }
 

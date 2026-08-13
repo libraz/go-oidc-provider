@@ -37,6 +37,7 @@ func (a riskAssessorAdapter) Assess(ctx context.Context, in risk.Input) (risk.Ou
 		RequiredFactors: factorTypesToStrings(out.RequiredFactors),
 		Score:           riskScoreToPkg(out.Score),
 		MinAAL:          aalToPkg(out.MinAAL),
+		NewDevice:       out.NewDevice,
 	}, nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -19,7 +20,7 @@ func TestInteractionMetadataAndSelfSkip(t *testing.T) {
 	t.Parallel()
 
 	mgr := newChooserManager(t, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
-	ix := chooser.New(mgr)
+	ix := chooser.New(mgr, nil)
 	if got := ix.Name(); got != authn.BuiltinChooserName {
 		t.Fatalf("Name() = %q, want %q", got, authn.BuiltinChooserName)
 	}
@@ -46,7 +47,7 @@ func TestInteractionBeginListsLiveAccountsForChooserPrompt(t *testing.T) {
 	ctx := context.Background()
 	mgr := newChooserManager(t, t0)
 	first, second := issueTwoAccounts(t, ctx, mgr, t0)
-	ix := chooser.New(mgr)
+	ix := chooser.New(mgr, nil)
 
 	step, err := ix.Begin(ctx, authn.BeginInput{ChooserGroupID: first.ChooserGroupID})
 	if err != nil {
@@ -98,6 +99,64 @@ func TestInteractionBeginListsLiveAccountsForChooserPrompt(t *testing.T) {
 	}
 }
 
+// TestInteractionBeginLabelsRowsItCanAndStillListsRowsItCannot pins the
+// display-name resolution and, more importantly, its failure mode. A
+// session can outlive the user record behind it, and a record can
+// legitimately carry no "name" claim; neither may cost the user the
+// ability to pick that account. The row must survive with the subject
+// as its label.
+func TestInteractionBeginLabelsRowsItCanAndStillListsRowsItCannot(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	mgr := newChooserManager(t, t0)
+	first, second := issueTwoAccounts(t, ctx, mgr, t0)
+
+	// Only the first subject has a record. The second's is absent, as
+	// it would be after the account was deleted while its session was
+	// still live.
+	users := inmem.New()
+	users.PutUser(ctx, &store.User{
+		Subject: "user-a",
+		Claims:  map[string]any{"name": "Alice Example"},
+	})
+	ix := chooser.New(mgr, users.Users())
+
+	step, err := ix.Begin(ctx, authn.BeginInput{ChooserGroupID: first.ChooserGroupID})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	data, ok := step.Prompt.Data.(interaction.ChooserPromptData)
+	if !ok {
+		t.Fatalf("Prompt.Data = %T, want interaction.ChooserPromptData", step.Prompt.Data)
+	}
+	byID := make(map[string]interaction.ChooserAccount, len(data.Accounts))
+	for _, account := range data.Accounts {
+		byID[account.SessionID] = account
+	}
+
+	labelled, ok := byID[first.SessionID]
+	if !ok {
+		t.Fatalf("session %q missing from the chooser: %v", first.SessionID, data.Accounts)
+	}
+	if labelled.DisplayName != "Alice Example" {
+		t.Errorf("DisplayName = %q, want %q: the chooser shows an opaque subject where a name exists",
+			labelled.DisplayName, "Alice Example")
+	}
+
+	unlabelled, ok := byID[second.SessionID]
+	if !ok {
+		t.Fatalf("the account with no user record was dropped from the chooser entirely: %v", data.Accounts)
+	}
+	if unlabelled.DisplayName != "" {
+		t.Errorf("DisplayName = %q for a subject with no record, want empty", unlabelled.DisplayName)
+	}
+	if unlabelled.Subject != "user-b" {
+		t.Errorf("Subject = %q, want user-b: renderers fall back to it and it must survive", unlabelled.Subject)
+	}
+}
+
 func TestInteractionContinueBindsOnlySessionsInActiveChooserGroup(t *testing.T) {
 	t.Parallel()
 
@@ -105,7 +164,7 @@ func TestInteractionContinueBindsOnlySessionsInActiveChooserGroup(t *testing.T) 
 	ctx := context.Background()
 	mgr := newChooserManager(t, t0)
 	first, second := issueTwoAccounts(t, ctx, mgr, t0)
-	ix := chooser.New(mgr)
+	ix := chooser.New(mgr, nil)
 
 	step, err := ix.Continue(ctx, authn.ContinueInput{
 		ChooserGroupID: first.ChooserGroupID,
@@ -148,7 +207,7 @@ func TestInteractionContinueRejectsInvalidSubmissions(t *testing.T) {
 	ctx := context.Background()
 	mgr := newChooserManager(t, t0)
 	first, _ := issueTwoAccounts(t, ctx, mgr, t0)
-	ix := chooser.New(mgr)
+	ix := chooser.New(mgr, nil)
 
 	cases := []struct {
 		name string

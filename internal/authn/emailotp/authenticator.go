@@ -623,6 +623,10 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 				if out.ResetRequired {
 					return interaction.Step{}, ErrResetRequired
 				}
+				// A non-zero stamp is a lock in force: the counter reports
+				// an expired one as zero, so no clock reading is needed
+				// here and none can disagree with the one the transition
+				// was evaluated against.
 				if !out.LockedUntil.IsZero() {
 					return interaction.Step{}, ErrLocked
 				}

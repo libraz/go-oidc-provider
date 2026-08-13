@@ -66,13 +66,19 @@ var (
 // safe for concurrent use after construction.
 type Interaction struct {
 	sessions *sessions.Manager
+	users    store.UserStore
 }
 
-// New builds a [*Interaction] bound to the supplied sessions manager.
-// The manager is the source of truth for chooser-group membership and
-// the executor of the cookie rebind.
-func New(mgr *sessions.Manager) *Interaction {
-	return &Interaction{sessions: mgr}
+// New builds a [*Interaction] bound to the supplied sessions manager
+// and user store. The manager is the source of truth for chooser-group
+// membership and the executor of the cookie rebind; the user store
+// supplies the human-readable label each row is shown under.
+//
+// A nil users store is supported and leaves every row's
+// [interaction.ChooserAccount.DisplayName] empty, which the shipped
+// drivers render as the raw subject.
+func New(mgr *sessions.Manager, users store.UserStore) *Interaction {
+	return &Interaction{sessions: mgr, users: users}
 }
 
 // Name implements [authn.Interaction]. Always returns
@@ -102,11 +108,18 @@ func (i *Interaction) Begin(ctx context.Context, in authn.BeginInput) (interacti
 		return interaction.Step{}, fmt.Errorf("chooser: list accounts: %w", err)
 	}
 	rows := make([]interaction.ChooserAccount, 0, len(accounts))
+	names := make(map[string]string, len(accounts))
 	for _, a := range accounts {
+		name, resolved := names[a.Subject]
+		if !resolved {
+			name = i.displayNameFor(ctx, a.Subject)
+			names[a.Subject] = name
+		}
 		rows = append(rows, interaction.ChooserAccount{
-			SessionID: a.SessionID,
-			Subject:   a.Subject,
-			AuthTime:  a.AuthTime,
+			SessionID:   a.SessionID,
+			Subject:     a.Subject,
+			DisplayName: name,
+			AuthTime:    a.AuthTime,
 		})
 	}
 	return interaction.Step{
@@ -169,6 +182,38 @@ func (i *Interaction) Continue(ctx context.Context, in authn.ContinueInput) (int
 	// The session vanished between the Switch call and the list
 	// call. Treat as expired.
 	return interaction.Step{}, fmt.Errorf("%w: %w", ErrSessionNotInGroup, store.ErrNotFound)
+}
+
+// displayNameClaim is the [store.User.Claims] entry the chooser reads
+// as an account's human-readable label. It is the OIDC Core 1.0 §5.1
+// "name" claim, which is also what the "profile" scope releases at
+// /userinfo — the chooser deliberately shows the same label the RP
+// would see rather than inventing a second notion of display name.
+const displayNameClaim = "name"
+
+// displayNameFor resolves the label the chooser row is shown under.
+//
+// The account chooser exists so a person can tell their own accounts
+// apart, and a subject identifier cannot do that job: it is opaque by
+// construction, and under pairwise projection it is per-client noise.
+// The lookup is therefore part of rendering a usable screen, not a
+// decoration.
+//
+// Every failure mode returns the empty string: an unwired store, a
+// user record that was deleted while its session is still live, a
+// backend fault, or a record with no "name" claim. The drivers fall
+// back to the subject in that case, so a chooser that cannot label a
+// row still lists it — losing the label must never lose the account.
+func (i *Interaction) displayNameFor(ctx context.Context, subject string) string {
+	if i.users == nil || subject == "" {
+		return ""
+	}
+	user, err := i.users.FindBySubject(ctx, subject)
+	if err != nil || user == nil {
+		return ""
+	}
+	name, _ := user.Claims[displayNameClaim].(string)
+	return name
 }
 
 // sessionIDMaxLen caps the submission's session_id field byte length.
