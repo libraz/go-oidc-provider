@@ -65,10 +65,29 @@ func (s *grantStore) read(ctx context.Context, pk string) (item, error) {
 	return s.parent.get(ctx, s.parent.names.grants, pk)
 }
 
+// assertTxOpen refuses a call made through a handle whose transaction
+// has already settled.
+//
+// The lookups below resolve their candidates through the parent store: a
+// secondary index cannot see staged writes, so the enumeration is not
+// routed through the buffer and the buffer's own guard never runs for
+// it. Their per-candidate re-reads are guarded, which means a settled
+// handle can no longer produce a grant — but without this it would still
+// answer "none" with a nil error, and a caller cannot tell that from a
+// subject who has granted nothing. Keeping the two distinguishable after
+// the handle settles is what [store.Tx] asks for; the alternative is a
+// leaked handle that reads as an empty account.
+func (s *grantStore) assertTxOpen() error {
+	return s.tx.assertOpen()
+}
+
 // FindBySubjectClient resolves the single grant a (subject, client)
 // pair holds. The composite attribute exists so this is one index
 // lookup rather than a subject-wide enumeration filtered in memory.
 func (s *grantStore) FindBySubjectClient(ctx context.Context, subject, clientID string) (*store.Grant, error) {
+	if err := s.assertTxOpen(); err != nil {
+		return nil, err
+	}
 	matches, err := s.parent.queryIndex(
 		ctx, s.parent.names.grants, indexByClient, attrSubjectClient, subjectClientKey(subject, clientID),
 	)
@@ -97,6 +116,9 @@ func (s *grantStore) FindBySubjectClient(ctx context.Context, subject, clientID 
 }
 
 func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*store.Grant, error) {
+	if err := s.assertTxOpen(); err != nil {
+		return nil, err
+	}
 	matches, err := s.parent.queryIndex(
 		ctx, s.parent.names.grants, indexBySubject, attrSubject, subject,
 	)
@@ -124,6 +146,57 @@ func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*stor
 	return out, nil
 }
 
+// RevokeByClient implements [store.RevokeByClient]. The dynamic
+// registration cascade calls it after a client is deleted.
+//
+// A grant is the record of a consent given to one client, and it carries
+// no revoked flag, so the cascade removes the row outright — the same
+// shape the in-memory and SQL adapters take, and what "subsequent
+// lookups treat the records as absent" means for this substore. Without
+// it the rows would outlive the client indefinitely: the grants table is
+// the one table with no TTL.
+//
+// The enumeration reads by_client_subject rather than by_client. The
+// latter is keyed on the composite (subject, client) attribute that
+// serves [grantStore.FindBySubjectClient] and cannot be queried on the
+// client alone. Each candidate is re-read by primary key before it is
+// removed, because the index is eventually consistent and a stale match
+// would otherwise delete a row that no longer belongs to this client.
+func (s *grantStore) RevokeByClient(ctx context.Context, clientID string) error {
+	if err := s.assertTxOpen(); err != nil {
+		return err
+	}
+	if clientID == "" {
+		return nil
+	}
+	matches, err := s.parent.queryIndex(
+		ctx, s.parent.names.grants, indexByClientSubject, attrClientID, clientID,
+	)
+	if err != nil {
+		return wrapErr("grants.RevokeByClient", err)
+	}
+	for _, match := range matches {
+		id := readS(match, attrPK)
+		if id == "" {
+			continue
+		}
+		g, err := s.Find(ctx, id)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if g.ClientID != clientID {
+			continue
+		}
+		if err := s.Delete(ctx, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *grantStore) Delete(ctx context.Context, id string) error {
 	if s.tx != nil {
 		return s.tx.delete(s.parent.names.grants, id)
@@ -142,6 +215,9 @@ func (s *grantStore) Delete(ctx context.Context, id string) error {
 // at startup to decide whether a fresh deployment can adopt a subject
 // mode, so a one-item scan is the right cost.
 func (s *grantStore) HasAny(ctx context.Context) (bool, error) {
+	if err := s.assertTxOpen(); err != nil {
+		return false, err
+	}
 	found, err := s.parent.scanAll(ctx, s.parent.names.grants, 1)
 	if err != nil {
 		return false, wrapErr("grants.HasAny", err)
@@ -158,6 +234,9 @@ func (s *grantStore) ListClientIDsBySubject(
 	subject, cursor string,
 	limit int,
 ) (store.GrantClientPage, error) {
+	if err := s.assertTxOpen(); err != nil {
+		return store.GrantClientPage{}, err
+	}
 	if limit <= 0 {
 		return store.GrantClientPage{}, errors.New("oidcdynamo: grant client page limit must be positive")
 	}
@@ -203,6 +282,9 @@ func (s *grantStore) ListSubjectsByClient(
 	clientID, cursor string,
 	limit int,
 ) (store.GrantSubjectPage, error) {
+	if err := s.assertTxOpen(); err != nil {
+		return store.GrantSubjectPage{}, err
+	}
 	if limit <= 0 {
 		return store.GrantSubjectPage{}, errors.New("oidcdynamo: grant subject page limit must be positive")
 	}
@@ -305,4 +387,5 @@ var (
 	_ store.GrantStore         = (*grantStore)(nil)
 	_ store.GrantClientLister  = (*grantStore)(nil)
 	_ store.GrantSubjectLister = (*grantStore)(nil)
+	_ store.RevokeByClient     = (*grantStore)(nil)
 )

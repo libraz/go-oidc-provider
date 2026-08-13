@@ -30,7 +30,7 @@ func (s *interactionStore) Save(ctx context.Context, i *store.Interaction) error
 	if err != nil {
 		return err
 	}
-	if err := s.parent.put(ctx, s.parent.names.interactions, entry); err != nil {
+	if err := s.parent.overwrite(ctx, s.parent.names.interactions, entry); err != nil {
 		return wrapErr("interactions.Save", err)
 	}
 	return nil

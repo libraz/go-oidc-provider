@@ -214,29 +214,16 @@ func approveConsent(
 	if rotated := findCookie(prior.Cookies(), csrfCookieName); rotated != nil {
 		csrf = rotated
 	}
-	scopes := requestedScopes(t, envelope)
+	// Read the approved set out of the prompt the OP rendered. An
+	// empty payload is an approval of nothing, so a helper that
+	// misreads the envelope does not fail here — it succeeds with a
+	// scopeless code, and the failure surfaces later as a token
+	// response with no id_token.
+	approved := testkit.ApprovedScopesFrom(t, envelope)
 	_ = prior.Body.Close()
 
 	return postInteraction(t, httpClient, interactionURL, origin, csrf, stateRef,
-		map[string]string{"approved_scopes": strings.Join(scopes, " ")})
-}
-
-func requestedScopes(t *testing.T, envelope map[string]any) []string {
-	t.Helper()
-	data, _ := envelope["data"].(map[string]any)
-	raw, _ := data["scopes"].([]any)
-	out := make([]string, 0, len(raw))
-	for _, entry := range raw {
-		switch v := entry.(type) {
-		case string:
-			out = append(out, v)
-		case map[string]any:
-			if name, ok := v["name"].(string); ok {
-				out = append(out, name)
-			}
-		}
-	}
-	return out
+		map[string]string{"approved_scopes": approved})
 }
 
 func exchangeCode(t *testing.T, p *testkit.Provider, code, verifier string) map[string]any {

@@ -148,7 +148,7 @@ func (s *ratStore) Put(ctx context.Context, t *store.RegistrationAccessToken) er
 		return err
 	}
 	entry.set(attrTokenHash, t.HashedValue)
-	if err := s.parent.put(ctx, s.parent.names.rats, entry); err != nil {
+	if err := s.parent.overwrite(ctx, s.parent.names.rats, entry); err != nil {
 		return wrapErr("rats.Put", err)
 	}
 	return nil

@@ -167,7 +167,7 @@ func (s *grantRevocationStore) RevokeJTI(ctx context.Context, r store.RevokedJTI
 	if s.tx != nil {
 		return s.tx.put(s.parent.names.grantTombstones, pk, entry)
 	}
-	if err := s.parent.put(ctx, s.parent.names.grantTombstones, entry); err != nil {
+	if err := s.parent.overwrite(ctx, s.parent.names.grantTombstones, entry); err != nil {
 		return wrapErr("grantRevocations.RevokeJTI", err)
 	}
 	return nil

@@ -27,24 +27,19 @@ func (s *cibaRequestStore) Save(ctx context.Context, req *store.CIBARequest) err
 	if err != nil {
 		return err
 	}
-	placed, err := s.parent.putIfAbsent(ctx, s.parent.names.cibaRequests, entry)
+	// An expired record no longer identifies anything redeemable, so it
+	// releases its id to a fresh request; a live one is a collision. The
+	// takeover is part of that decision and rides the same conditional
+	// write, so two requests landing on one expired record cannot both be
+	// told they own the id.
+	placed, err := s.parent.putIfKeyFree(ctx, s.parent.names.cibaRequests, entry)
 	if err != nil {
 		return wrapErr("cibaRequests.Save", err)
 	}
-	if placed {
-		return nil
+	if !placed {
+		return store.ErrAlreadyExists
 	}
-	// An expired record no longer identifies anything redeemable, so it
-	// releases its id to a fresh request; a live one is a collision.
-	if _, err := s.findLive(ctx, pk); errors.Is(err, store.ErrNotFound) {
-		if err := s.parent.put(ctx, s.parent.names.cibaRequests, entry); err != nil {
-			return wrapErr("cibaRequests.Save.replaceExpired", err)
-		}
-		return nil
-	} else if err != nil {
-		return err
-	}
-	return store.ErrAlreadyExists
+	return nil
 }
 
 func (s *cibaRequestStore) FindByAuthReqID(ctx context.Context, authReqID string) (*store.CIBARequest, error) {

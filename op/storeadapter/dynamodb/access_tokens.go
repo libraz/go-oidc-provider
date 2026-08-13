@@ -105,8 +105,14 @@ func (s *accessTokenStore) retire(ctx context.Context, pk string) error {
 //
 // Inside a transaction the enumeration reads the index while each
 // retirement is buffered, so the cascade covers the committed set and
-// costs one of the transaction's actions per token.
+// costs one of the transaction's actions per token. The enumeration is
+// outside the buffer, so the settled-handle guard is explicit: a grant
+// with no registered tokens must not answer a leaked handle with a
+// count of zero and no error.
 func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
+	if err := s.tx.assertOpen(); err != nil {
+		return 0, err
+	}
 	matches, err := s.parent.queryIndex(
 		ctx, s.parent.names.accessTokens, indexByGrant, attrGrantID, grantID,
 	)
@@ -128,6 +134,38 @@ func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (i
 		count++
 	}
 	return count, nil
+}
+
+// RevokeByClient implements [store.RevokeByClient]. The dynamic
+// registration cascade calls it after a client is deleted so the
+// registry rows shadowing that client's outstanding JWT access tokens
+// are retired at once rather than each waiting out its own expiry.
+//
+// The settled-handle guard precedes the empty-client short-circuit, so a
+// leaked handle reports the closed transaction whatever it was passed.
+func (s *accessTokenStore) RevokeByClient(ctx context.Context, clientID string) error {
+	if err := s.tx.assertOpen(); err != nil {
+		return err
+	}
+	if clientID == "" {
+		return nil
+	}
+	matches, err := s.parent.queryIndex(
+		ctx, s.parent.names.accessTokens, indexByClient, attrClientID, clientID,
+	)
+	if err != nil {
+		return wrapErr("accessTokens.RevokeByClient", err)
+	}
+	for _, match := range matches {
+		pk := readS(match, attrPK)
+		if pk == "" {
+			continue
+		}
+		if err := s.retire(ctx, pk); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return wrapErr("accessTokens.RevokeByClient", err)
+		}
+	}
+	return nil
 }
 
 // GC deletes records that expired before cutoff. DynamoDB's own TTL
@@ -214,4 +252,7 @@ func (s *Store) gcExpired(ctx context.Context, table string, cutoff time.Time, o
 	return deleted, nil
 }
 
-var _ store.AccessTokenRegistry = (*accessTokenStore)(nil)
+var (
+	_ store.AccessTokenRegistry = (*accessTokenStore)(nil)
+	_ store.RevokeByClient      = (*accessTokenStore)(nil)
+)

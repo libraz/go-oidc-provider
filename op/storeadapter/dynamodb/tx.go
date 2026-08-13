@@ -33,6 +33,14 @@ import (
 // justified, so a concurrent modification makes the commit fail rather
 // than silently overwrite.
 
+// errTxClosed is what the buffer reports once the transaction has
+// settled. [store.Tx] requires every call made through a committed or
+// rolled-back handle to fail with an error satisfying errors.Is(err,
+// [store.ErrTxRequired]): holding onto the handle is a programming
+// error, and an embedder that cannot tell it from a transport fault
+// retries it forever.
+var errTxClosed = fmt.Errorf("oidcdynamo: transaction already closed: %w", store.ErrTxRequired)
+
 type txOpKind int
 
 const (
@@ -89,6 +97,30 @@ func newTxBuffer(parent *Store) *txBuffer {
 
 func bufferKey(table, pk string) string { return table + "\x00" + pk }
 
+// assertOpen refuses a call made through a handle whose transaction has
+// already settled. The nil receiver is the substore handle that was
+// never bound to a transaction at all, which is always open.
+//
+// Every operation that reaches the buffer is guarded on its own, so this
+// exists for the operations that do not: a bulk revocation enumerates
+// its targets through the parent store, because a secondary index cannot
+// see staged writes, and only then acts on each candidate through the
+// buffer. The per-candidate writes carry the guard, so such an operation
+// reports the sentinel whenever its enumeration found something — and
+// returns silent success when the index matched nothing. Those two
+// answers have to be the same one. A caller holding a leaked handle is
+// otherwise told the revocation completed, which is exactly the reading
+// [store.Tx] requires a settled handle never to produce.
+//
+// Callers put it first, ahead of argument validation, so a settled
+// handle reports the closed-handle sentinel whatever it was passed.
+func (b *txBuffer) assertOpen() error {
+	if b != nil && b.settled {
+		return errTxClosed
+	}
+	return nil
+}
+
 // record stages one action, replacing whatever the transaction had
 // staged for the same item.
 //
@@ -100,7 +132,7 @@ func bufferKey(table, pk string) string { return table + "\x00" + pk }
 // from reading the rest of a chain it can no longer retire.
 func (b *txBuffer) record(op *txOp) error {
 	if b.settled {
-		return store.ErrTxRequired
+		return errTxClosed
 	}
 	k := bufferKey(op.table, op.pk)
 	if _, ok := b.ops[k]; !ok {
@@ -139,7 +171,16 @@ func (b *txBuffer) delete(table, pk string) error {
 // read to the write it justifies. Re-asserting the observed state on
 // commit is the closest equivalent: a writer that landed in between
 // aborts the transaction instead of having its work overwritten.
+//
+// A settled transaction is refused here as well as at the staging
+// paths. This is the one place the buffer reaches the live table, so
+// without the guard a lookup made through a handle the caller already
+// committed would answer from the table with no error at all — telling
+// the caller it is still inside a transaction that no longer exists.
 func (b *txBuffer) observe(ctx context.Context, table, pk string) (item, error) {
+	if b.settled {
+		return nil, errTxClosed
+	}
 	k := bufferKey(table, pk)
 	if base, ok := b.seen[k]; ok {
 		return base, nil
@@ -162,7 +203,7 @@ func (b *txBuffer) observe(ctx context.Context, table, pk string) (item, error) 
 // being replaced by a write that never saw it.
 func (b *txBuffer) putGuarded(ctx context.Context, table, pk string, i item, guarded ...string) error {
 	if b.settled {
-		return store.ErrTxRequired
+		return errTxClosed
 	}
 	if op, ok := b.ops[bufferKey(table, pk)]; ok && op.kind != txDelete {
 		// A second write to an item this transaction already staged joins
@@ -195,7 +236,7 @@ func (b *txBuffer) putGuarded(ctx context.Context, table, pk string, i item, gua
 // earlier one added to it.
 func (b *txBuffer) putVersioned(ctx context.Context, table, pk string, i item, attr string) error {
 	if b.settled {
-		return store.ErrTxRequired
+		return errTxClosed
 	}
 	if op, ok := b.ops[bufferKey(table, pk)]; ok && op.kind != txDelete {
 		if version := op.item[attr]; version != nil {
@@ -220,7 +261,7 @@ func (b *txBuffer) putVersioned(ctx context.Context, table, pk string, i item, a
 // commit aborts the transaction instead of double-spending the record.
 func (b *txBuffer) stampConsumed(ctx context.Context, table, pk string, at time.Time) error {
 	if b.settled {
-		return store.ErrTxRequired
+		return errTxClosed
 	}
 	base, err := b.get(ctx, table, pk)
 	if err != nil {
@@ -243,7 +284,7 @@ func (b *txBuffer) stampConsumed(ctx context.Context, table, pk string, at time.
 // makes a missing record fail the transaction instead of creating one.
 func (b *txBuffer) attach(ctx context.Context, table, pk, attr string, value types.AttributeValue) error {
 	if b.settled {
-		return store.ErrTxRequired
+		return errTxClosed
 	}
 	if op, ok := b.ops[bufferKey(table, pk)]; ok {
 		if op.kind == txDelete {
@@ -264,7 +305,15 @@ func (b *txBuffer) attach(ctx context.Context, table, pk, attr string, value typ
 // get resolves a read through the buffer first so a caller observes its
 // own uncommitted writes, then falls back to the transaction's read set,
 // which reads the table once and remembers what it saw.
+//
+// Every substore read bound to a transaction lands here, so the settle
+// check is what makes a lookup through a committed handle fail the way
+// [store.Tx] requires rather than serving the staged item the buffer
+// still holds.
 func (b *txBuffer) get(ctx context.Context, table, pk string) (item, error) {
+	if b.settled {
+		return nil, errTxClosed
+	}
 	if op, ok := b.ops[bufferKey(table, pk)]; ok {
 		if op.kind == txDelete {
 			return nil, store.ErrNotFound
@@ -291,7 +340,7 @@ func cloneItem(src item) item {
 
 func (b *txBuffer) commit(ctx context.Context) error {
 	if b.settled {
-		return store.ErrTxRequired
+		return errTxClosed
 	}
 	b.settled = true
 	if len(b.order) == 0 {

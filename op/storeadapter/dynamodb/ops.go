@@ -121,7 +121,17 @@ func (s *Store) expired(found item) bool {
 	return !expiresAt.IsZero() && expiresAt.Before(s.now())
 }
 
-func (s *Store) put(ctx context.Context, table string, i item) error {
+// overwrite replaces whatever the key holds. It is the adapter's only
+// write that asserts nothing, so it is confined to records whose holder
+// is not itself a decision: a metadata value, a directory entry, a
+// session its own owner rewrites.
+//
+// A write that decides who holds a key — a replay marker, an identifier
+// claim, a state transition — states that decision as a condition
+// instead. Reading a record, judging it, and overwriting it lets two
+// callers reach the same judgement and both succeed, which is exactly
+// the outcome a single-use guarantee exists to prevent.
+func (s *Store) overwrite(ctx context.Context, table string, i item) error {
 	_, err := s.api.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(table),
 		Item:      i,
@@ -138,6 +148,15 @@ func (s *Store) put(ctx context.Context, table string, i item) error {
 // its key indefinitely.
 const freeKeyCondition = "attribute_not_exists(#pk) OR (#expires <> :never AND #expires < :now)"
 
+// freeKeyAtExpiryCondition is [freeKeyCondition] under the inclusive
+// expiry bound [store.ConsumedJTIStore] pins for replay markers: a
+// record is free from its own expiry instant onwards rather than after
+// it. The two bounds differ only at that instant, and a substore whose
+// reads report a marker as expired there has to let a write take the
+// key there too — otherwise a caller is told the jti is free and is
+// still refused as a replay.
+const freeKeyAtExpiryCondition = "attribute_not_exists(#pk) OR (#expires <> :never AND #expires <= :now)"
+
 func freeKeyNames() map[string]string {
 	return map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
 }
@@ -149,10 +168,24 @@ func (s *Store) freeKeyValues() map[string]types.AttributeValue {
 // putIfKeyFree writes an item onto a key nothing live holds, reporting
 // whether the write landed. See [freeKeyCondition].
 func (s *Store) putIfKeyFree(ctx context.Context, table string, i item) (bool, error) {
+	return s.putUnderFreeKey(ctx, table, i, freeKeyCondition)
+}
+
+// putIfKeyFreeAtExpiry is [Store.putIfKeyFree] under the inclusive
+// expiry bound. See [freeKeyAtExpiryCondition].
+func (s *Store) putIfKeyFreeAtExpiry(ctx context.Context, table string, i item) (bool, error) {
+	return s.putUnderFreeKey(ctx, table, i, freeKeyAtExpiryCondition)
+}
+
+// putUnderFreeKey is the single write behind the free-key guards:
+// taking a key from a record that no longer holds it is one conditional
+// write, so the judgement and the write cannot be separated by a
+// competing caller.
+func (s *Store) putUnderFreeKey(ctx context.Context, table string, i item, condition string) (bool, error) {
 	_, err := s.api.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:                 aws.String(table),
 		Item:                      i,
-		ConditionExpression:       aws.String(freeKeyCondition),
+		ConditionExpression:       aws.String(condition),
 		ExpressionAttributeNames:  freeKeyNames(),
 		ExpressionAttributeValues: s.freeKeyValues(),
 	})

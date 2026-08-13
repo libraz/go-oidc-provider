@@ -177,7 +177,7 @@ func (s *Store) PutUser(ctx context.Context, u *store.User) error {
 			i[attrCodeHash] = avB(hash)
 		}
 	}
-	if err := s.put(ctx, s.names.users, i); err != nil {
+	if err := s.overwrite(ctx, s.names.users, i); err != nil {
 		return wrapErr("users.PutUser", err)
 	}
 	return nil
@@ -207,7 +207,7 @@ func (s *Store) PutUserWithPassword(
 	i.set(attrUsername, username)
 	i[attrCodeHash] = avB(passwordHash)
 	if username == "" {
-		if err := s.put(ctx, s.names.users, i); err != nil {
+		if err := s.overwrite(ctx, s.names.users, i); err != nil {
 			return wrapErr("users.PutUserWithPassword", err)
 		}
 		return nil

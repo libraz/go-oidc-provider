@@ -43,6 +43,159 @@ func race(attempt func(i int) error) []error {
 	return errs
 }
 
+// newMovingClockStore is [newIsolatedStore] with a clock the calling
+// test can advance. Reaching the branch where a write takes a key from
+// an expired record means aging that record past its own expiry, and
+// the clock the shared factory hands out is fixed.
+func newMovingClockStore(t *testing.T, prefix string) (*oidcdynamo.Store, *movableClock) {
+	t.Helper()
+	client := newEmulatorClient(t)
+	clock := &movableClock{now: contract.Reference}
+	s, err := oidcdynamo.New(client,
+		oidcdynamo.WithTablePrefix(prefix),
+		oidcdynamo.WithClock(clock),
+	)
+	if err != nil {
+		t.Fatalf("oidcdynamo.New: %v", err)
+	}
+	if err := s.CreateTables(t.Context()); err != nil {
+		t.Fatalf("CreateTables: %v", err)
+	}
+	disableEmulatorTTL(t, client, s)
+	return s, clock
+}
+
+// TestConsumedJTIs_ConcurrentMarkOverExpiredMarkerAdmitsOne pins the
+// guarantee the replay store exists for: however many callers present
+// one jti at once, exactly one is told it marked it.
+//
+// The case aims at the stale-marker branch, which is where the property
+// is easiest to lose. DynamoDB reclaims an expired item asynchronously,
+// so a marker whose expiry has passed is routinely still in the table
+// and a fresh jti that collides with it has to be able to take the key.
+// Deciding that from a read and then writing lets every racer read the
+// same expired marker and every racer succeed — the same DPoP proof or
+// the same private_key_jwt assertion accepted twice over.
+func TestConsumedJTIs_ConcurrentMarkOverExpiredMarkerAdmitsOne(t *testing.T) {
+	t.Parallel()
+
+	s, clock := newMovingClockStore(t, "jtirace_")
+	ctx := t.Context()
+	jtis := s.ConsumedJTIs()
+
+	const jti = "jti-stale-race"
+	const ttl = time.Hour
+	seeded := clock.now.Add(ttl)
+	if err := jtis.Mark(ctx, jti, seeded); err != nil {
+		t.Fatalf("seed Mark: %v", err)
+	}
+	// The bound is inclusive, so the marker is stale at its own
+	// expiresAt: every racer below finds a key it is entitled to take.
+	clock.now = seeded
+	renewed := clock.now.Add(ttl)
+
+	errs := race(func(int) error { return jtis.Mark(ctx, jti, renewed) })
+
+	winner := -1
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			if winner >= 0 {
+				t.Fatalf("racers %d and %d both marked jti %q: the same token was accepted twice",
+					winner, i, jti)
+			}
+			winner = i
+		case errors.Is(err, store.ErrAlreadyConsumed):
+		default:
+			t.Fatalf("Mark racer %d: want ErrAlreadyConsumed, got %v", i, err)
+		}
+	}
+	if winner < 0 {
+		t.Fatalf("every Mark was refused, so a fresh jti can never take a stale marker's key: %v", errs)
+	}
+
+	// The generation the winner wrote is live, so the next presentation
+	// of the jti is a replay rather than another takeover.
+	marked, err := jtis.Has(ctx, jti)
+	if err != nil {
+		t.Fatalf("Has after the race: %v", err)
+	}
+	if !marked {
+		t.Error("the jti reads as unmarked after a Mark reported success")
+	}
+	if err := jtis.Mark(ctx, jti, renewed); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Errorf("Mark after the race = %v, want ErrAlreadyConsumed", err)
+	}
+}
+
+// TestCIBA_ConcurrentSaveOverExpiredRequestAdmitsOne pins the same
+// property for the backchannel request id. An expired record releases
+// its id, but two requests must not both be told they own it: the
+// authentication device approves one record, and the client polling the
+// other would wait out its lifetime against a record nobody can reach.
+func TestCIBA_ConcurrentSaveOverExpiredRequestAdmitsOne(t *testing.T) {
+	t.Parallel()
+
+	s, clock := newMovingClockStore(t, "cibarace_")
+	ctx := t.Context()
+	reqs := s.CIBARequests()
+
+	const authReqID = "ciba-stale-race"
+	seeded := clock.now.Add(time.Hour)
+	if err := reqs.Save(ctx, cibaRequest(authReqID, "client-seed", clock.now, seeded)); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	// CIBA records hold their id up to and including their expiry
+	// instant, so the racers start one tick past it.
+	clock.now = seeded.Add(time.Nanosecond)
+
+	client := func(i int) string { return fmt.Sprintf("client-race-%d", i) }
+	errs := race(func(i int) error {
+		return reqs.Save(ctx, cibaRequest(authReqID, client(i), clock.now, clock.now.Add(time.Hour)))
+	})
+
+	winner := -1
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			if winner >= 0 {
+				t.Fatalf("racers %d and %d both claimed auth_req_id %q", winner, i, authReqID)
+			}
+			winner = i
+		case errors.Is(err, store.ErrAlreadyExists):
+		default:
+			t.Fatalf("Save racer %d: want ErrAlreadyExists, got %v", i, err)
+		}
+	}
+	if winner < 0 {
+		t.Fatalf("no request took the expired record's id: %v", errs)
+	}
+
+	// The stored record belongs to the winner, so the poll that is told
+	// to wait is the one the authentication device can approve.
+	got, err := reqs.FindByAuthReqID(ctx, authReqID)
+	if err != nil {
+		t.Fatalf("FindByAuthReqID after the race: %v", err)
+	}
+	if got.ClientID != client(winner) {
+		t.Errorf("stored record belongs to %q, want the client whose Save succeeded (%q)",
+			got.ClientID, client(winner))
+	}
+}
+
+func cibaRequest(id, clientID string, issuedAt, expiresAt time.Time) *store.CIBARequest {
+	return &store.CIBARequest{
+		ID:        id,
+		ClientID:  clientID,
+		Subject:   "sub-ciba-race",
+		Scope:     []string{"openid"},
+		Interval:  5 * time.Second,
+		Status:    store.CIBARequestStatusPending,
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
+	}
+}
+
 // TestGrant_ConcurrentTransactionsKeepEveryAmendment pins the version
 // guard grant writes carry.
 //

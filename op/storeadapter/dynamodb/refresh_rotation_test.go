@@ -95,6 +95,64 @@ func TestRefreshRotation_RejectedRetryCacheLeavesNoSuccessor(t *testing.T) {
 	})
 }
 
+// TestRefreshRotation_RetryResponseLapsesWithPredecessor pins the
+// retention bound on the sealed grace-window response: it may be kept
+// no longer than the predecessor's own refresh-token lifetime.
+//
+// The contract harness pins the same rule, but reaches the live-to-
+// expired transition only for backends that hand it a movable clock;
+// the shared DynamoDB factory pins one instant per suite, so the
+// transition is covered here. It is the half that matters most: a cache
+// which simply outlives its predecessor still answers every other retry
+// case correctly while re-delivering a token set for a credential the
+// endpoint has already stopped accepting.
+//
+// The successor deliberately outlives the predecessor, so the assertion
+// distinguishes the predecessor's own lifetime from the chain's.
+func TestRefreshRotation_RetryResponseLapsesWithPredecessor(t *testing.T) {
+	t.Parallel()
+
+	s, clock := newMovingClockStore(t, "rotlapse_")
+	ctx := t.Context()
+	refreshes := s.RefreshTokens()
+	retry := requireRetryStore(t, refreshes)
+
+	predecessor := newRotationToken("rt-lapse-predecessor", nil)
+	if err := refreshes.Save(ctx, predecessor); err != nil {
+		t.Fatalf("Save predecessor: %v", err)
+	}
+	if _, err := refreshes.Consume(ctx, predecessor.ID); err != nil {
+		t.Fatalf("Consume predecessor: %v", err)
+	}
+	successor := newRotationToken("rt-lapse-successor", &predecessor.ID)
+	successor.ExpiresAt = contract.Reference.Add(6 * time.Hour)
+	sealed := []byte("sealed-lapse-response")
+	if err := retry.SaveRotationWithRetry(ctx, successor, sealed); err != nil {
+		t.Fatalf("SaveRotationWithRetry: %v", err)
+	}
+
+	// Inside the predecessor's lifetime the cached response is what the
+	// grace window exists to deliver, so the bound must not truncate it
+	// early.
+	got, err := retry.LoadRetryResponse(ctx, predecessor.ID)
+	if err != nil {
+		t.Fatalf("LoadRetryResponse inside the predecessor's lifetime: %v", err)
+	}
+	if !bytes.Equal(got, sealed) {
+		t.Fatalf("LoadRetryResponse = %q, want %q", got, sealed)
+	}
+
+	// One tick past the predecessor's expiry the response is gone, while
+	// the successor it rotated to is untouched.
+	clock.now = predecessor.ExpiresAt.Add(time.Nanosecond)
+	if _, err := retry.LoadRetryResponse(ctx, predecessor.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("LoadRetryResponse past the predecessor's expiry = %v, want ErrNotFound", err)
+	}
+	if _, err := refreshes.Find(ctx, successor.ID); err != nil {
+		t.Errorf("Find successor after the predecessor lapsed: %v", err)
+	}
+}
+
 // TestRefreshRotation_TxCommitsSuccessorAndCacheTogether covers the
 // same guarantee on the path where the token endpoint owns the
 // transaction: both writes are buffered, so neither reaches the table

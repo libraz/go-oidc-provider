@@ -29,7 +29,7 @@ func (s *metadataStore) Get(ctx context.Context, key string) (string, error) {
 func (s *metadataStore) Set(ctx context.Context, key, value string) error {
 	i := newItem(key)
 	i[attrValue] = avS(value)
-	if err := s.parent.put(ctx, s.parent.names.metadata, i); err != nil {
+	if err := s.parent.overwrite(ctx, s.parent.names.metadata, i); err != nil {
 		return wrapErr("metadata.Set", err)
 	}
 	return nil

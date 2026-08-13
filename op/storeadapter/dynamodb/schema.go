@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -248,11 +249,16 @@ func (s *Store) TableDefinitions() []TableDefinition {
 			AttributeDefinitions: stringAttr(attrPK),
 		},
 		{
+			// by_grant serves RevokeByGrant and by_client serves
+			// RevokeByClient, the same pair the opaque access-token
+			// table carries: both formats are retired by grant on a
+			// code replay and by client on a registration delete.
 			Name:                 n.accessTokens,
 			KeySchema:            keySchema(attrPK),
-			AttributeDefinitions: stringAttr(attrPK, attrGrantID),
+			AttributeDefinitions: stringAttr(attrPK, attrGrantID, attrClientID),
 			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
 				gsi(indexByGrant, attrGrantID),
+				gsi(indexByClient, attrClientID),
 			},
 			TTLAttribute: attrTTL,
 		},
@@ -342,7 +348,10 @@ func (s *Store) TableDefinitions() []TableDefinition {
 // deployments provision through their own infrastructure tooling from
 // [Store.TableDefinitions].
 //
-// Existing tables are left untouched, so the call is safe to repeat.
+// The call is safe to repeat. An existing table keeps its data and its
+// TTL configuration; only secondary indexes it is missing are added, so
+// a table provisioned by an older version of the adapter converges on
+// the index set the substores query today.
 func (s *Store) CreateTables(ctx context.Context) error {
 	for _, def := range s.TableDefinitions() {
 		if err := s.createTable(ctx, def); err != nil {
@@ -363,7 +372,7 @@ func (s *Store) createTable(ctx context.Context, def TableDefinition) error {
 	if err != nil {
 		var inUse *types.ResourceInUseException
 		if errors.As(err, &inUse) {
-			return nil
+			return s.reconcileIndexes(ctx, def)
 		}
 		return fmt.Errorf("oidcdynamo: create table %s: %w", def.Name, err)
 	}
@@ -371,6 +380,127 @@ func (s *Store) createTable(ctx context.Context, def TableDefinition) error {
 		return err
 	}
 	return s.enableTTL(ctx, def)
+}
+
+// reconcileIndexes adds the secondary indexes an already-existing table
+// does not have yet.
+//
+// The index set grows as substores gain access patterns, and a query
+// against an index the table lacks fails outright rather than reporting
+// nothing to do. Returning early on ResourceInUseException would leave
+// exactly that: a table that reads as provisioned while the cascade that
+// depends on the new index cannot run. Reconciling here means the
+// definitions in [Store.TableDefinitions] are the single description of
+// what the adapter queries, for a fresh table and an old one alike.
+//
+// Indexes are added one per UpdateTable call and each is waited out:
+// DynamoDB accepts a single index creation at a time and refuses the
+// next while one is still backfilling.
+func (s *Store) reconcileIndexes(ctx context.Context, def TableDefinition) error {
+	for _, want := range def.GlobalSecondaryIndexes {
+		name := aws.ToString(want.IndexName)
+		status, err := s.indexStatus(ctx, def.Name, name)
+		if err != nil {
+			return err
+		}
+		if status == types.IndexStatusActive {
+			continue
+		}
+		if status == "" {
+			if err := s.addIndex(ctx, def, want); err != nil {
+				return err
+			}
+			continue
+		}
+		// Another process is already creating it.
+		if err := s.waitForIndex(ctx, def.Name, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) addIndex(ctx context.Context, def TableDefinition, idx types.GlobalSecondaryIndex) error {
+	name := aws.ToString(idx.IndexName)
+	_, err := s.api.UpdateTable(ctx, &dynamodb.UpdateTableInput{
+		TableName: aws.String(def.Name),
+		// Only the new index's key attributes may be declared here:
+		// UpdateTable rejects a definition the update does not use.
+		AttributeDefinitions: indexKeyAttributes(def, idx),
+		GlobalSecondaryIndexUpdates: []types.GlobalSecondaryIndexUpdate{{
+			Create: &types.CreateGlobalSecondaryIndexAction{
+				IndexName:  idx.IndexName,
+				KeySchema:  idx.KeySchema,
+				Projection: idx.Projection,
+			},
+		}},
+	})
+	if err != nil {
+		var inUse *types.ResourceInUseException
+		if !errors.As(err, &inUse) {
+			return fmt.Errorf("oidcdynamo: add index %s to table %s: %w", name, def.Name, err)
+		}
+		// A concurrent CreateTables call won the race; wait on its work
+		// rather than reporting a conflict the caller cannot act on.
+	}
+	return s.waitForIndex(ctx, def.Name, name)
+}
+
+// indexKeyAttributes narrows a table's attribute definitions to the ones
+// idx keys on, preserving the declared scalar types.
+func indexKeyAttributes(def TableDefinition, idx types.GlobalSecondaryIndex) []types.AttributeDefinition {
+	out := make([]types.AttributeDefinition, 0, len(idx.KeySchema))
+	for _, k := range idx.KeySchema {
+		for _, a := range def.AttributeDefinitions {
+			if aws.ToString(a.AttributeName) == aws.ToString(k.AttributeName) {
+				out = append(out, a)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// indexStatus reports the status DynamoDB holds for one index of a
+// table, or the empty status when the table carries no such index.
+func (s *Store) indexStatus(ctx context.Context, table, index string) (types.IndexStatus, error) {
+	described, err := s.api.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(table),
+	})
+	if err != nil {
+		return "", fmt.Errorf("oidcdynamo: describe table %s: %w", table, err)
+	}
+	if described.Table == nil {
+		return "", nil
+	}
+	for _, have := range described.Table.GlobalSecondaryIndexes {
+		if aws.ToString(have.IndexName) == index {
+			return have.IndexStatus, nil
+		}
+	}
+	return "", nil
+}
+
+// waitForIndex blocks until an index finishes backfilling. The bound is
+// a poll count rather than a deadline because the adapter is a
+// sub-module with no access to the OP's clock abstraction, and the
+// caller's context still cuts the wait short.
+func (s *Store) waitForIndex(ctx context.Context, table, index string) error {
+	for range indexPollAttempts {
+		status, err := s.indexStatus(ctx, table, index)
+		if err != nil {
+			return err
+		}
+		if status == types.IndexStatusActive {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("oidcdynamo: wait for index %s on table %s: %w", index, table, ctx.Err())
+		case <-time.After(indexPollInterval):
+		}
+	}
+	return fmt.Errorf("oidcdynamo: index %s on table %s did not become active", index, table)
 }
 
 func (s *Store) waitForTable(ctx context.Context, name string) error {

@@ -92,8 +92,14 @@ func (s *opaqueAccessTokenStore) retire(ctx context.Context, pk string) error {
 // RevokeByGrant retires every token of a grant and reports how many it
 // touched. Inside a transaction the enumeration reads the index while
 // each retirement is buffered, so the cascade covers the committed set
-// and costs one of the transaction's actions per token.
+// and costs one of the transaction's actions per token. The enumeration
+// is outside the buffer, so the settled-handle guard is explicit: a
+// grant with no tokens must not answer a leaked handle with a count of
+// zero and no error.
 func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
+	if err := s.tx.assertOpen(); err != nil {
+		return 0, err
+	}
 	matches, err := s.parent.queryIndex(
 		ctx, s.parent.names.opaqueAccessTokens, indexByGrant, attrGrantID, grantID,
 	)
@@ -119,7 +125,13 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID stri
 
 // RevokeByClient implements [store.RevokeByClient] for the dynamic
 // registration cascade.
+//
+// The settled-handle guard precedes the empty-client short-circuit, so a
+// leaked handle reports the closed transaction whatever it was passed.
 func (s *opaqueAccessTokenStore) RevokeByClient(ctx context.Context, clientID string) error {
+	if err := s.tx.assertOpen(); err != nil {
+		return err
+	}
 	if clientID == "" {
 		return nil
 	}

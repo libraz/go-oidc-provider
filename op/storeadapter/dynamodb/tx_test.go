@@ -3,6 +3,7 @@
 package oidcdynamo_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -165,6 +166,108 @@ func TestTx_CommitSpansSubstores(t *testing.T) {
 	if consumed.ConsumedAt == nil {
 		t.Fatal("code was not stamped consumed by the committed transaction")
 	}
+}
+
+// TestTx_SettledHandleRefusesGrantEnumerations pins what a settled
+// handle owes a caller that keeps using it, for the grant lookups the
+// transaction's buffer never sees.
+//
+// The buffer refuses every keyed read once the transaction settles, so
+// Find is covered by that guard and by the store contract. The index
+// enumerations resolve their candidates through the table instead — a
+// secondary index cannot see staged writes, so the query is not routed
+// through the buffer.
+//
+// Each lookup is driven twice, and the second run is the one that
+// matters. When the index does return a candidate, the per-candidate
+// re-read is keyed and the buffer refuses it, so the sentinel surfaces
+// even from an unguarded enumeration. When it returns none there is
+// nothing to re-read, and the call answers "this subject has no grants"
+// with a nil error — indistinguishable, to the caller, from a subject
+// who really has none, on a handle that stopped being a transaction some
+// time ago.
+func TestTx_SettledHandleRefusesGrantEnumerations(t *testing.T) {
+	t.Parallel()
+
+	s := newIsolatedStore(t, "txsettled_")
+	const subject, clientID = "sub-settled", "client-settled"
+	if err := s.Grants().Save(t.Context(), &store.Grant{
+		ID:        "grant-settled",
+		Subject:   subject,
+		ClientID:  clientID,
+		Scope:     []string{"openid"},
+		CreatedAt: contract.Reference,
+		UpdatedAt: contract.Reference,
+	}); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+
+	for _, settle := range []struct {
+		name  string
+		close func(store.Tx) error
+	}{
+		{"Commit", store.Tx.Commit},
+		{"Rollback", store.Tx.Rollback},
+	} {
+		t.Run(settle.name, func(t *testing.T) {
+			t.Parallel()
+			tx, err := s.BeginTx(t.Context())
+			if err != nil {
+				t.Fatalf("BeginTx: %v", err)
+			}
+			if err := settle.close(tx); err != nil {
+				t.Fatalf("%s: %v", settle.name, err)
+			}
+
+			t.Run("IndexHasCandidates", func(t *testing.T) {
+				assertGrantLookupsRefused(t, tx.Grants(), subject, clientID)
+			})
+			t.Run("IndexIsEmpty", func(t *testing.T) {
+				assertGrantLookupsRefused(t, tx.Grants(), "sub-without-grants", "client-without-grants")
+			})
+		})
+	}
+}
+
+// assertGrantLookupsRefused drives every grant lookup that does not go
+// through the transaction's buffer and asserts each one reports the
+// closed-handle sentinel rather than an answer.
+func assertGrantLookupsRefused(t *testing.T, grants store.GrantStore, subject, clientID string) {
+	t.Helper()
+	ctx := t.Context()
+
+	assertClosed := func(op string, found bool, err error) {
+		t.Helper()
+		switch {
+		case err == nil:
+			t.Errorf("%s through a settled Tx: want an error satisfying store.ErrTxRequired, got nil", op)
+		case !errors.Is(err, store.ErrTxRequired):
+			t.Errorf("%s through a settled Tx: want an error satisfying store.ErrTxRequired, got %v", op, err)
+		case found:
+			t.Errorf("%s through a settled Tx returned a result alongside %v", op, err)
+		}
+	}
+
+	one, err := grants.FindBySubjectClient(ctx, subject, clientID)
+	assertClosed("Grants().FindBySubjectClient", one != nil, err)
+	list, err := grants.ListBySubject(ctx, subject)
+	assertClosed("Grants().ListBySubject", len(list) > 0, err)
+	any, err := grants.HasAny(ctx)
+	assertClosed("Grants().HasAny", any, err)
+
+	clients, ok := grants.(store.GrantClientLister)
+	if !ok {
+		t.Fatalf("%T does not implement store.GrantClientLister", grants)
+	}
+	clientPage, err := clients.ListClientIDsBySubject(ctx, subject, "", 10)
+	assertClosed("Grants().ListClientIDsBySubject", len(clientPage.ClientIDs) > 0, err)
+
+	subjects, ok := grants.(store.GrantSubjectLister)
+	if !ok {
+		t.Fatalf("%T does not implement store.GrantSubjectLister", grants)
+	}
+	subjectPage, err := subjects.ListSubjectsByClient(ctx, clientID, "", 10)
+	assertClosed("Grants().ListSubjectsByClient", len(subjectPage.Subjects) > 0, err)
 }
 
 func newIsolatedStore(t *testing.T, prefix string) *oidcdynamo.Store {

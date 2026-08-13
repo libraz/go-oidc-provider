@@ -186,6 +186,15 @@ func (s *refreshStore) rotationRejected(ctx context.Context, parentID string, co
 // rotation that has just staged the sealed response reads it back
 // instead of reporting the grace window empty and taking the client's
 // retry for a replay.
+//
+// The sealed bytes are an attribute of the predecessor's own item — the
+// rotation attaches them there rather than to the successor it writes —
+// so the record read here carries the lifetime the response may be kept
+// for. Past it the response reads as absent: the predecessor is refused
+// everywhere else by then, and answering out of the cache would
+// re-deliver a token set for a credential the endpoint has stopped
+// accepting, from an encrypted copy the backend owed the deployment it
+// would let go of.
 func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
 	found, err := s.read(ctx, digestKey(predecessorID))
 	if err != nil {
@@ -193,6 +202,9 @@ func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID stri
 			return nil, store.ErrNotFound
 		}
 		return nil, wrapErr("refreshes.LoadRetryResponse", err)
+	}
+	if s.parent.expired(found) {
+		return nil, store.ErrNotFound
 	}
 	sealed := readBytes(found, attrRetryResponse)
 	if len(sealed) == 0 {
@@ -500,7 +512,14 @@ func (s *refreshStore) RevokeByClient(ctx context.Context, clientID string) erro
 // way to query staged writes — while each retirement is buffered, so the
 // set is the committed one and the writes are undoable. The same
 // per-node action cost as [refreshStore.RevokeChain] applies.
+//
+// The enumeration runs outside the buffer, so the settled-handle guard
+// has to be explicit here: without it an index that matches nothing
+// reports success through a handle that is no longer in a transaction.
 func (s *refreshStore) revokeByIndex(ctx context.Context, index, attr, value, op string) error {
+	if err := s.tx.assertOpen(); err != nil {
+		return err
+	}
 	matches, err := s.parent.queryIndex(ctx, s.parent.names.refreshes, index, attr, value)
 	if err != nil {
 		return wrapErr(op, err)

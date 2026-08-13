@@ -30,7 +30,7 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	}
 	entry.expires(sess.ExpiresAt)
 	entry.set(attrChooserGroup, sess.ChooserGroupID)
-	if err := s.parent.put(ctx, s.parent.names.sessions, entry); err != nil {
+	if err := s.parent.overwrite(ctx, s.parent.names.sessions, entry); err != nil {
 		return wrapErr("sessions.Save", err)
 	}
 	return nil

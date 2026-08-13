@@ -26,39 +26,21 @@ type jtiStore struct {
 // guarded can no longer be redeemed on its own merits, so keeping the
 // marker would only reject a legitimate fresh jti that happened to
 // collide.
+//
+// Both outcomes are one conditional write. Taking over a stale marker is
+// as much a decision as refusing a live one, and reading the stored
+// entry to judge it would let two proofs carrying the same jti find the
+// same expired marker and both be accepted — the replay this store
+// exists to catch.
 func (s *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) error {
-	digest := patterns.Digest(jti)
-	i := newItem(digest).expires(expiresAt)
+	i := newItem(patterns.Digest(jti)).expires(expiresAt)
 
-	placed, err := s.parent.putIfAbsent(ctx, s.parent.names.jtis, i)
+	placed, err := s.parent.putIfKeyFreeAtExpiry(ctx, s.parent.names.jtis, i)
 	if err != nil {
 		return wrapErr("jtis.Mark", err)
 	}
-	if placed {
-		return nil
-	}
-
-	existing, err := s.parent.get(ctx, s.parent.names.jtis, digest)
-	if errors.Is(err, store.ErrNotFound) {
-		// The entry was reclaimed between the conditional write and
-		// this read; retry once against the now-empty key.
-		placed, err = s.parent.putIfAbsent(ctx, s.parent.names.jtis, i)
-		if err != nil {
-			return wrapErr("jtis.Mark.retry", err)
-		}
-		if placed {
-			return nil
-		}
+	if !placed {
 		return store.ErrAlreadyConsumed
-	}
-	if err != nil {
-		return wrapErr("jtis.Mark.inspect", err)
-	}
-	if !s.jtiExpired(existing) {
-		return store.ErrAlreadyConsumed
-	}
-	if err := s.parent.put(ctx, s.parent.names.jtis, i); err != nil {
-		return wrapErr("jtis.Mark.replaceExpired", err)
 	}
 	return nil
 }

@@ -26,6 +26,26 @@ import (
 // from JSON; DynamoDB therefore projects it into attrRecordVersion so a
 // stale snapshot can be rejected without exposing the token in the document.
 
+// stampConsumedAt resolves the ConsumedAt a redemption writes onto a
+// single-use record. A value the caller already carried is kept — it is
+// the OP's own clock reading for the verification that just succeeded —
+// and a zero is stamped from the adapter's clock instead.
+//
+// Both [store.EmailOTPStore.Consume] and [store.RecoveryStore.Consume]
+// state the same post-condition: a nil return leaves the stored record
+// with a non-zero ConsumedAt, whether or not the caller presented one.
+// Writing the presented value through breaks it, because every one of
+// these redemptions is guarded on the record still being unconsumed:
+// the write then stores the value the guard requires the record to
+// already hold, so the redemption reports success and the code stays
+// redeemable for whoever reads it next.
+func stampConsumedAt(presented, now time.Time) time.Time {
+	if !presented.IsZero() {
+		return presented
+	}
+	return now
+}
+
 // totpStore is the SQL-free RFC 6238 enrolment table.
 type totpStore struct {
 	parent *Store
@@ -333,6 +353,11 @@ func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTP
 // still unconsumed and still carries the code material the caller
 // verified, so a stale success cannot redeem the challenge that
 // replaced it.
+//
+// The stamp itself is resolved by [stampConsumedAt] rather than copied
+// from the caller: a challenge written back unstamped still reads as
+// pending, and the generation the write advances does not keep the next
+// reader from redeeming it again with the generation it just read.
 func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) error {
 	if r == nil {
 		return errors.New("oidcdynamo: nil email otp record")
@@ -364,6 +389,7 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	}
 	stored := *r
 	stored.Version = version
+	stored.ConsumedAt = stampConsumedAt(r.ConsumedAt, now)
 	entry, err := emailOTPItem(&stored)
 	if err != nil {
 		return err
@@ -680,8 +706,13 @@ func (s *recoveryStore) Consume(ctx context.Context, b *store.RecoveryBatch, ind
 	}
 	slot := b.Codes[index]
 	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:        aws.String(s.parent.names.recoveryCodes),
-		Key:              recoverySlotKey(b.Subject, index),
+		TableName: aws.String(s.parent.names.recoveryCodes),
+		Key:       recoverySlotKey(b.Subject, index),
+		// The stamp is resolved here rather than copied from the caller:
+		// the predicate below requires the slot to be unconsumed, so
+		// writing a zero back would set the attribute to the value it
+		// already holds, and the redemption would report success while
+		// leaving the code redeemable.
 		UpdateExpression: aws.String("SET #consumed = :now"),
 		// The hash predicate is what makes regenerating a batch revoke
 		// the codes it replaced: a slot whose hash has moved on refuses
@@ -694,7 +725,7 @@ func (s *recoveryStore) Consume(ctx context.Context, b *store.RecoveryBatch, ind
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":hash": avS(slot.Hash),
-			":now":  avTime(slot.ConsumedAt),
+			":now":  avTime(stampConsumedAt(slot.ConsumedAt, s.parent.now())),
 			":zero": avN(0),
 		},
 	})

@@ -15,6 +15,15 @@ import (
 // ACTIVE almost immediately; the real service takes seconds.
 const tableWaitTimeout = 2 * time.Minute
 
+// indexPollInterval and indexPollAttempts bound the wait for a secondary
+// index added to an existing table. Together they cover the same span as
+// [tableWaitTimeout]; the SDK has no waiter for index status, so the
+// adapter polls DescribeTable itself.
+const (
+	indexPollInterval = 500 * time.Millisecond
+	indexPollAttempts = int(tableWaitTimeout / indexPollInterval)
+)
+
 // API is the subset of the DynamoDB client the adapter calls. Taking an
 // interface rather than the concrete *dynamodb.Client keeps the adapter
 // testable without a network and documents its blast radius: these are
@@ -28,6 +37,7 @@ type API interface {
 	Scan(context.Context, *dynamodb.ScanInput, ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
 	TransactWriteItems(context.Context, *dynamodb.TransactWriteItemsInput, ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error)
 	CreateTable(context.Context, *dynamodb.CreateTableInput, ...func(*dynamodb.Options)) (*dynamodb.CreateTableOutput, error)
+	UpdateTable(context.Context, *dynamodb.UpdateTableInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateTableOutput, error)
 	DescribeTable(context.Context, *dynamodb.DescribeTableInput, ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error)
 	UpdateTimeToLive(context.Context, *dynamodb.UpdateTimeToLiveInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateTimeToLiveOutput, error)
 }
