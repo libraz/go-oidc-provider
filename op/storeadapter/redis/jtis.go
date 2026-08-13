@@ -194,3 +194,5 @@ func decodeJTIExpiry(raw string) time.Time {
 	}
 	return time.UnixMicro(parsed).UTC()
 }
+
+var _ store.ConsumedJTIStore = (*jtiStore)(nil)

@@ -86,15 +86,22 @@ func (s *sessionStore) chooserGroupKey(groupID string) string {
 
 // Save persists a new session or replaces an existing one. The store
 // contract permits upsert; the inmem reference also upserts and the
-// implementation here is symmetric. When the supplied session
-// changes the ChooserGroupID of an existing record, the secondary
-// index is updated atomically: the ID is removed from the previous
-// group's SET before it is added to the new one. The parent record
-// SET, the index SADD, and the index's TTL maintenance (see the
-// ExpireNX / ExpireGT comment below) are issued through a single
-// Redis pipeline so Save stays proportional to the latency of one
-// round trip regardless of whether the session belongs to a chooser
-// group.
+// implementation here is symmetric. When the supplied session changes
+// the ChooserGroupID of an existing record, the removal from the
+// previous group's SET rides in the same transaction as the addition
+// to the new one, so no execution leaves the ID indexed under both.
+// Reading the previous group is a separate round trip that the
+// transaction does not fence, so a Save racing another Save on the
+// same ID can still observe a group that is already gone — a race the
+// contract leaves undefined, and one that costs only index bloat
+// because [sessionStore.ListByChooserGroup] answers membership from
+// the record rather than from the index.
+//
+// The parent record SET, the index SREM / SADD, and the index's TTL
+// maintenance (see the ExpireNX / ExpireGT comment below) are issued
+// through a single Redis pipeline so Save stays proportional to the
+// latency of one round trip regardless of whether the session belongs
+// to a chooser group.
 func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	if sess == nil {
 		return errors.New("oidcredis: nil session")
@@ -117,16 +124,20 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	}
 
 	// Upsert path: if the record already exists with a different
-	// chooser group, evict the stale secondary-index entry before
-	// recording the new one. This is best-effort — a concurrent Save
-	// against the same ID is undefined per the contract.
+	// chooser group, the stale secondary-index entry is evicted in the
+	// transaction below rather than by a bare command whose failure
+	// nobody observes.
+	var previousGroupKey string
 	if existing, err := s.fetch(ctx, sess.ID); err == nil &&
 		existing != nil && existing.ChooserGroupID != "" &&
 		existing.ChooserGroupID != sess.ChooserGroupID {
-		_ = s.parent.client.SRem(ctx, s.chooserGroupKey(existing.ChooserGroupID), sess.ID).Err()
+		previousGroupKey = s.chooserGroupKey(existing.ChooserGroupID)
 	}
 
 	pipe := s.parent.client.TxPipeline()
+	if previousGroupKey != "" {
+		pipe.SRem(ctx, previousGroupKey, sess.ID)
+	}
 	pipe.Set(ctx, s.sessionKey(sess.ID), payload, ttl)
 	if sess.ChooserGroupID != "" {
 		groupKey := s.chooserGroupKey(sess.ChooserGroupID)
@@ -270,9 +281,13 @@ func (s *sessionStore) Delete(ctx context.Context, id string) error {
 // ListByChooserGroup returns every non-expired session whose
 // ChooserGroupID matches groupID. The lookup is two-phase:
 // SMEMBERS yields the candidate IDs, then a single MGET fetches the
-// payloads. Stale IDs whose parent record has been TTL-evicted are
-// removed from the index opportunistically (lazy cleanup), so the
-// secondary index does not unbounded-grow against churning sessions.
+// payloads. The index only proposes candidates — each record's own
+// ChooserGroupID decides membership — so an entry left behind by a
+// session that has since moved to another group cannot surface that
+// account in this group's chooser. Those entries, along with IDs
+// whose parent record has been TTL-evicted, are removed from the
+// index opportunistically (lazy cleanup), so the secondary index does
+// not unbounded-grow against churning sessions.
 func (s *sessionStore) ListByChooserGroup(ctx context.Context, groupID string) ([]*store.Session, error) {
 	ids, err := s.parent.client.SMembers(ctx, s.chooserGroupKey(groupID)).Result()
 	if err != nil {
@@ -290,7 +305,7 @@ func (s *sessionStore) ListByChooserGroup(ctx context.Context, groupID string) (
 		return nil, fmt.Errorf("oidcredis: MGET sessions: %w", err)
 	}
 
-	out, stale := s.partitionLiveAndStale(ids, rawValues)
+	out, stale := s.partitionLiveAndStale(groupID, ids, rawValues)
 	if len(stale) > 0 {
 		// Best-effort cleanup; the secondary index is a hint, not a
 		// source of truth, so a partial SREM failure is non-fatal.
@@ -304,11 +319,21 @@ func (s *sessionStore) ListByChooserGroup(ctx context.Context, groupID string) (
 }
 
 // partitionLiveAndStale splits the parallel ids / rawValues slices into
-// (live sessions, IDs whose parent record is missing or unparseable
-// or already expired). The classification is collapsed into a single
-// helper so [sessionStore.ListByChooserGroup] reads as a flat
+// (live sessions belonging to groupID, IDs the index should no longer
+// carry: parent record missing, unparseable, already expired, or
+// recording a different chooser group). Membership is answered from the
+// record because the index can outlive the truth it mirrors — a session
+// whose group changed leaves its old SET entry behind whenever the
+// eviction does not land — and the caller treats the result as the
+// group's account list: a foreign entry would both offer another
+// browser's account in the chooser and pull it into a sign-out of every
+// session in this group.
+//
+// The classification is collapsed into a single helper so
+// [sessionStore.ListByChooserGroup] reads as a flat
 // "fetch → partition → cleanup" pipeline rather than a nested loop.
 func (s *sessionStore) partitionLiveAndStale(
+	groupID string,
 	ids []string,
 	rawValues []any,
 ) ([]*store.Session, []string) {
@@ -317,7 +342,8 @@ func (s *sessionStore) partitionLiveAndStale(
 	now := s.parent.clock.Now()
 	for i, raw := range rawValues {
 		rec, ok := decodeSessionRaw(raw)
-		if !ok || patterns.IsExpiredInclusive(rec.ExpiresAt, now) {
+		if !ok || rec.ChooserGroupID != groupID ||
+			patterns.IsExpiredInclusive(rec.ExpiresAt, now) {
 			stale = append(stale, ids[i])
 			continue
 		}
@@ -396,3 +422,5 @@ func decode(rec *sessionRecord) *store.Session {
 		UpdatedAt:      rec.UpdatedAt,
 	}
 }
+
+var _ store.SessionStore = (*sessionStore)(nil)

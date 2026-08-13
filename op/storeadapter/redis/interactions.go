@@ -261,3 +261,14 @@ func (s *interactionStore) Delete(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// The endpoint reaches CompareAndSwap / DeleteIfUnchanged through a type
+// assertion on [store.InteractionStore], so a signature drift here does
+// not break a build — it silently demotes the adapter to the
+// non-atomic path at runtime, where the authorization endpoint reports
+// that the interaction store lacks compare-and-swap. Pinning the
+// optional capability at compile time is what keeps that from shipping.
+var (
+	_ store.InteractionStore    = (*interactionStore)(nil)
+	_ store.InteractionStoreCAS = (*interactionStore)(nil)
+)

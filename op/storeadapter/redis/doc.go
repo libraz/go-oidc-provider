@@ -9,8 +9,12 @@
 // that benefit from a fast in-memory tier with native TTL semantics:
 //
 //   - [github.com/libraz/go-oidc-provider/op/store.ConsumedJTIStore] — DPoP
-//     and private_key_jwt replay protection. Every protected request
-//     performs a SETNX on the jti.
+//     and private_key_jwt replay protection. Every protected request runs
+//     a small Lua script (EVALSHA, falling back to EVAL) against the jti
+//     key. A bare SETNX cannot express it: taking over a marker whose own
+//     recorded expiry has passed is a decision about the stored value,
+//     and reading that value before writing would reopen the race SETNX
+//     exists to close.
 //   - [github.com/libraz/go-oidc-provider/op/store.InteractionStore] —
 //     short-lived UI state surviving redirects across login / consent /
 //     step-up screens.
@@ -24,8 +28,9 @@
 // must survive every restart, so its hash carries no TTL. See the godoc on
 // [Store.Metadata] for the eviction-policy consequence.
 //
-// The transactional cluster substores (AuthorizationCodes, RefreshTokens,
-// Grants, PushedAuthRequests, AccessTokens) and the long-lived
+// The transactional cluster substores (composite.TxClusterKinds —
+// AuthorizationCodes, RefreshTokens, Grants, PushedAuthRequests,
+// AccessTokens, OpaqueAccessTokens, GrantRevocations) and the long-lived
 // substores (Clients, Users, IATs, RATs) are deliberately out of scope.
 // The first-cut canonical deployment is therefore SQL durable + Redis
 // volatile, composed through
@@ -38,6 +43,29 @@
 // is enabled, so misconfiguration surfaces loudly rather than silently
 // corrupting state; the composite layer routes those accessors to the
 // durable backend before they ever reach the OP.
+//
+// # Server requirements
+//
+// Redis 7.0 or newer. The session chooser-group index maintains its TTL
+// with EXPIRE ... NX and EXPIRE ... GT, and both flags were introduced
+// in 7.0; on an older server the command is rejected and every session
+// write carrying a chooser group fails.
+//
+// The credential the adapter authenticates with needs more than the
+// read/write keyspace. An ACL that omits any of these leaves the
+// adapter building, connecting, and then failing at runtime on the
+// first request that needs the missing command:
+//
+//   - +@scripting (EVAL / EVALSHA / SCRIPT LOAD) — the replay marker and
+//     the interaction compare-and-swap are Lua scripts. Without it every
+//     DPoP and private_key_jwt request fails, which is every protected
+//     request on a FAPI deployment.
+//   - +@string, +@keyspace, +@set, +@hash, +@transaction — SET / GET /
+//     DEL / EXPIRE, the chooser-group SADD / SREM / SMEMBERS, the
+//     metadata HSET / HGET, and the MULTI / EXEC the session write
+//     issues as one transaction.
+//   - +@connection — the PING the constructor uses to fail fast on an
+//     unreachable or unauthenticated endpoint.
 //
 // # Security defaults
 //

@@ -48,3 +48,5 @@ func (m *metadataStore) Set(ctx context.Context, key, value string) error {
 	}
 	return nil
 }
+
+var _ store.MetadataStore = (*metadataStore)(nil)

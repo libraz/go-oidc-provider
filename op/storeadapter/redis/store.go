@@ -491,3 +491,10 @@ func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
 // tombstone strategy compose this adapter with
 // op/storeadapter/composite + a SQL anchor.
 func (s *Store) GrantRevocations() store.GrantRevocationStore { return nil }
+
+// The composite adapter accepts this Store as a backend through
+// [store.Store], and every out-of-scope accessor on it returns nil by
+// design. That makes the aggregate the one interface a missing or
+// renamed accessor would break silently — the adapter would still build
+// on its own and fail only where it is wired — so it is pinned here.
+var _ store.Store = (*Store)(nil)
