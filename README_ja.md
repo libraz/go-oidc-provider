@@ -109,7 +109,7 @@ op.WithAllowInsecureBackchannelLogoutForDev(),   // http:// の backchannel_logo
 ```
 
 `WithAllowLocalhostLoopback` が要るのは、配線のどこかを `127.0.0.1` ではなく
-`localhost` と綴らなければならない場合だけです。43 例のうち 9 例が使っており、
+`localhost` と綴らなければならない場合だけです。44 例のうち 9 例が使っており、
 その多くはスタブ RP が `http://localhost:…/callback` を `redirect_uri` として
 登録するためです。[`29-passkey`](examples/29-passkey/main.go) だけは理由が別で、
 WebAuthn の Relying Party ID はドメインである必要があり、ブラウザが IP
@@ -117,7 +117,7 @@ WebAuthn の Relying Party ID はドメインである必要があり、ブラ�
 `localhost` の名前解決が乗っ取られうるためです（RFC 8252 §7.3）。
 
 `WithAllowInsecureBackchannelLogoutForDev` が要るのは、平文 http の
-`backchannel_logout_uri` を登録する場合だけで、これを使うのは 43 例のうち 1 例
+`backchannel_logout_uri` を登録する場合だけで、これを使うのは 44 例のうち 1 例
 （[`42-back-channel-logout`](examples/42-back-channel-logout/main.go)）です。
 
 どちらも開発・CI 用途に限ったものです。検証ロジックに実際に弾かれたのでない
@@ -208,6 +208,23 @@ OpenID Connect Core §15.1 は RS256 の実装を必須としているため、�
 禁じています。なお**検証**側はこれより広く、クライアント認証アサーションと
 リクエストオブジェクトについては RS256 / PS256 / ES256 / EdDSA をいずれも
 受け付けます。
+
+**もうひとつの逸脱として、DPoP プルーフの検証失敗は OAuth のエラー封筒で
+返します。** RFC 9449 §7 は `invalid_dpop_proof` を定めていますが、フォーム
+ポストでプルーフを受け取るエンドポイント（トークン、PAR、デバイス認可、CIBA）
+はいずれも HTTP 400 と `error=invalid_request` を返します。これらの
+エンドポイントが他の失敗ですでに使っている封筒と同じなので、OAuth の
+エラーコードを見ているリライングパーティは DPoP のためだけに新しいコード種別を
+扱う必要がありません。`error_description` は失敗の系統（`DPoP proof
+malformed` / `DPoP proof signature invalid` / `DPoP proof does not bind to
+this request` / `DPoP proof iat outside acceptable window` / `DPoP proof
+replayed`）までは区別しますが、それ以上の細かい原因は示しません。どの検証段階
+まで到達したかを攻撃者に教えないためです。ただし次の 2 つはクライアントが
+判断に使う情報を失うため、独自のコードを維持します。§8 のナンスチャレンジは
+`error=use_dpop_nonce` と `DPoP-Nonce` レスポンスヘッダを返し、再試行可能で
+あることを終端的な失敗と区別できるようにします。保護リソースで拒否された
+プルーフは、その面を規定する Bearer トークンのエラー規則に従って
+`401 invalid_token` を返します。
 
 ## ストレージ
 

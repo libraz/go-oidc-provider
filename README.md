@@ -102,7 +102,7 @@ op.WithAllowInsecureBackchannelLogoutForDev(),   // admit an http:// backchannel
 ```
 
 `WithAllowLocalhostLoopback` is needed only when something in the wiring must
-be spelled `localhost` rather than `127.0.0.1` — 9 of the 43 examples reach for
+be spelled `localhost` rather than `127.0.0.1` — 9 of the 44 examples reach for
 it, mostly because a stub RP registers a `http://localhost:…/callback`
 `redirect_uri`, and [`29-passkey`](examples/29-passkey/main.go) because WebAuthn
 requires a Relying Party ID that is a domain and browsers reject an IP literal
@@ -110,7 +110,7 @@ for it. The textual host is not in the default carve-out because `localhost`
 resolution can be hijacked (RFC 8252 §7.3).
 
 `WithAllowInsecureBackchannelLogoutForDev` is needed only to register a
-plain-http `backchannel_logout_uri`, which 1 of the 43 examples does
+plain-http `backchannel_logout_uri`, which 1 of the 44 examples does
 ([`42-back-channel-logout`](examples/42-back-channel-logout/main.go)).
 
 Both are dev / CI-only. Add neither unless the validator has actually rejected
@@ -193,6 +193,23 @@ and therefore no downgrade path to defend, and ES256 is a first-class
 algorithm in the FAPI 2.0 profiles this library targets — which exclude
 RS256 outright. *Verification* is wider: RS256, PS256, ES256 and EdDSA are
 all accepted on client assertions and request objects.
+
+**A second departure: a rejected DPoP proof answers in the OAuth error
+envelope.** RFC 9449 §7 defines `invalid_dpop_proof`, but every endpoint that
+accepts a proof on a form post — token, PAR, device authorization and CIBA —
+returns HTTP 400 with `error=invalid_request`, the envelope those endpoints
+already use for every other failure, so a relying party keying off the OAuth
+error codes needs no additional code class. The
+`error_description` separates the failure families (`DPoP proof malformed`,
+`DPoP proof signature invalid`, `DPoP proof does not bind to this request`,
+`DPoP proof iat outside acceptable window`, `DPoP proof replayed`) without
+naming the precise sub-cause, which would tell a prober which check it
+reached. Two cases keep their own code, because collapsing them would cost the
+client information it has to act on: the §8 nonce challenge answers
+`error=use_dpop_nonce` with a `DPoP-Nonce` response header so a retry is
+distinguishable from a terminal failure, and a proof rejected at a protected
+resource answers `401 invalid_token` under the Bearer-token error rules that
+govern that surface.
 
 ## Storage
 

@@ -144,10 +144,12 @@ jobs:
             -count=1 -timeout=5m \
             ./...
 
-      # The DynamoDB adapter's own suite sits entirely behind the
-      # testcontainers tag because it needs the emulator, so this step
-      # only compiles it. The tagged run lives with the other
-      # container-backed suites.
+      # Everything in the DynamoDB adapter that needs the emulator sits
+      # behind the testcontainers tag and runs with the other
+      # container-backed suites. What this step executes is the untagged
+      # remainder: the structural guard that no item write leaves the
+      # package without a condition expression, which reads the package
+      # source rather than talking to a database.
       - name: Test op/storeadapter/dynamodb (race + coverage)
         working-directory: op/storeadapter/dynamodb
         run: |

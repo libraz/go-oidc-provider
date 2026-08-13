@@ -230,6 +230,13 @@ linters:
         - github.com/libraz/go-oidc-provider/internal/jose\.EncryptionKeyResolver
         - github.com/go-jose/go-jose/v4\.Signer
         - github.com/libraz/go-oidc-provider/op/storeadapter/sql\.runner
+        - github.com/libraz/go-oidc-provider/op/storeadapter/sql\.scanner
+        # The from-scratch reference store hands out the same two
+        # seams, and for the same reason: the transaction-bound
+        # implementation is what reports a settled handle, so a
+        # concrete return type would leave that path unable to.
+        - github.com/libraz/go-oidc-provider/examples/26-byo-store-from-scratch\.querier
+        - github.com/libraz/go-oidc-provider/examples/26-byo-store-from-scratch\.scanner
     nakedret:
       max-func-lines: 30
     nolintlint:
