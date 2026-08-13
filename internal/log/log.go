@@ -1,42 +1,18 @@
-// Package log is the library's thin wrapper over [log/slog]. Library code
-// MUST go through this package rather than reaching for [slog.Default()] so
-// that callers can inject a logger with their own handler, and so that we
-// have a single place to enforce redaction of sensitive attributes.
+// Package log holds the library's silent [slog.Handler].
+//
+// The library logs through [*slog.Logger] directly rather than through a
+// wrapper interface: the handler, not the logger, is the composition point
+// slog is designed around. Redaction of sensitive attributes is enforced at
+// exactly one place — the redact package's handler wrapper,
+// which op.WithLogger and op.WithAuditLogger apply to the embedder-supplied
+// handler as it enters the library. Everything downstream of that boundary
+// is already wrapped, so no call site has to remember to redact.
 package log
 
 import (
 	"context"
-	"io"
 	"log/slog"
-	"os"
 )
-
-// Logger is the minimal logging surface used by the library. It is
-// intentionally narrower than [*slog.Logger] so that we can swap the
-// backend (or enforce redaction in front of it) without leaking the
-// abstraction to the call sites.
-type Logger interface {
-	Debug(ctx context.Context, msg string, attrs ...slog.Attr)
-	Info(ctx context.Context, msg string, attrs ...slog.Attr)
-	Warn(ctx context.Context, msg string, attrs ...slog.Attr)
-	Error(ctx context.Context, msg string, attrs ...slog.Attr)
-	With(attrs ...slog.Attr) Logger
-}
-
-// New wraps the given [*slog.Logger] in our [Logger] interface. If l is
-// nil, a JSON logger writing to [os.Stderr] at info level is used.
-func New(l *slog.Logger) Logger {
-	if l == nil {
-		l = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	}
-	return slogLogger{l: l}
-}
-
-// Discard returns a [Logger] that drops every record. It is the right
-// default for tests that do not assert on log output.
-func Discard() Logger {
-	return slogLogger{l: slog.New(slog.NewTextHandler(io.Discard, nil))}
-}
 
 // DiscardHandler is a [slog.Handler] that drops every record. It is
 // the canonical fall-back the library uses when no logger is configured
@@ -60,34 +36,3 @@ func (h DiscardHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 // WithGroup returns the same handler; the discard handler has no
 // group state to track.
 func (h DiscardHandler) WithGroup(_ string) slog.Handler { return h }
-
-type slogLogger struct {
-	l *slog.Logger
-}
-
-func (s slogLogger) Debug(ctx context.Context, msg string, attrs ...slog.Attr) {
-	s.l.LogAttrs(ctx, slog.LevelDebug, msg, attrs...)
-}
-
-func (s slogLogger) Info(ctx context.Context, msg string, attrs ...slog.Attr) {
-	s.l.LogAttrs(ctx, slog.LevelInfo, msg, attrs...)
-}
-
-func (s slogLogger) Warn(ctx context.Context, msg string, attrs ...slog.Attr) {
-	s.l.LogAttrs(ctx, slog.LevelWarn, msg, attrs...)
-}
-
-func (s slogLogger) Error(ctx context.Context, msg string, attrs ...slog.Attr) {
-	s.l.LogAttrs(ctx, slog.LevelError, msg, attrs...)
-}
-
-func (s slogLogger) With(attrs ...slog.Attr) Logger {
-	if len(attrs) == 0 {
-		return s
-	}
-	args := make([]any, 0, len(attrs))
-	for _, a := range attrs {
-		args = append(args, a)
-	}
-	return slogLogger{l: s.l.With(args...)}
-}

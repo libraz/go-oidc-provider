@@ -52,7 +52,7 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 			Name:     "token.issued",
 			ClientID: "dynamic-deadbeef-1234",
 			Extras: map[string]any{
-				"grant_type": "refresh_token", // ignored by the fixed event mapping.
+				"grant_type": "refresh_token", // no label reads this key.
 				"sub":        "user-abc",
 				"ip":         "203.0.113.7",
 			},

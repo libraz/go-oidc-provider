@@ -6,7 +6,27 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// unknownGrantType is the grant_type label for a first refresh-token
+// issuance whose origin is absent or outside the closed set below. It is
+// deliberately not one of the real grant labels: a record that cannot
+// prove which grant minted it must not be counted as one that can.
+const unknownGrantType = "unknown"
+
+// refreshOriginLabels projects the persisted refresh-chain origin onto
+// the grant_type label. The map is closed, so the label cardinality is
+// the number of rows here plus unknownGrantType, whatever an event
+// carries.
+//
+//nolint:gochecknoglobals // immutable closed projection.
+var refreshOriginLabels = map[store.RefreshTokenOrigin]string{
+	store.RefreshOriginAuthCode:    "authorization_code",
+	store.RefreshOriginDeviceCode:  "device_code",
+	store.RefreshOriginCIBA:        "ciba",
+	store.RefreshOriginCustomGrant: "custom_grant",
+}
 
 // Bridge is an [audit.Emitter] that mirrors a curated subset of audit
 // events onto the [Collector] counters and forwards every event
@@ -80,11 +100,11 @@ func (b *Bridge) update(ev audit.Event) {
 func (b *Bridge) updateFlowMetric(definition auditevent.Definition, ev audit.Event) bool {
 	switch definition.Metric {
 	case auditevent.MetricTokenIssued:
-		// This event is emitted only when an authorization-code exchange
-		// actually persists a first refresh token. Keep the grant dimension
-		// fixed here instead of trusting caller-controlled Extras (refresh
+		// This event is emitted only when a grant actually persists a first
+		// refresh token; every such grant stamps the origin it recorded on
+		// the chain, so the label names the grant that minted it (refresh
 		// rotation has its own event and metric).
-		b.c.tokenIssued.WithLabelValues("authorization_code", b.c.clientIDLabel(ev.ClientID)).Inc()
+		b.c.tokenIssued.WithLabelValues(refreshGrantTypeLabel(ev.Extras), b.c.clientIDLabel(ev.ClientID)).Inc()
 	case auditevent.MetricTokensRefreshed:
 		b.c.tokensRefreshed.WithLabelValues(b.c.clientIDLabel(ev.ClientID)).Inc()
 	case auditevent.MetricLoginAttempts:
@@ -141,6 +161,25 @@ func (b *Bridge) updateOperationalMetric(definition auditevent.Definition) {
 	default:
 		return
 	}
+}
+
+// refreshGrantTypeLabel derives the grant_type label from the origin the
+// issuance path stamped on the event. The value is read as a
+// [store.RefreshTokenOrigin] and then resolved through the closed
+// projection, so neither a string planted under the same key — the only
+// shape request-derived data takes — nor an origin the projection does
+// not know can present itself as a grant: both land on
+// unknownGrantType.
+func refreshGrantTypeLabel(extras map[string]any) string {
+	origin, ok := extras[auditevent.ExtraRefreshOrigin].(store.RefreshTokenOrigin)
+	if !ok {
+		return unknownGrantType
+	}
+	label, ok := refreshOriginLabels[origin]
+	if !ok {
+		return unknownGrantType
+	}
+	return label
 }
 
 // stringExtra returns the string value at key, or "" when the entry

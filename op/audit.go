@@ -202,8 +202,8 @@ const (
 	// asked; those three are the signals to correlate on.
 	AuditLogoutRPInitiated = AuditEvent(auditevent.AuditLogoutRPInitiated)
 
-	// AuditBCLNoSessionsForSubject fires when /end_session or
-	// Provider.Logout names a session_id-bearing subject but the
+	// AuditBCLNoSessionsForSubject fires when a logout names a
+	// session_id-bearing subject but the
 	// back-channel coordinator finds zero RPs to notify. Under a
 	// volatile SessionStore (Redis without persistence, Memcached,
 	// or any in-memory tier under maxmemory eviction) this is the
@@ -341,6 +341,14 @@ const (
 
 // Device-flow events. Fire from the /device_authorization endpoint,
 // the verification ceremony, and the token-endpoint device_code grant.
+//
+// The verification-ceremony and revocation events are raised by the
+// helpers in
+// [github.com/libraz/go-oidc-provider/op/devicecodekit], which run in
+// the embedder's HTTP layer rather than in a handler the OP mounts.
+// They therefore ride the logger set on that package's dependency
+// bundle, not the one given to [WithAuditLogger]; a deployment that
+// wants them in its audit stream points both at the same sink.
 const (
 	AuditDeviceAuthorizationIssued          = AuditEvent(auditevent.AuditDeviceAuthorizationIssued)
 	AuditDeviceAuthorizationRejected        = AuditEvent(auditevent.AuditDeviceAuthorizationRejected)
@@ -385,6 +393,15 @@ const (
 
 // CIBA events. Fire from the /bc-authorize endpoint, the embedder's
 // authentication-device interaction, and the token-endpoint CIBA grant.
+//
+// AuditCIBAAuthDeviceApproved and AuditCIBAAuthDeviceDenied are the
+// exception: the OP never emits them. The approval and denial
+// transitions are made by the embedder calling
+// store.CIBARequestStore.Approve / Deny directly, and no library code
+// path sits between that call and the store, so there is nowhere for
+// the OP to observe the decision. The names are reserved so a
+// deployment raising them from its own authentication device lands in
+// the same vocabulary as the events the OP does raise for the request.
 const (
 	AuditCIBAAuthorizationIssued          = AuditEvent(auditevent.AuditCIBAAuthorizationIssued)
 	AuditCIBAAuthorizationRejected        = AuditEvent(auditevent.AuditCIBAAuthorizationRejected)

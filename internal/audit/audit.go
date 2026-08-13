@@ -153,6 +153,14 @@ type slogEmitter struct {
 // [slog.Attr] rather than the variadic any form so the audit attribute
 // is always the first key — log shippers that pre-route by leading
 // attribute see "audit" up front.
+//
+// A handler that is not enabled for the event's level short-circuits
+// before [attrsFor] runs. Flattening an event is not free — every
+// canonical field is appended and every [Event.Extras] value goes
+// through the redactor — and handler code emits unconditionally, so a
+// deployment that filters audit lines out by level (or leaves the
+// logger at its silent default) would otherwise pay for every record
+// nothing ever reads.
 func (e *slogEmitter) Emit(ctx context.Context, ev Event) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -162,7 +170,13 @@ func (e *slogEmitter) Emit(ctx context.Context, ev Event) {
 			)
 		}
 	}()
-	e.logger.LogAttrs(ctx, ev.Level.slogLevel(), ev.Message, attrsFor(ev)...)
+	level := ev.Level.slogLevel()
+	// Inside the recover so a downstream Enabled that panics is
+	// contained on the same terms as a downstream Handle that does.
+	if !e.logger.Enabled(ctx, level) {
+		return
+	}
+	e.logger.LogAttrs(ctx, level, ev.Message, attrsFor(ev)...)
 }
 
 // attrsFor flattens an [Event] into the slog attribute slice. Empty

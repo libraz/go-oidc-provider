@@ -3,6 +3,16 @@
 // public catalog and the metrics bridge cannot maintain competing lists.
 package auditevent
 
+import "slices"
+
+// ExtraRefreshOrigin is the Extras key under which the refresh-token
+// issuance path records the grant family that created the chain. The
+// value is a store.RefreshTokenOrigin, never a plain string: the metrics
+// bridge type-asserts it before deriving the grant_type label, so a
+// request-derived value planted under this key cannot claim a grant it
+// did not run.
+const ExtraRefreshOrigin = "refresh_origin"
+
 // Name is a stable audit-event wire name.
 type Name string
 
@@ -355,4 +365,18 @@ func indexDefinitions(catalog []Definition) map[string]Definition {
 // MetricName returns the registered Prometheus family name for metric.
 func MetricName(metric Metric) string {
 	return metricNames[metric]
+}
+
+// MetricNames returns every Prometheus family name the catalog projects
+// onto, sorted. It is the one enumeration of the OP's metric surface:
+// the collector's registration set, the operator-facing inventory the
+// examples publish, and the public-boundary assertions are all checked
+// against it rather than restating the list.
+func MetricNames() []string {
+	out := make([]string, 0, len(metricNames))
+	for _, name := range metricNames {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }

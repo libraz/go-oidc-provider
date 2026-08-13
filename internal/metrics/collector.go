@@ -84,7 +84,7 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 		tokenIssued: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name:        "oidc_token_issued_total",
-				Help:        "Number of refresh tokens initially issued from authorization-code exchanges, partitioned by grant_type and (static-seed) client_id.",
+				Help:        "Number of refresh tokens initially issued (not rotated), partitioned by the grant that created the chain and by (static-seed) client_id.",
 				ConstLabels: constLabels,
 			},
 			[]string{"grant_type", "client_id"},

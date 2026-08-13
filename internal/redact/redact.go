@@ -104,6 +104,15 @@ var substringAllowlist = []string{
 	"access_token_ttl_seconds",
 	"refresh_token_ttl_seconds",
 	"access_token_format",
+	// Cascade tallies carried by the device-code revocation record.
+	// Their values are a count or a boolean describing how far the
+	// revocation reached — never a credential. Public godoc names
+	// them as the evidence an operator reads to tell a complete
+	// cascade from a partial one, so redacting them would blind the
+	// one record written for that purpose.
+	"revoked_access_tokens",
+	"revoked_opaque_access_tokens",
+	"refresh_token_cascade_complete",
 }
 
 // IsSensitive reports whether key (after canonicalisation) names a
@@ -297,16 +306,22 @@ func Mask(s string) string {
 }
 
 // nextPairEnd returns the index of the next pair-terminator starting
-// at or after i. Pairs are terminated by '&', '?', ',', ';', or
-// whitespace — the separators that appear in URL query strings,
-// Cookie headers, and free-form log strings respectively. The
-// query-string introducer '?' is treated as a terminator so a
-// logged URL like ".../cb?code=v" splits the path from the query
-// before the pair scanner runs.
+// at or after i. Pairs are terminated by '&', '?', '#', ',', ';', or
+// whitespace — the separators that appear in URL query strings, URL
+// fragments, Cookie headers, and free-form log strings respectively.
+//
+// Both introducers matter: '?' splits the path from the query so a
+// logged ".../cb?code=v" reaches the pair scanner as a pair, and '#'
+// does the same for the fragment response mode, where the credential
+// arrives as ".../cb#code=v&state=w". Without the fragment
+// terminator the first parameter after '#' stays glued to the path
+// and its key never canonicalises to a sensitive name, so the leading
+// (and most sensitive) value of every fragment redirect survives
+// masking.
 func nextPairEnd(s string, i int) int {
 	for j := i; j < len(s); j++ {
 		switch s[j] {
-		case '&', '?', ',', ';', ' ', '\t':
+		case '&', '?', '#', ',', ';', ' ', '\t':
 			return j
 		}
 	}

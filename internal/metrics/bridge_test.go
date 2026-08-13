@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // recordingEmitter is a test stub that captures every event it
@@ -106,12 +107,13 @@ func TestBridge_TokenIssued_StaticClientLabelEmitted(t *testing.T) {
 	b.Emit(context.Background(), audit.Event{
 		Name:     "token.issued",
 		ClientID: "client-1",
-		// This is the production auth-code shape: grant_type is fixed by
-		// the catalog, while Extras carries only audit context.
+		// This is the production auth-code shape: the typed origin names
+		// the grant, while the remaining Extras carry audit context.
 		Extras: map[string]any{
-			"grant_id":       "grant-1",
-			"offline_access": false,
-			"ttl_bucket":     "default",
+			"grant_id":                    "grant-1",
+			"offline_access":              false,
+			"ttl_bucket":                  "default",
+			auditevent.ExtraRefreshOrigin: store.RefreshOriginAuthCode,
 		},
 	})
 
@@ -143,9 +145,10 @@ func TestBridge_TokenIssued_DynamicClientCollapsesToEmpty(t *testing.T) {
 		Name:     "token.issued",
 		ClientID: "dynamic-99",
 		Extras: map[string]any{
-			"grant_id":       "grant-2",
-			"offline_access": true,
-			"ttl_bucket":     "offline",
+			"grant_id":                    "grant-2",
+			"offline_access":              true,
+			"ttl_bucket":                  "offline",
+			auditevent.ExtraRefreshOrigin: store.RefreshOriginAuthCode,
 		},
 	})
 
@@ -166,29 +169,92 @@ func TestBridge_TokenIssued_DynamicClientCollapsesToEmpty(t *testing.T) {
 	}
 }
 
-func TestBridge_TokenIssued_IgnoresStaleGrantTypeExtra(t *testing.T) {
+// TestBridge_TokenIssued_GrantTypeFollowsChainOrigin pins the invariant
+// that makes the counter usable for per-grant alerting: every increment
+// carries the grant that actually created the chain. A redemption filed
+// under another grant's label is doubly wrong — it invents issuance on a
+// grant that ran nothing and hides the grant that ran.
+func TestBridge_TokenIssued_GrantTypeFollowsChainOrigin(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		origin store.RefreshTokenOrigin
+		want   string
+	}{
+		{"authorization_code", store.RefreshOriginAuthCode, "authorization_code"},
+		{"device_code", store.RefreshOriginDeviceCode, "device_code"},
+		{"ciba", store.RefreshOriginCIBA, "ciba"},
+		{"custom_grant", store.RefreshOriginCustomGrant, "custom_grant"},
+		{"unregistered_origin", store.RefreshTokenOrigin("not_a_grant"), "unknown"},
+		{"legacy_record_without_origin", "", "unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, reg := newTestCollector(t, metrics.Options{})
+			metrics.NewBridge(c, nil).Emit(context.Background(), audit.Event{
+				Name:   "token.issued",
+				Extras: map[string]any{auditevent.ExtraRefreshOrigin: tc.origin},
+			})
+			families, err := reg.Gather()
+			if err != nil {
+				t.Fatalf("Gather: %v", err)
+			}
+			if got := counterValue(t, families, "oidc_token_issued_total", map[string]string{
+				"grant_type": tc.want,
+				"client_id":  "",
+			}); got != 1 {
+				t.Fatalf("oidc_token_issued_total{grant_type=%q} = %v, want 1", tc.want, got)
+			}
+			if tc.want == "authorization_code" {
+				return
+			}
+			// The collapse this guards against is one-directional: an
+			// origin the bridge cannot resolve must not be absorbed by
+			// the busiest series.
+			if got := counterValue(t, families, "oidc_token_issued_total", map[string]string{
+				"grant_type": "authorization_code",
+				"client_id":  "",
+			}); got != 0 {
+				t.Fatalf("origin %q collapsed onto authorization_code: counter = %v", tc.origin, got)
+			}
+		})
+	}
+}
+
+// TestBridge_TokenIssued_UntypedOriginCannotForgeGrantType keeps the
+// label sourced from the OP's own typed value. Extras is a free-form map
+// whose other keys carry request-derived data, so a string that names a
+// grant must not be able to move the counter into that grant's series.
+func TestBridge_TokenIssued_UntypedOriginCannotForgeGrantType(t *testing.T) {
 	t.Parallel()
 
 	c, reg := newTestCollector(t, metrics.Options{})
 	metrics.NewBridge(c, nil).Emit(context.Background(), audit.Event{
-		Name:   "token.issued",
-		Extras: map[string]any{"grant_type": "refresh_token"},
+		Name: "token.issued",
+		Extras: map[string]any{
+			"grant_type":                  "refresh_token",
+			auditevent.ExtraRefreshOrigin: string(store.RefreshOriginDeviceCode),
+		},
 	})
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
 	if got := counterValue(t, families, "oidc_token_issued_total", map[string]string{
-		"grant_type": "authorization_code",
+		"grant_type": "unknown",
 		"client_id":  "",
 	}); got != 1 {
-		t.Fatalf("fixed grant_type counter=%v want 1", got)
+		t.Fatalf("unknown grant_type counter=%v want 1", got)
 	}
-	if got := counterValue(t, families, "oidc_token_issued_total", map[string]string{
-		"grant_type": "refresh_token",
-		"client_id":  "",
-	}); got != 0 {
-		t.Fatalf("stale grant_type counter=%v want 0", got)
+	for _, forged := range []string{"refresh_token", "device_code", "authorization_code"} {
+		if got := counterValue(t, families, "oidc_token_issued_total", map[string]string{
+			"grant_type": forged,
+			"client_id":  "",
+		}); got != 0 {
+			t.Fatalf("forged grant_type %q counter=%v want 0", forged, got)
+		}
 	}
 }
 
@@ -531,10 +597,10 @@ func TestBridge_CatalogMetricProjectionIsUnique(t *testing.T) {
 			bridge.Emit(context.Background(), audit.Event{
 				Name: string(definition.Name),
 				Extras: map[string]any{
-					"grant_type": "authorization_code",
-					"factor":     "password",
-					"method":     "client_secret_basic",
-					"reason":     "invalid_client_credentials",
+					auditevent.ExtraRefreshOrigin: store.RefreshOriginAuthCode,
+					"factor":                      "password",
+					"method":                      "client_secret_basic",
+					"reason":                      "invalid_client_credentials",
 				},
 			})
 

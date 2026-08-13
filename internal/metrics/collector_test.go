@@ -8,33 +8,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 )
-
-// expectedCollectorNames is the closed list of metric names the
-// constructor MUST register on a fresh registry. Adding a new metric
-// here without updating the constructor (or vice versa) surfaces a
-// regression at test time.
-var expectedCollectorNames = []string{
-	"oidc_token_issued_total",
-	"oidc_tokens_refreshed_total",
-	"oidc_login_attempts_total",
-	"oidc_refresh_replay_detected_total",
-	"oidc_code_replay_detected_total",
-	"oidc_client_authn_failures_total",
-	"oidc_dcr_events_total",
-	"oidc_device_authorization_events_total",
-	"oidc_device_code_events_total",
-	"oidc_ciba_events_total",
-	"oidc_token_exchange_events_total",
-	"oidc_custom_grant_events_total",
-	"oidc_back_channel_logout_total",
-	"oidc_logout_failures_total",
-	"oidc_introspection_errors_total",
-	"oidc_token_revoke_failures_total",
-	"oidc_dpop_loose_method_case_admitted_total",
-	"oidc_key_retired_kid_presented_total",
-}
 
 func TestCollector_New_NilRegistryRejected(t *testing.T) {
 	t.Parallel()
@@ -60,7 +36,7 @@ func TestCollector_New_RegistersExpectedMetrics(t *testing.T) {
 	// the registry without depending on a non-zero observation
 	// existing yet (vec metrics are not surfaced by Gather until they
 	// receive at least one sample).
-	for _, name := range expectedCollectorNames {
+	for _, name := range auditevent.MetricNames() {
 		probe := prometheus.NewCounter(prometheus.CounterOpts{Name: name, Help: "probe"})
 		if err := reg.Register(probe); err == nil {
 			t.Errorf("metric %q not registered: probe accepted", name)

@@ -224,6 +224,21 @@ func TestMask(t *testing.T) {
 			want: "https://op.example.com/cb?code=" + redact.Sentinel + "&iss=https://op",
 		},
 		{
+			// The fragment response mode delivers the credential
+			// after '#', so a logged callback URL carries its most
+			// sensitive parameter in the position a '?'-only scanner
+			// leaves glued to the path.
+			name: "url_fragment",
+			in:   "https://rp.example/cb#code=SECRET&state=XYZ&access_token=SECRET2",
+			want: "https://rp.example/cb#code=" + redact.Sentinel +
+				"&state=" + redact.Sentinel + "&access_token=" + redact.Sentinel,
+		},
+		{
+			name: "query_then_fragment",
+			in:   "https://rp.example/cb?iss=https://op#id_token=SECRET",
+			want: "https://rp.example/cb?iss=https://op#id_token=" + redact.Sentinel,
+		},
+		{
 			name: "case_insensitive_key",
 			in:   "Access_Token=shh-its-a-secret",
 			want: "Access_Token=" + redact.Sentinel,
