@@ -347,7 +347,7 @@ def _load_exclusions(
 class _AcceptedOutcome:
     """One class-level rule admitting a REVIEW / SKIPPED family."""
 
-    __slots__ = ("result", "plan", "module", "owner", "reason")
+    __slots__ = ("result", "plan", "module", "owner", "reason", "intermittent")
 
     def __init__(self, rule: dict[str, Any]) -> None:
         self.result: str = rule["result"]
@@ -355,6 +355,13 @@ class _AcceptedOutcome:
         self.module: str = rule.get("module", "*")
         self.owner: str = rule["owner"]
         self.reason: str = rule["reason"]
+        # intermittent marks a rule whose module does not settle on one
+        # outcome across runs — typically a REVIEW step the suite raises
+        # only sometimes. Such a rule matching nothing is the good run,
+        # not a stale entry, so it is exempt from the unmatched-rule
+        # blocker. It still has to match the declared result whenever the
+        # module does come out that way, and it still expires.
+        self.intermittent: bool = bool(rule.get("intermittent", False))
 
     def matches(self, plan: str, module: str, result: str) -> bool:
         return (
@@ -552,9 +559,11 @@ def _strict_release_issues(
             issues.append(f"exclusion names absent module [{plan}] {module}")
     # A rule that matches nothing is either a leftover from a fixed
     # module or a typo in its glob. Both read as "this family is
-    # accounted for" while accounting for nothing, so both are blockers.
+    # accounted for" while accounting for nothing, so both are blockers —
+    # except where the rule declares the module intermittent, for which
+    # matching nothing is the run where it behaved.
     for index, rule in enumerate(accepted):
-        if index not in matched_rules:
+        if index not in matched_rules and not rule.intermittent:
             issues.append(f"accepted outcome matches no module: {rule.label()}")
     # An unreachable entry that stopped applying is the good news case:
     # the module now answers. It still blocks, because leaving the entry

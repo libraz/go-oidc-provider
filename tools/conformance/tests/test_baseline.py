@@ -146,6 +146,23 @@ class AcceptedOutcomeTest(_VerifyHarness):
         self.assertEqual(result, 1, output)
         self.assertIn("accepted outcome matches no module", output)
 
+    def test_intermittent_rule_may_match_nothing(self) -> None:
+        """An intermittent rule matching nothing is the run where the
+        module behaved, not a leftover.
+
+        Some modules raise their REVIEW step only sometimes, so the run
+        that comes out PASSED would otherwise block the release for the
+        rule that exists to cover the other run. The exemption is opt-in
+        per rule; a rule without the marker is still rejected, which the
+        test above pins.
+        """
+        result, output = self.verify("candidate-review.json", "rules-stale-intermittent.json")
+        self.assertNotIn("accepted outcome matches no module", output)
+        # candidate-review.json still holds a REVIEW this manifest does
+        # not admit, so the run fails on that and not on the rule.
+        self.assertEqual(result, 1, output)
+        self.assertIn("unexcluded non-pass", output)
+
     def test_expired_rule_is_rejected(self) -> None:
         result, output = self.verify("candidate-review.json", "rules-expired.json")
         self.assertEqual(result, 1, output)

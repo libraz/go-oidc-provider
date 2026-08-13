@@ -1,0 +1,14 @@
+{
+  "schema": "go-oidc-provider/conformance-exclusions/v2",
+  "exclusions": [],
+  "accepted_outcomes": [
+    {
+      "result": "REVIEW",
+      "module": "no-such-module-*",
+      "intermittent": true,
+      "reason": "Fixture for an intermittent rule on the run where its module behaved, so the glob matches nothing.",
+      "owner": "conformance-maintainers",
+      "expires": "2999-01-01"
+    }
+  ]
+}
