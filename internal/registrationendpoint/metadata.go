@@ -114,7 +114,6 @@ type metadataWire struct {
 	BackchannelClientNotificationEndpoint      string   `json:"backchannel_client_notification_endpoint,omitempty"`
 	BackchannelAuthenticationRequestSigningAlg string   `json:"backchannel_authentication_request_signing_alg,omitempty"`
 	BackchannelUserCodeParameter               *bool    `json:"backchannel_user_code_parameter,omitempty"`
-	AuthorizationSignedResponseAlg             string   `json:"authorization_signed_response_alg,omitempty"`
 	AuthorizationDetailsTypes                  []string `json:"authorization_details_types,omitempty"`
 
 	// Metadata the OP does not persist but MUST answer for, because the
@@ -125,6 +124,7 @@ type metadataWire struct {
 	// asked for, so they are parsed and checked by
 	// [validateUnpersistedMetadata].
 	UserInfoSignedResponseAlg          string `json:"userinfo_signed_response_alg,omitempty"`
+	AuthorizationSignedResponseAlg     string `json:"authorization_signed_response_alg,omitempty"`
 	DPoPBoundAccessTokens              bool   `json:"dpop_bound_access_tokens,omitempty"`
 	RequirePushedAuthorizationRequests bool   `json:"require_pushed_authorization_requests,omitempty"`
 
@@ -154,18 +154,18 @@ type metadataWire struct {
 // path uses this to fail with invalid_software_statement, the PUT path
 // uses it to enforce immutability.
 type metadataExtras struct {
-	SoftwareStatement                     string
-	ClientID                              string
-	ClientSecret                          json.RawMessage
-	ClientSecretExp                       json.RawMessage
-	ClientIDIssuedAt                      json.RawMessage
-	RegAccessToken                        json.RawMessage
-	RegClientURI                          json.RawMessage
-	IntrospectionSignedResponseAlgPresent bool
+	SoftwareStatement string
+	ClientID          string
+	ClientSecret      json.RawMessage
+	ClientSecretExp   json.RawMessage
+	ClientIDIssuedAt  json.RawMessage
+	RegAccessToken    json.RawMessage
+	RegClientURI      json.RawMessage
 
 	// Members the OP validates but does not persist. See
 	// [validateUnpersistedMetadata] for the rule applied to each.
 	UserInfoSignedResponseAlg          string
+	AuthorizationSignedResponseAlg     string
 	DPoPBoundAccessTokens              bool
 	RequirePushedAuthorizationRequests bool
 }
@@ -199,10 +199,6 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 	var trailing json.RawMessage
 	if err := dec.Decode(&trailing); err != io.EOF {
 		return ClientMetadata{}, metadataExtras{}, errors.New("registrationendpoint: decode metadata: trailing JSON document")
-	}
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &members); err != nil {
-		return ClientMetadata{}, metadataExtras{}, fmt.Errorf("registrationendpoint: decode metadata members: %w", err)
 	}
 	m := ClientMetadata{
 		RedirectURIs:                      cloneStrings(w.RedirectURIs),
@@ -245,25 +241,20 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		BackchannelLogoutSessionRequired:  w.BackchannelLogoutSessionRequired,
 	}
 	extras := metadataExtras{
-		SoftwareStatement:                     w.SoftwareStatement,
-		ClientID:                              w.ClientID,
-		ClientSecret:                          append(json.RawMessage(nil), w.ClientSecret...),
-		ClientSecretExp:                       append(json.RawMessage(nil), w.ClientSecretExpiresAt...),
-		ClientIDIssuedAt:                      append(json.RawMessage(nil), w.ClientIDIssuedAt...),
-		RegAccessToken:                        append(json.RawMessage(nil), w.RegistrationAccessToken...),
-		RegClientURI:                          append(json.RawMessage(nil), w.RegistrationClientURI...),
-		IntrospectionSignedResponseAlgPresent: hasMetadataMember(members, "introspection_signed_response_alg"),
+		SoftwareStatement: w.SoftwareStatement,
+		ClientID:          w.ClientID,
+		ClientSecret:      append(json.RawMessage(nil), w.ClientSecret...),
+		ClientSecretExp:   append(json.RawMessage(nil), w.ClientSecretExpiresAt...),
+		ClientIDIssuedAt:  append(json.RawMessage(nil), w.ClientIDIssuedAt...),
+		RegAccessToken:    append(json.RawMessage(nil), w.RegistrationAccessToken...),
+		RegClientURI:      append(json.RawMessage(nil), w.RegistrationClientURI...),
 
 		UserInfoSignedResponseAlg:          w.UserInfoSignedResponseAlg,
+		AuthorizationSignedResponseAlg:     w.AuthorizationSignedResponseAlg,
 		DPoPBoundAccessTokens:              w.DPoPBoundAccessTokens,
 		RequirePushedAuthorizationRequests: w.RequirePushedAuthorizationRequests,
 	}
 	return m, extras, nil
-}
-
-func hasMetadataMember(members map[string]json.RawMessage, name string) bool {
-	_, ok := members[name]
-	return ok
 }
 
 // normalizeOptionalJSON maps an explicit JSON null to the same empty

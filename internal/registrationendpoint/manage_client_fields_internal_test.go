@@ -3,10 +3,13 @@ package registrationendpoint
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -17,7 +20,9 @@ type putDisposition int
 const (
 	// dispositionMetadata marks a field taken from the submitted
 	// RFC 7591 §2 metadata on every update. An omitted member clears it
-	// (RFC 7592 §2.2 defines omission as a request to delete).
+	// (RFC 7592 §2.2 defines omission as a request to delete), except
+	// where the library holds a documented default for the member — see
+	// [minimalUpdateValues].
 	dispositionMetadata putDisposition = iota
 
 	// dispositionPreserved marks a field the registration wire shape
@@ -123,33 +128,82 @@ func TestPutDispositionsCoverEveryClientField(t *testing.T) {
 	}
 }
 
+// probeRedirectURI is the single member the minimal update document
+// carries. The endpoint refuses a document without redirect_uris, so it
+// is the one metadata member the probe cannot omit.
+const probeRedirectURI = "https://rp.test.invalid/callback"
+
+// minimalUpdateValues names the members that are legitimately non-zero
+// after an update document that carries redirect_uris and nothing else:
+// the submitted URI, plus the members [applyMetadataDefaults] fills for
+// a document that omits them.
+//
+// Every other metadata member — Scopes above all — must come back zero.
+// A default that reaches the update path hands an already-registered
+// client authority it never asked for: a client that registered with
+// "openid" and then omits the member would collect the OP's whole
+// public scope catalog.
+var minimalUpdateValues = map[string]any{
+	"RedirectURIs":             []string{probeRedirectURI},
+	"GrantTypes":               []string{"authorization_code", "refresh_token"},
+	"ResponseTypes":            []string{"code"},
+	"TokenEndpointAuthMethod":  defaultAuthMethod,
+	"SubjectType":              defaultSubjectType,
+	"IDTokenSignedResponseAlg": defaultIDTokenAlg,
+	"ApplicationType":          defaultApplicationType,
+}
+
 // TestUpdateKeepsConfigurationTheMetadataCannotExpress drives the
-// persistence path with an empty metadata document. That submission is
-// the strongest probe available: it clears every field an update can
-// express, so whatever still carries its seeded value is exactly what
-// the update preserved. Rebuilding the record from the metadata instead
-// of copying the stored one turns every preserved field zero and fails
-// here.
+// endpoint itself with the smallest document PUT /register/{client_id}
+// accepts: redirect_uris and nothing else. That submission is the
+// strongest probe available — it omits every other member an update can
+// express, so whatever the persisted record still carries is exactly
+// what the update path decided to put there. Rebuilding the record from
+// the metadata instead of copying the stored one turns every preserved
+// field zero, and a member the request never named that comes back
+// populated is authority the OP granted on its own initiative.
+//
+// The probe runs through [Handler] rather than the persistence helper:
+// the scope defaults live in the validation stage, so a probe that
+// starts below it cannot see them.
 func TestUpdateKeepsConfigurationTheMetadataCannotExpress(t *testing.T) {
 	t.Parallel()
 
+	const clientID = "probe-client"
+	const rawRAT = "probe-registration-access-token"
+
 	existing := seedEveryClientField(t)
+	existing.ID = clientID
+	existing.Source = store.ClientSourceDynamic
 	stored := *existing
 	registry := &fieldProbeRegistry{client: existing}
-	deps := Deps{Clients: registry, RegistrationAccessTokens: fieldProbeRATStore{}}
+	handler := Handler(Deps{
+		Issuer:                   "https://op.test.invalid",
+		RegisterPath:             "/register",
+		Clients:                  registry,
+		RegistrationAccessTokens: fieldProbeRATStore{hashedRAT: hashSecret(rawRAT)},
+		// A populated catalog is what makes the probe able to fail: with
+		// no registered scopes there is nothing for a scope default to
+		// widen to.
+		Scopes: scoperegistry.New([]scoperegistry.Entry{
+			{Name: "openid", Public: true},
+			{Name: "profile", Public: true},
+			{Name: "email", Public: true},
+		}),
+	})
 
-	rotated, ok := rotateAndUpdate(
-		context.Background(),
-		httptest.NewRecorder(),
-		deps,
-		existing,
-		ClientMetadata{},
-	)
-	if !ok {
-		t.Fatal("rotateAndUpdate reported failure")
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPut, "/register/"+clientID,
+		strings.NewReader(`{"redirect_uris":["`+probeRedirectURI+`"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+rawRAT)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d want 200 body=%s", rec.Code, rec.Body.String())
 	}
 	if registry.updated == nil {
-		t.Fatal("rotateAndUpdate did not persist a client record")
+		t.Fatal("the update did not persist a client record")
 	}
 
 	got := reflect.ValueOf(*registry.updated)
@@ -171,28 +225,35 @@ func TestUpdateKeepsConfigurationTheMetadataCannotExpress(t *testing.T) {
 					name, got.Field(i).Interface(), want.Field(i).Interface())
 			}
 		case dispositionMetadata:
+			if expected, defaulted := minimalUpdateValues[name]; defaulted {
+				if !reflect.DeepEqual(got.Field(i).Interface(), expected) {
+					t.Errorf("update stored store.Client.%s = %v, want %v; the submitted document and the "+
+						"library defaults are the only sources an update draws on",
+						name, got.Field(i).Interface(), expected)
+				}
+				continue
+			}
 			if !got.Field(i).IsZero() {
 				t.Errorf("update kept store.Client.%s = %v although the submitted metadata omitted it; "+
-					"an omitted member deletes the value", name, got.Field(i).Interface())
+					"an omitted member deletes the value and never collects a registration default",
+					name, got.Field(i).Interface())
 			}
 		case dispositionDerived:
 			// Asserted explicitly below, where the expected value can
-			// be stated against the submitted auth method.
+			// be stated against the auth method the update settled on.
 		}
 	}
 
-	// The submission named no authentication method, so it is not a
-	// confidential registration: the secret is cleared and the client is
-	// not marked public either (only "none" produces a public client).
-	if registry.updated.SecretHash != "" {
-		t.Errorf("SecretHash=%q, want empty for an update that names no confidential auth method",
-			registry.updated.SecretHash)
+	// The document named no authentication method, so it takes the
+	// confidential default: the stored secret is carried forward rather
+	// than rotated, and the client stays confidential (only "none"
+	// produces a public client).
+	if registry.updated.SecretHash != stored.SecretHash {
+		t.Errorf("SecretHash=%q, want the stored hash %q carried forward: a metadata edit must not rotate "+
+			"credentials", registry.updated.SecretHash, stored.SecretHash)
 	}
 	if registry.updated.PublicClient {
-		t.Error("PublicClient=true, want false for an update that names no auth method")
-	}
-	if rotated.rawRAT == "" {
-		t.Error("rotateAndUpdate returned an empty registration access token")
+		t.Error("PublicClient=true, want false for an update that defaults to a confidential auth method")
 	}
 }
 
@@ -255,14 +316,20 @@ func (r *fieldProbeRegistry) UpdateClient(_ context.Context, c *store.Client) er
 
 func (r *fieldProbeRegistry) DeleteClient(context.Context, string) error { return nil }
 
-// fieldProbeRATStore accepts the rotated registration access token and
-// forgets it; the rotation itself is covered by the management suite.
-type fieldProbeRATStore struct{}
+// fieldProbeRATStore answers the management credential check with a
+// fixed hash and forgets the rotated token; the rotation itself is
+// covered by the management suite.
+type fieldProbeRATStore struct {
+	hashedRAT string
+}
 
 func (fieldProbeRATStore) Put(context.Context, *store.RegistrationAccessToken) error { return nil }
 
-func (fieldProbeRATStore) GetByClientID(context.Context, string) (*store.RegistrationAccessToken, error) {
-	return nil, store.ErrNotFound
+func (s fieldProbeRATStore) GetByClientID(_ context.Context, clientID string) (*store.RegistrationAccessToken, error) {
+	if s.hashedRAT == "" {
+		return nil, store.ErrNotFound
+	}
+	return &store.RegistrationAccessToken{ClientID: clientID, HashedValue: s.hashedRAT}, nil
 }
 
 func (fieldProbeRATStore) Delete(context.Context, string) error { return nil }

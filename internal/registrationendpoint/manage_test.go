@@ -179,6 +179,100 @@ func TestManage_UpdateRetainsIATScopeCeilingAcrossRATRotation(t *testing.T) {
 	}
 }
 
+// TestManage_UpdateWithoutScopeMemberDoesNotWidenScopes pins the rule
+// that an update grants no scope the client did not name. The client
+// below registers for "openid" alone under an initial access token that
+// carries no allowlist, which is the ordinary operator setup: the OP is
+// willing to hand a *new* registration its public scope catalog when
+// that registration asks for nothing in particular. An
+// already-registered client is in a different position. Omitting the
+// scope member on a PUT is a request to delete it (RFC 7592 §2.2), and
+// answering it with the catalog would let any dynamic client collect
+// every public scope — and mint tokens for them — with a single request
+// that asked for nothing at all.
+//
+// The second update proves the clearing is not a dead end: a client
+// that wants its scope back names it, and the OP grants what was named.
+func TestManage_UpdateWithoutScopeMemberDoesNotWidenScopes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	f := newFixture(t, op.RegistrationOption{})
+	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
+	createdResp := f.post(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/callback"},
+		"scope":         "openid",
+	}, iat)
+	defer createdResp.Body.Close()
+	if createdResp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(createdResp.Body)
+		t.Fatalf("register: status=%d want 201 body=%s", createdResp.StatusCode, raw)
+	}
+	created := decodeBody(t, createdResp)
+	clientID, _ := created["client_id"].(string)
+	rat, _ := created["registration_access_token"].(string)
+	managementURL := f.endpoint + "/" + clientID
+
+	registered, err := f.prov.Store.GetClient(ctx, clientID)
+	if err != nil {
+		t.Fatalf("GetClient(%q): %v", clientID, err)
+	}
+	if len(registered.Scopes) != 1 || registered.Scopes[0] != "openid" {
+		t.Fatalf("client.Scopes=%v after registration, want [openid]", registered.Scopes)
+	}
+
+	updated := f.manage(t, http.MethodPut, managementURL, rat, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/callback"},
+	})
+	defer updated.Body.Close()
+	if updated.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(updated.Body)
+		t.Fatalf("PUT: status=%d want 200 body=%s", updated.StatusCode, raw)
+	}
+	updatedBody := decodeBody(t, updated)
+	if scope, _ := updatedBody["scope"].(string); scope != "" {
+		t.Errorf("response scope=%q after an update that omitted the member, want none", scope)
+	}
+
+	stored, err := f.prov.Store.GetClient(ctx, clientID)
+	if err != nil {
+		t.Fatalf("GetClient(%q) after update: %v", clientID, err)
+	}
+	if len(stored.Scopes) != 0 {
+		t.Errorf("client.Scopes=%v after an update that omitted the scope member, want none; the client "+
+			"holds scopes it never registered for and can obtain tokens for them", stored.Scopes)
+	}
+
+	restored := f.manage(t, http.MethodPut, managementURL, ratFromBody(t, updatedBody), map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/callback"},
+		"scope":         "openid",
+	})
+	defer restored.Body.Close()
+	if restored.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(restored.Body)
+		t.Fatalf("restoring PUT: status=%d want 200 body=%s", restored.StatusCode, raw)
+	}
+	stored, err = f.prov.Store.GetClient(ctx, clientID)
+	if err != nil {
+		t.Fatalf("GetClient(%q) after restoring update: %v", clientID, err)
+	}
+	if len(stored.Scopes) != 1 || stored.Scopes[0] != "openid" {
+		t.Errorf("client.Scopes=%v after an update that named openid, want [openid]", stored.Scopes)
+	}
+}
+
+// ratFromBody reads the rotated registration access token out of an
+// update response. Every successful update rotates the credential, so a
+// test that issues a second update has to present the new one.
+func ratFromBody(tb testing.TB, body map[string]any) string {
+	tb.Helper()
+	rat, _ := body["registration_access_token"].(string)
+	if rat == "" {
+		tb.Fatalf("update response carries no rotated registration access token: %v", body)
+	}
+	return rat
+}
+
 // TestManage_Read_4xx covers the RAT verification error matrix.
 func TestManage_Read_4xx(t *testing.T) {
 	t.Parallel()

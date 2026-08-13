@@ -104,12 +104,12 @@ func TestArgon2id_HashRejectsWeakParams(t *testing.T) {
 }
 
 // TestArgon2id_VerifyRejectsDuplicateParameter pins the parser
-// invariant the audit-2026-05-07 review (S-03) flagged: a stored
-// PHC that re-declares m / t / p MUST be refused outright. Pre-audit
-// the parsers (one per credential surface) all walked the
-// "m=64,m=128,..." segment with last-value-wins semantics; the
-// shared internal/argon2id parser now rejects the duplicate so an
-// audit log cannot disagree with the actual derivation.
+// invariant: a stored PHC that re-declares m / t / p MUST be refused
+// outright. A parser that walks the "m=64,m=128,..." segment with
+// last-value-wins semantics derives the key from parameters other than
+// the ones an operator reading the record would see, so the shared
+// internal/argon2id parser rejects the duplicate rather than picking
+// one — an audit log cannot then disagree with the actual derivation.
 func TestArgon2id_VerifyRejectsDuplicateParameter(t *testing.T) {
 	t.Parallel()
 

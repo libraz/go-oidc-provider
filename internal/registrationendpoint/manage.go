@@ -43,6 +43,13 @@ func handleRead(w http.ResponseWriter, r *http.Request, deps Deps, clientID stri
 // undefined; this OP issues a fresh registration_access_token on every
 // successful update and revokes the previous one), and updates the
 // client.
+//
+// An update grants no scope the client did not name. The registration
+// path's defaults exist to give a new client an initial authority; an
+// already-registered client that omits the scope member is asking for
+// the member to be deleted (RFC 7592 §2.2), so its scopes are cleared
+// rather than replaced with whatever default a fresh registration would
+// have received.
 func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID string) {
 	ctx := r.Context()
 	existing, rat, ok := verifyRAT(ctx, w, r, deps, clientID)
@@ -73,7 +80,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		writeRegistrationError(w, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
-	if err := validateUnpersistedMetadata(extras); err != nil {
+	if err := validateUnpersistedMetadata(metadata, extras); err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, clientID)
 		return
 	}
@@ -82,8 +89,6 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		deps.AllowedGrantTypes,
 		deps.AllowedResponseTypes,
 		ratAllowedScopes(rat), // immutable IAT ceiling; empty legacy RAT means unrestricted.
-		false,                 // PUT is RAT-authenticated, never the open-registration flow.
-		nil,                   // PUT path does not apply the open-registration default scope.
 		deps.Scopes,
 		deps.PairwiseEnabled,
 		deps.AllowLocalhostLoopback,
@@ -104,7 +109,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 			return
 		}
 	}
-	rotated, ok := rotateAndUpdateWithAllowedScopes(ctx, w, deps, existing, canonical, ratAllowedScopes(rat), extras.IntrospectionSignedResponseAlgPresent)
+	rotated, ok := rotateAndUpdate(ctx, w, deps, existing, canonical, ratAllowedScopes(rat))
 	if !ok {
 		return
 	}
@@ -117,35 +122,27 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	writeRegistrationResponse(w, http.StatusOK, clientToResponse(rotated.client, deps, rotated.rawRAT, rotated.rawSecret))
 }
 
-// rotateAndUpdate is the shared persistence path for PUT
-// /register/{client_id}. It mints a fresh RAT, persists the updated
-// client, and overwrites the RAT row. The function returns the
-// updated client plus the raw RAT so the caller can include it in the
-// response body.
+// rotatedRegistration carries the outcome of a successful update: the
+// persisted client plus the freshly minted credentials the caller
+// includes in the response body.
 type rotatedRegistration struct {
 	client    *store.Client
 	rawRAT    string
 	rawSecret string
 }
 
+// rotateAndUpdate is the persistence path for PUT
+// /register/{client_id}. It mints a fresh RAT, persists the updated
+// client, and overwrites the RAT row, carrying allowedScopes onto the
+// rotated token so the ceiling an operator bound to the original
+// initial access token survives every rotation.
 func rotateAndUpdate(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
 	existing *store.Client,
 	m ClientMetadata,
-) (rotatedRegistration, bool) {
-	return rotateAndUpdateWithAllowedScopes(ctx, w, deps, existing, m, nil, false)
-}
-
-func rotateAndUpdateWithAllowedScopes(
-	ctx context.Context,
-	w http.ResponseWriter,
-	deps Deps,
-	existing *store.Client,
-	m ClientMetadata,
 	allowedScopes []string,
-	_ bool,
 ) (rotatedRegistration, bool) {
 	rawRAT, err := newOpaqueID(ratBytes)
 	if err != nil {

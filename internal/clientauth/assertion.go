@@ -81,6 +81,19 @@ type assertionSigningAlgResolver interface {
 
 const maxAssertionLifetime = 5 * time.Minute
 
+// DefaultAssertionLeeway is the skew tolerance applied to the time
+// claims of a client assertion when [PrivateKeyJWTVerifier.Leeway] is
+// zero.
+//
+// It is deliberately wider than the tolerance applied to access tokens
+// (see tokens.DefaultLeeway): an assertion is minted by a peer whose
+// clock this OP does not control and cannot correct, whereas an access
+// token was minted by this OP against its own clock. The two budgets
+// answer different questions and are not required to agree, but each
+// must have exactly one source so that neither drifts by having a
+// number restated at a second verification point.
+const DefaultAssertionLeeway = 60 * time.Second
+
 // PrivateKeyJWTVerifier is the library's reference [AssertionVerifier].
 // Embedders typically use this verifier wrapped around their own
 // JWKSResolver and the OP's [store.ConsumedJTIStore].
@@ -111,7 +124,7 @@ type PrivateKeyJWTVerifier struct {
 	Clock func() time.Time
 
 	// Leeway tolerates small clock skew on iat / nbf / exp comparisons.
-	// Defaults to 60 seconds when zero.
+	// Defaults to [DefaultAssertionLeeway] when zero.
 	Leeway time.Duration
 }
 
@@ -125,7 +138,7 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	ctx = withClientMemo(ctx)
 	leeway := v.Leeway
 	if leeway <= 0 {
-		leeway = 60 * time.Second
+		leeway = DefaultAssertionLeeway
 	}
 
 	jws, _, err := jose.ParseSigned(assertion)

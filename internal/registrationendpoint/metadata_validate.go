@@ -24,13 +24,19 @@ import (
 // The validator does not invoke [Deps.ValidateMetadata]; the handler
 // runs that hook after structural validation passes so embedder code
 // only sees metadata that already cleared the library checks.
+//
+// The validator never widens the submitted scope. Filling an omitted
+// scope member with a default belongs to the registration path (see
+// [defaultScopeIfEmpty]), which is the only path that knows which
+// authority admitted the client; a management update therefore reaches
+// this function with the scope the client actually submitted, and an
+// omitted member stays omitted instead of collecting the OP's catalog.
+// iatScopes remains the ceiling every named scope is held against.
 func validatePolicy(
 	m ClientMetadata,
 	allowedGrantTypes []string,
 	allowedResponseTypes []string,
 	iatScopes []string,
-	openRegistration bool,
-	openRegistrationDefaultScopes []string,
 	scopes *scoperegistry.Registry,
 	pairwiseEnabled bool,
 	allowLocalhostLoopback bool,
@@ -41,11 +47,10 @@ func validatePolicy(
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
 	}
 	canonical := applyMetadataDefaults(m, allowedGrantTypes, allowedResponseTypes)
-	if err := validateSignedResponseAlg("introspection_signed_response_alg", canonical.IntrospectionSignedResponseAlg); err != nil {
+	if err := validateSignedResponseAlg(introspectionSignedResponseSurface(), canonical.IntrospectionSignedResponseAlg); err != nil {
 		return ClientMetadata{}, err
 	}
 	canonical.IntrospectionSignedResponseAlg = normalizeIntrospectionSignedResponseAlg(canonical.IntrospectionSignedResponseAlg)
-	canonical.Scope = defaultScopeIfEmpty(canonical.Scope, iatScopes, openRegistration, openRegistrationDefaultScopes, scopes)
 	checks := []func() error{
 		func() error {
 			return validateRedirectURIs(canonical.RedirectURIs, canonical.ApplicationType, hasImplicitResponseType(canonical.ResponseTypes), allowLocalhostLoopback)
@@ -58,7 +63,9 @@ func validatePolicy(
 		func() error { return validateAuthMethod(canonical.TokenEndpointAuthMethod) },
 		func() error { return validateTokenEndpointAuthSigningAlg(canonical.TokenEndpointAuthSigningAlg) },
 		func() error { return validateSubjectType(canonical.SubjectType, pairwiseEnabled) },
-		func() error { return validateIDTokenAlg(canonical.IDTokenSignedResponseAlg) },
+		func() error {
+			return validateSignedResponseAlg(idTokenSignedResponseSurface(), canonical.IDTokenSignedResponseAlg)
+		},
 		func() error { return validateRequestedScopes(canonical.Scope, iatScopes, scopes) },
 		func() error { return validateMetadataURIs(canonical, allowInsecureBackchannelLogoutForDev) },
 		func() error { return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg) },
@@ -100,11 +107,13 @@ func validatePolicy(
 //
 // The members fall into two groups:
 //
-//   - UserInfo response-signing algorithms. Discovery publishes the alg
-//     value the OP signs UserInfo responses with, so a client naming a
-//     different algorithm MUST be refused. Introspection's signed-response
-//     algorithm is persisted on ClientMetadata and is validated by
-//     validatePolicy instead.
+//   - Response-signing algorithms for the surfaces whose shape is not
+//     client-configurable: UserInfo and the JARM authorization response.
+//     Both are held against [validateSignedResponseAlg] exactly like the
+//     persisted introspection member, so a client learns at registration
+//     time which shape it will receive. m supplies the UserInfo
+//     encryption metadata the UserInfo surface depends on; see
+//     [userInfoSignedResponseSurface].
 //   - Per-client enforcement flags. Asking the OP to require DPoP
 //     (RFC 9449 §5.2) or pushed authorization requests (RFC 9126 §6.2)
 //     from this client specifically is a hardening the OP applies
@@ -113,8 +122,12 @@ func validatePolicy(
 //     protection is in place, so the request is refused instead. A
 //     false value is the protocol default and is accepted as the no-op
 //     it is.
-func validateUnpersistedMetadata(extras metadataExtras) error {
-	if err := validateSignedResponseAlg("userinfo_signed_response_alg", extras.UserInfoSignedResponseAlg); err != nil {
+func validateUnpersistedMetadata(m ClientMetadata, extras metadataExtras) error {
+	userInfo := userInfoSignedResponseSurface(m.UserInfoEncryptedResponseAlg != "")
+	if err := validateSignedResponseAlg(userInfo, extras.UserInfoSignedResponseAlg); err != nil {
+		return err
+	}
+	if err := validateSignedResponseAlg(authorizationSignedResponseSurface(), extras.AuthorizationSignedResponseAlg); err != nil {
 		return err
 	}
 	if extras.DPoPBoundAccessTokens {
@@ -132,18 +145,113 @@ func validateUnpersistedMetadata(extras metadataExtras) error {
 	return nil
 }
 
-// validateSignedResponseAlg admits the single JWS alg the OP signs
-// with, plus the explicit "none" that names the unsigned JSON shape the
-// OP serves by default. Every other value is refused: the OP holds one
-// signing algorithm, so accepting a second name would promise a
-// signature the client could not verify.
-func validateSignedResponseAlg(field, alg string) error {
-	switch alg {
-	case "", "none", "ES256":
-		return nil
-	default:
-		return errInvalidClientMetadata(field + " " + alg + " is not supported (ES256 only)")
+// signedResponseAlgSurface describes what one *_signed_response_alg
+// member may name. The OP holds a single signing algorithm, so "ES256"
+// is the only algorithm any surface can ever produce; whether a surface
+// can also produce an unsigned body differs per surface, and a member
+// naming a shape its surface never emits is refused rather than
+// recorded. See [validateSignedResponseAlg] for the rule.
+type signedResponseAlgSurface struct {
+	// field is the wire member name, used in the error description.
+	field string
+	// signed reports whether registering the OP's signing algorithm
+	// makes every later response on this surface a JWS.
+	signed bool
+	// unsigned reports whether registering "none" makes every later
+	// response on this surface an unsigned body.
+	unsigned bool
+	// refusal states why the shape this surface cannot produce is
+	// refused. A surface produces at least one of the two shapes, so a
+	// single explanation covers whichever half is missing.
+	refusal string
+}
+
+// idTokenSignedResponseSurface returns the ID Token surface. An ID
+// Token is a JWS by definition (OIDC Core 1.0 §2); there is no unsigned
+// ID Token for a client to ask for.
+func idTokenSignedResponseSurface() signedResponseAlgSurface {
+	return signedResponseAlgSurface{
+		field:   "id_token_signed_response_alg",
+		signed:  true,
+		refusal: "the OP always signs an ID Token",
 	}
+}
+
+// introspectionSignedResponseSurface returns the introspection-response
+// surface, the one surface whose shape the client selects: a JWT
+// response is emitted when the client registers the signed shape and a
+// JSON body otherwise (RFC 9701 §4). The value is persisted on
+// [ClientMetadata] and honoured unconditionally, which is the shape the
+// other three surfaces are held against.
+func introspectionSignedResponseSurface() signedResponseAlgSurface {
+	return signedResponseAlgSurface{
+		field:    "introspection_signed_response_alg",
+		signed:   true,
+		unsigned: true,
+	}
+}
+
+// authorizationSignedResponseSurface returns the JARM authorization-
+// response surface. A JARM response is a JWS on every response mode
+// that carries one; the OP does not serve an unsigned JARM body.
+func authorizationSignedResponseSurface() signedResponseAlgSurface {
+	return signedResponseAlgSurface{
+		field:   "authorization_signed_response_alg",
+		signed:  true,
+		refusal: "the OP always signs a JARM authorization response",
+	}
+}
+
+// userInfoSignedResponseSurface returns the /userinfo surface for a
+// client that did or did not register UserInfo response encryption.
+//
+// A UserInfo response is signed before it is encrypted (OIDC Core 1.0
+// §5.3.2), so a client that registered userinfo_encrypted_response_alg
+// receives a JWS on every call and may name the OP's signing algorithm.
+// Without registered encryption the JWT shape is chosen per request by
+// `Accept: application/jwt` and never by registration, so naming an
+// algorithm there would ask for a response shape the OP will not switch
+// to; only the unsigned JSON default may be named.
+func userInfoSignedResponseSurface(encryptionRegistered bool) signedResponseAlgSurface {
+	if encryptionRegistered {
+		return signedResponseAlgSurface{
+			field:   "userinfo_signed_response_alg",
+			signed:  true,
+			refusal: "a UserInfo response encrypted for this client is signed before it is encrypted",
+		}
+	}
+	return signedResponseAlgSurface{
+		field:    "userinfo_signed_response_alg",
+		unsigned: true,
+		refusal: "the OP serves the signed UserInfo shape to a request carrying " +
+			"Accept: application/jwt, not to a registration",
+	}
+}
+
+// validateSignedResponseAlg admits only the response shape the surface
+// actually produces: the single JWS alg the OP signs with where the
+// surface emits a JWS, and the explicit "none" where it emits an
+// unsigned body. Every other algorithm name is refused because the OP
+// holds one signing algorithm, and a shape the surface never produces is
+// refused because accepting it would answer 201/200 to a request the OP
+// does not act on. Omitting the member names no shape and is always
+// accepted; the surface keeps its default.
+func validateSignedResponseAlg(surface signedResponseAlgSurface, alg string) error {
+	switch alg {
+	case "":
+		return nil
+	case "ES256":
+		if surface.signed {
+			return nil
+		}
+	case "none":
+		if surface.unsigned {
+			return nil
+		}
+	default:
+		return errInvalidClientMetadata(surface.field + " " + alg + " is not supported (ES256 only)")
+	}
+	return errInvalidClientMetadata(surface.field + " " + alg + " is not supported: " + surface.refusal)
 }
 
 func normalizeIntrospectionSignedResponseAlg(alg string) string {
@@ -162,6 +270,13 @@ func validateDefaultMaxAge(v *int64) error {
 
 // defaultScopeIfEmpty returns scope unchanged when non-empty; when
 // empty it returns the registration-path default joined by spaces.
+//
+// Only POST /register calls this. Handing a client scopes it did not
+// ask for is a property of admitting a new registration, so the RFC
+// 7592 update path has no default at all: an update that omits the
+// scope member clears the stored value like every other omitted member
+// rather than inheriting whichever default the creation path would
+// have picked.
 //
 // The selection order is:
 //  1. iatScopes — the IAT-bound allowlist
@@ -336,14 +451,6 @@ func validateSubjectType(t string, pairwiseEnabled bool) error {
 	default:
 		return errInvalidClientMetadata("subject_type " + t + " is not supported")
 	}
-}
-
-// validateIDTokenAlg enforces the permanent ES256-only signing policy.
-func validateIDTokenAlg(alg string) error {
-	if alg != "ES256" {
-		return errInvalidClientMetadata("id_token_signed_response_alg " + alg + " is not supported (ES256 only)")
-	}
-	return nil
 }
 
 // validateRequestedScopes enforces (1) the IAT-bound AllowedScopes

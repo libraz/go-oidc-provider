@@ -97,18 +97,20 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"software_statement is not supported in v1.0")
 		return
 	}
-	if err := validateUnpersistedMetadata(extras); err != nil {
+	if err := validateUnpersistedMetadata(metadata, extras); err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, "")
 		return
 	}
 	iatScopes := iatAllowedScopes(ver)
+	// Creation is the only point that grants scope the client did not
+	// name: the IAT allowlist, or the open-registration default, decides
+	// what a brand-new client starts with.
+	metadata.Scope = defaultScopeIfEmpty(metadata.Scope, iatScopes, ver.Open, deps.OpenRegistrationDefaultScopes, deps.Scopes)
 	canonical, err := validatePolicy(
 		metadata,
 		deps.AllowedGrantTypes,
 		deps.AllowedResponseTypes,
 		iatScopes,
-		ver.Open,
-		deps.OpenRegistrationDefaultScopes,
 		deps.Scopes,
 		deps.PairwiseEnabled,
 		deps.AllowLocalhostLoopback,

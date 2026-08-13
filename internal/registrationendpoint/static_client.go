@@ -135,10 +135,8 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 		metadata,
 		opts.AllowedGrantTypes,
 		allowedResponseTypes,
-		nil,   // iatScopes: static clients are not IAT-scoped.
-		false, // openRegistration: static clients are not /register flow.
-		nil,   // openRegistrationDefaultScopes: same.
-		nil,   // scopes: skip the scope-registry check; the embedder
+		nil, // iatScopes: static clients are not IAT-scoped.
+		nil, // scopes: skip the scope-registry check; the embedder
 		// authoritatively names the scopes their static clients carry.
 		opts.PairwiseEnabled,
 		opts.AllowLocalhostLoopback,
