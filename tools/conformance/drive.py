@@ -223,11 +223,16 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
 
     if opts.reject:
         sys.stdout.write(f"[drive reject] DELETE {interaction_url}\n")
+        # Cancelling is a state change, so the interaction endpoint holds it
+        # to the same double-submit gate as the POSTs: an allowed Origin plus
+        # the token the prompt issued. A DELETE carries no form body, so the
+        # token travels in the header half of the pattern — the same channel
+        # the SPA uses.
         status, hdrs, _ = ofcs.request(
             "DELETE",
             interaction_url,
             cookies=cookies,
-            headers={"Origin": ISSUER},
+            headers={"Origin": ISSUER, "X-CSRF-Token": csrf},
             follow_redirects=False,
         )
         loc = hdrs.get("Location") or ""
