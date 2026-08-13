@@ -28,11 +28,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -143,8 +145,8 @@ var (
 // DeviceCodes is always required. Revoke additionally requires the
 // backend selected by RevocationStrategy: AccessTokens for JTIRegistry,
 // GrantRevocations (or the documented AccessTokens migration fallback)
-// for GrantTombstone, and no JWT backend for None. [Deps.Audit] defaults
-// to the discard sink so the helpers can call the emitter unconditionally.
+// for GrantTombstone, and no JWT backend for None. An unset audit sink
+// defaults to discard so the helpers can call the emitter unconditionally.
 type Deps struct {
 	// DeviceCodes is the substore the helpers mutate. Required.
 	// A nil value causes every helper to return [ErrInvalidArgument]
@@ -152,14 +154,37 @@ type Deps struct {
 	// the first call rather than a panic deep inside the helper.
 	DeviceCodes store.DeviceCodeStore
 
-	// Audit is the structured audit-event sink. The helpers emit
+	// AuditLogger is the audit sink of the helpers. The events land on
+	// it as structured slog records carrying audit="true", the same
+	// shape and the same routing attribute the OP writes through
+	// op.WithAuditLogger, so one handler can serve both streams.
+	// The helpers emit
 	// [op.AuditDeviceCodeUserCodeBruteForce] on every mismatched
-	// user_code submission, [op.AuditDeviceCodeVerificationDenied]
-	// when the brute-force gate fires the lockout, and
-	// [op.AuditDeviceCodeRevoked] from [Revoke]. A nil emitter
-	// collapses to the discard sink so the helpers stay safe to
-	// invoke when the embedder has not wired audit observability
-	// yet.
+	// user_code submission, [op.AuditDeviceCodeVerificationApproved]
+	// and [op.AuditDeviceCodeVerificationDenied] from the verification
+	// page, and [op.AuditDeviceCodeRevoked] from [Revoke]. A nil logger
+	// drops every record, so the helpers stay safe to invoke when the
+	// embedder has not wired audit observability yet.
+	//
+	// The logger's handler is wrapped with the library redaction hook
+	// (the same one op.WithAuditLogger applies) before any record is
+	// written, so an attribute named after an OAuth/OIDC credential is
+	// masked before it reaches the embedder's handler. Wrapping is
+	// idempotent: a handler that already carries the hook is used as-is.
+	//
+	// The handler is invoked synchronously on the goroutine that ran the
+	// helper, so it MUST be non-blocking — hand the record to a buffered
+	// worker rather than shipping it inline — and safe for concurrent use.
+	AuditLogger *slog.Logger
+
+	// Audit is the structured audit-event sink used in preference to
+	// AuditLogger when both are set.
+	//
+	// Deprecated: the field's interface type takes a package-internal
+	// event type as its method argument, so no code outside this module
+	// can implement it and the field can only be assigned from within
+	// the library. Embedders wire AuditLogger instead; it carries the
+	// same device-code events.
 	Audit audit.Emitter
 
 	// AccessTokens is the per-JTI JWT access-token registry [Revoke]
@@ -388,11 +413,24 @@ type Clock interface {
 
 // auditEmitter returns the configured audit sink, or a discard
 // emitter so call sites can invoke Emit unconditionally.
+//
+// [Deps.AuditLogger] is redact-wrapped here rather than at assignment
+// time: Deps is a plain struct the embedder fills in field by field,
+// so there is no constructor to run the wrap in, and the hook has to be
+// in place before the first record reaches the embedder's handler.
+// Wrapping is idempotent and allocation-cheap next to the emission
+// itself, which happens once per verification-page submission.
 func (d *Deps) auditEmitter() audit.Emitter {
-	if d == nil || d.Audit == nil {
+	if d == nil {
 		return audit.Discard()
 	}
-	return d.Audit
+	if d.Audit != nil {
+		return d.Audit
+	}
+	if d.AuditLogger == nil {
+		return audit.Discard()
+	}
+	return audit.Slog(slog.New(redact.WrapHandler(d.AuditLogger.Handler())))
 }
 
 //nolint:ireturn // The configured limiter is an extension point; the fallback shares its interface.
