@@ -65,11 +65,27 @@
 // the SQL adapter's per-grant retention. A long-running process holds
 // the full rotation history of every grant it has issued.
 //
-// A sweep only removes records the lookup paths already treat as
-// absent, so it cannot change what a caller observes. The lockout
-// counters carry no ExpiresAt and are instead retired once their lock
-// has lapsed and their window anchor has aged out, which is the point
-// at which the library's own rolling-window rollover would reset them.
+// The sealed retry responses attached to those records are swept, on
+// their predecessor's own expiry. Nothing about a chain walk needs
+// them, the store is forbidden from serving one past that instant, and
+// each entry is an encrypted token response rather than a handful of
+// fields, so retaining them for the life of the process would grow the
+// heap by one response per rotation forever.
+//
+// PAR records are swept on a retention window measured from their own
+// expiry rather than on the expiry itself. Their Consume enforces
+// single-use only — expiry is gated at presentation by Find, so a
+// request_uri whose short lifetime elapsed during an interactive login
+// still redeems at code emission — and a sweep keyed on expiry alone
+// would make that redemption depend on how many unrelated pushes
+// happened while the user was authenticating.
+//
+// A sweep only removes records the substore's own read and consume
+// paths already reject, so it cannot change what a caller observes.
+// The lockout counters carry no ExpiresAt and are instead retired once
+// their lock has lapsed and their window anchor has aged out, which is
+// the point at which the library's own rolling-window rollover would
+// reset them.
 //
 // Substores whose rows have no expiry (clients, users, grants,
 // metadata, enrolled authentication factors) are owned by the embedder
@@ -173,7 +189,7 @@ func New(opts ...Option) *Store {
 	s.rats = newRATStore()
 	mfaVersions := newMFAVersionAllocator()
 	s.totps = newTOTPStore(mfaVersions)
-	s.recoveries = newRecoveryStore()
+	s.recoveries = newRecoveryStore(s.clock)
 	s.passkeys = newPasskeyStore()
 	s.emailotps = newEmailOTPStore(s.clock, mfaVersions)
 	s.authnLockouts = newAuthnLockoutStore(s.clock)
@@ -387,7 +403,7 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			byClient: make(refreshIndex),
 			byGrant:  make(refreshIndex),
 			revoked:  make(map[string]struct{}),
-			retries:  make(map[string][]byte),
+			retries:  make(map[string]retryResponse),
 		},
 		grStaging: &grantStaging{
 			parent:  s.grants,
@@ -435,12 +451,41 @@ func (s *Store) unlockTxCluster() {
 // --- RefreshTokenStore -------------------------------------------------------
 
 type refreshStore struct {
-	mu       sync.RWMutex
-	clock    Clock
-	m        map[string]*store.RefreshToken
-	byClient refreshIndex
-	byGrant  refreshIndex
-	retries  map[string][]byte
+	mu             sync.RWMutex
+	clock          Clock
+	m              map[string]*store.RefreshToken
+	byClient       refreshIndex
+	byGrant        refreshIndex
+	retries        map[string]retryResponse
+	retriesSinceGC uint32
+}
+
+// retryResponse is one sealed token response held for the RFC 9700
+// delivery grace window, keyed by the hashed predecessor the client
+// would re-present. expiresAt is the predecessor's own refresh-token
+// expiry: [store.RefreshRetryResponseStore] forbids retaining the bytes
+// past it, so the entry carries the bound rather than deriving it from
+// whichever record happens to still be in the map at read time.
+type retryResponse struct {
+	sealed    []byte
+	expiresAt time.Time
+}
+
+// retryResponseFullGCSaveInterval is how many retryable rotations pass
+// between full sweeps of the retry map. Every rotation adds an entry and
+// none of them is ever read more than once, so the map needs reclamation;
+// sweeping on each rotation would make every refresh cost O(total
+// entries).
+const retryResponseFullGCSaveInterval uint32 = 64
+
+// retryReclaimable reports whether a sealed retry response may be dropped.
+// Both paths that decide retention — the read that serves a retry and the
+// amortised sweep — consult this one predicate, so the store can never
+// serve bytes the sweep has already judged dead, nor keep bytes no read
+// would return. A predecessor that carried no expiry (zero) opts out of
+// expiry exactly as its own record does under Find.
+func retryReclaimable(rec retryResponse, now time.Time) bool {
+	return isExpiredAtStrict(rec.expiresAt, now)
 }
 
 func newRefreshStore(c Clock) *refreshStore {
@@ -449,7 +494,7 @@ func newRefreshStore(c Clock) *refreshStore {
 		m:        make(map[string]*store.RefreshToken),
 		byClient: make(refreshIndex),
 		byGrant:  make(refreshIndex),
-		retries:  make(map[string][]byte),
+		retries:  make(map[string]retryResponse),
 	}
 }
 
@@ -499,11 +544,53 @@ func (s *refreshStore) SaveRotationWithRetry(_ context.Context, token *store.Ref
 	if err := s.assertParentAliveLocked(token.ParentID); err != nil {
 		return err
 	}
+	parentKey := hashKey(*token.ParentID)
 	stored := storeRefresh(token, key)
 	s.m[key] = stored
 	s.indexRefreshLocked(key, stored)
-	s.retries[hashKey(*token.ParentID)] = append([]byte(nil), sealed...)
+	s.maybeGCRetriesLocked(s.clock.Now())
+	s.retries[parentKey] = retryResponse{
+		sealed:    append([]byte(nil), sealed...),
+		expiresAt: retryRetention(s.m[parentKey], token),
+	}
 	return nil
+}
+
+// retryRetention returns the instant past which the sealed response
+// belonging to predecessor must no longer be served. The predecessor's
+// own ExpiresAt is that bound. A predecessor the store cannot resolve
+// (nil) leaves no expiry to read, so the successor's own bounds the
+// entry instead: a rotation never dates its successor earlier than the
+// token it replaces, so the fallback over-retains and never
+// under-retains.
+func retryRetention(predecessor, successor *store.RefreshToken) time.Time {
+	if predecessor != nil {
+		return predecessor.ExpiresAt
+	}
+	return successor.ExpiresAt
+}
+
+// gcRetriesLocked drops every sealed retry response whose predecessor has
+// expired. LoadRetryResponse already refuses to serve them, so the sweep
+// cannot change what a caller observes; without it a long-running process
+// would accumulate one encrypted token response per rotation for the
+// lifetime of the process. The caller must hold refreshStore.mu for
+// writing.
+func (s *refreshStore) gcRetriesLocked(now time.Time) {
+	for key, rec := range s.retries {
+		if retryReclaimable(rec, now) {
+			delete(s.retries, key)
+		}
+	}
+	s.retriesSinceGC = 0
+}
+
+func (s *refreshStore) maybeGCRetriesLocked(now time.Time) {
+	s.retriesSinceGC++
+	if s.retriesSinceGC < retryResponseFullGCSaveInterval {
+		return
+	}
+	s.gcRetriesLocked(now)
 }
 
 // assertParentAliveLocked reports [store.ErrAlreadyConsumed] when parentID
@@ -522,14 +609,19 @@ func (s *refreshStore) assertParentAliveLocked(parentID *string) error {
 	return nil
 }
 
+// LoadRetryResponse returns the sealed response held against
+// predecessorID, or [store.ErrNotFound] once the predecessor's own
+// lifetime is over: the grace window exists to re-deliver a response the
+// client can still use, and a refresh token past its expiry is one the
+// endpoint would refuse anyway.
 func (s *refreshStore) LoadRetryResponse(_ context.Context, predecessorID string) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	sealed, ok := s.retries[hashKey(predecessorID)]
-	if !ok {
+	rec, ok := s.retries[hashKey(predecessorID)]
+	if !ok || retryReclaimable(rec, s.clock.Now()) {
 		return nil, store.ErrNotFound
 	}
-	return append([]byte(nil), sealed...), nil
+	return append([]byte(nil), rec.sealed...), nil
 }
 
 func (s *refreshStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
@@ -1206,7 +1298,45 @@ type parStore struct {
 	savesSinceGC uint32
 }
 
-const parFullGCSaveInterval uint32 = 64
+const (
+	// parFullGCSaveInterval is how many Save calls pass between full
+	// sweeps of the PAR map. A push mints a row before any user has
+	// interacted with it and most rows are never redeemed, so the map
+	// needs reclamation; sweeping on every push would make each one
+	// cost O(total records).
+	parFullGCSaveInterval uint32 = 64
+
+	// parRetention is how long a PAR record stays in the map past its
+	// own ExpiresAt. Consume enforces single-use only — expiry is
+	// gated at presentation by Find — so a request_uri whose lifetime
+	// (typically 60 seconds) elapsed while the user was working
+	// through a password, a second factor and a consent decision is
+	// still redeemable at code emission. Reclaiming on expiry alone
+	// would make that redemption depend on how many unrelated pushes
+	// arrived meanwhile, turning a completed login into a denied one
+	// under load.
+	//
+	// The window therefore has to outlast the whole interaction, whose
+	// own record is what bounds an interactive login and defaults to
+	// an hour, with room for an embedder that configures a longer one.
+	// A day clears every such ceiling by a wide margin and still
+	// bounds the map: an unredeemed row is reclaimed rather than held
+	// for the process lifetime.
+	parRetention = 24 * time.Hour
+)
+
+// parReclaimable reports whether a PAR record may be dropped from the
+// map. Every reclamation path in this substore — the amortised sweep
+// and the key-scoped eviction Save performs — consults this one
+// predicate, so no path can retire a row that Consume would still
+// redeem. A record without an ExpiresAt opts out of expiry and is
+// never reclaimed.
+func parReclaimable(rec *store.PushedAuthRequest, now time.Time) bool {
+	if rec.ExpiresAt.IsZero() {
+		return false
+	}
+	return isExpiredAtStrict(rec.ExpiresAt.Add(parRetention), now)
+}
 
 func newPARStore(c Clock) *parStore {
 	return &parStore{clock: c, m: make(map[string]*store.PushedAuthRequest)}
@@ -1220,7 +1350,7 @@ func (s *parStore) Save(_ context.Context, par *store.PushedAuthRequest) error {
 	defer s.mu.Unlock()
 	now := s.clock.Now()
 	key := hashKey(par.URI)
-	s.deleteExpiredKeyLocked(key, now)
+	s.deleteReclaimableKeyLocked(key, now)
 	s.maybeGCLocked(now)
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
@@ -1287,9 +1417,13 @@ func clonePAR(p *store.PushedAuthRequest) *store.PushedAuthRequest {
 	return &out
 }
 
+// gcLocked drops every PAR record past [parRetention]. A retained
+// record whose ExpiresAt has passed is unreachable through Find but
+// still redeemable through Consume, so the sweep waits out the
+// retention window before removing it.
 func (s *parStore) gcLocked(now time.Time) {
 	for key, rec := range s.m {
-		if !rec.ExpiresAt.IsZero() && now.UTC().After(rec.ExpiresAt.UTC()) {
+		if parReclaimable(rec, now) {
 			delete(s.m, key)
 		}
 	}
@@ -1304,12 +1438,19 @@ func (s *parStore) maybeGCLocked(now time.Time) {
 	s.gcLocked(now)
 }
 
-func (s *parStore) deleteExpiredKeyLocked(key string, now time.Time) {
+// deleteReclaimableKeyLocked evicts the record under key when it is
+// past retention, so an insert claiming that key is not rejected as a
+// duplicate of a row the store has finished with. A record still
+// inside its retention window stays, and the insert reports
+// [store.ErrAlreadyExists]: request_uris come from crypto/rand, so a
+// collision is a randomness fault, and overwriting a redeemable record
+// would hand its holder a different client's pushed request.
+func (s *parStore) deleteReclaimableKeyLocked(key string, now time.Time) {
 	rec, ok := s.m[key]
 	if !ok {
 		return
 	}
-	if !rec.ExpiresAt.IsZero() && now.UTC().After(rec.ExpiresAt.UTC()) {
+	if parReclaimable(rec, now) {
 		delete(s.m, key)
 	}
 }

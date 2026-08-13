@@ -1065,7 +1065,15 @@ func TestRefresh_HashOnStore_RawValueAbsent(t *testing.T) {
 	}
 }
 
-func TestPAR_SaveSweepsExpiredRecords(t *testing.T) {
+// TestPAR_SaveRefusesToDisplaceRedeemableRecord pins which rows the
+// key-scoped eviction Save performs is allowed to displace. An expired
+// record is hidden from Find but still redeemable through Consume, so
+// a push claiming its key must be refused rather than overwrite it:
+// request_uris come from crypto/rand, and silently replacing a
+// redeemable record would hand its holder a different pushed request.
+// Reclaiming the key once the record is past retention is covered by
+// the package-internal sweep tests, which can name the window.
+func TestPAR_SaveRefusesToDisplaceRedeemableRecord(t *testing.T) {
 	t.Parallel()
 
 	clk := &mutableClock{now: contract.Reference}
@@ -1084,14 +1092,23 @@ func TestPAR_SaveSweepsExpiredRecords(t *testing.T) {
 	if _, err := s.PushedAuthRequests().Find(ctx, uri); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Find expired err=%v want ErrNotFound", err)
 	}
-	if err := s.PushedAuthRequests().Save(ctx, &store.PushedAuthRequest{
+
+	replacement := &store.PushedAuthRequest{
 		URI:       uri,
 		ClientID:  "client-1",
 		RawParams: []byte("response_type=code&scope=openid"),
 		ExpiresAt: clk.now.Add(time.Minute),
 		CreatedAt: clk.now,
-	}); err != nil {
-		t.Fatalf("Save replacement after expiry: %v", err)
+	}
+	if err := s.PushedAuthRequests().Save(ctx, replacement); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("Save onto a redeemable record: want ErrAlreadyExists, got %v", err)
+	}
+	got, err := s.PushedAuthRequests().Consume(ctx, uri)
+	if err != nil {
+		t.Fatalf("Consume expired-but-unconsumed: %v", err)
+	}
+	if string(got.RawParams) != "response_type=code" {
+		t.Fatalf("Consume returned RawParams=%q; the refused push overwrote the record", got.RawParams)
 	}
 }
 

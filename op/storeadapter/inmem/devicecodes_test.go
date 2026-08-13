@@ -338,9 +338,16 @@ func TestDeviceCodes_Concurrent(t *testing.T) {
 
 	var (
 		wg       sync.WaitGroup
-		consumed atomic.Int64
 		conflict atomic.Int64
 	)
+	// approved[i] records which of the two racing transitions won record
+	// i, so the Consume sweep below can be checked against the outcome
+	// that actually happened. Asserting instead that some minimum number
+	// of records ended up approved would make the result depend on how
+	// the scheduler resolved 64 races, which is not a property of the
+	// store: a loaded machine can hand every one of them to Deny, and
+	// the run has then failed for a reason the store had no part in.
+	approved := make([]atomic.Bool, records)
 	for i := range records {
 		wg.Add(1)
 		go func() {
@@ -371,6 +378,7 @@ func TestDeviceCodes_Concurrent(t *testing.T) {
 			err := ds.Approve(ctx, concurrentDeviceID(i), "user-"+concurrentDeviceID(i), time.Time{})
 			switch {
 			case err == nil:
+				approved[i].Store(true)
 			case errors.Is(err, store.ErrConflict):
 				conflict.Add(1)
 			default:
@@ -396,19 +404,25 @@ func TestDeviceCodes_Concurrent(t *testing.T) {
 		t.Errorf("Approve/Deny race: ErrConflict count = %d, want %d", got, records)
 	}
 
+	// Consume must accept exactly the records Approve won and reject
+	// exactly the ones Deny won. That is the property under test and it
+	// holds for every split of the races, including the all-Deny one.
 	for i := range records {
 		_, err := ds.Consume(ctx, concurrentDeviceID(i))
 		switch {
 		case err == nil:
-			consumed.Add(1)
+			if !approved[i].Load() {
+				t.Errorf("Consume[%d] succeeded on a record Deny won: a denied authorization "+
+					"was redeemable", i)
+			}
 		case errors.Is(err, store.ErrConflict):
-			// Denied; Consume rejects.
+			if approved[i].Load() {
+				t.Errorf("Consume[%d] returned ErrConflict on a record Approve won: the user "+
+					"authorized the device and the token call would still fail", i)
+			}
 		default:
 			t.Errorf("Consume[%d]: unexpected %v", i, err)
 		}
-	}
-	if got := consumed.Load(); got == 0 || got > int64(records) {
-		t.Errorf("Consume sweep: %d Approved consumes; want 1..%d", got, records)
 	}
 }
 

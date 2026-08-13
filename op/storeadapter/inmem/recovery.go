@@ -5,7 +5,9 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -15,12 +17,13 @@ import (
 // mutate the slot list freely, and every Put clones the supplied
 // pointer so a later mutation by the caller does not leak into the map.
 type recoveryStore struct {
-	mu sync.RWMutex
-	m  map[string]*store.RecoveryBatch
+	clock Clock
+	mu    sync.RWMutex
+	m     map[string]*store.RecoveryBatch
 }
 
-func newRecoveryStore() *recoveryStore {
-	return &recoveryStore{m: make(map[string]*store.RecoveryBatch)}
+func newRecoveryStore(c Clock) *recoveryStore {
+	return &recoveryStore{clock: c, m: make(map[string]*store.RecoveryBatch)}
 }
 
 // Get implements [store.RecoveryStore].
@@ -74,9 +77,34 @@ func (s *recoveryStore) Consume(_ context.Context, b *store.RecoveryBatch, index
 		return store.ErrAlreadyConsumed
 	}
 	next := cloneRecoveryBatch(current)
-	next.Codes[index].ConsumedAt = b.Codes[index].ConsumedAt
+	next.Codes[index].ConsumedAt = s.stampFor(b.Codes[index])
 	s.m[b.Subject] = next
 	return nil
+}
+
+// stampFor resolves the timestamp a redemption writes onto the slot. A
+// slot the caller already stamped keeps that value; an unstamped one is
+// stamped from the store's clock.
+//
+// Copying a zero value through would report success while leaving the
+// slot exactly as available as it was before — a single-use code the
+// caller was told it had spent. The reference implementation is what
+// every backend is read against, so it owns the stamp rather than
+// trusting the caller to have applied one.
+func (s *recoveryStore) stampFor(slot store.RecoveryCode) time.Time {
+	if !slot.ConsumedAt.IsZero() {
+		return slot.ConsumedAt
+	}
+	return s.now()
+}
+
+// now reads the injected clock, falling back to the system clock for a
+// store constructed without one.
+func (s *recoveryStore) now() time.Time {
+	if s.clock == nil {
+		return timex.SystemClock.Now()
+	}
+	return s.clock.Now()
 }
 
 // Delete implements [store.RecoveryStore].

@@ -273,8 +273,8 @@ type refreshStaging struct {
 	updated  map[string]*store.RefreshToken
 	byClient refreshIndex
 	byGrant  refreshIndex
-	revoked  map[string]struct{} // chain roots whose descendants must be revoked at flush
-	retries  map[string][]byte   // hashed predecessor -> sealed response
+	revoked  map[string]struct{}      // chain roots whose descendants must be revoked at flush
+	retries  map[string]retryResponse // hashed predecessor -> sealed response
 }
 
 func (s *refreshStaging) flushLocked() {
@@ -285,8 +285,20 @@ func (s *refreshStaging) flushLocked() {
 	for id, rec := range s.updated {
 		s.parent.m[id] = rec
 	}
-	for parent, sealed := range s.retries {
-		s.parent.retries[parent] = append([]byte(nil), sealed...)
+	for parent, rec := range s.retries {
+		s.parent.retries[parent] = retryResponse{
+			sealed:    append([]byte(nil), rec.sealed...),
+			expiresAt: rec.expiresAt,
+		}
+	}
+	// Rotation runs inside a transaction in production, so the amortised
+	// sweep of the retry map has to be driven from here as well: counting
+	// only the direct SaveRotationWithRetry path would leave the map
+	// unreclaimed on the one route the token endpoint actually takes. The
+	// sweep runs after the staged entries land so it judges the map the
+	// transaction committed.
+	if len(s.retries) > 0 {
+		s.parent.maybeGCRetriesLocked(s.parent.clock.Now())
 	}
 	for root := range s.revoked {
 		// At flush time, traverse the now-merged map to revoke
@@ -345,10 +357,19 @@ func (r *txRefreshes) SaveRotationWithRetry(ctx context.Context, token *store.Re
 	if err := r.Save(ctx, token); err != nil {
 		return err
 	}
-	r.tx.rtStaging.retries[hashKey(*token.ParentID)] = append([]byte(nil), sealed...)
+	st := r.tx.rtStaging
+	parentKey := hashKey(*token.ParentID)
+	st.retries[parentKey] = retryResponse{
+		sealed:    append([]byte(nil), sealed...),
+		expiresAt: retryRetention(st.lookup(parentKey), token),
+	}
 	return nil
 }
 
+// LoadRetryResponse reads the staged view first so a rotation sees the
+// response it just sealed, then the committed map. Both answers are held
+// to the same retention bound as the non-transactional read: past the
+// predecessor's own expiry the entry reads as absent.
 func (r *txRefreshes) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
 	if r.tx.closed.Load() {
 		return nil, errTxClosed
@@ -357,14 +378,14 @@ func (r *txRefreshes) LoadRetryResponse(ctx context.Context, predecessorID strin
 		return nil, err
 	}
 	key := hashKey(predecessorID)
-	if sealed, ok := r.tx.rtStaging.retries[key]; ok {
-		return append([]byte(nil), sealed...), nil
-	}
-	sealed, ok := r.tx.rtStaging.parent.retries[key]
+	rec, ok := r.tx.rtStaging.retries[key]
 	if !ok {
+		rec, ok = r.tx.rtStaging.parent.retries[key]
+	}
+	if !ok || retryReclaimable(rec, r.tx.clock.Now()) {
 		return nil, store.ErrNotFound
 	}
-	return append([]byte(nil), sealed...), nil
+	return append([]byte(nil), rec.sealed...), nil
 }
 
 func (r *txRefreshes) Find(ctx context.Context, id string) (*store.RefreshToken, error) {
@@ -875,7 +896,10 @@ func (p *txPARs) Save(ctx context.Context, par *store.PushedAuthRequest) error {
 		return store.ErrAlreadyExists
 	}
 	parent, parentExists := st.parent.m[key]
-	if parentExists && isExpired(parent.ExpiresAt, p.tx.clock) {
+	// A staged insert replaces the committed row under the same key, so
+	// it is a reclamation path and answers to the same predicate as the
+	// sweep: only a record past retention may be displaced.
+	if parentExists && parReclaimable(parent, p.tx.clock.Now()) {
 		parentExists = false
 	}
 	if parentExists {

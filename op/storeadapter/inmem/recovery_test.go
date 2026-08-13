@@ -182,7 +182,7 @@ func TestRecoveryStore_PutClonesBatch(t *testing.T) {
 	}
 }
 
-// TestRecoveryStore_ConsumeRejectsStaleHashAfterRegenerate pins #19: a
+// TestRecoveryStore_ConsumeRejectsStaleHashAfterRegenerate pins that a
 // recovery code from a batch that was regenerated between Get and Consume
 // MUST NOT redeem a slot of the new batch. Regenerating is exactly how a
 // user revokes leaked codes, so honouring the stale hash would be a

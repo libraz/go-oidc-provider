@@ -184,6 +184,101 @@ func TestInteractionStore_SaveStaysBounded(t *testing.T) {
 	}
 }
 
+// TestRefreshStore_RetryResponsesStayBounded covers the one map in the
+// refresh substore that is swept. The rotation records themselves are
+// retained on purpose so a replay cascade can still walk the chain, but
+// each sealed retry response is an encrypted token response that nothing
+// may read past its predecessor's expiry, so holding them for the life of
+// the process would grow the heap by one response per rotation forever.
+func TestRefreshStore_RetryResponsesStayBounded(t *testing.T) {
+	t.Parallel()
+
+	clk := &parTestClock{now: contract.Reference}
+	s := New(WithClock(clk))
+	ctx := context.Background()
+
+	seedRetryRotation(t, s, clk, "live", clk.now.Add(time.Hour))
+	for i := range churn {
+		seedRetryRotation(t, s, clk, "lapsed-"+strconv.Itoa(i), clk.now.Add(-time.Second))
+	}
+
+	if got := len(s.refreshes.retries); got >= int(retryResponseFullGCSaveInterval) {
+		t.Fatalf("retry map holds %d sealed responses after %d rotations past their predecessor's expiry; "+
+			"an authenticated refresh loop must not grow it without bound", got, churn)
+	}
+	if _, err := s.refreshes.LoadRetryResponse(ctx, "live"); err != nil {
+		t.Fatalf("LoadRetryResponse for a live predecessor after the sweeps: %v "+
+			"(the sweep must only reclaim entries the read already refuses)", err)
+	}
+}
+
+// TestRefreshStore_TransactionalRetryResponsesStayBounded holds the commit
+// path to the same bound. The token endpoint rotates inside a transaction,
+// so a sweep driven only from the direct write would never run in
+// production.
+func TestRefreshStore_TransactionalRetryResponsesStayBounded(t *testing.T) {
+	t.Parallel()
+
+	clk := &parTestClock{now: contract.Reference}
+	s := New(WithClock(clk))
+	ctx := context.Background()
+
+	for i := range churn {
+		id := "tx-lapsed-" + strconv.Itoa(i)
+		seedRetryPredecessor(t, s, clk, id, clk.now.Add(-time.Second))
+		tx, err := s.BeginTx(ctx)
+		if err != nil {
+			t.Fatalf("BeginTx #%d: %v", i, err)
+		}
+		retries, ok := tx.RefreshTokens().(store.RefreshRetryResponseStore)
+		if !ok {
+			t.Fatalf("tx refresh substore %T does not implement store.RefreshRetryResponseStore", tx.RefreshTokens())
+		}
+		parent := id
+		if err := retries.SaveRotationWithRetry(ctx, &store.RefreshToken{
+			ID: id + "-successor", ClientID: "client-1", Subject: "subject-1", GrantID: "grant-1",
+			ParentID: &parent, ExpiresAt: clk.now.Add(time.Hour), CreatedAt: clk.now,
+		}, []byte("sealed-token-response")); err != nil {
+			t.Fatalf("tx SaveRotationWithRetry #%d: %v", i, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("Commit #%d: %v", i, err)
+		}
+	}
+
+	if got := len(s.refreshes.retries); got >= int(retryResponseFullGCSaveInterval) {
+		t.Fatalf("retry map holds %d sealed responses after %d committed rotations past their predecessor's expiry",
+			got, churn)
+	}
+}
+
+// seedRetryPredecessor persists one predecessor record whose expiry the
+// caller controls, so a rotation off it can be arranged either inside or
+// past the retention bound.
+func seedRetryPredecessor(t testing.TB, s *Store, clk *parTestClock, id string, expiresAt time.Time) {
+	t.Helper()
+	if err := s.refreshes.Save(context.Background(), &store.RefreshToken{
+		ID: id, ClientID: "client-1", Subject: "subject-1", GrantID: "grant-1",
+		ExpiresAt: expiresAt, CreatedAt: clk.now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("Save predecessor %s: %v", id, err)
+	}
+}
+
+// seedRetryRotation seeds a predecessor and rotates off it through the
+// direct (non-transactional) write, caching a sealed response against it.
+func seedRetryRotation(t testing.TB, s *Store, clk *parTestClock, id string, expiresAt time.Time) {
+	t.Helper()
+	seedRetryPredecessor(t, s, clk, id, expiresAt)
+	parent := id
+	if err := s.refreshes.SaveRotationWithRetry(context.Background(), &store.RefreshToken{
+		ID: id + "-successor", ClientID: "client-1", Subject: "subject-1", GrantID: "grant-1",
+		ParentID: &parent, ExpiresAt: clk.now.Add(time.Hour), CreatedAt: clk.now,
+	}, []byte("sealed-token-response")); err != nil {
+		t.Fatalf("SaveRotationWithRetry %s: %v", id, err)
+	}
+}
+
 func TestAuthnLockoutStore_SwapStaysBounded(t *testing.T) {
 	t.Parallel()
 

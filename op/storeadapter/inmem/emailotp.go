@@ -158,6 +158,12 @@ func (s *emailOTPStore) Consume(_ context.Context, r *store.EmailOTPRecord) erro
 		return store.ErrAlreadyConsumed
 	}
 	stored := cloneEmailOTPRecord(r)
+	// Marking the challenge is this method's job: a record the caller
+	// left unstamped must not be written back as still-consumable, or
+	// Consume reports success while the next reader can redeem it again.
+	if stored.ConsumedAt.IsZero() {
+		stored.ConsumedAt = s.now()
+	}
 	version, err := s.versions.next()
 	if err != nil {
 		return err

@@ -198,3 +198,24 @@ func TestPaginate(t *testing.T) {
 		})
 	}
 }
+
+// TestPaginate_PageIsIndependentOfTheInput pins that a page does not
+// alias the slice it came from. An adapter that sorts or rewrites a page
+// before returning it would otherwise reorder the caller's own list
+// underneath them, and the corruption would surface somewhere else
+// entirely. [patterns.DedupBatch] already returns an independent slice;
+// the two helpers are handed to the same callers and should not differ
+// on whether the result is safe to write to.
+func TestPaginate_PageIsIndependentOfTheInput(t *testing.T) {
+	t.Parallel()
+
+	in := []string{"a", "b", "c", "d"}
+	page, _, _ := patterns.Paginate(in, 1, 2)
+	if len(page) != 2 {
+		t.Fatalf("page=%v want 2 entries", page)
+	}
+	page[0] = "MUTATED"
+	if in[1] != "b" {
+		t.Fatalf("input[1]=%q after writing to the page; the page aliases the caller's slice", in[1])
+	}
+}

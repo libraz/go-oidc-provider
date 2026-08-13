@@ -1,17 +1,42 @@
-// Package patterns hosts the small, behaviour-pinned helpers shared by
-// the in-memory, SQL, and Redis store adapters so the expiry / not-
-// found / dedup / pagination semantics live in one place instead of
-// being re-implemented per adapter. The package is intentionally tiny:
-// every helper has a single, well-documented behavioural contract, and
-// adapter code is expected to call the helpers verbatim rather than
-// wrap them.
+// Package patterns hosts small, behaviour-pinned helpers for store
+// adapters. Every helper has a single, well-documented behavioural
+// contract and is meant to be called verbatim rather than wrapped.
 //
 // # Audience
 //
 // The package is exported so adapter implementers (inmem, SQL, Redis,
-// and any third-party backend) can share the same expiry / not-found /
-// dedup / pagination semantics. It is NOT part of the public OP API:
-// embedders do not call patterns helpers directly.
+// and any third-party backend) can reach it. It is NOT part of the
+// public OP API: embedders do not call patterns helpers directly.
+//
+// # What is actually shared
+//
+// Two categories are shared by the in-tree adapters. Expiry:
+// [IsExpiredStrict] backs inmem, SQL and DynamoDB, [IsExpiredInclusive]
+// backs Redis. And the hash-on-store contract: [Digest] is called from
+// every adapter that persists an opaque bearer secret, with
+// [ConstantTimeKeyMatch] where the lookup is not an exact-key one.
+//
+// The rest of the package is offered to third-party adapters rather than
+// relied on here, and the two paragraphs below say why for the cases
+// where that is a decision rather than an accident. [DigestBytes] is
+// simply the byte-form companion to [Digest] for a backend that stores
+// the digest as BYTEA / BLOB; no in-tree adapter does.
+//
+// The not-found mappers are deliberately not used in-tree. Every
+// in-tree lookup either labels a non-sentinel failure with the
+// operation it came from ("users.ReadPasswordHash", "oidcredis: HGET
+// op_metadata") — which a helper returning the error verbatim would
+// erase — or answers absence as a plain false rather than as an error
+// at all. Those are different obligations wearing a similar shape, and
+// routing them through one helper would cost error attribution to
+// remove a two-line errors.Is. An adapter with no such convention can
+// still use them.
+//
+// [Paginate] is likewise not the in-tree pagination: the store contract
+// pages by opaque cursor ([store.GrantClientPage.NextCursor]), and the
+// adapters build a page as they scan rather than slicing one out of a
+// fully materialised list. The helper is an integer-offset fallback for
+// backends whose native paging has that shape.
 //
 // # Behavioural floors
 //
@@ -29,6 +54,7 @@ package patterns
 
 import (
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -100,11 +126,12 @@ func MapRedisNotFound(err, redisNil error) error {
 }
 
 // DedupBatch returns a fresh slice that preserves the first occurrence
-// of each value in items. The order of survivors matches the order of
-// first appearance in the input, which is the property the Redis
-// chooser-group lookup needs: the secondary index may surface the
-// same session ID twice if a stale entry is re-added before the
-// cleanup pass lands, and the caller wants the first hit.
+// of each value in items, in order of first appearance.
+//
+// The helper is for a backend whose secondary index can hand back the
+// same identifier twice. The in-tree Redis adapter is not one: its
+// chooser-group index is a Redis SET, which cannot hold a duplicate
+// member, so its lookup has nothing to dedup.
 //
 // items may be nil, in which case the helper returns nil. A non-nil
 // empty input returns a non-nil empty result so callers can rely on
@@ -130,13 +157,16 @@ func DedupBatch[T comparable](items []T) []T {
 // follow-up request. hasMore reports whether the input has further
 // entries beyond the returned page.
 //
-// The helper is the slice-based fallback in-memory backends use to
-// approximate cursor pagination. SQL and Redis backends drive
-// pagination through their native cursor primitives (LIMIT / OFFSET
-// or SCAN respectively); they are expected to use this helper only
-// for unit-test fixtures, not in the hot path. The helper is
-// generically typed so it works against any record type without
-// per-store ceremony.
+// The helper is an integer-offset fallback for a backend whose native
+// paging works that way. It is not what the in-tree adapters do: the
+// store contract pages by opaque cursor, and inmem / SQL build each
+// page as they scan rather than slicing one out of a list they
+// materialised in full. The helper is generically typed so it works
+// against any record type without per-store ceremony.
+//
+// The returned page is a fresh slice, not a window onto items, so a
+// caller that sorts or rewrites a page cannot reach back into the
+// input — matching [DedupBatch], whose result is likewise independent.
 //
 // pageSize <= 0 collapses to "return everything from offset onward",
 // which keeps the API ergonomic for tests that want a single page.
@@ -154,7 +184,7 @@ func Paginate[T any](items []T, offset, pageSize int) (page []T, nextOffset int,
 	if pageSize > 0 && offset+pageSize < end {
 		end = offset + pageSize
 	}
-	page = items[offset:end]
+	page = slices.Clone(items[offset:end])
 	nextOffset = end
 	hasMore = end < len(items)
 	return page, nextOffset, hasMore
