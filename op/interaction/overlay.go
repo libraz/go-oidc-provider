@@ -29,6 +29,16 @@ const ChooserSessionIDField = "session_id"
 // themselves and forget to populate Inner.
 var ErrTemplateOverlayInnerNil = errors.New("interaction: TemplateOverlayDriver.Inner is nil")
 
+// ErrTemplateOverlayNoInnerErrorRenderer is returned by
+// [TemplateOverlayDriver.RenderError] when Inner is set but does not
+// implement [ErrorRenderer]. The HTTP layer reads a non-nil return as
+// "this Driver has no error surface" and falls back to the RFC 6749
+// §5.2 JSON envelope, which is exactly the outcome the unwrapped Inner
+// would have produced.
+var ErrTemplateOverlayNoInnerErrorRenderer = errors.New(
+	"interaction: TemplateOverlayDriver.Inner does not implement ErrorRenderer",
+)
+
 // TemplateOverlayDriver wraps an inner [Driver] and intercepts
 // [Driver.Render] for the two well-known prompt types
 // "consent.scope" and "interaction.chooser" when the corresponding
@@ -86,8 +96,21 @@ type TemplateOverlayDriver struct {
 	ChooserCSP string
 }
 
-// Compile-time confirmation that TemplateOverlayDriver satisfies Driver.
-var _ Driver = TemplateOverlayDriver{}
+// Compile-time confirmation that TemplateOverlayDriver satisfies Driver,
+// and that it keeps carrying the optional [ErrorRenderer] capability of
+// the Driver it decorates.
+//
+// The ErrorRenderer assertion is the load-bearing one. A decorator that
+// implements Driver and stops there type-asserts as "no error surface":
+// the library composes this wrapper the moment an embedder supplies a
+// branding template, so every pre-redirect authorization failure would
+// silently drop from the wrapped Driver's HTML page back to a raw JSON
+// envelope. Nothing exercises that path during a successful ceremony,
+// so only the assertion catches the regression.
+var (
+	_ Driver        = TemplateOverlayDriver{}
+	_ ErrorRenderer = TemplateOverlayDriver{}
+)
 
 // Render dispatches based on the concrete type of [Prompt.Data]. For
 // [ConsentScopePromptData] with a non-nil ConsentTemplate, Render
@@ -123,6 +146,28 @@ func (d TemplateOverlayDriver) ParseSubmission(r *http.Request) (FormSubmission,
 		return FormSubmission{}, ErrTemplateOverlayInnerNil
 	}
 	return d.Inner.ParseSubmission(r)
+}
+
+// RenderError implements [ErrorRenderer] by delegating to Inner. The
+// overlay owns the consent and chooser prompts only; a terminal
+// authorization error is not one of them, so the wrapper adds nothing
+// of its own and forwards the call unchanged.
+//
+// Delegation — rather than no method at all — is what keeps the
+// capability from being lost. An embedder who configures a consent
+// template on top of a Driver that renders errors as HTML keeps that
+// HTML; one whose Driver has no RenderError gets the same JSON envelope
+// as before, because the sentinel returned here routes the HTTP layer to
+// its fallback without touching the response.
+func (d TemplateOverlayDriver) RenderError(w http.ResponseWriter, r *http.Request, prompt ErrorPrompt) error {
+	if d.Inner == nil {
+		return ErrTemplateOverlayInnerNil
+	}
+	renderer, ok := d.Inner.(ErrorRenderer)
+	if !ok {
+		return ErrTemplateOverlayNoInnerErrorRenderer
+	}
+	return renderer.RenderError(w, r, prompt)
 }
 
 // renderConsent stamps response headers and executes ConsentTemplate

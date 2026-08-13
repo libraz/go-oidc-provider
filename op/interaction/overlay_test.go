@@ -398,3 +398,83 @@ func (r *commitRecorder) Write(p []byte) (int, error) {
 	}
 	return r.body.Write(p)
 }
+
+// TestTemplateOverlay_RenderErrorKeepsInnerHTMLSurface is the guard on
+// the decorator's capability preservation. TemplateOverlayDriver is
+// composed by the library itself the moment an embedder supplies a
+// consent or chooser template, so a wrapper that implemented Driver and
+// nothing else would type-assert as "no error surface": every
+// authorization failure that happens before a redirect target can be
+// trusted would drop from the inner Driver's HTML page to a raw JSON
+// envelope, in the browser, purely because a branding template was
+// added.
+func TestTemplateOverlay_RenderErrorKeepsInnerHTMLSurface(t *testing.T) {
+	t.Parallel()
+
+	overlay := interaction.TemplateOverlayDriver{
+		Inner: interaction.HTMLDriver{},
+		ConsentTemplate: template.Must(template.New("consent").
+			Parse(`<!doctype html><html><body>branded</body></html>`)),
+	}
+	renderer, ok := any(overlay).(interaction.ErrorRenderer)
+	if !ok {
+		t.Fatal("TemplateOverlayDriver does not satisfy ErrorRenderer; wrapping a Driver must not drop the capability")
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/oidc/auth", nil)
+	err := renderer.RenderError(rec, req, interaction.ErrorPrompt{
+		Code:        "invalid_request_uri",
+		Description: "request_uri expired",
+		Status:      http.StatusBadRequest,
+	})
+	if err != nil {
+		t.Fatalf("RenderError: %v", err)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html (the inner HTMLDriver's surface)", got)
+	}
+	if got := rec.Code; got != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", got)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `data-code="invalid_request_uri"`) {
+		t.Errorf("body does not carry the inner driver's error markup:\n%s", body)
+	}
+}
+
+// TestTemplateOverlay_RenderErrorFallsBackWhenInnerCannot confirms the
+// other half of the delegation contract: wrapping a Driver that never
+// had an error surface must not invent one. The sentinel tells the HTTP
+// layer to use its JSON envelope, which is byte-for-byte what the
+// unwrapped Driver produced, and nothing may be written to the response
+// before that decision is taken.
+func TestTemplateOverlay_RenderErrorFallsBackWhenInnerCannot(t *testing.T) {
+	t.Parallel()
+
+	inner := &recordingDriver{}
+	overlay := interaction.TemplateOverlayDriver{Inner: inner}
+
+	rec := &commitRecorder{header: make(http.Header)}
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/oidc/auth", nil)
+	err := overlay.RenderError(rec, req, interaction.ErrorPrompt{Code: "invalid_request"})
+	if !errors.Is(err, interaction.ErrTemplateOverlayNoInnerErrorRenderer) {
+		t.Fatalf("err = %v, want ErrTemplateOverlayNoInnerErrorRenderer", err)
+	}
+	if rec.status != 0 || rec.body.Len() != 0 {
+		t.Errorf("response touched before the fallback decision: status=%d body=%q", rec.status, rec.body.String())
+	}
+}
+
+// TestTemplateOverlay_InnerNilRenderError confirms RenderError reports
+// the same inner-nil sentinel as the other two methods rather than
+// panicking on a hand-composed wrapper.
+func TestTemplateOverlay_InnerNilRenderError(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/oidc/auth", nil)
+	err := interaction.TemplateOverlayDriver{}.RenderError(rec, req, interaction.ErrorPrompt{Code: "server_error"})
+	if !errors.Is(err, interaction.ErrTemplateOverlayInnerNil) {
+		t.Fatalf("err = %v, want ErrTemplateOverlayInnerNil", err)
+	}
+}

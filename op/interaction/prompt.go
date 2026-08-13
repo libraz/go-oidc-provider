@@ -112,6 +112,13 @@ func (RecoveryCodePromptData) isPromptData() {}
 // CaptchaPromptData backs Prompt.Type "captcha". The orchestrator
 // emits this prompt when [RiskAssessor] or the brute-force counter
 // require human verification.
+//
+// Both fields are copied from the configured captcha verifier when it
+// implements op.CaptchaWidgetDescriber, on every path that emits a
+// captcha prompt. A verifier that does not describe a widget leaves
+// both empty, so a driver MUST treat the pair as optional: an empty
+// Provider means "render your own challenge UI", not "the OP failed
+// to fill this in".
 type CaptchaPromptData struct {
 	// Provider is the upstream captcha service identifier.
 	// Stable values: "turnstile", "hcaptcha", "recaptcha_v3".
@@ -262,8 +269,15 @@ type ChooserAccount struct {
 	Subject string
 
 	// DisplayName is the human-friendly label the chooser screen
-	// shows. Empty when no display name is available; SPAs fall
-	// back to Subject in that case.
+	// shows. The built-in chooser resolves it from the "name" claim
+	// on the matching [op/store.User] record, so it is the same label
+	// the "profile" scope releases at /userinfo rather than a second
+	// notion of display name.
+	//
+	// Empty when the user store is unwired, holds no record for the
+	// subject, or carries no "name" claim. Renderers fall back to
+	// Subject in that case — the shipped drivers, the chooser
+	// template overlay and the SPA bundle all do.
 	DisplayName string
 
 	// AuthTime is when the account last authenticated. SPAs
@@ -381,14 +395,27 @@ type FieldSpec struct {
 	MaxLen int
 
 	// MinLen is the minimum byte length the orchestrator accepts
-	// for this field. Zero means "no minimum".
+	// for this field. Zero means "no minimum". The bound applies only
+	// to a value that was actually submitted: an optional field
+	// submitted empty counts as omitted, because a browser posts every
+	// rendered input whether or not the user filled it in.
 	MinLen int
 
 	// Required marks fields the SPA must include in its submission.
+	// The orchestrator rejects a submission that omits the field or
+	// submits it empty. A field whose empty value is a meaningful
+	// answer therefore MUST NOT be marked Required; express "the SPA
+	// must send something" with MinLen instead.
 	Required bool
 
 	// Pattern is an optional regex the orchestrator validates the
 	// value against before passing it to [op.Authenticator.Continue].
 	// Empty means "no pattern check beyond Kind validation".
+	//
+	// The value must match the pattern end to end, not merely contain
+	// a match, so "[0-9]{6}" accepts exactly six digits and nothing
+	// else; anchoring the pattern yourself is harmless. A pattern that
+	// does not compile rejects every submission for the field rather
+	// than passing them through unchecked.
 	Pattern string
 }

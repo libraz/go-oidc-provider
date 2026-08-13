@@ -4,6 +4,12 @@
   "consent.button.allow": "許可する",
   "consent.button.deny": "キャンセル",
   "consent.scope": "アクセスを承認",
+  "consent.approved_scopes": "承認するアクセス",
+
+  "interaction.chooser": "アカウントを選択",
+  "chooser.session_id": "アカウント",
+  "chooser.add_account": "別のアカウントを使用",
+  "chooser.no_accounts": "このブラウザーにサインイン中のアカウントはありません。",
 
   "login.title": "サインイン",
   "login.identifier.label": "メールアドレス または ユーザー名",
@@ -24,15 +30,13 @@
   "auth.passkey": "パスキーを使用",
   "auth.passkey.response": "パスキー応答",
   "captcha": "あなたが人間であることを確認",
-  "captcha.token": "検証トークン",
+  "auth.captcha.token": "検証トークン",
+
+  "logout.confirm.title": "サインアウトの確認",
+  "logout.confirm.body": "このブラウザーのすべてのアカウントからサインアウトします。続行しますか？",
+  "logout.confirm.body_current": "このアカウントからサインアウトします。続行しますか？",
+  "logout.confirm.button": "サインアウト",
 
   "logout.title": "サインアウトしました",
-  "logout.body": "このウィンドウを閉じてください。",
-
-  "error.invalid_request.title": "リクエストが不正です",
-  "error.invalid_request.body": "必須のパラメータが欠落しているか、形式が正しくありません。",
-  "error.access_denied.title": "アクセスが拒否されました",
-  "error.access_denied.body": "このクライアントへの承認を拒否しました。",
-  "error.server_error.title": "問題が発生しました",
-  "error.server_error.body": "リクエストを処理できませんでした。再度お試しください。"
+  "logout.body": "このウィンドウを閉じてください。"
 }

@@ -39,6 +39,25 @@ const htmlSubmissionContentType = "application/x-www-form-urlencoded"
 //     timestamps, no map iteration. Keys derived from maps are sorted
 //     before emission so golden tests can pin the byte-for-byte form.
 //
+// # Required hidden fields become text inputs
+//
+// A [FieldSpec] of kind [FieldHidden] normally carries a value the
+// client-side layer computes — a captcha provider's widget token, a
+// WebAuthn assertion. This driver runs no script, so nothing on the page
+// can put a value there, while the orchestrator rejects a submission
+// that omits a field the prompt declared [FieldSpec.Required]. Rendered
+// as a hidden input, such a field makes the step unanswerable from this
+// surface, and for the captcha step every unanswerable attempt is
+// counted: the chain aborts once they run out, locking out every user
+// who reaches the challenge.
+//
+// Required hidden fields are therefore emitted as labelled text inputs,
+// so the ceremony always has a way forward. Whether the typed value is
+// accepted stays the step's own decision — a captcha whose token can
+// only come from a browser widget will still refuse it, but the refusal
+// is the verifier's and is visible, rather than a form the user was
+// never able to fill in.
+//
 // Embedders that want branding or CSS either override the two
 // templated screens via [op.WithConsentUI] / [op.WithChooserUI] — which
 // carry a per-page [NormalizeCSP] policy so the assets are not blocked
@@ -189,18 +208,115 @@ func (d HTMLDriver) buildHTMLDocument(prompt Prompt) string {
 	b.WriteString(`<h1>`)
 	b.WriteString(html.EscapeString(title))
 	b.WriteString(`</h1>`)
-	writePromptIntro(&b, prompt)
-	b.WriteString(`<form method="post">`)
-	writeHiddenStateRef(&b, prompt.StateRef)
-	if prompt.CSRFToken != "" {
-		writeHiddenInput(&b, "csrf_token", prompt.CSRFToken)
+	// The chooser is the one prompt whose page is not "some inputs and
+	// a submit button": the answer is which of N rows the user picked,
+	// so each row carries its own submit and there is no single
+	// Continue to press. It gets its own body writer rather than three
+	// conditionals threaded through the shared one.
+	if data, ok := prompt.Data.(ChooserPromptData); ok {
+		d.writeChooserBody(&b, prompt, data)
+	} else {
+		d.writeStandardBody(&b, prompt)
 	}
-	d.writePromptBody(&b, prompt)
-	b.WriteString(`<button type="submit">`)
-	b.WriteString(html.EscapeString(d.buttonFor(prompt)))
-	b.WriteString(`</button></form></body></html>`)
+	b.WriteString(`</body></html>`)
 	return b.String()
 }
+
+// writeStandardBody emits the intro, the form, and the single submit
+// button every non-chooser prompt shares.
+func (d HTMLDriver) writeStandardBody(b *strings.Builder, prompt Prompt) {
+	writePromptIntro(b, prompt)
+	b.WriteString(`<form method="post">`)
+	writeHiddenStateRef(b, prompt.StateRef)
+	if prompt.CSRFToken != "" {
+		writeHiddenInput(b, "csrf_token", prompt.CSRFToken)
+	}
+	d.writePromptBody(b, prompt)
+	b.WriteString(`<button type="submit">`)
+	b.WriteString(html.EscapeString(d.buttonFor(prompt)))
+	b.WriteString(`</button></form>`)
+}
+
+// writeChooserBody renders the account picker: one submit button per
+// live account, followed by the "use another account" link.
+//
+// Each button carries name="session_id" with the row's opaque session
+// identifier as its value, so activating it submits exactly the field
+// the chooser interaction reads — a browser sends the name/value pair
+// of the activated submit button only. That is what lets the whole
+// picker live in one form, sharing the hidden state_ref and CSRF
+// token, without any script.
+//
+// The prompt's own session_id [FieldSpec] is deliberately not rendered
+// as a text input here. Its value is an opaque identifier the user has
+// never been shown, so asking them to type it is asking for something
+// they cannot supply; the buttons carry it instead.
+func (d HTMLDriver) writeChooserBody(b *strings.Builder, prompt Prompt, data ChooserPromptData) {
+	if len(data.Accounts) == 0 {
+		// No form at all: there is nothing to submit, and an empty one
+		// would render a dead control on a page whose only remaining
+		// affordance is the link below.
+		b.WriteString(`<p>`)
+		b.WriteString(html.EscapeString(d.chooserMessage(prompt.Locale, "chooser.no_accounts", chooserNoAccountsFallback)))
+		b.WriteString(`</p>`)
+	} else {
+		b.WriteString(`<form method="post">`)
+		writeHiddenStateRef(b, prompt.StateRef)
+		if prompt.CSRFToken != "" {
+			writeHiddenInput(b, "csrf_token", prompt.CSRFToken)
+		}
+		for _, account := range data.Accounts {
+			writeChooserAccountButton(b, account)
+		}
+		b.WriteString(`</form>`)
+	}
+	if data.AddAccountURL == "" {
+		// The orchestrator leaves the URL empty when it cannot mint one
+		// the OP would accept (a deployment that requires PAR). Emitting
+		// a dead link would be worse than emitting none.
+		return
+	}
+	b.WriteString(`<p><a href="`)
+	b.WriteString(html.EscapeString(data.AddAccountURL))
+	b.WriteString(`">`)
+	b.WriteString(html.EscapeString(d.chooserMessage(prompt.Locale, "chooser.add_account", chooserAddAccountFallback)))
+	b.WriteString(`</a></p>`)
+}
+
+// writeChooserAccountButton emits one account row. The label is the
+// display name when the user store supplied one and the subject
+// otherwise, matching what the shipped chooser template and the SPA
+// bundle do with the same two fields.
+func writeChooserAccountButton(b *strings.Builder, account ChooserAccount) {
+	label := account.DisplayName
+	if label == "" {
+		label = account.Subject
+	}
+	b.WriteString(`<p><button type="submit" name="`)
+	b.WriteString(html.EscapeString(ChooserSessionIDField))
+	b.WriteString(`" value="`)
+	b.WriteString(html.EscapeString(account.SessionID))
+	b.WriteString(`">`)
+	b.WriteString(html.EscapeString(label))
+	b.WriteString(`</button></p>`)
+}
+
+// chooserMessage resolves key through the translator and falls back to
+// the built-in English string when no catalogue answers.
+func (d HTMLDriver) chooserMessage(locale, key, fallback string) string {
+	if message, ok := d.message(locale, key, nil); ok {
+		return message
+	}
+	return fallback
+}
+
+// Built-in English for the two strings the chooser page needs that no
+// [FieldSpec] carries. They follow the same rule as [htmlLabelFor]:
+// the catalogue answers first, these answer when it does not.
+const (
+	chooserAddAccountFallback = "Use another account"
+	chooserNoAccountsFallback = "No accounts are signed in on this browser."
+)
 
 // writePromptIntro emits any per-prompt informational text that lives
 // outside the <form>. The text is metadata the SPA would normally
@@ -333,23 +449,31 @@ func (d HTMLDriver) writeFieldInputs(b *strings.Builder, locale string, inputs [
 	}
 }
 
-// writeFieldInput emits one labelled input. Hidden fields (Kind ==
-// FieldHidden) skip the label wrapper; everything else renders as a
-// <p><label>Label<br><input ...></label></p> block. Length attributes
-// translate from [FieldSpec.MinLen] / [FieldSpec.MaxLen] to HTML
-// minlength / maxlength so the browser surfaces a client-side hint
+// writeFieldInput emits one labelled input. An optional hidden field
+// (Kind == FieldHidden) skips the label wrapper; everything else renders
+// as a <p><label>Label<br><input ...></label></p> block. Length
+// attributes translate from [FieldSpec.MinLen] / [FieldSpec.MaxLen] to
+// HTML minlength / maxlength so the browser surfaces a client-side hint
 // before the server-side validator rejects the submission.
+//
+// A hidden field marked [FieldSpec.Required] is the exception: it is
+// presented as a text input. See [HTMLDriver] for why the alternative
+// is a step no user of this surface can ever complete.
 func (d HTMLDriver) writeFieldInput(b *strings.Builder, locale string, in FieldSpec) {
-	if in.Kind == FieldHidden {
+	if in.Kind == FieldHidden && !in.Required {
 		writeHiddenInput(b, in.Name, "")
 		return
+	}
+	kind := in.Kind
+	if kind == FieldHidden {
+		kind = FieldText
 	}
 	b.WriteString(`<p><label>`)
 	b.WriteString(html.EscapeString(d.labelFor(locale, in.Label)))
 	b.WriteString(`<br><input name="`)
 	b.WriteString(html.EscapeString(in.Name))
 	b.WriteString(`" type="`)
-	b.WriteString(htmlInputType(in.Kind))
+	b.WriteString(htmlInputType(kind))
 	b.WriteString(`"`)
 	if in.Required {
 		b.WriteString(` required`)
@@ -430,6 +554,10 @@ func htmlLabelFor(labelKey string) string {
 		return "Passkey response"
 	case "auth.captcha.token":
 		return "Verification token"
+	case "chooser.session_id":
+		return "Account"
+	case "consent.approved_scopes":
+		return "Approved access"
 	default:
 		return labelKey
 	}
@@ -519,6 +647,8 @@ func htmlTitleFor(promptType string) string {
 		return "Verify you are human"
 	case "consent.scope":
 		return "Authorize access"
+	case "interaction.chooser":
+		return "Choose an account"
 	default:
 		if promptType == "" {
 			return "Continue"

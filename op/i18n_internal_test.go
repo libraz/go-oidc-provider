@@ -51,7 +51,7 @@ func TestBuildLocaleResolver_OverlayMergesIntoSeed(t *testing.T) {
 		"consent.button.allow",
 		"login.password.label",
 		"login.button.submit",
-		"error.invalid_request.title",
+		"logout.title",
 	} {
 		if _, ok := en.Get(key, map[string]string{"client_name": "Acme"}); !ok {
 			t.Errorf("seed-only key %q dropped after merge", key)

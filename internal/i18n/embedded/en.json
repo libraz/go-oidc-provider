@@ -4,6 +4,12 @@
   "consent.button.allow": "Allow",
   "consent.button.deny": "Cancel",
   "consent.scope": "Authorize access",
+  "consent.approved_scopes": "Approved access",
+
+  "interaction.chooser": "Choose an account",
+  "chooser.session_id": "Account",
+  "chooser.add_account": "Use another account",
+  "chooser.no_accounts": "No accounts are signed in on this browser.",
 
   "login.title": "Sign in",
   "login.identifier.label": "Email or username",
@@ -24,15 +30,13 @@
   "auth.passkey": "Use a passkey",
   "auth.passkey.response": "Passkey response",
   "captcha": "Verify you are human",
-  "captcha.token": "Verification token",
+  "auth.captcha.token": "Verification token",
+
+  "logout.confirm.title": "Confirm sign-out",
+  "logout.confirm.body": "You are about to sign out of all browser accounts in this chooser group. Continue?",
+  "logout.confirm.body_current": "You are about to sign out of this account. Continue?",
+  "logout.confirm.button": "Sign out",
 
   "logout.title": "You're signed out",
-  "logout.body": "You can close this window.",
-
-  "error.invalid_request.title": "Invalid request",
-  "error.invalid_request.body": "The request is missing a required parameter or is otherwise malformed.",
-  "error.access_denied.title": "Access denied",
-  "error.access_denied.body": "You declined to authorize this client.",
-  "error.server_error.title": "Something went wrong",
-  "error.server_error.body": "We couldn't complete your request. Please try again."
+  "logout.body": "You can close this window."
 }

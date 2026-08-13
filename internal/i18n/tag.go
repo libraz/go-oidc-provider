@@ -27,6 +27,15 @@ const MaxTagLength = 48
 // case is folded to lower, and the BCP 47 separator is normalised
 // to '-'. Empty input returns the empty Tag, not [English]; the
 // caller decides whether an empty tag should fall back.
+//
+// ParseTag is the package's single normalisation point. Every Tag that
+// reaches a resolver's bundle map — whether it arrives from bundle
+// registration, the configured default, a cookie, an Accept-Language
+// header or an ui_locales parameter — passes through it, so a locale
+// that can be registered is a locale that can be selected. Callers
+// MUST NOT hand-roll case folding or separator handling; a tag built by
+// converting a string directly is only usable if it already happens to
+// be in the form ParseTag produces.
 func ParseTag(raw string) Tag {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || len(raw) > MaxTagLength {
@@ -49,13 +58,52 @@ func ParseTag(raw string) Tag {
 
 // Language returns the primary language subtag — the bytes before
 // the first '-'. "ja-JP" → "ja"; "en" → "en"; the empty Tag returns
-// the empty Tag. The helper is the only fall-back the matcher uses
-// when an exact tag does not match a registered locale.
+// the empty Tag. It is the last entry [Tag.Fallback] yields.
 func (t Tag) Language() Tag {
 	if i := strings.IndexByte(string(t), '-'); i >= 0 {
 		return t[:i]
 	}
 	return t
+}
+
+// Fallback returns the tag's lookup chain in most-specific-first
+// order, following the RFC 4647 §3.4 "Lookup" scheme: the rightmost
+// subtag is dropped one at a time until only the primary language
+// subtag remains, and a truncation that would leave a trailing
+// single-character subtag drops that subtag too, because a singleton
+// ("x" opening a private-use sequence, "u" opening a Unicode
+// extension) is a prefix marker rather than a locale of its own.
+//
+// The receiver is always the first entry, so a caller can walk the
+// result as the complete candidate list:
+//
+//	"pt-br"      → ["pt-br", "pt"]
+//	"zh-hant-tw" → ["zh-hant-tw", "zh-hant", "zh"]
+//	"en"         → ["en"]
+//
+// Truncation is all Fallback does; the receiver is expected to be in
+// the form [ParseTag] produces. The empty Tag yields nil.
+func (t Tag) Fallback() []Tag {
+	if t == "" {
+		return nil
+	}
+	out := []Tag{t}
+	cur := t
+	for {
+		i := strings.LastIndexByte(string(cur), '-')
+		if i < 0 {
+			return out
+		}
+		cur = cur[:i]
+		if j := strings.LastIndexByte(string(cur), '-'); j >= 0 && len(cur)-j == 2 {
+			cur = cur[:j]
+		} else if len(cur) < 2 {
+			// A bare singleton is not a language; stop rather than
+			// offering it as a candidate.
+			return out
+		}
+		out = append(out, cur)
+	}
 }
 
 // String returns the canonical BCP 47 form of t.

@@ -30,6 +30,7 @@ async function main() {
   }
   try {
     const prompt = await fetchPrompt();
+    if (deliverTerminal(prompt)) return;
     renderPrompt(prompt);
   } catch (err) {
     fail(err.message || String(err));
@@ -62,6 +63,11 @@ function renderPrompt(prompt) {
 
   if (prompt.type === "consent.scope") {
     renderConsent(prompt);
+    return;
+  }
+
+  if (prompt.type === "interaction.chooser") {
+    renderChooser(prompt);
     return;
   }
 
@@ -203,23 +209,42 @@ function bytesToB64url(buffer) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+// renderConsent draws the scope list the user is being asked to
+// approve. The prompt payload is the Go struct serialised without
+// json tags, so its members arrive exported ("Scopes", "Name"); the
+// lowercase spellings are accepted too, the way every other renderer
+// here does, so a driver that adds tags later keeps working.
+//
+// Reading the wrong spelling is not a cosmetic bug: the list renders
+// empty, the user approves a dialogue that showed them nothing, and
+// the submission carries no scope at all.
 function renderConsent(prompt) {
   const data = prompt.data ?? {};
-  const scopes = Array.isArray(data.scopes) ? data.scopes : [];
+  const scopes = Array.isArray(data.Scopes ?? data.scopes) ? (data.Scopes ?? data.scopes) : [];
+  const client = data.Client ?? data.client ?? {};
+  const clientName = client.Name || client.name || "";
+  if (clientName) {
+    const who = document.createElement("p");
+    who.className = "muted";
+    who.textContent = clientName + " is requesting access to:";
+    formEl.appendChild(who);
+  }
   const list = document.createElement("ul");
   list.className = "scopes";
   for (const s of scopes) {
     const li = document.createElement("li");
+    const scopeName = s.Name ?? s.name ?? "";
     const name = document.createElement("strong");
-    name.textContent = s.name;
+    name.textContent = scopeName;
     li.appendChild(name);
-    if (s.description) {
+    const description = s.Description ?? s.description;
+    if (description) {
       const desc = document.createElement("div");
       desc.className = "muted";
-      desc.textContent = s.description;
+      desc.textContent = description;
       li.appendChild(desc);
     }
-    if (s.required) {
+    if (s.Required ?? s.required) {
       const req = document.createElement("span");
       req.className = "muted";
       req.textContent = " (required)";
@@ -231,9 +256,45 @@ function renderConsent(prompt) {
   formEl.appendChild(buildSubmit("Approve"));
   formEl.onsubmit = (ev) => {
     ev.preventDefault();
-    const approved = scopes.map((s) => s.name).join(" ");
+    const approved = scopes.map((s) => s.Name ?? s.name ?? "").filter(Boolean).join(" ");
     submitForm(prompt, { approved_scopes: approved });
   };
+}
+
+// renderChooser draws one button per live account in the chooser
+// group plus the "add another account" link. Without this branch the
+// generic field loop runs, and since the chooser prompt declares its
+// session_id input as hidden the screen shows a bare Continue button
+// with nothing to choose.
+function renderChooser(prompt) {
+  const data = prompt.data ?? {};
+  const accounts = Array.isArray(data.Accounts ?? data.accounts) ? (data.Accounts ?? data.accounts) : [];
+  const list = document.createElement("ul");
+  list.className = "scopes";
+  for (const a of accounts) {
+    const sessionID = a.SessionID ?? a.sessionId ?? a.session_id ?? "";
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "submit";
+    button.value = sessionID;
+    button.textContent = a.DisplayName || a.displayName || a.Subject || a.subject || sessionID;
+    button.onclick = (ev) => {
+      ev.preventDefault();
+      submitForm(prompt, { session_id: sessionID });
+    };
+    li.appendChild(button);
+    list.appendChild(li);
+  }
+  formEl.appendChild(list);
+
+  const addURL = data.AddAccountURL || data.addAccountUrl || data.add_account_url || "";
+  if (addURL) {
+    const link = document.createElement("a");
+    link.href = addURL;
+    link.textContent = "Add another account";
+    formEl.appendChild(link);
+  }
+  formEl.onsubmit = (ev) => ev.preventDefault();
 }
 
 function buildField(spec) {
@@ -309,18 +370,52 @@ async function submitForm(prompt, values) {
     return;
   }
   const next = await r.json();
-  // The OP rewrites the orchestrator's terminal 302 into this
-  // envelope so the SPA can navigate at the document level
-  // (cross-origin fetch cannot follow the RP-callback redirect).
-  if (next && next.type === "redirect" && next.location) {
-    window.location.href = next.location;
-    return;
-  }
+  if (deliverTerminal(next)) return;
   if (next && next.type) {
     renderPrompt(next);
     return;
   }
   fail("Unexpected server response.");
+}
+
+// deliverTerminal hands a terminal authorization response to the
+// document and reports whether it did. Neither shape can be delivered
+// by the fetch() this SPA talks to the OP with — a cross-origin
+// redirect is opaque to it, and an auto-submitting HTML document cannot
+// execute inside it — so the OP hands both over as envelopes the SPA
+// replays at document level instead.
+function deliverTerminal(envelope) {
+  if (!envelope || typeof envelope.type !== "string") return false;
+  if (envelope.type === "redirect" && envelope.location) {
+    window.location.href = envelope.location;
+    return true;
+  }
+  if (envelope.type === "form_post" && envelope.action) {
+    submitTerminalForm(envelope.action, envelope.fields ?? {});
+    return true;
+  }
+  return false;
+}
+
+// submitTerminalForm rebuilds the Form Post Response Mode submission:
+// one hidden input per response parameter, posted to the RP's
+// redirect_uri at document level. It is the same request the page the
+// OP renders on the non-SPA surface auto-submits, and it covers the
+// JARM form_post.jwt mode too — that mode is the same shape with a lone
+// "response" field.
+function submitTerminalForm(action, fields) {
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = action;
+  for (const [name, value] of Object.entries(fields)) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+  document.body.appendChild(form);
+  form.submit();
 }
 
 function inputTypeFor(kind) {
@@ -354,6 +449,7 @@ function titleFor(type) {
     case "auth.passkey":           return "Use a passkey";
     case "captcha":                return "Verify you are human";
     case "consent.scope":          return "Authorize access";
+    case "interaction.chooser":    return "Choose an account";
     default:                       return type || "Continue";
   }
 }

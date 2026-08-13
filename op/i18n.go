@@ -2,7 +2,6 @@ package op
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
@@ -43,13 +42,20 @@ type LocaleBundle struct {
 // supplied messages. The map is cloned so a later mutation by the
 // caller does not race with the OP. Empty messages are accepted —
 // embedders may register a locale stub and fill it in later.
+//
+// locale is canonicalised to lowercase, hyphen-separated BCP 47 form,
+// which is the form every other locale surface uses: [LocaleBundle.Locale],
+// [Provider.SetLocaleCookie], the resolver's matcher and the
+// `ui_locales_supported` discovery entry. A bundle registered as
+// "pt-BR" is therefore selected by an ui_locales parameter of "pt-BR",
+// "pt_br" or "pt", and is advertised as "pt-br".
 func LocaleBundleFromMap(locale Locale, messages map[string]string) (LocaleBundle, error) {
 	if locale == "" {
-		return LocaleBundle{}, errors.New("op: LocaleBundle requires a non-empty locale")
+		return LocaleBundle{}, newConfigurationError("LocaleBundleFromMap requires a non-empty locale", nil)
 	}
-	b, err := i18n.NewBundle(i18n.Tag(locale), messages)
+	b, err := i18n.NewBundle(i18n.ParseTag(string(locale)), messages)
 	if err != nil {
-		return LocaleBundle{}, err
+		return LocaleBundle{}, newConfigurationError("LocaleBundleFromMap rejected the supplied locale", err)
 	}
 	return LocaleBundle{internal: b}, nil
 }
@@ -73,15 +79,28 @@ func (b LocaleBundle) Locale() Locale {
 //
 // The supplied locale MUST be registered through [WithLocale] (or
 // be one of the seed locales — en / ja). A default that is not
-// registered is rejected at construction time.
+// registered is rejected at construction time. The locale is
+// canonicalised the same way [LocaleBundleFromMap] canonicalises a
+// bundle's tag, so the two agree on "pt-BR" without the embedder
+// having to match the casing of its own registration.
+//
+// A default locale whose bundle is partial is not a dead end: keys it
+// does not define resolve through the rest of the chain — the
+// default's own language subtag, then the library's English
+// catalogue — so an incomplete translation degrades to another
+// language rather than to empty strings.
 //
 // Stable since v1.0.
 func WithDefaultLocale(locale Locale) Option {
 	return optionFunc(func(c *config) error {
 		if locale == "" {
-			return errors.New("op: WithDefaultLocale requires a non-empty locale")
+			return newConfigurationError("WithDefaultLocale requires a non-empty locale", nil)
 		}
-		c.defaultLocale = locale
+		canonical := i18n.ParseTag(string(locale))
+		if canonical == "" {
+			return newConfigurationError("WithDefaultLocale requires a usable BCP 47 locale", nil)
+		}
+		c.defaultLocale = Locale(canonical)
 		return nil
 	})
 }
@@ -119,7 +138,7 @@ type PreferredLocaleStore interface {
 func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(store) {
-			return errors.New("op: WithPreferredLocaleStore requires a non-nil store")
+			return newConfigurationError("WithPreferredLocaleStore requires a non-nil store", nil)
 		}
 		c.preferredLocaleStore = store
 		return nil
@@ -141,10 +160,11 @@ func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
 //
 // The value stored is the registered tag the supplied locale matches,
 // not the supplied locale verbatim: passing "ja-JP" to an OP that
-// registers only "ja" stores "ja". A locale matching nothing is
-// rejected with [ErrLocaleNotRegistered] rather than written, so a
-// picker cannot report success for a language the resolver will skip on
-// every later read.
+// registers only "ja" stores "ja", and casing and separator variants
+// ("PT-BR", "pt_BR") store the canonical "pt-br". A locale matching
+// nothing is rejected with [ErrLocaleNotRegistered] rather than
+// written, so a picker cannot report success for a language the
+// resolver will skip on every later read.
 //
 // The cookie is HttpOnly, Secure, SameSite=Lax and __Host- prefixed, so
 // it is confined to the OP's own origin and invisible to script. It
@@ -160,7 +180,7 @@ func (p *Provider) SetLocaleCookie(w http.ResponseWriter, locale Locale) error {
 	if p == nil || p.locales == nil {
 		return ErrLocaleNotRegistered
 	}
-	matched, ok := p.locales.Match(i18n.Tag(locale))
+	matched, ok := p.locales.Match(i18n.ParseTag(string(locale)))
 	if !ok {
 		return ErrLocaleNotRegistered
 	}
@@ -367,7 +387,7 @@ func injectHTMLTranslator(driver interaction.Driver, translator interaction.Mess
 func WithLocale(bundle LocaleBundle) Option {
 	return optionFunc(func(c *config) error {
 		if bundle.internal == nil {
-			return errors.New("op: WithLocale requires a non-empty bundle")
+			return newConfigurationError("WithLocale requires a non-empty bundle", nil)
 		}
 		c.localeBundles = append(c.localeBundles, bundle)
 		return nil

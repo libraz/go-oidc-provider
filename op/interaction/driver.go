@@ -22,6 +22,21 @@ const maxSubmissionBytes = 32 * 1024
 // reply back into a [FormSubmission].
 // Implementations MUST be safe for concurrent use; the library calls
 // every method from request-scoped goroutines.
+//
+// # Response headers
+//
+// The endpoint stamps X-Frame-Options, X-Content-Type-Options and
+// Referrer-Policy on w before it calls Render, so a Driver inherits
+// them without doing anything. An implementation MUST NOT delete or
+// weaken them: the interaction page holds the CSRF token and the
+// continuation reference, and the consent page carries a one-click
+// grant.
+//
+// Content-Security-Policy is the Driver's, because only the Driver
+// knows which origins its markup loads from. An implementation that
+// emits markup MUST send one; pass it through [NormalizeCSP], which
+// keeps the framing and base-uri protections intact whatever the
+// deployment's asset origins are.
 type Driver interface {
 	// Render writes the response for prompt to w. The Driver picks
 	// the content type (JSON for SPA, HTML for SSR) and sets the

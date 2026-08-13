@@ -21,37 +21,56 @@ type Bundle struct {
 // takes ownership of messages — the caller MUST NOT mutate the map
 // after the call. Empty tag is rejected; the package treats an
 // untagged bundle as a programmer bug rather than a runtime fault.
+//
+// tag is canonicalised through [ParseTag], so a bundle registered as
+// "pt-BR" or "pt_br" carries the same [Tag] the resolver derives from
+// a cookie or an ui_locales parameter. A tag ParseTag cannot
+// canonicalise — blank, or longer than [MaxTagLength] — is rejected
+// rather than registered under a key nothing will ever match.
 func NewBundle(tag Tag, messages map[string]string) (*Bundle, error) {
-	if tag == "" {
-		return nil, errors.New("i18n: bundle requires a non-empty tag")
+	canonical := ParseTag(string(tag))
+	if canonical == "" {
+		return nil, errUnusableTag(tag)
 	}
 	if messages == nil {
 		messages = map[string]string{}
 	}
-	return &Bundle{tag: tag, messages: maps.Clone(messages)}, nil
+	return &Bundle{tag: canonical, messages: maps.Clone(messages)}, nil
+}
+
+// errUnusableTag reports a tag [ParseTag] refused. The message names
+// both bounds because the two rejection causes — blank and over-long —
+// are indistinguishable from the returned empty Tag.
+func errUnusableTag(tag Tag) error {
+	if tag == "" {
+		return errors.New("i18n: bundle requires a non-empty tag")
+	}
+	return fmt.Errorf("i18n: bundle tag %q is unusable: a tag must be non-blank and at most %d bytes",
+		string(tag), MaxTagLength)
 }
 
 // LoadBundle parses raw as a JSON object whose leaves are strings,
 // returning a [Bundle] tagged with tag. Non-string values cause an
 // error; the package does not attempt to coerce numbers or booleans
-// into message text.
+// into message text. tag is canonicalised exactly as [NewBundle] does.
 func LoadBundle(tag Tag, raw []byte) (*Bundle, error) {
-	if tag == "" {
-		return nil, errors.New("i18n: bundle requires a non-empty tag")
+	canonical := ParseTag(string(tag))
+	if canonical == "" {
+		return nil, errUnusableTag(tag)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, fmt.Errorf("i18n: parse bundle %q: %w", tag, err)
+		return nil, fmt.Errorf("i18n: parse bundle %q: %w", canonical, err)
 	}
 	messages := make(map[string]string, len(decoded))
 	for k, v := range decoded {
 		s, ok := v.(string)
 		if !ok {
-			return nil, fmt.Errorf("i18n: bundle %q key %q is %T, want string", tag, k, v)
+			return nil, fmt.Errorf("i18n: bundle %q key %q is %T, want string", canonical, k, v)
 		}
 		messages[k] = s
 	}
-	return &Bundle{tag: tag, messages: messages}, nil
+	return &Bundle{tag: canonical, messages: messages}, nil
 }
 
 // Tag returns the locale tag the bundle was constructed for.

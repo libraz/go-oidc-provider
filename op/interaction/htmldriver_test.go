@@ -7,6 +7,7 @@ import (
 	"flag"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -107,8 +108,19 @@ func goldenCases() []struct {
 			prompt: interaction.Prompt{
 				Type: "captcha",
 				Data: interaction.CaptchaPromptData{Provider: "turnstile", SiteKey: "test-site-key"},
+				// Mirrors the field spec the orchestrator's captcha
+				// prompt and StepCaptcha both emit: hidden, required.
+				// The golden pins that this driver still renders it as
+				// something the user can fill in, because it ships no
+				// script that could fill it for them.
 				Inputs: []interaction.FieldSpec{
-					{Name: "captcha_token", Kind: interaction.FieldHidden},
+					{
+						Name:     "captcha_token",
+						Kind:     interaction.FieldHidden,
+						Label:    "auth.captcha.token",
+						Required: true,
+						MaxLen:   4096,
+					},
 				},
 				StateRef:  "ref-captcha",
 				CSRFToken: "csrf-3",
@@ -128,6 +140,48 @@ func goldenCases() []struct {
 				},
 				StateRef:  "ref-consent",
 				CSRFToken: "csrf-4",
+			},
+		},
+		{
+			// The picker the built-in chooser interaction emits. The
+			// golden pins that every account is a submit control of its
+			// own and that the add-account link is present, because the
+			// alternative this driver used to render — a lone text input
+			// asking for an opaque session identifier — is a page no
+			// user can complete.
+			name: "interaction-chooser",
+			prompt: interaction.Prompt{
+				Type: "interaction.chooser",
+				Data: interaction.ChooserPromptData{
+					Accounts: []interaction.ChooserAccount{
+						{SessionID: "sess-A", Subject: "alice", DisplayName: "Alice Example", AuthTime: expires},
+						// No display name: the row must still be pickable,
+						// labelled by its subject.
+						{SessionID: "sess-B", Subject: "bob", AuthTime: expires},
+					},
+					AddAccountURL: "/oidc/auth?prompt=login&client_id=rp-1",
+				},
+				Inputs: []interaction.FieldSpec{
+					{Name: "session_id", Kind: interaction.FieldText, Label: "chooser.session_id", Required: true, MaxLen: 64},
+				},
+				StateRef:  "ref-chooser",
+				CSRFToken: "csrf-5",
+			},
+		},
+		{
+			// The empty chooser group. There is nothing to submit, so
+			// the page is the explanatory line plus the link out; a form
+			// here would be a control that cannot do anything.
+			name: "interaction-chooser-empty",
+			prompt: interaction.Prompt{
+				Type: "interaction.chooser",
+				Data: interaction.ChooserPromptData{
+					AddAccountURL: "/oidc/auth?prompt=login&client_id=rp-1",
+				},
+				Inputs: []interaction.FieldSpec{
+					{Name: "session_id", Kind: interaction.FieldText, Label: "chooser.session_id", Required: true, MaxLen: 64},
+				},
+				StateRef: "ref-chooser-empty",
 			},
 		},
 		{
@@ -568,4 +622,92 @@ func renderToString(t *testing.T, prompt interaction.Prompt) string {
 		t.Fatalf("Render: %v", err)
 	}
 	return rec.Body.String()
+}
+
+// TestHTMLDriver_RequiredHiddenFieldIsAnswerable pins the property the
+// captcha gate depends on: a field the prompt declares Required must be
+// something a user of this surface can actually fill in.
+//
+// The driver ships no client-side script, so a hidden input stays at the
+// empty value it was rendered with. For the captcha challenge that is
+// not a cosmetic defect — the orchestrator counts every rejected answer
+// and abandons the chain when the attempts run out, so a page whose
+// token field can never hold a value locks out every user who reaches
+// the challenge.
+func TestHTMLDriver_RequiredHiddenFieldIsAnswerable(t *testing.T) {
+	t.Parallel()
+
+	prompt := interaction.Prompt{
+		Type: "captcha",
+		Data: interaction.CaptchaPromptData{Provider: "turnstile"},
+		Inputs: []interaction.FieldSpec{{
+			Name:     "captcha_token",
+			Kind:     interaction.FieldHidden,
+			Label:    "auth.captcha.token",
+			Required: true,
+			MaxLen:   4096,
+		}},
+		StateRef: "ref-captcha",
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/interaction/u-1", nil)
+	if err := (interaction.HTMLDriver{}).Render(rec, req, prompt); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := rec.Body.String()
+
+	if strings.Contains(body, `<input type="hidden" name="captcha_token"`) {
+		t.Fatalf("required captcha field rendered as a hidden input; no user of this surface can answer it:\n%s", body)
+	}
+	if !strings.Contains(body, `<input name="captcha_token" type="text" required maxlength="4096">`) {
+		t.Errorf("required captcha field is not a fillable text input:\n%s", body)
+	}
+	if !strings.Contains(body, `Verification token`) {
+		t.Errorf("promoted field carries no label, so the user is shown an unexplained box:\n%s", body)
+	}
+}
+
+// TestHTMLDriver_OptionalHiddenFieldStaysHidden is the counterweight:
+// only a Required field is promoted. A hidden field the step does not
+// insist on stays out of the user's way.
+func TestHTMLDriver_OptionalHiddenFieldStaysHidden(t *testing.T) {
+	t.Parallel()
+
+	prompt := interaction.Prompt{
+		Type:     "myorg.custom",
+		Inputs:   []interaction.FieldSpec{{Name: "opaque", Kind: interaction.FieldHidden}},
+		StateRef: "ref-x",
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/interaction/u-1", nil)
+	if err := (interaction.HTMLDriver{}).Render(rec, req, prompt); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `<input type="hidden" name="opaque" value="">`) {
+		t.Errorf("optional hidden field was promoted to a visible input:\n%s", body)
+	}
+}
+
+// TestHTMLDriver_PromotedFieldRoundTripsThroughParseSubmission closes
+// the loop: what the promoted input posts has to come back out of the
+// driver's own parser under the name the orchestrator reads.
+func TestHTMLDriver_PromotedFieldRoundTripsThroughParseSubmission(t *testing.T) {
+	t.Parallel()
+
+	form := url.Values{
+		"state_ref":     {"ref-captcha"},
+		"captcha_token": {"typed-by-the-user"},
+	}
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/interaction/u-1",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	got, err := (interaction.HTMLDriver{}).ParseSubmission(req)
+	if err != nil {
+		t.Fatalf("ParseSubmission: %v", err)
+	}
+	if got.Values["captcha_token"] != "typed-by-the-user" {
+		t.Errorf("captcha_token = %q, want the value the user typed", got.Values["captcha_token"])
+	}
 }

@@ -202,10 +202,13 @@ type Result struct {
 }
 
 // FormSubmission is the SPA's reply to a [Prompt]. The orchestrator
-// validates Values against [FieldSpec] before dispatching to
-// [op.Authenticator.Continue]; in particular the orchestrator caps
-// the total Values size, the per-field byte length, and the field
-// count to prevent denial-of-service through oversized submissions.
+// validates Values against the [FieldSpec] list of the prompt it
+// issued before dispatching to [op.Authenticator.Continue]: every
+// declared field's Required / MinLen / MaxLen / Pattern constraint is
+// applied, and the total Values size and field count are capped to
+// prevent denial-of-service through oversized submissions. A
+// submission that violates any of them is refused before the
+// authenticator or interaction runs.
 type FormSubmission struct {
 	// StateRef is the [Prompt.StateRef] from the prompt that
 	// produced this submission. The orchestrator validates it

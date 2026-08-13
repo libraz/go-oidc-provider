@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,6 +56,139 @@ func TestTagLanguage(t *testing.T) {
 		if got := tc.in.Language(); got != tc.want {
 			t.Fatalf("Language(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestTagFallback(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   i18n.Tag
+		want []i18n.Tag
+	}{
+		{"language only", "en", []i18n.Tag{"en"}},
+		{"region", "pt-br", []i18n.Tag{"pt-br", "pt"}},
+		{"script", "zh-hant", []i18n.Tag{"zh-hant", "zh"}},
+		{"script and region", "zh-hant-tw", []i18n.Tag{"zh-hant-tw", "zh-hant", "zh"}},
+		{"private use singleton", "pt-br-x-legal", []i18n.Tag{"pt-br-x-legal", "pt-br", "pt"}},
+		{"leading singleton", "x-private", []i18n.Tag{"x-private"}},
+		{"empty", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tc.in.Fallback()
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("Fallback(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// Every locale signal the resolver reads — a bundle tag, a cookie, an
+// ui_locales entry, an Accept-Language entry, an embedder's stored
+// preference — is canonicalised by the same function, so a bundle that
+// can be registered is a bundle that can be selected regardless of how
+// the requester spells the tag.
+func TestResolver_MatchNormalisesAndFallsBack(t *testing.T) {
+	t.Parallel()
+
+	ptBR, err := i18n.NewBundle("pt-BR", nil)
+	if err != nil {
+		t.Fatalf("NewBundle(pt-BR): %v", err)
+	}
+	if got := ptBR.Tag(); got != "pt-br" {
+		t.Fatalf("NewBundle(pt-BR).Tag() = %q, want the canonical %q", got, "pt-br")
+	}
+	zhHant, _ := i18n.NewBundle("zh-Hant", nil)
+	en, _ := i18n.NewBundle(i18n.English, nil)
+	r, err := i18n.NewResolver(i18n.English, en, ptBR, zhHant)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		in    i18n.Tag
+		want  i18n.Tag
+		match bool
+	}{
+		{name: "exact canonical", in: "pt-br", want: "pt-br", match: true},
+		{name: "registration casing", in: "pt-BR", want: "pt-br", match: true},
+		{name: "shouting", in: "PT-BR", want: "pt-br", match: true},
+		{name: "underscore separator", in: "pt_BR", want: "pt-br", match: true},
+		{name: "surrounding space", in: "  pt-br  ", want: "pt-br", match: true},
+		{name: "script subtag", in: "zh-Hant", want: "zh-hant", match: true},
+		{name: "region under a script", in: "zh-Hant-TW", want: "zh-hant", match: true},
+		{name: "region truncates to language", in: "en-US", want: "en", match: true},
+		// Lookup only truncates, so a bare language does not reach a
+		// more specific registration: "pt" is not "pt-br".
+		{name: "language does not extend to region", in: "pt", match: false},
+		{name: "sibling region", in: "zh-Hans", match: false},
+		{name: "unknown tag", in: "xx-YY", match: false},
+		{name: "empty", in: "", match: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := r.Match(tc.in)
+			if ok != tc.match {
+				t.Fatalf("Match(%q) matched = %v, want %v (got %q)", tc.in, ok, tc.match, got)
+			}
+			if ok && got != tc.want {
+				t.Fatalf("Match(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// A locale reaches the resolver through four transports. All four are
+// canonicalised, so an RP, a browser, a picker and an embedder's own
+// store all select the same bundle from the same spelling.
+func TestResolver_EverySignalIsCanonicalised(t *testing.T) {
+	t.Parallel()
+
+	newResolver := func(t *testing.T, prefs i18n.PreferredLocaleStore) *i18n.Resolver {
+		t.Helper()
+
+		ptBR, _ := i18n.NewBundle("pt-BR", nil)
+		en, _ := i18n.NewBundle(i18n.English, nil)
+		r, err := i18n.NewResolver(i18n.English, en, ptBR)
+		if err != nil {
+			t.Fatalf("NewResolver: %v", err)
+		}
+		if prefs != nil {
+			r.WithPreferredLocaleStore(prefs)
+		}
+		return r
+	}
+
+	cases := []struct {
+		name  string
+		prefs i18n.PreferredLocaleStore
+		in    i18n.Request
+	}{
+		{name: "ui_locales", in: i18n.Request{UILocales: []string{"PT-BR"}}},
+		{name: "cookie", in: i18n.Request{Cookie: "pt_BR"}},
+		{name: "accept-language", in: i18n.Request{AcceptLanguage: "pt-BR;q=0.9, de;q=0.1"}},
+		{
+			name:  "preferred locale store",
+			prefs: stubPrefs{tag: "Pt-Br"},
+			in:    i18n.Request{Subject: "sub-1"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newResolver(t, tc.prefs)
+			if got := r.Resolve(context.Background(), tc.in); got != "pt-br" {
+				t.Fatalf("Resolve(%s) = %q, want pt-br", tc.name, got)
+			}
+		})
 	}
 }
 
@@ -360,10 +494,17 @@ func TestResolver_AcceptLanguageCapsWork(t *testing.T) {
 func TestResolver_RejectsOverlongLocaleCookie(t *testing.T) {
 	t.Parallel()
 
-	en, _ := i18n.NewBundle(i18n.English, nil)
 	longTag := i18n.Tag("en-" + strings.Repeat("a", 80))
-	poison, _ := i18n.NewBundle(longTag, nil)
-	r, err := i18n.NewResolver(i18n.English, en, poison)
+
+	// A tag past the cap cannot be registered in the first place: the
+	// cookie / Accept-Language side would canonicalise it to the empty
+	// Tag, so a bundle under it could never be selected.
+	if _, err := i18n.NewBundle(longTag, nil); err == nil {
+		t.Fatalf("NewBundle(overlong tag) = nil error, want rejection")
+	}
+
+	en, _ := i18n.NewBundle(i18n.English, nil)
+	r, err := i18n.NewResolver(i18n.English, en)
 	if err != nil {
 		t.Fatalf("NewResolver: %v", err)
 	}
@@ -385,6 +526,62 @@ func TestResolver_BundleFallbackReportsMatch(t *testing.T) {
 	}
 	if _, ok := r.Bundle("zz"); ok {
 		t.Fatalf("unknown tag should be a fall-back, got direct match")
+	}
+}
+
+// A partial bundle is the normal case — an embedder translates the
+// handful of strings it cares about — so every tier of the lookup
+// chain has to keep going when a key is missing, including the last
+// two. A partial bundle chosen as the *default* is the case that has
+// no tier above it except English; without that terminal tier the OP
+// renders empty strings for every key the default does not translate.
+func TestResolver_MessageChainRunsToEnglish(t *testing.T) {
+	t.Parallel()
+
+	en, _ := i18n.NewBundle(i18n.English, map[string]string{
+		"only.english":     "Sign in",
+		"shared.key":       "English",
+		"login.identifier": "Email",
+	})
+	pt, _ := i18n.NewBundle("pt", map[string]string{
+		"shared.key":       "Português",
+		"login.identifier": "E-mail",
+	})
+	ptBR, _ := i18n.NewBundle("pt-BR", map[string]string{
+		"shared.key": "Português do Brasil",
+	})
+	// pt-br is the default and translates exactly one key.
+	r, err := i18n.NewResolver("pt-BR", en, pt, ptBR)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		tag  i18n.Tag
+		key  string
+		want string
+	}{
+		{name: "own bundle wins", tag: "pt-BR", key: "shared.key", want: "Português do Brasil"},
+		{name: "language subtag fills the gap", tag: "pt-BR", key: "login.identifier", want: "E-mail"},
+		{name: "english terminates the chain", tag: "pt-BR", key: "only.english", want: "Sign in"},
+		{name: "the default itself falls back", tag: "", key: "only.english", want: "Sign in"},
+		{name: "unmatched tag walks the default chain", tag: "xx", key: "login.identifier", want: "E-mail"},
+		{name: "explicit english is not overridden", tag: "en", key: "shared.key", want: "English"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := r.Message(tc.tag, tc.key, nil)
+			if !ok || got != tc.want {
+				t.Fatalf("Message(%q, %q) = (%q, %v), want (%q, true)", tc.tag, tc.key, got, ok, tc.want)
+			}
+		})
+	}
+
+	if got, ok := r.Message("pt-BR", "nowhere", nil); ok || got != "" {
+		t.Fatalf("Message(pt-BR, nowhere) = (%q, %v), want (empty, false)", got, ok)
 	}
 }
 
@@ -451,26 +648,35 @@ func TestResolver_DefaultAndAvailableAreStable(t *testing.T) {
 	}
 }
 
+// An unset default is the caller declining to choose, so the resolver
+// picks one. A *set* default naming a locale no bundle serves is a
+// configuration error: silently redirecting it would make Default()
+// report a locale the caller never asked for, and every lookup chain
+// terminate somewhere unannounced.
 func TestNewResolver_DefaultFallbacks(t *testing.T) {
 	t.Parallel()
 
 	en, _ := i18n.NewBundle(i18n.English, nil)
 	ja, _ := i18n.NewBundle(i18n.Japanese, nil)
-	r, err := i18n.NewResolver("zz", ja, en)
-	if err != nil {
-		t.Fatalf("NewResolver with English fallback: %v", err)
-	}
-	if got := r.Default(); got != i18n.English {
-		t.Fatalf("Default() = %q, want English fallback", got)
+	if _, err := i18n.NewResolver("zz", ja, en); err == nil {
+		t.Fatalf("NewResolver with an unregistered default = nil error, want rejection")
 	}
 
 	fr, _ := i18n.NewBundle("fr", nil)
-	r, err = i18n.NewResolver("", fr, ja)
+	r, err := i18n.NewResolver("", fr, ja)
 	if err != nil {
 		t.Fatalf("NewResolver with first-bundle fallback: %v", err)
 	}
 	if got := r.Default(); got != "fr" {
 		t.Fatalf("Default() = %q, want first registered bundle", got)
+	}
+
+	r, err = i18n.NewResolver("", ja, en)
+	if err != nil {
+		t.Fatalf("NewResolver with English fallback: %v", err)
+	}
+	if got := r.Default(); got != i18n.English {
+		t.Fatalf("Default() = %q, want English fallback", got)
 	}
 }
 

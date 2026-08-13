@@ -32,12 +32,17 @@ type PreferredLocaleStore interface {
 	PreferredLocale(ctx context.Context, sub string) (Tag, error)
 }
 
-// NewResolver returns a [Resolver] over the supplied bundles. The
-// first bundle whose [Tag] equals defTag is treated as the default;
-// when defTag is unset or unmatched, [English] is used. Bundle
+// NewResolver returns a [Resolver] over the supplied bundles. Bundle
 // registration order is preserved so the matcher prefers
-// caller-supplied locales over the embedded default when the
-// priority chain runs out.
+// caller-supplied locales over the embedded default when the priority
+// chain runs out.
+//
+// defTag is canonicalised through [ParseTag] and MUST name a
+// registered bundle; a default nothing serves is a configuration error
+// rather than a silent redirection, because [Resolver.Default] is
+// reported to embedders and terminates every lookup chain. Only an
+// unset defTag defers the choice to the resolver, which then prefers
+// [English] and falls back to the first registered bundle.
 func NewResolver(defTag Tag, bundles ...*Bundle) (*Resolver, error) {
 	if len(bundles) == 0 {
 		return nil, errors.New("i18n: NewResolver requires at least one bundle")
@@ -56,13 +61,18 @@ func NewResolver(defTag Tag, bundles ...*Bundle) (*Resolver, error) {
 		r.bundles[b.Tag()] = b
 		r.order = append(r.order, b.Tag())
 	}
-	r.defTag = defTag
-	if r.defTag == "" || r.bundles[r.defTag] == nil {
-		if r.bundles[English] != nil {
-			r.defTag = English
-		} else {
-			r.defTag = r.order[0]
+	if strings.TrimSpace(string(defTag)) != "" {
+		canonical := ParseTag(string(defTag))
+		if canonical == "" || r.bundles[canonical] == nil {
+			return nil, errors.New("i18n: default locale " + string(defTag) + " has no registered bundle")
 		}
+		r.defTag = canonical
+		return r, nil
+	}
+	if r.bundles[English] != nil {
+		r.defTag = English
+	} else {
+		r.defTag = r.order[0]
 	}
 	return r, nil
 }
@@ -78,21 +88,25 @@ func (r *Resolver) WithPreferredLocaleStore(prefs PreferredLocaleStore) *Resolve
 // Default returns the resolver's default tag.
 func (r *Resolver) Default() Tag { return r.defTag }
 
-// Bundle returns the bundle for tag, or the default bundle when tag
-// is not registered. The second return reports whether tag matched
-// directly so callers that want to detect a fall-back can branch.
+// Bundle returns the bundle serving tag under the same matching rule
+// [Resolver.Match] applies, or the default bundle when tag matches
+// nothing. The second return reports whether tag matched so callers
+// that want to detect a fall-back can branch.
 func (r *Resolver) Bundle(tag Tag) (*Bundle, bool) {
-	if b, ok := r.bundles[tag]; ok {
-		return b, true
+	if matched, ok := r.match(tag); ok {
+		return r.bundles[matched], true
 	}
 	return r.bundles[r.defTag], false
 }
 
-// Message returns key from the bundle selected by tag. An exact locale
-// match wins, followed by its registered language subtag (for example,
-// "ja-JP" → "ja"). When the selected locale does not define key, the
-// configured default bundle is consulted. The boolean is false only when
-// neither bundle defines key.
+// Message returns key from the first bundle along tag's lookup chain
+// that defines it. The chain is tag's own [Tag.Fallback] sequence
+// ("pt-BR" → "pt-br" → "pt"), then the configured default locale's,
+// and finally the library's [English] catalogue — so a partial bundle
+// serves the keys it translates and inherits the rest, and a partial
+// bundle chosen as the *default* inherits from English rather than
+// emitting empty strings. The boolean is false only when no bundle in
+// the chain defines key.
 //
 // Placeholder substitution follows [Bundle.Get]: values from data replace
 // matching "{name}" tokens, unknown placeholders remain visible verbatim,
@@ -103,21 +117,35 @@ func (r *Resolver) Message(tag Tag, key string, data map[string]string) (string,
 	if r == nil || key == "" {
 		return "", false
 	}
-	selected := r.defTag
-	if matched, ok := r.match(tag); ok {
-		selected = matched
-	}
-	if b := r.bundles[selected]; b != nil {
+	for _, b := range r.messageChain(tag) {
 		if message, ok := b.Get(key, data); ok {
 			return message, true
 		}
 	}
-	if selected != r.defTag {
-		if b := r.bundles[r.defTag]; b != nil {
-			return b.Get(key, data)
+	return "", false
+}
+
+// messageChain returns the bundles [Resolver.Message] consults for tag,
+// in priority order and without repeats: the tag's own lookup chain,
+// then the configured default's, then English. Tiers are appended
+// whole rather than stopping at the first registered bundle, because a
+// registered bundle may be partial — the point of the chain is that a
+// key the more specific bundle omits is still served.
+func (r *Resolver) messageChain(tag Tag) []*Bundle {
+	seen := make(map[Tag]struct{}, 4)
+	chain := make([]*Bundle, 0, 4)
+	for _, tier := range [...]Tag{tag, r.defTag, English} {
+		for _, candidate := range ParseTag(string(tier)).Fallback() {
+			if _, dup := seen[candidate]; dup {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			if b := r.bundles[candidate]; b != nil {
+				chain = append(chain, b)
+			}
 		}
 	}
-	return "", false
+	return chain
 }
 
 // Available returns the tags registered with the resolver in
@@ -168,17 +196,17 @@ func (r *Resolver) Resolve(ctx context.Context, in Request) Tag {
 		}
 	}
 	for _, raw := range in.UILocales {
-		if matched, ok := r.match(ParseTag(raw)); ok {
+		if matched, ok := r.match(Tag(raw)); ok {
 			return matched
 		}
 	}
 	if validLocaleCookie(in.Cookie) {
-		if matched, ok := r.match(ParseTag(in.Cookie)); ok {
+		if matched, ok := r.match(Tag(in.Cookie)); ok {
 			return matched
 		}
 	}
 	for _, raw := range parseAcceptLanguage(in.AcceptLanguage) {
-		if matched, ok := r.match(ParseTag(raw)); ok {
+		if matched, ok := r.match(Tag(raw)); ok {
 			return matched
 		}
 	}
@@ -186,12 +214,13 @@ func (r *Resolver) Resolve(ctx context.Context, in Request) Tag {
 }
 
 // Match reports the registered tag that would serve the supplied tag,
-// applying the same rule [Resolver.Resolve] uses inside the chain: an
-// exact registration wins, and failing that the language subtag is
-// tried so "ja-JP" selects the "ja" bundle. The returned tag is always
-// one of [Resolver.Available]; the boolean is false when nothing
-// matched, which callers persisting a user's choice use to reject a
-// tag the resolver would later skip.
+// applying the same rule [Resolver.Resolve] uses inside the chain: the
+// tag is canonicalised and then looked up along its BCP 47 fallback
+// chain, so "PT-BR" selects a registered "pt-br" bundle and "ja-JP"
+// selects "ja". The returned tag is always one of
+// [Resolver.Available]; the boolean is false when nothing matched,
+// which callers persisting a user's choice use to reject a tag the
+// resolver would later skip.
 func (r *Resolver) Match(tag Tag) (Tag, bool) {
 	if r == nil {
 		return "", false
@@ -199,22 +228,20 @@ func (r *Resolver) Match(tag Tag) (Tag, bool) {
 	return r.match(tag)
 }
 
-// match resolves tag against the registered bundles. An exact match
-// wins; failing that, the language subtag is tried so "ja-JP" hits
-// the "ja" bundle. An empty input or no match returns ("", false).
+// match resolves tag against the registered bundles. It is the single
+// entry point for every locale signal the resolver consults, so it
+// owns both halves of the rule: the tag is canonicalised through
+// [ParseTag] — callers hand it whatever the wire, a cookie or an
+// embedder supplied, in whatever case and with either separator — and
+// the canonical form is then looked up along its [Tag.Fallback] chain,
+// most specific first, so "pt-BR" selects a registered "pt-br" bundle
+// and, failing that, a registered "pt" one. An empty input or no match
+// along the whole chain returns ("", false).
 func (r *Resolver) match(tag Tag) (Tag, bool) {
-	if tag == "" {
-		return "", false
-	}
-	if _, ok := r.bundles[tag]; ok {
-		return tag, true
-	}
-	lang := tag.Language()
-	if lang == tag {
-		return "", false
-	}
-	if _, ok := r.bundles[lang]; ok {
-		return lang, true
+	for _, candidate := range ParseTag(string(tag)).Fallback() {
+		if _, ok := r.bundles[candidate]; ok {
+			return candidate, true
+		}
 	}
 	return "", false
 }
