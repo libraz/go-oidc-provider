@@ -86,38 +86,17 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		writeAuthorizeValidationError(w, r, req, deps, err)
 		return
 	}
-	if jarmFeatureRequested(req) && deps.JARM == nil {
-		// The request asked for a JARM mode but the OP did not opt in
-		// to the feature. Surface "unsupported_response_mode" via the
-		// legacy redirect — JARM cannot be used to convey "JARM is not
-		// supported by this OP". emitAuthorizeError implements the same
-		// fallback for the post-Validate paths.
-		emitAuthorizeError(w, r, deps, req, errUnsupportedResponseMode,
-			"response_mode is not supported by this OP")
-		return
-	}
 	if !validateRequestExtensions(w, r, deps, req, client) {
-		return
-	}
-	if jarmModeMissing(deps, req) {
-		// The active profile (FAPI 2.0 Message Signing §5.5) requires
-		// every authorize response to be JARM-wrapped, but this request
-		// did not opt into a JARM response_mode. Surface
-		// "unsupported_response_mode" via the legacy redirect — the
-		// non-JARM mode the request asked for is the one the profile
-		// forbids, and JARM cannot be used to convey "JARM is not in
-		// use yet".
-		emitAuthorizeError(w, r, deps, req, errUnsupportedResponseMode,
-			`response_mode is required by the active profile (use "jwt", "query.jwt", "fragment.jwt", or "form_post.jwt")`)
 		return
 	}
 	dispatchAuthorize(w, r, deps, req, client)
 }
 
 // validateRequestExtensions runs the request gates that sit between a
-// successful [authorize.Request.Validate] and dispatch: RFC 9396
-// authorization_details, the Grant Management draft parameters, and the
-// RFC 9449 §10.1 "dpop_jkt" commitment.
+// successful [authorize.Request.Validate] and dispatch: the JARM
+// response_mode rules, RFC 9396 authorization_details, the Grant
+// Management draft parameters, and the RFC 9449 §10.1 "dpop_jkt"
+// commitment.
 //
 // The rules live in [authorize.Request.ValidateExtensions] and the
 // policy in [Deps.ExtensionPolicy], both shared with the
@@ -126,7 +105,10 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 // function only renders: the checks run after [authorize.Request.Validate]
 // so redirect_uri has been matched against the client's registration and
 // the rejection can take the endpoint's normal channel (JARM / form_post
-// / redirect) rather than a pre-redirect first-party page.
+// / redirect) rather than a pre-redirect first-party page. A rejection of
+// the JARM response_mode itself leaves that channel through
+// [emitAuthorizeError]'s plain-response fallback: JARM cannot be used to
+// convey "JARM is not in use here".
 //
 // Returns false when it wrote the response; the caller then stops.
 func validateRequestExtensions(
@@ -190,13 +172,21 @@ func extractAuthorizeValues(r *http.Request) (url.Values, error) {
 //  1. PAR: a "request_uri" matching the urn:ietf:params:oauth:request_uri:
 //     prefix is consumed from the persisted record (RFC 9126 §2.3) and
 //     every other parameter except client_id is ignored.
-//  2. JAR: a "request" parameter is verified and merged onto the wire
-//     values per RFC 9101 §6.1; the merged values are then re-parsed.
-//     A "request_uri" that does NOT match the PAR URN prefix is
-//     rejected by [authorize.ParseValues] with
-//     [authorize.ErrInvalidRequestURI] — the library does not
-//     implement the RFC 9101 §5.2.2 generic-URI fetch, only the PAR
-//     form, so the JAR-by-URI surface is intentionally closed.
+//  2. JAR: a "request" parameter — or a "request_uri" outside the PAR
+//     URN namespace — is resolved by [resolveJARRequestIfNeeded] and
+//     merged onto the wire values per RFC 9101 §6.1; the merged values
+//     are then re-parsed. The non-URN form is the RFC 9101 §5.2.2
+//     by-reference surface, and the OP does fetch it: see
+//     [fetchJARRequestURI] for the outbound posture it runs under —
+//     the URI MUST appear verbatim in the client's preregistered
+//     [op/store.Client.RequestURIs], and the retrieval goes through the
+//     shared SSRF-gated envelope (https-only unless
+//     [op.WithAllowPrivateNetworkJAR] is set, cloud-metadata always
+//     blocked, no redirects, JWS media types only, capped body).
+//     [authorize.ParseValues]'s [authorize.ErrInvalidRequestURI] branch
+//     is the parser-side backstop behind that gate: by the time it runs,
+//     a JAR request_uri has already been consumed and stripped from the
+//     values, so anything left that is not a PAR URN is malformed.
 //  3. Bare wire form: the values feed straight to [authorize.ParseValues].
 //
 // The returned bool reports whether processing should continue: false
@@ -346,7 +336,7 @@ func dispatchAuthorize(
 	case decisionInteractionRequired:
 		emitAuthorizeError(w, r, deps, req, errInteractionRequired, "interaction is required")
 	case decisionInteract:
-		startInteraction(w, r, deps, req, client, active, hint.grant)
+		startInteraction(w, r, deps, req, client, active, hint)
 	case decisionMint:
 		mintAndRedirect(w, r, deps, req, client, active, hint)
 	}
@@ -507,6 +497,13 @@ type authorizeHint struct {
 	prompt    string
 	grant     *store.Grant
 	autoGrant *grantUpsert
+
+	// reauth mirrors hintState.forceLogin || hintState.acrUnsatisfied:
+	// the request may not be served from the authentication the entry
+	// session carries. [startInteraction] forwards it onto
+	// [authn.State.ReauthRequired] so the orchestrator does not let the
+	// inherited subject stand in for a credential.
+	reauth bool
 }
 
 // resolveSession reads the __Host-oidc_session cookie and asks the manager
@@ -527,12 +524,39 @@ func resolveSession(w http.ResponseWriter, r *http.Request, deps resolved) (*ses
 	now := deps.now().UTC()
 	active.Session.ExpiresAt = touch.ExpiresAt
 	active.Session.UpdatedAt = touch.UpdatedAt
-	if w != nil {
+	if w != nil && sessionCookieNeedsRefresh(active.Payload, now) {
 		if err := setSessionCookieWithMaxAge(w, touch.Cookie, touch.ExpiresAt, now); err != nil {
 			return nil, err
 		}
 	}
 	return active, nil
+}
+
+// sessionCookieRefreshInterval is how much of a session cookie's browser
+// lifetime must elapse before a request that only read the session
+// re-seals it.
+const sessionCookieRefreshInterval = 24 * time.Hour
+
+// sessionCookieNeedsRefresh reports whether re-sealing the cookie buys
+// the browser anything.
+//
+// A request that merely read the session writes back the selection it
+// observed when it started. If another tab switched accounts in the
+// meantime, that write restores the older account silently, and the next
+// prompt=none request mints for a subject the user has already left. So
+// re-sealing has to be worth the risk: either the payload carries no
+// issuance stamp, in which case nothing can be reasoned about and the
+// cookie is refreshed, or its browser Max-Age window has aged far enough
+// that extending it matters.
+//
+// The server-side touch stays unconditional — it extends the idle
+// lifetime without writing a selection back, so it cannot roll one back.
+// Only the Set-Cookie is held back.
+func sessionCookieNeedsRefresh(p sessions.Payload, now time.Time) bool {
+	if p.IssuedAt == 0 {
+		return true
+	}
+	return now.Sub(time.Unix(p.IssuedAt, 0).UTC()) >= sessionCookieRefreshInterval
 }
 
 // resolveSessionWithoutTouch validates and loads the browser session without
@@ -815,7 +839,12 @@ func decideHintInteractive(s hintState) authorizeHint {
 		// the authn chain again to reach the requested acr_values (already
 		// carried on the interaction state), and terminateInteraction
 		// re-stamps the resolved acr / auth_time onto the session + grant.
-		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptLogin, grant: s.existing}
+		return authorizeHint{
+			decision: decisionInteract,
+			prompt:   interaction.PromptLogin,
+			grant:    s.existing,
+			reauth:   true,
+		}
 	case s.selectAcct:
 		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptSelectAccount, grant: s.existing}
 	case s.needConsent:
@@ -830,12 +859,14 @@ func decideHintInteractive(s hintState) authorizeHint {
 // __Host-oidc_interaction cookie, and redirects the browser to
 // /interaction/{uid}. The orchestrator runs on the first GET and
 // emits the initial prompt.
-// existing is the grant the dispatcher resolved for (subject,
-// client_id), or nil when no cached grant covers this attempt. When
-// existing is non-nil and already covers the requested scope, the
-// helper pre-marks the built-in consent interaction as already run
-// so the user is not prompted to re-confirm scopes they have already
-// granted.
+// hint is the decision-matrix outcome: hint.grant is the grant the
+// dispatcher resolved for (subject, client_id), or nil when no cached
+// grant covers this attempt. When it is non-nil and already covers the
+// requested scope, the helper pre-marks the built-in consent
+// interaction as already run so the user is not prompted to re-confirm
+// scopes they have already granted. hint.reauth carries the
+// "may not be served from the existing session" verdict onto the
+// orchestrator state.
 func startInteraction(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -843,7 +874,7 @@ func startInteraction(
 	req *authorize.Request,
 	client *store.Client,
 	active *sessions.Active,
-	existing *store.Grant,
+	hint authorizeHint,
 ) {
 	if deps.Authn == nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "interaction is not configured")
@@ -855,7 +886,7 @@ func startInteraction(
 		return
 	}
 	now := deps.now().UTC()
-	authnState := initialAuthnState(r, deps, req, client, active, existing, uid, now)
+	authnState := initialAuthnState(r, deps, req, client, active, hint, uid, now)
 	authnRaw, err := encodeAuthnState(authnState)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not marshal interaction state")
@@ -897,18 +928,21 @@ func initialAuthnState(
 	req *authorize.Request,
 	client *store.Client,
 	active *sessions.Active,
-	existing *store.Grant,
+	hint authorizeHint,
 	uid string,
 	now time.Time,
 ) authn.State {
+	existing := hint.grant
 	willRunChooser := containsString(req.Prompt, interaction.PromptSelectAccount) && active != nil
 	return authn.State{
+		ReauthRequired:           hint.reauth,
 		InteractionUID:           uid,
 		ClientID:                 client.ID,
 		Client:                   projectClientView(client),
 		Subject:                  currentSubject(active),
 		RemoteIP:                 clientIPFromRequest(r, deps),
 		UserAgent:                truncateUserAgent(r.UserAgent()),
+		AcceptLanguage:           r.Header.Get("Accept-Language"),
 		AuthTime:                 now,
 		ActiveFactorIdx:          -1,
 		Phase:                    authn.PhaseBeforeAuthn,
@@ -919,6 +953,19 @@ func initialAuthnState(
 		ChooserAddAccount:        chooserAddAccountRequested(req, active),
 		ChooserAddAccountGroupID: chooserAddAccountGroupID(req, active),
 	}
+}
+
+// auditRemoteIP renders the request's resolved client IP for an audit
+// event. An unresolvable address yields "" rather than netip.Addr's
+// "invalid IP" placeholder, which audit.Event.IP documents as the
+// unresolvable case and which a log reader would otherwise mistake for
+// a literal address. Mirrors the guard [acrRemoteIP] applies on the
+// interaction path.
+func auditRemoteIP(r *http.Request, deps resolved) string {
+	if ip := clientIPFromRequest(r, deps); ip.IsValid() {
+		return ip.String()
+	}
+	return ""
 }
 
 func initialInteractionsRun(req *authorize.Request, existing *store.Grant, willRunChooser bool) map[string]bool {
@@ -1072,7 +1119,7 @@ func mintAndRedirect(
 			ActorID:   active.Session.Subject,
 			ClientID:  client.ID,
 			SessionID: active.Session.ID,
-			IP:        clientIPFromRequest(r, deps).String(),
+			IP:        auditRemoteIP(r, deps),
 			UserAgent: truncateUserAgent(r.UserAgent()),
 			Extras: map[string]any{
 				"grant_id": durableGrant.ID,
@@ -1096,7 +1143,34 @@ func mintAndRedirect(
 	emitAuthorizeSuccess(w, r, deps, req, codeID)
 }
 
+// commitSilentAuthorization persists the silent authorization — the grant
+// the code hangs off and the code itself — inside one transaction, and
+// reports whether a failure came from the PAR consumption so the caller
+// can answer access_denied instead of server_error.
+//
+// It shares [retryOnGrantConflict] with the interaction-completion path
+// because it shares the hazard: a returning user with two tabs open
+// drives two silent mints for the same (subject, client), and a backend
+// that versions the grant record fails whichever one reads first. The
+// caller draws codeID once, before the first attempt, so a retry rewrites
+// the same code rather than minting a second; everything the body writes
+// is staged inside the transaction it opens, so an attempt that lost left
+// neither a code nor a consumed request_uri behind.
 func commitSilentAuthorization(
+	ctx context.Context,
+	deps resolved,
+	req *authorize.Request,
+	client *store.Client,
+	active *sessions.Active,
+	hint authorizeHint,
+	codeID string,
+) (*store.Grant, bool, error) {
+	return retryOnGrantConflict(ctx, func() (*store.Grant, bool, error) {
+		return attemptSilentAuthorization(ctx, deps, req, client, active, hint, codeID)
+	})
+}
+
+func attemptSilentAuthorization(
 	ctx context.Context,
 	deps resolved,
 	req *authorize.Request,

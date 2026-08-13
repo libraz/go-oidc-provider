@@ -13,12 +13,22 @@
 // # CSRF / Origin policy
 // State-changing /interaction/{uid} requests must carry an Origin (or
 // Referer) header that matches the configured allowlist. The allowlist is
-// the union of the configured CORS origins and the issuer's own origin;
-// per-client redirect-URI origins are not currently enumerated because the
-// [op/store.ClientStore] contract is by-id only and walking the registry is
-// not feasible at request time. Embedders that need richer per-client
-// allowlisting can compose their own [csrf.Allowlist] and pass it via the
-// [Deps] field.
+// the union of the configured CORS origins and the issuer's own origin.
+//
+// Per-client redirect_uri origins are deliberately excluded, and the
+// exclusion is a trust boundary rather than a lookup limitation: the CORS
+// allowlist does carry them, so reusing it here would let an origin
+// registered by one client post to another client's consent ceremony —
+// exactly the cross-client forgery the ceremony exists to prevent.
+// Widening this list to the redirect_uri origins therefore erases the
+// boundary; nothing derived from a client registration belongs in it.
+//
+// The interaction UI is served by the OP itself, so the issuer's origin
+// covers the default deployment. An embedder that hosts that UI on a
+// separate origin names it through [op.WithCORSOrigins], which is an
+// explicit act rather than a side effect of registering a client. That
+// option is the only supported way to widen the list: [Deps] belongs to
+// this internal package and is not reachable from the public API.
 // # State carriage
 // The validated authorization request is persisted in
 // [op/store.Interaction.RawState] using internal/authorize.RequestState

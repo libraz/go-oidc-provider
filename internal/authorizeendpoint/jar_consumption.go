@@ -3,7 +3,6 @@ package authorizeendpoint
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/netsec"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -144,12 +144,14 @@ func renderJARError(w http.ResponseWriter, r *http.Request, deps resolved, code,
 //   - Membership in the client's preregistered RequestURIs allowlist
 //     (RFC 9101 §5.2.2 / FAPI 2.0 Message Signing). The OP is strict:
 //     no preregistration means the URI is not honoured.
-//   - The same SSRF deny-list (URL-time + dial-time), body cap, and
-//     content-type policy that backs the JWKS / sector_identifier_uri
-//     fetchers. The implementation goes through internal/netsec so
-//     a DNS-rebinding peer cannot pivot between the URL gate and the
-//     dial; cloud-metadata IPs remain rejected even when AllowPrivate
-//     is enabled.
+//   - The same SSRF deny-list (URL-time + dial-time) and body cap that
+//     back the JWKS / sector_identifier_uri fetchers. The fetch runs
+//     through the shared [securefetch] envelope — the same one those
+//     use — so a DNS-rebinding peer cannot pivot between the URL gate
+//     and the dial; cloud-metadata IPs remain rejected even when
+//     AllowPrivate is enabled. The envelope is built once per handler
+//     and held on [resolved], so repeat lookups reuse its connection
+//     pool rather than handshaking afresh.
 //   - HTTPS-only by default. http:// is admitted only when
 //     [op.WithAllowPrivateNetworkJAR] is set so loopback fixtures keep
 //     working without weakening the production posture.
@@ -179,83 +181,101 @@ func fetchJARRequestURI(
 			"request_uri is not preregistered for this client", state)
 		return "", false
 	}
-	netsecOpts := jarRequestURINetsecOptions(deps.AllowPrivateNetworkJAR)
-	if err := netsec.AssertSafeURL(ctx, uri, netsecOpts); err != nil {
-		renderJARError(w, r, deps, errInvalidRequestURI,
-			classifyJARRequestURISSRFError(err), state)
-		return "", false
-	}
-	httpClient := netsec.NewHTTPClient(netsecOpts)
-	// The URL came from the client's preregistered allowlist and has
-	// passed both the URL-time SSRF gate above and the dial-time gate
-	// installed by [netsec.NewHTTPClient]; the gosec G107/G704 SSRF
-	// taint warning is acknowledged here as covered by the deny-list.
-	fetchReq, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, http.NoBody) //nolint:gosec // see netsec gates above.
+	// NewRequest runs the URL-time SSRF gate; the dial-time gate rides on
+	// the shared client's transport.
+	fetchReq, err := deps.jarFetch.NewRequest(ctx, http.MethodGet, uri, nil)
 	if err != nil {
-		renderJARError(w, r, deps, errInvalidRequestURI, "request_uri is malformed", state)
+		renderJARError(w, r, deps, errInvalidRequestURI,
+			classifyJARRequestURINewRequestError(err), state)
 		return "", false
 	}
 	fetchReq.Header.Set("Accept", "application/oauth-authz-req+jwt, application/jwt, text/plain;q=0.5")
-	resp, err := httpClient.Do(fetchReq) //nolint:gosec // see netsec gates above.
+	body, resp, err := deps.jarFetch.Do(fetchReq) //nolint:bodyclose // securefetch.Do drains and closes the body internally.
 	if err != nil {
 		renderJARError(w, r, deps, errInvalidRequestURI,
-			classifyJARRequestURIDoError(err), state)
+			classifyJARRequestURIFetchError(err, resp), state)
 		return "", false
 	}
-	defer func() { _ = resp.Body.Close() }()
-	// MaxRedirects=0 in netsec.Options collapses every 30x onto
-	// http.ErrUseLastResponse, so a redirect surfaces here as a non-2xx
-	// status. We refuse the response rather than follow the location.
-	if resp.StatusCode/100 == 3 {
-		renderJARError(w, r, deps, errInvalidRequestURI,
-			"request_uri must not redirect", state)
-		return "", false
-	}
-	if resp.StatusCode/100 != 2 {
-		renderJARError(w, r, deps, errInvalidRequestURI,
-			fmt.Sprintf("request_uri responded with status %d", resp.StatusCode), state)
-		return "", false
-	}
+	// The media-type gate stays here rather than in the policy's
+	// AcceptContentTypes: an absent Content-Type is admitted (RFC 9101
+	// §10.6 is a SHOULD), and the envelope's allow-list has no spelling
+	// for "absent". The body it was read alongside is already bounded by
+	// the policy's cap, so a wrong media type costs a capped read and
+	// nothing more.
 	if !isJARRequestObjectContentType(resp.Header.Get("Content-Type")) {
 		renderJARError(w, r, deps, errInvalidRequestURI,
 			fmt.Sprintf("request_uri content-type %q is not a JWS media type", resp.Header.Get("Content-Type")), state)
 		return "", false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJARRequestURIBody+1))
-	if err != nil {
-		renderJARError(w, r, deps, errInvalidRequestURI, "request_uri body read failed", state)
-		return "", false
-	}
-	if int64(len(body)) > maxJARRequestURIBody {
-		renderJARError(w, r, deps, errInvalidRequestURI,
-			"request_uri body exceeds size cap", state)
-		return "", false
-	}
 	return strings.TrimSpace(string(body)), true
 }
 
-// jarRequestURINetsecOptions returns the [netsec.Options] snapshot the
-// JAR request_uri fetcher uses for the URL-time gate and the HTTP
-// client. The function is the single source of truth so the URL gate
-// and the dial gate cannot drift apart.
+// jarRequestURIPolicy returns the [securefetch.Policy] the JAR
+// request_uri fetcher runs under. The policy is the single source of
+// truth for the URL-time gate, the dial-time gate, and the response-side
+// status / body-cap checks, so none of them can drift apart.
 //
 // HTTPS-only is the production posture; AllowPrivate widens the scheme
 // allow-list to include http so loopback fixtures keep working. Cloud
 // metadata IPs remain rejected unconditionally — that gate is enforced
-// by [netsec.AssertSafeURLParsed] and the dial-control hook regardless
-// of AllowPrivate.
-func jarRequestURINetsecOptions(allowPrivate bool) netsec.Options {
+// by the netsec URL check and the dial-control hook regardless of
+// AllowPrivate.
+//
+// AcceptContentTypes is deliberately empty: the media-type rule this
+// endpoint needs admits an absent header, which the envelope's allow-list
+// cannot express, so [isJARRequestObjectContentType] applies it at the
+// call site instead.
+func jarRequestURIPolicy(allowPrivate bool) securefetch.Policy {
 	schemes := []string{"https"}
 	if allowPrivate {
 		schemes = []string{"http", "https"}
 	}
-	return netsec.Options{
-		AllowPrivate:   allowPrivate,
-		AllowedSchemes: schemes,
-		Timeout:        jarRequestURITimeout,
-		// MaxRedirects=0 (default) makes [netsec] refuse every 30x;
-		// the Do call below surfaces the redirect as a non-2xx status.
+	return securefetch.Policy{
+		AllowPrivateNetwork: allowPrivate,
+		AllowedSchemes:      schemes,
+		Timeout:             jarRequestURITimeout,
+		MaxBodyBytes:        maxJARRequestURIBody,
+		// MaxRedirects=0 (the default) refuses every 30x; the redirect
+		// surfaces as a non-2xx status the fetch-error classifier
+		// reports separately.
 	}
+}
+
+// classifyJARRequestURINewRequestError maps a request-construction
+// failure onto the wire description. An empty URL is a malformed
+// request_uri; everything else reaching here came from the URL-time SSRF
+// gate.
+func classifyJARRequestURINewRequestError(err error) string {
+	if errors.Is(err, securefetch.ErrEmptyURL) {
+		return "request_uri is malformed"
+	}
+	return classifyJARRequestURISSRFError(err)
+}
+
+// classifyJARRequestURIFetchError maps a [securefetch.Client.Do] failure
+// onto the wire description. resp is nil when the round trip never
+// produced one.
+//
+// The status branch splits a refused redirect from any other non-2xx:
+// MaxRedirects=0 collapses every 30x onto http.ErrUseLastResponse, so a
+// redirect arrives here as a 3xx status rather than a followed hop, and
+// the operator is told which of the two happened.
+func classifyJARRequestURIFetchError(err error, resp *http.Response) string {
+	switch {
+	case errors.Is(err, securefetch.ErrUnexpectedStatus):
+		if resp == nil {
+			return "request_uri fetch failed"
+		}
+		if resp.StatusCode/100 == 3 {
+			return "request_uri must not redirect"
+		}
+		return fmt.Sprintf("request_uri responded with status %d", resp.StatusCode)
+	case errors.Is(err, securefetch.ErrBodyTooLarge):
+		return "request_uri body exceeds size cap"
+	case errors.Is(err, securefetch.ErrReadBody):
+		return "request_uri body read failed"
+	}
+	return classifyJARRequestURIDoError(err)
 }
 
 // isJARRequestObjectContentType reports whether ct is a recognised

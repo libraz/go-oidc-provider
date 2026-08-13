@@ -3,6 +3,8 @@ package parendpoint_test
 import (
 	"context"
 	"errors"
+	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -125,8 +127,10 @@ func parVerdict(tb testing.TB, f *fixture, clientID, secret string, form url.Val
 // authorizeVerdict submits the same parameters inline at /authorize and
 // reduces the response to a [verdict]. The endpoint expresses an acceptance
 // as a redirect to the interaction it started and a rejection either as the
-// pre-redirect JSON envelope (redirect_uri not trusted yet) or as a redirect
-// carrying the OAuth error parameters; all three are collapsed here.
+// pre-redirect JSON envelope (redirect_uri not trusted yet), as a redirect
+// carrying the OAuth error parameters, or — for a request that asked for a
+// form-post response mode — as the auto-submitted HTML form carrying the
+// same parameters as hidden inputs; all of them are collapsed here.
 func authorizeVerdict(tb testing.TB, f *fixture, form url.Values) verdict {
 	tb.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
@@ -140,6 +144,14 @@ func authorizeVerdict(tb testing.TB, f *fixture, form url.Values) verdict {
 		tb.Fatalf("Do /authorize: %v", err)
 	}
 	defer resp.Body.Close()
+	return authorizeResponseVerdict(tb, resp)
+}
+
+// authorizeResponseVerdict reduces an /authorize response to a [verdict].
+// It is split out of [authorizeVerdict] so a request delivered through a
+// PAR request_uri is judged by the same reduction as the inline one.
+func authorizeResponseVerdict(tb testing.TB, resp *http.Response) verdict {
+	tb.Helper()
 	switch resp.StatusCode {
 	case http.StatusFound:
 		loc, locErr := resp.Location()
@@ -153,6 +165,12 @@ func authorizeVerdict(tb testing.TB, f *fixture, form url.Values) verdict {
 			return verdict{accepted: true}
 		}
 		tb.Fatalf("/authorize redirected to %s, which is neither an interaction nor an error", loc)
+	case http.StatusOK:
+		code := formPostHiddenInput(tb, resp, "error")
+		if code == "" {
+			tb.Fatalf("/authorize 200 is not a form-post error response")
+		}
+		return verdict{errCode: code}
 	case http.StatusBadRequest:
 		body := decodeJSON(tb, resp)
 		code, _ := body["error"].(string)
@@ -163,6 +181,26 @@ func authorizeVerdict(tb testing.TB, f *fixture, form url.Values) verdict {
 	}
 	tb.Fatalf("/authorize status=%d is neither an acceptance nor a rejection", resp.StatusCode)
 	return verdict{}
+}
+
+// formPostHiddenInput returns the value of the named hidden input in an
+// auto-submitted form-post response body, or "" when the body carries no
+// such field. The match is on the exact markup the response builder emits
+// rather than on a parsed DOM: the shape is fixed by the emitter and a
+// change to it should surface here as a failing row.
+func formPostHiddenInput(tb testing.TB, resp *http.Response, name string) string {
+	tb.Helper()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		tb.Fatalf("read form-post body: %v", err)
+	}
+	prefix := `<input type="hidden" name="` + name + `" value="`
+	_, rest, found := strings.Cut(string(body), prefix)
+	if !found {
+		return ""
+	}
+	value, _, _ := strings.Cut(rest, `"`)
+	return html.UnescapeString(value)
 }
 
 // oversizeAuthorizationDetails returns an authorization_details value past
@@ -212,6 +250,31 @@ func TestPARAuthorizeParity_SameRequestSameDecision(t *testing.T) {
 			name:     "dpop_jkt commitment an OP without DPoP cannot honour",
 			override: map[string]string{"dpop_jkt": committedJKT},
 			want:     verdict{errCode: "invalid_request"},
+		},
+		{
+			name:     "response_mode outside the catalogue",
+			override: map[string]string{"response_mode": "carrier_pigeon"},
+			want:     verdict{errCode: "unsupported_response_mode"},
+		},
+		{
+			name:     "response_mode=query, which needs no feature",
+			override: map[string]string{"response_mode": "query"},
+			want:     verdict{accepted: true},
+		},
+		{
+			name:     "response_mode=jwt on an OP with no JARM signer",
+			override: map[string]string{"response_mode": "jwt"},
+			want:     verdict{errCode: "unsupported_response_mode"},
+		},
+		{
+			name:     "response_mode=query.jwt on an OP with no JARM signer",
+			override: map[string]string{"response_mode": "query.jwt"},
+			want:     verdict{errCode: "unsupported_response_mode"},
+		},
+		{
+			name:     "response_mode=form_post.jwt on an OP with no JARM signer",
+			override: map[string]string{"response_mode": "form_post.jwt"},
+			want:     verdict{errCode: "unsupported_response_mode"},
 		},
 		{
 			name: "authorization_details naming an unregistered type",

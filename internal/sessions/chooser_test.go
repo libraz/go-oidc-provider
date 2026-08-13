@@ -259,6 +259,53 @@ func TestManager_Remove_CurrentRebindsToMostRecent(t *testing.T) {
 	}
 }
 
+// TestManager_Remove_CarriesReboundSessionExpiry pins the expiry that
+// travels with a rebound cookie. The HTTP layer may not hand the browser
+// a cookie that outlives the session it points at, and the surviving
+// sibling's server-side expiry is knowable only here — the caller sees
+// the new cookie value and nothing else about the account behind it. A
+// Removal that rebinds without reporting the expiry forces the caller to
+// either re-read the store or guess, and the profile default is the
+// wrong guess.
+func TestManager_Remove_CarriesReboundSessionExpiry(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	mgr, advance := chooserManager(t, t0)
+	ctx := context.Background()
+
+	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	advance(time.Minute)
+	second, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+		Subject:  "user-b",
+		AuthTime: t0.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("AddAccount: %v", err)
+	}
+	rem, err := mgr.Remove(ctx, first.ChooserGroupID, second.SessionID, second.SessionID)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if rem.CurrentSessionID != first.SessionID {
+		t.Fatalf("CurrentSessionID=%q want %q", rem.CurrentSessionID, first.SessionID)
+	}
+	active, err := mgr.Resolve(ctx, rem.Cookie)
+	if err != nil {
+		t.Fatalf("Resolve rebound cookie: %v", err)
+	}
+	if !rem.ExpiresAt.Equal(active.Session.ExpiresAt) {
+		t.Errorf("Removal.ExpiresAt=%v want the surviving session's %v",
+			rem.ExpiresAt, active.Session.ExpiresAt)
+	}
+	if rem.ExpiresAt.IsZero() {
+		t.Error("Removal.ExpiresAt is zero, which the caller reads as 'no server-side bound'")
+	}
+}
+
 func TestManager_Remove_LastSessionLeavesEmpty(t *testing.T) {
 	t.Parallel()
 

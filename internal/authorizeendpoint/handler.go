@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -121,13 +122,17 @@ type Deps struct {
 	Grants store.GrantStore
 
 	// ExtensionPolicy configures the gates that run after the request
-	// itself validates: RFC 9396 authorization_details, the Grant
-	// Management draft parameters, and the RFC 9449 §10.1 "dpop_jkt"
-	// commitment. The value is taken whole rather than reassembled from
-	// per-flag fields so /authorize and /par cannot be handed different
-	// policies — they are consecutive gates on the same request, and a
-	// rule that fires at only one of them mints a request_uri the next
-	// gate refuses.
+	// itself validates: the JARM response_mode rules, RFC 9396
+	// authorization_details, the Grant Management draft parameters, and
+	// the RFC 9449 §10.1 "dpop_jkt" commitment. The value is taken whole
+	// rather than reassembled from per-flag fields so /authorize and
+	// /par cannot be handed different policies — they are consecutive
+	// gates on the same request, and a rule that fires at only one of
+	// them mints a request_uri the next gate refuses.
+	//
+	// [ExtensionPolicy.JARMEnabled] MUST agree with the nilness of
+	// [Deps.JARM]: the policy decides whether a JARM request is
+	// admissible, the signer produces the response it was admitted for.
 	ExtensionPolicy authorize.ExtensionPolicy
 
 	// Interactions is the substore for in-progress UI interactions. The
@@ -262,20 +267,6 @@ type Deps struct {
 	// [DefaultInteractionTTL].
 	InteractionTTL time.Duration
 
-	// RequireJARMResponseMode, when true, makes /authorize reject any
-	// request that did not opt into one of the four JARM response_mode
-	// values ("jwt", "query.jwt", "fragment.jwt", "form_post.jwt").
-	// The flag implements the FAPI 2.0 Message Signing §5.5 mandate
-	// that every authorize response be JARM-wrapped: a request that
-	// omits the JARM response_mode is misconfigured against the active
-	// profile, and the OP signals that with the OAuth wire code
-	// "unsupported_response_mode" via the legacy redirect (JARM cannot
-	// be used to convey "JARM is not in use yet"). The check runs only
-	// after request validation has succeeded so a malformed request
-	// surfaces its own error first; it has no effect when the request
-	// already opted into JARM.
-	RequireJARMResponseMode bool
-
 	// RequestPolicy carries the profile-conditional requirements
 	// [authorize.Request.Validate] enforces: whether PKCE, a nonce, or
 	// at least one of state / nonce is mandatory, and whether the
@@ -383,6 +374,14 @@ type Deps struct {
 // untouched so the caller's struct is read-only.
 type resolved struct {
 	Deps
+
+	// jarFetch is the outbound envelope the JAR request_uri lookup runs
+	// through. It is built once here rather than per fetch: the client
+	// owns a connection pool, and rebuilding it per request would give
+	// every /authorize carrying a request_uri a fresh TLS handshake and
+	// leave a pool behind that nothing can reuse. One instance is safe
+	// for concurrent use.
+	jarFetch *securefetch.Client
 }
 
 // resolveDeps fills in defaults the caller chose to omit. The returned
@@ -397,7 +396,10 @@ func resolveDeps(d Deps) resolved {
 	if d.Driver == nil {
 		d.Driver = interaction.JSONDriver{}
 	}
-	return resolved{Deps: d}
+	return resolved{
+		Deps:     d,
+		jarFetch: securefetch.NewClient(jarRequestURIPolicy(d.AllowPrivateNetworkJAR)),
+	}
 }
 
 // spaActive reports whether the handler is wired for the SPA mount

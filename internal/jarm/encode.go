@@ -83,10 +83,12 @@ type SignerConfig struct {
 	// Required.
 	Issuer string
 
-	// Clock supplies the wall-clock reading for the "exp" computation
+	// Clock supplies the wall-clock reading for the "iat" and "nbf"
+	// claims on every signed response, and for the "exp" computation
 	// inside [Signer.SignDefault]. A nil value falls back to
 	// [timex.SystemClock]. The lower-level [Signer.Sign] entry point
-	// takes the absolute "exp" from the caller and ignores this field.
+	// takes the absolute "exp" from the caller but still stamps
+	// iat / nbf from this clock.
 	Clock timex.Clock
 
 	// Expiry overrides [DefaultExpiry] for [Signer.SignDefault]. Zero
@@ -162,9 +164,11 @@ func (s *Signer) Issuer() string { return s.issuer }
 // validates that Issuer / Audience / ExpiresAt are set; on the success
 // path Code is also required; on the error path Error is required.
 //
-// The function does NOT consult the clock; the caller has already
-// computed the absolute expiry the JWT carries. Use
-// [Signer.SignDefault] to delegate that computation.
+// The clock decides "iat" and "nbf"; only "exp" comes from the
+// caller, which has already computed the absolute expiry the JWT
+// carries. Use [Signer.SignDefault] to delegate that computation too
+// — a caller that passes an expiry earlier than the injected clock's
+// reading produces a JWT whose exp precedes its nbf.
 func (s *Signer) Sign(p Payload) (string, error) {
 	if err := validatePayload(p); err != nil {
 		return "", err

@@ -46,7 +46,7 @@ func emitPlainSuccessLocation(tb testing.TB, req *authorize.Request, issuer stri
 	emitPlainResponse(
 		rec,
 		httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/authorize", nil),
-		resolved{Deps{Issuer: issuer}},
+		resolveDeps(Deps{Issuer: issuer}),
 		req,
 		url.Values{"code": {"the-code"}},
 	)
@@ -104,7 +104,7 @@ func emitPlainErrorTarget(tb testing.TB, req *authorize.Request, code, descripti
 	emitPlainResponse(
 		rec,
 		httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/authorize", nil),
-		resolved{Deps{Issuer: issuer}},
+		resolveDeps(Deps{Issuer: issuer}),
 		req,
 		url.Values{"error": {code}, "error_description": {description}},
 	)

@@ -163,7 +163,14 @@ func TestResolveSilentGrant_RejectsSameOwnerDifferentID(t *testing.T) {
 	}
 }
 
-func TestReuseOrCreateGrant_NewAuthorizationDetailsPreserveExistingDetails(t *testing.T) {
+// TestReuseOrCreateGrant_NewAuthorizationDetailsAmendTheExistingGrant
+// pins that a repeat authorization asking for details the record does
+// not cover extends that record rather than minting a second one. A
+// second row for the same (subject, client) is a grant the consent
+// screen never shows and the user cannot revoke, while its refresh
+// chain stays redeemable. Grant Management's create action, which does
+// mint per authorization, dispatches before this function is reached.
+func TestReuseOrCreateGrant_NewAuthorizationDetailsAmendTheExistingGrant(t *testing.T) {
 	t.Parallel()
 
 	existingDetail := map[string]any{"type": "account_information"}
@@ -189,8 +196,9 @@ func TestReuseOrCreateGrant_NewAuthorizationDetailsPreserveExistingDetails(t *te
 	if err != nil {
 		t.Fatalf("reuseOrCreateGrant: %v", err)
 	}
-	if result.ID == "grant-old" {
-		t.Fatal("new authorization_details reused a grant that did not cover them")
+	if result.ID != "grant-old" {
+		t.Fatalf("result.ID=%q; new authorization_details minted a second grant for the same "+
+			"(subject, client) instead of extending the one the user can see", result.ID)
 	}
 	if len(result.AuthorizationDetails) != 2 {
 		t.Fatalf("AuthorizationDetails=%v want existing + new", result.AuthorizationDetails)

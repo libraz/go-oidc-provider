@@ -16,6 +16,78 @@ import (
 // parameter as a separate hidden input — see [jarm.WriteParamsFormPost].
 const formPostResponseMode = "form_post"
 
+// jarmResponseParam is the single form field the JARM form_post.jwt
+// mode posts to the redirect_uri. Naming it here lets the JARM mode
+// reuse the multi-parameter renderer rather than keeping a second
+// form-post code path alive.
+const jarmResponseParam = "response"
+
+// errFormPostNoParams reports a form-post response that would render no
+// hidden inputs at all. The browser would POST an empty body to the RP
+// and the flow would dead-end with nothing to diagnose, so both
+// form-post modes fail closed on it and the caller decides the fallback.
+var errFormPostNoParams = errors.New("authorizeendpoint: form_post response carries no parameters")
+
+// formPostSink is implemented by a [http.ResponseWriter] that must
+// receive a form-post authorization response as structured data instead
+// of the rendered auto-submitting HTML document.
+//
+// The SPA state routes wrap their writer in one. Their caller is a
+// fetch(), which can neither render an HTML document nor perform the
+// cross-origin POST that document would auto-submit; handing it the
+// rendered form drops the authorization response inside a JavaScript
+// string, where the RP never sees it. The sink lets the SPA rebuild the
+// submission at document level from the same action + parameter set the
+// browser surface renders.
+type formPostSink interface {
+	http.ResponseWriter
+
+	// captureFormPost records the form-post terminal. The
+	// implementation owns the wire shape it emits for it; params is
+	// not retained by the caller after the call returns.
+	captureFormPost(action string, params url.Values)
+}
+
+// writeFormPostTerminal is the single point every form-post
+// authorization response leaves the authorize endpoint through — the
+// OIDC Core "form_post" mode (one hidden input per response parameter)
+// and the JARM "form_post.jwt" mode (a lone "response" input) alike.
+// Routing both through here is what keeps a writer that cannot consume
+// rendered HTML, such as the SPA state surface, from having to grow a
+// second copy of the response-mode dispatch.
+//
+// The renderer commits headers and status before the body, so the
+// response is rendered into a private buffer first: a renderer failure
+// then stays recoverable by the caller instead of leaving the real
+// writer committed to a half-written form.
+func writeFormPostTerminal(w http.ResponseWriter, redirectURI string, params url.Values) error {
+	if !hasRenderableParam(params) {
+		return errFormPostNoParams
+	}
+	if sink, ok := w.(formPostSink); ok {
+		sink.captureFormPost(redirectURI, params)
+		return nil
+	}
+	buffer := newBufferedResponseWriter()
+	if err := jarm.WriteParamsFormPost(buffer, redirectURI, params); err != nil {
+		return err
+	}
+	return buffer.commit(w)
+}
+
+// hasRenderableParam reports whether params carries at least one
+// non-empty value. Empty values are dropped by the renderer (an absent
+// state must not become a stray empty input), so a set that holds only
+// those renders an empty form.
+func hasRenderableParam(params url.Values) bool {
+	for name := range params {
+		if params.Get(name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // jarmModeForRequest returns the resolved JARM response mode the
 // authorize endpoint should use, or the empty string when the request
 // did not opt into JARM. The bare "jwt" alias is resolved against the
@@ -57,17 +129,6 @@ func responseModeUsesFormPost(req *authorize.Request) bool {
 		return true
 	}
 	return jarmModeForRequest(req) == jarm.ResponseModeFormPostJWT
-}
-
-// jarmModeMissing reports whether the active configuration requires
-// every authorize response to be JARM-wrapped (Deps.RequireJARMResponseMode
-// is true) and this request did not opt into a JARM response_mode.
-// True means /authorize must reject the request with
-// unsupported_response_mode; false means continue. Symmetric to
-// [jarmFeatureRequested]: the two cover the four cells of the
-// (RequireJARMResponseMode × IsJARM) matrix.
-func jarmModeMissing(deps resolved, req *authorize.Request) bool {
-	return deps.RequireJARMResponseMode && !jarmFeatureRequested(req)
 }
 
 // jarmEmitSuccess writes the success response as a JARM JWT in the
@@ -154,7 +215,8 @@ func jarmEmitError(
 
 // jarmDispatch runs the JWT through the appropriate emitter for mode:
 // query / fragment redirects through the standard redirect helper,
-// form_post.jwt renders an HTML body via [jarm.WriteFormPost].
+// form_post.jwt through the shared [writeFormPostTerminal] choke point
+// carrying the JWT as the lone "response" parameter.
 func jarmDispatch(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -162,15 +224,7 @@ func jarmDispatch(
 	redirectURI, jwtToken string,
 ) error {
 	if mode == jarm.ResponseModeFormPostJWT {
-		// jarm.WriteFormPost writes headers and status before it writes the
-		// body. Render into a private buffer first so a renderer failure can
-		// become an OP-local 500 without leaking a partial form or leaving
-		// the real writer committed to a redirect-shaped response.
-		buffer := newBufferedResponseWriter()
-		if err := jarm.WriteFormPost(buffer, redirectURI, jwtToken); err != nil {
-			return err
-		}
-		return buffer.commit(w)
+		return writeFormPostTerminal(w, redirectURI, url.Values{jarmResponseParam: {jwtToken}})
 	}
 	target, err := jarm.BuildRedirect(mode, redirectURI, jwtToken)
 	if err != nil {
@@ -248,7 +302,7 @@ func emitPlainResponse(
 		params.Set("iss", deps.Issuer)
 	}
 	if responseModeUsesFormPost(req) {
-		if err := jarm.WriteParamsFormPost(w, req.RedirectURI, params); err == nil {
+		if err := writeFormPostTerminal(w, req.RedirectURI, params); err == nil {
 			return
 		}
 	}

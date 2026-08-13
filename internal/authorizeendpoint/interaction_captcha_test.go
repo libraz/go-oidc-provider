@@ -444,3 +444,96 @@ func TestInteractionCaptcha_HTMLDriverCompletesLogin(t *testing.T) {
 		t.Errorf("verifier saw tokens %q, want [not-the-token %s]", got, captchaGoodToken)
 	}
 }
+
+// fillableInputs returns the names of the inputs the rendered page lets
+// a user type into. Hidden inputs are excluded: their value is fixed by
+// the markup and no browser will change it without script, which this
+// surface does not serve.
+func fillableInputs(body string) map[string]struct{} {
+	re := regexp.MustCompile(`<input name="([^"]*)" type="([^"]*)"`)
+	out := map[string]struct{}{}
+	for _, m := range re.FindAllStringSubmatch(body, -1) {
+		if m[2] == "hidden" {
+			continue
+		}
+		out[m[1]] = struct{}{}
+	}
+	return out
+}
+
+// browserSubmission builds the POST body a browser would produce from
+// the rendered page: every hidden input at exactly the value the server
+// wrote into it, plus what the user typed into the fields the page
+// actually offered. Asking for a field the page did not offer fails the
+// test, because a browser has no way to invent one.
+func browserSubmission(t *testing.T, body string, typed map[string]string) url.Values {
+	t.Helper()
+	values := url.Values{}
+	hidden := regexp.MustCompile(`<input type="hidden" name="([^"]*)" value="([^"]*)">`)
+	for _, m := range hidden.FindAllStringSubmatch(body, -1) {
+		values.Set(m[1], m[2])
+	}
+	offered := fillableInputs(body)
+	for name, value := range typed {
+		if _, ok := offered[name]; !ok {
+			t.Fatalf("the page offers no fillable %q input, so a browser cannot submit one:\n%s", name, body)
+		}
+		values.Set(name, value)
+	}
+	return values
+}
+
+// TestInteractionCaptcha_HTMLDriverChallengeIsAnswerableByABrowser is
+// the no-script version of the captcha gate, driven the way a browser
+// would drive it: nothing is posted that the rendered page did not
+// offer.
+//
+// The distinction matters because the orchestrator spends an attempt on
+// every rejected token and abandons the chain once they run out. A
+// challenge page whose token field cannot receive a value is therefore
+// not a cosmetic gap — it is a lockout for every user who reaches the
+// gate, and one that a test synthesising its own POST body would never
+// notice.
+func TestInteractionCaptcha_HTMLDriverChallengeIsAnswerableByABrowser(t *testing.T) {
+	t.Parallel()
+
+	verifier := &countingCaptchaVerifier{}
+	h := newHarness(t, func(d *authorizeendpoint.Deps) {
+		d.Authn = buildCaptchaOrchestrator(t, verifier)
+		d.Driver = interaction.HTMLDriver{}
+	})
+	start := startInteractionFlow(t, h)
+
+	page := readHTMLPrompt(t, interactionGET(t, h, start))
+	for range captchaThreshold {
+		rr := postHTMLForm(t, h, start, page.cookie,
+			browserSubmission(t, page.body, map[string]string{retrySubjectField: captchaBadSubject}))
+		page = readHTMLPrompt(t, rr)
+	}
+
+	page = readHTMLPrompt(t, interactionGET(t, h, start))
+	if _, ok := fillableInputs(page.body)[authn.CaptchaTokenField]; !ok {
+		t.Fatalf("challenge page offers no fillable %q input; every user who reaches the gate is stuck:\n%s",
+			authn.CaptchaTokenField, page.body)
+	}
+
+	// The user types the token and the chain leaves the challenge.
+	rr := postHTMLForm(t, h, start, page.cookie,
+		browserSubmission(t, page.body, map[string]string{authn.CaptchaTokenField: captchaGoodToken}))
+	page = readHTMLPrompt(t, rr)
+	if _, ok := fillableInputs(page.body)[retrySubjectField]; !ok {
+		t.Fatalf("cleared captcha did not return to the credential form:\n%s", page.body)
+	}
+
+	final := postHTMLForm(t, h, start, page.cookie,
+		browserSubmission(t, page.body, map[string]string{retrySubjectField: "user-1"}))
+	if final.Code != http.StatusFound {
+		t.Fatalf("final status=%d body=%s", final.Code, final.Body.String())
+	}
+	if loc := final.Header().Get("Location"); !strings.Contains(loc, "code=") {
+		t.Errorf("Location=%q must carry an authorization code", loc)
+	}
+	if got := verifier.seen(); len(got) != 1 || got[0] != captchaGoodToken {
+		t.Errorf("verifier saw tokens %q, want exactly the token the user typed", got)
+	}
+}

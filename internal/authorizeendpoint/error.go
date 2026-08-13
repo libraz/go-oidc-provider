@@ -83,6 +83,7 @@ func renderJSONError(w http.ResponseWriter, status int, code, description string
 // helpers stay on renderJSONError because their callers are XHR / fetch
 // from the SPA.
 func renderBrowserError(w http.ResponseWriter, r *http.Request, driver interaction.Driver, status int, code, description, state string) {
+	stampCeremonyHeaders(w)
 	if driver != nil && wantsHTMLResponse(r) {
 		if er, ok := driver.(interaction.ErrorRenderer); ok {
 			if err := er.RenderError(w, r, interaction.ErrorPrompt{
@@ -223,4 +224,33 @@ func mergeRedirectParams(redirectURI string, params url.Values) (string, error) 
 func stampNoStore(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
+}
+
+// stampCeremonyHeaders writes the hardening headers every dynamic
+// ceremony response carries, whichever [interaction.Driver] ends up
+// producing the body.
+//
+// The endpoint owns these rather than the Driver because they protect
+// the ceremony itself, not the page's presentation: the interaction page
+// holds the CSRF token and the continuation reference, and a consent
+// page is one click away from a grant. A Driver the library did not
+// write — a SPA renderer, an embedder's template engine — would
+// otherwise have to re-derive the whole set to be as safe as the
+// built-in one, and losing any of it is invisible until someone frames
+// the page. Stamping before Render also lets a Driver that does know
+// better override a value deliberately.
+//
+// Content-Security-Policy is deliberately not in the set. Only the
+// Driver knows which origins its markup loads from, so a policy fixed
+// here would either break a branded page or be too permissive to be
+// worth sending; [interaction.Driver] documents it as the Driver's.
+func stampCeremonyHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("X-Content-Type-Options", "nosniff")
+	// same-origin (not no-referrer): a no-referrer page makes the browser
+	// serialize the Origin header of a same-origin form POST as "null"
+	// (Fetch "Append a request Origin header" §3), which the interaction
+	// CSRF Origin gate then rejects with 403.
+	h.Set("Referrer-Policy", "same-origin")
 }

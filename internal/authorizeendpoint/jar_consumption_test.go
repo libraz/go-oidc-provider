@@ -4,10 +4,12 @@ package authorizeendpoint
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -35,8 +37,10 @@ func jarFetchRequest() *http.Request {
 
 // jarFetchDeps returns the minimal [resolved] the fetcher reads: the
 // private-network toggle, and a nil Driver so rejections render as JSON.
+// It goes through [resolveDeps] so the shared outbound client is built
+// the same way production builds it.
 func jarFetchDeps(allowPrivate bool) resolved {
-	return resolved{Deps{AllowPrivateNetworkJAR: allowPrivate}}
+	return resolveDeps(Deps{AllowPrivateNetworkJAR: allowPrivate})
 }
 
 // decodeWireError parses the OAuth JSON envelope written by
@@ -288,7 +292,7 @@ func TestResolveJARRequestIfNeeded_RendersThroughTheDriver(t *testing.T) {
 		"client_id": {"rp-jar"},
 		"state":     {"state-abc"},
 	}
-	deps := resolved{Deps{Driver: interaction.HTMLDriver{}}}
+	deps := resolveDeps(Deps{Driver: interaction.HTMLDriver{}})
 
 	t.Run("browser_gets_the_driver_page", func(t *testing.T) {
 		t.Parallel()
@@ -348,5 +352,97 @@ func TestIsJARRequestObjectContentType_Matrix(t *testing.T) {
 				t.Fatalf("isJARRequestObjectContentType(%q)=%v want %v", tc.ct, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFetchJARRequestURI_ReusesOneConnectionAcrossFetches pins that the
+// outbound client is built once per handler rather than once per fetch.
+//
+// A client rebuilt per request brings its own connection pool, so every
+// /authorize carrying a request_uri pays a fresh TCP — in production, TLS
+// — handshake against the RP, and leaves behind a pool no later request
+// can draw on but which holds its connection open for the idle timeout.
+// An unauthenticated caller drives that endpoint.
+//
+// Counting server-side connections is what distinguishes the two shapes:
+// both fetch the same bytes, and only the transport differs.
+func TestFetchJARRequestURI_ReusesOneConnectionAcrossFetches(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	opened := 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/jwt")
+		_, _ = w.Write([]byte("eyJhbGciOiJSUzI1NiJ9.PAYLOAD.SIG"))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			opened++
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	uri := srv.URL + "/req"
+	// One resolved stands in for one mounted handler; both fetches go
+	// through it exactly as two requests to the same Provider would.
+	deps := jarFetchDeps(true)
+	client := fakeClient(uri)
+	for i := range 2 {
+		rec := httptest.NewRecorder()
+		if _, ok := fetchJARRequestURI(rec, jarFetchRequest(), deps, client, uri, ""); !ok {
+			t.Fatalf("fetch %d rejected: status=%d body=%q", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	mu.Lock()
+	got := opened
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("the upstream accepted %d connections for 2 fetches, want 1; the fetcher is "+
+			"building a new client (and so a new connection pool) per request instead of "+
+			"sharing the handler's", got)
+	}
+}
+
+// TestFetchJARRequestURI_BodyCapPrecedesTheMediaTypeGate pins the order
+// the two response-side gates fire in.
+//
+// The media-type rule this endpoint needs admits an absent header, which
+// the shared envelope's allow-list cannot express, so the check sits at
+// the call site — after the envelope has already read the body. That is
+// only safe while the body cap fires first: an upstream serving an
+// oversized body under a media type the OP would reject anyway must
+// still be cut off at the cap rather than read to completion and refused
+// afterwards. The distinguishing evidence is which of the two refusals
+// the caller gets back.
+func TestFetchJARRequestURI_BodyCapPrecedesTheMediaTypeGate(t *testing.T) {
+	t.Parallel()
+
+	oversized := strings.Repeat("A", int(maxJARRequestURIBody)+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(oversized))
+	}))
+	defer srv.Close()
+
+	uri := srv.URL + "/req"
+	rec := httptest.NewRecorder()
+	body, ok := fetchJARRequestURI(rec, jarFetchRequest(), jarFetchDeps(true), fakeClient(uri), uri, "")
+	if ok {
+		t.Fatalf("fetchJARRequestURI accepted an oversized non-JWS body; len=%d", len(body))
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", rec.Code)
+	}
+	code, desc := decodeWireError(t, rec)
+	if code != "invalid_request_uri" {
+		t.Fatalf("error=%q want invalid_request_uri", code)
+	}
+	if !strings.Contains(desc, "size cap") {
+		t.Fatalf("description=%q want the size-cap refusal; the media-type gate answered first, "+
+			"which means the body was read past the cap before anything rejected it", desc)
 	}
 }

@@ -3,6 +3,7 @@ package authorizeendpoint
 
 import (
 	"context"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,5 +134,76 @@ func TestAcceptQuality(t *testing.T) {
 				t.Errorf("q=%v want %v", gotQ, tc.wantQ)
 			}
 		})
+	}
+}
+
+// TestRenderBrowserError_KeepsHTMLThroughTemplateOverlay pins the
+// configuration the library builds for itself: an embedder who supplies
+// a consent or chooser template gets the built-in HTML driver wrapped in
+// interaction.TemplateOverlayDriver. Adding a branding template must not
+// change what a browser sees when the authorization request fails before
+// a redirect target can be trusted — that failure is the one the user
+// reads on the OP's own origin.
+func TestRenderBrowserError_KeepsHTMLThroughTemplateOverlay(t *testing.T) {
+	t.Parallel()
+
+	driver := interaction.TemplateOverlayDriver{
+		Inner: interaction.HTMLDriver{},
+		ConsentTemplate: template.Must(template.New("consent").
+			Parse(`<!doctype html><html><body>branded consent</body></html>`)),
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	renderBrowserError(rec, req, driver, http.StatusBadRequest, "invalid_request_uri", "expired", "st-1")
+
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Fatalf("Content-Type=%q want text/html (the overlay must not drop the inner ErrorRenderer)", got)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `data-code="invalid_request_uri"`) {
+		t.Errorf("HTML body missing the inner driver's error markup\n%s", body)
+	}
+}
+
+// TestRenderBrowserError_OverlayOverLegacyDriverStaysJSON confirms the
+// wrapper does not manufacture an error surface the wrapped Driver never
+// had: an embedder whose Driver predates the ErrorRenderer contract
+// keeps the JSON envelope after adding a template, exactly as before.
+func TestRenderBrowserError_OverlayOverLegacyDriverStaysJSON(t *testing.T) {
+	t.Parallel()
+
+	driver := interaction.TemplateOverlayDriver{Inner: legacyDriverNoErrorRenderer{}}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
+	req.Header.Set("Accept", "text/html")
+	renderBrowserError(rec, req, driver, http.StatusBadRequest, "invalid_request", "no", "")
+
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type=%q want application/json", got)
+	}
+}
+
+// TestRenderBrowserError_StampsCeremonyHeaders covers the pre-redirect
+// error page for a Driver that stamps nothing of its own. The framing,
+// sniffing and referrer protections belong to the endpoint precisely so
+// that a Driver the library did not write cannot lose them.
+func TestRenderBrowserError_StampsCeremonyHeaders(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
+	req.Header.Set("Accept", "text/html")
+	renderBrowserError(rec, req, legacyDriverNoErrorRenderer{}, http.StatusBadRequest, "invalid_request", "no", "")
+
+	for header, want := range map[string]string{
+		"X-Frame-Options":        "DENY",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "same-origin",
+	} {
+		if got := rec.Header().Get(header); got != want {
+			t.Errorf("%s=%q want %q", header, got, want)
+		}
 	}
 }

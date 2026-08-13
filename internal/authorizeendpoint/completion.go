@@ -30,7 +30,8 @@ func prepareCompletionIntent(
 	result interaction.Result,
 	acr string,
 	amr []string,
-	grantScope []string,
+	decision scopeDecision,
+	requestedScope []string,
 ) (*authorize.CompletionIntent, error) {
 	if len(deps.CompletionKey) < 32 {
 		return nil, errors.New("authorizeendpoint: completion key unavailable")
@@ -70,8 +71,14 @@ func prepareCompletionIntent(
 		AuthTime:   result.AuthTime,
 		ACR:        acr,
 		AMR:        slices.Clone(amr),
-		GrantScope: slices.Clone(grantScope),
-		Session:    encodeCompletionSession(establishment),
+		GrantScope: decision.grantScope(requestedScope),
+		// DeclinedScope travels with the intent so a retried or resumed
+		// completion applies the same grant amendment the ceremony
+		// decided on. Recomputing it downstream is not possible: the
+		// orchestrator state is gone by the time the completion is
+		// replayed.
+		DeclinedScope: decision.declined(),
+		Session:       encodeCompletionSession(establishment),
 	}, nil
 }
 
@@ -293,53 +300,25 @@ func deleteCompletionAnchor(
 	return cas.DeleteIfUnchanged(ctx, rec)
 }
 
-// maxCompletionAttempts bounds the retries [ensureDurableCompletion]
-// makes against an optimistic-lock conflict. A conflict here means a
-// second authorization for the same (subject, client) amended the grant
-// between this transaction's read and its commit, so the losing side
-// only has to re-read and re-apply. Three attempts covers the ordinary
-// two-tab case and the occasional three-way pile-up; a subject whose
-// grant is contended past that is not a user racing themselves, and
-// spinning would turn the endpoint into a load amplifier.
-const maxCompletionAttempts = 3
-
 // ensureDurableCompletion produces the authorization code the terminal
 // response carries, minting it inside one transaction with the grant
 // amendment and the PAR consumption when it does not already exist.
 //
-// A lost optimistic-lock race is retried rather than surfaced. Grants
-// are amended, not replaced — a second authorization adds to what the
-// grant already held — so a backend that versions the record makes the
-// loser fail instead of silently dropping the winner's additions. That
-// is the correct store-level answer and the wrong answer for the user
-// in front of it: nothing about their request was invalid, and the
-// amendment they lost is one a re-read reproduces exactly. Retrying is
-// safe because the whole body is keyed on a stable code id and re-reads
-// every record it amends: a rolled-back attempt wrote nothing, and an
-// attempt whose commit landed is caught by the existing-code check at
-// the top rather than minting a second result.
+// A lost optimistic-lock race is retried through [retryOnGrantConflict]
+// rather than surfaced. The retry is safe because the whole body is keyed
+// on the intent's stable code id and re-reads every record it amends: a
+// rolled-back attempt wrote nothing, and an attempt whose commit landed
+// is caught by the existing-code check at the top of
+// [attemptDurableCompletion] rather than minting a second result.
 func ensureDurableCompletion(
 	ctx context.Context,
 	deps resolved,
 	req *authorize.Request,
 	intent *authorize.CompletionIntent,
 ) (*store.AuthorizationCode, bool, error) {
-	for attempt := 1; ; attempt++ {
-		code, minted, err := attemptDurableCompletion(ctx, deps, req, intent)
-		// The bound is compared with >= rather than ==: an equality test
-		// would never hold if the constant were ever edited to zero, and
-		// the loop would spin forever on exactly the contention it
-		// exists to bound.
-		if err == nil || !errors.Is(err, store.ErrConflict) || attempt >= maxCompletionAttempts {
-			return code, minted, err
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			// The caller went away mid-retry. Report the conflict that
-			// caused the retry rather than the cancellation, so the
-			// reason the attempt was in flight is not lost.
-			return nil, false, err
-		}
-	}
+	return retryOnGrantConflict(ctx, func() (*store.AuthorizationCode, bool, error) {
+		return attemptDurableCompletion(ctx, deps, req, intent)
+	})
 }
 
 func attemptDurableCompletion(
@@ -373,6 +352,7 @@ func attemptDurableCompletion(
 		Subject:              intent.Subject,
 		ClientID:             req.ClientID,
 		Scope:                intent.GrantScope,
+		DeclinedScope:        intent.DeclinedScope,
 		AuthTime:             intent.AuthTime,
 		ACR:                  intent.ACR,
 		AMR:                  intent.AMR,

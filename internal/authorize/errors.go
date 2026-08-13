@@ -247,6 +247,22 @@ var (
 	// invalid_request.
 	ErrGrantIDForbiddenOnCreate = newErr("invalid_request", "grant_id must not accompany grant_management_action=create")
 
+	// ErrJARMUnsupported indicates the request selected one of the four
+	// JARM response_mode values on an OP that has no JARM signer wired.
+	// Distinct from [ErrResponseModeUnsupported], which fires on a name
+	// outside the catalogue: here the name is known but unusable on this
+	// deployment. Maps to unsupported_response_mode.
+	ErrJARMUnsupported = newErr("unsupported_response_mode", "response_mode is not supported by this OP")
+
+	// ErrJARMResponseModeRequired indicates the active profile mandates a
+	// JARM-wrapped authorization response (FAPI 2.0 Message Signing §5.5)
+	// and the request selected a plain response_mode, or omitted the
+	// parameter and so took the response_type-implied default. The
+	// description names the four admissible values because the RP's only
+	// remedy is to pick one. Maps to unsupported_response_mode.
+	ErrJARMResponseModeRequired = newErr("unsupported_response_mode",
+		`response_mode is required by the active profile (use "jwt", "query.jwt", "fragment.jwt", or "form_post.jwt")`)
+
 	// ErrDPoPJKTUnsupported indicates the request committed to a DPoP key
 	// via RFC 9449 §10.1 "dpop_jkt" while the OP cannot honour the
 	// commitment. Maps to invalid_request.

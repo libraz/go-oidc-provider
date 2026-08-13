@@ -453,6 +453,73 @@ func TestAuthorize_HappyPathWithExistingSessionAndGrant_EmitsCodeIssued(t *testi
 	}
 }
 
+// TestAuthorize_ExistingSessionKeepsRecentCookie pins that a request
+// which only read the session does not write the selection back.
+//
+// An /authorize that resolves an existing session re-seals the cookie
+// from the payload it read when the request started. Another tab that
+// switched accounts in between has already written a newer selection,
+// and re-sealing restores the older one — after which a prompt=none
+// request mints for a subject the user has left. Re-sealing is
+// therefore held back until the browser's Max-Age window has aged
+// enough to be worth extending.
+func TestAuthorize_ExistingSessionKeepsRecentCookie(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile", "email"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+	// Well inside the re-seal interval, which is where the rollback
+	// window lives: long enough for a second tab to have switched
+	// accounts, short enough that extending Max-Age buys nothing.
+	h.clock.now = h.clock.now.Add(authorizeendpoint.SessionCookieRefreshInterval - time.Hour)
+
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	for _, candidate := range resp.Cookies() {
+		if candidate.Name == cookie.SessionProfile.Name && candidate.Value != "" {
+			t.Fatalf("a read-only authorize re-sealed the session cookie; the account selection "+
+				"observed at entry would overwrite whatever another tab has since chosen (Max-Age=%d)",
+				candidate.MaxAge)
+		}
+	}
+
+	// The server-side idle expiry must still have moved: holding the
+	// cookie back is about not writing a selection, not about skipping
+	// the touch.
+	stored, err := h.store.Sessions().Find(context.Background(), out.SessionID)
+	if err != nil {
+		t.Fatalf("Find session: %v", err)
+	}
+	if !stored.ExpiresAt.After(h.clock.now) {
+		t.Errorf("session ExpiresAt=%v is not ahead of now=%v; the idle lifetime was not touched",
+			stored.ExpiresAt, h.clock.now)
+	}
+}
+
 func TestAuthorize_ExistingSessionTouchesIdleExpiry(t *testing.T) {
 	t.Parallel()
 
@@ -474,7 +541,10 @@ func TestAuthorize_ExistingSessionTouchesIdleExpiry(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Save grant: %v", err)
 	}
-	h.clock.now = h.clock.now.Add(time.Hour)
+	// Past the re-seal interval, so the read-only request is expected to
+	// write a fresh cookie. Within the interval it deliberately does not
+	// — TestAuthorize_ExistingSessionKeepsRecentCookie covers that half.
+	h.clock.now = h.clock.now.Add(authorizeendpoint.SessionCookieRefreshInterval + time.Hour)
 
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)

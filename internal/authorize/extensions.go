@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
+	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -62,13 +63,30 @@ type ExtensionPolicy struct {
 	// OP that can do neither must refuse the commitment rather than
 	// silently drop it.
 	DPoPEnabled bool
+
+	// JARMEnabled reports whether the OP can wrap an authorization
+	// response in the JARM signed JWT. False means no signer is wired,
+	// so a request that selects one of the four JARM response_mode
+	// values ("jwt", "query.jwt", "fragment.jwt", "form_post.jwt") asks
+	// for a response shape the OP cannot produce and must be refused.
+	JARMEnabled bool
+
+	// JARMResponseModeRequired forces every authorization request to
+	// select a JARM response_mode, implementing the FAPI 2.0 Message
+	// Signing §5.5 mandate that every authorize response be
+	// JARM-wrapped. A request that asks for a plain mode (or omits
+	// response_mode and so takes the response_type-implied default) is
+	// refused: the shape it asked for is the one the profile forbids.
+	// Only meaningful together with JARMEnabled.
+	JARMResponseModeRequired bool
 }
 
 // ValidateExtensions runs the request gates that sit between a successful
-// [Request.Validate] and the endpoint's terminal action: RFC 9396
-// authorization_details, the Grant Management draft parameters, and the
-// RFC 9449 §10.1 "dpop_jkt" commitment. It returns nil when the request is
-// admissible and the rejection to render otherwise.
+// [Request.Validate] and the endpoint's terminal action: the JARM
+// response_mode rules, RFC 9396 authorization_details, the Grant Management
+// draft parameters, and the RFC 9449 §10.1 "dpop_jkt" commitment. It
+// returns nil when the request is admissible and the rejection to render
+// otherwise.
 //
 // The method decides; it does not render. That split is what lets the
 // authorization endpoint and the pushed-authorization-request endpoint share
@@ -95,6 +113,13 @@ type ExtensionPolicy struct {
 // ctx is forwarded to the embedder-supplied authorization_details
 // validators; the gates themselves perform no I/O.
 func (req *Request) ValidateExtensions(ctx context.Context, client *store.Client, policy ExtensionPolicy) *Error {
+	// The response-mode gate runs first: it decides whether the OP can
+	// deliver any response at all in the shape the request asked for, so
+	// it is faulted before the gates that judge what the response would
+	// carry.
+	if rejection := req.validateJARMResponseMode(policy); rejection != nil {
+		return rejection
+	}
 	if rejection := req.validateAuthorizationDetails(ctx, client, policy); rejection != nil {
 		return rejection
 	}
@@ -102,6 +127,39 @@ func (req *Request) ValidateExtensions(ctx context.Context, client *store.Client
 		return rejection
 	}
 	return req.validateDPoPCommitment(policy)
+}
+
+// validateJARMResponseMode reconciles the response_mode the request
+// selected with what the OP can and must deliver. [Request.validateResponseMode]
+// has already filtered the catalogue of known names; this gate decides
+// whether the named mode is usable on this OP.
+//
+// Two rules, both derived from configuration the request cannot see:
+//
+//   - The request selected a JARM mode while no signer is wired. The OP
+//     would have to answer in a shape it cannot produce.
+//   - The active profile requires every response to be JARM-wrapped and
+//     the request selected a plain mode (or none, taking the
+//     response_type-implied default).
+//
+// Both surface unsupported_response_mode: the response_mode is the
+// parameter at fault either way, and the RP resolves both by picking a
+// different one.
+//
+// The rules read the pushed parameters only — no session, no interaction
+// state — so the pushed-authorization-request endpoint reaches the same
+// verdict the authorization endpoint will. That is what keeps /par from
+// minting a request_uri whose one-time value the RP spends on a request
+// the next gate refuses.
+func (req *Request) validateJARMResponseMode(policy ExtensionPolicy) *Error {
+	requested := jarm.IsJARM(req.ResponseMode)
+	if requested && !policy.JARMEnabled {
+		return ErrJARMUnsupported
+	}
+	if !requested && policy.JARMResponseModeRequired {
+		return ErrJARMResponseModeRequired
+	}
+	return nil
 }
 
 // validateAuthorizationDetails honours the RFC 9396 authorization_details

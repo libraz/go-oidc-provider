@@ -242,6 +242,14 @@ type CompletionIntent struct {
 	AMR        []string                `json:"amr,omitempty"`
 	GrantScope []string                `json:"grant_scope,omitempty"`
 	Session    CompletionSessionIntent `json:"session"`
+
+	// DeclinedScope is the set the consent ceremony presented and the
+	// user did not approve. The grant amendment removes these names,
+	// which is what makes a withdrawal stick: a grant that keeps a
+	// declined scope re-grants it silently on the next request, since
+	// the coverage predicate would report the scope as already
+	// consented. Empty for chains that ran no consent screen.
+	DeclinedScope []string `json:"declined_scope,omitempty"`
 }
 
 // CompletionSessionIntent describes the idempotent Session operation that

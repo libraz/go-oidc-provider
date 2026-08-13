@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -105,15 +106,10 @@ func stampSPAShellHeaders(w http.ResponseWriter) {
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", spaCacheControl)
 	h.Set("Pragma", "no-cache")
-	h.Set("X-Frame-Options", "DENY")
-	h.Set("X-Content-Type-Options", "nosniff")
-	// same-origin (not no-referrer), matching HTMLDriver.Render. The
-	// shell URL carries the interaction uid, so a full referrer must
-	// not cross an origin boundary; no-referrer would go further but
-	// makes the browser serialize the Origin header of the SPA's own
-	// state-changing fetches as "null" (Fetch "Append a request Origin
-	// header" §3), which the interaction CSRF Origin gate then rejects.
-	h.Set("Referrer-Policy", "same-origin")
+	// The framing / sniffing / referrer trio comes from the one helper
+	// the ceremony responses share, so the shell cannot drift away from
+	// what the interaction endpoint guarantees.
+	stampCeremonyHeaders(w)
 }
 
 // newSPAAssetHandler returns the HTTP handler that serves the SPA
@@ -277,10 +273,24 @@ func assertSymlinkWithin(root, abs string) error {
 	return nil
 }
 
+// SPA terminal envelope discriminators. The SPA reads "type" to decide
+// how to hand the authorization response to the document: navigate for
+// a redirect, submit a generated form for a form post.
+const (
+	spaEnvelopeRedirect = "redirect"
+	spaEnvelopeFormPost = "form_post"
+)
+
 // spaTerminalWriter is the [http.ResponseWriter] wrapper SPA state
-// routes use to convert the orchestrator's terminal-redirect 302 into a
-// JSON envelope the SPA can navigate to via window.location. Non-302
-// responses pass through unchanged: the JSON-driver next-prompt
+// routes use to convert the orchestrator's terminal authorization
+// response into a JSON envelope the SPA can deliver at document level.
+// Two terminal shapes are translated:
+//
+//   - a 302 with a Location header, for the redirect response modes;
+//   - a form-post terminal captured through [formPostSink], for
+//     response_mode=form_post and the JARM form_post.jwt mode.
+//
+// Everything else passes through unchanged: the JSON-driver next-prompt
 // emission, the JSON error envelopes, and the 204 cancel-no-redirect
 // path are all forwarded byte-for-byte.
 //
@@ -294,9 +304,26 @@ type spaTerminalWriter struct {
 	header   http.Header
 	status   int
 	body     []byte
+	formPost *formPostTerminal
 	captured bool
 	flushed  bool
 }
+
+// formPostTerminal is the structured form-post authorization response
+// captured from the emit path, before any HTML rendering.
+type formPostTerminal struct {
+	// action is the RP's redirect_uri the generated form posts to.
+	action string
+
+	// fields are the authorization response parameters, one hidden
+	// input each in the rendered browser-surface equivalent.
+	fields map[string]string
+}
+
+// The emit path selects the structured form-post terminal by type
+// assertion, so a signature drift here would silently put the SPA
+// surface back on the rendered HTML document it cannot consume.
+var _ formPostSink = (*spaTerminalWriter)(nil)
 
 func newSPATerminalWriter(inner http.ResponseWriter) *spaTerminalWriter {
 	return &spaTerminalWriter{
@@ -333,20 +360,56 @@ func (s *spaTerminalWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// flush copies the buffered response onto the inner writer. When the
-// captured status is 302 with a non-empty Location header, the writer
-// emits a 200 application/json envelope of the form
+// captureFormPost implements [formPostSink]. It records the form-post
+// terminal so [spaTerminalWriter.flush] can emit it as an envelope; the
+// auto-submitting HTML document the browser surface renders is never
+// produced for this writer, because a fetch() cannot execute it.
+//
+// Empty parameter values are dropped, mirroring the renderer's rule
+// that an absent state or iss must not become a stray empty field.
+func (s *spaTerminalWriter) captureFormPost(action string, params url.Values) {
+	if s.formPost != nil {
+		return
+	}
+	fields := make(map[string]string, len(params))
+	for name := range params {
+		if v := params.Get(name); v != "" {
+			fields[name] = v
+		}
+	}
+	s.formPost = &formPostTerminal{action: action, fields: fields}
+}
+
+// flush copies the buffered response onto the inner writer, translating
+// the two terminal authorization-response shapes into the JSON
+// envelopes the SPA contract defines.
+//
+// A captured 302 with a non-empty Location header becomes
 //
 //	{"type":"redirect","location":"<Location>"}
 //
-// instead. The SPA's submit handler reads this shape and sets
-// window.location.href = location to follow the redirect at the
-// document level.
+// which the SPA follows with window.location.href = location. A
+// captured form-post terminal becomes
+//
+//	{"type":"form_post","action":"<redirect_uri>","fields":{...}}
+//
+// from which the SPA builds a form at document level and submits it,
+// producing the same cross-origin POST the rendered HTML document would
+// have auto-submitted. Both carry the authorization response itself, so
+// both are stamped no-store.
 func (s *spaTerminalWriter) flush() {
 	if s.flushed {
 		return
 	}
 	s.flushed = true
+	if s.formPost != nil {
+		s.writeEnvelope(map[string]any{
+			"type":   spaEnvelopeFormPost,
+			"action": s.formPost.action,
+			"fields": s.formPost.fields,
+		})
+		return
+	}
 	if !s.captured {
 		// Handler returned without writing anything; treat as 200 OK
 		// with an empty body so middleware downstream doesn't see a
@@ -356,20 +419,10 @@ func (s *spaTerminalWriter) flush() {
 	}
 	if s.status == http.StatusFound {
 		if loc := s.header.Get("Location"); loc != "" {
-			out := s.inner.Header()
-			for k, vs := range s.header {
-				if k == "Location" || k == "Content-Length" || k == "Content-Type" {
-					continue
-				}
-				out[k] = vs
-			}
-			out.Set("Content-Type", "application/json; charset=utf-8")
-			body, _ := json.Marshal(map[string]string{
-				"type":     "redirect",
+			s.writeEnvelope(map[string]any{
+				"type":     spaEnvelopeRedirect,
 				"location": loc,
 			})
-			s.inner.WriteHeader(http.StatusOK)
-			_, _ = s.inner.Write(body)
 			return
 		}
 	}
@@ -381,4 +434,23 @@ func (s *spaTerminalWriter) flush() {
 	if len(s.body) > 0 {
 		_, _ = s.inner.Write(s.body)
 	}
+}
+
+// writeEnvelope emits a terminal envelope as a 200 JSON response.
+// Buffered headers are forwarded except the three the envelope owns:
+// Location (the SPA reads it from the body instead), Content-Type and
+// Content-Length (the buffered form-post/redirect body is discarded).
+func (s *spaTerminalWriter) writeEnvelope(envelope map[string]any) {
+	out := s.inner.Header()
+	for k, vs := range s.header {
+		if k == "Location" || k == "Content-Length" || k == "Content-Type" {
+			continue
+		}
+		out[k] = vs
+	}
+	stampNoStore(s.inner)
+	out.Set("Content-Type", "application/json; charset=utf-8")
+	body, _ := json.Marshal(envelope)
+	s.inner.WriteHeader(http.StatusOK)
+	_, _ = s.inner.Write(body)
 }

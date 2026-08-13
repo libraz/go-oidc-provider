@@ -41,9 +41,10 @@ type Payload struct {
 	CurrentSessionID string `json:"sid"`
 
 	// IssuedAt is the unix-seconds timestamp at which the cookie value
-	// was minted. Used by the resolver to detect cookies that survived
-	// past the absolute lifetime even though the session record is
-	// still valid (clock drift, edge-cache staleness, etc.).
+	// was minted. It records when this cookie was written, for audit
+	// and debugging; the absolute session lifetime is enforced
+	// server-side against the stored record's CreatedAt, so a forged
+	// or replayed cookie cannot extend it by carrying a later value.
 	IssuedAt int64 `json:"iat"`
 }
 

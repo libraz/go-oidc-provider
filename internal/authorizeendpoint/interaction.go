@@ -36,6 +36,10 @@ const csrfFormMaxBytes = 32 * 1024
 // It dispatches GET / POST / DELETE to the matching helper after pulling
 // the UID out of the path and validating the cookie binding.
 func serveInteraction(w http.ResponseWriter, r *http.Request, deps resolved) {
+	// Stamp the ceremony hardening headers before any branch can write,
+	// so every response this endpoint produces carries them regardless
+	// of which Driver renders the body. See stampCeremonyHeaders.
+	stampCeremonyHeaders(w)
 	uid := r.PathValue("uid")
 	if uid == "" {
 		http.NotFound(w, r)
@@ -551,6 +555,14 @@ func csrfFromForm(r *http.Request) string {
 // copy the session's assurance verbatim rather than re-deriving it from
 // an AAL0 factor set) so the grant does not silently downgrade to
 // no-acr / no-amr. Otherwise the configured ACR resolver runs.
+//
+// Copying the picked session's assurance verbatim is only sound when
+// that session may serve the request. The entry-time hint matrix
+// evaluated max_age / acr_values against the *cookie* session, which is
+// not the session the chooser bound, so the constraints are re-checked
+// here against the session that actually ends up on the response. A
+// stale or too-weak pick terminates the request (errStaleAuthentication
+// / errACRUnmet) instead of minting a code.
 func resolveGrantACRAMR(
 	r *http.Request,
 	deps resolved,
@@ -579,6 +591,9 @@ func resolveGrantACRAMR(
 			return "", nil, time.Time{}, errors.New(
 				"authorizeendpoint: chooser authentication context subject mismatch",
 			)
+		}
+		if err := checkPickedSessionFreshness(req, authCtx, deps.now().UTC()); err != nil {
+			return "", nil, time.Time{}, err
 		}
 		acr = authCtx.ACR
 		amr = authCtx.AMR
@@ -619,6 +634,48 @@ func resolveGrantACRAMR(
 // "" instead (the treatment a voluntary request gets) would hand the
 // relying party a code for an authentication it declared insufficient.
 var errACRUnmet = errors.New("authorizeendpoint: essential acr is not satisfied")
+
+// errStaleAuthentication signals that the authentication bound to the
+// response is older than the request's max_age, or that the request
+// asked for a fresh one with prompt=login. The caller translates it
+// into login_required, which is the same error the dispatcher emits
+// when the entry session fails the identical check — an RP that uses
+// max_age as a step-up gate sees one outcome regardless of which
+// account the user picked.
+var errStaleAuthentication = errors.New("authorizeendpoint: authentication is older than max_age")
+
+// checkPickedSessionFreshness re-applies the request's freshness and
+// authentication-context constraints to the session an account chooser
+// bound. The entry-time hint matrix ran the same predicates against the
+// cookie session; because the chooser can bind a *different* session,
+// the constraints have to hold for the session that actually backs the
+// response, on every exit path that emits a code.
+//
+// The predicates are the dispatcher's, reused verbatim
+// (acrUnsatisfiedByRequest, and the max_age arithmetic of
+// buildHintState) so the two gates cannot drift apart.
+func checkPickedSessionFreshness(
+	req *authorize.Request,
+	authCtx sessions.SessionAuthContext,
+	now time.Time,
+) error {
+	if req == nil {
+		return nil
+	}
+	if containsString(req.Prompt, interaction.PromptLogin) {
+		return errStaleAuthentication
+	}
+	if req.MaxAge != nil {
+		if *req.MaxAge == 0 ||
+			now.Sub(authCtx.AuthTime.UTC()) > time.Duration(*req.MaxAge)*time.Second {
+			return errStaleAuthentication
+		}
+	}
+	if acrUnsatisfiedByRequest(authCtx.ACR, req) {
+		return errACRUnmet
+	}
+	return nil
+}
 
 // acrRemoteIP returns the client IP the ACR policy sees. The chain
 // state carries the address /authorize resolved through the
@@ -684,14 +741,19 @@ func terminateInteraction(
 		result.AuthTime,
 	)
 	if err != nil {
-		if errors.Is(err, errACRUnmet) {
+		switch {
+		case errors.Is(err, errACRUnmet):
 			failUnmetAuthenticationRequirements(w, r, deps, rec, req)
-			return
+		case errors.Is(err, errStaleAuthentication):
+			failTerminalInteraction(w, r, deps, rec, req, errLoginRequired,
+				"the selected account's authentication is older than max_age")
+		default:
+			emitAuthorizeError(w, r, deps, req, errServerError, "could not resolve authentication context")
 		}
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not resolve authentication context")
 		return
 	}
 	result.AuthTime = authTime
+	decision := resolveScopeDecision(authnState, result, req.Scope)
 	intent, err := prepareCompletionIntent(
 		r,
 		deps,
@@ -700,7 +762,8 @@ func terminateInteraction(
 		result,
 		acr,
 		amr,
-		chooseGrantScope(result.Scope, req.Scope),
+		decision,
+		req.Scope,
 	)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not prepare authorization completion")
@@ -727,13 +790,29 @@ func failUnmetAuthenticationRequirements(
 	rec *store.Interaction,
 	req *authorize.Request,
 ) {
+	failTerminalInteraction(w, r, deps, rec, req, errUnmetAuthenticationRequirements,
+		"the authentication performed does not satisfy the requested acr")
+}
+
+// failTerminalInteraction claims the interaction record, clears the
+// ceremony cookies and emits code as a redirect error. Every
+// "the ceremony finished but its result may not be turned into an
+// authorization code" branch goes through here so none of them can
+// leave a replayable completed record behind.
+func failTerminalInteraction(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	rec *store.Interaction,
+	req *authorize.Request,
+	code, description string,
+) {
 	if !claimTerminalInteraction(w, r, deps, rec) {
 		return
 	}
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
-	emitAuthorizeError(w, r, deps, req, errUnmetAuthenticationRequirements,
-		"the authentication performed does not satisfy the requested acr")
+	emitAuthorizeError(w, r, deps, req, code, description)
 }
 
 func claimTerminalInteraction(
@@ -814,19 +893,68 @@ func setSessionCookieWithMaxAge(w http.ResponseWriter, value string, expiresAt, 
 	return nil
 }
 
-// chooseGrantScope picks the scope slice the authorize-code mint
-// records into the grant and the authorization code. The orchestrator
-// stamps the consent-approved subset on
-// [interaction.Result.Scope]; when present it wins, otherwise the
-// helper falls back to the original request scope. The fallback
-// preserves backward-compatible behaviour for chains that skip the
-// built-in consent screen (existing grant covered, or the embedder
-// suppressed consent).
-func chooseGrantScope(approved, requested []string) []string {
-	if len(approved) > 0 {
-		return append([]string(nil), approved...)
+// scopeDecision is what the ceremony decided about scope. The
+// distinction the type exists to carry is "the user answered" versus
+// "no ceremony ran": an approval of nothing and an absent ceremony
+// both leave the approved set empty, and only the latter may fall back
+// to the full requested set.
+type scopeDecision struct {
+	// answered reports that a consent-shaped Interaction returned a
+	// scope decision during this attempt.
+	answered bool
+
+	// presented is the scope set the ceremony put in front of the
+	// user. The ceremony is authoritative over exactly these names:
+	// scopes outside the set were never up for review and must not be
+	// touched.
+	presented []string
+
+	// approved is the subset the user accepted.
+	approved []string
+}
+
+// resolveScopeDecision reads the ceremony's verdict off the terminal
+// Result and the orchestrator state.
+func resolveScopeDecision(authnState authn.State, result interaction.Result, requested []string) scopeDecision {
+	if !authnState.ScopeApprovalRecorded {
+		return scopeDecision{}
+	}
+	presented := authnState.RequestedScopes
+	if len(presented) == 0 {
+		presented = requested
+	}
+	return scopeDecision{
+		answered:  true,
+		presented: append([]string(nil), presented...),
+		approved:  append([]string(nil), result.Scope...),
+	}
+}
+
+// grantScope picks the scope slice the authorize-code mint records into
+// the grant and the authorization code. An answered ceremony wins
+// outright — including when it approved nothing. The fallback to the
+// requested set applies only to chains that ran no consent screen
+// (existing grant covered, or the embedder suppressed consent).
+func (d scopeDecision) grantScope(requested []string) []string {
+	if d.answered {
+		return append([]string(nil), d.approved...)
 	}
 	return append([]string(nil), requested...)
+}
+
+// declined is the set the ceremony presented and the user did not
+// approve. It is what a grant amendment removes.
+func (d scopeDecision) declined() []string {
+	if !d.answered {
+		return nil
+	}
+	out := make([]string, 0, len(d.presented))
+	for _, s := range d.presented {
+		if !containsString(d.approved, s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // grantUpsert collects the inputs upsertGrant needs. The struct exists
@@ -840,6 +968,16 @@ type grantUpsert struct {
 	AuthTime time.Time
 	ACR      string
 	AMR      []string
+
+	// DeclinedScope is the set a consent ceremony presented and the
+	// user refused. The ordinary upsert removes these names from the
+	// reused grant, which is the only thing that makes a withdrawal
+	// observable: leaving them on the record means the next request
+	// for the same scope is reported as already consented and is
+	// served without a ceremony. Empty for every non-consent-driven
+	// call (silent re-stamp, first-party auto-grant), which keeps
+	// those paths widen-only as before.
+	DeclinedScope []string
 
 	// Claims is the parsed OIDC Core 1.0 §5.5 "claims" request
 	// parameter as carried by the authorize / PAR request. The
@@ -895,8 +1033,24 @@ func upsertGrant(
 }
 
 // reuseOrCreateGrant is the ordinary (non-Grant-Management) path: it
-// refreshes the existing (subject, client) grant when it already covers
-// the requested scope, otherwise it mints a fresh one.
+// amends the existing (subject, client) grant, and mints one only when
+// the subject has none for this client.
+//
+// Amending covers the widening case as well as the covered one. A
+// repeat authorization asking for more than the record holds used to
+// mint a second grant carrying the union, which left the superseded
+// record — and its live refresh chain — behind with nothing reaping it:
+// the consent screen shows one relationship, so a second row is a
+// grant the user cannot see and cannot revoke. Grant Management's
+// create action still mints per authorization, but it reaches
+// [createGrant] through [upsertGrant] rather than through here, so the
+// addressable-unit semantics that action promises are unaffected.
+//
+// When the call comes from an answered consent ceremony
+// ([grantUpsert.DeclinedScope] non-empty) the record is first narrowed:
+// the ceremony is authoritative over the names it presented, so a scope
+// the user unticked leaves the record before the union re-adds what was
+// approved.
 func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Grant, error) {
 	now := in.Now.UTC()
 	encodedClaims := authorize.EncodeClaimsToGrant(in.Claims)
@@ -904,36 +1058,30 @@ func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 	if validationErr := validateReusableGrantLookup(existing, err, in); validationErr != nil {
 		return nil, validationErr
 	}
-	if err == nil &&
-		existing != nil &&
-		scopeIsSubset(in.Scope, existing.Scope) &&
-		authorizationDetailsCovered(in.AuthorizationDetails, existing) {
-		existing.UpdatedAt = now
-		existing.AuthTime = in.AuthTime
-		existing.ACR = in.ACR
-		existing.AMR = append(existing.AMR[:0:0], in.AMR...)
-		if encodedClaims != nil {
-			existing.Claims = encodedClaims
-		}
-		if in.AuthorizationDetails != nil {
-			existing.AuthorizationDetails = appendAuthorizationDetails(
-				existing.AuthorizationDetails,
-				in.AuthorizationDetails,
-			)
-		}
-		if err := deps.Grants.Save(ctx, existing); err != nil {
-			return nil, fmt.Errorf("authorizeendpoint: refresh grant: %w", err)
-		}
-		return existing, nil
+	if err != nil || existing == nil {
+		return createGrant(ctx, deps, in)
 	}
-	if existing != nil {
-		in.Scope = unionScopes(existing.Scope, in.Scope)
-		in.AuthorizationDetails = appendAuthorizationDetails(
+	if len(in.DeclinedScope) > 0 {
+		existing.Scope = removeScopes(existing.Scope, in.DeclinedScope)
+	}
+	existing.Scope = unionScopes(existing.Scope, in.Scope)
+	existing.UpdatedAt = now
+	existing.AuthTime = in.AuthTime
+	existing.ACR = in.ACR
+	existing.AMR = append(existing.AMR[:0:0], in.AMR...)
+	if encodedClaims != nil {
+		existing.Claims = encodedClaims
+	}
+	if in.AuthorizationDetails != nil {
+		existing.AuthorizationDetails = appendAuthorizationDetails(
 			existing.AuthorizationDetails,
 			in.AuthorizationDetails,
 		)
 	}
-	return createGrant(ctx, deps, in)
+	if err := deps.Grants.Save(ctx, existing); err != nil {
+		return nil, fmt.Errorf("authorizeendpoint: refresh grant: %w", err)
+	}
+	return existing, nil
 }
 
 func validateReusableGrantLookup(
@@ -1034,6 +1182,21 @@ func mutateManagedGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 
 // unionScopes returns base with every entry of add that is not already
 // present, preserving order (base first, then new entries).
+// removeScopes returns base without any element of drop, preserving
+// base's order.
+func removeScopes(base, drop []string) []string {
+	if len(drop) == 0 {
+		return base
+	}
+	out := make([]string, 0, len(base))
+	for _, s := range base {
+		if !containsString(drop, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func unionScopes(base, add []string) []string {
 	seen := make(map[string]struct{}, len(base))
 	out := append([]string(nil), base...)

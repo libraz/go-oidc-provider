@@ -304,7 +304,7 @@ func TestInteractionCompletion_RetriedCompletionMintsSingleCode(t *testing.T) {
 // TestInteractionCompletion_PersistentConflictStopsAtAttemptBound pins
 // that the retry is bounded: a grant that stays contended past the bound
 // fails the request instead of spinning, and it does so after exactly
-// [authorizeendpoint.MaxCompletionAttempts] transactions. The conflict is
+// [authorizeendpoint.MaxCommitAttempts] transactions. The conflict is
 // not observable to the RP — the endpoint answers 500 rather than
 // exposing a storage-layer sentinel — and no code is left behind.
 func TestInteractionCompletion_PersistentConflictStopsAtAttemptBound(t *testing.T) {
@@ -320,8 +320,8 @@ func TestInteractionCompletion_PersistentConflictStopsAtAttemptBound(t *testing.
 		t.Fatalf("status=%d want 500 body=%s Location=%q",
 			rr.Code, rr.Body.String(), rr.Header().Get("Location"))
 	}
-	if got := fault.commitAttempts(); got != authorizeendpoint.MaxCompletionAttempts {
-		t.Fatalf("commit attempts=%d want %d", got, authorizeendpoint.MaxCompletionAttempts)
+	if got := fault.commitAttempts(); got != authorizeendpoint.MaxCommitAttempts {
+		t.Fatalf("commit attempts=%d want %d", got, authorizeendpoint.MaxCommitAttempts)
 	}
 	for _, id := range fault.savedCodeIDs() {
 		if _, err := h.store.AuthorizationCodes().Find(context.Background(), id); !errors.Is(err, store.ErrNotFound) {

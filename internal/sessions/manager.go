@@ -614,6 +614,13 @@ type Removal struct {
 	// chooser group has been fully torn down.
 	CurrentSessionID string
 
+	// ExpiresAt is the server-side expiry of the session Cookie was
+	// rebound to; zero when no rebind happened. It travels with Cookie
+	// because the HTTP layer may not issue a browser cookie that outlives
+	// the session it points at, and the surviving sibling's remaining
+	// lifetime is knowable only here.
+	ExpiresAt time.Time
+
 	// Remaining is the set of session IDs still in the chooser group
 	// after the removal.
 	Remaining []string
@@ -662,6 +669,7 @@ func (m *Manager) Remove(ctx context.Context, chooserGroupID, currentSessionID, 
 	}
 	out.Cookie = value
 	out.CurrentSessionID = next.ID
+	out.ExpiresAt = next.ExpiresAt
 	return out, nil
 }
 
