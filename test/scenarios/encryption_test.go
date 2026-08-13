@@ -1514,7 +1514,7 @@ func TestScenario_ENC_130_IntrospectionJWE(t *testing.T) {
 	encKey := scenariokit.NewOPEncryptionKey(t, "enc-1")
 	rp := scenariokit.NewRPEncryptionKey(t, "rp-enc-130-key")
 
-	tk := testkit.NewProvider(t, testkit.WithOptions(
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials(),
 		op.WithFeature(feature.Introspect),
 		op.WithEncryptionKeyset(op.EncryptionKeyset{encKey}),
 	))

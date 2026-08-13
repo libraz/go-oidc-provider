@@ -369,10 +369,74 @@ func TestScenario_RI_040_DeviceAuthRejectsUnknownResource(t *testing.T) {
 	t.Skip("out-of-scope: RI-040 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_RI_041_DeviceTokenBindsAudienceAndResource is OOS — see catalog out_of_scope_reason.
+// TestScenario_RI_041_DeviceTokenBindsAudienceAndResource verifies that
+// the resource indicator supplied at /device_authorization survives the
+// verification ceremony: redeeming the approved device_code yields an
+// access token whose aud is that resource, and the refresh token issued
+// alongside it reproduces the same audience on the next exchange.
+//
+// Binding at request time is not enough on its own. The device flow
+// puts a user ceremony between the request and the issuance, so the
+// resource has to be carried on the device-code record rather than
+// re-read from the token request — and the refresh half is what proves
+// the binding outlived the code it arrived on.
+//
+// Spec: RFC 8628 §3.4 / RFC 8707 §3.
 func TestScenario_RI_041_DeviceTokenBindsAudienceAndResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: RI-041 (see catalog out_of_scope_reason)")
+
+	const resource = "https://api.ri041.example.com"
+	p := newDevProviderWithResources(t,
+		[]string{"openid", "offline_access"},
+		[]string{resource},
+	)
+
+	status, body, _ := p.deviceAuthForm(t, url.Values{
+		"scope":    {"openid offline_access"},
+		"resource": {resource},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("/device_authorization status=%d want 200 body=%v", status, body)
+	}
+	deviceCode, _ := body["device_code"].(string)
+	if deviceCode == "" {
+		t.Fatalf("device_code missing: %v", body)
+	}
+	p.approveDeviceCode(t, deviceCode, devDefaultSubject)
+
+	status, tok := p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("/token (device_code) status=%d want 200 body=%v", status, tok)
+	}
+	at, _ := tok["access_token"].(string)
+	if at == "" {
+		t.Fatalf("access_token missing: %v", tok)
+	}
+	if got := decodeScenarioAccessTokenClaims(t, at)["aud"]; got != resource {
+		t.Errorf("device_code access_token aud=%v want %q", got, resource)
+	}
+
+	refresh, _ := tok["refresh_token"].(string)
+	if refresh == "" {
+		t.Fatalf("refresh_token missing on an offline_access device grant: %v", tok)
+	}
+	status, refreshed := p.tokenForm(t, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refresh},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("/token (refresh) status=%d want 200 body=%v", status, refreshed)
+	}
+	refreshedAT, _ := refreshed["access_token"].(string)
+	if refreshedAT == "" {
+		t.Fatalf("refreshed access_token missing: %v", refreshed)
+	}
+	if got := decodeScenarioAccessTokenClaims(t, refreshedAT)["aud"]; got != resource {
+		t.Errorf("refreshed access_token aud=%v want %q; the refresh token did not preserve the resource", got, resource)
+	}
 }
 
 // TestScenario_RI_042_DeviceFlowDefaultResourceAndRefresh is OOS — see catalog out_of_scope_reason.
@@ -399,10 +463,16 @@ func TestScenario_RI_050_BackchannelRejectsUnknownResource(t *testing.T) {
 	t.Skip("out-of-scope: RI-050 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_RI_051_CIBATokenBindsAudienceAndResource is OOS — see catalog out_of_scope_reason.
+// TestScenario_RI_051_CIBATokenBindsAudienceAndResource marks where the
+// scenario-level test would go. Approving a backchannel request needs a
+// hook the public surface does not expose, so the row names its own
+// coverage in `covered_by` and the gate resolves that name; a copy of
+// the name here would only rot.
+//
+// Spec: RFC 8707 §3, CIBA Core §7.1.
 func TestScenario_RI_051_CIBATokenBindsAudienceAndResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: RI-051 (see catalog out_of_scope_reason)")
+	t.Skip("covered outside the suite; see the resource_indicators catalog row's covered_by")
 }
 
 // TestScenario_RI_052_CIBARefreshPreservesResource is OOS — see catalog out_of_scope_reason.
@@ -447,7 +517,7 @@ func TestScenario_RI_060_ClientCredentialsBindsAudience(t *testing.T) {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 
-	tk := testkit.NewProvider(t)
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials()))
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      clientID,
 		SecretHash:              hash,
@@ -528,7 +598,7 @@ func TestScenario_RI_062_ClientCredentialsRejectsUnknownResource(t *testing.T) {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 
-	tk := testkit.NewProvider(t)
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials()))
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      clientID,
 		SecretHash:              hash,
@@ -604,7 +674,7 @@ func TestScenario_RI_063_ClientCredentialsRejectsMultipleResources(t *testing.T)
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 
-	tk := testkit.NewProvider(t)
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials()))
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      clientID,
 		SecretHash:              hash,

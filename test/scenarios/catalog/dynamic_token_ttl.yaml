@@ -38,7 +38,7 @@ rows:
       TTL function is invoked once with the DeviceCode token instance
       and the issuing Client.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not expose feature.Device or a /device/auth endpoint; grant.DeviceCode constant exists for option-signature stability but no device-flow handler is mounted. The ttl.DeviceCode dynamic callback API is also absent (v1.0 ships only global static TTL options). No v1.0 wire path can drive this row.
+    out_of_scope_reason: "The OP exposes no per-token-kind dynamic TTL callback API: lifetimes are global static options (op.WithAccessTokenTTL, op.WithRefreshTokenTTL, op.WithRefreshTokenOfflineTTL), and the device flow's own lifetime is the fixed op.WithDeviceCodeExpiry rather than a function invoked per issuance with the token instance and client. The device authorization grant itself is shipped and routable, so the grant is not the obstacle — the callback contract is."
 
   - id: DTT-003
     severity: P1
@@ -50,7 +50,7 @@ rows:
       RefreshToken exactly once each, with the corresponding token
       instance and the issuing Client.
     status: out-of-scope
-    out_of_scope_reason: "Device-code grant exchange is not implemented in v1.0; grant.DeviceCode is a stub constant and no token-endpoint dispatcher accepts urn:ietf:params:oauth:grant-type:device_code. Per-token-kind dynamic TTL callbacks (ttl.IdToken, ttl.AccessToken, ttl.RefreshToken) are also absent — v1.0 uses global static TTL options only. No v1.0 wire path can drive this row."
+    out_of_scope_reason: "The OP exposes no per-token-kind dynamic TTL callback API (ttl.IdToken / ttl.AccessToken / ttl.RefreshToken); lifetimes are global static options, so there is no function for a redemption to invoke once per token kind. The device-code grant exchange itself is shipped and routable, so the grant is not the obstacle — the callback contract is."
 
   - id: DTT-004
     severity: P1

@@ -134,7 +134,7 @@ rows:
       can add new transports without the registration call panicking
       or returning an error for valid input.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 exposes no public registerResponseMode(name, fn) hook. The valid response_modes set is fixed at the dispatcher boundary (internal/authorizeendpoint) to {query, form_post, jwt, query.jwt, fragment.jwt, form_post.jwt} and gated by op.WithJARMResponseMode for the .jwt half; an unknown value triggers unsupported_response_mode (RMO-033). Adding a custom-response-mode extension API would expand the OP's public surface for a transport family the library deliberately keeps closed: web_message and embedder-defined modes do not ship. Embedders that need custom transports wrap the OP's response and re-encode at the gateway layer."
+    out_of_scope_reason: "v1.0 exposes no public registerResponseMode(name, fn) hook. The valid response_modes set is fixed at the dispatcher boundary (internal/authorizeendpoint) to {query, form_post, jwt, query.jwt, fragment.jwt, form_post.jwt} and gated by op.WithFeature with feature.JARM for the .jwt half; an unknown value triggers unsupported_response_mode (RMO-033). Adding a custom-response-mode extension API would expand the OP's public surface for a transport family the library deliberately keeps closed: web_message and embedder-defined modes do not ship. Embedders that need custom transports wrap the OP's response and re-encode at the gateway layer."
 
   - id: RMO-031
     severity: P1

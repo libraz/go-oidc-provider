@@ -18,6 +18,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 // TestScenario_CC_001_ConfidentialClientGetsAccessToken pins the
@@ -43,7 +44,7 @@ func TestScenario_CC_001_ConfidentialClientGetsAccessToken(t *testing.T) {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 
-	tk := testkit.NewProvider(t)
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials()))
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      clientID,
 		SecretHash:              hash,
@@ -135,7 +136,7 @@ func TestScenario_CC_003_DisallowedScopeRejected(t *testing.T) {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
 
-	tk := testkit.NewProvider(t)
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials()))
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      clientID,
 		SecretHash:              hash,

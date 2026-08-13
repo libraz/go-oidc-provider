@@ -56,7 +56,7 @@ rows:
       and Account on the request context for hooks and audit
       consumers.
     status: out-of-scope
-    out_of_scope_reason: "Internal request-context plumbing is not part of the public wire surface of go-oidc-provider v1.0; observability hooks attach via op.WithAuditEmitter (op.AuditEvent), not via implicit ctx.entities. The upstream 'oidc-provider request.entities' inspection is not portable to a non-Node OP."
+    out_of_scope_reason: "Internal request-context plumbing is not part of the public wire surface of go-oidc-provider v1.0; observability hooks attach via op.WithAuditLogger (op.AuditEvent), not via implicit ctx.entities. The upstream 'oidc-provider request.entities' inspection is not portable to a non-Node OP."
 
   - id: UI-005
     severity: P0

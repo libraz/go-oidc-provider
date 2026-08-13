@@ -406,7 +406,7 @@ func TestScenario_TFJ_030_ClientCredentialsJWTPayloadShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
-	tk := testkit.NewProvider(t, testkit.WithOptions(
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials(),
 		op.WithAccessTokenFormat(op.AccessTokenFormatJWT),
 	))
 	tk.RegisterClient(t, testkit.ClientFixture{

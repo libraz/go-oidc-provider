@@ -325,6 +325,7 @@ func TestScenario_INT_006_RefreshTokenIntrospectNoHint(t *testing.T) {
 
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
+			scenariokit.WithClientCredentials(),
 			op.WithFeature(feature.Introspect),
 			op.WithStrictOfflineAccess(),
 		),
@@ -449,6 +450,7 @@ func assertRefreshTokenIntrospectActiveWithHint(t *testing.T, clientID, hint str
 
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
+			scenariokit.WithClientCredentials(),
 			op.WithFeature(feature.Introspect),
 			op.WithStrictOfflineAccess(),
 		),
@@ -547,7 +549,7 @@ func TestScenario_INT_010_ClientCredentialsIntrospectNoHint(t *testing.T) {
 	}
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(
+		testkit.WithOptions(scenariokit.WithClientCredentials(),
 			op.WithFeature(feature.Introspect),
 			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
 		),
@@ -677,6 +679,7 @@ func runCCIntrospectionWithHint(t *testing.T, idPrefix, hint string) {
 
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
+			scenariokit.WithClientCredentials(),
 			op.WithFeature(feature.Introspect),
 			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
 		),
@@ -1438,6 +1441,7 @@ func TestScenario_INT_020_BadClientAuthEmitsAuditError(t *testing.T) {
 	auditCap := scenariokit.NewAuditCapture()
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
+			scenariokit.WithClientCredentials(),
 			op.WithFeature(feature.Introspect),
 			op.WithAuditLogger(auditCap.Logger()),
 		),
@@ -1694,6 +1698,7 @@ func TestScenario_INT_023_ConsumedRefreshTokenReturnsActiveFalse(t *testing.T) {
 
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
+			scenariokit.WithClientCredentials(),
 			op.WithFeature(feature.Introspect),
 			op.WithStrictOfflineAccess(),
 		),

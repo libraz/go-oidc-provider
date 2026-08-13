@@ -157,7 +157,7 @@ rows:
       runs after the Find lookup so the proof is checked against the
       thumbprint the OP issued.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 ships no mTLS scenariokit harness: scenariokit's HTTP client does not present a TLS client cert and op.WithMTLS surface lives in op/feature for the embedder. Binding the certificate-mismatch wire shape requires a new public testkit mTLS rig (server-side trust pool + client cert injection) not on the v1.0 roadmap; the bind enforcement is exercised by internal/mtls white-box tests."
+    out_of_scope_reason: "v1.0 ships no mTLS scenariokit harness: scenariokit's HTTP client does not present a TLS client cert and the mTLS surface is enabled through op.WithFeature with feature.MTLS. Binding the certificate-mismatch wire shape requires a new public testkit mTLS rig (server-side trust pool + client cert injection) not on the v1.0 roadmap; the bind enforcement is exercised by internal/mtls white-box tests."
 
   - id: ATO-011
     severity: P1

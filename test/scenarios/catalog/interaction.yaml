@@ -51,7 +51,7 @@ rows:
       `action="{issuer}{interaction_url}"`, a hidden input
       `prompt=login`, and a Sign-in label.
     status: out-of-scope
-    out_of_scope_reason: "Vendor-specific HTML form rendering with hidden 'prompt=login' input and Sign-in label. v1.0's default Driver (interaction.JSONDriver) returns a JSON Prompt envelope ({type, data, inputs[], state_ref, csrf_token}); embedders ship their own SSR/HTML driver via op.WithInteraction. The 303-to-interaction-URL hop is observable and verified end-to-end by ITX-012 (RunCodeFlow); the upstream HTML form shape is not v1.0 wire."
+    out_of_scope_reason: "Vendor-specific HTML form rendering with hidden 'prompt=login' input and Sign-in label. v1.0's default Driver (interaction.JSONDriver) returns a JSON Prompt envelope ({type, data, inputs[], state_ref, csrf_token}); embedders ship their own SSR/HTML driver via op.WithInteractionDriver. The 303-to-interaction-URL hop is observable and verified end-to-end by ITX-012 (RunCodeFlow); the upstream HTML form shape is not v1.0 wire."
 
   - id: ITX-011
     severity: P0
@@ -212,7 +212,7 @@ rows:
       `_session` cookie (no `expires` attribute) and the session
       MUST be reported as `transient`.
     status: out-of-scope
-    out_of_scope_reason: "An upstream reference OP 'remember: false' branch yielding a transient session cookie (no Expires) plus a getSession().transient flag. v1.0 has no remember-me input and no 'transient' session marker — sessions.Manager treats every Issue as a single shape, with cookie TTL set by the embedder via op.WithSessionTTL."
+    out_of_scope_reason: "An upstream reference OP 'remember: false' branch yielding a transient session cookie (no Expires) plus a getSession().transient flag. v1.0 has no remember-me input and no 'transient' session marker — sessions.Manager treats every Issue as a single shape, with cookie lifetime governed by the embedder's own cookie configuration."
 
   - id: ITX-055
     severity: P0
@@ -235,7 +235,7 @@ rows:
       redirect carrying `error=<custom>`,
       `error_description=<custom>`, and `state`.
     status: out-of-scope
-    out_of_scope_reason: "Vendor-specific 'custom interaction failure with prompt=none → 303 carrying error=<custom>' extension contract. v1.0 has no embedder-hands-error-back API on the interaction surface — error redirects originate inside the orchestrator (the public interaction.Authenticator returns a typed error, the orchestrator translates it into a registered OAuth code). The closed set of error codes the orchestrator can produce is part of v1.0's catalog; embedders cannot inject arbitrary <custom> codes onto the redirect. The prompt=none branch's wire-observable shape (403 / login_required / consent_required) is bound by the prompt scenarios end-to-end; the upstream 'arbitrary embedder-supplied error code via interaction failure' wire is not v1.0."
+    out_of_scope_reason: "Vendor-specific 'custom interaction failure with prompt=none → 303 carrying error=<custom>' extension contract. v1.0 has no embedder-hands-error-back API on the interaction surface — error redirects originate inside the orchestrator (the public op.Authenticator returns a typed error, the orchestrator translates it into a registered OAuth code). The closed set of error codes the orchestrator can produce is part of v1.0's catalog; embedders cannot inject arbitrary <custom> codes onto the redirect. The prompt=none branch's wire-observable shape (403 / login_required / consent_required) is bound by the prompt scenarios end-to-end; the upstream 'arbitrary embedder-supplied error code via interaction failure' wire is not v1.0."
 
   - id: ITX-061
     severity: P1
@@ -302,7 +302,7 @@ rows:
       MUST 303 to the interaction (e.g.
       `validateInteraction('unrequestable', 'un_foo')`).
     status: out-of-scope
-    out_of_scope_reason: "Vendor-specific 'unrequestable prompt' extension category — an OP-injected prompt that the RP cannot ask for but the OP triggers itself based on policy. v1.0 has no 'unrequestable prompt' registration surface in interaction.Driver / interaction.Authenticator; OP-side conditions that need extra interaction (mfa challenge, risk-driven step-up, account-chooser disambiguation) are wired through typed Authenticators in the chain (op.WithAuthenticator), and their wire-observable redirects to the SPA are bound by the mfa / chooser scenarios. The 'validateInteraction(unrequestable, un_foo)' API and the 303-to-interaction wire that follows are upstream surface; v1.0 routes the same observable through its typed chain."
+    out_of_scope_reason: "Vendor-specific 'unrequestable prompt' extension category — an OP-injected prompt that the RP cannot ask for but the OP triggers itself based on policy. v1.0 has no 'unrequestable prompt' registration surface in interaction.Driver / op.Authenticator; OP-side conditions that need extra interaction (mfa challenge, risk-driven step-up, account-chooser disambiguation) are wired through typed Authenticators in the chain (op.WithAuthenticators), and their wire-observable redirects to the SPA are bound by the mfa / chooser scenarios. The 'validateInteraction(unrequestable, un_foo)' API and the 303-to-interaction wire that follows are upstream surface; v1.0 routes the same observable through its typed chain."
 
   - id: ITX-072
     severity: P0
@@ -327,4 +327,4 @@ rows:
       threshold (25) stamps a 24-hour lock; lock state is visible at
       the next Begin / Continue regardless of which factor drives it.
     status: out-of-scope
-    out_of_scope_reason: "Cross-factor lockout binds against the AuthnLockoutStore substore (op/store/lockout.go), which the orchestrator consults inside a Begin/Continue dispatch tick. Exercising the cross-factor pivot from the public surface requires multi-authenticator fixture (TOTP factor + email-OTP factor + passkey, all wired into op.WithAuthenticator chain, plus the SPA driver to enumerate ChallengeKinds and Continue against each in turn) that the scenariokit harness does not host. The atomic-increment / window-rollover / 1h-then-24h thresholds are pinned by internal/authn/lockout package tests and by op/storeadapter/sql/lockout_test.go (UPDATE ... SET failed_count = failed_count + 1 RETURNING) and op/storeadapter/redis/lockout_test.go (INCR atomicity). Re-opening for v1.0 would require a new public 'multi-factor failure replay' helper in scenariokit; not on the v1.0 roadmap."
+    out_of_scope_reason: "Cross-factor lockout binds against the AuthnLockoutStore substore (op/store/lockout.go), which the orchestrator consults inside a Begin/Continue dispatch tick. Exercising the cross-factor pivot from the public surface requires multi-authenticator fixture (TOTP factor + email-OTP factor + passkey, all wired into op.WithAuthenticators chain, plus the SPA driver to enumerate ChallengeKinds and Continue against each in turn) that the scenariokit harness does not host. The atomic-increment / window-rollover / 1h-then-24h thresholds are pinned by internal/authn/lockout package tests and by op/storeadapter/sql/lockout_test.go (UPDATE ... SET failed_count = failed_count + 1 RETURNING) and op/storeadapter/redis/lockout_test.go (INCR atomicity). Re-opening for v1.0 would require a new public 'multi-factor failure replay' helper in scenariokit; not on the v1.0 roadmap."

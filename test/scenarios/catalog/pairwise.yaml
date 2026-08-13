@@ -319,7 +319,7 @@ rows:
       or audit event payloads delivered to a pairwise client; only
       the pairwise sub is exposed.
     status: out-of-scope
-    out_of_scope_reason: "The delivery channel this row guards does not exist. Audit events are never delivered to a client: op.WithAuditEmitter hands audit.Event to the deployment operator, and the OP deliberately stamps ActorID with the OP-internal subject there (internal/authorizeendpoint/completion.go, internal/tokenendpoint/refresh.go) precisely so an operator can correlate one account across clients — pseudonymising the operator's own audit trail would defeat it. Every client-facing egress does carry the projected value, and each is bound: id_token by PW-50, userinfo by PW-51, introspection by PW-52, the id_token_hint comparison by PW-53, and the JWT access token by PW-40. Log redaction inside the embedder's sink is the embedder's concern."
+    out_of_scope_reason: "The delivery channel this row guards does not exist. Audit events are never delivered to a client: op.WithAuditLogger hands audit.Event to the deployment operator, and the OP deliberately stamps ActorID with the OP-internal subject there (internal/authorizeendpoint/completion.go, internal/tokenendpoint/refresh.go) precisely so an operator can correlate one account across clients — pseudonymising the operator's own audit trail would defeat it. Every client-facing egress does carry the projected value, and each is bound: id_token by PW-50, userinfo by PW-51, introspection by PW-52, the id_token_hint comparison by PW-53, and the JWT access token by PW-40. Log redaction inside the embedder's sink is the embedder's concern."
 
   - id: PW-62
     severity: P1

@@ -111,7 +111,7 @@ rows:
       invalid_request ("claims.userinfo should not be used since
       userinfo endpoint is not supported").
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose an option to disable the /userinfo endpoint — Discovery always advertises it and the handler is unconditionally mounted. The 'userinfo endpoint disabled' precondition this row asserts on is therefore unreachable; the v1.0 contract is 'userinfo is always available, embedders that wish to expose only /token must front the OP with a reverse proxy that drops /oidc/userinfo'. Revisit if op.WithUserInfoEndpointEnabled(false) ships."
+    out_of_scope_reason: "v1.0 does not expose an option to disable the /userinfo endpoint — Discovery always advertises it and the handler is unconditionally mounted. The 'userinfo endpoint disabled' precondition this row asserts on is therefore unreachable; the v1.0 contract is 'userinfo is always available, embedders that wish to expose only /token must front the OP with a reverse proxy that drops /oidc/userinfo'. Revisit if an option to disable the endpoint ships."
 
   - id: CL-10
     severity: P0
@@ -480,4 +480,16 @@ rows:
     behaviour: |
       Authorization requests that carry claims via either GET or POST
       yield identical parsing results.
+    status: active
+
+  - id: CL-90
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the deployment turns the claims parameter off, the OP
+      releases no §5.5-requested claim from a grant that already
+      carries a persisted payload — not at /userinfo, not in the
+      id_token of the first code exchange, and not in the id_token of
+      any later refresh exchange. Claims the granted scopes release are
+      unaffected, and the persisted payload stays on the grant.
     status: active

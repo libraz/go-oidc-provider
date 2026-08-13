@@ -210,7 +210,7 @@ rows:
       client MUST present it via Authorization: Bearer <token>; an
       access_token field in the request body is not honoured.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue: 'initialAccessToken set to a fixed string' is an upstream's adminRegistration shortcut (a single hard-coded string in OP config grants registration). v1.0 has no fixed-string IAT mode — every IAT is adapter-managed via Provider.IssueInitialAccessToken (op/registration.go:453); RegistrationOption has no string-shaped IAT field. The wire shape this row asserts is not exercisable at v1.0's surface."
+    out_of_scope_reason: "non-spec residue: 'initialAccessToken set to a fixed string' is an upstream's adminRegistration shortcut (a single hard-coded string in OP config grants registration). v1.0 has no fixed-string IAT mode — every IAT is adapter-managed via op.Provider.IssueInitialAccessToken; op.RegistrationOption has no string-shaped IAT field. The wire shape this row asserts is not exercisable at v1.0's surface."
 
   - id: DCR-IAT-02
     severity: P0
@@ -284,7 +284,7 @@ rows:
       returning false) suppresses RAT issuance; the response omits
       both registration_access_token and registration_client_uri.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue: 'issueRegistrationAccessToken=false' (or a function returning false) is an upstream toggle that suppresses RAT issuance per registration. v1.0 has no public option to suppress RAT issuance — every successful POST /register issues a RAT (internal/registrationendpoint/register.go:171 unconditionally calls RegistrationAccessTokens.Put). The 'response omits registration_access_token / registration_client_uri' wire shape is unreachable from public configuration; suppression by static-client setup is exercised by DCR-STATIC-02."
+    out_of_scope_reason: "non-spec residue: 'issueRegistrationAccessToken=false' (or a function returning false) is an upstream toggle that suppresses RAT issuance per registration. v1.0 has no public option to suppress RAT issuance — every successful POST /register issues a RAT (internal/registrationendpoint.persistRegistration calls RegistrationAccessTokens.Put unconditionally). The 'response omits registration_access_token / registration_client_uri' wire shape is unreachable from public configuration; suppression by static-client setup is exercised by DCR-STATIC-02."
 
   - id: DCR-RAT-03
     severity: P1
@@ -457,8 +457,7 @@ rows:
     behaviour: |
       For subject_type=pairwise without sector_identifier_uri, all
       redirect_uris MUST share the same host.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 does not yet implement op.WithPairwiseSubject (op/op.go:757 hard-codes PairwiseEnabled = false). Every subject_type=pairwise registration is rejected at validateSubjectType with invalid_client_metadata 'subject_type pairwise requires WithPairwiseSubject'; the per-host homogeneity rule (validatePairwiseMetadata) is unreachable through public configuration. Re-bind once WithPairwiseSubject ships."
+    status: active
 
   - id: DCR-VAL-08
     severity: P0

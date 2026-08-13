@@ -181,10 +181,29 @@ type CodeFlowResult struct {
 // "happy-path one-shot" entry.
 func RunCodeFlow(tb testing.TB, p *testkit.Provider, subject string, params AuthorizeParams) CodeFlowResult {
 	tb.Helper()
+	return RunCodeFlowWithClient(tb, p, mustClient(tb, p), subject, params)
+}
+
+// RunCodeFlowWithClient is [RunCodeFlow] driven through a caller-owned
+// [*http.Client]. It exists for scenarios that continue past the
+// callback on the same browser identity — logout is the motivating one,
+// because /end_session resolves the session from the cookie the flow
+// established, and a fresh jar would present the OP with no session to
+// terminate.
+//
+// The client MUST NOT follow redirects (use [testkit.Provider.HTTPClient],
+// which installs http.ErrUseLastResponse) and MUST carry a cookie jar.
+func RunCodeFlowWithClient(
+	tb testing.TB,
+	p *testkit.Provider,
+	client *http.Client,
+	subject string,
+	params AuthorizeParams,
+) CodeFlowResult {
+	tb.Helper()
 	if subject == "" {
 		subject = DefaultSubject
 	}
-	client := mustClient(tb, p)
 
 	// Step 1: GET /authorize → 302 to /interaction/{uid}
 	authorizeURL := p.Server.URL + "/oidc/auth?" + params.Values().Encode()

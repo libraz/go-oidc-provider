@@ -165,7 +165,10 @@ type mtlsConfidentialFixture struct {
 
 func newMTLSConfidentialFixture(tb testing.TB, opts ...op.Option) *mtlsConfidentialFixture {
 	tb.Helper()
-	all := append([]op.Option{op.WithFeature(feature.MTLS)}, opts...)
+	all := append([]op.Option{
+		op.WithFeature(feature.MTLS),
+		scenariokit.WithClientCredentials(),
+	}, opts...)
 	tk := testkit.NewProvider(tb, testkit.WithOptions(all...))
 	const secret = "rp-mtls-conf-secret" //nolint:gosec // not a credential — opaque test fixture secret.
 	hash, err := op.HashClientSecret(secret)

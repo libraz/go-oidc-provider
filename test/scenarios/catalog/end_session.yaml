@@ -128,7 +128,7 @@ rows:
       `Session` entities on the request context for downstream hooks
       and audit consumers.
     status: out-of-scope
-    out_of_scope_reason: "Internal request-context entity exposure (Client / IdTokenHint / Session) for downstream hooks and audit consumers is upstream-specific; v1.0's audit channel emits typed events (logout.requested / logout.completed) via op.WithAuditEmitter rather than projecting Go entities onto the request context. The wire-observable end_session redirect is bound by ES-004 (id_token_hint+post_logout_redirect_uri → 302) and ES-024 (state echoing); a typed-entity-on-context test would assert against an internal projection that v1.0 deliberately does not expose."
+    out_of_scope_reason: "Internal request-context entity exposure (Client / IdTokenHint / Session) for downstream hooks and audit consumers is upstream-specific; v1.0's audit channel emits typed events (logout.requested / logout.completed) via op.WithAuditLogger rather than projecting Go entities onto the request context. The wire-observable end_session redirect is bound by ES-004 (id_token_hint+post_logout_redirect_uri → 302) and ES-024 (state echoing); a typed-entity-on-context test would assert against an internal projection that v1.0 deliberately does not expose."
 
   - id: ES-011
     severity: P1
@@ -190,10 +190,11 @@ rows:
     behaviour: |
       When `id_token_hint` is a valid JWT signed by the OP but its
       `aud` is not a registered client, v1.0 returns HTML 400 with
-      the static description "invalid client" (handler.go:329:
-      verifyIDTokenHint succeeds, the resolved aud is then handed to
-      resolveByClientID which collapses ErrNotFound and any transport
-      fault onto descClientNotFound). The same description is reused
+      the static description "invalid client"
+      (internal/endsession.verifyIDTokenHint succeeds, the resolved aud
+      is then handed to internal/endsession.resolveByClientID which
+      collapses ErrNotFound and any transport fault onto
+      descClientNotFound). The same description is reused
       for an unknown `client_id` parameter (ES-008), so the wire
       surface is not an existence oracle either way.
     status: active
@@ -325,3 +326,26 @@ rows:
       with `invalid_client` (HTML 400).
     status: out-of-scope
     out_of_scope_reason: "v1.0 has no /session/end/success route; the post-logout success page is rendered inline by /end_session when no post_logout_redirect_uri is supplied (see ES-012). There is no client_id-bearing success URL to query, so 'unknown client_id at /session/end/success' has no v1.0 path."
+
+  - id: ES-030
+    severity: P2
+    spec: OIDC RP-Initiated Logout §2
+    behaviour: |
+      The inline confirmation page rendered when no
+      post_logout_redirect_uri is supplied resolves its title and body
+      through the locale resolver, so a request that selects a
+      non-English locale receives that locale's text and a matching
+      lang attribute rather than the built-in English.
+    status: active
+
+  - id: ES-031
+    severity: P2
+    spec: OIDC RP-Initiated Logout §5
+    behaviour: |
+      The CSRF interstitial rendered for a GET that cannot be admitted
+      directly resolves its title, its scope-specific body and its
+      submit button through the locale resolver, so the page that asks
+      the user to authorise destroying the session is served in the
+      language they selected. The body distinguishes the current-account
+      scope from the whole-chooser-group scope in every locale.
+    status: active

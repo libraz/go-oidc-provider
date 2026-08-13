@@ -1226,9 +1226,82 @@ func TestScenario_DCR_VAL_06_SectorIdentifierURIRules(t *testing.T) {
 	}
 }
 
+// newPairwiseDCRFixture is [newDCRFixture] with pairwise subjects
+// enabled, which is what makes subject_type=pairwise acceptable at
+// registration. Without the option every pairwise registration is
+// refused before the per-host rule is consulted, so the fixture is the
+// precondition for observing DCR-VAL-07 at all.
+func newPairwiseDCRFixture(t *testing.T) *dcrFixture {
+	t.Helper()
+	salt := bytes.Repeat([]byte{0x2a}, 32)
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithPairwiseSubject(salt),
+	))
+	return &dcrFixture{
+		tk:       tk,
+		endpoint: tk.Server.URL + "/oidc/register",
+	}
+}
+
+// TestScenario_DCR_VAL_07_PairwiseHostHomogeneityWithoutSector confirms
+// that a subject_type=pairwise registration which omits
+// sector_identifier_uri must keep every redirect_uri on one host:
+// redirect URIs spanning two hosts are refused with 400
+// invalid_client_metadata, while a multi-URI registration sharing one
+// host is accepted.
+//
+// The rule is what keeps a pairwise sub stable. The sector falls back
+// to the host of the registered redirect URI when no
+// sector_identifier_uri is supplied, so a client registering two hosts
+// has no single sector to derive from — accepting it would let the
+// subject it receives depend on which URI the OP happened to read.
+//
+// Spec: OpenID Connect Core 1.0 §8.1.
 func TestScenario_DCR_VAL_07_PairwiseHostHomogeneityWithoutSector(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: DCR-VAL-07 (see catalog out_of_scope_reason)")
+
+	t.Run("multi_host_rejected", func(t *testing.T) {
+		t.Parallel()
+		f := newPairwiseDCRFixture(t)
+		resp := f.post(t, f.mintIAT(t), "", map[string]any{
+			"redirect_uris": []string{
+				"https://rp-a.test.invalid/cb",
+				"https://rp-b.test.invalid/cb",
+			},
+			"subject_type": "pairwise",
+		})
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusBadRequest {
+			raw, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+		}
+		body := dcrDecode(t, resp)
+		if got, _ := body["error"].(string); got != "invalid_client_metadata" {
+			t.Errorf("error=%q want invalid_client_metadata", got)
+		}
+	})
+
+	t.Run("same_host_accepted", func(t *testing.T) {
+		t.Parallel()
+		f := newPairwiseDCRFixture(t)
+		resp := f.post(t, f.mintIAT(t), "", map[string]any{
+			"redirect_uris": []string{
+				"https://rp-a.test.invalid/cb",
+				"https://rp-a.test.invalid/cb2",
+			},
+			"subject_type": "pairwise",
+		})
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusCreated {
+			raw, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status=%d want 201 body=%s", resp.StatusCode, raw)
+		}
+		body := dcrDecode(t, resp)
+		if got, _ := body["subject_type"].(string); got != "pairwise" {
+			t.Errorf("subject_type=%q want pairwise (body=%v)", got, body)
+		}
+	})
 }
 
 func TestScenario_DCR_VAL_08_TLSClientAuthFieldExclusivity(t *testing.T) {

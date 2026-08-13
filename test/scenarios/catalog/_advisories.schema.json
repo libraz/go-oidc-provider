@@ -45,7 +45,7 @@
         "threat": {
           "type": "string",
           "pattern": "^T-[0-9]+$",
-          "description": "Threat category from docs/research/07-cve-and-threats.md (T-01..T-23)."
+          "description": "Threat category the advisory belongs to. The categories are declared by the `# --- T-NN <name>` section headers in _advisories.yaml, which group the queue; a value here must name one of them."
         },
         "status": {
           "type": "string",

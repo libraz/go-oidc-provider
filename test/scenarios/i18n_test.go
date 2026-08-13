@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -315,15 +316,30 @@ func TestScenario_I18N_012_PromptListsAvailableLocales(t *testing.T) {
 func TestScenario_I18N_013_LocaleFieldsOmitWhenResolverAbsent(t *testing.T) {
 	t.Parallel()
 
-	// The resolver is wired through op.New unconditionally, so this
-	// row is exercised at the JSON tag level rather than through a
-	// live handler. The guard rail is the omitempty tag on
-	// interaction.Prompt.Locale / UILocalesHint / LocalesAvailable;
-	// dropping the tag would land on
-	// op/interaction/types_test.go's TestPrompt_LocaleFieldsOmitWhenEmpty
-	// before reaching this row. The scenarios catalog still binds the
-	// behaviour so a future regression is logged here too.
-	t.Log("guarded by op/interaction/types_test.go TestPrompt_LocaleFieldsOmitWhenEmpty")
+	// The resolver is wired through op.New unconditionally, so the row
+	// is exercised at the JSON tag level rather than through a live
+	// handler: the guard rail is the omitempty tag on
+	// interaction.Prompt.Locale / UILocalesHint / LocalesAvailable.
+	// Marshalling a prompt whose locale fields are all zero is the
+	// shape an SPA sees from an OP that resolved no locale, and the
+	// three keys have to be absent rather than present-and-empty —
+	// a client that branches on key presence breaks either way.
+	var prompt interaction.Prompt
+	encoded, err := json.Marshal(prompt)
+	if err != nil {
+		t.Fatalf("marshal prompt: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("unmarshal prompt: %v", err)
+	}
+	for _, key := range []string{"locale", "ui_locales_hint", "locales_available"} {
+		if _, present := wire[key]; present {
+			t.Errorf("%q is on the wire for a prompt with no resolved locale (%s); "+
+				"an SPA written against an OP without i18n sees a field it does not expect",
+				key, encoded)
+		}
+	}
 }
 
 // TestScenario_I18N_020_SetLocaleCookiePersistsTheSelection pins the

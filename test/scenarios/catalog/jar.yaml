@@ -177,7 +177,7 @@ rows:
       endpoint, the request is rejected with invalid_request_object
       (client_id mismatch).
     status: out-of-scope
-    out_of_scope_reason: "v1.0 emits invalid_request (not invalid_request_object) for wire-vs-JWT client_id mismatch (writeJAREnvelopeError treats it as a wire consistency violation); the /authorize side shares the gate with PAR-023. The catalog's device_authorization_endpoint half has no v1.0 surface (no feature.DeviceFlow)."
+    out_of_scope_reason: "v1.0 emits invalid_request (not invalid_request_object) for wire-vs-JWT client_id mismatch (writeJAREnvelopeError treats it as a wire consistency violation); the /authorize side shares the gate with PAR-023. The catalog's device_authorization_endpoint half has no v1.0 surface (there is no device-flow feature flag)."
 
   - id: JAR-018
     severity: P0

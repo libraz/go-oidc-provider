@@ -124,7 +124,7 @@ rows:
       asymmetric (RSA-OAEP-256, ECDH-ES / +A128KW / +A256KW) with the
       recipient key resolved from the client's JWKS — the
       secret-derived families (HS*, bare A*KW, dir) are rejected by
-      internal/jose.JWEAlg.isSupported. Encrypted JARM itself is
+      internal/jose.JWEAlg.IsAllowed. Encrypted JARM itself is
       supported (see ENC-120 / ENC-121); it is specifically the
       secret-bound algs that are absent, so the expired-client_secret
       rejection path has no caller.

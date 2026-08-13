@@ -29,7 +29,7 @@ rows:
       token MUST return 200 while the session is alive and 401 with
       `invalid_token` once the session is destroyed.
     status: out-of-scope
-    out_of_scope_reason: "The 'expiresWithSession' marker is a vendor-internal model: tokens carry a session-link flag and the verifier consults it on every /userinfo call. v1.0 does not implement this model — neither store.AccessToken, store.AuthorizationCode, nor store.Grant carries a SessionID column, and internal/userinfo/handler.go performs no session-membership check during AT verification. The functionally adjacent v1.0 behaviour is the /end_session grant-tombstone cascade (internal/endsession/handler.go revokeAccessTokens), which is already exercised end-to-end by GTM-003 (TestScenario_GTM_003_EndSessionTombstonesRevokeAccessToken). Binding this row would either duplicate GTM-003 or assert a session-binding model the OP does not have."
+    out_of_scope_reason: "The 'expiresWithSession' marker is a vendor-internal model: tokens carry a session-link flag and the verifier consults it on every /userinfo call. v1.0 does not implement this model — neither store.AccessTokenRecord, store.AuthorizationCode, nor store.Grant carries a SessionID column, and internal/userinfo/handler.go performs no session-membership check during AT verification. The functionally adjacent v1.0 behaviour is the /end_session grant-tombstone cascade (internal/endsession/handler.go revokeAccessTokens), which is already exercised end-to-end by GTM-003 (TestScenario_GTM_003_EndSessionTombstonesRevokeAccessToken). Binding this row would either duplicate GTM-003 or assert a session-binding model the OP does not have."
 
   - id: SBT-002
     severity: P0

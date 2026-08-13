@@ -30,7 +30,7 @@ rows:
     behaviour: |
       When a request hits the UserInfo endpoint with a valid bearer
       token, the OP MUST resolve end-user claims by calling
-      store.Users().FindBySubject(ctx, sub) on the value passed to
+      store.UserStore.FindBySubject(ctx, sub) on the value passed to
       op.WithStore. No internal claim cache short-circuits the call.
     status: active
 
@@ -41,7 +41,7 @@ rows:
       When an authorization_code or refresh_token exchange at the
       token endpoint needs to project an OIDC Core 1.0 §5.5 "claims"
       request payload addressed to the id_token, the OP MUST resolve
-      end-user claims by calling store.Users().FindBySubject(ctx, sub)
+      end-user claims by calling store.UserStore.FindBySubject(ctx, sub)
       on the value passed to op.WithStore. Standard id_token claims
       (sub / iss / aud / iat / exp / auth_time / nonce / acr / amr /
       azp / at_hash / c_hash / sid) are emitted by the library
@@ -63,7 +63,7 @@ rows:
     severity: P0
     spec: RFC 6750 §3.1 / OIDC Core §5.3
     behaviour: |
-      When store.Users().FindBySubject returns store.ErrNotFound at
+      When store.UserStore.FindBySubject returns store.ErrNotFound at
       the UserInfo endpoint, the OP responds with HTTP 401 and the
       WWW-Authenticate header carries error="invalid_token". The
       response body is empty or carries the matching JSON error
@@ -74,7 +74,7 @@ rows:
     severity: P1
     spec: OIDC Core §5.5 / implementation contract
     behaviour: |
-      When store.Users().FindBySubject returns store.ErrNotFound
+      When store.UserStore.FindBySubject returns store.ErrNotFound
       while projecting an OIDC Core 1.0 §5.5 "claims" payload at the
       token endpoint, the OP silently omits the affected claims and
       completes the grant exchange normally. The id_token is still

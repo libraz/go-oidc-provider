@@ -71,7 +71,10 @@ scripts/scenario.sh coverage [--strict|--check-bindings|--yaml-only]
 `make scenario-validate`, `make scenario-coverage`,
 `make scenario-coverage-yaml-only`, and `make scenario-stats` are the
 entry points wired into the developer workflow. `make verify` runs the
-validator and `--check-bindings` as part of the pre-merge gate.
+validator and `coverage --strict` as part of the pre-merge gate;
+`--strict` is a superset of `--check-bindings`, so the tolerant mode
+stays available as `make scenario-coverage-bindings` for a tree
+mid-change.
 
 Flag-vs-positional ordering follows Go's `flag` package: any `-flag`
 arguments must precede positional arguments
@@ -80,6 +83,31 @@ reverse).
 
 Direct hand-edits are permitted — the validator catches drift — but
 the script gate is preferred for consistency.
+
+## Citing code from a row
+
+`behaviour`, `notes`, and `out_of_scope_reason` frequently point at the
+implementation — an out-of-scope claim is only auditable if a reviewer
+can check it against the tree. Two rules make those pointers hold, and
+the validator enforces both:
+
+- **Cite `package.Symbol`, never `file.go:123`.** A line number is
+  correct until the next edit to the file above it, and nothing about
+  the reference changes when it stops being true. Use the package name
+  for an exported symbol (`op.WithMTLSProxy`, `store.Client.Resources`)
+  and the package path when the symbol is unexported or the name would
+  be ambiguous (`internal/clientauth.verifySignature`). Methods and
+  struct fields are citable as `Type.Member`.
+- **A `package.Symbol` token means "this exists".** The validator
+  resolves every one of them against the repository's declarations, so
+  a row MUST NOT use that form for something the OP deliberately lacks.
+  Name the absent thing in prose instead — "no per-resource token-format
+  option", not `op.WithPerResourceFormat` — or the gate will read it as
+  a claim and fail.
+
+Audit event names (`grant.error`, `interaction.chooser`) and bare file
+paths are left alone: the first are wire strings rather than Go symbols,
+and the second do not rot the way a line number does.
 
 ## Naming conventions
 
@@ -115,7 +143,16 @@ The coverage gate reads exactly those rules:
 - a `covered_by` naming a test that no longer exists fails, so
   delegated coverage cannot rot the way a prose reference does;
 - a row bound only to a `t.Skip` stub is reported and fails `--strict`,
-  but not `--check-bindings`, which is the mode `make verify` runs.
+  which is the mode `make verify` runs; `--check-bindings` tolerates it.
+
+That last rule decides what to do with a row whose behaviour is
+reachable but not yet asserted. Because the pre-merge gate is
+`--strict`, such a row cannot be parked at `pending` behind a skip
+stub — the stub fails the gate. It either gets a real test and goes
+`active`, or it stays `out-of-scope` with a reason that is true of the
+shipping tree. "Reachable but untested" is not one of the available
+answers, which is deliberate: it is exactly the state that lets a gap
+sit unnoticed.
 
 ## Catalog-adjacent inventories
 

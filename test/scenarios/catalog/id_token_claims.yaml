@@ -115,7 +115,7 @@ rows:
       embedded in the id_token even when an access_token is also
       issued.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 has no conformIdTokenClaims toggle. There is no public op.With* option, no internal flag, and no per-client metadata field that switches the id_token composition into a 'legacy/conform=false' shape that embeds scope-derived claims when an access_token is also issued. The OP fixes the conform=true behaviour (scope-derived claims live on /userinfo when an AT is minted)."
+    out_of_scope_reason: "v1.0 has no conformIdTokenClaims toggle. There is no public option on the op package, no internal flag, and no per-client metadata field that switches the id_token composition into a 'legacy/conform=false' shape that embeds scope-derived claims when an access_token is also issued. The OP fixes the conform=true behaviour (scope-derived claims live on /userinfo when an AT is minted)."
 
   - id: IDT-13
     severity: P0

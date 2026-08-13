@@ -13,6 +13,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -647,4 +648,205 @@ func TestScenario_ES_027_SuccessPageWithKnownClient(t *testing.T) {
 func TestScenario_ES_028_SuccessPageUnknownClientRejected(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: ES-028 (see catalog out_of_scope_reason)")
+}
+
+// TestScenario_ES_030_ConfirmationPageIsLocalized checks that the
+// inline confirmation page — the one /end_session renders when the
+// request supplies no post_logout_redirect_uri — resolves its strings
+// through the locale resolver.
+//
+// The page is the last thing a user sees in the sign-out ceremony, and
+// it was the only library-rendered page whose text was a Go constant.
+// A deployment shipping the seed "ja" catalogue localized every other
+// screen and then ended on English, and the catalogue carried a
+// Japanese translation of exactly those two strings the whole time, so
+// nothing about the bundle revealed the gap.
+//
+// The assertion is by locale rather than by literal text: the page must
+// not be the built-in English, must carry the selected tag in its lang
+// attribute, and must contain the catalogue's text for that tag.
+//
+// Spec: OIDC RP-Initiated Logout 1.0 §2.
+func TestScenario_ES_030_ConfirmationPageIsLocalized(t *testing.T) {
+	t.Parallel()
+
+	tk, _ := newESProvider(t)
+
+	// The hint is what takes the request past the interstitial
+	// confirmation form: it proves an explicit intent to end this
+	// browser's session, so the handler terminates and renders the
+	// inline confirmation page directly. Supplying no
+	// post_logout_redirect_uri is what keeps the response that page
+	// rather than a 302.
+	values := url.Values{"id_token_hint": {mintESIDToken(t, tk, nil)}}
+	target := tk.Server.URL + "/oidc/end_session?" + values.Encode()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET %s: %v", target, err)
+	}
+	// Accept-Language is the resolver link a browser supplies on its
+	// own, so selecting the locale this way keeps the test on the path
+	// a real sign-out takes.
+	req.Header.Set("Accept-Language", "ja")
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", target, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/end_session status=%d want 200 (the inline confirmation page)", resp.StatusCode)
+	}
+	// Compare against the decoded document. The page escapes every
+	// resolved string at the substitution site, so an apostrophe in the
+	// English fallback reaches the wire as "&#39;" — asserting on the
+	// raw bytes would make the negative check below unfalsifiable.
+	page := html.UnescapeString(readESBody(t, resp))
+
+	if !strings.Contains(page, `lang="ja"`) {
+		t.Errorf("confirmation page is not marked as Japanese; lang attribute missing or wrong:\n%s", page)
+	}
+	// The seed catalogue's ja entries for logout.title / logout.body.
+	for _, want := range []string{"サインアウトしました", "このウィンドウを閉じてください。"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("confirmation page does not carry the ja text %q:\n%s", want, page)
+		}
+	}
+	// The built-in English is what the page fell back to before the
+	// resolver was wired, so its presence is the regression signature.
+	for _, notWant := range []string{"You're signed out", "You can close this window."} {
+		if strings.Contains(page, notWant) {
+			t.Errorf("confirmation page still serves the hardcoded English %q under Accept-Language: ja:\n%s",
+				notWant, page)
+		}
+	}
+}
+
+// TestScenario_ES_030_ConfirmationPageFallsBackToEnglish is the other
+// half: a request that selects no locale, or one the OP does not ship,
+// still gets a readable page rather than an empty one. The resolver's
+// default is English, so this pins that the wiring did not turn a
+// working page into a blank template.
+//
+// Spec: OIDC RP-Initiated Logout 1.0 §2.
+func TestScenario_ES_030_ConfirmationPageFallsBackToEnglish(t *testing.T) {
+	t.Parallel()
+
+	tk, _ := newESProvider(t)
+	resp := esGet(t, tk, url.Values{"id_token_hint": {mintESIDToken(t, tk, nil)}})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/end_session status=%d want 200", resp.StatusCode)
+	}
+	page := html.UnescapeString(readESBody(t, resp))
+	if !strings.Contains(page, `lang="en"`) {
+		t.Errorf("confirmation page without a locale preference is not marked English:\n%s", page)
+	}
+	if !strings.Contains(page, "You're signed out") {
+		t.Errorf("confirmation page lost its English text:\n%s", page)
+	}
+}
+
+// esInterstitial issues a GET /oidc/end_session that cannot be admitted
+// directly — no id_token_hint — so the handler renders the CSRF
+// interstitial, and returns the decoded page. locale selects the
+// language through the header a browser supplies on its own.
+func esInterstitial(t *testing.T, tk *testkit.Provider, values url.Values, locale string) string {
+	t.Helper()
+	target := tk.Server.URL + "/oidc/end_session"
+	if encoded := values.Encode(); encoded != "" {
+		target += "?" + encoded
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET %s: %v", target, err)
+	}
+	if locale != "" {
+		req.Header.Set("Accept-Language", locale)
+	}
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", target, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/end_session status=%d want 200 (the CSRF interstitial)", resp.StatusCode)
+	}
+	page := html.UnescapeString(readESBody(t, resp))
+	if !strings.Contains(page, `name="logout_csrf"`) {
+		t.Fatalf("the response is not the CSRF interstitial:\n%s", page)
+	}
+	return page
+}
+
+// TestScenario_ES_031_ConfirmationInterstitialIsLocalized checks that
+// the CSRF interstitial resolves its strings.
+//
+// This is the page that asks the user to authorise destroying their
+// session, so it is the last one that should arrive in a language they
+// did not choose — and it was the remaining hardcoded-English surface
+// in the package after the logged-out page was wired.
+//
+// Spec: OIDC RP-Initiated Logout 1.0 §5.
+func TestScenario_ES_031_ConfirmationInterstitialIsLocalized(t *testing.T) {
+	t.Parallel()
+
+	tk, rp := newESProvider(t)
+	page := esInterstitial(t, tk, url.Values{"client_id": {rp.ID}}, "ja")
+
+	if !strings.Contains(page, `lang="ja"`) {
+		t.Errorf("interstitial is not marked as Japanese:\n%s", page)
+	}
+	for _, want := range []string{"サインアウトの確認", "続行しますか？", "サインアウト"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("interstitial does not carry the ja text %q:\n%s", want, page)
+		}
+	}
+	for _, notWant := range []string{"Confirm sign-out", "You are about to sign out", "Sign out"} {
+		if strings.Contains(page, notWant) {
+			t.Errorf("interstitial still serves the hardcoded English %q under Accept-Language: ja:\n%s",
+				notWant, page)
+		}
+	}
+}
+
+// TestScenario_ES_031_InterstitialScopeMessageStaysScopeSpecific pins
+// that localizing the body did not collapse its two forms. The page
+// states what is about to be destroyed, and "this account" and "every
+// account in this browser" are different promises — a single shared
+// string would make the confirmation lie in one of the two cases.
+//
+// Spec: OIDC RP-Initiated Logout 1.0 §5.
+func TestScenario_ES_031_InterstitialScopeMessageStaysScopeSpecific(t *testing.T) {
+	t.Parallel()
+
+	tk, rp := newESProvider(t)
+	// The group-wide scope is the absence of the parameter, not an
+	// explicit "all": the handler accepts "current" as the only spelled
+	// value and rejects anything else. Sending the scope the test names
+	// would therefore assert against a 400 rather than against the page.
+	for _, tc := range []struct {
+		name    string
+		scope   string
+		spelled bool
+		locale  string
+		want    string
+	}{
+		{name: "current/ja", scope: "current", spelled: true, locale: "ja", want: "このアカウントからサインアウトします。"},
+		{name: "all/ja", scope: "all", locale: "ja", want: "このブラウザーのすべてのアカウントからサインアウトします。"},
+		{name: "current/en", scope: "current", spelled: true, locale: "", want: "You are about to sign out of this account."},
+		{name: "all/en", scope: "all", locale: "", want: "You are about to sign out of all browser accounts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			values := url.Values{"client_id": {rp.ID}}
+			if tc.spelled {
+				values.Set("logout_scope", tc.scope)
+			}
+			page := esInterstitial(t, tk, values, tc.locale)
+			if !strings.Contains(page, tc.want) {
+				t.Errorf("the %s scope under locale %q did not render %q:\n%s",
+					tc.scope, tc.locale, tc.want, page)
+			}
+		})
+	}
 }

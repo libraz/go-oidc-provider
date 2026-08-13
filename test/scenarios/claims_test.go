@@ -23,6 +23,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -1255,4 +1256,121 @@ func pathHasPrefix(path, prefix string) bool {
 		return false
 	}
 	return path[:len(prefix)] == prefix
+}
+
+// TestScenario_CL_90_ParameterOffSilencesAlreadyEstablishedGrant checks
+// that op.WithClaimsParameterSupported(false) stops the §5.5 projection
+// for a grant whose payload was persisted while the parameter was still
+// enabled. Turning the option off is a deployment-wide posture change,
+// so it cannot be honoured only by the request parsers: a grant records
+// its payload once and then feeds every later issuance, so a gate that
+// lived at the wire boundary alone would keep releasing the requested
+// claims for the whole life of the refresh chain.
+//
+// The grant is established through the real code flow and its §5.5
+// payload is written afterwards, directly onto the stored record —
+// exactly the state an OP is left in when the operator flips the option
+// on an existing deployment. All three release paths are then driven:
+// the first code exchange, /userinfo, and a refresh exchange.
+//
+// Spec: OIDC Core 1.0 §5.5 / OpenID Discovery §3
+// (claims_parameter_supported).
+func TestScenario_CL_90_ParameterOffSilencesAlreadyEstablishedGrant(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithClaimsParameterSupported(false)))
+	rp, secret := clRegisterRP(t, tk, "rp-cl-90")
+	clSeedAlice(t, tk)
+
+	// "name" is released by the "profile" scope, which this flow does
+	// not request: only a §5.5 projection can surface it. "email" is
+	// scope-driven and must survive the toggle, which is what keeps a
+	// silent all-claims blackout from passing this test.
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: rp.RedirectURIs[0],
+		Scope:       "openid email",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("/authorize did not yield a code: error=%q", flow.Error)
+	}
+
+	// Backdate the §5.5 payload onto the grant before the code is
+	// exchanged, so the first id_token already reads a grant that
+	// carries one. The payload goes through the library's own encoder
+	// rather than a hand-written map so the test binds to the encoder
+	// contract, not to the storage key.
+	grant, err := tk.Store.Grants().FindBySubjectClient(ctx, scenariokit.DefaultSubject, rp.ID)
+	if err != nil {
+		t.Fatalf("Grants.FindBySubjectClient: %v", err)
+	}
+	grant.Claims = authorize.EncodeClaimsToGrant(&authorize.ClaimsRequest{
+		IDToken:  map[string]authorize.ClaimSpec{"name": {Essential: true}},
+		UserInfo: map[string]authorize.ClaimSpec{"name": {Essential: true}},
+	})
+	if grant.Claims == nil {
+		t.Fatal("EncodeClaimsToGrant returned nil for a non-empty request")
+	}
+	if err := tk.Store.Grants().Save(ctx, grant); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  rp.RedirectURIs[0],
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: secret,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	if tok.RefreshToken == "" {
+		t.Fatalf("/token did not return refresh_token: raw=%v", tok.Raw)
+	}
+
+	// Exit path 1 — the first code exchange.
+	if got, ok := decodeScenarioJWTClaims(t, tok.IDToken)["name"]; ok {
+		t.Errorf("code-exchange id_token released name=%v with the claims parameter disabled", got)
+	}
+
+	// Exit path 2 — /userinfo.
+	status, _, body := callUserinfo(t, tk, tok.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("/userinfo status=%d body=%v", status, body)
+	}
+	if got, ok := body["name"]; ok {
+		t.Errorf("/userinfo released name=%v with the claims parameter disabled", got)
+	}
+	if got := body["email"]; got != "alice@example.com" {
+		t.Errorf("/userinfo email=%v want alice@example.com (scope-driven release must be unaffected)", got)
+	}
+
+	// Exit path 3 — the refresh exchange, which reads the same grant
+	// on every rotation and is where an unguarded projection would
+	// keep leaking indefinitely.
+	refreshed := postRefreshToken(t, tk, tok.RefreshToken, rp.ID, secret)
+	if refreshed.StatusCode != http.StatusOK {
+		t.Fatalf("/token refresh status=%d body=%v", refreshed.StatusCode, refreshed.Raw)
+	}
+	if refreshed.IDToken == "" {
+		t.Fatal("refresh did not return id_token")
+	}
+	if got, ok := decodeScenarioJWTClaims(t, refreshed.IDToken)["name"]; ok {
+		t.Errorf("refresh-derived id_token released name=%v with the claims parameter disabled", got)
+	}
+
+	// The payload is silenced, not erased: it remains the record of
+	// what the user consented to, so re-enabling the option restores
+	// the projection rather than resurrecting a lost grant.
+	stored, err := tk.Store.Grants().Find(ctx, grant.ID)
+	if err != nil {
+		t.Fatalf("Grants.Find: %v", err)
+	}
+	if authorize.DecodeClaimsFromGrant(stored.Claims) == nil {
+		t.Error("grant lost its §5.5 payload; the toggle must silence the projection, not erase consent")
+	}
 }

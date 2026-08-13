@@ -412,7 +412,7 @@ func TestScenario_REV_012_ClientCredentialsRevokeNoHint(t *testing.T) {
 	}
 
 	tk := testkit.NewProvider(t,
-		testkit.WithOptions(
+		testkit.WithOptions(scenariokit.WithClientCredentials(),
 			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
 			op.WithFeature(feature.Revoke),
 			op.WithFeature(feature.Introspect),
@@ -944,6 +944,7 @@ func mintRevocationClientCredentialsToken(t *testing.T, idPrefix string) (*testk
 
 	tk := testkit.NewProvider(t,
 		testkit.WithOptions(
+			scenariokit.WithClientCredentials(),
 			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
 			op.WithFeature(feature.Revoke),
 			op.WithFeature(feature.Introspect),

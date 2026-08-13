@@ -147,6 +147,30 @@ func makeDPoPProof(t *testing.T, key dpopKey, opts dpopProofOpts) string {
 	return tok
 }
 
+// makeDPoPProofRawClaims signs a proof from a caller-supplied claim map
+// instead of [dpopProofOpts]. It exists for the claim-type scenarios:
+// [dpopProofOpts] models every claim as a Go string, so a proof whose
+// jti is a number or an object — the shape RFC 9449 §4.2 forbids — can
+// only be built by handing the serialiser the raw map.
+func makeDPoPProofRawClaims(t *testing.T, key dpopKey, claims map[string]any) string {
+	t.Helper()
+	signerOpts := (&josev4.SignerOptions{}).
+		WithType(josev4.ContentType("dpop+jwt")).
+		WithHeader("jwk", key.jwk)
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.ES256, Key: key.priv},
+		signerOpts,
+	)
+	if err != nil {
+		t.Fatalf("makeDPoPProofRawClaims: NewSigner: %v", err)
+	}
+	tok, err := jwt.Signed(signer).Claims(claims).Serialize()
+	if err != nil {
+		t.Fatalf("makeDPoPProofRawClaims: Serialize: %v", err)
+	}
+	return tok
+}
+
 // dpopFixture bundles a DPoP-enabled testkit Provider with a registered
 // confidential client suitable for /token redemptions. The fixture pins
 // testkit.WithClock to dpopAnchor so proof iat values are deterministic
@@ -429,6 +453,20 @@ func expectTokenError(t *testing.T, resp *http.Response, wantCode string) map[st
 	return body
 }
 
+// expectTokenErrorDetail asserts a 400 response carrying exactly the
+// supplied OAuth error code and error_description. The DPoP proof
+// failures share a small closed set of descriptions, and the catalog
+// rows quote them verbatim, so binding the exact string is what keeps a
+// row from drifting away from the wire it claims to describe.
+func expectTokenErrorDetail(t *testing.T, resp *http.Response, wantCode, wantDesc string) map[string]any {
+	t.Helper()
+	body := expectTokenError(t, resp, wantCode)
+	if got, _ := body["error_description"].(string); got != wantDesc {
+		t.Errorf("error_description=%q want %q (body=%v)", got, wantDesc, body)
+	}
+	return body
+}
+
 // decodeJWTPayload returns the parsed claims of a compact JWS. The DPoP
 // scenarios that need to inspect the issued access token's cnf claim
 // use this helper to stay on the public surface (no internal/tokens
@@ -580,13 +618,10 @@ func TestScenario_DPOP_006_BearerSchemeWithDPoPHeaderRejected(t *testing.T) {
 
 // TestScenario_DPOP_007_ProofTypMustBeDpopJwt verifies RFC 9449 §4.2:
 // the JOSE typ header on a DPoP proof MUST equal "dpop+jwt". Any other
-// value is rejected.
-//
-// v1.0 surfaces this on the wire as 400 invalid_request "DPoP proof
-// malformed" at /token (the catalog originally cited 401
-// invalid_dpop_proof + an upstream-specific error_description; the OP
-// collapses the malformed-proof family onto the OAuth invalid_request
-// envelope per internal/tokenendpoint/dpop.go).
+// value is rejected at /token with 400 invalid_request "DPoP proof
+// malformed" — the OP answers every proof-validation failure in the
+// OAuth invalid_request envelope shared by its other form-post
+// endpoints rather than the §7 invalid_dpop_proof code.
 //
 // Spec: RFC 9449 §4.2.
 func TestScenario_DPOP_007_ProofTypMustBeDpopJwt(t *testing.T) {
@@ -608,7 +643,7 @@ func TestScenario_DPOP_007_ProofTypMustBeDpopJwt(t *testing.T) {
 	}
 	resp := f.postToken(t, form, proof)
 	defer func() { _ = resp.Body.Close() }()
-	expectTokenError(t, resp, "invalid_request")
+	expectTokenErrorDetail(t, resp, "invalid_request", "DPoP proof malformed")
 }
 
 // TestScenario_DPOP_008_ProofAlgWhitelistEnforced is out-of-scope. The
@@ -659,41 +694,58 @@ func TestScenario_DPOP_011_ProofJwkRejectsSymmetricKey(t *testing.T) {
 }
 
 // TestScenario_DPOP_012_ProofRequiresJtiClaim verifies RFC 9449 §4.2:
-// a DPoP proof body MUST contain a "jti" claim. Omitting it is
-// rejected with 400 invalid_request "DPoP proof malformed" at /token.
-//
-// (The catalog row originally cited an upstream-specific error_description
-// "DPoP proof must have a jti string property"; v1.0 collapses every
-// parse-stage failure onto a single description to keep the surface
-// opaque per internal/dpop/proof.go.)
+// a DPoP proof body MUST carry a jti claim and that claim MUST be a
+// string. The claim is what makes a proof individually replayable-once,
+// so a JSON number or object in its place is rejected as firmly as its
+// absence: 400 invalid_request "DPoP proof malformed" at /token.
 //
 // Spec: RFC 9449 §4.2.
 func TestScenario_DPOP_012_ProofRequiresJtiClaim(t *testing.T) {
 	t.Parallel()
 
-	f := newDPoPFixture(t)
-	code, verifier := f.runFlow(t)
-	key := newDPoPKey(t)
-	proof := makeDPoPProof(t, key, dpopProofOpts{
-		method:  http.MethodPost,
-		htu:     f.tokenURL(),
-		omitJTI: true,
-	})
-	form := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {f.redirect},
-		"code_verifier": {verifier},
+	cases := []struct {
+		name string
+		// jti is placed verbatim in the claim set; a nil value omits
+		// the claim entirely.
+		jti any
+	}{
+		{name: "absent", jti: nil},
+		{name: "number", jti: 12345},
+		{name: "object", jti: map[string]any{"value": "j-1"}},
+		{name: "array", jti: []any{"j-1"}},
 	}
-	resp := f.postToken(t, form, proof)
-	defer func() { _ = resp.Body.Close() }()
-	expectTokenError(t, resp, "invalid_request")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newDPoPFixture(t)
+			code, verifier := f.runFlow(t)
+			claims := map[string]any{
+				"htm": http.MethodPost,
+				"htu": f.tokenURL(),
+				"iat": dpopAnchor.Unix(),
+			}
+			if tc.jti != nil {
+				claims["jti"] = tc.jti
+			}
+			proof := makeDPoPProofRawClaims(t, newDPoPKey(t), claims)
+			form := url.Values{
+				"grant_type":    {"authorization_code"},
+				"code":          {code},
+				"redirect_uri":  {f.redirect},
+				"code_verifier": {verifier},
+			}
+			resp := f.postToken(t, form, proof)
+			defer func() { _ = resp.Body.Close() }()
+			expectTokenErrorDetail(t, resp, "invalid_request", "DPoP proof malformed")
+		})
+	}
 }
 
 // TestScenario_DPOP_013_ProofHtmMustMatchMethod verifies RFC 9449
-// §4.3: the proof "htm" claim MUST equal the request method. A
-// mismatch surfaces on the wire as 400 invalid_request "DPoP proof
-// does not bind to this request" at /token.
+// §4.3: the proof htm claim MUST equal the request method. A mismatch
+// is rejected with 400 invalid_request "DPoP proof does not bind to
+// this request" at /token.
 //
 // Spec: RFC 9449 §4.3.
 func TestScenario_DPOP_013_ProofHtmMustMatchMethod(t *testing.T) {
@@ -716,35 +768,94 @@ func TestScenario_DPOP_013_ProofHtmMustMatchMethod(t *testing.T) {
 	}
 	resp := f.postToken(t, form, proof)
 	defer func() { _ = resp.Body.Close() }()
-	expectTokenError(t, resp, "invalid_request")
+	expectTokenErrorDetail(t, resp, "invalid_request", "DPoP proof does not bind to this request")
 }
 
 // TestScenario_DPOP_014_ProofHtuMustMatchURI verifies RFC 9449 §4.3:
-// the proof "htu" claim MUST equal the canonical request URL
-// (scheme + host + path; query / fragment stripped). A mismatched htu
-// is rejected with 400 invalid_request "DPoP proof does not bind to
-// this request" at /token.
+// the proof htu claim MUST identify the request target. Verification
+// compares canonical forms — scheme and host lower-cased, a default
+// port stripped, query and fragment removed — on both sides, which is
+// what §4.3 asks for: the query and fragment are ignored in the
+// comparison rather than making the proof invalid. A proof naming a
+// different host or path binds to nothing here and is rejected with
+// 400 invalid_request "DPoP proof does not bind to this request".
 //
 // Spec: RFC 9449 §4.3.
 func TestScenario_DPOP_014_ProofHtuMustMatchURI(t *testing.T) {
 	t.Parallel()
 
-	f := newDPoPFixture(t)
-	code, verifier := f.runFlow(t)
-	key := newDPoPKey(t)
-	proof := makeDPoPProof(t, key, dpopProofOpts{
-		method: http.MethodPost,
-		htu:    "https://attacker.example/token",
+	t.Run("mismatched target is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name string
+			htu  string
+		}{
+			{name: "different host", htu: "https://attacker.example/token"},
+			{name: "different path", htu: "https://attacker.example/introspect"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				f := newDPoPFixture(t)
+				code, verifier := f.runFlow(t)
+				proof := makeDPoPProof(t, newDPoPKey(t), dpopProofOpts{
+					method: http.MethodPost,
+					htu:    tc.htu,
+				})
+				form := url.Values{
+					"grant_type":    {"authorization_code"},
+					"code":          {code},
+					"redirect_uri":  {f.redirect},
+					"code_verifier": {verifier},
+				}
+				resp := f.postToken(t, form, proof)
+				defer func() { _ = resp.Body.Close() }()
+				expectTokenErrorDetail(t, resp, "invalid_request",
+					"DPoP proof does not bind to this request")
+			})
+		}
 	})
-	form := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {f.redirect},
-		"code_verifier": {verifier},
-	}
-	resp := f.postToken(t, form, proof)
-	defer func() { _ = resp.Body.Close() }()
-	expectTokenError(t, resp, "invalid_request")
+
+	// The canonicalisation is symmetric: a query or fragment on either
+	// side drops out before the comparison, so these proofs still name
+	// the same target and the redemption succeeds.
+	t.Run("query and fragment are ignored", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name      string
+			htuSuffix string
+		}{
+			{name: "htu carries a query", htuSuffix: "?foo=bar"},
+			{name: "htu carries a fragment", htuSuffix: "#section"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				f := newDPoPFixture(t)
+				code, verifier := f.runFlow(t)
+				proof := makeDPoPProof(t, newDPoPKey(t), dpopProofOpts{
+					method: http.MethodPost,
+					htu:    f.tokenURL() + tc.htuSuffix,
+				})
+				form := url.Values{
+					"grant_type":    {"authorization_code"},
+					"code":          {code},
+					"redirect_uri":  {f.redirect},
+					"code_verifier": {verifier},
+				}
+				resp := f.postToken(t, form, proof)
+				defer func() { _ = resp.Body.Close() }()
+				if resp.StatusCode != http.StatusOK {
+					body := dpopJSON(t, resp)
+					t.Fatalf("status=%d want 200 (body=%v)", resp.StatusCode, body)
+				}
+			})
+		}
+	})
 }
 
 // TestScenario_DPOP_015_IatFreshnessWindowEnforced verifies RFC 9449
@@ -759,28 +870,41 @@ func TestScenario_DPOP_014_ProofHtuMustMatchURI(t *testing.T) {
 func TestScenario_DPOP_015_IatFreshnessWindowEnforced(t *testing.T) {
 	t.Parallel()
 
-	f := newDPoPFixture(t)
-	code, verifier := f.runFlow(t)
-	key := newDPoPKey(t)
-	// 10 minutes ahead: well outside the symmetric ±60s default window.
-	proof := makeDPoPProof(t, key, dpopProofOpts{
-		method: http.MethodPost,
-		htu:    f.tokenURL(),
-		iat:    dpopAnchor.Add(10 * time.Minute),
-	})
-	form := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {f.redirect},
-		"code_verifier": {verifier},
+	// The window is symmetric, so a proof minted in the future is as
+	// stale as one minted in the past; ±10 minutes clears the ±60s
+	// default in both directions.
+	cases := []struct {
+		name   string
+		offset time.Duration
+	}{
+		{name: "future", offset: 10 * time.Minute},
+		{name: "past", offset: -10 * time.Minute},
 	}
-	resp := f.postToken(t, form, proof)
-	body := expectTokenError(t, resp, "invalid_request")
-	if got := resp.Header.Get("DPoP-Nonce"); got != "" {
-		t.Errorf("DPoP-Nonce=%q want empty (no nonce source configured)", got)
-	}
-	if desc, _ := body["error_description"].(string); !strings.Contains(strings.ToLower(desc), "iat") {
-		t.Errorf("error_description=%q want iat-window mention", desc)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newDPoPFixture(t)
+			code, verifier := f.runFlow(t)
+			proof := makeDPoPProof(t, newDPoPKey(t), dpopProofOpts{
+				method: http.MethodPost,
+				htu:    f.tokenURL(),
+				iat:    dpopAnchor.Add(tc.offset),
+			})
+			form := url.Values{
+				"grant_type":    {"authorization_code"},
+				"code":          {code},
+				"redirect_uri":  {f.redirect},
+				"code_verifier": {verifier},
+			}
+			resp := f.postToken(t, form, proof)
+			defer func() { _ = resp.Body.Close() }()
+			expectTokenErrorDetail(t, resp, "invalid_request",
+				"DPoP proof iat outside acceptable window")
+			if got := resp.Header.Get("DPoP-Nonce"); got != "" {
+				t.Errorf("DPoP-Nonce=%q want empty (no nonce source configured)", got)
+			}
+		})
 	}
 }
 
@@ -911,13 +1035,11 @@ func TestScenario_DPOP_021_AthClaimRequiredAtResource(t *testing.T) {
 	t.Skip("out-of-scope: DPOP-021 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_DPOP_022_MalformedHeaderAtTokenRejected verifies that
-// a malformed DPoP header value at /token is rejected. The catalog
-// originally cited 400 invalid_dpop_proof + an upstream description; v1.0
-// surfaces this as 400 invalid_request "DPoP proof malformed" via
-// internal/tokenendpoint/dpop.go (the wire code is collapsed onto
-// the OAuth invalid_request envelope, which is what every other
-// /token failure also uses).
+// TestScenario_DPOP_022_MalformedHeaderAtTokenRejected verifies that a
+// malformed DPoP header value at /token is rejected with 400
+// invalid_request "DPoP proof malformed" — the same envelope every
+// other proof-validation failure uses, so a client cannot tell the
+// parse stage apart from the claim stage.
 //
 // Spec: RFC 9449 §5.
 func TestScenario_DPOP_022_MalformedHeaderAtTokenRejected(t *testing.T) {
@@ -936,10 +1058,7 @@ func TestScenario_DPOP_022_MalformedHeaderAtTokenRejected(t *testing.T) {
 	// before any signature work is attempted.
 	resp := f.postToken(t, form, "not.a.jwt")
 	defer func() { _ = resp.Body.Close() }()
-	body := expectTokenError(t, resp, "invalid_request")
-	if desc, _ := body["error_description"].(string); !strings.Contains(strings.ToLower(desc), "malformed") {
-		t.Errorf("error_description=%q want malformed mention", desc)
-	}
+	expectTokenErrorDetail(t, resp, "invalid_request", "DPoP proof malformed")
 }
 
 // TestScenario_DPOP_023_InvalidNonceAtUserinfoChallenge is out-of-
@@ -1900,7 +2019,7 @@ func TestScenario_DPOP_046_ClientCredentialsBinding(t *testing.T) {
 	clock := dpopFixedClock{t: dpopAnchor}
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithFeature(feature.DPoP)),
+		testkit.WithOptions(scenariokit.WithClientCredentials(), op.WithFeature(feature.DPoP)),
 	)
 	const clientID = "rp-dpop-cc"
 	const secret = "rp-dpop-cc-secret" //nolint:gosec // test fixture: not a real credential.
@@ -1965,14 +2084,11 @@ func TestScenario_DPOP_046_ClientCredentialsBinding(t *testing.T) {
 }
 
 // TestScenario_DPOP_047_TokenEndpointErrorShape verifies RFC 9449
-// §5.2: an invalid DPoP header value at /token is rejected with a
-// 400 JSON envelope. v1.0 collapses the malformed-proof family onto
-// the OAuth invalid_request envelope (per internal/tokenendpoint/dpop.go;
-// the catalog originally cited invalid_dpop_proof + an upstream
-// description, but the wire shape on v1.0 is invalid_request +
-// "DPoP proof malformed"). The row's hard contract is the JSON
-// envelope at /token; the exact code/description divergence is
-// covered by DPOP-022.
+// §5.2: an invalid DPoP header value at /token is answered with a 400
+// JSON envelope carrying invalid_request and "DPoP proof malformed".
+// The row is the wire-shape contract for the whole family — status,
+// Content-Type, code and description together — so it pins the exact
+// strings rather than just the presence of an error key.
 //
 // Spec: RFC 9449 §5.2.
 func TestScenario_DPOP_047_TokenEndpointErrorShape(t *testing.T) {
@@ -1988,13 +2104,10 @@ func TestScenario_DPOP_047_TokenEndpointErrorShape(t *testing.T) {
 	}
 	resp := f.postToken(t, form, "not.a.valid.proof")
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status=%d want 400", resp.StatusCode)
-	}
 	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Errorf("Content-Type=%q want application/json prefix", got)
 	}
-	body := dpopJSON(t, resp)
+	body := expectTokenErrorDetail(t, resp, "invalid_request", "DPoP proof malformed")
 	if _, ok := body["error"].(string); !ok {
 		t.Errorf("body missing 'error' key (body=%v)", body)
 	}

@@ -719,12 +719,12 @@ rows:
     severity: P0
     spec: RFC 7515 §4.1.4
     behaviour: |
-      The OP does NOT use the JWS "kid" header to filter the
-      registered JWKS — verifySignature
-      (internal/clientauth/assertion.go:153) iterates every key in the
-      set and accepts the first one whose Verify succeeds. So
-      "kid mismatch" only manifests when both the kid AND the
-      underlying key material map to no registered entry; the
+      A "kid" the registered JWKS does not list is refused outright:
+      internal/clientauth.verifySignature narrows the candidate set to
+      that kid and does NOT fall back to trialling every registered
+      key, because trialling would restore the signature-verification
+      amplification the kid gate exists to remove. An assertion with no
+      kid header is trialled against the whole set. Either way the
       verifier rejects with the canonical 401 invalid_client
       "client authentication failed" description. The response
       MUST NOT echo "no matching key" — that wording would let a
@@ -753,7 +753,8 @@ rows:
     behaviour: |
       iat / nbf / exp comparisons tolerate small clock skew via
       PrivateKeyJWTVerifier.Leeway. The implementation defaults to
-      60 seconds when zero is passed (assertion.go:118-120), so an
+      60 seconds when zero is passed
+      (internal/clientauth.PrivateKeyJWTVerifier.Verify), so an
       assertion whose iat lands far outside the 60-second window —
       e.g. 5 minutes in the future — is rejected with 401
       invalid_client. The OP does not expose a public knob to widen
@@ -789,7 +790,8 @@ rows:
     behaviour: |
       The OP advertises
       token_endpoint_auth_signing_alg_values_supported = [RS256,
-      PS256, ES256, EdDSA] (internal/discovery/build.go:349) and the
+      PS256, ES256, EdDSA] (internal/discovery.applyEndpointAuthMirrors)
+      and the
       JOSE parser
       (internal/jose/jose.go's allowedV4Algorithms) enforces the
       same list. An assertion outside the list — HS256 is the
@@ -820,7 +822,7 @@ rows:
       treats CA validation success (equivalent to certificateAuthorized
       returning true) as a precondition for authentication.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not expose mtls.ProxyConfig publicly
+    out_of_scope_reason: "Certificate retrieval and chain validation are both shipped and configurable (op.WithMTLSProxy names the trusted forwarding header and its CIDR allow-list; op.WithMTLSRootCAs supplies the anchors the OP re-checks the leaf against), but they feed RFC 8705 §3 token binding, not §2 authentication. There is no authentication step for a validated certificate to be a precondition of: tls_client_auth is not selectable as a token_endpoint_auth_method. Revisit when that method ships."
 
   - id: CA-MTLS-PKI-02
     severity: P0
@@ -831,7 +833,7 @@ rows:
       tls_client_auth_san_ip, or tls_client_auth_san_email; declaring
       more than one yields invalid_client_metadata.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
 
   - id: CA-MTLS-PKI-03
     severity: P0
@@ -841,7 +843,7 @@ rows:
       corresponding SAN/Subject DN field in the presented certificate;
       mismatch yields 401 invalid_client.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
 
   - id: CA-MTLS-PKI-04
     severity: P0
@@ -850,7 +852,7 @@ rows:
       When no client certificate is forwarded by the proxy, the OP
       returns 401 invalid_client.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
 
   - id: CA-MTLS-PKI-05
     severity: P0
@@ -860,7 +862,7 @@ rows:
       x-ssl-client-verify header is not SUCCESS), the OP returns
       401 invalid_client.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
 
   - id: CA-MTLS-PKI-06
     severity: P0
@@ -875,8 +877,8 @@ rows:
       before byte comparison.
     notes: |
       Naive byte comparison is unsafe; canonicalisation is mandatory.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    status: active
+    covered_by: internal/mtls.TestVerifyTLSClientAuth_SubjectDN_RFC4514Reorder
 
   - id: CA-MTLS-PKI-07
     severity: P0
@@ -885,8 +887,8 @@ rows:
       tls_client_auth_san_dns comparison distinguishes IDN A-labels
       from U-labels and matches ASCII case-insensitively per DNS
       rules.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    status: active
+    covered_by: internal/mtls.TestVerifyTLSClientAuth_SANDNS
 
   - id: CA-MTLS-PKI-08
     severity: P0
@@ -894,8 +896,8 @@ rows:
     behaviour: |
       tls_client_auth_san_uri MUST be exact-match including path,
       query, and fragment.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    status: active
+    covered_by: internal/mtls.TestVerifyTLSClientAuth_SANURI
 
   - id: CA-MTLS-PKI-09
     severity: P1
@@ -903,8 +905,8 @@ rows:
     behaviour: |
       tls_client_auth_san_ip comparison normalises IPv4 / IPv6
       strings (e.g. RFC 5952 IPv6 compression) before comparing.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    status: active
+    covered_by: internal/mtls.TestVerifyTLSClientAuth_SANIP
 
   - id: CA-MTLS-PKI-10
     severity: P1
@@ -912,8 +914,8 @@ rows:
     behaviour: |
       tls_client_auth_san_email follows rfc822Name case rules:
       local-part is case-sensitive, domain is case-insensitive.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    status: active
+    covered_by: internal/mtls.TestVerifyTLSClientAuth_SANEmailCaseFold
 
   - id: CA-MTLS-PKI-11
     severity: P1
@@ -923,7 +925,7 @@ rows:
       certificateAuthorized(ctx) so certificate retrieval and trust
       anchoring stay framework-agnostic.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not expose per-request certificate hooks under these names or any other. Certificate retrieval is internal and configured declaratively (op.WithMTLSProxy for the forwarded-header path, op.WithMTLSRootCAs for the trust anchors), which keeps the OP framework-agnostic by a different route than the callback shape this row describes. The row asserts an API design the library deliberately does not have, so there is nothing to observe rather than something unreachable."
 
   - id: CA-MTLS-PKI-12
     severity: P1
@@ -932,7 +934,7 @@ rows:
       When mTLS is enabled, discovery advertises
       mtls_endpoint_aliases.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "Duplicate: mtls_endpoint_aliases advertisement is asserted by CA-DISC-07, which is active. RFC 8705 §5 discovery is part of the shipped §3 certificate-binding feature and is reachable through op.WithFeature(feature.MTLS) with op.WithDiscoveryMetadata; this row restates it from the §2 client-authentication side, where the OP has no surface."
 
   - id: CA-MTLS-SS-01
     severity: P0
@@ -942,8 +944,8 @@ rows:
       presented client certificate matches a registered JWK's
       x5t#S256 (or the thumbprint computed from that JWK's public
       key) in the client's jwks or jwks_uri.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    status: active
+    covered_by: internal/mtls.TestVerifySelfSigned_HappyPath
 
   - id: CA-MTLS-SS-02
     severity: P0
@@ -952,7 +954,7 @@ rows:
       When the cached jwks_uri document is stale, the OP refetches
       and re-verifies before failing.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
 
   - id: CA-MTLS-SS-03
     severity: P0
@@ -961,7 +963,7 @@ rows:
       Certificates carrying RSA, EC (P-256, P-384, P-521), or Ed25519
       keys MUST be accepted.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2.2 self-signed client authentication (self_signed_tls_client_auth is not selectable as a token_endpoint_auth_method), so the accept-set has no wire surface. The verifier behind it accepts EC and RSA certificates (mtls.VerifySelfSignedTLSClientAuth, exercised by internal/mtls unit tests) but has no Ed25519 case, so this row is NOT delegated: binding it would claim an accept-set wider than what is asserted anywhere. Revisit when the method ships, and cover Ed25519 then."
 
   - id: CA-MTLS-SS-04
     severity: P0
@@ -970,7 +972,7 @@ rows:
       When no key in the registered jwks matches the certificate
       thumbprint, the OP returns 401 invalid_client.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
 
   - id: CA-MTLS-SS-05
     severity: P0
@@ -979,7 +981,7 @@ rows:
       When the certificate cannot be obtained from the proxy, the OP
       returns 401 invalid_client.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
 
   - id: CA-MTLS-SS-06
     severity: P1
@@ -989,7 +991,7 @@ rows:
       self_signed_tls_client_auth registration; mixed registration
       yields invalid_client_metadata.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose mtls.ProxyConfig as a public option (op/op.go:527 — \"embedders that need the reverse-proxy header path will land a configuration knob on a follow-up\"); the testkit does not provide a TLS-terminated server fixture for direct mTLS handshakes either. RFC 8705 §2.1 PKI-mode (or §2.2 self-signed) cert plumbing is therefore unobservable at the v1.0 wire. Reconsider when WithMTLSProxyHeader / WithMTLSTrustedProxies (or testkit.WithTLSClientAuth) ships."
+    out_of_scope_reason: "The OP does not offer RFC 8705 §2 mutual-TLS client authentication. tls_client_auth and self_signed_tls_client_auth are not selectable as a token_endpoint_auth_method: discovery never lists them, and both static seeding and dynamic registration reject them (op.AuthTLSClientAuth / op.AuthSelfSignedTLSClientAuth). No endpoint reaches mtls.VerifyClientAuth, so the behaviour has no wire surface. RFC 8705 §3 certificate-BOUND tokens are a separate shipped feature (op.WithFeature(feature.MTLS), configured by op.WithMTLSProxy / op.WithMTLSRootCAs) and are covered by CA-DISC-07 and the mtls_certificate_binding rows. Revisit when tls_client_auth ships as a token_endpoint_auth_method."
 
   - id: CA-ATT-01
     severity: P0

@@ -52,8 +52,8 @@ var skippedDirs = map[string]bool{
 // The second kind passes review, passes CI, and then fails on its
 // expiry date, usually in a package nobody has touched in years.
 //
-// The check reads that distinction off the year alone: a literal more
-// than a year ahead is a horizon, and a horizon has to sit beyond
+// The check reads that distinction off the year alone: a literal dated
+// past the current year is a horizon, and a horizon has to sit beyond
 // [horizonYears] so it can never arrive. Anything in between is the
 // shape that turns into a scheduled failure.
 //
@@ -68,7 +68,6 @@ func TestNoExpiringDateLiterals(t *testing.T) {
 	// The comparison uses the real wall clock deliberately: the whole
 	// question is what today's date does to these literals.
 	now := time.Now().UTC().Year()
-	nearFuture := now + 1
 	required := now + horizonYears
 
 	var findings []string
@@ -90,7 +89,13 @@ func TestNoExpiringDateLiterals(t *testing.T) {
 			return ferr
 		}
 		for _, y := range years {
-			if y.year <= nearFuture || y.year >= required {
+			// The band is left-closed at the current year: a literal
+			// dated to next year is the archetypal one-year horizon (a
+			// certificate NotAfter, a one-year token exp), and exempting
+			// it left exactly that shape permanently invisible. Only a
+			// year at or before the one the check runs in is safe,
+			// because it can never move back into the future.
+			if y.year <= now || y.year >= required {
 				continue
 			}
 			rel, rerr := filepath.Rel(root, path)

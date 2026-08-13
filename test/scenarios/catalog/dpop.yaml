@@ -19,6 +19,14 @@ description: |
   authorization-code, refresh, device, CIBA and client-credentials
   grants for both confidential and public clients.
 
+  Proof-validation failures at /token and /par surface as the OAuth
+  invalid_request envelope rather than the invalid_dpop_proof code of
+  RFC 9449 §7, so relying-party libraries key off the same code class
+  every other form-post endpoint uses. The §8 nonce challenge keeps its
+  own use_dpop_nonce code because a client must distinguish "retry with
+  the nonce in the DPoP-Nonce response header" from a terminal failure.
+  Rows below record the wire result the OP actually emits.
+
 rows:
   - id: DPOP-001
     severity: P1
@@ -86,9 +94,8 @@ rows:
     spec: RFC 9449 §4.2
     behaviour: |
       The proof JWT typ header MUST equal dpop+jwt. Any other value
-      (e.g. JWT, secevent+jwt) is rejected with 401
-      invalid_dpop_proof and an "unexpected typ JWT header value"
-      detail.
+      (e.g. JWT, secevent+jwt) is rejected at /token with 400
+      invalid_request "DPoP proof malformed".
     status: active
 
   - id: DPOP-008
@@ -138,8 +145,9 @@ rows:
     spec: RFC 9449 §4.2
     behaviour: |
       The proof JWT body MUST contain a string jti claim. A missing
-      or non-string jti is rejected with 401 invalid_dpop_proof
-      "DPoP proof must have a jti string property".
+      jti, and a jti carrying a number or an object in place of a
+      string, are rejected at /token with 400 invalid_request
+      "DPoP proof malformed".
     status: active
 
   - id: DPOP-013
@@ -147,17 +155,21 @@ rows:
     spec: RFC 9449 §4.3
     behaviour: |
       The proof htm claim MUST equal the current HTTP method. A
-      mismatch is rejected with 401 invalid_dpop_proof "DPoP proof
-      htm mismatch".
+      mismatch is rejected at /token with 400 invalid_request "DPoP
+      proof does not bind to this request".
     status: active
 
   - id: DPOP-014
     severity: P0
     spec: RFC 9449 §4.3
     behaviour: |
-      The proof htu claim MUST equal the canonical resource URI
-      (scheme + host + path, no query, no fragment). A mismatch is
-      rejected with 401 invalid_dpop_proof "DPoP proof htu mismatch".
+      The proof htu claim MUST identify the request target. Proof and
+      request URL are both folded to canonical form — scheme and host
+      lower-cased, a default port stripped, query and fragment
+      removed — before they are compared, so a proof whose htu carries
+      a query or fragment still matches the same target. A mismatch on
+      scheme, host or path is rejected at /token with 400
+      invalid_request "DPoP proof does not bind to this request".
     status: active
 
   - id: DPOP-015
@@ -165,9 +177,9 @@ rows:
     spec: RFC 9449 §4.3 / §11.1
     behaviour: |
       When the nonce mechanism is disabled, a proof iat outside the
-      configured freshness window (in either direction) is rejected
-      with 401 invalid_dpop_proof "DPoP proof iat is not recent
-      enough"; no DPoP-Nonce header is emitted.
+      configured freshness window (in either direction) is rejected at
+      /token with 400 invalid_request "DPoP proof iat outside
+      acceptable window"; no DPoP-Nonce header is emitted.
     status: active
 
   - id: DPOP-016
@@ -235,7 +247,7 @@ rows:
     spec: RFC 9449 §5
     behaviour: |
       A malformed DPoP header value at /token is rejected with 400
-      invalid_dpop_proof "invalid DPoP key binding".
+      invalid_request "DPoP proof malformed".
     status: active
 
   - id: DPOP-023
@@ -466,9 +478,10 @@ rows:
     severity: P2
     spec: RFC 9449 §5.2
     behaviour: |
-      An invalid DPoP header at /token returns HTTP 400 with body
-      {"error":"invalid_dpop_proof","error_description":"invalid DPoP
-      key binding"}.
+      An invalid DPoP header at /token returns HTTP 400 with
+      Content-Type application/json and body
+      {"error":"invalid_request","error_description":"DPoP proof
+      malformed"}.
     status: active
 
   - id: DPOP-048

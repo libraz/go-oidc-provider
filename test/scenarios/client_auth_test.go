@@ -806,7 +806,7 @@ func TestScenario_CA_NONE_02_NoneClientWithSecretRejected(t *testing.T) {
 func TestScenario_CA_NONE_03_NoneClientNotAllowedForConfidentialFlows(t *testing.T) {
 	t.Parallel()
 
-	tk := testkit.NewProvider(t)
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials()))
 	const clientID = "ca-none-03"
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:           clientID,
@@ -1825,18 +1825,15 @@ func TestScenario_CA_PKJWT_05_KeyResolvedFromJWKSWithRefetch(t *testing.T) {
 }
 
 // TestScenario_CA_PKJWT_06_NoMatchingKidRejected drives the
-// kid-resolution unhappy path. The OP does NOT use the JWS "kid"
-// header to filter the candidate JWKS — verifySignature
-// (internal/clientauth/assertion.go:153) iterates every key in the
-// registered set and accepts the first one whose Verify succeeds. So
-// "kid mismatch" only manifests when neither (a) the kid AND (b) the
-// underlying key material map to a registered entry. The test drives
-// that combined-mismatch case: the assertion is signed with an
-// unregistered keypair AND stamped with a kid the registered JWKS
-// does not list. No registered key verifies, and the OP collapses
-// onto the generic 401 invalid_client shape; the description does
-// not echo "no matching key" so a probe of kid values cannot
-// enumerate the registered key set.
+// kid-resolution unhappy path. A kid the registered JWKS does not
+// list is refused outright: the verifier narrows the candidate set to
+// that kid rather than trialling every registered key. The test
+// drives the doubly-unregistered case — the assertion is signed with
+// an unregistered keypair AND stamped with an unlisted kid — so the
+// rejection holds whichever layer is consulted first. The OP
+// collapses onto the generic 401 invalid_client shape; the
+// description does not echo "no matching key" so a probe of kid
+// values cannot enumerate the registered key set.
 //
 // Spec: RFC 7515 §4.1.4.
 func TestScenario_CA_PKJWT_06_NoMatchingKidRejected(t *testing.T) {
@@ -1852,10 +1849,8 @@ func TestScenario_CA_PKJWT_06_NoMatchingKidRejected(t *testing.T) {
 
 	claims := pkjwtClaims(clientID, tokenURL, now)
 	// Forge with an unregistered keypair and a kid that does not
-	// appear in the client's JWKS. Both layers of mismatch — kid AND
-	// key material — must miss for the verifier to reject; signing
-	// with the registered private key would succeed regardless of the
-	// kid header.
+	// appear in the client's JWKS, so neither the kid lookup nor the
+	// key material can resolve to a registered entry.
 	forged := newPKJWTKeypair(t, "ca-pkjwt-06-forged")
 	assertion := signedClientAssertionWithKID(t, forged, "ca-pkjwt-06-no-such-kid", claims)
 	resp := postPKJWTAssertion(t, tk, assertion, nil)
@@ -1891,21 +1886,27 @@ func TestScenario_CA_PKJWT_07_JtiSingleUseEnforced(t *testing.T) {
 	requireInvalidClient(t, second, "replay", "jti")
 }
 
-// TestScenario_CA_PKJWT_08_ClockToleranceDefaultZero pins the
-// clock-skew window the OP applies to assertion iat / exp comparisons.
+// TestScenario_CA_PKJWT_08_ClockToleranceDefaults60s pins the size of
+// the clock-skew window the OP applies to assertion iat comparisons.
 // PrivateKeyJWTVerifier.Leeway defaults to 60 seconds when zero is
-// passed (assertion.go:118-120), so an assertion whose iat lands
-// significantly outside that window — here 5 minutes in the future —
-// is rejected. The test wires a fixed [op.Clock] so the comparison is
-// deterministic; without it the verifier reads time.Now() and the
-// "future" claim could pass on slow hosts.
+// passed, and it mirrors the JAR and id_token verifier leeway so one
+// skew budget applies to every inbound assertion the OP verifies.
 //
-// The default tolerance is 60 seconds, not zero — it mirrors the JAR
-// and id_token verifier leeway so one clock-skew budget applies to
-// every inbound assertion the OP verifies.
+// Both sides of the boundary are exercised, because only the pair
+// pins the number. A rejection on its own is satisfied by any leeway
+// at all — including zero, the regression the row exists to catch —
+// so an assertion just inside the window has to be accepted for the
+// "60 seconds" in the row to mean anything. Conversely the acceptance
+// alone is satisfied by an unbounded window, so an assertion just
+// outside has to be refused.
+//
+// The offsets sit 30 seconds either side of the boundary rather than
+// one second off it: the fixed [op.Clock] makes the comparison exact,
+// and a wider margin keeps the test from turning into an assertion
+// about rounding.
 //
 // Spec: RFC 7523 §3 / RFC 7519 §4.1.4.
-func TestScenario_CA_PKJWT_08_ClockToleranceDefaultZero(t *testing.T) {
+func TestScenario_CA_PKJWT_08_ClockToleranceDefaults60s(t *testing.T) {
 	t.Parallel()
 
 	const clientID = "ca-pkjwt-08"
@@ -1918,15 +1919,22 @@ func TestScenario_CA_PKJWT_08_ClockToleranceDefaultZero(t *testing.T) {
 
 	tokenURL, _ := pkjwtAudiences(tk)
 
-	// iat is 5 minutes ahead of the OP's clock — well past the
-	// 60-second default leeway. The verifier rejects with
-	// ErrAssertionMalformed which the HTTP layer maps to 401
-	// invalid_client.
-	claims := pkjwtClaims(clientID, tokenURL, now.Add(5*time.Minute))
-	claims["jti"] = "ca-pkjwt-08-future-iat"
-	assertion := signedClientAssertion(t, kp, claims)
-	resp := postPKJWTAssertion(t, tk, assertion, nil)
-	requireInvalidClient(t, resp, "iat", "future", "skew")
+	// Inside the window. Client authentication succeeds, so the request
+	// proceeds to the grant and fails there on the deliberately fake
+	// code — 400 invalid_grant rather than 401 invalid_client. A leeway
+	// that regressed to zero rejects this assertion instead.
+	inWindow := pkjwtClaims(clientID, tokenURL, now.Add(30*time.Second))
+	inWindow["jti"] = "ca-pkjwt-08-iat-inside-window"
+	accepted := postPKJWTAssertion(t, tk, signedClientAssertion(t, kp, inWindow), nil)
+	requireAuthPassedFakeCode(t, accepted)
+
+	// Outside the window. The verifier rejects with
+	// ErrAssertionMalformed, which the HTTP layer maps to 401
+	// invalid_client. A leeway widened past 90 seconds accepts this one.
+	outOfWindow := pkjwtClaims(clientID, tokenURL, now.Add(90*time.Second))
+	outOfWindow["jti"] = "ca-pkjwt-08-iat-outside-window"
+	rejected := postPKJWTAssertion(t, tk, signedClientAssertion(t, kp, outOfWindow), nil)
+	requireInvalidClient(t, rejected, "iat", "future", "skew")
 }
 
 // TestScenario_CA_PKJWT_09_RegisteredAlgPinning is the per-client
@@ -2124,34 +2132,59 @@ func TestScenario_CA_MTLS_PKI_05_ProxyVerifyFailureRejected(t *testing.T) {
 	t.Skip("out-of-scope: CA-MTLS-PKI-05 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_CA_MTLS_PKI_06_SubjectDNCanonicalised is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_06_SubjectDNCanonicalised is a marker: the assertion for
+// CA-MTLS-PKI-06 lives outside the black-box suite because the rule it
+// states is a certificate-matching semantic with no wire surface of
+// its own. The catalog row delegates via covered_by.
+//
+// Asserted by: internal/mtls.TestVerifyTLSClientAuth_SubjectDN_RFC4514Reorder
 func TestScenario_CA_MTLS_PKI_06_SubjectDNCanonicalised(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-06 (see catalog out_of_scope_reason)")
+	t.Skip("delegated: CA-MTLS-PKI-06 is asserted by internal/mtls.TestVerifyTLSClientAuth_SubjectDN_RFC4514Reorder")
 }
 
-// TestScenario_CA_MTLS_PKI_07_SANDNSCaseAndIDNRules is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_07_SANDNSCaseAndIDNRules is a marker: the assertion for
+// CA-MTLS-PKI-07 lives outside the black-box suite because the rule it
+// states is a certificate-matching semantic with no wire surface of
+// its own. The catalog row delegates via covered_by.
+//
+// Asserted by: internal/mtls.TestVerifyTLSClientAuth_SANDNS
 func TestScenario_CA_MTLS_PKI_07_SANDNSCaseAndIDNRules(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-07 (see catalog out_of_scope_reason)")
+	t.Skip("delegated: CA-MTLS-PKI-07 is asserted by internal/mtls.TestVerifyTLSClientAuth_SANDNS")
 }
 
-// TestScenario_CA_MTLS_PKI_08_SANURIExactMatch is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_08_SANURIExactMatch is a marker: the assertion for
+// CA-MTLS-PKI-08 lives outside the black-box suite because the rule it
+// states is a certificate-matching semantic with no wire surface of
+// its own. The catalog row delegates via covered_by.
+//
+// Asserted by: internal/mtls.TestVerifyTLSClientAuth_SANURI
 func TestScenario_CA_MTLS_PKI_08_SANURIExactMatch(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-08 (see catalog out_of_scope_reason)")
+	t.Skip("delegated: CA-MTLS-PKI-08 is asserted by internal/mtls.TestVerifyTLSClientAuth_SANURI")
 }
 
-// TestScenario_CA_MTLS_PKI_09_SANIPNormalisation is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_09_SANIPNormalisation is a marker: the assertion for
+// CA-MTLS-PKI-09 lives outside the black-box suite because the rule it
+// states is a certificate-matching semantic with no wire surface of
+// its own. The catalog row delegates via covered_by.
+//
+// Asserted by: internal/mtls.TestVerifyTLSClientAuth_SANIP
 func TestScenario_CA_MTLS_PKI_09_SANIPNormalisation(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-09 (see catalog out_of_scope_reason)")
+	t.Skip("delegated: CA-MTLS-PKI-09 is asserted by internal/mtls.TestVerifyTLSClientAuth_SANIP")
 }
 
-// TestScenario_CA_MTLS_PKI_10_SANEmailRFC822CaseRules is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_PKI_10_SANEmailRFC822CaseRules is a marker: the assertion for
+// CA-MTLS-PKI-10 lives outside the black-box suite because the rule it
+// states is a certificate-matching semantic with no wire surface of
+// its own. The catalog row delegates via covered_by.
+//
+// Asserted by: internal/mtls.TestVerifyTLSClientAuth_SANEmailCaseFold
 func TestScenario_CA_MTLS_PKI_10_SANEmailRFC822CaseRules(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-PKI-10 (see catalog out_of_scope_reason)")
+	t.Skip("delegated: CA-MTLS-PKI-10 is asserted by internal/mtls.TestVerifyTLSClientAuth_SANEmailCaseFold")
 }
 
 // TestScenario_CA_MTLS_PKI_11_EmbedderCertificateHooksDelegated is OOS — see catalog out_of_scope_reason.
@@ -2166,10 +2199,15 @@ func TestScenario_CA_MTLS_PKI_12_DiscoveryAdvertisesMTLSAliases(t *testing.T) {
 	t.Skip("out-of-scope: CA-MTLS-PKI-12 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_CA_MTLS_SS_01_ThumbprintMatchesRegisteredJWK is OOS — see catalog out_of_scope_reason.
+// TestScenario_CA_MTLS_SS_01_ThumbprintMatchesRegisteredJWK is a marker: the assertion for
+// CA-MTLS-SS-01 lives outside the black-box suite because the rule it
+// states is a certificate-matching semantic with no wire surface of
+// its own. The catalog row delegates via covered_by.
+//
+// Asserted by: internal/mtls.TestVerifySelfSigned_HappyPath
 func TestScenario_CA_MTLS_SS_01_ThumbprintMatchesRegisteredJWK(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CA-MTLS-SS-01 (see catalog out_of_scope_reason)")
+	t.Skip("delegated: CA-MTLS-SS-01 is asserted by internal/mtls.TestVerifySelfSigned_HappyPath")
 }
 
 // TestScenario_CA_MTLS_SS_02_StaleJWKSURIRefetched is OOS — see catalog out_of_scope_reason.

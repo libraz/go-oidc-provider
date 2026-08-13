@@ -348,7 +348,7 @@ func TestScenario_ERR_020_BearerEndpointEmitsWWWAuthenticate(t *testing.T) {
 func TestScenario_ERR_021_BasicAuthFailureEmitsWWWAuthenticate(t *testing.T) {
 	t.Parallel()
 
-	tk := testkit.NewProvider(t)
+	tk := testkit.NewProvider(t, testkit.WithOptions(scenariokit.WithClientCredentials()))
 
 	form := strings.NewReader("grant_type=client_credentials")
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,

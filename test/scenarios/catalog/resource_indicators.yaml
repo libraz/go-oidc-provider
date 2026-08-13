@@ -178,8 +178,10 @@ rows:
       POST /device/auth with an unknown resource yields 400
       invalid_target with the description "resource indicator is
       missing, or unknown".
+    cross_refs:
+      - device_code#DEV-102
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not implement the OAuth 2.0 Device Authorization Grant (RFC 8628). The /token dispatcher (internal/tokenendpoint/handler.go: serve) only routes authorization_code, refresh_token, and client_credentials; urn:ietf:params:oauth:grant-type:device_code falls through to unsupported_grant_type. There is no /device/auth endpoint either. Tracked as a feature-level gap, not a resource-indicator gap."
+    out_of_scope_reason: "Duplicate: device_code#DEV-102 asserts this exact wire result — a /device_authorization request naming a resource outside the client's registered allowlist is rejected 400 invalid_target — and is active. The device authorization grant is shipped and routable (op.WithDeviceCodeGrant mounts /device_authorization, and the token dispatcher accepts urn:ietf:params:oauth:grant-type:device_code), so the exclusion is duplication, not absence."
 
   - id: RI-041
     severity: P0
@@ -189,8 +191,7 @@ rows:
       urn:ietf:params:oauth:grant-type:device_code MUST emit an
       access token whose aud and a refresh token whose resource
       reflect the resource supplied at /device/auth.
-    status: out-of-scope
-    out_of_scope_reason: "Same reason as RI-040: v1.0 ships no device authorization grant. The /token grant_type dispatcher (internal/tokenendpoint/handler.go: serve switch) does not handle urn:ietf:params:oauth:grant-type:device_code, so there is no AT mint path on which to assert RFC 8707 audience binding for the device flow."
+    status: active
 
   - id: RI-042
     severity: P1
@@ -198,8 +199,10 @@ rows:
     behaviour: |
       The default-resource path applies to the device flow as well,
       and refresh MUST preserve the resource.
+    cross_refs:
+      - device_code#DEV-102
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not implement the OAuth 2.0 Device Authorization Grant (RFC 8628) — see RI-040 / RI-041 OOS reasons. The /token grant_type dispatcher does not handle urn:ietf:params:oauth:grant-type:device_code, and there is no /device/auth endpoint. The default-resource flow this row asserts on top of the device flow has no v1.0 path; tracked as a feature-level gap on device_code, not a resource-indicator gap. Independently, defaultResource is also OOS (RI-001)."
+    out_of_scope_reason: "Two halves, one of which is genuinely absent: the OP exposes no defaultResource hook, the default-resource path this row extends has no configuration surface (see RI-001). The device flow itself is shipped, and the refresh half — a refresh exchange preserving the resource bound at authorization time — is asserted by RI-033 against the grant-agnostic refresh path. Revisit when a default-resource hook ships."
 
   - id: RI-043
     severity: P1
@@ -208,7 +211,7 @@ rows:
       useGrantedResource semantics MUST also apply to the device
       flow.
     status: out-of-scope
-    out_of_scope_reason: "Two missing prerequisites: (1) no device flow in v1.0 (RI-040 / RI-041 / RI-042 OOS for the same feature gap); (2) no useGrantedResource hook (RI-035 / RI-053 / RI-054 OOS). The cross-product asserted here has no v1.0 surface on either axis."
+    out_of_scope_reason: "The OP exposes no useGrantedResource hook (see RI-035 / RI-053 / RI-054), so the semantic this row extends has no configuration surface on any grant. The device flow is shipped and is not the obstacle."
 
   - id: RI-044
     severity: P1
@@ -217,7 +220,7 @@ rows:
       An explicit resource parameter at token exchange MUST be
       allowed and granted on the device flow.
     status: out-of-scope
-    out_of_scope_reason: "Same device-grant absence as RI-040 / RI-041 / RI-042: v1.0 does not implement RFC 8628 — no /device/auth endpoint, no urn:ietf:params:oauth:grant-type:device_code dispatch. Without an AT mint path bound to a device grant there is no surface on which to assert the explicit-resource-at-token-exchange semantic. Tracked as a feature-level gap."
+    out_of_scope_reason: "The OP does not accept an explicit resource parameter at token exchange on any grant: the resource is bound once at authorization time and read back from the code (see RI-036). The device flow is shipped and is not the obstacle; RFC 8707 §3 permits but does not require token-exchange-time resource selection."
 
   - id: RI-050
     severity: P0
@@ -225,19 +228,33 @@ rows:
     behaviour: |
       POST /backchannel with an unknown resource yields 400
       invalid_target.
+    cross_refs:
+      - ciba#CIBA-047
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not implement OIDC CIBA (no /backchannel endpoint, no urn:openid:params:grant-type:ciba dispatch). The CIBA-related profile selector op/profile.FAPICIBA exists but the grant itself is not wired; internal/backchannel/* is the unrelated Back-channel Logout subsystem (RP-initiated logout per OIDC RP-Initiated Logout / Back-Channel Logout spec). Tracked as a feature-level gap."
+    out_of_scope_reason: "Duplicate: ciba#CIBA-047 asserts this exact wire result — a /bc-authorize request naming a resource outside the client's registered allowlist is rejected 400 invalid_target — and is active. CIBA is shipped and routable (/bc-authorize is mounted and the token dispatcher accepts urn:openid:params:grant-type:ciba), so the exclusion is duplication, not absence."
 
   - id: RI-051
     severity: P0
     spec: OIDC CIBA + RFC 8707 §3
     behaviour: |
-      An allowed resource MUST produce an auth_req_id; the
-      subsequent grant_type=urn:openid:params:grant-type:ciba token
-      call MUST yield an access token whose aud equals the resource
-      and a refresh token whose resource equals the resource.
-    status: out-of-scope
-    out_of_scope_reason: "Same reason as RI-050: no CIBA grant in v1.0. There is no /backchannel auth_req_id issuance path, no urn:openid:params:grant-type:ciba grant_type in the /token dispatcher, and no AT mint helper bound to a CIBA grant record."
+      A grant_type=urn:openid:params:grant-type:ciba token call MUST
+      yield an access token whose aud equals the resource the
+      backchannel request registered, and a refresh token that retains
+      that resource so a later exchange cannot widen the audience.
+      Admitting the resource at /bc-authorize is the separate step
+      ciba#CIBA-047 asserts.
+    cross_refs:
+      - ciba#CIBA-047
+      - ciba#CIBA-049
+    status: active
+    covered_by: internal/tokenendpoint.TestHandleCIBA_AccessTokenBoundToRequestedResource
+    notes: |
+      Approving a backchannel request is not reachable from the public
+      surface, so a wire-level test cannot get past
+      authorization_pending to inspect the issued token. The assertion
+      sits at the token endpoint, where an approved record can be
+      seated directly — the same seam ciba#CIBA-049 uses for the same
+      reason.
 
   - id: RI-052
     severity: P1
@@ -245,8 +262,10 @@ rows:
     behaviour: |
       Refreshing the CIBA-issued refresh token MUST preserve the
       resource.
+    cross_refs:
+      - ciba#CIBA-047
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not implement OIDC CIBA (no /backchannel endpoint, no urn:openid:params:grant-type:ciba dispatch — see RI-050 / RI-051 / RI-054 OOS). Without a CIBA-issued refresh token there is no surface on which to assert refresh-time resource preservation specifically for that grant. The general 'refresh preserves resource' property for the authorization_code grant is bound by RI-033."
+    out_of_scope_reason: "Duplicate by mechanism: resource preservation across a refresh exchange is a property of the grant-agnostic refresh path, asserted by RI-033. CIBA is shipped and issues refresh tokens through that same path, so a CIBA-specific restatement adds no distinct wire surface."
 
   - id: RI-053
     severity: P1
@@ -256,7 +275,7 @@ rows:
       useGrantedResource=true, the issued tokens MUST carry the
       default resource.
     status: out-of-scope
-    out_of_scope_reason: "Two missing prerequisites: (1) no CIBA grant in v1.0 (RI-050 / RI-051 / RI-052 / RI-054 OOS); (2) no defaultResource hook (RI-001 OOS) and no useGrantedResource hook (RI-035 / RI-054 OOS). The intersection asserted here has no v1.0 surface on any axis."
+    out_of_scope_reason: "Neither hook this row composes exists: the OP exposes no defaultResource hook (RI-001) and no useGrantedResource hook (RI-035). CIBA is shipped and is not the obstacle."
 
   - id: RI-054
     severity: P0
@@ -267,7 +286,7 @@ rows:
       undefined (UserInfo-eligible) while the refresh token retains
       resource for refresh exchanges.
     status: out-of-scope
-    out_of_scope_reason: "Two missing prerequisites: (1) v1.0 does not implement the CIBA grant (see RI-050/RI-051); (2) v1.0 does not expose a useGrantedResource hook. Even setting CIBA aside, the conditional 'when useGrantedResource returns false' has no v1.0 surface — the AT minter unconditionally embeds the validated resource as aud (internal/tokenendpoint/authcode.go: mintJWTAccessToken) and falls back to aud=Issuer when resource is empty, so 'aud undefined' is not a v1.0 wire shape."
+    out_of_scope_reason: "The OP exposes no useGrantedResource hook, so the useGrantedResource=false branch this row asserts has no configuration surface; the access-token minter unconditionally stamps the validated resource as aud and falls back to aud=Issuer when none was bound, so an undefined aud is not a wire shape the OP produces. CIBA is shipped and is not the obstacle."
 
   - id: RI-060
     severity: P0
@@ -330,7 +349,7 @@ rows:
       resource (e.g. via a resource-scoped policy decision); both
       paths MUST accept a single resource parameter.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose a per-resource access-token format policy hook. The token format choice (opaque vs JWT) is global (op.WithJWTAccessTokens); there is no resource-scoped 'this resource gets opaque, that one gets JWT' policy decision at the /token boundary. Adding such a hook would need a new public option and a per-resource policy callback shape the library does not define. Embedders that need resource-scoped formats run a downstream gateway that re-projects opaque tokens to JWT (or vice versa) per the resource server's expectation."
+    out_of_scope_reason: "v1.0 does not expose a per-resource access-token format policy hook. The token format choice (opaque vs JWT) is global (op.WithAccessTokenFormat); there is no resource-scoped 'this resource gets opaque, that one gets JWT' policy decision at the /token boundary. Adding such a hook would need a new public option and a per-resource policy callback shape the library does not define. Embedders that need resource-scoped formats run a downstream gateway that re-projects opaque tokens to JWT (or vice versa) per the resource server's expectation."
 
   - id: RI-070
     severity: P1
