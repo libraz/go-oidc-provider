@@ -18,6 +18,29 @@ type JWTRevocationOpts struct {
 	RevocationStrategy store.AccessTokenRevocationStrategy
 }
 
+// RequireJTIFor reports whether an access-token verifier built for
+// strategy MUST reject a token carrying no "jti" claim. It is the
+// single place the answer is decided so the four endpoints that verify
+// JWT access tokens (/userinfo, /introspect, /revoke, token exchange)
+// cannot drift apart on it.
+//
+// Every strategy other than [store.RevocationStrategyNone] has at least
+// one revocation path that can only be answered through the jti, and
+// [JWTAccessTokenRevoked] reports "not revoked" when it cannot answer:
+//
+//   - [store.RevocationStrategyJTIRegistry] keys the whole lookup on
+//     the jti, so an empty one finds no row and reads as live.
+//   - [store.RevocationStrategyGrantTombstone] answers a grant-bound
+//     token from its "gid" claim, but a grantless one — a
+//     client_credentials token carries no grant — is covered only by
+//     the jti denylist row /revocation wrote for it.
+//
+// Under None no per-token state is consulted at all, so demanding a jti
+// would reject tokens without protecting anything.
+func RequireJTIFor(strategy store.AccessTokenRevocationStrategy) bool {
+	return strategy != store.RevocationStrategyNone
+}
+
 // JWTAccessTokenRevoked reports whether claims should be treated as
 // revoked under opts.RevocationStrategy. The second return reports
 // whether the lookup succeeded; callers decide how a lookup failure is

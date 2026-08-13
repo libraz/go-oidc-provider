@@ -148,6 +148,17 @@ var ErrSignerInvalid = errors.New("tokens: SigningKey has nil Signer")
 // digest is defined for the supplied JWS signing algorithm.
 var ErrHashAlgUnsupported = errors.New("tokens: unsupported hash-claim alg")
 
+// ErrSubjectMissing is returned by [SignIDToken] and [SignAccessToken]
+// when the claim bundle carries an empty "sub". OIDC Core 1.0 §2 and RFC
+// 9068 §2.2 both make the claim REQUIRED, and a signed token asserting
+// no subject is worse than absent: a relying party that checks only the
+// signature, issuer, and audience accepts it as a valid assertion and
+// maps every such token onto the same empty-string account key. The
+// grants that read a subject off a stored record enforce their own gate,
+// but the check lives here as well so a caller that forgets one cannot
+// put an anonymous credential on the wire.
+var ErrSubjectMissing = errors.New("tokens: claims carry an empty subject")
+
 // idTokenTypeHeader is the value of the "typ" JOSE header for ID Tokens
 // (OIDC Core 1.0 §2). RP libraries that strict-check the type expect
 // the legacy "JWT" value here.
@@ -168,10 +179,14 @@ const accessTokenTypeHeader = "at+jwt"
 // The function returns an error when claims.Extra contains a key that
 // would clobber a standard claim — silently overwriting "sub" or "exp"
 // in id_tokens has historically been a source of subtle confused-
-// deputy bugs, so the package refuses to do it.
+// deputy bugs, so the package refuses to do it. An empty claims.Subject
+// is refused with [ErrSubjectMissing] for the same reason.
 func SignIDToken(key SigningKey, claims IDTokenClaims) (string, error) {
 	if key.Signer == nil {
 		return "", ErrSignerInvalid
+	}
+	if claims.Subject == "" {
+		return "", ErrSubjectMissing
 	}
 	if err := validateNoStandardCollisions(claims.Extra, idTokenStandardKeys); err != nil {
 		return "", err
@@ -194,6 +209,9 @@ func SignIDToken(key SigningKey, claims IDTokenClaims) (string, error) {
 func SignAccessToken(key SigningKey, claims AccessTokenClaims) (string, error) {
 	if key.Signer == nil {
 		return "", ErrSignerInvalid
+	}
+	if claims.Subject == "" {
+		return "", ErrSubjectMissing
 	}
 	if err := validateNoStandardCollisions(claims.Extra, accessTokenStandardKeys); err != nil {
 		return "", err

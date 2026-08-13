@@ -42,9 +42,11 @@ const (
 // Defaults the handler applies when [Deps] omits the corresponding field.
 const (
 	// defaultLeeway is the symmetric tolerance applied to JWT access-token
-	// "exp" / "iat" comparisons. The value mirrors the userinfo handler so
-	// the two surfaces accept the same set of clock-skewed tokens.
-	defaultLeeway = 30 * time.Second
+	// "exp" / "iat" comparisons. It is an alias for [tokens.DefaultLeeway]
+	// rather than a copy of its value: every surface that verifies an
+	// access token has to accept the same set of clock-skewed tokens, and
+	// a restated literal agrees only until someone edits one of them.
+	defaultLeeway = tokens.DefaultLeeway
 
 	// tokenTypeBearer is the value the "token_type" introspection claim
 	// carries for both opaque and JWT bearer tokens (RFC 7662 §2.2).
@@ -261,10 +263,11 @@ func newAccessTokenVerifier(d Deps) *tokens.AccessTokenVerifier {
 		verifierClock = d.Clock
 	}
 	return &tokens.AccessTokenVerifier{
-		Keys:   d.Keys,
-		Issuer: d.Issuer,
-		Clock:  verifierClock,
-		Leeway: d.Leeway,
+		Keys:       d.Keys,
+		Issuer:     d.Issuer,
+		Clock:      verifierClock,
+		Leeway:     d.Leeway,
+		RequireJTI: endpointsupport.RequireJTIFor(d.RevocationStrategy),
 	}
 }
 

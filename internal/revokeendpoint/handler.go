@@ -33,10 +33,12 @@ var revokeSingleValuedParams = []string{
 const (
 	// defaultLeeway is the symmetric tolerance applied to JWT
 	// access-token "exp" / "iat" comparisons during the
-	// acknowledgement check. The value mirrors the introspection
-	// handler so the two surfaces accept the same set of
-	// clock-skewed tokens.
-	defaultLeeway = 30 * time.Second
+	// acknowledgement check. It is an alias for [tokens.DefaultLeeway]
+	// rather than a copy of its value: every surface that verifies an
+	// access token has to accept the same set of clock-skewed tokens,
+	// and a restated literal agrees only until someone edits one of
+	// them.
+	defaultLeeway = tokens.DefaultLeeway
 
 	// hintAccessToken / hintRefreshToken are the two values RFC 7009
 	// §2.1 defines for "token_type_hint". The handler honours them
@@ -213,10 +215,11 @@ func newAccessTokenVerifier(d Deps) *tokens.AccessTokenVerifier {
 		verifierClock = d.Clock
 	}
 	return &tokens.AccessTokenVerifier{
-		Keys:   d.Keys,
-		Issuer: d.Issuer,
-		Clock:  verifierClock,
-		Leeway: d.Leeway,
+		Keys:       d.Keys,
+		Issuer:     d.Issuer,
+		Clock:      verifierClock,
+		Leeway:     d.Leeway,
+		RequireJTI: endpointsupport.RequireJTIFor(d.RevocationStrategy),
 	}
 }
 

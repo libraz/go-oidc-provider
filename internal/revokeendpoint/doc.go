@@ -16,21 +16,21 @@
 //     internal/tokens.AccessTokenVerifier (issuer + signature + exp +
 //     iat). On a successful verify the handler matches the token's
 //     "client_id" against the authenticated client; on a match the
-//     revocation is acknowledged but performs NO state mutation. v1.0
-//     does not maintain an access-token denylist; JWT access tokens
-//     expire on their own. The branch is therefore a no-op apart from
-//     short-circuiting the dispatcher so the response stays uniform
-//     across token types.
+//     revocation is recorded in the shape
+//     [store.AccessTokenRevocationStrategy] selects — a grant tombstone
+//     by default, or a per-JTI record — so a resource server that
+//     consults the OP stops honouring the token.
 //   - Otherwise: opaque. Looked up in [op/store.RefreshTokenStore.Find].
 //     A record whose ClientID matches the authenticated client triggers
 //     a parent-walk to the chain root followed by a call to
 //     [op/store.RefreshTokenStore.RevokeChain]; the entire rotation
 //     chain is invalidated in a single best-effort store transaction.
 //
-// Opaque access tokens (RFC 7009 §2.1 anticipates them) are NOT a v1.0
-// feature: the library only mints JWT-shaped access tokens, so the JWT
-// branch handles every access-token revocation request. An embedder
-// that issues opaque access tokens out-of-band would need to wrap this
+// Opaque access tokens (RFC 7009 §2.1 anticipates them) are handled
+// too: an OP configured for [op.AccessTokenFormatOpaque] resolves them
+// through [Deps.OpaqueAccessTokens], which is a separate substore from
+// the refresh-token one. An embedder that issues access tokens
+// out-of-band, outside either store, would still need to wrap this
 // handler.
 //
 // # token_type_hint
@@ -58,13 +58,13 @@
 //
 // # JWT access-token revocation is a no-op
 //
-// The library does not maintain a denylist for JWT access tokens. A
-// successful JWT branch returns 200 without touching any storage; the
-// token still verifies until its "exp" claim is reached. Resource
-// servers MUST therefore size their access-token TTL so that the
-// natural expiry window is acceptable as a worst-case revocation lag.
-// The library's defaults (5–10 minutes) are well within the FAPI 2.0
-// guidance.
+// A JWT access token stays cryptographically valid until its "exp"
+// claim is reached: revocation is recorded on the OP, not stamped into
+// the token. A resource server that validates the signature offline and
+// never introspects therefore keeps honouring the token for the
+// remainder of its lifetime, so access-token TTL still bounds the
+// worst-case revocation lag for that deployment shape. The library's
+// defaults (5–10 minutes) are well within the FAPI 2.0 guidance.
 //
 // Refresh-token revocation, by contrast, is durable: the entire
 // rotation chain is consumed before the handler returns 200, and any
@@ -98,7 +98,8 @@
 //     acknowledgement;
 //   - [op/store.RefreshTokenStore] for refresh-token chain revocation.
 //
-// A nil [Deps.RefreshTokens] disables the opaque path entirely:
-// opaque tokens always silently 200. JWT acknowledgement still works
-// because it does not consult the refresh-token store.
+// A nil [Deps.RefreshTokens] disables refresh-token revocation only:
+// such a request silently 200s, as RFC 7009 §2.2 requires. The opaque
+// access-token path runs off [Deps.OpaqueAccessTokens] independently,
+// and JWT acknowledgement consults neither store.
 package revokeendpoint

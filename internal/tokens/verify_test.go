@@ -48,6 +48,26 @@ func signed(tb testing.TB, entry keys.Entry, claims tokens.AccessTokenClaims) st
 	return jws
 }
 
+// signedRawAccessToken serialises an arbitrary claim map as an at+jwt
+// JWS. It exists for the malformed-token rows the OP's own signer
+// refuses to produce, so the verifier can still be exercised against
+// wire shapes another producer could emit.
+func signedRawAccessToken(tb testing.TB, entry keys.Entry, claims map[string]any) string {
+	tb.Helper()
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.ES256, Key: entry.Signer},
+		(&josev4.SignerOptions{}).WithHeader("kid", entry.KeyID).WithType("at+jwt"),
+	)
+	if err != nil {
+		tb.Fatalf("NewSigner: %v", err)
+	}
+	jws, err := jwt.Signed(signer).Claims(claims).Serialize()
+	if err != nil {
+		tb.Fatalf("Serialize: %v", err)
+	}
+	return jws
+}
+
 func TestVerify_RoundTripSingleAudience(t *testing.T) {
 	t.Parallel()
 
@@ -750,37 +770,45 @@ func TestVerify_RejectsMissingTypHeader(t *testing.T) {
 // at a time so the failure attribution is unambiguous: a regression
 // that drops a row stops failing exactly that row, and the audit
 // log stops naming the missing claim.
+//
+// The rows are signed straight through go-jose rather than through
+// [tokens.SignAccessToken]: the issuing side refuses to emit a
+// subject-less token, and a token missing a REQUIRED claim reaches a
+// verifier from some other producer anyway.
 func TestVerify_RejectsMissingRequiredClaim(t *testing.T) {
 	t.Parallel()
 
 	set, entry := mustKeySet(t, "kid-1")
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
-	full := tokens.AccessTokenClaims{
-		Issuer:    "https://op.example.com",
-		Subject:   "user-1",
-		Audience:  []string{"client-1"},
-		ClientID:  "client-1",
-		IssuedAt:  now.Unix(),
-		ExpiresAt: now.Add(time.Hour).Unix(),
-		JTI:       "required-claim",
+	full := map[string]any{
+		"iss":       "https://op.example.com",
+		"sub":       "user-1",
+		"aud":       "client-1",
+		"client_id": "client-1",
+		"iat":       now.Unix(),
+		"exp":       now.Add(time.Hour).Unix(),
+		"jti":       "required-claim",
 	}
 	mutators := []struct {
 		name string
-		mut  func(*tokens.AccessTokenClaims)
+		drop string
 	}{
-		{"missing-iss", func(c *tokens.AccessTokenClaims) { c.Issuer = "" }},
-		{"missing-sub", func(c *tokens.AccessTokenClaims) { c.Subject = "" }},
-		{"missing-aud", func(c *tokens.AccessTokenClaims) { c.Audience = nil }},
-		{"missing-client_id", func(c *tokens.AccessTokenClaims) { c.ClientID = "" }},
-		{"missing-iat", func(c *tokens.AccessTokenClaims) { c.IssuedAt = 0 }},
-		{"missing-exp", func(c *tokens.AccessTokenClaims) { c.ExpiresAt = 0 }},
+		{"missing-iss", "iss"},
+		{"missing-sub", "sub"},
+		{"missing-aud", "aud"},
+		{"missing-client_id", "client_id"},
+		{"missing-iat", "iat"},
+		{"missing-exp", "exp"},
 	}
 	for _, tc := range mutators {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			claims := full
-			tc.mut(&claims)
-			jws := signed(t, entry, claims)
+			claims := make(map[string]any, len(full))
+			for k, v := range full {
+				claims[k] = v
+			}
+			delete(claims, tc.drop)
+			jws := signedRawAccessToken(t, entry, claims)
 			v := &tokens.AccessTokenVerifier{
 				Keys:   set,
 				Issuer: "https://op.example.com",

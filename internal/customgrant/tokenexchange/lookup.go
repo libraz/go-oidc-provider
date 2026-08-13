@@ -67,9 +67,11 @@ func (h *Handler) lookupAccessToken(ctx context.Context, raw string) (lookupResu
 // lookupJWT verifies a JWT-shaped token against the OP keyset.
 func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult, error) {
 	verifier := &tokens.AccessTokenVerifier{
-		Keys:   h.keys,
-		Issuer: h.issuer,
-		Clock:  h.clock,
+		Keys:       h.keys,
+		Issuer:     h.issuer,
+		Clock:      h.clock,
+		Leeway:     h.leeway,
+		RequireJTI: endpointsupport.RequireJTIFor(h.revocationStrategy),
 	}
 	claims, _, err := verifier.Verify(ctx, raw)
 	if err != nil {

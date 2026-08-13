@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -98,6 +99,20 @@ type Config struct {
 	// to the issued token's lifetime alongside the subject-token
 	// remaining and handler-requested bounds.
 	MaxAccessTTL time.Duration
+
+	// Leeway is the symmetric tolerance the subject-token / actor-token
+	// verifier applies to the "exp" and "iat" comparisons. Zero falls
+	// back to [tokens.DefaultLeeway], which is the same value
+	// /userinfo, /introspect and /revoke resolve to.
+	//
+	// The agreement is the point. A subject_token presented here is an
+	// access token the RP could equally have presented to any of those
+	// three, and its validity belongs to the token rather than to the
+	// endpoint reading it — so a narrower tolerance here would make
+	// exchange the one surface that rejects a token every other surface
+	// still honours, on exactly the clock skew the tolerance exists to
+	// absorb.
+	Leeway time.Duration
 }
 
 // Handler is the customgrant.Handler implementation. It is
@@ -115,6 +130,7 @@ type Handler struct {
 	audit              audit.Emitter
 	clock              interface{ Now() time.Time }
 	maxAccessTTL       time.Duration
+	leeway             time.Duration
 }
 
 // New constructs a Handler from cfg. Construction-time invariants
@@ -130,6 +146,10 @@ func New(cfg Config) (*Handler, error) {
 	if cfg.Issuer == "" {
 		return nil, errors.New("tokenexchange: empty issuer")
 	}
+	leeway := cfg.Leeway
+	if leeway <= 0 {
+		leeway = tokens.DefaultLeeway
+	}
 	return &Handler{
 		policy:             cfg.Policy,
 		issuer:             cfg.Issuer,
@@ -143,6 +163,7 @@ func New(cfg Config) (*Handler, error) {
 		audit:              cfg.Audit,
 		clock:              cfg.Clock,
 		maxAccessTTL:       cfg.MaxAccessTTL,
+		leeway:             leeway,
 	}, nil
 }
 

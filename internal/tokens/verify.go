@@ -62,6 +62,20 @@ var (
 	ErrAccessTokenTypeMismatch = errors.New("tokens: access token typ header is not at+jwt")
 )
 
+// DefaultLeeway is the symmetric tolerance every in-library
+// [AccessTokenVerifier] applies to the "exp" and "iat" comparisons when
+// its own [AccessTokenVerifier.Leeway] is left at zero.
+//
+// It lives here, next to the field it feeds, because it has to be one
+// value rather than one value per endpoint: /userinfo, /introspect,
+// /revoke and the token-exchange subject-token lookup all answer "is
+// this access token still valid?" about the same token, and a
+// deployment with clock skew gets contradictory answers the moment
+// those numbers drift apart. Thirty seconds sits well below the RFC
+// 7519 §4.1.4 recommended ceiling, so a skewed peer retries quickly
+// without widening the replay window on a stolen token.
+const DefaultLeeway = 30 * time.Second
+
 // Clock is the package-local view of [timex.Clock]. It is
 // duplicated here (rather than imported transitively through op/) so
 // this package keeps the same SigningKey/Entry split it already uses
@@ -96,6 +110,14 @@ type AccessTokenVerifier struct {
 	// "iat" comparisons. Two minutes is the upper bound recommended
 	// by RFC 7519 §4.1.4; the verifier does not enforce a maximum
 	// because resource-server policy varies.
+	//
+	// Every construction site inside this library resolves a zero value
+	// to [DefaultLeeway]. That is not a convenience: an access token's
+	// validity is a property of the token, not of the endpoint that
+	// happens to inspect it, so the surfaces that verify one have to
+	// agree on the tolerance or the same token becomes live at one and
+	// dead at another under the very clock skew the tolerance exists
+	// for.
 	Leeway time.Duration
 
 	// RequireJTI, when true, makes [AccessTokenVerifier.Verify]
@@ -105,14 +127,26 @@ type AccessTokenVerifier struct {
 	// cannot tell a revoked token from a fresh one, so accepting
 	// the token would silently bypass revocation.
 	//
-	// The flag is opt-in (rather than the default) because the
-	// "none" revocation strategy and operator-managed deployments
-	// that key revocation off the grant tombstone do not need a
-	// jti, and the spec (RFC 9068 §2.2) lists jti as RECOMMENDED
-	// rather than REQUIRED. A future major release may flip the
-	// default; v1.x keeps the safer "explicit opt-in" posture so a
-	// caller that constructs the verifier without configuring
-	// revocation does not start refusing tokens it used to accept.
+	// Every access-token-consuming endpoint sets it from the
+	// configured [store.AccessTokenRevocationStrategy]: on for
+	// anything other than [store.RevocationStrategyNone]. Both
+	// non-None strategies have a path that can only be answered
+	// through the jti —
+	//
+	//   - [store.RevocationStrategyJTIRegistry] looks the token up by
+	//     jti alone, so an empty one reads as "no row, not revoked".
+	//   - [store.RevocationStrategyGrantTombstone] covers a
+	//     grant-bound token through its "gid" claim, but a grantless
+	//     one (client_credentials mints no gid) is reachable only
+	//     through the jti denylist row that /revocation wrote.
+	//
+	// [store.RevocationStrategyNone] consults no per-token state at
+	// all, so requiring a jti there would reject tokens for no gain.
+	//
+	// The flag stays opt-in at this layer rather than defaulting to
+	// true because the verifier is also constructed by callers that
+	// have no revocation strategy to consult, and the spec
+	// (RFC 9068 §2.2) lists jti as RECOMMENDED rather than REQUIRED.
 	RequireJTI bool
 }
 

@@ -391,7 +391,7 @@ func TestHandler_RefreshToken_Revokes(t *testing.T) {
 	assertConsumedOrGone(t, f, rec.ID)
 }
 
-// TestHandler_RefreshToken_CascadesToAccessTokens pins #22 / RFC 7009
+// TestHandler_RefreshToken_CascadesToAccessTokens pins RFC 7009
 // §2.1: revoking a refresh token also invalidates the access tokens
 // issued under the same grant, so a client cannot revoke to contain a
 // compromise yet be left with a live access token until its own exp.

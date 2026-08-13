@@ -89,6 +89,18 @@ type HandlerDeps struct {
 	// the value is threaded through to [Build] verbatim.
 	CustomScopeClaims map[string][]string
 
+	// ClaimsParameterEnabled mirrors
+	// [authorizeendpoint.Deps.ClaimsParameterEnabled] for the response
+	// side: when false the handler ignores any OIDC Core 1.0 §5.5
+	// payload persisted on the originating grant and releases claims
+	// from the granted scopes alone. The gate reads the grant rather
+	// than the request, so a grant established while the parameter was
+	// still enabled stops projecting the moment the OP is reconfigured
+	// — the stored payload is left intact as the record of what the
+	// user consented to. Zero value is false so a Deps assembled
+	// without the flag fails closed.
+	ClaimsParameterEnabled bool
+
 	// DPoP is the RFC 9449 proof verifier. A nil value disables
 	// DPoP enforcement entirely; tokens carrying cnf.jkt are then
 	// rejected to fail closed (silently downgrading a sender-
@@ -167,10 +179,11 @@ func Handler(deps HandlerDeps) http.Handler {
 		verifierClock = deps.Clock
 	}
 	verifier := &tokens.AccessTokenVerifier{
-		Keys:   deps.Keys,
-		Issuer: deps.Issuer,
-		Clock:  verifierClock,
-		Leeway: deps.Leeway,
+		Keys:       deps.Keys,
+		Issuer:     deps.Issuer,
+		Clock:      verifierClock,
+		Leeway:     deps.Leeway,
+		RequireJTI: endpointsupport.RequireJTIFor(deps.RevocationStrategy),
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The registry is wrapped per request, not once here: the memo
@@ -698,15 +711,20 @@ func respondGenericInvalidToken(w http.ResponseWriter) {
 // body. The bool reports success; on false the handler has already
 // written the response and the caller MUST return.
 //
+// The grant the token descends from is resolved once, from the token's
+// own lineage ([resolveGrant]), and serves both consumers that need it:
+// the raw-subject recovery and the OIDC Core §5.5 claims-request
+// projection. Keeping it to a single lookup is what guarantees the two
+// cannot disagree about which grant the response is assembled from.
+//
 // When the access token's "sub" carries the per-client pairwise value
 // (RFC 9068 §3 / OIDC Core §8.1 — minted that way so RS-visible and
-// id_token "sub" agree), the raw OP-internal subject is recovered by
-// pivoting through the access token's "gid" private claim to the owning
-// grant. UserStore lookup and the OIDC Core §5.5 claims-request resolution
-// both key on the raw value; the response "sub" is then re-projected so
-// the client observes the pairwise value end-to-end. The opaque-format
-// path carries the same grant lineage in its persistent record and projects
-// it onto the synthetic claims handed here.
+// id_token "sub" agree), the raw OP-internal subject is read off that
+// grant. UserStore lookup keys on the raw value; the response "sub" is
+// then re-projected so the client observes the pairwise value
+// end-to-end. The opaque-format path carries the same grant lineage in
+// its persistent record and projects it onto the synthetic claims
+// handed here.
 // The returned [*store.Client] is the AT-bound client resolved by the
 // pairwise subject projection, or nil when no projector is configured (the
 // non-pairwise path resolves the client lazily in
@@ -718,7 +736,8 @@ func assembleClaims(
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
 ) (map[string]any, *store.Client, bool) {
-	rawSubject, ok := resolveRawSubject(ctx, w, deps, claims)
+	grant := resolveGrant(ctx, deps, claims)
+	rawSubject, ok := resolveRawSubject(w, deps, claims, grant)
 	if !ok {
 		return nil, nil, false
 	}
@@ -747,7 +766,7 @@ func assembleClaims(
 		Scopes:            claims.Scope,
 		Source:            source,
 		CustomScopeClaims: deps.CustomScopeClaims,
-		Claims:            lookupClaimsRequest(ctx, deps, rawSubject, claims.ClientID),
+		Claims:            claimsRequestFromGrant(deps, grant),
 	})
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -756,48 +775,73 @@ func assembleClaims(
 	return out, client, true
 }
 
+// resolveGrant loads the grant the presented access token descends
+// from. The lineage is carried by the token itself — the "gid" private
+// claim (RFC 7519 §4.3) the token endpoint stamps on every JWT it
+// issues, or the GrantID column of the opaque access-token record — so
+// the lookup is by grant ID and never by (subject, client_id): the
+// library does not assume there is at most one grant per pair, and a
+// (subject, client_id) search would resolve to whichever grant is
+// currently active rather than the one that authorised this token.
+//
+// A nil return means "no grant lineage is available", which covers an
+// unwired [HandlerDeps.Grants], a token minted without a grant
+// (client_credentials), a record written before the OP recorded the
+// lineage, and a grant that has been deleted since issuance. Deciding
+// what that absence means belongs to the callers: [resolveRawSubject]
+// treats it as fatal while pairwise projection is configured, and
+// [claimsRequestFromGrant] falls back to scope-derived release.
+func resolveGrant(
+	ctx context.Context,
+	deps HandlerDeps,
+	claims *tokens.AccessTokenClaims,
+) *store.Grant {
+	if deps.Grants == nil || claims.GrantID == "" {
+		return nil
+	}
+	g, err := deps.Grants.Find(ctx, claims.GrantID)
+	if err != nil {
+		return nil
+	}
+	return g
+}
+
 // resolveRawSubject returns the OP-internal stable subject identifier
 // for the presented access token. JWT tokens minted under a configured
 // SubjectProjector carry the per-client pairwise value in "sub" and the
-// stable identifier on the originating grant; the function recovers the
-// raw value by looking the grant up through the "gid" private claim
-// (RFC 7519 §4.3) the token endpoint stamps on every JWT it issues. Opaque
-// records carry the raw subject in "sub" and the same GrantID in persistent
-// storage, allowing both token formats to follow this path. Legacy records
-// without GrantID are rejected while pairwise projection is configured.
+// stable identifier on the originating grant, so the raw value is read
+// off the grant [resolveGrant] recovered from the token's own lineage.
+// Opaque records carry the raw subject in "sub" and the same GrantID in
+// persistent storage, allowing both token formats to follow this path.
+// Legacy records without GrantID are rejected while pairwise projection
+// is configured.
 //
 // A missing or unrecoverable grant collapses onto invalid_token rather
 // than silently falling back to the pairwise value: the grant being
 // gone means the consent the token descends from has been revoked, and
 // continuing to serve userinfo would defeat that.
+//
+// When no SubjectProjector is configured the token's "sub" is already
+// the OP-internal value (mintAccessToken stamps raw == public on that
+// branch), so the grant is not consulted at all.
 func resolveRawSubject(
-	ctx context.Context,
 	w http.ResponseWriter,
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
+	grant *store.Grant,
 ) (string, bool) {
-	// When no SubjectProjector is configured the JWT "sub" claim is
-	// already the OP-internal value (mintAccessToken stamps raw ==
-	// public on that branch), so the grant pivot would be a no-op DB
-	// hit. Short-circuit to keep the non-pairwise hot path free of the
-	// extra lookup.
 	if deps.SubjectProjector == nil {
 		return claims.Subject, true
 	}
-	if claims.GrantID == "" || deps.Grants == nil {
+	if grant == nil {
 		respondGenericInvalidToken(w)
 		return "", false
 	}
-	g, err := deps.Grants.Find(ctx, claims.GrantID)
-	if err != nil || g == nil {
-		respondGenericInvalidToken(w)
-		return "", false
-	}
-	if g.Subject == "" {
+	if grant.Subject == "" {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return "", false
 	}
-	return g.Subject, true
+	return grant.Subject, true
 }
 
 // projectResponseSubject converts the raw OP-internal subject into the
@@ -829,32 +873,23 @@ func projectResponseSubject(
 	return projected, client, true
 }
 
-// lookupClaimsRequest resolves the OIDC Core 1.0 §5.5 "claims" payload
-// that was persisted on the grant from which claims.Subject /
-// claims.ClientID's access token descends. Returns nil when:
+// claimsRequestFromGrant returns the OIDC Core 1.0 §5.5 "claims"
+// payload persisted on the grant the presented access token descends
+// from. Only that grant is read: a sibling grant of the same
+// (subject, client_id) pair may carry a different §5.5 payload, and
+// projecting it here would release claims the presented token was
+// never authorised for.
 //
-//   - the deps.Grants substore is not wired (embedders that have not
-//     yet adopted the per-claim projection),
-//   - the lookup fails (the grant was revoked between issuance and the
-//     userinfo call),
-//   - the grant carries no §5.5 payload (every claim was scope-driven).
+// Returns nil — which leaves the response scope-derived — when
+// [HandlerDeps.ClaimsParameterEnabled] is false, when the grant lineage
+// could not be resolved (see [resolveGrant]), or when the grant carries
+// no §5.5 payload because every claim was scope-driven.
 //
-// The resolution path uses [store.GrantStore.FindBySubjectClient] which
-// returns the active grant for the (subject, client) pair. Multiple
-// historical grants for one (subject, client) pair are not exercised
-// by the library; reading the latest active grant matches the
-// expectation that consent only ever broadens, not narrows, between
-// issuances of the same chain.
-func lookupClaimsRequest(
-	ctx context.Context,
-	deps HandlerDeps,
-	subject, clientID string,
-) *authorize.ClaimsRequest {
-	if deps.Grants == nil || subject == "" || clientID == "" {
-		return nil
-	}
-	g, err := deps.Grants.FindBySubjectClient(ctx, subject, clientID)
-	if err != nil || g == nil {
+// This is the only place the handler reads the persisted payload, so
+// the toggle covers every /userinfo response shape (JSON and signed
+// JWT alike) regardless of when the payload was written.
+func claimsRequestFromGrant(deps HandlerDeps, g *store.Grant) *authorize.ClaimsRequest {
+	if !deps.ClaimsParameterEnabled || g == nil {
 		return nil
 	}
 	return authorize.DecodeClaimsFromGrant(g.Claims)

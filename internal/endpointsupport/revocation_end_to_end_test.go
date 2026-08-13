@@ -12,6 +12,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -49,6 +50,9 @@ func TestEndToEnd_ClientCredentialsJWTRevocationClosesReadPaths(t *testing.T) {
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithFeature(feature.Revoke),
 		op.WithFeature(feature.Introspect),
+		// client_credentials is not in the default grant set, and the
+		// token endpoint refuses a grant the Provider has not enabled.
+		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials),
 	))
 	rp := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      "rp-cc-revocation",

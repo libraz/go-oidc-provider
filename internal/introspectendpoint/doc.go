@@ -1,9 +1,13 @@
 // Package introspectendpoint implements the OAuth 2.0 Token Introspection
 // endpoint defined by RFC 7662.
 //
-// A confidential or public client (typically a resource server acting as a
+// A client that authenticates (typically a resource server acting as a
 // protected resource) POSTs the token it wants inspected to /introspect,
-// authenticating with the same machinery the token endpoint uses. The
+// using the same machinery the token endpoint uses. RFC 7662 §2.1
+// requires the endpoint to authenticate its caller, so a client
+// registered with no authentication method is refused: introspection
+// discloses the token's subject, scope and expiry, which is not a
+// disclosure an unauthenticated caller may make. The
 // handler resolves the token (auto-detecting JWT vs. opaque), enforces the
 // same-client-only authorization policy described below, and responds with
 // the canonical introspection JSON per RFC 7662 §2.2.
@@ -84,9 +88,10 @@
 //   - [op/store.RefreshTokenStore] for opaque introspection;
 //   - internal/timex (via the package-local Clock) for wall-clock reads.
 //
-// A nil [Deps.RefreshTokens] disables the opaque path entirely: opaque
-// tokens always project onto inactive. JWT introspection still functions
-// because it does not consult the refresh-token store.
+// A nil [Deps.RefreshTokens] disables refresh-token introspection only:
+// such a token projects onto inactive. The opaque access-token path
+// runs off [Deps.OpaqueAccessTokens] independently, and JWT
+// introspection consults neither store.
 //
 // # JWT-formatted responses (RFC 9701)
 //
