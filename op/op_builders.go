@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -116,14 +117,47 @@ func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 	for _, t := range order {
 		merged = append(merged, bundles[t])
 	}
-	resolver, err := i18n.NewResolver(i18n.Tag(cfg.defaultLocale), merged...)
+	resolver, err := i18n.NewResolver(i18n.ParseTag(string(cfg.defaultLocale)), merged...)
 	if err != nil {
-		return nil, err
+		// Backstop: config.validateLocales already rejects a default
+		// locale no bundle serves, and the merge above cannot produce a
+		// duplicate or nil bundle. Typed anyway so no exit path out of
+		// [New] escapes the IsServerError / IsClientError partition.
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "locale resolver construction failed",
+			Cause:       err,
+		}
 	}
 	if cfg.preferredLocaleStore != nil {
 		resolver.WithPreferredLocaleStore(preferredLocaleStoreAdapter{store: cfg.preferredLocaleStore})
 	}
+	if err := validateAdvertisedLocales(cfg, resolver); err != nil {
+		return nil, err
+	}
 	return resolver, nil
+}
+
+// validateAdvertisedLocales rejects an explicit
+// [DiscoveryMetadata.UILocalesSupported] entry that no registered
+// bundle serves. `ui_locales_supported` is a contract, not a hint: an
+// RP that echoes an advertised tag back as `ui_locales` has to land on
+// a bundle, so the advertised set must be a subset of the selectable
+// one. The derived path — the resolver's own registration list, see
+// [buildDiscoveryInput] — holds that by construction; only the
+// embedder's explicit override can break it, and it does so silently
+// at request time unless the mismatch is caught here.
+func validateAdvertisedLocales(cfg *config, locales *i18n.Resolver) error {
+	for _, advertised := range cfg.discoveryMetadata.UILocalesSupported {
+		if _, ok := locales.Match(i18n.ParseTag(advertised)); !ok {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "WithDiscoveryMetadata advertises ui_locales_supported entry " +
+					strconv.Quote(advertised) + ", which no registered locale bundle serves",
+			}
+		}
+	}
+	return nil
 }
 
 // buildProxyTrust constructs the runtime [proxy.Trust] consumed by the
@@ -288,15 +322,17 @@ func authorizeRequestPolicy(cfg *config) authorize.Policy {
 }
 
 // authorizeExtensionPolicy renders the gates that run once a request has
-// validated — RFC 9396 authorization_details, the Grant Management draft
-// parameters, and the RFC 9449 §10.1 "dpop_jkt" commitment — for the
-// same two endpoints and for the same reason as [authorizeRequestPolicy].
+// validated — the JARM response_mode rules, RFC 9396
+// authorization_details, the Grant Management draft parameters, and the
+// RFC 9449 §10.1 "dpop_jkt" commitment — for the same two endpoints and
+// for the same reason as [authorizeRequestPolicy].
 //
-// DPoPEnabled is read from the feature flag, not from the constructed
-// verifier. The two answers agree by construction ([buildDPoPVerifier]
-// returns a nil verifier exactly when the flag is off), but /authorize
-// never verifies a proof and so holds no verifier to consult; the flag
-// is the only form of the question both endpoints can ask.
+// DPoPEnabled and JARMEnabled are read from the feature flags, not from
+// the constructed verifier / signer. The answers agree by construction
+// ([buildDPoPVerifier] and [buildJARMSigner] return nil exactly when
+// their flag is off), but neither endpoint holds both objects —
+// /authorize never verifies a DPoP proof and /par never signs a
+// response — so the flag is the only form of the question both can ask.
 func authorizeExtensionPolicy(cfg *config) authorize.ExtensionPolicy {
 	return authorize.ExtensionPolicy{
 		AuthorizationDetailTypes:      authorizationDetailRegistry(cfg),
@@ -304,6 +340,8 @@ func authorizeExtensionPolicy(cfg *config) authorize.ExtensionPolicy {
 		GrantManagementActions:        grantManagementActionSet(cfg),
 		GrantManagementActionRequired: cfg.grantManagementActionRequired,
 		DPoPEnabled:                   featureEnabled(cfg.features, feature.DPoP),
+		JARMEnabled:                   featureEnabled(cfg.features, feature.JARM),
+		JARMResponseModeRequired:      cfg.requireJARMResponseMode(),
 	}
 }
 
@@ -725,15 +763,17 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		deliverer.Client = cfg.backchannelLogoutHTTPClient
 	}
 	// The deliverer's SSRF gate refuses loopback / private-network
-	// destinations by default. The dev opt-in suppresses the gate so
-	// the in-process examples and CI fixtures can POST a logout token
-	// at a stub RP bound to 127.0.0.1; the
-	// [WithBackchannelAllowPrivateNetwork] knob retains its existing
-	// service-mesh meaning. Either flag widens the gate, mirroring the
-	// validator's accept-set.
-	if cfg.allowInsecureBackchannelLogoutForDev || cfg.BackchannelAllowsPrivateNetwork() {
-		deliverer.AllowPrivateNetwork = true
-	}
+	// destinations by default. The two opt-ins widen it by different
+	// amounts, and the difference is load-bearing: the dev opt-in
+	// releases loopback alone so the in-process examples and CI
+	// fixtures can POST a logout token at a stub RP bound to
+	// 127.0.0.1, matching both its own godoc and the registration
+	// validator's accept-set, while
+	// [WithBackchannelAllowPrivateNetwork] carries the wider
+	// service-mesh meaning and is the only way to reach RFC 1918
+	// space.
+	deliverer.AllowLoopbackNetwork = cfg.allowInsecureBackchannelLogoutForDev
+	deliverer.AllowPrivateNetwork = cfg.BackchannelAllowsPrivateNetwork()
 	coord, err := backchannel.NewCoordinator(backchannel.Config{
 		Issuer:                   cfg.issuer,
 		Signing:                  backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
@@ -877,25 +917,38 @@ func buildBuiltInInteractions(cfg *config, sessMgr *sessions.Manager) []Interact
 	out := make([]Interaction, 0, len(cfg.interactions)+2)
 	out = append(out, consent.New(consentCatalog(cfg.scopes)))
 	if sessMgr != nil {
-		out = append(out, chooser.New(sessMgr))
+		out = append(out, chooser.New(sessMgr, cfg.effectiveUserStore()))
 	}
 	out = append(out, cfg.interactions...)
 	return out
 }
 
+// enabledGrantWireNames projects the configured grants onto their wire
+// grant_type values: the built-ins selected by [WithGrants] followed by
+// every registered custom grant name.
+//
+// One projection feeds both the discovery document's
+// grant_types_supported and the token endpoint's dispatch gate.
+// Advertising a set the endpoint does not accept, or accepting one it
+// does not advertise, is the drift the shared helper exists to prevent.
+//
+// Custom grant_types follow the built-ins so RFC 8414 §2 ordering
+// preserves the spec-defined wires at the head of the list. The
+// dispatcher rejected built-in collisions at registration time, so the
+// append cannot create a duplicate entry.
+func enabledGrantWireNames(cfg *config) []string {
+	customNames := customGrantNamesFor(cfg)
+	out := make([]string, 0, len(cfg.grants)+len(customNames))
+	for _, g := range cfg.grants {
+		out = append(out, g.String())
+	}
+	return append(out, customNames...)
+}
+
 // buildDiscoveryInput converts the public [config] to the internal
 // [discovery.Input] the discovery builder consumes.
 func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i18n.Resolver) discovery.Input {
-	customNames := customGrantNamesFor(cfg)
-	grantStrings := make([]string, 0, len(cfg.grants)+len(customNames))
-	for _, g := range cfg.grants {
-		grantStrings = append(grantStrings, g.String())
-	}
-	// Custom grant_types follow the built-ins so RFC 8414 §2 ordering
-	// preserves the spec-defined wires at the head of the list. The
-	// dispatcher rejected built-in collisions at registration time so
-	// the append cannot create a duplicate entry.
-	grantStrings = append(grantStrings, customNames...)
+	grantStrings := enabledGrantWireNames(cfg)
 	uiLocales := cfg.discoveryMetadata.UILocalesSupported
 	if len(uiLocales) == 0 && locales != nil {
 		// Fall back to the registered locale set so the resolver and
@@ -958,12 +1011,19 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 	}
 }
 
-// buildSubjectProjector returns the closure the authorize handler
-// invokes at code emission to convert the post-authentication subject
-// into the value persisted onto [store.Grant.Subject] /
-// [store.AuthorizationCode.Subject]. The closure adapts the
-// [SubjectGenerator] surface to the function-typed callback the
-// handler receives so the internal package does not import op.
+// buildSubjectProjector returns the closure that converts a recorded
+// OP-internal subject into the "sub" a given client is served. The
+// closure adapts the [SubjectGenerator] surface to the function-typed
+// callback the internal packages receive so they do not import op.
+//
+// It is invoked when a subject leaves the OP, not when a grant is
+// created: the grant and the authorization code record the OP-internal
+// subject verbatim, and token issuance, /userinfo, introspection,
+// end-session and back-channel logout each project it again as they
+// answer. Keeping the recorded value unprojected is what lets
+// prompt=none and silent renewal look a grant up by (subject,
+// client_id); it also means the generator runs once per releasing
+// request rather than once per grant.
 //
 // # Per-client dispatch (built-in pairwise)
 //

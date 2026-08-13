@@ -113,7 +113,7 @@ func TestWithStaticClients_RejectsNilSeed(t *testing.T) {
 	}
 }
 
-// TestWithStaticClients_PersistsToStore verifies the H1-D seeding
+// TestWithStaticClients_PersistsToStore verifies the seeding
 // step: every ClientSeed projected through op.WithStaticClients lands
 // in the configured store as a real [store.Client] record so the
 // token / authorize / introspect endpoints can authenticate against
@@ -204,10 +204,10 @@ func TestWithStaticClients_AppendsAcrossCalls(t *testing.T) {
 	}
 }
 
-// TestWithStaticClients_ConfidentialEmptySecret pins the H1-C contract:
+// TestWithStaticClients_ConfidentialEmptySecret pins the contract:
 // [op.ConfidentialClient.seed] currently does NOT reject an empty
 // Secret because [op.HashClientSecret] hashes empty strings without
-// error. The test documents the current behaviour so a future H1-C
+// error. The test documents the current behaviour so a future
 // change that adds an empty-Secret guard surfaces here as a loud
 // regression rather than a silent behaviour drift; once the guard
 // lands, flip the assertion to expect an error and propagate the

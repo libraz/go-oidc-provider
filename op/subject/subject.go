@@ -19,33 +19,25 @@ func (s Subject) String() string { return string(s) }
 // IsZero reports whether s is the zero value.
 func (s Subject) IsZero() bool { return s == "" }
 
-// FederatedSubject is the typed wrapper for an upstream identifier
-// returned by an external IdP. The op package re-exports the type as
-// op.FederatedSubject; the canonical definition lives here for the
-// same reason as [Subject].
-type FederatedSubject struct {
-	// Provider is the registered upstream identifier (e.g. "google").
-	Provider string
-
-	// ExternalID is the opaque identifier the upstream IdP returned.
-	ExternalID string
-}
-
-// IsZero reports whether the FederatedSubject is unset.
-func (f FederatedSubject) IsZero() bool { return f.Provider == "" && f.ExternalID == "" }
-
 // Generator computes the value the OP writes into the "sub" claim of
 // issued ID tokens and JWT access tokens for an authenticated end-user.
 // The op package re-exports the type as op.SubjectGenerator.
 //
 // Implementations MUST be deterministic for a given input: calling
 // Generate twice with identical [GeneratorInput] MUST return the same
-// [Subject]. The library calls Generate once per (user, client) pair
-// at grant-creation time and persists the result on the
-// [store.Grant]; subsequent token issuance under the same grant
-// reuses the persisted value verbatim. Switching the active Generator
-// after grants have been issued is rejected at construction time by
-// the subject-mode immutability gate.
+// [Subject].
+//
+// Determinism is load-bearing rather than an optimisation, because the
+// library does not persist the projected value. A grant records the
+// OP-internal subject, and every surface that releases a "sub" — token
+// issuance, /userinfo, introspection, end-session and back-channel
+// logout — projects that recorded value again through the Generator
+// when it answers. Generate is therefore called on each of those
+// requests, not once when the grant is created: an implementation that
+// returns a fresh value per call, or that carries a side effect priced
+// as "once per (user, client)", will misbehave. Switching the active
+// Generator after grants have been issued is rejected at construction
+// time by the subject-mode immutability gate.
 //
 // The package ships two reference implementations: [UUIDv7] (the
 // default; passes InternalUserID through verbatim) and [Pairwise]
@@ -63,20 +55,25 @@ type Generator interface {
 	Generate(ctx context.Context, in GeneratorInput) (Subject, error)
 }
 
-// GeneratorInput is the bundle the library hands to a [Generator] at
-// grant-creation time. Exactly one of InternalUserID and Federated
-// MUST be non-zero; both being set or both being zero is a programmer
-// error in the calling site and the library reports it via the audit
-// chain.
+// GeneratorInput is the bundle the library hands to a [Generator] on
+// every projection. InternalUserID MUST be non-empty; an empty value is
+// a programmer error in the calling site and the library reports it via
+// the audit chain.
+//
+// There is no separate field for an identity minted by an upstream IdP.
+// The library has no federation surface of its own: an embedder
+// federates by wrapping its own authenticator in an external step,
+// which reports the authenticated user as a single opaque string, and
+// that string arrives here as InternalUserID. An embedder whose users
+// can come from more than one upstream must therefore make the string
+// distinguish them — "provider:external-id" is the conventional
+// shape — because two upstreams returning the same opaque identifier
+// for unrelated people would otherwise project onto one subject.
 type GeneratorInput struct {
-	// InternalUserID is the OP-internal stable identifier of the end
-	// user. Non-empty for users that authenticated through the OP's
-	// own UserStore.
+	// InternalUserID is the stable identifier of the end user as the
+	// OP knows it: either from the OP's own UserStore, or as reported
+	// by the embedder's external authentication step.
 	InternalUserID string
-
-	// Federated is the upstream identifier returned by an external
-	// IdP. Non-zero when the user authenticated through federation.
-	Federated FederatedSubject
 
 	// Client is the requesting client. Pairwise generators consult
 	// [store.Client.SectorIdentifierURI] and the registered redirect

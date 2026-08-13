@@ -11,12 +11,61 @@ import (
 	"testing"
 )
 
-// ApproveAllScopes is the canonical "approve every requested scope"
-// payload tests submit to the built-in consent screen. Helper
-// functions in this package use it as the default; tests that want
-// to exercise scope dropping pass an explicit subset to
-// [PostConsentApproval].
+// ApproveAllScopes is the empty approved-scopes payload.
+//
+// Deprecated: an empty submission records an approval of nothing, not
+// an approval of everything — a consent screen the user answered by
+// clearing every box is a decision the OP honours. Use
+// [ApprovedScopesFrom] to build the payload that approves what the
+// screen actually presented.
 const ApproveAllScopes = ""
+
+// ApprovedScopesFrom returns the approved-scopes payload that approves
+// every scope the consent prompt presented, read out of the envelope
+// [IsConsentPrompt] returned.
+//
+// Building the payload from the envelope rather than from the
+// authorization request is what makes it an approval: the OP decides
+// which scopes reach the screen, and a test that submits the request's
+// scope list instead would approve entries the user was never shown.
+// The member names are the ones the JSON driver writes for
+// [interaction.ConsentScopePromptData]; the lowercase spellings are
+// accepted too so a driver that adds tags later keeps working.
+func ApprovedScopesFrom(tb testing.TB, envelope map[string]any) string {
+	tb.Helper()
+	data, _ := envelope["data"].(map[string]any)
+	raw, _ := pick(data, "Scopes", "scopes").([]any)
+	if len(raw) == 0 {
+		tb.Fatalf("testkit: consent envelope presented no scopes: %v", envelope)
+	}
+	names := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		switch v := entry.(type) {
+		case string:
+			names = append(names, v)
+		case map[string]any:
+			if name, ok := pick(v, "Name", "name").(string); ok && name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) == 0 {
+		tb.Fatalf("testkit: consent envelope carried %d scope rows but no names: %v", len(raw), envelope)
+	}
+	return strings.Join(names, " ")
+}
+
+// pick returns the first member present under any of keys. The JSON
+// driver serialises the prompt payload without struct tags, so its
+// members arrive exported; readers accept both spellings.
+func pick(m map[string]any, keys ...string) any {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			return v
+		}
+	}
+	return nil
+}
 
 // IsConsentPrompt reports whether resp is a JSON envelope from the
 // built-in consent screen. The test-side dispatcher

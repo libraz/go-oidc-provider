@@ -300,14 +300,12 @@ var ErrSubjectGeneratorRequired = &Error{
 }
 
 // ErrSubjectInputEmpty is returned by [SubjectGenerator] implementations
-// when both [SubjectGeneratorInput.InternalUserID] and
-// [SubjectGeneratorInput.Federated] are zero. The library treats it as
-// a server-side configuration error: the issuance pipeline is expected
-// to populate exactly one of the two fields before invoking the
-// generator.
+// when [SubjectGeneratorInput.InternalUserID] is empty. The library
+// treats it as a server-side configuration error: the issuance pipeline
+// is expected to populate the field before invoking the generator.
 var ErrSubjectInputEmpty = &Error{
 	Code:        codeServerError,
-	Description: "subject generator input has no InternalUserID and no Federated identifier",
+	Description: "subject generator input has no InternalUserID",
 }
 
 // ErrPairwiseSectorUnresolved is returned by the pairwise

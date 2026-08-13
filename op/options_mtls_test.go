@@ -20,6 +20,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -36,7 +37,14 @@ const (
 // from the rest of the code exchange.
 func newRootCAsProvider(tb testing.TB, opts ...op.Option) *testkit.Provider {
 	tb.Helper()
-	all := append([]op.Option{op.WithFeature(feature.MTLS)}, opts...)
+	all := append([]op.Option{
+		op.WithFeature(feature.MTLS),
+		// The default grant set does not include client_credentials, and
+		// the token endpoint refuses a grant the Provider has not
+		// enabled before dispatch — which would short-circuit the
+		// certificate-binding step this fixture exists to reach.
+		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials),
+	}, opts...)
 	tk := testkit.NewProvider(tb, testkit.WithOptions(all...))
 	hash, err := op.HashClientSecret(rootCAsSecret)
 	if err != nil {

@@ -3,6 +3,7 @@ package op_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -284,6 +285,118 @@ func (*nilLockoutStore) Get(context.Context, string) (*store.AuthnLockoutRecord,
 
 func (*nilLockoutStore) CompareAndSwap(context.Context, uint64, *store.AuthnLockoutRecord) (bool, error) {
 	return false, nil
+}
+
+// movableClock is a [op.Clock] a test advances by hand. The mutex is
+// not for the test's own goroutine but for the store's: the in-memory
+// reference reads the clock from its own bookkeeping.
+type movableClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *movableClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *movableClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// TestNewEmailOTPAuthenticator_ConfiguredClockGatesCodeExpiry pins the
+// only handle a caller has on this factor's sense of time. The
+// constructor runs before [op.New], so the authenticator cannot inherit
+// the Provider's clock — [op.EmailOTPConfig.Clock] is where a deployment
+// that pins one puts it, and if the field did not reach the verifier the
+// factor would silently keep reading wall time while everything around
+// it read the pinned instant. A harness pinning a clock would then be
+// unable to expire a code at all: the acceptance window would only close
+// after five real minutes.
+//
+// The two halves are the same code and the same authenticator, differing
+// only in whether the configured clock was moved past the TTL.
+func TestNewEmailOTPAuthenticator_ConfiguredClockGatesCodeExpiry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	start := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+
+	send := func(t *testing.T, clock *movableClock, subject string) (op.Authenticator, op.ContinueInput, string) {
+		t.Helper()
+		st := inmem.New(inmem.WithClock(clock))
+		users := stubUsers{u: &store.User{
+			Subject: subject,
+			Claims:  map[string]any{"email": "alice@example.com"},
+		}}
+		delivered := make(chan op.EmailOTPMessage, 1)
+		auth, err := op.NewEmailOTPAuthenticator(op.EmailOTPConfig{
+			Mailer: op.MailerFunc(func(_ context.Context, msg op.EmailOTPMessage) error {
+				delivered <- msg
+				return nil
+			}),
+			Store: st.EmailOTPs(),
+			Users: users,
+			Clock: clock,
+		})
+		if err != nil {
+			t.Fatalf("NewEmailOTPAuthenticator: %v", err)
+		}
+		sent, err := auth.Continue(ctx, op.ContinueInput{
+			Subject: subject,
+			Submission: interaction.FormSubmission{
+				Values: map[string]string{"email": "alice@example.com"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("send step: %v", err)
+		}
+		issued := <-delivered
+		if !issued.ExpiresAt.Equal(clock.Now().Add(op.DefaultEmailOTPCodeTTL)) {
+			t.Fatalf("ExpiresAt = %v, want %v; the code window was not measured from the configured clock",
+				issued.ExpiresAt, clock.Now().Add(op.DefaultEmailOTPCodeTTL))
+		}
+		return auth, op.ContinueInput{Subject: subject, Scratch: sent.Scratch}, issued.Code
+	}
+
+	verify := func(auth op.Authenticator, in op.ContinueInput, code string) (interaction.Step, error) {
+		in.Submission = interaction.FormSubmission{Values: map[string]string{"code": code}}
+		return auth.Continue(ctx, in)
+	}
+
+	t.Run("inside the window the code verifies", func(t *testing.T) {
+		t.Parallel()
+		clock := &movableClock{t: start}
+		auth, in, code := send(t, clock, "sub-fresh")
+
+		clock.advance(op.DefaultEmailOTPCodeTTL - time.Minute)
+		step, err := verify(auth, in, code)
+		if err != nil {
+			t.Fatalf("verify inside the window: %v", err)
+		}
+		if step.Result == nil || step.Result.Subject != "sub-fresh" {
+			t.Fatalf("step = %+v, want a Result for sub-fresh", step)
+		}
+	})
+
+	t.Run("past the window the same code is refused", func(t *testing.T) {
+		t.Parallel()
+		clock := &movableClock{t: start}
+		auth, in, code := send(t, clock, "sub-stale")
+
+		clock.advance(op.DefaultEmailOTPCodeTTL + time.Minute)
+		step, err := verify(auth, in, code)
+		if err == nil {
+			t.Fatalf("verify accepted a code the configured clock had already expired (step = %+v); "+
+				"the factor is reading a clock the caller cannot move", step)
+		}
+		if step.Result != nil {
+			t.Fatalf("expired verify returned a Result: %+v", step.Result)
+		}
+	})
 }
 
 func TestMailerFunc_ImplementsMailer(t *testing.T) {

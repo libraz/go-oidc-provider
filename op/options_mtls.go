@@ -38,9 +38,13 @@ import (
 // accepting nil here would silently mean "trust whatever the transport
 // gave us", the opposite of the caller's evident intent.
 //
-// The pool is consumed by the mTLS verifier, which only exists when the
-// mTLS feature is enabled; without it there is no certificate-binding
-// path for the anchors to govern and the option is inert.
+// The pool is consumed by the mTLS verifier, which only exists when
+// [feature.MTLS] is enabled; without that flag there is no
+// certificate-binding path for the anchors to govern, the pool is never
+// consulted, and access tokens are issued as plain bearer tokens.
+// [New] logs a partial-wiring warning in that case rather than failing,
+// so a deployment that provisions anchors ahead of the flag keeps
+// booting. Pair the option with WithFeature(feature.MTLS).
 //
 // Stable since v1.1.
 func WithMTLSRootCAs(pool *x509.CertPool) Option {

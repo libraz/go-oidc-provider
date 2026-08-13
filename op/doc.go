@@ -54,11 +54,11 @@
 //
 // [WithLoginFlow] declares how a browser session authenticates. It is outside
 // the required set because an OP serving only client_credentials has no user
-// to authenticate. A provider that mounts the authorize endpoint without one
-// still constructs, but it has no credential to prompt for: the first request
-// that needs an interaction answers server_error ("interaction is not
-// configured"). [PrimaryPassword] is the usual starting point; further factors
-// attach as [Rule] entries.
+// to authenticate. Enable the authorization_code grant without one, however,
+// and [New] refuses to construct: an OP that can start an authorization it has
+// no credential to finish is exactly the zero-value start the boot contract
+// exists to exclude. [PrimaryPassword] is the usual starting point; further
+// factors attach as [Rule] entries.
 //
 // # Local development
 //
@@ -73,9 +73,10 @@
 //     be a domain, so an http issuer on an IP literal has none to pair
 //     with.
 //   - [WithAllowInsecureBackchannelLogoutForDev] admits http:// loopback
-//     URLs for backchannel_logout_uri at registration time and disables
-//     the deliverer's SSRF gate so a stub RP on 127.0.0.1 can receive the
-//     logout token POST.
+//     URLs for backchannel_logout_uri at registration time and narrows the
+//     deliverer's SSRF gate to loopback so a stub RP on 127.0.0.1 can
+//     receive the logout token POST. Every other private range stays
+//     refused; reaching one is [WithBackchannelAllowPrivateNetwork].
 //
 // Production embedders leave both off and front their RPs over TLS.
 //

@@ -24,21 +24,6 @@ func TestUUIDv7_PassesInternalUserIDThrough(t *testing.T) {
 	}
 }
 
-func TestUUIDv7_FederatedReturnsExternalID(t *testing.T) {
-	t.Parallel()
-	g := subject.UUIDv7()
-	out, err := g.Generate(context.Background(), subject.GeneratorInput{
-		Federated: subject.FederatedSubject{Provider: "google", ExternalID: "google-uid-123"},
-		Client:    &store.Client{ID: "client-a"},
-	})
-	if err != nil {
-		t.Fatalf("Generate returned error: %v", err)
-	}
-	if out != "google-uid-123" {
-		t.Fatalf("Generate returned %q, want google-uid-123", out)
-	}
-}
-
 func TestUUIDv7_EmptyInputReturnsError(t *testing.T) {
 	t.Parallel()
 	g := subject.UUIDv7()
@@ -47,19 +32,6 @@ func TestUUIDv7_EmptyInputReturnsError(t *testing.T) {
 	})
 	if !errors.Is(err, subject.ErrInputEmpty) {
 		t.Fatalf("Generate err = %v, want %v", err, subject.ErrInputEmpty)
-	}
-}
-
-func TestUUIDv7_BothSetReturnsError(t *testing.T) {
-	t.Parallel()
-	g := subject.UUIDv7()
-	_, err := g.Generate(context.Background(), subject.GeneratorInput{
-		InternalUserID: "user-1",
-		Federated:      subject.FederatedSubject{Provider: "google", ExternalID: "google-1"},
-		Client:         &store.Client{ID: "client-a"},
-	})
-	if !errors.Is(err, subject.ErrInputBothSet) {
-		t.Fatalf("Generate err = %v, want %v", err, subject.ErrInputBothSet)
 	}
 }
 

@@ -4,9 +4,7 @@ import "github.com/libraz/go-oidc-provider/op/subject"
 
 // Subject is the OP-internal identifier for an authenticated end user.
 // It is the value the library writes into the "sub" claim of issued
-// ID tokens and access JWTs. A Subject MUST NOT carry upstream
-// identifiers verbatim; federated logins go through [FederatedSubject]
-// before becoming a Subject.
+// ID tokens and access JWTs.
 //
 // The canonical type definition lives in
 // [github.com/libraz/go-oidc-provider/op/subject.Subject]; this is a
@@ -14,18 +12,6 @@ import "github.com/libraz/go-oidc-provider/op/subject"
 // op/subject sub-package owns the [SubjectGenerator] interface
 // without an import cycle.
 type Subject = subject.Subject
-
-// FederatedSubject is the typed wrapper for an upstream identifier
-// returned by an external IdP. It is the only way the library
-// accepts an upstream "sub": resolving it to an internal [Subject]
-// requires a [store.UserStore] that owns the (Provider, ExternalID)
-// → Subject mapping.
-//
-// The wrapper exists so a string returned by Google or GitHub cannot
-// be assigned to a [Subject] by mistake, even with implicit
-// conversions. Re-exported from
-// [github.com/libraz/go-oidc-provider/op/subject.FederatedSubject].
-type FederatedSubject = subject.FederatedSubject
 
 // SubjectGenerator computes the value the OP writes into the "sub"
 // claim of issued ID tokens and JWT access tokens for an authenticated
@@ -37,7 +23,7 @@ type FederatedSubject = subject.FederatedSubject
 type SubjectGenerator = subject.Generator
 
 // SubjectGeneratorInput is the bundle the library hands to a
-// [SubjectGenerator] at grant-creation time. Re-exported from
+// [SubjectGenerator] on every projection. Re-exported from
 // [github.com/libraz/go-oidc-provider/op/subject.GeneratorInput].
 type SubjectGeneratorInput = subject.GeneratorInput
 

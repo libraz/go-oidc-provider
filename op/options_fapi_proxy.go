@@ -44,6 +44,15 @@ import (
 // [MTLSProxyConfig] reads the recorded value back as an [MTLSProxy]
 // so embedder-side middleware can be pinned to the same allow-list.
 //
+// The verifier that consumes the allow-list exists only when
+// [feature.MTLS] is enabled. Without that flag this option is recorded
+// and validated but never read: certificates in the forwarded header
+// are ignored and access tokens carry no cnf.x5t#S256 confirmation,
+// even though [MTLSProxyConfig] still reads the configured value back.
+// [New] logs a partial-wiring warning in that case rather than failing,
+// so a deployment that stages the allow-list ahead of the flag keeps
+// booting. Pair the option with WithFeature(feature.MTLS).
+//
 // The recorded state lives on the [Provider]'s own configuration
 // (not a package-level registry), so two [Provider] instances never
 // share or leak each other's proxy configuration, and the state is

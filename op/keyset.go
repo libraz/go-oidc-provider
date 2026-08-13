@@ -49,6 +49,17 @@ type SigningKey struct {
 	// is expected to swap the active entry by rebuilding the [Keyset]
 	// rather than letting the runtime mutate selection mid-flight.
 	//
+	// Set the deadline only after the JWKS cache overlap and the
+	// longest lifetime of anything this key signed have both elapsed.
+	// A key demoted from the active slot has signed tokens that
+	// outlive the rotation, and the OP verifies its own JWT access
+	// tokens on the way into /userinfo and /introspect: a deadline
+	// stamped at the rotation instant makes every token issued just
+	// before it fail there for the rest of its lifetime, while JWKS
+	// still advertises the key it was signed with. The bound to clear
+	// is the largest of [WithAccessTokenTTL], the ID token lifetime,
+	// and any longer-lived JWS the deployment issues.
+	//
 	// Stable since v1.0.
 	NotAfter time.Time
 }

@@ -3,6 +3,7 @@ package op_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,6 +46,24 @@ func httpGet(tb testing.TB, url string) *http.Response {
 		tb.Fatalf("GET %s: %v", url, err)
 	}
 	return resp
+}
+
+// fetchDiscovery GETs one discovery URL and returns the raw body. A URL that
+// serves no document fails the test naming the URL: a relying party deriving
+// it receives a 404 in place of the OP metadata.
+func fetchDiscovery(tb testing.TB, url string) (body string, ok bool) {
+	tb.Helper()
+	resp := httpGet(tb, url)
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		tb.Fatalf("read discovery body at %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		tb.Errorf("GET %s = %d, want 200: the discovery document must answer at this URL", url, resp.StatusCode)
+		return "", false
+	}
+	return string(raw), true
 }
 
 func TestIntegration_Discovery_DefaultPathsAndShape(t *testing.T) {
@@ -147,43 +166,66 @@ func TestIntegration_Discovery_RespectsMountPrefix(t *testing.T) {
 	}
 }
 
+// TestIntegration_PathIssuerRoutesAdvertisedEndpoints pins that every
+// endpoint the discovery document advertises is routed, and that the document
+// itself answers at every path an issuer is discovered at. An issuer carrying
+// a path has two such paths: the RFC 8414 §3 form that inserts the well-known
+// suffix ahead of the issuer path, and the OpenID Connect Discovery 1.0 §4
+// form that appends it to the issuer, which is what standard relying-party
+// libraries request. Both must return the same document.
 func TestIntegration_PathIssuerRoutesAdvertisedEndpoints(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name          string
-		issuer        string
-		mountPrefix   string
-		discoveryPath string
-		endpointBase  string
+		name           string
+		issuer         string
+		mountPrefix    string
+		discoveryPaths []string
+		endpointBase   string
 	}{
 		{
-			name:          "root issuer default mount",
-			issuer:        validIssuer,
-			mountPrefix:   "/oidc",
-			discoveryPath: "/.well-known/openid-configuration",
-			endpointBase:  "/oidc",
+			name:           "root issuer default mount",
+			issuer:         validIssuer,
+			mountPrefix:    "/oidc",
+			discoveryPaths: []string{"/.well-known/openid-configuration"},
+			endpointBase:   "/oidc",
 		},
 		{
-			name:          "root issuer custom mount",
-			issuer:        validIssuer,
-			mountPrefix:   "/authz",
-			discoveryPath: "/.well-known/openid-configuration",
-			endpointBase:  "/authz",
+			name:           "root issuer custom mount",
+			issuer:         validIssuer,
+			mountPrefix:    "/authz",
+			discoveryPaths: []string{"/.well-known/openid-configuration"},
+			endpointBase:   "/authz",
 		},
 		{
-			name:          "path issuer default mount",
-			issuer:        validIssuer + "/tenant",
-			mountPrefix:   "/oidc",
-			discoveryPath: "/.well-known/openid-configuration/tenant",
-			endpointBase:  "/tenant/oidc",
+			name:        "path issuer default mount",
+			issuer:      validIssuer + "/tenant",
+			mountPrefix: "/oidc",
+			discoveryPaths: []string{
+				"/.well-known/openid-configuration/tenant",
+				"/tenant/.well-known/openid-configuration",
+			},
+			endpointBase: "/tenant/oidc",
 		},
 		{
-			name:          "path issuer custom mount",
-			issuer:        validIssuer + "/tenant",
-			mountPrefix:   "/authz",
-			discoveryPath: "/.well-known/openid-configuration/tenant",
-			endpointBase:  "/tenant/authz",
+			name:        "path issuer custom mount",
+			issuer:      validIssuer + "/tenant",
+			mountPrefix: "/authz",
+			discoveryPaths: []string{
+				"/.well-known/openid-configuration/tenant",
+				"/tenant/.well-known/openid-configuration",
+			},
+			endpointBase: "/tenant/authz",
+		},
+		{
+			name:        "nested path issuer",
+			issuer:      validIssuer + "/idp/tenant1",
+			mountPrefix: "/oidc",
+			discoveryPaths: []string{
+				"/.well-known/openid-configuration/idp/tenant1",
+				"/idp/tenant1/.well-known/openid-configuration",
+			},
+			endpointBase: "/idp/tenant1/oidc",
 		},
 	}
 	for _, tc := range cases {
@@ -194,17 +236,27 @@ func TestIntegration_PathIssuerRoutesAdvertisedEndpoints(t *testing.T) {
 				op.WithIssuer(tc.issuer),
 				op.WithMountPrefix(tc.mountPrefix),
 			)
-			resp := httpGet(t, base+tc.discoveryPath)
-			if resp.StatusCode != http.StatusOK {
-				resp.Body.Close()
-				t.Fatalf("discovery status=%d want 200", resp.StatusCode)
-			}
 			var doc map[string]any
-			if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
-				resp.Body.Close()
-				t.Fatalf("decode discovery: %v", err)
+			var firstBody string
+			for _, discoveryPath := range tc.discoveryPaths {
+				body, ok := fetchDiscovery(t, base+discoveryPath)
+				if !ok {
+					continue
+				}
+				if firstBody == "" {
+					firstBody = body
+					if err := json.Unmarshal([]byte(body), &doc); err != nil {
+						t.Fatalf("decode discovery at %s: %v", discoveryPath, err)
+					}
+					continue
+				}
+				if body != firstBody {
+					t.Errorf("discovery at %s returned a different document than %s", discoveryPath, tc.discoveryPaths[0])
+				}
 			}
-			resp.Body.Close()
+			if doc == nil {
+				t.Fatalf("no discovery path served a document")
+			}
 
 			wantPaths := map[string]string{
 				"authorization_endpoint": tc.endpointBase + "/auth",

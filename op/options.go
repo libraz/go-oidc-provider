@@ -367,7 +367,7 @@ type config struct {
 
 	// staticClients carries the [store.Client] records produced by
 	// every [WithStaticClients] call (in invocation order, in seed
-	// order within each call). The slice is the H1-D orchestrator's
+	// order within each call). The slice is the orchestrator's
 	// input; the option layer only validates seeds and aggregates.
 	staticClients []store.Client
 
@@ -921,9 +921,17 @@ func WithLogger(logger *slog.Logger) Option {
 // should ride on. The dedicated audit logger from [WithAuditLogger]
 // wins; otherwise the operational logger from [WithLogger] is used so
 // audit records are not silently dropped just because the embedder
-// did not split the streams. A nil return collapses the emitter to
-// [audit.Discard()] — that path is reachable only when neither option
-// was supplied.
+// did not split the streams.
+//
+// The return is never nil in a configured [Provider]: when neither
+// option was supplied, [config.applyDefaults] has already installed a
+// logger over the internal discard handler, so the emitter is a live
+// [audit.Slog] whose handler reports itself disabled rather than
+// [audit.Discard]. The two are equivalent at the sink — no record is
+// written either way — and the emitter skips flattening an event whose
+// handler is disabled, so the silent default costs no per-event work.
+// The nil branch remains for a config that has not been through the
+// defaults pass.
 func (c *config) effectiveAuditLogger() *slog.Logger {
 	if c.auditLogger != nil {
 		return c.auditLogger

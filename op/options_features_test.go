@@ -43,7 +43,7 @@ func TestWithGrants_RejectsDuplicate(t *testing.T) {
 	}
 }
 
-// TestWithGrants_RejectsSecondCall pins #26: a second WithGrants must
+// TestWithGrants_RejectsSecondCall pins that a second WithGrants must
 // error rather than silently replacing the first set, so a caller that
 // composes option slices from several helpers cannot lose an earlier
 // grant set under a later one.
@@ -476,7 +476,7 @@ func TestWithProfile_AutoEnablesRequiredFeatures(t *testing.T) {
 	t.Parallel()
 
 	// FAPI2Baseline requires PAR + JAR per profile.RequiredFeatures.
-	// With H1-E auto-enable in WithProfile the embedder no longer
+	// With auto-enable in WithProfile the embedder no longer
 	// needs explicit WithFeature(PAR) / WithFeature(JAR) calls; only
 	// the disjunctive sender-constrained-token requirement (DPoP OR
 	// MTLS) still has to be supplied manually because it lives on

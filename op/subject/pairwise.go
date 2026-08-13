@@ -93,20 +93,14 @@ func (g pairwiseGenerator) Generate(_ context.Context, in GeneratorInput) (Subje
 }
 
 // pickUserID returns the user identifier the pairwise hash binds
-// against. Federated identifiers are bound as "Provider:ExternalID"
-// so two upstream IdPs returning the same opaque ExternalID for
-// unrelated users cannot collide on the pairwise output.
+// against. The identifier is taken verbatim, so distinguishing users
+// that reach the OP through different upstreams is the embedder's
+// responsibility — see [GeneratorInput] for why.
 func pickUserID(in GeneratorInput) (string, error) {
-	switch {
-	case in.InternalUserID != "" && !in.Federated.IsZero():
-		return "", ErrInputBothSet
-	case in.InternalUserID != "":
-		return in.InternalUserID, nil
-	case !in.Federated.IsZero():
-		return in.Federated.Provider + ":" + in.Federated.ExternalID, nil
-	default:
+	if in.InternalUserID == "" {
 		return "", ErrInputEmpty
 	}
+	return in.InternalUserID, nil
 }
 
 // resolveSector returns the sector host per OIDC Core 1.0 §5. Prefer

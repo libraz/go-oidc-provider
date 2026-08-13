@@ -70,10 +70,21 @@ func WithTrustedProxyHosts(hosts ...string) Option {
 }
 
 // WithCORSOrigins adds explicit cross-origin entries to the CORS allowlist.
-// The full allowlist is the union of these origins plus every redirect_uri
-// origin the [store.ClientStore] returns; this option only handles entries
-// that cannot be derived from a registered redirect_uri (admin SPAs,
-// management consoles, etc.).
+// The option handles entries that cannot be derived from a registered
+// redirect_uri (admin SPAs, management consoles, etc.).
+//
+// Two allowlists are built from it, because the routes have different trust
+// boundaries. The API endpoints (/token, /userinfo, /introspect, /revoke,
+// /par) admit these origins plus every redirect_uri origin the
+// [store.ClientStore] returns. The interaction ceremony routes
+// (/interaction/{uid}, and in SPA mode the state and asset routes under
+// [SPAUI.LoginMount]) admit only the issuer origin plus these explicit
+// entries: a ceremony response carries the CSRF token and the account list
+// for a login in progress, so one client being registered is no reason for
+// its origin to read another client's ceremony. A login UI hosted on a
+// client's redirect_uri origin therefore has to be named here — which is
+// what the ceremony's CSRF gate has always required of it for
+// state-changing requests.
 // Origins MUST be absolute URLs with non-empty scheme and host. The path,
 // query, and fragment are stripped. Each call appends to the configured
 // list; duplicates are deduplicated at allowlist build time.
@@ -396,9 +407,15 @@ func WithAllowLocalhostLoopback() Option {
 // 127.0.0.1, [::1], and "localhost". Public IP literals and
 // non-loopback DNS names continue to require https; the SSRF
 // gate's link-local / RFC 1918 / IPv6 ULA deny-list keeps every
-// other private destination blocked. The option emits a loud
-// audit-stream warning at op.New so a deployment cannot silently
-// leave it on after promoting from CI to production.
+// other private destination blocked, at the URL check, the DNS
+// lookup, the dial and every redirect hop alike. A registered
+// "localhost" is admitted only while it resolves to a loopback
+// address, so a split-horizon resolver cannot widen the opt-in.
+// Reaching an RP on a private LAN is a different decision with a
+// different option: [WithBackchannelAllowPrivateNetwork]. The
+// option emits a loud audit-stream warning at op.New so a
+// deployment cannot silently leave it on after promoting from CI
+// to production.
 //
 // Use this option for the in-process demos under examples/ and for
 // CI fixtures that bind a stub RP on a loopback port; never combine

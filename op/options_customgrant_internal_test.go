@@ -163,6 +163,7 @@ func TestBuiltinGrantTypeWireList_OrderIsWireVisible(t *testing.T) {
 // The empty-string arm (the "grant_type is required" branch) names no
 // wire and is skipped.
 func grantTypeSwitchCases(file *ast.File) []string {
+	consts := fileStringConstants(file)
 	var out []string
 	ast.Inspect(file, func(n ast.Node) bool {
 		sw, ok := n.(*ast.SwitchStmt)
@@ -178,27 +179,68 @@ func grantTypeSwitchCases(file *ast.File) []string {
 			if !ok {
 				continue
 			}
-			out = append(out, caseStringLiterals(clause)...)
+			out = append(out, caseWireValues(clause, consts)...)
 		}
 		return true
 	})
 	return out
 }
 
-// caseStringLiterals unquotes the string-literal expressions of a
-// single case arm, dropping non-literal and empty values.
-func caseStringLiterals(clause *ast.CaseClause) []string {
+// fileStringConstants indexes the file's package-level string constants
+// by name. The dispatch switch names its wires through constants (the
+// same ones the enabled-grant and per-client gates key on), so the scan
+// has to resolve identifiers to reach the wire values.
+func fileStringConstants(file *ast.File) map[string]string {
+	out := map[string]string{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range value.Names {
+				if i >= len(value.Values) {
+					continue
+				}
+				lit, ok := value.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if unquoted, err := strconv.Unquote(lit.Value); err == nil && unquoted != "" {
+					out[name.Name] = unquoted
+				}
+			}
+		}
+	}
+	return out
+}
+
+// caseWireValues resolves the expressions of a single case arm to wire
+// strings, accepting both inline literals and references to the file's
+// string constants. Anything else (an empty case, a non-string
+// expression) is dropped.
+func caseWireValues(clause *ast.CaseClause, consts map[string]string) []string {
 	out := make([]string, 0, len(clause.List))
 	for _, expr := range clause.List {
-		lit, ok := expr.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			continue
+		switch e := expr.(type) {
+		case *ast.BasicLit:
+			if e.Kind != token.STRING {
+				continue
+			}
+			wire, err := strconv.Unquote(e.Value)
+			if err != nil || wire == "" {
+				continue
+			}
+			out = append(out, wire)
+		case *ast.Ident:
+			if wire, ok := consts[e.Name]; ok {
+				out = append(out, wire)
+			}
 		}
-		wire, err := strconv.Unquote(lit.Value)
-		if err != nil || wire == "" {
-			continue
-		}
-		out = append(out, wire)
 	}
 	return out
 }

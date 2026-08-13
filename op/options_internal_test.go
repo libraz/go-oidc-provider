@@ -1,7 +1,7 @@
 package op
 
 // The tests in this file live in package op (not op_test) so they can
-// inspect unexported [config] fields the H1-E option layer touches.
+// inspect unexported [config] fields the option layer touches.
 // External-package tests in op/options_test.go cover the same surface
 // from the embedder's perspective; this file pins the structural
 // invariants that would otherwise require routing requests through
@@ -120,6 +120,38 @@ func TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet(t *testing.T) {
 	}
 }
 
+// TestApplyDefaults_ComposedDriverKeepsErrorRenderer pins the property
+// that survives the composition: the driver applyDefaults installs must
+// still be able to render a terminal authorization error. The wrapping
+// happens because of a branding template, and the error path is the one
+// nothing exercises during a successful login, so a wrapper that lost
+// the capability would ship as "the consent page looks right" while
+// every pre-redirect failure fell back to a raw JSON envelope in the
+// user's browser.
+func TestApplyDefaults_ComposedDriverKeepsErrorRenderer(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		seed func(*config)
+	}{
+		{"default driver", func(*config) {}},
+		{"with consent template", func(c *config) { c.consentUISet = true; c.consentUI = ConsentUI{} }},
+		{"with chooser template", func(c *config) { c.chooserUISet = true; c.chooserUI = ChooserUI{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := &config{}
+			tc.seed(c)
+			c.applyDefaults()
+			if _, ok := c.interactionD.(interaction.ErrorRenderer); !ok {
+				t.Fatalf("composed driver %T does not satisfy interaction.ErrorRenderer", c.interactionD)
+			}
+		})
+	}
+}
+
 // The per-template Content-Security-Policy is validated at the option
 // site and consumed by the overlay driver, so applyDefaults is the only
 // place the two halves meet. A policy that stops here renders the
@@ -147,12 +179,11 @@ func TestApplyDefaults_CarriesTemplatePoliciesIntoTheOverlay(t *testing.T) {
 	}
 }
 
-// TestWithStaticClients_StoresSeededClients pins the H1-E aggregate
+// TestWithStaticClients_StoresSeededClients pins the aggregate
 // behaviour: every seed projected through [ClientSeed.seed] is
 // appended to [config.staticClients] in the order seeds appear. The
-// orchestrator wiring that consumes the slice is staged for H1-D;
-// this test guards the option-side contract so the H1-D commit can
-// rely on the slice shape without re-deriving it.
+// test guards the option-side contract on its own, so the wiring that
+// consumes the slice can rely on its shape without re-deriving it.
 func TestWithStaticClients_StoresSeededClients(t *testing.T) {
 	t.Parallel()
 

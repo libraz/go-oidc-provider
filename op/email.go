@@ -89,9 +89,22 @@ type EmailOTPConfig struct {
 	// authoritative source of the destination address.
 	Users store.UserStore
 
-	// Clock supplies the wall-clock reading the authenticator and
-	// its verifier consult. Nil falls back to the [Provider]'s
-	// clock (or [timex.SystemClock] when called outside one).
+	// Clock supplies the wall-clock reading the authenticator and its
+	// verifier consult — the code TTL, the resend window, and the
+	// per-record lockout stamp all read it. Nil pins
+	// [timex.SystemClock] for the lifetime of the returned
+	// authenticator.
+	//
+	// The fall-back is the system clock and not the [Provider]'s: this
+	// constructor runs before [New], so there is no Provider to inherit
+	// from, and the value returned here is already built by the time one
+	// exists. A deployment that pins a clock through [WithClock] — a
+	// test harness pins one to make the code TTL deterministic — MUST
+	// pass the same [Clock] here, or this factor keeps reading real time
+	// while the rest of the OP reads the pinned one. Scheduling the
+	// factor as a [StepEmailOTP] inside [WithLoginFlow] instead needs no
+	// second wiring: that path is compiled inside [New] and is handed
+	// the Provider's clock.
 	Clock Clock
 
 	// CodeTTL is the acceptance window from issuance to verify.
@@ -134,9 +147,13 @@ const DefaultEmailOTPCodeTTL = emailotp.DefaultCodeTTL
 //   - Brute-force counter: 30 wrong codes inside a 24-hour rolling
 //     window stamp a 1-hour lock; 90 wrong codes stamp a 24-hour
 //     lock and force the user through the recovery flow.
-//   - Single-use: the persisted record is deleted on a successful
-//     verify so a replay of the code (e.g., from a leaked SPA log)
-//     is rejected on the next attempt.
+//   - Single-use: a successful verify stamps the persisted record
+//     consumed rather than deleting it, so a replay of the code (e.g.,
+//     from a leaked SPA log) is rejected on the next attempt. The
+//     record is retained past the code's own expiry because it also
+//     carries the resend cap and the failure counter; deleting it at
+//     verify — or at expiry — would hand an attacker a fresh budget for
+//     both.
 //   - Cross-factor budget: set [EmailOTPConfig.LockoutStore] and the
 //     factor shares the per-subject counter every other built-in
 //     second factor consults, so guesses cannot be reset by pivoting

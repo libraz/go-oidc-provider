@@ -20,20 +20,6 @@ func TestSubject_StringAndZero(t *testing.T) {
 	}
 }
 
-func TestFederatedSubject_Zero(t *testing.T) {
-	t.Parallel()
-
-	if !(op.FederatedSubject{}).IsZero() {
-		t.Error("zero FederatedSubject must report IsZero")
-	}
-	if (op.FederatedSubject{Provider: "google"}).IsZero() {
-		t.Error("FederatedSubject with provider must not be zero")
-	}
-	if (op.FederatedSubject{ExternalID: "123"}).IsZero() {
-		t.Error("FederatedSubject with external id must not be zero")
-	}
-}
-
 func TestParseScopeSet_AndStringRoundtrip(t *testing.T) {
 	t.Parallel()
 

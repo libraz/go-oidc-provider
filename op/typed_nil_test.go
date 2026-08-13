@@ -82,7 +82,7 @@ func TestWithLoginFlow_RejectsTypedNilDependencies(t *testing.T) {
 			field: "LoginFlow.Primary",
 			buildFlow: func(t *testing.T, _ *inmem.Store) op.LoginFlow {
 				t.Helper()
-				return op.LoginFlow{Primary: typedNilFrom[op.Step](t, &stagedH1DStep{})}
+				return op.LoginFlow{Primary: typedNilFrom[op.Step](t, &foreignStep{})}
 			},
 		},
 		{
@@ -182,7 +182,7 @@ func TestWithLoginFlow_RejectsTypedNilDependencies(t *testing.T) {
 			field: "Primary.ExternalStep.Authenticator",
 			buildFlow: func(t *testing.T, _ *inmem.Store) op.LoginFlow {
 				t.Helper()
-				auth := typedNilFrom[op.Authenticator](t, &h1dStubAuth{})
+				auth := typedNilFrom[op.Authenticator](t, &stubAuth{})
 				return op.LoginFlow{Primary: op.ExternalStep{
 					Authenticator: auth,
 					KindLabel:     "test.primary",
@@ -250,7 +250,7 @@ func TestPublicAuthnOptions_RejectTypedNilDependencies(t *testing.T) {
 		{
 			name:   "authenticator",
 			field:  "WithAuthenticators",
-			option: op.WithAuthenticators(typedNilFrom[op.Authenticator](t, &h1dStubAuth{})),
+			option: op.WithAuthenticators(typedNilFrom[op.Authenticator](t, &stubAuth{})),
 		},
 		{
 			name:   "captcha-verifier",

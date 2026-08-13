@@ -194,7 +194,14 @@ func TestPairwise_MultipleRedirectHostsAreUnresolved(t *testing.T) {
 	}
 }
 
-func TestPairwise_FederatedBindsProvider(t *testing.T) {
+// TestPairwise_DistinctUserIDsDoNotCollideWithinASector pins the half
+// of upstream-collision resistance the generator owns. The generator
+// takes InternalUserID verbatim, so an embedder serving users from more
+// than one upstream is the party that has to make the identifier say
+// which upstream a user came from; what the generator guarantees in
+// return is that two identifiers which do differ never project onto one
+// subject for the same sector.
+func TestPairwise_DistinctUserIDsDoNotCollideWithinASector(t *testing.T) {
 	t.Parallel()
 	g := subject.Pairwise(fixedSalt())
 	c := &store.Client{
@@ -202,21 +209,21 @@ func TestPairwise_FederatedBindsProvider(t *testing.T) {
 		SectorIdentifierURI: "https://fed.example",
 	}
 	googleSub, err := g.Generate(context.Background(), subject.GeneratorInput{
-		Federated: subject.FederatedSubject{Provider: "google", ExternalID: "shared-id"},
-		Client:    c,
+		InternalUserID: "google:shared-id",
+		Client:         c,
 	})
 	if err != nil {
 		t.Fatalf("google Generate: %v", err)
 	}
 	githubSub, err := g.Generate(context.Background(), subject.GeneratorInput{
-		Federated: subject.FederatedSubject{Provider: "github", ExternalID: "shared-id"},
-		Client:    c,
+		InternalUserID: "github:shared-id",
+		Client:         c,
 	})
 	if err != nil {
 		t.Fatalf("github Generate: %v", err)
 	}
 	if googleSub == githubSub {
-		t.Fatalf("different upstream providers with same ExternalID produced same sub")
+		t.Fatalf("distinct user identifiers produced the same sub within one sector")
 	}
 }
 

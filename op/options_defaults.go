@@ -273,11 +273,155 @@ func (c *config) emitPartialWiringWarnings() {
 	if c.allowInsecureBackchannelLogoutForDev {
 		c.logger.Warn(
 			"WithAllowInsecureBackchannelLogoutForDev admits plain-http "+
-				"loopback URLs for backchannel_logout_uri and disables "+
-				"the SSRF gate on the deliverer; never enable this in "+
-				"production",
+				"loopback URLs for backchannel_logout_uri and lets the "+
+				"deliverer POST a signed logout token at a loopback "+
+				"address; never enable this in production",
 			"option", "WithAllowInsecureBackchannelLogoutForDev",
 		)
 	}
 	c.warnUserStoreMismatch()
+	c.warnCaptchaOnScriptlessUI()
+	c.warnPasskeyOnScriptlessUI()
+	c.warnMTLSOptionsWithoutFeature()
+}
+
+// warnMTLSOptionsWithoutFeature reports mTLS knobs configured on an OP
+// that has no mTLS verifier to apply them.
+//
+// [buildMTLSVerifier] returns a nil verifier unless [feature.MTLS] is
+// enabled, and every consumer reads nil as "mTLS off". The recorded
+// [WithMTLSProxy] allow-list and [WithMTLSRootCAs] pool are then never
+// read: no certificate is selected from the forwarded header, no chain
+// is checked, and no cnf.x5t#S256 is stamped. The request still
+// succeeds, so the deployment issues plain bearer tokens while its
+// configuration says the tokens are certificate-bound — and
+// [MTLSProxyConfig] reads the recorded value back unchanged, which is
+// what makes the gap invisible from the embedder's side.
+//
+// Reported rather than rejected because both options are legitimately
+// set ahead of the feature flag — a deployment staging its proxy
+// allow-list before turning binding on, or sharing one option slice
+// across environments that enable the feature selectively. Rejecting
+// would break those without making any deployment safer than a line
+// naming the missing flag does.
+func (c *config) warnMTLSOptionsWithoutFeature() {
+	if featureEnabled(c.features, feature.MTLS) {
+		return
+	}
+	for _, o := range []struct {
+		configured bool
+		option     string
+	}{
+		{c.mtlsProxy.header != "" || len(c.mtlsProxy.trusted) > 0, "WithMTLSProxy"},
+		{c.mtlsRootCAs != nil, "WithMTLSRootCAs"},
+	} {
+		if !o.configured {
+			continue
+		}
+		c.logger.Warn(
+			o.option+" is configured but the mTLS feature is not enabled, so the "+
+				"OP builds no certificate verifier and never reads the value: "+
+				"client certificates are ignored and access tokens are issued as "+
+				"plain bearer tokens with no cnf.x5t#S256 confirmation. Add "+
+				"WithFeature(feature.MTLS) to make the setting take effect",
+			"option", o.option,
+		)
+	}
+}
+
+// warnCaptchaOnScriptlessUI reports a captcha challenge scheduled behind
+// the built-in HTML interaction surface.
+//
+// [interaction.HTMLDriver] renders no client-side script, so it presents
+// the captcha token field as a plain text input rather than mounting a
+// provider widget. That keeps the challenge answerable — the alternative
+// is an unfillable hidden field and a chain that aborts once the
+// attempts run out — but it only produces a token the verifier accepts
+// when the deployment's captcha is one a human can type. A widget-issued
+// token (Turnstile, reCAPTCHA, hCaptcha) cannot be produced on this
+// surface at all, and every request that reaches the challenge is
+// refused for a reason no user can act on.
+//
+// The library cannot tell the two apart: [CaptchaVerifier] is opaque.
+// The condition is therefore reported rather than rejected, so the
+// deployments where a typed answer is the intended one keep working.
+func (c *config) warnCaptchaOnScriptlessUI() {
+	if !c.captchaScheduled() || !rendersWithoutScript(c.interactionD) {
+		return
+	}
+	c.logger.Warn(
+		"a captcha challenge is configured but the interaction UI is the "+
+			"built-in HTML driver, which renders no client-side script; the "+
+			"token field is served as a plain text input, so a captcha whose "+
+			"token comes from a browser widget cannot be answered there. "+
+			"Configure WithSPAUI or WithInteractionDriver with a UI that "+
+			"mounts the provider's widget",
+		"option", "WithCaptchaVerifier",
+	)
+}
+
+// warnPasskeyOnScriptlessUI reports a passkey ceremony scheduled behind
+// the built-in HTML interaction surface.
+//
+// The passkey prompt carries the assertion the browser's WebAuthn call
+// produces. That call is script, and [interaction.HTMLDriver] ships
+// none, so the field is served as a text input a user has no way to
+// fill: unlike a captcha, there is no deployment where a human can
+// type the answer. The condition is still reported rather than
+// rejected, because an embedder may serve the ceremony from its own
+// page and drive this endpoint only for the submission.
+func (c *config) warnPasskeyOnScriptlessUI() {
+	if !c.passkeyScheduled() || !rendersWithoutScript(c.interactionD) {
+		return
+	}
+	c.logger.Warn(
+		"a passkey step is configured but the interaction UI is the "+
+			"built-in HTML driver, which renders no client-side script; the "+
+			"assertion field is served as a plain text input, and a WebAuthn "+
+			"assertion cannot be produced by typing. Configure WithSPAUI or "+
+			"WithInteractionDriver with a UI that runs the ceremony",
+		"option", "WithLoginFlow",
+	)
+}
+
+// passkeyScheduled reports whether a passkey step can be put in front of
+// a user through the compiled login flow.
+func (c *config) passkeyScheduled() bool {
+	for _, step := range c.loginFlowSteps() {
+		if step.Kind() == StepKindPasskey {
+			return true
+		}
+	}
+	return false
+}
+
+// captchaScheduled reports whether any wiring can put a captcha prompt
+// in front of a user: the failure-threshold gate that [WithCaptchaVerifier]
+// arms, or a [StepCaptcha] the [LoginFlow] schedules through its rules.
+func (c *config) captchaScheduled() bool {
+	if !isNilLike(c.captcha) {
+		return true
+	}
+	for _, step := range c.loginFlowSteps() {
+		if step.Kind() == StepKindCaptcha {
+			return true
+		}
+	}
+	return false
+}
+
+// rendersWithoutScript reports whether d is the built-in HTML driver,
+// possibly behind the library's own template overlay. A driver the
+// library did not write is assumed to be script-capable: its output is
+// unknowable here, and warning about every custom driver would train
+// the reader to ignore the line.
+func rendersWithoutScript(d interaction.Driver) bool {
+	switch v := d.(type) {
+	case interaction.HTMLDriver, *interaction.HTMLDriver:
+		return true
+	case interaction.TemplateOverlayDriver:
+		return rendersWithoutScript(v.Inner)
+	default:
+		return false
+	}
 }

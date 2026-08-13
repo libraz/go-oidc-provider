@@ -20,6 +20,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -28,11 +29,13 @@ import (
 )
 
 // defaultUserInfoLeeway is the symmetric tolerance the /userinfo
-// handler applies to the access-token "exp" / "iat" comparisons. The
-// value is well below the RFC 7519 §4.1.4 recommended ceiling so a
-// slow / clock-skewed RP retries quickly without amplifying replay
-// windows for stolen tokens.
-const defaultUserInfoLeeway = 30 * time.Second
+// handler applies to the access-token "exp" / "iat" comparisons. It is
+// an alias for [tokens.DefaultLeeway], which is the one value every
+// access-token verification surface resolves to: /userinfo answers the
+// same "is this token valid?" question as /introspect, /revoke and the
+// token-exchange subject-token lookup, and a deployment with clock skew
+// gets contradictory answers the moment those tolerances differ.
+const defaultUserInfoLeeway = tokens.DefaultLeeway
 
 // csrfDerivationLabel is the HMAC label used to derive the CSRF signing
 // key from the active cookie key. Including a domain-separation label
@@ -322,7 +325,7 @@ func (a preferredLocaleStoreAdapter) PreferredLocale(ctx context.Context, sub st
 	if err != nil {
 		return "", err
 	}
-	return i18n.Tag(loc), nil
+	return i18n.ParseTag(string(loc)), nil
 }
 
 // toScopeEntries projects the public [Scope] values onto the internal
@@ -922,8 +925,13 @@ func spaWiringFor(cfg *config) (loginMount, staticDir string) {
 //
 // cfg supplies the Provider-level fallbacks the per-step builders
 // consult when the Step omits its own field (e.g. StepTOTP defers to
-// [WithMFAEncryptionKeys] when [StepTOTP.EncryptionKey] is empty).
+// [WithMFAEncryptionKeys] when [StepTOTP.EncryptionKey] is empty), and
+// the Provider-level [WithRiskAssessor] fallback for [LoginFlow.Risk].
 func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, error) {
+	assessor, err := resolveLoginFlowRisk(flow, cfg)
+	if err != nil {
+		return nil, err
+	}
 	primary, err := projectStepToFlow("Primary", flow.Primary, cfg)
 	if err != nil {
 		return nil, err
@@ -951,12 +959,43 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 	spec := authn.LoginFlowSpec{
 		Primary: primary,
 		Rules:   rules,
-		Risk:    flow.Risk,
+		Risk:    assessor,
 	}
 	if !isNilLike(flow.Decider) {
 		spec.Decider = &deciderAdapter{inner: flow.Decider}
 	}
 	return authn.CompileLoginFlow(spec)
+}
+
+// resolveLoginFlowRisk picks the single [RiskAssessor] the compiled flow
+// consults. [LoginFlow.Risk] and [WithRiskAssessor] are two spellings of
+// one seam, and the LoginFlow path budgets exactly one Assess call per
+// chain, so the two cannot both be honoured:
+//
+//   - Only [LoginFlow.Risk] set — used.
+//   - Only [WithRiskAssessor] set — used. Without this fallback the
+//     option would be accepted and never consulted, which is a step-up
+//     policy that silently does not run.
+//   - Both set — configuration error. Picking one silently would make
+//     the ignored assessor's Deny verdicts disappear.
+//
+//nolint:ireturn,nolintlint // RiskAssessor is the embedder-facing interface the caller stores.
+func resolveLoginFlowRisk(flow LoginFlow, cfg *config) (RiskAssessor, error) {
+	flowSet := !isNilLike(flow.Risk)
+	optionSet := !isNilLike(cfg.risk)
+	switch {
+	case flowSet && optionSet:
+		return nil, newConfigurationError(
+			"WithRiskAssessor conflicts with LoginFlow.Risk"+
+				" — the LoginFlow path consults exactly one assessor per chain; set one of the two", nil,
+		)
+	case optionSet:
+		return cfg.risk, nil
+	case flowSet:
+		return flow.Risk, nil
+	default:
+		return nil, nil //nolint:nilnil // documented "no assessor configured" sentinel
+	}
 }
 
 // projectStepToFlow projects a single public [Step] onto the
