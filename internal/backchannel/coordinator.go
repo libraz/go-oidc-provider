@@ -719,8 +719,8 @@ func (c *Coordinator) dispatchOne(
 // session walk returned zero RPs to notify. The event is gated on
 // notice.SessionID being non-empty: a logout call that does not
 // name a session has no expectation of a fan-out, and emitting
-// then would generate noise on every Provider.Logout call against
-// a stale subject. INFO-level because under volatile session
+// then would generate noise on every logout against a stale
+// subject. INFO-level because under volatile session
 // placement the gap is the spec-conformant best-effort floor;
 // dashboards alert on elevated rates rather than on individual
 // occurrences.

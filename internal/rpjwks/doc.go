@@ -14,7 +14,10 @@
 //     dropped rather than failing the document, so an RP that publishes an
 //     X25519 key beside its signing key stays usable.
 //   - A bounded TTL/LRU cache with HTTP conditional-GET revalidation, so a
-//     rotation propagates without re-downloading an unchanged document.
+//     rotation propagates without re-downloading an unchanged document. The
+//     bound is the OP's: an upstream Cache-Control max-age may shorten an
+//     entry's life but never extend it past [Config.TTL], so a key the RP
+//     withdrew stops being accepted within that window.
 //   - Negative caching of upstream failures, and a per-URL throttle on the
 //     forced refresh, so neither path amplifies inbound requests into outbound
 //     ones.

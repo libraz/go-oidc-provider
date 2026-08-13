@@ -143,14 +143,39 @@ func TestTTLFromResponse_AbsentLeavesConfiguredTTL(t *testing.T) {
 		if cc != "" {
 			resp.Header.Set("Cache-Control", cc)
 		}
-		if got := ttlFromResponse(resp); got != 0 {
+		if got := ttlFromResponse(resp, DefaultTTL); got != 0 {
 			t.Errorf("Cache-Control=%q ttl=%v want 0", cc, got)
 		}
 	}
 	resp := &http.Response{Header: http.Header{}}
 	resp.Header.Set("Cache-Control", "max-age=90")
-	if got := ttlFromResponse(resp); got != 90*time.Second {
+	if got := ttlFromResponse(resp, DefaultTTL); got != 90*time.Second {
 		t.Errorf("ttl=%v want 90s", got)
+	}
+}
+
+// TestTTLFromResponse_ClampsToCeiling pins the direction the freshness hint is
+// allowed to move in. The header is written by the relying party, so a long
+// max-age must not be able to pin its keyset in the OP's cache: a key the RP
+// leaked or withdrew would otherwise keep verifying client assertions for the
+// advertised span, with no operator-visible signal.
+func TestTTLFromResponse_ClampsToCeiling(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = 5 * time.Minute
+	for _, tc := range []struct {
+		cacheControl string
+		want         time.Duration
+	}{
+		{"max-age=31536000", ceiling},    // a year: clamped to the OP's bound
+		{"max-age=300", ceiling},         // exactly the bound: unchanged
+		{"max-age=30", 30 * time.Second}, // below the bound: the RP may shorten
+	} {
+		resp := &http.Response{Header: http.Header{}}
+		resp.Header.Set("Cache-Control", tc.cacheControl)
+		if got := ttlFromResponse(resp, ceiling); got != tc.want {
+			t.Errorf("Cache-Control=%q ttl=%v want %v", tc.cacheControl, got, tc.want)
+		}
 	}
 }
 

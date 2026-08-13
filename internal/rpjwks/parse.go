@@ -63,16 +63,27 @@ func isJSONContentType(ct string) bool {
 	return ct == "application/json" || ct == "application/jwk-set+json"
 }
 
-// ttlFromResponse extracts the freshness lifetime the upstream advertised.
-// A zero return leaves the cache's configured TTL in force, which is also what
-// a non-positive max-age collapses to: JWKS documents are not safe to treat as
-// "no-cache", because revalidation against an unreachable upstream is
-// indistinguishable from a key rotation.
-func ttlFromResponse(resp *http.Response) time.Duration {
-	if maxAge, ok := parseMaxAge(resp.Header.Get("Cache-Control")); ok && maxAge > 0 {
-		return maxAge
+// ttlFromResponse extracts the freshness lifetime the upstream advertised,
+// bounded by ceiling. A zero return leaves the cache's configured TTL in force,
+// which is also what a non-positive max-age collapses to: JWKS documents are not
+// safe to treat as "no-cache", because revalidation against an unreachable
+// upstream is indistinguishable from a key rotation.
+//
+// The freshness hint belongs to the relying party, so it may only shorten an
+// entry's life, never extend it. Without the ceiling an RP advertising a year of
+// max-age would pin its keyset in the OP's cache for that year, and a key it
+// then leaked or withdrew would keep verifying client assertions — and keep
+// receiving outbound encryptions — with no operator-visible signal and no way
+// short of a process restart to force a refetch.
+func ttlFromResponse(resp *http.Response, ceiling time.Duration) time.Duration {
+	maxAge, ok := parseMaxAge(resp.Header.Get("Cache-Control"))
+	if !ok || maxAge <= 0 {
+		return 0
 	}
-	return 0
+	if ceiling > 0 && maxAge > ceiling {
+		return ceiling
+	}
+	return maxAge
 }
 
 // parseMaxAge pulls a numeric "max-age" directive out of a Cache-Control header

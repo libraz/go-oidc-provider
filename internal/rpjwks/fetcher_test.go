@@ -63,32 +63,118 @@ func jwksHandler(cacheControl, etag string, hits *atomic.Int32) http.Handler {
 	})
 }
 
-func TestFetch_HonoursAdvertisedFreshness(t *testing.T) {
+// TestFetch_AdvertisedFreshnessMayOnlyShorten pins the one direction an RP is
+// allowed to move the cache lifetime in. A max-age below the configured TTL is
+// honoured, because an RP asking to be refetched sooner costs the OP nothing;
+// the opposite direction is the security-relevant one and is covered by
+// [TestFetch_AdvertisedFreshnessCannotOutliveTheConfiguredTTL].
+func TestFetch_AdvertisedFreshnessMayOnlyShorten(t *testing.T) {
 	t.Parallel()
 
 	hits := &atomic.Int32{}
-	srv := httptest.NewServer(jwksHandler("max-age=60", "", hits))
+	srv := httptest.NewServer(jwksHandler("max-age=30", "", hits))
 	defer srv.Close()
 
 	clock := testClock()
-	f := newTestFetcher(t, Config{Clock: clock, TTL: time.Second})
+	f := newTestFetcher(t, Config{Clock: clock, TTL: 10 * time.Minute})
 	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
 		t.Fatalf("fetch 1: %v", err)
 	}
-	// The upstream's max-age (60s) outranks the fetcher's configured TTL (1s).
+	clock.now = clock.now.Add(15 * time.Second)
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("fetch 2: %v", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("hits=%d want 1 inside the advertised freshness", got)
+	}
+	clock.now = clock.now.Add(16 * time.Second)
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("fetch 3: %v", err)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Errorf("hits=%d want 2; the shorter advertised freshness was ignored", got)
+	}
+}
+
+// TestFetch_AdvertisedFreshnessCannotOutliveTheConfiguredTTL is the other
+// direction: the Cache-Control header is written by the relying party, so
+// letting it extend the entry would hand an RP the power to decide how long the
+// OP keeps trusting a key. An RP advertising a year would keep a leaked or
+// withdrawn key usable for that year, with no operator-visible signal and no
+// forced refetch short of restarting the process.
+func TestFetch_AdvertisedFreshnessCannotOutliveTheConfiguredTTL(t *testing.T) {
+	t.Parallel()
+
+	hits := &atomic.Int32{}
+	srv := httptest.NewServer(jwksHandler("max-age=31536000", "", hits))
+	defer srv.Close()
+
+	clock := testClock()
+	f := newTestFetcher(t, Config{Clock: clock, TTL: time.Minute})
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("fetch 1: %v", err)
+	}
 	clock.now = clock.now.Add(30 * time.Second)
 	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
 		t.Fatalf("fetch 2: %v", err)
 	}
 	if got := hits.Load(); got != 1 {
-		t.Errorf("hits=%d want 1", got)
+		t.Errorf("hits=%d want 1 inside the configured TTL", got)
 	}
 	clock.now = clock.now.Add(31 * time.Second)
 	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
 		t.Fatalf("fetch 3: %v", err)
 	}
 	if got := hits.Load(); got != 2 {
-		t.Errorf("hits=%d want 2 after the advertised freshness elapsed", got)
+		t.Errorf("hits=%d want 2; a year of advertised max-age outlived the configured TTL", got)
+	}
+}
+
+// TestFetch_WithdrawnKeyStopsBeingServedWithinTheConfiguredTTL states the
+// consequence the clamp exists for, in the vocabulary of the callers. An RP
+// that removes a key from its JWKS — after a leak, say — must stop being able
+// to authenticate with it, and every caller that resolves a jwks_uri
+// (client-assertion verification, request-object verification, outbound JWE)
+// reads the same cached keyset this test observes. The withdrawn key must be
+// gone within one configured TTL no matter what the RP advertised.
+func TestFetch_WithdrawnKeyStopsBeingServedWithinTheConfiguredTTL(t *testing.T) {
+	t.Parallel()
+
+	withdrawn := &atomic.Bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		w.Header().Set("Cache-Control", "max-age=31536000")
+		kid := "k1"
+		if withdrawn.Load() {
+			kid = "k2"
+		}
+		_, _ = w.Write([]byte(`{"keys":[{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","kid":"` + kid + `"}]}`))
+	}))
+	defer srv.Close()
+
+	clock := testClock()
+	f := newTestFetcher(t, Config{Clock: clock, TTL: time.Minute})
+	keys, err := f.Fetch(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("prime fetch: %v", err)
+	}
+	if len(keys.Keys) != 1 || keys.Keys[0].KeyID != "k1" {
+		t.Fatalf("prime fetch returned kids %v, want [k1]", keyIDs(keys))
+	}
+
+	withdrawn.Store(true)
+	clock.now = clock.now.Add(time.Minute + time.Second)
+	keys, err = f.Fetch(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("fetch after the TTL elapsed: %v", err)
+	}
+	for _, kid := range keyIDs(keys) {
+		if kid == "k1" {
+			t.Fatalf("withdrawn kid k1 still served past the configured TTL; kids=%v", keyIDs(keys))
+		}
+	}
+	if len(keys.Keys) != 1 || keys.Keys[0].KeyID != "k2" {
+		t.Fatalf("fetch after the TTL returned kids %v, want [k2]", keyIDs(keys))
 	}
 }
 

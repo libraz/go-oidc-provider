@@ -241,6 +241,54 @@ func TestCache_RefreshBypassesAFreshEntry(t *testing.T) {
 	}
 }
 
+// TestCache_LoaderTTLCannotExceedTheConfiguredTTL pins the cache's own bound on
+// a loader-supplied lifetime. The TTL a [TTLLoader] returns is derived from a
+// remote, client-controlled document; the clamp lives here as well as at the
+// call site so a protocol layer that forgets to bound it cannot let that
+// document decide how long the cache keeps serving it.
+func TestCache_LoaderTTLCannotExceedTheConfiguredTTL(t *testing.T) {
+	t.Parallel()
+
+	clock := &movableClock{now: time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)}
+	cache := New[string](Config{Clock: clock, TTL: time.Minute})
+	var calls atomic.Int32
+	loader := func(context.Context, string, bool) (string, time.Duration, error) {
+		calls.Add(1)
+		return "value", 365 * 24 * time.Hour, nil
+	}
+
+	if _, err := cache.LoadTTL(context.Background(), "key", loader); err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	clock.now = clock.now.Add(30 * time.Second)
+	if _, err := cache.LoadTTL(context.Background(), "key", loader); err != nil {
+		t.Fatalf("load inside the configured TTL: %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("loader calls=%d want 1 inside the configured TTL", got)
+	}
+
+	clock.now = clock.now.Add(31 * time.Second)
+	if _, err := cache.LoadTTL(context.Background(), "key", loader); err != nil {
+		t.Fatalf("load past the configured TTL: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("loader calls=%d want 2; a year-long loader TTL outlived the configured TTL", got)
+	}
+
+	// The refresh path stores through the same clamp.
+	if _, err := cache.RefreshTTL(context.Background(), "key", loader); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	clock.now = clock.now.Add(time.Minute + time.Second)
+	if _, err := cache.LoadTTL(context.Background(), "key", loader); err != nil {
+		t.Fatalf("load past the refreshed entry's TTL: %v", err)
+	}
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("loader calls=%d want 4; the refreshed entry kept the loader's own TTL", got)
+	}
+}
+
 // TestCache_FailedRefreshKeepsTheStoredValue pins that a refresh cannot be used
 // to discard a value the cache is still serving correctly. The trigger for a
 // refresh is an identifier any peer can supply, so a peer timing its probes
@@ -332,6 +380,128 @@ func TestCache_AbandonedCallerDoesNotStallOrPoison(t *testing.T) {
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("loader calls=%d want 1; the abandoned load should have served the retry", got)
+	}
+}
+
+// TestCache_LoaderOutlivesTheAbandoningFlightLeader pins the half of the
+// abandoned-caller contract that a loader ignoring its context cannot show.
+// Whichever caller wins the singleflight race supplies the loader's context,
+// and which one that is is a race nobody can observe — so if the loader obeyed
+// it, one peer hanging up would abort the fetch every collapsed waiter is
+// blocked on. On an endpoint an unauthenticated peer can drive, that is a key
+// they can keep unresolvable on demand.
+//
+// The loader here selects on its context, so it reports directly whether the
+// leader's cancellation reached it.
+func TestCache_LoaderOutlivesTheAbandoningFlightLeader(t *testing.T) {
+	t.Parallel()
+
+	cache := New[string](Config{TTL: time.Hour, NegativeTTL: time.Hour})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	var sawCancel atomic.Bool
+	loader := func(ctx context.Context, _ string, _ bool) (string, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		select {
+		case <-ctx.Done():
+			sawCancel.Store(true)
+			return "", ctx.Err()
+		case <-release:
+			return "value", nil
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	abandoned := make(chan error, 1)
+	go func() {
+		_, err := cache.Load(ctx, "key", loader)
+		abandoned <- err
+	}()
+
+	<-entered
+	cancel()
+	// The leader itself is entitled to stop waiting; only the loader must not.
+	if err := <-abandoned; !errors.Is(err, context.Canceled) {
+		t.Fatalf("abandoned Load err=%v want context.Canceled", err)
+	}
+	close(release)
+
+	value, err := cache.Load(context.Background(), "key", loader)
+	if err != nil || value != "value" {
+		t.Fatalf("follower Load value=%q err=%v want value,nil", value, err)
+	}
+	if sawCancel.Load() {
+		t.Error("the loader observed the flight leader's cancellation; one caller hanging up can " +
+			"abort the fetch every collapsed waiter depends on")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("loader calls=%d want 1; the abandoned flight did not complete, so the follower "+
+			"had to re-fetch instead of reading the cached result", got)
+	}
+}
+
+// TestCache_RefreshLoaderOutlivesTheAbandoningCaller is the same contract on
+// the refresh path, which runs its own singleflight key and so collapses its
+// own set of waiters.
+func TestCache_RefreshLoaderOutlivesTheAbandoningCaller(t *testing.T) {
+	t.Parallel()
+
+	cache := New[string](Config{TTL: time.Hour, NegativeTTL: time.Hour})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var sawCancel atomic.Bool
+	loader := func(ctx context.Context, _ string, _ bool) (string, time.Duration, error) {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			sawCancel.Store(true)
+			return "", 0, ctx.Err()
+		case <-release:
+			return "refreshed", 0, nil
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	abandoned := make(chan error, 1)
+	go func() {
+		_, err := cache.RefreshTTL(ctx, "key", loader)
+		abandoned <- err
+	}()
+
+	<-entered
+	cancel()
+	if err := <-abandoned; !errors.Is(err, context.Canceled) {
+		t.Fatalf("abandoned RefreshTTL err=%v want context.Canceled", err)
+	}
+	close(release)
+
+	value, ok, err := waitForValue(t, cache, "key")
+	if sawCancel.Load() {
+		t.Error("the refresh loader observed the abandoning caller's cancellation")
+	}
+	if !ok || err != nil || value != "refreshed" {
+		t.Errorf("cached value=%q ok=%v err=%v want refreshed,true,nil; the abandoned refresh did "+
+			"not complete", value, ok, err)
+	}
+}
+
+// waitForValue polls the cache until the detached loader has stored its result.
+// The abandoning caller returns before the loader does, so there is no handle
+// to synchronise on from the outside.
+func waitForValue(tb testing.TB, cache *Cache[string], key string) (string, bool, error) {
+	tb.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		value, ok, err := cache.Get(key)
+		if ok || time.Now().After(deadline) {
+			return value, ok, err
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

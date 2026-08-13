@@ -106,6 +106,68 @@ func TestResolverCache_ExpiredEntryIsEvicted(t *testing.T) {
 	}
 }
 
+// TestResolverCache_WithdrawnKeyIsDroppedDespiteALongAdvertisedMaxAge is the
+// outbound-encryption half of the cache-lifetime bound. This path has no
+// forced-refresh trigger — a superseded recipient key still yields a usable
+// recipient, so nothing locally signals that the RP rotated — which leaves
+// [Config.JWKSCacheTTL] as the only thing that stops the OP encrypting id_tokens
+// and userinfo responses to a key the RP already withdrew. An RP advertising a
+// year of Cache-Control max-age must not be able to extend that window.
+func TestResolverCache_WithdrawnKeyIsDroppedDespiteALongAdvertisedMaxAge(t *testing.T) {
+	t.Parallel()
+
+	current, err := json.Marshal(fakeJWKS(t))
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	// The rotated document publishes a different kid, so the assertion below
+	// distinguishes "refetched" from "still serving the withdrawn key".
+	rotatedSet := fakeJWKS(t)
+	rotatedSet.Keys[0].KeyID = "k2"
+	rotated, err := json.Marshal(rotatedSet)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var withdrawn atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		w.Header().Set("Cache-Control", "max-age=31536000")
+		if withdrawn.Load() {
+			_, _ = w.Write(rotated)
+			return
+		}
+		_, _ = w.Write(current)
+	}))
+	t.Cleanup(srv.Close)
+
+	clock := &movableClock{now: time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)}
+	r := New(Config{
+		Clock:               clock,
+		JWKSCacheTTL:        time.Minute,
+		AllowPrivateNetwork: true,
+	})
+	client := &store.Client{ID: "rp", JWKsURI: srv.URL}
+
+	rcpt, err := r.ResolveRecipient(context.Background(), client, "RSA-OAEP-256", "A256GCM")
+	if err != nil {
+		t.Fatalf("ResolveRecipient: %v", err)
+	}
+	if rcpt.KeyID != "k1" {
+		t.Fatalf("recipient kid=%q want k1", rcpt.KeyID)
+	}
+
+	withdrawn.Store(true)
+	clock.now = clock.now.Add(time.Minute + time.Second)
+	rcpt, err = r.ResolveRecipient(context.Background(), client, "RSA-OAEP-256", "A256GCM")
+	if err != nil {
+		t.Fatalf("ResolveRecipient after the TTL elapsed: %v", err)
+	}
+	if rcpt.KeyID != "k2" {
+		t.Fatalf("recipient kid=%q want k2; the withdrawn key survived JWKSCacheTTL", rcpt.KeyID)
+	}
+}
+
 func TestResolverCache_SingleflightCollapsesConcurrentFetches(t *testing.T) {
 	t.Parallel()
 

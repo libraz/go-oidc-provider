@@ -81,7 +81,9 @@ type Target struct {
 // register backchannel_logout_uri = "http://127.0.0.1/..." or
 // "http://169.254.169.254/..." and have the OP POST a signed
 // logout_token at an internal service. Embedders fronting their RPs
-// with private DNS opt out of the gate by setting AllowPrivateNetwork.
+// with private DNS opt out of the gate by setting AllowPrivateNetwork;
+// dev / CI setups that only need a loopback stub set the narrower
+// AllowLoopbackNetwork instead.
 type HTTPDeliverer struct {
 	// Client is the underlying [*http.Client]. A nil Client falls
 	// back to a package-default with the timeout below; embedders
@@ -101,8 +103,18 @@ type HTTPDeliverer struct {
 	// private DNS opt in via op.WithBackchannelAllowPrivateNetwork.
 	AllowPrivateNetwork bool
 
-	// Resolver overrides the DNS resolver consulted when AllowPrivateNetwork
-	// is false. The default nil value falls back to [net.DefaultResolver];
+	// AllowLoopbackNetwork is the narrow counterpart of
+	// AllowPrivateNetwork: it admits loopback destinations
+	// (127.0.0.0/8, ::1, and the textual loopback names, the latter
+	// only when they resolve to a loopback address) and leaves every
+	// other deny-listed range — link-local, RFC 1918, IPv6 ULA, cloud
+	// metadata — refused. op.WithAllowInsecureBackchannelLogoutForDev
+	// sets this flag rather than AllowPrivateNetwork so the dev opt-in
+	// delivers exactly the destination set its godoc promises.
+	AllowLoopbackNetwork bool
+
+	// Resolver overrides the DNS resolver consulted when the deny-list
+	// is engaged. The default nil value falls back to [net.DefaultResolver];
 	// tests inject a stub so the SSRF guard can be exercised without a
 	// real DNS round-trip.
 	Resolver *net.Resolver
@@ -144,15 +156,17 @@ func NewHTTPDeliverer(timeout time.Duration) *HTTPDeliverer {
 // transport as its base, while always constructing the surrounding hardened
 // envelope using the current [HTTPDeliverer.AllowPrivateNetwork] flag. A
 // caller cannot weaken redirect, timeout, or dial-time policy by supplying a
-// full client.
+// full client. [HTTPDeliverer.AllowLoopbackNetwork] travels with it, so the
+// narrow opt-in reaches the dial-time hook as well as the URL gate.
 func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
 	d.fetchOnce.Do(func() {
 		policy := securefetch.Policy{
-			AllowPrivateNetwork: d.AllowPrivateNetwork,
-			AllowedSchemes:      []string{"http", "https"},
-			MaxBodyBytes:        maxResponseBytes,
-			Timeout:             d.timeoutOrDefault(),
-			Resolver:            d.Resolver,
+			AllowPrivateNetwork:  d.AllowPrivateNetwork,
+			AllowLoopbackNetwork: d.AllowLoopbackNetwork,
+			AllowedSchemes:       []string{"http", "https"},
+			MaxBodyBytes:         maxResponseBytes,
+			Timeout:              d.timeoutOrDefault(),
+			Resolver:             d.Resolver,
 		}
 		if d.Client != nil {
 			policy.BaseTransport = d.Client.Transport
@@ -170,7 +184,8 @@ func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
 // Before issuing the POST, Deliver runs an SSRF deny-list against
 // the parsed Target.URL: loopback, link-local, RFC 1918 / ULA, and
 // IPv6 unique-local addresses are rejected unless AllowPrivateNetwork
-// is true. The check is per-call (not cached) so a client that
+// is true (or, for the loopback block alone,
+// AllowLoopbackNetwork). The check is per-call (not cached) so a client that
 // rotates DNS at the last second cannot escape the gate by racing
 // the resolver; the cost is one DNS round-trip per delivery, which
 // is negligible against the network round-trip the POST itself
@@ -221,7 +236,9 @@ var ErrPrivateNetworkBlocked = errors.New("backchannel: target resolves to a den
 // rebinding peer cannot pivot between gate and dial.
 //
 // Cloud-metadata IPs (169.254.169.254 et al) remain rejected even
-// when [HTTPDeliverer.AllowPrivateNetwork] is true.
+// when [HTTPDeliverer.AllowPrivateNetwork] is true, as does every
+// non-loopback private range when only
+// [HTTPDeliverer.AllowLoopbackNetwork] is set.
 func (d *HTTPDeliverer) assertSafeURL(ctx context.Context, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {

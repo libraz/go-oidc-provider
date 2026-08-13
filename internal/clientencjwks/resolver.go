@@ -32,8 +32,12 @@ type Config struct {
 	// Zero falls back to [rpjwks.DefaultTimeout].
 	HTTPTimeout time.Duration
 
-	// JWKSCacheTTL is the in-memory cache lifetime applied to every
-	// fetched keyset. Zero falls back to [rpjwks.DefaultTTL].
+	// JWKSCacheTTL is the maximum in-memory cache lifetime applied to
+	// every fetched keyset. An RP advertising a shorter Cache-Control
+	// max-age shortens the entry it produced; a longer one is clamped
+	// to this value, so a key the RP withdrew stops being used as a
+	// JWE recipient within one TTL. Zero falls back to
+	// [rpjwks.DefaultTTL].
 	JWKSCacheTTL time.Duration
 
 	// JWKSNegativeCacheTTL is the lifetime of a failed remote lookup.
@@ -163,6 +167,13 @@ func (r *Resolver) ResolveRecipient(
 // fetches go through the package's TTL cache so a busy outbound
 // path collapses repeated lookups to one network round-trip per
 // cache window.
+//
+// Unlike the inbound verification paths, this one has no
+// forced-refresh trigger: encrypting to a superseded key produces no
+// local signal, because a stale cached keyset still yields a usable
+// recipient. [Config.JWKSCacheTTL] is therefore the whole bound on
+// how long a withdrawn recipient key can stay in use, which is why
+// an RP's Cache-Control max-age is not allowed to exceed it.
 func (r *Resolver) resolveJWKS(
 	ctx context.Context,
 	client *store.Client,

@@ -27,10 +27,11 @@ const (
 	// timeouts the embedder configured on its own server.
 	DefaultTimeout = 5 * time.Second
 
-	// DefaultTTL is the freshness lifetime applied to a fetched keyset when the
-	// response advertises no Cache-Control max-age. Short enough that a key
-	// rotation propagates without operator intervention, long enough that the
-	// common case costs no network round-trip.
+	// DefaultTTL is the longest a fetched keyset stays cached when the caller
+	// configures no TTL of its own. Short enough that a key rotation propagates
+	// without operator intervention, long enough that the common case costs no
+	// network round-trip. A response advertising a shorter Cache-Control
+	// max-age is cached for that shorter time; a longer one is clamped here.
 	DefaultTTL = 5 * time.Minute
 
 	// DefaultNegativeTTL caps how long a fetch failure is cached against a URL.
@@ -132,8 +133,11 @@ type Config struct {
 	// Timeout caps one outbound fetch. Zero falls back to [DefaultTimeout].
 	Timeout time.Duration
 
-	// TTL is the cache lifetime for a keyset whose response advertised no
-	// Cache-Control max-age. Zero falls back to [DefaultTTL].
+	// TTL is the maximum cache lifetime of a fetched keyset. A response
+	// advertising a shorter Cache-Control max-age shortens the entry it
+	// produced; a longer one is clamped to this value, so the OP — not the
+	// relying party — decides how long a withdrawn key may keep working.
+	// Zero falls back to [DefaultTTL].
 	TTL time.Duration
 
 	// NegativeTTL is the lifetime of a cached fetch failure. Zero falls back to
@@ -191,6 +195,11 @@ type Fetcher struct {
 
 	fetchErr error
 	timeout  time.Duration
+	// ttl is the effective [Config.TTL]. It is both the lifetime of an entry
+	// whose response advertised nothing and the ceiling every advertised
+	// max-age is clamped to, so no RP can hold a keyset in the cache longer
+	// than the OP configured.
+	ttl      time.Duration
 	maxBody  int64
 	inflight chan struct{}
 
@@ -277,6 +286,7 @@ func New(cfg Config) *Fetcher {
 		}),
 		fetchErr:      cfg.FetchError,
 		timeout:       cfg.Timeout,
+		ttl:           cfg.TTL,
 		maxBody:       cfg.MaxBodyBytes,
 		inflight:      sharedURLLoadSlots(cfg.MaxInflight),
 		allowPrivate:  cfg.AllowPrivateNetwork,
@@ -379,15 +389,14 @@ func (f *Fetcher) clearForced(url string) {
 
 // load returns the cache loader for jwksURI.
 //
-// The round-trip runs under a context detached from the caller's request. A
-// singleflight winner's context is shared by every collapsed waiter, so leaving
-// the fetch bound to it would let one caller — an unauthenticated peer driving
-// an endpoint that resolves this client, say — abort the fetch every other
-// waiter depends on. The detached context keeps the caller's values (log and
-// trace correlation) but carries the fetcher's own deadline.
+// The context arrives already detached from the caller that won the
+// singleflight race — [remotecache] severs it so no single waiter's
+// cancellation can abort a fetch every collapsed peer depends on — so all this
+// adds is the fetcher's own deadline, which is the bound the cache leaves to
+// the loader.
 func (f *Fetcher) load(jwksURI string) remotecache.TTLLoader[*entry] {
 	return func(ctx context.Context, stale *entry, hasStale bool) (*entry, time.Duration, error) {
-		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), f.timeout)
+		fetchCtx, cancel := context.WithTimeout(ctx, f.timeout)
 		defer cancel()
 		if !hasStale {
 			stale = nil
@@ -429,7 +438,7 @@ func (f *Fetcher) doFetch(ctx context.Context, jwksURI string, cached *entry) (*
 	if cached != nil && resp.StatusCode == http.StatusNotModified {
 		// The cached keyset is still authoritative; renew its freshness
 		// without re-parsing.
-		return cached, ttlFromResponse(resp), nil
+		return cached, ttlFromResponse(resp, f.ttl), nil
 	}
 	if resp.StatusCode/100 != 2 {
 		return nil, 0, fmt.Errorf("status %d", resp.StatusCode)
@@ -448,7 +457,7 @@ func (f *Fetcher) doFetch(ctx context.Context, jwksURI string, cached *entry) (*
 	if err != nil {
 		return nil, 0, err
 	}
-	return &entry{keys: keys, etag: resp.Header.Get("ETag")}, ttlFromResponse(resp), nil
+	return &entry{keys: keys, etag: resp.Header.Get("ETag")}, ttlFromResponse(resp, f.ttl), nil
 }
 
 // acquireLoad takes both the process-wide hard ceiling and this fetcher's

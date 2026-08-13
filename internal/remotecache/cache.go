@@ -58,7 +58,9 @@ type Loader[V any] func(ctx context.Context, stale V, hasStale bool) (V, error)
 // TTLLoader is a [Loader] whose upstream advertises its own freshness lifetime
 // (an HTTP Cache-Control max-age, say). A non-positive TTL selects the cache's
 // configured [Config.TTL], so a loader that has nothing to advertise simply
-// returns zero.
+// returns zero. An upstream hint may only shorten an entry's life: a TTL longer
+// than [Config.TTL] is clamped to it, so a remote document cannot extend its own
+// residence in the cache.
 type TTLLoader[V any] func(ctx context.Context, stale V, hasStale bool) (V, time.Duration, error)
 
 // Cache is a concurrency-safe, size-bounded TTL/LRU cache. Positive and
@@ -139,12 +141,14 @@ func (c *Cache[V]) Load(ctx context.Context, key string, loader Loader[V]) (V, e
 }
 
 // LoadTTL is [Cache.Load] for an upstream that advertises its own freshness
-// lifetime; the loader's TTL replaces [Config.TTL] for the entry it produces.
+// lifetime; the loader's TTL replaces [Config.TTL] for the entry it produces,
+// up to [Config.TTL] itself (see [TTLLoader]).
 func (c *Cache[V]) LoadTTL(ctx context.Context, key string, loader TTLLoader[V]) (V, error) {
 	if cached := c.getFresh(key); cached.ok {
 		return cached.value, cached.err
 	}
 
+	loadCtx := detach(ctx)
 	return c.await(ctx, c.flight.DoChan(key, func() (any, error) {
 		// Re-check inside the singleflight so a concurrent winner that
 		// completed between the probe above and the call here does not force a
@@ -153,7 +157,7 @@ func (c *Cache[V]) LoadTTL(ctx context.Context, key string, loader TTLLoader[V])
 			return loadResult[V]{value: cached.value, err: cached.err}, nil
 		}
 		stale := c.removeExpired(key)
-		value, ttl, err := loader(ctx, stale.value, stale.ok)
+		value, ttl, err := loader(loadCtx, stale.value, stale.ok)
 		if err != nil {
 			if c.cacheableError(err) {
 				c.putNegative(key, err, stale.value, stale.ok)
@@ -182,9 +186,10 @@ func (c *Cache[V]) LoadTTL(ctx context.Context, key string, loader TTLLoader[V])
 // concurrent [Cache.LoadTTL], whose inner re-check would hand back the very
 // entry the refresh exists to replace.
 func (c *Cache[V]) RefreshTTL(ctx context.Context, key string, loader TTLLoader[V]) (V, error) {
+	loadCtx := detach(ctx)
 	return c.await(ctx, c.flight.DoChan(key+refreshFlightSuffix, func() (any, error) {
 		current := c.peek(key)
-		value, ttl, err := loader(ctx, current.value, current.ok)
+		value, ttl, err := loader(loadCtx, current.value, current.ok)
 		if err != nil {
 			if !current.ok && c.cacheableError(err) {
 				var zero V
@@ -195,6 +200,27 @@ func (c *Cache[V]) RefreshTTL(ctx context.Context, key string, loader TTLLoader[
 		c.putPositive(key, value, ttl)
 		return loadResult[V]{value: value}, nil
 	}))
+}
+
+// detach severs a loader's context from the caller that happened to win the
+// singleflight race, keeping its values (log and trace correlation, request
+// identifiers) but dropping its cancellation and deadline.
+//
+// The winner's context is not the loader's to obey. One flight serves every
+// caller collapsed onto the key, and which of them became the winner is a race
+// none of them can see — so honouring its cancellation would let a single peer
+// that hangs up abort a fetch every other waiter is blocked on, and on an
+// endpoint an unauthenticated peer can drive, do it on demand until the key
+// never resolves. [Cache.await] already promises the other half of this ("the
+// loader keeps running and its result lands in the cache for the next caller");
+// that promise is only true if the loader outlives the abandoning caller.
+//
+// Detaching here rather than in each loader makes the guarantee structural: a
+// loader added later inherits it instead of having to remember it. Bounding the
+// work stays with the loader, which is the only layer that knows what its
+// upstream costs — every current one carries its own request timeout.
+func detach(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
 }
 
 // await blocks on a singleflight result while still honouring the caller's
@@ -305,8 +331,13 @@ func (c *Cache[V]) peek(key string) staleResult[V] {
 	return staleResult[V]{value: e.value, ok: !e.negative || e.hasStale}
 }
 
+// putPositive stores value under the loader's TTL, bounded by [Config.TTL].
+// The clamp is deliberately here rather than only at the call site: the TTL a
+// [TTLLoader] returns is derived from a remote, client-controlled document, and
+// a protocol layer that forgot to bound it would otherwise let that document
+// choose how long the cache retains it.
 func (c *Cache[V]) putPositive(key string, value V, ttl time.Duration) {
-	if ttl <= 0 {
+	if ttl <= 0 || ttl > c.ttl {
 		ttl = c.ttl
 	}
 	c.put(key, value, nil, false, false, ttl)

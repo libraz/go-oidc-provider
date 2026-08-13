@@ -34,6 +34,19 @@
 // addresses would expose every cloud deployment to credential
 // disclosure via SSRF, which is the opposite of the option's intent.
 //
+// # Opt-in width
+//
+// Two opt-ins release the deny-list, and they are deliberately not the
+// same size. [Options.AllowPrivate] admits the whole private range for
+// a deployment whose RPs genuinely live on a private LAN;
+// [Options.AllowLoopback] admits loopback only, for a caller whose
+// documented promise is "reaches a stub on a loopback port". A caller
+// that needs the narrow promise MUST NOT reach for the wide flag: the
+// gate is the only thing standing between an RP-registered URL and
+// RFC 1918 space. Both flags converge on [Options.classifyAddr], so
+// the URL-time, DNS-time, dial-time and redirect checks cannot drift
+// into disagreeing about what an opt-in means.
+//
 // # Redirects
 //
 // [NewHTTPClient] caps redirects at [Options.MaxRedirects] (default 0)

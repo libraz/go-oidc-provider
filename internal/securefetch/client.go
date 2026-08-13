@@ -76,6 +76,15 @@ type Policy struct {
 	// even with this flag set; see [netsec] for the rationale.
 	AllowPrivateNetwork bool
 
+	// AllowLoopbackNetwork is the narrow flavour of
+	// [Policy.AllowPrivateNetwork]: it lifts the deny-list for loopback
+	// destinations only and leaves link-local, RFC 1918, IPv6 ULA and
+	// cloud-metadata addresses blocked. Call sites whose opt-in is
+	// documented as "dev / CI stub on a loopback port" use this one so
+	// the enforced destination set matches the documented one; see
+	// [netsec.Options.AllowLoopback].
+	AllowLoopbackNetwork bool
+
 	// AllowedSchemes restricts the URL scheme allow-list. A nil /
 	// empty value falls back to {"http", "https"}; pass {"https"}
 	// to force TLS (the sector resolver uses this).
@@ -177,11 +186,12 @@ func (p Policy) WithHTTPClientForTest(c *http.Client) Policy {
 // netsecOptions returns the [netsec.Options] snapshot the envelope
 // uses for both the URL-time gate and the [*http.Client] construction.
 // The function is the single source of truth so the dial-time and
-// URL-time checks always agree on the AllowPrivate / scheme / timeout
-// posture.
+// URL-time checks always agree on the AllowPrivate / AllowLoopback /
+// scheme / timeout posture.
 func (p Policy) netsecOptions() netsec.Options {
 	return netsec.Options{
 		AllowPrivate:    p.AllowPrivateNetwork,
+		AllowLoopback:   p.AllowLoopbackNetwork,
 		AllowedSchemes:  p.AllowedSchemes,
 		Timeout:         p.Timeout,
 		MaxRedirects:    p.MaxRedirects,
@@ -214,10 +224,10 @@ type Client struct {
 }
 
 // NewClient returns a [*Client] with the supplied [Policy]. The
-// function returns an error when the policy carries an unrecoverable
-// misconfiguration (negative body cap); the SSRF posture, redirect
-// policy, and timeouts are never invalid because they fall back to
-// the hardened defaults documented on [Policy].
+// constructor cannot fail: a negative body cap is clamped to the
+// default ceiling, and the SSRF posture, redirect policy, and
+// timeouts fall back to the hardened defaults documented on
+// [Policy].
 func NewClient(p Policy) *Client {
 	if p.MaxBodyBytes < 0 {
 		// Clamp negative caps to the default. A negative value is a

@@ -71,6 +71,23 @@ type Options struct {
 	// rejected — see the package doc for the rationale.
 	AllowPrivate bool
 
+	// AllowLoopback is the narrow flavour of [Options.AllowPrivate]:
+	// it releases the gate for loopback destinations only (127.0.0.0/8,
+	// ::1, and their IPv4-mapped IPv6 spellings, plus the textual names
+	// [IsLocalHostname] matches). Link-local, RFC 1918, IPv6 ULA, the
+	// unspecified address and cloud metadata stay blocked.
+	//
+	// The field exists so a caller whose documented promise is "this
+	// reaches a stub bound on a loopback port" does not have to buy the
+	// whole private-network range to keep that promise. A textual
+	// loopback name is still resolved and every resolved address must
+	// itself be loopback, so a split-horizon resolver cannot widen the
+	// opt-in by mapping "localhost" onto an internal host.
+	//
+	// [Options.AllowPrivate] is the wider setting and wins when both
+	// are true.
+	AllowLoopback bool
+
 	// AllowedSchemes is the URL scheme allow-list. A nil / empty value
 	// falls back to {"http", "https"}; pass {"https"} to force TLS.
 	AllowedSchemes []string
@@ -212,6 +229,14 @@ func AssertSafeURLParsed(ctx context.Context, u *url.URL, opts Options) error {
 			// expects to reach loopback addresses.
 			return nil
 		}
+		if opts.AllowLoopback {
+			// The loopback-only opt-in admits the textual name but
+			// still insists the name resolves to a loopback address:
+			// a split-horizon resolver that maps "localhost" onto an
+			// internal host would otherwise turn the narrow opt-in
+			// back into a private-network one.
+			return assertResolvedHostSafe(ctx, host, opts)
+		}
 		return fmt.Errorf("%w: host %q is loopback / localhost", ErrPrivateNetworkBlocked, host)
 	}
 	if ip := net.ParseIP(host); ip != nil {
@@ -220,19 +245,56 @@ func AssertSafeURLParsed(ctx context.Context, u *url.URL, opts Options) error {
 	return assertResolvedHostSafe(ctx, host, opts)
 }
 
+// addrVerdict is the outcome [Options.classifyAddr] returns for one
+// resolved address.
+type addrVerdict int
+
+const (
+	// addrAllowed means the address may be dialled under the caller's
+	// opt-in posture.
+	addrAllowed addrVerdict = iota
+	// addrDeniedPrivate means the address is inside the private
+	// deny-list and no opt-in released it.
+	addrDeniedPrivate
+	// addrDeniedMetadata means the address is a cloud-metadata
+	// service, which no opt-in releases.
+	addrDeniedMetadata
+)
+
+// classifyAddr is the single place the package decides whether one
+// address may be dialled. All four enforcement points — the IP-literal
+// check, the DNS-time check, the [Dialer.Control] hook and the
+// redirect re-check — route through it so an opt-in cannot mean one
+// thing at the URL gate and another at the socket.
+func (o Options) classifyAddr(ip net.IP) addrVerdict {
+	if IsCloudMetadataIP(ip) {
+		// Rejected under every opt-in; see [IsCloudMetadataIP].
+		return addrDeniedMetadata
+	}
+	if o.AllowPrivate {
+		return addrAllowed
+	}
+	if !IsPrivateIP(ip) {
+		return addrAllowed
+	}
+	if o.AllowLoopback && ip.IsLoopback() {
+		// [net.IP.IsLoopback] covers 127.0.0.0/8, ::1 and the
+		// IPv4-mapped IPv6 spelling of the v4 block.
+		return addrAllowed
+	}
+	return addrDeniedPrivate
+}
+
 // assertIPSafe runs the deny-list against a literal IP host. The
 // helper is split out so [AssertSafeURLParsed] stays under the
 // project gocognit gate.
 func assertIPSafe(ip net.IP, host string, opts Options) error {
-	if IsCloudMetadataIP(ip) {
-		// Cloud metadata is rejected even with AllowPrivate.
+	switch opts.classifyAddr(ip) {
+	case addrDeniedMetadata:
 		return fmt.Errorf("%w: host %q is a cloud metadata IP", ErrCloudMetadataBlocked, host)
-	}
-	if opts.AllowPrivate {
-		return nil
-	}
-	if IsPrivateIP(ip) {
+	case addrDeniedPrivate:
 		return fmt.Errorf("%w: host %q is loopback / link-local / private", ErrPrivateNetworkBlocked, host)
+	case addrAllowed:
 	}
 	return nil
 }
@@ -253,13 +315,14 @@ func assertResolvedHostSafe(ctx context.Context, host string, opts Options) erro
 		return fmt.Errorf("netsec: lookup %q returned no addresses", host)
 	}
 	for _, addr := range addrs {
-		if IsCloudMetadataIP(addr.IP) {
+		switch opts.classifyAddr(addr.IP) {
+		case addrDeniedMetadata:
 			return fmt.Errorf("%w: host %q resolves to a cloud metadata IP %s",
 				ErrCloudMetadataBlocked, host, addr.IP)
-		}
-		if !opts.AllowPrivate && IsPrivateIP(addr.IP) {
+		case addrDeniedPrivate:
 			return fmt.Errorf("%w: host %q resolves to a private IP %s",
 				ErrPrivateNetworkBlocked, host, addr.IP)
+		case addrAllowed:
 		}
 	}
 	return nil
@@ -388,11 +451,12 @@ func makeDialControl(opts Options) func(network, address string, c syscall.RawCo
 			// in the caller, not an attack.
 			return fmt.Errorf("netsec: dial address %q is not an IP literal", address)
 		}
-		if IsCloudMetadataIP(ip) {
+		switch opts.classifyAddr(ip) {
+		case addrDeniedMetadata:
 			return fmt.Errorf("%w: dial address %s is a cloud metadata IP", ErrCloudMetadataBlocked, ip)
-		}
-		if !opts.AllowPrivate && IsPrivateIP(ip) {
+		case addrDeniedPrivate:
 			return fmt.Errorf("%w: dial address %s is loopback / link-local / private", ErrPrivateNetworkBlocked, ip)
+		case addrAllowed:
 		}
 		if opts.DialControlHook != nil {
 			return opts.DialControlHook(network, address, c)
