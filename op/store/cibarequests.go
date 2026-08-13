@@ -150,11 +150,12 @@ type CIBARequest struct {
 	// rendering-context escaping is the embedder's responsibility.
 	BindingMessage string
 
-	// UserCode is the optional out-of-band confirmation value the
-	// client supplied (CIBA Core §7.1, only meaningful when
-	// backchannel_user_code_parameter_supported is advertised).
-	// Backends store the value as supplied; the authentication device
-	// is responsible for prompting the user.
+	// UserCode is the out-of-band confirmation value CIBA Core §7.1
+	// defines. The bundled /bc-authorize handler never populates it:
+	// the OP advertises backchannel_user_code_parameter_supported as
+	// false and refuses a non-empty user_code, so the field exists for
+	// an embedder that drives the substore itself against its own
+	// user-code registry. Backends store the value as supplied.
 	UserCode string
 
 	// DPoPJKT is the SHA-256 thumbprint of the DPoP proof the client

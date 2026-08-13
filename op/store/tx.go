@@ -79,6 +79,11 @@ type Tx interface {
 	// backend; the sentinel is what callers match on, so a bare
 	// backend-specific error leaves an embedder unable to tell a closed
 	// handle from a transport fault.
+	//
+	// A lookup is a call like any other. A backend that answers one
+	// from its backing store after Commit reports success to a caller
+	// that believes it is still inside a transaction, and the record it
+	// hands back carries none of the isolation the caller is acting on.
 	Commit() error
 
 	// Rollback discards every change made through the substore handles

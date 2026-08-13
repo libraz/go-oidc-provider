@@ -191,6 +191,16 @@ type EmailOTPStore interface {
 	// has been superseded. A zero or signed-max generation is also rejected
 	// with [ErrAlreadyConsumed].
 	//
+	// Marking the challenge is the implementation's job, not the
+	// caller's: a nil return MUST leave the stored record with a
+	// non-zero ConsumedAt, whether or not r carried one. A backend that
+	// copies the presented value through reports success while leaving
+	// the challenge redeemable when the caller passed a zero. Backends
+	// SHOULD honour a non-zero presented value — it is the OP's own
+	// clock reading for the verification that just succeeded — and stamp
+	// their own otherwise. [RecoveryStore.Consume] carries the same
+	// post-condition for the same reason.
+	//
 	// r is the successful verifier result, so it may also clear
 	// FailedCount, FirstFailureAt, and LockedUntil while stamping
 	// ConsumedAt. Backends MUST persist that verification-owned transition;

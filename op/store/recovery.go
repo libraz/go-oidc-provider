@@ -82,6 +82,16 @@ type RecoveryStore interface {
 	// set. The index is the slot index returned by the recovery
 	// verifier for the same batch.
 	//
+	// Marking the slot is the implementation's job, not the caller's: a
+	// nil return MUST leave the stored slot with a non-zero ConsumedAt,
+	// whether or not b.Codes[index].ConsumedAt carried one. A backend
+	// that copies the presented value through reports success while
+	// leaving the code redeemable when the caller passed a zero, which
+	// breaks single-use for every later holder of that code. Backends
+	// SHOULD honour a non-zero presented value — it is the OP's own
+	// clock reading for the verification that just succeeded — and stamp
+	// their own otherwise.
+	//
 	// The presented b.Codes[index].Hash MUST match the stored slot's
 	// Hash. An implementation MUST reject (with [ErrAlreadyConsumed]) a
 	// Consume whose slot hash differs from the current batch's, so a code

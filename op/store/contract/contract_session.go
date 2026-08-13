@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ var sessionCases = []subtest{
 	{"Expired", sessionExpired},
 	{"ListByChooserGroup", sessionListByChooserGroup},
 	{"ListByChooserGroupSkipsExpired", sessionListByChooserGroupSkipsExpired},
+	{"ListByChooserGroupFollowsTheRecord", sessionListByChooserGroupFollowsTheRecord},
 	{"ConcurrentRotate", sessionConcurrentRotate},
 }
 
@@ -239,6 +241,50 @@ func sessionListByChooserGroupSkipsExpired(t *testing.T, f Factory) {
 	}
 }
 
+// sessionListByChooserGroupFollowsTheRecord pins which of the two
+// possible sources of truth answers ListByChooserGroup: a session that
+// moved to another group MUST NOT come back under the group it left,
+// however the backend maintains whatever secondary index it keeps. A
+// backend that lists from the index alone returns the session under
+// both groups the moment one index write is lost, and what the caller
+// does with that list is offer the accounts in a browser's chooser and
+// sign them all out together — so the failure hands one browser another
+// account's subject, and lets a sign-out-everywhere reach a session
+// that is not part of that group.
+func sessionListByChooserGroupFollowsTheRecord(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	s := newSession(b.Now(), "s-moved")
+	s.ChooserGroupID = "cg-left"
+	if err := b.Store.Sessions().Save(ctx, s); err != nil {
+		t.Fatalf("Save into the original group: %v", err)
+	}
+	moved := *s
+	moved.ChooserGroupID = "cg-joined"
+	moved.UpdatedAt = b.Now().Add(time.Minute)
+	if err := b.Store.Sessions().Save(ctx, &moved); err != nil {
+		t.Fatalf("Save into the new group: %v", err)
+	}
+
+	left, err := b.Store.Sessions().ListByChooserGroup(ctx, "cg-left")
+	if err != nil {
+		t.Fatalf("ListByChooserGroup(left group): %v", err)
+	}
+	for _, got := range left {
+		if got.ID == s.ID {
+			t.Errorf("session %q still listed under the group it left (ChooserGroupID=%q)",
+				got.ID, got.ChooserGroupID)
+		}
+	}
+	joined, err := b.Store.Sessions().ListByChooserGroup(ctx, "cg-joined")
+	if err != nil {
+		t.Fatalf("ListByChooserGroup(new group): %v", err)
+	}
+	if len(joined) != 1 || joined[0].ID != s.ID {
+		t.Fatalf("ListByChooserGroup(new group) = %+v, want exactly %q", joined, s.ID)
+	}
+}
+
 // --- PushedAuthRequestStore --------------------------------------------------
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
@@ -247,7 +293,16 @@ var parCases = []subtest{
 	{"ConsumeOnce", parConsumeOnce},
 	{"Expired", parExpired},
 	{"ConsumeExpiredStillRedeems", parConsumeExpiredStillRedeems},
+	{"ConsumeSurvivesUnrelatedPushes", parConsumeSurvivesUnrelatedPushes},
 }
+
+// parUnrelatedPushes is how many unrelated records the churn case
+// writes while one login is in progress. Backends that reclaim rows on
+// an amortised sweep run it once a fixed number of writes has
+// accumulated, so the count is set well above any such interval: a
+// smaller number could stop short of a reclamation boundary and report
+// a pass without ever having crossed one.
+const parUnrelatedPushes = 256
 
 func parSaveFind(t *testing.T, f Factory) {
 	b := f(t)
@@ -324,6 +379,48 @@ func parConsumeExpiredStillRedeems(t *testing.T, f Factory) {
 		t.Fatal("Consume returned ConsumedAt=nil")
 	}
 	if _, err := b.Store.PushedAuthRequests().Consume(ctx, "urn:par:exp-consume"); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("second Consume: want ErrAlreadyConsumed, got %v", err)
+	}
+}
+
+// parConsumeSurvivesUnrelatedPushes pins the reclamation half of the
+// single-use-only Consume contract: whatever a backend does to bound
+// its storage, it may only retire records its own Consume already
+// rejects. An unconsumed record therefore stays redeemable however far
+// its short lifetime is behind and however many unrelated pushes have
+// arrived since. A backend that reclaims on expiry alone answers the
+// authorization endpoint with ErrNotFound at code emission, turning a
+// login the user completed into access_denied — intermittently, and
+// only under push load.
+func parConsumeSurvivesUnrelatedPushes(t *testing.T, f Factory) {
+	b := f(t)
+	if b.Advance == nil {
+		t.Skip("backend supplies no Advance hook")
+	}
+	ctx := context.Background()
+	par := newPAR(b.Now(), "urn:par:slow-login")
+	if err := b.Store.PushedAuthRequests().Save(ctx, par); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// The user takes longer over password, second factor and consent
+	// than the request_uri lifetime, while other clients keep pushing.
+	b.Advance(5 * time.Minute)
+	for i := range parUnrelatedPushes {
+		unrelated := newPAR(b.Now(), "urn:par:unrelated-"+strconv.Itoa(i))
+		if err := b.Store.PushedAuthRequests().Save(ctx, unrelated); err != nil {
+			t.Fatalf("Save unrelated push #%d: %v", i, err)
+		}
+	}
+
+	got, err := b.Store.PushedAuthRequests().Consume(ctx, "urn:par:slow-login")
+	if err != nil {
+		t.Fatalf("Consume after %d unrelated pushes: want success, got %v", parUnrelatedPushes, err)
+	}
+	if got.ConsumedAt == nil {
+		t.Fatal("Consume returned ConsumedAt=nil")
+	}
+	if _, err := b.Store.PushedAuthRequests().Consume(ctx, "urn:par:slow-login"); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("second Consume: want ErrAlreadyConsumed, got %v", err)
 	}
 }

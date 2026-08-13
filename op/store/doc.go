@@ -55,11 +55,18 @@
 //	-----------------------  ---------------------  ------------------------------------
 //	StaticClientReconciler   Store                  seeded static clients are not
 //	                                                reconciled against the backend
-//	RevokeByClient           Store.RefreshTokens()  deleting a dynamically registered
-//	                                                client skips the bulk credential
-//	                                                cascade for that substore
+//	RevokeByClient           each client-keyed      deleting a dynamically registered
+//	                         substore               client leaves the credential
+//	                                                cascade to the embedder's
+//	                                                OnClientDeleted hook
 //	RefreshChainResolver     Store.RefreshTokens()  chain nodes resolve through Find
 //	                                                instead of the stored-handle lookup
+//
+// RevokeByClient is the one extension that is all-or-nothing across the
+// substores it applies to. [RevokeByClient] lists them; a backend that
+// implements it on some and not others reports a completed cascade while
+// leaving live records bound to the deleted client in the substores it
+// missed, and nothing at the call site can tell.
 //
 // A backend can verify its own placement decisions against
 // [github.com/libraz/go-oidc-provider/op/store/contract], which exercises the

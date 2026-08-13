@@ -96,6 +96,7 @@ func Run(t *testing.T, f Factory) {
 		{"AccessTokenRegistry", accessTokenRegistryCases},
 		{"OpaqueAccessTokenStore", opaqueAccessTokenCases},
 		{"GrantRevocationStore", grantRevocationCases},
+		{"ClientDeletionCascade", clientCascadeCases},
 		{"DeviceCodeStore", deviceCodeCases},
 		{"CIBARequestStore", cibaRequestCases},
 		{"MetadataStore", metadataStoreCases},
@@ -286,6 +287,41 @@ var clientRegistryCases = []subtest{
 	{"UpdateMissing", clientUpdateMissing},
 	{"DeleteMissing", clientDeleteMissing},
 	{"UpdateRoundTrip", clientUpdateRoundTrip},
+	{"UpdateUnchanged", clientUpdateUnchanged},
+}
+
+// clientUpdateUnchanged pins that ErrNotFound reports absence and
+// nothing else. Re-submitting a client's current metadata is the normal
+// behaviour of a configuration reconcile loop, and a backend that reads
+// its verdict off an affected-row count sees zero rows changed for it —
+// which reaches the embedder as a 401 from PUT /register/{client_id} on
+// that backend alone, while another engine answers 200 for the same
+// request.
+func clientUpdateUnchanged(t *testing.T, f Factory) {
+	b := f(t)
+	registry := requireRegistry(t, b.Store)
+	ctx := context.Background()
+	c := &store.Client{
+		ID:           "upd-noop",
+		RedirectURIs: []string{"https://rp.example.com/cb"},
+		GrantTypes:   []string{"authorization_code"},
+		Scopes:       []string{"openid"},
+	}
+	if err := registry.RegisterClient(ctx, c); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+	stored, err := b.Store.Clients().GetClient(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := registry.UpdateClient(ctx, stored); err != nil {
+			t.Fatalf("UpdateClient with unchanged metadata (attempt %d): %v", attempt, err)
+		}
+	}
+	if _, err := b.Store.Clients().GetClient(ctx, c.ID); err != nil {
+		t.Fatalf("GetClient after unchanged updates: %v", err)
+	}
 }
 
 func clientRegisterDuplicate(t *testing.T, f Factory) {
@@ -526,8 +562,8 @@ var refreshCases = []subtest{
 	{"RevokeChain", refreshRevokeChain},
 	{"RevokeChainMissing", refreshRevokeChainMissing},
 	{"RevokeByGrant", refreshRevokeByGrant},
-	{"RevokeByClient", refreshRevokeByClient},
 	{"RetryResponse", refreshRetryResponse},
+	{"RetryResponseDiesWithPredecessor", refreshRetryResponseDiesWithPredecessor},
 	{"Expired", refreshExpired},
 	{"SaveOntoRevokedParent", refreshSaveOntoRevokedParent},
 }
@@ -730,36 +766,6 @@ func refreshRevokeByGrant(t *testing.T, f Factory) {
 	}
 }
 
-func refreshRevokeByClient(t *testing.T, f Factory) {
-	b := f(t)
-	revoke, ok := b.Store.RefreshTokens().(store.RevokeByClient)
-	if !ok {
-		t.Skipf("backend %T does not implement store.RevokeByClient", b.Store.RefreshTokens())
-	}
-	ctx := context.Background()
-	targetA := newRefresh(b.Now(), "client-target-a", nil)
-	targetA.ClientID = "client-target"
-	targetB := newRefresh(b.Now(), "client-target-b", nil)
-	targetB.ClientID = "client-target"
-	other := newRefresh(b.Now(), "client-other", nil)
-	other.ClientID = "client-other"
-	for _, rt := range []*store.RefreshToken{targetA, targetB, other} {
-		if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
-			t.Fatalf("Save %s: %v", rt.ID, err)
-		}
-	}
-
-	if err := revoke.RevokeByClient(ctx, "client-target"); err != nil {
-		t.Fatalf("RevokeByClient: %v", err)
-	}
-	assertRevoked(t, b.Store, targetA.ID)
-	assertRevoked(t, b.Store, targetB.ID)
-	assertRefreshLive(t, b.Store, other.ID)
-	if err := revoke.RevokeByClient(ctx, "client-absent"); err != nil {
-		t.Fatalf("RevokeByClient absent: %v", err)
-	}
-}
-
 // refreshRetryResponse exercises [store.RefreshRetryResponseStore], the
 // durable half of the RFC 9700 delivery grace window. The extension is
 // skippable here for the same reason every extension is — a backend that
@@ -813,6 +819,77 @@ func refreshRetryResponse(t *testing.T, f Factory) {
 
 	if _, err := retry.LoadRetryResponse(ctx, "rt-retry-absent"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("LoadRetryResponse for an unknown predecessor: want ErrNotFound, got %v", err)
+	}
+}
+
+// refreshRetryResponseDiesWithPredecessor pins the retention bound
+// [store.RefreshRetryResponseStore] puts on the sealed bytes: they may be
+// kept no longer than the predecessor's own refresh-token lifetime. Once
+// that lifetime is over the predecessor reads as absent everywhere else,
+// and a grace window that still answered for it would re-deliver a
+// response for a token the endpoint has stopped accepting — and would do
+// so out of an encrypted copy the backend was supposed to have let go of.
+//
+// The bound is the predecessor's alone. A backend that ties retention to
+// something coarser — the row's presence in a table swept per grant, the
+// lifetime of the process — passes every other retry case and still
+// serves the response for as long as an unrelated sibling chain happens
+// to live.
+//
+// Two arrangements reach the same point, because backends differ in
+// whether their test clock can be moved: a rotation off a predecessor
+// that is already past its expiry, and a live rotation whose predecessor
+// expires afterwards. The second runs only when the backend supplies
+// [Backend.Advance].
+func refreshRetryResponseDiesWithPredecessor(t *testing.T, f Factory) {
+	b := f(t)
+	retry, ok := b.Store.RefreshTokens().(store.RefreshRetryResponseStore)
+	if !ok {
+		t.Skipf("backend %T does not implement store.RefreshRetryResponseStore", b.Store.RefreshTokens())
+	}
+	ctx := context.Background()
+
+	expired := newRefresh(b.Now(), "rt-retry-expired-parent", nil)
+	expired.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := b.Store.RefreshTokens().Save(ctx, expired); err != nil {
+		t.Fatalf("Save expired predecessor: %v", err)
+	}
+	successor := newRefresh(b.Now(), "rt-retry-expired-child", &expired.ID)
+	if err := retry.SaveRotationWithRetry(ctx, successor, []byte("sealed-token-response")); err != nil {
+		t.Fatalf("SaveRotationWithRetry onto an expired predecessor: %v", err)
+	}
+	if _, err := retry.LoadRetryResponse(ctx, expired.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("LoadRetryResponse for a predecessor past its ExpiresAt: want ErrNotFound, got %v — "+
+			"the sealed response outlived the token it was cached against", err)
+	}
+
+	if b.Advance == nil {
+		return
+	}
+	live := newRefresh(b.Now(), "rt-retry-lapsing-parent", nil)
+	if err := b.Store.RefreshTokens().Save(ctx, live); err != nil {
+		t.Fatalf("Save live predecessor: %v", err)
+	}
+	if _, err := b.Store.RefreshTokens().Consume(ctx, live.ID); err != nil {
+		t.Fatalf("Consume live predecessor: %v", err)
+	}
+	sealed := []byte("sealed-token-response")
+	rotated := newRefresh(b.Now(), "rt-retry-lapsing-child", &live.ID)
+	if err := retry.SaveRotationWithRetry(ctx, rotated, sealed); err != nil {
+		t.Fatalf("SaveRotationWithRetry: %v", err)
+	}
+	// Inside the predecessor's lifetime the retry is exactly what the
+	// grace window is for, so the bound must not truncate it early.
+	got, err := retry.LoadRetryResponse(ctx, live.ID)
+	if err != nil {
+		t.Fatalf("LoadRetryResponse inside the predecessor's lifetime: %v", err)
+	}
+	if !bytes.Equal(got, sealed) {
+		t.Fatalf("LoadRetryResponse = %q, want %q", got, sealed)
+	}
+	b.Advance(25 * time.Hour)
+	if _, err := retry.LoadRetryResponse(ctx, live.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("LoadRetryResponse after the predecessor expired: want ErrNotFound, got %v", err)
 	}
 }
 

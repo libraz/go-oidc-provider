@@ -58,6 +58,7 @@ func RunEmailOTPs(t *testing.T, f EmailOTPFactory) {
 		{"NilPreviousReclaimsRecordPastRetention", emailOTPCASReserveReclaims},
 		{"ConcurrentFirstSendHasOneWinner", emailOTPConcurrentReserve},
 		{"ConsumeStampsConsumedAt", emailOTPConsume},
+		{"ConsumeStampsAnUnstampedChallenge", emailOTPConsumeStampsUnstamped},
 		{"ConsumeClearsVerifierFailureState", emailOTPConsumeClearsVerifierFailureState},
 		{"ConsumeTwiceRejected", emailOTPConsumeTwice},
 		{"ConsumeExpiredCodeRejected", emailOTPConsumeExpired},
@@ -353,6 +354,63 @@ func emailOTPConsume(t *testing.T, b EmailOTPBackend) {
 		t.Fatalf("ConsumedAt = %v, want %v", got.ConsumedAt, now)
 	}
 	assertEmailOTPVersionChanged(t, presentedVersion, got.Version)
+}
+
+// emailOTPConsumeStampsUnstamped pins the post-condition declared on
+// [store.EmailOTPStore.Consume]: marking the challenge is the
+// implementation's job, so a nil return leaves a non-zero ConsumedAt
+// whether or not the caller presented one.
+//
+// Every other Consume case presents a stamped record, which is what a
+// backend that copies the presented value through needs in order to look
+// correct. Presenting a zero is the case that separates them: such a
+// backend reports success and stores a challenge that still reads as
+// pending, so the next holder of the same code redeems it again. The
+// second redemption below is that holder. [store.RecoveryStore.Consume]
+// carries the same post-condition and the same case.
+func emailOTPConsumeStampsUnstamped(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	seed := emailOTPContractRecord(b.Now())
+	if err := b.Store.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	presented, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+	if !presented.ConsumedAt.IsZero() {
+		t.Fatalf("seeded challenge is already stamped: %v", presented.ConsumedAt)
+	}
+
+	// Presented exactly as read: the caller stamps nothing.
+	if err := b.Store.Consume(ctx, presented); err != nil {
+		t.Fatalf("Consume of an unstamped challenge: %v", err)
+	}
+
+	got, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after consume: %v", err)
+	}
+	if got.ConsumedAt.IsZero() {
+		t.Fatalf(
+			"Consume returned nil but the stored challenge is still unconsumed; " +
+				"the code stays redeemable for every later holder",
+		)
+	}
+
+	// The challenge has to be spent for the next caller, not merely
+	// stamped: the replay presents the record as it now reads, so a
+	// backend whose only defence is the generation counter does not pass
+	// on that alone.
+	replay, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get for replay: %v", err)
+	}
+	replay.ConsumedAt = time.Time{}
+	if err := b.Store.Consume(ctx, replay); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("second Consume of the same challenge: want ErrAlreadyConsumed, got %v", err)
+	}
 }
 
 // emailOTPConsumeClearsVerifierFailureState mirrors a successful code entry

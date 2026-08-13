@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -44,22 +45,61 @@ var concurrencyCases = []subtest{
 	{"CIBAConsumeHasOneWinner", concurrentCIBAConsume},
 	{"RefreshRotationHasOneWinner", concurrentRefreshRotation},
 	{"RevokeGrantKeepsTheWidestWindow", concurrentRevokeGrant},
+	{"IATIncrementUsesHasOneWinner", concurrentIATSingleUse},
+	{"IATIncrementUsesStopsAtTheCeiling", concurrentIATMultiUse},
+	{"GrantAmendKeepsEveryWriterScope", concurrentGrantAmend},
 }
 
 // race runs attempt from [concurrentRacers] goroutines and returns their
 // errors in launch order.
+//
+// The goroutines are held at a barrier until every one of them is
+// running, so they enter the operation together. Launching them and
+// letting them start where they may staggers the callers by however
+// long the runtime took to schedule each one, which on a backend whose
+// lost-update window is a single round trip is long enough for the
+// window to have closed before the second caller arrives — and the
+// contract case then reports a non-atomic backend as correct.
 func race(attempt func(i int) error) []error {
 	errs := make([]error, concurrentRacers)
-	var wg sync.WaitGroup
-	wg.Add(concurrentRacers)
+	var ready, done sync.WaitGroup
+	start := make(chan struct{})
+	ready.Add(concurrentRacers)
+	done.Add(concurrentRacers)
 	for i := range concurrentRacers {
 		go func() {
-			defer wg.Done()
+			defer done.Done()
+			ready.Done()
+			<-start
 			errs[i] = attempt(i)
 		}()
 	}
-	wg.Wait()
+	ready.Wait()
+	close(start)
+	done.Wait()
 	return errs
+}
+
+// assertWinners reports the indices of the attempts that succeeded,
+// failing the test when the count is anything but want.
+//
+// More winners than want means the record was handed out beyond its
+// ceiling. Fewer is just as wrong: the operation is one a legitimate
+// client must be able to complete, and a backend that turned an extra
+// caller away rejected a registration the operator paid for.
+func assertWinners(t *testing.T, op string, errs []error, want int) []int {
+	t.Helper()
+	won := make([]int, 0, want)
+	for i, err := range errs {
+		if err == nil {
+			won = append(won, i)
+		}
+	}
+	if len(won) != want {
+		t.Fatalf("%s: %d of %d concurrent attempts succeeded, want exactly %d (errors: %v)",
+			op, len(won), len(errs), want, errs)
+	}
+	return won
 }
 
 // assertOneWinner reports the index of the single attempt that
@@ -70,18 +110,7 @@ func race(attempt func(i int) error) []error {
 // operation is one a legitimate client must be able to complete.
 func assertOneWinner(t *testing.T, op string, errs []error) int {
 	t.Helper()
-	won, winner := 0, -1
-	for i, err := range errs {
-		if err == nil {
-			won++
-			winner = i
-		}
-	}
-	if won != 1 {
-		t.Fatalf("%s: %d of %d concurrent attempts succeeded, want exactly 1 (errors: %v)",
-			op, won, len(errs), errs)
-	}
-	return winner
+	return assertWinners(t, op, errs, 1)[0]
 }
 
 func concurrentAuthCodeConsume(t *testing.T, f Factory) {
@@ -282,4 +311,168 @@ func concurrentRevokeGrant(t *testing.T, f Factory) {
 	if n != 0 {
 		t.Fatalf("GC dropped %d rows: the tombstone kept a retention shorter than %s", n, widest)
 	}
+}
+
+// concurrentIATSingleUse drives the ceiling
+// [store.InitialAccessTokenStore.IncrementUses] declares atomic under the
+// traffic that makes the declaration matter: one Initial Access Token
+// handed to an automated onboarding job that registers several clients at
+// once, or leaked and replayed in parallel.
+//
+// A backend that reads the counter, decides, and writes it back passes
+// every sequential registration case in the harness and then admits N
+// clients on a single-use credential, because each racer reads the same
+// pre-increment value. The ceiling is what the operator was promised when
+// they minted the token, so it is asserted three ways: the number of
+// callers told "yes", the answer every other caller got, and the counter
+// the token carries afterwards.
+func concurrentIATSingleUse(t *testing.T, f Factory) {
+	concurrentIATIncrementUses(t, f, 0, 1)
+}
+
+// concurrentIATMultiUse is [concurrentIATSingleUse] for the multi-use
+// tokens an operator mints for tenant onboarding. It exists because the
+// single-use variant alone is passed by a backend that hard-codes a
+// ceiling of one and ignores MaxUses entirely: such a backend would
+// reject the second and third registration of an invitation that was
+// paid for, and the single-use case cannot see it.
+func concurrentIATMultiUse(t *testing.T, f Factory) {
+	concurrentIATIncrementUses(t, f, 3, 3)
+}
+
+func concurrentIATIncrementUses(t *testing.T, f Factory, maxUses, ceiling int) {
+	b := f(t)
+	s := requireIATStore(t, b.Store)
+	ctx := context.Background()
+	tok := newIAT(b.Now(), "iat-race", "hash-race")
+	tok.MaxUses = maxUses
+	if err := s.Put(ctx, tok); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	errs := race(func(int) error {
+		_, err := s.IncrementUses(ctx, tok.ID)
+		return err
+	})
+	assertWinners(t, "InitialAccessTokens().IncrementUses", errs, ceiling)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("IncrementUses %d past the ceiling: want ErrConflict, got %v — "+
+				"the caller cannot tell a replay race from an absent or broken token", i, err)
+		}
+	}
+
+	// The counter has to agree with the verdicts. A backend that answered
+	// the right number of callers but let the lost updates overwrite each
+	// other leaves a token that reads as unspent, and the next
+	// registration is admitted on a credential already at its ceiling.
+	got, err := s.GetByHash(ctx, tok.HashedValue)
+	if err != nil {
+		t.Fatalf("GetByHash after the race: %v", err)
+	}
+	if got.Uses != ceiling {
+		t.Fatalf("Uses = %d after %d concurrent increments, want the ceiling %d",
+			got.Uses, concurrentRacers, ceiling)
+	}
+	if _, err := s.IncrementUses(ctx, tok.ID); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("IncrementUses after the race: want ErrConflict, got %v", err)
+	}
+}
+
+// grantAmendAttempts bounds the retries [amendGrantScope] makes. It is
+// far more generous than the bound the OP itself applies to a contended
+// grant, because the traffic differs: the OP retries a user racing
+// themselves across two tabs, while this case deliberately drives every
+// racer at one record, and an optimistic backend hands out one commit per
+// round.
+const grantAmendAttempts = 4 * concurrentRacers
+
+// concurrentGrantAmend drives the read-amend-write cycle
+// [store.GrantStore.Save] declares backends must make safe, under the
+// traffic the declaration names: several authorizations for the same
+// (subject, client) completing at once, each adding a scope to what the
+// record already holds.
+//
+// The union is the whole point. A grant is amended, not replaced, so a
+// backend that neither locks the row nor rejects a stale basis lets the
+// writer that read first land last: the scope the other authorization
+// recorded disappears while both users are told their consent was
+// stored, and the client that was granted it gets an access_denied on a
+// scope the user approved.
+//
+// The cycle runs inside a transaction because that is the only shape in
+// which either permitted defence exists — a row lock has to span the read
+// and the write, and a rejected write has to have a basis to compare
+// against — and it is the shape the OP itself uses on every path that
+// amends a grant. Backends that do not implement [store.Transactional]
+// never see that cycle and are skipped.
+func concurrentGrantAmend(t *testing.T, f Factory) {
+	b := f(t)
+	txr := requireTransactional(t, b.Store)
+	ctx := context.Background()
+	base := newGrant(b.Now(), "grant-amend-race", "sub-amend", "client-amend")
+	base.Scope = []string{"openid"}
+	if err := b.Store.Grants().Save(ctx, base); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	errs := race(func(i int) error {
+		return amendGrantScope(ctx, txr, base.ID, amendedScope(i))
+	})
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent amend %d: %v — every amendment is one a re-read reproduces, "+
+				"so a caller that keeps re-reading has to be able to land it", i, err)
+		}
+	}
+
+	got, err := b.Store.Grants().Find(ctx, base.ID)
+	if err != nil {
+		t.Fatalf("Find after the race: %v", err)
+	}
+	for i := range concurrentRacers {
+		if !slices.Contains(got.Scope, amendedScope(i)) {
+			t.Fatalf("scope %q is missing from %v: an amendment that reported success was overwritten "+
+				"by one that read the record before it",
+				amendedScope(i), got.Scope)
+		}
+	}
+	if !slices.Contains(got.Scope, "openid") {
+		t.Fatalf("the scope the grant started with is missing from %v", got.Scope)
+	}
+}
+
+func amendedScope(i int) string { return "scope-" + strconv.Itoa(i) }
+
+// amendGrantScope runs one read-amend-write cycle against a grant,
+// re-driving the whole cycle when the backend reports the basis it read
+// is no longer current. Retrying is what the contract asks of a caller:
+// [store.GrantStore.Save] lets a backend answer [store.ErrConflict]
+// instead of locking, and nothing about a losing attempt was invalid —
+// the amendment it carried is one a re-read reproduces exactly.
+func amendGrantScope(ctx context.Context, txr store.Transactional, id, scope string) error {
+	var err error
+	for attempt := 1; attempt <= grantAmendAttempts; attempt++ {
+		if err = amendGrantScopeOnce(ctx, txr, id, scope); err == nil || !errors.Is(err, store.ErrConflict) {
+			return err
+		}
+	}
+	return err
+}
+
+func amendGrantScopeOnce(ctx context.Context, txr store.Transactional, id, scope string) error {
+	tx, err := txr.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	g, err := tx.Grants().Find(ctx, id)
+	if err != nil {
+		return err
+	}
+	g.Scope = append(slices.Clone(g.Scope), scope)
+	if err := tx.Grants().Save(ctx, g); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

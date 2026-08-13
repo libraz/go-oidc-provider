@@ -33,6 +33,7 @@ var transactionalCases = []subtest{
 	{"BeginCommit", txBeginCommit},
 	{"BeginRollback", txBeginRollback},
 	{"RollbackAfterCommitNoOp", txRollbackAfterCommitNoOp},
+	{"UseAfterCommitReportsTxRequired", txUseAfterCommitReportsTxRequired},
 	{"CrossSubstore", txCrossSubstore},
 	{"PARConsumeExpiredStillRedeems", txPARConsumeExpiredStillRedeems},
 	{"RefreshConsumeReplayReturnsRecord", txRefreshConsumeReplayReturnsRecord},
@@ -215,6 +216,114 @@ func txRollbackAfterCommitNoOp(t *testing.T, f Factory) {
 	}
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback after Commit must be a no-op, got %v", err)
+	}
+}
+
+// txUseAfterCommitReportsTxRequired pins what a settled handle owes the
+// caller that keeps using it. [store.Tx.Commit] declares that every later
+// call — read, write, or a second Commit — fails with an error satisfying
+// errors.Is(err, [store.ErrTxRequired]), and the reads are the half a
+// backend is most likely to leave open: the write path already has a
+// staging buffer or a driver to refuse it, while a read can quietly fall
+// through to the backing store.
+//
+// Both failure shapes it catches are worse than a plain missing check. A
+// read that answers from the table with a nil error tells the handler it
+// is still inside a transaction that no longer exists, and it acts on a
+// record carrying none of the isolation it believes it has. A refusal
+// that reports a backend-specific error instead of the sentinel is
+// indistinguishable from a transport fault, so the retry loop above it
+// re-drives a request whose defect is a leaked handle, forever.
+//
+// Every substore of the cluster is seeded through the aggregate first, so
+// the settled reads have live data available to leak and a refusal cannot
+// be mistaken for an empty store.
+func txUseAfterCommitReportsTxRequired(t *testing.T, f Factory) {
+	b := f(t)
+	txr := requireTransactional(t, b.Store)
+	ctx := context.Background()
+	seedSettledRecords(t, b, ctx)
+
+	tx := beginTx(t, txr, ctx)
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	assertSettledReadsRefused(t, tx, ctx)
+
+	orphan := newAuthCode(b.Now(), "tx-settled-orphan")
+	assertTxRequired(t, "AuthorizationCodes().Save", false, tx.AuthorizationCodes().Save(ctx, orphan))
+	assertTxRequired(t, "second Commit", false, tx.Commit())
+
+	// The refused write must not have landed either: a backend that
+	// reported the sentinel and staged the record anyway would publish it
+	// on whatever transaction commits next.
+	if _, err := b.Store.AuthorizationCodes().Find(ctx, orphan.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find the code a committed Tx refused to save: want ErrNotFound, got %v", err)
+	}
+}
+
+// seedSettledRecords writes one record into each cluster substore
+// [assertSettledReadsRefused] then looks for. Seeding runs through the
+// aggregate and before BeginTx because backends that hold the cluster for
+// the lifetime of a transaction cannot service the aggregate while one is
+// open.
+func seedSettledRecords(t *testing.T, b Backend, ctx context.Context) {
+	t.Helper()
+	if err := b.Store.AuthorizationCodes().Save(ctx, newAuthCode(b.Now(), "tx-settled-code")); err != nil {
+		t.Fatalf("Save code: %v", err)
+	}
+	if err := b.Store.Grants().Save(ctx, newGrant(b.Now(), "tx-settled-grant", "sub", "client")); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+	seedRefreshTokens(t, b.Store, ctx, newRefresh(b.Now(), "tx-settled-refresh", nil))
+	if err := b.Store.PushedAuthRequests().Save(ctx, newPAR(b.Now(), "urn:par:tx-settled")); err != nil {
+		t.Fatalf("Save PAR: %v", err)
+	}
+}
+
+// assertSettledReadsRefused drives one lookup through each cluster
+// substore of a settled handle. The four are checked together because a
+// backend guards them one implementation at a time: a substore whose read
+// path was written separately from the others is exactly where the gap
+// survives.
+func assertSettledReadsRefused(t *testing.T, tx store.Tx, ctx context.Context) {
+	t.Helper()
+	gotCode, err := tx.AuthorizationCodes().Find(ctx, "tx-settled-code")
+	assertTxRequired(t, "AuthorizationCodes().Find", gotCode != nil, err)
+	gotGrant, err := tx.Grants().Find(ctx, "tx-settled-grant")
+	assertTxRequired(t, "Grants().Find", gotGrant != nil, err)
+	gotRefresh, err := tx.RefreshTokens().Find(ctx, "tx-settled-refresh")
+	assertTxRequired(t, "RefreshTokens().Find", gotRefresh != nil, err)
+	gotPAR, err := tx.PushedAuthRequests().Find(ctx, "urn:par:tx-settled")
+	assertTxRequired(t, "PushedAuthRequests().Find", gotPAR != nil, err)
+	// The grace-window cache is an extension, so it is asserted only when
+	// the backend exposes it — but the case itself never skips: the
+	// mandatory four above are what a backend advertising
+	// [store.Transactional] has to answer for.
+	if retry, ok := tx.RefreshTokens().(store.RefreshRetryResponseStore); ok {
+		sealed, err := retry.LoadRetryResponse(ctx, "tx-settled-refresh")
+		assertTxRequired(t, "LoadRetryResponse", sealed != nil, err)
+	}
+}
+
+// assertTxRequired asserts that one call made through a settled handle
+// failed the way [store.Tx.Commit] requires. found reports whether the
+// backend produced a record anyway, which is how a read that fell through
+// to the backing store shows up.
+func assertTxRequired(t *testing.T, op string, found bool, err error) {
+	t.Helper()
+	switch {
+	case err == nil && found:
+		t.Fatalf("%s through a committed Tx returned a record with a nil error: the call reached the "+
+			"backing store, so a caller holding a closed handle cannot tell it left the transaction", op)
+	case err == nil:
+		t.Fatalf("%s through a committed Tx: want an error satisfying store.ErrTxRequired, got nil", op)
+	case !errors.Is(err, store.ErrTxRequired):
+		t.Fatalf("%s through a committed Tx: want an error satisfying store.ErrTxRequired, got %v — "+
+			"a caller cannot tell a closed handle from a transport fault and retries it", op, err)
+	case found:
+		t.Fatalf("%s through a committed Tx returned a record alongside %v", op, err)
 	}
 }
 

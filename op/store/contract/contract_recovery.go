@@ -31,6 +31,7 @@ func RunRecoveryCodes(t *testing.T, f RecoveryFactory) {
 		{"PutGetRoundTrip", recoveryRoundTrip},
 		{"PutReplacesBatchWholesale", recoveryPutReplaces},
 		{"ConsumeMarksOneSlot", recoveryConsumeMarksSlot},
+		{"ConsumeStampsAnUnstampedSlot", recoveryConsumeStampsUnstamped},
 		{"ConsumeTwiceRejected", recoveryConsumeTwice},
 		{"ConsumeSupersededHashRejected", recoveryConsumeSupersededHash},
 		{"ConsumeMissingBatch", recoveryConsumeMissing},
@@ -133,6 +134,61 @@ func recoveryConsumeMarksSlot(t *testing.T, s store.RecoveryStore) {
 		if code.Hash != seed.Codes[i].Hash {
 			t.Fatalf("slot %d Hash = %q, want %q", i, code.Hash, seed.Codes[i].Hash)
 		}
+	}
+}
+
+// recoveryConsumeStampsUnstamped pins the post-condition declared on
+// [store.RecoveryStore.Consume]: marking the slot is the
+// implementation's job, so a nil return leaves a non-zero ConsumedAt
+// whether or not the caller presented one.
+//
+// Every other Consume case presents a stamped slot, which is what a
+// backend that copies the presented value through needs in order to
+// look correct. Presenting a zero is the case that separates them: a
+// backend whose write is "set ConsumedAt to what the caller passed"
+// then writes the value its own predicate requires the slot to already
+// hold, reports success, and leaves a single-use code redeemable for
+// everyone who reads it afterwards. The second redemption below is what
+// the holder of that code would actually do.
+func recoveryConsumeStampsUnstamped(t *testing.T, s store.RecoveryStore) {
+	t.Helper()
+	ctx := context.Background()
+	seed := recoveryContractBatch()
+	if err := s.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	presented, err := s.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+	if !presented.Codes[0].ConsumedAt.IsZero() {
+		t.Fatalf("seeded slot is already stamped: %v", presented.Codes[0].ConsumedAt)
+	}
+
+	// Presented exactly as read: the caller stamps nothing.
+	if err := s.Consume(ctx, presented, 0); err != nil {
+		t.Fatalf("Consume of an unstamped slot: %v", err)
+	}
+
+	got, err := s.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after consume: %v", err)
+	}
+	if got.Codes[0].ConsumedAt.IsZero() {
+		t.Fatalf(
+			"Consume returned nil but the stored slot is still unconsumed; " +
+				"the code stays redeemable for every later holder",
+		)
+	}
+
+	// The slot has to be spent for the next caller, not merely stamped.
+	replay, err := s.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get for replay: %v", err)
+	}
+	replay.Codes[0].ConsumedAt = time.Time{}
+	if err := s.Consume(ctx, replay, 0); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("second Consume of the same slot: want ErrAlreadyConsumed, got %v", err)
 	}
 }
 
