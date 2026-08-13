@@ -108,6 +108,12 @@ CREATE TABLE IF NOT EXISTS vault_renewal_slips (
     -- store.RefreshRetryResponseStore attaches to exposing the interface
     -- at all. The bytes are already encrypted by the token endpoint and
     -- this store never looks inside them.
+    --
+    -- Living on the successor row also means the row's own expires_epoch
+    -- is NOT the retention bound: the interface caps the response at the
+    -- predecessor's refresh-token lifetime, which is the earlier of the
+    -- two, so the read joins back to the predecessor row rather than
+    -- trusting the row it reads from (see refreshRetrySelect).
     retry_sealed         BLOB,
     dpop_thumb           TEXT NOT NULL,
     mtls_thumb           TEXT NOT NULL,
@@ -186,14 +192,37 @@ CREATE TABLE IF NOT EXISTS vault_op_notes (
 );
 `
 
-// querier is the minimal surface both *sql.DB and *sql.Tx satisfy.
+// querier is the minimal surface a substore needs from the database.
 // Every substore is constructed against a querier so the same code
 // runs directly on the database or inside a transaction; scratchStore
-// hands out db-bound substores while scratchTx hands out tx-bound ones.
+// hands out db-bound substores (see dbQuerier) while scratchTx hands out
+// tx-bound ones (see txQuerier).
+//
+// A single-row query returns a scanner rather than *sql.Row because
+// *sql.Row keeps its failure in an unexported field, so a wrapper has no
+// way to report one of its own through it — which is what a settled
+// transaction has to do.
 type querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (databasesql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*databasesql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *databasesql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) scanner
+}
+
+// dbQuerier adapts *sql.DB to querier. Outside a transaction there is
+// nothing to guard; the wrapper exists so a single-row query returns the
+// same scanner on both paths.
+type dbQuerier struct{ db *databasesql.DB }
+
+func (q dbQuerier) ExecContext(ctx context.Context, query string, args ...any) (databasesql.Result, error) {
+	return q.db.ExecContext(ctx, query, args...)
+}
+
+func (q dbQuerier) QueryContext(ctx context.Context, query string, args ...any) (*databasesql.Rows, error) {
+	return q.db.QueryContext(ctx, query, args...)
+}
+
+func (q dbQuerier) QueryRowContext(ctx context.Context, query string, args ...any) scanner {
+	return q.db.QueryRowContext(ctx, query, args...)
 }
 
 // digest hashes a bearer secret to the value stored on disk. SHA-256

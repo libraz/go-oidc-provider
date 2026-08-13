@@ -9,16 +9,23 @@
 // The composite adapter enforces a critical invariant at construction
 // time: every substore that participates in atomic commits
 // (composite.TxClusterKinds — AuthorizationCodes, RefreshTokens,
-// Grants, Sessions, PushedAuthRequests, AccessTokens) MUST resolve to
-// the same backend. Splitting them across backends would shatter the
-// "code → token + grant" rotation atomicity and open a replay
-// window. composite.New rejects misconfigured wiring with
-// composite.ErrTxClusterSplit before the OP starts serving.
+// Grants, PushedAuthRequests, AccessTokens, OpaqueAccessTokens,
+// GrantRevocations) MUST resolve to the same backend. Splitting them
+// across backends would shatter the "code → token + grant" rotation
+// atomicity and open a replay window. composite.New rejects
+// misconfigured wiring with composite.ErrTxClusterSplit before the OP
+// starts serving.
+//
+// Sessions is deliberately outside that cluster: the OP does not
+// coordinate session writes with token-endpoint commits, so an embedder
+// may route Sessions to the volatile backend. This example keeps it on
+// the durable side because a lost session logs every user out.
 //
 // # Where Redis goes
 //
-// The non-cluster volatile substores (Interactions, ConsumedJTIs) are
-// the right fit for a fast key/value store. This example uses
+// The non-cluster volatile substores (Interactions, ConsumedJTIs, and
+// Sessions if the deployment accepts losing logins on a cache flush)
+// are the right fit for a fast key/value store. This example uses
 // op/storeadapter/inmem as a deliberate stand-in so the example boots
 // without external dependencies. The live counterpart is
 // example 09-redis-volatile, which swaps inmem for the real

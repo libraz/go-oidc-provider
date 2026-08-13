@@ -3,15 +3,27 @@
 Runnable demos for [`github.com/libraz/go-oidc-provider`](../README.md).
 
 All examples build behind the `example` build tag, so they are excluded from
-`go test ./...` and from production `go.sum`. Each one is its own module wired
-to the checkout through a development `replace`, so run it with the repository
-workspace disabled:
+`go test ./...` and from production `go.sum`.
+
+An example that needs a dependency beyond the library — a store adapter, a
+metrics client — is its own module wired to the checkout through a development
+`replace`, and runs with the repository workspace disabled:
 
 ```sh
-(cd examples/01-minimal && GOWORK=off go run -tags example .)
+(cd examples/06-sql-store && GOWORK=off go run -tags example .)
 ```
 
-`make example-01` (and the other `example-NN` targets) does the same thing.
+An example that needs nothing beyond the library carries no `go.mod` at all: it
+is a package of the repository module gated behind the tag, and runs from the
+checkout as-is:
+
+```sh
+(cd examples/04-oauth2-only && go run -tags example .)
+```
+
+`make example-NN` exists for the smoke-tested subset only; `EXAMPLE_SMOKE` in
+the Makefile is that list, and the targets are derived from it. Every other
+example is started with the `go run` line above.
 
 Embedder-side install (the same versions every example pins):
 
@@ -72,6 +84,7 @@ it boots with
 | customise SQL table names | [`25-byo-table-names`](25-byo-table-names/main.go) |
 | implement a store from scratch | [`26-byo-store-from-scratch`](26-byo-store-from-scratch/main.go) |
 | split hot volatile state from durable state | [`08-composite-hot-cold`](08-composite-hot-cold/main.go), [`09-redis-volatile`](09-redis-volatile/main.go) |
+| run the login / consent / chooser screens with no UI configured at all | [`19-default-ui`](19-default-ui/main.go) |
 | swap the default HTML driver for JSON | [`16-custom-interaction`](16-custom-interaction/main.go) |
 | drive login / consent / logout from a SPA | [`10-react-login`](10-react-login/main.go) — bundle is dependency-free vanilla JS, so it runs with no build step; the JSON contract is the same one a React / Vue / Svelte build output consumes |
 | run a SPA against MySQL + Redis (the usual deployment shape) | [`17-spa-composite-store`](17-spa-composite-store/main.go) |
@@ -128,7 +141,7 @@ in-flight or v1.x work:
 | Band  | Topic                                                          |
 |-------|----------------------------------------------------------------|
 | 00–09 | bootstrap, core flows, profiles, storage adapters              |
-| 10–19 | UI and browser integration (SPA, consent, chooser, CORS, i18n); 18–19 hold the storage-adapter overflow, 00–09 being full |
+| 10–19 | UI and browser integration (SPA, consent, chooser, CORS, i18n); 18 holds the storage-adapter overflow, 00–09 being full |
 | 20–29 | MFA, authentication rules, and user-store projection           |
 | 30–39 | advanced grants, subject modes, encrypted tokens, federation   |
 | 40–49 | governance: first-party, DCR, back-channel logout              |

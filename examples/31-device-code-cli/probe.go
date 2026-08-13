@@ -30,7 +30,8 @@ import (
 //  3. Asserts 200 + non-empty device_code + non-empty user_code.
 //  4. Verifies and approves using user_code plus an opaque server-side
 //     ceremony key, mirroring a browser verification page that must not
-//     receive device_code.
+//     receive device_code. The approval is audited onto logger through
+//     [devicecodekit.Deps.AuditLogger].
 //  5. POSTs /token with grant_type=device_code.
 //  6. Asserts 200 + non-empty access_token.
 //
@@ -57,7 +58,10 @@ func selfVerify(logger *slog.Logger) error {
 	}
 	logger.Debug("self-verify authorized", slog.String("user_code", authz.UserCode))
 
-	deps := &devicecodekit.Deps{DeviceCodes: st.DeviceCodes()}
+	deps := &devicecodekit.Deps{
+		DeviceCodes: st.DeviceCodes(),
+		AuditLogger: logger,
+	}
 	ceremonyKey, err := newVerificationCeremonyKey()
 	if err != nil {
 		return fmt.Errorf("verification ceremony key: %w", err)

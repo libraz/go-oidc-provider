@@ -11,6 +11,7 @@ import (
 	databasesql "database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -59,9 +60,29 @@ func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
 		epochOf(g.AuthTime), g.ACR, encodeStrings(g.AMR), encodeObjectArray(g.AuthorizationDetails),
 		epochOf(g.CreatedAt), epochOf(g.UpdatedAt))
 	if err != nil {
+		// A grant is the one record the OP amends rather than replaces:
+		// it reads the row, adds to it, and writes it back. Backends owe
+		// that cycle either a row lock held across it or an ErrConflict
+		// that tells the caller its basis went stale. SQLite has no row
+		// lock to offer — a transaction that read before another one
+		// committed is refused outright — so this store takes the second
+		// option, and the OP re-reads and re-applies.
+		if isLocked(err) {
+			return fmt.Errorf("grants.Save: %w: %w", store.ErrConflict, err)
+		}
 		return fmt.Errorf("grants.Save: %w", err)
 	}
 	return nil
+}
+
+// isLocked reports whether err is SQLite refusing a write because
+// another connection was writing, or had written, since this
+// transaction read. The check is by message because the store does not
+// import the driver's error types.
+func isLocked(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked")
 }
 
 func (s *grantStore) Find(ctx context.Context, id string) (*store.Grant, error) {

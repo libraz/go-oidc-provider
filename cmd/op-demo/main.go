@@ -14,22 +14,27 @@
 // deployment actually runs rather than only against the in-memory
 // reference implementation. See storage.go.
 //
+// The binary is its own module, so it is built from its own directory
+// rather than through a package path in the root module. GOWORK=off
+// keeps the command working in a clean clone, where the workspace file
+// the repository ignores does not exist yet.
+//
 // Quick start (HTTP):
 //
-//	go run ./cmd/op-demo \
+//	(cd cmd/op-demo && GOWORK=off go run . \
 //	    -listen 127.0.0.1:9090 \
 //	    -issuer http://127.0.0.1:9090 \
 //	    -client-id demo-client \
-//	    -redirect-uri https://localhost.emobix.co.uk:8443/test/a/op-demo/callback
+//	    -redirect-uri https://localhost.emobix.co.uk:8443/test/a/op-demo/callback)
 //
 // Quick start (HTTPS, required by the OpenID Foundation Conformance
 // Suite because issuer URLs MUST be https://):
 //
-//	go run ./cmd/op-demo \
+//	(cd cmd/op-demo && GOWORK=off go run . \
 //	    -listen :9443 \
 //	    -issuer https://localhost:9443 \
 //	    -tls-cert ./localhost.pem \
-//	    -tls-key  ./localhost-key.pem
+//	    -tls-key  ./localhost-key.pem)
 //
 // To run a specific OFCS plan, pair the binary with the matching
 // -profile flag. The wiring each profile activates lives in its own
@@ -116,9 +121,11 @@ type runConfig struct {
 	enableDCR bool
 	// cibaAutoApproveDelay is how long the auto-approving CIBA
 	// substore waits before flipping a Pending record to Approved.
-	// The default (3 s) is long enough that the first /token poll
-	// lands authorization_pending under the 1 s default poll
-	// interval — the shape the OFCS fapi-ciba plan asserts on.
+	// The default is sized so the first /token polls land
+	// authorization_pending under the 1 s default poll interval —
+	// the shape the OFCS fapi-ciba plan asserts on. The value itself
+	// lives on the flag declaration; repeating it here would be a
+	// second place to keep in step.
 	cibaAutoApproveDelay time.Duration
 	// storeBackend selects the storage the OP runs on: "inmem" (the
 	// default) or "composite" (durable substores on MySQL, volatile ones

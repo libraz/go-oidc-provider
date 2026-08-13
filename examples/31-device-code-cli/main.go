@@ -38,16 +38,23 @@
 //
 // What the run prints, in order:
 //
-//  1. "self-verify: device-code round-trip OK" — the in-process
+//  1. An audit="true" record for
+//     event=device_code.verification.approved, then
+//     "self-verify: device-code round-trip OK" — the in-process
 //     probe asserted POST /device_authorization → Approve →
 //     POST /token (grant_type=device_code) yields an access_token.
+//     The verification helpers write that record to the logger the
+//     example passes as devicecodekit.Deps.AuditLogger; a deployment
+//     points the field at whatever sink receives the OP's own audit
+//     stream.
 //  2. "[op] listening on 127.0.0.1:8089" — the OP banner.
 //  3. The boxed user_code panel the CLI would render on a TV
 //     screen; alongside, the verification_uri_complete shortcut.
 //  4. "[cli] poll #N -> authorization_pending" or
 //     "[cli] poll #N -> 200 OK" — the polling loop. The first poll
 //     observes the pending record while a goroutine simulates the
-//     user approving the request on a second device.
+//     user approving the request on a second device; that approval
+//     writes a second device_code.verification.approved audit record.
 //  5. "[cli] id_token sub=user-alice aud=cli-tool" — the decoded
 //     claims confirming the round-trip.
 //

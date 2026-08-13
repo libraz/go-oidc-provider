@@ -36,7 +36,7 @@
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
-//   - Listener: TLS 1.2 with self-signed cert generated at startup; production replaces the cert chain with a CA the RPs trust.
+//   - Listener: TLS 1.2 with the operator-supplied FAPI_CERT / FAPI_KEY pair; a self-signed pair is fine for a local run, production replaces it with a chain the RPs trust.
 package main
 
 import (

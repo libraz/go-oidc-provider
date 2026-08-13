@@ -192,9 +192,22 @@ INSERT INTO vault_renewal_slips
    issued_epoch)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
+	// refreshRetrySelect joins the successor row that carries the sealed
+	// response back to the predecessor it is keyed by, because the
+	// retention bound belongs to the predecessor and the row holding the
+	// bytes is the successor — whose expiry is later by construction.
+	// store.RefreshRetryResponseStore forbids keeping a response past the
+	// predecessor's own refresh-token lifetime, so the predecessor's
+	// expires_epoch, not the successor's, decides whether this read may
+	// answer. A predecessor row that is gone answers nothing: the client
+	// could not have presented that token either.
 	refreshRetrySelect = `
-SELECT retry_sealed FROM vault_renewal_slips
-WHERE parent_secret_digest = ? AND retry_sealed IS NOT NULL`
+SELECT successor.retry_sealed
+FROM vault_renewal_slips AS successor
+JOIN vault_renewal_slips AS predecessor
+  ON predecessor.token_secret_digest = successor.parent_secret_digest
+WHERE successor.parent_secret_digest = ? AND successor.retry_sealed IS NOT NULL
+  AND (predecessor.expires_epoch = 0 OR predecessor.expires_epoch >= ?)`
 
 	// refreshSelect takes two keys rather than one so a single statement
 	// serves both lookup kinds: the credential path binds the same digest
@@ -250,9 +263,18 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, successor *sto
 // re-presented — so it is hashed here and matched against the stored
 // digest. Nothing on this path accepts a stored digest verbatim: a
 // database reader holds no value that redeems a cached response.
+//
+// The read is bounded by the predecessor's own expiry as well: the
+// interface allows a store to retain a sealed response no longer than the
+// refresh token it was cached against, and past that instant the OP would
+// refuse the presented token anyway, so re-delivering a response for it
+// would hand back credentials derived from a token the endpoint has
+// stopped accepting. Rows are reclaimed on a schedule the embedder owns;
+// this bound is what makes the read independent of when that runs.
 func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
 	var sealed []byte
-	err := s.q.QueryRowContext(ctx, refreshRetrySelect, digest(predecessorID)).Scan(&sealed)
+	err := s.q.QueryRowContext(ctx, refreshRetrySelect,
+		digest(predecessorID), epochOf(s.now())).Scan(&sealed)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -279,7 +301,7 @@ func (s *refreshStore) save(ctx context.Context, t *store.RefreshToken, sealed [
 		return fmt.Errorf("refreshes.Save.begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.saveRotation(ctx, tx, t, sealed); err != nil {
+	if err := s.saveRotation(ctx, txQuerier{tx: tx}, t, sealed); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

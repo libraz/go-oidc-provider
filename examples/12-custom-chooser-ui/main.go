@@ -22,9 +22,15 @@
 //
 //  1. GET /oidc/auth?... → sign in as alice (first account in this
 //     browser).
-//  2. GET /oidc/auth?...&prompt=login → sign in as bob (joins
-//     alice's chooser group).
-//  3. GET /oidc/auth?...&prompt=select_account → the chooser
+//  2. GET /oidc/auth?...&prompt=select_account → the chooser
+//     template enumerates alice and renders AddAccountURL.
+//  3. Follow the template's "Sign in to a different account" link →
+//     sign in as bob. Only that link joins alice's chooser group: it
+//     carries the OP-private marker the authorize endpoint matches
+//     against the active session before routing the fresh login to
+//     AddAccount instead of Issue. A bare prompt=login has no such
+//     marker and replaces the current account rather than adding one.
+//  4. GET /oidc/auth?...&prompt=select_account → the chooser
 //     template enumerates both accounts and lets the user pick.
 //
 // PRODUCTION CAVEATS:
@@ -129,7 +135,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Printf("custom-chooser-ui example listening on %s (issuer %s, HTML chooser via WithChooserUI)", opAddr, issuer)
-	log.Println("flow: sign in as alice → /authorize?prompt=login as bob → /authorize?prompt=select_account")
+	log.Println("flow: sign in as alice → /authorize?prompt=select_account → follow the add-account link as bob → /authorize?prompt=select_account")
 	log.Println("demo users: alice/alice-password, bob/bob-password")
 	if err := serve.Listen(opAddr, mux); err != nil {
 		log.Fatalf("listen: %v", err)
@@ -138,11 +144,16 @@ func main() {
 
 // seedAccounts materialises the two demo subjects the chooser
 // enumerates. In a real deployment the user records come from the
-// embedder's identity backend. The chooser screen reads Subject +
-// AuthTime off the live SessionStore at render time, so the User
-// records here only matter when the orchestrator projects claims into
-// the id_token / userinfo response — the password credential is what
-// lets a browser reach a session in the first place.
+// embedder's identity backend.
+//
+// The chooser screen reads SessionID / Subject / AuthTime off the live
+// SessionStore at render time and resolves each row's DisplayName from
+// the "name" claim on the matching User record — which is why the
+// template's {{if .DisplayName}} branch renders "Alice Example" rather
+// than the raw subject here. A record without a "name" claim leaves
+// DisplayName empty and the template falls back to Subject. The
+// password credential is what lets a browser reach a session in the
+// first place.
 func seedAccounts(st *inmem.Store) error {
 	for _, acct := range []struct {
 		subject  string

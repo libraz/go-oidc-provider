@@ -26,6 +26,10 @@ import (
 type scratchStore struct {
 	db  *databasesql.DB
 	now func() time.Time
+
+	// txGate admits one transaction at a time. See BeginTx for why a
+	// SQLite-backed store needs it.
+	txGate chan struct{}
 }
 
 // newScratchStore builds the aggregate. The clock is time.Now wrapped
@@ -33,8 +37,9 @@ type scratchStore struct {
 // from examples/).
 func newScratchStore(db *databasesql.DB) *scratchStore {
 	return &scratchStore{
-		db:  db,
-		now: time.Now, //nolint:forbidigo // example store — not OP business logic; internal/timex is unreachable from examples/.
+		db:     db,
+		now:    time.Now, //nolint:forbidigo // example store — not OP business logic; internal/timex is unreachable from examples/.
+		txGate: make(chan struct{}, 1),
 	}
 }
 
@@ -49,37 +54,42 @@ func (s *scratchStore) Migrate(ctx context.Context) error {
 
 // --- store.Store accessors (db-bound) ------------------------------------
 
-func (s *scratchStore) Clients() store.ClientStore { return &clientStore{q: s.db} }
+// q is the querier every substore reached through the aggregate runs on.
+// The tx-bound accessors in tx.go have their own (see scratchTx.q), which
+// is what keeps the settled-transaction guard in one place per path.
+func (s *scratchStore) q() querier { return dbQuerier{db: s.db} }
+
+func (s *scratchStore) Clients() store.ClientStore { return &clientStore{q: s.q()} }
 
 func (s *scratchStore) AuthorizationCodes() store.AuthorizationCodeStore {
-	return &authCodeStore{q: s.db, now: s.now}
+	return &authCodeStore{q: s.q(), now: s.now}
 }
 
 func (s *scratchStore) RefreshTokens() store.RefreshTokenStore {
-	return &refreshStore{q: s.db, now: s.now, db: s.db}
+	return &refreshStore{q: s.q(), now: s.now, db: s.db}
 }
 
-func (s *scratchStore) Grants() store.GrantStore { return &grantStore{q: s.db, now: s.now} }
+func (s *scratchStore) Grants() store.GrantStore { return &grantStore{q: s.q(), now: s.now} }
 
-func (s *scratchStore) Sessions() store.SessionStore { return &sessionStore{q: s.db, now: s.now} }
+func (s *scratchStore) Sessions() store.SessionStore { return &sessionStore{q: s.q(), now: s.now} }
 
 func (s *scratchStore) PushedAuthRequests() store.PushedAuthRequestStore {
-	return &parStore{q: s.db, now: s.now}
+	return &parStore{q: s.q(), now: s.now}
 }
 
 func (s *scratchStore) Interactions() store.InteractionStore {
-	return &interactionStore{q: s.db, now: s.now}
+	return &interactionStore{q: s.q(), now: s.now}
 }
 
-func (s *scratchStore) ConsumedJTIs() store.ConsumedJTIStore { return &jtiStore{q: s.db, now: s.now} }
+func (s *scratchStore) ConsumedJTIs() store.ConsumedJTIStore { return &jtiStore{q: s.q(), now: s.now} }
 
-func (s *scratchStore) Users() store.UserStore { return &userStore{q: s.db} }
+func (s *scratchStore) Users() store.UserStore { return &userStore{q: s.q()} }
 
 func (s *scratchStore) AccessTokens() store.AccessTokenRegistry {
-	return &accessTokenStore{q: s.db}
+	return &accessTokenStore{q: s.q()}
 }
 
-func (s *scratchStore) Metadata() store.MetadataStore { return &metadataStore{q: s.db} }
+func (s *scratchStore) Metadata() store.MetadataStore { return &metadataStore{q: s.q()} }
 
 // --- substores the demo does not exercise return nil --------------------
 //

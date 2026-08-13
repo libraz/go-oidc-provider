@@ -27,7 +27,14 @@ import (
 func newTestStore(t *testing.T) (*scratchStore, *databasesql.DB) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "scratch-test.db")
-	dsn := "file:" + dbPath + "?_pragma=busy_timeout(5000)"
+	// The pragmas match the ones main.go opens the database with. WAL is
+	// not a tuning knob here: without it a transaction that reads a row
+	// before writing it cannot take the write lock while any other
+	// connection is still reading, and the contract's concurrent grant
+	// amendment — several authorizations for one (subject, client)
+	// landing together — has every attempt refused instead of one at a
+	// time.
+	dsn := "file:" + dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := databasesql.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)

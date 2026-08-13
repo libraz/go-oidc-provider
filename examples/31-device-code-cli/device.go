@@ -45,7 +45,15 @@ func simulateBrowserApproval(ctx context.Context, st store.Store, authz *authori
 		return
 	case <-time.After(demoApprovalDelay):
 	}
-	deps := &devicecodekit.Deps{DeviceCodes: st.DeviceCodes()}
+	// AuditLogger is what makes the ceremony observable: the verification
+	// helpers emit their approve / deny / brute-force events onto it as
+	// audit="true" slog records. A deployment routes it to the same sink
+	// that receives op.WithAuditLogger; the demo reuses the run's logger
+	// so the records appear inline with the rest of the output.
+	deps := &devicecodekit.Deps{
+		DeviceCodes: st.DeviceCodes(),
+		AuditLogger: logger,
+	}
 	ceremonyKey, err := newVerificationCeremonyKey()
 	if err != nil {
 		logger.Warn("create verification ceremony key failed", slog.String("err", err.Error()))

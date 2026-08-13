@@ -1,8 +1,8 @@
 //go:build example
 
 // Example 42 demonstrates OpenID Connect Back-Channel Logout 1.0.
-// When the OP terminates a session (RP-Initiated Logout via
-// /end_session, or an admin tool calling Provider.Logout) it walks
+// When the OP terminates a session — RP-Initiated Logout via
+// /end_session — it walks
 // every client whose store.Client.BackchannelLogoutURI is non-empty
 // and POSTs a signed Logout Token to that URL. Delivery is
 // best-effort and parallel across RPs.
@@ -18,10 +18,28 @@
 //     points at the RP stub on :9090.
 //   - :9090 — a tiny RP that prints every Logout Token it receives.
 //
-// To trigger a delivery, drive a normal authorize / token round-trip
-// to establish a session — sign in as "demo" / "demo-password" —
-// then hit /oidc/end_session with the id_token_hint. The RP stub
-// prints the Logout Token the OP POSTs to it.
+// To trigger a delivery, establish a session and then end it. The
+// registered redirect_uri (:5173) is a placeholder that nothing
+// serves — the browser lands on a connection error, which is fine:
+// the authorization code is in the address bar.
+//
+//  1. Open the authorize URL and sign in as "demo" / "demo-password":
+//
+//     http://127.0.0.1:8080/oidc/authorize?response_type=code&client_id=demo-rp&redirect_uri=http://127.0.0.1:5173/callback&scope=openid+profile&state=xyz
+//
+//  2. Copy the "code" query parameter off the failed redirect and
+//     exchange it, keeping the id_token from the response:
+//
+//     curl -s -u demo-rp:bcl-demo-secret-rotate-me \
+//     -d grant_type=authorization_code -d code=$CODE \
+//     -d redirect_uri=http://127.0.0.1:5173/callback \
+//     http://127.0.0.1:8080/oidc/token
+//
+//  3. End the session with that token as the hint:
+//
+//     curl -si "http://127.0.0.1:8080/oidc/end_session?id_token_hint=$ID_TOKEN"
+//
+// The RP stub on :9090 prints the Logout Token the OP POSTs to it.
 //
 // Wiring details:
 //

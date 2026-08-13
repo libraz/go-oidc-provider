@@ -17,9 +17,10 @@
 // recovery sheet is what happens when that code cannot arrive, and
 // deciding that is not something a rule predicate can see: the only
 // signal the OP gets is that the user keeps failing the factor it
-// offered. An [op.Decider] reads the failure count and requires the
-// recovery step instead, and the step is declared as a rule with a
-// predicate that never fires so the Decider has a kind to name.
+// offered. An [op.Decider] reads the mailed code's own rejection
+// counter off the e-mail OTP record and requires the recovery step
+// instead, and the step is declared as a rule with a predicate that
+// never fires so the Decider has a kind to name.
 //
 // What the library deliberately does not offer is a seam for the user
 // to pick a different factor. The flow decides; the user's only input
@@ -70,9 +71,11 @@
 //  5. Approve consent; /me shows the ID Token with
 //     "amr": ["mfa","otp","pwd"].
 //
-// To exercise the recovery path instead, choose the recovery-code
-// prompt at step 3 and paste one of the codes printed in the startup
-// banner. Each code works once.
+// To exercise the recovery path instead, fail the mailed code at
+// step 4 until the Decider swaps the step: the SPA has no factor
+// picker, because the flow — not the user — decides which factor is
+// asked for. Once the recovery prompt appears, paste one of the codes
+// printed in the startup banner. Each code works once.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
@@ -99,6 +102,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/recoverykit"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -180,11 +184,11 @@ func run() error {
 		// no seam for "the user says the mail never arrived" — the
 		// flow decides which factor runs, and the user's only signal is
 		// that they keep failing the one they were given. Here two
-		// failed codes is taken as "the inbox is unreachable" and the
+		// rejected codes is taken as "the inbox is unreachable" and the
 		// recovery sheet is required instead. A deployment that wants
 		// the user to choose explicitly builds that choice into its own
 		// UI and drives it through a Decider like this one.
-		Decider: fallbackToRecovery{after: 2},
+		Decider: fallbackToRecovery{otps: st.EmailOTPs(), after: 2},
 	}
 
 	provider, err := op.New(
@@ -250,33 +254,61 @@ func run() error {
 }
 
 // fallbackToRecovery swaps the mailed code for the recovery sheet once
-// the login has burned through `after` failed attempts. The
+// the mailed code itself has been rejected `after` times. The
 // orchestrator consults the Decider before the rule table on every
 // pass, so returning Require short-circuits the RuleAlways that would
 // otherwise keep asking for a code the user cannot receive.
 //
-// Returning Pass is the ordinary answer: it hands the decision back to
-// the rules.
+// The count is read off the e-mail OTP record rather than taken from
+// [op.LoginContext.FailedAttempts], and the difference decides whether
+// this policy means what it says. FailedAttempts is every rejected
+// submission in the attempt, the primary password included, and a
+// completed factor does not clear it: a user who mistypes their
+// password twice and signs in on the third try arrives at the second
+// factor already over the threshold and is handed the recovery sheet
+// without ever being shown a mailed code.
+// [store.EmailOTPRecord.FailedCount] counts rejected codes and nothing
+// else. Its scope is the record's rolling window rather than this one
+// login, and a code that verifies resets it — which is the scope the
+// question actually has, since "the mail does not arrive" is a
+// property of the mailbox rather than of one sign-in.
 //
-// The third answer is the one that is easy to leave out. Requiring a
-// step that has already completed is not an error — the orchestrator
-// declines to run it twice and falls through to the rules, where
-// RuleAlways would demand the mailed code all over again. The failure
-// count that opened the fallback never goes back down, so this Decider
-// is asked the same question on every later pass and has to end the
-// login itself. Allow does that: the password already ran as Primary,
-// so a recovery code accepted on top of it is the second factor, and
-// there is nothing further to ask for.
+// Returning Pass is the ordinary answer: it hands the decision back to
+// the rules. A record that cannot be read answers Pass too. No code
+// has been sent yet on that path, or the store is unavailable; neither
+// is evidence about the mailbox, and promoting the recovery sheet on
+// an unreadable counter would hand out the fallback for free.
+//
+// The answer that is easy to leave out is the one asked first here.
+// Requiring a step that has already completed is not an error — the
+// orchestrator declines to run it twice and falls through to the rules,
+// where RuleAlways would demand the mailed code all over again.
+// Redeeming a recovery code does not clear the mailed code's counter,
+// so this Decider is asked the same question on every later pass and
+// has to end the login itself. Allow does that: the password already
+// ran as Primary, so a recovery code accepted on top of it is the
+// second factor, and there is nothing further to ask for.
 type fallbackToRecovery struct {
+	// otps is the record store [op.StepEmailOTP] writes its verify
+	// counters to. The Decider only reads it.
+	otps store.EmailOTPStore
+
+	// after is how many rejected codes open the fallback.
 	after int
 }
 
-func (f fallbackToRecovery) Decide(_ context.Context, lc op.LoginContext) op.Decision { //nolint:ireturn // op.Decision is a sealed sum type; returning it is the Decider contract.
-	if lc.FailedAttempts < f.after {
-		return op.Pass{}
-	}
+func (f fallbackToRecovery) Decide(ctx context.Context, lc op.LoginContext) op.Decision { //nolint:ireturn // op.Decision is a sealed sum type; returning it is the Decider contract.
 	if slices.Contains(lc.CompletedSteps, op.StepKindRecoveryCode) {
 		return op.Allow{}
+	}
+	if lc.Identity.Subject == "" {
+		// Primary has not bound a subject yet, so there is no record
+		// to read and no factor to fall back from.
+		return op.Pass{}
+	}
+	rec, err := f.otps.Get(ctx, string(lc.Identity.Subject))
+	if err != nil || rec.FailedCount < f.after {
+		return op.Pass{}
 	}
 	return op.Require{Kind: op.StepKindRecoveryCode}
 }
