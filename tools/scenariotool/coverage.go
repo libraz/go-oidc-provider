@@ -92,8 +92,11 @@ func runCoverage(ctx context.Context, dir, testsPattern, cwd, testRoot string, s
 	if err != nil {
 		return err
 	}
-	stubs, err := discoverSkipStubs(testRoot)
+	stubs, classified, err := discoverSkipStubs(testRoot)
 	if err != nil {
+		return err
+	}
+	if err := checkStubScanReachedTests(testRoot, len(testIDs), classified); err != nil {
 		return err
 	}
 	brokenDelegations, err := verifyDelegations(ctx, rows, cwd)
@@ -111,6 +114,38 @@ func runCoverage(ctx context.Context, dir, testsPattern, cwd, testRoot string, s
 		return &exitError{code: 1, message: "scenariotool: binding gate failed (--check-bindings)"}
 	}
 	return nil
+}
+
+// checkStubScanReachedTests refuses to report coverage when `go test
+// -list` found scenario tests but the source scan classified none of
+// them.
+//
+// The two disagreeing means the scan did not read the tests it is meant
+// to judge — a wrong or empty -test-root, a renamed tree, a layout the
+// walk no longer matches. Every such case yields an empty stub set,
+// which is indistinguishable from the healthy "nothing is a stub"
+// answer: skip-only drops to zero, every bound row is credited, and the
+// gate reports full coverage having verified nothing. That is the same
+// false green the classifier itself was fixed to stop producing, one
+// layer up, so it is refused here rather than reported.
+//
+// The supported way to run without the scan is -yaml-only, which skips
+// the `go test -list` side too and so cannot claim a binding it did not
+// check.
+func checkStubScanReachedTests(testRoot string, testCount, classified int) error {
+	if testCount == 0 || classified > 0 {
+		return nil
+	}
+	where := testRoot
+	if where == "" {
+		where = "(empty -test-root)"
+	}
+	return fmt.Errorf(
+		"`go test -list` found %d scenario test(s) but the source scan under %s classified none; "+
+			"the skip-stub scan is not reading the suite, so every binding would be credited unverified "+
+			"(use -yaml-only to report the catalog side alone)",
+		testCount, where,
+	)
 }
 
 // reportYAMLOnlyCoverage prints the status split that can be derived
@@ -375,13 +410,22 @@ func scenarioIDFromTestName(name string) (string, bool) {
 }
 
 // discoverSkipStubs returns the set of scenario IDs whose every test
-// function is a skip stub. A row keeps its binding as soon as one of
-// its tests runs, so an ID only lands here when nothing under it
-// asserts. An empty testRoot disables the scan and yields no stubs.
-func discoverSkipStubs(testRoot string) (map[string]struct{}, error) {
+// function is a skip stub, alongside the number of scenario test
+// functions the scan classified at all.
+//
+// A row keeps its binding as soon as one of its tests runs, so an ID
+// only lands here when nothing under it asserts.
+//
+// The second return exists because an empty stub set is ambiguous on
+// its own: it means either "every bound test asserts" (the healthy
+// state) or "the scan read nothing" (a broken scan). Those two produce
+// an identical, passing dashboard, so the caller needs the classified
+// count to tell them apart. An empty testRoot yields zero of both and
+// is likewise the caller's to reject.
+func discoverSkipStubs(testRoot string) (map[string]struct{}, int, error) {
 	stubs := map[string]struct{}{}
 	if testRoot == "" {
-		return stubs, nil
+		return stubs, 0, nil
 	}
 	asserting := map[string]struct{}{}
 	err := filepath.WalkDir(testRoot, func(path string, d os.DirEntry, walkErr error) error {
@@ -394,12 +438,23 @@ func discoverSkipStubs(testRoot string) (map[string]struct{}, error) {
 		return collectSkipStubs(path, stubs, asserting)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("walk %s: %w", testRoot, err)
+		return nil, 0, fmt.Errorf("walk %s: %w", testRoot, err)
+	}
+	// Distinct IDs seen, counted before the subtraction below: that
+	// subtraction only moves IDs between the two sets and must not change
+	// how much the scan is credited with having read. An ID carrying both
+	// a stub and an asserting function counts once.
+	seen := make(map[string]struct{}, len(stubs)+len(asserting))
+	for id := range stubs {
+		seen[id] = struct{}{}
+	}
+	for id := range asserting {
+		seen[id] = struct{}{}
 	}
 	for id := range asserting {
 		delete(stubs, id)
 	}
-	return stubs, nil
+	return stubs, len(seen), nil
 }
 
 // collectSkipStubs records every scenario test declared in one file as
@@ -421,7 +476,7 @@ func collectSkipStubs(path string, stubs, asserting map[string]struct{}) error {
 		if !ok {
 			continue
 		}
-		if opensWithSkip(fd.Body) {
+		if neverAsserts(fd.Body) {
 			stubs[id] = struct{}{}
 		} else {
 			asserting[id] = struct{}{}
@@ -430,13 +485,21 @@ func collectSkipStubs(path string, stubs, asserting map[string]struct{}) error {
 	return nil
 }
 
-// opensWithSkip reports whether the first statement that could do any
-// work is an unconditional t.Skip / t.Skipf / t.SkipNow.
+// neverAsserts reports whether a test body cannot fail: it either opens
+// with an unconditional t.Skip / t.Skipf / t.SkipNow, or it never gets
+// as far as a statement that could assert anything.
 //
 // Bookkeeping calls that every scenario test opens with are stepped
 // over. A skip nested in an if — the "no Docker here, skip" shape — is
 // not a stub: that test asserts whenever its precondition holds.
-func opensWithSkip(body *ast.BlockStmt) bool {
+//
+// Running off the end of the list is the second stub shape and returns
+// true. A body that is empty, or that holds nothing but the bookkeeping
+// calls above, has no statement that can fail — so counting it as
+// coverage would let an empty function stand in for an assertion, which
+// is the one thing a coverage gate must not accept. Only a statement
+// the walk cannot classify as bookkeeping is evidence of real work.
+func neverAsserts(body *ast.BlockStmt) bool {
 	for _, stmt := range body.List {
 		expr, ok := stmt.(*ast.ExprStmt)
 		if !ok {
@@ -455,7 +518,7 @@ func opensWithSkip(body *ast.BlockStmt) bool {
 			return false
 		}
 	}
-	return false
+	return true
 }
 
 // calledTestingMethod returns the method name of a `<ident>.<Method>()`

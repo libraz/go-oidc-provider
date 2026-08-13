@@ -190,7 +190,7 @@ func coverageCmd(ctx context.Context, args []string) error {
 	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
 	tests := fs.String("tests", "./test/scenarios/...", "go test package selector")
 	cwd := fs.String("cwd", "", "working directory for `go test -list` (defaults to current directory)")
-	testRoot := fs.String("test-root", "test/scenarios", "directory holding <feature>_test.go files; pass empty to skip the skip-stub scan")
+	testRoot := fs.String("test-root", "test/scenarios", "directory holding <feature>_test.go files; must reach the suite (use -yaml-only to report without it)")
 	strict := fs.Bool("strict", false, "exit non-zero when any binding gap exists, skip-only bindings included")
 	checkBindings := fs.Bool("check-bindings", false, "exit non-zero on a row without a test, a test without a row, or a running test under an out-of-scope row")
 	yamlOnly := fs.Bool("yaml-only", false, "skip `go test -list` and report only YAML-side counts")

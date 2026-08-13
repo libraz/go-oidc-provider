@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -163,6 +164,23 @@ type ValidationOptions struct {
 	// warnings printed on stderr. Used during partial migration when
 	// not every feature file is in place yet.
 	LenientCrossRefs bool
+
+	// SourceRoot is the repository root scanned for Go declarations so
+	// prose citations of the form `package.Symbol` can be resolved.
+	// Callers that have a tree to check against pass its root; the ones
+	// that do not set SkipSymbolCitations instead.
+	SourceRoot string
+
+	// SkipSymbolCitations turns the citation check off for a caller with
+	// no tree to resolve against — `flip`, which re-reads what it just
+	// wrote, and the structural tests.
+	//
+	// It exists so that decision has to be spelled. An empty SourceRoot
+	// alone used to mean the same thing, which made "this caller has no
+	// tree" and "this caller lost its root" the same input: the second
+	// silently disabled the check and left the validator reporting a
+	// catalog it had not resolved a single citation in.
+	SkipSymbolCitations bool
 }
 
 // Validate runs structural + cross-file checks. The returned error
@@ -181,12 +199,51 @@ func (c *Catalog) Validate(opts ValidationOptions) error {
 		problems = append(problems, dangling...)
 	}
 
+	// Prose citations are checked the same way covered_by is: by
+	// resolving them against the other side rather than trusting the
+	// sentence. A citation that no longer names anything is how an
+	// out-of-scope claim stops being auditable.
+	citations, err := c.symbolCitationProblems(opts)
+	if err != nil {
+		return err
+	}
+	problems = append(problems, citations...)
+
 	if len(problems) == 0 {
 		return nil
 	}
 	sort.Strings(problems)
 	return fmt.Errorf("catalog validation failed (%d issue(s)):\n  %s",
 		len(problems), strings.Join(problems, "\n  "))
+}
+
+// symbolCitationProblems resolves the catalog's prose citations against
+// the tree named by opts, or reports why it cannot.
+//
+// The two ways the check can end up resolving nothing are refused
+// rather than skipped, because both read out as a clean catalog: a
+// caller that supplied no root without saying it meant to, and a root
+// whose scan found no declarations at all. Skipping is available, but
+// only to a caller that asks for it in as many words.
+func (c *Catalog) symbolCitationProblems(opts ValidationOptions) ([]string, error) {
+	switch {
+	case opts.SkipSymbolCitations && opts.SourceRoot != "":
+		return nil, errors.New("SkipSymbolCitations and SourceRoot are mutually exclusive: " +
+			"a caller either has a tree to resolve citations against or it does not")
+	case opts.SkipSymbolCitations:
+		return nil, nil
+	case opts.SourceRoot == "":
+		return nil, errors.New("no SourceRoot: the citation check has no tree to resolve against, " +
+			"so every row would be reported clean unresolved (set SkipSymbolCitations to disable it deliberately)")
+	}
+	ix, err := buildSymbolIndex(opts.SourceRoot)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkSymbolIndexReachedSources(opts.SourceRoot, ix); err != nil {
+		return nil, err
+	}
+	return c.unresolvedSymbolCitations(ix), nil
 }
 
 // validateFiles walks every feature file and every row in it, carrying

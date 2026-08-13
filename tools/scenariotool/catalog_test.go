@@ -416,7 +416,13 @@ rows:
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir := writeCatalog(t, tc.files(t))
-			assertProblems(t, validationProblems(t, dir, tc.opts), tc.want(dir))
+			// Every case here exercises a structural rule against a
+			// catalog with no Go tree beside it. The citation check has
+			// its own tests and its own fixture tree, and Validate now
+			// refuses to run without either a root or this opt-out.
+			opts := tc.opts
+			opts.SkipSymbolCitations = true
+			assertProblems(t, validationProblems(t, dir, opts), tc.want(dir))
 		})
 	}
 }
@@ -438,7 +444,7 @@ rows:
     cross_refs: [broken]
 `})
 	path := filepath.Join(dir, "alpha.yaml")
-	assertProblems(t, validationProblems(t, dir, ValidationOptions{}), []string{
+	assertProblems(t, validationProblems(t, dir, ValidationOptions{SkipSymbolCitations: true}), []string{
 		path + ` rows[0] (bad-id): 'behaviour' MUST be non-empty`,
 		path + ` rows[0] (bad-id): 'spec' MUST be non-empty`,
 		path + ` rows[0] (bad-id): cross_refs[0]="broken" must match <feature>#<ID>`,
@@ -476,7 +482,7 @@ rows:
 	})
 	alpha := filepath.Join(dir, "alpha.yaml")
 	beta := filepath.Join(dir, "beta.yaml")
-	assertProblems(t, validationProblems(t, dir, ValidationOptions{}), []string{
+	assertProblems(t, validationProblems(t, dir, ValidationOptions{SkipSymbolCitations: true}), []string{
 		fmt.Sprintf(`%s rows[0] (AL-001): id "AL-001" already declared in %s`, beta, alpha),
 		fmt.Sprintf(`%s: prefix "AL" already used by %s`, beta, alpha),
 	})

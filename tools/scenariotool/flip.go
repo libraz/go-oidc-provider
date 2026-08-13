@@ -53,7 +53,13 @@ func runFlip(dir, id, newStatus, reason string) error {
 	if err != nil {
 		return fmt.Errorf("flip wrote %s but reload failed: %w", r.File.Path, err)
 	}
-	if err := cat2.Validate(ValidationOptions{LenientCrossRefs: false}); err != nil {
+	// The re-read asks one question: did the write leave the file
+	// structurally valid? The citation check is deliberately not part of
+	// that answer — it judges the whole catalog, so a citation that
+	// rotted under some other row would block an unrelated flip. The
+	// reason text this flip may have added is prose like any other and
+	// is judged by the `validate` gate.
+	if err := cat2.Validate(ValidationOptions{LenientCrossRefs: false, SkipSymbolCitations: true}); err != nil {
 		return fmt.Errorf("flip wrote %s but validation failed: %w", r.File.Path, err)
 	}
 	fmt.Printf("scenariotool: %s %s -> %s\n", id, current, newStatus)

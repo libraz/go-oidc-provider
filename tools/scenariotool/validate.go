@@ -9,7 +9,18 @@ func runValidate(dir string, lenient bool) error {
 	if err != nil {
 		return err
 	}
-	if err := cat.Validate(ValidationOptions{LenientCrossRefs: lenient}); err != nil {
+	// A root that will not resolve fails the run. This is the gate's own
+	// entry point: it is the one caller that must never fall back to
+	// checking the catalog against a tree that declares none of what it
+	// cites, because there is nobody behind it to notice.
+	root, err := repoRootFromCatalogDir(dir)
+	if err != nil {
+		return err
+	}
+	if err := cat.Validate(ValidationOptions{
+		LenientCrossRefs: lenient,
+		SourceRoot:       root,
+	}); err != nil {
 		return &exitError{code: 1, message: err.Error()}
 	}
 	rows := 0
