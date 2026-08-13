@@ -122,6 +122,22 @@ func (s *memJTIStore) Has(_ context.Context, jti string) (bool, error) {
 	return ok, nil
 }
 
+// len reports how many replay entries the store holds. Tests that
+// assert a refused proof left the table untouched read it.
+func (s *memJTIStore) len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.m)
+}
+
+// expiryOf returns the retention deadline recorded for jti, or the zero
+// time when the entry is absent.
+func (s *memJTIStore) expiryOf(jti string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.m[jti]
+}
+
 type captureJTIStore struct {
 	jti       string
 	expiresAt time.Time

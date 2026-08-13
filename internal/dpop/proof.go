@@ -288,14 +288,20 @@ func stripDefaultPort(host, scheme string) string {
 // window is symmetric on purpose: a proof minted in the future is just
 // as suspicious as one from the past, and RFC 9449 §11.1 instructs the
 // server to reject either direction.
+//
+// The comparison is between instants, never between a difference and
+// the window. [time.Time.Sub] saturates at ±[time.Duration] range, so a
+// far-future iat yields math.MinInt64 — whose negation wraps back to
+// itself, leaving a "distance" that compares as less than any window.
+// A client-supplied timestamp decides that comparison, so the
+// saturating form fails open at exactly the input an attacker controls.
+// Comparing now.Add(±window) against the instant has no such edge: an
+// out-of-range iat lands outside the bounds in whichever direction it
+// overflowed, and is refused.
 func withinIatWindow(iat int64, now time.Time, window time.Duration) bool {
 	if window <= 0 {
 		return false
 	}
 	t := time.Unix(iat, 0)
-	delta := now.Sub(t)
-	if delta < 0 {
-		delta = -delta
-	}
-	return delta <= window
+	return !t.Before(now.Add(-window)) && !t.After(now.Add(window))
 }

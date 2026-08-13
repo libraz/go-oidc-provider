@@ -409,8 +409,28 @@ func (v *Verifier) Check(ctx context.Context, in VerifyInput) (*Checked, error) 
 	return &Checked{
 		JKT:             jkt,
 		JTI:             parsed.claims.JTI,
-		replayExpiresAt: time.Unix(parsed.claims.IssuedAt, 0).Add(v.replayLeew),
+		replayExpiresAt: replayExpiry(parsed.claims.IssuedAt, now, v.iatWindow, v.replayLeew),
 	}, nil
+}
+
+// replayExpiry derives the retention deadline of a proof's replay
+// marker from its iat, clamped to the latest value the iat gate can
+// legitimately produce.
+//
+// The gate accepts only iat <= now + window, so iat + leeway can never
+// exceed now + window + leeway. Clamping there is therefore exact on
+// every accepting path and bites only if the gate is bypassed — which
+// is the point of having it. Retention is the one thing on this path a
+// client-supplied timestamp would otherwise decide, and a far-future
+// iat would pin a replay entry for centuries (Redis TTL) or forever
+// (in-memory), making the table's size an attacker's choice.
+func replayExpiry(iat int64, now time.Time, window, leeway time.Duration) time.Time {
+	ceiling := now.Add(window + leeway)
+	from := time.Unix(iat, 0).Add(leeway)
+	if from.After(ceiling) {
+		return ceiling
+	}
+	return from
 }
 
 // checkNonce runs the optional RFC 9449 §8 / §9 nonce gate. The check
