@@ -40,7 +40,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 ## インストール
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v1.0.0
+go get github.com/libraz/go-oidc-provider/op@v1.1.0
 ```
 
 Go 1.25 以上が必要です。DB / Redis / AWS SDK のドライバを引き込むストア
@@ -48,9 +48,9 @@ Go 1.25 以上が必要です。DB / Redis / AWS SDK のドライバを引き込
 利用者の `go.sum` に余計な依存は入りません。
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.0.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.1.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.1.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.1.0
 ```
 
 ## クイックスタート

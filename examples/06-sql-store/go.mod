@@ -9,7 +9,7 @@ go 1.25.0
 toolchain go1.26.5
 
 require (
-	github.com/libraz/go-oidc-provider v1.0.0
+	github.com/libraz/go-oidc-provider v1.1.0
 	github.com/libraz/go-oidc-provider/op/storeadapter/sql v1.0.0
 	modernc.org/sqlite v1.56.0
 )

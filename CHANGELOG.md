@@ -4,10 +4,14 @@
 in subsequent releases are tracked here in
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-The project follows strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-from `v1.0.0` onwards; pre-v1.0 minor releases (including the `v0.9.x`
-series) may carry breaking changes — see the `Changed` / `Removed`
-sections of each release for the migration notes.
+The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Read the `Changed` / `Removed` sections of each release for the migration
+notes before upgrading: pre-v1.0 minor releases (including the `v0.9.x`
+series) carry breaking changes, and `v1.1.0` carries several on the stable
+surface as well — chiefly the `op/store` interfaces a bring-your-own store
+implements. An embedder on `op.New` plus a bundled storage adapter compiles
+unchanged; one that implements its own `store.*`, `op.HintResolver`,
+`op.SubjectGenerator` or `op.CaptchaVerifier` does not.
 
 The main module and the storage-adapter sub-modules
 (`op/storeadapter/sql`, `op/storeadapter/redis`, and from `v1.0.0`
@@ -15,7 +19,13 @@ The main module and the storage-adapter sub-modules
 each sub-module independently:
 
 ```
-# v1.0.0 (latest)
+# v1.1.0 (latest)
+go get github.com/libraz/go-oidc-provider@v1.1.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.1.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.1.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.1.0
+
+# v1.0.0
 go get github.com/libraz/go-oidc-provider@v1.0.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
@@ -54,16 +64,21 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ## [Unreleased]
 
+## [v1.1.0] — 2026-08-13
+
 A security and correctness pass. Several of the fixes close paths on which the
 OP returned a wrong answer silently: a consent ceremony that never ran, a
 revoked token that kept introspecting as active, an authentication context that
 described an older login than the one being served.
 
-Seven deployment classes need to read the Changed section before upgrading:
-anyone running a BYO `store.PasskeyStore` or MFA store, an existing SQL or
-DynamoDB adapter installation, anyone whose OP serves only machine-to-machine
-grants, anyone whose relying parties reconcile their registration through
-`PUT /register/{client_id}`, and anyone serving the device-code or CIBA grant.
+Eleven deployment classes need to read the Changed section before upgrading:
+anyone running a BYO `store.PasskeyStore`, MFA store or CIBA request store, an
+existing SQL or DynamoDB adapter installation, anyone whose OP serves only
+machine-to-machine grants, anyone whose relying parties reconcile their
+registration through `PUT /register/{client_id}`, anyone serving the
+device-code or CIBA grant, anyone serving RP-initiated logout to browsers that
+hold more than one account, anyone introspecting from a public client, and
+anyone with dashboards or alerts on the OP's Prometheus metrics.
 
 ### Security
 
@@ -519,11 +534,46 @@ grants, anyone whose relying parties reconcile their registration through
   fails closed with `authn.ErrNoEligibleAuthenticator`. `RiskOutcome.MinAAL`
   remains non-applicable on this surface and its godoc says so.
 
+- `/introspect` requires a confidential client, and refuses one that is public
+  or registered with `token_endpoint_auth_method=none` with
+  `401 invalid_client` before the `token` parameter is read. A public client
+  authenticates by naming its own `client_id`, so the endpoint was answering
+  RFC 7662's active/inactive question to any caller who could spell one — a
+  token-status oracle over every token whose audience the deployment let a
+  public client reach, and a storage lookup an unauthenticated caller could
+  drive at their own request rate. The gate runs ahead of the token lookup, so
+  a refused request reads nothing. See **Changed** for the migration note.
+
+- Refresh rotation revalidates the RFC 9396 `authorization_details` selection
+  inside the transaction that writes the successor token. The selection was
+  computed from a read taken before that transaction, so a grant amended
+  between the two — a re-consent that narrowed it, a concurrent
+  grant-management action — yielded an access token stamped with rich
+  authorizations the live grant no longer covered. The grant is now re-read
+  after `Consume` and a divergence rolls the transaction back, leaving the
+  predecessor redeemable so the client can retry. Moving the preflight read
+  ahead of the transaction also removes the stale SQLite WAL snapshot it
+  established, which had been failing the later `Consume` with
+  `SQLITE_BUSY_SNAPSHOT`.
+
+- Outbound relying-party JWKS loads are capped at 64 distinct URLs in flight
+  across the process, with a per-component share that can only narrow that
+  ceiling and never widen it. A deployment running open dynamic registration
+  accepts a `jwks_uri` from anyone, and nothing bounded the fan-out: a burst of
+  `private_key_jwt`, JAR or `self_signed_tls_client_auth` requests naming
+  distinct unfetched URLs turned one inbound request each into an outbound
+  socket and goroutine, aimed at a host the registrant chose. The gate is
+  non-blocking and fails closed — a refusal surfaces as a transient error, is
+  kept out of the negative cache, and releases the forced-refresh marker, so
+  the next caller retries as soon as a slot frees rather than inheriting a
+  cached failure.
+
 ### Fixed
 
 - `op/storeadapter/sql/schema/MIGRATIONS.md` names every index the current
-  schema carries. Eight added since `v1.0.0` — seven on `expires_at` columns
-  and one on `oidc_grants(client_id)` — were only ever created by a fresh
+  schema carries. Nine added since `v1.0.0` — seven on `expires_at` columns
+  and two on `oidc_grants`, keyed on `client_id` and on
+  `(client_id, subject, updated_at)` — were only ever created by a fresh
   install. SQLite and PostgreSQL declare their indexes as separate
   `CREATE INDEX IF NOT EXISTS` statements and so acquire them on the next
   `Migrate()`, but MySQL declares them inline in `CREATE TABLE`, which
@@ -1089,6 +1139,36 @@ grants, anyone whose relying parties reconcile their registration through
   Lookup now walks the selected tag's own fallback chain, the default's, and
   finally the seed English catalogue.
 
+- An interaction or logout ceremony survives a cookie-key rotation. The CSRF
+  double-submit token and the login-flow state reference were signed with a key
+  derived from the newest configured cookie key alone, while the cookies
+  themselves decrypt across the whole overlap window — so the moment a new key
+  was deployed, every ceremony already in a browser failed its next submission
+  with a CSRF error, and the user's only route forward was to restart the
+  authorization request. Both signers now issue with the current key and verify
+  against the full ring, and verification walks the whole ring rather than
+  stopping at the key that matched, so the work does not report which one it
+  was. A token whose issued-at lies in the future is rejected rather than
+  passed through by a check that only bounded age in one direction, and the
+  state-reference payload is validated on issue as well as on verify.
+
+- A grant-management `DELETE` that has already removed the grant answers 204
+  rather than 404. The handler treated `ErrNotFound` from the final delete as a
+  failure, so a client retrying after a timeout — the case a bearer-token API
+  with no idempotency key is expected to hit — was told the grant it had just
+  removed did not exist. The requested grant is also processed last, so a
+  failure on a sibling record leaves the authenticated anchor queryable instead
+  of stranding the client with a `grant_id` it can neither read nor retire.
+
+- `introspection_signed_response_alg: "none"` is read as "no signing
+  requirement" rather than as a demand for a signed response the OP then had to
+  satisfy with an algorithm named `none`. The value is also projected onto the
+  public `op.ClientMetadata` view now, which had dropped it — a registration a
+  `RegistrationOption.ValidateMetadata` hook was asked to approve did not carry
+  the member that decides whether that client's introspection responses arrive
+  as JSON or as a JWS, so the one hook that could refuse the combination could
+  not see it.
+
 ### Changed
 
 - `op.New` rejects a configuration that sets `op.WithRiskAssessor` alongside a
@@ -1108,8 +1188,10 @@ grants, anyone whose relying parties reconcile their registration through
   The `json:"-"` tag keeps the token out of the opaque record document, so a
   JSON-backed store must persist it in separate backend state. Update unkeyed
   struct literals to keyed literals before upgrading. Existing bundled SQL
-  installations must add both `row_version` columns from
-  `op/storeadapter/sql/schema/MIGRATIONS.md` before starting the new binary.
+  installations must add both `row_version` columns — and, on the same pass,
+  the `oidc_registration_access_tokens.allowed_scopes` column this release also
+  reads — from `op/storeadapter/sql/schema/MIGRATIONS.md` before starting the
+  new binary.
   Quiesce and upgrade SQL and DynamoDB MFA writers together: an old SQL writer
   does not advance the token, while an old DynamoDB `PutItem` writer removes its
   attribute.
@@ -1353,8 +1435,8 @@ grants, anyone whose relying parties reconcile their registration through
 
 - `op/devicecodekit.Deps` carries a mutex and is no longer copyable; `go vet`'s
   copylocks check rejects passing it by value. Hold it behind a pointer, which is
-  what every helper in the package already takes. The package also gained
-  `AttemptLimiter` and the surrounding user-code attempt-budget API.
+  what every helper in the package already takes. The mutex is there for the
+  user-code attempt budget the package gained; see **Added**.
 
 - Locale tags are reported in canonical BCP 47 form — lowercase,
   hyphen-separated — wherever the OP names one back to the embedder or the
@@ -1380,6 +1462,55 @@ grants, anyone whose relying parties reconcile their registration through
   which both predicates answered false — code branching on them fell through
   every arm and treated a misconfiguration as a success or an unclassified
   crash, depending on which way the caller had written the fallback.
+
+- **BREAKING (RP-initiated logout).** `/end_session` terminates every browser
+  account in the active chooser group. A request that wants the previous
+  behaviour — end the active session and leave the group's siblings signed in —
+  sends the new `logout_scope=current` parameter, which also rebinds the
+  session cookie to a surviving sibling when the group still has one. Any other
+  value, including an empty or repeated one, is a 400. "Log out" on a browser
+  holding several accounts previously left the others live while clearing the
+  cookie that named them, which reads as a completed sign-out and is not one.
+  The confirmation form binds the scope across its GET → POST round-trip, so a
+  forged or stale form cannot widen or narrow what the POST destroys. Group-wide
+  logout snapshots the group before deleting it and drives the cascades from
+  that snapshot, so access-token, opaque-token and refresh-chain revocation and
+  back-channel logout run once per session rather than once per resolved
+  subject.
+
+- **BREAKING (dashboards).** `oidc_login_attempts_total` renames its
+  `authenticator` label to `factor`, and counts MFA attempts alongside login
+  attempts. Queries selecting on `authenticator` stop matching. The rename
+  follows what the series now holds: with `mfa.success` / `mfa.failed` reaching
+  the same counter, the label names the factor that resolved rather than the
+  authenticator that ran, and the two are not the same thing on a chain where
+  one authenticator serves several factors.
+
+- **BREAKING (introspection clients).** A resource server that authenticated at
+  `/introspect` as a public client, or as one registered with
+  `token_endpoint_auth_method=none`, receives `401 invalid_client` and must
+  re-register as confidential. See **Security** for why. Deployments introspecting
+  from a confidential client are unaffected.
+
+- **BREAKING (BYO CIBA stores).** `store.CIBARequestStore.Approve` MUST return
+  `store.ErrConflict` and leave the record untouched when the record already
+  carries a subject that differs from the one supplied. Populating an empty
+  subject exactly once is unchanged, which is what keeps a deferred-subject
+  record approvable. A store that silently overwrote the subject let an
+  authentication device move an in-flight request onto a different account.
+
+- Discovery advertises `none` in `token_endpoint_auth_methods_supported`, which
+  the token endpoint has always accepted, and adds it to
+  `registration_endpoint_auth_methods_supported` when open dynamic registration
+  is enabled. The mirrored introspection and revocation lists stay confidential-
+  only, so the document no longer implies a public caller is accepted at a
+  surface that refuses one.
+
+- `mtls_endpoint_aliases` is validated at construction against the endpoints
+  and features actually mounted, and an alias naming an unknown key or an
+  unmounted endpoint is a configuration error rather than a published document
+  that sends a client to a path returning 404. Declaring any alias without
+  `feature.MTLS` is likewise refused.
 
 ### Added
 
@@ -1598,6 +1729,55 @@ grants, anyone whose relying parties reconcile their registration through
   interactions and lockout counters. Without it an unauthenticated `/authorize`
   loop grew the process until it ran out of memory.
 
+- `store.GrantSubjectLister` with `ListSubjectsByClient` and
+  `store.GrantSubjectPage`, the keyset-paginated counterpart to the existing
+  `ListClientIDsBySubject`, plus `RegistrationOption.OnClientDeletedSnapshot`.
+  Deleting a dynamically registered client can now send that client its own
+  signed Logout Token: the registration endpoint snapshots the client record
+  and a bounded page of its granted subjects *before* the delete, then drives
+  the fan-out from the snapshot, which is the only order that works — after the
+  delete there is no client left to resolve a `backchannel_logout_uri` from.
+  The built-in path engages when the configured grant store exposes both
+  bounded grant indexes; a store exposing neither keeps the existing
+  `OnClientDeleted` hook and acquires no new start-up requirement. The optional
+  interface is bounded on purpose: an implementation must cost `limit+1` rows,
+  not a materialised enumeration of every grant the client holds. The bundled
+  inmem, SQL and DynamoDB adapters implement it.
+
+- `store.RegistrationAccessToken.AllowedScopes`, the immutable scope ceiling a
+  registration access token inherits from the initial access token that minted
+  it. Empty means unrestricted, which is what every token issued before this
+  release carries. Without it the ceiling an IAT declared applied at `POST
+  /register` and then evaporated: the client's own `PUT` could name any
+  registered scope, so a constrained onboarding token bought a constraint that
+  lasted one request.
+
+- `op.AuditGrantManagementRevokeFailed` (`grant_management.revoke_failed`) and
+  `op.AuditRefreshPriorAccessTokenRevokeFailed`
+  (`refresh.prior_access_token_revoke_failed`), raised when a revocation that
+  ran behind an already-written success response did not complete. Both carry
+  the stage that failed and whether the failure is retryable. These are the
+  side effects a 200 or a 204 cannot report, so without an event they were
+  invisible: the client saw a successful rotation or a successful grant
+  deletion while a prior access token stayed live.
+
+- `devicecodekit.VerifyUserCodeByAttemptKey`, which charges a caller-supplied
+  opaque ceremony key before it normalizes or looks up the submitted
+  `user_code`, together with the `devicecodekit.AttemptLimiter` interface,
+  `devicecodekit.ErrAttemptLocked`, `devicecodekit.Deps.AttemptLimiter` and a
+  bundled `devicecodekit.InMemoryAttemptLimiter`
+  (`NewAttemptLimiter` / `NewAttemptLimiterWithOptions` /
+  `AttemptLimiterOptions`). A verification page previously had to budget
+  manual entry against the short user code itself, which makes the brute-force
+  subject the very value being guessed — a wrong guess spends someone else's
+  budget, and a correct one has already succeeded. Charging the ceremony key
+  instead bounds the entry attempts of one browser session. A key that has
+  spent its budget is refused before any lookup, and `Reset` stays an explicit
+  ceremony-owner operation. The bundled limiter is bounded by a fixed key
+  ceiling, a ceremony TTL and lazy eviction, so the fallback cannot grow with
+  attacker-supplied key material; a multi-process deployment supplies its own
+  backed by a shared store.
+
 ### Deprecated
 
 - `devicecodekit.Deps.Audit` — its interface type takes a package-internal
@@ -1605,10 +1785,9 @@ grants, anyone whose relying parties reconcile their registration through
   `devicecodekit.Deps.AuditLogger`. The field is still honoured and still takes
   precedence when both are set.
 
-
-Nothing listed here is removed, and none of it changes behaviour. Each symbol
-turned out to do less than its documentation claimed, and the godoc now says
-what it actually does.
+The three below are deprecated on documentation grounds. Nothing listed there
+is removed, and none of it changes behaviour: each symbol turned out to do less
+than its documentation claimed, and the godoc now says what it actually does.
 
 - `op.AuditDenyReasonKey` — no code path emits it. A denied login is recorded
   under a plain `reason` attribute; match that instead. See the Security note
@@ -3139,7 +3318,8 @@ from the access-token TTL (see Changed).
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.1.0...HEAD
+[v1.1.0]: https://github.com/libraz/go-oidc-provider/compare/v1.0.0...v1.1.0
 [v1.0.0]: https://github.com/libraz/go-oidc-provider/compare/v0.9.5...v1.0.0
 [v0.9.5]: https://github.com/libraz/go-oidc-provider/compare/v0.9.4...v0.9.5
 [v0.9.4]: https://github.com/libraz/go-oidc-provider/compare/v0.9.3...v0.9.4
