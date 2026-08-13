@@ -1,20 +1,44 @@
 package endsession
 
-import "net/http"
+import (
+	"html"
+	"net/http"
+	"strings"
+)
 
-// loggedOutBody is the static HTML body served when the request
-// validated but no post_logout_redirect_uri was supplied. The body is
-// self-contained: no scripts, no external resources, no caller-
-// controlled interpolation. Embedders that need a richer confirmation
-// page mount their own handler in front of /end_session.
-const loggedOutBody = `<!DOCTYPE html>
-<html lang="en"><head>
+// Message keys the confirmation page resolves. They are the only two
+// user-facing strings this package renders, and the seed catalogue
+// carries a translation of each; resolving them is what keeps a
+// deployment that ships a non-English locale from serving one English
+// page at the end of an otherwise localized ceremony.
+const (
+	loggedOutTitleKey = "logout.title"
+	loggedOutBodyKey  = "logout.body"
+)
+
+// Built-in English for the confirmation page, used when no resolver is
+// wired (direct callers, embedders that skip i18n) or when the selected
+// locale's catalogue answers neither key.
+const (
+	loggedOutTitleFallback = "You're signed out"
+	loggedOutBodyFallback  = "You can close this window."
+)
+
+// loggedOutTemplate is the HTML body served when the request validated
+// but no post_logout_redirect_uri was supplied. The document is
+// self-contained: no scripts, no external resources. The three
+// placeholders are filled from the resolved locale and its messages,
+// each escaped at the substitution site; nothing caller-controlled
+// reaches the page. Embedders that need a richer confirmation page
+// mount their own handler in front of /end_session.
+const loggedOutTemplate = `<!DOCTYPE html>
+<html lang="{LANG}"><head>
 <meta charset="utf-8">
-<title>Signed out</title>
+<title>{TITLE}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 </head><body>
-<h1>You're signed out</h1>
-<p>You can close this window.</p>
+<h1>{TITLE}</h1>
+<p>{BODY}</p>
 </body></html>
 `
 
@@ -33,14 +57,55 @@ const errorBodyTemplate = `<!DOCTYPE html>
 </body></html>
 `
 
-// writeLoggedOutPage emits the v1.0 confirmation page. The
-// Content-Security-Policy header is the strictest possible value
-// compatible with the document so a future regression that introduces
-// dynamic content fails closed.
-func writeLoggedOutPage(w http.ResponseWriter) {
+// writeLoggedOutPage emits the confirmation page in the locale the
+// resolver selected for this request. The Content-Security-Policy
+// header is the strictest possible value compatible with the document
+// so a future regression that introduces dynamic content fails closed.
+func writeLoggedOutPage(w http.ResponseWriter, page loggedOutPage) {
 	stampStaticHeaders(w)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(loggedOutBody))
+	// The body is a const template whose three placeholders are each
+	// filled by renderLoggedOutBody through html.EscapeString. The only
+	// non-constant inputs are the resolved locale tag and two catalogue
+	// strings, and a catalogue is embedder-supplied text that
+	// [i18n.Resolver.Message] documents as raw and unescaped — escaping
+	// it at the substitution site is exactly where that contract puts
+	// the responsibility.
+	//nolint:gosec // G705: every interpolated value is html-escaped in renderLoggedOutBody.
+	_, _ = w.Write([]byte(renderLoggedOutBody(page)))
+}
+
+// loggedOutPage is the resolved content of the confirmation page. A
+// zero value renders the built-in English at lang="en", which is what
+// a nil resolver produces.
+type loggedOutPage struct {
+	locale string
+	title  string
+	body   string
+}
+
+// renderLoggedOutBody substitutes the resolved strings into the static
+// template. Every value is HTML-escaped here rather than at the
+// resolver boundary, because a catalogue is embedder-supplied text and
+// [i18n.Resolver.Message] documents its return as raw, unescaped.
+func renderLoggedOutBody(page loggedOutPage) string {
+	locale := page.locale
+	if locale == "" {
+		locale = "en"
+	}
+	title := page.title
+	if title == "" {
+		title = loggedOutTitleFallback
+	}
+	body := page.body
+	if body == "" {
+		body = loggedOutBodyFallback
+	}
+	out := replaceFirst(loggedOutTemplate, "{LANG}", html.EscapeString(locale))
+	// The title appears twice — <title> and <h1> — so the substitution
+	// runs until no placeholder is left rather than exactly once.
+	out = strings.ReplaceAll(out, "{TITLE}", html.EscapeString(title))
+	return replaceFirst(out, "{BODY}", html.EscapeString(body))
 }
 
 // writeLogoutError emits the static error page. The Content-Type and

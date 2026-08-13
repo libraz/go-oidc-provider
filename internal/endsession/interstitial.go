@@ -33,7 +33,7 @@ const confirmTokenField = "logout_csrf"
 // is taken from the resolved client so a hint-only request still
 // carries a client into the POST, where the hint is no longer present
 // to identify one.
-func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, f flow) {
+func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, deps Deps, f flow) {
 	token, err := csrf.NewRandomToken()
 	if err != nil {
 		// crypto/rand can only fail under exotic conditions (no
@@ -62,9 +62,78 @@ func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, f flow) {
 		state:            f.req.state,
 		logoutScope:      f.req.logoutScope,
 		scopeFingerprint: f.req.logoutScope,
-		chooserGroupID:   f.session.chooserGroupID,
-		scopeMessage:     confirmationScopeMessage(f.req.logoutScope),
+		chooserGroupID:   f.session.fingerprint.chooserGroupID,
+		page:             resolveConfirmationPage(r, deps, f),
 	})))
+}
+
+// Message keys the interstitial resolves. The body has two forms
+// because the page states what is about to be destroyed, and "this
+// account" and "every account in this browser" are different promises
+// — collapsing them onto one string to save a catalogue entry would
+// make the confirmation lie in one of the two cases.
+const (
+	confirmTitleKey       = "logout.confirm.title"
+	confirmBodyKey        = "logout.confirm.body"
+	confirmBodyCurrentKey = "logout.confirm.body_current"
+	confirmButtonKey      = "logout.confirm.button"
+)
+
+// Built-in English for the interstitial, used when no resolver is
+// wired or the selected locale answers a key with nothing.
+const (
+	confirmTitleFallback       = "Confirm sign-out"
+	confirmBodyFallback        = "You are about to sign out of all browser accounts in this chooser group. Continue?"
+	confirmBodyCurrentFallback = "You are about to sign out of this account. Continue?"
+	confirmButtonFallback      = "Sign out"
+)
+
+// confirmationPage is the resolved, locale-dependent content of the
+// interstitial. A zero value renders the built-in English at
+// lang="en", which is what a nil resolver produces.
+type confirmationPage struct {
+	locale string
+	title  string
+	body   string
+	button string
+}
+
+// resolveConfirmationPage selects the interstitial's locale and looks
+// up its strings, choosing the body that matches the logout scope the
+// GET asked for.
+//
+// The resolver chain is the one the confirmation page shares with the
+// logged-out page and with every interaction prompt, so a user who
+// picked a language earlier in the ceremony is not handed an English
+// page at the one step that asks them to confirm something
+// destructive.
+func resolveConfirmationPage(r *http.Request, deps Deps, f flow) confirmationPage {
+	bodyKey := confirmBodyKey
+	bodyFallback := confirmBodyFallback
+	if f.req.logoutScope == logoutScopeCurrent {
+		bodyKey = confirmBodyCurrentKey
+		bodyFallback = confirmBodyCurrentFallback
+	}
+	page := confirmationPage{
+		title:  confirmTitleFallback,
+		body:   bodyFallback,
+		button: confirmButtonFallback,
+	}
+	if deps.LocaleResolver == nil {
+		return page
+	}
+	tag := deps.LocaleResolver.Resolve(r.Context(), localeRequest(r, f))
+	page.locale = string(tag)
+	if v, ok := deps.LocaleResolver.Message(tag, confirmTitleKey, nil); ok && v != "" {
+		page.title = v
+	}
+	if v, ok := deps.LocaleResolver.Message(tag, bodyKey, nil); ok && v != "" {
+		page.body = v
+	}
+	if v, ok := deps.LocaleResolver.Message(tag, confirmButtonKey, nil); ok && v != "" {
+		page.button = v
+	}
+	return page
 }
 
 // confirmationForm carries the values the interstitial template
@@ -78,14 +147,8 @@ type confirmationForm struct {
 	logoutScope      string
 	scopeFingerprint string
 	chooserGroupID   string
-	scopeMessage     string
-}
-
-func confirmationScopeMessage(scope string) string {
-	if scope == logoutScopeCurrent {
-		return "You are about to sign out of this account. Continue?"
-	}
-	return "You are about to sign out of all browser accounts in this chooser group. Continue?"
+	// page carries the locale-resolved strings the template renders.
+	page confirmationPage
 }
 
 // confirmationClientID returns the client_id the confirmation form
@@ -191,13 +254,18 @@ func clearConfirmCookie(w http.ResponseWriter) {
 // chooser group seen on GET. {ACTION} is
 // the request path without query — the browser POSTs back to the same
 // endpoint.
+//
+// {LANG}, {TITLE}, {SCOPE_MESSAGE} and {BUTTON} come from the locale
+// resolver. This is the page that asks the user to authorise
+// destroying their session, so it is the last one that should be
+// served in a language they did not choose.
 const confirmationBodyTemplate = `<!DOCTYPE html>
-<html lang="en"><head>
+<html lang="{LANG}"><head>
 <meta charset="utf-8">
-<title>Confirm sign-out</title>
+<title>{TITLE}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 </head><body>
-<h1>Confirm sign-out</h1>
+<h1>{TITLE}</h1>
 <p>{SCOPE_MESSAGE}</p>
 <form method="post" action="{ACTION}">
 <input type="hidden" name="logout_csrf" value="{TOKEN}">
@@ -207,7 +275,7 @@ const confirmationBodyTemplate = `<!DOCTYPE html>
 {LOGOUT_SCOPE_FIELD}
 <input type="hidden" name="logout_scope_fingerprint" value="{LOGOUT_SCOPE_FINGERPRINT}">
 <input type="hidden" name="chooser_group_id" value="{CHOOSER_GROUP_ID}">
-<button type="submit">Sign out</button>
+<button type="submit">{BUTTON}</button>
 </form>
 </body></html>
 `
@@ -221,12 +289,21 @@ const confirmationBodyTemplate = `<!DOCTYPE html>
 // adding security at this scope.
 func buildConfirmationBody(token string, form confirmationForm) string {
 	body := confirmationBodyTemplate
+	locale := form.page.locale
+	if locale == "" {
+		locale = "en"
+	}
+	body = replaceFirst(body, "{LANG}", htmlEscapeASCII(locale))
+	// The title appears twice — <title> and <h1> — so this one
+	// substitution runs until no placeholder is left.
+	body = strings.ReplaceAll(body, "{TITLE}", htmlEscapeASCII(form.page.title))
+	body = replaceFirst(body, "{BUTTON}", htmlEscapeASCII(form.page.button))
 	body = replaceFirst(body, "{ACTION}", htmlEscapeASCII(form.action))
 	body = replaceFirst(body, "{TOKEN}", htmlEscapeASCII(token))
 	body = replaceFirst(body, "{CLIENT_ID}", htmlEscapeASCII(form.clientID))
 	body = replaceFirst(body, "{STATE}", htmlEscapeASCII(form.state))
 	body = replaceFirst(body, "{POST_LOGOUT}", htmlEscapeASCII(form.postLogout))
-	body = replaceFirst(body, "{SCOPE_MESSAGE}", htmlEscapeASCII(form.scopeMessage))
+	body = replaceFirst(body, "{SCOPE_MESSAGE}", htmlEscapeASCII(form.page.body))
 	scopeField := ""
 	if form.logoutScope == logoutScopeCurrent {
 		scopeField = `<input type="hidden" name="logout_scope" value="` + htmlEscapeASCII(form.logoutScope) + `">`

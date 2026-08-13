@@ -8,11 +8,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
@@ -60,6 +63,36 @@ type failingSessionStore struct {
 }
 
 func (s failingSessionStore) Delete(context.Context, string) error { return s.err }
+
+// findFailingSessionStore fails the read half of the session store on
+// demand. It is the counterpart of [failingSessionStore], which fails
+// the write half: the two halves of a logout have independent failure
+// modes, and a fix that only teaches the handler about one of them
+// leaves the other reporting a sign-out that never happened.
+type findFailingSessionStore struct {
+	store.SessionStore
+	mu  sync.Mutex
+	err error
+}
+
+// arm makes every subsequent Find fail with err. The store starts
+// healthy so a session can be issued and its cookie sealed before the
+// fault is introduced, which is the sequence a real outage follows.
+func (s *findFailingSessionStore) arm(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
+
+func (s *findFailingSessionStore) Find(ctx context.Context, id string) (*store.Session, error) {
+	s.mu.Lock()
+	err := s.err
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.SessionStore.Find(ctx, id)
+}
 
 type failingGrantStore struct {
 	store.GrantStore
@@ -123,7 +156,7 @@ func TestTerminateSession_AuditsSessionStoreFailureWithoutFalseSuccess(t *testin
 	w := httptest.NewRecorder()
 	req := logoutRequest(outcome.Cookie)
 	deps := Deps{Sessions: manager, Audit: recorder}
-	terminateSession(w, req, deps, readSessionFingerprint(req, deps))
+	terminateSession(w, req, deps, readSessionLookup(req, deps))
 
 	if !recorder.has("session.destroy_failed") {
 		t.Fatalf("session.destroy_failed not emitted: %#v", recorder.snapshot())
@@ -134,6 +167,80 @@ func TestTerminateSession_AuditsSessionStoreFailureWithoutFalseSuccess(t *testin
 	if len(w.Result().Cookies()) == 0 {
 		t.Fatal("logout did not clear the session cookie after store failure")
 	}
+}
+
+// TestServe_ConfirmedPOSTDuringSessionReadFaultDoesNotClaimSignOut is
+// the read-side counterpart of
+// [TestTerminateSession_AuditsSessionStoreFailureWithoutFalseSuccess].
+// The request is the one that used to be most dangerous: a POST that
+// passes the double-submit CSRF gate, so nothing else stands between it
+// and the response. When the store cannot answer the session read, the
+// OP knows neither which session to end nor whether one exists, and the
+// only honest answer is a failure — a signed-out page here would tell
+// the user their session is gone while the row and the subject's tokens
+// are still live.
+func TestServe_ConfirmedPOSTDuringSessionReadFaultDoesNotClaimSignOut(t *testing.T) {
+	t.Parallel()
+
+	backend := inmem.New()
+	sessionStore := &findFailingSessionStore{SessionStore: backend.Sessions()}
+	manager, outcome := issueManagerSession(t, sessionStore)
+	sessionStore.arm(errors.New("session backend unavailable"))
+
+	recorder := &recordingAudit{}
+	handler := Handler(Deps{
+		Issuer:   "https://op.example.com",
+		Sessions: manager,
+		Audit:    recorder,
+	})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, confirmedLogoutPOST(outcome.Cookie))
+	resp := w.Result()
+
+	if resp.StatusCode/100 == 2 {
+		t.Fatalf("status = %d, want a failure status: the OP never learned whether a session exists", resp.StatusCode)
+	}
+	if !recorder.has("session.destroy_failed") {
+		t.Fatalf("session.destroy_failed not emitted: %#v", recorder.snapshot())
+	}
+	// The counter an operator watches for "logouts that did not happen"
+	// is fed by the catalogue projection of that event name, so pin the
+	// projection here rather than re-testing the metrics bridge.
+	definition, ok := auditevent.Lookup("session.destroy_failed")
+	if !ok || definition.Metric != auditevent.MetricLogoutFailures {
+		t.Fatalf("session.destroy_failed projects onto %v, want MetricLogoutFailures", definition.Metric)
+	}
+	if recorder.has("session.destroyed") || recorder.has("session.already_absent") {
+		t.Fatalf("unreadable session recorded as destroyed or absent: %#v", recorder.snapshot())
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == cookie.SessionProfile.Name {
+			t.Fatal("session cookie retired although the session it names may still be live")
+		}
+	}
+}
+
+// confirmedLogoutPOST builds the POST the interstitial itself submits:
+// same-origin, carrying both halves of the double-submit CSRF token and
+// the scope fingerprint the confirmation form binds. Every gate before
+// the session read admits it, which is what makes it the right probe
+// for what happens after the read.
+func confirmedLogoutPOST(sessionCookie string) *http.Request {
+	form := url.Values{
+		confirmTokenField:          {"csrf-token"},
+		"logout_scope_fingerprint": {logoutScopeAll},
+	}
+	req := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://op.example.com/end_session",
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://op.example.com")
+	req.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessionCookie})
+	req.AddCookie(&http.Cookie{Name: cookie.LogoutCSRFProfile.Name, Value: "csrf-token"})
+	return req
 }
 
 func TestTerminateSession_AuditsTokenRevocationFailure(t *testing.T) {
@@ -152,7 +259,7 @@ func TestTerminateSession_AuditsTokenRevocationFailure(t *testing.T) {
 		},
 		Audit: recorder,
 	}
-	terminateSession(httptest.NewRecorder(), req, deps, readSessionFingerprint(req, deps))
+	terminateSession(httptest.NewRecorder(), req, deps, readSessionLookup(req, deps))
 
 	if !recorder.has("session.destroyed") {
 		t.Fatalf("session.destroyed not emitted: %#v", recorder.snapshot())
@@ -197,7 +304,7 @@ func TestTerminateSession_ClientLookupFaultReachesBackchannelAudit(t *testing.T)
 		Backchannel: coordinator,
 		Audit:       recorder,
 	}
-	terminateSession(httptest.NewRecorder(), req, deps, readSessionFingerprint(req, deps))
+	terminateSession(httptest.NewRecorder(), req, deps, readSessionLookup(req, deps))
 	// The fan-out is detached from the request, so the evidence lands
 	// after terminateSession has returned.
 	drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

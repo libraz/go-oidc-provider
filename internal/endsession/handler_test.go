@@ -77,11 +77,35 @@ func (r *endSessionAuditRecorder) find(name string) *audit.Event {
 	return nil
 }
 
+// harnessOption customises the infrastructure [newHarness] assembles
+// before it mounts the handler. The zero set of options is the healthy
+// deployment every functional row runs against; a row that needs a
+// degraded backend supplies one.
+type harnessOption func(*harnessConfig)
+
+// harnessConfig accumulates the option effects.
+type harnessConfig struct {
+	// wrapSessionStore decorates the session store the session manager
+	// is built on, so a row can inject a backend fault the manager and
+	// the handler both see through their normal call paths.
+	wrapSessionStore func(store.SessionStore) store.SessionStore
+}
+
+// withSessionStoreWrapper installs a decorator around the in-memory
+// session store.
+func withSessionStoreWrapper(fn func(store.SessionStore) store.SessionStore) harnessOption {
+	return func(c *harnessConfig) { c.wrapSessionStore = fn }
+}
+
 // newHarness builds a handler against fresh in-memory infrastructure
 // and registers a single fixture client whose post-logout allowlist
 // contains exactly one URI.
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T, opts ...harnessOption) *harness {
 	t.Helper()
+	cfg := harnessConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	clock := &fakeClock{now: fixedNow()}
 	st := inmem.New(inmem.WithClock(clock))
 
@@ -121,9 +145,13 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("sessions.NewCodec: %v", err)
 	}
+	sessionStore := st.Sessions()
+	if cfg.wrapSessionStore != nil {
+		sessionStore = cfg.wrapSessionStore(sessionStore)
+	}
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: sessCodec,
-		Store: st.Sessions(),
+		Store: sessionStore,
 		Clock: clock.Now,
 	})
 	if err != nil {

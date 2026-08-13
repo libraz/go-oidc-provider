@@ -31,10 +31,10 @@
 //     allows the OP to consume to render a chooser. The OP has no
 //     chooser UX surface here, so the parameter is parsed and
 //     discarded.
-//   - ui_locales (OPTIONAL, IGNORED): locale preference for the
-//     confirmation prompt. The confirmation is a small static page
-//     that does not localise, so the parameter is parsed and
-//     discarded.
+//   - ui_locales (OPTIONAL): space-delimited locale preference for the
+//     confirmation prompt. It is one link of the chain the page
+//     resolves its strings through and reaches nothing else, so it is
+//     never logged or echoed.
 //
 // # Validation policy
 // The handler short-circuits to a 400 page (NOT a redirect) on any
@@ -67,12 +67,23 @@
 //     can trigger a malformed GET (CSRF-style) terminate the user's
 //     session by accident. The success and "no redirect URI" paths
 //     do clear the cookie because the request validated.
+//   - A session store that cannot answer is not the same as a session
+//     that is absent. A missing or unusable cookie, and a session the
+//     store reports as gone or expired, both establish that there is
+//     nothing to terminate. A transport failure establishes nothing:
+//     the OP responds 503 with the static error page, records
+//     session.destroy_failed (which feeds the logout-failure counter),
+//     terminates nothing, and leaves the session cookie in place so a
+//     retry can still name the session. It deliberately does not
+//     redirect to post_logout_redirect_uri or render the signed-out
+//     page, because the session and the subject's tokens may still be
+//     live.
 //   - An interactive confirmation prompt is rendered unless the
 //     request proves intent for the session at hand. The spec says
 //     the OP SHOULD ask the user to confirm; the OP skips the prompt
 //     only when id_token_hint carries the subject the session cookie
-//     authenticates (or when no session resolves at all, where there
-//     is nothing to terminate). Every other shape — no hint, or a
+//     authenticates (or when the cookie proved no session resolves, so
+//     there is nothing to terminate). Every other shape — no hint, or a
 //     hint minted for a different subject — gets the interstitial on
 //     GET and a double-submit CSRF check on POST, because a bare hint
 //     proves possession of someone's token, not the identity of the

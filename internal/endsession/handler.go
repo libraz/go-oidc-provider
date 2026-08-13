@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -16,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -80,11 +82,11 @@ const maxIDTokenHintAge = 30 * 24 * time.Hour
 
 // Clock is the structural wall-clock dependency, mirroring the
 // interface in the sibling endpoints so a value satisfying [op.Clock]
-// flows through without an adapter. The handler does not currently
-// read the clock — the verifier deliberately does not enforce exp —
-// but the field is plumbed so a future policy that needs the wall
-// clock (rate limiting, audit timestamps) can be wired without
-// breaking the [Deps] shape.
+// flows through without an adapter. Every wall-clock reading the
+// handler takes goes through it — the id_token_hint iat-age cap, the
+// revocation tombstone timestamps, and the Max-Age of a session cookie
+// rebound to a surviving chooser sibling — so a deployment or a test
+// pins all of them with one value.
 type Clock interface {
 	Now() time.Time
 }
@@ -132,6 +134,18 @@ type Deps struct {
 	// godoc for why the field exists despite the v1.0 verifier not
 	// consulting it.
 	Clock Clock
+
+	// LocaleResolver selects the locale of the confirmation page and
+	// supplies its two strings. It is the same resolver the interaction
+	// endpoint stamps onto a prompt, consulted through the same chain
+	// (preferred locale for the subject, the request's ui_locales, the
+	// locale cookie, Accept-Language, the configured default).
+	//
+	// A nil resolver renders the built-in English, which keeps direct
+	// callers and embedders who skip i18n on the shape they had. Wiring
+	// it is what stops a deployment that ships a non-English catalogue
+	// from ending an otherwise localized ceremony on an English page.
+	LocaleResolver *i18n.Resolver
 
 	// Backchannel is the [backchannel.Coordinator] the handler hands
 	// off to after the session is terminated. A nil value disables
@@ -254,9 +268,9 @@ func resolveOrigins(deps Deps) *csrf.Allowlist {
 
 // request carries the parsed parameters the handler operates on. The
 // fields mirror the OIDC RP-Initiated Logout 1.0 §2 wire shape minus
-// the parameters v1.0 ignores entirely (logout_hint, ui_locales —
-// see the package godoc for why). Adding the ignored fields back is
-// purely additive when the library grows a chooser UX surface.
+// the parameters the handler ignores entirely (logout_hint — see the
+// package godoc for why). Adding an ignored field back is purely
+// additive when the library grows a chooser UX surface.
 type request struct {
 	idTokenHint      string
 	clientID         string
@@ -265,6 +279,10 @@ type request struct {
 	logoutScope      string
 	scopeFingerprint string
 	chooserGroupID   string
+	// uiLocales is the space-delimited OIDC RP-Initiated Logout §2
+	// "ui_locales" preference. It feeds the confirmation page's locale
+	// resolution and is read nowhere else.
+	uiLocales string
 }
 
 // flow is the per-request snapshot every step after parsing shares:
@@ -277,18 +295,57 @@ type flow struct {
 	req     request
 	hint    hintClaims
 	client  *store.Client
-	session sessionFingerprint
+	session sessionLookup
 }
 
 // sessionFingerprint is the pair the handler reads out of the session
 // cookie: the session id to delete and the OP-internal subject whose
-// grants the logout cascade retires. The zero value means "no
-// resolvable session", which every downstream step treats as "nothing
-// to terminate".
+// grants the logout cascade retires.
 type sessionFingerprint struct {
 	sessionID      string
 	subject        string
 	chooserGroupID string
+}
+
+// sessionState classifies what reading the session cookie proved. The
+// three values are the only outcomes the logout flow may act on, and
+// keeping them apart is a security property rather than a nicety: a
+// backend that could not answer says nothing about whether a session
+// exists, so folding it onto "there is nothing here" would let a
+// storage outage produce a logout that destroys nothing while the
+// response, the audit stream and the logout-failure counter all report
+// a completed sign-out.
+type sessionState uint8
+
+const (
+	// sessionStoreUnavailable is the zero value on purpose. A lookup
+	// that no branch classified must read as "the store did not answer",
+	// because that is the outcome whose mishandling is unsafe; a value
+	// nobody set can then never be mistaken for a resolved absence.
+	sessionStoreUnavailable sessionState = iota
+
+	// sessionAbsent means the cookie proved there is nothing to
+	// terminate: it was missing, it did not decrypt, or it named a
+	// session the store has confirmed is gone or expired.
+	sessionAbsent
+
+	// sessionActive means the cookie resolved to a live session whose
+	// fingerprint is carried alongside.
+	sessionActive
+)
+
+// sessionLookup is the three-valued result of reading the session
+// cookie. The fingerprint travels with its state so every consumer
+// decides from the classification rather than from whether the
+// fingerprint happens to be empty — the distinction between "resolved
+// absent" and "unresolvable" is invisible in the fingerprint alone.
+type sessionLookup struct {
+	state       sessionState
+	fingerprint sessionFingerprint
+	// err carries the backend failure behind [sessionStoreUnavailable]
+	// so the audit record names the cause. It is nil in every other
+	// state.
+	err error
 }
 
 // serve is the request-scoped entry point. It validates the shape,
@@ -339,12 +396,75 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !validatePostLogout(w, f.client, f.req.postLogout) {
 		return
 	}
-	f.session = readSessionFingerprint(r, deps)
+	f.session = readSessionLookup(r, deps)
+	if !admitSessionLookup(w, r, deps, f.session) {
+		return
+	}
 	if !enforceCSRFGate(w, r, deps, f) {
 		return
 	}
 	terminateSessionForScope(w, r, deps, f.session, f.req.logoutScope)
-	emitResponse(w, r, f.req)
+	emitResponse(w, r, deps, f)
+}
+
+// admitSessionLookup decides whether the flow may continue past the
+// session read. It returns true for the two states that describe the
+// session — resolved, or proven absent — and false once it has written
+// the response for a session store that could not answer.
+//
+// The unavailable branch deliberately does all three of the following,
+// because dropping any one of them turns an outage into a silent
+// no-op:
+//
+//   - Emits [auditevent.AuditSessionDestroyFailed] (which the metrics
+//     bridge projects onto the logout-failure counter), so the outage is
+//     visible on the same stream a real deletion failure appears on.
+//   - Stops before the CSRF gate. The gate's "nothing to terminate"
+//     admission is only sound when the OP knows there is nothing to
+//     terminate; an unanswered lookup is not that knowledge, and
+//     admitting on it would let a cross-site request skip the
+//     confirmation whenever the backend is down.
+//   - Stops before the response. The browser must not be told the
+//     sign-out completed while the session row and the subject's tokens
+//     are still live.
+//
+// The session cookie is left in place. Clearing it is permitted on
+// every path, but here it would cost the only handle the browser has on
+// the session that is still running: the user could no longer retry the
+// logout the OP just failed to perform.
+//
+// The switch has no default clause so the exhaustiveness check binds; a
+// state added later must state its own policy rather than inheriting a
+// permissive one, and the fallthrough return is a refusal either way.
+func admitSessionLookup(w http.ResponseWriter, r *http.Request, deps Deps, lookup sessionLookup) bool {
+	switch lookup.state {
+	case sessionActive, sessionAbsent:
+		return true
+	case sessionStoreUnavailable:
+		emitSessionLookupFailed(r.Context(), deps, lookup)
+		writeLogoutError(w, http.StatusServiceUnavailable, descInternalError)
+		return false
+	}
+	return false
+}
+
+// emitSessionLookupFailed records that the OP could not read the
+// session it was asked to terminate. The event is the same one a failed
+// deletion emits: from the outside both mean "a session may still be
+// live after a logout request", and an operator watching the
+// logout-failure counter needs the read failures in it as much as the
+// write failures.
+func emitSessionLookupFailed(ctx context.Context, deps Deps, lookup sessionLookup) {
+	extras := map[string]any{}
+	if lookup.err != nil {
+		extras["error"] = lookup.err.Error()
+	}
+	deps.audit().Emit(ctx, audit.Event{
+		Name:    string(auditevent.AuditSessionDestroyFailed),
+		Level:   audit.LevelError,
+		Message: "session lookup failed; nothing was terminated",
+		Extras:  extras,
+	})
 }
 
 // validateRequestBounds enforces the per-parameter size caps the
@@ -399,7 +519,7 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, deps Deps, f flow) 
 		return true
 	}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
-		renderLogoutConfirmation(w, r, f)
+		renderLogoutConfirmation(w, r, deps, f)
 		return false
 	}
 	if !validateOriginOrReferer(r, deps.Origins) {
@@ -410,7 +530,7 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, deps Deps, f flow) 
 		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
 		return false
 	}
-	if f.session.sessionID != "" && f.req.chooserGroupID != f.session.chooserGroupID {
+	if f.session.fingerprint.sessionID != "" && f.req.chooserGroupID != f.session.fingerprint.chooserGroupID {
 		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
 		return false
 	}
@@ -437,9 +557,12 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, deps Deps, f flow) 
 //
 // Two admissions remain:
 //
-//   - No resolvable session. There is nothing to terminate, so the
-//     request cannot destroy anyone's login state and the OP answers
-//     with the post-logout redirect the RP asked for.
+//   - The cookie proved there is no session ([sessionAbsent]). There is
+//     nothing to terminate, so the request cannot destroy anyone's
+//     login state and the OP answers with the post-logout redirect the
+//     RP asked for. The admission keys on that proof rather than on an
+//     empty fingerprint: a lookup the store could not answer produces
+//     the same empty fingerprint and must not buy the same exemption.
 //   - Matching subject. The comparison runs in the per-client subject
 //     space: the session stores the OP-internal subject while the
 //     id_token carries whatever [Deps.SubjectProjector] derived for
@@ -453,13 +576,14 @@ func hintAuthorizesSession(ctx context.Context, deps Deps, f flow) bool {
 	if f.req.idTokenHint == "" {
 		return false
 	}
-	if f.session == (sessionFingerprint{}) {
+	if f.session.state == sessionAbsent {
 		return true
 	}
-	if f.hint.subject == "" || f.session.subject == "" {
+	sess := f.session.fingerprint
+	if f.hint.subject == "" || sess.subject == "" {
 		return false
 	}
-	projected, ok := projectSessionSubject(ctx, deps, f.session.subject, f.client)
+	projected, ok := projectSessionSubject(ctx, deps, sess.subject, f.client)
 	return ok && projected == f.hint.subject
 }
 
@@ -522,11 +646,13 @@ func readValues(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 }
 
 // parseRequest projects the raw parameter map onto the typed
-// [request]. The OIDC RP-Initiated Logout 1.0 §2 parameters
-// "logout_hint" and "ui_locales" are intentionally not extracted:
-// v1.0 has no UX surface that would consume them, and storing the
-// values would only invite a future regression that surfaces them
-// through a log line or audit record without sanitisation.
+// [request]. "ui_locales" is extracted because the confirmation page
+// resolves its strings and the parameter is that chain's second link;
+// the value reaches [i18n.Resolver.Resolve] and nothing else, so it is
+// never logged or echoed. "logout_hint" is still intentionally not
+// extracted: no surface consumes it, and storing the value would only
+// invite a future regression that surfaces it through a log line or
+// audit record without sanitisation.
 func parseRequest(v url.Values) request {
 	scope := logoutScopeAll
 	if raw, ok := v["logout_scope"]; ok && len(raw) == 1 {
@@ -540,6 +666,7 @@ func parseRequest(v url.Values) request {
 		logoutScope:      scope,
 		scopeFingerprint: v.Get("logout_scope_fingerprint"),
 		chooserGroupID:   v.Get("chooser_group_id"),
+		uiLocales:        v.Get("ui_locales"),
 	}
 }
 
@@ -675,11 +802,11 @@ func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout 
 // answers, so it is detached and the caller proceeds to write the
 // response.
 //
-// sess is the fingerprint [serve] read before the CSRF gate ran, so
-// the session that gets destroyed is exactly the one the gate
-// authorised.
-func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, sess sessionFingerprint) {
-	terminateSessionForScope(w, r, deps, sess, logoutScopeAll)
+// lookup is the classified session read [serve] performed before the
+// CSRF gate ran, so the session that gets destroyed is exactly the one
+// the gate authorised.
+func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, lookup sessionLookup) {
+	terminateSessionForScope(w, r, deps, lookup, logoutScopeAll)
 }
 
 // terminateSessionForScope performs the destructive part of /end_session.
@@ -688,13 +815,34 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, sess se
 // cascades. The current-scope branch removes only the active row and lets the
 // session manager rebind the cookie to a surviving sibling.
 //
+// The state switch is a backstop rather than the primary gate — [serve]
+// answers an unavailable store before the flow reaches here — but it is
+// what makes the destructive path safe for any future caller: it cannot
+// be handed a lookup that never resolved a session and treat the
+// resulting empty fingerprint as an idempotent no-op.
+//
 //nolint:gocognit,cyclop // The destructive workflow keeps failure audit, revocation, and cookie ordering explicit.
-func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps, sess sessionFingerprint, scope string) {
+func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps, lookup sessionLookup, scope string) {
 	ctx := r.Context()
 	if scope == "" {
 		scope = logoutScopeAll
 	}
 
+	switch lookup.state {
+	case sessionAbsent:
+		clearSessionCookie(w)
+		return
+	case sessionStoreUnavailable:
+		// No session was ever resolved, so there is nothing this
+		// function could delete. Record the fault instead of returning
+		// as though the logout had nothing to do.
+		emitSessionLookupFailed(ctx, deps, lookup)
+		return
+	case sessionActive:
+		// Fall through to the destructive workflow.
+	}
+
+	sess := lookup.fingerprint
 	if sess.sessionID == "" {
 		clearSessionCookie(w)
 		return
@@ -810,7 +958,7 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 	}
 
 	if scope == logoutScopeCurrent && sessionErr == nil && removal.Cookie != "" && len(removal.Remaining) > 0 {
-		if err := setSessionCookie(w, removal.Cookie); err == nil {
+		if err := setSessionCookie(w, removal.Cookie, removal.ExpiresAt, endSessionNow(deps)); err == nil {
 			return
 		}
 	}
@@ -940,25 +1088,49 @@ func endSessionNow(deps Deps) time.Time {
 	return timex.SystemClock.Now().UTC()
 }
 
-// readSessionFingerprint pulls the session id and the authenticated
-// subject out of the __Host-oidc_session cookie. A missing cookie /
-// decode failure returns the zero value; the caller treats that as
-// "nothing to terminate".
-func readSessionFingerprint(r *http.Request, deps Deps) sessionFingerprint {
+// readSessionLookup classifies the __Host-oidc_session cookie into one
+// of the three [sessionState] outcomes and, when a session resolves,
+// pulls out the session id and the authenticated subject.
+//
+// Only two failures are answers about the session: an unusable cookie
+// ([sessions.ErrCookieInvalid] — missing, undecryptable, or bound to a
+// foreign chooser group) and a session the store confirmed is gone or
+// expired ([sessions.ErrCurrentSessionExpired]). Both prove there is
+// nothing to terminate. Everything else — a transport failure, a
+// timeout, a backend that answered nothing at all — is a fault: the OP
+// asked whether a session exists and did not learn the answer, so it
+// may not proceed as though the answer were "no".
+func readSessionLookup(r *http.Request, deps Deps) sessionLookup {
 	c, err := r.Cookie(cookie.SessionProfile.Name)
 	if err != nil || c == nil || c.Value == "" {
-		return sessionFingerprint{}
+		return sessionLookup{state: sessionAbsent}
 	}
 	active, err := deps.Sessions.Resolve(r.Context(), c.Value)
-	if err != nil || active == nil || active.Session == nil {
-		return sessionFingerprint{}
+	if err != nil {
+		if errors.Is(err, sessions.ErrCookieInvalid) || errors.Is(err, sessions.ErrCurrentSessionExpired) {
+			return sessionLookup{state: sessionAbsent}
+		}
+		return sessionLookup{state: sessionStoreUnavailable, err: err}
 	}
-	return sessionFingerprint{
-		sessionID:      active.Session.ID,
-		subject:        active.Session.Subject,
-		chooserGroupID: active.Session.ChooserGroupID,
+	if active == nil || active.Session == nil {
+		// The manager folds a missing row into ErrCurrentSessionExpired,
+		// so reaching here means it broke its own contract. Treat the
+		// silence as a fault: nothing here proves the session is gone.
+		return sessionLookup{state: sessionStoreUnavailable, err: errSessionUnanswered}
+	}
+	return sessionLookup{
+		state: sessionActive,
+		fingerprint: sessionFingerprint{
+			sessionID:      active.Session.ID,
+			subject:        active.Session.Subject,
+			chooserGroupID: active.Session.ChooserGroupID,
+		},
 	}
 }
+
+// errSessionUnanswered marks the contract violation of a session
+// manager that reports neither a session nor an error.
+var errSessionUnanswered = errors.New("endsession: session manager returned no session and no error")
 
 // clearSessionCookie writes a Set-Cookie header that retires the
 // session cookie. Errors during construction are swallowed: a failure
@@ -974,8 +1146,14 @@ func clearSessionCookie(w http.ResponseWriter) {
 // setSessionCookie writes a newly sealed session payload. It is used by the
 // current-session logout path when the manager has rebound the browser to a
 // surviving chooser sibling.
-func setSessionCookie(w http.ResponseWriter, value string) error {
-	c, err := cookie.Build(cookie.SessionProfile, value)
+//
+// expiresAt is the sibling's server-side expiry and now the endpoint's clock
+// reading; [cookie.BuildSession] requires both so the rebound cookie cannot be
+// handed a browser lifetime longer than the session it was just bound to. A
+// sibling with nothing left returns [cookie.ErrSessionExpired] and the caller
+// clears the cookie instead.
+func setSessionCookie(w http.ResponseWriter, value string, expiresAt, now time.Time) error {
+	c, err := cookie.BuildSession(value, expiresAt, now)
 	if err != nil {
 		return err
 	}
@@ -996,17 +1174,65 @@ func setSessionCookie(w http.ResponseWriter, value string) error {
 // raw value as a Location header. Surfacing the malformed string as a
 // redirect target risks an open-redirect surface against any future
 // regression that loosens validatePostLogout's exact-match rule.
-func emitResponse(w http.ResponseWriter, r *http.Request, req request) {
-	if req.postLogout == "" {
-		writeLoggedOutPage(w)
+func emitResponse(w http.ResponseWriter, r *http.Request, deps Deps, f flow) {
+	if f.req.postLogout == "" {
+		writeLoggedOutPage(w, resolveLoggedOutPage(r, deps, f))
 		return
 	}
-	target, ok := buildPostLogoutRedirect(req.postLogout, req.state)
+	target, ok := buildPostLogoutRedirect(f.req.postLogout, f.req.state)
 	if !ok {
-		writeLoggedOutPage(w)
+		writeLoggedOutPage(w, resolveLoggedOutPage(r, deps, f))
 		return
 	}
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// resolveLoggedOutPage selects the confirmation page's locale and looks
+// up its two strings.
+//
+// The subject comes from the session the request arrived with, so a
+// signed-in user's stored locale preference wins here exactly as it
+// does on the login and consent screens. It is read before the session
+// is destroyed, which is why the flow — not just the request — is
+// threaded down to this point.
+//
+// A nil resolver returns the zero page, which renders the built-in
+// English.
+func resolveLoggedOutPage(r *http.Request, deps Deps, f flow) loggedOutPage {
+	if deps.LocaleResolver == nil {
+		return loggedOutPage{}
+	}
+	tag := deps.LocaleResolver.Resolve(r.Context(), localeRequest(r, f))
+	page := loggedOutPage{locale: string(tag)}
+	if title, ok := deps.LocaleResolver.Message(tag, loggedOutTitleKey, nil); ok {
+		page.title = title
+	}
+	if body, ok := deps.LocaleResolver.Message(tag, loggedOutBodyKey, nil); ok {
+		page.body = body
+	}
+	return page
+}
+
+// localeRequest assembles the resolver input both /end_session pages
+// share. Keeping it in one place is what stops the confirmation page
+// and the logged-out page from answering a user's language preference
+// differently within the same ceremony.
+//
+// The subject comes from the session the request arrived with, and the
+// caller reads it before the session is destroyed, so a signed-in
+// user's stored preference wins here exactly as it does on the login
+// and consent screens.
+func localeRequest(r *http.Request, f flow) i18n.Request {
+	cookieVal := ""
+	if c, err := r.Cookie(cookie.LocaleProfile.Name); err == nil {
+		cookieVal = c.Value
+	}
+	return i18n.Request{
+		Subject:        f.session.fingerprint.subject,
+		UILocales:      strings.Fields(f.req.uiLocales),
+		Cookie:         cookieVal,
+		AcceptLanguage: r.Header.Get("Accept-Language"),
+	}
 }
 
 // buildPostLogoutRedirect composes the post-logout redirect target.
