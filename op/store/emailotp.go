@@ -154,7 +154,8 @@ type EmailOTPStore interface {
 	Put(ctx context.Context, r *EmailOTPRecord) error
 
 	// CompareAndSwap replaces previous with next only when the stored
-	// challenge's Version still equals previous.Version. It returns
+	// challenge still equals previous field for field: its Version, and
+	// every value the record carries. It returns
 	// ErrAlreadyConsumed when another verification, failure update, or resend
 	// won the race. next.Version MUST equal previous.Version; the backend
 	// assigns a fresh opaque successor token to its stored clone and MUST NOT
@@ -166,6 +167,15 @@ type EmailOTPStore interface {
 	// Authenticators use it for every failure counter update and resend
 	// reservation so stale read-modify-write snapshots can never erase a
 	// successful Consume or a newer challenge.
+	//
+	// Matching the whole record is not a stricter reading of the Version
+	// rule but a superset of it, and on a conforming backend the two
+	// never disagree: a backend that assigns a fresh, non-zero Version to
+	// every transition it retains cannot hold a record whose Version
+	// equals previous.Version while a value differs. They part company
+	// only where a value moved out of band and left the Version behind,
+	// and there the swap MUST be refused — the record previous describes
+	// is not the record that would be overwritten.
 	//
 	// A nil previous means "insert only if absent" and is how the first
 	// send for a subject reserves its record. Backends MUST apply next

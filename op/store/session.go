@@ -106,6 +106,15 @@ type SessionStore interface {
 	// return [ErrAlreadyExists] if used in insert mode and the ID is
 	// already present; backends that perform upsert MAY treat Save as
 	// idempotent.
+	//
+	// Replacement holds for a record that is already past its ExpiresAt
+	// too. Backends MAY decline to store such a record — every read path
+	// filters it out anyway — but after Save returns nil, a Find on that
+	// ID MUST NOT resolve whatever the ID held before. Dropping the
+	// write outright is equivalent only when the ID held nothing live.
+	// The distinction is what an embedder relies on to end a session out
+	// of band: a silent no-op answers nil and leaves the subject signed
+	// in for the next prompt=none authorization.
 	Save(ctx context.Context, s *Session) error
 
 	// Find returns the session identified by id, or [ErrNotFound] when
@@ -120,6 +129,22 @@ type SessionStore interface {
 	// [ErrNotFound] if the session does not exist or has expired. The
 	// caller is responsible for computing the new ExpiresAt; backends do
 	// not read the wall clock.
+	//
+	// Those two fields are the whole of the write. Every other field,
+	// and every secondary index derived from one, MUST still hold what
+	// the last committed write left there — a backend that implements
+	// the extension by reading the record, patching the two fields and
+	// storing the whole thing back would undo a step-up's ACR or an
+	// account switch's ChooserGroupID that landed in between, silently
+	// and with a nil error. A backend that cannot narrow the write that
+	// far MAY answer [ErrConflict] when it finds the record changed
+	// under it; what it MUST NOT do is write the stale snapshot.
+	//
+	// Touch is idempotent: repeating it with the values the record
+	// already carries MUST succeed. A backend deciding from an
+	// affected-row count has to tell "nothing changed" from "no such
+	// row", since an OP whose clock has second granularity computes the
+	// same ExpiresAt for two requests inside one second.
 	Touch(ctx context.Context, id string, expiresAt, updatedAt time.Time) error
 
 	// Delete removes the session identified by id. It MUST return

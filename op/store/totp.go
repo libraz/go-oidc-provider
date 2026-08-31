@@ -104,7 +104,8 @@ type TOTPStore interface {
 	Put(ctx context.Context, r *TOTPRecord) error
 
 	// CompareAndSwap replaces previous with next only when the stored
-	// enrolment's Version still equals previous.Version. It returns
+	// enrolment still equals previous field for field: its Version, and
+	// every value the record carries. It returns
 	// ErrAlreadyConsumed when another verification or failure update won the
 	// race, preventing a stale wrong-code write from rolling LastAcceptedStep
 	// or counters backward. next.Version MUST equal previous.Version; the
@@ -112,6 +113,15 @@ type TOTPStore interface {
 	// MUST NOT mutate either caller-owned record. A zero, signed-max, or otherwise
 	// malformed generation snapshot is reported as [ErrAlreadyConsumed], the
 	// same retry/conflict signal used for a stale snapshot.
+	//
+	// Matching the whole record is not a stricter reading of the Version
+	// rule but a superset of it, and on a conforming backend the two
+	// never disagree: a backend that assigns a fresh, non-zero Version to
+	// every transition it retains cannot hold a record whose Version
+	// equals previous.Version while a value differs. They part company
+	// only where a value moved out of band and left the Version behind,
+	// and there the swap MUST be refused — the record previous describes
+	// is not the record that would be overwritten.
 	CompareAndSwap(ctx context.Context, previous, next *TOTPRecord) error
 
 	// Accept atomically persists a successful verification result. It

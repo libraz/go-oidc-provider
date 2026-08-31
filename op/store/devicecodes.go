@@ -235,6 +235,15 @@ type DeviceCodeStore interface {
 	// compare the normalised value byte-for-byte. Returns
 	// [ErrNotFound] when no such record exists; expired records are
 	// reported as not found.
+	//
+	// Unlike [DeviceCodeStore.FindByDeviceCode], the returned record's
+	// ID field MUST be empty — neither the original device_code nor its
+	// digest. This lookup is what a browser-facing verification page
+	// resolves the user's typed code with, and the device_code is the
+	// bearer credential the device polls the token endpoint with. A
+	// backend that filled it in would hand the page, and anything that
+	// reaches the page's data, the ability to poll on the device's
+	// behalf and collect its tokens.
 	FindByUserCode(ctx context.Context, userCode string) (*DeviceCode, error)
 
 	// Approve atomically transitions a Pending record to Approved

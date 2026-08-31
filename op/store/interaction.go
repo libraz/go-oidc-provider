@@ -85,6 +85,12 @@ type InteractionStore interface {
 	// MUST return [ErrAlreadyExists] if used in insert mode and the ID is
 	// already present; backends that perform upsert MAY treat Save as
 	// idempotent.
+	//
+	// Replacement holds for a record that is already past its ExpiresAt
+	// too. Backends MAY decline to store such a record — every read path
+	// filters it out anyway — but after Save returns nil, a Find on that
+	// ID MUST NOT resolve whatever the ID held before. Dropping the write
+	// outright is equivalent only when the ID held nothing live.
 	Save(ctx context.Context, i *Interaction) error
 
 	// Find returns the interaction identified by id, or [ErrNotFound]
@@ -122,6 +128,15 @@ type InteractionStore interface {
 // [ErrConflict] when the ID exists but its RawState no longer matches. The
 // successful replacement MUST preserve the normal [InteractionStore.Save]
 // expiry semantics.
+//
+// Atomically means that of several callers presenting the same previous
+// state, at most one may be told its replacement applied: the state
+// machine these swaps advance is what the authorization endpoint drives
+// to code emission, so two winners are two codes issued for one consent.
+// A swap whose next is identical to the stored record still applied, and
+// MUST report success — a backend deciding from an affected-row count
+// has to tell "nothing changed" from "the predicate did not match",
+// since a resubmitted step recomputes the state it already stored.
 type InteractionStoreCAS interface {
 	InteractionStore
 

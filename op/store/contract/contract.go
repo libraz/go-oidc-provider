@@ -101,6 +101,7 @@ func Run(t *testing.T, f Factory) {
 		{"CIBARequestStore", cibaRequestCases},
 		{"MetadataStore", metadataStoreCases},
 		{"UserStore", userStoreCases},
+		{"ConsumeStates", consumeCases},
 		{"Transactional", transactionalCases},
 		{"Concurrency", concurrencyCases},
 		{"SubstoreNamespace", namespaceCases},
@@ -564,6 +565,7 @@ var refreshCases = []subtest{
 	{"RevokeByGrant", refreshRevokeByGrant},
 	{"RetryResponse", refreshRetryResponse},
 	{"RetryResponseDiesWithPredecessor", refreshRetryResponseDiesWithPredecessor},
+	{"RetryRotationOntoAbsentParent", refreshRetryRotationOntoAbsentParent},
 	{"Expired", refreshExpired},
 	{"SaveOntoRevokedParent", refreshSaveOntoRevokedParent},
 }
@@ -893,6 +895,45 @@ func refreshRetryResponseDiesWithPredecessor(t *testing.T, f Factory) {
 	}
 }
 
+// refreshRetryRotationOntoAbsentParent pins the parity
+// [store.RefreshRetryResponseStore.SaveRotationWithRetry] declares with
+// [store.RefreshTokenStore.Save]: the two share Save's conflict and
+// replay semantics, so a rotation whose parent row is simply gone has to
+// reach the same outcome through both.
+//
+// An absent parent proves no revocation — a chain root swept by GC, or
+// one this backend never stored — so the rotation is kept. The retry
+// cache is the optional half of the operation: there is no predecessor
+// row to hang it on, and [store.RefreshRetryResponseStore.LoadRetryResponse]
+// already answers ErrNotFound for a predecessor that never had one. A
+// backend that fails the whole call because the cache found nothing to
+// attach itself to loses a rotation the plain Save would have kept, and
+// the client's refresh returns a storage error instead of tokens.
+func refreshRetryRotationOntoAbsentParent(t *testing.T, f Factory) {
+	b := f(t)
+	retry, ok := b.Store.RefreshTokens().(store.RefreshRetryResponseStore)
+	if !ok {
+		t.Skipf("backend %T does not implement store.RefreshRetryResponseStore", b.Store.RefreshTokens())
+	}
+	ctx := context.Background()
+
+	absent := "rt-absent-parent"
+	// The plain Save is asserted first so the case reports the parity it
+	// is about: the two calls differ only in whether a cache rides along.
+	plain := newRefresh(b.Now(), "rt-absent-parent-plain", &absent)
+	if err := b.Store.RefreshTokens().Save(ctx, plain); err != nil {
+		t.Fatalf("Save onto an absent parent: want success, got %v", err)
+	}
+	successor := newRefresh(b.Now(), "rt-absent-parent-child", &absent)
+	if err := retry.SaveRotationWithRetry(ctx, successor, []byte("sealed-token-response")); err != nil {
+		t.Fatalf("SaveRotationWithRetry onto an absent parent: want the same success Save reports, got %v", err)
+	}
+	if _, err := b.Store.RefreshTokens().Find(ctx, successor.ID); err != nil {
+		t.Fatalf("Find the rotated successor: %v — the rotation was rolled back because its retry "+
+			"cache had no predecessor row to attach to", err)
+	}
+}
+
 // refreshExpired pins the normative rule declared on
 // [store.RefreshTokenStore.Find] and [store.RefreshTokenStore.Consume]:
 // a token whose ExpiresAt has already passed MUST read as ErrNotFound,
@@ -985,24 +1026,44 @@ func grantFindMissing(t *testing.T, f Factory) {
 	}
 }
 
+// grantFindBySubjectClient pins the rule declared on
+// [store.GrantStore.FindBySubjectClient]: a backend that retains
+// superseded grants for the pair returns the most recent one.
+//
+// The fixture ids run against recency on purpose — the older grant
+// sorts first — because a backend that answers from an unordered index
+// scan hands back whichever row its pages yielded first, and an id
+// scheme where the newest also happens to sort first lets that pass.
+// What it costs when it is wrong is the consent gate: a repeat
+// authorization matched against a superseded grant skips the prompt on
+// the narrower scope the earlier grant recorded, and the amendment
+// lands on a record nothing else reads.
 func grantFindBySubjectClient(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	older := newGrant(b.Now().Add(-2*time.Hour), "g-old", "sub", "client")
-	older.UpdatedAt = b.Now().Add(-2 * time.Hour)
-	newer := newGrant(b.Now(), "g-new", "sub", "client")
-	newer.UpdatedAt = b.Now()
-	for _, g := range []*store.Grant{older, newer} {
+	// Several superseded rows rather than one, with ids that sort both
+	// before and after the newest: a backend answering from an unordered
+	// scan has to be wrong about most of them, so the case does not turn
+	// on which row a particular index happened to yield first.
+	superseded := []string{"g-aaa", "g-mmm", "g-yyy", "g-zzy"}
+	for i, id := range superseded {
+		g := newGrant(b.Now().Add(-time.Duration(i+2)*time.Hour), id, "sub", "client")
+		g.UpdatedAt = b.Now().Add(-time.Duration(i+2) * time.Hour)
 		if err := b.Store.Grants().Save(ctx, g); err != nil {
 			t.Fatalf("Save %s: %v", g.ID, err)
 		}
+	}
+	newest := newGrant(b.Now(), "g-zzz", "sub", "client")
+	newest.UpdatedAt = b.Now()
+	if err := b.Store.Grants().Save(ctx, newest); err != nil {
+		t.Fatalf("Save %s: %v", newest.ID, err)
 	}
 	got, err := b.Store.Grants().FindBySubjectClient(ctx, "sub", "client")
 	if err != nil {
 		t.Fatalf("FindBySubjectClient: %v", err)
 	}
-	if got.ID != "g-new" {
-		t.Fatalf("FindBySubjectClient returned older grant: %+v", got)
+	if got.ID != newest.ID {
+		t.Fatalf("FindBySubjectClient returned %q, want the most recent grant %q", got.ID, newest.ID)
 	}
 }
 
@@ -1294,6 +1355,7 @@ var userStoreCases = []subtest{
 	{"FindBySubjectRoundTrip", userStoreFindBySubject},
 	{"FindByUsernameResolvesSameSubject", userPasswordFindByUsername},
 	{"FindByUsernameMissing", userPasswordFindByUsernameMissing},
+	{"FindByUsernameMatchesVerbatim", userPasswordFindByUsernameVerbatim},
 	{"ReadPasswordHashRoundTrip", userPasswordReadHash},
 	{"ReadPasswordHashMissingSubject", userPasswordReadHashMissing},
 }
@@ -1365,6 +1427,61 @@ func userPasswordFindByUsername(t *testing.T, f Factory) {
 	}
 	if got.Subject != want.Subject {
 		t.Fatalf("FindByUsername subject = %q, want %q", got.Subject, want.Subject)
+	}
+}
+
+// userPasswordFindByUsernameVerbatim pins the matching rule
+// [store.UserPasswordStore] declares: the username is compared byte for
+// byte, and any folding or trimming belongs to the embedder.
+//
+// A backend whose column collation folds case or strips accents deviates
+// twice over, and both directions are behaviour the embedder never
+// asked for. A login submitted as "ALICE" resolves alice's account on
+// that backend and reports "no such user" on every other, so the same
+// deployment authenticates differently depending on which engine it was
+// pointed at. And two accounts that differ only in case — which the
+// embedder's own directory accepted — collapse onto one row, so
+// provisioning the second fails with a duplicate key on that engine
+// alone.
+func userPasswordFindByUsernameVerbatim(t *testing.T, f Factory) {
+	b := f(t)
+	if b.SeedUser == nil {
+		t.Skip("backend supplies no SeedUser hook")
+	}
+	passwords := requireUserPasswords(t, b.Store)
+	ctx := context.Background()
+	hash := []byte("$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$Y29udHJhY3RoYXNo")
+
+	lower := &store.User{Subject: "verbatim-lower", UpdatedAt: Reference}
+	b.SeedUser(t, lower, "verbatim-user@example.com", hash)
+
+	// A username differing only in case is a different username, and
+	// seeding it must not collide with the one above.
+	upper := &store.User{Subject: "verbatim-upper", UpdatedAt: Reference}
+	b.SeedUser(t, upper, "Verbatim-User@example.com", hash)
+
+	for _, tc := range []struct {
+		username string
+		subject  string
+	}{
+		{"verbatim-user@example.com", lower.Subject},
+		{"Verbatim-User@example.com", upper.Subject},
+	} {
+		got, err := passwords.FindByUsername(ctx, tc.username)
+		if err != nil {
+			t.Fatalf("FindByUsername(%q): %v — the two usernames collapsed onto one row", tc.username, err)
+		}
+		if got.Subject != tc.subject {
+			t.Fatalf("FindByUsername(%q) resolved subject %q, want %q — the lookup is not comparing bytes",
+				tc.username, got.Subject, tc.subject)
+		}
+	}
+
+	// A case that was never seeded resolves nothing. Folding it onto a
+	// stored row would authenticate a credential the directory does not
+	// hold under that name.
+	if _, err := passwords.FindByUsername(ctx, "VERBATIM-USER@EXAMPLE.COM"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("FindByUsername on an unseeded casing: want ErrNotFound, got %v", err)
 	}
 }
 

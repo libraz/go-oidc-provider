@@ -69,6 +69,7 @@ func RunEmailOTPs(t *testing.T, f EmailOTPFactory) {
 		{"DeleteMissing", emailOTPDeleteMissing},
 		{"DefensiveCopies", emailOTPDefensiveCopies},
 		{"ConcurrentCompareAndSwapHasOneWinner", emailOTPConcurrentCAS},
+		{"ConcurrentConsumeHasOneWinner", emailOTPConcurrentConsume},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -734,6 +735,50 @@ func emailOTPDefensiveCopies(t *testing.T, b EmailOTPBackend) {
 	}
 	if !bytes.Equal(second.CodeHash, pristine.CodeHash) {
 		t.Fatalf("result mutation leaked into CodeHash: %x", second.CodeHash)
+	}
+}
+
+// emailOTPConcurrentConsume drives the redemption under the traffic that
+// makes its single-use rule a security property: the same emailed code
+// submitted twice at once, from a retried form post or from an attacker
+// racing the legitimate submission.
+//
+// The sequential replay case pins ErrAlreadyConsumed for the second
+// caller, and every read-decide-write implementation passes it. What it
+// cannot see is two callers that both read the unredeemed challenge
+// before either wrote: both are told the code was theirs to spend, and a
+// second factor that may be presented once has been accepted twice.
+func emailOTPConcurrentConsume(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	now := b.Now()
+	seed := emailOTPContractRecord(now)
+	if err := b.Store.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	presented, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+
+	errs := race(func(int) error {
+		attempt := *presented
+		attempt.ConsumedAt = now
+		return b.Store.Consume(ctx, &attempt)
+	})
+	assertOneWinner(t, "EmailOTPs().Consume", errs)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrAlreadyConsumed) {
+			t.Fatalf("losing Consume %d: want ErrAlreadyConsumed, got %v", i, err)
+		}
+	}
+
+	got, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after the race: %v", err)
+	}
+	if got.ConsumedAt.IsZero() {
+		t.Fatal("the challenge reads as unredeemed after a Consume reported success")
 	}
 }
 

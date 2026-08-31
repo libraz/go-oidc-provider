@@ -30,6 +30,7 @@ import (
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var transactionalCases = []subtest{
+	{"SubstoreCoverage", txSubstoreCoverage},
 	{"BeginCommit", txBeginCommit},
 	{"BeginRollback", txBeginRollback},
 	{"RollbackAfterCommitNoOp", txRollbackAfterCommitNoOp},
@@ -157,7 +158,7 @@ func txBeginCommit(t *testing.T, f Factory) {
 	txr := requireTransactional(t, b.Store)
 	ctx := context.Background()
 	tx := beginTx(t, txr, ctx)
-	requireSubstoresNonNil(t, tx)
+	requireSubstoresNonNil(t, b.Store, tx)
 	code := newAuthCode(b.Now(), "tx-ac")
 	if err := tx.AuthorizationCodes().Save(ctx, code); err != nil {
 		t.Fatalf("Save in tx: %v", err)
@@ -174,11 +175,20 @@ func txBeginCommit(t *testing.T, f Factory) {
 	}
 }
 
-func requireSubstoresNonNil(t *testing.T, tx store.Tx) {
+// requireSubstoresNonNil asserts that the transaction hands back a
+// usable handle for every substore the aggregate itself provides. The
+// walk is over [txClusterSubstores] rather than a written-out list so a
+// substore added to [store.Tx] is checked here the moment its row
+// exists.
+func requireSubstoresNonNil(t *testing.T, s store.Store, tx store.Tx) {
 	t.Helper()
-	if tx.AuthorizationCodes() == nil || tx.RefreshTokens() == nil ||
-		tx.Grants() == nil || tx.PushedAuthRequests() == nil {
-		t.Fatal("Tx returned nil substore handle")
+	for _, sub := range txClusterSubstores {
+		if !sub.present(s) {
+			continue
+		}
+		if sub.handle(tx) == nil {
+			t.Fatalf("Tx.%s() returned nil while the aggregate provides the substore", sub.accessor)
+		}
 	}
 }
 
@@ -249,7 +259,7 @@ func txUseAfterCommitReportsTxRequired(t *testing.T, f Factory) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	assertSettledReadsRefused(t, tx, ctx)
+	assertSettledReadsRefused(t, b, tx, ctx)
 
 	orphan := newAuthCode(b.Now(), "tx-settled-orphan")
 	assertTxRequired(t, "AuthorizationCodes().Save", false, tx.AuthorizationCodes().Save(ctx, orphan))
@@ -263,44 +273,218 @@ func txUseAfterCommitReportsTxRequired(t *testing.T, f Factory) {
 	}
 }
 
+// txClusterSubstore is one row of the table the settled-handle
+// assertions are generated from: an accessor [store.Tx] declares,
+// whether a backend may decline it, how to give it a record worth
+// leaking, and how to read that record back through the handle.
+type txClusterSubstore struct {
+	// accessor is the [store.Tx] method this row answers for. It is
+	// matched against the interface's own method set by
+	// [txSubstoreCoverage], which is what keeps the table exhaustive.
+	accessor string
+
+	// present reports whether the backend provides the substore.
+	// Three of the seven are declared optional by [store.Store], and a
+	// backend that returns nil for one has nothing to seed or refuse.
+	present func(s store.Store) bool
+
+	// handle returns the transaction's substore handle, so the nil-check
+	// walks the same list.
+	handle func(tx store.Tx) any
+
+	// seed writes one record through the aggregate. Seeding runs before
+	// BeginTx because backends that hold the cluster for the lifetime of
+	// a transaction cannot service the aggregate while one is open.
+	seed func(t *testing.T, b Backend, ctx context.Context)
+
+	// readName spells the lookup read issues, for the failure message.
+	readName string
+
+	// read issues one lookup through the transaction handle and reports
+	// whether the backend produced an answer from its backing store.
+	read func(ctx context.Context, tx store.Tx, now time.Time) (bool, error)
+}
+
+// txClusterSubstores is the table every settled-handle assertion walks.
+//
+// [store.Tx.Commit] declares that a lookup made through a settled handle
+// fails like any other call, and a backend guards those lookups one
+// implementation at a time: the substore whose read path was written
+// separately from the others is exactly where the gap survives. Naming
+// the substores here rather than inside each case is what lets
+// [txSubstoreCoverage] check the list against the interface.
+//
+//nolint:gochecknoglobals // table generated against the [store.Tx] method set; read-only.
+var txClusterSubstores = []txClusterSubstore{
+	{
+		accessor: "AuthorizationCodes",
+		present:  func(store.Store) bool { return true },
+		handle:   func(tx store.Tx) any { return tx.AuthorizationCodes() },
+		seed: func(t *testing.T, b Backend, ctx context.Context) {
+			t.Helper()
+			if err := b.Store.AuthorizationCodes().Save(ctx, newAuthCode(b.Now(), "tx-settled-code")); err != nil {
+				t.Fatalf("Save code: %v", err)
+			}
+		},
+		readName: "AuthorizationCodes().Find",
+		read: func(ctx context.Context, tx store.Tx, _ time.Time) (bool, error) {
+			got, err := tx.AuthorizationCodes().Find(ctx, "tx-settled-code")
+			return got != nil, err
+		},
+	},
+	{
+		accessor: "Grants",
+		present:  func(store.Store) bool { return true },
+		handle:   func(tx store.Tx) any { return tx.Grants() },
+		seed: func(t *testing.T, b Backend, ctx context.Context) {
+			t.Helper()
+			if err := b.Store.Grants().Save(ctx, newGrant(b.Now(), "tx-settled-grant", "sub", "client")); err != nil {
+				t.Fatalf("Save grant: %v", err)
+			}
+		},
+		readName: "Grants().Find",
+		read: func(ctx context.Context, tx store.Tx, _ time.Time) (bool, error) {
+			got, err := tx.Grants().Find(ctx, "tx-settled-grant")
+			return got != nil, err
+		},
+	},
+	{
+		accessor: "RefreshTokens",
+		present:  func(store.Store) bool { return true },
+		handle:   func(tx store.Tx) any { return tx.RefreshTokens() },
+		seed: func(t *testing.T, b Backend, ctx context.Context) {
+			t.Helper()
+			seedRefreshTokens(t, b.Store, ctx, newRefresh(b.Now(), "tx-settled-refresh", nil))
+		},
+		readName: "RefreshTokens().Find",
+		read: func(ctx context.Context, tx store.Tx, _ time.Time) (bool, error) {
+			got, err := tx.RefreshTokens().Find(ctx, "tx-settled-refresh")
+			return got != nil, err
+		},
+	},
+	{
+		accessor: "PushedAuthRequests",
+		present:  func(store.Store) bool { return true },
+		handle:   func(tx store.Tx) any { return tx.PushedAuthRequests() },
+		seed: func(t *testing.T, b Backend, ctx context.Context) {
+			t.Helper()
+			if err := b.Store.PushedAuthRequests().Save(ctx, newPAR(b.Now(), "urn:par:tx-settled")); err != nil {
+				t.Fatalf("Save PAR: %v", err)
+			}
+		},
+		readName: "PushedAuthRequests().Find",
+		read: func(ctx context.Context, tx store.Tx, _ time.Time) (bool, error) {
+			got, err := tx.PushedAuthRequests().Find(ctx, "urn:par:tx-settled")
+			return got != nil, err
+		},
+	},
+	{
+		accessor: "AccessTokens",
+		present:  func(s store.Store) bool { return s.AccessTokens() != nil },
+		handle:   func(tx store.Tx) any { return tx.AccessTokens() },
+		seed: func(t *testing.T, b Backend, ctx context.Context) {
+			t.Helper()
+			rec := newAccessTokenRecord(b.Now(), "tx-settled-jti", "tx-settled-grant")
+			if err := b.Store.AccessTokens().Register(ctx, rec); err != nil {
+				t.Fatalf("Register access token: %v", err)
+			}
+		},
+		readName: "AccessTokens().Find",
+		read: func(ctx context.Context, tx store.Tx, _ time.Time) (bool, error) {
+			got, err := tx.AccessTokens().Find(ctx, "tx-settled-jti")
+			return got != nil, err
+		},
+	},
+	{
+		accessor: "OpaqueAccessTokens",
+		present:  func(s store.Store) bool { return s.OpaqueAccessTokens() != nil },
+		handle:   func(tx store.Tx) any { return tx.OpaqueAccessTokens() },
+		seed: func(t *testing.T, b Backend, ctx context.Context) {
+			t.Helper()
+			tok := newOpaqueAT(b.Now(), "tx-settled-oat", "tx-settled-grant")
+			if err := b.Store.OpaqueAccessTokens().Save(ctx, tok); err != nil {
+				t.Fatalf("Save opaque access token: %v", err)
+			}
+		},
+		readName: "OpaqueAccessTokens().Find",
+		read: func(ctx context.Context, tx store.Tx, _ time.Time) (bool, error) {
+			got, err := tx.OpaqueAccessTokens().Find(ctx, "tx-settled-oat")
+			return got != nil, err
+		},
+	},
+	{
+		accessor: "GrantRevocations",
+		present:  func(s store.Store) bool { return s.GrantRevocations() != nil },
+		handle:   func(tx store.Tx) any { return tx.GrantRevocations() },
+		seed: func(t *testing.T, b Backend, ctx context.Context) {
+			t.Helper()
+			tomb := store.GrantTombstone{
+				GrantID:   "tx-settled-grant",
+				RevokedAt: b.Now(),
+				ExpiresAt: b.Now().Add(time.Hour),
+				Reason:    "code_replay",
+			}
+			if err := b.Store.GrantRevocations().RevokeGrant(ctx, tomb); err != nil {
+				t.Fatalf("RevokeGrant: %v", err)
+			}
+		},
+		readName: "GrantRevocations().IsRevoked",
+		read: func(ctx context.Context, tx store.Tx, now time.Time) (bool, error) {
+			// A settled handle answering this one with (false, nil) is
+			// a revocation check that fails open: the caller reads a
+			// tombstoned grant as live and honours its access token.
+			return tx.GrantRevocations().IsRevoked(ctx, "tx-settled-grant", "", now)
+		},
+	},
+}
+
+// txSubstoreCoverage checks [txClusterSubstores] against the accessors
+// [store.Tx] declares.
+//
+// Without it the settled-handle assertions cover whatever somebody
+// listed. [store.Tx] declares seven substore accessors, and a harness
+// that drives four of them lets a backend whose AccessTokens or
+// GrantRevocations read falls through to the backing store pass the
+// entire suite — for GrantRevocations that is a revocation check
+// answering fail-open through a handle its caller believes is still
+// inside a transaction.
+func txSubstoreCoverage(t *testing.T, _ Factory) {
+	covered := make(map[string]string, len(txClusterSubstores))
+	for _, sub := range txClusterSubstores {
+		covered[sub.accessor] = "txClusterSubstores"
+	}
+	assertCovers(t, "store.Tx substore accessors", accessorMethods(typeOf[store.Tx]()), covered)
+}
+
 // seedSettledRecords writes one record into each cluster substore
-// [assertSettledReadsRefused] then looks for. Seeding runs through the
-// aggregate and before BeginTx because backends that hold the cluster for
-// the lifetime of a transaction cannot service the aggregate while one is
-// open.
+// [assertSettledReadsRefused] then looks for, so a refusal cannot be
+// mistaken for an empty store.
 func seedSettledRecords(t *testing.T, b Backend, ctx context.Context) {
 	t.Helper()
-	if err := b.Store.AuthorizationCodes().Save(ctx, newAuthCode(b.Now(), "tx-settled-code")); err != nil {
-		t.Fatalf("Save code: %v", err)
-	}
-	if err := b.Store.Grants().Save(ctx, newGrant(b.Now(), "tx-settled-grant", "sub", "client")); err != nil {
-		t.Fatalf("Save grant: %v", err)
-	}
-	seedRefreshTokens(t, b.Store, ctx, newRefresh(b.Now(), "tx-settled-refresh", nil))
-	if err := b.Store.PushedAuthRequests().Save(ctx, newPAR(b.Now(), "urn:par:tx-settled")); err != nil {
-		t.Fatalf("Save PAR: %v", err)
+	for _, sub := range txClusterSubstores {
+		if !sub.present(b.Store) {
+			continue
+		}
+		sub.seed(t, b, ctx)
 	}
 }
 
-// assertSettledReadsRefused drives one lookup through each cluster
-// substore of a settled handle. The four are checked together because a
-// backend guards them one implementation at a time: a substore whose read
-// path was written separately from the others is exactly where the gap
-// survives.
-func assertSettledReadsRefused(t *testing.T, tx store.Tx, ctx context.Context) {
+// assertSettledReadsRefused drives one lookup through every cluster
+// substore of a settled handle.
+func assertSettledReadsRefused(t *testing.T, b Backend, tx store.Tx, ctx context.Context) {
 	t.Helper()
-	gotCode, err := tx.AuthorizationCodes().Find(ctx, "tx-settled-code")
-	assertTxRequired(t, "AuthorizationCodes().Find", gotCode != nil, err)
-	gotGrant, err := tx.Grants().Find(ctx, "tx-settled-grant")
-	assertTxRequired(t, "Grants().Find", gotGrant != nil, err)
-	gotRefresh, err := tx.RefreshTokens().Find(ctx, "tx-settled-refresh")
-	assertTxRequired(t, "RefreshTokens().Find", gotRefresh != nil, err)
-	gotPAR, err := tx.PushedAuthRequests().Find(ctx, "urn:par:tx-settled")
-	assertTxRequired(t, "PushedAuthRequests().Find", gotPAR != nil, err)
-	// The grace-window cache is an extension, so it is asserted only when
-	// the backend exposes it — but the case itself never skips: the
-	// mandatory four above are what a backend advertising
-	// [store.Transactional] has to answer for.
+	for _, sub := range txClusterSubstores {
+		if !sub.present(b.Store) {
+			continue
+		}
+		found, err := sub.read(ctx, tx, b.Now())
+		assertTxRequired(t, sub.readName, found, err)
+	}
+	// The grace-window cache is an extension of the refresh substore
+	// rather than an accessor of its own, so it is asserted only when the
+	// backend exposes it — but the case itself never skips: the accessors
+	// above are what a backend advertising [store.Transactional] has to
+	// answer for.
 	if retry, ok := tx.RefreshTokens().(store.RefreshRetryResponseStore); ok {
 		sealed, err := retry.LoadRetryResponse(ctx, "tx-settled-refresh")
 		assertTxRequired(t, "LoadRetryResponse", sealed != nil, err)

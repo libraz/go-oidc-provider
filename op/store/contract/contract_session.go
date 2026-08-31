@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strconv"
@@ -22,7 +23,10 @@ import (
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var sessionCases = []subtest{
 	{"SaveFind", sessionSaveFind},
+	{"SaveReplacesPastDatedRecord", sessionSaveReplacesWithPastDated},
 	{"Touch", sessionTouch},
+	{"TouchWithUnchangedValues", sessionTouchUnchanged},
+	{"TouchLeavesEveryOtherField", sessionTouchLeavesOtherFields},
 	{"TouchMissing", sessionTouchMissing},
 	{"TouchAfterDelete", sessionTouchAfterDelete},
 	{"Delete", sessionDelete},
@@ -83,6 +87,217 @@ func sessionTouch(t *testing.T, f Factory) {
 	if !got.UpdatedAt.Equal(newUpd) {
 		t.Fatalf("Touch did not update UpdatedAt: got %v want %v", got.UpdatedAt, newUpd)
 	}
+}
+
+// sessionTouchUnchanged pins that a Touch which writes the values the
+// record already carries still reports success.
+//
+// The repeat is ordinary traffic, not a contrived input: an OP whose
+// clock has second granularity computes the same ExpiresAt for two
+// requests that arrive inside the same second, and the sliding-expiry
+// update on the second one changes no column at all. A backend that
+// reads its verdict off an affected-row count sees zero changed rows for
+// it — MySQL counts changed rows rather than matched ones — and answers
+// ErrNotFound, which the OP maps onto "the current session expired". The
+// user is signed out mid-flow, on one storage engine only, by a request
+// that found their session perfectly alive.
+func sessionTouchUnchanged(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	s := newSession(b.Now(), "s-touch-noop")
+	if err := b.Store.Sessions().Save(ctx, s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	exp := b.Now().Add(2 * time.Hour)
+	upd := b.Now().Add(time.Minute)
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := b.Store.Sessions().Touch(ctx, s.ID, exp, upd); err != nil {
+			t.Fatalf("Touch with unchanged values (attempt %d): want success, got %v", attempt, err)
+		}
+	}
+	got, err := b.Store.Sessions().Find(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("Find after the repeated Touch: %v", err)
+	}
+	if !got.ExpiresAt.Equal(exp) || !got.UpdatedAt.Equal(upd) {
+		t.Fatalf("repeated Touch left ExpiresAt=%v UpdatedAt=%v, want %v / %v",
+			got.ExpiresAt, got.UpdatedAt, exp, upd)
+	}
+}
+
+// touchRaceRounds is how many times [sessionTouchLeavesOtherFields]
+// runs its two writers at each other. One round is enough to catch a
+// backend that always loses the field, but the interleaving that exposes
+// a read-decide-write extension is a window of one round trip, so the
+// case repeats to make hitting it reliable rather than lucky.
+const touchRaceRounds = 16
+
+// sessionTouchLeavesOtherFields pins the scope of the write
+// [store.SessionStore.Touch] declares: it sets ExpiresAt and UpdatedAt,
+// and it is not a replacement of the record.
+//
+// The distinction is invisible until something else writes the record
+// between the extension's read and its write. A backend that implements
+// the idle timer by reading the session, patching two fields and putting
+// the whole thing back rewinds everything the other writer stored — the
+// ACR a step-up just raised, the chooser group an account switch just
+// moved the session into — and rebuilds whatever secondary index it
+// derives from them. Nothing reports an error: the session simply goes
+// back to what it was a moment ago, carrying the authentication context
+// of the login it was supposed to have left behind.
+//
+// The two writers run against each other because that is the only shape
+// the defect has. Whichever order they land in, the post-condition is the
+// same and does not depend on the timing: the record-level write is the
+// Save, so the fields it set are what the record holds afterwards, and
+// the Touch may have moved the two timestamps and nothing else. A
+// backend that cannot narrow the write that far is required to refuse
+// rather than store what it read, so a Touch that reports
+// [store.ErrConflict] satisfies the contract too — what it may not do is
+// report success and take the step-up with it.
+func sessionTouchLeavesOtherFields(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	sessions := b.Store.Sessions()
+
+	for round := range touchRaceRounds {
+		id := "s-touch-fields-" + strconv.Itoa(round)
+		original := newSession(b.Now(), id)
+		original.ChooserGroupID = "cg-before-" + strconv.Itoa(round)
+		original.ACR = "urn:acr:pwd"
+		if err := sessions.Save(ctx, original); err != nil {
+			t.Fatalf("Save round %d: %v", round, err)
+		}
+
+		// The step-up: a second factor raised the ACR and the account
+		// moved into another chooser group.
+		stepped := newSession(b.Now(), id)
+		stepped.ChooserGroupID = "cg-after-" + strconv.Itoa(round)
+		stepped.ACR = "urn:acr:mfa"
+		stepped.AMR = []string{"pwd", "otp"}
+
+		exp := b.Now().Add(2 * time.Hour)
+		upd := b.Now().Add(time.Minute)
+		saveErr, touchErr := raceSaveAndTouch(sessions, stepped, exp, upd)
+		if saveErr != nil {
+			t.Fatalf("concurrent Save round %d: %v", round, saveErr)
+		}
+		if touchErr != nil && !errors.Is(touchErr, store.ErrConflict) {
+			t.Fatalf("concurrent Touch round %d: %v", round, touchErr)
+		}
+
+		got, err := sessions.Find(ctx, id)
+		if err != nil {
+			t.Fatalf("Find round %d: %v", round, err)
+		}
+		if got.ACR != stepped.ACR {
+			t.Fatalf("round %d: ACR = %q after a Touch racing a step-up, want %q — the extension wrote "+
+				"back the snapshot it read and undid the step-up", round, got.ACR, stepped.ACR)
+		}
+		if got.ChooserGroupID != stepped.ChooserGroupID {
+			t.Fatalf("round %d: ChooserGroupID = %q after Touch, want %q — Touch is not a replacement "+
+				"of the record", round, got.ChooserGroupID, stepped.ChooserGroupID)
+		}
+		assertChooserGroupHolds(t, sessions, stepped.ChooserGroupID, id)
+		assertChooserGroupOmits(t, sessions, original.ChooserGroupID, id)
+	}
+}
+
+// raceSaveAndTouch runs one record-level Save and one idle-timer
+// extension at the same session, holding both goroutines at a barrier so
+// they enter the store together.
+func raceSaveAndTouch(
+	sessions store.SessionStore,
+	sess *store.Session,
+	expiresAt, updatedAt time.Time,
+) (saveErr, touchErr error) {
+	ctx := context.Background()
+	var ready, done sync.WaitGroup
+	start := make(chan struct{})
+	ready.Add(2)
+	done.Add(2)
+	go func() {
+		defer done.Done()
+		ready.Done()
+		<-start
+		saveErr = sessions.Save(ctx, sess)
+	}()
+	go func() {
+		defer done.Done()
+		ready.Done()
+		<-start
+		touchErr = sessions.Touch(ctx, sess.ID, expiresAt, updatedAt)
+	}()
+	ready.Wait()
+	close(start)
+	done.Wait()
+	return saveErr, touchErr
+}
+
+// assertChooserGroupHolds asserts that the chooser-group index lists id.
+func assertChooserGroupHolds(t *testing.T, sessions store.SessionStore, groupID, id string) {
+	t.Helper()
+	listed, err := sessions.ListByChooserGroup(context.Background(), groupID)
+	if err != nil {
+		t.Fatalf("ListByChooserGroup(%q): %v", groupID, err)
+	}
+	for _, sess := range listed {
+		if sess.ID == id {
+			return
+		}
+	}
+	t.Fatalf("session %q is missing from chooser group %q: the index no longer follows the record", id, groupID)
+}
+
+// assertChooserGroupOmits asserts that the chooser-group index does not
+// list id. A stale entry is what a whole-record write leaves behind: the
+// group the session was moved out of keeps offering it in the account
+// chooser.
+func assertChooserGroupOmits(t *testing.T, sessions store.SessionStore, groupID, id string) {
+	t.Helper()
+	listed, err := sessions.ListByChooserGroup(context.Background(), groupID)
+	if err != nil {
+		t.Fatalf("ListByChooserGroup(%q): %v", groupID, err)
+	}
+	for _, sess := range listed {
+		if sess.ID == id {
+			t.Fatalf("session %q is still listed under the chooser group %q it was moved out of", id, groupID)
+		}
+	}
+}
+
+// sessionSaveReplacesWithPastDated pins what [store.SessionStore.Save]
+// owes the caller when the record it is handed is already past its
+// ExpiresAt: whatever the id held before must not survive it.
+//
+// Ending a session out of band is the reason this matters. An embedder
+// that terminates one by storing it with an expiry in the past reads a
+// nil error, and on a backend that quietly drops the write the earlier,
+// still-authenticated record stays exactly where it was. The next
+// prompt=none authorization succeeds silently for a subject the operator
+// believes was signed out.
+//
+// Dropping the write is only equivalent to replacing it when the id held
+// nothing live to begin with, which is why the case seeds one first.
+func sessionSaveReplacesWithPastDated(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	sessions := b.Store.Sessions()
+
+	live := newSession(b.Now(), "s-save-past-dated")
+	if err := sessions.Save(ctx, live); err != nil {
+		t.Fatalf("Save live: %v", err)
+	}
+	ended := newSession(b.Now(), live.ID)
+	ended.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := sessions.Save(ctx, ended); err != nil {
+		t.Fatalf("Save past-dated over a live record: %v", err)
+	}
+	if _, err := sessions.Find(ctx, live.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find after a past-dated Save: want ErrNotFound, got %v — the earlier record survived "+
+			"the write that was meant to replace it, and the subject is still signed in", err)
+	}
+	assertChooserGroupOmits(t, sessions, live.ChooserGroupID, live.ID)
 }
 
 func sessionTouchMissing(t *testing.T, f Factory) {
@@ -430,10 +645,95 @@ func parConsumeSurvivesUnrelatedPushes(t *testing.T, f Factory) {
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var interactionCases = []subtest{
 	{"SaveFind", interactionSaveFind},
+	{"SaveReplacesPastDatedRecord", interactionSaveReplacesWithPastDated},
 	{"CompareAndSwap", interactionCompareAndSwap},
+	{"CompareAndSwapToIdenticalState", interactionCompareAndSwapIdentical},
+	{"ConcurrentCompareAndSwapHasOneWinner", interactionConcurrentCAS},
+	{"ConcurrentDeleteIfUnchangedHasOneWinner", interactionConcurrentDeleteIfUnchanged},
 	{"Delete", interactionDelete},
 	{"DeleteExpired", interactionDeleteExpired},
 	{"Expired", interactionExpired},
+}
+
+// interactionConcurrentCAS and interactionConcurrentDeleteIfUnchanged
+// funnel the harness's [Factory] into the free-standing helpers so the
+// suite drives them automatically. The helpers are exported because a
+// volatile backend that hosts interactions and nothing else reaches the
+// contract through [RunInteractions] or through them directly.
+func interactionConcurrentCAS(t *testing.T, f Factory) {
+	b := f(t)
+	AssertConcurrentInteractionCAS(t, b.Store.Interactions(), b.Now())
+}
+
+func interactionConcurrentDeleteIfUnchanged(t *testing.T, f Factory) {
+	b := f(t)
+	AssertConcurrentInteractionDelete(t, b.Store.Interactions(), b.Now())
+}
+
+// interactionCompareAndSwapIdentical pins that a swap whose replacement
+// equals what is stored still reports success.
+//
+// The idempotent write is what a retried interaction step looks like: a
+// browser resubmits the form, the driver recomputes the same state, and
+// the swap it issues changes no column. A backend that reads its verdict
+// off an affected-row count sees zero changed rows for it — MySQL counts
+// changed rows rather than matched ones — and reports ErrConflict, which
+// the driver reads as another tab having taken the interaction over. The
+// user is bounced out of a flow nothing else was touching.
+func interactionCompareAndSwapIdentical(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	cas, ok := b.Store.Interactions().(store.InteractionStoreCAS)
+	if !ok {
+		t.Fatal("InteractionStore must implement InteractionStoreCAS")
+	}
+	original := newInteraction(b.Now(), "i-cas-identical")
+	if err := cas.Save(ctx, original); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	stored, err := cas.Find(ctx, original.ID)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	next := *stored
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := cas.CompareAndSwap(ctx, stored, &next); err != nil {
+			t.Fatalf("CompareAndSwap onto an identical replacement (attempt %d): want success, got %v", attempt, err)
+		}
+	}
+	got, err := cas.Find(ctx, original.ID)
+	if err != nil {
+		t.Fatalf("Find after the identical swap: %v", err)
+	}
+	if !bytes.Equal(got.RawState, stored.RawState) {
+		t.Fatalf("RawState = %q after an identical swap, want %q", got.RawState, stored.RawState)
+	}
+}
+
+// interactionSaveReplacesWithPastDated is
+// [sessionSaveReplacesWithPastDated] for the interaction record: an
+// interaction stored with an expiry already behind the clock replaces
+// whatever the id held, and a backend that drops the write leaves the
+// earlier state resolvable for the rest of its lifetime.
+func interactionSaveReplacesWithPastDated(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	interactions := b.Store.Interactions()
+
+	live := newInteraction(b.Now(), "i-save-past-dated")
+	if err := interactions.Save(ctx, live); err != nil {
+		t.Fatalf("Save live: %v", err)
+	}
+	ended := newInteraction(b.Now(), live.ID)
+	ended.RawState = []byte(`{"step":"done"}`)
+	ended.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := interactions.Save(ctx, ended); err != nil {
+		t.Fatalf("Save past-dated over a live record: %v", err)
+	}
+	if _, err := interactions.Find(ctx, live.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find after a past-dated Save: want ErrNotFound, got %v — the earlier state survived "+
+			"the write that was meant to replace it", err)
+	}
 }
 
 func interactionSaveFind(t *testing.T, f Factory) {
@@ -633,9 +933,19 @@ var jtiCases = []subtest{
 	{"MarkHas", jtiMarkHas},
 	{"HasMissing", jtiHasMissing},
 	{"Replay", jtiReplay},
+	{"ConcurrentMarkHasOneWinner", jtiConcurrentMark},
 	{"ExpiredMarkerCanBeReplaced", jtiExpiredMarkerCanBeReplaced},
 	{"ExpiryBoundIsInclusive", jtiExpiryBoundIsInclusive},
 	{"ZeroExpiryPersists", jtiZeroExpiryPersists},
+}
+
+// jtiConcurrentMark funnels the harness's [Factory] into the
+// free-standing [AssertConcurrentJTIMark] helper so the suite drives the
+// replay marker's atomicity automatically. The helper is exported for
+// the volatile backends that host consumed JTIs and little else.
+func jtiConcurrentMark(t *testing.T, f Factory) {
+	b := f(t)
+	AssertConcurrentJTIMark(t, b.Store.ConsumedJTIs(), b.Now())
 }
 
 // jtiExpiryBoundIsInclusive pins the single expiry boundary declared on

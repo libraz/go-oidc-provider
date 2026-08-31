@@ -119,9 +119,17 @@ type AuthorizationCodeStore interface {
 	// Consume atomically marks the authorization code as consumed and
 	// returns the record. The implementation MUST hash the presented id
 	// and look up the resulting digest. It MUST return [ErrNotFound] if
-	// no such record exists, [ErrAlreadyConsumed] if the record's
-	// ConsumedAt was already set on entry, and a non-nil error if the
-	// underlying compare-and-set fails. When returning ErrAlreadyConsumed,
+	// no such record exists or the record has expired,
+	// [ErrAlreadyConsumed] if the record's ConsumedAt was already set on
+	// entry, and a non-nil error if the underlying compare-and-set
+	// fails. The expiry check MUST take precedence over the
+	// already-consumed check, so a code that is both expired and
+	// redeemed still reads as ErrNotFound: the token endpoint treats
+	// ErrAlreadyConsumed as replay evidence and runs the RFC 6749
+	// §4.1.2 cascade on it, which revokes the user's grant, refresh
+	// chain and access tokens. A code that merely ran out of time is not
+	// evidence of anything and must reach the client as an ordinary
+	// invalid_grant. When returning ErrAlreadyConsumed,
 	// implementations SHOULD also return the consumed record if it is still
 	// available so callers can recover GrantID for replay revocation. After
 	// a successful Consume the returned record's ConsumedAt MUST be non-nil

@@ -38,6 +38,7 @@ const concurrentRacers = 8
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var concurrencyCases = []subtest{
+	{"SingleWinnerCoverage", singleWinnerCoverage},
 	{"AuthorizationCodeConsumeHasOneWinner", concurrentAuthCodeConsume},
 	{"RefreshConsumeHasOneWinner", concurrentRefreshConsume},
 	{"PushedAuthRequestConsumeHasOneWinner", concurrentPARConsume},
@@ -61,6 +62,25 @@ var concurrencyCases = []subtest{
 // window to have closed before the second caller arrives — and the
 // contract case then reports a non-atomic backend as correct.
 func race(attempt func(i int) error) []error {
+	return raceAfter(nil, attempt)
+}
+
+// raceAfter is [race] with a per-goroutine warm-up run before the
+// barrier.
+//
+// The warm-up is not decoration. A backend that dials lazily hands the
+// first racer a pooled connection and makes the other seven wait on a
+// TCP handshake, and a handshake costs more than the whole operation
+// under test: measured against a container-hosted Redis, the first
+// racer's read and write both completed before any other racer's read
+// reached the server. Every caller then observes the state the winner
+// left, a deliberately non-atomic read-decide-write answers correctly,
+// and the case reports a backend it cannot actually see through.
+//
+// warm should issue one cheap read against the substore under test —
+// enough to leave each goroutine's connection established and returned
+// to the pool — and must not touch the record the attempts race for.
+func raceAfter(warm func(i int), attempt func(i int) error) []error {
 	errs := make([]error, concurrentRacers)
 	var ready, done sync.WaitGroup
 	start := make(chan struct{})
@@ -69,6 +89,9 @@ func race(attempt func(i int) error) []error {
 	for i := range concurrentRacers {
 		go func() {
 			defer done.Done()
+			if warm != nil {
+				warm(i)
+			}
 			ready.Done()
 			<-start
 			errs[i] = attempt(i)
@@ -111,6 +134,204 @@ func assertWinners(t *testing.T, op string, errs []error, want int) []int {
 func assertOneWinner(t *testing.T, op string, errs []error) int {
 	t.Helper()
 	return assertWinners(t, op, errs, 1)[0]
+}
+
+// singleWinnerCases records which sub-test drives each method of the
+// single-winner surface. The map is keyed by the (interface, method)
+// pair the scan in contract_coverage.go produces, and the value names
+// the case a reader should go to.
+//
+// Several of the entries sit outside [Run] because their substore does
+// too: the authentication factors are reached through their own
+// Run* entry points, which is why the value names the case rather than
+// pointing at a table [Run] iterates.
+//
+//nolint:gochecknoglobals // coverage map checked against the interfaces; read-only.
+var singleWinnerCases = map[methodRef]string{
+	{iface: "AuthorizationCodeStore", method: "Consume"}:        "Concurrency/AuthorizationCodeConsumeHasOneWinner",
+	{iface: "RefreshTokenStore", method: "Consume"}:             "Concurrency/RefreshConsumeHasOneWinner",
+	{iface: "PushedAuthRequestStore", method: "Consume"}:        "Concurrency/PushedAuthRequestConsumeHasOneWinner",
+	{iface: "DeviceCodeStore", method: "Consume"}:               "Concurrency/DeviceCodeConsumeHasOneWinner",
+	{iface: "CIBARequestStore", method: "Consume"}:              "Concurrency/CIBAConsumeHasOneWinner",
+	{iface: "InitialAccessTokenStore", method: "IncrementUses"}: "Concurrency/IATIncrementUsesHasOneWinner",
+	{iface: "ConsumedJTIStore", method: "Mark"}:                 "ConsumedJTIStore/ConcurrentMarkHasOneWinner",
+	{iface: "InteractionStoreCAS", method: "CompareAndSwap"}:    "InteractionStore/ConcurrentCompareAndSwapHasOneWinner",
+	{iface: "InteractionStoreCAS", method: "DeleteIfUnchanged"}: "InteractionStore/ConcurrentDeleteIfUnchangedHasOneWinner",
+	{iface: "EmailOTPStore", method: "CompareAndSwap"}:          "RunEmailOTPs/ConcurrentCompareAndSwapHasOneWinner",
+	{iface: "EmailOTPStore", method: "Consume"}:                 "RunEmailOTPs/ConcurrentConsumeHasOneWinner",
+	{iface: "TOTPStore", method: "CompareAndSwap"}:              "RunTOTPs/ConcurrentCompareAndSwapHasOneWinner",
+	{iface: "AuthnLockoutStore", method: "CompareAndSwap"}:      "RunAuthnLockouts/ConcurrentSameVersionHasOneWinner",
+	{iface: "RecoveryStore", method: "Consume"}:                 "RunRecoveryCodes/ConcurrentConsumeHasOneWinner",
+}
+
+// singleWinnerCoverage checks that every conditional write the store
+// package declares has a case that races it.
+//
+// The sequential cases pin these rules as one caller sees them, and
+// every read-decide-write implementation passes them. What decides
+// whether the rule holds is the parallel traffic it exists for, so a
+// method that reaches the interface without a racing case is a rule the
+// suite states and never tests: two concurrent Marks both returning nil
+// accept a replayed proof, and two concurrent swaps both returning nil
+// let two browser tabs drive one interaction to two authorization codes.
+func singleWinnerCoverage(t *testing.T, _ Factory) {
+	assertCovers(t, "single-winner surface", singleWinnerSurface(), singleWinnerCases)
+}
+
+// AssertConcurrentInteractionCAS pins the atomicity
+// [store.InteractionStoreCAS.CompareAndSwap] declares: of several
+// callers presenting the same previous state, at most one may be told it
+// applied its replacement.
+//
+// The sequential cases cannot see the difference. A backend that reads
+// the record, compares the state in the adapter, and writes the
+// replacement back satisfies every one of them and still lets two racers
+// both succeed — and the interaction state machine is what the
+// authorization endpoint advances, so two winners are two browser tabs
+// driving one interaction to completion and two authorization codes
+// issued for one consent.
+//
+// The helper is exported so a volatile backend that hosts interactions
+// and nothing else can pin the contract without the full [Run]
+// aggregate. It writes the interaction "i-cas-race"; callers must not
+// pre-populate that id.
+func AssertConcurrentInteractionCAS(t *testing.T, interactions store.InteractionStore, now time.Time) {
+	t.Helper()
+	cas, stored := seedRacedInteraction(t, interactions, now, "i-cas-race")
+	ctx := context.Background()
+
+	errs := raceAfter(
+		func(int) { _, _ = cas.Find(ctx, "i-cas-race-warmup") },
+		func(i int) error {
+			next := *stored
+			next.RawState = []byte("racer-" + strconv.Itoa(i))
+			return cas.CompareAndSwap(ctx, stored, &next)
+		},
+	)
+	winner := assertOneWinner(t, "Interactions().CompareAndSwap", errs)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("losing CompareAndSwap %d: want ErrConflict, got %v — the caller cannot tell a "+
+				"lost race from a broken store and retries a step it must not repeat", i, err)
+		}
+	}
+
+	got, err := cas.Find(ctx, stored.ID)
+	if err != nil {
+		t.Fatalf("Find after the race: %v", err)
+	}
+	want := []byte("racer-" + strconv.Itoa(winner))
+	if !bytes.Equal(got.RawState, want) {
+		t.Fatalf("RawState = %q after the race, want %q — the state stored is not the one the "+
+			"successful swap wrote", got.RawState, want)
+	}
+}
+
+// AssertConcurrentInteractionDelete is [AssertConcurrentInteractionCAS]
+// for the conditional removal: the same previous state presented by
+// several callers may retire the interaction exactly once.
+//
+// The single winner is what lets the endpoint that finished the
+// interaction be the one that emits the code. A backend that answered
+// nil to every caller would tell each of them it had closed the
+// ceremony it was holding.
+//
+// The helper writes the interaction "i-delete-race"; callers must not
+// pre-populate that id.
+func AssertConcurrentInteractionDelete(t *testing.T, interactions store.InteractionStore, now time.Time) {
+	t.Helper()
+	cas, stored := seedRacedInteraction(t, interactions, now, "i-delete-race")
+	ctx := context.Background()
+
+	errs := raceAfter(
+		func(int) { _, _ = cas.Find(ctx, "i-delete-race-warmup") },
+		func(int) error { return cas.DeleteIfUnchanged(ctx, stored) },
+	)
+	assertOneWinner(t, "Interactions().DeleteIfUnchanged", errs)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrConflict) && !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("losing DeleteIfUnchanged %d: want ErrConflict or ErrNotFound, got %v", i, err)
+		}
+	}
+	if _, err := cas.Find(ctx, stored.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find after the race: want ErrNotFound, got %v", err)
+	}
+}
+
+// seedRacedInteraction stores one interaction and returns the CAS handle
+// together with the record as the backend stored it, which is the
+// previous state every racer presents.
+func seedRacedInteraction(
+	t *testing.T,
+	interactions store.InteractionStore,
+	now time.Time,
+	id string,
+) (store.InteractionStoreCAS, *store.Interaction) {
+	t.Helper()
+	cas, ok := interactions.(store.InteractionStoreCAS)
+	if !ok {
+		t.Fatal("InteractionStore must implement InteractionStoreCAS")
+	}
+	ctx := context.Background()
+	seed := &store.Interaction{
+		ID:        id,
+		ClientID:  "client",
+		Step:      "consent",
+		RawState:  []byte(`{"step":"consent"}`),
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := cas.Save(ctx, seed); err != nil {
+		t.Fatalf("Save %s: %v", id, err)
+	}
+	stored, err := cas.Find(ctx, id)
+	if err != nil {
+		t.Fatalf("Find %s: %v", id, err)
+	}
+	return cas, stored
+}
+
+// AssertConcurrentJTIMark pins the first-writer-wins rule
+// [store.ConsumedJTIStore.Mark] declares, under the traffic that makes
+// it a security property rather than a bookkeeping one.
+//
+// The replay marker is what stops a captured DPoP proof or client
+// assertion from being presented twice, and an attacker replaying one
+// does not wait politely for the original to finish. A backend that
+// reads the key, finds it free, and then writes hands both callers a nil
+// — the replay is accepted, and the sequential case that pins
+// ErrAlreadyConsumed for the second Mark never sees it.
+//
+// The helper marks the jti "jti-mark-race"; callers must not
+// pre-populate it.
+func AssertConcurrentJTIMark(t *testing.T, jtis store.ConsumedJTIStore, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	const jti = "jti-mark-race"
+
+	errs := raceAfter(
+		func(int) { _, _ = jtis.Has(ctx, "jti-mark-race-warmup") },
+		func(int) error { return jtis.Mark(ctx, jti, now.Add(time.Hour)) },
+	)
+	assertOneWinner(t, "ConsumedJTIs().Mark", errs)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrAlreadyConsumed) {
+			t.Fatalf("losing Mark %d: want ErrAlreadyConsumed, got %v — the caller cannot tell a "+
+				"replay from a storage fault, and a fault is retried", i, err)
+		}
+	}
+	present, err := jtis.Has(ctx, jti)
+	if err != nil {
+		t.Fatalf("Has after the race: %v", err)
+	}
+	if !present {
+		t.Fatal("Has reports the jti free after a Mark reported success: the marker the winner " +
+			"recorded is not there, so the next presentation of the same proof is accepted")
+	}
+	if err := jtis.Mark(ctx, jti, now.Add(time.Hour)); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("Mark after the race: want ErrAlreadyConsumed, got %v", err)
+	}
 }
 
 func concurrentAuthCodeConsume(t *testing.T, f Factory) {

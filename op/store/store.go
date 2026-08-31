@@ -12,8 +12,11 @@ package store
 // Implementations used with the browser authorization-code flow MUST also
 // implement [Transactional]. The OP rejects that configuration at startup
 // otherwise. Backends used only for non-browser grant types may omit the
-// extension. The composite adapter keeps atomic-cluster members on one anchor
-// and exposes Transactional only when that anchor supports transactions.
+// extension. The composite adapter keeps atomic-cluster members on one
+// anchor and requires that anchor to be transactional: a composition
+// whose anchor is not is rejected at construction time. Go has no way to
+// drop a method from a type conditionally, so a composite either carries
+// BeginTx and can honour it or must refuse to be built.
 type Store interface {
 	// Clients returns the [ClientStore] for this backend.
 	Clients() ClientStore
