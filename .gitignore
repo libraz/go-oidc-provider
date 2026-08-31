@@ -80,9 +80,10 @@ conformance/render/
 /op-demo
 /cmd/op-demo/op-demo
 
-# scenariotool and stabilitytool are separate Go submodules whose binaries
-# are built next to their source by `go build ./tools/<name>` (or by the
-# scenario-* / stability* Makefile targets that exec them).
+# reachtool, scenariotool and stabilitytool are separate Go submodules whose
+# binaries are built next to their source by `go build ./tools/<name>` (or by
+# the reach / scenario-* / stability* Makefile targets that exec them).
+/tools/reachtool/reachtool
 /tools/scenariotool/scenariotool
 /tools/stabilitytool/stabilitytool
 

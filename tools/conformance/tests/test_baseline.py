@@ -168,6 +168,20 @@ class AcceptedOutcomeTest(_VerifyHarness):
         self.assertEqual(result, 1, output)
         self.assertIn("expired accepted outcome", output)
 
+    def test_class_rule_cannot_admit_an_unfinished_module(self) -> None:
+        """A rule covers a verdict, and an unfinished module has none.
+
+        The suite hands out a REVIEW result on modules that stopped
+        answering — WAITING and INTERRUPTED both occur — so a rule that
+        looked only at the result would let a module that never
+        responded ship as a member of an accounted-for REVIEW family,
+        silently and on the one gate that exists to stop it.
+        """
+        result, output = self.verify("candidate-stalled-review.json", "rules-review.json")
+        self.assertEqual(result, 1, output)
+        self.assertIn("unfinished module [plan-a] module-persistent: WAITING/REVIEW", output)
+        self.assertIn("unfinished module [plan-a] module-pass: INTERRUPTED/REVIEW", output)
+
 
 class UnreachableVerdictTest(_VerifyHarness):
     """A module with no verdict is admissible only under its own section.

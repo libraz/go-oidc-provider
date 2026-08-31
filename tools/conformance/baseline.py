@@ -363,9 +363,22 @@ class _AcceptedOutcome:
         # module does come out that way, and it still expires.
         self.intermittent: bool = bool(rule.get("intermittent", False))
 
-    def matches(self, plan: str, module: str, result: str) -> bool:
+    def matches(self, plan: str, module: str, status: str, result: str) -> bool:
+        """Report whether this rule explains one module's outcome.
+
+        FINISHED is required, not incidental. A rule justifies a
+        *verdict* the suite reached — "a human must look at this
+        screen", "this module does not apply here" — and a module that
+        stopped answering has no verdict, only whatever partial reading
+        it held when it stalled. The suite carries a REVIEW result on
+        WAITING and INTERRUPTED modules often enough that ignoring the
+        status would let a module that never responded ship as an
+        accounted-for member of a REVIEW family, which is the case
+        unreachable_verdicts exists to keep countable.
+        """
         return (
-            result == self.result
+            status == "FINISHED"
+            and result == self.result
             and fnmatch.fnmatchcase(plan, self.plan)
             and fnmatch.fnmatchcase(module, self.module)
         )
@@ -548,9 +561,21 @@ def _strict_release_issues(
         # A per-module entry is the strongest claim and is checked
         # first. Falling through to the class rules is what keeps a
         # forty-module REVIEW family from needing forty entries.
-        covering = [i for i, rule in enumerate(accepted) if rule.matches(plan, module, result)]
+        covering = [
+            i for i, rule in enumerate(accepted) if rule.matches(plan, module, status, result)
+        ]
         if covering:
             matched_rules.update(covering)
+            continue
+        if status != "FINISHED":
+            # Reported apart from the ordinary non-pass so the reader is
+            # not left reasoning about the result: the module stopped
+            # short, and the result beside it is a partial reading of a
+            # run that never ended.
+            issues.append(
+                f"unfinished module [{plan}] {module}: {status}/{result} "
+                "(no verdict was reached)"
+            )
             continue
         issues.append(f"unexcluded non-pass [{plan}] {module}: {status}/{result}")
 

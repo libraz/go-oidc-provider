@@ -86,7 +86,16 @@ log "scenariotool advisories --check"
 log "stabilitytool --check"
 "$SCRIPT_DIR/stability.sh" --check
 
+# Nothing above notices a declaration that stopped being reached: the
+# compiler is satisfied by a constant nobody reads, and an audit event
+# no handler emits is indistinguishable, on the stream, from one whose
+# situation never arose.
+log "reachtool"
+"$SCRIPT_DIR/reach.sh"
+
 "$SCRIPT_DIR/check_doc_refs.sh"
+
+"$SCRIPT_DIR/check_version_refs.sh"
 
 "$SCRIPT_DIR/verify_examples.sh"
 

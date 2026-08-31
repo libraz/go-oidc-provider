@@ -87,6 +87,27 @@ public_modules() {
   if [ -f "$REPO_ROOT/cmd/op-demo/go.mod" ]; then
     printf '%s\t./...\t\n' "$REPO_ROOT/cmd/op-demo"
   fi
+  example_modules
+  # The reference application is its own module and carries the same build
+  # tag as the examples. It builds against the working tree, so a change
+  # that breaks an embedder-facing seam breaks it in the same commit.
+  if [ -f "$REPO_ROOT/sample/go.mod" ]; then
+    printf '%s\t./...\t%s\n' "$REPO_ROOT/sample" "example"
+  fi
+  verify_harness_modules
+}
+
+# Every entry that carries the "example" build tag, in the same
+# "<path>\t<packages>\t<tags>" shape public_modules emits.
+#
+# It is a function of its own because two commands need exactly this set
+# and must not drift: `make verify` reaches it through public_modules,
+# and scripts/verify_examples.sh — the target a contributor runs while
+# editing an example — iterates it directly. A single `./examples/...`
+# pattern from the repository root is NOT that set: `go` does not
+# descend into a nested module, so most of the tree would go
+# uncompiled.
+example_modules() {
   if compgen -G "$REPO_ROOT/examples/*/go.mod" >/dev/null; then
     for f in "$REPO_ROOT"/examples/*/go.mod; do
       printf '%s\t./...\t%s\n' "$(dirname "$f")" "example"
@@ -95,11 +116,11 @@ public_modules() {
   # Not every example is its own module: an example that needs no
   # dependency beyond the library is a package of the host module gated
   # behind the "example" tag, as are the helpers those examples import
-  # (examples/internal/{devkeys,opkit,serve,webui}). The host module's own
-  # entry above runs untagged and therefore cannot see a single one of
-  # them — every file is excluded by the build constraint — so they need
-  # a second pass, narrowed to the subtree that carries the tag rather
-  # than re-analysing the whole module.
+  # (examples/internal/{devkeys,opkit,serve,webui}). The host module's
+  # untagged entry cannot see a single one of them — every file is
+  # excluded by the build constraint — so they need a pass of their own,
+  # narrowed to the subtree that carries the tag rather than
+  # re-analysing the whole module.
   printf '%s\t./examples/...\t%s\n' "$REPO_ROOT" "example"
   # Shared example helpers are independent modules too. They are not shipped
   # as tutorials, but a regression in either fans out to many examples, so the
@@ -109,13 +130,6 @@ public_modules() {
       printf '%s\t./...\t%s\n' "$d" "example"
     fi
   done
-  # The reference application is its own module and carries the same build
-  # tag as the examples. It builds against the working tree, so a change
-  # that breaks an embedder-facing seam breaks it in the same commit.
-  if [ -f "$REPO_ROOT/sample/go.mod" ]; then
-    printf '%s\t./...\t%s\n' "$REPO_ROOT/sample" "example"
-  fi
-  verify_harness_modules
 }
 
 # The example verification harnesses. Both modules consist entirely of
@@ -140,8 +154,9 @@ verify_harness_modules() {
   fi
 }
 
-# The build tools that back the repository's own gates: the scenario
-# catalog validator and the stability reporter. They are separate modules
+# The build tools that back the repository's own gates: the
+# declared-but-unreached gate, the scenario catalog validator and the
+# stability reporter. They are separate modules
 # so their parsing dependencies stay out of the library's go.sum, and they
 # are deliberately not part of public_modules — nothing here ships, and an
 # untagged entry there would also enrol them in go.work.
@@ -158,7 +173,7 @@ verify_harness_modules() {
 # rather than fail, which is how these two went unlinted.
 tool_modules() {
   local d
-  for d in scenariotool stabilitytool; do
+  for d in reachtool scenariotool stabilitytool; do
     if [ -f "$REPO_ROOT/tools/$d/go.mod" ]; then
       printf '%s\t./...\n' "$REPO_ROOT/tools/$d"
     fi

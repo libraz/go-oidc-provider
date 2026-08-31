@@ -36,13 +36,18 @@ allowed=(
 # documented and actual endpoint shape.
 matches="$(grep -RhoIE '/oidc/[a-zA-Z0-9_./-]+' examples/ | sort -u || true)"
 
+# A documented path is accepted when it equals an allowed path or
+# extends it at a segment boundary (/oidc/interaction/<id>). Matching
+# on any following character instead would accept every path an
+# allowed one is a prefix of, so /oidc/authorize would pass as an
+# extension of /oidc/auth.
 bad=()
 while IFS= read -r m; do
   [ -z "$m" ] && continue
   ok=0
   for a in "${allowed[@]}"; do
     case "$m" in
-      "$a"|"$a"?*) ok=1; break ;;
+      "$a"|"$a"/*) ok=1; break ;;
     esac
   done
   if [ "$ok" = 0 ]; then

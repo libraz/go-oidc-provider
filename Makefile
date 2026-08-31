@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 
 .PHONY: tools format lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify clean \
         verify-examples verify-examples-api verify-examples-browser verify-examples-harness \
-        stability stability-check stability-backfill \
+        stability stability-check stability-backfill reach \
         scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
         scenario-coverage-bindings \
         scenario-coverage-yaml-only scenario-stats scenario-advisories scenario-advisories-strict \
@@ -118,6 +118,15 @@ stability-check:
 stability-backfill:
 	@scripts/stability.sh --write-backfill
 
+# Declared-but-unreached gate: exported constants and sentinels no code
+# path produces, catalogued audit events whose godoc lets an operator
+# read silence as evidence, seed message keys no screen renders, and
+# DynamoDB indexes no read path queries. Deliberate exceptions live in
+# api/unreached.txt, one row each with the reason nothing reading the
+# entry is correct; a row that stops applying fails too.
+reach:
+	@scripts/reach.sh
+
 # Catalog source of truth: test/scenarios/catalog/<feature>.yaml.
 # See test/scenarios/catalog/README.md for the schema.
 scenario-validate:
@@ -134,7 +143,10 @@ scenario-coverage-strict:
 
 # The subset of the coverage gate that is a binding check rather than a
 # progress report: a row with no test, a test with no row, or a test
-# that runs under an out-of-scope row. `make verify` runs this one.
+# that runs under an out-of-scope row. `make verify` runs the --strict
+# mode above, which is a superset of this one — this target is the
+# tolerant local check for a tree mid-change, and passing it does not
+# mean the pre-merge gate passes.
 scenario-coverage-bindings:
 	@scripts/scenario.sh coverage --check-bindings
 

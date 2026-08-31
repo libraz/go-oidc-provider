@@ -1,0 +1,25 @@
+# Vocabulary this repository declares and nothing reaches, where that
+# is the correct state.
+#
+# Format: <kind> TAB <id> TAB <reason>, one row per entry.
+#   symbol   <package dir>.<Name>   an exported constant or sentinel
+#   event    <audit event name>     a catalogued event nothing emits
+#   message  <i18n key>             a seed key no built-in screen renders
+#   index    <GSI name>             a secondary index no read path queries
+#
+# The reason has to argue why nothing reading the entry is right —
+# reserved wire vocabulary a deployment raises itself, a frozen
+# deprecated name, a default expressed by absence. "Not done yet" is not
+# such an argument; a row that would say that is a deletion instead.
+#
+# Hand-maintained, unlike experimental.txt and stability.txt next to it.
+# A row that stops applying fails the gate: see tools/reachtool.
+symbol	op.AuditDenyReasonKey	Deprecated and frozen; the godoc records that no path emits the key and that the value is kept so existing references compile.
+symbol	op.CustomGrantDupCap	Embedder-facing name for the duplicate cap; the copy the dispatcher enforces is internal/customgrant.DupCap, which internal code reads without importing op.
+symbol	op.SessionDurabilityVolatile	Zero value of the posture enum, so it applies by absence: the library tests for SessionDurabilityDurable and never names the default.
+symbol	op/devicecodekit.DenyReasonUserDenied	Conventional deny reason the library never stamps; embedders pass it to Revoke so the vocabulary has one source of truth.
+symbol	op/devicecodekit.DenyReasonUserRevokedDevice	Conventional deny reason the library never stamps; embedders pass it to Revoke so the vocabulary has one source of truth.
+symbol	op/interaction.PromptNone	Wire value of the OIDC prompt parameter, exported for interaction drivers; the OP matches the raw request parameter rather than naming the constant.
+symbol	op/store.ClientSourceAdmin	Provenance discriminator the embedder's registry sets; the library treats admin-created clients exactly as ClientSourceStatic, and only audit analysis reads the difference.
+symbol	op/testkit.ApproveAllScopes	Deprecated and frozen; the godoc directs callers to ApprovedScopesFrom and the constant is kept so existing tests compile.
+message	consent.button.deny	Reserved for embedder-supplied consent UIs; the bundled HTMLDriver ships no decline control, as the WithLocale godoc records.
