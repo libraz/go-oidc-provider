@@ -16,6 +16,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
@@ -58,7 +59,7 @@ func serveInteraction(w http.ResponseWriter, r *http.Request, deps resolved) {
 		serveInteractionDelete(w, r, deps, uid)
 	default:
 		w.Header().Set("Allow", "GET, POST, DELETE")
-		renderJSONError(w, http.StatusMethodNotAllowed, errInvalidRequest, "method not allowed")
+		renderBrowserError(w, r, deps.Driver, http.StatusMethodNotAllowed, errInvalidRequest, "method not allowed", "")
 	}
 }
 
@@ -95,7 +96,7 @@ func serveInteractionGet(w http.ResponseWriter, r *http.Request, deps resolved, 
 	}
 	authnState, err := decodeAuthnState(state.Authn)
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction state corrupted")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction state corrupted", "")
 		return
 	}
 	dispatchTick(w, r, deps, rec, state, authnState, nil)
@@ -105,7 +106,7 @@ func serveInteractionGet(w http.ResponseWriter, r *http.Request, deps resolved, 
 // submission and dispatches the resulting [interaction.Step].
 func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
 	if err := csrf.CheckOrigin(r, deps.InteractionOrigins); err != nil {
-		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "origin not allowed")
+		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "origin not allowed", "")
 		return
 	}
 	rec, state, ok := loadInteraction(w, r, deps, uid)
@@ -121,12 +122,12 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 	}
 	authnState, err := decodeAuthnState(state.Authn)
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction state corrupted")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction state corrupted", "")
 		return
 	}
 	submission, err := deps.Driver.ParseSubmission(r)
 	if err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "invalid interaction body")
+		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "invalid interaction body", "")
 		return
 	}
 	dispatchTick(w, r, deps, rec, state, authnState, &submission)
@@ -140,7 +141,7 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 //nolint:gocognit // The validation and conflict branches preserve the protocol's response distinctions.
 func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
 	if err := csrf.CheckOrigin(r, deps.InteractionOrigins); err != nil {
-		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "origin not allowed")
+		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "origin not allowed", "")
 		return
 	}
 	rec, state, ok := loadInteraction(w, r, deps, uid)
@@ -156,7 +157,7 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 	}
 	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
 	if !ok {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction store lacks compare-and-swap")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction store lacks compare-and-swap", "")
 		return
 	}
 	if err := cas.DeleteIfUnchanged(r.Context(), rec); err != nil {
@@ -169,14 +170,14 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 				resumeInteractionCompletion(w, r, deps, current, currentState)
 				return
 			}
-			renderJSONError(w, http.StatusConflict, errInvalidRequest, "interaction changed; reload before cancelling")
+			renderBrowserError(w, r, deps.Driver, http.StatusConflict, errInvalidRequest, "interaction changed; reload before cancelling", "")
 			return
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			http.NotFound(w, r)
 			return
 		}
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not cancel interaction")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not cancel interaction", "")
 		return
 	}
 	clearCookie(w, cookie.InteractionProfile)
@@ -216,7 +217,7 @@ func dispatchTick(
 		return
 	}
 	if step.Prompt == nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "orchestrator returned empty step")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "orchestrator returned empty step", "")
 		return
 	}
 	savedRec, savedState, err := persistAuthnState(
@@ -234,14 +235,14 @@ func dispatchTick(
 				resumeInteractionCompletion(w, r, deps, savedRec, savedState)
 				return
 			}
-			renderJSONError(w, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing")
+			renderBrowserError(w, r, deps.Driver, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing", "")
 			return
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			http.NotFound(w, r)
 			return
 		}
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist interaction")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not persist interaction", "")
 		return
 	}
 	rec = savedRec
@@ -254,11 +255,11 @@ func dispatchTick(
 	// vector inside a chain whose user-visible step changed.
 	token, err := deps.CSRF.IssueScoped(rec.ID, step.Prompt.Type, now)
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not issue csrf token")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not issue csrf token", "")
 		return
 	}
 	if err := setCSRFCookie(w, token, deps.InteractionTTL); err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not set csrf cookie")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not set csrf cookie", "")
 		return
 	}
 	stampNoStore(w)
@@ -270,16 +271,90 @@ func dispatchTick(
 	// the driver's.
 	prompt.CSRFToken = token
 	if err := stampChooserAddAccountURL(deps, &prompt, next, state); err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not build chooser add-account URL")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not build chooser add-account URL", "")
 		return
 	}
 	stampPromptLocale(r, deps, &prompt, next, state)
-	if err := deps.Driver.Render(w, r, prompt); err != nil {
-		// Render's own headers may already be partially written;
-		// surfacing a JSON error after that is unsafe so we just
-		// bail. The persistent state is consistent.
+	renderPrompt(w, r, deps, rec.ClientID, prompt)
+}
+
+// renderPrompt hands the prompt to the configured [interaction.Driver]
+// and answers a render failure the Driver did not answer itself.
+//
+// A Driver that returns an error after committing its own status line
+// (a template that failed midway through a body it had already started
+// streaming) has already given the browser a response; appending a
+// second one would splice an error page onto a half-rendered prompt, so
+// the request ends there. A Driver that returns an error without ever
+// touching the writer has committed nothing, and leaving it at that is
+// what turned a template fault into an empty 200 OK: net/http writes an
+// implicit 200 for a handler that returns having written nothing, so the
+// browser is told the prompt rendered and shows a blank page. The
+// distinction is what [committingResponseWriter] exists to record.
+//
+// The persisted interaction state is consistent either way — the prompt
+// was saved before the render — so the user can reload into the same
+// step once the deployment's template fault is fixed.
+//
+// The audit event rides on the branch the endpoint answers, not on every
+// render error: a Driver that committed its own response already told
+// the user what happened in whatever terms it chose, and the OP has
+// nothing to add to a record of it. Only the branch where the Driver
+// produced nothing leaves the cause invisible everywhere except here.
+func renderPrompt(w http.ResponseWriter, r *http.Request, deps resolved, clientID string, prompt interaction.Prompt) {
+	rw := &committingResponseWriter{ResponseWriter: w}
+	err := deps.Driver.Render(rw, r, prompt)
+	if err == nil || rw.committed {
 		return
 	}
+	deps.auditEmitter().Emit(r.Context(), audit.Event{
+		Name:     opAuditInteractionRenderFailed,
+		Level:    audit.LevelWarn,
+		Message:  "interaction driver could not render the prompt",
+		ClientID: clientID,
+		Extras: map[string]any{
+			"prompt_type": prompt.Type,
+			"error":       err.Error(),
+		},
+	})
+	renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not render interaction prompt", "")
+}
+
+// committingResponseWriter records whether the wrapped writer was
+// committed: any WriteHeader, Write or Flush sends the response head, so
+// each marks the response as belonging to the code that made the call.
+// It wraps the writer only for the duration of a
+// [interaction.Driver.Render] call.
+type committingResponseWriter struct {
+	http.ResponseWriter
+
+	committed bool
+}
+
+func (w *committingResponseWriter) WriteHeader(status int) {
+	w.committed = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *committingResponseWriter) Write(p []byte) (int, error) {
+	w.committed = true
+	return w.ResponseWriter.Write(p)
+}
+
+// Flush keeps a streaming Driver working through the wrapper. The
+// delegation goes through [http.ResponseController] so it reaches the
+// real writer whether or not that writer implements [http.Flusher]
+// directly.
+func (w *committingResponseWriter) Flush() {
+	w.committed = true
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Unwrap exposes the wrapped writer to [http.ResponseController] so a
+// Driver reaching for a capability this wrapper does not name (deadline
+// control, connection hijacking) still finds it.
+func (w *committingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // failTick completes an errored tick: persist whatever the failure
@@ -337,7 +412,7 @@ func persistFailedTick(
 ) bool {
 	encoded, err := encodeAuthnState(next)
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction state corrupted")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction state corrupted", "")
 		return false
 	}
 	if bytes.Equal(encoded, state.Authn) {
@@ -353,11 +428,11 @@ func persistFailedTick(
 			resumeInteractionCompletion(w, r, deps, savedRec, savedState)
 			return false
 		}
-		renderJSONError(w, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing")
+		renderBrowserError(w, r, deps.Driver, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing", "")
 	case errors.Is(err, store.ErrNotFound):
 		http.NotFound(w, r)
 	default:
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist interaction")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not persist interaction", "")
 	}
 	return false
 }
@@ -369,9 +444,9 @@ func persistFailedTick(
 func writeAuthnError(w http.ResponseWriter, r *http.Request, deps resolved, state authorize.RequestState, err error) {
 	switch {
 	case errors.Is(err, authn.ErrInvalidStateRef):
-		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "stateref rejected")
+		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "stateref rejected", "")
 	case errors.Is(err, authn.ErrChainComplete):
-		renderJSONError(w, http.StatusGone, errInvalidRequest, "interaction already complete")
+		renderBrowserError(w, r, deps.Driver, http.StatusGone, errInvalidRequest, "interaction already complete", "")
 	case errors.Is(err, authn.ErrRiskDenied):
 		emitAuthorizeError(w, r, deps, state.Library.ToRequest(), errAccessDenied, "risk policy denied the request")
 	case errors.Is(err, authn.ErrFactorAbort):
@@ -379,9 +454,9 @@ func writeAuthnError(w http.ResponseWriter, r *http.Request, deps resolved, stat
 		// already-consumed one-time code, active lockout, required
 		// reset). Render as a 4xx so the SPA / driver can distinguish it
 		// from a real server fault instead of surfacing a 500.
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "authentication factor cannot continue")
+		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "authentication factor cannot continue", "")
 	default:
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "orchestrator failed")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "orchestrator failed", "")
 	}
 }
 
@@ -466,12 +541,12 @@ func loadInteraction(
 			http.NotFound(w, r)
 			return nil, authorize.RequestState{}, false
 		}
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction store unavailable")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction store unavailable", "")
 		return nil, authorize.RequestState{}, false
 	}
 	state, err := authorize.UnmarshalState(rec.RawState)
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction state corrupted")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction state corrupted", "")
 		return nil, authorize.RequestState{}, false
 	}
 	return rec, state, true
@@ -497,7 +572,7 @@ func loadInteraction(
 func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid, scope string) bool {
 	cookieVal, err := r.Cookie(cookie.CSRFProfile.Name)
 	if err != nil || cookieVal == nil || cookieVal.Value == "" {
-		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf cookie missing")
+		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "csrf cookie missing", "")
 		return false
 	}
 	submitted := r.Header.Get("X-CSRF-Token")
@@ -505,15 +580,15 @@ func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid,
 		submitted = csrfFromForm(r)
 	}
 	if submitted == "" {
-		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token missing")
+		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "csrf token missing", "")
 		return false
 	}
 	if !csrf.ConstantTimeEqual(cookieVal.Value, submitted) {
-		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token mismatch")
+		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "csrf token mismatch", "")
 		return false
 	}
 	if err := deps.CSRF.VerifyScoped(submitted, uid, scope, deps.now(), deps.InteractionTTL); err != nil {
-		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token rejected")
+		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "csrf token rejected", "")
 		return false
 	}
 	return true
@@ -524,18 +599,24 @@ func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid,
 // through to the missing-token branch and JSON-mode SPAs keep their
 // header-only contract.
 //
+// The media-type test goes through the same [isFormContent] predicate
+// the rest of the package uses, which matches the type/subtype
+// case-insensitively per RFC 9110 §8.3 and tolerates parameters. The
+// set of bodies this function will look for a token in has to be a
+// superset of the set the configured Driver accepts as a form
+// submission — [interaction.HTMLDriver] applies the same
+// case-insensitive rule — or the stricter predicate silently answers
+// 403 to a submission the Driver would have parsed.
+//
 // The function caps the body through [http.MaxBytesReader] before
 // calling [http.Request.ParseForm] so a hostile client cannot stream
-// an unbounded body. A subsequent call to [http.Request.ParseForm]
-// from the driver is a no-op (the standard library caches the parsed
-// form on the request) so this read does not interfere with the
-// driver's own ParseSubmission.
+// an unbounded body. The parse drains r.Body, which is the
+// precondition [interaction.Driver.ParseSubmission] documents for
+// form-encoded bodies: an implementation that accepts them reads the
+// fields from r.PostForm, or calls ParseForm itself and gets the
+// standard library's cached parse.
 func csrfFromForm(r *http.Request) string {
-	ct := r.Header.Get("Content-Type")
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	if strings.TrimSpace(ct) != "application/x-www-form-urlencoded" {
+	if !isFormContent(r.Header.Get("Content-Type")) {
 		return ""
 	}
 	r.Body = http.MaxBytesReader(nil, r.Body, csrfFormMaxBytes)
@@ -543,6 +624,18 @@ func csrfFromForm(r *http.Request) string {
 		return ""
 	}
 	return r.PostForm.Get("csrf_token")
+}
+
+// chooserReentryBound reports whether the completing chain bound an
+// existing session through the account chooser rather than running a
+// credential ceremony of its own. The predicate is shared by the
+// resolver below (which seeds the auth context from the picked session)
+// and by [terminateInteraction] (which tells the terminal validator that
+// the response is served from an authentication established before this
+// attempt), so the two cannot disagree about what the chain did.
+func chooserReentryBound(st authn.State) bool {
+	return len(st.Factors) == 0 && st.ChooserBoundSubject &&
+		st.ChooserGroupID != "" && st.ChooserSelectedSessionID != ""
 }
 
 // resolveGrantACRAMR determines the acr/amr the grant and id_token
@@ -557,12 +650,12 @@ func csrfFromForm(r *http.Request) string {
 // no-acr / no-amr. Otherwise the configured ACR resolver runs.
 //
 // Copying the picked session's assurance verbatim is only sound when
-// that session may serve the request. The entry-time hint matrix
-// evaluated max_age / acr_values against the *cookie* session, which is
-// not the session the chooser bound, so the constraints are re-checked
-// here against the session that actually ends up on the response. A
-// stale or too-weak pick terminates the request (errStaleAuthentication
-// / errACRUnmet) instead of minting a code.
+// that session belongs to the subject the chain bound; a pick that no
+// longer does is a permanent condition, not a transient fault, and
+// yields [errChooserSubjectMismatch]. Whether the picked session is
+// fresh and strong enough for the request is not settled here: that is
+// [validateTerminalAuthorization]'s job, which applies the same
+// predicates to every exit that can emit a code.
 func resolveGrantACRAMR(
 	r *http.Request,
 	deps resolved,
@@ -573,10 +666,8 @@ func resolveGrantACRAMR(
 	authTime time.Time,
 ) (string, []string, time.Time, error) {
 	acr, amr, level := authn.Aggregate(authnState.Factors)
-	chooserReentry := len(authnState.Factors) == 0 && authnState.ChooserBoundSubject &&
-		authnState.ChooserGroupID != "" && authnState.ChooserSelectedSessionID != ""
 	switch {
-	case chooserReentry:
+	case chooserReentryBound(authnState):
 		authCtx, err := deps.Sessions.AuthContext(
 			r.Context(),
 			authnState.ChooserGroupID,
@@ -588,12 +679,7 @@ func resolveGrantACRAMR(
 			)
 		}
 		if authCtx.Subject != subject {
-			return "", nil, time.Time{}, errors.New(
-				"authorizeendpoint: chooser authentication context subject mismatch",
-			)
-		}
-		if err := checkPickedSessionFreshness(req, authCtx, deps.now().UTC()); err != nil {
-			return "", nil, time.Time{}, err
+			return "", nil, time.Time{}, errChooserSubjectMismatch
 		}
 		acr = authCtx.ACR
 		amr = authCtx.AMR
@@ -627,55 +713,13 @@ func resolveGrantACRAMR(
 	return acr, amr, authTime, nil
 }
 
-// errACRUnmet signals that the ceremony reached a context the
-// configured ACR policy refused for an acr the request marked
-// essential. The caller translates it into the
-// unmet_authentication_requirements wire error; flattening the acr to
-// "" instead (the treatment a voluntary request gets) would hand the
-// relying party a code for an authentication it declared insufficient.
-var errACRUnmet = errors.New("authorizeendpoint: essential acr is not satisfied")
-
-// errStaleAuthentication signals that the authentication bound to the
-// response is older than the request's max_age, or that the request
-// asked for a fresh one with prompt=login. The caller translates it
-// into login_required, which is the same error the dispatcher emits
-// when the entry session fails the identical check — an RP that uses
-// max_age as a step-up gate sees one outcome regardless of which
-// account the user picked.
-var errStaleAuthentication = errors.New("authorizeendpoint: authentication is older than max_age")
-
-// checkPickedSessionFreshness re-applies the request's freshness and
-// authentication-context constraints to the session an account chooser
-// bound. The entry-time hint matrix ran the same predicates against the
-// cookie session; because the chooser can bind a *different* session,
-// the constraints have to hold for the session that actually backs the
-// response, on every exit path that emits a code.
-//
-// The predicates are the dispatcher's, reused verbatim
-// (acrUnsatisfiedByRequest, and the max_age arithmetic of
-// buildHintState) so the two gates cannot drift apart.
-func checkPickedSessionFreshness(
-	req *authorize.Request,
-	authCtx sessions.SessionAuthContext,
-	now time.Time,
-) error {
-	if req == nil {
-		return nil
-	}
-	if containsString(req.Prompt, interaction.PromptLogin) {
-		return errStaleAuthentication
-	}
-	if req.MaxAge != nil {
-		if *req.MaxAge == 0 ||
-			now.Sub(authCtx.AuthTime.UTC()) > time.Duration(*req.MaxAge)*time.Second {
-			return errStaleAuthentication
-		}
-	}
-	if acrUnsatisfiedByRequest(authCtx.ACR, req) {
-		return errACRUnmet
-	}
-	return nil
-}
+// errChooserSubjectMismatch signals that the session an account chooser
+// bound no longer belongs to the subject the completed chain reports.
+// The condition is permanent — the grant a code would hang off can never
+// come to match a session owned by somebody else — so the caller retires
+// the interaction record and its ceremony cookies instead of leaving a
+// completed chain on disk for the user to replay into the same failure.
+var errChooserSubjectMismatch = errors.New("authorizeendpoint: chooser authentication context subject mismatch")
 
 // acrRemoteIP returns the client IP the ACR policy sees. The chain
 // state carries the address /authorize resolved through the
@@ -741,19 +785,23 @@ func terminateInteraction(
 		result.AuthTime,
 	)
 	if err != nil {
-		switch {
-		case errors.Is(err, errACRUnmet):
-			failUnmetAuthenticationRequirements(w, r, deps, rec, req)
-		case errors.Is(err, errStaleAuthentication):
-			failTerminalInteraction(w, r, deps, rec, req, errLoginRequired,
-				"the selected account's authentication is older than max_age")
-		default:
-			emitAuthorizeError(w, r, deps, req, errServerError, "could not resolve authentication context")
-		}
+		failTerminalAuthorization(w, r, deps, rec, req, err)
 		return
 	}
 	result.AuthTime = authTime
 	decision := resolveScopeDecision(authnState, result, req.Scope)
+	if err := validateTerminalAuthorization(r.Context(), deps, req, terminalAuthorization{
+		Subject:                result.Subject,
+		Scope:                  decision.grantScope(req.Scope),
+		AuthTime:               result.AuthTime,
+		ACR:                    acr,
+		SessionBacked:          chooserReentryBound(authnState),
+		ConsentAnswered:        decision.answered,
+		ConsentFromCachedGrant: authnState.InteractionsRun[consent.Name],
+	}); err != nil {
+		failTerminalAuthorization(w, r, deps, rec, req, err)
+		return
+	}
 	intent, err := prepareCompletionIntent(
 		r,
 		deps,
@@ -771,27 +819,64 @@ func terminateInteraction(
 	}
 	rec, state, err = persistCompletionIntent(r.Context(), deps, rec, state, intent)
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist authorization completion")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not persist authorization completion", "")
 		return
 	}
 	resumeInteractionCompletion(w, r, deps, rec, state)
 }
 
-// failUnmetAuthenticationRequirements ends the interaction when the
-// completed ceremony cannot satisfy an acr the request marked
-// essential. The interaction is claimed and its cookies cleared before
-// the error is emitted, mirroring the "subject was not authenticated"
-// branch: the ceremony is over either way, and leaving the record
-// behind would let the same completed chain be replayed for a code.
-func failUnmetAuthenticationRequirements(
+// failTerminalAuthorization ends a completed interaction whose result
+// may not be turned into an authorization code, mapping the refusal onto
+// the wire.
+//
+// Every refusal that names a permanent condition goes through
+// [failTerminalInteraction], which claims the record and clears the
+// ceremony cookies before answering: the ceremony is over either way,
+// and leaving a completed record behind would let the browser replay the
+// same chain straight back into the same refusal, with a manual record
+// deletion as the only way out. Only a genuinely transient failure — a
+// session store that could not answer — leaves the record in place, so a
+// retry has something to succeed against.
+func failTerminalAuthorization(
 	w http.ResponseWriter,
 	r *http.Request,
 	deps resolved,
 	rec *store.Interaction,
 	req *authorize.Request,
+	err error,
 ) {
-	failTerminalInteraction(w, r, deps, rec, req, errUnmetAuthenticationRequirements,
-		"the authentication performed does not satisfy the requested acr")
+	code, description, permanent := terminalRefusal(err)
+	if !permanent {
+		emitAuthorizeError(w, r, deps, req, code, description)
+		return
+	}
+	failTerminalInteraction(w, r, deps, rec, req, code, description)
+}
+
+// terminalRefusal renders a terminal-validation sentinel as the wire
+// code, description, and whether the condition is permanent (the record
+// is retired) or transient (the record survives for a retry).
+func terminalRefusal(err error) (code, description string, permanent bool) {
+	switch {
+	case errors.Is(err, errACRUnmet):
+		return errUnmetAuthenticationRequirements,
+			"the authentication performed does not satisfy the requested acr", true
+	case errors.Is(err, errStaleAuthentication):
+		return errLoginRequired,
+			"the selected account's authentication is older than max_age", true
+	case errors.Is(err, errChooserSubjectMismatch):
+		return errAccessDenied,
+			"the selected account no longer matches the authenticated subject", true
+	case errors.Is(err, errTerminalSubjectMissing):
+		return errAccessDenied, "subject was not authenticated", true
+	case errors.Is(err, errTerminalConsentUncovered):
+		return errAccessDenied,
+			"the authenticated account has not consented to the requested scope", true
+	case errors.Is(err, errTerminalGrantMismatch):
+		return errServerError, "the authorization grant does not match the request", false
+	default:
+		return errServerError, "could not resolve authentication context", false
+	}
 }
 
 // failTerminalInteraction claims the interaction record, clears the
@@ -823,12 +908,12 @@ func claimTerminalInteraction(
 ) bool {
 	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
 	if !ok {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction store lacks compare-and-swap")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction store lacks compare-and-swap", "")
 		return false
 	}
 	if err := cas.DeleteIfUnchanged(r.Context(), rec); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			renderJSONError(w, http.StatusGone, errInvalidRequest, "interaction already complete")
+			renderBrowserError(w, r, deps.Driver, http.StatusGone, errInvalidRequest, "interaction already complete", "")
 			return false
 		}
 		if errors.Is(err, store.ErrConflict) {
@@ -840,10 +925,10 @@ func claimTerminalInteraction(
 				resumeInteractionCompletion(w, r, deps, current, state)
 				return false
 			}
-			renderJSONError(w, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing")
+			renderBrowserError(w, r, deps.Driver, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing", "")
 			return false
 		}
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not claim interaction")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not claim interaction", "")
 		return false
 	}
 	return true

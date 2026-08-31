@@ -9,54 +9,15 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// requestedACRValues is the single source of truth for "which
-// authentication context did this request ask for". OIDC Core 1.0
-// §5.5.1.1 lets a relying party name it two ways — the acr_values
-// parameter, or an "acr" entry under the claims parameter's id_token
-// member — and the two are alternative spellings of the same ask.
-// Reading only acr_values would hand a claims-only request an acr the
-// OP never agreed to: the step-up gate honours both spellings, so a
-// policy that sees only one can approve a context the gate rejected.
-//
-// Ordering is acr_values first (the parameter form carries the RP's
-// preference order) followed by the claims spec's "value" and "values"
-// entries. Duplicates are dropped so a value named through both
-// spellings is offered to the policy once. Non-string claims entries
-// are skipped: acr is a string claim, and a numeric or object entry
-// names no context the OP could satisfy.
+// requestedACRValues names the authentication contexts the request asked
+// for, in the OP's preference order. It is a thin alias for
+// [authorize.Request.RequestedACRValues]: the enumeration lives in the
+// shared request package because every authentication-request surface
+// has to agree about which values a request names — /authorize hands
+// them to the ACR policy, and all three surfaces check them against
+// `acr_values_supported`.
 func requestedACRValues(req *authorize.Request) []string {
-	if req == nil {
-		return nil
-	}
-	out := make([]string, 0, len(req.ACRValues))
-	seen := make(map[string]struct{}, len(req.ACRValues))
-	add := func(v string) {
-		if v == "" {
-			return
-		}
-		if _, dup := seen[v]; dup {
-			return
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
-	}
-	for _, v := range req.ACRValues {
-		add(v)
-	}
-	if spec, ok := req.Claims.IDTokenSpec("acr"); ok {
-		if v, isString := spec.Value.(string); isString {
-			add(v)
-		}
-		for _, candidate := range spec.Values {
-			if v, isString := candidate.(string); isString {
-				add(v)
-			}
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return req.RequestedACRValues()
 }
 
 // essentialACRRequested reports whether the request marked the acr

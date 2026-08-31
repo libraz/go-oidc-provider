@@ -153,8 +153,7 @@ func TestResolveSilentGrant_RejectsSameOwnerDifferentID(t *testing.T) {
 	_, err := resolveSilentGrant(
 		context.Background(),
 		resolved{Deps: Deps{Grants: grants}},
-		&authorize.Request{Scope: []string{"openid"}},
-		&store.Client{ID: "client-1"},
+		&authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
 		&sessions.Active{Session: &store.Session{Subject: "user-1"}},
 		authorizeHint{grant: &store.Grant{ID: "grant-1"}},
 	)

@@ -193,11 +193,11 @@ func resumeInteractionCompletion(
 ) {
 	intent := state.Completion
 	if intent == nil || intent.Version != completionIntentVersion {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "authorization completion intent is invalid")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "authorization completion intent is invalid", "")
 		return
 	}
 	if err := refreshCompletionSession(w, r, deps, intent); err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not refresh session")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not refresh session", "")
 		return
 	}
 	req := state.Library.ToRequest()
@@ -217,23 +217,23 @@ func resumeInteractionCompletion(
 			emitAuthorizeError(w, r, deps, req, errAccessDenied, "request_uri is no longer valid")
 			return
 		}
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "authorization completion unavailable")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "authorization completion unavailable", "")
 		return
 	}
 	out, err := deps.Sessions.Establish(r.Context(), decodeCompletionSession(intent.Session))
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not establish session")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not establish session", "")
 		return
 	}
 	if out.Cookie != "" {
 		if err := setSessionCookieWithMaxAge(w, out.Cookie, intent.Session.ExpiresAt, deps.now()); err != nil {
-			renderJSONError(w, http.StatusInternalServerError, errServerError, "could not establish session")
+			renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not establish session", "")
 			return
 		}
 	}
 	deleteErr := deleteCompletionAnchor(r.Context(), deps, rec)
 	if deleteErr != nil && !errors.Is(deleteErr, store.ErrNotFound) {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not finalize interaction")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not finalize interaction", "")
 		return
 	}
 	// The conditional-delete winner owns completion audit emission. This
@@ -349,14 +349,18 @@ func attemptDurableCompletion(
 	txDeps.Grants = tx.Grants()
 	txDeps.PARs = tx.PushedAuthRequests()
 	grant, err := upsertGrant(ctx, txDeps, grantUpsert{
-		Subject:              intent.Subject,
-		ClientID:             req.ClientID,
-		Scope:                intent.GrantScope,
-		DeclinedScope:        intent.DeclinedScope,
-		AuthTime:             intent.AuthTime,
-		ACR:                  intent.ACR,
-		AMR:                  intent.AMR,
-		Claims:               req.Claims,
+		Subject:       intent.Subject,
+		ClientID:      req.ClientID,
+		Scope:         intent.GrantScope,
+		DeclinedScope: intent.DeclinedScope,
+		AuthTime:      intent.AuthTime,
+		ACR:           intent.ACR,
+		AMR:           intent.AMR,
+		Claims:        req.Claims,
+		// Scope comes from the ceremony's answer, authorization_details
+		// from the request: the consent step has no element-level row to
+		// answer with, so the elements are persisted as requested even
+		// when the user approved no scope at all.
 		AuthorizationDetails: req.AuthorizationDetails,
 		GMAction:             req.GrantManagementAction,
 		GMGrantID:            req.GrantID,
@@ -471,6 +475,18 @@ func completionCodeMatches(
 		code.DPoPJKT == req.DPoPJKT
 }
 
+// emitCompletionAudit writes the audit records the interactive exit owes:
+// the session record when the interaction established one, the consent
+// grant, and the authorization code the browser is about to carry away.
+//
+// The code.issued record is the counterpart of the one [mintAndRedirect]
+// writes on the silent exit. Both exits emit it so an operator correlating
+// code.issued against code.consumed sees a matching pair for every code the
+// OP hands to an RP; a consumption with no issuance is then evidence of an
+// injected or forged code rather than of a user who happened to pass through
+// the consent screen. The extras carry the same keys with the same meaning
+// on both exits: grant_id, the scope the code was minted with, and the
+// fingerprinted code id.
 func emitCompletionAudit(
 	ctx context.Context,
 	deps resolved,
@@ -489,9 +505,29 @@ func emitCompletionAudit(
 		ActorID:  intent.Subject,
 		ClientID: clientID,
 		Extras: map[string]any{
-			"grant_id":      grantID,
-			"scope":         slices.Clone(intent.GrantScope),
-			"completion_id": intent.CodeID,
+			"grant_id": grantID,
+			"scope":    slices.Clone(intent.GrantScope),
+			// intent.CodeID is the authorization code the browser is
+			// about to carry to the RP, so only its irreversible
+			// digest reaches the audit stream.
+			"completion_id": audit.Fingerprint(intent.CodeID),
+		},
+	})
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:      opAuditCodeIssued,
+		Level:     audit.LevelInfo,
+		Message:   "authorization code issued",
+		ActorID:   intent.Subject,
+		ClientID:  clientID,
+		SessionID: out.SessionID,
+		Extras: map[string]any{
+			// The code is a bearer credential for its whole TTL, so
+			// only its irreversible digest reaches the audit stream.
+			// The token endpoint stamps the same key with the same
+			// transform, so the two records still correlate.
+			"code_id":  audit.Fingerprint(intent.CodeID),
+			"grant_id": grantID,
+			"scope":    slices.Clone(intent.GrantScope),
 		},
 	})
 }

@@ -82,6 +82,9 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeAuthorizeError(w, err)
 		return
 	}
+	if !validateACRValuesSupported(w, deps, req) {
+		return
+	}
 	if !validateRequestExtensions(w, r, deps, req, client) {
 		return
 	}
@@ -118,6 +121,30 @@ func validateRequestExtensions(
 		return true
 	}
 	writeError(w, http.StatusBadRequest, rejection.Code, rejection.Description)
+	return false
+}
+
+// validateACRValuesSupported rejects a pushed request that names an
+// authentication context the OP has not advertised in
+// `acr_values_supported`.
+//
+// Pushing is the point at which RFC 9126 has the AS validate the
+// authorization parameters, so a value /authorize would refuse must be
+// refused here too: minting a request_uri for it would spend the
+// client's one-time reference on a request the next gate rejects. The
+// predicate and the wording are shared with the other two
+// authentication-request surfaces, so the same acr_values is answered
+// the same way whether the client pushes it, posts it inline, or sends
+// it on the backchannel.
+//
+// Returns false when it wrote an error response.
+func validateACRValuesSupported(w http.ResponseWriter, deps Deps, req *authorize.Request) bool {
+	value, unsupported := req.UnsupportedACRValue(deps.ACRValuesSupported)
+	if !unsupported {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, errInvalidRequest,
+		"acr_values entry "+value+" is not advertised in acr_values_supported")
 	return false
 }
 
@@ -190,106 +217,48 @@ func writeJARError(w http.ResponseWriter, err error) {
 }
 
 // authenticateWithDPoP runs DPoP proof verification and client
-// authentication in the one order that satisfies both of the
-// constraints the two mechanisms impose, and returns the proof's RFC
-// 7638 thumbprint ("" when no proof was presented) alongside the
-// authenticated client.
+// authentication through the shared [dpop.Gate] and returns the
+// proof's RFC 7638 thumbprint ("" when no proof was presented)
+// alongside the authenticated client.
 //
-// Proof verification runs FIRST so the RFC 9449 §8 `use_dpop_nonce`
-// challenge fires before any client_assertion jti is consumed: §8
-// contemplates a verbatim retry of the client-side request body with
-// only the proof refreshed, and RP libraries (OFCS included) rebuild
-// only the DPoP header, reusing the original client_assertion. Marking
-// the assertion's jti on the first attempt would surface on the retry
-// as invalid_client / ErrAssertionReplayed. Nothing in the verification
-// depends on the resolved client identity — the proof is bound to the
-// request and to its own key, never to the client's credential.
+// The gate documents the verify → authenticate → commit ordering and
+// the reasons behind it; /par inherits it unchanged. Two /par-specific
+// consequences are worth naming: the RFC 9449 §8 nonce challenge fires
+// before JAR consumption as well as before client authentication, and
+// the deferred replay commit keeps an endpoint that is reachable
+// without a credential from turning an unauthenticated request rate
+// into storage cost.
 //
-// The proof's replay marker is written LAST, after authentication
-// succeeds. /par is reachable without a credential, so that write is
-// the one place where an unauthenticated request rate would translate
-// into storage cost. Deferring it weakens nothing: the marker still
-// lands before the endpoint acts on the request, and a proof replayed
-// on a request that cannot authenticate is refused on the credential
-// instead. The token endpoint applies the identical ordering.
+// The §10 commitment check against the request's "dpop_jkt" parameter
+// (form or merged JAR claim) is separate: it lives in [applyDPoPJKT],
+// which runs after JAR merging so the comparison sees the post-merge
+// value.
 //
 // The function writes the response on every failure path; the caller
 // only checks the bool.
 func authenticateWithDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (string, *store.Client, bool) {
-	checked, ok := verifyDPoPProof(r, w, deps)
+	var client *store.Client
+	checked, ok := dpopGate(deps).Authenticate(r.Context(), w, r, func() bool {
+		var authOK bool
+		client, _, authOK = authenticate(r.Context(), w, r, deps)
+		return authOK
+	})
 	if !ok {
 		return "", nil, false
 	}
-	client, _, ok := authenticate(r.Context(), w, r, deps)
-	if !ok {
-		return "", nil, false
-	}
-	if !commitDPoPProof(r.Context(), w, deps, checked) {
-		return "", nil, false
-	}
-	return checkedJKT(checked), client, true
+	return checked.Thumbprint(), client, true
 }
 
-// verifyDPoPProof runs the stateless RFC 9449 §4.3 gates over the
-// optional DPoP header on the /par request and returns the accepted
-// proof when one was presented. The function runs ahead of client
-// authentication and JAR consumption so the §8 nonce challenge can
-// fire before any jti-bearing credential is consumed; the §10
-// commitment check against the request's "dpop_jkt" parameter (form or
-// merged JAR claim) lives in [applyDPoPJKT], which runs after JAR
-// merging so the comparison sees the post-merge value.
-//
-// The proof is not single-use until [commitDPoPProof] has run; see
-// [authenticateWithDPoP] for why the two phases are kept apart.
-//
-// A nil [Deps.DPoP] disables verification; a missing DPoP header is
-// always tolerated because RFC 9449 §10.1 makes the header optional
-// at /par. Errors emit the response body and the function returns
-// ok=false so the caller stops.
-func verifyDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps) (*dpop.Checked, bool) {
-	if deps.DPoP == nil {
-		return nil, true
-	}
-	if r.Header.Get("DPoP") == "" {
-		return nil, true
-	}
-	checked, err := deps.DPoP.CheckHTTPRequest(r.Context(), r, "")
-	if err != nil {
-		writeDPoPError(w, deps, err)
-		return nil, false
-	}
-	return checked, true
-}
-
-// commitDPoPProof writes the replay marker for the proof
-// [verifyDPoPProof] accepted, making it single-use. It is a no-op when
-// no proof was presented. The function emits the response and returns
-// false on failure; a repeated or concurrent use of the same proof
-// surfaces through the same [dpop.WriteError] mapping the single-phase
-// verifier produced.
-func commitDPoPProof(ctx context.Context, w http.ResponseWriter, deps Deps, checked *dpop.Checked) bool {
-	if checked == nil {
-		return true
-	}
-	if err := deps.DPoP.Commit(ctx, checked); err != nil {
-		writeDPoPError(w, deps, err)
-		return false
-	}
-	return true
-}
-
-// checkedJKT returns the proof's RFC 7638 thumbprint, or "" when no
-// proof was presented. The helper keeps the nil handling out of
-// [serve].
-func checkedJKT(checked *dpop.Checked) string {
-	if checked == nil {
-		return ""
-	}
-	return checked.JKT
+// dpopGate projects [Deps] onto the shared proof lifecycle. A nil
+// [Deps.DPoP] yields a gate that admits every request without a proof,
+// which is what RFC 9449 §10.1 asks of /par: the header is optional
+// there even when the feature is wired.
+func dpopGate(deps Deps) dpop.Gate {
+	return dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces}
 }
 
 // applyDPoPJKT reconciles the proof's thumbprint (from
-// [verifyDPoPProof]) with any "dpop_jkt" already present in values
+// [authenticateWithDPoP]) with any "dpop_jkt" already present in values
 // (form parameter or merged JAR claim) and stamps the verified value
 // onto the snapshot. The split keeps the §8 nonce challenge ahead of
 // authentication while still applying RFC 9449 §10:
@@ -326,18 +295,6 @@ func cloneValues(in url.Values) url.Values {
 		out[k] = append([]string(nil), v...)
 	}
 	return out
-}
-
-// writeDPoPError translates a dpop.Err* sentinel onto the wire form.
-// The package-local helper is a thin wrapper over [dpop.WriteError]
-// so the token / PAR / future endpoints share an identical
-// boundary mapping; see the godoc on [dpop.WriteError] for the wire
-// taxonomy. The PAR-specific default branch ("DPoP proof verification
-// failed") is intentionally collapsed onto the shared 500 server_error
-// fallback — an unknown sentinel is a programmer bug, not a wire
-// condition the client can act on.
-func writeDPoPError(w http.ResponseWriter, deps Deps, err error) {
-	dpop.WriteError(context.Background(), w, err, dpop.NonceSourceFromIssuer(deps.DPoPNonces))
 }
 
 // stripAuthFields returns a copy of in with the credential-bearing keys

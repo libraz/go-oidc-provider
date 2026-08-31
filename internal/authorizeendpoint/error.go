@@ -58,9 +58,11 @@ type errorResponse struct {
 	ErrorDescription string `json:"error_description,omitempty"`
 }
 
-// renderJSONError writes an RFC 6749 §5.2-shaped envelope. It exists for
-// failure paths that cannot redirect to the RP — typically pre-redirect_uri
-// validation or a structurally malformed /interaction request.
+// renderJSONError writes an RFC 6749 §5.2-shaped envelope. It is the
+// terminal fallback of [renderBrowserError] — every failure path that
+// cannot redirect to the RP goes through the negotiating entry point, so
+// this shape is what a client that did not ask for HTML receives, and
+// what any client receives when no Driver can render the failure.
 func renderJSONError(w http.ResponseWriter, status int, code, description string) {
 	stampNoStore(w)
 	w.Header().Set("Content-Type", "application/json")
@@ -78,10 +80,14 @@ func renderJSONError(w http.ResponseWriter, status int, code, description string
 // state is the RP-supplied "state" parameter when one parsed cleanly
 // before the failure; an empty string skips the field on the wire.
 //
-// Use this on /authorize-side failure paths where the user is reached
-// via a browser navigation (no safe redirect target). The /interaction
-// helpers stay on renderJSONError because their callers are XHR / fetch
-// from the SPA.
+// Every failure path of both /authorize and /interaction/{uid} routes
+// through here. Neither endpoint may assume its caller is a script: the
+// browser navigates to /authorize directly, and a server-rendered Driver
+// serves /interaction/{uid} as ordinary page loads and form posts, so a
+// raw JSON envelope would surface to the user as unstyled text in the
+// address bar's page. Content negotiation is what keeps the SPA
+// contract intact at the same time — an XHR / fetch client that asks for
+// application/json still gets the byte-identical envelope below.
 func renderBrowserError(w http.ResponseWriter, r *http.Request, driver interaction.Driver, status int, code, description, state string) {
 	stampCeremonyHeaders(w)
 	if driver != nil && wantsHTMLResponse(r) {

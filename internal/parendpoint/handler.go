@@ -180,6 +180,17 @@ type Deps struct {
 	// parameter had been silently ignored.
 	ClaimsParameterEnabled bool
 
+	// ACRValuesSupported mirrors
+	// [authorizeendpoint.Deps.ACRValuesSupported]: the allowlist of
+	// Authentication Context Class Reference values the OP advertises in
+	// discovery. RFC 9126 has the AS validate request parameters when
+	// the request_uri is issued, so a pushed request naming a value
+	// outside a non-empty list is refused here rather than minting a
+	// request_uri that /authorize will refuse a moment later. An empty
+	// list preserves the verbatim posture of a deployment that never
+	// advertised the metadata.
+	ACRValuesSupported []string
+
 	// Audit is the structured audit-event sink. A nil Emitter falls
 	// back to [audit.Discard] so the handler can call the emitter
 	// unconditionally. The PAR endpoint emits "client_authn.failure"

@@ -160,6 +160,14 @@ func (f *dpopWriteGateFixture) proof(tb testing.TB, jti string) string {
 // helper does not expose.
 func (f *dpopWriteGateFixture) post(tb testing.TB, proof, basicSecret string) *http.Response {
 	tb.Helper()
+	return f.postProofValues(tb, basicSecret, proof)
+}
+
+// postProofValues is [dpopWriteGateFixture.post] with explicit control
+// over the "DPoP" header values: one header value per entry in proofs,
+// so a caller can reproduce the multi-value shape RFC 9449 §4.1 forbids.
+func (f *dpopWriteGateFixture) postProofValues(tb testing.TB, basicSecret string, proofs ...string) *http.Response {
+	tb.Helper()
 	form := goodAuthorizeForm(f.client.ID, f.client.RedirectURIs[0])
 	req, err := http.NewRequestWithContext(
 		context.Background(),
@@ -172,7 +180,9 @@ func (f *dpopWriteGateFixture) post(tb testing.TB, proof, basicSecret string) *h
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(f.client.ID, basicSecret)
-	req.Header.Set("DPoP", proof)
+	for _, proof := range proofs {
+		req.Header.Add("DPoP", proof)
+	}
 	resp, err := f.prov.HTTPClient(nil).Do(req)
 	if err != nil {
 		tb.Fatalf("POST /par: %v", err)
@@ -213,6 +223,36 @@ func TestPAR_AuthenticatedDPoPRequestMarksProofOnce(t *testing.T) {
 	}
 	if got := f.marks.marks.Load(); got != 1 {
 		t.Fatalf("consumed-jti writes=%d want 1; the proof must still be marked single-use", got)
+	}
+}
+
+// TestPAR_EmptyLeadingDPoPValueDoesNotDowngradeToBearer drives the
+// presence test with a "DPoP" header whose first value is empty and
+// whose second carries a real proof. /par has no secondary guard here:
+// a presence test that reads only the first value reports "no proof",
+// the pushed record is stored without a dpop_jkt, and the whole
+// /authorize → /token chain that redeems the request_uri comes back
+// unbound. RFC 9449 §4.1 allows exactly one proof, so the request is
+// refused instead.
+func TestPAR_EmptyLeadingDPoPValueDoesNotDowngradeToBearer(t *testing.T) {
+	t.Parallel()
+
+	f := newDPoPWriteGateFixture(t)
+	resp := f.postProofValues(t, f.secret, "", f.proof(t, "jti-empty-leading"))
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusCreated {
+		t.Fatal("status=201; the request was pushed without its proof, so the record carries no dpop_jkt")
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", body["error"])
+	}
+	if body["error_description"] != "DPoP proof malformed" {
+		t.Errorf("error_description=%v want %q", body["error_description"], "DPoP proof malformed")
+	}
+	if got := f.marks.marks.Load(); got != 0 {
+		t.Errorf("consumed-jti writes=%d want 0; a rejected proof must not be marked", got)
 	}
 }
 

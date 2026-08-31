@@ -35,9 +35,10 @@ import (
 const opAuditConsentGrantedFirstParty = string(auditevent.AuditConsentGrantedFirstParty)
 
 const (
-	opAuditCodeIssued     = string(auditevent.AuditCodeIssued)
-	opAuditConsentGranted = string(auditevent.AuditConsentGranted)
-	opAuditSessionCreated = string(auditevent.AuditSessionCreated)
+	opAuditCodeIssued              = string(auditevent.AuditCodeIssued)
+	opAuditConsentGranted          = string(auditevent.AuditConsentGranted)
+	opAuditSessionCreated          = string(auditevent.AuditSessionCreated)
+	opAuditInteractionRenderFailed = string(auditevent.AuditInteractionRenderFailed)
 )
 
 // serveAuthorize is the request-scoped entry point for /authorize. It runs
@@ -86,6 +87,9 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		writeAuthorizeValidationError(w, r, req, deps, err)
 		return
 	}
+	if !validateACRValuesSupported(w, r, deps, req) {
+		return
+	}
 	if !validateRequestExtensions(w, r, deps, req, client) {
 		return
 	}
@@ -123,6 +127,42 @@ func validateRequestExtensions(
 		return true
 	}
 	emitAuthorizeError(w, r, deps, req, rejection.Code, rejection.Description)
+	return false
+}
+
+// validateACRValuesSupported rejects a request that names an
+// authentication context the OP has not advertised in
+// `acr_values_supported`.
+//
+// The gate sits after [applyClientAuthorizeDefaults] on purpose, so it
+// covers all three ways a value reaches the request: the inline
+// acr_values / claims parameters, the snapshot replayed from a PAR
+// request_uri, and the backfill from [store.Client.DefaultACRValues].
+// An unadvertised value that survived to the decision matrix would be
+// persisted onto the session and the grant and emitted as the id_token's
+// acr claim, letting a client name a context the operator never
+// enrolled. The same predicate runs at /par and at /bc-authorize, so the
+// three authentication-request surfaces answer one request identically.
+//
+// It runs after [authorize.Request.Validate] so the refusal can leave
+// through the endpoint's normal channel: redirect_uri has been matched
+// against the registration by then, and an RP that named an
+// unrecognised acr learns why at its callback rather than at a
+// first-party page it cannot read.
+//
+// Returns false when it wrote the response; the caller then stops.
+func validateACRValuesSupported(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+) bool {
+	value, unsupported := req.UnsupportedACRValue(deps.ACRValuesSupported)
+	if !unsupported {
+		return true
+	}
+	emitAuthorizeError(w, r, deps, req, errInvalidRequest,
+		"acr_values entry "+value+" is not advertised in acr_values_supported")
 	return false
 }
 
@@ -362,6 +402,13 @@ func dispatchAuthorize(
 //
 // The [store.Client.Source] guard is enforced by the wiring layer
 // (see [firstPartyClientSet]); this helper trusts that contract.
+//
+// What the skip actually elides is the scope screen: the ceremony
+// presents scopes and nothing else. RFC 9396 authorization_details are
+// carried by the request and land on the grant on either path, so
+// enabling the skip does not remove an element-level display that the
+// prompting path would otherwise have shown (see
+// [authorizationDetailsCovered]).
 func firstPartyShouldSkipConsent(
 	r *http.Request,
 	hint authorizeHint,
@@ -637,10 +684,13 @@ func buildHintState(
 		promptNone: containsString(req.Prompt, "none"),
 		selectAcct: containsString(req.Prompt, interaction.PromptSelectAccount),
 	}
-	if !out.forceLogin && out.hasSession && req.MaxAge != nil {
-		if *req.MaxAge == 0 || now.UTC().Sub(active.Session.AuthTime.UTC()) > time.Duration(*req.MaxAge)*time.Second {
-			out.forceLogin = true
-		}
+	if !out.forceLogin && out.hasSession && req.MaxAge != nil &&
+		authorize.AuthenticationIsStale(active.Session.AuthTime, now, *req.MaxAge) {
+		// The entry gate and the terminal validator share
+		// [authorize.AuthenticationIsStale] so the two readings of
+		// max_age cannot drift — and so neither of them wraps a large
+		// value into a duration and reverses the comparison.
+		out.forceLogin = true
 	}
 	if out.hasSession {
 		out.acrUnsatisfied = acrUnsatisfiedByRequest(active.Session.ACR, req)
@@ -719,12 +769,21 @@ func consentAlreadyCovered(req *authorize.Request, existing *store.Grant) bool {
 }
 
 // authorizationDetailsCovered reports whether every requested RFC 9396
-// authorization_details element is already present on the grant. The
-// requested details are consent-bearing rich authorizations, so a request
-// that introduces a new element must run through consent (where the
-// interaction path persists it onto the grant) rather than silent-mint a
-// code against a grant whose details do not match — which would otherwise
-// either drop the requested detail or grant it without the user seeing it.
+// authorization_details element is already present on the grant. A request
+// that introduces a new element is therefore not covered and runs through
+// the interaction path, which persists it onto the grant, rather than
+// silent-minting a code against a grant whose details do not match — which
+// would drop the requested detail from a code the RP believes carries it.
+//
+// The ceremony that routing reaches presents scopes only. Neither the
+// built-in consent step nor [interaction.ConsentScopePromptData] has an
+// element-level row, and the submission answers with approved_scopes, so
+// the elements ride on the authorization request and are persisted
+// verbatim regardless of what the user approves. Routing here buys a fresh
+// ceremony and a fresh grant amendment, not a display of the element's
+// terms. A deployment that must show those terms — a payment amount, a
+// payee — renders them from the authorization request in its own
+// [interaction.Driver].
 func authorizationDetailsCovered(requested []map[string]any, grant *store.Grant) bool {
 	if len(requested) == 0 {
 		return true
@@ -1108,6 +1167,15 @@ func mintAndRedirect(
 		return
 	}
 	if err != nil {
+		// A terminal-validation refusal keeps its own wire code: the
+		// silent exit is subject to the same invariants as the
+		// interactive one, so an RP sees the same answer whichever exit
+		// the request happened to take. Anything else is a commit
+		// failure.
+		if code, description, _ := terminalRefusal(err); code != errServerError {
+			emitAuthorizeError(w, r, deps, req, code, description)
+			return
+		}
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not commit authorization code")
 		return
 	}
@@ -1135,7 +1203,11 @@ func mintAndRedirect(
 		ClientID:  client.ID,
 		SessionID: active.Session.ID,
 		Extras: map[string]any{
-			"code_id":  codeID,
+			// The code itself is a bearer credential for the whole
+			// TTL, so the audit stream carries only its irreversible
+			// digest. The token endpoint stamps the same key with the
+			// same transform, so the two records still correlate.
+			"code_id":  audit.Fingerprint(codeID),
 			"grant_id": durableGrant.ID,
 			"scope":    append([]string(nil), req.Scope...),
 		},
@@ -1191,8 +1263,25 @@ func attemptSilentAuthorization(
 	txDeps.PARs = tx.PushedAuthRequests()
 	txDeps.Codes = tx.AuthorizationCodes()
 	txDeps.Grants = tx.Grants()
-	durableGrant, err := resolveSilentGrant(ctx, txDeps, req, client, active, hint)
+	durableGrant, err := resolveSilentGrant(ctx, txDeps, req, active, hint)
 	if err != nil {
+		return nil, false, err
+	}
+	// The silent exit's terminal gate. The decision matrix approved this
+	// mint against the session and the grant as they were when the
+	// request arrived; the grant has since been re-read (and possibly
+	// re-stamped) inside this transaction, so the invariants are settled
+	// here against what the code is actually about to point at.
+	authCtx := sessionAuthContext(active)
+	if err := validateTerminalAuthorization(ctx, txDeps, req, terminalAuthorization{
+		Subject:                active.Session.Subject,
+		Scope:                  req.Scope,
+		AuthTime:               authCtx.AuthTime,
+		ACR:                    authCtx.ACR,
+		SessionBacked:          true,
+		ConsentFromCachedGrant: hint.autoGrant == nil,
+		Grant:                  durableGrant,
+	}); err != nil {
 		return nil, false, err
 	}
 	now := deps.now().UTC()
@@ -1230,11 +1319,19 @@ func attemptSilentAuthorization(
 	return durableGrant, false, nil
 }
 
+// resolveSilentGrant produces the durable grant a silent mint hangs its
+// code off: the auto-grant the first-party skip planned, or the cached
+// grant the decision matrix picked, re-read inside the transaction and
+// re-stamped with what this request carries.
+//
+// It settles the record's identity and contents only. Whether that
+// record describes an authorization the request may actually be served
+// from is [validateTerminalAuthorization]'s call, which applies one set
+// of rules to every exit that can emit a code.
 func resolveSilentGrant(
 	ctx context.Context,
 	deps resolved,
 	req *authorize.Request,
-	client *store.Client,
 	active *sessions.Active,
 	hint authorizeHint,
 ) (*store.Grant, error) {
@@ -1245,20 +1342,35 @@ func resolveSilentGrant(
 	if err != nil {
 		return nil, fmt.Errorf("authorizeendpoint: reload silent grant: %w", err)
 	}
-	if grant == nil ||
-		grant.ID != hint.grant.ID ||
-		grant.ClientID != client.ID ||
-		grant.Subject != active.Session.Subject ||
-		!scopeIsSubset(req.Scope, grant.Scope) {
+	if grant == nil || grant.ID != hint.grant.ID {
 		return nil, errors.New("authorizeendpoint: authorization grant unavailable")
 	}
-	// The grant may have been recorded by an older ceremony than the
-	// session now serving this request. Re-stamp the session's context so
-	// the id_token reports the authentication the decision matrix just
-	// validated max_age / acr_values against, instead of a stale (and
-	// possibly stronger) one. The interactive and auto-grant paths do the
-	// equivalent through upsertGrant.
-	if stampGrantAuthContext(grant, sessionAuthContext(active)) {
+	// The grant may have been recorded by an older ceremony — or an
+	// earlier request — than the one now being served. Re-stamp both
+	// halves of what the grant carries forward so the code points at this
+	// request's authorization rather than a previous one's:
+	//
+	//   - the session's authentication context, so the id_token reports
+	//     the authentication the decision matrix just validated max_age /
+	//     acr_values against instead of a stale (and possibly stronger)
+	//     one;
+	//   - the OIDC Core 1.0 §5.5 claims payload, so the token and
+	//     userinfo endpoints project what this request asked for. Without
+	//     it a returning subject who adds a claims parameter to an
+	//     otherwise-covered request is served silently against the
+	//     payload of the authorization that first created the grant.
+	//
+	// A nil payload leaves the grant's claims untouched, matching
+	// reuseOrCreateGrant's rule that "absent" is not "erase". The
+	// interactive and auto-grant paths do the equivalent through
+	// upsertGrant.
+	changed := stampGrantAuthContext(grant, sessionAuthContext(active))
+	if encoded := authorize.EncodeClaimsToGrant(req.Claims); encoded != nil &&
+		!claimsPayloadEqual(grant.Claims, encoded) {
+		grant.Claims = encoded
+		changed = true
+	}
+	if changed {
 		grant.UpdatedAt = deps.now().UTC()
 		if err := deps.Grants.Save(ctx, grant); err != nil {
 			return nil, fmt.Errorf("authorizeendpoint: refresh silent grant auth context: %w", err)

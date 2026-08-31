@@ -311,6 +311,20 @@ type Deps struct {
 	// onto the grant for downstream projection.
 	ClaimsParameterEnabled bool
 
+	// ACRValuesSupported is the OP-side allowlist of Authentication
+	// Context Class Reference values published in discovery via
+	// `acr_values_supported`. Empty means the OP did not advertise the
+	// list and any client-supplied acr_values value is accepted (the
+	// legacy posture); a non-empty slice makes the endpoint reject any
+	// request naming a value outside it, so a client cannot drive the
+	// issued id_token's `acr` claim — or the authentication state
+	// persisted behind it — to a context the operator never enrolled.
+	// The rule covers the inline parameters, a PAR snapshot replayed
+	// through request_uri, and the [store.Client.DefaultACRValues]
+	// backfill alike, and matches what /par and /bc-authorize enforce
+	// from the same option.
+	ACRValuesSupported []string
+
 	// ACRResolver, when non-nil, is consulted before stamping acr /
 	// amr onto the persisted grant. The library wires a non-nil
 	// resolver from the [op.ACRPolicy] supplied via [op.WithACRPolicy]

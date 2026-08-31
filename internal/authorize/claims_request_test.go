@@ -194,6 +194,95 @@ func TestClaimSpec_Allows_Number(t *testing.T) {
 	}
 }
 
+// TestClaimSpec_Allows_NumberAcrossGoRepresentations pins the JSON-value
+// semantics of the value / values constraints for numbers. Only the
+// request side is parsed by this package; the compared value comes from
+// the embedder's user store, where a numeric claim arrives as whatever
+// Go type that store uses. A comparison that only recognised the
+// parser's own json.Number would silently drop every numerically
+// constrained claim in such a deployment.
+func TestClaimSpec_Allows_NumberAcrossGoRepresentations(t *testing.T) {
+	t.Parallel()
+	parsed, err := authorize.ParseClaimsRequest(`{"id_token":{"updated_at":{"essential":true,"value":1699999999}}}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	spec, ok := parsed.IDTokenSpec("updated_at")
+	if !ok {
+		t.Fatal("parsed request lost the updated_at entry")
+	}
+
+	matching := []any{
+		json.Number("1699999999"),
+		int(1699999999),
+		int64(1699999999),
+		uint64(1699999999),
+		float64(1699999999),
+	}
+	for _, v := range matching {
+		if !spec.Allows(v) {
+			t.Errorf("Allows(%T(%v)) = false, want true", v, v)
+		}
+	}
+
+	mismatching := []any{
+		json.Number("1700000000"),
+		int64(1700000000),
+		float64(1699999999.5),
+		"1699999999",
+		true,
+		nil,
+	}
+	for _, v := range mismatching {
+		if spec.Allows(v) {
+			t.Errorf("Allows(%T(%v)) = true, want false", v, v)
+		}
+	}
+}
+
+// TestClaimSpec_Allows_ValuesListAcrossGoRepresentations covers the
+// same tolerance for the "values" list, whose elements go through the
+// identical comparison.
+func TestClaimSpec_Allows_ValuesListAcrossGoRepresentations(t *testing.T) {
+	t.Parallel()
+	parsed, err := authorize.ParseClaimsRequest(`{"userinfo":{"level":{"values":[1,2,3]}}}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	spec, ok := parsed.UserInfoSpec("level")
+	if !ok {
+		t.Fatal("parsed request lost the level entry")
+	}
+	if !spec.Allows(int64(2)) {
+		t.Error("Allows(int64(2)) = false; the listed value must match an int64 source")
+	}
+	if !spec.Allows(float32(3)) {
+		t.Error("Allows(float32(3)) = false; the listed value must match a float source")
+	}
+	if spec.Allows(int64(4)) {
+		t.Error("Allows(int64(4)) = true; 4 is not in the values list")
+	}
+}
+
+// TestClaimSpec_Allows_LargeIntegersCompareExactly pins that the
+// tolerance does not degrade precision: two int64 values that share a
+// float64 rounding must still disagree, so a numeric identifier beyond
+// 2^53 cannot be matched by its neighbour.
+func TestClaimSpec_Allows_LargeIntegersCompareExactly(t *testing.T) {
+	t.Parallel()
+	parsed, err := authorize.ParseClaimsRequest(`{"id_token":{"account":{"value":9007199254740993}}}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	spec, _ := parsed.IDTokenSpec("account")
+	if !spec.Allows(int64(9007199254740993)) {
+		t.Error("Allows: the exact integer must match")
+	}
+	if spec.Allows(int64(9007199254740992)) {
+		t.Error("Allows: a neighbouring integer sharing one float64 rounding must not match")
+	}
+}
+
 func TestClaimsRequest_Roundtrip(t *testing.T) {
 	t.Parallel()
 	raw := `{"userinfo":{"name":{"essential":true}},"id_token":{"sub":{"value":"alice"}}}`

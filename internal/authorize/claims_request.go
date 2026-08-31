@@ -3,6 +3,7 @@ package authorize
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"slices"
 )
 
@@ -98,7 +99,14 @@ func (c *ClaimsRequest) UserInfoSpec(name string) (ClaimSpec, bool) {
 // both are present (the spec is silent on the combination) the
 // projector treats them as conjunction: v MUST equal Value AND v
 // MUST be in Values. The comparison is JSON-equality: numbers compare
-// by float64 round-trip, strings by byte equality, bools by identity.
+// by numeric value regardless of the Go representation each side
+// happens to use, strings by byte equality, bools by identity.
+//
+// The representation tolerance matters because only the request side
+// is parsed by this package: v comes from the embedder's
+// [github.com/libraz/go-oidc-provider/op/store.User] claims map, where
+// a numeric claim is just as likely to be an int64 or a float64 as the
+// json.Number the wire parser produces.
 func (s ClaimSpec) Allows(v any) bool {
 	if s.Value != nil && !jsonEqual(s.Value, v) {
 		return false
@@ -262,16 +270,18 @@ func decodeJSONAny(raw json.RawMessage) (any, error) {
 }
 
 // jsonEqual implements JSON-equality for ClaimSpec.Allows. Numbers
-// compare via json.Number string form (post-UseNumber); strings and
-// bools by Go equality; slices and maps element-wise. Mixed types
-// always disagree.
+// compare by canonical numeric value across every Go representation a
+// JSON number can arrive in (see [asJSONNumber]); strings and bools by
+// Go equality; slices and maps element-wise. Values of different JSON
+// kinds always disagree.
 //
 //nolint:gocognit,cyclop // exhaustive type switch over JSON shapes
 func jsonEqual(a, b any) bool {
+	if an, ok := asJSONNumber(a); ok {
+		bn, ok := asJSONNumber(b)
+		return ok && an.equal(bn)
+	}
 	switch av := a.(type) {
-	case json.Number:
-		bv, ok := b.(json.Number)
-		return ok && av.String() == bv.String()
 	case string:
 		bv, ok := b.(string)
 		return ok && av == bv
@@ -306,6 +316,92 @@ func jsonEqual(a, b any) bool {
 	default:
 		return false
 	}
+}
+
+// jsonNumber is the canonical numeric view [jsonEqual] compares. An
+// integral value keeps its exact int64 form so two large integers that
+// share one float64 rounding still disagree; anything else (fractional
+// literals, magnitudes beyond int64) falls back to the float64
+// round-trip.
+type jsonNumber struct {
+	i     int64
+	f     float64
+	isInt bool
+}
+
+// equal reports whether the two canonical views describe the same JSON
+// number. Two integral views compare exactly; a mixed pair compares on
+// the float64 side, which is what lets a json.Number request value
+// match a float64 the embedder's store round-tripped through
+// encoding/json.
+func (n jsonNumber) equal(other jsonNumber) bool {
+	if n.isInt && other.isInt {
+		return n.i == other.i
+	}
+	return n.f == other.f
+}
+
+// asJSONNumber returns the canonical numeric view of v and reports
+// whether v is a number at all. The accepted set spans both sides of
+// the comparison: json.Number as produced by this package's UseNumber
+// parsing, and the sized integer / floating-point types an embedder's
+// store returns for a numeric claim.
+//
+//nolint:cyclop // flat enumeration of Go's numeric representations
+func asJSONNumber(v any) (jsonNumber, bool) {
+	switch n := v.(type) {
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return intJSONNumber(i), true
+		}
+		f, err := n.Float64()
+		if err != nil {
+			return jsonNumber{}, false
+		}
+		return jsonNumber{f: f}, true
+	case int:
+		return intJSONNumber(int64(n)), true
+	case int8:
+		return intJSONNumber(int64(n)), true
+	case int16:
+		return intJSONNumber(int64(n)), true
+	case int32:
+		return intJSONNumber(int64(n)), true
+	case int64:
+		return intJSONNumber(n), true
+	case uint:
+		return uintJSONNumber(uint64(n)), true
+	case uint8:
+		return intJSONNumber(int64(n)), true
+	case uint16:
+		return intJSONNumber(int64(n)), true
+	case uint32:
+		return intJSONNumber(int64(n)), true
+	case uint64:
+		return uintJSONNumber(n), true
+	case float32:
+		return jsonNumber{f: float64(n)}, true
+	case float64:
+		return jsonNumber{f: n}, true
+	default:
+		return jsonNumber{}, false
+	}
+}
+
+// intJSONNumber builds the canonical view of an integral value, keeping
+// the float64 projection alongside it for comparisons against a
+// fractional counterpart.
+func intJSONNumber(i int64) jsonNumber {
+	return jsonNumber{i: i, f: float64(i), isInt: true}
+}
+
+// uintJSONNumber builds the canonical view of an unsigned value,
+// degrading to the float64 form for magnitudes int64 cannot hold.
+func uintJSONNumber(u uint64) jsonNumber {
+	if u <= math.MaxInt64 {
+		return intJSONNumber(int64(u))
+	}
+	return jsonNumber{f: float64(u)}
 }
 
 // CloneClaimsRequest returns a deep copy of c suitable for handing to
