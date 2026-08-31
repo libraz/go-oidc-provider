@@ -19,9 +19,10 @@ import (
 // Captcha events deliberately bypass these helpers — captcha is
 // out-of-band from the brute-force / amr-history feed. Hard
 // authenticator errors (store outage, codec misconfiguration) also
-// bypass them; observers see only the soft credential-failure path
-// through observeFailure. [classifyFactorError] is what keeps that
-// second exclusion true at every call site.
+// bypass them; observers see only the two paths on which a factor
+// reached a judgement, observeFailure and observeLocked.
+// [classifyFactorError] is what keeps that second exclusion true at
+// every call site.
 
 // credentialVerdict records what a factor's error says about the
 // credential the user submitted. The distinction decides whether the
@@ -46,16 +47,35 @@ const (
 	// refused it: a wrong password, a wrong OTP code, an assertion whose
 	// signature did not verify.
 	credentialRejected
+
+	// credentialLocked means the brute-force gate terminated the attempt
+	// — either it refused before the factor evaluated anything, or the
+	// rejection it just counted crossed the lockout threshold. The
+	// verdict is separate from credentialRejected because the two answer
+	// different questions for a risk feed: "this submission was wrong"
+	// versus "this actor is now barred", and an observer that treats a
+	// lock as one more wrong guess cannot tell an ongoing attack from
+	// one the OP has already stopped.
+	credentialLocked
 )
 
 // classifyFactorError reads what an [Authenticator.Continue] error says
-// about the credential. Only the [ErrFactorRetry] wrapper marks a
-// judgement — it is the contract an authenticator uses to report "the
-// submission was wrong, let the user try again". Everything else
-// (a store outage, a codec misconfiguration, a context deadline) is a
-// chain-fatal error the HTTP layer surfaces unchanged, and it says
+// about the credential. Two wrappers mark a judgement: [ErrFactorRetry]
+// is the contract an authenticator uses to report "the submission was
+// wrong, let the user try again", and [ErrFactorLocked] is the one it
+// uses to report that the brute-force gate ended the attempt. Everything
+// else (a store outage, a codec misconfiguration, a context deadline) is
+// a chain-fatal error the HTTP layer surfaces unchanged, and it says
 // nothing about what the user typed.
+//
+// The lock check runs first: [ErrFactorLocked] wraps [ErrFactorAbort],
+// so the two sentinels are disjoint today, but ordering the check this
+// way means a factor that later wraps both still reports the terminal
+// state rather than the retryable one.
 func classifyFactorError(err error) credentialVerdict {
+	if errors.Is(err, ErrFactorLocked) {
+		return credentialLocked
+	}
 	if errors.Is(err, ErrFactorRetry) {
 		return credentialRejected
 	}
@@ -64,9 +84,10 @@ func classifyFactorError(err error) credentialVerdict {
 
 // recordFactorFailure files one factor failure under the verdict that
 // was reached about it. A rejection goes to the observer feed and the
-// login.* / mfa.* audit names; a fault goes to the logger only, so the
-// operator sees the cause without an outage being counted as failed
-// authentication attempts.
+// login.* / mfa.* audit names; a lockout goes to the observer feed
+// only; a fault goes to the logger only, so the operator sees the
+// cause without an outage being counted as failed authentication
+// attempts.
 //
 // The switch carries no default clause so the exhaustiveness check
 // binds: a verdict added later has to choose its own stream rather than
@@ -82,6 +103,8 @@ func (o *Orchestrator) recordFactorFailure(
 	switch verdict {
 	case credentialRejected:
 		o.observeFailure(ctx, st, now, factor)
+	case credentialLocked:
+		o.observeLocked(ctx, st, now, factor)
 	case credentialUnevaluated:
 		o.logger.Warn("authn: factor could not evaluate the submitted credential",
 			slog.String("authenticator_type", string(factor)),
@@ -120,6 +143,30 @@ func (o *Orchestrator) observeFailure(ctx context.Context, st State, now time.Ti
 		At:        now,
 	})
 	o.emitAttempt(ctx, st, factor, false)
+}
+
+// observeLocked fans out an [AttemptLocked] event: the brute-force gate,
+// not the credential itself, is what ended this attempt. Subject is
+// blanked for the same reason observeFailure blanks it — a lock confirms
+// the account exists, so carrying the subject would make the feed an
+// enumeration oracle.
+//
+// Unlike the other two helpers this one does NOT reach [emitAttempt].
+// The login.* / mfa.* pair counts resolved credential submissions, and a
+// locked subject retrying produces refusals that never reached a factor;
+// filing them there would inflate the failed-login metric with events
+// that are not guesses. The lock already has its own operator-facing
+// signal in the lockout counter's own audit event, so nothing is lost.
+func (o *Orchestrator) observeLocked(ctx context.Context, st State, now time.Time, factor FactorType) {
+	audit.FanOut(ctx, o.logger, o.auditObservers, audit.Event{
+		ClientID:  st.ClientID,
+		RemoteIP:  st.RemoteIP,
+		UserAgent: st.UserAgent,
+		Outcome:   audit.Locked,
+		Factor:    string(factor),
+		Reason:    "attempt.locked",
+		At:        now,
+	})
 }
 
 // emitAttempt reports the same outcome to the OP-wide audit stream

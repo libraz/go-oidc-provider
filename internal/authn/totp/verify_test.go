@@ -340,6 +340,12 @@ func TestVerify_ReplaysSameStepRejected(t *testing.T) {
 	if !errors.Is(err2, totp.ErrWrongCode) {
 		t.Fatalf("replay err=%v want ErrWrongCode", err2)
 	}
+	// The dedicated outcome is what lets the adapter leave the
+	// cross-factor counter alone; reported as a plain wrong code, the
+	// replay would be indistinguishable from a guess one layer up.
+	if res2.Outcome != totp.OutcomeReplayed {
+		t.Errorf("replay outcome=%v want OutcomeReplayed", res2.Outcome)
+	}
 	if res2.Record.FailedCount != 0 {
 		t.Errorf("FailedCount=%d want 0 (replay must not punish)", res2.Record.FailedCount)
 	}

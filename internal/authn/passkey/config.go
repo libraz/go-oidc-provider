@@ -120,6 +120,71 @@ type Config struct {
 	AAGUIDReCheckOnAssertion bool
 }
 
+// StepPolicy is the passkey policy an embedder configures once, on the
+// single step value that drives both ceremonies: the login step the
+// orchestrator runs and the enrolment facade built from the same value.
+// Each side projects that value onto this struct and builds its [Config]
+// through [ConfigFrom], so the axes the two ceremonies must agree on are
+// derived in one place. A credential enrolled under one policy has to be
+// one the same policy can sign in with; deriving the requirement twice is
+// how a deployment ends up registering credentials that can never
+// authenticate.
+type StepPolicy struct {
+	// RPID, RPDisplayName and RPOrigins are the Relying Party identity
+	// bound into both ceremonies. See the matching [Config] fields.
+	RPID          string
+	RPDisplayName string
+	RPOrigins     []string
+
+	// SessionTTL is the lifetime stamped on the emitted [Session].
+	SessionTTL time.Duration
+
+	// RequireUserVerification demands the PIN / biometric gesture that
+	// turns proof of possession into two factors. It governs both
+	// ceremonies: requiring it only at assertion time would let an
+	// authenticator without a PIN enrol successfully and then fail every
+	// subsequent login.
+	RequireUserVerification bool
+
+	// AAGUIDAllowlist and AAGUIDReCheckOnAssertion carry the
+	// authenticator-model policy. See the matching [Config] fields.
+	AAGUIDAllowlist          []string
+	AAGUIDReCheckOnAssertion bool
+}
+
+// ConfigFrom derives the ceremony [Config] from p. It exists so the two
+// axes an embedder does not set directly are computed once:
+//
+//   - UserVerification is "required" or "preferred". "discouraged" asks
+//     an authenticator to skip a gesture it would otherwise perform,
+//     which no deployment gains assurance from, so it is not reachable
+//     from the step.
+//   - AttestationPreference follows the allowlist. Asking for an
+//     authenticator-model allowlist is asking for attestation: without
+//     it the AAGUID is self-asserted by whatever produced the
+//     registration response, so any software authenticator could claim a
+//     certified model's identifier.
+func ConfigFrom(p StepPolicy) Config {
+	uv := protocol.VerificationPreferred
+	if p.RequireUserVerification {
+		uv = protocol.VerificationRequired
+	}
+	attestation := protocol.PreferNoAttestation
+	if len(p.AAGUIDAllowlist) > 0 {
+		attestation = protocol.PreferDirectAttestation
+	}
+	return Config{
+		RPID:                     p.RPID,
+		RPDisplayName:            p.RPDisplayName,
+		RPOrigins:                p.RPOrigins,
+		SessionTTL:               p.SessionTTL,
+		AttestationPreference:    attestation,
+		UserVerification:         uv,
+		AAGUIDAllowlist:          p.AAGUIDAllowlist,
+		AAGUIDReCheckOnAssertion: p.AAGUIDReCheckOnAssertion,
+	}
+}
+
 // Verifier is the package's high-level façade. Construct one via [New]
 // and reuse it for the lifetime of the process; the underlying
 // [webauthn.WebAuthn] is built once and shared across goroutines.

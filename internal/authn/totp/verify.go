@@ -72,6 +72,12 @@ const (
 	// persist it before redirecting the user to the recovery flow so
 	// that a concurrent attacker cannot keep guessing.
 	OutcomeResetRequired
+
+	// OutcomeReplayed means the code matched a step the record has
+	// already accepted. It is a distinct outcome from OutcomeWrongCode
+	// because it is not a guess: the caller MUST NOT advance any
+	// brute-force counter on it. The Record is unchanged.
+	OutcomeReplayed
 )
 
 // Sentinel errors. Returned values are wrapped through [errors.Is] so
@@ -79,13 +85,25 @@ const (
 var (
 	// ErrLocked is returned when [Verifier.Verify] is called while
 	// LockedUntil is in the future. The Result.Outcome equals
-	// OutcomeLocked.
-	ErrLocked = fmt.Errorf("totp: factor is locked: %w", authn.ErrFactorAbort)
+	// OutcomeLocked. It wraps [authn.ErrFactorLocked] (itself an
+	// [authn.ErrFactorAbort]) so the orchestrator reports the attempt
+	// to the observer feed as a lockout rather than as an unclassified
+	// abort.
+	ErrLocked = fmt.Errorf("totp: factor is locked: %w", authn.ErrFactorLocked)
 
 	// ErrWrongCode is returned when the supplied code does not match
 	// any step in the skew window. The Result.Outcome equals
 	// OutcomeWrongCode and the Record carries the bumped counters.
 	ErrWrongCode = errors.New("totp: code did not match")
+
+	// ErrReplayed is returned when the supplied code matches a step the
+	// record has already accepted. It wraps [ErrWrongCode] so a caller
+	// that only cares about "this submission does not let the user in"
+	// keeps dispatching on the one sentinel, while a caller that owns a
+	// brute-force counter can tell a replay from a guess and leave the
+	// counter alone. The Result.Outcome equals OutcomeReplayed and the
+	// Record is unchanged.
+	ErrReplayed = fmt.Errorf("totp: code already accepted: %w", ErrWrongCode)
 
 	// ErrResetRequired is returned when FailedCount has crossed
 	// lockThresholdLong. The orchestrator MUST treat this as a
@@ -160,7 +178,8 @@ type Verifier struct {
 //     OutcomeResetRequired.
 //
 // Replay defence: the [store.TOTPRecord.LastAcceptedStep] guard rejects
-// a code whose step value has already been accepted. The defence is
+// a code whose step value has already been accepted with [ErrReplayed],
+// leaving every counter on the record untouched. The defence is
 // only effective when every OP replica that handles a TOTP submission
 // observes the same record — i.e. when the configured [store.TOTPStore]
 // is shared across replicas (a transactional row in a relational
@@ -207,9 +226,13 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 		if rec.LastAcceptedStep != 0 && matched <= rec.LastAcceptedStep {
 			// Treat as a wrong-code outcome WITHOUT incrementing the
 			// brute-force counter (a replay should not punish the
-			// legitimate user) but emit the same sentinel so the
-			// orchestrator dispatches identically.
-			return &Result{Outcome: OutcomeWrongCode, Record: rec}, ErrWrongCode
+			// legitimate user) but emit a sentinel wrapping ErrWrongCode
+			// so the orchestrator dispatches identically. The dedicated
+			// outcome is what lets the adapter leave the cross-factor
+			// counter alone too: a form double-submit is not a guess, and
+			// the promise made here only holds if every counter the
+			// submission can reach honours it.
+			return &Result{Outcome: OutcomeReplayed, Record: rec}, ErrReplayed
 		}
 		rec.FailedCount = 0
 		rec.FirstFailureAt = time.Time{}

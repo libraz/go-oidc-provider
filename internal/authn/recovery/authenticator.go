@@ -44,8 +44,10 @@ var ErrSubjectRequired = errors.New("recovery: subject is required")
 var ErrCodeMissing = errors.New("recovery: code field is missing")
 
 // ErrLocked is returned when the shared cross-factor brute-force gate
-// is locked for the subject.
-var ErrLocked = fmt.Errorf("recovery: factor is locked: %w", authn.ErrFactorAbort)
+// is locked for the subject. It wraps [authn.ErrFactorLocked] (itself an
+// [authn.ErrFactorAbort]) so the orchestrator reports the attempt to the
+// observer feed as a lockout rather than as an unclassified abort.
+var ErrLocked = fmt.Errorf("recovery: factor is locked: %w", authn.ErrFactorLocked)
 
 // ErrResetRequired is returned when the shared cross-factor counter
 // crosses the long threshold and the user must reset/recover factors.
@@ -121,11 +123,11 @@ func (*Authenticator) AMR() string { return "otp" }
 func (*Authenticator) Prompts() []string { return []string{PromptType} }
 
 // Begin implements [authn.Authenticator]. It reads the persisted batch
-// to surface [interaction.RecoveryCodePromptData.AttemptsRemaining] (the count
-// of unconsumed slots) and emits the [PromptType] prompt. Begin
-// surfaces [store.ErrNotFound] when the user has no batch generated
-// so the orchestrator can stop the chain rather than silently rolling
-// over to the next factor.
+// to confirm the subject has one, reads the shared brute-force budget to
+// surface [interaction.RecoveryCodePromptData.AttemptsRemaining], and
+// emits the [PromptType] prompt. Begin surfaces [store.ErrNotFound] when
+// the user has no batch generated so the orchestrator can stop the chain
+// rather than silently rolling over to the next factor.
 func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
@@ -145,7 +147,11 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	if batch == nil {
 		return interaction.Step{}, store.ErrNotFound
 	}
-	return interaction.Step{Prompt: a.prompt(batch)}, nil
+	remaining, err := a.lockout.RemainingAttempts(ctx, in.Subject)
+	if err != nil {
+		return interaction.Step{}, fmt.Errorf("recovery: lockout budget: %w", err)
+	}
+	return interaction.Step{Prompt: a.prompt(remaining)}, nil
 }
 
 // Continue implements [authn.Authenticator]. It loads the batch,
@@ -155,9 +161,9 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 //     bound subject and the orchestrator's
 //     [authn.ContinueInput.AuthTime]. The persisted batch carries the
 //     stamped ConsumedAt on the matched slot.
-//   - On [OutcomeInvalid]: [interaction.Step.Prompt] is re-emitted with
-//     [interaction.RecoveryCodePromptData.AttemptsRemaining] unchanged (no slot
-//     was consumed).
+//   - On [OutcomeInvalid]: the chain re-issues the prompt through Begin
+//     with [interaction.RecoveryCodePromptData.AttemptsRemaining]
+//     decremented by the failure just recorded.
 //   - On [OutcomeAllConsumed] / [OutcomeNoCodes]: the matching error
 //     is returned so the orchestrator stops the chain.
 func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) { //nolint:gocognit,cyclop // Recovery-code verification branches mirror the factor state machine.
@@ -234,16 +240,18 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	}
 }
 
-// prompt builds the [interaction.Prompt] the adapter emits on Begin and on
-// the wrong-code re-emit branch of Continue. Centralising the shape
-// here keeps the two call sites in sync.
-func (*Authenticator) prompt(batch *store.RecoveryBatch) *interaction.Prompt {
-	remaining := 0
-	for _, slot := range batch.Codes {
-		if slot.ConsumedAt.IsZero() {
-			remaining++
-		}
-	}
+// prompt builds the [interaction.Prompt] the adapter emits on Begin. A
+// wrong guess surfaces [ErrRetry] instead of a prompt, and the
+// orchestrator re-issues this one through Begin, so the shape the SPA
+// sees is built here on every path.
+//
+// remaining is the shared brute-force budget, not the number of
+// unconsumed slots. The field carries one doc comment across the sibling
+// PromptData types, so it has to carry one quantity: the slot count would
+// mean something different here than it does on the TOTP prompt, and it
+// would additionally disclose how many recovery codes an account has left
+// to whoever cleared the first factor.
+func (*Authenticator) prompt(remaining int) *interaction.Prompt {
 	return &interaction.Prompt{
 		Type: PromptType,
 		Data: interaction.RecoveryCodePromptData{AttemptsRemaining: remaining},

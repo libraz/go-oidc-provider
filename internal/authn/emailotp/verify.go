@@ -95,8 +95,11 @@ var (
 	// is before the verifier's clock.
 	ErrExpired = fmt.Errorf("emailotp: code expired: %w", authn.ErrFactorAbort)
 
-	// ErrLocked is returned when rec.LockedUntil is in the future.
-	ErrLocked = fmt.Errorf("emailotp: factor is locked: %w", authn.ErrFactorAbort)
+	// ErrLocked is returned when rec.LockedUntil is in the future. It
+	// wraps [authn.ErrFactorLocked] (itself an [authn.ErrFactorAbort])
+	// so the orchestrator reports the attempt to the observer feed as a
+	// lockout rather than as an unclassified abort.
+	ErrLocked = fmt.Errorf("emailotp: factor is locked: %w", authn.ErrFactorLocked)
 
 	// ErrWrongCode is returned when the supplied code does not
 	// match the persisted hash. This is the only recoverable verify

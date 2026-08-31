@@ -9,8 +9,6 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/go-webauthn/webauthn/protocol"
-
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -171,15 +169,15 @@ func New(step op.PrimaryPasskey) (*Registrar, error) {
 	if isNilStore(step.Store) {
 		return nil, ErrStoreRequired
 	}
-	v, err := passkey.New(passkey.Config{
+	v, err := passkey.New(passkey.ConfigFrom(passkey.StepPolicy{
 		RPID:                     step.RPID,
 		RPDisplayName:            step.RPDisplayName,
 		RPOrigins:                step.RPOrigins,
 		SessionTTL:               step.SessionTTL,
-		AttestationPreference:    attestationPreferenceFor(step),
+		RequireUserVerification:  step.RequireUserVerification,
 		AAGUIDAllowlist:          step.AAGUIDAllowlist,
 		AAGUIDReCheckOnAssertion: step.AAGUIDReCheckOnAssertion,
-	})
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("passkeykit: %w", err)
 	}
@@ -286,20 +284,6 @@ func (r *Registrar) Register(ctx context.Context, session *Session, user User, r
 		return nil, fmt.Errorf("passkeykit: persist credential: %w", err)
 	}
 	return rec, nil
-}
-
-// attestationPreferenceFor derives the conveyance preference from the
-// step, exactly as the login side does. Asking for an
-// authenticator-model allowlist is asking for attestation: without one
-// the AAGUID is self-asserted by whatever produced the response, so any
-// software authenticator could claim a certified model's identifier.
-// Deriving the preference rather than exposing it as a second knob is
-// what keeps the two settings from being configured inconsistently.
-func attestationPreferenceFor(step op.PrimaryPasskey) protocol.ConveyancePreference {
-	if len(step.AAGUIDAllowlist) > 0 {
-		return protocol.PreferDirectAttestation
-	}
-	return protocol.PreferNoAttestation
 }
 
 // isNilStore reports whether the step's store is unusable, catching the

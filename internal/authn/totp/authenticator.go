@@ -196,10 +196,12 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 
 		previous := cloneRecord(rec)
 		res, verr := a.verifier.Verify(ctx, rec, code)
-		if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeSuccess {
-			// OutcomeLocked leaves the record unchanged and OutcomeSuccess
-			// is persisted through atomic Accept below. Wrong-code and
-			// reset-required branches use CAS to retain every update.
+		if res != nil && res.Record != nil && res.Outcome != OutcomeLocked &&
+			res.Outcome != OutcomeSuccess && res.Outcome != OutcomeReplayed {
+			// OutcomeLocked and OutcomeReplayed leave the record unchanged
+			// and OutcomeSuccess is persisted through atomic Accept below.
+			// Wrong-code and reset-required branches use CAS to retain
+			// every update.
 			if perr := a.store.CompareAndSwap(ctx, previous, res.Record); perr != nil {
 				if errors.Is(perr, store.ErrAlreadyConsumed) {
 					// Re-read and re-verify against the latest record so a
@@ -231,6 +233,16 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 				}
 			}
 			return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+		case errors.Is(verr, ErrReplayed):
+			// A replayed code is a form double-submit or a browser retry,
+			// not a guess against the secret. The verifier already left
+			// the record's own FailedCount alone; the cross-factor counter
+			// is skipped here for the same reason, so a flaky connection
+			// cannot push a legitimate user towards the shared lockout.
+			// ErrRetry is still returned so the orchestrator records the
+			// attempt and re-issues the prompt — a silently swallowed
+			// replay would be an audit blind spot.
+			return interaction.Step{}, ErrRetry
 		case errors.Is(verr, ErrWrongCode):
 			if a.lockout != nil {
 				out, lerr := a.lockout.RecordFailure(ctx, in.Subject)

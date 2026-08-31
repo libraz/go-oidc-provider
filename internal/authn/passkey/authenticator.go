@@ -212,27 +212,82 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 // Outcomes:
 //   - On success: [interaction.Step.Result] is populated with the
 //     bound subject and the orchestrator's [authn.ContinueInput.AuthTime].
-//   - On [ErrCloneDetected]: the updated credential record is
-//     persisted (so the audit trail is intact) but the error is
-//     surfaced verbatim. The orchestrator owns the policy decision.
-//   - On any other error (parse failure, signature failure, expired
-//     session): the error flows through unchanged so the orchestrator
-//     can stop the chain.
+//   - On a rejected assertion (bad signature, challenge mismatch,
+//     unregistered credential, unparsable payload, expired ceremony):
+//     the error carries [authn.ErrFactorRetry], so the orchestrator
+//     records the attempt and re-issues a fresh challenge instead of
+//     surfacing a server fault at a user who touched the wrong key.
+//   - On [ErrCloneDetected]: the updated credential record is persisted
+//     (so the audit trail is intact) and the error carries
+//     [authn.ErrFactorAbort] — terminal for this attempt, and the
+//     orchestrator owns the policy decision.
+//   - On a store or configuration fault: the error flows through
+//     unclassified so the HTTP layer surfaces it as a server error and
+//     the failure counters stay clean.
+//
+// See [classifyContinueError] for which error lands in which class and
+// why the distinction has to be made here rather than upstream.
 func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
 	response, session, err := a.parseContinueInput(in)
 	if err != nil {
-		return interaction.Step{}, err
+		return interaction.Step{}, classifyContinueError(err)
 	}
 	creds, err := a.loadCredentials(ctx, in.Subject)
 	if err != nil {
 		return interaction.Step{}, err
 	}
 	if len(creds) == 0 {
-		return interaction.Step{}, ErrCredentialNotRegistered
+		return interaction.Step{}, classifyContinueError(ErrCredentialNotRegistered)
 	}
 
 	cred, ferr := a.verifier.FinishLogin(ctx, session, in.Subject, in.Subject, creds, response)
-	return a.continueResult(ctx, in.Subject, in.AuthTime, cred, ferr)
+	step, err := a.continueResult(ctx, in.Subject, in.AuthTime, cred, ferr)
+	return step, classifyContinueError(err)
+}
+
+// classifyContinueError stamps the orchestrator-facing failure class on
+// a ceremony error. The orchestrator reads one of two sentinels to decide
+// both what it records and where the chain goes, and an error carrying
+// neither is treated as an authenticator fault: nothing reaches the
+// observer feed or the audit stream, and the HTTP layer renders a 500.
+// That is the right answer for a store outage and the wrong one for
+// everything the SPA can cause, which is why every exit the submitted
+// assertion or the ceremony's own clock can reach is classified here.
+//
+//   - [authn.ErrFactorRetry] for a rejected assertion. The submission was
+//     judged and refused, and a fresh ceremony can succeed: a cancelled
+//     WebAuthn dialog, the wrong security key, a challenge that ran out
+//     its five minutes. The orchestrator observes the failure and
+//     re-prompts with a new challenge.
+//   - [authn.ErrFactorAbort] for a terminal refusal. A clone warning or
+//     an authenticator model that has fallen out of the allowlist is not
+//     retryable — a fresh challenge would be refused the same way — and a
+//     submission arriving without the ceremony state, or without the
+//     response field its own prompt declared required, cannot have come
+//     from the prompt as rendered.
+//
+// Anything else — a store failure, an unusable configuration, a corrupt
+// scratch payload — is returned unchanged. Those never evaluated a
+// credential, and filing them as credential failures would make an outage
+// read as credential stuffing while an embedder driving lockout off the
+// observer feed locked out the users it was unable to authenticate.
+func classifyContinueError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrAssertionInvalid),
+		errors.Is(err, ErrCredentialNotRegistered),
+		errors.Is(err, ErrInvalidResponse),
+		errors.Is(err, ErrChallengeExpired):
+		return fmt.Errorf("%w: %w", err, authn.ErrFactorRetry)
+	case errors.Is(err, ErrCloneDetected),
+		errors.Is(err, ErrAAGUIDDisallowed),
+		errors.Is(err, ErrSessionMissing),
+		errors.Is(err, ErrResponseMissing):
+		return fmt.Errorf("%w: %w", err, authn.ErrFactorAbort)
+	default:
+		return err
+	}
 }
 
 // parseContinueInput validates the orchestrator-supplied input and

@@ -249,6 +249,51 @@ func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time
 	return false, time.Time{}, nil
 }
 
+// RemainingAttempts reports how many failed submissions subject may
+// still make, across every factor, before the short cross-factor lock
+// takes effect. It is what a factor's prompt shows the user as the
+// attempts it has left, so every prompt that carries such a number reads
+// it from here and they cannot come to mean different things.
+//
+// A nil receiver reports the full budget: a deployment that never wired
+// the shared counter has nothing spent against it, which is the same
+// number a wired counter reports for a subject with no failures.
+// A window that has rolled over reads as unspent for the same reason the
+// next failure would reset it, and a subject whose lock is already in
+// force has nothing left.
+//
+// A missing record is "never failed" and returns the full budget; a
+// record that breaks the store contract surfaces the error rather than
+// an implicit full budget.
+func (c *Counter) RemainingAttempts(ctx context.Context, subject string) (int, error) {
+	if c == nil || subject == "" {
+		return thresholdShort, nil
+	}
+	rec, err := c.store.Get(ctx, subject)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return thresholdShort, nil
+		}
+		return 0, err
+	}
+	if err := checkRecord(rec, subject, false); err != nil {
+		return 0, err
+	}
+	now := c.clock.Now()
+	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
+		return 0, nil
+	}
+	spent := rec.FailedCount
+	if !rec.FirstFailureAt.IsZero() && now.Sub(rec.FirstFailureAt) > counterWindow {
+		spent = 0
+	}
+	remaining := thresholdShort - spent
+	if remaining < 0 {
+		return 0, nil
+	}
+	return remaining, nil
+}
+
 // RecordFailure advances the complete cross-factor lockout state with
 // a versioned compare-and-swap. Increment, window rollover, and lock
 // stamping are one transition, so none can overwrite a concurrently

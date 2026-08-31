@@ -21,9 +21,12 @@ const (
 	// failure).
 	AttemptFailure
 
-	// AttemptLocked reports the orchestrator refused the attempt
-	// before the factor ran because the rate limiter / brute-force
-	// counter has the actor locked out.
+	// AttemptLocked reports the brute-force gate, rather than the
+	// credential, is what ended the attempt: either the factor's
+	// per-record lock or the shared cross-factor counter refused
+	// before anything was evaluated, or the rejection just counted
+	// crossed the lockout threshold. Factors signal it by wrapping
+	// [ErrFactorLocked]; the orchestrator classifies on that wrapper.
 	AttemptLocked
 )
 
@@ -57,8 +60,8 @@ type LoginAttempt struct {
 	Outcome AttemptOutcome
 
 	// Factor identifies the factor that ran. For [AttemptLocked]
-	// before any factor began, the orchestrator sets it to the
-	// factor that would have run.
+	// raised before the factor evaluated anything, it is the factor
+	// that would have run.
 	Factor FactorType
 
 	// Reason is a stable enum-like reason code with the "attempt.*"

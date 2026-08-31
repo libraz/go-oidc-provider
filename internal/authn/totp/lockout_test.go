@@ -175,3 +175,109 @@ func TestAuthenticator_ExpiredCrossFactorLockDoesNotResurrect(t *testing.T) {
 		t.Fatalf("Begin after a recoverable wrong code: %v; want the prompt back", err)
 	}
 }
+
+// crossFactorFailures reports the cumulative count the shared counter
+// holds for subject. A missing row is the "never failed" state and reads
+// as zero.
+func crossFactorFailures(t *testing.T, lockouts store.AuthnLockoutStore, subject string) int {
+	t.Helper()
+
+	rec, err := lockouts.Get(context.Background(), subject)
+	if errors.Is(err, store.ErrNotFound) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("AuthnLockouts.Get: %v", err)
+	}
+	return rec.FailedCount
+}
+
+// TestAuthenticator_ReplayDoesNotAdvanceCrossFactorCounter pins the
+// promise the replay guard makes: a code the record has already accepted
+// is a double-submitted form or a browser retry, not a guess, so no
+// brute-force counter it can reach may advance — neither the per-record
+// FailedCount nor the cross-factor budget shared with the sibling
+// factors. Without this, a flaky connection spends a legitimate user's
+// way towards a one-hour lock on submissions they made only once.
+//
+// A genuine wrong code is driven through the same authenticator
+// afterwards so the zero asserted above is a property of the replay
+// path, not of a counter that was never wired.
+func TestAuthenticator_ReplayDoesNotAdvanceCrossFactorCounter(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	subject := "alice"
+	st := inmem.New()
+	clock := &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)}
+
+	counter, err := lockout.New(st.AuthnLockouts(), clock)
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	codec, err := totp.NewCodec(newKey(t))
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	secret, err := totp.GenerateSecret()
+	if err != nil {
+		t.Fatalf("GenerateSecret: %v", err)
+	}
+	if err := st.TOTPs().Put(ctx, newRecord(t, codec, subject, secret, clock.t.Add(-time.Hour))); err != nil {
+		t.Fatalf("TOTPs.Put: %v", err)
+	}
+	auth, err := totp.NewAuthenticator(&totp.Verifier{Clock: clock, Codec: codec}, st.TOTPs())
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+	auth = auth.WithLockout(counter)
+
+	code := totp.Code(secret, clock.t)
+	submission := interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: code}}
+
+	step, err := auth.Continue(ctx, authn.ContinueInput{Subject: subject, AuthTime: clock.t, Submission: submission})
+	if err != nil {
+		t.Fatalf("first submission: %v", err)
+	}
+	if step.Result == nil {
+		t.Fatalf("first submission returned %+v, want a Result", step)
+	}
+
+	// The same code again, inside the same step window: the replay guard
+	// refuses it, and the refusal must be a soft retry.
+	_, err = auth.Continue(ctx, authn.ContinueInput{Subject: subject, AuthTime: clock.t, Submission: submission})
+	if !errors.Is(err, totp.ErrRetry) {
+		t.Fatalf("replayed submission err=%v want ErrRetry", err)
+	}
+	if got := crossFactorFailures(t, st.AuthnLockouts(), subject); got != 0 {
+		t.Errorf("cross-factor FailedCount after a replay = %d, want 0: a replay is not a guess and must not "+
+			"spend the budget shared with every other factor", got)
+	}
+	rec, err := st.TOTPs().Get(ctx, subject)
+	if err != nil {
+		t.Fatalf("TOTPs.Get: %v", err)
+	}
+	if rec.FailedCount != 0 {
+		t.Errorf("record FailedCount after a replay = %d, want 0", rec.FailedCount)
+	}
+
+	// Control: a code that never matched is a guess, and the shared
+	// counter does move for it.
+	wrong := "000000"
+	for _, offset := range []time.Duration{-30 * time.Second, 0, 30 * time.Second} {
+		if totp.Code(secret, clock.t.Add(offset)) == wrong {
+			wrong = "999999"
+		}
+	}
+	_, err = auth.Continue(ctx, authn.ContinueInput{
+		Subject:    subject,
+		AuthTime:   clock.t,
+		Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: wrong}},
+	})
+	if !errors.Is(err, totp.ErrRetry) {
+		t.Fatalf("wrong-code submission err=%v want ErrRetry", err)
+	}
+	if got := crossFactorFailures(t, st.AuthnLockouts(), subject); got != 1 {
+		t.Errorf("cross-factor FailedCount after a real wrong code = %d, want 1", got)
+	}
+}

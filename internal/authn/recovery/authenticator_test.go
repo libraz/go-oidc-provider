@@ -71,7 +71,14 @@ func TestAuthenticator_Metadata(t *testing.T) {
 	}
 }
 
-func TestAuthenticator_BeginEmitsPromptWithFullSlots(t *testing.T) {
+// TestAuthenticator_BeginEmitsPromptWithFullAttemptBudget pins what the
+// prompt's AttemptsRemaining counts: failed submissions left, not
+// unconsumed slots. A subject with a fresh batch and no failures has the
+// whole shared budget, which is a different number from the ten codes
+// sitting in the batch — and publishing the latter would tell whoever
+// cleared the first factor how much recovery material the account has
+// left.
+func TestAuthenticator_BeginEmitsPromptWithFullAttemptBudget(t *testing.T) {
 	t.Parallel()
 
 	f := newAdapterFixture(t)
@@ -89,8 +96,70 @@ func TestAuthenticator_BeginEmitsPromptWithFullSlots(t *testing.T) {
 	if !ok {
 		t.Fatalf("Prompt.Data type = %T, want interaction.RecoveryCodePromptData", step.Prompt.Data)
 	}
-	if data.AttemptsRemaining != 10 {
-		t.Errorf("AttemptsRemaining = %d, want 10", data.AttemptsRemaining)
+	if data.AttemptsRemaining != 30 {
+		t.Errorf("AttemptsRemaining = %d, want 30 (the failure budget, not the %d unconsumed codes)",
+			data.AttemptsRemaining, len(f.plaintext))
+	}
+}
+
+// TestAuthenticator_AttemptBudgetTracksRecordedFailures completes the
+// claim above from the other side: the number moves with the shared
+// counter and stays put when a slot is consumed, which is what makes it
+// a failure budget rather than a slot count.
+func TestAuthenticator_AttemptBudgetTracksRecordedFailures(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	f := newAdapterFixture(t)
+	st := inmem.New()
+	counter, err := lockout.New(st.AuthnLockouts(), f.clock)
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	auth := f.adapter.WithLockout(counter)
+
+	remaining := func(t *testing.T) int {
+		t.Helper()
+		step, err := auth.Begin(ctx, op.BeginInput{Subject: f.subject, AuthTime: f.authTime})
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		data, ok := step.Prompt.Data.(interaction.RecoveryCodePromptData)
+		if !ok {
+			t.Fatalf("Prompt.Data type = %T, want interaction.RecoveryCodePromptData", step.Prompt.Data)
+		}
+		return data.AttemptsRemaining
+	}
+
+	if got := remaining(t); got != 30 {
+		t.Fatalf("AttemptsRemaining before any failure = %d, want 30", got)
+	}
+	for i := range 3 {
+		if _, err := auth.Continue(ctx, op.ContinueInput{
+			Subject:    f.subject,
+			AuthTime:   f.authTime,
+			Submission: interaction.FormSubmission{Values: map[string]string{recovery.CodeFieldName: "AAAAA-BBBBB"}},
+		}); !errors.Is(err, recovery.ErrRetry) {
+			t.Fatalf("wrong code %d: err = %v, want ErrRetry", i+1, err)
+		}
+	}
+	if got := remaining(t); got != 27 {
+		t.Errorf("AttemptsRemaining after 3 failures = %d, want 27", got)
+	}
+
+	// Spending a slot is not a failed attempt: the budget is unchanged
+	// by a code that worked.
+	if _, err := auth.Continue(ctx, op.ContinueInput{
+		Subject:    f.subject,
+		AuthTime:   f.authTime,
+		Submission: interaction.FormSubmission{Values: map[string]string{recovery.CodeFieldName: f.plaintext[0]}},
+	}); err != nil {
+		t.Fatalf("valid code: %v", err)
+	}
+	// The successful attempt cleared the counter, so the budget is whole
+	// again while one fewer slot remains.
+	if got := remaining(t); got != 30 {
+		t.Errorf("AttemptsRemaining after a successful attempt = %d, want 30", got)
 	}
 }
 

@@ -486,4 +486,14 @@ var (
 	// 5xx — the condition is terminal for this attempt but the user can
 	// start a fresh one.
 	ErrCaptchaExhausted = fmt.Errorf("authn: captcha challenge exhausted: %w", ErrFactorAbort)
+
+	// ErrFactorLocked is the [ErrFactorAbort] refinement a factor wraps
+	// when the brute-force gate — its own per-record LockedUntil stamp or
+	// the shared cross-factor counter — is what terminated the attempt.
+	// It exists so the orchestrator can tell a lockout apart from every
+	// other terminal abort without importing each factor's sentinels,
+	// which is what lets [AttemptLocked] reach the
+	// [LoginAttemptObserver] feed. Wrapping it keeps the HTTP rendering
+	// unchanged: dispatch on [ErrFactorAbort] still matches.
+	ErrFactorLocked = fmt.Errorf("authn: factor locked: %w", ErrFactorAbort)
 )
