@@ -47,7 +47,12 @@ type SigningKey struct {
 	// The active signer is selected by position in the slice and never
 	// consulted against NotAfter at signing time, because the embedder
 	// is expected to swap the active entry by rebuilding the [Keyset]
-	// rather than letting the runtime mutate selection mid-flight.
+	// rather than letting the runtime mutate selection mid-flight. The
+	// one time the deadline is read on the issuing side is at
+	// construction: [op.New] fails when the first entry's deadline has
+	// already been reached, because such a Provider would sign tokens
+	// its own verification paths reject on sight. Deadlines on the
+	// retiring entries behind it are not constrained.
 	//
 	// Set the deadline only after the JWKS cache overlap and the
 	// longest lifetime of anything this key signed have both elapsed.

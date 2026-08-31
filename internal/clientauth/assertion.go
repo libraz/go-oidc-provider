@@ -296,7 +296,8 @@ func assertionAlgAllowed(ctx context.Context, resolver JWKSResolver, clientID st
 //     the number of actual verifications at [jose.MaxKidlessTrialKeys],
 //     mirroring the kid-less bound the JWE decrypt path already applies.
 //
-// Each candidate is first gated through [jose.AssertAlgKeyShape]: the
+// Each candidate is first gated through [signingUsable] and then through
+// [jose.AssertAlgKeyShape]: the
 // OP's own signing keys are held to the RFC 7518 §3.3 / RFC 8725 §3.2
 // floor (RSA >= 2048 bits, curve pinned to the declared alg), and a
 // client registering a weaker or mismatched key MUST NOT receive a laxer
@@ -305,6 +306,10 @@ func assertionAlgAllowed(ctx context.Context, resolver JWKSResolver, clientID st
 // count against the kid-less trial cap), so a sub-floor key can never
 // satisfy the assertion. Compliant keys are unaffected: the gate is a
 // superset of what go-jose already enforces.
+//
+// A key whose "use" member declares a purpose other than signatures is
+// likewise skipped, so the verifier is no laxer than the registration
+// gate that refuses to count such a key as a signing key.
 func verifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) ([]byte, error) {
 	if len(jws.Signatures) == 0 {
 		return nil, errors.New("authn: assertion has no signatures")
@@ -326,6 +331,9 @@ func verifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) (
 
 	trials := 0
 	for i := range candidates {
+		if !signingUsable(candidates[i].Use) {
+			continue
+		}
 		if jose.AssertAlgKeyShape(alg, candidates[i].Key) != nil {
 			continue
 		}
@@ -347,6 +355,16 @@ func verifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) (
 		}
 	}
 	return nil, errors.New("authn: assertion signature does not verify")
+}
+
+// signingUsable reports whether a JWK whose "use" member is declared as
+// use may verify a signature. RFC 7517 §4.2 makes the declaration
+// binding: a key published as "enc" is the client's encryption key, not
+// a verification key, and an unrecognised value names a purpose this OP
+// cannot honour. An absent "use" leaves the key unrestricted, which
+// RFC 7517 permits and many clients rely on.
+func signingUsable(use string) bool {
+	return use == "" || use == "sig"
 }
 
 // decodeAssertionClaims unmarshals the JWS payload onto AssertionClaims,

@@ -114,7 +114,7 @@ func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*Encryption
 		if isNilPrivateKey(e.PrivateKey) {
 			return nil, fmt.Errorf("%w: entry %q has nil PrivateKey", ErrInvalidEncryptionKey, e.KeyID)
 		}
-		pub, alg, err := encPublicAndAlg(e.PrivateKey, e.Algorithm)
+		pub, alg, err := encPublicAndAlg(e.PrivateKey, e.Algorithm, cfg.jwe)
 		if err != nil {
 			return nil, fmt.Errorf("%w: entry %q: %w", ErrInvalidEncryptionKey, e.KeyID, err)
 		}
@@ -171,14 +171,16 @@ func isNilPrivateKey(key crypto.PrivateKey) bool {
 //     explicitly via [EncryptionEntry.Algorithm].
 //
 // An explicit Algorithm value is validated against [jose.JWEAlg.IsAllowed]
-// so an embedder cannot smuggle a non-shipped alg onto the published JWK.
-func encPublicAndAlg(priv crypto.PrivateKey, explicitAlg string) (crypto.PublicKey, string, error) {
+// so an embedder cannot smuggle a non-shipped alg onto the published JWK,
+// and against policy so the published metadata cannot name an alg the
+// deployment's own narrowing has switched off.
+func encPublicAndAlg(priv crypto.PrivateKey, explicitAlg string, policy jose.JWEPolicy) (crypto.PublicKey, string, error) {
 	switch k := priv.(type) {
 	case *rsa.PrivateKey:
 		if k.N == nil || k.N.BitLen() < jose.MinRSAKeyBits {
 			return nil, "", fmt.Errorf("RSA key must be at least %d bits", jose.MinRSAKeyBits)
 		}
-		return chooseEncAlg(&k.PublicKey, explicitAlg, jose.JWEAlgRSAOAEP256, "RSA")
+		return chooseEncAlg(&k.PublicKey, explicitAlg, jose.JWEAlgRSAOAEP256, "RSA", policy)
 	case *ecdsa.PrivateKey:
 		if k.Curve == nil {
 			return nil, "", errors.New("ECDSA key has nil curve")
@@ -186,28 +188,68 @@ func encPublicAndAlg(priv crypto.PrivateKey, explicitAlg string) (crypto.PublicK
 		if !isAllowedECDHCurve(k.Curve.Params().Name) {
 			return nil, "", fmt.Errorf("ECDSA curve %q is not on the OP allow-list", k.Curve.Params().Name)
 		}
-		return chooseEncAlg(&k.PublicKey, explicitAlg, jose.JWEAlgECDHES, "ECDSA")
+		return chooseEncAlg(&k.PublicKey, explicitAlg, jose.JWEAlgECDHES, "ECDSA", policy)
 	default:
 		return nil, "", fmt.Errorf("unsupported PrivateKey type %T", priv)
 	}
 }
 
 // chooseEncAlg picks the alg label to advertise on the published JWK.
-// The empty input falls back to def; a non-empty input is validated
-// against the package allow-list and against the key family
-// (RSA-OAEP-* requires RSA, ECDH-ES* requires ECDSA).
-func chooseEncAlg(pub crypto.PublicKey, explicit string, def jose.JWEAlg, family string) (crypto.PublicKey, string, error) {
-	if explicit == "" {
+// A non-empty explicit input is validated against the package
+// allow-list, against the key family (RSA-OAEP-* requires RSA, ECDH-ES*
+// requires ECDSA), and against policy. The empty input infers a label
+// from the family: def when the deployment still permits it, otherwise
+// the first family alg that survives the narrowing.
+//
+// The published `alg` is metadata a relying party encrypts by, so it
+// MUST name something [jose.Decrypt] would actually accept for this key
+// — otherwise an RP that trusts the JWK over the discovery document is
+// locked out permanently with no diagnosable cause. Two outcomes follow
+// when nothing survives:
+//
+//   - The narrowing is non-empty but excludes this key's whole family.
+//     Two settings the operator chose contradict each other and the key
+//     can never decrypt anything, so construction fails.
+//   - The narrowing is empty, i.e. the operator switched JWE
+//     negotiation off wholesale while still publishing the keyset. That
+//     posture is deliberate, so the key is published with no `alg`
+//     member (RFC 7517 §4.4 makes it OPTIONAL) rather than with a label
+//     that would be false.
+func chooseEncAlg(
+	pub crypto.PublicKey,
+	explicit string,
+	def jose.JWEAlg,
+	family string,
+	policy jose.JWEPolicy,
+) (crypto.PublicKey, string, error) {
+	if explicit != "" {
+		parsed, ok := jose.ParseJWEAlg(explicit)
+		if !ok {
+			return nil, "", fmt.Errorf("alg %q is not in the JWE allow-list", explicit)
+		}
+		if !algMatchesKeyFamily(parsed, family) {
+			return nil, "", fmt.Errorf("alg %q is not compatible with %s key", explicit, family)
+		}
+		if !policy.AllowsAlg(parsed) {
+			return nil, "", fmt.Errorf("alg %q is excluded by the deployment's JWE alg narrowing", explicit)
+		}
+		return pub, parsed.String(), nil
+	}
+	if policy.AllowsAlg(def) {
 		return pub, def.String(), nil
 	}
-	parsed, ok := jose.ParseJWEAlg(explicit)
-	if !ok {
-		return nil, "", fmt.Errorf("alg %q is not in the JWE allow-list", explicit)
+	for _, alg := range jose.AllowedJWEAlgs() {
+		if algMatchesKeyFamily(alg, family) && policy.AllowsAlg(alg) {
+			return pub, alg.String(), nil
+		}
 	}
-	if !algMatchesKeyFamily(parsed, family) {
-		return nil, "", fmt.Errorf("alg %q is not compatible with %s key", explicit, family)
+	if len(policy.Algs) == 0 {
+		return pub, "", nil
 	}
-	return pub, parsed.String(), nil
+	return nil, "", fmt.Errorf(
+		"no JWE alg for a %s key survives the deployment's JWE alg narrowing, so the OP would "+
+			"publish an encryption key it always refuses to decrypt with", family,
+	)
 }
 
 // algMatchesKeyFamily reports whether a JWE alg is compatible with

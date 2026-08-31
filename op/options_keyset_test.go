@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 )
@@ -80,6 +81,93 @@ func TestWithKeyset_RejectsTypedNilSigner(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "nil Signer") {
 		t.Fatalf("typed-nil signer error=%v, want nil Signer configuration error", err)
+	}
+}
+
+// keysetClockNow is the instant the retirement-deadline tests below
+// inject through [op.WithClock], so "already retired" and "still live"
+// are decided against a pinned reading rather than the wall clock.
+var keysetClockNow = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+func TestWithKeyset_RejectsActiveEntryPastNotAfter(t *testing.T) {
+	t.Parallel()
+
+	// A Provider built on this keyset would sign with a kid its own
+	// verification gate rejects, breaking /userinfo and /introspect for
+	// every token it issues.
+	active := newTestKey(t, "retired-active")
+	active.NotAfter = keysetClockNow.Add(-time.Second)
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(stubStore{}),
+		op.WithKeyset(op.Keyset{active}),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
+		op.WithClock(fakeClock{now: keysetClockNow}),
+	)
+	if err == nil {
+		t.Fatal("New accepted a keyset whose active entry has already retired")
+	}
+	if !strings.Contains(err.Error(), "retired-active") ||
+		!strings.Contains(err.Error(), "NotAfter") {
+		t.Fatalf("err = %v, want it to name the active kid and its NotAfter deadline", err)
+	}
+}
+
+func TestWithKeyset_RejectsActiveEntryAtNotAfter(t *testing.T) {
+	t.Parallel()
+
+	// keys.Set.Find rejects a deadline of exactly "now", so construction
+	// must reject the same instant rather than admit a keyset that fails
+	// on its first verification.
+	active := newTestKey(t, "boundary-active")
+	active.NotAfter = keysetClockNow
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(stubStore{}),
+		op.WithKeyset(op.Keyset{active}),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
+		op.WithClock(fakeClock{now: keysetClockNow}),
+	)
+	if err == nil {
+		t.Fatal("New accepted a keyset whose active entry retires exactly now")
+	}
+}
+
+func TestWithKeyset_AcceptsRetiredEntryBehindLiveActive(t *testing.T) {
+	t.Parallel()
+
+	// A completed rotation looks exactly like this: a live signer in the
+	// active slot with the outgoing key held behind it for cache warmth.
+	active := newTestKey(t, "live-active")
+	active.NotAfter = keysetClockNow.Add(time.Hour)
+	retiring := newTestKey(t, "past-deadline")
+	retiring.NotAfter = keysetClockNow.Add(-time.Hour)
+
+	if _, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(stubStore{}),
+		op.WithKeyset(op.Keyset{active, retiring}),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		fixtureAuthenticator(),
+		op.WithClock(fakeClock{now: keysetClockNow}),
+	); err != nil {
+		t.Fatalf("New rejected a live active key with a retired entry behind it: %v", err)
+	}
+}
+
+func TestWithKeyset_AcceptsZeroNotAfter(t *testing.T) {
+	t.Parallel()
+
+	// The zero value means "never retires" and must stay the default.
+	if _, err := op.New(append(
+		validBaseOpts(t),
+		op.WithClock(fakeClock{now: keysetClockNow}),
+	)...); err != nil {
+		t.Fatalf("New rejected a keyset with no retirement deadline: %v", err)
 	}
 }
 

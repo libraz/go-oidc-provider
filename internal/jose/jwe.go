@@ -268,9 +268,10 @@ type jweProtectedHeader struct {
 //
 // Decrypt does NOT verify nested JWS content (the `cty=JWT` case).
 // The caller inspects [DecryptedJWE.ContentType] and routes the
-// payload through [ParseSigned] + [Verify] with its own JWS
-// resolver. This split keeps the JWE wrapper free of an inbound
-// dependency on every caller's signing-keyset shape.
+// payload through [ParseSigned] followed by
+// [josev4.JSONWebSignature.Verify] against its own JWS resolver. This
+// split keeps the JWE wrapper free of an inbound dependency on every
+// caller's signing-keyset shape.
 func Decrypt(raw string, resolver EncryptionKeyResolver) (DecryptedJWE, error) {
 	if resolver == nil {
 		return DecryptedJWE{}, fmt.Errorf("%w: nil resolver", ErrJWEMalformed)
@@ -402,6 +403,16 @@ func filterKeysForAlg(keys []any, alg JWEAlg) []any {
 		}
 	}
 	return out
+}
+
+// KeyMatchesJWEAlg reports whether key is a private key [Decrypt] would
+// accept for a ciphertext whose protected header names alg. It exposes
+// the package's own key-shape gate so a caller that decides what to
+// advertise — the discovery builder's inbound alg list, in particular —
+// derives the answer from the same predicate the decrypt path applies,
+// rather than restating the family mapping and drifting from it.
+func KeyMatchesJWEAlg(key any, alg JWEAlg) bool {
+	return keyMatchesAlg(key, alg)
 }
 
 func keyMatchesAlg(key any, alg JWEAlg) bool {

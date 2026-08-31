@@ -258,6 +258,123 @@ func TestVerify_JTIReplayTTLHasMaxAgeAndSkewFloor(t *testing.T) {
 	}
 }
 
+// TestVerify_JTIReplayTTLClampedToConfiguredCeiling pins the upper bound on
+// consumed-jti retention. Without a cap the request object's own "exp" — a
+// client-chosen value — decides how long the OP keeps the replay marker, so a
+// single RP could grow the consumed-jti table by one indefinitely retained row
+// per authorization request. The clamp is unconditional: it holds on a
+// deployment that enables no profile, and therefore leaves MaxLifetime unset,
+// which is exactly where a far-future "exp" is otherwise admitted. Both
+// endpoint scopes are driven because they share one retention decision.
+func TestVerify_JTIReplayTTLClampedToConfiguredCeiling(t *testing.T) {
+	t.Parallel()
+
+	const century = 100 * 365 * 24 * time.Hour
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const (
+		maxAge = 2 * time.Minute
+		skew   = 5 * time.Second
+	)
+
+	cases := []struct {
+		name   string
+		verify func(*jar.Verifier, string) error
+	}{
+		{
+			name: "authorize",
+			verify: func(v *jar.Verifier, raw string) error {
+				_, err := v.Verify(context.Background(), raw, testClientID, newClient())
+				return err
+			},
+		},
+		{
+			name: "ciba",
+			verify: func(v *jar.Verifier, raw string) error {
+				_, err := v.VerifyCIBA(context.Background(), raw, testClientID, newClient())
+				return err
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			jtis := &captureJTIStore{}
+			priv, keys := jtiKey(t, testKID)
+			c := happyClaims(now)
+			c["nbf"] = now.Unix()
+			c["jti"] = "far-future-exp"
+			c["exp"] = now.Add(century).Unix()
+			raw := signClaims(t, priv, testKID, c, josev4.ES256)
+
+			v, err := jar.NewVerifier(jar.VerifierConfig{
+				Issuer:        testIssuer,
+				Resolver:      &staticResolver{keys: keys},
+				Clock:         fakeClock{now: now},
+				MaxAge:        maxAge,
+				MaxFutureSkew: skew,
+				JTIs:          jtis,
+			})
+			if err != nil {
+				t.Fatalf("NewVerifier: %v", err)
+			}
+			if err := tc.verify(v, raw); err != nil {
+				t.Fatalf("verify: %v", err)
+			}
+			want := now.Add(maxAge + skew)
+			if !jtis.expiresAt.Equal(want) {
+				t.Fatalf("jti expiresAt=%s want %s (client exp must not set retention)", jtis.expiresAt, want)
+			}
+		})
+	}
+}
+
+// TestVerify_JTIReplayTTLKeepsExpWithinConfiguredLifetime is the companion to
+// [TestVerify_JTIReplayTTLClampedToConfiguredCeiling]: where a positive
+// MaxLifetime widens the window a request object may live in, retention
+// follows the object's "exp" for its full admitted span. The ceiling bounds
+// retention by the verifier's own configuration; it does not shorten a
+// legitimately long-lived object's marker.
+func TestVerify_JTIReplayTTLKeepsExpWithinConfiguredLifetime(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const (
+		maxAge      = 10 * time.Minute
+		maxLifetime = 60 * time.Minute
+		skew        = 5 * time.Second
+		expIn       = 59 * time.Minute
+	)
+
+	jtis := &captureJTIStore{}
+	priv, keys := jtiKey(t, testKID)
+	c := happyClaims(now)
+	c["nbf"] = now.Unix()
+	c["jti"] = "long-lived-exp"
+	c["exp"] = now.Add(expIn).Unix()
+	raw := signClaims(t, priv, testKID, c, josev4.ES256)
+
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:        testIssuer,
+		Resolver:      &staticResolver{keys: keys},
+		Clock:         fakeClock{now: now},
+		MaxAge:        maxAge,
+		MaxFutureSkew: skew,
+		MaxLifetime:   maxLifetime,
+		JTIs:          jtis,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	want := now.Add(expIn + skew)
+	if !jtis.expiresAt.Equal(want) {
+		t.Fatalf("jti expiresAt=%s want %s", jtis.expiresAt, want)
+	}
+}
+
 // TestNewVerifier_RequiresJTIStoreOrOptOut asserts the construction-
 // time guard: a JAR verifier built without a JTIs store and without
 // AllowMissingJTI fails fast at startup.

@@ -598,7 +598,7 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string,
 		// AllowMissingJTI=true with no store: skip the gate.
 		return nil
 	}
-	expiresAt, ok := jtiExpiry(obj.Claims, v.clock.Now(), v.maxAge, v.maxFutureSkew)
+	expiresAt, ok := jtiExpiry(obj.Claims, v.clock.Now(), v.maxAge, v.maxFutureSkew, v.maxLifetime)
 	if !ok {
 		// "exp" was already validated upstream; reaching this branch
 		// means the claim disappeared between the two reads, which is
@@ -620,7 +620,19 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string,
 // through the verifier's max-age window plus clock skew so coarse TTL
 // backends cannot evict a just-accepted jti before every still-valid replay
 // candidate has aged out.
-func jtiExpiry(claims map[string]any, now time.Time, maxAge, skew time.Duration) (time.Time, bool) {
+//
+// Retention is also bounded above by a server-configured ceiling: the widest
+// window the verifier's own configuration admits a request object to live in
+// (maxLifetime when it is set, the max-age window otherwise) plus skew. Without
+// the clamp a client-chosen "exp" decides how long the OP keeps the row, so a
+// single misbehaving RP could pin one replay marker per authorization request
+// for centuries and make the consumed-jti table's size its own choice. The
+// clamp is unconditional for the same reason the DPoP and client-assertion
+// replay gates clamp theirs: it must not depend on a profile being enabled.
+// On every accepting path with maxLifetime set the ceiling is above the
+// admitted "exp", so the clamp only bites where a client-supplied timestamp
+// would otherwise be unbounded.
+func jtiExpiry(claims map[string]any, now time.Time, maxAge, skew, maxLifetime time.Duration) (time.Time, bool) {
 	exp, ok := claimSeconds(claims, "exp")
 	if !ok {
 		return time.Time{}, false
@@ -629,11 +641,18 @@ func jtiExpiry(claims map[string]any, now time.Time, maxAge, skew time.Duration)
 	if !expAt.After(now) {
 		return time.Time{}, false
 	}
-	floor := now.Add(maxAge)
-	if floor.After(expAt) {
-		return floor.Add(skew), true
+	window := maxAge
+	if maxLifetime > window {
+		window = maxLifetime
 	}
-	return expAt.Add(skew), true
+	retainUntil := expAt
+	if floor := now.Add(maxAge); floor.After(retainUntil) {
+		retainUntil = floor
+	}
+	if ceiling := now.Add(window); retainUntil.After(ceiling) {
+		retainUntil = ceiling
+	}
+	return retainUntil.Add(skew), true
 }
 
 // decodeVerifiedClaims is the post-signature variant of
@@ -655,23 +674,42 @@ func decodeVerifiedClaims(payload []byte) (map[string]any, error) {
 // match; when the header is absent the function only succeeds when the
 // keyset carries exactly one key, because choosing arbitrarily would
 // hide an OP-side key-rotation bug.
+//
+// Either branch additionally requires the selected key to be usable for
+// signatures ([signingUsable]).
 func pickKey(keys *josev4.JSONWebKeySet, kid string) (*josev4.JSONWebKey, error) {
 	if kid != "" {
-		matches := keys.Key(kid)
-		if len(matches) == 0 {
-			return nil, ErrNoMatchingJWK
-		}
 		// JSONWebKeySet.Key returns every key whose kid matches; pick
-		// the first to keep behaviour deterministic. Multiple keys
-		// sharing a kid is a misconfiguration on the RP side.
-		k := matches[0]
-		return &k, nil
+		// the first usable one to keep behaviour deterministic.
+		// Multiple keys sharing a kid is a misconfiguration on the RP
+		// side.
+		for _, k := range keys.Key(kid) {
+			if signingUsable(k.Use) {
+				return &k, nil
+			}
+		}
+		return nil, ErrNoMatchingJWK
 	}
-	if len(keys.Keys) == 1 {
+	if len(keys.Keys) == 1 && signingUsable(keys.Keys[0].Use) {
 		k := keys.Keys[0]
 		return &k, nil
 	}
 	return nil, ErrNoMatchingJWK
+}
+
+// signingUsable reports whether a JWK whose "use" member is declared as
+// use may verify a signature. RFC 7517 §4.2 makes the declaration
+// binding: a key published as "enc" is the RP's response-encryption key,
+// not a verification key, and an unrecognised value names a purpose this
+// OP cannot honour. An absent "use" leaves the key unrestricted, which
+// RFC 7517 permits and many RPs rely on.
+//
+// The predicate mirrors the one client registration applies when it
+// decides whether a JWKS carries a signing key. Without it here the
+// verifier is laxer than the registration gate, so a client could sign a
+// request object with a key the OP never accepted as a signing key.
+func signingUsable(use string) bool {
+	return use == "" || use == "sig"
 }
 
 // validateClaims runs the RFC 9101 §6.1 / FAPI 2.0 Message Signing

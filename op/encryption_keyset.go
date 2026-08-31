@@ -72,8 +72,16 @@ type EncryptionKey struct {
 //
 // Slice order is the trial-decryption order for a ciphertext whose
 // protected header omits `kid` (RFC 7516 §4.1.6); a ciphertext that
-// names a kid routes to that entry directly. Entries are published
-// until their respective NotAfter deadline. During a rotation overlap,
+// names a kid routes to that entry directly. The kid-less trial set is
+// not the whole slice: retired entries are skipped, entries whose key
+// type does not match the protected-header `alg` are skipped, and a
+// surviving set larger than [MaxKidlessEncryptionTrialKeys] causes the
+// ciphertext to be refused rather than trialled against a prefix. See
+// [WithEncryptionKeyset] for what that means for a deployment holding
+// many keys of one family.
+//
+// Entries are published until their respective NotAfter deadline.
+// During a rotation overlap,
 // retain the retiring entry and use [WithJWKSRotationActive] to shorten
 // JWKS caching; remove it only after that overlap and the longest
 // accepted request lifetime have elapsed.

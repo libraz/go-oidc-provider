@@ -45,11 +45,10 @@ type EncryptionRecipient struct {
 //
 // The protected header carries `alg`, `enc`, and `kid` (when
 // recipient.KeyID is non-empty). No `crit`, `cty`, or `zip` is
-// emitted by default — callers that need a nested JWE-of-JWS shape
-// build the inner JWS first via [Sign] and then wrap it through
-// [Encrypt] with `cty=JWT` (currently configured by the caller via
-// the returned compact form, since this layer only emits the
-// minimum protected header).
+// emitted by default, so this function alone cannot produce the
+// nested JWE-of-JWS shape: callers that need it sign the inner JWS
+// elsewhere (internal/tokens.SignIDToken and its siblings) and wrap
+// the result through [EncryptNestedJWT], which stamps `cty=JWT`.
 func Encrypt(plaintext []byte, recipient EncryptionRecipient) (string, error) {
 	if !recipient.Alg.IsAllowed() {
 		return "", fmt.Errorf("%w: %q", ErrJWEAlgNotAllowed, recipient.Alg)
@@ -100,9 +99,9 @@ func Encrypt(plaintext []byte, recipient EncryptionRecipient) (string, error) {
 // signing keys.
 //
 // The inner jws value MUST already be a compact-serialised JWS (e.g.
-// the output of [Sign]). The function does not validate the JWS
-// shape beyond non-emptiness; callers are responsible for ensuring
-// the input is a JWS the recipient will accept.
+// the output of internal/tokens.SignIDToken). The function does not
+// validate the JWS shape beyond non-emptiness; callers are responsible
+// for ensuring the input is a JWS the recipient will accept.
 func EncryptNestedJWT(jws string, recipient EncryptionRecipient) (string, error) {
 	if jws == "" {
 		return "", fmt.Errorf("%w: empty inner JWS", ErrJWEMalformed)

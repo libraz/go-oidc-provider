@@ -40,6 +40,23 @@ func SupportedEncryptionEncs() []string {
 	return out
 }
 
+// MaxKidlessEncryptionTrialKeys is the number of [EncryptionKeyset]
+// entries the OP will trial-decrypt against when an inbound ciphertext
+// omits `kid`, counted after the live-entry and key-type filters
+// described on [WithEncryptionKeyset]. A ciphertext whose filtered
+// candidate set is larger is refused.
+//
+// The bound is what keeps one attacker-supplied kid-less ciphertext
+// from amplifying asymmetric decryptions across an arbitrarily large
+// keyset, so it is deliberately small. It constrains only kid-less
+// ciphertexts: a keyset of any size serves relying parties that send
+// `kid`, which every RP the OP publishes a JWKS to is able to do.
+//
+// The canonical value lives in the JOSE layer; the name is exported
+// here so the limit is reachable from the public API an embedder sizing
+// a keyset actually reads.
+const MaxKidlessEncryptionTrialKeys = jose.MaxKidlessTrialKeys
+
 // WithEncryptionKeyset registers the JWKs the OP uses to decrypt
 // inbound JWE — request objects on /authorize and /par, which are the
 // only ciphertexts addressed to the OP itself. Outbound JWE (id_token /
@@ -60,9 +77,19 @@ func SupportedEncryptionEncs() []string {
 // would be a configuration smell even if the underlying key
 // material is distinct).
 //
-// Multiple keys allow rotation: inbound decryptions match `kid` first
-// and fall back to trial decryption against every key in slice order
-// when `kid` is absent (RFC 7516 §4.1.6).
+// Multiple keys allow rotation. An inbound ciphertext that names a
+// `kid` routes straight to that entry. A ciphertext that omits one
+// (RFC 7516 §4.1.6 makes `kid` OPTIONAL) is trial-decrypted in slice
+// order against the entries that are still live and whose key type
+// matches the protected-header `alg` — an RSA key for RSA-OAEP-256, an
+// EC key for the ECDH-ES family. If more than
+// [MaxKidlessEncryptionTrialKeys] entries survive that filter the
+// ciphertext is refused outright rather than trialled against a prefix,
+// because a result that depended on keyset order and size would turn a
+// rotation into an intermittent, undiagnosable client error. Deployments
+// holding more keys of one family than the cap admits therefore need
+// their relying parties to send `kid`; [op.New] warns when the keyset is
+// in that shape.
 //
 // The encryption keyset is OPTIONAL. Embedders who never accept an
 // encrypted request object omit it, and the OP runs without inbound
@@ -201,6 +228,47 @@ func (c *config) encryptionInboundEnabled() bool {
 	return len(c.encryptionKeyset) > 0
 }
 
+// inboundEncryptionAlgs narrows [config.effectiveEncryptionAlgs] to the
+// algs some entry of [WithEncryptionKeyset] can actually decrypt with.
+// It answers only the `request_object_encryption_alg_values_supported`
+// advertisement; every other encryption family negotiates against the
+// relying party's key and is unaffected by which keys the OP itself
+// holds.
+//
+// An encrypted request object is addressed to the OP, so an advertised
+// alg the OP has no key family for is an offer no RP can take up: it
+// selects a recipient absent from the OP's JWKS, and the request object
+// it constructs anyway is refused as invalid_request_object with
+// nothing in the response naming the cause. The membership test is
+// [jose.KeyMatchesJWEAlg], the same predicate the decrypt path applies,
+// so the advertisement cannot drift from what decryption accepts.
+//
+// Retirement deadlines are deliberately not consulted. The discovery
+// document is built once at construction while an entry can retire at
+// any point afterwards, so gating on NotAfter here would only freeze
+// whatever the clock happened to read during [op.New]; the runtime
+// gates live in [keys.EncryptionSet].
+func (c *config) inboundEncryptionAlgs() []string {
+	if len(c.encryptionKeyset) == 0 {
+		return nil
+	}
+	advertised := c.effectiveEncryptionAlgs()
+	out := make([]string, 0, len(advertised))
+	for _, raw := range advertised {
+		alg, ok := jose.ParseJWEAlg(raw)
+		if !ok {
+			continue
+		}
+		for _, k := range c.encryptionKeyset {
+			if jose.KeyMatchesJWEAlg(k.PrivateKey, alg) {
+				out = append(out, raw)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // jwePolicy converts the embedder's narrowing into the value every JWE
 // surface enforces. A half that was never narrowed stays nil, which
 // [jose.JWEPolicy] reads as "the library allow-list, unmodified"; a
@@ -230,6 +298,70 @@ func (c *config) jwePolicy() jose.JWEPolicy {
 		}
 	}
 	return p
+}
+
+// warnEncryptionKidlessTrialCap reports a keyset holding more keys of
+// one JWE family than [MaxKidlessEncryptionTrialKeys] admits. Every
+// kid-less ciphertext addressed to that family is refused there, so a
+// deployment that staged a long HSM rotation would see every kid-less
+// encrypted request object fail as invalid_request_object with nothing
+// in the response, the logs, or the option surface naming the cap as
+// the cause.
+//
+// Reported rather than rejected because the shape is legitimate: an OP
+// whose relying parties all send `kid` — which is every RP that reads
+// the OP's JWKS — runs on such a keyset with no failure at all. The cap
+// only decides what happens when `kid` is absent, so refusing to
+// construct would break working deployments to prevent a problem they
+// do not have.
+//
+// The check runs on the configured slice rather than on the built
+// [keys.EncryptionSet] and so ignores NotAfter: a deadline that has not
+// been reached yet still leaves the entry live, and one that has is a
+// key the operator is about to remove anyway. Counting every entry
+// makes the warning depend on the configuration rather than on the
+// instant [op.New] happened to run.
+func (c *config) warnEncryptionKidlessTrialCap() {
+	if len(c.encryptionKeyset) == 0 {
+		return
+	}
+	perFamily := map[string]int{}
+	for _, k := range c.encryptionKeyset {
+		for _, alg := range jose.AllowedJWEAlgs() {
+			if jose.KeyMatchesJWEAlg(k.PrivateKey, alg) {
+				perFamily[familyLabel(alg)]++
+				break
+			}
+		}
+	}
+	for _, family := range []string{"RSA", "EC"} {
+		count := perFamily[family]
+		if count <= MaxKidlessEncryptionTrialKeys {
+			continue
+		}
+		c.logger.Warn(
+			"WithEncryptionKeyset holds "+strconv.Itoa(count)+" "+family+" keys, above the "+
+				strconv.Itoa(MaxKidlessEncryptionTrialKeys)+"-key kid-less trial cap, so every "+
+				"encrypted request object whose protected header omits kid is refused as "+
+				"invalid_request_object; require relying parties to send kid, or hold fewer "+
+				"keys of this family",
+			"option", "WithEncryptionKeyset",
+			"family", family,
+			"keys", count,
+			"cap", MaxKidlessEncryptionTrialKeys,
+		)
+	}
+}
+
+// familyLabel names the key family a JWE alg is served by, for the
+// operator-facing warning [warnEncryptionKidlessTrialCap] emits. The
+// trial cap applies per family because [jose.Decrypt] filters candidates
+// by key type before trialling any of them.
+func familyLabel(alg jose.JWEAlg) string {
+	if alg == jose.JWEAlgRSAOAEP256 {
+		return "RSA"
+	}
+	return "EC"
 }
 
 // validateEncryptionKeyset enforces the kid-disjoint invariant

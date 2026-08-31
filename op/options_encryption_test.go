@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -375,10 +376,92 @@ func TestDiscovery_InboundEncryptionRequiresKeyset(t *testing.T) {
 	}
 }
 
+// TestDiscovery_InboundEncryptionAlgsFollowKeyFamilies pins the
+// inbound array to the key families the OP actually holds. An encrypted
+// request object is addressed to the OP's own key, so advertising an
+// alg no configured key can serve sends the RP looking for a recipient
+// the JWKS does not contain and the request object it builds anyway
+// comes back as an undiagnosable invalid_request_object.
+//
+// The outbound arrays are checked alongside because they must NOT
+// shrink: those negotiate against the relying party's key and are
+// unaffected by what the OP holds.
+func TestDiscovery_InboundEncryptionAlgsFollowKeyFamilies(t *testing.T) {
+	t.Parallel()
+
+	ecAlgs := []string{"ECDH-ES", "ECDH-ES+A128KW", "ECDH-ES+A256KW"}
+	for name, tc := range map[string]struct {
+		keyset op.EncryptionKeyset
+		want   []string
+	}{
+		"RSA only": {
+			keyset: op.EncryptionKeyset{{KeyID: "enc-rsa", PrivateKey: mustRSA(t)}},
+			want:   []string{"RSA-OAEP-256"},
+		},
+		"EC only": {
+			keyset: op.EncryptionKeyset{{KeyID: "enc-ec", PrivateKey: mustECDSA(t, elliptic.P256())}},
+			want:   ecAlgs,
+		},
+		"both families": {
+			keyset: op.EncryptionKeyset{
+				{KeyID: "enc-rsa", PrivateKey: mustRSA(t)},
+				{KeyID: "enc-ec", PrivateKey: mustECDSA(t, elliptic.P384())},
+			},
+			want: op.SupportedEncryptionAlgs(),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := fetchDiscoveryDoc(t, append(validBaseOpts(t),
+				op.WithFeature(feature.JAR),
+				op.WithEncryptionKeyset(tc.keyset),
+			))
+
+			got := toStrings(t, doc["request_object_encryption_alg_values_supported"])
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("request_object_encryption_alg_values_supported=%v want %v", got, tc.want)
+			}
+			outbound := toStrings(t, doc["id_token_encryption_alg_values_supported"])
+			if !slices.Equal(outbound, op.SupportedEncryptionAlgs()) {
+				t.Errorf(
+					"id_token_encryption_alg_values_supported=%v want the full list %v",
+					outbound, op.SupportedEncryptionAlgs(),
+				)
+			}
+		})
+	}
+}
+
+// TestDiscovery_InboundEncryptionAlgsIntersectNarrowing pins that the
+// family filter composes with op.WithSupportedEncryptionAlgs rather
+// than replacing it: the inbound array is the intersection, so a value
+// either side excluded stays off the wire.
+func TestDiscovery_InboundEncryptionAlgsIntersectNarrowing(t *testing.T) {
+	t.Parallel()
+
+	doc := fetchDiscoveryDoc(t, append(validBaseOpts(t),
+		op.WithFeature(feature.JAR),
+		op.WithEncryptionKeyset(op.EncryptionKeyset{
+			{KeyID: "enc-ec", PrivateKey: mustECDSA(t, elliptic.P256())},
+		}),
+		op.WithSupportedEncryptionAlgs([]string{"RSA-OAEP-256", "ECDH-ES+A256KW"}, nil),
+	))
+
+	got := toStrings(t, doc["request_object_encryption_alg_values_supported"])
+	if !slices.Equal(got, []string{"ECDH-ES+A256KW"}) {
+		t.Errorf("request_object_encryption_alg_values_supported=%v want [ECDH-ES+A256KW]", got)
+	}
+}
+
 // TestDiscovery_NarrowedEncryptionAlgsShrinkEveryFamily pins that
 // op.WithSupportedEncryptionAlgs reaches the wire on every family at
 // once, inbound and outbound, so the advertisement cannot disagree with
 // what the runtime will accept.
+//
+// The keyset is EC because the narrowing keeps only an EC alg: an OP
+// configured to negotiate ECDH-ES alone has no use for an RSA
+// decryption key and does not construct.
 func TestDiscovery_NarrowedEncryptionAlgsShrinkEveryFamily(t *testing.T) {
 	t.Parallel()
 
@@ -386,7 +469,9 @@ func TestDiscovery_NarrowedEncryptionAlgsShrinkEveryFamily(t *testing.T) {
 		op.WithFeature(feature.JAR),
 		op.WithFeature(feature.JARM),
 		op.WithFeature(feature.Introspect),
-		op.WithEncryptionKeyset(op.EncryptionKeyset{{KeyID: "enc-1", PrivateKey: mustRSA(t)}}),
+		op.WithEncryptionKeyset(op.EncryptionKeyset{
+			{KeyID: "enc-1", PrivateKey: mustECDSA(t, elliptic.P256())},
+		}),
 		op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, []string{"A256GCM"}),
 	))
 
@@ -411,6 +496,123 @@ func TestDiscovery_NarrowedEncryptionAlgsShrinkEveryFamily(t *testing.T) {
 		if got := doc[k]; !slices.Equal(toStrings(t, got), []string{"A256GCM"}) {
 			t.Errorf("%s=%v want [A256GCM]", k, got)
 		}
+	}
+}
+
+// TestWithEncryptionKeyset_WarnsAboveKidlessTrialCap covers the
+// misconfiguration the kid-less trial cap makes possible: a deployment
+// staging a long rotation with more keys of one family than the cap
+// admits has every kid-less encrypted request object refused, with
+// nothing in the response or the option surface naming the cause.
+// Construction still succeeds, because relying parties that send kid —
+// which is all of them, once they have read the OP's JWKS — are
+// unaffected.
+func TestWithEncryptionKeyset_WarnsAboveKidlessTrialCap(t *testing.T) {
+	t.Parallel()
+
+	ks := make(op.EncryptionKeyset, 0, op.MaxKidlessEncryptionTrialKeys+1)
+	for i := range cap(ks) {
+		ks = append(ks, op.EncryptionKey{
+			KeyID:      "enc-" + strconv.Itoa(i),
+			PrivateKey: mustECDSA(t, elliptic.P256()),
+		})
+	}
+
+	logged := warnings(t, append(validBaseOpts(t), op.WithEncryptionKeyset(ks))...)
+	if !strings.Contains(logged, "kid-less trial cap") {
+		t.Errorf("logger output = %q, want a warning naming the kid-less trial cap", logged)
+	}
+}
+
+// TestWithEncryptionKeyset_SilentAtKidlessTrialCap pins the boundary
+// from the other side: a keyset exactly at the cap still decrypts every
+// kid-less ciphertext, so warning there would train the operator to
+// ignore the line. The count is per key family, so a set that is over
+// the cap only in aggregate stays silent too.
+func TestWithEncryptionKeyset_SilentAtKidlessTrialCap(t *testing.T) {
+	t.Parallel()
+
+	ks := make(op.EncryptionKeyset, 0, op.MaxKidlessEncryptionTrialKeys+1)
+	for i := range op.MaxKidlessEncryptionTrialKeys {
+		ks = append(ks, op.EncryptionKey{
+			KeyID:      "enc-ec-" + strconv.Itoa(i),
+			PrivateKey: mustECDSA(t, elliptic.P256()),
+		})
+	}
+	ks = append(ks, op.EncryptionKey{KeyID: "enc-rsa", PrivateKey: mustRSA(t)})
+
+	logged := warnings(t, append(validBaseOpts(t), op.WithEncryptionKeyset(ks))...)
+	if strings.Contains(logged, "kid-less trial cap") {
+		t.Errorf("logger output = %q, want no kid-less trial cap warning at the boundary", logged)
+	}
+}
+
+// TestWithEncryptionKeyset_RejectsFamilyExcludedByNarrowing pins that
+// op.WithSupportedEncryptionAlgs reaches the published JWK metadata too.
+// A key whose whole family the narrowing removed can never decrypt
+// anything, and publishing it would hand an RP that trusts the JWKS
+// document over the discovery one a recipient the OP always refuses.
+func TestWithEncryptionKeyset_RejectsFamilyExcludedByNarrowing(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithEncryptionKeyset(op.EncryptionKeyset{{KeyID: "enc-1", PrivateKey: mustRSA(t)}}),
+		op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, nil),
+	)...)
+	if err == nil {
+		t.Fatal("New accepted an RSA encryption key under an EC-only alg narrowing")
+	}
+	if !strings.Contains(err.Error(), "narrowing") {
+		t.Fatalf("err = %v, want it to name the alg narrowing as the cause", err)
+	}
+}
+
+// TestJWKS_EncryptionKeyAlgsStayWithinNarrowing is the wire-level
+// counterpart: whatever alg the OP stamps on a published use=enc JWK
+// has to be one it would actually accept on an inbound ciphertext.
+func TestJWKS_EncryptionKeyAlgsStayWithinNarrowing(t *testing.T) {
+	t.Parallel()
+
+	// ECDH-ES is the label an EC key carries by default, so narrowing it
+	// away is what forces the advertisement onto a surviving member.
+	allowed := []string{"ECDH-ES+A128KW"}
+	provider, err := op.New(append(validBaseOpts(t),
+		op.WithEncryptionKeyset(op.EncryptionKeyset{
+			{KeyID: "enc-ec", PrivateKey: mustECDSA(t, elliptic.P256())},
+		}),
+		op.WithSupportedEncryptionAlgs(allowed, nil),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+
+	srv := httptest.NewServer(provider)
+	t.Cleanup(srv.Close)
+	resp := getJSON(t, srv.URL+"/oidc/jwks")
+	defer resp.Body.Close()
+
+	var doc struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+			Use string `json:"use"`
+			Alg string `json:"alg"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode jwks: %v", err)
+	}
+	seen := false
+	for _, k := range doc.Keys {
+		if k.Use != "enc" {
+			continue
+		}
+		seen = true
+		if !slices.Contains(allowed, k.Alg) {
+			t.Errorf("published enc key %q advertises alg %q outside the narrowing %v", k.Kid, k.Alg, allowed)
+		}
+	}
+	if !seen {
+		t.Fatal("jwks published no use=enc key")
 	}
 }
 
