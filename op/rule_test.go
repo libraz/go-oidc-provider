@@ -1,9 +1,19 @@
 package op_test
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // dummyStep is a built-in [op.Step] value used as the [op.Rule.Then]
@@ -139,7 +149,8 @@ func TestRuleACR(t *testing.T) {
 }
 
 // TestRuleWhen covers the caller-supplied predicate path and the
-// nil-predicate fallback.
+// nil-predicate fallback, which matches the [op.Rule.When] contract
+// that an absent predicate fires on every pass.
 func TestRuleWhen(t *testing.T) {
 	t.Parallel()
 	called := 0
@@ -157,16 +168,127 @@ func TestRuleWhen(t *testing.T) {
 		t.Errorf("RuleWhen: predicate called %d times, want 2", called)
 	}
 
-	// nil predicate falls back to constant-false.
+	// A nil predicate falls back to constant-true, so RuleWhen(nil, s)
+	// and the bare struct literal op.Rule{Then: s} declare the same
+	// rule. Constant-false would make the declared step unreachable
+	// without saying so.
 	rNil := op.RuleWhen(nil, dummyStep)
 	if rNil.When == nil {
-		t.Fatal("RuleWhen(nil): When should be set to a constant-false predicate, not nil")
+		t.Fatal("RuleWhen(nil): When should be set to a constant-true predicate, not nil")
 	}
-	if rNil.When(op.LoginContext{}) {
-		t.Error("RuleWhen(nil): predicate should be constant-false")
+	if !rNil.When(op.LoginContext{}) {
+		t.Error("RuleWhen(nil): predicate should be constant-true")
 	}
-	if rNil.When(op.LoginContext{FailedAttempts: 99, NewDevice: true}) {
-		t.Error("RuleWhen(nil): predicate should be constant-false on populated context")
+	if !rNil.When(op.LoginContext{FailedAttempts: 99, NewDevice: true}) {
+		t.Error("RuleWhen(nil): predicate should be constant-true on populated context")
+	}
+}
+
+// promptRecorderDriver is an embedder [interaction.Driver] that records
+// the type of every prompt the orchestrator emits. Recording the type is
+// all the nil-predicate test needs: which step the flow reaches is the
+// question, and the prompt type names it.
+type promptRecorderDriver struct{ types []string }
+
+func (d *promptRecorderDriver) Render(_ http.ResponseWriter, _ *http.Request, p interaction.Prompt) error {
+	d.types = append(d.types, p.Type)
+	return nil
+}
+
+func (d *promptRecorderDriver) ParseSubmission(*http.Request) (interaction.FormSubmission, error) {
+	return interaction.FormSubmission{}, nil
+}
+
+// TestRuleNilWhenFiresInACompiledFlow pins the [op.Rule.When] contract
+// where it decides whether a user is asked for a second factor: a rule
+// written as a bare struct literal, with no predicate, fires.
+//
+// The rule's Then here is a captcha, which the orchestrator schedules
+// ahead of the primary credential, so the very first prompt of the
+// ceremony reports whether the predicate matched. Were an absent
+// predicate read as "never fires", the flow would compile, construct,
+// and then run the primary factor alone — the declared step silently
+// dropped, with nothing on the wire to say so.
+func TestRuleNilWhenFiresInACompiledFlow(t *testing.T) {
+	t.Parallel()
+
+	const clientID = "rule-nil-when-client"
+	const redirectURI = "https://rp.example.com/cb"
+
+	st := inmem.New()
+	driver := &promptRecorderDriver{}
+	provider, err := op.New(append(validBaseOptsWithStoreNoAuthn(t, st),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+			// When is deliberately left unset: this is the struct-literal
+			// spelling of RuleAlways.
+			Rules: []op.Rule{{Then: op.StepCaptcha{Verifier: typedCaptchaVerifier{}}}},
+		}),
+		op.WithInteractionDriver(driver),
+		op.WithStaticClients(op.PublicClient{
+			ID:           clientID,
+			RedirectURIs: []string{redirectURI},
+			Scopes:       []string{"openid"},
+		}),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New with a nil-When rule: %v", err)
+	}
+
+	verifier := strings.Repeat("v", 43)
+	sum := sha256.Sum256([]byte(verifier))
+	values := url.Values{
+		"client_id":             {clientID},
+		"response_type":         {"code"},
+		"redirect_uri":          {redirectURI},
+		"scope":                 {"openid"},
+		"state":                 {"state-rule-nil-when"},
+		"nonce":                 {"nonce-rule-nil-when"},
+		"code_challenge":        {base64.RawURLEncoding.EncodeToString(sum[:])},
+		"code_challenge_method": {"S256"},
+	}
+	authRec := httptest.NewRecorder()
+	provider.ServeHTTP(authRec, httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		validIssuer+"/oidc/auth?"+values.Encode(),
+		http.NoBody,
+	))
+	authResp := authRec.Result()
+	defer authResp.Body.Close()
+	if authResp.StatusCode != http.StatusFound {
+		raw, _ := io.ReadAll(authResp.Body)
+		t.Fatalf("/authorize status = %d, want 302; body=%s", authResp.StatusCode, raw)
+	}
+	location, err := authResp.Location()
+	if err != nil {
+		t.Fatalf("/authorize Location: %v", err)
+	}
+
+	stepReq := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		validIssuer+location.RequestURI(),
+		http.NoBody,
+	)
+	for _, c := range authResp.Cookies() {
+		stepReq.AddCookie(c)
+	}
+	stepRec := httptest.NewRecorder()
+	provider.ServeHTTP(stepRec, stepReq)
+	stepResp := stepRec.Result()
+	defer stepResp.Body.Close()
+	if stepResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(stepResp.Body)
+		t.Fatalf("/interaction status = %d, want 200; body=%s", stepResp.StatusCode, raw)
+	}
+
+	if len(driver.types) == 0 {
+		t.Fatal("the ceremony emitted no prompt at all")
+	}
+	if got := driver.types[0]; got != "captcha" {
+		t.Errorf("first prompt type = %q, want %q; a rule whose When is unset must fire, "+
+			"not vanish and leave the primary factor standing alone", got, "captcha")
 	}
 }
 

@@ -881,6 +881,13 @@ func WithKeyset(ks Keyset) Option {
 // audit timestamps, and rate-limit windows. If unset, the [Provider] uses a
 // real wall clock backed by [time.Now()]. Tests SHOULD inject a deterministic
 // clock so the whole flow shares the same fake time.
+//
+// Audit timestamps are included on purpose: every record the OP's own
+// emitter chain writes is stamped from this clock, not from the slog
+// runtime, so a record can be laid alongside the "iat" / "exp" of the
+// token it describes. A deployment correcting for skew moves both
+// together; a test asserting on the pair sees one timeline.
+//
 // Stable since v1.0.
 func WithClock(clock Clock) Option {
 	return optionFunc(func(c *config) error {
@@ -940,12 +947,15 @@ func (c *config) effectiveAuditLogger() *slog.Logger {
 }
 
 // effectiveAuditEmitter returns the [audit.Emitter] handler-mount
-// sites consume. The base layer is [audit.Slog] over
+// sites consume. The base layer is [audit.SlogClock] over
 // [config.effectiveAuditLogger]; when [WithPrometheus] is configured
 // the result is wrapped with a [metrics.Bridge] so a single emission
 // fires both the slog audit line and the matching counter.
+//
+// The configured clock is threaded in so audit records and the tokens
+// they describe are stamped from one timeline; see [WithClock].
 func (c *config) effectiveAuditEmitter() audit.Emitter {
-	base := audit.Slog(c.effectiveAuditLogger())
+	base := audit.SlogClock(c.effectiveAuditLogger(), c.clock)
 	if c.metricsCollector == nil {
 		return base
 	}

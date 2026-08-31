@@ -9,10 +9,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
+	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/protectedresource"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
@@ -81,6 +83,9 @@ func (c *config) validateRequired() error {
 		return ErrKeysetRequired
 	}
 	if err := validateKeyset(c.keyset); err != nil {
+		return err
+	}
+	if err := validateActiveSigningKeyLive(c.keyset, c.clock.Now()); err != nil {
 		return err
 	}
 	if err := validateCookieKeys(c.cookieKeys); err != nil {
@@ -776,13 +781,23 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 				" requires WithDPoPNonceSource when WithFeature(DPoP) is active",
 		}
 	}
-	if isFAPI2Profile(p) && c.refreshGracePeriodSet && !c.refreshGracePeriodIsZero {
+	// The bound is the window the profile itself resolves to when the
+	// option is absent, not a strict zero. FAPI 2.0 §3.1.7 argues for
+	// the tightest window a deployment can run, but a FAPI 2.0
+	// deployment that configures nothing already runs
+	// [refresh.GraceTTLDefault] — see [config.effectiveRefreshGrace]
+	// for why that default cannot be narrowed. Rejecting every
+	// non-zero value would therefore refuse configurations STRICTER
+	// than the one the OP applies, pushing an embedder that asked for
+	// a five-second window back onto the sixty-second default.
+	if isFAPI2Profile(p) && c.refreshGracePeriodSet &&
+		c.refreshGracePeriod > refresh.GraceTTLDefault {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "WithProfile " + p.String() +
-				" requires WithRefreshGracePeriod(0); FAPI 2.0 §3.1.7 " +
-				"forbids a replay-tolerant grace window for a replayed " +
-				"refresh token under this profile",
+				" caps WithRefreshGracePeriod at " +
+				refresh.GraceTTLDefault.String() + "; got " +
+				c.refreshGracePeriod.String(),
 		}
 	}
 	return nil
@@ -1372,4 +1387,39 @@ func validateKeyset(ks Keyset) error {
 		}
 	}
 	return nil
+}
+
+// validateActiveSigningKeyLive rejects a keyset whose active entry
+// (ks[0], the signer every newly-issued JWS is stamped with) has
+// already reached its [SigningKey.NotAfter] deadline at the configured
+// clock reading.
+//
+// The retirement gate runs on verification only ([keys.Set.Find]), so
+// such a Provider would sign happily and then refuse its own tokens at
+// every entry point that verifies them — /userinfo, /introspect,
+// /revoke, token exchange, /end_session — for the whole lifetime of
+// each token, with no runtime signal naming the cause. Because the OP
+// verifies what it just issued, an active entry whose deadline has
+// passed is not a rotation posture the deployment can be in: the only
+// correct move is to promote a live key, and a construction error is
+// what says so before the first token is minted.
+//
+// The comparison mirrors [keys.Set.Find]: a deadline of exactly "now"
+// already rejects there, so it must reject here too. Retiring entries
+// behind the active slot are untouched — holding a past-deadline key in
+// the tail is exactly how a completed rotation looks.
+func validateActiveSigningKeyLive(ks Keyset, now time.Time) error {
+	if len(ks) == 0 {
+		return nil
+	}
+	active := ks[0]
+	if active.NotAfter.IsZero() || now.Before(active.NotAfter) {
+		return nil
+	}
+	return &Error{
+		Code: codeConfiguration,
+		Description: "active keyset entry " + active.KeyID +
+			" has already reached its NotAfter deadline, so every token it signs " +
+			"would fail the OP's own verification; promote a live key to the first slot",
+	}
 }

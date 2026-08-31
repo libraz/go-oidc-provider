@@ -85,6 +85,20 @@ func WithTrustedProxyHosts(hosts ...string) Option {
 // client's redirect_uri origin therefore has to be named here — which is
 // what the ceremony's CSRF gate has always required of it for
 // state-changing requests.
+//
+// A ceremony origin MUST be same-site with the issuer — a sibling host
+// under the same registrable domain, e.g. login.acme.example next to
+// id.acme.example. Naming a genuinely cross-site origin here grants it
+// CORS but not a working ceremony: __Host-oidc_interaction is SameSite=Lax
+// and __Host-oidc_csrf is SameSite=Strict, so the browser withholds them
+// from a cross-site UI's fetch and from every cross-site write. The
+// endpoint then answers 404 (it will not confirm that a uid it cannot
+// bind to a cookie exists) and the login cannot complete. The SameSite
+// attributes are the ceremony's CSRF defence and are not configurable;
+// a login UI on a different registrable domain than the issuer is
+// therefore unsupported, and an embedder in that position moves the UI
+// onto an issuer-sibling host.
+//
 // Origins MUST be absolute URLs with non-empty scheme and host. The path,
 // query, and fragment are stripped. Each call appends to the configured
 // list; duplicates are deduplicated at allowlist build time.
@@ -256,11 +270,16 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 // replay is treated as theft and the family is revoked. The library
 // default (60 seconds) absorbs typical SPA / mobile retry storms; a
 // stricter posture passes a smaller positive duration. Pass zero to
-// disable the window entirely so any replay revokes immediately —
-// FAPI 2.0 §3.1.7 mandates this for FAPI2Baseline /
-// FAPI2MessageSigning, and the option layer enforces the bound at
-// construction time when those profiles are active (a non-zero value
-// supplied alongside the profile produces a configuration error).
+// disable the window entirely so any replay revokes immediately.
+//
+// Under FAPI2Baseline / FAPI2MessageSigning the window is capped at
+// that same library default rather than forced to zero. Those
+// profiles resolve to the 60-second default when the option is
+// absent (see [config.effectiveRefreshGrace]), so anything from zero
+// up to it — including the strict no-grace posture FAPI 2.0 §3.1.7
+// argues for — is accepted verbatim, and only a value WIDER than the
+// default is a construction error.
+//
 // Negative values are rejected at the option site; the API treats
 // "no grace" as the explicit zero so accidental sign-flip cannot
 // silently widen the window.
@@ -295,11 +314,15 @@ func WithRefreshGracePeriod(d time.Duration) Option {
 // grace window is what makes a rotation survive the client's network
 // retry, and the FAPI 2.0 conformance suite tests for exactly that: its
 // refresh-token module redeems the rotated predecessor a second time and
-// requires a 200. Because [New] separately refuses an explicit non-zero
-// window under this profile, resolving the default to zero would leave a
-// FAPI 2.0 deployment with no configuration at all that passes
-// certification. RFC 9700 §2.2.2 permits the window; the replay defence
-// it coexists with is the chain-wide cascade, which is unconditional.
+// requires a 200. A deployment that declares the profile and configures
+// nothing else has to inherit that window, or it cannot be certified.
+// RFC 9700 §2.2.2 permits the window; the replay defence it coexists
+// with is the chain-wide cascade, which is unconditional.
+//
+// [New] caps an explicit window at the same default under this
+// profile, so the resolved value is never wider than what an
+// unconfigured FAPI 2.0 deployment already runs — but a stricter
+// explicit value, zero included, passes through untouched.
 func (c *config) effectiveRefreshGrace() time.Duration {
 	if !c.refreshGracePeriodSet {
 		return 0

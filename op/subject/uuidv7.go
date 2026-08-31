@@ -41,6 +41,8 @@ func (uuidv7Generator) Generate(_ context.Context, in GeneratorInput) (Subject, 
 }
 
 // ErrInputEmpty signals that a [GeneratorInput] carried no
-// InternalUserID. The op package wraps the sentinel into
-// op.ErrSubjectInputEmpty for the public catalog.
+// InternalUserID. The op package bridges the sentinel onto
+// op.ErrSubjectInputEmpty for the public catalog: an error surfaced by
+// the issuance path or by op.Provider.SubjectGenerator matches both
+// values under errors.Is.
 var ErrInputEmpty = errors.New("subject: input has no InternalUserID")

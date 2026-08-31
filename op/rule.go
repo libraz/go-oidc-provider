@@ -10,14 +10,20 @@ package op
 // true and whose [Rule.Then.Kind] is not in
 // [LoginContext.CompletedSteps], then re-enters the loop. When no
 // rule matches the flow grants.
-// A nil When is treated as the constant-true predicate. A nil Then is
-// rejected at construction time.
+// A nil When is treated as the constant-true predicate, so the rule
+// behaves exactly as if it had been built with [RuleAlways]. A nil Then
+// is rejected at construction time.
 type Rule struct {
 	// When is the predicate the orchestrator evaluates on every pass.
 	// MUST be a pure function of [LoginContext]; the orchestrator
 	// recovers from a panic in When and treats the rule as not
 	// matching, but a programming error in the predicate still costs
 	// a log entry and a wasted evaluation pass.
+	//
+	// A nil predicate matches every pass. The alternative — treating an
+	// unset field as "never fires" — would let a struct literal that
+	// declares a second factor compile, construct, and then authenticate
+	// every user on the primary factor alone.
 	When func(LoginContext) bool
 
 	// Then is the [Step] the orchestrator runs when [Rule.When]
@@ -136,10 +142,13 @@ func RuleACR(acr string, then Step) Rule {
 // inspection. The predicate MUST be a pure function of
 // [LoginContext]; the orchestrator does not promise to invoke it
 // exactly once per pass.
-// A nil pred is treated as the constant-false predicate.
+// A nil pred is treated as the constant-true predicate, matching the
+// [Rule.When] contract: the helper and the struct literal are two
+// spellings of one rule, so they cannot disagree on what an absent
+// predicate means.
 func RuleWhen(pred func(LoginContext) bool, then Step) Rule {
 	if pred == nil {
-		pred = func(LoginContext) bool { return false }
+		pred = func(LoginContext) bool { return true }
 	}
 	return Rule{When: pred, Then: then}
 }

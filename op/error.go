@@ -283,6 +283,12 @@ var ErrLocaleNotRegistered = &Error{
 // that does not provide adequate resistance to precomputation; the
 // validator runs at construction time so the failure mode is build-up
 // rather than a runtime surprise.
+//
+// A short salt can still reach a generator through
+// [WithSubjectGenerator], which does not inspect the value it is
+// handed. The issuance path reports the same entry per request in that
+// case, since the pairwise generator answers every call with a failure
+// rather than deriving a weak subject.
 var ErrPairwiseSaltTooShort = &Error{
 	Code:        codeConfiguration,
 	Description: "WithPairwiseSubject salt must be at least 32 bytes",
@@ -299,10 +305,17 @@ var ErrSubjectGeneratorRequired = &Error{
 	Description: "WithSubjectGenerator requires a non-nil SubjectGenerator",
 }
 
-// ErrSubjectInputEmpty is returned by [SubjectGenerator] implementations
-// when [SubjectGeneratorInput.InternalUserID] is empty. The library
-// treats it as a server-side configuration error: the issuance pipeline
-// is expected to populate the field before invoking the generator.
+// ErrSubjectInputEmpty is reported when a built-in [SubjectGenerator]
+// is invoked with an empty [SubjectGeneratorInput.InternalUserID]. The
+// library treats it as a server-side configuration error: the issuance
+// pipeline is expected to populate the field before invoking the
+// generator.
+//
+// Both the issuance path and [Provider.SubjectGenerator] bridge the
+// op/subject sentinel onto this entry, so [errors.Is] against it
+// matches from either. A generator supplied through
+// [WithSubjectGenerator] owns its own error values; only the issuance
+// path bridges those.
 var ErrSubjectInputEmpty = &Error{
 	Code:        codeServerError,
 	Description: "subject generator input has no InternalUserID",
@@ -315,6 +328,13 @@ var ErrSubjectInputEmpty = &Error{
 // §5 requires a single sector for stable pairwise output; the library
 // refuses to invent one because two RPs sharing the OP would otherwise
 // collide on subject values.
+//
+// The generator reports the condition through its own op/subject
+// sentinel, which the library bridges onto this entry at both seams
+// that cross the public boundary: the issuance path built by
+// buildSubjectProjector, and the generator [Provider.SubjectGenerator]
+// hands to out-of-band tooling. [errors.Is] matches this entry from
+// either, and the sub-package sentinel keeps matching too.
 var ErrPairwiseSectorUnresolved = &Error{
 	Code:        codeServerError,
 	Description: "pairwise subject requires sector_identifier_uri or a single redirect_uri host",

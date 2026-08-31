@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-webauthn/webauthn/protocol"
-
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
@@ -279,27 +277,20 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 			Description: "PrimaryPasskey.Store is nil",
 		}
 	}
-	// Asking for an authenticator-model allowlist is asking for
-	// attestation: without it the AAGUID the allowlist compares is
-	// self-asserted by whatever produced the registration response, so
-	// any software authenticator could claim a certified model's
-	// identifier. The conveyance preference is therefore derived from
-	// the allowlist rather than exposed as a second knob an embedder
-	// could set inconsistently.
-	attestation := protocol.PreferNoAttestation
-	if len(s.AAGUIDAllowlist) > 0 {
-		attestation = protocol.PreferDirectAttestation
-	}
-	v, err := passkey.New(passkey.Config{
+	// The ceremony configuration is derived through the shared helper the
+	// enrolment facade also calls, so every policy axis the two ceremonies
+	// must agree on — user verification, conveyance preference — is
+	// computed once. A credential registered under a policy the login side
+	// reads differently is a credential the user can never sign in with.
+	v, err := passkey.New(passkey.ConfigFrom(passkey.StepPolicy{
 		RPID:                     s.RPID,
 		RPDisplayName:            s.RPDisplayName,
 		RPOrigins:                s.RPOrigins,
 		SessionTTL:               s.SessionTTL,
-		AttestationPreference:    attestation,
-		UserVerification:         passkeyUserVerification(s.RequireUserVerification),
+		RequireUserVerification:  s.RequireUserVerification,
 		AAGUIDAllowlist:          s.AAGUIDAllowlist,
 		AAGUIDReCheckOnAssertion: s.AAGUIDReCheckOnAssertion,
-	})
+	}))
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -339,19 +330,6 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 		}))
 	}
 	return auth, nil
-}
-
-// passkeyUserVerification projects the public
-// [PrimaryPasskey.RequireUserVerification] bit onto the WebAuthn
-// requirement string. Only "required" and "preferred" are reachable
-// from the public surface: "discouraged" asks an authenticator to skip
-// a gesture it would otherwise perform, which no deployment gains
-// assurance from, so the OP does not offer it.
-func passkeyUserVerification(required bool) protocol.UserVerificationRequirement {
-	if required {
-		return protocol.VerificationRequired
-	}
-	return protocol.VerificationPreferred
 }
 
 // buildStepTOTP constructs the internal [totp.Codec] + [totp.Verifier]

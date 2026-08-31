@@ -420,6 +420,11 @@ type Clock interface {
 // in place before the first record reaches the embedder's handler.
 // Wrapping is idempotent and allocation-cheap next to the emission
 // itself, which happens once per verification-page submission.
+//
+// [Deps.Clock] is threaded into the emitter so a record and the
+// tombstone written beside it carry the same instant; a deterministic
+// Deps would otherwise stamp one from the fake clock and the other
+// from the wall clock.
 func (d *Deps) auditEmitter() audit.Emitter {
 	if d == nil {
 		return audit.Discard()
@@ -430,7 +435,7 @@ func (d *Deps) auditEmitter() audit.Emitter {
 	if d.AuditLogger == nil {
 		return audit.Discard()
 	}
-	return audit.Slog(slog.New(redact.WrapHandler(d.AuditLogger.Handler())))
+	return audit.SlogClock(slog.New(redact.WrapHandler(d.AuditLogger.Handler())), timex.ClockFunc(d.now))
 }
 
 //nolint:ireturn // The configured limiter is an extension point; the fallback shares its interface.

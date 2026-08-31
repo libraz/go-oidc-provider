@@ -35,11 +35,14 @@ import (
 
 // buildMetricsCollector populates [config.metricsCollector] when
 // [WithPrometheus] supplied a registry. The function builds the
-// static-client allowlist and the endpoint-name reverse map up front
-// so the bridge and the middleware see the same closed sets — adding
-// an endpoint to the router without listing it here causes that
-// endpoint's histogram observations to land in the "other" bucket
-// rather than leaking the literal path as a label value.
+// static-client allowlist up front so the bridge has a closed set to
+// project client_id onto: a client absent from it collapses onto the
+// empty label rather than putting a request-supplied identifier into
+// the metric.
+//
+// The collector counts what the OP's own audit-event chain reports and
+// nothing else; internal/metrics states the scope, and what falls
+// outside it belongs to the embedder.
 //
 // The collector is registered on the embedder-supplied registry with
 // the issuer stamped on every metric as a constant label, so two
@@ -1000,6 +1003,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 		PairwiseEnabled:                    cfg.pairwiseEnabled(),
 		EncryptionAlgsSupported:            cfg.effectiveEncryptionAlgs(),
 		EncryptionEncsSupported:            cfg.effectiveEncryptionEncs(),
+		InboundEncryptionAlgsSupported:     cfg.inboundEncryptionAlgs(),
 		Metadata: discovery.Metadata{
 			ServiceDocumentation: cfg.discoveryMetadata.ServiceDocumentation,
 			OPPolicyURI:          cfg.discoveryMetadata.OPPolicyURI,
@@ -1055,6 +1059,13 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 // Without any subject option the projector hands every client to the
 // UUIDv7 passthrough, so the OP-internal subject flows verbatim into
 // the "sub" claim.
+//
+// # Errors
+//
+// A generator failure leaves the closure bridged onto the public error
+// catalog (see bridgeSubjectError), so a sector that cannot be resolved
+// reaches the issuance path as [ErrPairwiseSectorUnresolved] rather
+// than as an op/subject sentinel no catalog entry names.
 func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, client *store.Client) (string, error) {
 	if cfg.pairwiseEnabled() {
 		// Built-in pairwise wiring: dispatch on the per-client
@@ -1074,7 +1085,7 @@ func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, cl
 				Client:         client,
 			})
 			if err != nil {
-				return "", err
+				return "", bridgeSubjectError(err)
 			}
 			return string(sub), nil
 		}
@@ -1086,7 +1097,7 @@ func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, cl
 			Client:         client,
 		})
 		if err != nil {
-			return "", err
+			return "", bridgeSubjectError(err)
 		}
 		return string(sub), nil
 	}

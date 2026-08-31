@@ -179,16 +179,20 @@ func (invalidSaltGenerator) Generate(context.Context, GeneratorInput) (Subject, 
 // ErrSectorUnresolved signals that the requesting client carried no
 // sector_identifier_uri AND has more than one (or zero) registered
 // redirect_uri host from which a sector can be derived. The op
-// package wraps the sentinel into op.ErrPairwiseSectorUnresolved for
-// the public catalog.
+// package bridges the sentinel onto op.ErrPairwiseSectorUnresolved for
+// the public catalog: an error surfaced by the issuance path or by
+// op.Provider.SubjectGenerator matches both values under errors.Is.
 var ErrSectorUnresolved = errors.New("subject: pairwise sector cannot be resolved from client")
 
 // ErrInvalidSectorURL signals that a SectorIdentifierURI string is
-// not a parseable URL with a non-empty host. The op package wraps the
-// sentinel into a server-side configuration error.
+// not a parseable URL with a non-empty host. The op package bridges the
+// sentinel onto a server-class op.Error; the sentinel itself stays in
+// the chain for errors.Is.
 var ErrInvalidSectorURL = errors.New("subject: sector_identifier_uri is not a parseable URL")
 
 // ErrSaltTooShort signals that [Pairwise] was constructed with a
-// salt shorter than [MinSaltLength]. The op package wraps the
-// sentinel into op.ErrPairwiseSaltTooShort for the public catalog.
+// salt shorter than [MinSaltLength]. The op package bridges the
+// sentinel onto op.ErrPairwiseSaltTooShort for the public catalog,
+// which the option-site validator reports at construction time for the
+// same condition.
 var ErrSaltTooShort = errors.New("subject: pairwise salt is shorter than the documented minimum")

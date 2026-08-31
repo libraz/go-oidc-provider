@@ -100,13 +100,9 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 	if priorInit && current != store.SubjectModePublic {
 		return subjectModeMismatch("subject-mode marker absent but op-init sentinel present (store has been used previously), configured=" + current)
 	}
-	hasGrants, hasErr := c.store.Grants().HasAny(ctx)
+	hasGrants, hasErr := c.storeHasAnyGrant(ctx)
 	if hasErr != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "grant-store probe for subject-mode gate failed",
-			Cause:       hasErr,
-		}
+		return hasErr
 	}
 	if hasGrants && current != store.SubjectModePublic {
 		return subjectModeMismatch("persisted marker absent on a populated store (legacy upgrade infers " + store.SubjectModePublic + "), configured=" + current)
@@ -119,6 +115,31 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 		}
 	}
 	return c.writeOpInitMarker(ctx, meta)
+}
+
+// storeHasAnyGrant probes the grant store for the legacy-upgrade inference
+// in [config.enforceSubjectModeGate].
+//
+// A nil grant substore is a supported configuration, not an oversight:
+// validate() admits it whenever needsGrantStore reports that the enabled
+// grant set never writes a grant record (a client_credentials-only,
+// machine-to-machine deployment). Such a store holds no grants for the
+// inference to read, so the probe reports "no grants" rather than
+// dereferencing the missing substore.
+func (c *config) storeHasAnyGrant(ctx context.Context) (bool, *Error) {
+	grants := c.store.Grants()
+	if isNilLike(grants) {
+		return false, nil
+	}
+	has, err := grants.HasAny(ctx)
+	if err != nil {
+		return false, &Error{
+			Code:        codeConfiguration,
+			Description: "grant-store probe for subject-mode gate failed",
+			Cause:       err,
+		}
+	}
+	return has, nil
 }
 
 func subjectModeMismatch(detail string) *Error {

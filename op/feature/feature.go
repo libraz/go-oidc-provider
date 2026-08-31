@@ -10,9 +10,19 @@ const (
 	// accidentally-zero callers fail loudly.
 	flagUnspecified Flag = iota
 
-	// PKCE enables RFC 7636 Proof Key for Code Exchange. PKCE is enabled
-	// by default on the authorization_code grant; explicit selection only
-	// affects discovery metadata and per-client policy.
+	// PKCE names RFC 7636 Proof Key for Code Exchange.
+	//
+	// The flag has no runtime or discovery effect. PKCE with S256 is
+	// supported unconditionally and "code_challenge_methods_supported"
+	// always advertises ["S256"], so passing this flag to
+	// [op.WithFeature] neither adds nor removes anything. In particular
+	// it does NOT make code_challenge mandatory: public and native
+	// clients always require it, and confidential clients are held to it
+	// only under [op.WithProfile] with profile.Baseline or either FAPI
+	// 2.0 profile. Use [op.WithProfile] to harden a deployment.
+	//
+	// The constant is retained because it is part of the v1.0 stable
+	// enumeration.
 	PKCE
 
 	// PAR enables RFC 9126 Pushed Authorization Requests. The /par

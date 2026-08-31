@@ -1,10 +1,15 @@
 package op_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -692,4 +697,153 @@ func TestProvider_RevokeInitialAccessToken_RejectsEmptyID(t *testing.T) {
 	if !op.IsServerError(err) {
 		t.Errorf("empty id must surface as a server-side configuration error: %v", err)
 	}
+}
+
+// TestIntegration_DCR_IssuerPath_ClientManagementIsReachable drives the
+// RFC 7592 management endpoint under an issuer that carries a path, the
+// shape a multi-tenant deployment has. An issuer path is part of the
+// public endpoint namespace, so the handler is mounted below it; the
+// registration_client_uri the OP itself advertises therefore also carries
+// it, and every read / update / delete an RP performs against that URL
+// must be classified as a management request rather than as a second
+// registration under a longer path.
+func TestIntegration_DCR_IssuerPath_ClientManagementIsReachable(t *testing.T) {
+	t.Parallel()
+
+	const tenantIssuer = validIssuer + "/tenant"
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	provider, err := op.New(
+		op.WithIssuer(tenantIssuer),
+		op.WithStore(s),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		op.WithClock(clock),
+		fixtureAuthenticator(),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	srv := httptest.NewServer(provider)
+	t.Cleanup(srv.Close)
+
+	iat, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+
+	created := postJSON(t, srv.URL+"/tenant/oidc/register", iat.Value,
+		map[string]any{"redirect_uris": []string{"https://rp.test.invalid/callback"}})
+	if created.status != http.StatusCreated {
+		t.Fatalf("POST /register: status=%d want 201 body=%s", created.status, created.raw)
+	}
+	manageURL, _ := created.body["registration_client_uri"].(string)
+	rat, _ := created.body["registration_access_token"].(string)
+	clientID, _ := created.body["client_id"].(string)
+	if manageURL == "" || rat == "" || clientID == "" {
+		t.Fatalf("registration response is missing management credentials: %v", created.body)
+	}
+	// The advertised URL is rooted at the issuer, which is not the
+	// ephemeral host the test server listens on. Only the host is
+	// rewritten: the path is exactly what an RP would follow, and it is
+	// the value under test.
+	want := tenantIssuer + "/oidc/register/" + clientID
+	if manageURL != want {
+		t.Fatalf("registration_client_uri=%q want %q", manageURL, want)
+	}
+	manageURL = srv.URL + strings.TrimPrefix(manageURL, validIssuer)
+
+	read := requestJSON(t, http.MethodGet, manageURL, rat, nil)
+	if read.status != http.StatusOK {
+		t.Errorf("GET registration_client_uri: status=%d want 200 body=%s", read.status, read.raw)
+	}
+	// A successful management request rotates the registration access
+	// token, so each step below presents the token the previous response
+	// carried.
+	if rotated, _ := read.body["registration_access_token"].(string); rotated != "" {
+		rat = rotated
+	}
+
+	// A POST to the management URL is not a registration. Answering it as
+	// one would mint a second client behind a URL the OP told the RP was
+	// the handle on the first.
+	dup := requestJSON(t, http.MethodPost, manageURL, rat,
+		map[string]any{"redirect_uris": []string{"https://rp.test.invalid/other"}})
+	if dup.status != http.StatusMethodNotAllowed {
+		t.Errorf("POST registration_client_uri: status=%d want 405 body=%s", dup.status, dup.raw)
+	}
+	if _, ok := dup.body["client_id"]; ok {
+		t.Errorf("POST registration_client_uri minted a duplicate registration: %v", dup.body)
+	}
+
+	updated := requestJSON(t, http.MethodPut, manageURL, rat, map[string]any{
+		"client_id":     clientID,
+		"redirect_uris": []string{"https://rp.test.invalid/updated"},
+	})
+	if updated.status != http.StatusOK {
+		t.Fatalf("PUT registration_client_uri: status=%d want 200 body=%s", updated.status, updated.raw)
+	}
+	if rotated, _ := updated.body["registration_access_token"].(string); rotated != "" {
+		rat = rotated
+	}
+
+	deleted := requestJSON(t, http.MethodDelete, manageURL, rat, nil)
+	if deleted.status != http.StatusNoContent {
+		t.Errorf("DELETE registration_client_uri: status=%d want 204 body=%s", deleted.status, deleted.raw)
+	}
+}
+
+// jsonResponse is the decoded shape the DCR round-trip helpers return.
+// raw is retained so a failing assertion can name the body the OP sent
+// even when it is not valid JSON.
+type jsonResponse struct {
+	status int
+	raw    string
+	body   map[string]any
+}
+
+// postJSON issues an RFC 7591 registration request authenticated with an
+// initial access token.
+func postJSON(tb testing.TB, url, token string, payload map[string]any) jsonResponse {
+	tb.Helper()
+	return requestJSON(tb, http.MethodPost, url, token, payload)
+}
+
+// requestJSON issues one bearer-authenticated JSON request and decodes
+// the response. A nil payload sends no body, which is the shape GET and
+// DELETE take.
+func requestJSON(tb testing.TB, method, url, token string, payload map[string]any) jsonResponse {
+	tb.Helper()
+
+	var body io.Reader = http.NoBody
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			tb.Fatalf("marshal payload: %v", err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, url, body)
+	if err != nil {
+		tb.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		tb.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		tb.Fatalf("read body: %v", err)
+	}
+	out := jsonResponse{status: resp.StatusCode, raw: string(raw)}
+	_ = json.Unmarshal(raw, &out.body)
+	return out
 }

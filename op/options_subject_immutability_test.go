@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -242,6 +243,50 @@ func TestSubjectModeGate_AcceptsPublicOnUsedStoreWithWipedMarker(t *testing.T) {
 		t.Errorf("marker=%q want %q", got, store.SubjectModePublic)
 	}
 }
+
+// TestSubjectModeGate_NilGrantStoreOnMachineToMachineStore pins the
+// construction contract for a deployment whose store omits the grant
+// substore. Enabling client_credentials alone issues no grant record, so
+// validation admits a nil [store.GrantStore]; the subject-mode gate must
+// reach the same conclusion instead of dereferencing the missing substore.
+// op.New returns a usable provider on this shape.
+func TestSubjectModeGate_NilGrantStoreOnMachineToMachineStore(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	provider, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storeWithoutGrants{Store: st}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		op.WithGrants(grant.ClientCredentials),
+		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyNone),
+	)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("op.New returned a nil provider with a nil error")
+	}
+	// The gate still records the mode: the nil substore only removes the
+	// legacy-upgrade inference, not the marker write that makes a later
+	// strategy switch detectable.
+	got, err := st.Metadata().Get(context.Background(), store.SubjectModeKey)
+	if err != nil {
+		t.Fatalf("metadata Get: %v", err)
+	}
+	if got != store.SubjectModePublic {
+		t.Errorf("marker=%q want %q", got, store.SubjectModePublic)
+	}
+}
+
+// storeWithoutGrants is a [store.Store] whose grant substore is absent,
+// as a machine-to-machine backend that never persists a grant record may
+// legitimately leave it. Every other substore delegates to the embedded
+// store.
+type storeWithoutGrants struct{ store.Store }
+
+// Grants implements [store.Store] by reporting no grant substore.
+func (storeWithoutGrants) Grants() store.GrantStore { return nil }
 
 // passthroughGenerator is a SubjectGenerator that returns the input
 // InternalUserID verbatim. The test only needs it to exercise the

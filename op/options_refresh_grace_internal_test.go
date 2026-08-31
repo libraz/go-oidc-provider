@@ -12,13 +12,16 @@ import (
 // that does not set the option: the ordinary default, not a strict zero.
 //
 // Narrowing it to zero here is the one thing this function must not do.
-// [New] separately refuses an explicit non-zero window under a FAPI 2.0
-// profile, so a zero default would leave no configuration whatsoever
-// that passes certification: the suite's
+// A deployment that declares the profile and configures nothing else
+// would then have no window at all, and the suite's
 // fapi2-security-profile-id2-refresh-token module redeems the rotated
-// predecessor a second time and requires a 200, which is the retry the
-// window exists to absorb (RFC 9700 §2.2.2). A profile the OP cannot be
+// predecessor a second time and requires a 200 — the retry the window
+// exists to absorb (RFC 9700 §2.2.2). A profile the OP cannot be
 // certified under is not a stricter profile, it is a broken one.
+//
+// The same value is the ceiling [config.validateProfile] enforces on an
+// explicit window under the profile, so no FAPI 2.0 configuration
+// resolves to a wider one than this.
 //
 // The replay defence that does apply unconditionally is the chain-wide
 // cascade, which no profile setting can switch off.

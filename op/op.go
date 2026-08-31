@@ -91,12 +91,18 @@ func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // either inspect [store.Client.SubjectType] themselves or invoke the
 // per-client projector through a /authorize round-trip.
 //
+// Failures of the built-in generators are reported as the catalog
+// entries that document them ([ErrSubjectInputEmpty],
+// [ErrPairwiseSectorUnresolved]), matchable with [errors.Is] and
+// classified by [IsServerError]. A generator supplied through
+// [WithSubjectGenerator] is returned verbatim, errors included.
+//
 // Stable since v1.0.
 func (p *Provider) SubjectGenerator() SubjectGenerator { //nolint:ireturn,nolintlint // sealed-sum interface return is the contract.
 	if p == nil || p.cfg == nil {
 		return nil
 	}
-	return p.cfg.effectiveSubjectGenerator()
+	return p.cfg.catalogSubjectGenerator()
 }
 
 // LocaleResolver returns the locale [Resolver] the Provider built
@@ -944,11 +950,14 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 		}
 		// Capture the public predicate inside a closure that adapts
 		// the LoginFlowContext shape to the public LoginContext one.
-		// The closure preserves nil semantics: a nil When projects to
-		// a nil compiled predicate (the compiler then substitutes the
-		// constant-false predicate).
+		// A nil When is the constant-true predicate per the [Rule]
+		// contract, substituted here rather than left nil: the compiled
+		// flow reads an unset predicate as "never fires", which would
+		// turn a declared second factor into a step no LoginContext can
+		// reach and silently authenticate every user on the primary
+		// factor alone.
 		pred := r.When
-		var when func(authn.LoginFlowContext) bool
+		when := func(authn.LoginFlowContext) bool { return true }
 		if pred != nil {
 			when = func(lc authn.LoginFlowContext) bool {
 				return pred(toPublicLoginContext(lc))

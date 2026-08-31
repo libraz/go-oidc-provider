@@ -283,6 +283,7 @@ func (c *config) emitPartialWiringWarnings() {
 	c.warnCaptchaOnScriptlessUI()
 	c.warnPasskeyOnScriptlessUI()
 	c.warnMTLSOptionsWithoutFeature()
+	c.warnEncryptionKidlessTrialCap()
 }
 
 // warnMTLSOptionsWithoutFeature reports mTLS knobs configured on an OP

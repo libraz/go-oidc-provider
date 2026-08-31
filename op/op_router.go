@@ -357,11 +357,16 @@ func mountRegistrationEndpoint(
 		return
 	}
 	grantSubjects, _ := cfg.store.Grants().(store.GrantSubjectLister)
+	// The path both mux entries below are keyed on. It is threaded into the
+	// handler so its management-vs-registration discrimination reads the
+	// same base the router mounted under, issuer path included.
+	registerPath := protocolEndpointPath(cfg, cfg.endpoints.Register)
 	deps := registrationendpoint.Deps{
 		HighEntropyClientSecrets:             cfg.highEntropyClientSecrets,
 		Issuer:                               cfg.issuer,
 		MountPrefix:                          cfg.mountPrefix,
 		RegisterPath:                         cfg.endpoints.Register,
+		RegisterMountPath:                    registerPath,
 		Clock:                                cfg.clock,
 		Clients:                              registry,
 		InitialAccessTokens:                  cfg.store.InitialAccessTokens(),
@@ -389,7 +394,6 @@ func mountRegistrationEndpoint(
 		OpaqueAccessTokens:                   cfg.store.OpaqueAccessTokens(),
 	}
 	handler := strictCORS.Handler(registrationendpoint.Handler(deps))
-	registerPath := protocolEndpointPath(cfg, cfg.endpoints.Register)
 	mux.Handle(registerPath, handler)
 	mux.Handle(registerPath+"/{client_id}", handler)
 }
@@ -436,6 +440,7 @@ func mountPAREndpoint(
 			SecretVerifier:             cfg.clientSecretVerifier(),
 			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
 			ClaimsParameterEnabled:     cfg.claimsParameterSupported(),
+			ACRValuesSupported:         cfg.acrValuesSupportedCopy(),
 			Audit:                      cfg.effectiveAuditEmitter(),
 		})),
 	)
@@ -601,6 +606,7 @@ func mountAuthorizeHandlers(
 		Issuer:                 cfg.issuer,
 		AllowPrivateNetworkJAR: cfg.allowPrivateNetworkJAR,
 		ClaimsParameterEnabled: cfg.claimsParameterSupported(),
+		ACRValuesSupported:     cfg.acrValuesSupportedCopy(),
 		ACRResolver:            newACRResolver(cfg),
 		LocaleResolver:         locales,
 		ProxyTrust:             proxyTrust,

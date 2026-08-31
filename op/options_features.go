@@ -205,8 +205,26 @@ func WithStrictOfflineAccess() Option {
 
 // WithAccessTokenFormat selects the global access-token format.
 // Default [AccessTokenFormatJWT]; passing [AccessTokenFormatOpaque]
-// switches every issued access token onto the opaque-bearer path
-// described in [store.OpaqueAccessToken].
+// switches the access tokens the OP mints for the grants it implements
+// itself — authorization_code, refresh_token, client_credentials,
+// device_code, CIBA — onto the opaque-bearer path described in
+// [store.OpaqueAccessToken].
+//
+// Two issuance paths stay outside the option's reach:
+//
+//   - [BoundAccessToken] always mints an RFC 9068 JWT. A bound token
+//     carries the handler's own claims and an audience set, and the
+//     opaque shadow row has room for neither, so an opaque deployment
+//     would hand the resource server a token stripped of the claims
+//     the handler issued it for.
+//   - A [CustomGrantResponse.AccessToken] is whatever the handler
+//     signed or minted; the OP writes the value verbatim and has no
+//     say in its shape.
+//
+// A refresh chain rooted in a custom grant does converge on the
+// configured format: the rotated access token is minted by the OP
+// through the ordinary path, so a chain whose root was a bound JWT
+// yields opaque successors under an opaque deployment.
 //
 // When the opaque format is selected the configured [Store] MUST
 // return a non-nil [store.OpaqueAccessTokenStore] from

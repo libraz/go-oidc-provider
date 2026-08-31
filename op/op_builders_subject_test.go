@@ -2,6 +2,7 @@ package op //nolint:testpackage // exercises package-private buildSubjectProject
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -224,6 +225,66 @@ func TestBuildSubjectProjector_DefaultPathPassthrough(t *testing.T) {
 		if got != "user-default" {
 			t.Fatalf("client %s got sub=%q, want passthrough user-default", c.ID, got)
 		}
+	}
+}
+
+// TestBuildSubjectProjector_UnresolvedSectorReachesTheCatalog pins the
+// error the issuance path surfaces when a pairwise client registers
+// several redirect hosts and no sector_identifier_uri: the sector
+// cannot be derived, and the failure must arrive as the catalog entry
+// that documents it. The projector is the closure every releasing
+// surface calls, so an error that only carried the op/subject sentinel
+// would leave [ErrPairwiseSectorUnresolved] — and the actionable
+// "configure sector_identifier_uri" diagnosis it names — unreachable.
+func TestBuildSubjectProjector_UnresolvedSectorReachesTheCatalog(t *testing.T) {
+	t.Parallel()
+	cfg := &config{
+		pairwiseSalt:     projectorSalt(),
+		subjectGenerator: newPairwiseGeneratorFromSalt(projectorSalt()),
+	}
+	projector := buildSubjectProjector(cfg)
+
+	multiHost := &store.Client{
+		ID:          "multi-host-rp",
+		SubjectType: "pairwise",
+		RedirectURIs: []string{
+			"https://alpha.example.com/cb",
+			"https://beta.example.com/cb",
+		},
+	}
+
+	got, err := projector(context.Background(), "user-11", multiHost)
+	if err == nil {
+		t.Fatalf("projector returned sub=%q for an unresolvable sector, want an error", got)
+	}
+	if !errors.Is(err, ErrPairwiseSectorUnresolved) {
+		t.Errorf("errors.Is(err, ErrPairwiseSectorUnresolved) = false for %v", err)
+	}
+	if !errors.Is(err, subject.ErrSectorUnresolved) {
+		t.Errorf("bridging dropped the originating sentinel from the chain: %v", err)
+	}
+	if !IsServerError(err) {
+		t.Errorf("IsServerError(err) = false; the failure is an operator fault: %v", err)
+	}
+}
+
+// TestBuildSubjectProjector_EmptyInputReachesTheCatalog is the same
+// contract for the other built-in generator: the default passthrough
+// refuses an empty InternalUserID, and the catalog entry naming that
+// condition must match what the projector returns.
+func TestBuildSubjectProjector_EmptyInputReachesTheCatalog(t *testing.T) {
+	t.Parallel()
+	projector := buildSubjectProjector(&config{})
+
+	_, err := projector(context.Background(), "", &store.Client{ID: "c1"})
+	if err == nil {
+		t.Fatal("projector accepted an empty InternalUserID")
+	}
+	if !errors.Is(err, ErrSubjectInputEmpty) {
+		t.Errorf("errors.Is(err, ErrSubjectInputEmpty) = false for %v", err)
+	}
+	if !errors.Is(err, subject.ErrInputEmpty) {
+		t.Errorf("bridging dropped the originating sentinel from the chain: %v", err)
 	}
 }
 
