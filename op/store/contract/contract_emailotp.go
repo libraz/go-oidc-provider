@@ -26,6 +26,17 @@ type EmailOTPBackend struct {
 	// against. The harness builds records at Now±1h to exercise the
 	// live and expired sides of every window.
 	Now func() time.Time
+
+	// Diverge rewrites the stored challenge for subject out of band: it
+	// moves at least one value a caller can read back while leaving the
+	// record's Version untouched, the way a writer that bypassed the
+	// store would. Backends that can reach their storage directly
+	// provide it so the contract can separate a compare-and-swap that
+	// matches the whole record from one that matches Version alone.
+	// Nothing else in the suite separates the two, because Put,
+	// CompareAndSwap and Consume all stamp a fresh Version whenever they
+	// change a value. Nil skips only that case.
+	Diverge func(t *testing.T, subject string)
 }
 
 // EmailOTPFactory builds a fresh standalone email-OTP backend for a
@@ -51,6 +62,7 @@ func RunEmailOTPs(t *testing.T, f EmailOTPFactory) {
 		{"RetentionFallsBackToExpiresAt", emailOTPRetentionFallback},
 		{"CompareAndSwapAppliesNext", emailOTPCASApplies},
 		{"CompareAndSwapStaleSnapshotRejected", emailOTPCASStale},
+		{"CompareAndSwapRejectsVersionEqualDivergedRecord", emailOTPCASDiverged},
 		{"CompareAndSwapRejectsInvalidVersion", emailOTPCASInvalidVersion},
 		{"CompareAndSwapIdenticalHasOneWinner", emailOTPCASIdentical},
 		{"NilPreviousReservesFirstSend", emailOTPCASReserves},
@@ -244,6 +256,60 @@ func emailOTPCASStale(t *testing.T, b EmailOTPBackend) {
 	expected.Version = got.Version
 	assertEmailOTPVersionChanged(t, stale.Version, got.Version)
 	assertEmailOTPEqual(t, got, &expected)
+}
+
+// emailOTPCASDiverged pins the precondition
+// [store.EmailOTPStore.CompareAndSwap] states: the stored challenge has to
+// equal previous field for field, not merely carry the same Version.
+//
+// Every other case here is blind to the difference, because the store's
+// own writes stamp a fresh Version whenever they move a value, so
+// "Version matches" and "the record matches" agree on all of them. They
+// disagree only where a writer outside the store moved a value and left
+// the Version behind, which is what [EmailOTPBackend.Diverge] produces. A
+// backend that gated on Version alone would apply the swap there,
+// overwriting a challenge the caller never read — and because the resend
+// cap and the brute-force window live in those counters, the write that
+// erases them is a rate-limit bypass rather than a lost update.
+func emailOTPCASDiverged(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	if b.Diverge == nil {
+		t.Skip("backend supplies no Diverge hook: the Version-equal, value-different record needs an out-of-band write")
+	}
+	ctx := context.Background()
+	seed := emailOTPContractRecord(b.Now())
+	if err := b.Store.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	previous, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+
+	b.Diverge(t, seed.Subject)
+	diverged, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after the out-of-band write: %v", err)
+	}
+	if diverged.Version != previous.Version {
+		t.Fatalf("Diverge moved Version to %d; it has to stay at %d for this case to exist",
+			diverged.Version, previous.Version)
+	}
+	if reflect.DeepEqual(diverged, previous) {
+		t.Fatalf("Diverge left the record unchanged: %+v", diverged)
+	}
+
+	next := *previous
+	next.FailedCount++
+	if err := b.Store.CompareAndSwap(ctx, previous, &next); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap on a Version-equal, value-different record = %v, want ErrAlreadyConsumed", err)
+	}
+
+	after, err := b.Store.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after the refused swap: %v", err)
+	}
+	assertEmailOTPEqual(t, after, diverged)
 }
 
 func emailOTPCASInvalidVersion(t *testing.T, b EmailOTPBackend) {

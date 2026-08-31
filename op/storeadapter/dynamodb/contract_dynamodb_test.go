@@ -170,9 +170,13 @@ func runMFAContracts(t *testing.T, f contract.Factory) {
 
 	t.Run("TOTPStore", func(t *testing.T) {
 		t.Parallel()
-		contract.RunTOTPs(t, func(t *testing.T) store.TOTPStore {
+		contract.RunTOTPs(t, func(t *testing.T) contract.TOTPBackend {
 			t.Helper()
-			return adapter(t).TOTPs()
+			s := adapter(t)
+			return contract.TOTPBackend{
+				Store:   s.TOTPs(),
+				Diverge: s.DivergeTOTPRecord,
+			}
 		})
 	})
 
@@ -209,7 +213,11 @@ func runMFAContracts(t *testing.T, f contract.Factory) {
 			if !ok {
 				t.Fatalf("factory produced %T, want *oidcdynamo.Store", b.Store)
 			}
-			return contract.EmailOTPBackend{Store: s.EmailOTPs(), Now: b.Now}
+			return contract.EmailOTPBackend{
+				Store:   s.EmailOTPs(),
+				Now:     b.Now,
+				Diverge: s.DivergeEmailOTPRecord,
+			}
 		})
 	})
 }

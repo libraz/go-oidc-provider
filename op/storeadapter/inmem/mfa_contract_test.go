@@ -15,8 +15,12 @@ import (
 func TestTOTPStoreContract(t *testing.T) {
 	t.Parallel()
 
-	contract.RunTOTPs(t, func(*testing.T) store.TOTPStore {
-		return inmem.New().TOTPs()
+	contract.RunTOTPs(t, func(*testing.T) contract.TOTPBackend {
+		s := inmem.New()
+		return contract.TOTPBackend{
+			Store:   s.TOTPs(),
+			Diverge: s.DivergeTOTPRecord,
+		}
 	})
 }
 
@@ -34,9 +38,11 @@ func TestEmailOTPStoreContract(t *testing.T) {
 	contract.RunEmailOTPs(t, func(t *testing.T) contract.EmailOTPBackend {
 		t.Helper()
 		clock := &mutableClock{now: contract.Reference}
+		s := inmem.New(inmem.WithClock(clock))
 		return contract.EmailOTPBackend{
-			Store: inmem.New(inmem.WithClock(clock)).EmailOTPs(),
-			Now:   clock.Now,
+			Store:   s.EmailOTPs(),
+			Now:     clock.Now,
+			Diverge: s.DivergeEmailOTPRecord,
 		}
 	})
 }

@@ -13,11 +13,30 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// TOTPFactory builds a fresh standalone [store.TOTPStore] for a single
-// contract sub-test. TOTP enrolments are intentionally separate from
-// [Backend] because they are supplied directly to the TOTP step rather
-// than through the aggregate [store.Store].
-type TOTPFactory func(t *testing.T) store.TOTPStore
+// TOTPBackend bundles a freshly constructed [store.TOTPStore] with the
+// hooks a backend supplies to reach states its own API cannot produce.
+// TOTP enrolments are intentionally separate from [Backend] because they
+// are supplied directly to the TOTP step rather than through the
+// aggregate [store.Store].
+type TOTPBackend struct {
+	// Store is the substore under test.
+	Store store.TOTPStore
+
+	// Diverge rewrites the stored enrolment for subject out of band: it
+	// moves at least one value a caller can read back while leaving the
+	// record's Version untouched, the way a writer that bypassed the
+	// store would. Backends that can reach their storage directly
+	// provide it so the contract can separate a compare-and-swap that
+	// matches the whole record from one that matches Version alone.
+	// Nothing else in the suite separates the two, because Put,
+	// CompareAndSwap and Accept all stamp a fresh Version whenever they
+	// change a value. Nil skips only that case.
+	Diverge func(t *testing.T, subject string)
+}
+
+// TOTPFactory builds a fresh standalone TOTP backend for a single
+// contract sub-test.
+type TOTPFactory func(t *testing.T) TOTPBackend
 
 // RunTOTPs exercises the round-trip, compare-and-swap, and single-use
 // acceptance guarantees of [store.TOTPStore]. Adapter authors should call
@@ -28,13 +47,14 @@ func RunTOTPs(t *testing.T, f TOTPFactory) {
 
 	cases := []struct {
 		name string
-		run  func(*testing.T, store.TOTPStore)
+		run  func(*testing.T, TOTPBackend)
 	}{
 		{"Missing", totpMissing},
 		{"PutGetRoundTrip", totpRoundTrip},
 		{"PutReplacesEnrolment", totpPutReplaces},
 		{"CompareAndSwapAppliesNext", totpCASApplies},
 		{"CompareAndSwapStaleSnapshotRejected", totpCASStale},
+		{"CompareAndSwapRejectsVersionEqualDivergedRecord", totpCASDiverged},
 		{"CompareAndSwapRejectsInvalidVersion", totpCASInvalidVersion},
 		{"CompareAndSwapIdenticalHasOneWinner", totpCASIdentical},
 		{"AcceptAdvancesStep", totpAcceptAdvances},
@@ -56,15 +76,17 @@ func RunTOTPs(t *testing.T, f TOTPFactory) {
 	}
 }
 
-func totpMissing(t *testing.T, s store.TOTPStore) {
+func totpMissing(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	if _, err := s.Get(context.Background(), "missing"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Get(missing) error = %v, want ErrNotFound", err)
 	}
 }
 
-func totpRoundTrip(t *testing.T, s store.TOTPStore) {
+func totpRoundTrip(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	want := totpContractRecord()
 	if err := s.Put(ctx, want); err != nil {
@@ -84,8 +106,9 @@ func totpRoundTrip(t *testing.T, s store.TOTPStore) {
 	assertTOTPEqual(t, got, want)
 }
 
-func totpPutReplaces(t *testing.T, s store.TOTPStore) {
+func totpPutReplaces(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	first := totpContractRecord()
 	if err := s.Put(ctx, first); err != nil {
@@ -115,8 +138,9 @@ func totpPutReplaces(t *testing.T, s store.TOTPStore) {
 	assertTOTPEqual(t, got, second)
 }
 
-func totpCASApplies(t *testing.T, s store.TOTPStore) {
+func totpCASApplies(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -148,8 +172,9 @@ func totpCASApplies(t *testing.T, s store.TOTPStore) {
 	assertTOTPEqual(t, got, &expected)
 }
 
-func totpCASStale(t *testing.T, s store.TOTPStore) {
+func totpCASStale(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -192,8 +217,63 @@ func totpCASStale(t *testing.T, s store.TOTPStore) {
 	assertTOTPEqual(t, got, &expected)
 }
 
-func totpCASInvalidVersion(t *testing.T, s store.TOTPStore) {
+// totpCASDiverged pins the precondition [store.TOTPStore.CompareAndSwap]
+// states: the stored enrolment has to equal previous field for field, not
+// merely carry the same Version.
+//
+// Every other case here is blind to the difference, because the store's
+// own writes stamp a fresh Version whenever they move a value, so
+// "Version matches" and "the record matches" agree on all of them. They
+// disagree only where a writer outside the store moved a value and left
+// the Version behind, which is what [TOTPBackend.Diverge] produces. A
+// backend that gated on Version alone would apply the swap there,
+// overwriting an enrolment the caller never read — erasing, on its next
+// read, whatever failure counter or lock its own write buried.
+func totpCASDiverged(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	if b.Diverge == nil {
+		t.Skip("backend supplies no Diverge hook: the Version-equal, value-different record needs an out-of-band write")
+	}
+	s := b.Store
+	ctx := context.Background()
+	seed := totpContractRecord()
+	if err := s.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	previous, err := s.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+
+	b.Diverge(t, seed.Subject)
+	diverged, err := s.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after the out-of-band write: %v", err)
+	}
+	if diverged.Version != previous.Version {
+		t.Fatalf("Diverge moved Version to %d; it has to stay at %d for this case to exist",
+			diverged.Version, previous.Version)
+	}
+	if reflect.DeepEqual(diverged, previous) {
+		t.Fatalf("Diverge left the record unchanged: %+v", diverged)
+	}
+
+	next := *previous
+	next.LockedUntil = Reference.Add(24 * time.Hour)
+	if err := s.CompareAndSwap(ctx, previous, &next); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap on a Version-equal, value-different record = %v, want ErrAlreadyConsumed", err)
+	}
+
+	after, err := s.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after the refused swap: %v", err)
+	}
+	assertTOTPEqual(t, after, diverged)
+}
+
+func totpCASInvalidVersion(t *testing.T, b TOTPBackend) {
+	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -217,8 +297,9 @@ func totpCASInvalidVersion(t *testing.T, s store.TOTPStore) {
 	}
 }
 
-func totpCASIdentical(t *testing.T, s store.TOTPStore) {
+func totpCASIdentical(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -269,8 +350,9 @@ func totpCASIdentical(t *testing.T, s store.TOTPStore) {
 	assertTOTPVersionChanged(t, previous.Version, got.Version)
 }
 
-func totpAcceptAdvances(t *testing.T, s store.TOTPStore) {
+func totpAcceptAdvances(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -302,8 +384,9 @@ func totpAcceptAdvances(t *testing.T, s store.TOTPStore) {
 	assertTOTPEqual(t, got, &expected)
 }
 
-func totpAcceptReplay(t *testing.T, s store.TOTPStore) {
+func totpAcceptReplay(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -341,8 +424,9 @@ func totpAcceptReplay(t *testing.T, s store.TOTPStore) {
 	assertTOTPEqual(t, got, &expected)
 }
 
-func totpAcceptEarlier(t *testing.T, s store.TOTPStore) {
+func totpAcceptEarlier(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	seed.LastAcceptedStep = 100
@@ -369,8 +453,9 @@ func totpAcceptEarlier(t *testing.T, s store.TOTPStore) {
 	}
 }
 
-func totpAcceptStaleEnrollment(t *testing.T, s store.TOTPStore) {
+func totpAcceptStaleEnrollment(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	old := totpContractRecord()
 	old.Subject = "enrollment-subject"
@@ -405,8 +490,9 @@ func totpAcceptStaleEnrollment(t *testing.T, s store.TOTPStore) {
 	assertTOTPEqual(t, got, newerStored)
 }
 
-func totpAcceptInvalidVersion(t *testing.T, s store.TOTPStore) {
+func totpAcceptInvalidVersion(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -425,8 +511,9 @@ func totpAcceptInvalidVersion(t *testing.T, s store.TOTPStore) {
 	assertContractTOTPUnchanged(t, "invalid Accept input", current, currentBefore)
 }
 
-func totpDelete(t *testing.T, s store.TOTPStore) {
+func totpDelete(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -440,15 +527,17 @@ func totpDelete(t *testing.T, s store.TOTPStore) {
 	}
 }
 
-func totpDeleteMissing(t *testing.T, s store.TOTPStore) {
+func totpDeleteMissing(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	if err := s.Delete(context.Background(), "missing"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Delete(missing) error = %v, want ErrNotFound", err)
 	}
 }
 
-func totpDefensiveCopies(t *testing.T, s store.TOTPStore) {
+func totpDefensiveCopies(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -485,8 +574,9 @@ func totpDefensiveCopies(t *testing.T, s store.TOTPStore) {
 	}
 }
 
-func totpConcurrentCAS(t *testing.T, s store.TOTPStore) {
+func totpConcurrentCAS(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
@@ -541,8 +631,9 @@ func totpConcurrentCAS(t *testing.T, s store.TOTPStore) {
 	assertTOTPVersionChanged(t, current.Version, got.Version)
 }
 
-func totpDeleteRecreateRejectsStaleSnapshot(t *testing.T, s store.TOTPStore) {
+func totpDeleteRecreateRejectsStaleSnapshot(t *testing.T, b TOTPBackend) {
 	t.Helper()
+	s := b.Store
 	ctx := context.Background()
 	seed := totpContractRecord()
 	if err := s.Put(ctx, seed); err != nil {
