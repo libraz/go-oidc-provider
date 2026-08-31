@@ -21,6 +21,13 @@
 // invoke [Verifier.Verify] per request; the verifier holds its
 // configuration in immutable fields and is safe for concurrent use.
 //
+// Endpoints that authenticate a client around the proof drive the whole
+// per-request lifecycle — presence test, stateless verification, client
+// authentication, replay commit, and the wire mapping of every [Err*]
+// sentinel — through [Gate.Authenticate] rather than assembling the
+// phases themselves, so the ordering and the error envelope stay
+// identical across them.
+//
 // # Algorithm policy
 //
 // The verifier accepts ES256, EdDSA, and PS256 proofs. RS256 (PKCS#1

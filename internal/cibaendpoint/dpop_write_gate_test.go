@@ -128,6 +128,14 @@ func (f *dpopWriteGateFixture) proof(t *testing.T, jti, htm string) string {
 // supplied DPoP proof and Basic credentials.
 func (f *dpopWriteGateFixture) post(t *testing.T, proof, secret string) *httptest.ResponseRecorder {
 	t.Helper()
+	return f.postProofValues(t, secret, proof)
+}
+
+// postProofValues is [dpopWriteGateFixture.post] with explicit control
+// over the "DPoP" header values: one header value per entry in proofs,
+// so a caller can reproduce the multi-value shape RFC 9449 §4.1 forbids.
+func (f *dpopWriteGateFixture) postProofValues(t *testing.T, secret string, proofs ...string) *httptest.ResponseRecorder {
+	t.Helper()
 	form := url.Values{}
 	form.Set("scope", "openid")
 	form.Set("login_hint", "user@example")
@@ -139,7 +147,9 @@ func (f *dpopWriteGateFixture) post(t *testing.T, proof, secret string) *httptes
 	)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(testClientID, secret)
-	req.Header.Set("DPoP", proof)
+	for _, proof := range proofs {
+		req.Header.Add("DPoP", proof)
+	}
 	rec := httptest.NewRecorder()
 	cibaendpoint.Handler(f.deps).ServeHTTP(rec, req)
 	return rec
@@ -220,6 +230,34 @@ func TestCIBA_ReplayedProofStillRejected(t *testing.T) {
 	}
 	if description != "DPoP proof replayed" {
 		t.Errorf("error_description = %q, want %q", description, "DPoP proof replayed")
+	}
+}
+
+// TestCIBA_EmptyLeadingDPoPValueDoesNotDowngradeToBearer drives the
+// presence test with a "DPoP" header whose first value is empty and
+// whose second carries a real proof. A presence test that reads only the
+// first value reports "no proof" and records an unbound backchannel
+// request, silently dropping the sender constraint the client asked for.
+// RFC 9449 §4.1 allows exactly one proof, so the request is refused
+// instead.
+func TestCIBA_EmptyLeadingDPoPValueDoesNotDowngradeToBearer(t *testing.T) {
+	t.Parallel()
+
+	f := newDPoPWriteGateFixture(t)
+	rec := f.postProofValues(t, testClientSecret, "", f.proof(t, "jti-empty-leading", http.MethodPost))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	code, description := decodeDPoPEnvelope(t, rec)
+	if code != wireInvalidRequest {
+		t.Errorf("error = %q, want %q", code, wireInvalidRequest)
+	}
+	if description != "DPoP proof malformed" {
+		t.Errorf("error_description = %q, want %q", description, "DPoP proof malformed")
+	}
+	if got := f.marks.marks.Load(); got != 0 {
+		t.Errorf("consumed-jti writes = %d, want 0; a rejected proof must not be marked", got)
 	}
 }
 

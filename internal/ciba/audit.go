@@ -65,7 +65,8 @@ const (
 	// AuditTokenIssued is emitted when the token endpoint
 	// successfully redeems an auth_req_id. Extras carry: client_id,
 	// subject, scope, audience, sender_constraint ("dpop", "mtls",
-	// or "bearer").
+	// "dpop+mtls", or "bearer"; the composite value reports that the
+	// record committed to both methods and the poll re-verified both).
 	AuditTokenIssued = string(auditevent.AuditCIBATokenIssued)
 
 	// AuditTokenRejected is emitted when the token-endpoint CIBA

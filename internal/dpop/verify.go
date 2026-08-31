@@ -285,6 +285,17 @@ type Checked struct {
 	replayExpiresAt time.Time
 }
 
+// Thumbprint returns the proof's RFC 7638 thumbprint, or "" when no
+// proof was presented. The nil receiver is the "no proof" case the
+// two-phase entry points return, so handler code can bind the value
+// unconditionally instead of repeating the nil check.
+func (c *Checked) Thumbprint() string {
+	if c == nil {
+		return ""
+	}
+	return c.JKT
+}
+
 // Verify runs the full RFC 9449 §4.3 checklist on the supplied proof:
 // parse + signature + typ/alg gate, htm/htu/iat/jti claim validation,
 // optional ath binding, and replay marking via
