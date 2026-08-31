@@ -70,10 +70,14 @@ func newPostgresFactory(t *testing.T) contract.Factory {
 	t.Cleanup(func() { _ = admin.Close() })
 
 	var seq atomic.Uint64
-	clock := &fixedClock{now: contract.Reference}
 
 	return func(t *testing.T) contract.Backend {
 		t.Helper()
+		// One clock per sub-test: the harness advances it to reach the
+		// expired-after-the-fact states, and sub-tests run in parallel
+		// against the same server, so a shared clock would let one
+		// sub-test expire another's live records.
+		clock := &fixedClock{now: contract.Reference}
 		dbName := fmt.Sprintf("oidc_t_%d", seq.Add(1))
 		// CREATE DATABASE is not transactional in postgres; database/sql
 		// runs each Exec without an enclosing tx so the statement
@@ -103,7 +107,14 @@ func newPostgresFactory(t *testing.T) contract.Factory {
 		if err := s.Migrate(t.Context()); err != nil {
 			t.Fatalf("Migrate: %v", err)
 		}
-		return contract.Backend{Store: s, Now: clock.Now, SeedUser: seedContractUser(s)}
+		return contract.Backend{
+			Store: s,
+			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
+			SeedUser: seedContractUser(s),
+		}
 	}
 }
 

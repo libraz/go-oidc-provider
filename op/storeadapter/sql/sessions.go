@@ -68,7 +68,26 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 		return wrapErr("sessions.Touch.RowsAffected", err)
 	}
 	if n == 0 {
-		return store.ErrNotFound
+		// MySQL counts changed rows rather than matched ones, so a Touch
+		// that writes the expiry the row already carries reports zero.
+		// An OP whose clock has second granularity computes the same
+		// value for two requests inside one second, and reporting the
+		// second one as ErrNotFound signs the user out of a session the
+		// read above just proved alive. Only a row that is really gone
+		// may be reported absent, so decide on presence.
+		return s.exists(ctx, id)
+	}
+	return nil
+}
+
+// exists returns nil when a session row carries id and
+// [store.ErrNotFound] when none does. It disambiguates the
+// zero-affected-rows outcome of [sessionStore.Touch], which is reached
+// both by a no-op update and by an update against a row a concurrent
+// Delete removed between the read and the write.
+func (s *sessionStore) exists(ctx context.Context, id string) error {
+	if _, err := s.find(ctx, id); err != nil {
+		return err
 	}
 	return nil
 }

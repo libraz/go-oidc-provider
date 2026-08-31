@@ -65,9 +65,9 @@ func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 		return errors.New("oidcsql: passkey record missing CredentialID")
 	}
 
-	tx, err := s.parent.db.BeginTx(ctx, nil)
+	tx, err := s.parent.beginInternalTx(ctx, "passkeys.Put.BeginTx")
 	if err != nil {
-		return wrapErr("passkeys.Put.BeginTx", err)
+		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -111,9 +111,9 @@ func (s *passkeyStore) UpdateAssertion(
 	credentialID []byte,
 	update store.PasskeyAssertionUpdate,
 ) (*store.PasskeyRecord, error) {
-	tx, err := s.parent.db.BeginTx(ctx, nil)
+	tx, err := s.parent.beginInternalTx(ctx, "passkeys.UpdateAssertion.BeginTx")
 	if err != nil {
-		return nil, wrapErr("passkeys.UpdateAssertion.BeginTx", err)
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 

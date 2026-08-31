@@ -144,6 +144,15 @@ func (d Dialect) upsertAlias() string {
 // upsertDoNothingQualified accepts the target table name for MySQL's
 // self-assignment spelling, where the incoming-row alias makes the RHS
 // ambiguous when it is left unqualified.
+//
+// It suits an idempotent write whose caller does not care which of the
+// two arms ran. A caller that does care MUST NOT read the answer out of
+// the affected-row count: MySQL's arm is a self-assignment, so it
+// changes nothing, and a connection that counts matched rather than
+// changed rows (CLIENT_FOUND_ROWS) reports it exactly as it reports a
+// fresh insert. A conditional write whose outcome is load-bearing
+// carries no conflict clause at all and reads the engine's duplicate-key
+// refusal instead.
 func (d Dialect) upsertDoNothingQualified(key, table string) string {
 	if d.upsertConflict {
 		return " ON CONFLICT(" + key + ") DO NOTHING"

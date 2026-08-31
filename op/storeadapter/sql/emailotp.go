@@ -108,7 +108,7 @@ func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTP
 		return fmt.Errorf("oidcsql: emailOTPs.CompareAndSwap: generate Version: %w", err)
 	}
 	insertArgs := append([]any{next.Subject, version}, emailOTPValues(next)...)
-	placed, err := s.execAffects(ctx, s.parent.queries.emailOTPInsertIfAbsent, "emailOTPs.CompareAndSwap.insert", insertArgs)
+	placed, err := s.insertIfAbsent(ctx, insertArgs)
 	if err != nil {
 		return err
 	}
@@ -139,6 +139,29 @@ func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTP
 	// this nil-previous reservation lost. Never settle by reading values:
 	// an identical next value is still a second writer.
 	return store.ErrAlreadyConsumed
+}
+
+// insertIfAbsent places the reservation and reports whether this call
+// is the one that placed it. The row is claimed by the primary key, and
+// the engine's duplicate-key refusal is what says the key was already
+// held.
+//
+// The outcome deliberately does not come from the affected-row count. A
+// conditional insert that resolves to "match the row and change
+// nothing" reports one affected row on a connection that counts matched
+// rather than changed rows (MySQL's CLIENT_FOUND_ROWS), which is
+// indistinguishable from a fresh insert — and a reservation wrongly
+// reported as won is a message delivered against a send ceiling that
+// never moved. An unrecognised backend error is returned as one: the
+// caller must not send while the outcome is unknown.
+func (s *emailOTPStore) insertIfAbsent(ctx context.Context, args []any) (bool, error) {
+	if _, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPInsertIfAbsent, args...); err != nil {
+		if isDuplicate(err) {
+			return false, nil
+		}
+		return false, wrapErr("emailOTPs.CompareAndSwap.insert", err)
+	}
+	return true, nil
 }
 
 // execAffects runs a conditional statement and reports whether it

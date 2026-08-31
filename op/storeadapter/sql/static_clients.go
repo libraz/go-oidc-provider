@@ -11,19 +11,19 @@ import (
 // database transaction. Existing equivalent records are left untouched;
 // missing records are inserted; any difference rolls the complete batch back.
 func (s *Store) ReconcileStaticClients(ctx context.Context, clients []*store.Client) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	itx, err := s.beginInternalTx(ctx, "clients.ReconcileStaticClients.BeginTx")
 	if err != nil {
-		return wrapErr("clients.ReconcileStaticClients.BeginTx", err)
+		return err
 	}
 	defer func() {
-		_ = tx.Rollback()
+		_ = itx.Rollback()
 	}()
 
-	registry := newClientStore(s, tx)
+	registry := newClientStore(s, itx.tx)
 	if err := reconcileStaticClientsInTx(ctx, registry, clients); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := itx.Commit(); err != nil {
 		return wrapErr("clients.ReconcileStaticClients.Commit", err)
 	}
 	return nil

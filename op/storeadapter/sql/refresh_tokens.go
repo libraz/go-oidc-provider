@@ -51,12 +51,12 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 	if s.tx != nil {
 		return s.saveRotation(ctx, s.runner(), t)
 	}
-	tx, err := s.parent.db.BeginTx(ctx, nil)
+	tx, err := s.parent.beginInternalTx(ctx, "refreshes.Save.begin")
 	if err != nil {
-		return wrapErr("refreshes.Save.begin", err)
+		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.saveRotation(ctx, txRunner{tx: tx}, t); err != nil {
+	if err := s.saveRotation(ctx, tx, t); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -76,12 +76,12 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 	if s.tx != nil {
 		return s.saveRotationWithRetry(ctx, s.runner(), t, sealed)
 	}
-	tx, err := s.parent.db.BeginTx(ctx, nil)
+	tx, err := s.parent.beginInternalTx(ctx, "refreshes.SaveRotationWithRetry.begin")
 	if err != nil {
-		return wrapErr("refreshes.SaveRotationWithRetry.begin", err)
+		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.saveRotationWithRetry(ctx, txRunner{tx: tx}, t, sealed); err != nil {
+	if err := s.saveRotationWithRetry(ctx, tx, t, sealed); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -98,13 +98,16 @@ func (s *refreshStore) saveRotationWithRetry(ctx context.Context, run runner, t 
 	if err != nil {
 		return wrapErr("refreshes.SaveRotationWithRetry.cache", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
+	if _, err := res.RowsAffected(); err != nil {
 		return wrapErr("refreshes.SaveRotationWithRetry.cache.RowsAffected", err)
 	}
-	if n != 1 {
-		return store.ErrNotFound
-	}
+	// A predecessor row that is no longer there — swept by GC, or never
+	// stored by this backend — leaves the cache with nothing to hang on,
+	// which is not a reason to lose the rotation: the plain Save keeps it
+	// on exactly the same input, and an absent parent is what proves the
+	// chain was never revoked. The grace window degrades on its own terms,
+	// since LoadRetryResponse already answers ErrNotFound for a
+	// predecessor that has no cached response.
 	return nil
 }
 
@@ -387,6 +390,16 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 	if err != nil {
 		return nil, err
 	}
+	// Expiry outranks redemption, as Find and the in-memory reference
+	// resolve it: a lapsed row reads as absent whatever its consumed_at
+	// holds. Answering ErrAlreadyConsumed for a row that merely ran out
+	// of time reports a replay the client never committed, and the
+	// exchanger's cascade then revokes the whole chain — every token the
+	// client legitimately holds — because a device came back online with
+	// a token older than its lifetime.
+	if isExpired(t.ExpiresAt, s.parent.clock) {
+		return nil, store.ErrNotFound
+	}
 	if n > 0 {
 		// The row was just marked by this call. Keep the exact database
 		// value when available; the fallback covers drivers that scan a
@@ -396,13 +409,13 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 		}
 		return t, nil
 	}
-	if t.ConsumedAt != nil {
-		return t, store.ErrAlreadyConsumed
-	}
-	if isExpired(t.ExpiresAt, s.parent.clock) {
-		return nil, store.ErrNotFound
-	}
-	return nil, store.ErrAlreadyConsumed
+	// The conditional update matched nothing against a live row, so the
+	// row was already consumed on entry — either before this call or by
+	// the rotation that won the race with it. The record rides along with
+	// the sentinel: the replay handler resolves the chain root from it,
+	// and dropping a record already in hand degrades a targeted
+	// revocation into a guess.
+	return t, store.ErrAlreadyConsumed
 }
 
 // RevokeChain marks every refresh token in the rotation chain rooted
@@ -432,16 +445,16 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 // caller-owned [store.Tx] to control that scope explicitly.
 func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
 	if s.tx == nil {
-		tx, err := s.parent.db.BeginTx(ctx, nil)
+		itx, err := s.parent.beginInternalTx(ctx, "refreshes.RevokeChain.begin")
 		if err != nil {
-			return wrapErr("refreshes.RevokeChain.begin", err)
+			return err
 		}
-		defer func() { _ = tx.Rollback() }()
-		txStore := &refreshStore{parent: s.parent, tx: tx}
+		defer func() { _ = itx.Rollback() }()
+		txStore := &refreshStore{parent: s.parent, tx: itx.tx}
 		if err := txStore.revokeChainBFS(ctx, rootID); err != nil {
 			return err
 		}
-		if err := tx.Commit(); err != nil {
+		if err := itx.Commit(); err != nil {
 			return wrapErr("refreshes.RevokeChain.commit", err)
 		}
 		return nil

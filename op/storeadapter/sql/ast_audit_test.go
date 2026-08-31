@@ -82,6 +82,93 @@ func TestQueriesIsSoleSQLBuilder(t *testing.T) {
 	}
 }
 
+// TestTransactionGateHasNoBypass asserts that tx.go is the only file
+// that opens a transaction.
+//
+// [Dialect.serializesTransactions] promises at most one open
+// transaction on an engine that cannot resolve two, and the gate that
+// keeps that promise is taken in exactly two places: the public
+// [Store.BeginTx] and [Store.beginInternalTx]. A substore that reaches
+// for the *sql.DB directly gets a transaction the gate never counted,
+// and nothing about the resulting code looks wrong — the failure shows
+// up as an intermittent driver error under concurrency, on one engine,
+// in a deployment shape CI does not run. The structural check is what
+// makes that unwritable rather than merely discouraged.
+func TestTransactionGateHasNoBypass(t *testing.T) {
+	t.Parallel()
+
+	fset := token.NewFileSet()
+	for _, name := range packageSources(t) {
+		file, err := parser.ParseFile(fset, filepath.Join(".", name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		if name != "tx.go" {
+			ast.Inspect(file, func(n ast.Node) bool {
+				if callsMethod(n, "BeginTx") {
+					pos := fset.Position(n.Pos())
+					t.Errorf("%s:%d: opens a transaction outside tx.go — route it through Store.beginInternalTx so it takes the transaction gate",
+						pos.Filename, pos.Line)
+				}
+				return true
+			})
+			continue
+		}
+		// Within tx.go, every function that opens a transaction has to
+		// take the gate first.
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			var opens, gates bool
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				opens = opens || callsMethod(n, "BeginTx")
+				gates = gates || callsMethod(n, "acquireTxGate")
+				return true
+			})
+			if opens && !gates {
+				pos := fset.Position(fn.Pos())
+				t.Errorf("%s:%d: %s opens a transaction without acquiring the transaction gate",
+					pos.Filename, pos.Line, fn.Name.Name)
+			}
+		}
+	}
+}
+
+// callsMethod reports whether n is a call to a method with the given
+// name, whatever the receiver expression is.
+func callsMethod(n ast.Node, name string) bool {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == name
+}
+
+// packageSources lists the package's non-test .go files.
+func packageSources(t *testing.T) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		t.Fatal("no package sources found; this test stopped checking anything")
+	}
+	return out
+}
+
 func nameMapFieldSet(t *testing.T) map[string]bool {
 	t.Helper()
 	typ := reflect.TypeOf(nameMap{})

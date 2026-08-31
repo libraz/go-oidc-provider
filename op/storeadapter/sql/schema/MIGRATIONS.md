@@ -49,6 +49,12 @@ CREATE INDEX IF NOT EXISTS idx_oidc_interactions_expires
     ON oidc_interactions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_consumed_jtis_expires
     ON oidc_consumed_jtis(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_client
+    ON oidc_refresh_tokens(client_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_client
+    ON oidc_access_tokens(client_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_client
+    ON oidc_opaque_access_tokens(client_id);
 ```
 
 MySQL/MariaDB:
@@ -78,6 +84,14 @@ ALTER TABLE oidc_interactions
     ADD INDEX idx_oidc_interactions_expires (expires_at);
 ALTER TABLE oidc_consumed_jtis
     ADD INDEX idx_oidc_consumed_jtis_expires (expires_at);
+ALTER TABLE oidc_refresh_tokens
+    ADD INDEX idx_oidc_refresh_tokens_client (client_id);
+ALTER TABLE oidc_access_tokens
+    ADD INDEX idx_oidc_access_tokens_client (client_id);
+ALTER TABLE oidc_opaque_access_tokens
+    ADD INDEX idx_oidc_opaque_access_tokens_client (client_id);
+ALTER TABLE oidc_users
+    MODIFY username VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL;
 ```
 
 PostgreSQL:
@@ -107,6 +121,12 @@ CREATE INDEX IF NOT EXISTS idx_oidc_interactions_expires
     ON oidc_interactions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_consumed_jtis_expires
     ON oidc_consumed_jtis(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_client
+    ON oidc_refresh_tokens(client_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_client
+    ON oidc_access_tokens(client_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_client
+    ON oidc_opaque_access_tokens(client_id);
 ```
 
 The `allowed_scopes` column is nullable intentionally: `NULL` represents an
@@ -126,6 +146,19 @@ The `expires_at` indexes bound the retention sweep: a `DELETE` filtered on an
 unindexed column scans the table, and on MySQL it takes a lock per row it
 examines rather than per row it removes, so the cost grows with the data the
 sweep exists to bound.
+The MySQL-only `oidc_users.username` collation change makes the lookup match
+bytes, which is what the adapter documents and what SQLite and PostgreSQL do
+already. MySQL's default collation is case- and accent-insensitive, so without
+it a login submitted as `ALICE` resolves `alice` on MySQL and nowhere else, and
+two usernames differing only in case cannot both exist. Apply it before
+provisioning usernames that differ only in case; on a database that already
+holds rows the `MODIFY` fails if two existing usernames collide under the
+binary collation, which names the accounts that have to be reconciled first.
+The three `client_id` indexes on the token tables bound the rest of that same
+cascade. It revokes with an `UPDATE` rather than a `DELETE`, which the engine
+plans identically: filtered on an unindexed column it scans, and on MySQL the
+per-examined-row lock then covers the whole table, blocking every concurrent
+refresh and introspection until the client deletion commits.
 
 ## Deployment order and writer compatibility
 

@@ -63,9 +63,9 @@ func (s *recoveryStore) Put(ctx context.Context, b *store.RecoveryBatch) error {
 	if b.Subject == "" {
 		return errors.New("oidcsql: recovery batch missing Subject")
 	}
-	tx, err := s.parent.db.BeginTx(ctx, nil)
+	tx, err := s.parent.beginInternalTx(ctx, "recoveryCodes.Put.BeginTx")
 	if err != nil {
-		return wrapErr("recoveryCodes.Put.BeginTx", err)
+		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 

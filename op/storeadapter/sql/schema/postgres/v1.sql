@@ -121,6 +121,12 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_parent ON oidc_refresh_tokens(parent_id);
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_grant ON oidc_refresh_tokens(grant_id);
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_expires ON oidc_refresh_tokens(expires_at);
+-- Deleting a client revokes its outstanding tokens with an UPDATE
+-- filtered on client_id alone. An UPDATE over an unindexed column scans
+-- the table exactly as a DELETE does, and on MySQL it locks every row it
+-- examines rather than every row it changes, so the whole table is held
+-- against concurrent refresh and introspection until the cascade ends.
+CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_client ON oidc_refresh_tokens(client_id);
 
 CREATE TABLE IF NOT EXISTS oidc_access_tokens (
     jti TEXT PRIMARY KEY,
@@ -134,6 +140,7 @@ CREATE TABLE IF NOT EXISTS oidc_access_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_grant ON oidc_access_tokens(grant_id);
 CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_expires ON oidc_access_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_client ON oidc_access_tokens(client_id);
 
 CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
     token_hash BYTEA PRIMARY KEY,
@@ -153,6 +160,7 @@ CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_grant ON oidc_opaque_access_tokens(grant_id);
 CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_expires ON oidc_opaque_access_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_client ON oidc_opaque_access_tokens(client_id);
 
 CREATE TABLE IF NOT EXISTS oidc_grant_revocations (
     grant_id TEXT PRIMARY KEY,

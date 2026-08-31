@@ -8,19 +8,23 @@ import (
 	"testing"
 )
 
-// A DELETE that filters on a column with no index scans the table, and
-// on MySQL it takes a lock per row it examines rather than per row it
-// removes. The statements below are exactly the ones a deployment runs
-// on a schedule against its largest tables, so the scan grows with the
-// data the sweep exists to bound.
+// A DELETE or an UPDATE that filters on a column with no index scans the
+// table, and on MySQL it takes a lock per row it examines rather than per
+// row it writes. The statements below are exactly the ones a deployment
+// runs on a schedule, or on a client deletion, against its largest
+// tables, so the scan grows with the data the sweep exists to bound.
 //
 // The swept tables are derived from the query registry rather than
 // listed here: a hand-kept list is the thing that goes stale the moment
 // a new sweep is added, which is the failure this test exists to catch.
 
 var (
-	expirySweepRE   = regexp.MustCompile(`DELETE FROM (\w+) WHERE[^;]*\bexpires_at\b`)
-	clientCascadeRE = regexp.MustCompile(`DELETE FROM (\w+) WHERE client_id = `)
+	expirySweepRE = regexp.MustCompile(`DELETE FROM (\w+) WHERE[^;]*\bexpires_at\b`)
+	// The cascade revokes from some tables and deletes from others, and
+	// the distinction is invisible to the engine: both plan the same way
+	// and both take the same locks. Matching only DELETE left the three
+	// revoking UPDATEs unchecked.
+	clientCascadeRE = regexp.MustCompile(`(?:DELETE FROM|UPDATE) (\w+)(?: SET [^;]*?)? WHERE client_id = `)
 	createIndexRE   = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?\w+ ON (\w+)\s*\(\s*(\w+)`)
 	createTableRE   = regexp.MustCompile(`(?i)CREATE TABLE (?:IF NOT EXISTS )?(\w+)\s*\(`)
 	inlineIndexRE   = regexp.MustCompile(`(?i)^\s*(?:UNIQUE )?(?:INDEX|KEY) \w+ \(\s*(\w+)`)
@@ -75,8 +79,8 @@ func indexedColumns(t *testing.T, schema []byte) map[string]map[string]bool {
 	return out
 }
 
-// sweptTables returns the tables the registry deletes from with a
-// predicate on the named column.
+// sweptTables returns the tables the registry runs re's statement shape
+// against with a predicate on the named column.
 func sweptTables(t *testing.T, re *regexp.Regexp) map[string]bool {
 	t.Helper()
 
@@ -96,7 +100,7 @@ func sweptTables(t *testing.T, re *regexp.Regexp) map[string]bool {
 		}
 	}
 	if len(tables) == 0 {
-		t.Fatal("no matching DELETE statements found; the registry shape changed and this test stopped checking anything")
+		t.Fatal("no matching statements found; the registry shape changed and this test stopped checking anything")
 	}
 	return tables
 }
@@ -171,15 +175,25 @@ func TestSchema_EveryExpirySweepIsIndexed(t *testing.T) {
 }
 
 // The client-scoped cascade runs when a client is deleted through
-// dynamic registration, and it deletes from tables keyed on something
-// else entirely. oidc_grants is the one that needs saying out loud: it
-// carries a composite index leading with subject, which cannot serve a
-// client_id predicate, so the cascade scanned until a dedicated index
-// was added.
+// dynamic registration, over tables keyed on something else entirely. It
+// deletes from some of them and revokes in place on the others;
+// oidc_grants is the one that needs saying out loud, because it carries a
+// composite index leading with subject, which cannot serve a client_id
+// predicate, so the cascade scanned until a dedicated index was added.
+//
+// The revoking half is named explicitly below. Deriving the table set
+// from the registry is what keeps a newly added statement in scope, but
+// it also means a regex that stops matching a shape silently narrows the
+// check to nothing rather than failing.
 func TestSchema_EveryClientCascadeIsIndexed(t *testing.T) {
 	t.Parallel()
 
 	tables := sweptTables(t, clientCascadeRE)
+	for _, revoked := range []string{"oidc_refresh_tokens", "oidc_access_tokens", "oidc_opaque_access_tokens"} {
+		if !tables[revoked] {
+			t.Fatalf("the cascade's UPDATE against %s is no longer matched; this test stopped covering it", revoked)
+		}
+	}
 	for name, dialect := range allDialects() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

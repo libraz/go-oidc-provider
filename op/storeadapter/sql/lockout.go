@@ -64,20 +64,22 @@ func (s *authnLockoutStore) CompareAndSwap(
 	nextVersion := int64(expectedVersion + 1) //nolint:gosec // bounded by the MaxUint64 guard above.
 
 	if expectedVersion == 0 {
-		res, err := s.parent.db.ExecContext(ctx, s.parent.queries.lockoutInsert,
+		// The create arm reads its outcome from the engine's refusal,
+		// not from the affected-row count: an insert that resolves to
+		// "match the row and change nothing" reports one affected row
+		// on a connection that counts matched rather than changed rows
+		// (MySQL's CLIENT_FOUND_ROWS), so two racing first failures
+		// would both report a fresh counter and the brute-force count
+		// would advance by one where two failures happened.
+		if _, err := s.parent.db.ExecContext(ctx, s.parent.queries.lockoutInsert,
 			next.Subject, next.FailedCount, nextVersion,
-			timeToInt64(next.FirstFailureAt), timeToInt64(next.LockedUntil))
-		if err != nil {
+			timeToInt64(next.FirstFailureAt), timeToInt64(next.LockedUntil)); err != nil {
 			if isDuplicate(err) {
 				return false, nil
 			}
 			return false, wrapErr("authnLockouts.CompareAndSwap.insert", err)
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return false, wrapErr("authnLockouts.CompareAndSwap.RowsAffected", err)
-		}
-		return n > 0, nil
+		return true, nil
 	}
 
 	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.lockoutUpdate,

@@ -1,6 +1,7 @@
 package oidcsql
 
 import (
+	"bytes"
 	"context"
 	databasesql "database/sql"
 	"errors"
@@ -50,12 +51,43 @@ func (s *interactionStore) CompareAndSwap(
 	if n > 0 {
 		return nil
 	}
-	if _, err := s.Find(ctx, previous.ID); errors.Is(err, store.ErrNotFound) {
+	current, err := s.Find(ctx, previous.ID)
+	if errors.Is(err, store.ErrNotFound) {
 		return store.ErrNotFound
-	} else if err != nil {
+	}
+	if err != nil {
 		return err
 	}
+	// MySQL counts changed rows rather than matched ones, so a swap whose
+	// replacement equals the stored row reports zero even though its
+	// predicate matched. That shape is an ordinary retried step — the
+	// browser resubmits and the driver recomputes the same state — and
+	// reporting ErrConflict for it tells the driver another tab has taken
+	// the interaction over, bouncing the user out of a flow nobody else
+	// was touching.
+	if interactionSwapWasNoOp(current, previous, next) {
+		return nil
+	}
 	return store.ErrConflict
+}
+
+// interactionSwapWasNoOp reports whether the row the engine left
+// untouched is the one the swap asked for: the predicate still matches
+// (the stored RawState equals previous) and every column the statement
+// writes already holds the replacement's value.
+//
+// Both halves are needed. Without the first, a swap that lost to a
+// concurrent writer which happened to store the same replacement would
+// be reported as this caller's win; without the second, a genuine
+// conflict against a row whose RawState is unchanged would pass.
+func interactionSwapWasNoOp(current, previous, next *store.Interaction) bool {
+	return bytes.Equal(current.RawState, previous.RawState) &&
+		bytes.Equal(current.RawState, next.RawState) &&
+		current.ClientID == next.ClientID &&
+		current.Step == next.Step &&
+		current.ExpiresAt.Equal(next.ExpiresAt) &&
+		current.CreatedAt.Equal(next.CreatedAt) &&
+		current.UpdatedAt.Equal(next.UpdatedAt)
 }
 
 func (s *interactionStore) DeleteIfUnchanged(

@@ -979,11 +979,18 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// insert rather than a read followed by a write: two sends
 		// racing on a subject with no stored challenge would both read
 		// an empty row, both write, and both deliver a message.
+		//
+		// The condition is the primary key and nothing else: no
+		// conflict clause, so a second reservation is refused by the
+		// engine and reported as a duplicate-key error. A DO NOTHING
+		// tail would leave the outcome to be read out of the affected-row
+		// count, and that count does not distinguish "inserted a row"
+		// from "matched one and changed nothing" on a connection that
+		// asked for matched rows (MySQL's CLIENT_FOUND_ROWS).
 		emailOTPInsertIfAbsent: d.rebind(
 			"INSERT INTO " + n.emailOTPs +
 				" (subject, row_version, " + joinColumns(emailOTPValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(2+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
-				d.upsertDoNothingQualified("subject", n.emailOTPs),
+				" VALUES (" + bindPlaceholders(2+len(emailOTPValueColumns)) + ")",
 		),
 		// A row past its retention horizon no longer holds the key. The
 		// predicate is evaluated against the current row version, so of
@@ -1019,11 +1026,15 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT subject, failed_count, record_version, first_failure_at, locked_until" +
 				" FROM " + n.authnLockouts + " WHERE subject = ?",
 		),
+		// Creating the counter carries no conflict clause for the same
+		// reason the email-OTP reservation above does not: the create
+		// arm of the compare-and-swap must lose against an existing
+		// row, and only the engine's duplicate-key refusal reports that
+		// independently of how the connection counts affected rows.
 		lockoutInsert: d.rebind(
 			"INSERT INTO " + n.authnLockouts +
 				" (subject, failed_count, record_version, first_failure_at, locked_until)" +
-				" VALUES (?, ?, ?, ?, ?)" + d.upsertAlias() +
-				d.upsertDoNothingQualified("subject", n.authnLockouts),
+				" VALUES (?, ?, ?, ?, ?)",
 		),
 		lockoutUpdate: d.rebind(
 			"UPDATE " + n.authnLockouts +

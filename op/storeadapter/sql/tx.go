@@ -17,7 +17,7 @@ import (
 func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 	release, err := s.acquireTxGate(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("oidcsql: begin transaction: %w", err)
 	}
 	dbtx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -45,7 +45,9 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 //
 // Waiting honours the caller's context so a request that was abandoned
 // while queued fails as a cancellation rather than holding a slot the
-// handler no longer wants.
+// handler no longer wants. The context error is returned bare; the
+// caller labels it, because a wait can be entered from the public
+// [Store.BeginTx] or from a substore opening a transaction of its own.
 func (s *Store) acquireTxGate(ctx context.Context) (func(), error) {
 	if s.txGate == nil {
 		return func() {}, nil
@@ -55,9 +57,89 @@ func (s *Store) acquireTxGate(ctx context.Context) (func(), error) {
 		var once sync.Once
 		return func() { once.Do(func() { <-s.txGate }) }, nil
 	case <-ctx.Done():
-		return nil, fmt.Errorf("oidcsql: begin transaction: %w", ctx.Err())
+		return nil, ctx.Err()
 	}
 }
+
+// internalTx is a transaction a substore opens on the caller's behalf
+// because its operation is a read-amend-write that has to be atomic —
+// as opposed to one the embedder asked for through [Store.BeginTx].
+//
+// The engine cannot tell the two apart, so neither may the gate.
+// [Dialect.serializesTransactions] promises that at most one
+// transaction is open at a time on an engine with no row lock to wait
+// on, and a gate the public handle honours while the substores open
+// transactions around it admits exactly the concurrency the gate exists
+// to remove: on SQLite the second writer's read-amend-write is refused
+// outright rather than made to wait, and the driver's refusal matches no
+// store sentinel, so a valid login fails as a bare storage fault.
+//
+// The handle is a [runner], so statements inside an internal
+// transaction read the same as statements outside one and carry the same
+// settled-transaction translation.
+type internalTx struct {
+	tx      *databasesql.Tx
+	release func()
+	done    bool
+}
+
+// beginInternalTx takes the transaction gate and then opens the
+// transaction. Every exit returns the slot: the failure to open it, and
+// Commit and Rollback alike. label names the operation in the wrapped
+// backend error, matching the substore-qualified labels [wrapErr]
+// carries elsewhere.
+func (s *Store) beginInternalTx(ctx context.Context, label string) (*internalTx, error) {
+	release, err := s.acquireTxGate(ctx)
+	if err != nil {
+		return nil, wrapErr(label, err)
+	}
+	dbtx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		release()
+		return nil, wrapErr(label, err)
+	}
+	return &internalTx{tx: dbtx, release: release}, nil
+}
+
+// Commit finalises the transaction and returns the gate slot. The
+// driver error is returned undecorated; the substore labels it.
+func (t *internalTx) Commit() error {
+	if t.done {
+		return errTxClosed
+	}
+	t.done = true
+	defer t.release()
+	return t.tx.Commit()
+}
+
+// Rollback discards every change. It is idempotent and safe after
+// Commit, so a deferred Rollback can be used as a cleanup pattern
+// without releasing a slot Commit already gave up.
+func (t *internalTx) Rollback() error {
+	if t.done {
+		return nil
+	}
+	t.done = true
+	defer t.release()
+	if err := t.tx.Rollback(); err != nil && !errors.Is(err, databasesql.ErrTxDone) {
+		return err
+	}
+	return nil
+}
+
+func (t *internalTx) ExecContext(ctx context.Context, query string, args ...any) (databasesql.Result, error) {
+	return txRunner{tx: t.tx}.ExecContext(ctx, query, args...)
+}
+
+func (t *internalTx) QueryContext(ctx context.Context, query string, args ...any) (*databasesql.Rows, error) {
+	return txRunner{tx: t.tx}.QueryContext(ctx, query, args...)
+}
+
+func (t *internalTx) QueryRowContext(ctx context.Context, query string, args ...any) scanner {
+	return txRunner{tx: t.tx}.QueryRowContext(ctx, query, args...)
+}
+
+var _ runner = (*internalTx)(nil)
 
 // sqlTx is the [store.Tx] handle returned by [Store.BeginTx]. It is
 // not safe for concurrent use across goroutines; callers MUST drive
@@ -95,28 +177,20 @@ func (t *sqlTx) RefreshTokens() store.RefreshTokenStore { return t.refreshes }
 // PushedAuthRequests returns the tx-bound [store.PushedAuthRequestStore].
 func (t *sqlTx) PushedAuthRequests() store.PushedAuthRequestStore { return t.pars }
 
-// AccessTokens returns the tx-bound access-token registry. Although
-// [store.Tx] does not expose this method directly, callers that hold a
-// concrete *sqlTx may use it for manual cross-substore transactions.
-//
-// This method is exported on the concrete *sqlTx type for embedders
-// who hold a typed handle and need to reach the registry inside a
-// transaction.
+// AccessTokens returns the tx-bound access-token registry. It
+// implements [store.Tx], so the same settled-handle and
+// read-your-own-writes rules apply to it as to the other substores of
+// the cluster.
 func (t *sqlTx) AccessTokens() store.AccessTokenRegistry { return t.accessTokens }
 
-// OpaqueAccessTokens returns the tx-bound opaque-AT substore. As with
-// [sqlTx.AccessTokens], [store.Tx] does not expose this method
-// directly; callers that hold a concrete *sqlTx may use it for manual
-// cross-substore transactions.
+// OpaqueAccessTokens returns the tx-bound opaque-AT substore. It
+// implements [store.Tx].
 func (t *sqlTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return t.opaqueAccessTokens
 }
 
-// GrantRevocations returns the tx-bound grant-revocation substore. As
-// with [sqlTx.AccessTokens] and [sqlTx.OpaqueAccessTokens],
-// [store.Tx] does not expose this method directly; callers that hold
-// a concrete *sqlTx may use it for manual cross-substore
-// transactions.
+// GrantRevocations returns the tx-bound grant-revocation substore. It
+// implements [store.Tx].
 func (t *sqlTx) GrantRevocations() store.GrantRevocationStore {
 	return t.grantRevocations
 }

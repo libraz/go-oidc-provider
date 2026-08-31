@@ -118,7 +118,14 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     retry_response LONGBLOB NULL,
     INDEX idx_oidc_refresh_tokens_parent (parent_id),
     INDEX idx_oidc_refresh_tokens_grant (grant_id),
-    INDEX idx_oidc_refresh_tokens_expires (expires_at)
+    INDEX idx_oidc_refresh_tokens_expires (expires_at),
+    -- Deleting a client revokes its outstanding tokens with an UPDATE
+    -- filtered on client_id alone. An UPDATE over an unindexed column
+    -- scans the table exactly as a DELETE does, and InnoDB locks every
+    -- row it examines rather than every row it changes, so the whole
+    -- table is held against concurrent refresh and introspection until
+    -- the cascade ends.
+    INDEX idx_oidc_refresh_tokens_client (client_id)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_access_tokens (
@@ -131,7 +138,8 @@ CREATE TABLE IF NOT EXISTS oidc_access_tokens (
     expires_at BIGINT NOT NULL,
     issued_at BIGINT NOT NULL,
     INDEX idx_oidc_access_tokens_grant (grant_id),
-    INDEX idx_oidc_access_tokens_expires (expires_at)
+    INDEX idx_oidc_access_tokens_expires (expires_at),
+    INDEX idx_oidc_access_tokens_client (client_id)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
@@ -150,7 +158,8 @@ CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
     expires_at BIGINT NOT NULL,
     revoked TINYINT(1) NOT NULL DEFAULT 0,
     INDEX idx_oidc_opaque_access_tokens_grant (grant_id),
-    INDEX idx_oidc_opaque_access_tokens_expires (expires_at)
+    INDEX idx_oidc_opaque_access_tokens_expires (expires_at),
+    INDEX idx_oidc_opaque_access_tokens_client (client_id)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_grant_revocations (
@@ -234,11 +243,17 @@ CREATE TABLE IF NOT EXISTS oidc_consumed_jtis (
     INDEX idx_oidc_consumed_jtis_expires (expires_at)
 );
 
+-- username carries an explicit binary collation: the adapter matches it
+-- verbatim, and MySQL's default (utf8mb4_0900_ai_ci / utf8mb4_general_ci)
+-- is both case- and accent-insensitive. Under the default, a login
+-- submitted as "ALICE" resolves alice's row here while the other engines
+-- report no such user, and two accounts differing only in case collide on
+-- the unique key that every other engine accepts as two rows.
 CREATE TABLE IF NOT EXISTS oidc_users (
     subject VARCHAR(255) NOT NULL PRIMARY KEY,
     claims JSON NOT NULL,
     updated_at BIGINT NOT NULL,
-    username VARCHAR(255) NULL,
+    username VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
     password_hash VARBINARY(512) NULL,
     UNIQUE KEY oidc_users_username (username)
 );

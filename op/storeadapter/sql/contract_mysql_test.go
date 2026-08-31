@@ -3,8 +3,10 @@
 package oidcsql_test
 
 import (
+	"bytes"
 	"context"
 	databasesql "database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"sync/atomic"
@@ -76,10 +78,14 @@ func newMySQLFactoryWithClientFoundRows(t *testing.T, clientFoundRows bool) cont
 	t.Cleanup(func() { _ = admin.Close() })
 
 	var seq atomic.Uint64
-	clock := &fixedClock{now: contract.Reference}
 
 	return func(t *testing.T) contract.Backend {
 		t.Helper()
+		// One clock per sub-test: the harness advances it to reach the
+		// expired-after-the-fact states, and sub-tests run in parallel
+		// against the same server, so a shared clock would let one
+		// sub-test expire another's live records.
+		clock := &fixedClock{now: contract.Reference}
 		// Database name is built from a process-local counter so it
 		// satisfies MySQL's regular identifier grammar without quoting
 		// (purely [a-z_0-9]).
@@ -107,7 +113,14 @@ func newMySQLFactoryWithClientFoundRows(t *testing.T, clientFoundRows bool) cont
 		if err := s.Migrate(t.Context()); err != nil {
 			t.Fatalf("Migrate: %v", err)
 		}
-		return contract.Backend{Store: s, Now: clock.Now, SeedUser: seedContractUser(s)}
+		return contract.Backend{
+			Store: s,
+			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
+			SeedUser: seedContractUser(s),
+		}
 	}
 }
 
@@ -185,5 +198,97 @@ func TestMySQL_ClientFoundRowsMFAPut(t *testing.T) {
 	}
 	if emailSecond.Version == 0 || emailSecond.Version == emailFirst.Version {
 		t.Fatalf("email OTP repeated Put Version = %d, want a fresh token after %d", emailSecond.Version, emailFirst.Version)
+	}
+}
+
+// TestMySQL_ClientFoundRowsConditionalInserts covers the two writes whose
+// whole purpose is to lose against a row that already exists: the create arm
+// of the lockout compare-and-swap, and the nil-previous email-OTP
+// reservation. Both are conditional inserts, and under clientFoundRows=true
+// an insert that matched an existing row and changed nothing reports the same
+// affected-row count as one that stored the caller's values.
+//
+// Reporting the loser as a winner is not a cosmetic error in either case. The
+// reservation is the ceiling on how many messages a subject can be sent, so a
+// send that believes it reserved delivers a code that the verify step will
+// never accept — the stored challenge is somebody else's — and it can repeat
+// for as long as the attacker keeps asking. The counter is the cross-factor
+// brute-force gate, so two concurrent failures reported as two fresh creates
+// leave the count at one.
+func TestMySQL_ClientFoundRowsConditionalInserts(t *testing.T) {
+	t.Parallel()
+	b := newMySQLFactoryWithClientFoundRows(t, true)(t)
+	s, ok := b.Store.(*oidcsql.Store)
+	if !ok {
+		t.Fatalf("factory produced %T, want *oidcsql.Store", b.Store)
+	}
+	ctx := context.Background()
+
+	lockouts := s.AuthnLockouts()
+	const lockoutSubject = "client-found-rows-lockout"
+	created, err := lockouts.CompareAndSwap(ctx, 0, &store.AuthnLockoutRecord{
+		Subject:        lockoutSubject,
+		FailedCount:    1,
+		FirstFailureAt: contract.Reference,
+	})
+	if err != nil || !created {
+		t.Fatalf("first failure created=%v err=%v, want the counter to be created", created, err)
+	}
+	// A second first-failure: same expectation of an empty key, different
+	// values. It has to be told it lost so the caller re-reads and advances
+	// the counter the winner installed.
+	created, err = lockouts.CompareAndSwap(ctx, 0, &store.AuthnLockoutRecord{
+		Subject:        lockoutSubject,
+		FailedCount:    1,
+		FirstFailureAt: contract.Reference.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("second create-arm compare-and-swap: %v", err)
+	}
+	if created {
+		t.Fatal("the second create-arm compare-and-swap reported success against an existing counter; " +
+			"two concurrent failures would leave the brute-force count at one")
+	}
+	stored, err := lockouts.Get(ctx, lockoutSubject)
+	if err != nil {
+		t.Fatalf("Get the lockout counter: %v", err)
+	}
+	if !stored.FirstFailureAt.Equal(contract.Reference) {
+		t.Errorf("stored FirstFailureAt = %v, want the winner's %v: the losing create overwrote the window anchor",
+			stored.FirstFailureAt, contract.Reference)
+	}
+
+	otps := s.EmailOTPs()
+	const otpSubject = "client-found-rows-otp-reservation"
+	reserved := &store.EmailOTPRecord{
+		Subject:           otpSubject,
+		CodeSalt:          []byte{0x01},
+		CodeHash:          []byte{0x01},
+		SentAt:            contract.Reference,
+		ExpiresAt:         contract.Reference.Add(5 * time.Minute),
+		RetainUntil:       contract.Reference.Add(24 * time.Hour),
+		SendCount:         1,
+		SendWindowStart:   contract.Reference,
+		LastSendAttemptAt: contract.Reference,
+	}
+	if err := otps.CompareAndSwap(ctx, nil, reserved); err != nil {
+		t.Fatalf("first send reservation: %v", err)
+	}
+	second := *reserved
+	second.CodeSalt = []byte{0x02}
+	second.CodeHash = []byte{0x02}
+	if err := otps.CompareAndSwap(ctx, nil, &second); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("second send reservation err=%v, want ErrAlreadyConsumed: a send that believes it reserved delivers a code", err)
+	}
+	held, err := otps.Get(ctx, otpSubject)
+	if err != nil {
+		t.Fatalf("Get the reserved challenge: %v", err)
+	}
+	if !bytes.Equal(held.CodeHash, reserved.CodeHash) {
+		t.Errorf("stored CodeHash = %v, want the winner's %v: the losing send replaced the challenge it was refused",
+			held.CodeHash, reserved.CodeHash)
+	}
+	if held.SendCount != 1 {
+		t.Errorf("stored SendCount = %d, want 1: the losing send left its bookkeeping behind", held.SendCount)
 	}
 }
