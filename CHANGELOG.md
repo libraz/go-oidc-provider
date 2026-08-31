@@ -78,7 +78,9 @@ deployments that configure `op.WithRefreshGracePeriod`, anyone whose
 `op.LoginAttemptObserver` switches on the attempt outcome, anyone whose custom
 `interaction.Driver` renders the recovery-code prompt's remaining-attempt
 count, anyone serving a custom grant that returns a refresh token, and anyone
-who implements their own `op/store` backend.
+who implements their own `op/store` backend — the last of these both for the
+tightened redemption contract and because `op/store/contract` carries one
+signature change, which is the only breaking change in this release.
 
 ### Security
 
@@ -606,6 +608,18 @@ who implements their own `op/store` backend.
   release.
 
 ### Changed
+
+- **BREAKING (BYO stores using the contract harness).**
+  `contract.TOTPFactory` now returns a `contract.TOTPBackend` rather than a
+  bare `store.TOTPStore`, matching the shape `contract.EmailOTPFactory` and
+  `contract.Factory` already had. The struct carries the store alongside an
+  optional `Diverge` hook, which the harness uses to write a record out of
+  band and then assert that `CompareAndSwap` refuses a snapshot whose
+  `Version` still matches but whose other fields no longer do — the
+  field-for-field precondition the interface documents. A backend that does
+  not supply the hook skips that case, as it already does for `Advance`.
+  Adapt the factory to `func(t *testing.T) contract.TOTPBackend{Store: …}`;
+  the case bodies are unchanged.
 
 - **Existing SQL installations: apply three indexes.** The client-deletion
   cascade revokes with `UPDATE`s filtered on `client_id` alone against
