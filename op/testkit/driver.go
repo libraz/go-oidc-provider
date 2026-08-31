@@ -6,11 +6,19 @@ import (
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
-// AutoConsentDriver is a permissive [interaction.Driver] tailored for
-// tests. It defers prompt rendering and submission parsing to the
-// stock [interaction.JSONDriver]; the testkit value exists primarily
-// to keep the wiring in [NewTest] readable and to give third-party
-// tests a single import path for the default driver.
+// AutoConsentDriver is the [interaction.Driver] the testkit installs by
+// default. It delegates prompt rendering and submission parsing verbatim
+// to the stock [interaction.JSONDriver]; the testkit value exists to keep
+// the wiring in [NewProvider] readable and to give third-party tests a
+// single import path for the default driver.
+//
+// Despite the name it approves nothing. A prompted authorization stops
+// at the interaction endpoint with a 200 and a JSON prompt body, not a
+// 302, and the test must submit the consent itself — see
+// [PostConsentApproval]. Only a flow that needs no prompt at all (a
+// first-party client, or a grant that already covers the requested
+// scope) reaches the redirect without that step. The name is retained
+// for compatibility with the v1.0 stable surface.
 //
 // Tests that need a different shape (custom rendering, multi-step
 // flows) install their own driver via [op.WithInteractionDriver] passed

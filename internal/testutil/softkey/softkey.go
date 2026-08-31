@@ -100,7 +100,9 @@ func (k *Key) CredentialID() []byte { return append([]byte(nil), k.credentialID.
 // attestation that vouches for the model, which "none" does not.
 func (k *Key) SetAAGUID(aaguid [16]byte) { k.aaguid = aaguid }
 
-// SignCount reports the counter the next assertion will carry.
+// SignCount reports the counter the most recent assertion carried, or 0
+// before the first [Key.Assert] call. Because Assert increments before
+// signing, the next assertion will carry this value plus one.
 func (k *Key) SignCount() uint32 { return k.signCount }
 
 // SetSignCount rewinds or advances the counter. A counter that fails to

@@ -483,14 +483,26 @@ func TestScenario_CL_24_ValuesArrayMatchReleasesClaim(t *testing.T) {
 // TestScenario_CL_25_ValueComparisonUsesJSONEquality checks that the
 // projector's value/values comparison observes JSON equality across
 // the primitive shapes the spec admits: strings compare by byte
-// equality (match path releases the claim, mismatch omits it), and
-// booleans compare by identity. Numeric and array shapes share the
-// same jsonEqual path; CL-23 / CL-24 already exercise the value /
-// values constraints positively at the wire layer.
+// equality (match path releases the claim, mismatch omits it),
+// booleans compare by identity, and numbers compare by numeric value.
+//
+// The numeric half is driven with a claim the user store returns as an
+// int64 — the shape an embedder's record naturally carries — while the
+// request side is parsed from the wire. Both the id_token projection
+// and the /userinfo projection are exercised, since each reads the
+// stored value through its own call site. A comparison that recognised
+// only the parser's own numeric type would drop the claim from both
+// while still issuing the tokens, which is exactly the silence this row
+// exists to catch. CL-23 / CL-24 already exercise the value / values
+// constraints positively at the wire layer.
 //
 // Spec: OIDC Core 1.0 §5.5.1.
 func TestScenario_CL_25_ValueComparisonUsesJSONEquality(t *testing.T) {
 	t.Parallel()
+
+	// The user record holds the numeric claim as an int64; nothing in
+	// the OP re-encodes it before the constraint is evaluated.
+	const updatedAt int64 = 1699999999
 
 	tk := testkit.NewProvider(t)
 	rp, secret := clRegisterRP(t, tk, "rp-cl-25")
@@ -499,15 +511,23 @@ func TestScenario_CL_25_ValueComparisonUsesJSONEquality(t *testing.T) {
 		Claims: map[string]any{
 			"email":          "alice@example.com",
 			"email_verified": true,
+			"updated_at":     updatedAt,
 		},
 	})
 
-	// Match path: requested string equals the source string AND the
-	// boolean matches its source value.
+	// Match path: requested string equals the source string, the
+	// boolean matches its source value, and the number matches across
+	// the wire / store representations. "updated_at" is requested in
+	// both locations because the two projections are separate code
+	// paths reading the same record.
 	extraMatch := claimsRequestExtra(t, map[string]any{
 		"id_token": map[string]any{
 			"email":          map[string]any{"value": "alice@example.com"},
 			"email_verified": map[string]any{"value": true},
+			"updated_at":     map[string]any{"essential": true, "value": updatedAt},
+		},
+		"userinfo": map[string]any{
+			"updated_at": map[string]any{"essential": true, "value": updatedAt},
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extraMatch)
@@ -518,14 +538,30 @@ func TestScenario_CL_25_ValueComparisonUsesJSONEquality(t *testing.T) {
 	if got := idClaims["email_verified"]; got != true {
 		t.Errorf("id_token email_verified=%v want true (bool equality)", got)
 	}
+	if got, _ := idClaims["updated_at"].(float64); int64(got) != updatedAt {
+		t.Errorf("id_token updated_at=%v want %d (numeric equality across representations)",
+			idClaims["updated_at"], updatedAt)
+	}
+	status, _, body := callUserinfo(t, tk, tok.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("/userinfo status=%d body=%v", status, body)
+	}
+	if got, _ := body["updated_at"].(float64); int64(got) != updatedAt {
+		t.Errorf("/userinfo updated_at=%v want %d (numeric equality across representations)",
+			body["updated_at"], updatedAt)
+	}
 
-	// Mismatch path: a different string and a flipped boolean must
-	// both fall out of the projection.
+	// Mismatch path: a different string, a flipped boolean and a
+	// neighbouring number must all fall out of the projection.
 	rp2, secret2 := clRegisterRP(t, tk, "rp-cl-25b")
 	extraMiss := claimsRequestExtra(t, map[string]any{
 		"id_token": map[string]any{
 			"email":          map[string]any{"value": "bob@example.com"},
 			"email_verified": map[string]any{"value": false},
+			"updated_at":     map[string]any{"value": updatedAt + 1},
+		},
+		"userinfo": map[string]any{
+			"updated_at": map[string]any{"value": updatedAt + 1},
 		},
 	})
 	_, tok2 := clRunCodeFlow(t, tk, rp2, secret2, "openid", extraMiss)
@@ -535,6 +571,16 @@ func TestScenario_CL_25_ValueComparisonUsesJSONEquality(t *testing.T) {
 	}
 	if v, ok := idClaims2["email_verified"]; ok {
 		t.Errorf("id_token leaked email_verified=%v despite bool-value mismatch", v)
+	}
+	if v, ok := idClaims2["updated_at"]; ok {
+		t.Errorf("id_token leaked updated_at=%v despite numeric-value mismatch", v)
+	}
+	status2, _, body2 := callUserinfo(t, tk, tok2.AccessToken)
+	if status2 != http.StatusOK {
+		t.Fatalf("/userinfo status=%d body=%v", status2, body2)
+	}
+	if v, ok := body2["updated_at"]; ok {
+		t.Errorf("/userinfo leaked updated_at=%v despite numeric-value mismatch", v)
 	}
 }
 

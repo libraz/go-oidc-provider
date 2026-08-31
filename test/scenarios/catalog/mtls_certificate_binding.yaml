@@ -82,21 +82,20 @@ rows:
     severity: P0
     spec: RFC 8705 §3 / RFC 8628
     behaviour: |
-      A confidential client redeeming a device_code at /token with a
-      TLS client cert receives an access token bound by x5t#S256;
-      the refresh token is NOT sender-constrained.
-    status: out-of-scope
-    out_of_scope_reason: RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/device_code.yaml. Revisit when the device_code wave lands.
+      A confidential client that presented a TLS client cert at
+      /device_authorization and redeems the approved device_code at
+      /token with the same cert receives an access token bound by
+      x5t#S256; the issued refresh token inherits the same binding.
+    status: active
 
   - id: MTLS-009
     severity: P0
-    spec: RFC 8705 §3
+    spec: RFC 8705 §3 / RFC 8628 §3.5
     behaviour: |
-      A device_code redemption for a cert-binding-required client
-      with no TLS client cert is rejected with 400 invalid_grant
-      "mutual TLS client certificate not provided".
-    status: out-of-scope
-    out_of_scope_reason: RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/device_code.yaml.
+      A device_code whose device-authorization record committed to a
+      TLS client cert is rejected with 400 invalid_grant when the
+      /token poll presents no cert; no credential is minted.
+    status: active
 
   - id: MTLS-010
     severity: P0
@@ -106,28 +105,26 @@ rows:
       with a TLS client cert receives both an access token and a
       refresh token bound by x5t#S256 (RTs MUST be sender-constrained
       for public clients).
-    status: out-of-scope
-    out_of_scope_reason: RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/device_code.yaml.
+    status: active
 
   - id: MTLS-011
     severity: P0
     spec: RFC 8705 §3 / OIDC CIBA Core
     behaviour: |
-      A confidential client redeeming a CIBA grant at /token with a
-      TLS client cert receives an access token bound by x5t#S256; the
-      refresh token is NOT sender-constrained.
-    status: out-of-scope
-    out_of_scope_reason: OpenID CIBA Core 1.0 is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/ciba.yaml. Revisit when CIBA lands.
+      A confidential client that presented a TLS client cert at
+      /bc-authorize and redeems the approved auth_req_id at /token
+      with the same cert receives an access token bound by x5t#S256;
+      the issued refresh token inherits the same binding.
+    status: active
 
   - id: MTLS-012
     severity: P0
-    spec: RFC 8705 §3
+    spec: RFC 8705 §3 / OIDC CIBA Core §11
     behaviour: |
-      A CIBA grant redemption for a cert-binding-required client
-      with no TLS client cert is rejected with 400 invalid_grant
-      "mutual TLS client certificate not provided".
-    status: out-of-scope
-    out_of_scope_reason: OpenID CIBA Core 1.0 is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/ciba.yaml.
+      A CIBA request whose record committed to a TLS client cert is
+      rejected with 400 invalid_grant when the /token poll presents
+      no cert; no credential is minted.
+    status: active
 
   - id: MTLS-013
     severity: P0
@@ -136,8 +133,7 @@ rows:
       A public client redeeming a CIBA grant with a TLS client cert
       receives both an access token and a refresh token bound by
       x5t#S256.
-    status: out-of-scope
-    out_of_scope_reason: OpenID CIBA Core 1.0 is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/ciba.yaml.
+    status: active
 
   - id: MTLS-014
     severity: P0
@@ -147,7 +143,7 @@ rows:
       with a TLS client cert receives an access token bound by
       x5t#S256; the refresh token is NOT sender-constrained.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue (divergent posture): the row asserts the AT is bound by x5t#S256 (true in v1.0) AND the RT is NOT sender-constrained (false in v1.0). v1.0 propagates the cert binding onto the rotated refresh-token record for confidential clients as well as public ones (internal/tokenendpoint.maybeIssueRefreshToken stamps MTLSCertThumbprint from the request binding, with no public-vs-confidential split). Leaving the RT unbound would silently downgrade the chain on first refresh; the project chose the safer 'bind once, enforce always' posture. The AT-binding half is exercised by MTLS-007 (thumbprint encoding) and MTLS-018/-023 (issuance for public client / client_credentials); the RT-bind-too divergence is covered by internal/tokenendpoint/authcode_mtls_test.go and internal/tokenendpoint/refresh_mtls_test.go (RT thumbprint round-trip across rotation)."
+    out_of_scope_reason: "non-spec residue (divergent posture): the row asserts the AT is bound by x5t#S256 (true in v1.0) AND the RT is NOT sender-constrained (false in v1.0). v1.0 propagates the cert binding onto the rotated refresh-token record for confidential clients as well as public ones (internal/tokenendpoint.issueRefreshToken stamps MTLSCertThumbprint from the request binding, with no public-vs-confidential split). Leaving the RT unbound would silently downgrade the chain on first refresh; the project chose the safer 'bind once, enforce always' posture. The AT-binding half is exercised by MTLS-007 (thumbprint encoding) and MTLS-018/-023 (issuance for public client / client_credentials); the RT-bind-too divergence is covered by internal/tokenendpoint/authcode_mtls_test.go and internal/tokenendpoint/refresh_mtls_test.go (RT thumbprint round-trip across rotation)."
 
   - id: MTLS-015
     severity: P0

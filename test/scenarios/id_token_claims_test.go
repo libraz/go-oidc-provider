@@ -519,44 +519,32 @@ func TestScenario_IDT_04_NonceMirroredFromRequest(t *testing.T) {
 }
 
 // TestScenario_IDT_05_AuthTimeIncludedWhenEssentialOrMaxAge asserts
-// that supplying max_age on /authorize forces the OP to write the
-// auth_time claim into the id_token. OIDC Core §3.1.2.1 ties max_age
-// to a fresh-authentication requirement, and §2 then makes auth_time
-// REQUIRED whenever max_age is present in the request.
+// that max_age on /authorize governs the auth_time the id_token
+// carries. OIDC Core §3.1.2.1 ties max_age to a fresh-authentication
+// requirement, and §2 then makes auth_time REQUIRED whenever max_age is
+// present in the request.
+//
+// The assertion is a comparison rather than a presence check: the OP
+// stamps auth_time on every interactive login, so a single flow would
+// report the claim even from an OP that ignores max_age entirely. What
+// max_age decides is whether a seated session is reused, and the
+// observable consequence is whether auth_time advances.
 //
 // Spec: OIDC Core 1.0 §2 / §3.1.2.1 (max_age forces auth_time).
 func TestScenario_IDT_05_AuthTimeIncludedWhenEssentialOrMaxAge(t *testing.T) {
 	t.Parallel()
+	env := newATEnv(t, nil)
 
-	tk := testkit.NewProvider(t)
-	rp, secret := idtRegisterRP(t, tk, "rp-idt-05")
+	first := env.login(t, url.Values{"max_age": {"600"}})
 
-	pkce := scenariokit.NewPKCEPair("")
-	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
-		ClientID:    rp.ID,
-		RedirectURI: rp.RedirectURIs[0],
-		Scope:       "openid",
-		PKCE:        pkce,
-		Extra:       map[string][]string{"max_age": {"600"}},
-	})
-	if flow.Code == "" {
-		t.Fatalf("authorize callback missing code: %+v", flow)
-	}
-	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
-		Code:         flow.Code,
-		RedirectURI:  rp.RedirectURIs[0],
-		Verifier:     pkce.Verifier,
-		ClientID:     rp.ID,
-		ClientSecret: secret,
-	})
-	if tok.StatusCode != http.StatusOK {
-		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
-	}
-	claims := decodeScenarioJWTClaims(t, tok.IDToken)
-	if _, ok := claims["auth_time"].(float64); !ok {
-		t.Errorf("auth_time missing or not numeric: %v (%T) — max_age MUST force auth_time",
-			claims["auth_time"], claims["auth_time"])
-	}
+	// Still inside the window: the session is fresh and the claim is the
+	// original authentication instant.
+	env.clock.advance(300 * time.Second)
+	env.assertSilent(t, url.Values{"max_age": {"600"}}, first, "a session younger than max_age")
+
+	// Past the window: the OP must re-authenticate and the claim moves.
+	env.clock.advance(400 * time.Second)
+	env.assertReauthenticated(t, url.Values{"max_age": {"600"}}, first, 700*time.Second)
 }
 
 // TestScenario_IDT_06_AcrEmittedOnRequestOrDefault asserts that

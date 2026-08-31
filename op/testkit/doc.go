@@ -2,8 +2,13 @@
 // go-oidc-provider library. It boots a fully wired [op.Provider] over an
 // in-memory store, generates a deterministic ECDSA P-256 signing key per
 // test, and exposes utilities for fabricating [store.Client] fixtures and
-// signing JWTs the way an external party (a confidential RP, an MTLS peer)
-// would.
+// signing JWTs with the OP's own active key.
+//
+// The package supplies no signer other than the OP's. Tests that need a
+// signature from the other end of the trust relationship — a confidential
+// RP's private_key_jwt client assertion, a JAR request object — generate
+// their own key and register its public half on the client fixture; see
+// [Provider.SignedJWT] for the details.
 //
 // # Scope
 //

@@ -493,45 +493,105 @@ func TestScenario_MTLS_007_ThumbprintAlgorithm(t *testing.T) {
 	}
 }
 
-// TestScenario_MTLS_008_DeviceCodeBindingConfidential is OOS: RFC
-// 8628 device authorization grant is intentionally deferred to v1.x
-// (see test/scenarios/catalog/device_code.yaml's blanket OOS).
+// TestScenario_MTLS_008_DeviceCodeBindingConfidential drives the
+// device-code family end to end for a confidential client: the cert
+// presented at /device_authorization is committed onto the
+// device-authorization record, the poll at /token presents the same
+// cert, and the issued access token carries cnf.x5t#S256. The refresh
+// token inherits the binding as well — v1.0 propagates the certificate
+// binding onto the refresh record for confidential and public clients
+// alike, so a stolen refresh token is unusable without the certificate.
+//
+// Spec: RFC 8705 §3 / RFC 8628 §3.4.
 func TestScenario_MTLS_008_DeviceCodeBindingConfidential(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: MTLS-008 (see catalog out_of_scope_reason)")
+
+	f := newMTLSAsyncFixture(t, false, op.WithDeviceCodeGrant(),
+		devURNDeviceCode, "rp-mtls-device-conf")
+	body := f.redeemDeviceCode(t, f.cert)
+	f.assertBoundTokens(t, body)
 }
 
-// TestScenario_MTLS_009_DeviceCodeRequiresMTLS is OOS for the same
-// reason: device_code grant is post-v1.0.
+// TestScenario_MTLS_009_DeviceCodeRequiresMTLS pins the downgrade
+// refusal on the device-code family: a record that committed to a
+// certificate at /device_authorization may not be redeemed by a poll
+// that presents none. Minting an unbound token from a bound record
+// would hand a device_code thief a token the legitimate device's
+// certificate was supposed to gate, so the OP answers 400
+// invalid_grant and issues nothing.
+//
+// Spec: RFC 8705 §3 / RFC 8628 §3.5.
 func TestScenario_MTLS_009_DeviceCodeRequiresMTLS(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: MTLS-009 (see catalog out_of_scope_reason)")
+
+	f := newMTLSAsyncFixture(t, false, op.WithDeviceCodeGrant(),
+		devURNDeviceCode, "rp-mtls-device-nocert")
+	status, body := f.redeemDeviceCodeStatus(t, nil)
+	assertMTLSGrantRejected(t, status, body)
 }
 
-// TestScenario_MTLS_010_DeviceCodeBindingPublic is OOS: device_code
-// grant is post-v1.0.
+// TestScenario_MTLS_010_DeviceCodeBindingPublic runs the device-code
+// binding for a public client (auth method none). The client has no
+// secret, so the certificate is the only thing standing between a
+// leaked device_code and a usable token pair: both the access token
+// and the persisted refresh token MUST carry the thumbprint.
+//
+// Spec: RFC 8705 §3 / RFC 8628 §3.4.
 func TestScenario_MTLS_010_DeviceCodeBindingPublic(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: MTLS-010 (see catalog out_of_scope_reason)")
+
+	f := newMTLSAsyncFixture(t, true, op.WithDeviceCodeGrant(),
+		devURNDeviceCode, "rp-mtls-device-public")
+	body := f.redeemDeviceCode(t, f.cert)
+	f.assertBoundTokens(t, body)
 }
 
-// TestScenario_MTLS_011_CIBABindingConfidential is OOS: OpenID CIBA
-// Core 1.0 is not implemented in v1.0 (see ciba.yaml's blanket OOS).
+// TestScenario_MTLS_011_CIBABindingConfidential is the CIBA analogue of
+// MTLS-008: the certificate presented at /bc-authorize is committed
+// onto the CIBA record, the poll at /token presents the same
+// certificate, and the issued access token plus refresh token carry
+// the x5t#S256 binding.
+//
+// Spec: RFC 8705 §3 / OIDC CIBA Core 1.0 §7.1 / §11.
 func TestScenario_MTLS_011_CIBABindingConfidential(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: MTLS-011 (see catalog out_of_scope_reason)")
+
+	f := newMTLSAsyncFixture(t, false,
+		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		cibaURNGrant, "rp-mtls-ciba-conf")
+	body := f.redeemCIBA(t, f.cert)
+	f.assertBoundTokens(t, body)
 }
 
-// TestScenario_MTLS_012_CIBARequiresMTLS is OOS: CIBA is post-v1.0.
+// TestScenario_MTLS_012_CIBARequiresMTLS is the CIBA analogue of
+// MTLS-009: a CIBA record that committed to a certificate refuses a
+// certificate-less poll with 400 invalid_grant rather than minting an
+// unbound token.
+//
+// Spec: RFC 8705 §3 / OIDC CIBA Core 1.0 §11.
 func TestScenario_MTLS_012_CIBARequiresMTLS(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: MTLS-012 (see catalog out_of_scope_reason)")
+
+	f := newMTLSAsyncFixture(t, false,
+		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		cibaURNGrant, "rp-mtls-ciba-nocert")
+	status, body := f.redeemCIBAStatus(t, nil)
+	assertMTLSGrantRejected(t, status, body)
 }
 
-// TestScenario_MTLS_013_CIBABindingPublic is OOS: CIBA is post-v1.0.
+// TestScenario_MTLS_013_CIBABindingPublic runs the CIBA binding for a
+// public client. As in MTLS-010 the certificate is the only sender
+// constraint available, so both issued credentials MUST carry it.
+//
+// Spec: RFC 8705 §3 / OIDC CIBA Core 1.0 §7.1 / §11.
 func TestScenario_MTLS_013_CIBABindingPublic(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: MTLS-013 (see catalog out_of_scope_reason)")
+
+	f := newMTLSAsyncFixture(t, true,
+		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		cibaURNGrant, "rp-mtls-ciba-public")
+	body := f.redeemCIBA(t, f.cert)
+	f.assertBoundTokens(t, body)
 }
 
 // TestScenario_MTLS_014_AuthCodeBindingConfidential is OOS. The
@@ -899,6 +959,232 @@ func TestScenario_MTLS_024_ClientCredentialsRequiresMTLS(t *testing.T) {
 func TestScenario_MTLS_025_GrantErrorResponseShape(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: MTLS-025 (see catalog out_of_scope_reason)")
+}
+
+// mtlsAsyncAuthTime is the wall clock the asynchronous fixtures stamp
+// onto an approved device-code / CIBA record. A literal keeps the
+// issued id_token's auth_time claim independent of the machine clock;
+// no row asserts on the value, it only has to be deterministic.
+var mtlsAsyncAuthTime = time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+// mtlsAsyncFixture is the harness the device-code and CIBA binding
+// scenarios share. Both families commit the sender-constraint binding
+// at an initiation endpoint (/device_authorization, /bc-authorize) and
+// verify it again when the client polls /token, so one fixture drives
+// both: it registers a confidential or public client for the grant
+// under test and retains the single certificate that has to bind
+// initiation and redemption.
+type mtlsAsyncFixture struct {
+	tk     *testkit.Provider
+	client *store.Client
+	secret string
+	cert   *x509.Certificate
+	thumb  string
+}
+
+// newMTLSAsyncFixture constructs an MTLS-enabled provider for one
+// asynchronous grant family. enable installs either the device-code or
+// the CIBA endpoint; grantType is registered alongside refresh_token so
+// every successful redemption also exercises the refresh-token binding
+// policy.
+func newMTLSAsyncFixture(
+	t *testing.T,
+	public bool,
+	enable op.Option,
+	grantType, clientID string,
+) *mtlsAsyncFixture {
+	t.Helper()
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithFeature(feature.MTLS),
+		enable,
+	))
+	secret := ""
+	secretHash := ""
+	authMethod := "none"
+	if !public {
+		secret = "rp-mtls-async-secret" //nolint:gosec // not a credential — opaque test fixture secret.
+		var err error
+		secretHash, err = op.HashClientSecret(secret)
+		if err != nil {
+			t.Fatalf("HashClientSecret: %v", err)
+		}
+		authMethod = "client_secret_basic"
+	}
+	client := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              secretHash,
+		PublicClient:            public,
+		TokenEndpointAuthMethod: authMethod,
+		Scopes:                  []string{"openid"},
+		GrantTypes:              []string{grantType, "refresh_token"},
+	})
+	cert := mtlsCert(t)
+	return &mtlsAsyncFixture{
+		tk:     tk,
+		client: client,
+		secret: secret,
+		cert:   cert,
+		thumb:  mtlsThumbprint(cert),
+	}
+}
+
+// post sends one form request to path with the supplied client
+// certificate (nil for a certificate-less request). Public clients
+// authenticate with client_id in the body; confidential clients use
+// HTTP Basic.
+func (f *mtlsAsyncFixture) post(
+	t *testing.T,
+	path string,
+	form url.Values,
+	cert *x509.Certificate,
+) (int, map[string]any) {
+	t.Helper()
+	if f.secret == "" {
+		form.Set("client_id", f.client.ID)
+	}
+	resp := mtlsServeWithCert(t, f.tk, http.MethodPost, f.tk.Issuer+path, form, cert, func(r *http.Request) {
+		if f.secret != "" {
+			r.SetBasicAuth(f.client.ID, f.secret)
+		}
+	})
+	defer resp.Body.Close()
+	return resp.StatusCode, mtlsDecodeJSON(t, resp)
+}
+
+// redeemDeviceCodeStatus drives /device_authorization with the
+// fixture's certificate, approves the record through the substore (the
+// verification page is the embedder's surface), and polls /token with
+// pollCert. It returns the poll's status and body so a row can assert
+// either outcome.
+func (f *mtlsAsyncFixture) redeemDeviceCodeStatus(
+	t *testing.T,
+	pollCert *x509.Certificate,
+) (int, map[string]any) {
+	t.Helper()
+	status, initiated := f.post(t, "/oidc/device_authorization",
+		url.Values{"scope": {"openid"}}, f.cert)
+	if status != http.StatusOK {
+		t.Fatalf("/device_authorization status=%d body=%v", status, initiated)
+	}
+	deviceCode, _ := initiated["device_code"].(string)
+	if deviceCode == "" {
+		t.Fatalf("device_code missing: %v", initiated)
+	}
+	if err := f.tk.Store.DeviceCodes().Approve(
+		context.Background(), deviceCode, devDefaultSubject, mtlsAsyncAuthTime,
+	); err != nil {
+		t.Fatalf("DeviceCodes.Approve: %v", err)
+	}
+	return f.post(t, "/oidc/token", url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	}, pollCert)
+}
+
+// redeemDeviceCode is the success-path wrapper around
+// [mtlsAsyncFixture.redeemDeviceCodeStatus].
+func (f *mtlsAsyncFixture) redeemDeviceCode(t *testing.T, pollCert *x509.Certificate) map[string]any {
+	t.Helper()
+	status, body := f.redeemDeviceCodeStatus(t, pollCert)
+	if status != http.StatusOK {
+		t.Fatalf("device_code /token status=%d body=%v", status, body)
+	}
+	return body
+}
+
+// redeemCIBAStatus mirrors [mtlsAsyncFixture.redeemDeviceCodeStatus]
+// for the CIBA family: /bc-authorize with the fixture's certificate,
+// approval through the substore (the authentication device is the
+// embedder's surface), then a /token poll with pollCert.
+func (f *mtlsAsyncFixture) redeemCIBAStatus(
+	t *testing.T,
+	pollCert *x509.Certificate,
+) (int, map[string]any) {
+	t.Helper()
+	status, initiated := f.post(t, "/oidc/bc-authorize", url.Values{
+		"scope":      {"openid"},
+		"login_hint": {cibaKnownLoginHint},
+	}, f.cert)
+	if status != http.StatusOK {
+		t.Fatalf("/bc-authorize status=%d body=%v", status, initiated)
+	}
+	authReqID, _ := initiated["auth_req_id"].(string)
+	if authReqID == "" {
+		t.Fatalf("auth_req_id missing: %v", initiated)
+	}
+	if err := f.tk.Store.CIBARequests().Approve(
+		context.Background(), authReqID, cibaDefaultSubject, "", mtlsAsyncAuthTime,
+	); err != nil {
+		t.Fatalf("CIBARequests.Approve: %v", err)
+	}
+	return f.post(t, "/oidc/token", url.Values{
+		"grant_type":  {cibaURNGrant},
+		"auth_req_id": {authReqID},
+	}, pollCert)
+}
+
+// redeemCIBA is the success-path wrapper around
+// [mtlsAsyncFixture.redeemCIBAStatus].
+func (f *mtlsAsyncFixture) redeemCIBA(t *testing.T, pollCert *x509.Certificate) map[string]any {
+	t.Helper()
+	status, body := f.redeemCIBAStatus(t, pollCert)
+	if status != http.StatusOK {
+		t.Fatalf("ciba /token status=%d body=%v", status, body)
+	}
+	return body
+}
+
+// assertBoundTokens checks both halves of the binding contract on a
+// successful asynchronous redemption: the access token's cnf carries
+// the certificate thumbprint (and no jkt, because no DPoP proof was
+// presented), and the persisted refresh-token record carries the same
+// thumbprint. The refresh half holds for confidential and public
+// clients alike — v1.0 binds once and enforces always rather than
+// leaving a confidential client's chain to downgrade to bearer on the
+// first rotation.
+func (f *mtlsAsyncFixture) assertBoundTokens(t *testing.T, body map[string]any) {
+	t.Helper()
+	if f.thumb == "" {
+		t.Fatal("fixture certificate produced an empty thumbprint")
+	}
+	accessToken, _ := body["access_token"].(string)
+	if accessToken == "" {
+		t.Fatalf("access_token missing: %v", body)
+	}
+	cnf := mtlsAccessTokenCnf(t, accessToken)
+	if got := cnf["x5t#S256"]; got != f.thumb {
+		t.Errorf("access_token cnf.x5t#S256=%q want %q", got, f.thumb)
+	}
+	if _, hasJKT := cnf["jkt"]; hasJKT {
+		t.Errorf("cnf must not carry jkt for an mTLS-only bound token (cnf=%v)", cnf)
+	}
+	refreshToken, _ := body["refresh_token"].(string)
+	if refreshToken == "" {
+		t.Fatalf("refresh_token missing: %v", body)
+	}
+	rec, err := f.tk.Store.RefreshTokens().Find(context.Background(), refreshToken)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find: %v", err)
+	}
+	if rec.MTLSCertThumbprint != f.thumb {
+		t.Errorf("refresh token MTLSCertThumbprint=%q want %q", rec.MTLSCertThumbprint, f.thumb)
+	}
+}
+
+// assertMTLSGrantRejected pins the refusal shape shared by the
+// certificate-less polls: 400 invalid_grant with no credential in the
+// body.
+func assertMTLSGrantRejected(t *testing.T, status int, body map[string]any) {
+	t.Helper()
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 (body=%v)", status, body)
+	}
+	if got, _ := body["error"].(string); got != "invalid_grant" {
+		t.Errorf("error=%q want invalid_grant (body=%v)", got, body)
+	}
+	if _, present := body["access_token"]; present {
+		t.Errorf("rejection must not mint an access token: %v", body)
+	}
 }
 
 // mtlsIssueAuthCodeAccessToken is the shared "issue an mTLS-bound
