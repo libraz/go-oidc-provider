@@ -2,13 +2,18 @@ package op_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // The interaction ceremony and the OP's API surface do not share a
@@ -202,6 +207,145 @@ func TestAPIRoutes_KeepClientRedirectOriginOnCORS(t *testing.T) {
 		if got := h.Get("Access-Control-Allow-Origin"); got != clientRedirectOrigin {
 			t.Errorf("GET %s: Access-Control-Allow-Origin = %q, want %q; a registered SPA can no "+
 				"longer call the API from its callback page", path, got, clientRedirectOrigin)
+		}
+	}
+}
+
+// ceremonyCrossSiteUIOrigin is a login UI on a different registrable
+// domain than the issuer. It is what an embedder reaches for after
+// reading that a UI on a client's redirect_uri origin belongs on
+// [op.WithCORSOrigins] — and it is the case the option's doc now calls
+// unsupported, because the ceremony cookies are same-site by design.
+const ceremonyCrossSiteUIOrigin = "https://login-ui.example.net"
+
+// crossSiteCeremonyProvider mirrors [ceremonyCORSProvider] with a real
+// password login flow, so /authorize hands back a ceremony the built-in
+// HTML driver can actually render. The reachability question is about
+// which requests reach a live interaction, so the interaction has to be
+// live.
+func crossSiteCeremonyProvider(tb testing.TB) *op.Provider {
+	tb.Helper()
+	st := inmem.New()
+	provider, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(st),
+		op.WithKeyset(validKeyset(tb)),
+		op.WithCookieKeys(newRandomCookieKey(tb)),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+		}),
+		op.WithCORSOrigins(ceremonyUIOrigin, ceremonyCrossSiteUIOrigin),
+		op.WithStaticClients(op.PublicClient{
+			ID:           "spa",
+			RedirectURIs: []string{clientRedirectOrigin + "/callback"},
+			Scopes:       []string{"openid"},
+		}),
+	)
+	if err != nil {
+		tb.Fatalf("op.New: %v", err)
+	}
+	return provider
+}
+
+// stageCeremony drives /authorize far enough to have a live interaction
+// and returns its path plus the cookies the OP set for it.
+func stageCeremony(tb testing.TB, srv *httptest.Server) (string, []*http.Cookie) {
+	tb.Helper()
+
+	verifier := strings.Repeat("v", 43)
+	sum := sha256.Sum256([]byte(verifier))
+	values := url.Values{
+		"client_id":             {"spa"},
+		"response_type":         {"code"},
+		"redirect_uri":          {clientRedirectOrigin + "/callback"},
+		"scope":                 {"openid"},
+		"state":                 {"state-ceremony-reach"},
+		"nonce":                 {"nonce-ceremony-reach"},
+		"code_challenge":        {base64.RawURLEncoding.EncodeToString(sum[:])},
+		"code_challenge_method": {"S256"},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		srv.URL+"/oidc/auth?"+values.Encode(), http.NoBody)
+	if err != nil {
+		tb.Fatalf("NewRequest: %v", err)
+	}
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		tb.Fatalf("GET /oidc/auth: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		tb.Fatalf("authorize status = %d, want 302", resp.StatusCode)
+	}
+	location, err := resp.Location()
+	if err != nil {
+		tb.Fatalf("authorize Location: %v", err)
+	}
+	if !strings.HasPrefix(location.Path, "/oidc/interaction/") {
+		tb.Fatalf("authorize Location = %s, want an interaction path", location)
+	}
+	return location.Path, resp.Cookies()
+}
+
+// ceremonyRequest sends one request to the staged ceremony from origin,
+// attaching cookies, and returns the status. Passing no cookies models
+// what a browser does for a cross-site UI: __Host-oidc_interaction is
+// SameSite=Lax and __Host-oidc_csrf is SameSite=Strict, so neither
+// travels on a cross-site fetch or on a cross-site write.
+func ceremonyRequest(
+	tb testing.TB, srv *httptest.Server, method, path, origin string, cookies []*http.Cookie,
+) int {
+	tb.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), method, srv.URL+path, http.NoBody)
+	if err != nil {
+		tb.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Origin", origin)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		tb.Fatalf("%s %s from %s: %v", method, path, origin, err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestInteractionRoute_CrossSiteUIOriginCannotDriveTheCeremony fixes the
+// boundary [op.WithCORSOrigins] documents. Listing a cross-site login UI
+// grants it CORS — the preflight passes and the response headers name it
+// — and grants it nothing else: the ceremony cookies are same-site by
+// design, so the endpoint never binds the uid to a cookie and answers
+// 404 rather than confirming the uid exists.
+//
+// The test exists to keep that 404 deliberate. It is the single visible
+// symptom of an unsupported topology, and a future change that made the
+// route answer on a cookie-less request would be a far worse defect than
+// the confusion this pins.
+func TestInteractionRoute_CrossSiteUIOriginCannotDriveTheCeremony(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(crossSiteCeremonyProvider(t))
+	t.Cleanup(srv.Close)
+
+	// CORS is not the blocker: the cross-site origin is admitted here
+	// exactly as the same-site sibling is.
+	assertCORSAllowed(t,
+		corsHeadersFor(t, srv, "/oidc/interaction/probe-uid", ceremonyCrossSiteUIOrigin),
+		"GET /oidc/interaction/probe-uid", ceremonyCrossSiteUIOrigin)
+
+	path, cookies := stageCeremony(t, srv)
+	if got := ceremonyRequest(t, srv, http.MethodGet, path, ceremonyIssuerOrigin, cookies); got != http.StatusOK {
+		t.Fatalf("same-site GET status = %d, want 200; the control arm is broken, not the boundary", got)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		if got := ceremonyRequest(t, srv, method, path, ceremonyCrossSiteUIOrigin, nil); got != http.StatusNotFound {
+			t.Errorf("cross-site %s status = %d, want 404; the ceremony cookies are same-site and the "+
+				"endpoint must not answer for a uid it cannot bind to one", method, got)
 		}
 	}
 }

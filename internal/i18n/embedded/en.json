@@ -4,6 +4,7 @@
   "consent.button.allow": "Allow",
   "consent.button.deny": "Cancel",
   "consent.scope": "Authorize access",
+  "consent.scope_required": "(required)",
   "consent.approved_scopes": "Approved access",
 
   "interaction.chooser": "Choose an account",

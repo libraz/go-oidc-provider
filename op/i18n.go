@@ -383,6 +383,15 @@ func injectHTMLTranslator(driver interaction.Driver, translator interaction.Mess
 // [WithDefaultLocale]) MUST be registered — either via this option
 // or implicitly through the seed library bundles.
 //
+// Not every seed key reaches a built-in screen. "consent.button.deny"
+// is reserved for embedder-supplied consent UIs: the bundled
+// [interaction.HTMLDriver] renders no decline button, because declining
+// a subset of scopes needs client-side script the driver deliberately
+// does not ship, and the whole-ceremony decline is the DELETE on
+// /interaction/{uid} rather than a form control. Overriding the key is
+// harmless and takes effect wherever the embedder's own template reads
+// it; it will not change the built-in screen.
+//
 // Stable since v1.0.
 func WithLocale(bundle LocaleBundle) Option {
 	return optionFunc(func(c *config) error {

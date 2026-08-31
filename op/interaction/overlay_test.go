@@ -478,3 +478,64 @@ func TestTemplateOverlay_InnerNilRenderError(t *testing.T) {
 		t.Fatalf("err = %v, want ErrTemplateOverlayInnerNil", err)
 	}
 }
+
+// TestTemplateOverlay_ConsentTemplateIsLocaleBlind pins the shape the
+// shipped consent-template example documents. The seam hands the
+// template a fixed data model with no locale and no message bundle, so
+// an embedder cannot key its copy off the locale the OP resolved for
+// the request; the template renders one language whatever /authorize
+// asked for.
+//
+// The property is asserted, not just described, because the example's
+// overview comment is written against it. Wiring the locale through
+// later is a welcome change — it should fail here, and the failure is
+// the reminder to rewrite that comment and lift the reservation on
+// [op.ConsentUI]'s Strings field at the same time.
+func TestTemplateOverlay_ConsentTemplateIsLocaleBlind(t *testing.T) {
+	t.Parallel()
+
+	data := interaction.ConsentScopePromptData{
+		Client: interaction.ClientView{ClientID: "rp-1", Name: "Example RP"},
+		Scopes: []interaction.ConsentScope{{Name: "openid", Required: true}},
+	}
+
+	t.Run("locale does not change the render", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl := template.Must(template.New("consent").Parse(
+			`<p>{{.Client.Name}}</p>{{range .Scopes}}<p>{{.Name}}</p>{{end}}`,
+		))
+		overlay := interaction.TemplateOverlayDriver{
+			Inner:           interaction.HTMLDriver{},
+			ConsentTemplate: tmpl,
+		}
+		renderWith := func(locale string) string {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/interaction/u-1", nil)
+			prompt := interaction.Prompt{Type: "consent.scope", Locale: locale, Data: data, StateRef: "ref"}
+			if err := overlay.Render(rec, req, prompt); err != nil {
+				t.Fatalf("Render(locale=%q): %v", locale, err)
+			}
+			return rec.Body.String()
+		}
+		if ja, en := renderWith("ja"), renderWith("en"); ja != en {
+			t.Errorf("consent template output differs by locale:\n ja: %s\n en: %s", ja, en)
+		}
+	})
+
+	t.Run("no locale field reaches the template", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl := template.Must(template.New("consent").Parse(`{{.Locale}}`))
+		overlay := interaction.TemplateOverlayDriver{
+			Inner:           interaction.HTMLDriver{},
+			ConsentTemplate: tmpl,
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/interaction/u-1", nil)
+		prompt := interaction.Prompt{Type: "consent.scope", Locale: "ja", Data: data, StateRef: "ref"}
+		if err := overlay.Render(rec, req, prompt); err == nil {
+			t.Fatalf("Render succeeded with a template reading .Locale; body = %q", rec.Body.String())
+		}
+	})
+}

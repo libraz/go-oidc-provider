@@ -225,7 +225,7 @@ func (d HTMLDriver) buildHTMLDocument(prompt Prompt) string {
 // writeStandardBody emits the intro, the form, and the single submit
 // button every non-chooser prompt shares.
 func (d HTMLDriver) writeStandardBody(b *strings.Builder, prompt Prompt) {
-	writePromptIntro(b, prompt)
+	d.writePromptIntro(b, prompt)
 	b.WriteString(`<form method="post">`)
 	writeHiddenStateRef(b, prompt.StateRef)
 	if prompt.CSRFToken != "" {
@@ -257,7 +257,7 @@ func (d HTMLDriver) writeChooserBody(b *strings.Builder, prompt Prompt, data Cho
 		// would render a dead control on a page whose only remaining
 		// affordance is the link below.
 		b.WriteString(`<p>`)
-		b.WriteString(html.EscapeString(d.chooserMessage(prompt.Locale, "chooser.no_accounts", chooserNoAccountsFallback)))
+		b.WriteString(html.EscapeString(d.messageOr(prompt.Locale, "chooser.no_accounts", nil, chooserNoAccountsFallback)))
 		b.WriteString(`</p>`)
 	} else {
 		b.WriteString(`<form method="post">`)
@@ -279,7 +279,7 @@ func (d HTMLDriver) writeChooserBody(b *strings.Builder, prompt Prompt, data Cho
 	b.WriteString(`<p><a href="`)
 	b.WriteString(html.EscapeString(data.AddAccountURL))
 	b.WriteString(`">`)
-	b.WriteString(html.EscapeString(d.chooserMessage(prompt.Locale, "chooser.add_account", chooserAddAccountFallback)))
+	b.WriteString(html.EscapeString(d.messageOr(prompt.Locale, "chooser.add_account", nil, chooserAddAccountFallback)))
 	b.WriteString(`</a></p>`)
 }
 
@@ -301,10 +301,12 @@ func writeChooserAccountButton(b *strings.Builder, account ChooserAccount) {
 	b.WriteString(`</button></p>`)
 }
 
-// chooserMessage resolves key through the translator and falls back to
-// the built-in English string when no catalogue answers.
-func (d HTMLDriver) chooserMessage(locale, key, fallback string) string {
-	if message, ok := d.message(locale, key, nil); ok {
+// messageOr resolves key through the translator and falls back to the
+// built-in English string when no catalogue answers. data supplies the
+// "{name}" placeholders of the resolved message and is nil for the keys
+// that carry none.
+func (d HTMLDriver) messageOr(locale, key string, data map[string]string, fallback string) string {
+	if message, ok := d.message(locale, key, data); ok {
 		return message
 	}
 	return fallback
@@ -323,32 +325,32 @@ const (
 // render (masked email, attempts remaining, captcha provider) and is
 // surfaced in plain prose so the HTML driver remains usable without
 // JS. All values pass through [html.EscapeString].
-func writePromptIntro(b *strings.Builder, prompt Prompt) {
-	switch d := prompt.Data.(type) {
+func (d HTMLDriver) writePromptIntro(b *strings.Builder, prompt Prompt) {
+	switch data := prompt.Data.(type) {
 	case PasswordPromptData:
-		if d.UsernameHint != "" {
+		if data.UsernameHint != "" {
 			b.WriteString(`<p>Hint: `)
-			b.WriteString(html.EscapeString(d.UsernameHint))
+			b.WriteString(html.EscapeString(data.UsernameHint))
 			b.WriteString(`</p>`)
 		}
 	case TOTPPromptData:
-		writeAttemptsRemaining(b, d.AttemptsRemaining)
+		writeAttemptsRemaining(b, data.AttemptsRemaining)
 	case RecoveryCodePromptData:
-		writeAttemptsRemaining(b, d.AttemptsRemaining)
+		writeAttemptsRemaining(b, data.AttemptsRemaining)
 	case EmailOTPVerifyPromptData:
-		if d.MaskedEmail != "" {
+		if data.MaskedEmail != "" {
 			b.WriteString(`<p>Code sent to `)
-			b.WriteString(html.EscapeString(d.MaskedEmail))
+			b.WriteString(html.EscapeString(data.MaskedEmail))
 			b.WriteString(`.</p>`)
 		}
 	case CaptchaPromptData:
-		if d.Provider != "" {
+		if data.Provider != "" {
 			b.WriteString(`<p>Captcha provider: `)
-			b.WriteString(html.EscapeString(d.Provider))
+			b.WriteString(html.EscapeString(data.Provider))
 			b.WriteString(`</p>`)
 		}
 	case ConsentScopePromptData:
-		writeConsentScopeList(b, d)
+		d.writeConsentScopeList(b, prompt.Locale, data)
 	default:
 		// PasskeyPromptData, EmailOTPSendPromptData, nil, and user-
 		// extension PromptData values share this branch: no
@@ -383,11 +385,17 @@ func writeAttemptsRemaining(b *strings.Builder, attempts int) {
 }
 
 // writeConsentScopeList renders the read-only list of scopes the user
-// is being asked to approve. Each row carries an explicit "(required)"
+// is being asked to approve. Each row carries an explicit required
 // marker for scopes the catalogue declared mandatory, matching the
 // orchestrator's server-side enforcement.
-func writeConsentScopeList(b *strings.Builder, data ConsentScopePromptData) {
-	writeConsentClient(b, data.Client)
+//
+// Both the marker and the client line above the list resolve through
+// the message catalogue: the consent screen's title and submit button
+// already do, and a page whose frame is translated while its body lines
+// stay English is a mixed-language screen no embedder configured.
+func (d HTMLDriver) writeConsentScopeList(b *strings.Builder, locale string, data ConsentScopePromptData) {
+	d.writeConsentClient(b, locale, data.Client)
+	required := d.messageOr(locale, "consent.scope_required", nil, consentRequiredFallback)
 	b.WriteString(`<ul>`)
 	for _, s := range data.Scopes {
 		b.WriteString(`<li>`)
@@ -397,14 +405,21 @@ func writeConsentScopeList(b *strings.Builder, data ConsentScopePromptData) {
 			b.WriteString(html.EscapeString(s.Description))
 		}
 		if s.Required {
-			b.WriteString(` (required)`)
+			b.WriteString(` `)
+			b.WriteString(html.EscapeString(required))
 		}
 		b.WriteString(`</li>`)
 	}
 	b.WriteString(`</ul>`)
 }
 
-func writeConsentClient(b *strings.Builder, client ClientView) {
+// writeConsentClient emits the line naming the relying party the user
+// is about to authorize. The catalogue answers with the full sentence
+// (the "{client_name}" placeholder carries the name), so a locale can
+// order the name and the surrounding words however it needs to; the
+// built-in English fallback keeps the "Client: <name>" shape the screen
+// has always emitted when no catalogue is wired.
+func (d HTMLDriver) writeConsentClient(b *strings.Builder, locale string, client ClientView) {
 	name := client.Name
 	if name == "" {
 		name = client.ClientID
@@ -412,10 +427,20 @@ func writeConsentClient(b *strings.Builder, client ClientView) {
 	if name == "" {
 		return
 	}
-	b.WriteString(`<p>Client: `)
-	b.WriteString(html.EscapeString(name))
+	line := d.messageOr(locale, "consent.subtitle",
+		map[string]string{"client_name": name}, consentClientFallback+name)
+	b.WriteString(`<p>`)
+	b.WriteString(html.EscapeString(line))
 	b.WriteString(`</p>`)
 }
+
+// Built-in English for the two consent lines no [FieldSpec] carries.
+// They follow the same rule as [htmlLabelFor]: the catalogue answers
+// first, these answer when it does not.
+const (
+	consentClientFallback   = "Client: "
+	consentRequiredFallback = "(required)"
+)
 
 // writeConsentApprovedField emits the single hidden field the
 // consent interaction expects on submission. The value is the space-

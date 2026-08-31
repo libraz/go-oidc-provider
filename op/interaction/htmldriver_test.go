@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -709,5 +710,112 @@ func TestHTMLDriver_PromotedFieldRoundTripsThroughParseSubmission(t *testing.T) 
 	}
 	if got.Values["captcha_token"] != "typed-by-the-user" {
 		t.Errorf("captcha_token = %q, want the value the user typed", got.Values["captcha_token"])
+	}
+}
+
+// seedTranslator resolves against the catalogues the library embeds, so
+// the localization tests below assert what a deployment that registers
+// nothing actually renders — not what a fixture map says it would.
+func seedTranslator(tb testing.TB) interaction.MessageTranslator {
+	tb.Helper()
+	bundles, err := i18n.DefaultBundles()
+	if err != nil {
+		tb.Fatalf("i18n.DefaultBundles: %v", err)
+	}
+	byTag := make(map[string]*i18n.Bundle, len(bundles))
+	for _, bundle := range bundles {
+		byTag[string(bundle.Tag())] = bundle
+	}
+	return func(locale, key string, data map[string]string) (string, bool) {
+		bundle, ok := byTag[locale]
+		if !ok {
+			return "", false
+		}
+		return bundle.Get(key, data)
+	}
+}
+
+// TestHTMLDriver_ConsentPageIsFullyLocalized pins the property a
+// registered locale is supposed to buy: one locale selects one language
+// for the whole page. The consent screen is where it is easiest to lose,
+// because the title and the submit button come from the catalogue while
+// the client line and the required marker are the driver's own prose —
+// a Japanese user of a zero-configuration deployment must not get a
+// Japanese frame around English body lines.
+//
+// The check is by fallback string rather than by character class: scope
+// names are the embedder's protocol identifiers and stay ASCII in every
+// locale, so their presence says nothing about the translation.
+func TestHTMLDriver_ConsentPageIsFullyLocalized(t *testing.T) {
+	t.Parallel()
+
+	driver := interaction.HTMLDriver{Translator: seedTranslator(t)}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/interaction/u-1", nil)
+	err := driver.Render(rec, req, interaction.Prompt{
+		Type:   "consent.scope",
+		Locale: "ja",
+		Data: interaction.ConsentScopePromptData{
+			Client: interaction.ClientView{ClientID: "rp-1", Name: "Example RP"},
+			Scopes: []interaction.ConsentScope{
+				{Name: "openid", Required: true},
+				{Name: "profile"},
+			},
+		},
+		StateRef: "ref-consent",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	out := rec.Body.String()
+
+	for _, want := range []string{
+		`<html lang="ja">`,
+		`<title>Example RP を承認</title>`,
+		`<h1>Example RP を承認</h1>`,
+		`<p>Example RP が次の情報へのアクセスを求めています:</p>`,
+		`<li>openid （必須）</li>`,
+		`<button type="submit">許可する</button>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ja consent page missing %q; got:\n%s", want, out)
+		}
+	}
+	for _, english := range []string{"Client: ", "(required)", "Authorize access", ">Continue<"} {
+		if strings.Contains(out, english) {
+			t.Errorf("ja consent page still carries the English fallback %q; got:\n%s", english, out)
+		}
+	}
+}
+
+// TestHTMLDriver_ConsentFallbacksStayEnglishWithoutCatalogue is the
+// other half: routing the two lines through the catalogue must not make
+// them disappear for a deployment whose translator answers nothing.
+func TestHTMLDriver_ConsentFallbacksStayEnglishWithoutCatalogue(t *testing.T) {
+	t.Parallel()
+
+	driver := interaction.HTMLDriver{
+		Translator: func(_, _ string, _ map[string]string) (string, bool) {
+			return "", false
+		},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/interaction/u-1", nil)
+	err := driver.Render(rec, req, interaction.Prompt{
+		Type: "consent.scope",
+		Data: interaction.ConsentScopePromptData{
+			Client: interaction.ClientView{ClientID: "rp-1", Name: "Example RP"},
+			Scopes: []interaction.ConsentScope{{Name: "openid", Required: true}},
+		},
+		StateRef: "ref-consent",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	out := rec.Body.String()
+	for _, fallback := range []string{`<p>Client: Example RP</p>`, `<li>openid (required)</li>`} {
+		if !strings.Contains(out, fallback) {
+			t.Errorf("consent page missing fallback %q; got:\n%s", fallback, out)
+		}
 	}
 }

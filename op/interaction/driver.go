@@ -53,6 +53,17 @@ type Driver interface {
 	// against the active [Prompt.Inputs] before dispatching to
 	// the [op.Authenticator]. The function MUST NOT consume more
 	// than a few KiB from r.Body.
+	//
+	// Precondition on form-encoded bodies: the endpoint verifies the
+	// CSRF token before it calls this method, and for a request
+	// declaring application/x-www-form-urlencoded it recovers the
+	// token by calling [http.Request.ParseForm]. r.Body is therefore
+	// already drained by the time ParseSubmission runs — reading it
+	// yields io.EOF. An implementation that accepts form bodies MUST
+	// read the fields from r.PostForm (or call ParseForm itself,
+	// which the standard library serves from its cached parse) rather
+	// than from r.Body. Bodies in any other wire format, JSON
+	// included, are untouched and are read from r.Body as usual.
 	ParseSubmission(r *http.Request) (FormSubmission, error)
 }
 

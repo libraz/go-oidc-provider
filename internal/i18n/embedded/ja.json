@@ -4,6 +4,7 @@
   "consent.button.allow": "許可する",
   "consent.button.deny": "キャンセル",
   "consent.scope": "アクセスを承認",
+  "consent.scope_required": "（必須）",
   "consent.approved_scopes": "承認するアクセス",
 
   "interaction.chooser": "アカウントを選択",
