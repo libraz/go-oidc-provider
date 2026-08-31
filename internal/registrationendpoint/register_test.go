@@ -314,7 +314,11 @@ func TestRegister_IgnoresStandardUnstoredMetadata(t *testing.T) {
 	body := minimalMetadata()
 	body["software_id"] = "software-123"
 	body["software_version"] = "2026.6"
-	body["tls_client_certificate_bound_access_tokens"] = true
+	// false is the protocol default: it asks the OP for nothing, so it is
+	// accepted and dropped. The true form asks for a per-client
+	// enforcement the OP does not apply and is refused instead; see
+	// TestRegister_RefusesValuesTheOPWillNotHonour.
+	body["tls_client_certificate_bound_access_tokens"] = false
 	body["backchannel_token_delivery_mode"] = "poll"
 	body["backchannel_client_notification_endpoint"] = "https://rp.test.invalid/ciba/callback"
 	body["backchannel_authentication_request_signing_alg"] = "ES256"

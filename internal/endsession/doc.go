@@ -78,6 +78,15 @@
 //     redirect to post_logout_redirect_uri or render the signed-out
 //     page, because the session and the subject's tokens may still be
 //     live.
+//   - A deletion that fails is answered the same way. The OP reports a
+//     successful sign-out only when every session row in the requested
+//     scope was actually deleted, or was already absent; a store that
+//     could not remove one produces the same 503, the same
+//     session.destroy_failed record, and the same retained cookie. The
+//     token and back-channel cascades stay non-blocking — they are
+//     recorded as their own audit events and do not change the response
+//     — because they retire credentials derived from a session the OP
+//     did destroy.
 //   - An interactive confirmation prompt is rendered unless the
 //     request proves intent for the session at hand. The spec says
 //     the OP SHOULD ask the user to confirm; the OP skips the prompt
@@ -97,7 +106,10 @@
 //     forged or stale form cannot silently widen or narrow the destructive
 //     scope. Group-wide logout snapshots the group before deletion, dedupes
 //     subjects for JWT / opaque access-token and refresh-chain revocation,
-//     and sends back-channel logout for every snapshotted session. Explicit
+//     and sends one back-channel logout fan-out per distinct subject in the
+//     snapshot — the logout token this OP issues names a subject and no sid,
+//     so a second browser session of the same account describes the same
+//     logout to every relying party. Explicit
 //     "current" logout removes only the active session and rebinds the
 //     cookie to a surviving sibling when one remains.
 //   - post_logout_redirect_uri is rejected when no client can be

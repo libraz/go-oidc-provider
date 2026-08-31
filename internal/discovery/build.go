@@ -139,6 +139,20 @@ type Input struct {
 	// the *_encryption_enc_values_supported advertisement.
 	EncryptionEncsSupported []string
 
+	// InboundEncryptionAlgsSupported lists the JWE alg values the OP
+	// can actually decrypt with, i.e. EncryptionAlgsSupported
+	// intersected with the key families present in the configured
+	// encryption keyset. Only request_object_encryption_alg_values_supported
+	// reads it: that is the one array describing ciphertext addressed
+	// to the OP's own keys, so an alg no key of the right family backs
+	// is one an RP cannot use. Every other *_encryption_alg_values_supported
+	// array describes encryption to the relying party's key and stays
+	// on the wider EncryptionAlgsSupported list.
+	//
+	// The op layer supplies the value; an empty list means no
+	// encrypted request object can be negotiated at all.
+	InboundEncryptionAlgsSupported []string
+
 	// Metadata carries the static RFC 8414 §2 metadata fields the
 	// embedder injects through op.WithDiscoveryMetadata. The op
 	// layer pre-validates the struct (override-deny check on
@@ -537,6 +551,17 @@ func applyCIBAFeature(in Input, doc *Document) {
 // so it is advertised only when the OP holds a decryption keyset
 // ([Features.EncryptionInbound]) and JAR is enabled.
 //
+// The direction also decides which alg list applies. The outbound four
+// negotiate against a key the relying party owns, so the embedder's
+// full narrowed subset is advertisable. request_object negotiates
+// against a key the OP owns, so it is further intersected down to
+// [Input.InboundEncryptionAlgsSupported] — the algs some configured
+// decryption key can actually serve. Advertising the wider list there
+// would send an RP that picked, say, an ECDH-ES variant looking for an
+// EC recipient the OP's JWKS does not contain, and the request object
+// it built anyway would come back as an undiagnosable
+// invalid_request_object.
+//
 // The alg / enc lists are the embedder's narrowed subset (or the
 // closed v0.9.1 default when no narrowing was applied). An empty list
 // on either side means no pair can be negotiated, so nothing is
@@ -561,8 +586,9 @@ func applyEncryptionFeature(in Input, doc *Document) {
 		doc.IntrospectionEncryptionAlgValuesSupported = algs
 		doc.IntrospectionEncryptionEncValuesSupported = encs
 	}
-	if in.Features.EncryptionInbound && in.Features.JAR {
-		doc.RequestObjectEncryptionAlgValuesSupported = algs
+	inbound := slices.Clone(in.InboundEncryptionAlgsSupported)
+	if in.Features.EncryptionInbound && in.Features.JAR && len(inbound) > 0 {
+		doc.RequestObjectEncryptionAlgValuesSupported = inbound
 		doc.RequestObjectEncryptionEncValuesSupported = encs
 	}
 }

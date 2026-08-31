@@ -115,13 +115,13 @@ func validatePolicy(
 //     encryption metadata the UserInfo surface depends on; see
 //     [userInfoSignedResponseSurface].
 //   - Per-client enforcement flags. Asking the OP to require DPoP
-//     (RFC 9449 §5.2) or pushed authorization requests (RFC 9126 §6.2)
-//     from this client specifically is a hardening the OP applies
-//     globally or per presented proof, never per registration. Storing
-//     the flag and not enforcing it would leave the client believing a
-//     protection is in place, so the request is refused instead. A
-//     false value is the protocol default and is accepted as the no-op
-//     it is.
+//     (RFC 9449 §5.2), certificate-bound access tokens (RFC 8705 §3.4)
+//     or pushed authorization requests (RFC 9126 §6.2) from this client
+//     specifically is a hardening the OP applies globally or per
+//     presented proof, never per registration. Storing the flag and not
+//     enforcing it would leave the client believing a protection is in
+//     place, so the request is refused instead. A false value is the
+//     protocol default and is accepted as the no-op it is.
 func validateUnpersistedMetadata(m ClientMetadata, extras metadataExtras) error {
 	userInfo := userInfoSignedResponseSurface(m.UserInfoEncryptedResponseAlg != "")
 	if err := validateSignedResponseAlg(userInfo, extras.UserInfoSignedResponseAlg); err != nil {
@@ -134,6 +134,13 @@ func validateUnpersistedMetadata(m ClientMetadata, extras metadataExtras) error 
 		return errInvalidClientMetadata(
 			"dpop_bound_access_tokens true is not supported: the OP binds an access token when the " +
 				"request presents a DPoP proof and does not enforce the requirement per client",
+		)
+	}
+	if extras.TLSClientCertificateBoundAccessTokens {
+		return errInvalidClientMetadata(
+			"tls_client_certificate_bound_access_tokens true is not supported: the OP binds an access " +
+				"token when the request presents a client certificate and does not enforce the " +
+				"requirement per client",
 		)
 	}
 	if extras.RequirePushedAuthorizationRequests {

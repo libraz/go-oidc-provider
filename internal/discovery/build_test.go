@@ -294,6 +294,49 @@ func TestBuild_StaticPolicyValues(t *testing.T) {
 	}
 }
 
+// TestBuild_ResponseModes_BaselinePublishedWithoutJARM pins the baseline
+// response_modes_supported set to the wire. The member is not left to the
+// spec's implicit defaults: a deployment with JARM off still advertises
+// ["query", "form_post"], and the "omitempty" tag on the field must never
+// take effect for it.
+//
+// Spec: OIDC Core 1.0 §3.1.2.1 / OAuth 2.0 Form Post Response Mode 1.0 §2.
+func TestBuild_ResponseModes_BaselinePublishedWithoutJARM(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints:   discovery.EndpointPaths{JWKS: "/jwks", Authorize: "/auth", Token: "/token"},
+		Features:    discovery.Features{AuthorizeEndpoint: true}, // JARM off.
+	})
+	want := []string{"query", "form_post"}
+	if len(doc.ResponseModesSupported) != len(want) {
+		t.Fatalf("response_modes_supported=%v, want %v", doc.ResponseModesSupported, want)
+	}
+	for i, mode := range want {
+		if doc.ResponseModesSupported[i] != mode {
+			t.Errorf("response_modes_supported[%d]=%q, want %q", i, doc.ResponseModesSupported[i], mode)
+		}
+	}
+
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal document: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal document: %v", err)
+	}
+	modes, ok := wire["response_modes_supported"].([]any)
+	if !ok {
+		t.Fatalf("response_modes_supported absent from the wire document: %s", raw)
+	}
+	if len(modes) == 0 {
+		t.Error("response_modes_supported is empty on the wire, want the baseline set")
+	}
+}
+
 // TestBuild_OmitsAuthorizeSurfacesForMachineToMachineGrants covers the
 // grant set of a client_credentials-only deployment: the router mounts
 // neither /authorize nor /end_session, and no session teardown can ever

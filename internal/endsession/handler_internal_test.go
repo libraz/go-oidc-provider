@@ -156,7 +156,9 @@ func TestTerminateSession_AuditsSessionStoreFailureWithoutFalseSuccess(t *testin
 	w := httptest.NewRecorder()
 	req := logoutRequest(outcome.Cookie)
 	deps := Deps{Sessions: manager, Audit: recorder}
-	terminateSession(w, req, deps, readSessionLookup(req, deps))
+	if err := terminateSession(w, req, deps, readSessionLookup(req, deps)); err == nil {
+		t.Fatal("termination reported success although the session row was not deleted")
+	}
 
 	if !recorder.has("session.destroy_failed") {
 		t.Fatalf("session.destroy_failed not emitted: %#v", recorder.snapshot())
@@ -164,8 +166,13 @@ func TestTerminateSession_AuditsSessionStoreFailureWithoutFalseSuccess(t *testin
 	if recorder.has("session.destroyed") {
 		t.Fatalf("session.destroyed emitted despite store failure: %#v", recorder.snapshot())
 	}
-	if len(w.Result().Cookies()) == 0 {
-		t.Fatal("logout did not clear the session cookie after store failure")
+	// The cookie stays. It is the browser's only handle on the session
+	// that is still running, so retiring it would leave the user unable
+	// to retry the logout the OP just failed to perform.
+	for _, c := range w.Result().Cookies() {
+		if c.Name == cookie.SessionProfile.Name {
+			t.Fatal("session cookie retired although the session it names was not deleted")
+		}
 	}
 }
 

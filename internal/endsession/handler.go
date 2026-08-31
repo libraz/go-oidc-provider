@@ -403,7 +403,17 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !enforceCSRFGate(w, r, deps, f) {
 		return
 	}
-	terminateSessionForScope(w, r, deps, f.session, f.req.logoutScope)
+	if err := terminateSessionForScope(w, r, deps, f.session, f.req.logoutScope); err != nil {
+		// The session rows the request asked to destroy are still live.
+		// Telling the browser the sign-out completed — a redirect to the
+		// RP or the "you're signed out" page — would leave a previously
+		// stolen cookie usable behind a screen that says otherwise. The
+		// session cookie is deliberately left in place for the same
+		// reason admitSessionLookup leaves it: it is the only handle the
+		// browser has for retrying the logout the OP just failed.
+		writeLogoutError(w, http.StatusServiceUnavailable, descInternalError)
+		return
+	}
 	emitResponse(w, r, deps, f)
 }
 
@@ -788,11 +798,12 @@ func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout 
 // terminateSession is the success-path side effect: delete the session
 // record the cookie pointed at, hand a back-channel logout fan-out to
 // the affected RPs off to the coordinator, and clear the cookie in the
-// response. Store and downstream revocation failures are deliberately
-// non-blocking for the browser response, but they are recorded as
-// distinct audit events rather than being misreported as a successful
-// session destruction. The cookie is always cleared so the browser
-// stops authenticating future requests with stale state.
+// response. Downstream revocation and back-channel failures are
+// deliberately non-blocking for the browser response, but they are
+// recorded as distinct audit events rather than being misreported as a
+// successful session destruction. A failure to delete the session rows
+// themselves is returned to the caller: the browser must not be told the
+// sign-out completed while the session it names is still usable.
 //
 // The ordering here is load-bearing. Session deletion and the
 // access-token cascade run on the request path, so the response is
@@ -805,8 +816,8 @@ func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout 
 // lookup is the classified session read [serve] performed before the
 // CSRF gate ran, so the session that gets destroyed is exactly the one
 // the gate authorised.
-func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, lookup sessionLookup) {
-	terminateSessionForScope(w, r, deps, lookup, logoutScopeAll)
+func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, lookup sessionLookup) error {
+	return terminateSessionForScope(w, r, deps, lookup, logoutScopeAll)
 }
 
 // terminateSessionForScope performs the destructive part of /end_session.
@@ -815,6 +826,11 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, lookup 
 // cascades. The current-scope branch removes only the active row and lets the
 // session manager rebind the cookie to a surviving sibling.
 //
+// It returns a non-nil error when the OP could not confirm that every
+// session row in the requested scope is gone. On that path the session
+// cookie is left untouched, so the browser keeps the one handle it has
+// for retrying, and the caller MUST NOT report success.
+//
 // The state switch is a backstop rather than the primary gate — [serve]
 // answers an unavailable store before the flow reaches here — but it is
 // what makes the destructive path safe for any future caller: it cannot
@@ -822,7 +838,7 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, lookup 
 // resulting empty fingerprint as an idempotent no-op.
 //
 //nolint:gocognit,cyclop // The destructive workflow keeps failure audit, revocation, and cookie ordering explicit.
-func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps, lookup sessionLookup, scope string) {
+func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps, lookup sessionLookup, scope string) error {
 	ctx := r.Context()
 	if scope == "" {
 		scope = logoutScopeAll
@@ -831,13 +847,13 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 	switch lookup.state {
 	case sessionAbsent:
 		clearSessionCookie(w)
-		return
+		return nil
 	case sessionStoreUnavailable:
 		// No session was ever resolved, so there is nothing this
 		// function could delete. Record the fault instead of returning
 		// as though the logout had nothing to do.
 		emitSessionLookupFailed(ctx, deps, lookup)
-		return
+		return errSessionNotDestroyed
 	case sessionActive:
 		// Fall through to the destructive workflow.
 	}
@@ -845,7 +861,7 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 	sess := lookup.fingerprint
 	if sess.sessionID == "" {
 		clearSessionCookie(w)
-		return
+		return nil
 	}
 
 	snapshot := make([]*store.Session, 0, 1)
@@ -939,30 +955,57 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 			Extras:  map[string]any{"error": err.Error()},
 		})
 	}
-	if deps.Backchannel != nil {
-		seen := make(map[string]struct{}, len(snapshot))
-		for _, row := range snapshot {
-			if row == nil || row.Subject == "" || row.ID == "" {
-				continue
-			}
-			key := row.ID
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			deps.Backchannel.NotifyDetached(ctx, backchannel.Notice{
-				Subject:   row.Subject,
-				SessionID: row.ID,
-			})
-		}
-	}
+	notifyBackchannelForSnapshot(ctx, deps, snapshot)
 
-	if scope == logoutScopeCurrent && sessionErr == nil && removal.Cookie != "" && len(removal.Remaining) > 0 {
+	if sessionErr != nil {
+		// At least one session row survived the request. Leave the cookie
+		// alone: it is the browser's only handle on the session that is
+		// still running, and clearing it would cost the user the ability
+		// to retry the logout the OP just failed to perform.
+		return sessionErr
+	}
+	if scope == logoutScopeCurrent && removal.Cookie != "" && len(removal.Remaining) > 0 {
 		if err := setSessionCookie(w, removal.Cookie, removal.ExpiresAt, endSessionNow(deps)); err == nil {
-			return
+			return nil
 		}
 	}
 	clearSessionCookie(w)
+	return nil
+}
+
+// notifyBackchannelForSnapshot hands one back-channel logout fan-out to
+// the coordinator per distinct subject in the pre-delete snapshot.
+//
+// The unit of a back-channel logout token is the subject, not the browser
+// session: this OP deliberately issues subject-only logout tokens (no
+// sid), so N browser sessions of one account in a chooser group would
+// otherwise produce N semantically identical fan-outs. Each RP would
+// receive N tokens differing only in jti, and the coordinator's inflight
+// budget would be spent N times over — under load that sheds fan-outs
+// that other subjects still needed. The sibling token cascade dedupes on
+// the same key for the same reason.
+//
+// The Notice still carries the session id of the first row seen for the
+// subject, so an operator correlating the audit stream has a handle on
+// the ceremony that produced the fan-out.
+func notifyBackchannelForSnapshot(ctx context.Context, deps Deps, snapshot []*store.Session) {
+	if deps.Backchannel == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(snapshot))
+	for _, row := range snapshot {
+		if row == nil || row.Subject == "" || row.ID == "" {
+			continue
+		}
+		if _, ok := seen[row.Subject]; ok {
+			continue
+		}
+		seen[row.Subject] = struct{}{}
+		deps.Backchannel.NotifyDetached(ctx, backchannel.Notice{
+			Subject:   row.Subject,
+			SessionID: row.ID,
+		})
+	}
 }
 
 // revokeAccessTokens cascades RP-Initiated Logout to the access-token
@@ -1131,6 +1174,12 @@ func readSessionLookup(r *http.Request, deps Deps) sessionLookup {
 // errSessionUnanswered marks the contract violation of a session
 // manager that reports neither a session nor an error.
 var errSessionUnanswered = errors.New("endsession: session manager returned no session and no error")
+
+// errSessionNotDestroyed reports that the destructive workflow could not
+// establish that the requested sessions are gone. It stands in for the
+// unreadable-store case, where no per-row deletion error exists but the
+// OP equally cannot claim the sign-out happened.
+var errSessionNotDestroyed = errors.New("endsession: session termination could not be confirmed")
 
 // clearSessionCookie writes a Set-Cookie header that retires the
 // session cookie. Errors during construction are swallowed: a failure

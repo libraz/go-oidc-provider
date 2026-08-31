@@ -109,7 +109,6 @@ type metadataWire struct {
 	// oversight.
 	SoftwareID                                 string   `json:"software_id,omitempty"`
 	SoftwareVersion                            string   `json:"software_version,omitempty"`
-	TLSClientCertificateBoundAccessTokens      *bool    `json:"tls_client_certificate_bound_access_tokens,omitempty"`
 	BackchannelTokenDeliveryMode               string   `json:"backchannel_token_delivery_mode,omitempty"`
 	BackchannelClientNotificationEndpoint      string   `json:"backchannel_client_notification_endpoint,omitempty"`
 	BackchannelAuthenticationRequestSigningAlg string   `json:"backchannel_authentication_request_signing_alg,omitempty"`
@@ -123,10 +122,11 @@ type metadataWire struct {
 	// the published metadata or quietly drop a hardening the client
 	// asked for, so they are parsed and checked by
 	// [validateUnpersistedMetadata].
-	UserInfoSignedResponseAlg          string `json:"userinfo_signed_response_alg,omitempty"`
-	AuthorizationSignedResponseAlg     string `json:"authorization_signed_response_alg,omitempty"`
-	DPoPBoundAccessTokens              bool   `json:"dpop_bound_access_tokens,omitempty"`
-	RequirePushedAuthorizationRequests bool   `json:"require_pushed_authorization_requests,omitempty"`
+	UserInfoSignedResponseAlg             string `json:"userinfo_signed_response_alg,omitempty"`
+	AuthorizationSignedResponseAlg        string `json:"authorization_signed_response_alg,omitempty"`
+	DPoPBoundAccessTokens                 bool   `json:"dpop_bound_access_tokens,omitempty"`
+	TLSClientCertificateBoundAccessTokens bool   `json:"tls_client_certificate_bound_access_tokens,omitempty"`
+	RequirePushedAuthorizationRequests    bool   `json:"require_pushed_authorization_requests,omitempty"`
 
 	// SoftwareStatement is parsed only so the handler can detect its
 	// presence and reject with invalid_software_statement; v1.0 does
@@ -164,10 +164,11 @@ type metadataExtras struct {
 
 	// Members the OP validates but does not persist. See
 	// [validateUnpersistedMetadata] for the rule applied to each.
-	UserInfoSignedResponseAlg          string
-	AuthorizationSignedResponseAlg     string
-	DPoPBoundAccessTokens              bool
-	RequirePushedAuthorizationRequests bool
+	UserInfoSignedResponseAlg             string
+	AuthorizationSignedResponseAlg        string
+	DPoPBoundAccessTokens                 bool
+	TLSClientCertificateBoundAccessTokens bool
+	RequirePushedAuthorizationRequests    bool
 }
 
 // parseClientMetadataWithExtras is the variant the handler uses; it
@@ -249,10 +250,11 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		RegAccessToken:    append(json.RawMessage(nil), w.RegistrationAccessToken...),
 		RegClientURI:      append(json.RawMessage(nil), w.RegistrationClientURI...),
 
-		UserInfoSignedResponseAlg:          w.UserInfoSignedResponseAlg,
-		AuthorizationSignedResponseAlg:     w.AuthorizationSignedResponseAlg,
-		DPoPBoundAccessTokens:              w.DPoPBoundAccessTokens,
-		RequirePushedAuthorizationRequests: w.RequirePushedAuthorizationRequests,
+		UserInfoSignedResponseAlg:             w.UserInfoSignedResponseAlg,
+		AuthorizationSignedResponseAlg:        w.AuthorizationSignedResponseAlg,
+		DPoPBoundAccessTokens:                 w.DPoPBoundAccessTokens,
+		TLSClientCertificateBoundAccessTokens: w.TLSClientCertificateBoundAccessTokens,
+		RequirePushedAuthorizationRequests:    w.RequirePushedAuthorizationRequests,
 	}
 	return m, extras, nil
 }

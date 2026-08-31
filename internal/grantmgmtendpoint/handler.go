@@ -219,9 +219,18 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 		return nil, nil, false
 	}
 	g, err := deps.Grants.Find(r.Context(), grantID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		// The store could not answer whether the grant exists. Reporting
+		// 404 here would tell a client trying to contain a compromise that
+		// the grant is already gone, and DELETE's idempotency makes that a
+		// reason not to retry — the grant and its token chain would survive
+		// the incident. Surface the fault so the caller retries.
+		writeError(w, http.StatusInternalServerError, "server_error", "could not resolve grant")
+		return nil, nil, false
+	}
 	if err != nil || g == nil || g.ClientID != client.ID {
-		// Ownership failure is reported as 404 so the endpoint does not
-		// confirm that another client's grant exists.
+		// Proven absence, and ownership failure, are both reported as 404 so
+		// the endpoint does not confirm that another client's grant exists.
 		writeError(w, http.StatusNotFound, "invalid_request", "grant not found")
 		return nil, nil, false
 	}

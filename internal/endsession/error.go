@@ -62,10 +62,11 @@ const (
 
 	// descInternalError is rendered when the OP cannot build the
 	// confirmation page — no entropy source for the CSRF token, or a
-	// cookie profile that fails to validate — and when the session
-	// store cannot answer the lookup the logout depends on. All three
-	// are OP-side faults rather than request-shaped ones, so the
-	// message says nothing about the request.
+	// cookie profile that fails to validate — when the session store
+	// cannot answer the lookup the logout depends on, and when the
+	// session rows the request asked to destroy could not be deleted.
+	// All of them are OP-side faults rather than request-shaped ones, so
+	// the message says nothing about the request.
 	descInternalError = "logout request could not be processed"
 
 	// descDuplicateParameter is rendered when a single-valued

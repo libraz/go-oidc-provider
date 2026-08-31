@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endsession"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -228,6 +229,62 @@ func TestHandler_StalledBackchannelTargetDoesNotHoldTheLogoutResponse(t *testing
 	drainFanOut(t, h.coord)
 	if h.audit.find("logout.back_channel.delivered") == nil {
 		t.Fatalf("detached delivery outcome not audited: %#v", h.audit.snapshot())
+	}
+}
+
+// TestHandler_GroupLogoutNotifiesEachRPOncePerSubject pins the unit of a
+// back-channel fan-out. This OP issues subject-only logout tokens by
+// design — no sid — so N browser sessions of one account in a chooser
+// group describe exactly one logout for every relying party the subject
+// granted. Fanning out per session row would send each RP N tokens that
+// differ only in jti, and would spend the coordinator's inflight budget N
+// times over; under load the shedding that follows drops fan-outs other
+// subjects still needed.
+func TestHandler_GroupLogoutNotifiesEachRPOncePerSubject(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu        sync.Mutex
+		delivered []string
+	)
+	deliver := backchannel.DelivererFunc(func(_ context.Context, target backchannel.Target, _ string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		delivered = append(delivered, target.ClientID)
+		return nil
+	})
+	h := newDetachHarness(t, deliver)
+
+	// Three browser sessions of the same account share one chooser group,
+	// which is what a shared device with re-logins produces.
+	cookieValue, _ := h.issueSession(t)
+	active, err := h.sessionMgr.Resolve(context.Background(), cookieValue)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	for range 2 {
+		out, err := h.sessionMgr.AddAccount(context.Background(), active.Payload.ChooserGroupID, sessions.Login{
+			Subject:  "user-1",
+			AuthTime: h.clock.now,
+		})
+		if err != nil {
+			t.Fatalf("AddAccount: %v", err)
+		}
+		cookieValue = out.Cookie
+	}
+
+	token := h.confirmToken(t, cookieValue)
+	resp := h.confirmLogout(t, cookieValue, token)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	drainFanOut(t, h.coord)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(delivered) != 1 || delivered[0] != "rp-detached" {
+		t.Fatalf("logout tokens delivered = %v, want exactly one to rp-detached", delivered)
 	}
 }
 

@@ -23,43 +23,44 @@ import (
 //nolint:gosec // G101: "client_secret_basic" is the OIDC DCR auth-method name, not a secret.
 func fullStandardMetadata() map[string]any {
 	return map[string]any{
-		"redirect_uris":                         []string{"https://rp.test.invalid/callback"},
-		"response_types":                        []string{"code"},
-		"grant_types":                           []string{"authorization_code", "refresh_token"},
-		"application_type":                      "web",
-		"contacts":                              []string{"ops@rp.test.invalid"},
-		"client_name":                           "Standard RP",
-		"logo_uri":                              "https://rp.test.invalid/logo.png",
-		"client_uri":                            "https://rp.test.invalid/",
-		"policy_uri":                            "https://rp.test.invalid/privacy",
-		"tos_uri":                               "https://rp.test.invalid/terms",
-		"jwks_uri":                              "https://rp.test.invalid/jwks.json",
-		"subject_type":                          "public",
-		"id_token_signed_response_alg":          "ES256",
-		"id_token_encrypted_response_alg":       "RSA-OAEP-256",
-		"id_token_encrypted_response_enc":       "A256GCM",
-		"userinfo_signed_response_alg":          "ES256",
-		"userinfo_encrypted_response_alg":       "RSA-OAEP-256",
-		"userinfo_encrypted_response_enc":       "A128GCM",
-		"request_object_signing_alg":            "ES256",
-		"request_object_encryption_alg":         "ECDH-ES",
-		"request_object_encryption_enc":         "A256GCM",
-		"token_endpoint_auth_method":            "client_secret_basic",
-		"token_endpoint_auth_signing_alg":       "ES256",
-		"default_max_age":                       3600,
-		"require_auth_time":                     true,
-		"default_acr_values":                    []string{"urn:example:acr:silver"},
-		"initiate_login_uri":                    "https://rp.test.invalid/login",
-		"request_uris":                          []string{"https://rp.test.invalid/request.jwt"},
-		"scope":                                 "openid",
-		"post_logout_redirect_uris":             []string{"https://rp.test.invalid/logout"},
-		"backchannel_logout_uri":                "https://rp.test.invalid/backchannel-logout",
-		"software_id":                           "standard-rp",
-		"software_version":                      "1.4.2",
-		"authorization_signed_response_alg":     "ES256",
-		"introspection_signed_response_alg":     "ES256",
-		"dpop_bound_access_tokens":              false,
-		"require_pushed_authorization_requests": false,
+		"redirect_uris":                              []string{"https://rp.test.invalid/callback"},
+		"response_types":                             []string{"code"},
+		"grant_types":                                []string{"authorization_code", "refresh_token"},
+		"application_type":                           "web",
+		"contacts":                                   []string{"ops@rp.test.invalid"},
+		"client_name":                                "Standard RP",
+		"logo_uri":                                   "https://rp.test.invalid/logo.png",
+		"client_uri":                                 "https://rp.test.invalid/",
+		"policy_uri":                                 "https://rp.test.invalid/privacy",
+		"tos_uri":                                    "https://rp.test.invalid/terms",
+		"jwks_uri":                                   "https://rp.test.invalid/jwks.json",
+		"subject_type":                               "public",
+		"id_token_signed_response_alg":               "ES256",
+		"id_token_encrypted_response_alg":            "RSA-OAEP-256",
+		"id_token_encrypted_response_enc":            "A256GCM",
+		"userinfo_signed_response_alg":               "ES256",
+		"userinfo_encrypted_response_alg":            "RSA-OAEP-256",
+		"userinfo_encrypted_response_enc":            "A128GCM",
+		"request_object_signing_alg":                 "ES256",
+		"request_object_encryption_alg":              "ECDH-ES",
+		"request_object_encryption_enc":              "A256GCM",
+		"token_endpoint_auth_method":                 "client_secret_basic",
+		"token_endpoint_auth_signing_alg":            "ES256",
+		"default_max_age":                            3600,
+		"require_auth_time":                          true,
+		"default_acr_values":                         []string{"urn:example:acr:silver"},
+		"initiate_login_uri":                         "https://rp.test.invalid/login",
+		"request_uris":                               []string{"https://rp.test.invalid/request.jwt"},
+		"scope":                                      "openid",
+		"post_logout_redirect_uris":                  []string{"https://rp.test.invalid/logout"},
+		"backchannel_logout_uri":                     "https://rp.test.invalid/backchannel-logout",
+		"software_id":                                "standard-rp",
+		"software_version":                           "1.4.2",
+		"authorization_signed_response_alg":          "ES256",
+		"introspection_signed_response_alg":          "ES256",
+		"dpop_bound_access_tokens":                   false,
+		"tls_client_certificate_bound_access_tokens": false,
+		"require_pushed_authorization_requests":      false,
 	}
 }
 
@@ -228,6 +229,11 @@ func TestRegister_RefusesValuesTheOPWillNotHonour(t *testing.T) {
 			value:  true,
 		},
 		{
+			name:   "per-client certificate binding the OP does not apply",
+			member: "tls_client_certificate_bound_access_tokens",
+			value:  true,
+		},
+		{
 			name:   "per-client pushed-authorization enforcement the OP does not apply",
 			member: "require_pushed_authorization_requests",
 			value:  true,
@@ -296,5 +302,42 @@ func TestManage_Update_AppliesTheSameToleranceRule(t *testing.T) {
 	}
 	if got := decodeBody(t, rejected); got["error"] != "invalid_client_metadata" {
 		t.Errorf("error=%v want invalid_client_metadata", got["error"])
+	}
+}
+
+// TestManage_Update_RefusesPerClientCertificateBinding pins the update
+// half of the enforcement-flag rule for
+// tls_client_certificate_bound_access_tokens. The OP binds an access
+// token to whatever certificate the request presented; it holds no
+// per-client switch that could make the binding mandatory. Accepting the
+// member on a PUT would answer 200 to a request for a protection that
+// does not exist, and the client would go on believing every token it
+// receives is certificate-bound.
+func TestManage_Update_RefusesPerClientCertificateBinding(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	created := f.register(t, nil)
+
+	refused := minimalMetadata()
+	refused["tls_client_certificate_bound_access_tokens"] = true
+	resp := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, refused)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	if got := decodeBody(t, resp); got["error"] != "invalid_client_metadata" {
+		t.Errorf("error=%v want invalid_client_metadata", got["error"])
+	}
+
+	// The omitted form still onboards: the member is refused only when it
+	// asks for the enforcement, never as an unknown member.
+	accepted := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, minimalMetadata())
+	defer accepted.Body.Close()
+	if accepted.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(accepted.Body)
+		t.Fatalf("omitted member: status=%d want 200 body=%s", accepted.StatusCode, raw)
 	}
 }

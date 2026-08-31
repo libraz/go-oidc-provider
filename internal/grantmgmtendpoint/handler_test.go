@@ -490,6 +490,87 @@ func TestHandler_RevokeDeleteFailure_Returns500(t *testing.T) {
 	}
 }
 
+// TestHandler_GrantLookupTransportFailure_Returns500 pins that a store
+// which could not answer whether the grant exists is not reported as one
+// that answered "no". A client revoking a grant to contain a compromise
+// reads 404 as the idempotent already-gone outcome and stops retrying,
+// and the grant plus its refresh / access-token chain would survive the
+// incident. The 500 keeps the operation retryable, and the retry — once
+// the store answers again — must still be able to revoke the grant.
+func TestHandler_GrantLookupTransportFailure_Returns500(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{http.MethodDelete, http.MethodGet} {
+		t.Run(strings.ToLower(method), func(t *testing.T) {
+			t.Parallel()
+
+			healthy := make(chan struct{})
+			f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+				d.QueryEnabled = true
+				d.RevokeEnabled = true
+				d.Grants = healableGrantStore{GrantStore: d.Grants, healed: healthy}
+			})
+			f.seedGrant(t, "grant-unreachable")
+			f.seedGrantTokens(t, "grant-unreachable")
+
+			resp := f.do(t, method, "grant-unreachable")
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("status=%d want 500: the store never reported the grant absent", resp.StatusCode)
+			}
+			if body := decodeError(t, resp); body["error"] != "server_error" {
+				t.Errorf("error=%v want server_error", body["error"])
+			}
+
+			// The grant survived the outage, so the client's retry must be
+			// able to complete the revoke it was denied.
+			close(healthy)
+			retry := f.do(t, http.MethodDelete, "grant-unreachable")
+			defer retry.Body.Close()
+			if retry.StatusCode != http.StatusNoContent {
+				t.Fatalf("retry status=%d want 204", retry.StatusCode)
+			}
+			f.assertGrantTokens(t, "grant-unreachable", false)
+		})
+	}
+}
+
+// healableGrantStore fails Find until healed is closed, then reads
+// through. It models a transient outage: the same grant is unreachable
+// and then reachable again, which is what makes the retry meaningful.
+type healableGrantStore struct {
+	store.GrantStore
+	healed chan struct{}
+}
+
+func (s healableGrantStore) Find(ctx context.Context, id string) (*store.Grant, error) {
+	select {
+	case <-s.healed:
+		return s.GrantStore.Find(ctx, id)
+	default:
+		return nil, errors.New("simulated backend connection failure")
+	}
+}
+
+// TestHandler_GrantNotFound_Returns404 is the counterpart of the
+// transport-failure case: a store that positively reports the grant
+// absent still yields 404, so the fix above did not turn the
+// existence-oracle defence into a 500 for every unknown grant_id.
+func TestHandler_GrantNotFound_Returns404(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.QueryEnabled = true
+		d.RevokeEnabled = true
+	})
+
+	resp := f.do(t, http.MethodDelete, "grant-never-existed")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d want 404", resp.StatusCode)
+	}
+}
+
 // TestHandler_RevokeSecurityCascadeFailure_Returns500 pins the fail-closed
 // ordering: no security-revocation failure may be hidden behind a successful
 // grant delete and 204 response. Keeping the grant makes the DELETE retryable.

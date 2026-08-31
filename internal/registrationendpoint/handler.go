@@ -62,6 +62,18 @@ type Deps struct {
 	// registrations.
 	RegisterPath string
 
+	// RegisterMountPath is the absolute request path the router mounted
+	// this handler at — the very string passed to http.ServeMux.Handle,
+	// including any path component the issuer URL carries. The handler
+	// discriminates a management request from a registration request
+	// against this value, so a deployment whose issuer is
+	// https://idp.example.com/tenant classifies /tenant/oidc/register/{id}
+	// as management rather than serving a second registration under it.
+	//
+	// An empty value falls back to [MountPrefix] + [RegisterPath], which
+	// is the same path for the bare-host issuer a direct caller has.
+	RegisterMountPath string
+
 	// Clock supplies the current wall-clock reading. A nil Clock
 	// falls back to [timex.SystemClock].
 	Clock Clock
@@ -314,7 +326,7 @@ func (d *Deps) audit() audit.Emitter {
 // <RegisterPath>/{client_id} so the routing logic here only has to
 // distinguish the two shapes.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
-	clientID, isManagement := managementClientID(r.URL.Path, deps.MountPrefix, deps.RegisterPath)
+	clientID, isManagement := managementClientID(r.URL.Path, registerMountPath(deps))
 	if isManagement {
 		serveManagement(w, r, deps, clientID)
 		return
@@ -351,19 +363,32 @@ func serveManagement(w http.ResponseWriter, r *http.Request, deps Deps, clientID
 	}
 }
 
+// registerMountPath returns the absolute path the handler is reachable
+// at. [Deps.RegisterMountPath] is authoritative because the router
+// computes it from the same inputs it mounts with; the concatenation is
+// the fallback for a caller that constructs [Deps] directly, where the
+// issuer carries no path and the two agree.
+func registerMountPath(deps Deps) string {
+	if deps.RegisterMountPath != "" {
+		return deps.RegisterMountPath
+	}
+	return joinPath(deps.MountPrefix, deps.RegisterPath)
+}
+
 // managementClientID extracts the {client_id} path parameter for the
 // RFC 7592 management endpoints. The function returns ("", false) when
-// the request targets the bare /register path and (id, true) when it
-// targets /register/{id}.
-// The op layer routes /register and /register/{client_id} to the same
+// the request targets the bare registration path and (id, true) when it
+// targets <base>/{id}.
+// The op layer routes <base> and <base>/{client_id} to the same
 // handler instance via two http.ServeMux entries; this helper does
-// the second-stage discrimination.
-func managementClientID(path, mountPrefix, registerPath string) (string, bool) {
-	full := joinPath(mountPrefix, registerPath)
-	if !strings.HasPrefix(path, full) {
+// the second-stage discrimination, and it must do it against the same
+// base the router mounted under — a base missing the issuer's own path
+// classifies every management request as a repeat registration.
+func managementClientID(path, base string) (string, bool) {
+	if !strings.HasPrefix(path, base) {
 		return "", false
 	}
-	rest := strings.TrimPrefix(path, full)
+	rest := strings.TrimPrefix(path, base)
 	if rest == "" || rest == "/" {
 		return "", false
 	}

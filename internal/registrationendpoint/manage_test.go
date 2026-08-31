@@ -417,7 +417,11 @@ func TestManage_Update_IgnoresStandardUnstoredMetadata(t *testing.T) {
 	updated["client_name"] = "Client With Ignored Metadata"
 	updated["software_id"] = "software-456"
 	updated["software_version"] = "2026.7"
-	updated["tls_client_certificate_bound_access_tokens"] = true
+	// false is the protocol default: it asks the OP for nothing, so it is
+	// accepted and dropped. The true form asks for a per-client
+	// enforcement the OP does not apply and is refused instead; see
+	// TestManage_Update_RefusesPerClientCertificateBinding.
+	updated["tls_client_certificate_bound_access_tokens"] = false
 	updated["backchannel_token_delivery_mode"] = "ping"
 	updated["backchannel_client_notification_endpoint"] = "https://rp.test.invalid/ciba/ping"
 	updated["backchannel_authentication_request_signing_alg"] = "ES256"

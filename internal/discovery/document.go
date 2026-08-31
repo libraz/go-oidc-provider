@@ -236,10 +236,11 @@ type Document struct {
 	MTLSEndpointAliases map[string]string `json:"mtls_endpoint_aliases,omitempty"`
 
 	// ResponseModesSupported lists the response_mode values the OP
-	// accepts at /authorize. The default v1.0 set is omitted from the
-	// wire (the spec defines well-known defaults); the field becomes
-	// non-empty when the JARM feature is enabled so clients can
-	// discover the *.jwt variants.
+	// accepts at /authorize. The baseline ["query", "form_post"] is
+	// published unconditionally rather than left to the spec's implicit
+	// defaults, so a client can read the accepted set off the document
+	// instead of inferring it. Enabling JARM appends the "query.jwt",
+	// "fragment.jwt", "form_post.jwt" and "jwt" variants.
 	ResponseModesSupported []string `json:"response_modes_supported,omitempty"`
 
 	// AuthorizationSigningAlgValuesSupported lists the alg values the

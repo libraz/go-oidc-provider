@@ -134,8 +134,17 @@ func renderErrorBody(description string) string {
 // stampStaticHeaders writes the response headers shared by the
 // confirmation and error pages. Centralising the helper keeps the two
 // surfaces from drifting.
+//
+// The framing defenses are not optional on these pages: the interstitial
+// carries a one-click submit that destroys the session and cascades a
+// revocation, so a same-site framer could UI-redress it into a forced
+// sign-out. The sandbox directive constrains what the document itself
+// may do and says nothing about who may frame it, so frame-ancestors and
+// X-Frame-Options are both stamped, on every exit that writes headers.
 func stampStaticHeaders(w http.ResponseWriter) {
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; sandbox allow-forms allow-same-origin")
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; sandbox allow-forms allow-same-origin")
+	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")

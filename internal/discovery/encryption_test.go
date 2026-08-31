@@ -1,13 +1,17 @@
 package discovery_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 )
 
 // encryptionInput returns the minimum Input that advertises a JWE
-// inventory, with the feature bits the caller wants layered on top.
+// inventory, with the feature bits the caller wants layered on top. The
+// inbound list matches the outbound one, standing for an OP holding a
+// key of every advertised family; the tests that care about the
+// difference override it.
 func encryptionInput(features discovery.Features) discovery.Input {
 	return discovery.Input{
 		Issuer:      "https://idp.example.com",
@@ -16,10 +20,62 @@ func encryptionInput(features discovery.Features) discovery.Input {
 			JWKS: "/jwks", Authorize: "/auth", Token: "/token", UserInfo: "/userinfo",
 			Introspect: "/introspect",
 		},
-		Features:                features,
-		GrantsSupported:         []string{"authorization_code"},
-		EncryptionAlgsSupported: []string{"RSA-OAEP-256", "ECDH-ES"},
-		EncryptionEncsSupported: []string{"A128GCM", "A256GCM"},
+		Features:                       features,
+		GrantsSupported:                []string{"authorization_code"},
+		EncryptionAlgsSupported:        []string{"RSA-OAEP-256", "ECDH-ES"},
+		EncryptionEncsSupported:        []string{"A128GCM", "A256GCM"},
+		InboundEncryptionAlgsSupported: []string{"RSA-OAEP-256", "ECDH-ES"},
+	}
+}
+
+// TestBuild_InboundEncryptionAlgsAreTheInboundList pins the inbound
+// array to the algs the OP can actually decrypt with, independently of
+// the wider inventory it negotiates outbound. An encrypted request
+// object is addressed to the OP's own key, so an alg no configured key
+// backs is an offer no RP can take up: it selects a recipient the OP's
+// JWKS does not carry, and the request object it builds anyway is
+// refused as invalid_request_object with nothing naming the cause.
+func TestBuild_InboundEncryptionAlgsAreTheInboundList(t *testing.T) {
+	t.Parallel()
+
+	in := encryptionInput(discovery.Features{
+		AuthorizeEndpoint: true, JAR: true, EncryptionInbound: true,
+	})
+	in.InboundEncryptionAlgsSupported = []string{"RSA-OAEP-256"}
+
+	doc := discovery.Build(in)
+	if !slices.Equal(doc.RequestObjectEncryptionAlgValuesSupported, []string{"RSA-OAEP-256"}) {
+		t.Errorf("request_object_encryption_alg_values_supported=%v want [RSA-OAEP-256]",
+			doc.RequestObjectEncryptionAlgValuesSupported)
+	}
+	// The outbound families negotiate against the relying party's key,
+	// so the OP's own key inventory must not shrink them.
+	if !slices.Equal(doc.IDTokenEncryptionAlgValuesSupported, in.EncryptionAlgsSupported) {
+		t.Errorf("id_token_encryption_alg_values_supported=%v want %v",
+			doc.IDTokenEncryptionAlgValuesSupported, in.EncryptionAlgsSupported)
+	}
+}
+
+// TestBuild_NoInboundEncryptionAlgsSuppressesRequestObject pins the
+// fail-closed end of the same rule: an OP holding a keyset whose
+// families back none of the advertised algs claims no inbound
+// capability at all rather than advertising one it cannot serve.
+func TestBuild_NoInboundEncryptionAlgsSuppressesRequestObject(t *testing.T) {
+	t.Parallel()
+
+	in := encryptionInput(discovery.Features{
+		AuthorizeEndpoint: true, JAR: true, EncryptionInbound: true,
+	})
+	in.InboundEncryptionAlgsSupported = nil
+
+	doc := discovery.Build(in)
+	if len(doc.RequestObjectEncryptionAlgValuesSupported) != 0 {
+		t.Errorf("request_object_encryption_alg_values_supported=%v want empty",
+			doc.RequestObjectEncryptionAlgValuesSupported)
+	}
+	if len(doc.RequestObjectEncryptionEncValuesSupported) != 0 {
+		t.Errorf("request_object_encryption_enc_values_supported=%v want empty",
+			doc.RequestObjectEncryptionEncValuesSupported)
 	}
 }
 

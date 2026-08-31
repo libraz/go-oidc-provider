@@ -3,9 +3,15 @@
 //
 // The OP only accepts the S256 transformation. The "plain" method is rejected
 // by policy regardless of client configuration: OAuth 2.1 and FAPI 2.0 forbid
-// it, and the OP mandates PKCE with no off-switch. Callers therefore never need to thread a
-// method choice through the API; this package validates the challenge format
-// at issuance and the verifier at exchange.
+// it. Callers therefore never need to thread a method choice through the API;
+// this package validates the challenge format at issuance and the verifier at
+// exchange.
+//
+// Whether code_challenge is required at all is not decided here. The caller
+// owns that gate: internal/authorize.Policy.PKCERequired makes it mandatory
+// for every client (the posture the Baseline and FAPI profiles select), and
+// public and native clients are held to it regardless of that bit. A
+// default-profile deployment leaves it optional for confidential clients.
 package pkce
 
 import (
@@ -59,8 +65,8 @@ var (
 // (the only valid output of SHA-256 → base64url-no-pad).
 //
 // Empty challenge or empty method returns [ErrChallengeRequired]; it is the
-// caller's responsibility to enforce LegacyNoPKCE exemptions before calling
-// this function.
+// caller's responsibility to decide whether a request without code_challenge
+// reaches this function at all.
 func ValidateChallenge(challenge, method string) error {
 	if challenge == "" {
 		return ErrChallengeRequired
