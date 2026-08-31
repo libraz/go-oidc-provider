@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
 func TestDiscard_DoesNotPanic(t *testing.T) {
@@ -252,5 +254,67 @@ func TestSlog_LevelMapping(t *testing.T) {
 				t.Fatalf("level = %v, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSlogClock_StampsTheRecordFromTheInjectedClock is the assertion
+// the emitter exists to satisfy: the timestamp on an audit record has
+// to come from the same clock as the "iat" / "exp" of the tokens the
+// record describes.
+//
+// The record is written through slog, whose own logging calls read the
+// wall clock, so this is not something the emitter gets for free — it
+// held for no record before the emitter began building the record
+// itself. A fixed instant far from now is what tells the two apart.
+func TestSlogClock_StampsTheRecordFromTheInjectedClock(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2020, time.March, 14, 1, 59, 26, 0, time.UTC)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	em := audit.SlogClock(logger, timex.ClockFunc(func() time.Time { return fixed }))
+
+	em.Emit(context.Background(), audit.Event{Name: "token.issued", Message: "token issued"})
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("decode: %v\n%s", err, buf.String())
+	}
+	raw, ok := rec[slog.TimeKey].(string)
+	if !ok {
+		t.Fatalf("record carries no %q: %s", slog.TimeKey, buf.String())
+	}
+	got, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	if !got.Equal(fixed) {
+		t.Errorf("record time = %s, want %s from the injected clock", got, fixed)
+	}
+}
+
+// TestSlogClock_NilClockFallsBackToTheSystemClock keeps a construction
+// mistake off the HTTP path: the audit emitter is reached from request
+// handlers, and a nil-deref there would turn a logging misconfiguration
+// into a failed authorization.
+func TestSlogClock_NilClockFallsBackToTheSystemClock(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	em := audit.SlogClock(slog.New(slog.NewJSONHandler(&buf, nil)), nil)
+	before := time.Now()
+	em.Emit(context.Background(), audit.Event{Name: "token.issued"})
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("decode: %v\n%s", err, buf.String())
+	}
+	raw, _ := rec[slog.TimeKey].(string)
+	got, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	if got.Before(before.Add(-time.Minute)) || got.After(time.Now().Add(time.Minute)) {
+		t.Errorf("record time = %s, want an instant from the system clock", got)
 	}
 }

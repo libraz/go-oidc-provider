@@ -20,12 +20,20 @@
 //     site needing to know. Exact event-to-counter mappings come from
 //     internal/auditevent, the same typed registry projected by
 //     op.AuditEventCatalog; unknown extension names remain audit-only.
-//   - Cardinality safety: every label value drawn from caller-
-//     controlled input (client_id, factor name) is gated
-//     through a closed allowlist before being emitted. Dynamic
-//     clients without a static-seed entry collapse onto the empty
-//     client_id label. PII labels (subject, IP, user-agent) are never
-//     emitted.
+//   - Cardinality safety: client_id is the only label whose value can
+//     arrive from the wire, and it is the only one gated at the
+//     bridge — it is projected through the closed static-client set,
+//     so a client without a static-seed entry collapses onto the empty
+//     client_id label. Every other label is bounded at its source
+//     instead: result, kind and event are read off the catalog row,
+//     while factor, auth_method and reason are forwarded verbatim from
+//     the emitting path, which selects them from a fixed vocabulary of
+//     its own. An embedder therefore owns the cardinality of the
+//     labels their code supplies — a custom [op.Authenticator] whose
+//     Type() varies per user or per request widens
+//     oidc_login_attempts_total directly, and Type() MUST return one
+//     of a small set fixed at configuration time. PII labels (subject,
+//     IP, user-agent) are never emitted.
 //   - Registry ownership: the [prometheus.Registry] is the embedder's.
 //     Every metric carries the OP issuer as a constant label, so several
 //     Providers in one process can share a single registry without a

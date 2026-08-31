@@ -47,9 +47,19 @@ func AuditEventCatalog() []AuditEventDefinition {
 	return out
 }
 
-// Account-management events. Most fire from out-of-band admin paths
-// the OP does not host directly; they are listed here so a single
-// catalogue exists for SOC dashboards to subscribe to.
+// Account-management events.
+//
+// Reserved vocabulary: the library emits none of the constants in this
+// block. Account management — creating and deleting accounts,
+// registering a passkey, enabling TOTP, changing a password, linking a
+// federated identity — happens on the deployment's own admin surface,
+// which the OP does not host. The names are catalogued so that surface
+// and the OP's own records land in one vocabulary.
+//
+// A dashboard MUST NOT read silence here as evidence. No enrolment
+// having been recorded means the deployment has not wired its
+// account-management plane to this stream, not that no passkey was
+// registered.
 const (
 	AuditAccountCreated             = AuditEvent(auditevent.AuditAccountCreated)
 	AuditAccountDeleted             = AuditEvent(auditevent.AuditAccountDeleted)
@@ -83,10 +93,11 @@ const (
 	AuditMFASuccess   = AuditEvent(auditevent.AuditMFASuccess)
 	AuditMFAFailed    = AuditEvent(auditevent.AuditMFAFailed)
 
-	// AuditMFARequired, AuditStepUpRequired and AuditStepUpSuccess are
-	// reserved vocabulary: the OP defines the names so a deployment's
-	// audit pipeline can carry them consistently, but does not emit
-	// them itself.
+	// Reserved vocabulary: the library never emits AuditMFARequired,
+	// AuditStepUpRequired or AuditStepUpSuccess. The OP defines the
+	// names so a deployment's audit pipeline can carry them
+	// consistently; silence on these three is not evidence that the
+	// situation did not arise.
 	//
 	// Step-up is the embedder's decision. [StepUpChallenge] builds the
 	// RFC 9470 WWW-Authenticate value, and the resource server that
@@ -125,14 +136,14 @@ const (
 	AuditConsentGranted           = AuditEvent(auditevent.AuditConsentGranted)
 	AuditConsentGrantedFirstParty = AuditEvent(auditevent.AuditConsentGrantedFirstParty)
 
-	// AuditConsentGrantedDelta, AuditConsentSkippedExisting and
-	// AuditConsentRevoked are catalogued vocabulary the OP does not
-	// currently emit. They name real distinctions — a re-prompt forced
-	// by a newly requested sensitive scope, a prompt skipped because
-	// the stored grant already covered the request, and a consent
-	// withdrawal — and a deployment is free to carry them from its own
-	// account-management plane, but no code path in the library raises
-	// one today. Do not build an alert that assumes their absence
+	// Reserved vocabulary: the library never emits
+	// AuditConsentGrantedDelta, AuditConsentSkippedExisting or
+	// AuditConsentRevoked. They name real distinctions — a re-prompt
+	// forced by a newly requested sensitive scope, a prompt skipped
+	// because the stored grant already covered the request, and a
+	// consent withdrawal — and a deployment is free to carry them from
+	// its own account-management plane, but no code path in the library
+	// raises one today. Do not build an alert that assumes their absence
 	// means the situation did not occur.
 	//
 	// A withdrawal driven through the OAuth 2.0 Grant Management
@@ -195,9 +206,9 @@ const (
 	AuditLogoutBackChannelResolveFailed = AuditEvent(auditevent.AuditLogoutBackChannelResolveFailed)
 	AuditLogoutBackChannelOverflow      = AuditEvent(auditevent.AuditLogoutBackChannelOverflow)
 
-	// AuditLogoutRPInitiated is catalogued vocabulary the OP does not
-	// currently emit. /end_session records what it did to the session
-	// — [AuditSessionDestroyed], [AuditSessionAlreadyAbsent] or
+	// Reserved vocabulary: the library never emits
+	// AuditLogoutRPInitiated. /end_session records what it did to the
+	// session — [AuditSessionDestroyed], [AuditSessionAlreadyAbsent] or
 	// [AuditSessionDestroyFailed] — rather than the fact that an RP
 	// asked; those three are the signals to correlate on.
 	AuditLogoutRPInitiated = AuditEvent(auditevent.AuditLogoutRPInitiated)
@@ -218,11 +229,12 @@ const (
 // Defensive events. Fire from request-validation paths that detect
 // abuse signals or operator-visible policy hits.
 const (
-	// AuditRateLimitExceeded and AuditRateLimitBypassed are reserved
-	// vocabulary for embedder-emitted events from operator-side
-	// rate-limit middleware (reverse proxy, gateway, Go handler
-	// chains). The library does NOT implement a generic per-IP /
-	// per-endpoint HTTP rate limit — that responsibility lives with
+	// Reserved vocabulary: the library never emits
+	// AuditRateLimitExceeded or AuditRateLimitBypassed. They exist for
+	// embedder-emitted events from operator-side rate-limit middleware
+	// (reverse proxy, gateway, Go handler chains). The library does
+	// NOT implement a generic per-IP / per-endpoint HTTP rate limit —
+	// that responsibility lives with
 	// the embedder per the project charter. The OP only owns the
 	// authentication-flow brute-force gate wired through
 	// [WithAuthnLockoutStore] (and the device-code user-code gate
@@ -234,11 +246,11 @@ const (
 	AuditRateLimitExceeded = AuditEvent(auditevent.AuditRateLimitExceeded)
 	AuditRateLimitBypassed = AuditEvent(auditevent.AuditRateLimitBypassed)
 
-	// AuditPKCEViolation, AuditRedirectURIMismatch and
-	// AuditAlgLegacyUsed are catalogued vocabulary the OP does not
-	// currently emit. Each names a rejection the OP does perform — a
-	// code exchanged with the wrong verifier, a redirect_uri that is
-	// not the registered one, a request selecting a legacy algorithm —
+	// Reserved vocabulary: the library never emits AuditPKCEViolation,
+	// AuditRedirectURIMismatch or AuditAlgLegacyUsed. Each names a
+	// rejection the OP does perform — a code exchanged with the wrong
+	// verifier, a redirect_uri that is not the registered one, a
+	// request selecting a legacy algorithm —
 	// but the rejection is reported to the client on the wire and is
 	// not raised on the audit stream. An absent event here therefore
 	// means "not instrumented", not "did not happen"; the request log
@@ -293,6 +305,29 @@ const (
 	// rejected kid in [Event.Extras] so dashboards can correlate
 	// against the rotation timeline without parsing the slog message.
 	AuditKeyRetiredKidPresented = AuditEvent(auditevent.AuditKeyRetiredKidPresented)
+)
+
+// Interaction ceremony events. Fire from /interaction/{uid}, where the
+// configured [interaction.Driver] owns the rendered surface.
+const (
+	// AuditInteractionRenderFailed fires when the Driver returns an
+	// error from Render without having written anything to the response.
+	// The OP answers the request with a server_error page of its own, so
+	// the wire response is honest, but only the audit stream carries the
+	// cause: the endpoint sees a failed Render and nothing about which
+	// template, field or data binding produced it.
+	//
+	// The event is warn-level and names the prompt type that could not be
+	// rendered, which is what makes a broken template attributable. It is
+	// a deployment fault rather than an attack signal — a prompt no user
+	// can be shown blocks every login that reaches it — so a non-zero
+	// rate here warrants a page even though the request count looks
+	// normal.
+	//
+	// A Driver that fails after committing its own status line does not
+	// raise this event: the response already belongs to the Driver, and
+	// the OP has nothing to add to what it already sent.
+	AuditInteractionRenderFailed = AuditEvent(auditevent.AuditInteractionRenderFailed)
 )
 
 // Introspection events. Fire from the /introspect endpoint. Only the
@@ -426,7 +461,9 @@ const (
 
 // Custom-grant dispatch events. Requested and Failed describe dispatcher
 // outcomes; RefreshDropped records a successful response whose refresh token
-// was removed because the client was not registered for that grant.
+// was withheld by one of the issuance gates documented on
+// [CustomGrantResponse.IssueRefreshToken]. The event's extras name the gate
+// that fired under the "reason" key.
 const (
 	AuditCustomGrantRequested      = AuditEvent(auditevent.AuditCustomGrantRequested)
 	AuditCustomGrantFailed         = AuditEvent(auditevent.AuditCustomGrantFailed)
@@ -436,8 +473,13 @@ const (
 // Token-exchange events. Fire from the in-tree RFC 8693 handler.
 // Every successful exchange emits Requested + Granted; rejections
 // emit Requested + one of the failure-class events depending on the
-// gate that fired. The internal package cannot import op (one-way
-// import graph), so the values are duplicated as raw strings inside
+// gate that fired.
+//
+// The handler cannot import op — the import graph runs one way — so it
+// names its own constants. Those constants are not a second copy of
+// these: both sides resolve the same internal/auditevent registry, so
+// an event renamed there moves the public constant and the handler's
+// together.
 const (
 	AuditTokenExchangeRequested             = AuditEvent(auditevent.AuditTokenExchangeRequested)
 	AuditTokenExchangeGranted               = AuditEvent(auditevent.AuditTokenExchangeGranted)

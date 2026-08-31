@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
+	"runtime"
 
 	"github.com/libraz/go-oidc-provider/internal/redact"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
 // Level is the audit-record severity. The values mirror the slog
@@ -127,18 +129,44 @@ type discardEmitter struct{}
 func (discardEmitter) Emit(_ context.Context, _ Event) {}
 
 // Slog returns an [Emitter] that emits each event as a structured
-// slog record on logger. A nil logger collapses to [Discard] so the
-// constructor cannot be the cause of a downstream nil-deref.
+// slog record on logger, timestamped from the system clock. A nil
+// logger collapses to [Discard] so the constructor cannot be the cause
+// of a downstream nil-deref.
 //
 // Records are stamped with attribute "audit"="true" so log shippers
 // can route audit lines to a dedicated retention bucket without
 // parsing the event name. The remaining canonical fields ride as
 // top-level attributes; [Event.Extras] is grouped under "extras".
+//
+// Callers that have a [timex.Clock] MUST use [SlogClock] instead: an
+// audit record timestamped from a different clock than the tokens it
+// describes cannot be laid alongside them, which is the one thing a
+// forensic reconstruction needs the trail for.
 func Slog(logger *slog.Logger) Emitter {
+	return SlogClock(logger, timex.SystemClock)
+}
+
+// SlogClock is [Slog] with the record timestamp sourced from clock.
+//
+// The timestamp has to be taken here rather than left to the slog
+// runtime. [slog.Logger.LogAttrs] stamps the record from the wall
+// clock at the moment it is called, so an OP running on an injected
+// clock — a test pinning time, a deployment correcting for skew —
+// would write audit records on one timeline and the "iat" / "exp" of
+// the tokens those records describe on another. The two are only
+// useful together.
+//
+// A nil clock falls back to the system clock rather than panicking:
+// the audit path is not where a construction mistake should take down
+// an HTTP handler.
+func SlogClock(logger *slog.Logger, clock timex.Clock) Emitter {
 	if logger == nil {
 		return Discard()
 	}
-	return &slogEmitter{logger: logger}
+	if clock == nil {
+		clock = timex.SystemClock
+	}
+	return &slogEmitter{logger: logger, clock: clock}
 }
 
 // slogEmitter is the production [Emitter]. The struct is intentionally
@@ -146,6 +174,7 @@ func Slog(logger *slog.Logger) Emitter {
 // easy to inspect when adding a new canonical field.
 type slogEmitter struct {
 	logger *slog.Logger
+	clock  timex.Clock
 }
 
 // Emit implements [Emitter] by routing the event to the underlying
@@ -153,6 +182,11 @@ type slogEmitter struct {
 // [slog.Attr] rather than the variadic any form so the audit attribute
 // is always the first key — log shippers that pre-route by leading
 // attribute see "audit" up front.
+//
+// The record is built and handed to the handler directly rather than
+// through [slog.Logger.LogAttrs], because LogAttrs is where the
+// timestamp would otherwise be read from the wall clock. See
+// [SlogClock].
 //
 // A handler that is not enabled for the event's level short-circuits
 // before [attrsFor] runs. Flattening an event is not free — every
@@ -176,7 +210,18 @@ func (e *slogEmitter) Emit(ctx context.Context, ev Event) {
 	if !e.logger.Enabled(ctx, level) {
 		return
 	}
-	e.logger.LogAttrs(ctx, level, ev.Message, attrsFor(ev)...)
+	// Captured the way slog does it, so a handler configured with
+	// AddSource still resolves a call site — Emit's caller, which is
+	// the handler code that raised the event.
+	var pcs [1]uintptr
+	runtime.Callers(2, pcs[:])
+	record := slog.NewRecord(e.clock.Now(), level, ev.Message, pcs[0])
+	record.AddAttrs(attrsFor(ev)...)
+	// Discarded for parity with [slog.Logger], which drops the handler
+	// error on every logging call; surfacing it here would make the
+	// audit path the one place in the process where a broken sink
+	// changes control flow.
+	_ = e.logger.Handler().Handle(ctx, record)
 }
 
 // attrsFor flattens an [Event] into the slog attribute slice. Empty

@@ -2,8 +2,11 @@ package op_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 )
@@ -412,5 +415,52 @@ func TestWithAuditLogger_AcceptsNil(t *testing.T) {
 	}
 	if provider == nil {
 		t.Fatalf("provider is nil")
+	}
+}
+
+// TestWithClock_StampsAuditRecords drives a real Provider construction
+// with a fixed clock and asserts the audit record it writes carries
+// that instant.
+//
+// This is the end-to-end half of the claim [op.WithClock] makes. The
+// unit test in internal/audit shows the emitter honours a clock it is
+// handed; only building a Provider shows the configured clock actually
+// reaches the emitter chain the handlers use. startup.profile is the
+// branch chosen because op.New emits it unconditionally — no request,
+// store, or flow is needed to reach an emission.
+func TestWithClock_StampsAuditRecords(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2021, time.September, 9, 1, 46, 40, 0, time.UTC)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithAuditLogger(logger),
+		op.WithClock(fakeClock{now: fixed}),
+	)...); err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+
+	var found bool
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("decode %q: %v", line, err)
+		}
+		if rec["event"] != string(op.AuditStartupProfile) {
+			continue
+		}
+		found = true
+		got, err := time.Parse(time.RFC3339Nano, rec[slog.TimeKey].(string))
+		if err != nil {
+			t.Fatalf("parse record time: %v", err)
+		}
+		if !got.Equal(fixed) {
+			t.Errorf("audit record time = %s, want %s: the configured clock does not reach the emitter", got, fixed)
+		}
+	}
+	if !found {
+		t.Fatalf("no %s record on the audit stream: %s", op.AuditStartupProfile, buf.String())
 	}
 }

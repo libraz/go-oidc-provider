@@ -9,10 +9,13 @@ import "github.com/libraz/go-oidc-provider/internal/authn"
 // AttemptOutcome is an alias for [authn.AttemptOutcome].
 type AttemptOutcome = authn.AttemptOutcome
 
-// AttemptOutcome values re-exported from the authn package.
+// AttemptOutcome values re-exported from the authn package. The set is
+// complete, so an embedder can write an exhaustive switch over
+// [AttemptOutcome] using public identifiers alone.
 const (
 	AttemptSuccess = authn.AttemptSuccess
 	AttemptFailure = authn.AttemptFailure
+	AttemptLocked  = authn.AttemptLocked
 )
 
 // LoginAttempt is an alias for [authn.LoginAttempt].

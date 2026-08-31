@@ -131,3 +131,82 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 		}
 	}
 }
+
+// TestCardinality_LabelValueOwnership pins which labels the bridge
+// bounds and which it forwards, because the package doc makes exactly
+// that split and an operator sizes their scrape budget on it.
+//
+// client_id is the label whose value can arrive from the wire, so the
+// bridge projects it through the closed static-client set. factor is
+// supplied by the emitting path from its own fixed vocabulary and is
+// forwarded verbatim — which means an embedder whose Authenticator
+// returns an unbounded Type() widens the series themselves. Asserting
+// the pass-through rather than a fallback keeps the doc and the code
+// saying the same thing; if a future change starts gating factor, this
+// test is the one that has to be updated deliberately.
+func TestCardinality_LabelValueOwnership(t *testing.T) {
+	t.Parallel()
+
+	reg := prometheus.NewRegistry()
+	c, err := metrics.New(reg, metrics.Options{
+		StaticClientIDs: map[string]struct{}{"client-1": {}},
+		Issuer:          testIssuer,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	bridge := metrics.NewBridge(c, nil)
+	bridge.Emit(context.Background(), audit.Event{
+		Name:     "login.success",
+		ClientID: "dynamic-deadbeef-1234",
+		Extras:   map[string]any{"factor": "tenant-42-webauthn-platform"},
+	})
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	got := map[string]string{}
+	for _, fam := range families {
+		if fam.GetName() != "oidc_login_attempts_total" {
+			continue
+		}
+		for _, m := range fam.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				got[lp.GetName()] = lp.GetValue()
+			}
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("oidc_login_attempts_total carries no sample; the emission path changed")
+	}
+	if _, ok := got["client_id"]; ok {
+		t.Errorf("oidc_login_attempts_total carries client_id = %q; the counter is not client-scoped", got["client_id"])
+	}
+	if want := "tenant-42-webauthn-platform"; got["factor"] != want {
+		t.Errorf("factor = %q, want %q forwarded verbatim: the doc says the emitting path owns this value", got["factor"], want)
+	}
+
+	// The counter that does carry client_id is where the closed
+	// projection has to hold.
+	bridge.Emit(context.Background(), audit.Event{
+		Name:     "token.refreshed",
+		ClientID: "dynamic-deadbeef-1234",
+	})
+	families, err = reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, fam := range families {
+		if fam.GetName() != "oidc_tokens_refreshed_total" {
+			continue
+		}
+		for _, m := range fam.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "client_id" && lp.GetValue() != "" {
+					t.Errorf("client_id = %q for a client with no static-seed entry; want the empty sink", lp.GetValue())
+				}
+			}
+		}
+	}
+}

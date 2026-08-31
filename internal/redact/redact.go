@@ -169,9 +169,16 @@ func canonicalise(s string) string {
 }
 
 // ReplaceAttr is the [slog.HandlerOptions.ReplaceAttr] hook that
-// performs single-attribute redaction. It is exposed for embedders
-// who construct their own [slog.Handler] and wish to compose the
-// redaction with additional rewrites.
+// performs single-attribute redaction. It is the entry point
+// [WrapHandler] builds on, and reaching it is what an embedder does by
+// passing their own handler to one of the op.With*Logger options: the
+// OP wraps the supplied handler in the redactor, so their rewrites and
+// this one compose without the package being importable from outside.
+//
+// Offering a seam an embedder could hold directly would be an additive
+// change on the public op surface, not something this package can
+// grant: Go's internal rule puts it out of reach of any module but
+// this one.
 //
 // Group attributes are recursed into by the slog runtime, so this
 // hook does not have to descend manually — slog passes each leaf
