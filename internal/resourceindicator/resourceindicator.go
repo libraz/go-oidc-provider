@@ -209,6 +209,78 @@ func Contains(set []string, raw string) bool {
 	return false
 }
 
+// NormalizeLabel returns the comparison form of an audience label:
+// values that canonicalise as resource indicators come back canonical,
+// and values that are not resource indicators at all — an RFC 8693
+// audience is a logical name, which need not be a URI — come back
+// verbatim so they still compare exactly.
+//
+// A value rejected for carrying a fragment or userinfo comes back
+// verbatim too, but [EqualLabel] and [ContainsLabel] refuse to match it:
+// the policy that forbids those components would be void if a surface
+// could fall back to a byte comparison and admit them.
+//
+// Use this at the surfaces that only need a stable stored form; use
+// [EqualLabel] / [ContainsLabel] wherever the answer decides whether a
+// request is authorized.
+func NormalizeLabel(raw string) string {
+	canon, err := Canonicalize(raw)
+	if err != nil {
+		return raw
+	}
+	return canon
+}
+
+// EqualLabel reports whether two audience labels denote the same
+// audience, under the same rules [NormalizeLabel] documents. A label
+// that carries a fragment or userinfo never matches anything, including
+// an identical string.
+func EqualLabel(a, b string) bool {
+	keyA, okA := labelKey(a)
+	keyB, okB := labelKey(b)
+	return okA && okB && keyA == keyB
+}
+
+// ContainsLabel reports whether set holds a label equal to raw under
+// [EqualLabel]. It is the canonical replacement for a
+// [slices.Contains] over a registered audience list.
+func ContainsLabel(set []string, raw string) bool {
+	key, ok := labelKey(raw)
+	if !ok {
+		return false
+	}
+	for _, candidate := range set {
+		candidateKey, candidateOK := labelKey(candidate)
+		if candidateOK && candidateKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+// labelKey returns the value an audience-label comparison keys on and
+// whether the label may match at all.
+//
+// The split follows the reason canonicalisation failed. A value that is
+// not a URI ([ErrParse], [ErrNotAbsolute]) is an opaque audience name
+// and compares verbatim. A value that IS URI-shaped but carries a
+// component the policy forbids ([ErrFragment], [ErrUserinfo]) is
+// unmatchable: admitting it through a verbatim comparison would let a
+// registration written with userinfo authorize the parser-confusion
+// forms the canonical path exists to reject. The empty string is
+// unmatchable because it names no audience.
+func labelKey(raw string) (string, bool) {
+	canon, err := Canonicalize(raw)
+	switch {
+	case err == nil:
+		return canon, true
+	case errors.Is(err, ErrFragment), errors.Is(err, ErrUserinfo), errors.Is(err, ErrEmpty):
+		return "", false
+	default:
+		return raw, true
+	}
+}
+
 // canonicalHost lowercases host and strips the default port for scheme.
 // host arrives in the "name:port" form url.URL.Host uses; the function
 // preserves IPv6 literal brackets verbatim.

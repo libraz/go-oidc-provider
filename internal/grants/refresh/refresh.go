@@ -18,13 +18,18 @@
 //     [store.ErrAlreadyConsumed], the caller sees [ErrTokenReplayed] and
 //     the rotation history is retired — walked to its chain root and passed
 //     to [store.RefreshTokenStore.RevokeChain], or, when no root resolves,
-//     retired grant-wide through [store.RefreshTokenStore.RevokeByGrant] —
-//     together with a matching grant tombstone. Who runs that cascade is
-//     decided by
+//     retired grant-wide through [store.RefreshTokenStore.RevokeByGrant].
+//     Who runs that cascade is decided by
 //     [ExchangerConfig.DeferReplayCascade]: by default the Exchanger runs
 //     it inline, and a caller that wraps Exchange in a [store.Tx] sets the
 //     flag and calls [Exchanger.RevokeReplayedChain] itself once the
 //     transaction has settled.
+//
+//     The refresh chain is the whole of what this package retires. Access
+//     tokens issued under the same grant are retired by the caller, which
+//     owns the access-token substores and the revocation strategy that
+//     decides how a JWT access token is made to stop verifying; the
+//     cascade entry points therefore return the grant they resolved.
 //
 // Like the authorization-code package, this layer never reads the wall
 // clock directly; callers inject a clock so tests advance time
@@ -54,11 +59,6 @@ const (
 	auditRefreshChainRevokeFailed = string(auditevent.AuditRefreshChainRevokeFailed)
 	auditRefreshGrantRevokeFailed = string(auditevent.AuditRefreshGrantRevokeFailed)
 )
-
-// chainRevokeReason names the cascade trigger written onto the
-// [store.GrantTombstone.Reason] field. The constant is local to the
-// package because the only call site is the chain-revoke path.
-const chainRevokeReason = "refresh_replay"
 
 // IDLength is the byte length of a randomly-generated refresh token. 32
 // bytes (256 bits) matches RFC 6819 §5.1.4.2 and the value used for
@@ -276,13 +276,11 @@ func validateIssue(in IssueInput) error {
 // Exchanger consumes refresh tokens and validates the rotation contract.
 // It is immutable after construction and safe for concurrent use.
 type Exchanger struct {
-	store            store.RefreshTokenStore
-	clock            func() time.Time
-	graceTTL         time.Duration
-	audit            audit.Emitter
-	grantRevocations store.GrantRevocationStore
-	tombstoneTTL     time.Duration
-	deferCascade     bool
+	store        store.RefreshTokenStore
+	clock        func() time.Time
+	graceTTL     time.Duration
+	audit        audit.Emitter
+	deferCascade bool
 }
 
 // ExchangerConfig is the parameter bundle for [NewExchanger].
@@ -317,24 +315,6 @@ type ExchangerConfig struct {
 	// guard.
 	Audit audit.Emitter
 
-	// GrantRevocations, when non-nil, is the [store.GrantRevocationStore]
-	// the chain-revoke cascade writes a [store.GrantTombstone] to so
-	// JWT access tokens descended from the replayed chain are blocked
-	// at userinfo / introspection / mint time. Without this hook the
-	// chain revoke only invalidates refresh tokens; outstanding JWT
-	// access tokens remain redeemable until their natural expiry.
-	// Nil disables the tombstone path; the chain revoke still runs.
-	GrantRevocations store.GrantRevocationStore
-
-	// GrantTombstoneTTL bounds the lifetime of a tombstone written by
-	// the chain-revoke cascade. The value is computed by the embedder
-	// as max(access_token_TTL + grace) so any access token issued
-	// before the cascade is guaranteed to have expired before its
-	// tombstone disappears. Zero means "no GC", which is safe (the
-	// tombstone is never collected) but unbounded in storage; the
-	// token endpoint wires a positive value at construction.
-	GrantTombstoneTTL time.Duration
-
 	// DeferReplayCascade hands ownership of the RFC 9700 §2.2.2 chain
 	// cascade to the caller. When false (the default) [Exchanger.Exchange]
 	// walks the chain and retires it inline before returning
@@ -343,8 +323,8 @@ type ExchangerConfig struct {
 	// token to retire the chain.
 	//
 	// A caller that wraps Exchange in a [store.Tx] sets this. The cascade
-	// touches one row per chain node plus a grant tombstone, which a
-	// transactional backend has to buffer against a bounded action limit,
+	// touches one row per chain node, which a transactional backend has
+	// to buffer against a bounded action limit,
 	// so a long chain would be retired only in part — and breadth-first
 	// from the root, leaving the newest node, the one a thief holds, alive.
 	// Rollback would discard the cascade outright. Such a caller therefore
@@ -375,13 +355,11 @@ func NewExchanger(cfg ExchangerConfig) (*Exchanger, error) {
 		em = audit.Discard()
 	}
 	return &Exchanger{
-		store:            cfg.Store,
-		clock:            clock,
-		graceTTL:         graceTTL,
-		audit:            em,
-		grantRevocations: cfg.GrantRevocations,
-		tombstoneTTL:     cfg.GrantTombstoneTTL,
-		deferCascade:     cfg.DeferReplayCascade,
+		store:        cfg.Store,
+		clock:        clock,
+		graceTTL:     graceTTL,
+		audit:        em,
+		deferCascade: cfg.DeferReplayCascade,
 	}, nil
 }
 
@@ -670,11 +648,17 @@ func (e *Exchanger) onReplayDetected(ctx context.Context, presentedID string) {
 // surrounding transaction has committed or rolled back — the presented
 // record is already consumed either way, which is what the chain walk
 // reads.
-func (e *Exchanger) RevokeReplayedChain(ctx context.Context, presentedToken string) {
+//
+// The return is the grant the replayed chain was issued under, so the
+// caller can retire the access tokens descended from the same grant. It
+// is empty when the presented record no longer resolves; a caller MUST
+// treat that as "the grant is unknown", not as "there is nothing left to
+// retire".
+func (e *Exchanger) RevokeReplayedChain(ctx context.Context, presentedToken string) string {
 	if presentedToken == "" {
-		return
+		return ""
 	}
-	e.revokeChainBestEffort(ctx, presentedToken)
+	return e.revokeChainBestEffort(ctx, presentedToken)
 }
 
 // emitReplayDetected fires [auditRefreshReplayDetected]. The Extras
@@ -793,10 +777,12 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 // §2.2.2 requires the compromised chain to die, and a warn-level log is not a
 // revocation.
 //
-// When the [Exchanger] was wired with a [store.GrantRevocationStore] the
-// cascade also writes a [store.GrantTombstone] keyed by that same grant, so
-// JWT access tokens descended from the replayed chain are blocked at
-// userinfo / introspection / mint time.
+// Access tokens descended from the replayed chain are NOT retired here.
+// Which mechanism makes a JWT access token stop verifying is a property of
+// the caller's [store.AccessTokenRevocationStrategy], and an opaque access
+// token lives in a substore this package does not hold; the resolved grant
+// is returned instead so the caller runs that teardown through the one
+// implementation every other grant-teardown site uses.
 //
 // The "best effort" qualifier covers the one state neither rung can act on:
 // the presented record no longer resolves at all (already garbage-collected,
@@ -805,15 +791,16 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 // (auditRefreshChainRevokeFailed / auditRefreshGrantRevokeFailed) so SOC
 // tooling can spot a silent failure even though the wire response stays at the
 // user-visible invalid_grant contract via [ErrTokenReplayed].
-func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) {
-	// The grant is resolved before anything is revoked. Both the fallback
-	// rung and the tombstone key on it, and either cascade rewrites the
-	// records it would otherwise have to be read back from.
+func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) string {
+	// The grant is resolved before anything is revoked. The fallback rung
+	// and the caller's access-token teardown both key on it, and either
+	// cascade rewrites the records it would otherwise have to be read back
+	// from.
 	grantID := e.presentedGrantID(ctx, presentedID)
 	if !e.revokeChainFromRoot(ctx, presentedID) {
 		e.revokeWholeGrant(ctx, grantID)
 	}
-	e.tombstoneGrant(ctx, grantID)
+	return grantID
 }
 
 // presentedGrantID resolves the grant the replayed token was issued under.
@@ -860,38 +847,6 @@ func (e *Exchanger) revokeWholeGrant(ctx context.Context, grantID string) {
 	if err := e.store.RevokeByGrant(ctx, grantID); err != nil {
 		e.emitChainRevokeFailed(ctx,
 			"refresh grant revoke failed after replay detection", err.Error())
-	}
-}
-
-// tombstoneGrant writes the [store.GrantTombstone] that blocks JWT access
-// tokens descended from the replayed chain. It is a no-op without a
-// configured [store.GrantRevocationStore] — the refresh cascade then still
-// runs, but outstanding JWT access tokens stay redeemable until their natural
-// expiry — and without a grant to key on, since JWT-AT revocation is
-// grant-keyed.
-func (e *Exchanger) tombstoneGrant(ctx context.Context, grantID string) {
-	if e.grantRevocations == nil || grantID == "" {
-		return
-	}
-	now := e.clock().UTC()
-	tomb := store.GrantTombstone{
-		GrantID:   grantID,
-		RevokedAt: now,
-		Reason:    chainRevokeReason,
-	}
-	if e.tombstoneTTL > 0 {
-		tomb.ExpiresAt = now.Add(e.tombstoneTTL)
-	}
-	if err := e.grantRevocations.RevokeGrant(ctx, tomb); err != nil {
-		e.audit.Emit(ctx, audit.Event{
-			Name:    auditRefreshGrantRevokeFailed,
-			Level:   audit.LevelWarn,
-			Message: "grant tombstone write failed after refresh replay detection",
-			Extras: map[string]any{
-				"grant_id": grantID,
-				"reason":   err.Error(),
-			},
-		})
 	}
 }
 

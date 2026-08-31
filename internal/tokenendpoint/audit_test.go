@@ -111,6 +111,7 @@ func auditRefreshClient(tb testing.TB, f *fixture) (*store.Client, string) {
 		SecretHash:              hash,
 		TokenEndpointAuthMethod: "client_secret_basic",
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
 	})
 	return client, secret
 }

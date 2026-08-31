@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
 	"github.com/libraz/go-oidc-provider/internal/refreshchain"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -210,7 +211,7 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 	// access tokens issued under the same grant. Mirror the /end_session
 	// cascade so a client that revokes to contain a compromise is not left
 	// with live access tokens until their own exp.
-	cascadeRevokeAccessTokens(ctx, deps, rec.GrantID)
+	cascadeRevokeAccessTokens(ctx, deps, authenticatedClientID, rec.GrantID)
 	emitRevoked(ctx, deps, revokedEvent{
 		ClientID: authenticatedClientID,
 		Subject:  rec.Subject,
@@ -222,22 +223,28 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 
 // cascadeRevokeAccessTokens propagates a refresh-token revocation to the
 // access tokens issued under the same grant (RFC 7009 §2.1 SHOULD),
-// mirroring the /end_session cascade. Both the JWT-strategy path and the
-// opaque substore run best-effort: a store fault must not disturb the RFC
-// 7009 §2.2 "always 200" wire posture, so errors are swallowed here (the
-// refresh-chain revocation itself already succeeded before this runs).
-func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, grantID string) {
+// mirroring the /end_session cascade. The refresh side is deliberately out
+// of scope here: the chain revocation this follows has already retired it.
+//
+// The teardown runs best-effort: a store fault must not disturb the RFC
+// 7009 §2.2 "always 200" wire posture, so a failed rung is surfaced on the
+// audit channel and the wire answer is unchanged (the refresh-chain
+// revocation itself already succeeded before this runs).
+func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, clientID, grantID string) {
 	if grantID == "" {
 		return
 	}
-	now := revokeNow(deps)
-	_ = endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+	out := teardown.Revoker{
+		OpaqueAccessTokens: deps.OpaqueAccessTokens,
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
-		RevocationStrategy: deps.RevocationStrategy,
-	}, grantID, now, revokeTombstoneRetention(deps.AccessTokenTTL), "revoke")
-	if deps.OpaqueAccessTokens != nil {
-		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+		Strategy:           deps.RevocationStrategy,
+		Now:                revokeNow(deps),
+		TombstoneRetention: revokeTombstoneRetention(deps.AccessTokenTTL),
+		Reason:             "revoke",
+	}.Run(ctx, teardown.AccessTokensOfGrant(grantID))
+	for _, f := range out.Failures {
+		emitRevokeFailed(ctx, deps, clientID, f.Surface, f.Err)
 	}
 }
 

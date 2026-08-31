@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -132,10 +133,7 @@ func TestDispatch_ClientGrantNotPermitted(t *testing.T) {
 	if !errors.Is(err, ErrClientGrantNotPermitted) {
 		t.Fatalf("err = %v, want ErrClientGrantNotPermitted", err)
 	}
-	events := em.snapshot()
-	if len(events) != 1 || events[0].Name != AuditEventFailed {
-		t.Fatalf("audit events = %+v, want one %s", events, AuditEventFailed)
-	}
+	assertRequestedThenFailed(t, em.snapshot(), "client_grant_not_permitted")
 }
 
 func TestDispatch_FormPolicy(t *testing.T) {
@@ -236,17 +234,42 @@ func TestDispatch_PanicRecovered(t *testing.T) {
 	if !errors.Is(err, ErrPanic) {
 		t.Fatalf("err = %v, want ErrPanic", err)
 	}
-	events := em.snapshot()
-	// Two audit events: the panic recovery emits its own before
-	// emitFailed runs from Dispatch.
-	if len(events) < 1 {
-		t.Fatalf("audit events = %+v, want at least one", events)
+	// Exactly one failure record. A recover block that emitted its own
+	// record on top of the one Dispatch raises for the returned error
+	// doubles the panic-class failure rate, so an alert calibrated on
+	// oidc_custom_grant_events_total{event="failed"} fires at half the
+	// real rate — and the two records disagreed on level and reason.
+	failed := assertRequestedThenFailed(t, em.snapshot(), "panic")
+	if failed.Level != audit.LevelError {
+		t.Errorf("panic failure level=%v want %v", failed.Level, audit.LevelError)
 	}
-	for _, ev := range events {
-		if ev.Name != AuditEventFailed {
-			t.Errorf("event %q, want %s", ev.Name, AuditEventFailed)
-		}
+	if got, _ := failed.Extras["panic_value"].(string); got != "boom" {
+		t.Errorf("extras.panic_value=%v want boom", failed.Extras["panic_value"])
 	}
+	if got, _ := failed.Extras["stack"].(string); got == "" {
+		t.Error("extras.stack is empty; the panic record must carry the trace")
+	}
+}
+
+// assertRequestedThenFailed pins the audit shape of a rejected
+// dispatch: the attempt is recorded at entry, exactly one failure
+// follows it, and the failure names the gate that fired. Returning the
+// failure lets a caller assert the gate-specific extras.
+func assertRequestedThenFailed(tb testing.TB, events []audit.Event, wantReason string) audit.Event {
+	tb.Helper()
+	if len(events) != 2 {
+		tb.Fatalf("audit events = %+v, want exactly %s then %s", events, AuditEventRequested, AuditEventFailed)
+	}
+	if events[0].Name != AuditEventRequested {
+		tb.Fatalf("first event = %q, want %s (the attempt is counted at entry)", events[0].Name, AuditEventRequested)
+	}
+	if events[1].Name != AuditEventFailed {
+		tb.Fatalf("second event = %q, want %s", events[1].Name, AuditEventFailed)
+	}
+	if got := events[1].Extras["reason"]; got != wantReason {
+		tb.Errorf("failure reason = %v, want %q", got, wantReason)
+	}
+	return events[1]
 }
 
 func TestDispatch_TTLCapTruncates(t *testing.T) {
@@ -378,6 +401,46 @@ func TestDispatch_AudienceInflationRejected(t *testing.T) {
 	}
 }
 
+// TestAudienceSubsetFollowsTheSharedResourcePolicy pins the dispatcher
+// onto the OP-wide resource-indicator equality policy. The dispatcher
+// compares a handler-returned audience against the client's registered
+// Resources, which is the same question client_credentials and token
+// exchange answer, and a private normalisation helper here would let a
+// value be accepted for one grant and rejected for another.
+//
+// [resourceindicator.EqualLabel] is the policy itself, so the assertion
+// is that the dispatcher agrees with it — including on the fragment and
+// userinfo forms, which are FORBIDDEN on a resource indicator and must
+// therefore match nothing.
+func TestAudienceSubsetFollowsTheSharedResourcePolicy(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		registered string
+		returned   string
+	}{
+		{name: "default https port stripped", registered: "https://api.example.com:443/v1/", returned: "https://api.example.com/v1"},
+		{name: "non-default port preserved", registered: "https://api.example.com:8443", returned: "https://api.example.com"},
+		{name: "trailing slash ignored", registered: "https://api.example.com/v1/", returned: "https://api.example.com/v1"},
+		{name: "scheme and host case folded", registered: "HTTPS://API.EXAMPLE.COM/v1", returned: "https://api.example.com/v1"},
+		{name: "path case preserved", registered: "https://api.example.com/V1", returned: "https://api.example.com/v1"},
+		{name: "returned fragment matches nothing", registered: "https://api.example.com/v1", returned: "https://api.example.com/v1#frag"},
+		{name: "returned userinfo matches nothing", registered: "https://api.example.com/v1", returned: "https://trusted@api.example.com/v1"},
+		{name: "opaque audience label compares verbatim", registered: "urn:example:api", returned: "urn:example:api"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			want := resourceindicator.EqualLabel(tc.registered, tc.returned)
+			if got := audienceSubset([]string{tc.returned}, []string{tc.registered}); got != want {
+				t.Fatalf("audienceSubset=%v want %v (shared policy)", got, want)
+			}
+		})
+	}
+}
+
 func TestDispatch_HandlerErrorPropagated(t *testing.T) {
 	t.Parallel()
 
@@ -396,10 +459,7 @@ func TestDispatch_HandlerErrorPropagated(t *testing.T) {
 	if !errors.Is(err, custom) {
 		t.Fatalf("err = %v, want %v", err, custom)
 	}
-	events := em.snapshot()
-	if len(events) != 1 || events[0].Name != AuditEventFailed {
-		t.Fatalf("audit events = %+v, want one %s", events, AuditEventFailed)
-	}
+	assertRequestedThenFailed(t, em.snapshot(), "handler_error")
 }
 
 func TestDispatch_HasHandlerAndNames(t *testing.T) {

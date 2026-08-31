@@ -9,11 +9,11 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// dpopOutcome is the result of [verifyTokenDPoP]: a (possibly empty)
-// thumbprint plus a flag reporting whether a proof was actually
-// presented. The split lets handler code distinguish "no proof, issue
-// bearer token" from "proof verified, bind to jkt" without inspecting
-// the Verifier directly.
+// dpopOutcome is the result of the token endpoint's proof phase: a
+// (possibly empty) thumbprint plus a flag reporting whether a proof was
+// actually presented. The split lets handler code distinguish "no
+// proof, issue bearer token" from "proof verified, bind to jkt" without
+// inspecting the Verifier directly.
 type dpopOutcome struct {
 	// JKT is the RFC 7638 thumbprint extracted from the proof. Empty
 	// when no proof was presented.
@@ -29,35 +29,34 @@ type dpopOutcome struct {
 	// jkt requires a proof to be presented even if the verifier is
 	// configured to issue bearer tokens by default.
 	Presented bool
+}
 
-	// checked is the accepted-but-uncommitted proof whose replay
-	// marker [commitTokenDPoP] writes. Nil when no proof was
-	// presented or when DPoP is not enabled.
-	checked *dpop.Checked
+// newDPoPOutcome projects the shared [dpop.Checked] onto the shape the
+// grant handlers consume. A nil proof — DPoP disabled, or no header on
+// the request — yields the zero outcome, which routes the handler onto
+// the bearer path.
+func newDPoPOutcome(checked *dpop.Checked) *dpopOutcome {
+	if checked == nil {
+		return &dpopOutcome{}
+	}
+	return &dpopOutcome{JKT: checked.JKT, JTI: checked.JTI, Presented: true}
+}
+
+// dpopGate projects [Deps] onto the shared proof lifecycle. A nil
+// [Deps.DPoP] yields a gate that admits every request without a proof,
+// so the handler issues bearer tokens.
+func dpopGate(deps Deps) dpop.Gate {
+	return dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces}
 }
 
 // authenticateWithDPoP runs DPoP proof verification and client
-// authentication in the one order that satisfies both of the
-// constraints the two mechanisms impose, and is the entry point every
-// grant handler uses.
+// authentication through the shared [dpop.Gate], and is the entry
+// point every grant handler uses.
 //
-// Proof verification runs FIRST because RFC 9449 §8 contemplates a
-// verbatim retry of the client-side request body with only the proof
-// refreshed: RP libraries rebuild the DPoP header and resend the
-// original client_assertion, so a `use_dpop_nonce` challenge raised
-// after the assertion's jti had been consumed would surface on the
-// retry as invalid_client. The proof is bound to the request, never to
-// the client's credential, so nothing in the verification depends on
-// the resolved identity.
-//
-// The proof's own replay marker is written LAST, after authentication
-// succeeds. That write is the only durable storage effect on this path,
-// and leaving it ahead of authentication would let an unauthenticated
-// request rate translate directly into storage cost. Deferring it
-// weakens nothing: a replayed proof on a request that cannot
-// authenticate is refused on the credential, and any request that
-// reaches the commit is refused with the same ErrProofReplayed it
-// would have seen under the single-phase verifier.
+// The gate documents the verify → authenticate → commit ordering and
+// the reasons behind it; the token endpoint inherits it unchanged and
+// folds the per-client grant gate into the authentication step, so
+// that check too runs between the two proof phases.
 //
 // grantType is the wire grant_type the calling handler implements. The
 // per-client authorization gate ([store.Client.GrantTypes]) runs here,
@@ -77,21 +76,19 @@ func authenticateWithDPoP(
 	deps Deps,
 	grantType string,
 ) (*dpopOutcome, *store.Client, bool) {
-	out, ok := verifyTokenDPoP(w, r, deps)
+	var client *store.Client
+	checked, ok := dpopGate(deps).Authenticate(ctx, w, r, func() bool {
+		var authOK bool
+		client, _, authOK = authenticate(ctx, w, r, deps)
+		if !authOK {
+			return false
+		}
+		return clientPermitsGrant(w, client, grantType)
+	})
 	if !ok {
 		return nil, nil, false
 	}
-	client, _, ok := authenticate(ctx, w, r, deps)
-	if !ok {
-		return nil, nil, false
-	}
-	if !clientPermitsGrant(w, client, grantType) {
-		return nil, nil, false
-	}
-	if !commitTokenDPoP(ctx, w, deps, out) {
-		return nil, nil, false
-	}
-	return out, client, true
+	return newDPoPOutcome(checked), client, true
 }
 
 // clientPermitsGrant enforces [store.Client.GrantTypes]. An empty list
@@ -115,52 +112,9 @@ func clientPermitsGrant(w http.ResponseWriter, client *store.Client, grantType s
 	return false
 }
 
-// verifyTokenDPoP runs the stateless DPoP gates over the inbound
-// request when the feature is wired and a proof header is present. The
-// function emits an HTTP error and returns (nil, false) on every
-// failure path so the caller only checks the bool. When DPoP is not
-// enabled or no proof is presented the function returns
-// (&dpopOutcome{}, true) — the caller proceeds with bearer-token
-// issuance.
-//
-// The proof is not yet single-use when this returns; see
-// [commitTokenDPoP].
-func verifyTokenDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (*dpopOutcome, bool) {
-	if deps.DPoP == nil {
-		return &dpopOutcome{}, true
-	}
-	header := r.Header.Get("DPoP")
-	if header == "" {
-		return &dpopOutcome{}, true
-	}
-	checked, err := deps.DPoP.CheckHTTPRequest(r.Context(), r, "")
-	if err != nil {
-		writeDPoPError(w, deps, err)
-		return nil, false
-	}
-	return &dpopOutcome{JKT: checked.JKT, JTI: checked.JTI, Presented: true, checked: checked}, true
-}
-
-// commitTokenDPoP writes the replay marker for the proof
-// [verifyTokenDPoP] accepted, making it single-use. It is a no-op when
-// no proof was presented. The function emits the response and returns
-// false on failure; a repeated or concurrent use of the same proof
-// surfaces through the same [dpop.WriteError] mapping the single-phase
-// verifier produced.
-func commitTokenDPoP(ctx context.Context, w http.ResponseWriter, deps Deps, out *dpopOutcome) bool {
-	if out == nil || out.checked == nil {
-		return true
-	}
-	if err := deps.DPoP.Commit(ctx, out.checked); err != nil {
-		writeDPoPError(w, deps, err)
-		return false
-	}
-	return true
-}
-
 // enforceDPoPRefreshBinding reconciles the post-exchange DPoP state for
 // the refresh_token grant. Proof verification (signature, htu/htm, RFC
-// 9449 §8 nonce challenge) ran upfront in [verifyTokenDPoP] so the
+// 9449 §8 nonce challenge) ran upfront in [authenticateWithDPoP] so the
 // use_dpop_nonce 400 fires before any client_assertion jti is consumed;
 // this helper only enforces the bound-chain invariants RFC 9449 §5.2
 // owes the rotation, which depend on data the exchange surfaces:
@@ -197,24 +151,4 @@ func enforceDPoPRefreshBinding(w http.ResponseWriter, deps Deps, out *dpopOutcom
 		return false
 	}
 	return true
-}
-
-// writeDPoPError translates a dpop.Err* sentinel onto the wire form.
-// The package-local helper is a thin wrapper over [dpop.WriteError]
-// so the token / PAR / future endpoints share an identical
-// boundary mapping; see the godoc on [dpop.WriteError] for the wire
-// taxonomy and on the nonce-challenge response specifically.
-//
-// The wrapper takes a [Deps] (rather than the broader [dpop.NonceSource]
-// directly) so call sites stay symmetric with the rest of the
-// package's helpers; the [dpop.NonceSourceFromIssuer] adapter
-// transports the wire shape of [Deps.DPoPNonces] into the shared
-// helper without leaking dpop-package details upward. The
-// [context.Background] argument is acceptable because the nonce
-// adapter ignores the context (the issuer is a synchronous
-// in-memory call); when a request-scoped context is required (e.g.
-// for tracing) the call site can be migrated to
-// [dpop.WriteError] directly.
-func writeDPoPError(w http.ResponseWriter, deps Deps, err error) {
-	dpop.WriteError(context.Background(), w, err, dpop.NonceSourceFromIssuer(deps.DPoPNonces))
 }

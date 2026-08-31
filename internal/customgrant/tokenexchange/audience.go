@@ -1,29 +1,8 @@
 package tokenexchange
 
 import (
-	"net/url"
-	"strings"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 )
-
-// normaliseResource applies the RFC 8707 §2 canonicalisation rule to
-// a resource indicator: lowercase scheme + host, strip the trailing
-// slash from the path (including the bare "/" root that net/url
-// preserves). Values that do not parse as URLs are returned verbatim
-// so the caller can still route them through the AllowedResources
-// allowlist (and reject unknown values uniformly).
-func normaliseResource(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return raw
-	}
-	u.Scheme = strings.ToLower(u.Scheme)
-	u.Host = strings.ToLower(u.Host)
-	u.Path = strings.TrimRight(u.Path, "/")
-	return u.String()
-}
 
 // dedupe collapses duplicate entries in s while preserving order.
 func dedupe(s []string) []string {
@@ -61,19 +40,13 @@ func scopeSubset(want, have []string) bool {
 }
 
 // audienceSubset reports whether every entry of granted appears in
-// requested. Both sides are canonicalised per RFC 8707 §2 before the
-// comparison so a policy-granted "HTTPS://API.EXAMPLE/" matches a
-// requested "https://api.example". An empty granted vacuously passes.
+// requested. Equality is [resourceindicator.ContainsLabel], the OP-wide
+// policy, so a policy-granted "HTTPS://API.EXAMPLE:443/" matches a
+// requested "https://api.example" here exactly as it does at
+// client_credentials. An empty granted vacuously passes.
 func audienceSubset(granted, requested []string) bool {
-	if len(granted) == 0 {
-		return true
-	}
-	idx := make(map[string]struct{}, len(requested))
-	for _, v := range requested {
-		idx[normaliseResource(v)] = struct{}{}
-	}
 	for _, v := range granted {
-		if _, ok := idx[normaliseResource(v)]; !ok {
+		if !resourceindicator.ContainsLabel(requested, v) {
 			return false
 		}
 	}

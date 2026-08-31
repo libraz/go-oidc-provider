@@ -9,7 +9,9 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/grants/grantscope"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -52,7 +54,7 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	if !preflightRefreshBeforeConsume(ctx, w, r, deps, client.ID, in, dpopOut) {
+	if !preflightRefreshBeforeConsume(ctx, w, r, deps, client, in, dpopOut) {
 		return
 	}
 	// Resolve authorization_details before opening the transaction. A SQL
@@ -128,6 +130,9 @@ func completeRefreshToken(
 		return true
 	}
 	if !checkTokenScopeAllowlist(w, deps, client.ID, exchanged.Scope) {
+		return rollback
+	}
+	if !requireRegisteredScopes(w, client, exchanged.Scope) {
 		return rollback
 	}
 	if !enforceStrictOfflineAccess(w, deps, exchanged.Scope, exchanged.Origin) {
@@ -262,6 +267,32 @@ func runRefreshTokenTransaction(
 	return staged, true
 }
 
+// requireRegisteredScopes re-applies the client's registered Scopes to a
+// scope set the OP is about to issue against. Returns true when the
+// request may proceed.
+//
+// The set was already a subset of the registration when the grant was
+// created, so the only way this fails is that the registration was
+// narrowed while the chain was live — which is exactly the case it
+// exists for. Without it, tightening a compromised client's Scopes stops
+// /authorize, /device_authorization and client_credentials but leaves
+// every running refresh chain minting access tokens at the original
+// scope indefinitely, so containment would need the coarser step of
+// revoking the grants.
+//
+// The check runs on both sides of the exchanger: before Consume, so a
+// rejected rotation does not spend the presented token, and after it as
+// defence in depth for the grace path, whose consumed record bypasses
+// the preflight.
+func requireRegisteredScopes(w http.ResponseWriter, client *store.Client, scope []string) bool {
+	if client == nil || grantscope.Subset(scope, client.Scopes) {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, errInvalidScope,
+		"scope exceeds the client's registered scopes")
+	return false
+}
+
 // checkRefreshScopeAllowlist enforces the per-scope AllowedClients
 // allowlist for any scope the RP explicitly requested at /token. The
 // check runs before [refresh.Exchanger.Exchange] so an allowlist
@@ -293,10 +324,11 @@ func preflightRefreshBeforeConsume(
 	w http.ResponseWriter,
 	r *http.Request,
 	deps Deps,
-	clientID string,
+	client *store.Client,
 	in refreshInputs,
 	dpopOut *dpopOutcome,
 ) bool {
+	clientID := client.ID
 	rec, err := deps.RefreshTokens.Find(ctx, in.Token)
 	if err == nil && rec == nil {
 		// A nil record alongside a nil error violates the store contract.
@@ -327,6 +359,9 @@ func preflightRefreshBeforeConsume(
 		return false
 	}
 	if deps.Scopes != nil && !checkTokenScopeAllowlist(w, deps, clientID, scope) {
+		return false
+	}
+	if !requireRegisteredScopes(w, client, scope) {
 		return false
 	}
 	if !enforceStrictOfflineAccess(w, deps, scope, rec.Origin) {
@@ -510,8 +545,6 @@ func newRefreshExchanger(deps Deps) (*refresh.Exchanger, error) {
 		Clock:              deps.clockFunc(),
 		GraceTTL:           deps.RefreshTokenGraceTTL,
 		Audit:              deps.audit(),
-		GrantRevocations:   refreshChainRevocationStore(deps),
-		GrantTombstoneTTL:  refreshChainTombstoneTTL(deps),
 		DeferReplayCascade: true,
 	})
 }
@@ -547,10 +580,24 @@ func (c *replayCascade) arm(presented string) {
 // armed reports whether a replay was detected during the exchange.
 func (c *replayCascade) armed() bool { return c != nil && c.token != "" }
 
-// run retires the replayed chain through non-transactional substores. It
-// is a no-op unless a replay was detected and it never reports failure:
-// the exchanger raises a warn-level audit event on a transport fault and
-// the client keeps the invalid_grant answer it has already been given.
+// run retires every credential still redeemable under the replayed
+// grant, through non-transactional substores. It is a no-op unless a
+// replay was detected and it never reports failure: a transport fault
+// raises a warn-level audit event and the client keeps the invalid_grant
+// answer it has already been given.
+//
+// Two rungs run, in this order:
+//
+//   - The refresh chain, through the exchanger, which walks parent
+//     pointers to the root and falls back to the whole grant. It hands
+//     back the grant it resolved.
+//   - Every access token issued under that grant, through the shared
+//     [teardown.Revoker]: the JWT half under whatever
+//     [store.AccessTokenRevocationStrategy] is configured, and the
+//     opaque half independently of it. RFC 9700 §2.2.2 requires the
+//     tokens issued from a compromised grant to be revoked, and an
+//     attacker who redeemed the stolen refresh token holds exactly the
+//     access token this rung retires.
 func (c *replayCascade) run(ctx context.Context, deps Deps) {
 	if !c.armed() {
 		return
@@ -563,7 +610,10 @@ func (c *replayCascade) run(ctx context.Context, deps Deps) {
 		// audit event has already been emitted.
 		return
 	}
-	exchanger.RevokeReplayedChain(ctx, c.token)
+	grantID := exchanger.RevokeReplayedChain(ctx, c.token)
+	out := grantTeardown(deps, teardownReasonRefreshReplay).
+		Run(ctx, teardown.AccessTokensOfGrant(grantID))
+	reportTeardown(ctx, deps, out, auditRefreshGrantRevokeFailed, teardownReasonRefreshReplay, grantID)
 }
 
 // exchangeRefresh runs the [refresh.Exchanger] and translates sentinel
@@ -768,7 +818,7 @@ func issueRefreshResponse(
 		authCtx.AuthTime,
 		binding,
 		authorizationDetails,
-		exchanged.AccessTokenExtra,
+		accessTokenOverrides{Extra: exchanged.AccessTokenExtra},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -878,7 +928,7 @@ func reissueGraceAccessToken(
 		authCtx.AuthTime,
 		binding,
 		response.AuthorizationDetails,
-		exchanged.AccessTokenExtra,
+		accessTokenOverrides{Extra: exchanged.AccessTokenExtra},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -1257,38 +1307,4 @@ func revokePriorOpaqueAT(ctx context.Context, deps Deps, resource, grantID strin
 	}
 	_, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
 	return err
-}
-
-// refreshChainRevocationStore returns the
-// [store.GrantRevocationStore] the refresh exchanger uses to
-// tombstone replayed chains. The hook fires only when the active
-// strategy is [store.RevocationStrategyGrantTombstone] AND the
-// embedder wired a non-nil substore. Other strategies leave the
-// JWT-AT cascade to the per-token JTI denylist (legacy path) or skip
-// JWT revocation entirely; both keep the refresh-chain revoke alive
-// but suppress the tombstone write so the wire shape matches the
-// strategy's documented behaviour.
-func refreshChainRevocationStore(deps Deps) store.GrantRevocationStore {
-	if deps.RevocationStrategy != store.RevocationStrategyGrantTombstone {
-		return nil
-	}
-	return deps.GrantRevocations
-}
-
-// refreshChainTombstoneTTL bounds the lifetime of a tombstone written
-// by the refresh chain-revoke cascade. The value is computed as
-// (access_token_TTL + 5 minute grace) so any access token issued
-// before the cascade is guaranteed to have expired before its
-// tombstone disappears. The grace covers clock skew between the OP
-// and resource servers consulting [store.GrantRevocationStore.IsRevoked];
-// 5 minutes is the same floor the access-token registry GC uses. A
-// zero/negative [Deps.AccessTokenTTL] is normalised to the token endpoint
-// default here as a defensive backstop so a partially constructed Deps value
-// cannot accidentally disable tombstone GC.
-func refreshChainTombstoneTTL(deps Deps) time.Duration {
-	ttl := deps.AccessTokenTTL
-	if ttl <= 0 {
-		ttl = defaultAccessTokenTTL
-	}
-	return ttl + 5*time.Minute
 }

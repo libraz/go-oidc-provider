@@ -478,20 +478,15 @@ func prepareDeviceCodeResponse(
 			return preparedDeviceCodeResponse{}, err
 		}
 	}
-	refreshToken, err = maybeIssueRefreshToken(
-		ctx,
-		deps,
-		client,
-		authorized.Subject,
-		grantID,
-		authorized.Scope,
-		resource,
-		"",
-		binding,
-		store.RefreshOriginDeviceCode,
-		false,
-		authContext{AuthTime: authTime},
-	)
+	refreshIn := builtinRefreshIssuance(deps, client)
+	refreshIn.Subject = authorized.Subject
+	refreshIn.GrantID = grantID
+	refreshIn.Scope = authorized.Scope
+	refreshIn.Resource = resource
+	refreshIn.Binding = binding
+	refreshIn.Origin = store.RefreshOriginDeviceCode
+	refreshIn.AuthCtx = authContext{AuthTime: authTime}
+	refreshToken, err = issueRefreshToken(ctx, deps, refreshIn)
 	if err != nil {
 		return preparedDeviceCodeResponse{}, err
 	}

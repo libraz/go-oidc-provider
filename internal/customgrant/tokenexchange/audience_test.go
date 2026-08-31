@@ -7,30 +7,72 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-func TestNormaliseResourceAppliesRFC8707CanonicalForm(t *testing.T) {
+// resourceEqualityCase is one (registered, requested) pair together
+// with the single verdict every surface that compares a resource
+// indicator against a registered audience is allowed to give.
+type resourceEqualityCase struct {
+	name       string
+	registered string
+	requested  string
+	want       bool
+}
+
+// resourceEqualityCases is written the way an operator registers a value
+// and the way a client sends it.
+//
+// The fragment and userinfo rows are the ones a private normalisation
+// helper gets wrong: both components are FORBIDDEN on a resource
+// indicator, and a helper that falls back to a verbatim comparison
+// admits them at its own surface while the canonical implementation
+// rejects them at every other.
+var resourceEqualityCases = []resourceEqualityCase{
+	{name: "default https port stripped", registered: "https://api.example.com:443/v1/", requested: "https://api.example.com/v1", want: true},
+	{name: "default http port stripped", registered: "http://api.example.com:80", requested: "http://api.example.com/", want: true},
+	{name: "non-default port preserved", registered: "https://api.example.com:8443", requested: "https://api.example.com", want: false},
+	{name: "trailing slash ignored", registered: "https://api.example.com/v1/", requested: "https://api.example.com/v1", want: true},
+	{name: "scheme and host case folded", registered: "HTTPS://API.EXAMPLE.COM/v1", requested: "https://api.example.com/v1", want: true},
+	{name: "path case preserved", registered: "https://api.example.com/V1", requested: "https://api.example.com/v1", want: false},
+	{name: "requested fragment rejected", registered: "https://api.example.com/v1", requested: "https://api.example.com/v1#frag", want: false},
+	{name: "registered fragment matches nothing", registered: "https://api.example.com/v1#frag", requested: "https://api.example.com/v1#frag", want: false},
+	{name: "requested userinfo rejected", registered: "https://api.example.com/v1", requested: "https://trusted@api.example.com/v1", want: false},
+	{name: "registered userinfo matches nothing", registered: "https://trusted@api.example.com/v1", requested: "https://trusted@api.example.com/v1", want: false},
+	{name: "opaque audience label compares verbatim", registered: "urn:example:api", requested: "urn:example:api", want: true},
+}
+
+// TestAudienceEqualityMatchesTheClientCredentialsSurface pins the
+// cross-surface invariant: the same (registered, requested) pair MUST
+// receive the same verdict at token exchange as at client_credentials,
+// whose allowlist predicate is [resourceindicator.Contains]. A client
+// that registers "https://api.example.com:443/v1/" and sends the same
+// value at both endpoints must not be accepted at one and rejected at
+// the other with invalid_target.
+func TestAudienceEqualityMatchesTheClientCredentialsSurface(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{name: "empty", in: "", want: ""},
-		{name: "scheme and host lowercased", in: "HTTPS://API.EXAMPLE", want: "https://api.example"},
-		{name: "root slash stripped", in: "https://api.example/", want: "https://api.example"},
-		{name: "trailing path slashes stripped", in: "HTTPS://API.EXAMPLE/foo///", want: "https://api.example/foo"},
-		{name: "query preserved", in: "HTTPS://API.EXAMPLE/foo/?a=1", want: "https://api.example/foo?a=1"},
-		{name: "non-url left untouched", in: "api.example/resource", want: "api.example/resource"},
-		{name: "parseable but not absolute left untouched", in: "/relative/path/", want: "/relative/path/"},
-	}
-	for _, tc := range cases {
+	for _, tc := range resourceEqualityCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := normaliseResource(tc.in); got != tc.want {
-				t.Fatalf("normaliseResource(%q) = %q, want %q", tc.in, got, tc.want)
+			registered := []string{tc.registered}
+			// The client_credentials surface. Its allowlist only ever sees
+			// values that already passed resource-indicator validation, so
+			// an opaque audience label — legal at token exchange, which
+			// speaks RFC 8693 audiences — is out of its domain.
+			if resourceindicator.Validate(tc.requested) == nil {
+				if got := resourceindicator.Contains(registered, tc.requested); got != tc.want {
+					t.Errorf("client_credentials allowlist=%v want %v", got, tc.want)
+				}
+			}
+			if got := audienceAllowed([]string{tc.requested}, &store.Client{Resources: registered}); got != tc.want {
+				t.Errorf("audienceAllowed=%v want %v", got, tc.want)
+			}
+			if got := audienceSubset([]string{tc.requested}, registered); got != tc.want {
+				t.Errorf("audienceSubset=%v want %v", got, tc.want)
 			}
 		})
 	}

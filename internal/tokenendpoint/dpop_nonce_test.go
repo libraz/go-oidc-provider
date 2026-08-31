@@ -1,16 +1,16 @@
-// White-box test for the [writeDPoPError] nonce dispatch and the
-// [writeUseDPoPNonce] helper. RFC 9449 §8 defines a distinct wire
+// White-box test for the nonce dispatch the token endpoint inherits
+// from the shared [dpop.Gate]. RFC 9449 §8 defines a distinct wire
 // shape for the use_dpop_nonce challenge — it is not just another
-// invalid_request — so the handler MUST route the two new
+// invalid_request — so the endpoint MUST route the two nonce
 // dpop.Err* sentinels off the standard ladder. The cases here lock
-// the routing without spinning up the full token-endpoint fixture
-// (the public op.WithDPoPNonceSource option that exercises this
-// path end-to-end lands in a follow-up).
+// the routing as [dpopGate] wires it, without spinning up the full
+// token-endpoint fixture.
 //
 //nolint:testpackage // intentional white-box test for unexported helpers.
 package tokenendpoint
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -26,11 +26,11 @@ type staticIssuer string
 
 func (s staticIssuer) IssueNonce() string { return string(s) }
 
-func TestWriteDPoPError_NonceMissing_EmitsUseDPoPNonceChallenge(t *testing.T) {
+func TestDPoPGateWriteError_NonceMissing_EmitsUseDPoPNonceChallenge(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
 	deps := Deps{DPoPNonces: staticIssuer("fresh-nonce-42")}
-	writeDPoPError(rec, deps, dpop.ErrProofNonceMissing)
+	dpopGate(deps).WriteError(context.Background(), rec, dpop.ErrProofNonceMissing)
 
 	if got := rec.Code; got != 400 {
 		t.Errorf("status = %d, want 400 (RFC 9449 §8.2 token-endpoint error envelope)", got)
@@ -50,7 +50,7 @@ func TestWriteDPoPError_NonceMissing_EmitsUseDPoPNonceChallenge(t *testing.T) {
 	}
 }
 
-func TestWriteDPoPError_NonceInvalid_AlsoEmitsChallenge(t *testing.T) {
+func TestDPoPGateWriteError_NonceInvalid_AlsoEmitsChallenge(t *testing.T) {
 	t.Parallel()
 	// ErrProofNonceInvalid (stale value) shares the wire response
 	// with ErrProofNonceMissing per RFC 9449 §8 — the client
@@ -58,7 +58,7 @@ func TestWriteDPoPError_NonceInvalid_AlsoEmitsChallenge(t *testing.T) {
 	// fired. Distinct sentinel discrimination is for audit logs.
 	rec := httptest.NewRecorder()
 	deps := Deps{DPoPNonces: staticIssuer("rotated")}
-	writeDPoPError(rec, deps, dpop.ErrProofNonceInvalid)
+	dpopGate(deps).WriteError(context.Background(), rec, dpop.ErrProofNonceInvalid)
 
 	if got := rec.Code; got != 400 {
 		t.Errorf("status = %d, want 400", got)
@@ -73,7 +73,7 @@ func TestWriteDPoPError_NonceInvalid_AlsoEmitsChallenge(t *testing.T) {
 	}
 }
 
-func TestWriteDPoPError_NoIssuer_OmitsHeaderButKeepsErrorCode(t *testing.T) {
+func TestDPoPGateWriteError_NoIssuer_OmitsHeaderButKeepsErrorCode(t *testing.T) {
 	t.Parallel()
 	// Misconfiguration path: the verifier was wired with a
 	// NonceVerifier (so the proof is rejected for missing nonce)
@@ -82,7 +82,7 @@ func TestWriteDPoPError_NoIssuer_OmitsHeaderButKeepsErrorCode(t *testing.T) {
 	// the gate fired; the missing DPoP-Nonce header truthfully
 	// signals "the server has no nonce to give you".
 	rec := httptest.NewRecorder()
-	writeDPoPError(rec, Deps{}, dpop.ErrProofNonceMissing)
+	dpopGate(Deps{}).WriteError(context.Background(), rec, dpop.ErrProofNonceMissing)
 
 	if got := rec.Code; got != 400 {
 		t.Errorf("status = %d, want 400", got)
@@ -106,18 +106,18 @@ type emptyIssuer struct{}
 
 func (emptyIssuer) IssueNonce() string { return "" }
 
-func TestWriteDPoPError_IssuerReturnsEmpty_OmitsHeader(t *testing.T) {
+func TestDPoPGateWriteError_IssuerReturnsEmpty_OmitsHeader(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
 	deps := Deps{DPoPNonces: emptyIssuer{}}
-	writeDPoPError(rec, deps, dpop.ErrProofNonceMissing)
+	dpopGate(deps).WriteError(context.Background(), rec, dpop.ErrProofNonceMissing)
 
 	if got := rec.Header().Get("DPoP-Nonce"); got != "" {
 		t.Errorf("DPoP-Nonce = %q, want empty (issuer returned empty string)", got)
 	}
 }
 
-func TestWriteDPoPError_NonNonceErrorBypassesNonceBranch(t *testing.T) {
+func TestDPoPGateWriteError_NonNonceErrorBypassesNonceBranch(t *testing.T) {
 	t.Parallel()
 	// A non-nonce sentinel must NOT trigger the use_dpop_nonce
 	// challenge — even when an issuer is wired. Otherwise a
@@ -125,7 +125,7 @@ func TestWriteDPoPError_NonNonceErrorBypassesNonceBranch(t *testing.T) {
 	// probing the endpoint.
 	rec := httptest.NewRecorder()
 	deps := Deps{DPoPNonces: staticIssuer("should-not-leak")}
-	writeDPoPError(rec, deps, dpop.ErrProofSignature)
+	dpopGate(deps).WriteError(context.Background(), rec, dpop.ErrProofSignature)
 
 	if got := rec.Header().Get("DPoP-Nonce"); got != "" {
 		t.Errorf("DPoP-Nonce = %q, want empty (signature errors must not leak a nonce)", got)

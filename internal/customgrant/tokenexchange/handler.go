@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -201,13 +202,13 @@ func (h *Handler) ParamPolicy() customgrant.ParamPolicy {
 // the full state machine documented in the package doc; the heavy
 // lifting lives in the helpers below so each phase stays focused.
 func (h *Handler) Handle(ctx context.Context, req customgrant.Request) (customgrant.Response, error) {
+	h.emitRequestedAudit(ctx, req)
 	subjectView, actorView, err := h.parseAndVerify(ctx, req)
 	if err != nil {
 		return customgrant.Response{}, err
 	}
 	requestedAudience := computeRequestedAudience(req.Form, subjectView)
 	requestedScope := h.resolveRequestedScope(req, subjectView)
-	h.emitRequestedAudit(ctx, req.Client, subjectView, actorView, requestedAudience, requestedScope)
 	if err := h.enforceScopeAudience(ctx, req.Client, subjectView, requestedScope, requestedAudience); err != nil {
 		return customgrant.Response{}, err
 	}
@@ -302,17 +303,26 @@ func (h *Handler) resolveRequestedScope(req customgrant.Request, subjectView Tok
 	return intersectScope(requested, req.Client.Scopes)
 }
 
-// emitRequestedAudit fires the entry-side audit event after the
-// structural checks pass but before any policy decision runs, so the
-// audit chain captures every attempt that survived parse-time gates.
-func (h *Handler) emitRequestedAudit(ctx context.Context, client *store.Client, subjectView TokenView, actorView *TokenView, requestedAudience, requestedScope []string) {
+// emitRequestedAudit fires the entry-side audit event before any gate
+// runs, so the audit stream records every attempt that reached the
+// handler — including the ones rejected during structural validation
+// and token lookup (an unrecognised subject_token_type, an id_token
+// whose "aud" names another client, a sender-constraint mismatch).
+// Those rejections would otherwise be invisible, and an operator
+// reading "exchange rejection rate" could not tell a request that was
+// never made from one refused before the instrumentation.
+//
+// The record therefore carries only what the request itself states: the
+// authenticated client and the audience / scope it asked for. The
+// resolved subject is not known yet and rides on the terminal events
+// ([auditGranted] and the failure-class events) instead.
+func (h *Handler) emitRequestedAudit(ctx context.Context, req customgrant.Request) {
 	h.emit(ctx, auditRequested, audit.LevelInfo,
 		"token-exchange requested",
-		clientIDOf(client), subjectView.Subject,
+		clientIDOf(req.Client), "",
 		map[string]any{
-			"actor":              actorSubOf(actorView),
-			"requested_audience": append([]string(nil), requestedAudience...),
-			"requested_scope":    append([]string(nil), requestedScope...),
+			"requested_audience": computeRequestedAudience(req.Form, TokenView{}),
+			"requested_scope":    append([]string(nil), req.RequestedScope...),
 		})
 }
 
@@ -462,6 +472,14 @@ func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenVie
 		Subject:        subjectView.Subject,
 		Scope:          append([]string(nil), grantedScope...),
 		Audience:       append([]string(nil), grantedAudience...),
+		// The resolved policy decision rides onto the response so the
+		// wire layer withholds the id_token whenever the policy did.
+		// Without it an exchange that declined the token would still
+		// emit one off the granted scope alone — and that token would
+		// carry neither the act chain nor the cnf binding assembled
+		// below, handing the caller a delegated identity laundered of
+		// its delegation record and of its proof-of-possession pin.
+		IssueIDToken: issueIDToken,
 	}
 	if issueIDToken && containsOpenID(grantedScope) {
 		resp.AuthTime = h.now()
@@ -652,20 +670,21 @@ func knownTokenType(urn string) bool {
 }
 
 // computeRequestedAudience folds the audience and resource form
-// values together, normalises each per RFC 8707 §2, and de-duplicates.
-// Falls back to the subject_token's audience (also normalised) when
-// the request omits both parameters so downstream comparisons see a
-// single canonical form.
+// values together, normalises each through
+// [resourceindicator.NormalizeLabel], and de-duplicates. Falls back to
+// the subject_token's audience (also normalised) when the request omits
+// both parameters so downstream comparisons see a single canonical
+// form.
 func computeRequestedAudience(form map[string][]string, subject TokenView) []string {
 	out := make([]string, 0, 4)
 	for _, v := range form["audience"] {
 		if v != "" {
-			out = append(out, normaliseResource(v))
+			out = append(out, resourceindicator.NormalizeLabel(v))
 		}
 	}
 	for _, v := range form["resource"] {
 		if v != "" {
-			out = append(out, normaliseResource(v))
+			out = append(out, resourceindicator.NormalizeLabel(v))
 		}
 	}
 	if len(out) > 0 {
@@ -674,7 +693,7 @@ func computeRequestedAudience(form map[string][]string, subject TokenView) []str
 	if len(subject.Audience) > 0 {
 		fallback := make([]string, 0, len(subject.Audience))
 		for _, v := range subject.Audience {
-			fallback = append(fallback, normaliseResource(v))
+			fallback = append(fallback, resourceindicator.NormalizeLabel(v))
 		}
 		return dedupe(fallback)
 	}
@@ -719,13 +738,13 @@ func applyDecision(d *Decision, requestedScope, requestedAudience []string, defa
 }
 
 // audienceAllowed reports whether every entry of want appears in the
-// client's Resources allowlist. Both sides are normalised per
-// RFC 8707 §2 before the comparison so a client registering
+// client's Resources allowlist, under the OP-wide equality policy
+// ([resourceindicator.ContainsLabel]): a client registering
 // "https://api.example/" matches a request indicator
-// "HTTPS://API.EXAMPLE/" — the canonical form is the equality test.
-// An empty want vacuously passes; an empty client.Resources rejects
-// every non-empty want (clients that want token-exchange-issuable
-// audiences MUST register them explicitly).
+// "HTTPS://API.EXAMPLE/", and a value carrying a fragment or userinfo
+// matches nothing at all. An empty want vacuously passes; an empty
+// client.Resources rejects every non-empty want (clients that want
+// token-exchange-issuable audiences MUST register them explicitly).
 func audienceAllowed(want []string, client *store.Client) bool {
 	if len(want) == 0 {
 		return true
@@ -733,12 +752,8 @@ func audienceAllowed(want []string, client *store.Client) bool {
 	if client == nil || len(client.Resources) == 0 {
 		return false
 	}
-	idx := make(map[string]struct{}, len(client.Resources))
-	for _, r := range client.Resources {
-		idx[normaliseResource(r)] = struct{}{}
-	}
 	for _, v := range want {
-		if _, ok := idx[normaliseResource(v)]; !ok {
+		if !resourceindicator.ContainsLabel(client.Resources, v) {
 			return false
 		}
 	}

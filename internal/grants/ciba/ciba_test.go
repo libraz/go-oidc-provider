@@ -148,6 +148,77 @@ func TestAuthorize_MTLSBindingMatch(t *testing.T) {
 	}
 }
 
+// TestAuthorize_DualBindingANDEvaluated pins the AND evaluation across
+// every confirmation method a record committed to. A record carrying
+// both a DPoP thumbprint and an mTLS thumbprint must not redeem on a
+// poll that satisfies only one of them: otherwise a holder of the
+// auth_req_id plus the DPoP key would receive a token stamped with a
+// cnf.x5t#S256 the OP never re-verified.
+func TestAuthorize_DualBindingANDEvaluated(t *testing.T) {
+	t.Parallel()
+
+	newDualRecord := func() *store.CIBARequest {
+		rec := makeRecord(store.CIBARequestStatusApproved)
+		rec.DPoPJKT = "jkt-device"
+		rec.MTLSCertS256 = "x5t-device"
+		return rec
+	}
+
+	t.Run("cert mismatch is refused", func(t *testing.T) {
+		t.Parallel()
+		_, err := cgrant.Authorize(cgrant.AuthorizeInput{
+			Client:                makeClient(),
+			Record:                newDualRecord(),
+			PresentedDPoPJKT:      "jkt-device",
+			PresentedMTLSCertS256: "x5t-attacker",
+		})
+		if !errors.Is(err, cgrant.ErrCnfBindingMismatch) {
+			t.Errorf("got %v, want ErrCnfBindingMismatch", err)
+		}
+	})
+
+	t.Run("cert absent is refused", func(t *testing.T) {
+		t.Parallel()
+		_, err := cgrant.Authorize(cgrant.AuthorizeInput{
+			Client:           makeClient(),
+			Record:           newDualRecord(),
+			PresentedDPoPJKT: "jkt-device",
+		})
+		if !errors.Is(err, cgrant.ErrCnfBindingMissing) {
+			t.Errorf("got %v, want ErrCnfBindingMissing", err)
+		}
+	})
+
+	t.Run("dpop mismatch is refused", func(t *testing.T) {
+		t.Parallel()
+		_, err := cgrant.Authorize(cgrant.AuthorizeInput{
+			Client:                makeClient(),
+			Record:                newDualRecord(),
+			PresentedDPoPJKT:      "jkt-attacker",
+			PresentedMTLSCertS256: "x5t-device",
+		})
+		if !errors.Is(err, cgrant.ErrCnfBindingMismatch) {
+			t.Errorf("got %v, want ErrCnfBindingMismatch", err)
+		}
+	})
+
+	t.Run("both matching succeeds", func(t *testing.T) {
+		t.Parallel()
+		got, err := cgrant.Authorize(cgrant.AuthorizeInput{
+			Client:                makeClient(),
+			Record:                newDualRecord(),
+			PresentedDPoPJKT:      "jkt-device",
+			PresentedMTLSCertS256: "x5t-device",
+		})
+		if err != nil {
+			t.Fatalf("Authorize: %v", err)
+		}
+		if got.SenderConstraint != "dpop+mtls" {
+			t.Errorf("SenderConstraint = %q, want dpop+mtls", got.SenderConstraint)
+		}
+	})
+}
+
 func TestAuthorize_ScopeSubset(t *testing.T) {
 	t.Parallel()
 	rec := makeRecord(store.CIBARequestStatusApproved)

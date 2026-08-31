@@ -249,18 +249,27 @@ type CustomGrantResponse struct {
 	// projected again, AuthTime is replayed onto refresh-derived
 	// id_tokens, a single Audience entry is preserved as the RFC 8707
 	// resource binding, and BoundAccessToken.ExtraClaims are copied to
-	// the next JWT access token. If both Subject and
-	// BoundAccessToken.Subject are empty, the OP drops the refresh token
-	// and emits the refresh-dropped audit event rather than failing the
-	// token response.
+	// the next JWT access token.
 	//
-	// Issuance is gated by the OP: it is honoured only when the
-	// client is registered for the refresh_token grant and the grant
-	// is refresh-eligible (the device-code and client-credentials
-	// shapes are not, per RFC 8628 / RFC 6749 §4.4.3). A request for
-	// refresh on an ineligible grant is not an error — the refresh
-	// token is dropped and the consent/refresh-dropped audit event
-	// fires.
+	// Issuance is gated by the OP, and every gate drops the credential
+	// rather than failing the response — the access token and id_token
+	// are still returned, with the refresh_token field absent and a
+	// refresh-dropped audit event carrying the reason. The gates are:
+	//
+	//   - the Provider serves the refresh_token grant at all
+	//     ([WithGrants]); a Provider that does not would reject the
+	//     issued credential with unsupported_grant_type at redemption;
+	//   - the client is registered for the refresh_token grant;
+	//   - the response resolves a subject, from Subject or
+	//     BoundAccessToken.Subject;
+	//   - the response carries a Scope, which every refresh chain needs
+	//     to replay onto its rotations;
+	//   - the response names at most one Audience entry, because
+	//     RFC 8707 §2.2 pins one resource indicator per chain.
+	//
+	// The scope preconditions the built-in grants apply (OIDC Core 1.0
+	// §11 openid / offline_access) deliberately do not: a delegation
+	// grant legitimately issues refresh tokens with no OIDC scope.
 	//
 	// Stable since v1.0.
 	IssueRefreshToken bool
@@ -319,6 +328,16 @@ type CustomGrantResponse struct {
 // claims; the OP fills iss / sub / aud / exp / iat / jti / scope and
 // (when the request carried a verified DPoP proof or mTLS leaf cert)
 // cnf.jkt / cnf.x5t#S256.
+//
+// The token is always an RFC 9068 JWT, including under
+// [WithAccessTokenFormat] ([store.AccessTokenFormatOpaque]) and
+// [WithAccessTokenFormatPerAudience]. Those options govern the grants
+// the OP implements itself; a bound token states claims and an
+// audience set that the opaque shadow row cannot carry, so minting it
+// opaque would silently drop them. An embedder who needs the opaque
+// shape for a custom grant mints the value in the handler and returns
+// it on [CustomGrantResponse.AccessToken], backed by its own
+// introspection.
 //
 // Use this when:
 //   - your handler needs no out-of-band signing key,
@@ -440,12 +459,19 @@ func (a customGrantAdapter) Handle(ctx context.Context, req customgrant.Request)
 		AccessToken:       resp.AccessToken,
 		AccessTokenTTL:    resp.AccessTokenTTL,
 		IssueRefreshToken: resp.IssueRefreshToken,
-		IDToken:           resp.IDToken,
-		Subject:           string(resp.Subject),
-		AuthTime:          resp.AuthTime,
-		Scope:             append([]string(nil), resp.Scope...),
-		Audience:          append([]string(nil), resp.Audience...),
-		ExtraClaims:       cloneClaims(resp.ExtraClaims),
+		// The public surface has no id_token opt-in: an embedder-supplied
+		// handler states the decision through Scope, and "openid in the
+		// granted scope means the OP signs an id_token" is the documented
+		// contract of [CustomGrantResponse]. The internal flag exists for
+		// handlers the OP ships itself (token exchange), whose policy seam
+		// can decline the token independently of scope.
+		IssueIDToken: true,
+		IDToken:      resp.IDToken,
+		Subject:      string(resp.Subject),
+		AuthTime:     resp.AuthTime,
+		Scope:        append([]string(nil), resp.Scope...),
+		Audience:     append([]string(nil), resp.Audience...),
+		ExtraClaims:  cloneClaims(resp.ExtraClaims),
 	}
 	if resp.BoundAccessToken != nil {
 		out.BoundAccessToken = &customgrant.BoundAccessToken{

@@ -114,8 +114,12 @@ func (f *fixture) confidentialClientFixture(tb testing.TB) (*store.Client, strin
 		tb.Fatalf("Argon2id.Hash: %v", err)
 	}
 	client := f.prov.RegisterClient(tb, testkit.ClientFixture{
-		ID:                      "client-conf",
-		SecretHash:              hash,
+		ID:         "client-conf",
+		SecretHash: hash,
+		// offline_access joins the testkit default set because the refresh
+		// suites seed chains bound to it, and the token endpoint re-applies
+		// the client's registered Scopes to every set it issues against.
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
 		TokenEndpointAuthMethod: "client_secret_basic",
 	})
 	return client, secret

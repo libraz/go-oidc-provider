@@ -7,14 +7,13 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
-	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
-	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/internal/userinfo/userclaims"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -238,70 +237,15 @@ func revokeChainForCode(ctx context.Context, deps Deps, code, replayGrantID stri
 	if grantID == "" {
 		return
 	}
-	// Revoke access tokens first so the userinfo / introspection paths
-	// reject any AT a sibling refresh might mint racing the cascade.
-	// AT first, RT second: a refresh-grant racing the revocation can
-	// still mint an AT, but the mint-refusal check on the refresh path
-	// (under RevocationStrategyGrantTombstone) closes that window, and
-	// under RevocationStrategyJTIRegistry the AT also passes through
-	// Register which is a fresh row, leaving the next refresh attempt
-	// blocked once the RT half of the cascade lands.
-	revokeJWTAccessTokensForGrant(ctx, deps, grantID)
-	// Mirror the cascade onto the opaque-AT substore. The substore is
-	// nil for embedders who stay on the JWT-only default; calling
-	// RevokeByGrant on a nil substore would panic, so guard the call.
-	// The order is JWT registry → opaque store → refresh chain; each
-	// substore is idempotent so the cascade is order-independent, but we
-	// keep the symmetric ordering so log lines / tx audit trails stay
-	// predictable.
-	if deps.OpaqueAccessTokens != nil {
-		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
-	}
-	// RevokeByGrant walks the refresh-token store by GrantID and stamps
-	// every matching record. Implementations are expected to be silent
-	// when no record matches (a freshly-replayed code may not have
-	// produced a refresh token at all).
-	_ = deps.RefreshTokens.RevokeByGrant(ctx, grantID)
-}
-
-// revokeJWTAccessTokensForGrant runs the JWT-AT half of the
-// code-replay cascade against the configured
-// [Deps.RevocationStrategy]. The function is a strategy dispatcher:
-//
-//   - [store.RevocationStrategyJTIRegistry] preserves the per-JTI
-//     behaviour and flips Revoked on every per-AT shadow row.
-//   - [store.RevocationStrategyGrantTombstone] writes a single
-//     [store.GrantTombstone]. The tombstone's RevokedAt is
-//     stamped at the wall-clock instant the cascade runs and the
-//     ExpiresAt outlives the longest possible JWT AT under the grant
-//     (now + AccessTokenTTL + 5m grace) so a verifier consulting
-//     IsRevoked rejects every AT issued before the cascade until the
-//     tombstone is GC'd.
-//   - [store.RevocationStrategyNone] is a no-op; JWT ATs live until exp.
-//
-// All branches swallow store errors: the caller still emits
-// invalid_grant on the replay path, and the next /token request hits
-// the same cascade so a transient store fault recovers. Logging the
-// failure is the OP's responsibility; the tokenendpoint package does
-// not own a slog logger today, so we leave the failure observable
-// only through the audit emitter (handled by the caller).
-func revokeJWTAccessTokensForGrant(ctx context.Context, deps Deps, grantID string) {
-	if err := endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
-		AccessTokens:       deps.AccessTokens,
-		GrantRevocations:   deps.GrantRevocations,
-		RevocationStrategy: deps.RevocationStrategy,
-	}, grantID, deps.now().UTC(), deps.AccessTokenTTL+5*time.Minute, "code_replay"); err != nil {
-		deps.audit().Emit(ctx, audit.Event{
-			Name:    auditTokenRevokeFailed,
-			Level:   audit.LevelWarn,
-			Message: "access-token revoke cascade failed after authorization-code replay",
-			Extras: map[string]any{
-				"surface":  "code_replay_jwt_access_tokens",
-				"grant_id": grantID,
-				"err":      err.Error(),
-			},
-		})
-	}
+	// The teardown retires access tokens before refresh tokens: a
+	// refresh grant racing the revocation can still mint an AT, but the
+	// mint-refusal check on the refresh path (under
+	// RevocationStrategyGrantTombstone) closes that window, and under
+	// RevocationStrategyJTIRegistry the AT also passes through Register
+	// which is a fresh row, leaving the next refresh attempt blocked
+	// once the RT half of the cascade lands.
+	out := grantTeardown(deps, teardownReasonCodeReplay).Run(ctx, teardown.WholeGrant(grantID))
+	reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonCodeReplay, grantID)
 }
 
 // issueAuthCodeResponse mints the access token, optionally a refresh
@@ -369,46 +313,41 @@ func issueAuthCodeResponse(
 			Extra:       idTokenExtra,
 		})
 		if err != nil {
-			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID)
+			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
 		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
 		if err != nil {
-			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID)
+			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
 	}
-	refreshToken, err := maybeIssueRefreshToken(
-		ctx,
-		deps,
-		client,
-		exchanged.Subject,
-		exchanged.GrantID,
-		exchanged.Scope,
-		exchanged.Resource,
-		exchanged.Nonce,
-		binding,
-		store.RefreshOriginAuthCode,
-		false,
-		authCtx.withAuthorizationDetails(authorizationDetails),
-	)
+	refreshIn := builtinRefreshIssuance(deps, client)
+	refreshIn.Subject = exchanged.Subject
+	refreshIn.GrantID = exchanged.GrantID
+	refreshIn.Scope = exchanged.Scope
+	refreshIn.Resource = exchanged.Resource
+	refreshIn.Nonce = exchanged.Nonce
+	refreshIn.Binding = binding
+	refreshIn.Origin = store.RefreshOriginAuthCode
+	refreshIn.AuthCtx = authCtx.withAuthorizationDetails(authorizationDetails)
+	refreshToken, err := issueRefreshToken(ctx, deps, refreshIn)
 	if err != nil {
-		revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID)
+		revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	if !enforceAuthCodeGrantTombstoneMintRefusal(ctx, w, deps, exchanged.GrantID, exchanged.IssuedAt) {
-		// The access token was already minted — and, for the opaque token
-		// format, persisted — before the tombstone refusal fired. Revoke
-		// the opaque-AT row too (not just the refresh token) so a refused
-		// mint does not leave an orphaned, still-valid access token that
-		// lingers until TTL/GC.
-		revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID)
-		if refreshToken != "" {
-			_ = deps.RefreshTokens.RevokeByGrant(ctx, exchanged.GrantID)
-		}
+		// The grant carries an active tombstone, so the teardown is
+		// grant-wide rather than scoped to this exchange: every credential
+		// under a revoked grant has to stop working, including the access
+		// token this exchange had already minted — and, for the opaque
+		// format, persisted — before the refusal fired.
+		out := grantTeardown(deps, teardownReasonGrantTombstoned).
+			Run(ctx, teardown.WholeGrant(exchanged.GrantID))
+		reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonGrantTombstoned, exchanged.GrantID)
 		return
 	}
 	writeSuccess(w, successResponse{
@@ -423,17 +362,26 @@ func issueAuthCodeResponse(
 	})
 }
 
-// revokeOrphanedOpaqueAccessToken revokes the opaque access-token row minted
-// for grantID when the auth-code exchange fails after the row was persisted
-// but before the token value reached the client. The raw token is never
-// written to the response (or logged) on these error paths, so no party holds
-// a usable bearer; this only stops a dead, still-valid row from lingering
-// until TTL/GC. The store is nil for JWT-only embedders; guard the call.
-// Idempotent when no row matches.
-func revokeOrphanedOpaqueAccessToken(ctx context.Context, deps Deps, grantID string) {
-	if deps.OpaqueAccessTokens != nil {
-		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
-	}
+// revokeOrphanedOpaqueAccessToken revokes the opaque access-token row this
+// exchange just minted, when the auth-code exchange fails after the row was
+// persisted but before the token value reached the client. The raw token is
+// never written to the response (or logged) on these error paths, so no party
+// holds a usable bearer; this only stops a dead, still-valid row from
+// lingering until TTL/GC.
+//
+// The scope is the token, not the grant. [reuseOrCreateGrant] hands the same
+// GrantID to every exchange of a (subject, client) pair, so a grant-wide
+// retirement here would revoke the live access tokens of earlier successful
+// exchanges — a transient id_token signing or JWE fault would log the user
+// out of every resource server rather than failing one refresh.
+//
+// accessToken is empty on paths that failed before the mint; the teardown
+// then has nothing to retire. The substore is nil for JWT-only embedders and
+// RevokeByID is idempotent when no row matches, so both collapse to a no-op.
+func revokeOrphanedOpaqueAccessToken(ctx context.Context, deps Deps, grantID, accessToken string) {
+	out := grantTeardown(deps, teardownReasonOrphanedMint).
+		Run(ctx, teardown.IssuedCredentials(accessToken, ""))
+	reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonOrphanedMint, grantID)
 }
 
 // enforceAuthCodeGrantTombstoneMintRefusal refuses to mint tokens when the
@@ -551,6 +499,9 @@ func projectPublicSubject(ctx context.Context, deps Deps, raw string, client *st
 // works); the JWT registry stores the empty string verbatim and
 // RevokeByGrant treats the empty grant as a no-op. The opaque path
 // stores the same empty string on the row's GrantID column.
+//
+// The optional [accessTokenOverrides] carries the per-request mint
+// parameters only some grants state; see the type's field docs.
 func mintAccessToken(
 	ctx context.Context,
 	deps Deps,
@@ -561,10 +512,17 @@ func mintAccessToken(
 	authTime int64,
 	binding tokenBinding,
 	authorizationDetails []map[string]any,
-	extraClaims ...map[string]any,
+	overrides ...accessTokenOverrides,
 ) (string, error) {
+	over := accessTokenOverrides{}
+	if len(overrides) > 0 {
+		over = overrides[0]
+	}
+	if over.TTL <= 0 {
+		over.TTL = deps.AccessTokenTTL
+	}
 	format := store.AccessTokenFormatJWT
-	if deps.AccessTokenFormatFor != nil {
+	if !over.ForceJWT && deps.AccessTokenFormatFor != nil {
 		format = deps.AccessTokenFormatFor(resource)
 	}
 	switch format {
@@ -572,16 +530,52 @@ func mintAccessToken(
 		// The opaque path carries no claims; introspection / userinfo
 		// echo authorization_details by reading the grant via the shadow
 		// row's GrantID, so the details are not threaded onto the token.
-		return mintOpaqueAccessToken(ctx, deps, rawSubject, clientID, grantID, scope, resource, now, authTime, binding)
+		return mintOpaqueAccessToken(ctx, deps, rawSubject, clientID, grantID, scope, resource, now, authTime, binding, over)
 	case store.AccessTokenFormatJWT:
 		fallthrough
 	default:
-		var extra map[string]any
-		if len(extraClaims) > 0 {
-			extra = extraClaims[0]
-		}
-		return mintJWTAccessToken(ctx, deps, rawSubject, publicSubject, clientID, grantID, scope, resource, now, authTime, binding, authorizationDetails, extra)
+		return mintJWTAccessToken(ctx, deps, rawSubject, publicSubject, clientID, grantID, scope, resource, now, authTime, binding, authorizationDetails, over)
 	}
+}
+
+// accessTokenOverrides carries the mint parameters a grant may state
+// per request. The zero value is what the four built-in grants pass:
+// the OP's configured access-token TTL, the format the policy resolves
+// for the request's resource indicator, the audience derived from that
+// same indicator, and no handler-supplied claims.
+type accessTokenOverrides struct {
+	// TTL is the lifetime stamped on the token and, for the opaque
+	// shape, on its shadow row. Zero or negative falls back to
+	// [Deps.AccessTokenTTL]. A grant that advertises a shorter
+	// expires_in than the OP's global lifetime (a custom grant whose
+	// handler bounded the credential to the material it was derived
+	// from) MUST state it here, or the minted token would outlive the
+	// lifetime the client was told about.
+	TTL time.Duration
+
+	// Audience replaces the single resource-indicator audience on the
+	// JWT shape. It exists for the custom-grant bound mint, which is
+	// the only issuance path whose audience is a set rather than one
+	// RFC 8707 resource indicator. The opaque shape ignores it: the
+	// shadow row carries exactly one audience column, so a caller
+	// stating an audience set pins [ForceJWT] as well.
+	Audience []string
+
+	// Extra are the handler-supplied private claims merged onto the
+	// JWT shape. The opaque shape drops them — its row carries no
+	// claim map — which is why a caller whose claims are load-bearing
+	// pins [ForceJWT].
+	Extra map[string]any
+
+	// ForceJWT pins the wire shape to the RFC 9068 JWT form regardless
+	// of what [Deps.AccessTokenFormatFor] resolves for the request.
+	// Only the custom-grant bound mint sets it: the handler states its
+	// claims (a token-exchange act chain among them) and its audience
+	// set on the response, and neither survives the opaque shadow row,
+	// so an opaque deployment would silently hand the resource server
+	// a token stripped of the delegation record. The exclusion is
+	// documented on op.WithAccessTokenFormat and op.BoundAccessToken.
+	ForceJWT bool
 }
 
 // mintJWTAccessToken signs the JWT-shaped access token (RFC 9068) and,
@@ -622,21 +616,24 @@ func mintJWTAccessToken(
 	authTime int64,
 	binding tokenBinding,
 	authorizationDetails []map[string]any,
-	extraClaims map[string]any,
+	over accessTokenOverrides,
 ) (string, error) {
 	jti, err := newJTI()
 	if err != nil {
 		return "", err
 	}
-	expiresAt := tokens.ExpiresIn(now, deps.AccessTokenTTL)
-	audience := deps.Issuer
-	if resource != "" {
-		audience = resource
+	expiresAt := tokens.ExpiresIn(now, over.TTL)
+	audience := []string{deps.Issuer}
+	switch {
+	case len(over.Audience) > 0:
+		audience = append([]string(nil), over.Audience...)
+	case resource != "":
+		audience = []string{resource}
 	}
 	claims := tokens.AccessTokenClaims{
 		Issuer:               deps.Issuer,
 		Subject:              publicSubject,
-		Audience:             []string{audience},
+		Audience:             audience,
 		ClientID:             clientID,
 		IssuedAt:             now.Unix(),
 		ExpiresAt:            expiresAt,
@@ -646,7 +643,7 @@ func mintJWTAccessToken(
 		Confirmation:         binding.confirmation(),
 		GrantID:              grantID,
 		AuthorizationDetails: authorizationDetails,
-		Extra:                cloneClaimsMap(extraClaims),
+		Extra:                cloneClaimsMap(over.Extra),
 	}
 	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
 	if err != nil {
@@ -688,6 +685,7 @@ func mintOpaqueAccessToken(
 	now time.Time,
 	authTime int64,
 	binding tokenBinding,
+	over accessTokenOverrides,
 ) (string, error) {
 	if deps.OpaqueAccessTokens == nil {
 		// The op.New validator rejects this configuration at
@@ -700,7 +698,7 @@ func mintOpaqueAccessToken(
 	if err != nil {
 		return "", err
 	}
-	expiresAt := tokens.ExpiresIn(now, deps.AccessTokenTTL)
+	expiresAt := tokens.ExpiresIn(now, over.TTL)
 	audience := deps.Issuer
 	if resource != "" {
 		audience = resource
@@ -818,76 +816,18 @@ func idTokenACRForClaims(acr string, req *authorize.ClaimsRequest) string {
 	return ""
 }
 
-// maybeIssueRefreshToken issues and persists a refresh token when the
-// client and granted scope satisfy [clientPermitsRefresh]. Returns the
-// empty string when no refresh token is issued; that is a valid
-// successful response (e.g. a non-OIDC client or a public client that
-// did not request "openid"). The binding is propagated onto the
-// persisted record so refresh-time enforcement can require a
-// matching proof / cert.
-func maybeIssueRefreshToken(
-	ctx context.Context,
-	deps Deps,
-	client *store.Client,
-	subject, grantID string,
-	scope []string,
-	resource, nonce string,
-	binding tokenBinding,
-	origin store.RefreshTokenOrigin,
-	subjectPublic bool,
-	authCtx authContext,
-) (string, error) {
-	if !deps.refreshIssuanceEnabled(client) {
-		return "", nil
-	}
-	if !clientPermitsRefresh(client, scope, deps.refreshPolicy()) {
-		return "", nil
-	}
-	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
-		Store: deps.RefreshTokens,
-		Clock: deps.clockFunc(),
-		TTL:   pickRefreshTokenTTL(deps, scope),
-	})
-	if err != nil {
-		return "", err
-	}
-	token, err := issuer.Issue(ctx, refresh.IssueInput{
-		ClientID:             client.ID,
-		Subject:              subject,
-		GrantID:              grantID,
-		Scope:                append([]string(nil), scope...),
-		Resource:             resource,
-		Origin:               origin,
-		SubjectPublic:        subjectPublic,
-		AuthTime:             timeFromUnix(authCtx.AuthTime),
-		ACR:                  authCtx.ACR,
-		AMR:                  append([]string(nil), authCtx.AMR...),
-		AuthorizationDetails: cloneAuthorizationDetails(authCtx.AuthorizationDetails),
-		Nonce:                nonce,
-		DPoPJKT:              refreshDPoPJKT(client, binding.DPoPJKT),
-		MTLSCertThumbprint:   binding.MTLSThumbprint,
-	})
-	if err != nil {
-		return "", err
-	}
-	deps.audit().Emit(ctx, audit.Event{
-		Name:     auditTokenIssued,
-		Level:    audit.LevelInfo,
-		Message:  "refresh token issued",
-		ActorID:  subject,
-		ClientID: client.ID,
-		Extras: map[string]any{
-			"grant_id":       grantID,
-			"offline_access": oidcscope.ContainsOfflineAccess(scope),
-			"ttl_bucket":     ttlBucketFor(deps, scope),
-			// The origin rides as the typed store value, not as a string:
-			// it is the same value persisted on the chain, and consumers
-			// that project it onto a label resolve it by type so no
-			// request-derived string can stand in for a grant.
-			auditevent.ExtraRefreshOrigin: origin,
+// builtinRefreshIssuance returns the [refreshIssuance] shape the four
+// built-in grants share: the OIDC Core 1.0 §11 scope predicate applies,
+// and a response that does not qualify drops the credential silently
+// because "this grant carries no offline access" is an ordinary
+// outcome rather than something an operator needs to see.
+func builtinRefreshIssuance(deps Deps, client *store.Client) refreshIssuance {
+	return refreshIssuance{
+		Client: client,
+		ScopeEligible: func(scope []string) bool {
+			return clientPermitsRefresh(client, scope, deps.refreshPolicy())
 		},
-	})
-	return token, nil
+	}
 }
 
 func requireAuthTimeForIDToken(client *store.Client, scope []string, authTime int64) error {
@@ -971,6 +911,12 @@ func lookupAuthContext(ctx context.Context, deps Deps, grantID string) authConte
 // value or that fail the spec's "value" / "values" constraint are
 // silently omitted, matching the project's "omit on absent" stance.
 //
+// Names resolve against [userclaims.Source], the same claim source
+// /userinfo resolves against, so a §5.5 request naming a claim in both
+// objects is answered identically in both — including the claims the
+// library synthesises from [store.User]'s own columns rather than from
+// its Claims map.
+//
 // The function returns nil for an empty request, no user lookup, or a
 // nil deps.UserStore so the caller can guard the Extra assignment
 // with a simple non-nil check.
@@ -990,6 +936,7 @@ func projectIDTokenClaims(
 	if err != nil || user == nil {
 		return nil
 	}
+	source := userclaims.Source(user)
 	out := map[string]any{}
 	for name, spec := range req.IDToken {
 		switch name {
@@ -1001,7 +948,7 @@ func projectIDTokenClaims(
 			// ACR policy seam; here we ignore it.
 			continue
 		}
-		v, ok := user.Claims[name]
+		v, ok := source[name]
 		if !ok {
 			continue
 		}

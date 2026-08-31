@@ -39,7 +39,7 @@ func (f faultyGrantRevocationStore) IsRevoked(context.Context, string, string, t
 
 func (f faultyGrantRevocationStore) GC(context.Context, time.Time) (int, error) { return 0, nil }
 
-func TestRevokeJWTAccessTokensForGrant_StoreFault_EmitsAudit(t *testing.T) {
+func TestRevokeChainForCode_JWTStoreFault_EmitsAudit(t *testing.T) {
 	t.Parallel()
 
 	const grantID = "grant-replay-audit-1"
@@ -50,11 +50,12 @@ func TestRevokeJWTAccessTokensForGrant_StoreFault_EmitsAudit(t *testing.T) {
 		GrantRevocations: faultyGrantRevocationStore{
 			err: errors.New("simulated grant revocation fault"),
 		},
+		RefreshTokens:      &captureRefreshStore{},
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 		AccessTokenTTL:     5 * time.Minute,
 	}
 
-	revokeJWTAccessTokensForGrant(context.Background(), deps, grantID)
+	revokeChainForCode(context.Background(), deps, "code-1", grantID)
 
 	if len(capture.events) != 1 {
 		t.Fatalf("events=%d want 1", len(capture.events))

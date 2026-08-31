@@ -3,8 +3,10 @@ package devicecode
 import (
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/grants/grantscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -133,8 +135,9 @@ type Authorized struct {
 	AuthTime time.Time
 
 	// SenderConstraint names the binding stamped on the eventual
-	// access token: "dpop", "mtls", or "bearer". The caller uses
-	// this to decide cnf claim shape and to populate the
+	// access token: "dpop", "mtls", "dpop+mtls" (record committed to
+	// both methods and the poll satisfied both), or "bearer". The
+	// caller uses this to decide cnf claim shape and to populate the
 	// device_code.token.issued audit extras.
 	SenderConstraint string
 }
@@ -147,8 +150,9 @@ type Authorized struct {
 //     surfaces the cause via the matching sentinel).
 //  3. The record must name a subject; an approval without one cannot
 //     certify anyone (ErrSubjectMissing).
-//  4. cnf binding presented at /token must match the binding the
-//     device committed to at /device_authorization. Empty matches
+//  4. Every cnf binding the device committed to at
+//     /device_authorization must be satisfied by the /token request;
+//     methods are evaluated independently and ANDed. Empty matches
 //     empty (bearer flow); a record-side binding without a request-
 //     side one is a silent downgrade attempt.
 //  5. The record's scope is the binding ceiling; Authorize re-checks
@@ -178,8 +182,8 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := requireScopeSubset(in.Record.Scope, in.Client.Scopes); err != nil {
-		return nil, err
+	if !grantscope.Subset(in.Record.Scope, in.Client.Scopes) {
+		return nil, ErrScopeForbidden
 	}
 	return &Authorized{
 		Scope:            slices.Clone(in.Record.Scope),
@@ -211,51 +215,43 @@ func mapStatusToError(s store.DeviceCodeStatus) error {
 
 // matchCnfBinding compares the binding stored on the record against
 // the one the polling client presented. It returns the binding
-// label ("dpop", "mtls", or "bearer") on success, [ErrCnfBindingMissing]
-// when the record requires a binding the request did not present,
-// and [ErrCnfBindingMismatch] when the labels differ or the
+// label ("dpop", "mtls", "dpop+mtls", or "bearer") on success,
+// [ErrCnfBindingMissing] when the record requires a binding the
+// request did not present, and [ErrCnfBindingMismatch] when the
 // thumbprints do not match.
+//
+// Every confirmation method the record committed to is evaluated
+// independently and all of them must hold (AND). RFC 7800 §3 permits
+// a record to carry several confirmation members, so stopping at the
+// first populated one would let a holder of the device_code plus one
+// matching key redeem a dually bound record without ever proving the
+// other method — and the issued token would still be stamped with the
+// cnf member the OP never re-verified.
 func matchCnfBinding(in AuthorizeInput) (string, error) {
-	switch {
-	case in.Record.DPoPJKT != "":
+	methods := make([]string, 0, 2)
+	if in.Record.DPoPJKT != "" {
 		if in.PresentedDPoPJKT == "" {
 			return "", ErrCnfBindingMissing
 		}
 		if in.PresentedDPoPJKT != in.Record.DPoPJKT {
 			return "", ErrCnfBindingMismatch
 		}
-		return "dpop", nil
-	case in.Record.MTLSCertS256 != "":
+		methods = append(methods, "dpop")
+	}
+	if in.Record.MTLSCertS256 != "" {
 		if in.PresentedMTLSCertS256 == "" {
 			return "", ErrCnfBindingMissing
 		}
 		if in.PresentedMTLSCertS256 != in.Record.MTLSCertS256 {
 			return "", ErrCnfBindingMismatch
 		}
-		return "mtls", nil
-	default:
+		methods = append(methods, "mtls")
+	}
+	if len(methods) == 0 {
 		// Bearer flow — record was unbound. The
 		// /device_authorization handler MUST have already
 		// rejected this combination under FAPI 2.0 baseline.
 		return "bearer", nil
 	}
-}
-
-// requireScopeSubset reports [ErrScopeForbidden] when granted is
-// not a subset of allowed. An empty granted set is a subset of any
-// allowed set; an empty allowed set rejects every non-empty grant.
-func requireScopeSubset(granted, allowed []string) error {
-	if len(granted) == 0 {
-		return nil
-	}
-	idx := make(map[string]struct{}, len(allowed))
-	for _, s := range allowed {
-		idx[s] = struct{}{}
-	}
-	for _, s := range granted {
-		if _, ok := idx[s]; !ok {
-			return ErrScopeForbidden
-		}
-	}
-	return nil
+	return strings.Join(methods, "+"), nil
 }

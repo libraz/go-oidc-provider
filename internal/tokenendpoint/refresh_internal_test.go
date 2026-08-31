@@ -5,12 +5,22 @@ import (
 	"time"
 )
 
-func TestRefreshChainTombstoneTTL_DefaultsWhenAccessTokenTTLUnset(t *testing.T) {
+func TestTombstoneRetention_DefaultsWhenAccessTokenTTLUnset(t *testing.T) {
 	t.Parallel()
 
-	got := refreshChainTombstoneTTL(Deps{})
-	want := defaultAccessTokenTTL + 5*time.Minute
+	got := tombstoneRetention(Deps{})
+	want := defaultAccessTokenTTL + tombstoneGrace
 	if got != want {
-		t.Fatalf("refreshChainTombstoneTTL=%v want %v", got, want)
+		t.Fatalf("tombstoneRetention=%v want %v", got, want)
+	}
+}
+
+func TestTombstoneRetention_AddsGraceToConfiguredTTL(t *testing.T) {
+	t.Parallel()
+
+	got := tombstoneRetention(Deps{AccessTokenTTL: 42 * time.Minute})
+	want := 42*time.Minute + tombstoneGrace
+	if got != want {
+		t.Fatalf("tombstoneRetention=%v want %v", got, want)
 	}
 }

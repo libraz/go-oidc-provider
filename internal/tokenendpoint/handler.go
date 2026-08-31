@@ -38,6 +38,7 @@ const (
 	auditTokenRefreshed                      = string(auditevent.AuditTokenRefreshed)
 	auditRefreshPriorAccessTokenRevokeFailed = string(auditevent.AuditRefreshPriorAccessTokenRevokeFailed)
 	auditTokenRevokeFailed                   = string(auditevent.AuditTokenRevokeFailed)
+	auditRefreshGrantRevokeFailed            = string(auditevent.AuditRefreshGrantRevokeFailed)
 	auditCodeConsumed                        = string(auditevent.AuditCodeConsumed)
 	auditCodeReplayDetected                  = string(auditevent.AuditCodeReplayDetected)
 	auditClientAuthnFailure                  = clientauthhttp.EventClientAuthnFailure
@@ -236,10 +237,13 @@ type Deps struct {
 	RefreshTokenOfflineTTL time.Duration
 
 	// RefreshTokenGraceTTL bounds the RFC 9700 §2.2.2 grace window
-	// during which a just-rotated refresh token is still accepted.
-	// Zero or negative falls back to [refresh.GraceTTLDefault]
-	// (currently 60s). The token endpoint forwards this verbatim to
-	// [refresh.ExchangerConfig.GraceTTL].
+	// during which a just-rotated refresh token is still accepted. The
+	// token endpoint forwards this verbatim to
+	// [refresh.ExchangerConfig.GraceTTL], whose three sentinels apply:
+	// zero falls back to [refresh.GraceTTLDefault] (currently 60s),
+	// positive values are used as the explicit window, and negative
+	// values disable the window entirely so any re-presentation of a
+	// consumed token is treated as a replay.
 	RefreshTokenGraceTTL time.Duration
 
 	// RefreshRetryEncryptionKeys contains the active and retiring 32-byte
@@ -751,7 +755,23 @@ func clientRegisteredForRefresh(c *store.Client) bool {
 // removing the grant stops an existing chain rather than only stopping
 // new ones.
 func (d *Deps) refreshIssuanceEnabled(c *store.Client) bool {
-	return d.grantEnabled(grantTypeRefreshToken) && clientRegisteredForRefresh(c)
+	return d.refreshIssuanceBlockedReason(c) == ""
+}
+
+// refreshIssuanceBlockedReason names the half of [refreshIssuanceEnabled]
+// that refuses issuance, or the empty string when neither does. Issuance
+// paths that audit the refusal report this value so the record separates
+// "the operator turned the grant off provider-wide" from "this client is
+// not registered for it".
+func (d *Deps) refreshIssuanceBlockedReason(c *store.Client) string {
+	switch {
+	case !d.grantEnabled(grantTypeRefreshToken):
+		return refreshDropProviderGrantDisabled
+	case !clientRegisteredForRefresh(c):
+		return refreshDropClientNotRegistered
+	default:
+		return ""
+	}
 }
 
 // pickRefreshTokenTTL returns the TTL the handler uses for a refresh

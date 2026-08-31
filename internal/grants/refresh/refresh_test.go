@@ -1263,71 +1263,32 @@ func TestExchange_Replay_EmitsReplayDetectedAuditEvent(t *testing.T) {
 	}
 }
 
-// stubGrantRevocationStore captures RevokeGrant invocations so tests
-// can assert the cascade ran the grant tombstone path. Other methods
-// are stubs that return safe defaults so the substore satisfies the
-// interface without coupling the test to behaviour it does not
-// exercise.
-type stubGrantRevocationStore struct {
-	mu     sync.Mutex
-	grants []store.GrantTombstone
-	err    error
-}
-
-func (s *stubGrantRevocationStore) RevokeGrant(_ context.Context, t store.GrantTombstone) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.err != nil {
-		return s.err
-	}
-	s.grants = append(s.grants, t)
-	return nil
-}
-
-func (s *stubGrantRevocationStore) RevokeJTI(_ context.Context, _ store.RevokedJTI) error {
-	return nil
-}
-
-func (s *stubGrantRevocationStore) IsRevoked(_ context.Context, _, _ string, _ time.Time) (bool, error) {
-	return false, nil
-}
-
-func (s *stubGrantRevocationStore) GC(_ context.Context, _ time.Time) (int, error) {
-	return 0, nil
-}
-
-func (s *stubGrantRevocationStore) snapshot() []store.GrantTombstone {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]store.GrantTombstone, len(s.grants))
-	copy(out, s.grants)
-	return out
-}
-
-// TestExchange_ChainRevoke_TombstonesGrant pins the cascade: a refresh
-// replay MUST cascade onto the grant-tombstone substore so JWT
-// access tokens descended from the chain are blocked at userinfo /
-// introspection / mint time. Without the cascade, the chain revoke
-// only kills refresh tokens; outstanding JWT access tokens remain
-// redeemable until natural expiry.
-func TestExchange_ChainRevoke_TombstonesGrant(t *testing.T) {
+// TestExchange_ChainRevoke_ReportsResolvedGrant pins the hand-off the
+// access-token half of the cascade depends on: the exchanger retires the
+// refresh chain and reports the grant it belonged to, so the caller can
+// retire the access tokens issued under the same grant (RFC 9700 §2.2.2
+// requires the tokens of a compromised grant to die, and the exchanger
+// holds neither the access-token substores nor the revocation strategy
+// that decides how a JWT access token stops verifying).
+//
+// An empty result would silently disarm that half, so the assertion is on
+// the value and not merely on the chain being revoked.
+func TestExchange_ChainRevoke_ReportsResolvedGrant(t *testing.T) {
 	t.Parallel()
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	cur := t0
 	clk := func() time.Time { return cur }
 	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
-	revs := &stubGrantRevocationStore{}
 
 	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
 	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
-		Store:             st,
-		Clock:             clk,
-		GrantRevocations:  revs,
-		GrantTombstoneTTL: time.Hour,
+		Store:              st,
+		Clock:              clk,
+		DeferReplayCascade: true,
 	})
 	if err != nil {
 		t.Fatalf("NewExchanger: %v", err)
@@ -1346,74 +1307,38 @@ func TestExchange_ChainRevoke_TombstonesGrant(t *testing.T) {
 		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
 	}
 
-	tombs := revs.snapshot()
-	if len(tombs) != 1 {
-		t.Fatalf("tombstones=%d want 1: %+v", len(tombs), tombs)
+	if got := exc.RevokeReplayedChain(ctx, root); got != "grant-1" {
+		t.Fatalf("RevokeReplayedChain grant=%q want %q", got, "grant-1")
 	}
-	if tombs[0].GrantID != "grant-1" {
-		t.Errorf("tombstone.GrantID=%q want %q", tombs[0].GrantID, "grant-1")
+
+	rec, err := st.Find(ctx, root)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
 	}
-	if tombs[0].RevokedAt.IsZero() {
-		t.Errorf("tombstone.RevokedAt is zero")
-	}
-	if tombs[0].ExpiresAt.IsZero() {
-		t.Errorf("tombstone.ExpiresAt is zero (configured TTL was 1h)")
-	}
-	if tombs[0].Reason == "" {
-		t.Errorf("tombstone.Reason is empty; want a non-empty cascade trigger")
+	if !rec.Revoked {
+		t.Error("replayed chain left unrevoked")
 	}
 }
 
-// TestExchange_ChainRevoke_GrantTombstoneFailure_EmitsAudit pins the
-// audit signal for the grant tombstone branch: when the
-// tombstone substore returns an error the exchanger MUST emit a
-// warn-level audit event so SOC tooling can spot the half-cascade.
-func TestExchange_ChainRevoke_GrantTombstoneFailure_EmitsAudit(t *testing.T) {
+// TestRevokeReplayedChain_UnresolvableRecord_ReportsNoGrant pins the other
+// direction: a presented value the store cannot resolve yields an empty
+// grant, which the caller is required to treat as "the grant is unknown"
+// rather than "there was nothing to retire".
+func TestRevokeReplayedChain_UnresolvableRecord_ReportsNoGrant(t *testing.T) {
 	t.Parallel()
 
-	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
-	cur := t0
-	clk := func() time.Time { return cur }
-	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
-	revs := &stubGrantRevocationStore{err: errors.New("synthetic tombstone fault")}
-	em := &recordingEmitter{}
-
-	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
-	if err != nil {
-		t.Fatalf("NewIssuer: %v", err)
-	}
+	clk := func() time.Time { return time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC) }
+	st := inmem.New().RefreshTokens()
 	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
-		Store:            st,
-		Clock:            clk,
-		Audit:            em,
-		GrantRevocations: revs,
+		Store:              st,
+		Clock:              clk,
+		DeferReplayCascade: true,
 	})
 	if err != nil {
 		t.Fatalf("NewExchanger: %v", err)
 	}
-	ctx := context.Background()
 
-	root, err := iss.Issue(ctx, goodIssue())
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
-	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
-		t.Fatalf("first Exchange: %v", err)
-	}
-	cur = cur.Add(refresh.GraceTTLDefault + time.Second)
-	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
-		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
-	}
-
-	events := em.snapshot()
-	var found bool
-	for _, ev := range events {
-		if ev.Name == "refresh.grant_revoke_failed" && ev.Level == audit.LevelWarn {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected refresh.grant_revoke_failed warn event, got %+v", events)
+	if got := exc.RevokeReplayedChain(context.Background(), "unknown-token"); got != "" {
+		t.Fatalf("RevokeReplayedChain grant=%q want empty", got)
 	}
 }

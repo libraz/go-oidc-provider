@@ -11,6 +11,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -267,7 +268,7 @@ func (h *Handler) lookupOpaqueAccessToken(ctx context.Context, raw string) (look
 	}
 	var aud []string
 	if rec.Audience != "" {
-		aud = []string{normaliseResource(rec.Audience)}
+		aud = []string{resourceindicator.NormalizeLabel(rec.Audience)}
 	}
 	return lookupResult{
 		view: TokenView{
@@ -369,7 +370,7 @@ func extractActFromRaw(raw json.RawMessage) map[string]any {
 	return out
 }
 
-// normaliseAudience applies the RFC 8707 §2 canonicalisation rule to
+// normaliseAudience applies the OP-wide audience-label normalisation to
 // every entry of aud so [TokenView.Audience] carries the same
 // normalised form the policy-facing godoc promises. A nil input
 // yields nil so callers do not need to special-case the empty set.
@@ -379,7 +380,7 @@ func normaliseAudience(aud []string) []string {
 	}
 	out := make([]string, len(aud))
 	for i, v := range aud {
-		out[i] = normaliseResource(v)
+		out[i] = resourceindicator.NormalizeLabel(v)
 	}
 	return out
 }

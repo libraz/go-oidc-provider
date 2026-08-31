@@ -142,10 +142,27 @@ type Response struct {
 	// the authoritative documentation and the issuance gate.
 	IssueRefreshToken bool
 
+	// IssueIDToken permits the wire layer to sign an id_token of its
+	// own. It is the id_token counterpart of [IssueRefreshToken]: the
+	// handler states the decision, the OP owns the credential. The
+	// wire layer mints only when this is true AND Scope contains
+	// "openid"; a false value withholds the token even from an
+	// openid-scoped response, which is how a handler that computed
+	// "no id_token for this request" (a token exchange whose policy
+	// declined one) keeps the act chain and cnf binding it did not
+	// build from leaking onto the wire in a bare token. Ignored when
+	// [IDToken] is non-empty — an embedder-signed token is returned
+	// verbatim.
+	//
+	// The op-side adapter sets it for every embedder-supplied handler
+	// so those keep the documented "openid in scope means id_token"
+	// contract of op.CustomGrantResponse.
+	IssueIDToken bool
+
 	// IDToken, when non-empty, is treated as embedder-signed and
-	// returned verbatim. When empty and Scope contains "openid", the
-	// wire layer signs a fresh id_token from ExtraClaims merged with
-	// the standard claim set.
+	// returned verbatim. When empty, [IssueIDToken] and Scope decide
+	// whether the wire layer signs a fresh id_token from ExtraClaims
+	// merged with the standard claim set.
 	IDToken string
 
 	// Subject is the value the wire layer writes into the id_token

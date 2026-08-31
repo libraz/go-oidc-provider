@@ -508,23 +508,18 @@ func prepareCIBAResponse(
 			return preparedCIBAResponse{}, err
 		}
 	}
-	refreshToken, err = maybeIssueRefreshToken(
-		ctx,
-		deps,
-		client,
-		authorized.Subject,
-		grantID,
-		authorized.Scope,
-		resource,
-		"",
-		binding,
-		store.RefreshOriginCIBA,
-		false,
-		authContext{
-			AuthTime: authTime,
-			ACR:      authorized.ACR,
-		},
-	)
+	refreshIn := builtinRefreshIssuance(deps, client)
+	refreshIn.Subject = authorized.Subject
+	refreshIn.GrantID = grantID
+	refreshIn.Scope = authorized.Scope
+	refreshIn.Resource = resource
+	refreshIn.Binding = binding
+	refreshIn.Origin = store.RefreshOriginCIBA
+	refreshIn.AuthCtx = authContext{
+		AuthTime: authTime,
+		ACR:      authorized.ACR,
+	}
+	refreshToken, err = issueRefreshToken(ctx, deps, refreshIn)
 	if err != nil {
 		return preparedCIBAResponse{}, err
 	}

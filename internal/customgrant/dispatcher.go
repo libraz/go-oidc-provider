@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -22,9 +23,12 @@ const (
 	AuditEventRequested = string(auditevent.AuditCustomGrantRequested)
 	AuditEventFailed    = string(auditevent.AuditCustomGrantFailed)
 	// AuditEventRefreshDropped fires when a response asked the OP to
-	// mint a refresh token but the client is not registered for the
-	// refresh_token grant. The rest of the response is still issued;
-	// the refresh token is silently omitted (RFC 6749 §6 gate).
+	// mint a refresh token but an issuance gate withheld it — the
+	// Provider does not serve the refresh_token grant, the client is
+	// not registered for it, or the response carries no material the OP
+	// can persist as a chain root. The rest of the response is still
+	// issued; the refresh token is omitted (RFC 6749 §6 gate) and the
+	// event's extras name the gate under "reason".
 	AuditEventRefreshDropped = string(auditevent.AuditCustomGrantRefreshDropped)
 )
 
@@ -236,6 +240,21 @@ type DispatchInput struct {
 // A non-sentinel error returned by the handler is propagated verbatim
 // so a handler that returns its own *op.Error retains the wire shape
 // it chose.
+//
+// Dispatch owns the audit emissions for the whole dispatch, and it is
+// the only place either event is raised:
+//
+//   - [AuditEventRequested] fires once at entry, for every attempt that
+//     reached a registered handler — successes and rejections alike. It
+//     is the attempt count, so "failure rate = failed / requested" is a
+//     ratio an operator can calibrate an alert on; emitting it only on
+//     success would make the denominator the success count and let the
+//     ratio exceed 1.
+//   - [AuditEventFailed] fires at most once, from the single exit
+//     below, whichever gate produced the rejection. A second emission
+//     from inside a gate would double-count that gate's failure class
+//     in oidc_custom_grant_events_total and break de-duplication keyed
+//     on (request_id, event).
 func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Response, error) {
 	if d == nil || len(d.handlers) == 0 {
 		return Response{}, ErrUnknownGrant
@@ -244,15 +263,27 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Response, 
 	if handler == nil {
 		return Response{}, ErrUnknownGrant
 	}
+	d.emitRequested(ctx, in)
+	resp, fail, err := d.attempt(ctx, handler, in)
+	if err != nil {
+		d.emitFailed(ctx, in, fail)
+		return Response{}, err
+	}
+	return resp, nil
+}
+
+// attempt runs the gates between entry and a validated response. Every
+// rejection names itself through the returned [failure] instead of
+// emitting, so the audit stream has exactly one record per dispatch
+// outcome regardless of which gate fired.
+func (d *Dispatcher) attempt(ctx context.Context, handler Handler, in DispatchInput) (Response, failure, error) {
 	if !clientGrantPermitted(in.Client, in.GrantType) {
-		d.emitFailed(ctx, in, "client_grant_not_permitted")
-		return Response{}, ErrClientGrantNotPermitted
+		return Response{}, failure{reason: "client_grant_not_permitted"}, ErrClientGrantNotPermitted
 	}
 	policy := handler.ParamPolicy()
 	form, err := filterForm(in.Form, policy)
 	if err != nil {
-		d.emitFailed(ctx, in, "form_policy_violation")
-		return Response{}, err
+		return Response{}, failure{reason: "form_policy_violation"}, err
 	}
 	req := Request{
 		Client:         in.Client,
@@ -266,17 +297,23 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Response, 
 	if cert, ok := in.MTLSCert.(*x509.Certificate); ok {
 		req.MTLSCert = cert
 	}
-	resp, err := d.invokeHandler(ctx, handler, req)
+	resp, fail, err := d.invokeHandler(ctx, handler, req)
 	if err != nil {
-		d.emitFailed(ctx, in, "handler_error")
-		return Response{}, err
+		return Response{}, fail, err
 	}
 	if err := d.validateResponse(in.Client, &resp); err != nil {
-		d.emitFailed(ctx, in, "response_invalid")
-		return Response{}, err
+		return Response{}, failure{reason: "response_invalid"}, err
 	}
-	d.emitRequested(ctx, in)
-	return resp, nil
+	return resp, failure{}, nil
+}
+
+// failure describes a rejected dispatch for the single audit emission
+// [Dispatch] makes. reason is a stable enum the dispatcher selects from
+// so SOC tooling can pre-aggregate without parsing free-form text;
+// extras carries whatever the individual gate has to add.
+type failure struct {
+	reason string
+	extras map[string]any
 }
 
 // lookup returns the handler registered for grantType, or nil when
@@ -292,31 +329,35 @@ func (d *Dispatcher) lookup(grantType string) Handler {
 	return nil
 }
 
-// invokeHandler runs the handler with panic recovery. A recovered
-// panic is converted into [ErrPanic]; the stack trace rides on the
-// audit emission via [emitFailed] so SOC tooling can correlate the
-// crash without leaking it to the wire response.
-func (d *Dispatcher) invokeHandler(ctx context.Context, h Handler, req Request) (resp Response, err error) {
+// invokeHandler runs the handler with panic recovery. A recovered panic
+// is converted into [ErrPanic] and described through the returned
+// [failure], which carries the panic value and the stack trace onto the
+// caller's single audit emission: the recover block deliberately emits
+// nothing itself, because the non-nil error it returns already earns a
+// record from [Dispatch] and a panic would otherwise be counted twice —
+// once at Error level with reason "panic" and once at Info level with
+// reason "handler_error".
+//
+// The stack rides on the audit record so SOC tooling can correlate the
+// crash without it ever reaching the wire response.
+func (d *Dispatcher) invokeHandler(ctx context.Context, h Handler, req Request) (resp Response, fail failure, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			stack := debug.Stack()
-			d.auditEmit.Emit(ctx, audit.Event{
-				Name:     AuditEventFailed,
-				Level:    audit.LevelError,
-				Message:  "custom grant handler panicked",
-				ClientID: clientIDOf(req.Client),
-				Extras: map[string]any{
-					"grant_type":  h.Name(),
-					"reason":      "panic",
+			fail = failure{
+				reason: "panic",
+				extras: map[string]any{
 					"panic_value": fmt.Sprint(rec),
-					"stack":       string(stack),
+					"stack":       string(debug.Stack()),
 				},
-			})
+			}
 			err = ErrPanic
 		}
 	}()
 	resp, err = h.Handle(ctx, req)
-	return resp, err
+	if err != nil {
+		return resp, failure{reason: "handler_error"}, err
+	}
+	return resp, failure{}, nil
 }
 
 // validateResponse enforces the post-handler invariants the OP
@@ -487,53 +528,29 @@ func scopeSubset(want, allowed []string) bool {
 }
 
 // audienceSubset reports whether every entry of want is present in
-// allowed. Both sides are normalised per RFC 8707 §2 (lowercase
-// scheme + host, trim trailing slash) before the comparison so a
-// handler that returns the canonical form for a resource indicator
-// the embedder registered with a trailing slash still satisfies the
-// allow-list. An empty want vacuously satisfies the check.
+// allowed, under the OP-wide equality policy
+// ([resourceindicator.ContainsLabel]): a handler that returns the
+// canonical form for a resource indicator the embedder registered with
+// a trailing slash (or a default port) still satisfies the allow-list,
+// and a value carrying a fragment or userinfo satisfies nothing. An
+// empty want vacuously satisfies the check.
 func audienceSubset(want, allowed []string) bool {
-	if len(want) == 0 {
-		return true
-	}
-	idx := make(map[string]struct{}, len(allowed))
-	for _, a := range allowed {
-		idx[normaliseAudience(a)] = struct{}{}
-	}
 	for _, aud := range want {
-		if _, ok := idx[normaliseAudience(aud)]; !ok {
+		if !resourceindicator.ContainsLabel(allowed, aud) {
 			return false
 		}
 	}
 	return true
 }
 
-// normaliseAudience applies the RFC 8707 §2 canonicalisation rule —
-// lowercase scheme + host, trim the trailing slash from the path.
-// Values that do not parse as a URL with both scheme and host are
-// returned verbatim so non-URL audience labels still compare strictly.
-func normaliseAudience(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return raw
-	}
-	u.Scheme = strings.ToLower(u.Scheme)
-	u.Host = strings.ToLower(u.Host)
-	u.Path = strings.TrimRight(u.Path, "/")
-	return u.String()
-}
-
-// emitRequested records a successful dispatch on the audit sink.
-// The record carries the grant_type and client_id but never the
-// raw form (which may include handler-private business data).
+// emitRequested records one dispatch attempt on the audit sink. The
+// record carries the grant_type and client_id but never the raw form
+// (which may include handler-private business data).
 func (d *Dispatcher) emitRequested(ctx context.Context, in DispatchInput) {
 	d.auditEmit.Emit(ctx, audit.Event{
 		Name:     AuditEventRequested,
 		Level:    audit.LevelInfo,
-		Message:  "custom grant dispatched",
+		Message:  "custom grant requested",
 		ClientID: clientIDOf(in.Client),
 		ActorID:  in.SubjectID,
 		Extras: map[string]any{
@@ -542,20 +559,30 @@ func (d *Dispatcher) emitRequested(ctx context.Context, in DispatchInput) {
 	})
 }
 
-// emitFailed records a dispatch rejection on the audit sink. The
-// reason string is a stable enum the dispatcher itself selects from
-// so SOC tooling can pre-aggregate without parsing free-form text.
-func (d *Dispatcher) emitFailed(ctx context.Context, in DispatchInput, reason string) {
+// emitFailed records a dispatch rejection on the audit sink. A panic is
+// reported at Error level; every other rejection is an ordinary
+// protocol outcome and stays at Info.
+func (d *Dispatcher) emitFailed(ctx context.Context, in DispatchInput, fail failure) {
+	extras := map[string]any{
+		"grant_type": in.GrantType,
+		"reason":     fail.reason,
+	}
+	for k, v := range fail.extras {
+		extras[k] = v
+	}
+	level := audit.LevelInfo
+	message := "custom grant rejected"
+	if fail.reason == "panic" {
+		level = audit.LevelError
+		message = "custom grant handler panicked"
+	}
 	d.auditEmit.Emit(ctx, audit.Event{
 		Name:     AuditEventFailed,
-		Level:    audit.LevelInfo,
-		Message:  "custom grant rejected",
+		Level:    level,
+		Message:  message,
 		ClientID: clientIDOf(in.Client),
 		ActorID:  in.SubjectID,
-		Extras: map[string]any{
-			"grant_type": in.GrantType,
-			"reason":     reason,
-		},
+		Extras:   extras,
 	})
 }
 

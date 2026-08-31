@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/internal/userinfo/userclaims"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -756,7 +757,7 @@ func assembleClaims(
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return nil, nil, false
 	}
-	source := userClaims(user)
+	source := userclaims.Source(user)
 	publicSubject, client, ok := projectResponseSubject(ctx, w, deps, rawSubject, claims.ClientID)
 	if !ok {
 		return nil, nil, false
@@ -893,34 +894,6 @@ func claimsRequestFromGrant(deps HandlerDeps, g *store.Grant) *authorize.ClaimsR
 		return nil
 	}
 	return authorize.DecodeClaimsFromGrant(g.Claims)
-}
-
-// userClaims returns the claim source map for u, defending against a
-// nil user (which the substore should never return alongside a nil
-// error, but library code is small enough to be paranoid).
-//
-// When [store.User.UpdatedAt] is non-zero and the embedder did not
-// already populate "updated_at" in [store.User.Claims], the timestamp
-// is projected as Unix-seconds so the "profile" scope's allow-list
-// can release it. The merge happens in a fresh map so the embedder's
-// backing store stays untouched (the contract says Claims is treated
-// read-only).
-func userClaims(u *store.User) map[string]any {
-	if u == nil {
-		return nil
-	}
-	if u.UpdatedAt.IsZero() {
-		return u.Claims
-	}
-	if _, has := u.Claims["updated_at"]; has {
-		return u.Claims
-	}
-	out := make(map[string]any, len(u.Claims)+1)
-	for k, v := range u.Claims {
-		out[k] = v
-	}
-	out["updated_at"] = u.UpdatedAt.Unix()
-	return out
 }
 
 // writeJSON encodes body with json.Marshal, stamps the cache and

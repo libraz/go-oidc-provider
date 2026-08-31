@@ -33,7 +33,6 @@ type longChainFixture struct {
 	exchanger *refresh.Exchanger
 	tokens    store.RefreshTokenStore
 	events    *recordingEmitter
-	grants    *stubGrantRevocationStore
 	stolen    string
 	tip       string
 }
@@ -45,18 +44,15 @@ func newLongChainFixture(tb testing.TB, depth int) longChainFixture {
 	clk := func() time.Time { return cur }
 	tokens := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 	events := &recordingEmitter{}
-	grants := &stubGrantRevocationStore{}
 
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{Store: tokens, Clock: clk, TTL: 24 * time.Hour})
 	if err != nil {
 		tb.Fatalf("NewIssuer: %v", err)
 	}
 	exchanger, err := refresh.NewExchanger(refresh.ExchangerConfig{
-		Store:             tokens,
-		Clock:             clk,
-		Audit:             events,
-		GrantRevocations:  grants,
-		GrantTombstoneTTL: time.Hour,
+		Store: tokens,
+		Clock: clk,
+		Audit: events,
 	})
 	if err != nil {
 		tb.Fatalf("NewExchanger: %v", err)
@@ -98,7 +94,6 @@ func newLongChainFixture(tb testing.TB, depth int) longChainFixture {
 		exchanger: exchanger,
 		tokens:    tokens,
 		events:    events,
-		grants:    grants,
 		stolen:    previous,
 		tip:       current,
 	}
@@ -135,10 +130,6 @@ func TestExchange_ReplayOnAChainTooLongToWalkStillKillsTheSuccessor(t *testing.T
 			chainDepthBeyondWalkLimit)
 	}
 
-	// Captured before the probe below, which is itself a replay and would
-	// otherwise contribute a second tombstone.
-	tombs := f.grants.snapshot()
-
 	rec, err := f.tokens.Find(ctx, f.tip)
 	if err != nil {
 		t.Fatalf("Find chain tip: %v", err)
@@ -160,13 +151,12 @@ func TestExchange_ReplayOnAChainTooLongToWalkStillKillsTheSuccessor(t *testing.T
 		t.Errorf("successor exchange err=%v want ErrTokenReplayed", err)
 	}
 
-	// The tombstone half of the cascade: JWT access tokens minted under the
-	// grant must be blocked at userinfo / introspection / mint time too.
-	if len(tombs) != 1 {
-		t.Fatalf("tombstones=%d want 1: %+v", len(tombs), tombs)
-	}
-	if tombs[0].GrantID != "grant-1" {
-		t.Errorf("tombstone.GrantID=%q want %q", tombs[0].GrantID, "grant-1")
+	// The access-token half of the cascade belongs to the caller, and it
+	// runs off the grant the exchanger resolved. A fallback that retired the
+	// history but reported no grant would leave every access token under it
+	// redeemable, so the depth path has to surface the grant too.
+	if got := f.exchanger.RevokeReplayedChain(ctx, f.stolen); got != "grant-1" {
+		t.Errorf("resolved grant=%q want %q", got, "grant-1")
 	}
 }
 

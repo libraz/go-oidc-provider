@@ -85,6 +85,12 @@ func TestOpenIDScopeOptional_RefreshExchangeRotatesPlainOAuthChain(t *testing.T)
 
 	f := newFixtureWithOptions(t, op.WithOpenIDScopeOptional())
 	client, secret := f.confidentialClientFixture(t)
+	// The rotation re-applies the client's registered Scopes, so the plain
+	// OAuth scope this chain carries has to be part of the registration.
+	client.Scopes = append(client.Scopes, "api:read")
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
 	const tokenID = "rt-plain-oauth" //nolint:gosec // opaque test fixture id, not a credential.
 	f.seedGrant(t, &store.Grant{
 		ID: "grant-plain-oauth-refresh", Subject: "user-1", ClientID: client.ID,
