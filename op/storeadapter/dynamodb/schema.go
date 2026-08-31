@@ -16,11 +16,11 @@ import (
 // the substore method that drives it.
 const (
 	indexBySubject       = "by_subject"
+	indexBySubjectClient = "by_subject_client"
 	indexByGrant         = "by_grant"
 	indexByClient        = "by_client"
 	indexByClientSubject = "by_client_subject"
 	indexByParent        = "by_parent"
-	indexByHandle        = "by_handle"
 	indexByUsername      = "by_username"
 	indexByChooserGroup  = "by_chooser_group"
 	indexByHash          = "by_hash"
@@ -35,7 +35,6 @@ const (
 	attrClientID      = "client_id"
 	attrGrantID       = "grant_id"
 	attrParentID      = "parent_id"
-	attrStoredHandle  = "stored_handle"
 	attrUserCode      = "user_code"
 	attrUsername      = "username"
 	attrChooserGroup  = "chooser_group"
@@ -162,25 +161,26 @@ func (s *Store) TableDefinitions() []TableDefinition {
 		},
 		{
 			// by_grant serves RevokeByGrant, by_client serves
-			// RevokeByClient, by_parent walks a rotation chain for
-			// RevokeChain, and by_handle serves the
-			// RefreshChainResolver extension.
+			// RevokeByClient, and by_parent walks a rotation chain for
+			// RevokeChain. A token is looked up by its handle through the
+			// primary key — the stored key is the handle's digest — so
+			// that access pattern needs no index of its own.
 			Name:      n.refreshes,
 			KeySchema: keySchema(attrPK),
 			AttributeDefinitions: stringAttr(
-				attrPK, attrGrantID, attrClientID, attrParentID, attrStoredHandle,
+				attrPK, attrGrantID, attrClientID, attrParentID,
 			),
 			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
 				gsi(indexByGrant, attrGrantID),
 				gsi(indexByClient, attrClientID),
 				gsi(indexByParent, attrParentID),
-				gsi(indexByHandle, attrStoredHandle),
 			},
 			TTLAttribute: attrTTL,
 		},
 		{
-			// by_subject serves ListBySubject and the paged
-			// ListClientIDsBySubject; subject_client is the composite
+			// by_subject_client serves ListBySubject on its partition key
+			// alone and the paged ListClientIDsBySubject through its
+			// client-id sort key; subject_client is the composite
 			// FindBySubjectClient lookup. by_client_subject provides the
 			// bounded subject lister for client deletion with subject as
 			// the sort key.
@@ -188,7 +188,7 @@ func (s *Store) TableDefinitions() []TableDefinition {
 			KeySchema:            keySchema(attrPK),
 			AttributeDefinitions: stringAttr(attrPK, attrSubject, attrSubjectClient, attrClientID),
 			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
-				gsi(indexBySubject, attrSubject),
+				gsiWithSort(indexBySubjectClient, attrSubject, attrClientID),
 				gsi(indexByClient, attrSubjectClient),
 				gsiWithSort(indexByClientSubject, attrClientID, attrSubject),
 			},

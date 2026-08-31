@@ -106,10 +106,14 @@ func newDynamoFactory(t *testing.T) contract.Factory {
 	client := newEmulatorClient(t)
 
 	var seq atomic.Uint64
-	clock := &fixedClock{now: contract.Reference}
 
 	return func(t *testing.T) contract.Backend {
 		t.Helper()
+		// One clock per sub-test: the harness advances it to reach the
+		// expired-after-the-fact states, and sub-tests run in parallel
+		// against the same emulator, so a shared clock would let one
+		// sub-test expire another's live records.
+		clock := &fixedClock{now: contract.Reference}
 		prefix := fmt.Sprintf("t%d_", seq.Add(1))
 		s, err := oidcdynamo.New(client,
 			oidcdynamo.WithTablePrefix(prefix),
@@ -125,6 +129,9 @@ func newDynamoFactory(t *testing.T) contract.Factory {
 		return contract.Backend{
 			Store: s,
 			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
 			SeedUser: func(t *testing.T, u *store.User, username string, passwordHash []byte) {
 				t.Helper()
 				if err := s.PutUserWithPassword(t.Context(), u, username, passwordHash); err != nil {

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/store/contract"
 	oidcdynamo "github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb"
@@ -272,8 +274,28 @@ func assertGrantLookupsRefused(t *testing.T, grants store.GrantStore, subject, c
 
 func newIsolatedStore(t *testing.T, prefix string) *oidcdynamo.Store {
 	t.Helper()
+	s, _ := newWrappedStore(t, prefix, nil)
+	return s
+}
+
+// newWrappedStore builds an isolated store whose requests pass through
+// wrap before reaching the emulator, so a test can count the calls the
+// adapter makes or fail one of them. It returns the raw client too: a
+// test that has to observe or seed the stored items themselves needs a
+// path that is not the adapter under test. A nil wrap leaves the client
+// untouched.
+func newWrappedStore(
+	t *testing.T,
+	prefix string,
+	wrap func(oidcdynamo.API) oidcdynamo.API,
+) (*oidcdynamo.Store, *awsdynamodb.Client) {
+	t.Helper()
 	client := newEmulatorClient(t)
-	s, err := oidcdynamo.New(client,
+	var api oidcdynamo.API = client
+	if wrap != nil {
+		api = wrap(client)
+	}
+	s, err := oidcdynamo.New(api,
 		oidcdynamo.WithTablePrefix(prefix),
 		oidcdynamo.WithClock(&fixedClock{now: contract.Reference}),
 	)
@@ -284,5 +306,5 @@ func newIsolatedStore(t *testing.T, prefix string) *oidcdynamo.Store {
 		t.Fatalf("CreateTables: %v", err)
 	}
 	disableEmulatorTTL(t, client, s)
-	return s
+	return s, client
 }

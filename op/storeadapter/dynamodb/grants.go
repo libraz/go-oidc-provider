@@ -3,7 +3,6 @@ package oidcdynamo
 import (
 	"context"
 	"errors"
-	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -81,9 +80,17 @@ func (s *grantStore) assertTxOpen() error {
 	return s.tx.assertOpen()
 }
 
-// FindBySubjectClient resolves the single grant a (subject, client)
-// pair holds. The composite attribute exists so this is one index
-// lookup rather than a subject-wide enumeration filtered in memory.
+// FindBySubjectClient resolves the grant a (subject, client) pair
+// holds. The composite attribute exists so this is one index lookup
+// rather than a subject-wide enumeration filtered in memory.
+//
+// A backend that retains superseded grants can hold several rows for the
+// pair, and the newest is the one the consent gate has to see:
+// [store.GrantStore.FindBySubjectClient] requires it, and returning any
+// other means a repeat authorization skips the prompt on a narrower
+// grant, or amends a superseded record instead of the live one. An index
+// scan has no order to rely on, so the newest is chosen here rather than
+// taken from whichever item the pages happened to yield first.
 func (s *grantStore) FindBySubjectClient(ctx context.Context, subject, clientID string) (*store.Grant, error) {
 	if err := s.assertTxOpen(); err != nil {
 		return nil, err
@@ -94,25 +101,49 @@ func (s *grantStore) FindBySubjectClient(ctx context.Context, subject, clientID 
 	if err != nil {
 		return nil, wrapErr("grants.FindBySubjectClient", err)
 	}
+	var newest *store.Grant
 	for _, match := range matches {
-		id := readS(match, attrPK)
-		if id == "" {
-			continue
-		}
-		// The index is eventually consistent; confirm against the item
-		// itself before handing a grant to a consent decision.
-		g, err := s.Find(ctx, id)
-		if errors.Is(err, store.ErrNotFound) {
-			continue
-		}
+		g, ok, err := s.resolveIndexMatch(ctx, match, subject, clientID)
 		if err != nil {
 			return nil, err
 		}
-		if g.Subject == subject && g.ClientID == clientID {
-			return g, nil
+		if !ok {
+			continue
+		}
+		if newest == nil || g.UpdatedAt.After(newest.UpdatedAt) {
+			newest = g
 		}
 	}
-	return nil, store.ErrNotFound
+	if newest == nil {
+		return nil, store.ErrNotFound
+	}
+	return newest, nil
+}
+
+// resolveIndexMatch re-reads one index hit by primary key and reports
+// whether it really belongs to the pair. The index is eventually
+// consistent, so a hit may name a row that has since moved or gone, and
+// a consent decision must be made against the item itself.
+func (s *grantStore) resolveIndexMatch(
+	ctx context.Context,
+	match item,
+	subject, clientID string,
+) (*store.Grant, bool, error) {
+	id := readS(match, attrPK)
+	if id == "" {
+		return nil, false, nil
+	}
+	g, err := s.Find(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if g.Subject != subject || g.ClientID != clientID {
+		return nil, false, nil
+	}
+	return g, true, nil
 }
 
 func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*store.Grant, error) {
@@ -120,7 +151,7 @@ func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*stor
 		return nil, err
 	}
 	matches, err := s.parent.queryIndex(
-		ctx, s.parent.names.grants, indexBySubject, attrSubject, subject,
+		ctx, s.parent.names.grants, indexBySubjectClient, attrSubject, subject,
 	)
 	if err != nil {
 		return nil, wrapErr("grants.ListBySubject", err)
@@ -226,9 +257,17 @@ func (s *grantStore) HasAny(ctx context.Context) (bool, error) {
 }
 
 // ListClientIDsBySubject implements [store.GrantClientLister]. The
-// cursor is the last client id returned, and the page is the next
-// lexicographically-ordered run after it, so paging is stable even
-// while grants are being created and revoked underneath it.
+// by_subject_client GSI orders a subject's grants by client id, so each
+// request asks DynamoDB for at most limit+1 rows and the cursor — the last
+// client id returned — becomes a sort-key bound the service applies rather
+// than a filter applied after the fact. A subject that has accumulated
+// years of client registrations therefore costs one bounded query per page
+// instead of a full enumeration, which is the resource bound the method
+// exists for. Repeat grants for one client are adjacent in that order and
+// collapse after the strongly-consistent re-read; when a page is filled
+// from several index pages, each individual query stays bounded.
+//
+//nolint:gocognit,cyclop // Stable cursor paging needs its bounded query, live re-read, and deduplication decisions in one ordered loop.
 func (s *grantStore) ListClientIDsBySubject(
 	ctx context.Context,
 	subject, cursor string,
@@ -240,33 +279,70 @@ func (s *grantStore) ListClientIDsBySubject(
 	if limit <= 0 {
 		return store.GrantClientPage{}, errors.New("oidcdynamo: grant client page limit must be positive")
 	}
-	grants, err := s.ListBySubject(ctx, subject)
-	if err != nil {
-		return store.GrantClientPage{}, err
+	seen := make(map[string]struct{}, limit+1)
+	ids := make([]string, 0, limit+1)
+	var start map[string]types.AttributeValue
+	for len(ids) <= limit {
+		in := &dynamodb.QueryInput{
+			TableName:              aws.String(s.parent.names.grants),
+			IndexName:              aws.String(indexBySubjectClient),
+			KeyConditionExpression: aws.String("#subject = :subject"),
+			ExpressionAttributeNames: map[string]string{
+				"#subject": attrSubject,
+			},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":subject": avS(subject),
+			},
+			ExclusiveStartKey: start,
+			Limit:             aws.Int32(int32(limit + 1)), //nolint:gosec // limit is bounded by the caller's int and DynamoDB accepts int32 pages.
+		}
+		if cursor != "" {
+			in.KeyConditionExpression = aws.String("#subject = :subject AND #client > :cursor")
+			in.ExpressionAttributeNames["#client"] = attrClientID
+			in.ExpressionAttributeValues[":cursor"] = avS(cursor)
+		}
+		page, err := s.parent.api.Query(ctx, in)
+		if err != nil {
+			return store.GrantClientPage{}, wrapErr("grants.ListClientIDsBySubject", err)
+		}
+		for _, match := range page.Items {
+			id := readS(match, attrPK)
+			if id == "" {
+				continue
+			}
+			g, err := s.Find(ctx, id)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return store.GrantClientPage{}, err
+			}
+			if g.Subject != subject || g.ClientID == "" || g.ClientID <= cursor {
+				continue
+			}
+			if _, duplicate := seen[g.ClientID]; duplicate {
+				continue
+			}
+			seen[g.ClientID] = struct{}{}
+			ids = append(ids, g.ClientID)
+			if len(ids) > limit {
+				break
+			}
+		}
+		if len(ids) > limit || len(page.LastEvaluatedKey) == 0 {
+			break
+		}
+		start = page.LastEvaluatedKey
 	}
 
-	seen := make(map[string]struct{}, len(grants))
-	ids := make([]string, 0, len(grants))
-	for _, g := range grants {
-		if g.ClientID <= cursor {
-			continue
-		}
-		if _, duplicate := seen[g.ClientID]; duplicate {
-			continue
-		}
-		seen[g.ClientID] = struct{}{}
-		ids = append(ids, g.ClientID)
-	}
-	slices.Sort(ids)
-
-	page := store.GrantClientPage{}
+	result := store.GrantClientPage{}
 	if len(ids) > limit {
-		page.ClientIDs = ids[:limit]
-		page.NextCursor = ids[limit-1]
-		return page, nil
+		result.ClientIDs = ids[:limit]
+		result.NextCursor = result.ClientIDs[limit-1]
+		return result, nil
 	}
-	page.ClientIDs = ids
-	return page, nil
+	result.ClientIDs = ids
+	return result, nil
 }
 
 // ListSubjectsByClient implements [store.GrantSubjectLister]. The dedicated
@@ -355,6 +431,13 @@ func (s *grantStore) ListSubjectsByClient(
 }
 
 func grantItem(g *store.Grant) (item, error) {
+	// The client id is the sort key of by_subject_client, and DynamoDB
+	// does not index an item whose key attribute is absent. A grant with
+	// no client would be readable by id and invisible to every
+	// subject-wide enumeration, so it is refused at the write instead.
+	if g.ClientID == "" {
+		return nil, errors.New("oidcdynamo: grant missing ClientID")
+	}
 	entry, err := newItem(g.ID).doc(g)
 	if err != nil {
 		return nil, err

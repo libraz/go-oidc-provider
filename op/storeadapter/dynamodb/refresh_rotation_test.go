@@ -39,8 +39,9 @@ func requireRetryStore(t *testing.T, refreshes store.RefreshTokenStore) store.Re
 }
 
 // TestRefreshRotation_RejectedRetryCacheLeavesNoSuccessor pins the
-// all-or-nothing property of SaveRotationWithRetry against the two ways
-// the cache write can be turned away.
+// all-or-nothing property of SaveRotationWithRetry against a cache write
+// the predecessor's own state turns away, and the parity with Save for
+// the one case that is not a rejection at all.
 //
 // A successor that outlived a failed cache write would be the worst of
 // both worlds: the client sees only the error, retries with the
@@ -55,18 +56,26 @@ func TestRefreshRotation_RejectedRetryCacheLeavesNoSuccessor(t *testing.T) {
 	refreshes := s.RefreshTokens()
 	retry := requireRetryStore(t, refreshes)
 
-	t.Run("PredecessorGone", func(t *testing.T) {
+	// A predecessor that is simply gone is not a rejection: an absent
+	// parent proves the chain was never revoked, which is exactly what
+	// Save concludes from the same input. The rotation is kept and only
+	// the cache — the optional half — is dropped, since there is no row
+	// left to attach it to and LoadRetryResponse already answers
+	// ErrNotFound for a predecessor that has none.
+	t.Run("PredecessorGoneKeepsTheRotation", func(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
 		parentID := "rt-gone-predecessor"
 		successor := newRotationToken("rt-gone-successor", &parentID)
 
-		err := retry.SaveRotationWithRetry(ctx, successor, []byte("sealed"))
-		if !errors.Is(err, store.ErrNotFound) {
-			t.Fatalf("SaveRotationWithRetry without a predecessor = %v, want ErrNotFound", err)
+		if err := retry.SaveRotationWithRetry(ctx, successor, []byte("sealed")); err != nil {
+			t.Fatalf("SaveRotationWithRetry without a predecessor = %v, want the success Save reports", err)
 		}
-		if _, err := refreshes.Find(ctx, successor.ID); !errors.Is(err, store.ErrNotFound) {
-			t.Fatalf("successor survived the rejected rotation: Find = %v, want ErrNotFound", err)
+		if _, err := refreshes.Find(ctx, successor.ID); err != nil {
+			t.Fatalf("the rotation was rolled back because its cache had no predecessor row: Find = %v", err)
+		}
+		if _, err := retry.LoadRetryResponse(ctx, parentID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("LoadRetryResponse for a predecessor that never existed = %v, want ErrNotFound", err)
 		}
 	})
 

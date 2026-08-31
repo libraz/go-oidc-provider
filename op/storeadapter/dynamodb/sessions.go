@@ -47,11 +47,46 @@ func (s *sessionStore) Find(ctx context.Context, id string) (*store.Session, err
 	return decodeSession(found)
 }
 
+// touchAttempts bounds how often Touch re-reads and retries after
+// finding the item changed under it. Each retry costs one read and one
+// conditional write and rebuilds the replacement from what is stored
+// now, so a handful absorbs an ordinary interleaved Save while still
+// failing rather than looping under a writer that never stops.
+const touchAttempts = 3
+
 // Touch extends a live session. It refuses to resurrect an expired or
 // absent one: the condition is what keeps a request that raced with
 // expiry from writing the session back into existence.
+//
+// The record is a single JSON document, so the two fields
+// [store.SessionStore.Touch] sets cannot be updated in place — the
+// replacement is derived from what was read. The write is therefore
+// conditioned on the stored document still being that one: without it,
+// the extension would put back everything the snapshot held and undo a
+// step-up's ACR or an account switch's ChooserGroupID that landed in
+// between, along with the chooser-group index entry derived from it. A
+// document that changed is re-read and the extension applied again, and
+// a caller that keeps losing gets [store.ErrConflict] rather than a
+// stale overwrite.
 func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedAt time.Time) error {
-	current, err := s.Find(ctx, id)
+	for attempt := range touchAttempts {
+		err := s.touchOnce(ctx, id, expiresAt, updatedAt)
+		if !errors.Is(err, store.ErrConflict) || attempt == touchAttempts-1 {
+			return err
+		}
+	}
+	return store.ErrConflict
+}
+
+func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, updatedAt time.Time) error {
+	found, err := s.parent.getLive(ctx, s.parent.names.sessions, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return store.ErrNotFound
+		}
+		return wrapErr("sessions.Touch", err)
+	}
+	current, err := decodeSession(found)
 	if err != nil {
 		return err
 	}
@@ -66,21 +101,33 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 	entry.set(attrChooserGroup, current.ChooserGroupID)
 
 	_, err = s.parent.api.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:           aws.String(s.parent.names.sessions),
-		Item:                entry,
-		ConditionExpression: aws.String("attribute_exists(#pk) AND (#exp = :zero OR #exp >= :now)"),
+		TableName: aws.String(s.parent.names.sessions),
+		Item:      entry,
+		ConditionExpression: aws.String(
+			"attribute_exists(#pk) AND (#exp = :zero OR #exp >= :now) AND #doc = :expected",
+		),
 		ExpressionAttributeNames: map[string]string{
 			"#pk":  attrPK,
 			"#exp": attrExpiresAt,
+			"#doc": attrDoc,
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":zero": avN(0),
-			":now":  avTime(s.parent.now()),
+			":zero":     avN(0),
+			":now":      avTime(s.parent.now()),
+			":expected": found[attrDoc],
 		},
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
-			return store.ErrNotFound
+			// Either the session went away or somebody else wrote it. The
+			// read decides which, so a caller cannot mistake a lost race
+			// for a session that ended.
+			if _, findErr := s.Find(ctx, id); errors.Is(findErr, store.ErrNotFound) {
+				return store.ErrNotFound
+			} else if findErr != nil {
+				return findErr
+			}
+			return store.ErrConflict
 		}
 		return wrapErr("sessions.Touch", err)
 	}

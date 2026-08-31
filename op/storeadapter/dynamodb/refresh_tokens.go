@@ -113,7 +113,11 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 		if err := s.Save(ctx, t); err != nil {
 			return err
 		}
-		return s.tx.attach(ctx, s.parent.names.refreshes, parentDigest, attrRetryResponse, avB(sealed))
+		err := s.tx.attach(ctx, s.parent.names.refreshes, parentDigest, attrRetryResponse, avB(sealed))
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
 	}
 
 	entry, err := refreshItem(t)
@@ -148,7 +152,17 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 	})
 	if err != nil {
 		if isTransactionCanceledByCondition(err) {
-			return s.rotationRejected(ctx, *t.ParentID, transactionCancellationCodes(err))
+			rejected := s.rotationRejected(ctx, *t.ParentID, transactionCancellationCodes(err))
+			if errors.Is(rejected, store.ErrNotFound) {
+				// The predecessor row is gone rather than revoked, so
+				// there is nothing to hang the cache on and nothing that
+				// says the chain died. [refreshStore.Save] keeps the
+				// rotation on exactly this input, and the two calls are
+				// declared to share its semantics; the grace window is
+				// the optional half and degrades on its own terms.
+				return s.Save(ctx, t)
+			}
+			return rejected
 		}
 		return wrapErr("refreshes.SaveRotationWithRetry", err)
 	}
@@ -558,7 +572,6 @@ func refreshItem(t *store.RefreshToken) (item, error) {
 	entry.set(attrClientID, t.ClientID)
 	entry.set(attrGrantID, t.GrantID)
 	entry.set(attrParentID, parentDigest)
-	entry.set(attrStoredHandle, digest)
 	entry.setTime(attrConsumedAt, timeOrZero(t.ConsumedAt))
 	entry.setBool(attrRevoked, t.Revoked)
 	return entry, nil

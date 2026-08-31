@@ -667,11 +667,19 @@ func (s *recoveryStore) Put(ctx context.Context, b *store.RecoveryBatch) error {
 	}
 
 	var actions []types.TransactWriteItem
-	for i := len(b.Codes); i < len(existing); i++ {
-		actions = append(actions, types.TransactWriteItem{Delete: &types.Delete{
-			TableName: aws.String(s.parent.names.recoveryCodes),
-			Key:       recoverySlotKey(b.Subject, i),
-		}})
+	for _, slot := range existing {
+		// The key comes from the slot's own index rather than from a loop
+		// position: a partition left with a gap by an older adapter would
+		// otherwise keep the slots this batch does not overwrite, and the
+		// user would still be able to redeem a code the regeneration was
+		// meant to revoke. Deriving the key from the item repairs such a
+		// partition as a side effect of the next regeneration.
+		if index := readN(slot, attrSlotIndex); index >= int64(len(b.Codes)) {
+			actions = append(actions, types.TransactWriteItem{Delete: &types.Delete{
+				TableName: aws.String(s.parent.names.recoveryCodes),
+				Key:       recoverySlotKey(b.Subject, int(index)),
+			}})
+		}
 	}
 	for i, code := range b.Codes {
 		entry := newCompositeItem(b.Subject, attrSlotIndex, avN(int64(i)))
@@ -752,6 +760,14 @@ func (s *recoveryStore) explainRejectedConsume(ctx context.Context, subject stri
 	return store.ErrAlreadyConsumed
 }
 
+// Delete removes the whole batch in one transaction, the same shape
+// [recoveryStore.Put] takes. A per-slot loop would let a failure part-way
+// through leave the remaining slots behind: Get would keep reporting a
+// live batch, the account UI would keep showing recovery codes as
+// enabled, and the codes in those slots would stay redeemable. Each key
+// comes from the slot's own index rather than from the loop position, so
+// a retry against a partition an older adapter left with a gap still
+// removes every slot instead of deleting keys that do not exist.
 func (s *recoveryStore) Delete(ctx context.Context, subject string) error {
 	slots, err := s.parent.queryPartition(ctx, s.parent.names.recoveryCodes, subject)
 	if err != nil {
@@ -760,13 +776,20 @@ func (s *recoveryStore) Delete(ctx context.Context, subject string) error {
 	if len(slots) == 0 {
 		return store.ErrNotFound
 	}
-	for i := range slots {
-		if _, err := s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	if len(slots) > maxTransactionItems {
+		return ErrTransactionTooLarge
+	}
+	actions := make([]types.TransactWriteItem, 0, len(slots))
+	for _, slot := range slots {
+		actions = append(actions, types.TransactWriteItem{Delete: &types.Delete{
 			TableName: aws.String(s.parent.names.recoveryCodes),
-			Key:       recoverySlotKey(subject, i),
-		}); err != nil {
-			return wrapErr("recovery.Delete", err)
-		}
+			Key:       recoverySlotKey(subject, int(readN(slot, attrSlotIndex))),
+		}})
+	}
+	if _, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: actions,
+	}); err != nil {
+		return wrapErr("recovery.Delete", err)
 	}
 	return nil
 }
