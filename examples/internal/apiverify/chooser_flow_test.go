@@ -64,6 +64,11 @@ type browser struct {
 	// pageURL is the absolute URL of the most recent 200 page, which is
 	// where that page's form posts back to.
 	pageURL string
+	// finalURL is the last redirect target that pointed off the OP —
+	// the RP callback the authorization completed on. It is the only
+	// place the authorization code appears, so a probe that has to
+	// redeem the code reads it from here.
+	finalURL string
 }
 
 func newBrowser(t *testing.T, baseURL string) *browser {
@@ -162,6 +167,7 @@ func (b *browser) interactionPageAt(target string) (page string, ok bool) {
 	b.t.Helper()
 	for range 12 {
 		if !b.onOP(target) {
+			b.finalURL = b.resolve(target)
 			return "", false
 		}
 		status, header, body := b.do(http.MethodGet, target, "", "", nil)

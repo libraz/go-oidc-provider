@@ -19,7 +19,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 > オプションリファレンスはすべてドキュメントサイトに集約しています。本 README
 > は、ソースツリーの案内とサンプル一覧に絞っています。
 
-> **ステータス: `v1.0.0`。** 本リリース以降、公開 `op` API は
+> **ステータス: `v1.1.0`。** 1.0 リリース以降、公開 `op` API は
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。
 > 唯一の例外は godoc に `Experimental:` マーカーを持つシンボルで、その一覧は
 > [`api/experimental.txt`](api/experimental.txt) に機械生成されます。

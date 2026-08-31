@@ -181,14 +181,16 @@ func run() error {
 	flow.Risk = acrRiskAssessor{}
 	flow = opkit.WithMFARules(flow,
 		// TOTP fires when the assessor scores RiskScoreHigh or above.
-		// Rule order matters: TOTP wins on High because it appears
-		// first.
+		// Declaration order sets prompt order, not exclusivity: on
+		// High both rules fire, and TOTP is prompted first only
+		// because it is declared first.
 		op.RuleRisk(op.RiskScoreHigh, op.StepTOTP{
 			Store:         st.TOTPs(),
 			EncryptionKey: keys.TOTPKey,
 		}),
-		// Captcha fires from RiskScoreMedium upward. The Medium
-		// branch hits this rule because TOTP gates on High.
+		// Captcha fires from RiskScoreMedium upward — on High as well
+		// as on Medium. Medium reaches it because the TOTP rule above
+		// gates on High and does not match.
 		op.RuleRisk(op.RiskScoreMedium, op.StepCaptcha{
 			Verifier: stubCaptchaVerifier{},
 		}),

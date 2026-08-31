@@ -5,7 +5,17 @@
 // The library passes a canonical [interaction.ConsentTemplateData]
 // context (Client, Scopes, StateRef, CSRFToken, ApprovedScopesField,
 // SubmitMethod, SubmitAction) to the template; the embedder controls
-// every other aspect of the render — branding, layout, copy, i18n.
+// branding, layout and copy.
+//
+// Localization is not one of them. ConsentTemplateData carries no
+// locale and no message bundle — [op.ConsentUI] records the Strings
+// field as reserved until the public i18n surface stabilises — so the
+// template renders one fixed language. The two paths that do see the
+// OP's chosen locale today are [op.WithLocale] over the built-in
+// consent screen, and a full [op.WithInteractionDriver] driver, which
+// receives it on Prompt.Locale. For surfaces outside the ceremony
+// (emails, out-of-band pages) the resolver is reachable through
+// [op.Provider.LocaleResolver].
 //
 // Run with the example build tag:
 //

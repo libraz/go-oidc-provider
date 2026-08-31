@@ -57,8 +57,11 @@ func fapi2BaselineOptions() []op.Option {
 //     mandates a server-supplied DPoP nonce. The option layer rejects
 //     op.New under this profile if no source is wired.
 //
-// The in-memory rotator is dev-only — a multi-instance OP must back
-// the source with a shared store (op.NewRedisDPoPNonceSource etc.).
+// The in-memory rotator is dev-only: two replicas issue from
+// independent rings and reject each other's nonces. A multi-instance
+// OP implements [op.DPoPNonceSource] over a shared cache and passes it
+// to [op.WithDPoPNonceSource]; there is no built-in distributed
+// implementation yet.
 func fapi2MessageSigningOptions(ctx context.Context, logger *slog.Logger) ([]op.Option, error) {
 	nonces, err := op.NewInMemoryDPoPNonceSource(ctx, time.Minute,
 		op.WithInMemoryDPoPNonceLogger(logger))

@@ -18,11 +18,11 @@ Message Signing.
 > reference live there. This README is the source-tree map and example
 > inventory.
 
-> **Status: `v1.0.0`.** The public `op` surface is under strict
-> [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from this release
-> on. The one exemption is symbols documented with an `Experimental:` marker;
-> they are inventoried in [`api/experimental.txt`](api/experimental.txt), which
-> is regenerated and diffed by `make verify` so the exempt set cannot grow
+> **Status: `v1.1.0`.** The public `op` surface is under strict
+> [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the 1.0
+> release on. The one exemption is symbols documented with an `Experimental:`
+> marker; they are inventoried in [`api/experimental.txt`](api/experimental.txt),
+> which is regenerated and diffed by `make verify` so the exempt set cannot grow
 > without review. Worth knowing before you build on it: the exempt set is the
 > authentication-step seam (`LoginFlow`, `WithLoginFlow`, `WithAuthenticators`
 > and the hooks around them), the interaction UI types, and Grant Management,

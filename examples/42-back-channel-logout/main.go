@@ -23,9 +23,10 @@
 // serves — the browser lands on a connection error, which is fine:
 // the authorization code is in the address bar.
 //
-//  1. Open the authorize URL and sign in as "demo" / "demo-password":
+//  1. Open the authorize URL in a browser and sign in as
+//     "demo" / "demo-password":
 //
-//     http://127.0.0.1:8080/oidc/authorize?response_type=code&client_id=demo-rp&redirect_uri=http://127.0.0.1:5173/callback&scope=openid+profile&state=xyz
+//     http://127.0.0.1:8080/oidc/auth?response_type=code&client_id=demo-rp&redirect_uri=http://127.0.0.1:5173/callback&scope=openid+profile&state=xyz
 //
 //  2. Copy the "code" query parameter off the failed redirect and
 //     exchange it, keeping the id_token from the response:
@@ -35,9 +36,16 @@
 //     -d redirect_uri=http://127.0.0.1:5173/callback \
 //     http://127.0.0.1:8080/oidc/token
 //
-//  3. End the session with that token as the hint:
+//  3. End the session, IN THE SAME BROWSER — paste the URL below into
+//     the address bar of the window that signed in at step 1:
 //
-//     curl -si "http://127.0.0.1:8080/oidc/end_session?id_token_hint=$ID_TOKEN"
+//     http://127.0.0.1:8080/oidc/end_session?id_token_hint=$ID_TOKEN
+//
+//     The session cookie is what tells the OP which session to
+//     terminate. A bare curl carries none, so the OP resolves no
+//     session, answers 200, and delivers nothing — the fail-secure
+//     outcome, not a delivery failure. To drive step 3 from the shell,
+//     share one cookie jar across steps 1 and 3 (curl -c/-b jar.txt).
 //
 // The RP stub on :9090 prints the Logout Token the OP POSTs to it.
 //
@@ -106,11 +114,15 @@ func main() {
 		// way to establish one first: the authorize round-trip that
 		// seeds the session runs through this password step.
 		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
-		// Dev / CI-only: admit the http://127.0.0.1 backchannel_logout_uri
-		// below and disable the deliverer's SSRF gate so the in-process
-		// stub RP receives the logout token POST. Production deployments
-		// leave this off; OIDC Back-Channel Logout 1.0 §2.2 requires
-		// https for backchannel_logout_uri on the public Internet.
+		// Dev / CI-only: narrow the deliverer's SSRF gate to the loopback
+		// hosts so the http://127.0.0.1 backchannel_logout_uri below is
+		// admitted and the in-process stub RP receives the logout token
+		// POST. Every other private destination stays blocked — the
+		// link-local / RFC 1918 / IPv6 ULA deny-list still applies at the
+		// URL check, the DNS lookup, the dial and every redirect hop.
+		// Production deployments leave this off; OIDC Back-Channel Logout
+		// 1.0 §2.2 requires https for backchannel_logout_uri on the public
+		// Internet.
 		op.WithAllowInsecureBackchannelLogoutForDev(),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                   clientID,

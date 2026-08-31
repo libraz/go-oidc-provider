@@ -40,9 +40,11 @@ func buildProvider(issuer string) (*op.Provider, error) {
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		// SubjectAuthenticator + AutoConsentDriver let the example
-		// drive the auth-code flow programmatically: the helper POSTs
-		// the desired subject onto /interaction; the consent screen
-		// auto-approves every requested scope.
+		// drive the auth-code flow programmatically: prompts are
+		// rendered as JSON, so the helper POSTs the desired subject
+		// onto /interaction and then, despite the driver's name,
+		// submits the consent itself (completeConsentIfPrompted
+		// approves every requested scope).
 		op.WithAuthenticators(testkit.SubjectAuthenticator{}),
 		op.WithInteractionDriver(testkit.AutoConsentDriver{}),
 		op.WithStaticClients(

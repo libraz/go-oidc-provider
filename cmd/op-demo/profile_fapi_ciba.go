@@ -223,8 +223,9 @@ type cibaAutoApproveStore struct {
 	transactional store.Transactional
 }
 
-// CIBARequests overrides the embedded store's method so the op.Store
-// interface receives the wrapped substore.
+// CIBARequests overrides the embedded store's method so the
+// [store.Store] the OP is configured with receives the wrapped
+// substore.
 func (s *cibaAutoApproveStore) CIBARequests() store.CIBARequestStore {
 	return s.auto
 }

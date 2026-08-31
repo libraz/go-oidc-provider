@@ -188,9 +188,17 @@ func runDiscoveryAssert(t *testing.T, dir, baseURL string, want, notWant []strin
 	}
 }
 
+// pkceVerifier is the verifier whose S256 challenge authorizeParams sends
+// (RFC 7636 Appendix B). Most probes stop at the interaction hand-off and
+// never redeem it; the ones that run the code through /token need the
+// preimage, and a fixed pair keeps every call site short.
+const (
+	pkceVerifier  = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	pkceChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+)
+
 // authorizeParams builds a minimal Authorization Code + PKCE authorization
-// request. The verifier is never redeemed — the probe stops at the
-// interaction hand-off — so a fixed challenge keeps the call sites short.
+// request.
 func authorizeParams(clientID, redirectURI, scope string) url.Values {
 	return url.Values{
 		"response_type":         {"code"},
@@ -198,7 +206,7 @@ func authorizeParams(clientID, redirectURI, scope string) url.Values {
 		"redirect_uri":          {redirectURI},
 		"scope":                 {scope},
 		"state":                 {"apiverify-state"},
-		"code_challenge":        {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"},
+		"code_challenge":        {pkceChallenge},
 		"code_challenge_method": {"S256"},
 	}
 }
@@ -217,6 +225,14 @@ func runAuthorizeInteraction(t *testing.T, dir, baseURL string, params url.Value
 	p := buildAndStart(t, dir)
 	defer p.kill()
 
+	driveAuthorizeInteraction(t, p, baseURL, params, want)
+}
+
+// driveAuthorizeInteraction is runAuthorizeInteraction against an example
+// the caller already booted, for a probe that has a second thing to assert
+// about the same process.
+func driveAuthorizeInteraction(t *testing.T, p *proc, baseURL string, params url.Values, want []string) {
+	t.Helper()
 	doc := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
 	authorize := discoveryEndpointPath(t, doc, "authorization_endpoint")
 
@@ -448,6 +464,25 @@ func runClientCredentials(t *testing.T, dir, baseURL, clientID, secret, scope st
 	if !strings.Contains(string(body), `"access_token"`) {
 		t.Fatalf("token response missing access_token:\n%s", body)
 	}
+}
+
+// waitForLog blocks until want appears in the example's captured output or
+// the deadline passes. Some deliverables are only observable there: an
+// outbound call the OP makes on its own (a back-channel logout POST) leaves
+// no trace on the response the probe holds.
+func waitForLog(t *testing.T, p *proc, want string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if strings.Contains(p.readLog(), want) {
+			return
+		}
+		if exited, code := p.poll(); exited {
+			t.Fatalf("example exited (code %d) before logging %q:\n%s", code, want, p.readLog())
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %q in the example log:\n%s", want, p.readLog())
 }
 
 // pollHTTP polls url until it answers 200 or the deadline passes, failing

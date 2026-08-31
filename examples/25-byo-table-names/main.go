@@ -14,8 +14,8 @@
 //
 //	(cd examples/25-byo-table-names && GOWORK=off go run -tags example .)
 //
-// The example renames all eighteen OP-internal tables under an "auth_"
-// prefix, applies the rewritten schema, logs the physical tables the
+// The example renames all twenty-three OP-internal tables under an
+// "auth_" prefix, applies the rewritten schema, logs the physical tables the
 // adapter actually created, seeds one password user into the renamed
 // users table, and serves the OP on :8080.
 //
@@ -70,9 +70,13 @@ const (
 
 // naming maps every logical record kind WithNaming accepts onto a
 // physical table name under this embedder's "auth_" convention. Listing
-// all eighteen keys makes it explicit that the rename covers the whole
-// OP-internal surface, not just the clients table. Unknown keys make
-// oidcsql.New fail fast, so a typo here is caught at construction time.
+// all twenty-three keys makes it explicit that the rename covers the
+// whole OP-internal surface — the authentication-factor tables at the
+// bottom as much as the clients table at the top. A key left out is not
+// an error: the adapter keeps its bundled oidc_ default for it, so the
+// omission surfaces as a stray oidc_ table in a schema review rather
+// than at construction. Unknown keys do make oidcsql.New fail fast, so
+// a typo here is caught immediately.
 var naming = map[string]string{
 	"clients":                    "auth_clients",
 	"authorization_codes":        "auth_codes",
@@ -92,6 +96,11 @@ var naming = map[string]string{
 	"op_metadata":                "auth_op_metadata",
 	"device_codes":               "auth_device_codes",
 	"ciba_requests":              "auth_ciba_requests",
+	"totp_secrets":               "auth_totp_secrets",
+	"passkeys":                   "auth_passkeys",
+	"recovery_codes":             "auth_recovery_codes",
+	"email_otps":                 "auth_email_otps",
+	"authn_lockouts":             "auth_authn_lockouts",
 }
 
 func main() {

@@ -29,8 +29,12 @@
 // op/storeadapter/inmem as a deliberate stand-in so the example boots
 // without external dependencies. The live counterpart is
 // example 09-redis-volatile, which swaps inmem for the real
-// op/storeadapter/redis adapter; every composite.With(...) call below
-// stays unchanged.
+// op/storeadapter/redis adapter. Swapping the backend leaves both
+// composite.With(...) calls below unchanged — but 09 also routes a
+// third Kind, Sessions, to the volatile backend, because it accepts
+// losing logins when the cache is flushed and this example does not.
+// Which Kinds go volatile is a durability decision, separate from
+// which backend serves them.
 //
 // # Running
 //
@@ -142,9 +146,11 @@ func run() error {
 	// --- Volatile backend: stand-in for Redis ------------------------
 	// inmem is used here so the example boots without a Redis
 	// container. Example 09-redis-volatile shows the same wiring
-	// against op/storeadapter/redis; the composite.With(...) calls
-	// below stay identical because both backends satisfy
-	// store.Store for the substores routed to them.
+	// against op/storeadapter/redis. Both backends satisfy store.Store
+	// for the substores routed to them, so swapping one for the other
+	// changes nothing in the composite.With(...) calls below; 09 does
+	// route one more Kind (Sessions) to its volatile backend, which is
+	// a durability choice this example makes differently.
 	volatile := inmem.New()
 	log.Printf("volatile store: inmem (see example 09 for the live op/storeadapter/redis variant)")
 
