@@ -389,8 +389,7 @@ func enforceDPoPCnf(
 		respondDPoPInvalid(w, "DPoP-bound access token must use the DPoP authentication scheme")
 		return false
 	}
-	header := r.Header.Get("DPoP")
-	if header == "" {
+	if !dpop.HasProof(r) {
 		respondDPoPInvalid(w, "DPoP proof required")
 		return false
 	}

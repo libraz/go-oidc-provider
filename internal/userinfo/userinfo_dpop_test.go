@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +154,67 @@ func TestUserInfo_DPoP_MissingProof(t *testing.T) {
 	}
 	if got := resp.Header.Get("WWW-Authenticate"); got == "" {
 		t.Errorf("WWW-Authenticate must be set; got empty")
+	}
+}
+
+// TestUserInfo_DPoP_EmptyFirstProofValueIsNotMissingProof pins the
+// presence test on the value count rather than the first value's content.
+// A request carrying "DPoP: <empty>" followed by "DPoP: <valid proof>"
+// presents a proof — a malformed one, because RFC 9449 §4.1 allows
+// exactly one proof per request — so it MUST reach the verifier and be
+// rejected as a bad proof, not diagnosed as "no proof presented".
+func TestUserInfo_DPoP_EmptyFirstProofValueIsNotMissingProof(t *testing.T) {
+	t.Parallel()
+
+	f := dpopUserInfoFixture(t)
+	f.putUser(t, "user-1", map[string]any{"email": "alice@example.com"})
+	key := newDPoPProofKey(t)
+	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
+		c.Scope = []string{"openid", "email"}
+		c.Confirmation = map[string]string{"jkt": key.jkt}
+	})
+	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-empty-first", dpop.AccessTokenHash(token))
+	req := f.newGetDPoP(t, token)
+	req.Header.Add("DPoP", "")
+	req.Header.Add("DPoP", proof)
+	resp := f.doRequest(t, req)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	challenge := resp.Header.Get("WWW-Authenticate")
+	if strings.Contains(challenge, "DPoP proof required") {
+		t.Errorf("challenge diagnosed a missing proof; a multi-value DPoP header "+
+			"must be rejected by the verifier instead: %q", challenge)
+	}
+	if !strings.Contains(challenge, "DPoP proof rejected") {
+		t.Errorf("challenge = %q, want the verifier's rejection", challenge)
+	}
+}
+
+// TestUserInfo_DPoP_NoProofHeaderStillReportsMissingProof holds the
+// complement of [TestUserInfo_DPoP_EmptyFirstProofValueIsNotMissingProof]:
+// a wholly absent "DPoP" header keeps reporting the missing-proof
+// challenge, so tightening the presence test does not blur that signal.
+func TestUserInfo_DPoP_NoProofHeaderStillReportsMissingProof(t *testing.T) {
+	t.Parallel()
+
+	f := dpopUserInfoFixture(t)
+	f.putUser(t, "user-1", map[string]any{"email": "alice@example.com"})
+	key := newDPoPProofKey(t)
+	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
+		c.Scope = []string{"openid", "email"}
+		c.Confirmation = map[string]string{"jkt": key.jkt}
+	})
+	resp := f.doRequest(t, f.newGetDPoP(t, token))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	if challenge := resp.Header.Get("WWW-Authenticate"); !strings.Contains(challenge, "DPoP proof required") {
+		t.Errorf("challenge = %q, want the missing-proof diagnosis", challenge)
 	}
 }
 
