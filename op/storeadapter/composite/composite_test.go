@@ -3,6 +3,8 @@ package composite_test
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +114,47 @@ func TestNew_KindNotRouted(t *testing.T) {
 	)
 	if !errors.Is(err, composite.ErrKindNotRouted) {
 		t.Fatalf("missing route: want ErrKindNotRouted, got %v", err)
+	}
+}
+
+func TestNew_InvalidKindRejected(t *testing.T) {
+	t.Parallel()
+	persistent := newInmem(t)
+	ephemeral := newInmem(t)
+
+	// Kind is an integer type, so a config-driven caller can hand With a
+	// value no constant names. Such a route is unreachable: every Kind the
+	// Store serves comes from the enumeration, so the registration would be
+	// dropped and the traffic served by the default backend instead.
+	_, err := composite.New(
+		composite.WithDefault(persistent),
+		composite.With(composite.Kind(4242), ephemeral),
+	)
+	if !errors.Is(err, composite.ErrInvalidKind) {
+		t.Fatalf("unknown kind: want ErrInvalidKind, got %v", err)
+	}
+	// The diagnostic must name the offending value so an operator can find
+	// the registration that produced it.
+	if msg := err.Error(); !strings.Contains(msg, "Kind(4242)") {
+		t.Errorf("error message %q does not name the offending kind", msg)
+	}
+
+	// A zero Kind is the same class of mistake: it is what a struct field or
+	// a map lookup miss yields, and it must not silently route to the default.
+	if _, err := composite.New(
+		composite.WithDefault(persistent),
+		composite.With(composite.Kind(0), ephemeral),
+	); !errors.Is(err, composite.ErrInvalidKind) {
+		t.Fatalf("zero kind: want ErrInvalidKind, got %v", err)
+	}
+
+	// A nil store still makes the registration a no-op, so an out-of-range
+	// Kind paired with nil leaves nothing to reject.
+	if _, err := composite.New(
+		composite.WithDefault(persistent),
+		composite.With(composite.Kind(4242), nil),
+	); err != nil {
+		t.Fatalf("unknown kind with nil store must stay a no-op: %v", err)
 	}
 }
 
@@ -342,6 +385,87 @@ func TestNew_LastWithWins(t *testing.T) {
 	}
 	if _, err := first.Interactions().Find(ctx, "i-last"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("first must not see record after override: %v", err)
+	}
+}
+
+// nonComparableStore is a value-receiver [store.Store] whose struct carries a
+// map field, so its dynamic type is not comparable. The atomic-routing cluster
+// invariant is an identity check between routed backends, and Go panics when
+// two interface values sharing a non-comparable dynamic type are compared, so
+// New must reject this shape as a configuration error instead.
+type nonComparableStore struct {
+	store.Store
+	labels map[string]string
+}
+
+func newNonComparableStore(t *testing.T) nonComparableStore {
+	t.Helper()
+	s := nonComparableStore{Store: newInmem(t), labels: map[string]string{"tier": "hot"}}
+	if reflect.TypeOf(s).Comparable() {
+		t.Fatal("fixture must have a non-comparable dynamic type")
+	}
+	return s
+}
+
+func TestNew_NonComparableClusterBackendRejected(t *testing.T) {
+	t.Parallel()
+	// Every Kind, including the whole atomic-routing cluster, resolves to the
+	// same non-comparable backend. New must return, not panic.
+	s, err := composite.New(composite.WithDefault(newNonComparableStore(t)))
+	if !errors.Is(err, composite.ErrBackendNotComparable) {
+		t.Fatalf("non-comparable default: want ErrBackendNotComparable, got %v", err)
+	}
+	if s != nil {
+		t.Fatal("New returned a usable Store for an unverifiable cluster")
+	}
+	// The diagnostic must name the offending backend type so the operator can
+	// locate the store to route through a pointer.
+	if msg := err.Error(); !strings.Contains(msg, "nonComparableStore") {
+		t.Errorf("error %q must name the backend type", msg)
+	}
+}
+
+func TestNew_NonComparableNonAnchorClusterMemberRejected(t *testing.T) {
+	t.Parallel()
+	// The screen covers every cluster member, not just the anchor: a
+	// non-comparable backend routed for a single cluster Kind is reported the
+	// same way rather than reaching the comparison.
+	s, err := composite.New(
+		composite.WithDefault(newInmem(t)),
+		composite.With(composite.RefreshTokens, newNonComparableStore(t)),
+	)
+	if !errors.Is(err, composite.ErrBackendNotComparable) {
+		t.Fatalf("non-comparable cluster member: want ErrBackendNotComparable, got %v", err)
+	}
+	if s != nil {
+		t.Fatal("New returned a usable Store for an unverifiable cluster")
+	}
+}
+
+func TestNew_NonComparableBackendOutsideClusterAccepted(t *testing.T) {
+	t.Parallel()
+	// Comparability is only required of the atomic-routing cluster. A Kind
+	// outside it is never compared, so a non-comparable backend remains a
+	// valid route there and the constructed Store serves through it.
+	override := newNonComparableStore(t)
+	s, err := composite.New(
+		composite.WithDefault(newInmem(t)),
+		composite.With(composite.Interactions, override),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	rec := &store.Interaction{
+		ID: "i-noncmp", ClientID: "c", Step: "consent",
+		ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.Interactions().Save(ctx, rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := override.Interactions().Find(ctx, "i-noncmp"); err != nil {
+		t.Fatalf("override.Find: %v", err)
 	}
 }
 

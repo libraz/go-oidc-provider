@@ -82,9 +82,13 @@
 //     [RedactedDSN] when an endpoint identifier is needed in an application
 //     log; it removes credentials and query parameters and fails closed for
 //     malformed input.
-//   - Value size is capped at 64 KiB. Save / Mark calls whose serialised
-//     payload exceeds the cap fail rather than letting an attacker pin
-//     unbounded RAM into the cache.
+//   - Value size is bounded. Interaction and session payloads are the
+//     ones an attacker can influence, and their Save calls reject a
+//     serialised payload over 64 KiB rather than letting one pin
+//     unbounded RAM into the cache. Replay markers need no check to be
+//     bounded: their key is always a 64-character digest of the jti and
+//     their value is one of two short fixed shapes, neither of which
+//     carries caller-supplied bytes.
 //   - Keys are namespaced under a fixed "oidc:" prefix. Multiple OPs
 //     sharing a Redis instance MUST use the [WithKeyPrefix] override so
 //     their keyspaces do not collide.

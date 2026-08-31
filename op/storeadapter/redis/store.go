@@ -16,10 +16,16 @@ import (
 
 // MaxValueBytes is the upper bound the adapter enforces on serialised
 // payload size. The cap protects the cache from an attacker pinning
-// unbounded memory through interaction state or oversized JTIs. The
+// unbounded memory through interaction or session state, which are the
+// payloads a request can grow; it is checked on those Save paths. The
 // limit is generous compared to typical payloads (PAR records and
 // interaction state are well under 8 KiB in practice) but bounded so a
 // runaway client cannot starve the tier.
+//
+// Replay markers are outside the cap because they are bounded by their
+// own shape rather than by a check: the key is a fixed-length digest of
+// the jti and the value is either a single byte or a marker plus a
+// microsecond epoch.
 const MaxValueBytes = 64 * 1024
 
 // DefaultKeyPrefix is the namespace every key is rooted under unless

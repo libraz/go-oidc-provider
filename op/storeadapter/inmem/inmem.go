@@ -87,6 +87,32 @@
 // the point at which the library's own rolling-window rollover would
 // reset them.
 //
+// Three substores are reclaimed on a cutoff the embedder passes in
+// rather than by a sweep of their own: the access-token registry, the
+// opaque access tokens, and the grant revocations, whose grant
+// tombstones and JTI denylist are collected together. Each implements
+// the GC method its interface declares, so an embedder running a
+// janitor reclaims them on the schedule it already runs for a SQL
+// backend, and a deployment that skips the janitor keeps them. Only an
+// authenticated exchange or an administrative revocation adds a row to
+// any of the three, so the growth an embedder is choosing to accept is
+// bounded by its own clients rather than by an anonymous caller.
+//
+// Two substores carry an expiry and are reclaimed by neither route,
+// because their key space is what bounds them. The email-OTP
+// challenges hold one record per subject — a fresh send replaces the
+// subject's previous challenge instead of adding to it — so the map is
+// bounded by the directory the embedder owns; the stale record is left
+// behind deliberately, so its rate-limit and brute-force counters stay
+// readable while their windows are live. The initial access tokens exist
+// only because an operator minted them, so nothing an unauthenticated
+// caller does grows that map either. Both filter expired rows on read,
+// like every other substore here.
+//
+// Registration access tokens appear on none of those lists and belong
+// on none: [store.RegistrationAccessToken] carries no expiry or
+// retention field at all, so there is nothing for a sweep to key on.
+//
 // Substores whose rows have no expiry (clients, users, grants,
 // metadata, enrolled authentication factors) are owned by the embedder
 // and are never swept.

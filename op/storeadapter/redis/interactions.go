@@ -71,8 +71,15 @@ func (s *interactionStore) Save(ctx context.Context, i *store.Interaction) error
 	}
 	ttl := i.ExpiresAt.Sub(s.parent.clock.Now())
 	if ttl <= 0 {
-		// The contract permits backends to drop expired records; an
-		// already-expired Save is a no-op.
+		// Past-dated Save: the record is not worth storing, since every
+		// read path filters it out anyway — but the write still replaces
+		// whatever the id held. Dropping it silently would leave the
+		// earlier state resolvable for the rest of its own lifetime,
+		// which is not what a caller that stored a terminal state asked
+		// for.
+		if err := s.parent.client.Del(ctx, s.interactionKey(i.ID)).Err(); err != nil {
+			return fmt.Errorf("oidcredis: DEL interaction: %w", err)
+		}
 		return nil
 	}
 	if err := s.parent.client.Set(ctx, s.interactionKey(i.ID), payload, ttl).Err(); err != nil {

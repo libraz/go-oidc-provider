@@ -28,7 +28,8 @@
 // Every Kind MUST be reachable. Callers either route Kinds individually with
 // [With] or supply a fallback with [WithDefault]; mixing both is supported
 // (per-Kind overrides win over the default). [New] returns
-// [ErrKindNotRouted] if any Kind is left unrouted.
+// [ErrKindNotRouted] if any Kind is left unrouted, and [ErrInvalidKind] if a
+// registration names a Kind outside the enumeration.
 //
 // # Client write capabilities
 //
@@ -50,6 +51,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -262,10 +265,22 @@ var (
 	// before [New] returns successfully.
 	ErrKindNotRouted = errors.New("composite: kind has no backend and no default")
 
-	// ErrInvalidKind signals that an unknown [Kind] was passed to [With].
-	// The condition is normally caught by the type system; the error
-	// exists as a defensive guard against future Kind additions that
-	// forget to update lookup tables.
+	// ErrBackendNotComparable signals that a backend routed for a member
+	// of [TxClusterKinds] has a dynamic type that cannot be compared — a
+	// value-receiver store whose struct carries a map, slice or function
+	// field. The cluster invariant is an identity check between routed
+	// backends, and comparing two interface values that share a
+	// non-comparable dynamic type is a run-time panic, so the condition is
+	// reported as a construction error instead. Routing the backend through
+	// a pointer makes it comparable.
+	ErrBackendNotComparable = errors.New("composite: atomic-routing cluster backend type is not comparable; route it through a pointer")
+
+	// ErrInvalidKind signals that a [Kind] outside the closed
+	// enumeration was passed to [With]. Kind is an integer type, so a
+	// configuration-driven or loop-driven caller can hand [With] a value
+	// no constant names; [New] reports it rather than dropping the route
+	// and serving the Kind from [WithDefault]. The error also guards
+	// against a future Kind addition that forgets to update [allKinds].
 	ErrInvalidKind = errors.New("composite: invalid kind")
 )
 
@@ -287,7 +302,10 @@ func WithDefault(s store.Store) Option {
 }
 
 // With routes calls for kind to s. Calling With twice for the same kind keeps
-// the last registration. Passing a nil store is a no-op.
+// the last registration. Passing a nil store is a no-op. A kind outside the
+// enumerated constants is recorded here and reported by [New] as
+// [ErrInvalidKind]; the option itself cannot fail because it returns an
+// [Option] rather than an error.
 func With(kind Kind, s store.Store) Option {
 	return func(c *config) {
 		if s == nil {
@@ -335,17 +353,21 @@ type Store struct {
 // New builds a composite [Store] from the supplied options. The validation
 // order is fixed:
 //
-//  1. Every [Kind] is routed (either via [With] or [WithDefault]); otherwise
+//  1. Every registered [Kind] is one the enumeration names; otherwise
+//     [ErrInvalidKind] is returned with the offending value named.
+//  2. Every [Kind] is routed (either via [With] or [WithDefault]); otherwise
 //     [ErrKindNotRouted] is returned with the offending Kind named.
-//  2. Every member of [TxClusterKinds] resolves to the same backend (the
+//  3. Every member of [TxClusterKinds] resolves to the same backend (the
 //     "routing anchor"); otherwise [ErrTxClusterSplit] is returned with the
-//     conflicting Kinds and backend types named.
-//  3. The routing anchor implements [store.Transactional]; otherwise
+//     conflicting Kinds and backend types named. A cluster backend whose
+//     dynamic type is not comparable cannot take part in that check and is
+//     reported as [ErrBackendNotComparable].
+//  4. The routing anchor implements [store.Transactional]; otherwise
 //     [ErrTxAnchorNotTx] is returned.
 //
-// The order is deliberate: missing routing is the most common configuration
-// bug, so callers see that error first; cluster splits are the next-most
-// common.
+// The order is deliberate: an unroutable registration invalidates every
+// later check, missing routing is the most common configuration bug, so
+// callers see that error next; cluster splits are the next-most common.
 func New(opts ...Option) (*Store, error) {
 	cfg := &config{}
 	for _, opt := range opts {
@@ -353,6 +375,9 @@ func New(opts ...Option) (*Store, error) {
 			continue
 		}
 		opt(cfg)
+	}
+	if err := validateRouteKinds(cfg); err != nil {
+		return nil, err
 	}
 	routes, err := buildRoutes(cfg)
 	if err != nil {
@@ -377,6 +402,30 @@ func New(opts ...Option) (*Store, error) {
 		registry:         registry,
 		staticReconciler: staticReconciler,
 	}, nil
+}
+
+// validateRouteKinds rejects a [With] registration whose Kind is outside
+// [allKinds]. Without the check the registration is silently dropped by
+// buildRoutes and the Kind is served by the [WithDefault] backend, so a
+// caller that routed hot volatile traffic away from a durable backend
+// would keep writing to the durable one with no signal. Offending values
+// are reported in ascending order so the error is deterministic across
+// runs regardless of map iteration.
+func validateRouteKinds(cfg *config) error {
+	invalid := make([]Kind, 0, len(cfg.routes))
+	for k := range cfg.routes {
+		if !slices.Contains(allKinds, k) {
+			invalid = append(invalid, k)
+		}
+	}
+	if len(invalid) == 0 {
+		return nil
+	}
+	slices.Sort(invalid)
+	return fmt.Errorf(
+		"%w: With(...) registered %s, which is not a member of the Kind enumeration",
+		ErrInvalidKind, invalid[0],
+	)
 }
 
 // buildRoutes resolves every [Kind] against the per-Kind overrides and the
@@ -408,10 +457,20 @@ func resolveKind(cfg *config, k Kind) (store.Store, error) {
 // resolveAnchor verifies that every [TxClusterKinds] member maps to the same
 // backend. The first kind in the cluster is the canonical anchor; subsequent
 // kinds that resolve to a different backend produce [ErrTxClusterSplit].
+//
+// Every cluster member is screened for comparability before any comparison
+// runs, so a non-comparable backend surfaces as [ErrBackendNotComparable]
+// rather than as a run-time panic inside New.
 func resolveAnchor(routes map[Kind]store.Store) (store.Store, error) {
 	anchorKind := TxClusterKinds[0]
 	anchor := routes[anchorKind]
+	if err := assertComparable(anchorKind, anchor); err != nil {
+		return nil, err
+	}
 	for _, k := range TxClusterKinds[1:] {
+		if err := assertComparable(k, routes[k]); err != nil {
+			return nil, err
+		}
 		if routes[k] != anchor {
 			return nil, fmt.Errorf(
 				"%w: %s routed to %T but %s routed to %T",
@@ -420,6 +479,20 @@ func resolveAnchor(routes map[Kind]store.Store) (store.Store, error) {
 		}
 	}
 	return anchor, nil
+}
+
+// assertComparable rejects a backend whose dynamic type cannot take part in
+// the identity check [resolveAnchor] runs. Go compares interface values by
+// dynamic value, so two
+// operands sharing a non-comparable dynamic type panic instead of yielding
+// false; there is no way to recover the identity of such a value, which makes
+// the cluster invariant unverifiable and the configuration unusable.
+func assertComparable(k Kind, s store.Store) error {
+	t := reflect.TypeOf(s)
+	if t == nil || t.Comparable() {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is routed to %T", ErrBackendNotComparable, k, s)
 }
 
 // Clients implements [store.Store]. The returned [store.ClientStore] is the

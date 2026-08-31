@@ -300,25 +300,3 @@ func TestOpaqueAccessToken_HashOnStore(t *testing.T) {
 		t.Fatalf("Find(digest) err = %v, want ErrNotFound (digest must not redeem)", err)
 	}
 }
-
-// TestOpaqueAccessToken_PepperFieldExists pins the pepper-reservation
-// surface on the inmem store so downstream commits that wire the HMAC
-// pepper through can rely on the field being present without breaking
-// callers.
-func TestOpaqueAccessToken_PepperFieldExists(t *testing.T) {
-	t.Parallel()
-	// The pepper field is unexported; the test reaches it through
-	// reflection so the type signature does not have to leak the
-	// implementation detail. The check is a runtime sentinel: the
-	// lookup fails if the field is renamed, alerting a future refactor
-	// that downstream wiring depends on it.
-	s := inmem.New()
-	at := s.OpaqueAccessTokens()
-	if at == nil {
-		t.Fatal("OpaqueAccessTokens() returned nil")
-	}
-	rv := reflect.ValueOf(at).Elem()
-	if !rv.FieldByName("pepper").IsValid() {
-		t.Fatal("pepper field missing on opaqueAccessTokenStore (downstream commits depend on it)")
-	}
-}

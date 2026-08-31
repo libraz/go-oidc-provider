@@ -32,13 +32,31 @@ type sessionStore struct {
 	touchScript *redis.Script
 }
 
-// touchSessionLua atomically verifies that the session still exists,
-// refreshes its payload/TTL, restores chooser-group membership when a
-// legacy or prematurely expired index is missing, and extends that index
-// without shortening a longer-lived sibling's TTL.
+// touchSessionLua refreshes a session's payload and TTL only while the
+// stored record is still byte-for-byte the one the caller read, restores
+// chooser-group membership when a legacy or prematurely expired index is
+// missing, and extends that index without shortening a longer-lived
+// sibling's TTL.
+//
+// The stored-value comparison is what keeps Touch from being a
+// replacement. Redis has no primitive that edits two fields of a JSON
+// value, so the new payload is built in the adapter from the record it
+// read — and writing that back unconditionally would undo whatever
+// landed in between: the ACR a step-up just raised, the chooser group an
+// account switch just moved the session into, and the index entries
+// derived from them. [store.SessionStore.Touch] sets two fields, so a
+// snapshot that is no longer current is refused rather than written, and
+// the caller retries against what is there now.
+//
+// Returns 0 when the key is gone, 2 when the record changed under the
+// caller, and 1 when the refresh applied.
 const touchSessionLua = `
-if redis.call("EXISTS", KEYS[1]) == 0 then
+local current = redis.call("GET", KEYS[1])
+if not current then
 	return 0
+end
+if current ~= ARGV[4] then
+	return 2
 end
 redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2], "XX")
 if #KEYS == 2 then
@@ -51,6 +69,13 @@ if #KEYS == 2 then
 end
 return 1
 `
+
+// touchAttempts bounds how often Touch re-reads and retries after
+// finding the record changed under it. Each retry costs one round trip
+// and rebuilds the payload from what is stored now, so a handful is
+// enough to absorb an ordinary interleaved Save while still failing
+// rather than looping under a writer that never stops.
+const touchAttempts = 3
 
 func newSessionStore(parent *Store) *sessionStore {
 	return &sessionStore{
@@ -116,10 +141,16 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	}
 	ttl := sess.ExpiresAt.Sub(s.parent.clock.Now())
 	if ttl <= 0 {
-		// Past-dated Save: drop. The contract permits backends to
-		// treat already-expired records as absent on read, so writing
-		// one would only manufacture a Find/ListByChooserGroup hit
-		// that the expiry filter immediately rejects.
+		// Past-dated Save: the record itself is not worth storing, since
+		// every read path filters it out anyway — but the write still has
+		// to replace whatever the id held. Dropping it silently leaves an
+		// earlier, still-authenticated session exactly where it was,
+		// which is how an embedder that ends a session by storing a
+		// past-dated one gets a nil error and a subject who is still
+		// signed in on the next prompt=none authorization.
+		if err := s.Delete(ctx, sess.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
 		return nil
 	}
 
@@ -189,14 +220,32 @@ func (s *sessionStore) Find(ctx context.Context, id string) (*store.Session, err
 }
 
 // Touch extends the session's idle timer without recreating a deleted
-// record. Redis has no compare-and-update JSON primitive in the plain
-// command set, so the adapter fetches the record and uses one Lua operation
-// to rewrite its value and both TTLs. The operation restores missing
-// chooser-group membership and preserves a longer-lived sibling's index
-// expiry. If a concurrent Delete removes the key first, the script returns
-// false and Touch returns ErrNotFound instead of resurrecting the session.
+// record and without rewriting anything else the record holds. Redis has
+// no primitive that edits two fields of a JSON value, so the adapter
+// reads the record, derives the replacement, and conditions the write on
+// the stored bytes still being the ones it read (see [touchSessionLua]).
+// The operation also restores missing chooser-group membership and
+// preserves a longer-lived sibling's index expiry.
+//
+// A record that changed in between is re-read and the extension applied
+// again, up to [touchAttempts] times, so an interleaved Save costs a
+// round trip rather than the field it wrote. A caller that keeps losing
+// gets [store.ErrConflict]: overwriting with a snapshot known to be
+// stale is the one outcome the idle-timer extension must not produce. If
+// a concurrent Delete removes the key first, Touch returns ErrNotFound
+// instead of resurrecting the session.
 func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedAt time.Time) error {
-	rec, err := s.fetch(ctx, id)
+	for attempt := range touchAttempts {
+		err := s.touchOnce(ctx, id, expiresAt, updatedAt)
+		if !errors.Is(err, store.ErrConflict) || attempt == touchAttempts-1 {
+			return err
+		}
+	}
+	return store.ErrConflict
+}
+
+func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, updatedAt time.Time) error {
+	rec, stored, err := s.fetchRaw(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -235,14 +284,19 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 		payload,
 		ttlMillis,
 		id,
+		stored,
 	).Int()
 	if err != nil {
 		return fmt.Errorf("oidcredis: SET session (Touch): %w", err)
 	}
-	if updated == 0 {
+	switch updated {
+	case 0:
 		return store.ErrNotFound
+	case 1:
+		return nil
+	default:
+		return store.ErrConflict
 	}
-	return nil
 }
 
 // Delete removes the session identified by id. The chooser-group
@@ -377,18 +431,27 @@ func decodeSessionRaw(raw any) (*sessionRecord, bool) {
 // against the adapter clock (defence in depth) before treating the
 // record as live.
 func (s *sessionStore) fetch(ctx context.Context, id string) (*sessionRecord, error) {
+	rec, _, err := s.fetchRaw(ctx, id)
+	return rec, err
+}
+
+// fetchRaw reads a session and returns the stored bytes alongside the
+// decoded record. [sessionStore.Touch] needs both: the record to derive
+// its replacement from, and the exact bytes to condition the write on so
+// a snapshot that went stale is refused rather than written back.
+func (s *sessionStore) fetchRaw(ctx context.Context, id string) (*sessionRecord, []byte, error) {
 	raw, err := s.parent.client.Get(ctx, s.sessionKey(id)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return nil, store.ErrNotFound
+			return nil, nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("oidcredis: GET session: %w", err)
+		return nil, nil, fmt.Errorf("oidcredis: GET session: %w", err)
 	}
 	var rec sessionRecord
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return nil, fmt.Errorf("oidcredis: unmarshal session: %w", err)
+		return nil, nil, fmt.Errorf("oidcredis: unmarshal session: %w", err)
 	}
-	return &rec, nil
+	return &rec, raw, nil
 }
 
 func (s *sessionStore) encode(sess *store.Session) ([]byte, error) {
