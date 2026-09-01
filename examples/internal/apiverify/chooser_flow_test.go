@@ -163,10 +163,20 @@ func (b *browser) onOP(target string) bool {
 // reaches a 200 page on the OP, and returns that page. A redirect off
 // the OP (the RP callback) returns ok=false, which is how the driver
 // recognises "the authorization completed".
+//
+// "Off the OP" is not the same as "completed": a refused authorization
+// also leaves the OP, carrying an OAuth error instead of a code. Both
+// the entry target and every redirect followed below are checked for
+// one, so a ceremony the OP rejected fails here with its own reason
+// rather than being read as a success whose effect then goes missing
+// several hops later.
 func (b *browser) interactionPageAt(target string) (page string, ok bool) {
 	b.t.Helper()
 	for range 12 {
 		if !b.onOP(target) {
+			if err := oauthError(b.t, target); err != "" {
+				b.t.Fatalf("the OP refused the authorization with %q: %s", err, target)
+			}
 			b.finalURL = b.resolve(target)
 			return "", false
 		}
