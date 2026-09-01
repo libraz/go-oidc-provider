@@ -1281,13 +1281,17 @@ func attemptSilentAuthorization(
 	// request arrived; the grant has since been re-read (and possibly
 	// re-stamped) inside this transaction, so the invariants are settled
 	// here against what the code is actually about to point at.
-	authCtx := sessionAuthContext(active)
-	if err := validateTerminalAuthorization(ctx, txDeps, req, terminalAuthorization{
+	//
+	// The resolved authentication is discarded rather than stamped:
+	// resolveSilentGrant has already written the same projection of the
+	// same session record onto the grant, and re-stamping here would put
+	// a second write in the path of a value that cannot differ.
+	exit, backing := silentExit(hint, active)
+	if _, err := validateTerminalAuthorization(ctx, txDeps, req, terminalAuthorization{
+		Exit:                   exit,
+		Backing:                backing,
 		Subject:                active.Session.Subject,
 		Scope:                  req.Scope,
-		AuthTime:               authCtx.AuthTime,
-		ACR:                    authCtx.ACR,
-		SessionBacked:          true,
 		ConsentFromCachedGrant: hint.autoGrant == nil,
 		Grant:                  durableGrant,
 	}); err != nil {

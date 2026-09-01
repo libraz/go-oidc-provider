@@ -645,114 +645,6 @@ func chooserReentryBound(st authn.State) bool {
 		st.ChooserGroupID != "" && st.ChooserSelectedSessionID != ""
 }
 
-// resolveGrantACRAMR determines the acr/amr the grant and id_token
-// carry, plus the auth time to stamp on the result.
-//
-// A chain that ran no authenticator has no authentication of its own to
-// describe: [authn.Aggregate] over an empty factor set yields
-// acr=""/amr=nil, and the attempt's reference clock is the moment the
-// interaction record was created rather than the moment anybody
-// authenticated. Both such exits therefore copy the backing session's
-// assurance verbatim and bypass the ACR resolver — an account chooser
-// (select_account) re-entry takes it from the session the user picked,
-// and a chain that only ran interactions (an incremental-consent screen
-// against a live session) from the session the request carries. This
-// mirrors applyFirstPartySkip on the auto-grant path, so the grant never
-// silently downgrades to no-acr / no-amr and the reported auth_time
-// keeps naming the authentication that actually happened. Only a chain
-// that authenticated somebody reaches the configured ACR resolver.
-//
-// Copying a session's assurance verbatim is only sound when that session
-// belongs to the subject the chain bound; one that no longer does is a
-// permanent condition, not a transient fault, and yields
-// [errChooserSubjectMismatch] or [errSessionAuthnUnavailable]. Whether
-// the session is fresh and strong enough for the request is not settled
-// here: that is [validateTerminalAuthorization]'s job, which applies the
-// same predicates to every exit that can emit a code.
-func resolveGrantACRAMR(
-	r *http.Request,
-	deps resolved,
-	rec *store.Interaction,
-	req *authorize.Request,
-	authnState authn.State,
-	subject string,
-	authTime time.Time,
-) (string, []string, time.Time, error) {
-	if noCredentialChainRan(authnState) {
-		authCtx, err := backingSessionAuthContext(r, deps, authnState, subject)
-		if err != nil {
-			return "", nil, time.Time{}, err
-		}
-		if !authCtx.AuthTime.IsZero() {
-			authTime = authCtx.AuthTime
-		}
-		return authCtx.ACR, authCtx.AMR, authTime, nil
-	}
-	acr, amr, level := authn.Aggregate(authnState.Factors)
-	if deps.ACRResolver == nil {
-		return acr, amr, authTime, nil
-	}
-	out := deps.ACRResolver(r.Context(), ACRResolveInput{
-		RequestedACRValues: requestedACRValues(req),
-		CompletedKinds:     append([]string(nil), authnState.CompletedStepKinds...),
-		InternalAAL:        level,
-		Subject:            subject,
-		ClientID:           rec.ClientID,
-		RequestedScopes:    append([]string(nil), req.Scope...),
-		RemoteIP:           acrRemoteIP(r, deps, authnState),
-		UserAgent:          acrUserAgent(r, authnState),
-		AcceptLanguage:     r.Header.Get("Accept-Language"),
-	})
-	switch {
-	case out.OK:
-		acr = out.ACR
-		if out.AMR != nil {
-			amr = append([]string(nil), out.AMR...)
-		}
-	case essentialACRRequested(req):
-		return "", nil, time.Time{}, errACRUnmet
-	default:
-		acr = ""
-	}
-	return acr, amr, authTime, nil
-}
-
-// backingSessionAuthContext returns the authentication context of the
-// session a factor-less chain is served from: the one the account
-// chooser picked when it ran, otherwise the one the request carries.
-func backingSessionAuthContext(
-	r *http.Request,
-	deps resolved,
-	authnState authn.State,
-	subject string,
-) (grantAuthContext, error) {
-	if !chooserReentryBound(authnState) {
-		return currentSessionAuthContext(r, deps, subject)
-	}
-	authCtx, err := deps.Sessions.AuthContext(
-		r.Context(),
-		authnState.ChooserGroupID,
-		authnState.ChooserSelectedSessionID,
-	)
-	if err != nil {
-		return grantAuthContext{}, fmt.Errorf(
-			"authorizeendpoint: resolve chooser authentication context: %w", err,
-		)
-	}
-	if authCtx.Subject != subject {
-		return grantAuthContext{}, errChooserSubjectMismatch
-	}
-	return grantAuthContext{AuthTime: authCtx.AuthTime, ACR: authCtx.ACR, AMR: authCtx.AMR}, nil
-}
-
-// errChooserSubjectMismatch signals that the session an account chooser
-// bound no longer belongs to the subject the completed chain reports.
-// The condition is permanent — the grant a code would hang off can never
-// come to match a session owned by somebody else — so the caller retires
-// the interaction record and its ceremony cookies instead of leaving a
-// completed chain on disk for the user to replay into the same failure.
-var errChooserSubjectMismatch = errors.New("authorizeendpoint: chooser authentication context subject mismatch")
-
 // currentSessionAuthContext reads the authentication context off the
 // browser session the completing request carries, for a chain that
 // authenticated nobody itself and is therefore served from that
@@ -844,32 +736,25 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
 		return
 	}
-	acr, amr, authTime, err := resolveGrantACRAMR(
-		r,
-		deps,
-		rec,
-		req,
-		authnState,
-		result.Subject,
-		result.AuthTime,
-	)
+	exit, backing := interactionExit(r, deps, rec, req, authnState, result.Subject, result.AuthTime)
+	decision := resolveScopeDecision(authnState, result, req.Scope)
+	authCtx, err := validateTerminalAuthorization(r.Context(), deps, req, terminalAuthorization{
+		Exit:                   exit,
+		Backing:                backing,
+		Subject:                result.Subject,
+		Scope:                  decision.grantScope(req.Scope),
+		ConsentAnswered:        decision.answered,
+		ConsentFromCachedGrant: authnState.InteractionsRun[consent.Name],
+	})
 	if err != nil {
 		failTerminalAuthorization(w, r, deps, rec, req, err)
 		return
 	}
-	result.AuthTime = authTime
-	decision := resolveScopeDecision(authnState, result, req.Scope)
-	if err := validateTerminalAuthorization(r.Context(), deps, req, terminalAuthorization{
-		Subject:                result.Subject,
-		Scope:                  decision.grantScope(req.Scope),
-		AuthTime:               result.AuthTime,
-		ACR:                    acr,
-		SessionBacked:          noCredentialChainRan(authnState),
-		ConsentAnswered:        decision.answered,
-		ConsentFromCachedGrant: authnState.InteractionsRun[consent.Name],
-	}); err != nil {
-		failTerminalAuthorization(w, r, deps, rec, req, err)
-		return
+	// The completion carries the authentication the gate validated. A
+	// session that records no auth_time leaves the ceremony's own reading
+	// in place rather than reporting the zero instant.
+	if !authCtx.AuthTime.IsZero() {
+		result.AuthTime = authCtx.AuthTime
 	}
 	intent, err := prepareCompletionIntent(
 		r,
@@ -877,8 +762,8 @@ func terminateInteraction(
 		rec,
 		authnState,
 		result,
-		acr,
-		amr,
+		authCtx.ACR,
+		authCtx.AMR,
 		decision,
 		req.Scope,
 	)

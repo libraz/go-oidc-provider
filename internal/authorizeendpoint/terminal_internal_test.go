@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -44,6 +45,24 @@ func terminalGrant() *store.Grant {
 	}
 }
 
+// stubTerminalAuthn is a fixed authentication record for the gate to
+// read. The rows below vary what the record says, not who reported it:
+// an exit can only choose which record the gate reads, so a test that
+// wants a particular auth_time or acr supplies a record carrying it.
+type stubTerminalAuthn struct {
+	ctx grantAuthContext
+	err error
+}
+
+func (s stubTerminalAuthn) authContext(context.Context) (grantAuthContext, error) {
+	return s.ctx, s.err
+}
+
+// sessionAt returns a record whose authentication happened at t.
+func sessionAt(t time.Time) stubTerminalAuthn {
+	return stubTerminalAuthn{ctx: grantAuthContext{AuthTime: t}}
+}
+
 // TestValidateTerminalAuthorization covers the invariants the single
 // gate re-establishes for every exit that emits an authorization code.
 // Each row is an authorization some exit believed it could serve, and
@@ -61,24 +80,67 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 			name: "consistent silent mint passes",
 			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
 			in: terminalAuthorization{
+				Exit:                   exitSilentCachedGrant,
+				Backing:                sessionAt(terminalNow.Add(-time.Hour)),
 				Subject:                "user-1",
 				Scope:                  []string{"openid"},
-				AuthTime:               terminalNow.Add(-time.Hour),
-				SessionBacked:          true,
 				ConsentFromCachedGrant: true,
 				Grant:                  terminalGrant(),
 			},
 		},
 		{
+			name: "an exit that does not say which route it took",
+			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
+			in: terminalAuthorization{
+				Backing:                sessionAt(terminalNow.Add(-time.Hour)),
+				Subject:                "user-1",
+				Scope:                  []string{"openid"},
+				ConsentFromCachedGrant: true,
+				Grant:                  terminalGrant(),
+			},
+			want: errTerminalExitUnknown,
+		},
+		{
+			name: "an exit that points at no authentication record",
+			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
+			in: terminalAuthorization{
+				Exit:                   exitSilentCachedGrant,
+				Subject:                "user-1",
+				Scope:                  []string{"openid"},
+				ConsentFromCachedGrant: true,
+				Grant:                  terminalGrant(),
+			},
+			want: errTerminalAuthnUnavailable,
+		},
+		{
+			name: "the record the exit pointed at could not be read",
+			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
+			in: terminalAuthorization{
+				Exit:                   exitInteractiveChooserSession,
+				Backing:                stubTerminalAuthn{err: errChooserSubjectMismatch},
+				Subject:                "user-1",
+				Scope:                  []string{"openid"},
+				ConsentFromCachedGrant: true,
+				Grant:                  terminalGrant(),
+			},
+			want: errChooserSubjectMismatch,
+		},
+		{
 			name: "no subject bound",
 			req:  &authorize.Request{ClientID: "client-1"},
-			in:   terminalAuthorization{Grant: terminalGrant()},
+			in: terminalAuthorization{
+				Exit:    exitSilentCachedGrant,
+				Backing: sessionAt(terminalNow),
+				Grant:   terminalGrant(),
+			},
 			want: errTerminalSubjectMissing,
 		},
 		{
 			name: "grant belongs to another subject",
 			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
 			in: terminalAuthorization{
+				Exit:    exitSilentCachedGrant,
+				Backing: sessionAt(terminalNow),
 				Subject: "user-2",
 				Scope:   []string{"openid"},
 				Grant:   terminalGrant(),
@@ -89,6 +151,8 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 			name: "grant does not hold the scope the code would carry",
 			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid", "email"}},
 			in: terminalAuthorization{
+				Exit:    exitSilentCachedGrant,
+				Backing: sessionAt(terminalNow),
 				Subject: "user-1",
 				Scope:   []string{"openid", "email"},
 				Grant:   terminalGrant(),
@@ -105,6 +169,8 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 				},
 			},
 			in: terminalAuthorization{
+				Exit:    exitSilentCachedGrant,
+				Backing: sessionAt(terminalNow),
 				Subject: "user-1",
 				Scope:   []string{"openid"},
 				Grant:   terminalGrant(),
@@ -119,11 +185,11 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 				Prompt:   []string{interaction.PromptLogin},
 			},
 			in: terminalAuthorization{
-				Subject:       "user-1",
-				Scope:         []string{"openid"},
-				AuthTime:      terminalNow.Add(-time.Hour),
-				SessionBacked: true,
-				Grant:         terminalGrant(),
+				Exit:    exitSilentCachedGrant,
+				Backing: sessionAt(terminalNow.Add(-time.Hour)),
+				Subject: "user-1",
+				Scope:   []string{"openid"},
+				Grant:   terminalGrant(),
 			},
 			want: errStaleAuthentication,
 		},
@@ -131,11 +197,11 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 			name: "session-backed exit past max_age",
 			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}, MaxAge: ptrInt64(60)},
 			in: terminalAuthorization{
-				Subject:       "user-1",
-				Scope:         []string{"openid"},
-				AuthTime:      terminalNow.Add(-time.Hour),
-				SessionBacked: true,
-				Grant:         terminalGrant(),
+				Exit:    exitSilentCachedGrant,
+				Backing: sessionAt(terminalNow.Add(-time.Hour)),
+				Subject: "user-1",
+				Scope:   []string{"openid"},
+				Grant:   terminalGrant(),
 			},
 			want: errStaleAuthentication,
 		},
@@ -143,10 +209,10 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 			name: "a max_age too large to widen into a duration still admits the session",
 			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}, MaxAge: ptrInt64(99999999999)},
 			in: terminalAuthorization{
+				Exit:                   exitSilentCachedGrant,
+				Backing:                sessionAt(terminalNow.Add(-time.Hour)),
 				Subject:                "user-1",
 				Scope:                  []string{"openid"},
-				AuthTime:               terminalNow.Add(-time.Hour),
-				SessionBacked:          true,
 				ConsentFromCachedGrant: true,
 				Grant:                  terminalGrant(),
 			},
@@ -159,12 +225,14 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 				ACRValues: []string{"urn:example:strong"},
 			},
 			in: terminalAuthorization{
-				Subject:       "user-1",
-				Scope:         []string{"openid"},
-				AuthTime:      terminalNow.Add(-time.Hour),
-				ACR:           "urn:example:weak",
-				SessionBacked: true,
-				Grant:         terminalGrant(),
+				Exit: exitSilentCachedGrant,
+				Backing: stubTerminalAuthn{ctx: grantAuthContext{
+					AuthTime: terminalNow.Add(-time.Hour),
+					ACR:      "urn:example:weak",
+				}},
+				Subject: "user-1",
+				Scope:   []string{"openid"},
+				Grant:   terminalGrant(),
 			},
 			want: errACRUnmet,
 		},
@@ -176,10 +244,13 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 				ACRValues: []string{"urn:example:strong"},
 			},
 			in: terminalAuthorization{
+				Exit: exitInteractiveChain,
+				Backing: stubTerminalAuthn{ctx: grantAuthContext{
+					AuthTime: terminalNow,
+					ACR:      "urn:example:resolved-by-policy",
+				}},
 				Subject:         "user-1",
 				Scope:           []string{"openid"},
-				AuthTime:        terminalNow,
-				ACR:             "urn:example:resolved-by-policy",
 				ConsentAnswered: true,
 			},
 		},
@@ -187,9 +258,10 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 			name: "pre-marked consent against a subject with no grant",
 			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
 			in: terminalAuthorization{
+				Exit:                   exitInteractiveEntrySession,
+				Backing:                sessionAt(terminalNow),
 				Subject:                "user-without-grant",
 				Scope:                  []string{"openid"},
-				AuthTime:               terminalNow,
 				ConsentFromCachedGrant: true,
 			},
 			want: errTerminalConsentUncovered,
@@ -198,9 +270,10 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 			name: "pre-marked consent against the subject that consented",
 			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
 			in: terminalAuthorization{
+				Exit:                   exitInteractiveEntrySession,
+				Backing:                sessionAt(terminalNow),
 				Subject:                "user-1",
 				Scope:                  []string{"openid"},
-				AuthTime:               terminalNow,
 				ConsentFromCachedGrant: true,
 			},
 		},
@@ -208,9 +281,10 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 			name: "an answered ceremony is authoritative for the subject it ran under",
 			req:  &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
 			in: terminalAuthorization{
+				Exit:                   exitInteractiveChain,
+				Backing:                sessionAt(terminalNow),
 				Subject:                "user-without-grant",
 				Scope:                  []string{"openid"},
-				AuthTime:               terminalNow,
 				ConsentAnswered:        true,
 				ConsentFromCachedGrant: true,
 			},
@@ -224,7 +298,7 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 			if err := backing.Grants().Save(context.Background(), terminalGrant()); err != nil {
 				t.Fatalf("Save grant: %v", err)
 			}
-			err := validateTerminalAuthorization(
+			_, err := validateTerminalAuthorization(
 				context.Background(),
 				terminalDeps(backing.Grants()),
 				row.req,
@@ -240,6 +314,44 @@ func TestValidateTerminalAuthorization(t *testing.T) {
 				t.Fatalf("validateTerminalAuthorization = %v, want %v", err, row.want)
 			}
 		})
+	}
+}
+
+// TestValidateTerminalAuthorization_ReturnsWhatItValidated fixes the
+// reason the gate has a return value at all. The caller stamps the
+// authentication onto the grant and the id_token; if it re-read the
+// record itself instead, the value shipped and the value checked would
+// be two separate reads of a record that can change between them.
+func TestValidateTerminalAuthorization_ReturnsWhatItValidated(t *testing.T) {
+	t.Parallel()
+
+	want := grantAuthContext{
+		AuthTime: terminalNow.Add(-time.Minute),
+		ACR:      "urn:example:strong",
+		AMR:      []string{"pwd", "otp"},
+	}
+	backing := inmem.New(inmem.WithClock(fixedAuthorizeClock(terminalNow)))
+	if err := backing.Grants().Save(context.Background(), terminalGrant()); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+	got, err := validateTerminalAuthorization(
+		context.Background(),
+		terminalDeps(backing.Grants()),
+		&authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
+		terminalAuthorization{
+			Exit:                   exitSilentCachedGrant,
+			Backing:                stubTerminalAuthn{ctx: want},
+			Subject:                "user-1",
+			Scope:                  []string{"openid"},
+			ConsentFromCachedGrant: true,
+			Grant:                  terminalGrant(),
+		},
+	)
+	if err != nil {
+		t.Fatalf("validateTerminalAuthorization = %v, want nil", err)
+	}
+	if !got.AuthTime.Equal(want.AuthTime) || got.ACR != want.ACR || !slices.Equal(got.AMR, want.AMR) {
+		t.Fatalf("gate returned %+v, want the record it read: %+v", got, want)
 	}
 }
 
@@ -274,14 +386,23 @@ func TestTerminateInteraction_ChooserSubjectMismatchRetiresTheRecord(t *testing.
 	}
 	// The session the chooser bound belongs to somebody other than the
 	// subject the completed chain reports.
-	picked, err := manager.Issue(ctx, sessions.Login{
-		Subject:  "user-picked",
-		AuthTime: terminalNow,
-		ACR:      "urn:example:strong",
-		AMR:      []string{"pwd"},
+	pickedPlan, err := manager.PlanEstablishment(ctx, sessions.EstablishPlan{
+		Login: sessions.Login{
+			Subject:  "user-picked",
+			AuthTime: terminalNow,
+			ACR:      "urn:example:strong",
+			AMR:      []string{"pwd"},
+		},
+		StableSessionID:      "session-picked",
+		StableChooserGroupID: "chooser-picked",
+		Now:                  terminalNow,
 	})
 	if err != nil {
-		t.Fatalf("Issue picked session: %v", err)
+		t.Fatalf("PlanEstablishment picked session: %v", err)
+	}
+	picked, err := manager.Establish(ctx, pickedPlan)
+	if err != nil {
+		t.Fatalf("Establish picked session: %v", err)
 	}
 
 	state := authorize.RequestState{Library: authorize.RequestSnapshot{

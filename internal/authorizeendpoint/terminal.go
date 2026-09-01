@@ -17,6 +17,19 @@ import (
 // what the request asked for: the point of the type is to let one
 // validator compare the two.
 type terminalAuthorization struct {
+	// Exit names the route this call came in on. It is the only thing an
+	// exit says about which rules apply to it: whether the response is
+	// served from an authentication established before this attempt is
+	// read off the route's spec, not asserted per call.
+	Exit exitKind
+
+	// Backing locates the record holding the authentication the response
+	// reports. The gate reads it, applies the request's constraints to
+	// what it found, and returns it — so the value the caller goes on to
+	// stamp is the value that was checked. See [terminalAuthn] for why
+	// the exit hands over a locator instead of an auth_time and an acr.
+	Backing terminalAuthn
+
 	// Subject is the account the code will be issued for. On the
 	// interactive exit this is the subject the credential chain bound,
 	// which is not necessarily the subject the request arrived with.
@@ -24,21 +37,6 @@ type terminalAuthorization struct {
 
 	// Scope is the scope set the code will carry.
 	Scope []string
-
-	// AuthTime and ACR describe the authentication backing the response:
-	// the ceremony that just ran, the session the account chooser bound,
-	// or the session a silent mint is served from.
-	AuthTime time.Time
-	ACR      string
-
-	// SessionBacked reports that the authentication above was established
-	// before this attempt rather than during it. The request's freshness
-	// and authentication-context constraints were evaluated at the door
-	// against the session the *cookie* carried, which is not necessarily
-	// this one, so they are re-applied here. A ceremony that ran during
-	// this attempt is instead governed by the ACR resolution seam, which
-	// has already had its say by the time this validator runs.
-	SessionBacked bool
 
 	// ConsentAnswered reports that a consent ceremony returned a scope
 	// decision during this attempt. An answered ceremony is authoritative
@@ -61,6 +59,17 @@ type terminalAuthorization struct {
 // errTerminalSubjectMissing signals that an exit reached the code-issuing
 // gate without a subject to bind the code to.
 var errTerminalSubjectMissing = errors.New("authorizeendpoint: terminal authorization has no subject")
+
+// errTerminalExitUnknown signals that a call reached the code-issuing
+// gate without naming which route it came in on, or naming one the gate
+// has no rules for. The rules are not guessable from the rest of the
+// input, so the gate refuses rather than picking a default.
+var errTerminalExitUnknown = errors.New("authorizeendpoint: terminal authorization names no exit")
+
+// errTerminalAuthnUnavailable signals that an exit named a route but
+// supplied nothing to read the backing authentication from. Serving the
+// response would mean reporting an authentication nobody sourced.
+var errTerminalAuthnUnavailable = errors.New("authorizeendpoint: terminal authorization has no authentication source")
 
 // errTerminalGrantMismatch signals that the grant an exit resolved does
 // not describe the authorization the request asked for: a different
@@ -96,26 +105,29 @@ var errStaleAuthentication = errors.New("authorizeendpoint: authentication is ol
 // that emits an authorization code passes through, immediately before
 // the code is persisted.
 //
-// The endpoint has four such exits — a silent mint against a cached
-// grant, a first-party auto-grant, a completed interaction, and the
-// resumption of one — and each of them arrives with its own reason for
-// believing the request may be served. Those reasons were all formed at
-// the door, against the session the request arrived with and the grant
-// that session's subject held at that moment. Between the door and the
-// code, the credential chain may bind a different subject, an account
-// chooser may bind a different session, and a concurrent request may
-// amend the grant. The invariants are therefore re-established here,
-// against what the exit actually resolved:
+// The routes into it are enumerated by [exitKind], and each of them
+// arrives with its own reason for believing the request may be served.
+// Those reasons were all formed at the door, against the session the
+// request arrived with and the grant that session's subject held at that
+// moment. Between the door and the code, the credential chain may bind a
+// different subject, an account chooser may bind a different session,
+// and a concurrent request may amend the grant. The invariants are
+// therefore re-established here, against what the exit actually
+// resolved:
 //
+//   - the exit names a route the gate has rules for;
 //   - a subject is bound;
 //   - the grant the code hangs off belongs to that subject and this
 //     client, holds the scope the code will carry, and records this
 //     request's claims projection;
-//   - the authentication backing the response satisfies the request's
-//     max_age / prompt=login freshness and its acr_values;
+//   - the authentication backing the response — read here, off the
+//     record the exit pointed at — satisfies the request's max_age /
+//     prompt=login freshness and its acr_values;
 //   - the scope being granted is backed by consent from the bound
 //     subject.
 //
+// It returns the authentication it resolved so the caller stamps the
+// value that passed rather than reading the record a second time.
 // Callers map the returned sentinel onto their own channel: the
 // interaction path terminates the ceremony, the silent path answers the
 // redirect, and both refuse to mint.
@@ -124,17 +136,24 @@ func validateTerminalAuthorization(
 	deps resolved,
 	req *authorize.Request,
 	in terminalAuthorization,
-) error {
+) (grantAuthContext, error) {
+	if !in.Exit.valid() {
+		return grantAuthContext{}, errTerminalExitUnknown
+	}
 	if req == nil || in.Subject == "" {
-		return errTerminalSubjectMissing
+		return grantAuthContext{}, errTerminalSubjectMissing
 	}
 	if err := validateTerminalGrant(deps, req, in); err != nil {
-		return err
+		return grantAuthContext{}, err
 	}
-	if err := validateTerminalAuthentication(req, in, deps.now().UTC()); err != nil {
-		return err
+	authCtx, err := resolveTerminalAuthentication(ctx, req, in, deps.now().UTC())
+	if err != nil {
+		return grantAuthContext{}, err
 	}
-	return validateTerminalConsent(ctx, deps, req, in)
+	if err := validateTerminalConsent(ctx, deps, req, in); err != nil {
+		return grantAuthContext{}, err
+	}
+	return authCtx, nil
 }
 
 // validateTerminalGrant checks the grant the exit resolved against the
@@ -199,29 +218,46 @@ func claimsPayloadEqual(stored, requested map[string]any) bool {
 	return bytes.Equal(rawStored, rawRequested)
 }
 
-// validateTerminalAuthentication re-applies the request's freshness and
-// authentication-context constraints to the authentication that actually
-// backs the response.
+// resolveTerminalAuthentication reads the authentication backing the
+// response off the record that holds it, then re-applies the request's
+// freshness and authentication-context constraints to what it found.
 //
-// It runs only for a response served from an authentication established
-// before this attempt. A ceremony that ran during the attempt satisfies
-// prompt=login and max_age by construction, and its acr is the ACR
-// resolution seam's verdict — re-deriving one here from string
+// The constraints apply only to a response served from an authentication
+// established before this attempt — the routes [exitSpec] marks
+// ServesEstablishedSession. A ceremony that ran during the attempt
+// satisfies prompt=login and max_age by construction, and its acr is the
+// ACR resolution seam's verdict; re-deriving one here from string
 // membership would overrule the configured [op.ACRPolicy].
-func validateTerminalAuthentication(req *authorize.Request, in terminalAuthorization, now time.Time) error {
-	if !in.SessionBacked {
-		return nil
+//
+// The read happens here rather than at the caller so the exit cannot
+// hand the gate an assurance of its own composition, and the resolved
+// value is returned so the two never diverge downstream.
+func resolveTerminalAuthentication(
+	ctx context.Context,
+	req *authorize.Request,
+	in terminalAuthorization,
+	now time.Time,
+) (grantAuthContext, error) {
+	if in.Backing == nil {
+		return grantAuthContext{}, errTerminalAuthnUnavailable
+	}
+	authCtx, err := in.Backing.authContext(ctx)
+	if err != nil {
+		return grantAuthContext{}, err
+	}
+	if !in.Exit.spec().ServesEstablishedSession {
+		return authCtx, nil
 	}
 	if containsString(req.Prompt, interaction.PromptLogin) {
-		return errStaleAuthentication
+		return grantAuthContext{}, errStaleAuthentication
 	}
-	if req.MaxAge != nil && authorize.AuthenticationIsStale(in.AuthTime, now, *req.MaxAge) {
-		return errStaleAuthentication
+	if req.MaxAge != nil && authorize.AuthenticationIsStale(authCtx.AuthTime, now, *req.MaxAge) {
+		return grantAuthContext{}, errStaleAuthentication
 	}
-	if acrUnsatisfiedByRequest(in.ACR, req) {
-		return errACRUnmet
+	if acrUnsatisfiedByRequest(authCtx.ACR, req) {
+		return grantAuthContext{}, errACRUnmet
 	}
-	return nil
+	return authCtx, nil
 }
 
 // validateTerminalConsent re-evaluates the consent decision against the

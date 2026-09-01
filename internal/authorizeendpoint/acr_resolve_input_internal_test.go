@@ -15,6 +15,35 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
+// resolveGrantACRAMR names the exit a completed ceremony took and asks
+// the record it points at for the authentication the response reports.
+//
+// It is the two production statements that precede the terminal gate,
+// spelled as one call: the endpoint itself resolves the same pair inside
+// [validateTerminalAuthorization], which returns what it validated. The
+// tests below drive it directly because their subject is the resolution
+// — which record is read, and what the ACR policy is handed — rather
+// than the request constraints the gate goes on to apply.
+func resolveGrantACRAMR(
+	r *http.Request,
+	deps resolved,
+	rec *store.Interaction,
+	req *authorize.Request,
+	authnState authn.State,
+	subject string,
+	authTime time.Time,
+) (string, []string, time.Time, error) {
+	_, backing := interactionExit(r, deps, rec, req, authnState, subject, authTime)
+	authCtx, err := backing.authContext(r.Context())
+	if err != nil {
+		return "", nil, time.Time{}, err
+	}
+	if !authCtx.AuthTime.IsZero() {
+		authTime = authCtx.AuthTime
+	}
+	return authCtx.ACR, authCtx.AMR, authTime, nil
+}
+
 // acrCapture records the input the ACR policy was handed and answers
 // with a fixed verdict, so a test can assert on what the wire layer
 // resolved rather than on what the policy decided to do with it.
