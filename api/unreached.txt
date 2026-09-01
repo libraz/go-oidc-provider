@@ -2,10 +2,17 @@
 # is the correct state.
 #
 # Format: <kind> TAB <id> TAB <reason>, one row per entry.
-#   symbol   <package dir>.<Name>   an exported constant or sentinel
+#   symbol   <package dir>.<Name>   an exported constant, or an Err-prefixed
+#                                   exported sentinel, never named as a Go
+#                                   identifier in non-test library code
 #   event    <audit event name>     a catalogued event nothing emits
 #   message  <i18n key>             a seed key no built-in screen renders
 #   index    <GSI name>             a secondary index no read path queries
+#
+# "Never named" for a symbol row is a textual-reference test: a name that
+# appears only inside an enum's own String()/IsValid()-style plumbing
+# already counts as named, whether or not any code path branches on the
+# value. That question is left to manual review; this gate cannot ask it.
 #
 # The reason has to argue why nothing reading the entry is right —
 # reserved wire vocabulary a deployment raises itself, a frozen

@@ -118,12 +118,18 @@ stability-check:
 stability-backfill:
 	@scripts/stability.sh --write-backfill
 
-# Declared-but-unreached gate: exported constants and sentinels no code
-# path produces, catalogued audit events whose godoc lets an operator
-# read silence as evidence, seed message keys no screen renders, and
-# DynamoDB indexes no read path queries. Deliberate exceptions live in
-# api/unreached.txt, one row each with the reason nothing reading the
-# entry is correct; a row that stops applying fails too.
+# Declared-but-unreached gate: exported constants and Err-prefixed
+# sentinels never named as a Go identifier anywhere in non-test library
+# code, catalogued audit events whose godoc lets an operator read
+# silence as evidence, seed message keys no screen renders, and
+# DynamoDB indexes no read path queries. "Named" is a textual-reference
+# test, not a control-flow one: a symbol that appears only in an
+# enum's own String()/IsValid()-style plumbing counts as named, even
+# when nothing ever branches on it. Whether a flag is actually
+# consulted anywhere remains a manual review question this gate does
+# not answer. Deliberate exceptions live in api/unreached.txt, one row
+# each with the reason nothing reading the entry is correct; a row
+# that stops applying fails too.
 reach:
 	@scripts/reach.sh
 
