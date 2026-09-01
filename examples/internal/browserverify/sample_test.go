@@ -204,7 +204,12 @@ func enrolTOTP(ctx context.Context) (string, time.Time, error) {
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("enrolment code: %w", err)
 	}
+	// Confirming the enrolment replaces whatever second factor the account
+	// had, so the application asks for the current password alongside the
+	// code. Typing it here is what makes this a test of the flow a member
+	// actually walks rather than of a form that no longer exists.
 	if err := chromedp.Run(ctx,
+		chromedp.SendKeys(`input[name="current_password"]`, samplePassword, chromedp.ByQuery),
 		chromedp.SendKeys(`input[name="code"]`, code, chromedp.ByQuery),
 		chromedp.Click(`button[type="submit"]`, chromedp.ByQuery),
 		chromedp.WaitVisible(`.flag-ok`, chromedp.ByQuery),
