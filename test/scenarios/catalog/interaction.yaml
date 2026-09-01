@@ -131,7 +131,7 @@ rows:
       `text/html` matching
       `/interaction session and authentication session mismatch/`.
     status: out-of-scope
-    out_of_scope_reason: "An upstream reference OP 'interaction session and authentication session mismatch' text/html error after consent POST when the auth session is destroyed before resume runs. v1.0 has no /auth/resume endpoint — terminateInteraction (internal/authorizeendpoint/interaction.go) runs in the same handler as the consent POST, calling sessions.Manager.Issue/Switch/AddAccount synchronously. There is no resume gap and no upstream 'mismatch' error string."
+    out_of_scope_reason: "An upstream reference OP 'interaction session and authentication session mismatch' text/html error after consent POST when the auth session is destroyed before resume runs. v1.0 has no /auth/resume endpoint — terminateInteraction (internal/authorizeendpoint/interaction.go) runs in the same handler as the consent POST, applying the planned sessions.Establishment synchronously. There is no resume gap and no upstream 'mismatch' error string."
 
   - id: ITX-025
     severity: P0
@@ -193,7 +193,7 @@ rows:
       yield a permanent session cookie (the `expires` attribute is
       set). `getSession()` MUST be non-`transient`.
     status: out-of-scope
-    out_of_scope_reason: "Vendor-specific 'remember' flag on the login result that toggles permanent vs transient session cookie semantics. v1.0 has no 'remember' input — sessions.Manager.Issue always emits a __Host-oidc_session cookie with the configured TTL, and the embedder's interaction.Driver does not negotiate remember-me at the orchestrator boundary. Add-remember-flag would require a public Authenticator.RememberMe() extension which is not in v1.0's API."
+    out_of_scope_reason: "Vendor-specific 'remember' flag on the login result that toggles permanent vs transient session cookie semantics. v1.0 has no 'remember' input — sessions.Manager.Establish always emits a __Host-oidc_session cookie with the configured TTL, and the embedder's interaction.Driver does not negotiate remember-me at the orchestrator boundary. Add-remember-flag would require a public Authenticator.RememberMe() extension which is not in v1.0's API."
 
   - id: ITX-053
     severity: P0

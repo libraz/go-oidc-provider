@@ -36,6 +36,7 @@ rows:
       the form action attribute. An XSS payload such as
       https://client.example.com/cb"><script>...</script><x=" MUST be
       rendered as escaped text only and never executed.
+    shape: value
     status: active
 
   - id: RMO-003

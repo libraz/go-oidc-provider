@@ -279,11 +279,12 @@ rows:
     spec: RFC 9068 §2 / RFC 8705 / RFC 9449
     behaviour: |
       A standard bearer JWT access token sets header typ=at+jwt,
-      alg=ES256, and a kid pointing at the active signing key, with a
+      alg=ES256, and a kid equal to the active signing key's, with a
       payload containing iss, sub, client_id, aud, scope, jti, iat,
       and exp. The cnf claim is absent on the bearer default; it
       appears only when the token is sender-constrained (DPoP jkt or
       mTLS x5t#S256, covered by the dpop / mtls catalogs).
+    shape: value
     status: active
 
   - id: TFJ-029

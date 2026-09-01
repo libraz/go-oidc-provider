@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"testing"
 
@@ -679,4 +681,121 @@ func TestScenario_DIS_040_DiscoveryEndpointsAreCORSOpen(t *testing.T) {
 func TestScenario_DIS_041_OAuthMirrorMatchesOIDCConfig(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: DIS-041 (see catalog out_of_scope_reason)")
+}
+
+// TestScenario_DIS_042_AdvertisedEndpointsAreRouted checks that every
+// absolute URL the discovery document advertises reaches a handler.
+//
+// The rest of this file asserts that a metadata field is present and
+// looks plausible. That is a weaker claim than an RP relies on: an RP
+// reads the document once and addresses every later request to the URLs
+// it found there, so a field advertising a path the router never bound
+// is indistinguishable from a correct document until the first real
+// request 404s. The provider below turns on the optional endpoints
+// precisely so the conditional advertisements are covered too.
+//
+// A handler that then rejects the request — 400, 401, 405 — is a pass:
+// the claim under test is that the route exists, not that a bare GET
+// satisfies it. Only the router's not-found path is a failure.
+//
+// Spec: RFC 8414 §2 / OIDC Discovery §3.
+func TestScenario_DIS_042_AdvertisedEndpointsAreRouted(t *testing.T) {
+	t.Parallel()
+
+	p := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithDeviceCodeGrant(),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.JARM),
+	))
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+
+	advertised := advertisedURLs(t, doc)
+	if len(advertised) < 2 {
+		t.Fatalf("discovery advertised %d absolute URLs, want the endpoint set: %v", len(advertised), advertised)
+	}
+
+	probed := 0
+	for _, field := range sortedKeys(advertised) {
+		raw := advertised[field]
+		// The document advertises absolute URLs under the configured
+		// Issuer Identifier, which does not resolve in a test process.
+		// Probing the advertised host would therefore fail DNS on every
+		// field and prove nothing, so the path is replayed against the
+		// server actually under test — the router is the subject here,
+		// not name resolution.
+		target, err := url.Parse(raw)
+		if err != nil {
+			t.Errorf("%s=%q is not a usable URL: %v", field, raw, err)
+			continue
+		}
+		probe := p.Server.URL + target.EscapedPath()
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, probe, http.NoBody)
+		if err != nil {
+			t.Errorf("%s: cannot probe %q: %v", field, probe, err)
+			continue
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("%s advertised as %q: %v", field, raw, err)
+			continue
+		}
+		status := resp.StatusCode
+		resp.Body.Close()
+		probed++
+		if status == http.StatusNotFound {
+			t.Errorf("%s=%q is advertised but the router serves no such route (404 at %s); "+
+				"an RP that believes the document fails at its first request", field, raw, target.EscapedPath())
+		}
+	}
+	// Without this the test passes by probing nothing, which is how a
+	// gate reports success over an empty set.
+	if probed != len(advertised) {
+		t.Errorf("probed %d of %d advertised endpoints; every one must be reached "+
+			"or the pass says nothing", probed, len(advertised))
+	}
+}
+
+// advertisedURLs collects every discovery field whose value is an
+// absolute URL the OP is claiming to serve: the *_endpoint family plus
+// jwks_uri. Informational URLs that deliberately point at documentation
+// rather than at a protocol route are excluded by name.
+func advertisedURLs(tb testing.TB, doc map[string]any) map[string]string {
+	tb.Helper()
+	informational := map[string]bool{
+		"service_documentation": true,
+		"op_policy_uri":         true,
+		"op_tos_uri":            true,
+	}
+	out := map[string]string{}
+	for key, value := range doc {
+		if informational[key] {
+			continue
+		}
+		if !strings.HasSuffix(key, "_endpoint") && key != "jwks_uri" {
+			continue
+		}
+		raw, ok := value.(string)
+		if !ok || raw == "" {
+			tb.Errorf("%s is advertised as %v, which is not a URL", key, value)
+			continue
+		}
+		if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+			tb.Errorf("%s=%q must be an absolute URL (RFC 8414 §2)", key, raw)
+			continue
+		}
+		out[key] = raw
+	}
+	return out
+}
+
+// sortedKeys orders a map's keys so a failure names the same field
+// first on every run.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

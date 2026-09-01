@@ -31,7 +31,13 @@ rows:
     spec: RFC 9207 §2
     behaviour: |
       A successful response_type=code redirect carries code, state,
-      and iss as query parameters.
+      and iss as query parameters, and iss equals the OP's configured
+      Issuer Identifier. The value is the whole mechanism: an RP
+      detects a mix-up attack by comparing iss against the issuer it
+      sent the request to, so a response carrying some other issuer's
+      identifier — or a placeholder — defeats RFC 9207 while still
+      satisfying a check that only looks for the parameter.
+    shape: value
     status: active
 
   - id: ISS-011
@@ -122,17 +128,24 @@ rows:
     spec: RFC 9207 §2 + JARM §4.1
     behaviour: |
       With response_mode=jwt (any response_type), the redirect query
-      carries the response JWT; the iss claim is embedded inside the
-      JWT payload.
+      carries the response JWT and no bare iss parameter; the iss
+      claim inside the JWT payload equals the OP's configured Issuer
+      Identifier.
+    shape: value
     status: active
 
   - id: ISS-020
     severity: P0
     spec: RFC 9207 §2
     behaviour: |
-      A regular response_modes error (e.g. invalid scope "openid
-      profile") redirects back with error, error_description,
-      state, and iss as query parameters.
+      A regular response_modes error (e.g. a scope outside the
+      client's registered set) redirects back with error,
+      error_description, state, and iss as query parameters, and iss
+      equals the OP's configured Issuer Identifier. The error path
+      carries the same obligation as the success path: an RP that
+      cannot attribute a failure to an issuer cannot tell a rejection
+      from a mix-up.
+    shape: value
     status: active
 
   - id: ISS-021
@@ -148,8 +161,10 @@ rows:
     severity: P0
     spec: RFC 9207 §2 + JARM §4.1
     behaviour: |
-      A response_mode=jwt error redirects back with the response
-      JWT (which carries iss) as a query parameter.
+      A response_mode=jwt error redirects back with the response JWT
+      as a query parameter, and the JWT's iss claim equals the OP's
+      configured Issuer Identifier.
+    shape: value
     status: active
 
   - id: ISS-023
