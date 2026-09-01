@@ -18,7 +18,7 @@ Message Signing.
 > reference live there. This README is the source-tree map and example
 > inventory.
 
-> **Status: `v1.1.0`.** The public `op` surface is under strict
+> **Status: `v1.2.0`.** The public `op` surface is under strict
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the 1.0
 > release on. The one exemption is symbols documented with an `Experimental:`
 > marker; they are inventoried in [`api/experimental.txt`](api/experimental.txt),
@@ -37,16 +37,16 @@ Message Signing.
 ## Install
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v1.1.0
+go get github.com/libraz/go-oidc-provider/op@v1.2.0
 ```
 
 Go 1.25+. Storage adapters are published as sub-modules so their
 dependencies stay out of your `go.sum` until you opt in:
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.1.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.1.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.1.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.2.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.2.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.2.0
 ```
 
 ## Quickstart

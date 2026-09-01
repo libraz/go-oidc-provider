@@ -14,7 +14,7 @@ go 1.25.0
 toolchain go1.27.0
 
 require (
-	github.com/libraz/go-oidc-provider v1.1.0
+	github.com/libraz/go-oidc-provider v1.2.0
 	rsc.io/qr v0.2.0
 )
 

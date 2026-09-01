@@ -19,7 +19,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 > オプションリファレンスはすべてドキュメントサイトに集約しています。本 README
 > は、ソースツリーの案内とサンプル一覧に絞っています。
 
-> **ステータス: `v1.1.0`。** 1.0 リリース以降、公開 `op` API は
+> **ステータス: `v1.2.0`。** 1.0 リリース以降、公開 `op` API は
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。
 > 唯一の例外は godoc に `Experimental:` マーカーを持つシンボルで、その一覧は
 > [`api/experimental.txt`](api/experimental.txt) に機械生成されます。
@@ -40,7 +40,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 ## インストール
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v1.1.0
+go get github.com/libraz/go-oidc-provider/op@v1.2.0
 ```
 
 Go 1.25 以上が必要です。DB / Redis / AWS SDK のドライバを引き込むストア
@@ -48,9 +48,9 @@ Go 1.25 以上が必要です。DB / Redis / AWS SDK のドライバを引き込
 利用者の `go.sum` に余計な依存は入りません。
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.1.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.1.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.1.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.2.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.2.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.2.0
 ```
 
 ## クイックスタート

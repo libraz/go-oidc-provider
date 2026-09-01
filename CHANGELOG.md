@@ -11,7 +11,10 @@ series) carry breaking changes, and `v1.1.0` carries several on the stable
 surface as well — chiefly the `op/store` interfaces a bring-your-own store
 implements. An embedder on `op.New` plus a bundled storage adapter compiles
 unchanged; one that implements its own `store.*`, `op.HintResolver`,
-`op.SubjectGenerator` or `op.CaptchaVerifier` does not.
+`op.SubjectGenerator` or `op.CaptchaVerifier` does not. `v1.2.0` leaves the
+runtime surface intact and breaks only `op/store/contract`, the test harness a
+bring-your-own store runs against itself, so the adaptation is confined to test
+code.
 
 The main module and the storage-adapter sub-modules
 (`op/storeadapter/sql`, `op/storeadapter/redis`, and from `v1.0.0`
@@ -19,7 +22,13 @@ The main module and the storage-adapter sub-modules
 each sub-module independently:
 
 ```
-# v1.1.0 (latest)
+# v1.2.0 (latest)
+go get github.com/libraz/go-oidc-provider@v1.2.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.2.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.2.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.2.0
+
+# v1.1.0
 go get github.com/libraz/go-oidc-provider@v1.1.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.1.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.1.0
@@ -62,7 +71,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
-## [Unreleased]
+## [v1.2.0] — 2026-09-02
 
 A security and correctness pass across the whole surface. Most of what changed
 closes a path on which the OP answered without saying it had answered wrongly:
@@ -4101,7 +4110,8 @@ from the access-token TTL (see Changed).
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.2.0...HEAD
+[v1.2.0]: https://github.com/libraz/go-oidc-provider/compare/v1.1.0...v1.2.0
 [v1.1.0]: https://github.com/libraz/go-oidc-provider/compare/v1.0.0...v1.1.0
 [v1.0.0]: https://github.com/libraz/go-oidc-provider/compare/v0.9.5...v1.0.0
 [v0.9.5]: https://github.com/libraz/go-oidc-provider/compare/v0.9.4...v0.9.5

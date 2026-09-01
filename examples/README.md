@@ -28,10 +28,10 @@ example is started with the `go run` line above.
 Embedder-side install (the same versions every example pins):
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v1.1.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.1.0       # examples 06 / 07 / 08 / 09 / 17 / 24 / 25 / 27
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.1.0     # examples 09 / 17
-go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.1.0  # example 18
+go get github.com/libraz/go-oidc-provider/op@v1.2.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.2.0       # examples 06 / 07 / 08 / 09 / 17 / 24 / 25 / 27
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.2.0     # examples 09 / 17
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.2.0  # example 18
 ```
 
 Each row in the table below also maps to a use-case page on the docs site under

@@ -17,7 +17,7 @@ go 1.26
 
 toolchain go1.27.0
 
-require github.com/libraz/go-oidc-provider v1.1.0
+require github.com/libraz/go-oidc-provider v1.2.0
 
 require (
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect

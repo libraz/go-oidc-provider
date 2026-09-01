@@ -15,9 +15,9 @@ toolchain go1.27.0
 require (
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/go-sql-driver/mysql v1.10.0
-	github.com/libraz/go-oidc-provider v1.1.0
-	github.com/libraz/go-oidc-provider/op/storeadapter/redis v1.1.0
-	github.com/libraz/go-oidc-provider/op/storeadapter/sql v1.1.0
+	github.com/libraz/go-oidc-provider v1.2.0
+	github.com/libraz/go-oidc-provider/op/storeadapter/redis v1.2.0
+	github.com/libraz/go-oidc-provider/op/storeadapter/sql v1.2.0
 	golang.org/x/oauth2 v0.36.0
 )
 
