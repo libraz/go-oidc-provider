@@ -626,36 +626,49 @@ func csrfFromForm(r *http.Request) string {
 	return r.PostForm.Get("csrf_token")
 }
 
-// chooserReentryBound reports whether the completing chain bound an
-// existing session through the account chooser rather than running a
-// credential ceremony of its own. The predicate is shared by the
-// resolver below (which seeds the auth context from the picked session)
-// and by [terminateInteraction] (which tells the terminal validator that
-// the response is served from an authentication established before this
-// attempt), so the two cannot disagree about what the chain did.
+// noCredentialChainRan reports whether the completing chain established
+// no authentication of its own, so whatever the response reports has to
+// come from an authentication that already existed when the request
+// arrived. It is the predicate the resolver below branches on and the
+// one [terminalAuthorization.SessionBacked] carries, so the two cannot
+// disagree about what the chain did.
+func noCredentialChainRan(st authn.State) bool {
+	return len(st.Factors) == 0
+}
+
+// chooserReentryBound narrows [noCredentialChainRan] to the account
+// chooser: the user picked a specific existing session, which is named
+// on the chain state and is not necessarily the session the request
+// arrived with.
 func chooserReentryBound(st authn.State) bool {
-	return len(st.Factors) == 0 && st.ChooserBoundSubject &&
+	return noCredentialChainRan(st) && st.ChooserBoundSubject &&
 		st.ChooserGroupID != "" && st.ChooserSelectedSessionID != ""
 }
 
 // resolveGrantACRAMR determines the acr/amr the grant and id_token
-// carry, plus the auth time to stamp on the result. On an account
-// chooser (select_account) re-entry the user picked an existing session
-// instead of running an authenticator, so authnState.Factors is empty
-// and [authn.Aggregate] yields acr=""/amr=nil; in that case the auth
-// context is seeded from the chosen session and the ACR resolver is
-// bypassed, mirroring applyFirstPartySkip on the auto-grant path (both
-// copy the session's assurance verbatim rather than re-deriving it from
-// an AAL0 factor set) so the grant does not silently downgrade to
-// no-acr / no-amr. Otherwise the configured ACR resolver runs.
+// carry, plus the auth time to stamp on the result.
 //
-// Copying the picked session's assurance verbatim is only sound when
-// that session belongs to the subject the chain bound; a pick that no
-// longer does is a permanent condition, not a transient fault, and
-// yields [errChooserSubjectMismatch]. Whether the picked session is
-// fresh and strong enough for the request is not settled here: that is
-// [validateTerminalAuthorization]'s job, which applies the same
-// predicates to every exit that can emit a code.
+// A chain that ran no authenticator has no authentication of its own to
+// describe: [authn.Aggregate] over an empty factor set yields
+// acr=""/amr=nil, and the attempt's reference clock is the moment the
+// interaction record was created rather than the moment anybody
+// authenticated. Both such exits therefore copy the backing session's
+// assurance verbatim and bypass the ACR resolver — an account chooser
+// (select_account) re-entry takes it from the session the user picked,
+// and a chain that only ran interactions (an incremental-consent screen
+// against a live session) from the session the request carries. This
+// mirrors applyFirstPartySkip on the auto-grant path, so the grant never
+// silently downgrades to no-acr / no-amr and the reported auth_time
+// keeps naming the authentication that actually happened. Only a chain
+// that authenticated somebody reaches the configured ACR resolver.
+//
+// Copying a session's assurance verbatim is only sound when that session
+// belongs to the subject the chain bound; one that no longer does is a
+// permanent condition, not a transient fault, and yields
+// [errChooserSubjectMismatch] or [errSessionAuthnUnavailable]. Whether
+// the session is fresh and strong enough for the request is not settled
+// here: that is [validateTerminalAuthorization]'s job, which applies the
+// same predicates to every exit that can emit a code.
 func resolveGrantACRAMR(
 	r *http.Request,
 	deps resolved,
@@ -665,52 +678,71 @@ func resolveGrantACRAMR(
 	subject string,
 	authTime time.Time,
 ) (string, []string, time.Time, error) {
-	acr, amr, level := authn.Aggregate(authnState.Factors)
-	switch {
-	case chooserReentryBound(authnState):
-		authCtx, err := deps.Sessions.AuthContext(
-			r.Context(),
-			authnState.ChooserGroupID,
-			authnState.ChooserSelectedSessionID,
-		)
+	if noCredentialChainRan(authnState) {
+		authCtx, err := backingSessionAuthContext(r, deps, authnState, subject)
 		if err != nil {
-			return "", nil, time.Time{}, fmt.Errorf(
-				"authorizeendpoint: resolve chooser authentication context: %w", err,
-			)
+			return "", nil, time.Time{}, err
 		}
-		if authCtx.Subject != subject {
-			return "", nil, time.Time{}, errChooserSubjectMismatch
-		}
-		acr = authCtx.ACR
-		amr = authCtx.AMR
 		if !authCtx.AuthTime.IsZero() {
 			authTime = authCtx.AuthTime
 		}
-	case deps.ACRResolver != nil:
-		out := deps.ACRResolver(r.Context(), ACRResolveInput{
-			RequestedACRValues: requestedACRValues(req),
-			CompletedKinds:     append([]string(nil), authnState.CompletedStepKinds...),
-			InternalAAL:        level,
-			Subject:            subject,
-			ClientID:           rec.ClientID,
-			RequestedScopes:    append([]string(nil), req.Scope...),
-			RemoteIP:           acrRemoteIP(r, deps, authnState),
-			UserAgent:          acrUserAgent(r, authnState),
-			AcceptLanguage:     r.Header.Get("Accept-Language"),
-		})
-		switch {
-		case out.OK:
-			acr = out.ACR
-			if out.AMR != nil {
-				amr = append([]string(nil), out.AMR...)
-			}
-		case essentialACRRequested(req):
-			return "", nil, time.Time{}, errACRUnmet
-		default:
-			acr = ""
+		return authCtx.ACR, authCtx.AMR, authTime, nil
+	}
+	acr, amr, level := authn.Aggregate(authnState.Factors)
+	if deps.ACRResolver == nil {
+		return acr, amr, authTime, nil
+	}
+	out := deps.ACRResolver(r.Context(), ACRResolveInput{
+		RequestedACRValues: requestedACRValues(req),
+		CompletedKinds:     append([]string(nil), authnState.CompletedStepKinds...),
+		InternalAAL:        level,
+		Subject:            subject,
+		ClientID:           rec.ClientID,
+		RequestedScopes:    append([]string(nil), req.Scope...),
+		RemoteIP:           acrRemoteIP(r, deps, authnState),
+		UserAgent:          acrUserAgent(r, authnState),
+		AcceptLanguage:     r.Header.Get("Accept-Language"),
+	})
+	switch {
+	case out.OK:
+		acr = out.ACR
+		if out.AMR != nil {
+			amr = append([]string(nil), out.AMR...)
 		}
+	case essentialACRRequested(req):
+		return "", nil, time.Time{}, errACRUnmet
+	default:
+		acr = ""
 	}
 	return acr, amr, authTime, nil
+}
+
+// backingSessionAuthContext returns the authentication context of the
+// session a factor-less chain is served from: the one the account
+// chooser picked when it ran, otherwise the one the request carries.
+func backingSessionAuthContext(
+	r *http.Request,
+	deps resolved,
+	authnState authn.State,
+	subject string,
+) (grantAuthContext, error) {
+	if !chooserReentryBound(authnState) {
+		return currentSessionAuthContext(r, deps, subject)
+	}
+	authCtx, err := deps.Sessions.AuthContext(
+		r.Context(),
+		authnState.ChooserGroupID,
+		authnState.ChooserSelectedSessionID,
+	)
+	if err != nil {
+		return grantAuthContext{}, fmt.Errorf(
+			"authorizeendpoint: resolve chooser authentication context: %w", err,
+		)
+	}
+	if authCtx.Subject != subject {
+		return grantAuthContext{}, errChooserSubjectMismatch
+	}
+	return grantAuthContext{AuthTime: authCtx.AuthTime, ACR: authCtx.ACR, AMR: authCtx.AMR}, nil
 }
 
 // errChooserSubjectMismatch signals that the session an account chooser
@@ -720,6 +752,43 @@ func resolveGrantACRAMR(
 // the interaction record and its ceremony cookies instead of leaving a
 // completed chain on disk for the user to replay into the same failure.
 var errChooserSubjectMismatch = errors.New("authorizeendpoint: chooser authentication context subject mismatch")
+
+// currentSessionAuthContext reads the authentication context off the
+// browser session the completing request carries, for a chain that
+// authenticated nobody itself and is therefore served from that
+// session.
+//
+// The session the chain inherited its subject from can be gone by the
+// time the ceremony ends — it may have expired, been signed out in
+// another tab, or been switched to a different account — and there is
+// then no authentication left for the response to describe. That is a
+// refusal, not a value to invent: a fabricated auth_time is exactly what
+// an RP's freshness check is meant to catch. A store that could not
+// answer is reported as a wrapped fault instead, so the caller can tell
+// the transient case apart and leave the record in place for a retry.
+func currentSessionAuthContext(r *http.Request, deps resolved, subject string) (grantAuthContext, error) {
+	active, err := resolveSessionWithoutTouch(r, deps)
+	if err != nil {
+		if !errors.Is(err, sessions.ErrCurrentSessionExpired) && !errors.Is(err, sessions.ErrCookieInvalid) {
+			return grantAuthContext{}, fmt.Errorf(
+				"authorizeendpoint: resolve session authentication context: %w", err,
+			)
+		}
+		active = nil
+	}
+	if active == nil || active.Session == nil || active.Session.Subject != subject {
+		return grantAuthContext{}, errSessionAuthnUnavailable
+	}
+	return sessionAuthContext(active), nil
+}
+
+// errSessionAuthnUnavailable signals that a chain which ran no
+// authenticator reached the code-issuing gate with no live session to
+// describe the authentication the response would report. The condition
+// is permanent for this ceremony — the session it inherited its subject
+// from is not coming back — so the caller retires the interaction record
+// and asks the user to log in again.
+var errSessionAuthnUnavailable = errors.New("authorizeendpoint: no session backs the completed authorization")
 
 // acrRemoteIP returns the client IP the ACR policy sees. The chain
 // state carries the address /authorize resolved through the
@@ -795,7 +864,7 @@ func terminateInteraction(
 		Scope:                  decision.grantScope(req.Scope),
 		AuthTime:               result.AuthTime,
 		ACR:                    acr,
-		SessionBacked:          chooserReentryBound(authnState),
+		SessionBacked:          noCredentialChainRan(authnState),
 		ConsentAnswered:        decision.answered,
 		ConsentFromCachedGrant: authnState.InteractionsRun[consent.Name],
 	}); err != nil {
@@ -867,6 +936,9 @@ func terminalRefusal(err error) (code, description string, permanent bool) {
 	case errors.Is(err, errChooserSubjectMismatch):
 		return errAccessDenied,
 			"the selected account no longer matches the authenticated subject", true
+	case errors.Is(err, errSessionAuthnUnavailable):
+		return errLoginRequired,
+			"the session backing this authorization is no longer available", true
 	case errors.Is(err, errTerminalSubjectMissing):
 		return errAccessDenied, "subject was not authenticated", true
 	case errors.Is(err, errTerminalConsentUncovered):
@@ -1097,11 +1169,11 @@ var errGrantNotOwned = errors.New("authorizeendpoint: grant_id not owned by subj
 
 // upsertGrant ensures a grant exists for (subject, clientID) covering
 // at least the supplied scope. The auth context (AuthTime, ACR, AMR) is
-// refreshed on every call so the persisted record always reflects the
-// most recent interactive authentication; OIDC Core 1.0 §12 requires
-// refresh-token-derived id_tokens to carry the same acr/amr as the
-// originating authentication, and the library reads them back through
-// the grant on every token issuance.
+// refreshed on every call that resolved one, so the persisted record
+// always reflects the authentication backing the authorization; OIDC
+// Core 1.0 §12 requires refresh-token-derived id_tokens to carry the
+// same acr/amr as the originating authentication, and the library reads
+// them back through the grant on every token issuance.
 func upsertGrant(
 	ctx context.Context,
 	deps resolved,
@@ -1151,9 +1223,7 @@ func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 	}
 	existing.Scope = unionScopes(existing.Scope, in.Scope)
 	existing.UpdatedAt = now
-	existing.AuthTime = in.AuthTime
-	existing.ACR = in.ACR
-	existing.AMR = append(existing.AMR[:0:0], in.AMR...)
+	stampReusedGrantAuthContext(existing, in)
 	if encodedClaims != nil {
 		existing.Claims = encodedClaims
 	}
@@ -1167,6 +1237,26 @@ func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 		return nil, fmt.Errorf("authorizeendpoint: refresh grant: %w", err)
 	}
 	return existing, nil
+}
+
+// stampReusedGrantAuthContext refreshes the reused grant's
+// authentication context.
+//
+// A context that names nothing at all is not written through. Every
+// token later minted from the grant — a refresh-issued id_token, an
+// introspection response — reads acr / amr / auth_time back off the
+// record, so replacing a recorded authentication with "no
+// authentication" would degrade the whole remaining lifetime of the
+// grant rather than just the response in hand. Callers resolve a real
+// context for every exit that reaches here, which makes this a floor
+// rather than a branch with semantics of its own.
+func stampReusedGrantAuthContext(g *store.Grant, in grantUpsert) {
+	if in.AuthTime.IsZero() && in.ACR == "" && len(in.AMR) == 0 {
+		return
+	}
+	g.AuthTime = in.AuthTime
+	g.ACR = in.ACR
+	g.AMR = append(g.AMR[:0:0], in.AMR...)
 }
 
 func validateReusableGrantLookup(

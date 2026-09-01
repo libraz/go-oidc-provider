@@ -30,6 +30,15 @@ func (c *acrCapture) resolver() ACRResolver {
 	}
 }
 
+// acrTestState marks st as the state of a chain that ran a credential
+// factor. Only such a chain consults the ACR policy: one that
+// authenticated nobody reports the backing session's assurance
+// verbatim, so a factor-less state would never reach the resolver.
+func acrTestState(st authn.State) authn.State {
+	st.Factors = []authn.Factor{{Type: authn.FactorPassword, AssuranceLevel: authn.AAL1}}
+	return st
+}
+
 // acrTestRequest builds an interaction-endpoint request carrying the
 // browser headers the remote hints are read from.
 func acrTestRequest(t *testing.T) *http.Request {
@@ -66,7 +75,7 @@ func TestResolveGrantACRAMR_ClaimsOnlyACRReachesPolicy(t *testing.T) {
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
 		&store.Interaction{ClientID: "client-1"},
 		req,
-		authn.State{},
+		acrTestState(authn.State{}),
 		"user-1",
 		time.Time{},
 	)
@@ -103,7 +112,7 @@ func TestResolveGrantACRAMR_UnionsBothACRSpellings(t *testing.T) {
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
 		&store.Interaction{ClientID: "client-1"},
 		req,
-		authn.State{},
+		acrTestState(authn.State{}),
 		"user-1",
 		time.Time{},
 	); err != nil {
@@ -133,7 +142,7 @@ func TestResolveGrantACRAMR_RemoteHintsReachPolicy(t *testing.T) {
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
 		&store.Interaction{ClientID: "client-1"},
 		&authorize.Request{ClientID: "client-1", ACRValues: []string{"urn:example:strong"}},
-		state,
+		acrTestState(state),
 		"user-1",
 		time.Time{},
 	); err != nil {
@@ -169,7 +178,7 @@ func TestResolveGrantACRAMR_RemoteHintsFallBackToRequest(t *testing.T) {
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
 		&store.Interaction{ClientID: "client-1"},
 		&authorize.Request{ClientID: "client-1", ACRValues: []string{"urn:example:strong"}},
-		authn.State{},
+		acrTestState(authn.State{}),
 		"user-1",
 		time.Time{},
 	); err != nil {
@@ -203,7 +212,7 @@ func TestResolveGrantACRAMR_EssentialUnsatisfiedFails(t *testing.T) {
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
 		&store.Interaction{ClientID: "client-1"},
 		req,
-		authn.State{},
+		acrTestState(authn.State{}),
 		"user-1",
 		time.Time{},
 	)
@@ -224,7 +233,7 @@ func TestResolveGrantACRAMR_VoluntaryUnsatisfiedOmitsACR(t *testing.T) {
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
 		&store.Interaction{ClientID: "client-1"},
 		&authorize.Request{ClientID: "client-1", ACRValues: []string{"urn:example:strong"}},
-		authn.State{},
+		acrTestState(authn.State{}),
 		"user-1",
 		time.Time{},
 	)
@@ -256,7 +265,7 @@ func TestResolveGrantACRAMR_NonEssentialClaimsSpecOmitsACR(t *testing.T) {
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
 		&store.Interaction{ClientID: "client-1"},
 		req,
-		authn.State{},
+		acrTestState(authn.State{}),
 		"user-1",
 		time.Time{},
 	)

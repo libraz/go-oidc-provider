@@ -100,3 +100,27 @@ rows:
       Driving a CIBA redemption end to end needs an approve hook the
       public surface does not expose, so the assertion sits at the
       token endpoint where the approved record can be seated directly.
+
+  - id: AT-009
+    severity: P0
+    spec: OIDC Core §2 / §3.1.2.1
+    behaviour: |
+      When an authorization request is served from a live session and no
+      credential chain runs during the attempt — the user is only asked
+      to approve additional scope — the issued ID Token's `auth_time`
+      MUST be the authentication time recorded on that session, and
+      `acr` / `amr` MUST be the ones of that authentication. Neither may
+      be re-derived from the attempt's empty factor set, and the durable
+      grant the code hangs off MUST keep the same three values, since
+      every later token minted from that grant reads them back off the
+      record.
+    status: active
+    covered_by: internal/authorizeendpoint.TestEndToEnd_ConsentOnlyKeepsSessionAuthentication
+    notes: |
+      AT-001..AT-006 assert only that `auth_time` is present, and the
+      rows that pin a value cover the device_code and CIBA redemptions,
+      so this is where the authorization-code path's value is fixed.
+      Driving it takes a two-pass browser flow against a movable clock,
+      which the suite's single-pass fixtures do not provide; the
+      assertion therefore sits beside the endpoint's other multi-hop
+      freshness tests and runs on both authentication surfaces.
