@@ -808,6 +808,20 @@ signature change, which is the only breaking change in this release.
   relying parties all send `kid`, which is every RP that reads its JWKS, runs
   on such a keyset with no failures — so it is reported rather than refused.
 
+- `op.VerifyPassword`, the inverse of `op.HashPassword`, so an application that
+  adds a credential step of its own — a re-authentication before a password
+  change, before a second-factor enrolment — checks the stored record through
+  the library rather than parsing the PHC encoding itself. Passwords were
+  verified only inside the OP's own login flow, and an embedder that owns the
+  account pages is exactly the one that needs the comparison somewhere else, so
+  the reference application had grown an argon2id parser of its own. The
+  function returns a boolean rather than an error: a wrong password, a record
+  that does not parse, and one whose work factors fall outside the bounds the
+  verifier enforces are one answer, and a boolean leaves no error value in
+  which a later change could start telling them apart. A caller gating a
+  credential change on it supplies its own rate limiting — the brute-force gate
+  covers the authentication flow, not an endpoint of the application's.
+
 ## [v1.1.0] — 2026-08-13
 
 A security and correctness pass. Several of the fixes close paths on which the
