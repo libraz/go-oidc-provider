@@ -7,10 +7,17 @@
 #    says ("add neither unless the validator has actually rejected your
 #    wiring"). The option compiles and boots either way, so nothing but
 #    a static check notices.
-# 2. The counts the READMEs quote match the tree. The prose used to
+# 2. Any count the READMEs quote matches the tree. The prose used to
 #    claim every loopback-binding example reaches for both options; the
 #    number has drifted twice since. A reader who believes an inflated
 #    count copies a security-relevant option into a production stack.
+#    A README that does not document the option quotes no count and is
+#    not asked to: the per-option prose lives on the documentation site,
+#    a separate repository this check cannot read, so demanding the
+#    sentence here would only force it back into a file it was moved out
+#    of. The closing line reports how many claims were actually checked,
+#    so the difference between "every claim agrees" and "there were no
+#    claims" stays visible rather than reading as the same green.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
@@ -67,10 +74,13 @@ claim() {
   ' "$1" | sed -nE "$3"
 }
 
+claims_checked=0
+
 check_readme() {
   local file="$1" option="$2" want_count="$3" expr="$4" stated
   stated="$(claim "$file" "$option" "$expr")"
-  [ -n "$stated" ] || die "$file: no example count stated for $option (expected \"$want_count of $total\")"
+  [ -n "$stated" ] || return 0
+  claims_checked=$((claims_checked + 1))
   [ "$stated" = "$want_count $total" ] ||
     die "$file: $option is stated as \"$stated\" but the tree has \"$want_count $total\""
 }
@@ -89,4 +99,4 @@ check_readme README.md WithAllowInsecureBackchannelLogoutForDev "$bcl_count" "$e
 check_readme README_ja.md WithAllowLocalhostLoopback "$loopback_count" "$ja"
 check_readme README_ja.md WithAllowInsecureBackchannelLogoutForDev "$bcl_count" "$ja"
 
-log "example dev opt-ins OK ($loopback_count loopback, $bcl_count insecure-backchannel, of $total examples)"
+log "example dev opt-ins OK ($loopback_count loopback, $bcl_count insecure-backchannel, of $total examples; $claims_checked README count claim(s) checked)"
