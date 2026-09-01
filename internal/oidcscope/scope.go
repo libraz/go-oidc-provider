@@ -44,6 +44,26 @@ const ScopeOpenID = "openid"
 // is case-sensitive on the wire (RFC 6749 §3.3).
 const ScopeOfflineAccess = "offline_access"
 
+// The OIDC Core 1.0 §5.4 claim-group scope names. They live here rather
+// than beside the code that releases each group because the public
+// package declares the same six values as embedder-facing vocabulary
+// and cannot import that code directly. Keeping one spelling per value
+// in this package gives op something to pin its constants against; two
+// independent spellings agree only until one of them is edited.
+const (
+	// ScopeProfile releases the profile claim group.
+	ScopeProfile = "profile"
+
+	// ScopeEmail releases email and email_verified.
+	ScopeEmail = "email"
+
+	// ScopeAddress releases the address claim group.
+	ScopeAddress = "address"
+
+	// ScopePhone releases phone_number and phone_number_verified.
+	ScopePhone = "phone"
+)
+
 // ContainsOpenID reports whether scopes lists [ScopeOpenID]. The match
 // is byte-equal per OIDC Core 1.0 §3.1.2.1: scope tokens are
 // case-sensitive and the server does not normalise them. The function

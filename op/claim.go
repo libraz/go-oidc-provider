@@ -57,6 +57,15 @@ const (
 	ScopeNameOfflineAccess ScopeName = "offline_access"
 )
 
+// The constants above are the vocabulary an embedder writes. The values
+// the OP matches on at runtime are the ones in internal/oidcscope: the
+// packages that do the matching are imported *by* this one and cannot
+// import it back, so the same six wire strings are spelled in two
+// places. Two spellings agree only until one is edited, and the drift
+// would be silent — discovery would advertise one scope while the claim
+// projection released another, with every gate green. TestScopeNameParity
+// pins the pair.
+
 // Scope is the registered metadata for a single OAuth 2.0 scope. It
 // bundles the wire identifier (Name) with everything the OP needs to
 // describe the scope on the consent prompt, in the discovery document,

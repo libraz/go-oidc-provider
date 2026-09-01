@@ -22,6 +22,7 @@ import (
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 )
 
 // ErrSubjectRequired is returned by [Build] when the input does not carry a
@@ -29,16 +30,19 @@ import (
 // 1.0 §5.3.2); a call site that omits it is a programmer error.
 var ErrSubjectRequired = errors.New("userinfo: Subject is required")
 
-// Standard scope names the package recognises. Values mirror the constants
-// in op/claim.go; they are duplicated here so internal/userinfo can stay
-// independent of the public package (the op package would import this one
-// during HTTP handler construction, not the other way around).
+// Standard scope names the package recognises. They are aliases of the
+// canonical spellings in internal/oidcscope rather than fresh literals:
+// the public package declares the same six values as embedder-facing
+// vocabulary and pins its constants against that package, so a single
+// spelling per value is what makes the two surfaces provably agree.
+// This package still cannot import op — construction runs the other way
+// — but it no longer has to mirror it by hand.
 const (
-	scopeOpenID  = "openid"
-	scopeProfile = "profile"
-	scopeEmail   = "email"
-	scopeAddress = "address"
-	scopePhone   = "phone"
+	scopeOpenID  = oidcscope.ScopeOpenID
+	scopeProfile = oidcscope.ScopeProfile
+	scopeEmail   = oidcscope.ScopeEmail
+	scopeAddress = oidcscope.ScopeAddress
+	scopePhone   = oidcscope.ScopePhone
 )
 
 // Input is the bundle [Build] consumes.
