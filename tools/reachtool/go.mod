@@ -6,4 +6,4 @@ module github.com/libraz/go-oidc-provider/tools/reachtool
 
 go 1.25.0
 
-toolchain go1.26.5
+toolchain go1.27.0

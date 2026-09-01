@@ -11,7 +11,7 @@ module github.com/libraz/go-oidc-provider/examples/internal/browserverify
 
 go 1.26
 
-toolchain go1.26.5
+toolchain go1.27.0
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20260804232424-e85f50dbfd32

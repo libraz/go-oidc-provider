@@ -10,7 +10,7 @@ module github.com/libraz/go-oidc-provider/examples/internal/rpkit
 
 go 1.25.0
 
-toolchain go1.26.5
+toolchain go1.27.0
 
 require (
 	github.com/coreos/go-oidc/v3 v3.20.0
