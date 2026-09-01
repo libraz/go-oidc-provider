@@ -105,7 +105,13 @@ than left to `SameSite=Lax`, which is a property of whoever is browsing.
 Both operations that replace a credential also ask for the current
 password: a session cookie says only that this browser signed in at some
 point, and without a second check on the credential being replaced, one
-stolen cookie is the whole of an account takeover.
+stolen cookie is the whole of an account takeover. That check is
+`op.VerifyPassword` against the application's own column — the inverse of
+the `op.HashPassword` signup stored, so the re-authentication runs the
+comparison the sign-in screen runs rather than a second implementation of
+it. A deployment puts a rate limit in front of those two routes; the
+library's brute-force gate covers the OP's authentication flow, not the
+application's pages.
 
 **TOTP is opt-in per member.** `StepTOTP` fails when no enrolment exists, so
 the rule is `op.RuleWhen(...)` rather than `op.RuleAlways` — an

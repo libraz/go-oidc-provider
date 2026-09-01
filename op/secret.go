@@ -1,6 +1,7 @@
 package op
 
 import (
+	"github.com/libraz/go-oidc-provider/internal/authn/password"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 )
 
@@ -88,4 +89,32 @@ func HashPassword(plain string) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(enc), nil
+}
+
+// VerifyPassword reports whether plain is the password behind hash. It
+// is the inverse of [HashPassword] and runs the same comparison the
+// built-in [PrimaryPassword] Step runs, so an application that adds a
+// credential step of its own — a re-authentication before a password
+// change or a second-factor enrolment — reads the stored record
+// through [store.UserPasswordStore.ReadPasswordHash] and checks it
+// here rather than parsing the encoding itself. Any valid PHC argon2id
+// encoding verifies, not only one this package produced.
+//
+// Every way of not matching is the same false. A wrong password, a
+// stored record that does not parse, and one whose Argon2id parameters
+// fall outside the bounds the verifier enforces — the OWASP 2024 floor
+// on memory and iterations, and defensive caps on every axis including
+// the derived-key length, so a corrupt record cannot turn one
+// verification into an allocation the process cannot serve — are one
+// outcome. Separating them would describe the stored value to whoever
+// is guessing, and a boolean makes that structural: there is no error
+// value here for a later change to start distinguishing them in. The
+// comparison of the derived key is constant-time.
+//
+// The library's brute-force gate covers the authentication flow and
+// nothing else. A caller gating a credential change on this function
+// supplies its own rate limiting, or the change screen becomes the
+// password oracle the sign-in screen is not.
+func VerifyPassword(hash []byte, plain string) bool {
+	return password.Verify(hash, plain) == nil
 }

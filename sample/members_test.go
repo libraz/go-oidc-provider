@@ -5,6 +5,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/op"
 )
 
 // TestMembersEmailPinsBinaryCollation is the schema half of the identity
@@ -63,5 +65,36 @@ func TestNormaliseEmailFoldsCaseButNotAccents(t *testing.T) {
 	// resolve the first member's row.
 	if accented, plain := normaliseEmail("café@example.com"), normaliseEmail("cafe@example.com"); accented == plain {
 		t.Errorf("normaliseEmail folds %q onto %q", accented, plain)
+	}
+}
+
+// TestVerifyPasswordAgainstAStoredEncoding pins the pair the account
+// pages rest on: signUp and changePassword write op.HashPassword's
+// encoding into password_phc, and verifyPassword reads that column back
+// through op.VerifyPassword before either page replaces a credential.
+// The fake member store the page tests run against holds plaintext, so
+// this is where the two halves meet a hash the library produced.
+func TestVerifyPasswordAgainstAStoredEncoding(t *testing.T) {
+	t.Parallel()
+
+	stored, err := op.HashPassword("correct-horse")
+	if err != nil {
+		t.Fatalf("op.HashPassword: %v", err)
+	}
+	if !op.VerifyPassword(stored, "correct-horse") {
+		t.Error("the stored member's own password does not verify")
+	}
+	for _, tc := range []struct {
+		name     string
+		password string
+		stored   []byte
+	}{
+		{"wrong password", "correct-hors", stored},
+		{"column never written", "correct-horse", nil},
+		{"column truncated by a narrower type", "correct-horse", stored[:len(stored)-4]},
+	} {
+		if op.VerifyPassword(tc.stored, tc.password) {
+			t.Errorf("%s: verified", tc.name)
+		}
 	}
 }

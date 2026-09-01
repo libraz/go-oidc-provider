@@ -4,15 +4,11 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/argon2"
 
 	"github.com/libraz/go-oidc-provider/op"
 	opstore "github.com/libraz/go-oidc-provider/op/store"
@@ -120,59 +116,22 @@ func (s *memberStore) ReadPasswordHash(ctx context.Context, sub string) ([]byte,
 // Changing a credential has to present the credential it replaces, so
 // the password change and the second-factor enrolment both come through
 // here before they alter anything.
+//
+// The comparison is op.VerifyPassword, the inverse of the op.HashPassword
+// call signUp and changePassword store with — the application reads its
+// own column and hands the encoding back to the library rather than
+// parsing the PHC string itself.
+//
+// A deployment adds rate limiting in front of the pages that call this.
+// The library's brute-force gate covers the OP's own authentication
+// flow, and these are the application's routes, so without a limit of
+// their own they answer guesses the sign-in screen would have stopped.
 func (s *memberStore) verifyPassword(ctx context.Context, subject, password string) error {
 	stored, err := s.ReadPasswordHash(ctx, subject)
 	if err != nil {
 		return err
 	}
-	return matchPasswordHash(password, string(stored))
-}
-
-// maxPasswordHashBytes bounds the derived-key length read out of a stored
-// record, so a record claiming an absurd length cannot turn one
-// verification into an allocation the process cannot serve.
-const maxPasswordHashBytes = 1024
-
-// matchPasswordHash checks a plaintext against the PHC argon2id encoding
-// op.HashPassword produced. The library hashes but does not export a
-// verifier: it verifies passwords itself inside the login flow, and an
-// application that adds a re-authentication step of its own does the
-// comparison on its own side.
-//
-// Every failure returns the same error. A malformed stored record and a
-// wrong password are both "not authenticated" here, and telling them
-// apart would only describe the stored value to whoever is guessing.
-func matchPasswordHash(password, encoded string) error {
-	// "$argon2id$v=19$m=65536,t=3,p=1$<salt>$<hash>" splits into six
-	// fields, the first of which is empty.
-	parts := strings.Split(encoded, "$")
-	if len(parts) != 6 || parts[1] != "argon2id" {
-		return errPasswordMismatch
-	}
-	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version {
-		return errPasswordMismatch
-	}
-	var (
-		memory      uint32
-		iterations  uint32
-		parallelism uint8
-	)
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism); err != nil {
-		return errPasswordMismatch
-	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
-		return errPasswordMismatch
-	}
-	want, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(want) == 0 || len(want) > maxPasswordHashBytes {
-		return errPasswordMismatch
-	}
-	//nolint:gosec // G115: len(want) is bounded by maxPasswordHashBytes on the line above.
-	keyLength := uint32(len(want))
-	got := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLength)
-	if subtle.ConstantTimeCompare(got, want) != 1 {
+	if !op.VerifyPassword(stored, password) {
 		return errPasswordMismatch
 	}
 	return nil

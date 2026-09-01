@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/totpkit"
 )
 
@@ -29,8 +28,9 @@ const testOrigin = "https://sample.test"
 // store into.
 //
 // Passwords are held in plaintext here. The real store keeps the PHC
-// encoding and compares through matchPasswordHash, which
-// TestMatchPasswordHash covers against a hash op.HashPassword produced.
+// encoding and compares through op.VerifyPassword, which
+// TestVerifyPasswordAgainstAStoredEncoding covers against a hash
+// op.HashPassword produced.
 type fakeMembers struct {
 	mu        sync.Mutex
 	records   map[string]*member
@@ -367,35 +367,6 @@ func TestTOTPConfirmRequiresCurrentPassword(t *testing.T) {
 	defer totps.mu.Unlock()
 	if totps.count != 0 {
 		t.Errorf("%d enrolment(s) were persisted without the current password", totps.count)
-	}
-}
-
-// TestMatchPasswordHash exercises the verifier against an encoding the
-// library actually produced, which is the part the fake member store
-// above stands in for.
-func TestMatchPasswordHash(t *testing.T) {
-	t.Parallel()
-
-	hash, err := op.HashPassword("correct-horse")
-	if err != nil {
-		t.Fatalf("op.HashPassword: %v", err)
-	}
-	if err := matchPasswordHash("correct-horse", string(hash)); err != nil {
-		t.Errorf("matchPasswordHash on the right password: %v", err)
-	}
-	for _, tc := range []struct {
-		name     string
-		password string
-		encoded  string
-	}{
-		{"wrong password", "correct-hors", string(hash)},
-		{"empty record", "correct-horse", ""},
-		{"truncated record", "correct-horse", "$argon2id$v=19$m=65536,t=3,p=1$c2FsdA"},
-		{"foreign scheme", "correct-horse", "$bcrypt$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA"},
-	} {
-		if err := matchPasswordHash(tc.password, tc.encoded); !errors.Is(err, errPasswordMismatch) {
-			t.Errorf("%s: err = %v, want errPasswordMismatch", tc.name, err)
-		}
 	}
 }
 
