@@ -993,6 +993,7 @@ func initialAuthnState(
 ) authn.State {
 	existing := hint.grant
 	willRunChooser := containsString(req.Prompt, interaction.PromptSelectAccount) && active != nil
+	addAccount := chooserAddAccountRequested(req, active)
 	return authn.State{
 		ReauthRequired:           hint.reauth,
 		InteractionUID:           uid,
@@ -1005,11 +1006,11 @@ func initialAuthnState(
 		AuthTime:                 now,
 		ActiveFactorIdx:          -1,
 		Phase:                    authn.PhaseBeforeAuthn,
-		InteractionsRun:          initialInteractionsRun(req, existing, willRunChooser),
+		InteractionsRun:          initialInteractionsRun(req, existing, willRunChooser || addAccount),
 		RequestedScopes:          append([]string(nil), req.Scope...),
 		ACRValues:                requestedACRValues(req),
 		ChooserGroupID:           activeChooserGroupID(active, willRunChooser),
-		ChooserAddAccount:        chooserAddAccountRequested(req, active),
+		ChooserAddAccount:        addAccount,
 		ChooserAddAccountGroupID: chooserAddAccountGroupID(req, active),
 	}
 }
@@ -1027,19 +1028,27 @@ func auditRemoteIP(r *http.Request, deps resolved) string {
 	return ""
 }
 
-func initialInteractionsRun(req *authorize.Request, existing *store.Grant, willRunChooser bool) map[string]bool {
+// initialInteractionsRun decides whether the built-in consent interaction
+// starts out already marked as run.
+//
+// bindsOtherSubject reports that the chain is expected to bind an account
+// other than the cookie-resolved one — the chooser picking a sibling
+// session, or an AddAccountURL-derived login joining a second account to
+// the group. The grant the dispatcher looked up describes the *current*
+// subject, so it says nothing about what the incoming one has approved:
+// pre-marking consent there would carry one account's approval over to
+// another. The terminal gate re-runs the coverage predicate against the
+// bound subject and fails the ceremony closed, so the pre-mark does not
+// leak a code — it costs the second account its consent screen and, with
+// it, the whole authorization.
+//
+// Otherwise the pre-marking uses the same coverage predicate the
+// dispatcher used to decide it needed an interaction at all, so a
+// request routed here *because* consent is owed always reaches the
+// consent screen.
+func initialInteractionsRun(req *authorize.Request, existing *store.Grant, bindsOtherSubject bool) map[string]bool {
 	interactionsRun := map[string]bool{}
-	// When the chooser will run, the picked subject may differ from the
-	// cookie-resolved one. The grant we looked up (against the current
-	// subject) does not authoritatively cover the picked subject's scope
-	// set, so do NOT pre-mark consent as already run. Consent re-evaluates
-	// after the chooser binds the picked subject.
-	//
-	// Otherwise the pre-marking uses the same coverage predicate the
-	// dispatcher used to decide it needed an interaction at all, so a
-	// request routed here *because* consent is owed always reaches the
-	// consent screen.
-	if !willRunChooser && consentAlreadyCovered(req, existing) {
+	if !bindsOtherSubject && consentAlreadyCovered(req, existing) {
 		interactionsRun[consent.Name] = true
 	}
 	return interactionsRun

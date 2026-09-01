@@ -28,3 +28,13 @@ func TestScenario_SES_003_ClockToleranceRejectsBeyondSkewSession(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: SES-003 (see catalog out_of_scope_reason)")
 }
+
+// TestScenario_SES_004_AddAccountJoinsChooserGroup marks where the
+// scenario-level test would go. Following the chooser's add-account link
+// requires reading the link off the rendered prompt, which the black-box
+// flow harness does not surface, so the row names its own coverage in
+// `covered_by` and the gate resolves that name.
+func TestScenario_SES_004_AddAccountJoinsChooserGroup(t *testing.T) {
+	t.Parallel()
+	t.Skip("covered outside the suite; see the sessions catalog row's covered_by")
+}

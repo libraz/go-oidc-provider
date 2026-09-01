@@ -11,8 +11,9 @@ specs:
 
 description: |
   Authorization-time handling of the persisted authentication session:
-  expiry enforcement, clock-tolerance window, and session-id rotation
-  when a stale session is rejected.
+  expiry enforcement, clock-tolerance window, session-id rotation when a
+  stale session is rejected, and the multi-account group a browser
+  accumulates when it signs a second account in alongside the first.
 
 rows:
   - id: SES-001
@@ -48,3 +49,23 @@ rows:
       reason `login` / `no_session` and issues a new session id.
     status: out-of-scope
     out_of_scope_reason: "v1.0's public surface does not expose a session clock-tolerance knob (no WithClockTolerance / WithSessionClockTolerance option; internal/sessions/manager.go's Resolve treats now>=ExpiresAt as expired with no leeway window). Without a settable tolerance, the boundary-condition assertion in the row has no wire seam to drive. Adjacent JWT verification surfaces (DPoP, JAR, /userinfo) carry their own per-feature leeways, but those do not extend to the chooser-group session lifecycle."
+
+  - id: SES-004
+    severity: P0
+    spec: OIDC Core §3.1.2.1 (prompt=select_account, prompt=login)
+    behaviour: |
+      A browser that signs in as one account and then signs a second
+      account in from the account-chooser prompt's add-account link ends
+      up with both accounts in one group: the next
+      `prompt=select_account` request offers both in a single prompt.
+      The second sign-in presents its own consent screen — the cached
+      grant the first account holds for the same client never stands in
+      for it, whatever scope it covers.
+    status: active
+    covered_by: internal/authorizeendpoint.TestEndToEnd_ChooserAddAccount_SecondChooserListsBothAccounts
+    notes: |
+      Driving the add-account link needs the OP-private markers the
+      chooser prompt stamps onto it plus the session cookie that makes
+      them trustworthy, neither of which the black-box flow harness
+      surfaces, so the assertion lives where the chooser prompt can be
+      read directly.
