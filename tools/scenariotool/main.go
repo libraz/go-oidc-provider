@@ -27,6 +27,8 @@ Subcommands:
   list <feature>                 Print rows for one feature file.
   lookup <id>                    Resolve one row by ID across every catalog file.
   stats [feature]                Severity x status dashboard, optionally for one feature.
+  shape [--check] [feature]      Row-shape dashboard: how much of a file demands a value, an order
+                                 or an identity rather than only that a claim is present.
   next [feature]                 Print the next pending row(s) to pick up.
   flip <id> <status>             Update a row's status to active|pending|out-of-scope.
   coverage [--strict|--check-bindings|--yaml-only]
@@ -99,6 +101,8 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 		return flipCmd(args)
 	case "coverage":
 		return coverageCmd(ctx, args)
+	case "shape":
+		return shapeCmd(args)
 	case "advisories":
 		return advisoriesCmd(args)
 	default:
@@ -153,6 +157,20 @@ func statsCmd(args []string) error {
 		return err
 	}
 	return runStats(*dir, feature)
+}
+
+func shapeCmd(args []string) error {
+	fs := flag.NewFlagSet("shape", flag.ContinueOnError)
+	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	check := fs.Bool("check", false, "fail on a feature file whose rows demand only presence")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	feature, err := optionalFeatureArg(fs, "shape")
+	if err != nil {
+		return err
+	}
+	return runShape(*dir, feature, *check)
 }
 
 func nextCmd(args []string) error {

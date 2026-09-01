@@ -9,13 +9,14 @@ import (
 	"strings"
 )
 
-// The four kinds of vocabulary the gate walks. Each is also the first
+// The kinds of vocabulary the gate walks. Each is also the first
 // field of an allowlist row.
 const (
 	kindSymbol  = "symbol"
 	kindEvent   = "event"
 	kindMessage = "message"
 	kindIndex   = "index"
+	kindConsult = "consulted"
 )
 
 // Package locations the checks are anchored to. They are named here
@@ -118,6 +119,59 @@ func checkSymbols(ix *index, al *allowlist) []finding {
 		})
 	}
 	return out
+}
+
+// checkConsulted reports exported constants the library names only
+// inside their own enumeration plumbing.
+//
+// It is the second half of [checkSymbols]. That check asks whether a
+// declaration is named anywhere, and a constant listed by its own
+// String() and IsValid() answers yes — so a feature flag can be
+// accepted, validated, advertised in discovery, and never branched on,
+// with this gate green the whole time. The description of the gate had
+// to disclaim exactly that. This check asks the narrower question the
+// description implied: does anything act on the value.
+//
+// Sentinel errors are out of scope. An Err value's use is being
+// returned and compared, neither of which the plumbing set covers, so
+// running them through this check would only produce noise.
+func checkConsulted(ix *index, al *allowlist) []finding {
+	var out []finding
+	for _, d := range ix.decls {
+		if !publicPkg(d.pkg) || !isExported(d.name) || !consultCandidate(d) {
+			continue
+		}
+		// A symbol nothing names at all is checkSymbols' finding; this
+		// one speaks only about symbols that are named but inert.
+		if !ix.usedIn(d.name, libraryFile) {
+			continue
+		}
+		if ix.consultedIn(d.name, libraryFile) {
+			continue
+		}
+		if d.alias != "" && ix.consultedIn(d.alias, libraryFile) {
+			continue
+		}
+		id := d.qualified()
+		if al.allows(kindConsult, id) {
+			continue
+		}
+		out = append(out, finding{
+			kind:  kindConsult,
+			id:    id,
+			where: d.pos(),
+			detail: "named only by its own enumeration plumbing — String, IsValid, a lookup table — so nothing " +
+				"branches on it; wire the branch it describes, delete it, or allowlist it with the reason " +
+				"being enumerable is the whole contract",
+		})
+	}
+	return out
+}
+
+// consultCandidate reports whether a declaration is one the consulted
+// check speaks about: an exported constant that is not an audit event.
+func consultCandidate(d decl) bool {
+	return d.kind == kindConst && !isAuditEventConst(d)
 }
 
 // symbolCandidate reports whether a declaration is one the symbol check

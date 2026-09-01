@@ -2,17 +2,24 @@
 # is the correct state.
 #
 # Format: <kind> TAB <id> TAB <reason>, one row per entry.
-#   symbol   <package dir>.<Name>   an exported constant, or an Err-prefixed
+#   symbol    <package dir>.<Name>  an exported constant, or an Err-prefixed
 #                                   exported sentinel, never named as a Go
 #                                   identifier in non-test library code
-#   event    <audit event name>     a catalogued event nothing emits
-#   message  <i18n key>             a seed key no built-in screen renders
-#   index    <GSI name>             a secondary index no read path queries
+#   consulted <package dir>.<Name>  an exported constant the library names
+#                                   only inside its own enumeration
+#                                   plumbing, so nothing branches on it
+#   event     <audit event name>    a catalogued event nothing emits
+#   message   <i18n key>            a seed key no built-in screen renders
+#   index     <GSI name>            a secondary index no read path queries
 #
-# "Never named" for a symbol row is a textual-reference test: a name that
-# appears only inside an enum's own String()/IsValid()-style plumbing
-# already counts as named, whether or not any code path branches on the
-# value. That question is left to manual review; this gate cannot ask it.
+# The two symbol questions are separate on purpose. "Never named" is a
+# textual-reference test, and a name appearing only in an enum's own
+# String()/IsValid()/lookup-table plumbing satisfies it. Whether anything
+# acts on the value is the `consulted` rows' question: that check drops
+# the plumbing declarations before asking, so a constant that is parsed,
+# validated and advertised but never branched on is reported rather than
+# passed. Neither check can tell whether the branch it finds is the right
+# one.
 #
 # The reason has to argue why nothing reading the entry is right —
 # reserved wire vocabulary a deployment raises itself, a frozen
@@ -29,4 +36,10 @@ symbol	op/devicecodekit.DenyReasonUserRevokedDevice	Conventional deny reason the
 symbol	op/interaction.PromptNone	Wire value of the OIDC prompt parameter, exported for interaction drivers; the OP matches the raw request parameter rather than naming the constant.
 symbol	op/store.ClientSourceAdmin	Provenance discriminator the embedder's registry sets; the library treats admin-created clients exactly as ClientSourceStatic, and only audit analysis reads the difference.
 symbol	op/testkit.ApproveAllScopes	Deprecated and frozen; the godoc directs callers to ApprovedScopesFrom and the constant is kept so existing tests compile.
+consulted	op.ScopeNameAddress	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopeAddress, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
+consulted	op.ScopeNameEmail	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopeEmail, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
+consulted	op.ScopeNameOfflineAccess	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopeOfflineAccess, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
+consulted	op.ScopeNameOpenID	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopeOpenID, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
+consulted	op.ScopeNamePhone	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopePhone, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
+consulted	op.ScopeNameProfile	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopeProfile, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
 message	consent.button.deny	Reserved for embedder-supplied consent UIs; the bundled HTMLDriver ships no decline control, as the WithLocale godoc records.

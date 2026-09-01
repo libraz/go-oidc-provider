@@ -32,6 +32,11 @@
       "type": "string",
       "description": "Optional multi-line context for the file."
     },
+    "shape_exempt_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Why this file is right to demand only that things appear. Set it to exempt the file from the shape gate, which otherwise fails a file whose in-scope rows say nothing about values, ordering or identity. A file that later grows a non-presence row must drop the exemption."
+    },
     "rows": {
       "type": "array",
       "minItems": 1,
@@ -69,6 +74,11 @@
           "enum": ["active", "pending", "out-of-scope"],
           "default": "pending",
           "description": "active = a TestScenario_<id>_* function asserts the behaviour. pending = catalog row exists, no test yet (or t.Skip placeholder). out-of-scope = intentional exclusion (requires out_of_scope_reason)."
+        },
+        "shape": {
+          "type": "string",
+          "enum": ["presence", "value", "order", "identity"],
+          "description": "What the row demands. presence = something appears or is absent. value = a particular value, or a relationship between values. order = a sequence (what happens before what, what is consumed once). identity = which principal, client, grant or session the thing refers to. Optional: the shape gate infers a shape from the behaviour text and only ever infers upward, out of presence, so declare this only when the prose does not read the way the inference expects."
         },
         "cross_refs": {
           "type": "array",

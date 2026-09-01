@@ -4,7 +4,8 @@ SHELL := /usr/bin/env bash
 
 .PHONY: tools format lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify clean \
         verify-examples verify-examples-api verify-examples-browser verify-examples-harness \
-        stability stability-check stability-backfill reach \
+        stability stability-check stability-backfill reach gates gates-write failopen \
+        scenario-shape scenario-shape-report \
         scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
         scenario-coverage-bindings \
         scenario-coverage-yaml-only scenario-stats scenario-advisories scenario-advisories-strict \
@@ -122,16 +123,45 @@ stability-backfill:
 # sentinels never named as a Go identifier anywhere in non-test library
 # code, catalogued audit events whose godoc lets an operator read
 # silence as evidence, seed message keys no screen renders, and
-# DynamoDB indexes no read path queries. "Named" is a textual-reference
-# test, not a control-flow one: a symbol that appears only in an
-# enum's own String()/IsValid()-style plumbing counts as named, even
-# when nothing ever branches on it. Whether a flag is actually
-# consulted anywhere remains a manual review question this gate does
-# not answer. Deliberate exceptions live in api/unreached.txt, one row
-# each with the reason nothing reading the entry is correct; a row
-# that stops applying fails too.
+# DynamoDB indexes no read path queries.
+#
+# It asks two questions about a constant, because they have different
+# answers. "Named" is a textual-reference test, and a symbol appearing
+# only in an enum's own String()/IsValid()/lookup-table plumbing
+# satisfies it. "Consulted" drops those plumbing declarations first, so
+# a flag that is parsed, validated and advertised while nothing ever
+# branches on it is reported rather than passed. Neither question is
+# whether the branch that exists is the right one.
+#
+# Deliberate exceptions live in api/unreached.txt, one row each with the
+# reason nothing reading the entry is correct; a row that stops applying
+# fails too.
 reach:
 	@scripts/reach.sh
+
+# Gate-topology check. Source of truth: test/gates/gates.yaml, rendered
+# to api/gates.md. It reconciles the declared map against the tree in
+# three directions: every surface's paths still resolve, every
+# script-running target here is either claimed as a gate or excused as a
+# non-gate, and no surface is left where every gate that reaches it only
+# reads or compiles it. That last check is the point — a surface nothing
+# runs passes every other gate in this file.
+gates:
+	@scripts/gates.sh --check
+
+gates-write:
+	@scripts/gates.sh --write
+
+# Fail-open gate: a branch that turns a storage read's error into a
+# fabricated negative, so a backend that did not answer reads as a
+# record that does not exist. Five audits in a row found this in a new
+# place. The check is narrow — bare `err != nil`, error mentioned
+# nowhere in the branch, branch returns a zero value — so a branch that
+# propagates, wraps, classifies or logs the error is left alone.
+# Deliberate exceptions live in api/failopen.txt with the reason losing
+# the distinction is right.
+failopen:
+	@scripts/failopen.sh
 
 # Catalog source of truth: test/scenarios/catalog/<feature>.yaml.
 # See test/scenarios/catalog/README.md for the schema.
@@ -165,6 +195,18 @@ scenario-coverage-yaml-only:
 # to narrow to one file.
 scenario-stats:
 	@scripts/scenario.sh stats $(feature)
+
+# Row-shape axis. Coverage answers whether every row has a test; this
+# answers whether the rows say enough. A row that asserts a claim is
+# *present* is satisfied by an implementation that emits the claim with
+# the wrong value, so a feature file made only of presence rows can sit
+# at 100% coverage over a hole. The gate fails a file whose rows are
+# predominantly presence-shaped without a recorded reason.
+scenario-shape:
+	@scripts/scenario.sh shape --check
+
+scenario-shape-report:
+	@scripts/scenario.sh shape $(feature)
 
 # CVE / GHSA advisory inventory ↔ `// Tracks: <id>` comment audit.
 # Source of truth: test/scenarios/catalog/_advisories.yaml + the Go

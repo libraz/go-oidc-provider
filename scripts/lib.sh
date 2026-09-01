@@ -155,8 +155,9 @@ verify_harness_modules() {
 }
 
 # The build tools that back the repository's own gates: the
-# declared-but-unreached gate, the scenario catalog validator and the
-# stability reporter. They are separate modules
+# declared-but-unreached gate, the scenario catalog validator, the
+# stability reporter, the gate-topology check and the fail-open
+# check. They are separate modules
 # so their parsing dependencies stay out of the library's go.sum, and they
 # are deliberately not part of public_modules — nothing here ships, and an
 # untagged entry there would also enrol them in go.work.
@@ -173,7 +174,7 @@ verify_harness_modules() {
 # rather than fail, which is how these two went unlinted.
 tool_modules() {
   local d
-  for d in reachtool scenariotool stabilitytool; do
+  for d in reachtool scenariotool stabilitytool gatetool failopentool; do
     if [ -f "$REPO_ROOT/tools/$d/go.mod" ]; then
       printf '%s\t./...\n' "$REPO_ROOT/tools/$d"
     fi

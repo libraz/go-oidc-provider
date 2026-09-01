@@ -1,0 +1,775 @@
+# Gate topology — source of truth for api/gates.md.
+#
+# Every verification command this repository runs, the question it
+# actually answers, and the shipped surfaces it drives.
+#
+# The file exists because a green gate has repeatedly been read as a
+# broader claim than it makes. The conformance suite passed while a
+# defect lived in three shipped multi-account sign-in paths, because the
+# suite drives one authenticated session and never follows an
+# add-account link. Nothing in the tree recorded that limit, so a ledger
+# closed four audits against a gate that could not see them.
+#
+# `level` is the load-bearing field. A surface every gate reaches only at
+# `static` level is compiled, vetted and linted, and never run: a defect
+# in it survives a fully green tree. `make gates` fails on such a
+# surface unless it carries a `static_only_reason`, which is a written,
+# reviewable decision rather than an oversight.
+#
+# Schema: tools/gatetool/model.go. Run `make gates-write` after editing.
+
+surfaces:
+  - id: public-api
+    title: Public API (`op`)
+    paths:
+      - op/op.go
+      - op/options.go
+      - op/error.go
+      - op/feature
+      - op/profile
+      - op/grant
+      - op/subject
+
+  - id: authorize
+    title: Authorization endpoint
+    paths:
+      - internal/authorizeendpoint
+      - internal/authorize
+
+  - id: token-grants
+    title: Token endpoint and grants
+    paths:
+      - internal/tokenendpoint
+      - internal/grants
+      - internal/tokens
+      - internal/customgrant
+
+  - id: userinfo
+    title: UserInfo endpoint
+    paths:
+      - internal/userinfo
+
+  - id: introspection-revocation
+    title: Introspection and revocation
+    paths:
+      - internal/introspectendpoint
+      - internal/revokeendpoint
+
+  - id: end-session
+    title: End-session and back-channel logout
+    paths:
+      - internal/endsession
+      - internal/backchannel
+
+  - id: registration
+    title: Dynamic client registration
+    paths:
+      - internal/registrationendpoint
+
+  - id: par
+    title: Pushed authorization requests
+    paths:
+      - internal/parendpoint
+
+  - id: device-code
+    title: Device authorization grant
+    paths:
+      - internal/devicecode
+      - internal/devicecodeendpoint
+      - op/devicecodekit
+
+  - id: ciba
+    title: CIBA
+    paths:
+      - internal/ciba
+      - internal/cibaendpoint
+
+  - id: grant-management
+    title: Grant management
+    paths:
+      - internal/grantmgmtendpoint
+
+  - id: discovery-jwks
+    title: Discovery, JWKS and key handling
+    paths:
+      - internal/discovery
+      - internal/jwks
+      - internal/keys
+      - internal/jose
+
+  - id: authn-factors
+    title: Authentication factors
+    paths:
+      - internal/authn
+      - op/passkeykit
+      - op/totpkit
+      - op/recoverykit
+
+  - id: account-chooser
+    title: Account chooser and multi-account sessions
+    paths:
+      - internal/authn/chooser
+      - internal/sessions/chooser_test.go
+      - internal/sessions/establish.go
+
+  - id: session-cookie-csrf
+    title: Session cookie, CSRF and CORS
+    paths:
+      - internal/sessions
+      - internal/cookie
+      - internal/csrf
+      - internal/cors
+
+  - id: dpop
+    title: DPoP
+    paths:
+      - internal/dpop
+
+  - id: mtls
+    title: mTLS client authentication and proxy identity
+    paths:
+      - internal/mtls
+      - internal/proxy
+
+  - id: jar-jarm
+    title: JAR, JARM and RP keysets
+    paths:
+      - internal/jar
+      - internal/jarm
+      - internal/rpjwks
+      - internal/clientencjwks
+
+  - id: client-auth
+    title: Client authentication
+    paths:
+      - internal/clientauth
+
+  - id: store-inmem
+    title: In-memory store adapter
+    paths:
+      - op/storeadapter/inmem
+
+  - id: store-composite
+    title: Composite store adapter
+    paths:
+      - op/storeadapter/composite
+
+  - id: store-sql
+    title: SQL store adapter
+    paths:
+      - op/storeadapter/sql
+
+  - id: store-redis
+    title: Redis store adapter
+    paths:
+      - op/storeadapter/redis
+
+  - id: store-dynamodb
+    title: DynamoDB store adapter
+    paths:
+      - op/storeadapter/dynamodb
+
+  - id: interaction-drivers
+    title: Interaction drivers
+    paths:
+      - op/interaction
+
+  - id: i18n
+    title: Message bundles
+    paths:
+      - internal/i18n
+
+  - id: audit-metrics
+    title: Audit events and metrics
+    paths:
+      - internal/audit
+      - internal/auditevent
+      - internal/metrics
+      - internal/redact
+
+  - id: testkit
+    title: Embedder test kit
+    paths:
+      - op/testkit
+
+  - id: examples
+    title: Numbered examples
+    paths:
+      - examples
+
+  - id: sample-app
+    title: Reference application
+    paths:
+      - sample
+
+  - id: gate-tooling
+    title: Gate tooling
+    paths:
+      - tools/reachtool
+      - tools/scenariotool
+      - tools/stabilitytool
+      - tools/gatetool
+      - tools/failopentool
+
+gates:
+  - id: gofmt
+    in_verify: true
+    level: static
+    answers: Whether every Go file already matches gofumpt and goimports output.
+    blind_to:
+      - Anything about what the code does. Formatting is orthogonal to behaviour.
+    drives:
+      [
+        public-api,
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        discovery-jwks,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+        store-inmem,
+        store-composite,
+        store-sql,
+        store-redis,
+        store-dynamodb,
+        interaction-drivers,
+        i18n,
+        audit-metrics,
+        testkit,
+        examples,
+        sample-app,
+        gate-tooling,
+      ]
+
+  - id: vet
+    target: vet
+    in_verify: true
+    level: static
+    answers: Whether go vet's analyzers flag a construct in any module of the tree.
+    blind_to:
+      - Logic that is well-formed but wrong. vet has no model of this project's invariants.
+      - Code behind a build tag the run does not select.
+    drives:
+      [
+        public-api,
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        discovery-jwks,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+        store-inmem,
+        store-composite,
+        store-sql,
+        store-redis,
+        store-dynamodb,
+        interaction-drivers,
+        i18n,
+        audit-metrics,
+        testkit,
+        examples,
+        sample-app,
+        gate-tooling,
+      ]
+
+  - id: lint
+    target: lint
+    in_verify: true
+    level: static
+    answers: Whether golangci-lint's configured analyzer set flags the tree, including the depguard and forbidigo rules that enforce this project's own bans.
+    blind_to:
+      - A rule nobody wrote. The banned-construct set is exactly what .golangci.yml enumerates.
+      - A violation inside a directory the config excludes.
+    drives:
+      [
+        public-api,
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        discovery-jwks,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+        store-inmem,
+        store-composite,
+        store-sql,
+        store-redis,
+        store-dynamodb,
+        interaction-drivers,
+        i18n,
+        audit-metrics,
+        testkit,
+        examples,
+        sample-app,
+        gate-tooling,
+      ]
+
+  - id: test
+    target: test
+    in_verify: false
+    level: unit
+    answers: Whether the in-process test suite passes against the in-memory reference store.
+    blind_to:
+      - Behaviour no test asserts. Coverage of the catalog is a separate gate, and the catalog's own completeness is not measured by either.
+      - Data races, which need the -race variant.
+      - Anything that only appears against a real storage engine or a real browser.
+    drives:
+      [
+        public-api,
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        discovery-jwks,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+        store-inmem,
+        store-composite,
+        store-sql,
+        store-redis,
+        store-dynamodb,
+        interaction-drivers,
+        i18n,
+        audit-metrics,
+        testkit,
+      ]
+
+  - id: test-race
+    target: test-race
+    in_verify: true
+    level: unit
+    answers: Whether the in-process suite passes with the race detector armed.
+    blind_to:
+      - A race on a path no test drives concurrently. The detector reports interleavings that happen, not those that could.
+      - Everything the plain unit gate is blind to.
+    drives:
+      [
+        public-api,
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        discovery-jwks,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+        store-inmem,
+        store-composite,
+        store-sql,
+        store-redis,
+        store-dynamodb,
+        interaction-drivers,
+        i18n,
+        audit-metrics,
+        testkit,
+      ]
+
+  - id: tool-tests
+    in_verify: true
+    level: unit
+    answers: Whether the gate tools' own suites pass. Their modules sit outside the shipping inventory, so `make test` never reaches them and `scripts/verify.sh` runs them as a separate step.
+    blind_to:
+      - Whether a gate's predicate is the right one. A tool can be correct about the wrong question, which is how the reach gate shipped a weaker predicate than its description claimed.
+    drives: [gate-tooling]
+
+  - id: fuzz
+    target: fuzz
+    in_verify: false
+    level: unit
+    answers: Whether the registered fuzz targets find a crashing input within the time budget.
+    blind_to:
+      - Any parser with no fuzz target registered against it.
+      - Semantic errors. A fuzz target reports crashes and failed assertions, not wrong answers.
+    drives: [token-grants, jar-jarm, dpop, introspection-revocation, store-sql]
+
+  - id: govulncheck
+    target: govulncheck
+    in_verify: false
+    level: static
+    answers: Whether any reachable dependency symbol appears in the Go vulnerability database.
+    blind_to:
+      - A vulnerability with no advisory yet.
+      - A defect in this repository's own code.
+    drives:
+      [public-api, store-sql, store-redis, store-dynamodb, examples, sample-app]
+
+  - id: licenses
+    target: licenses
+    in_verify: false
+    level: static
+    answers: Whether every dependency's license is on the allowed list.
+    blind_to:
+      - License terms a scanner classifies but misreads.
+      - Anything about code correctness.
+    drives: [public-api, store-sql, store-redis, store-dynamodb]
+
+  - id: scenario-validate
+    target: scenario-validate
+    in_verify: true
+    level: static
+    answers: Whether every catalog file conforms to the catalog schema.
+    blind_to:
+      - A requirement no row states. A missing row is not a schema violation.
+    drives:
+      [
+        public-api,
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        discovery-jwks,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+      ]
+
+  - id: scenario-coverage
+    target: scenario-coverage-strict
+    in_verify: true
+    level: static
+    answers: Whether every in-scope catalog row is bound to a test that exists and runs.
+    blind_to:
+      - Completeness of the catalog itself. 100% measures fidelity to the rows that were written, not that the right rows were written.
+      - A row that asserts a claim is present without asserting its value. The shape gate reports that ratio; this gate counts such a row as covered.
+    drives:
+      [
+        public-api,
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        discovery-jwks,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+      ]
+
+  - id: scenario-shape
+    target: scenario-shape
+    in_verify: true
+    level: static
+    answers: Whether each catalog feature file states enough about values, ordering and identity rather than only about presence.
+    blind_to:
+      - Whether a value-shaped row asserts the right value. The gate reads the declared shape, not the assertion.
+      - A feature with no catalog file at all.
+    drives:
+      [
+        public-api,
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        discovery-jwks,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+      ]
+
+  - id: scenario-advisories
+    target: scenario-advisories-strict
+    in_verify: true
+    level: static
+    answers: Whether every catalogued CVE/GHSA has a `// Tracks:` annotation and every annotation names a catalogued advisory.
+    blind_to:
+      - A vulnerability class with no advisory. Most defects this project finds are not published advisories.
+    drives: [public-api, jar-jarm, dpop, client-auth, store-sql]
+
+  - id: stability
+    target: stability-check
+    in_verify: true
+    level: static
+    answers: Whether the recorded per-symbol stability markers still match the godoc, and whether a release rewrites a row already recorded.
+    blind_to:
+      - Whether a symbol marked stable behaves as its previous release did. The gate reads markers, not behaviour.
+    drives: [public-api, interaction-drivers, testkit]
+
+  - id: reach
+    target: reach
+    in_verify: true
+    level: static
+    answers: Whether every exported constant, Err-prefixed sentinel, catalogued audit event, seed message key and DynamoDB index is both named in non-test library code and branched on outside its own enumeration plumbing.
+    blind_to:
+      - Whether the branch it finds is the right one. A constant consulted by a wrong comparison passes.
+      - A value reached only through a string literal rather than the constant. The check follows identifiers, so an internal package spelling the same wire value by hand looks like nothing consulting the constant.
+      - Behaviour of the code that does name the symbol.
+    drives:
+      [public-api, audit-metrics, i18n, store-dynamodb, interaction-drivers]
+
+  - id: doc-refs
+    in_verify: true
+    level: static
+    answers: Whether documentation cross-references resolve to files that exist.
+    blind_to:
+      - Whether the prose at the other end still says what the reference claims.
+    drives: [public-api, examples, sample-app]
+
+  - id: version-refs
+    in_verify: true
+    level: static
+    answers: Whether the version strings quoted across README, examples and manifests agree.
+    blind_to:
+      - Whether the quoted version is the right one to ship.
+    drives: [public-api, examples, sample-app]
+
+  - id: gates
+    target: gates
+    in_verify: true
+    level: static
+    answers: Whether the declared gate topology still matches the tree — surfaces resolve, script-running Makefile targets are accounted for, and no surface is left with nothing that runs it.
+    blind_to:
+      - Whether a gate's `answers` line is honest. The map records claims; only a reader checks them.
+      - Whether a gate that claims a surface exercises it well.
+    drives: [gate-tooling]
+
+  - id: failopen
+    target: failopen
+    in_verify: true
+    level: static
+    answers: Whether any branch turns a storage read's error into a fabricated negative without carrying the error anywhere.
+    blind_to:
+      - A fail-open written in a shape the pattern does not match — an error assigned to an outer variable and then dropped, or a negative produced two calls later.
+      - Whether the distinction the branch does draw is drawn correctly.
+      - A store method whose name is outside the read set the check recognises.
+    drives:
+      [
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        grant-management,
+        authn-factors,
+        account-chooser,
+        session-cookie-csrf,
+        store-inmem,
+        store-composite,
+        store-sql,
+        store-redis,
+        store-dynamodb,
+      ]
+
+  - id: verify-examples
+    target: verify-examples
+    in_verify: true
+    level: static
+    answers: Whether every example compiles and vets, and whether the static documentation checks over the examples pass.
+    blind_to:
+      - Any configuration the library now rejects at construction. Nothing here calls op.New, so an example that can no longer start compiles green.
+    drives: [examples]
+
+  - id: apiverify
+    target: verify-examples-api
+    in_verify: false
+    level: integration
+    answers: Whether each non-browser example boots as a real process and does what its header doc promises, driven over HTTP with a real cookie jar.
+    blind_to:
+      - Rendering, framing defenses and anything else that needs a browser.
+      - The docker-compose examples, which it does not start.
+    drives:
+      [
+        examples,
+        public-api,
+        authorize,
+        token-grants,
+        account-chooser,
+        session-cookie-csrf,
+        interaction-drivers,
+        device-code,
+        ciba,
+        i18n,
+        audit-metrics,
+      ]
+
+  - id: browserverify
+    target: verify-examples-browser
+    in_verify: false
+    level: integration
+    answers: Whether the browser-driven examples and the reference application complete a real sign-in in Chrome.
+    blind_to:
+      - Everything, when Chrome is absent — the harness skips unless BROWSERVERIFY_REQUIRED is set.
+      - Browsers other than the one installed.
+    drives: [examples, sample-app, interaction-drivers, session-cookie-csrf]
+
+  - id: store-contracts
+    in_verify: false
+    level: integration
+    answers: Whether each storage adapter satisfies the shared store contract against a real engine started in a container.
+    blind_to:
+      - Engine versions other than the pinned images.
+      - Contract clauses the generated suite does not cover.
+    drives: [store-sql, store-redis, store-dynamodb, store-composite]
+
+  - id: conformance
+    target: conformance-release-verify
+    in_verify: false
+    level: integration
+    answers: Whether the candidate OFCS run has the reference module catalog and every module passed, matched an exclusion entry, or fell under an accepted-outcome rule.
+    blind_to:
+      - Any flow the suite does not route through. It drives one authenticated session per plan and never follows an add-account link, so multi-account behaviour is entirely outside it.
+      - Anything an embedder does. The suite exercises op-demo's configuration, not every configuration the library allows.
+
+    drives:
+      [
+        authorize,
+        token-grants,
+        userinfo,
+        introspection-revocation,
+        end-session,
+        registration,
+        par,
+        device-code,
+        ciba,
+        discovery-jwks,
+        dpop,
+        mtls,
+        jar-jarm,
+        client-auth,
+      ]
+
+non_gates:
+  - target: tools
+    reason: Installs the pinned developer tooling; it reports on the environment, not the tree.
+  - target: format
+    reason: Rewrites files. The check-only counterpart runs inside `make verify` as the gofmt gate.
+  - target: verify
+    reason: Aggregate. It runs the gates below it and adds no check of its own.
+  - target: verify-examples-harness
+    reason: Aggregate of the apiverify and browserverify gates.
+  - target: cover
+    reason: Produces a coverage report. Nothing fails on the number.
+  - target: fuzz-long
+    reason: The fuzz gate with a longer budget; the same target set, so it makes no separate claim.
+  - target: gates-write
+    reason: Regenerates api/gates.md. The check-only counterpart is the gates gate.
+  - target: stability
+    reason: Regenerates the stability report. The check-only counterpart is the stability gate.
+  - target: stability-backfill
+    reason: Regenerates while admitting a late marker; a deliberate write, not a check.
+  - target: scenario-validate-lenient
+    reason: Tolerant variant for a tree mid-change. Passing it does not mean the strict gate passes.
+  - target: scenario-coverage
+    reason: Progress report. The strict variant is the gate.
+  - target: scenario-coverage-bindings
+    reason: Tolerant subset of the strict coverage gate, for a tree mid-change.
+  - target: scenario-coverage-yaml-only
+    reason: Catalog-only view that stays usable when the main module does not build.
+  - target: scenario-stats
+    reason: Dashboard. Nothing fails on the numbers.
+  - target: scenario-shape-report
+    reason: Dashboard for the row-shape ratio. The strict variant is the shape gate.
+  - target: scenario-advisories
+    reason: Inventory report. The --check variant is the gate.
+  - target: conformance-up
+    reason: Service lifecycle.
+  - target: conformance-down
+    reason: Service lifecycle.
+  - target: conformance-certs
+    reason: Generates harness certificates.
+  - target: conformance-seed-plans
+    reason: Seeds the suite's test plans.
+  - target: conformance-ofcs-up
+    reason: Service lifecycle.
+  - target: conformance-ofcs-down
+    reason: Service lifecycle.
+  - target: conformance-ofcs-status
+    reason: Status query.
+  - target: conformance-op-up
+    reason: Service lifecycle.
+  - target: conformance-op-down
+    reason: Service lifecycle.
+  - target: conformance-op-status
+    reason: Status query.
+  - target: conformance-baseline
+    reason: Captures a baseline. It records an outcome rather than judging one.
+  - target: conformance-baseline-diff
+    reason: Compares two baselines for a human. The release gate is the judging variant.

@@ -1,0 +1,27 @@
+# Branches that answer a storage read's error without carrying it, where
+# that is the correct state.
+#
+# Format: <file>:<line> TAB <reason>, one row per entry.
+#
+# The gate reports a branch only when the condition is a bare
+# `err != nil`, the error came from a storage read, the branch mentions
+# the error nowhere, and the branch returns a fabricated negative. That
+# shape has produced the same defect in five consecutive audits: a
+# session lookup that could not reach the backend read as "not signed
+# in", a grant lookup that timed out read as "no consent", a delete that
+# failed read as a success.
+#
+# A uniform *wire* response is often required — RFC 7662 §2.2 forbids an
+# introspection endpoint from distinguishing rejection sub-classes, and
+# a client-registry miss must not be an existence oracle. That is not a
+# reason for a row here: collapse on the wire and separate on the audit
+# stream, which is what those endpoints now do. A row is for a branch
+# where the failure genuinely carries no information worth keeping.
+#
+# The reason has to argue why losing the distinction is right. "The
+# response has to look the same" is an argument about the wire, not
+# about the branch, and a row that says it is an audit emission instead.
+#
+# Line numbers move. A row whose line no longer holds the shape simply
+# stops matching, and the gate reports the branch at its new line — so a
+# stale row is visible as a new finding rather than as silent coverage.

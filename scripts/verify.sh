@@ -80,6 +80,13 @@ log "scenariotool validate"
 log "scenariotool coverage --strict"
 "$SCRIPT_DIR/scenario.sh" coverage --strict
 
+# Coverage above answers whether every row has a test. This answers
+# whether the rows say enough: a file made only of "the claim is
+# present" rows sits at 100% while nothing pins the value, which is the
+# hole a wrong auth_time claim lived in.
+log "scenariotool shape --check"
+"$SCRIPT_DIR/scenario.sh" shape --check
+
 log "scenariotool advisories --check"
 "$SCRIPT_DIR/scenario.sh" advisories --check >/dev/null
 
@@ -92,6 +99,19 @@ log "stabilitytool --check"
 # situation never arose.
 log "reachtool"
 "$SCRIPT_DIR/reach.sh"
+
+# And nothing above notices a surface that every gate merely compiles.
+# The gates below this line each answer one narrow question; this one
+# asks whether, between them, anything actually runs each shipped area.
+log "gatetool"
+"$SCRIPT_DIR/gates.sh" --check
+
+# nilerr catches a branch that returns a nil error after testing one.
+# It does not catch a branch that returns `false`, or an empty record,
+# or nothing at all — which is the shape a storage failure takes when
+# it is reported as a record that does not exist.
+log "failopentool"
+"$SCRIPT_DIR/failopen.sh"
 
 "$SCRIPT_DIR/check_doc_refs.sh"
 

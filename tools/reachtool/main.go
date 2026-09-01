@@ -37,6 +37,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Floors below which a clean report means the scan is broken rather
@@ -114,28 +115,21 @@ func run(args []string, out io.Writer) error {
 // scanCounts records how much each check had to look at, so a clean
 // report can be told apart from a scan that found nothing to report on.
 type scanCounts struct {
-	symbols  int
-	events   int
-	messages int
-	indexes  int
+	symbols   int
+	consulted int
+	events    int
+	messages  int
+	indexes   int
 }
 
 // checkAll runs every check and returns their findings and sizes.
 func checkAll(root string, ix *index, al *allowlist) ([]finding, scanCounts, error) {
 	var counts scanCounts
 	findings := checkSymbols(ix, al)
-	for _, d := range ix.decls {
-		if publicPkg(d.pkg) && isExported(d.name) && symbolCandidate(d) {
-			counts.symbols++
-		}
-	}
-
+	findings = append(findings, checkConsulted(ix, al)...)
 	findings = append(findings, checkEvents(ix, al)...)
-	for _, d := range ix.declsIn(auditEventPkg) {
-		if d.kind == kindConst && d.typeName == "Name" && d.str != "" {
-			counts.events++
-		}
-	}
+	counts.symbols, counts.consulted = countSymbolCandidates(ix)
+	counts.events = countAuditEvents(ix)
 
 	messages, keys, err := checkMessages(root, ix, al)
 	if err != nil {
@@ -145,12 +139,49 @@ func checkAll(root string, ix *index, al *allowlist) ([]finding, scanCounts, err
 	findings = append(findings, messages...)
 
 	findings = append(findings, checkIndexes(ix, al)...)
-	for _, d := range ix.declsIn(dynamoPkg) {
-		if d.kind == kindConst && d.str != "" && len(d.name) > len("index") && d.name[:len("index")] == "index" {
-			counts.indexes++
+	counts.indexes = countDynamoIndexes(ix)
+	return findings, counts, nil
+}
+
+// countSymbolCandidates reports how many declarations each of the two
+// constant checks had to look at, so a clean report can be told apart
+// from a scan that found nothing to report on.
+func countSymbolCandidates(ix *index) (symbols, consulted int) {
+	for _, d := range ix.decls {
+		if !publicPkg(d.pkg) || !isExported(d.name) {
+			continue
+		}
+		if symbolCandidate(d) {
+			symbols++
+		}
+		if consultCandidate(d) {
+			consulted++
 		}
 	}
-	return findings, counts, nil
+	return symbols, consulted
+}
+
+// countAuditEvents reports how many catalogued events the walk saw.
+func countAuditEvents(ix *index) int {
+	n := 0
+	for _, d := range ix.declsIn(auditEventPkg) {
+		if d.kind == kindConst && d.typeName == "Name" && d.str != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// countDynamoIndexes reports how many secondary-index constants the
+// walk saw.
+func countDynamoIndexes(ix *index) int {
+	n := 0
+	for _, d := range ix.declsIn(dynamoPkg) {
+		if d.kind == kindConst && d.str != "" && strings.HasPrefix(d.name, "index") {
+			n++
+		}
+	}
+	return n
 }
 
 // assertScanReachedSources refuses to report a clean tree when the

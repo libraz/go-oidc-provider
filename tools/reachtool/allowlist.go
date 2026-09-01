@@ -138,6 +138,7 @@ func validKinds() map[string]bool {
 		kindEvent:   true,
 		kindMessage: true,
 		kindIndex:   true,
+		kindConsult: true,
 	}
 }
 

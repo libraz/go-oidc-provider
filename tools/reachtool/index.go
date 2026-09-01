@@ -73,6 +73,13 @@ type index struct {
 	// identifiers.
 	literals map[string]map[string]bool
 
+	// consults is uses minus the sites that only enumerate. A value
+	// listed by its own String() and IsValid() is named by the library
+	// and consulted by nothing, and the difference between those two
+	// statements is the difference between a flag that works and a flag
+	// that is parsed, validated, and then ignored. See isPlumbing.
+	consults map[string]map[string]bool
+
 	files int
 }
 
@@ -98,6 +105,7 @@ func buildIndex(root string) (*index, error) {
 	ix := &index{
 		uses:     map[string]map[string]bool{},
 		literals: map[string]map[string]bool{},
+		consults: map[string]map[string]bool{},
 	}
 	skip := skippedDirs()
 	fset := token.NewFileSet()
@@ -143,6 +151,7 @@ func (ix *index) addFile(fset *token.FileSet, root, path string) error {
 	ix.files++
 	ix.addDecls(fset, pkg, rel, f)
 	ix.addUses(rel, f)
+	ix.addConsults(rel, f)
 	return nil
 }
 
@@ -293,6 +302,107 @@ func (ix *index) addUses(rel string, f *ast.File) {
 		}
 		return true
 	})
+}
+
+// addConsults records the identifier uses that are not part of a type's
+// own enumeration plumbing.
+//
+// The symbol check asks whether the library names a declaration
+// anywhere. That question is answered "yes" by a constant that appears
+// only in its own String() and IsValid(), which is how a feature flag
+// can be parsed, validated, advertised, and never branched on. This
+// second index answers the narrower question — does anything act on it
+// — by dropping the declarations whose whole job is to enumerate.
+func (ix *index) addConsults(rel string, f *ast.File) {
+	declared := declaredIdents(f)
+	for _, d := range f.Decls {
+		if isPlumbing(d) {
+			continue
+		}
+		ast.Inspect(d, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && !declared[id] {
+				record(ix.consults, id.Name, rel)
+			}
+			return true
+		})
+	}
+}
+
+// plumbingFuncs are the method and function names whose body exists to
+// list a type's values rather than to act on one. A use inside one of
+// these says the value is spelled out somewhere, not that anything
+// depends on it.
+//
+// The set is deliberately short. A name like Validate or Apply is left
+// out because those routinely carry real logic, and a check that
+// discounted them would start reporting live symbols.
+//
+//nolint:gochecknoglobals // closed enumeration; declared once and treated as a constant lookup table.
+var plumbingFuncs = map[string]bool{
+	"String":        true,
+	"GoString":      true,
+	"IsValid":       true,
+	"Values":        true,
+	"All":           true,
+	"MarshalText":   true,
+	"UnmarshalText": true,
+	"MarshalJSON":   true,
+	"UnmarshalJSON": true,
+}
+
+// isPlumbing reports whether a top-level declaration exists to enumerate
+// values rather than to act on them: one of the plumbing methods above,
+// or a package-level table literal keyed by them.
+func isPlumbing(d ast.Decl) bool {
+	switch node := d.(type) {
+	case *ast.FuncDecl:
+		return plumbingFuncs[node.Name.Name]
+	case *ast.GenDecl:
+		if node.Tok != token.VAR && node.Tok != token.CONST {
+			return false
+		}
+		return isTableDecl(node)
+	default:
+		return false
+	}
+}
+
+// isTableDecl reports whether every value in a package-level var or
+// const group is a map or slice literal — the shape a lookup table
+// takes. Such a table names each member of an enumeration exactly once
+// and branches on none of them.
+func isTableDecl(gen *ast.GenDecl) bool {
+	found := false
+	for _, spec := range gen.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok || len(vs.Values) == 0 {
+			return false
+		}
+		for _, v := range vs.Values {
+			lit, ok := v.(*ast.CompositeLit)
+			if !ok {
+				return false
+			}
+			switch lit.Type.(type) {
+			case *ast.MapType, *ast.ArrayType:
+				found = true
+			default:
+				return false
+			}
+		}
+	}
+	return found
+}
+
+// consultedIn reports whether any file that acts on the identifier
+// satisfies want.
+func (ix *index) consultedIn(name string, want func(file string) bool) bool {
+	for file := range ix.consults[name] {
+		if want(file) {
+			return true
+		}
+	}
+	return false
 }
 
 // declaredIdents collects the identifiers that introduce a name rather

@@ -29,9 +29,13 @@ Per row:
 | `behaviour`          | yes | Plain-English expected behaviour, imperative voice. |
 | `status`             | no  | `active` / `pending` / `out-of-scope` (default `pending`). |
 | `covered_by`         | no  | `<package path>.<TestFunc>` naming the test that asserts this row from outside the suite. Only valid when `status == active`. |
+| `shape`              | no  | `presence` / `value` / `order` / `identity` — what the row demands. Inferred from `behaviour` when omitted. |
 | `cross_refs`         | no  | List of `<feature>#<ID>` refs to other rows. |
 | `notes`              | no  | Reviewer context (blocked-on, fixture needs, etc.). |
 | `out_of_scope_reason`| if `status == out-of-scope` | Brief justification, may reference an ADR. |
+
+File-level `shape_exempt_reason` exempts a file from the shape gate; see
+below.
 
 Severity grading:
 
@@ -45,6 +49,45 @@ Severity grading:
 `schema.json` carries the JSON Schema definition (consumable by IDEs
 that follow the `# yaml-language-server: $schema=...` directive at
 the top of every catalog file).
+
+## Row shape — what a row demands
+
+Coverage answers whether every row has a test. It cannot answer whether
+the rows say enough, and the two are easy to confuse: a file can sit at
+100% coverage while asserting nothing an implementation could get
+wrong in an interesting way.
+
+A row that says an ID Token "MUST include `auth_time`" is satisfied by
+an implementation that emits `auth_time` with the wrong value. Every
+row about `auth_time` on the authorization-code path was written that
+way, so an exit that reported the wrong authentication time — and
+dropped `acr` and `amr` while doing it — passed the whole suite.
+
+`shape` names which of four things a row demands:
+
+| Shape      | The row demands |
+|------------|-----------------|
+| `presence` | Something appears, or is absent. |
+| `value`    | A particular value, or a relationship between two values. |
+| `order`    | A sequence: what happens before what, what is consumed once, what may not be replayed. |
+| `identity` | Which principal, client, grant or session the thing refers to. |
+
+The field is optional. `make scenario-shape-report` infers a shape from
+the `behaviour` text, and the inference only ever moves a row *out* of
+`presence` — a sentence it cannot read counts as presence, which makes a
+file look thinner rather than richer. Declare `shape:` when the prose is
+clear to a reader but not to the inference.
+
+`make scenario-shape` (part of `make verify`) fails a file whose
+in-scope rows are all presence-shaped. Out-of-scope rows are excluded
+from the count, so a file cannot clear the gate by declaring rows away.
+A file that genuinely can only assert presence sets
+`shape_exempt_reason` at the file level; a file that later grows a
+non-presence row must drop the exemption, which the gate also checks.
+
+The ratio is a scoping signal rather than a target. A file near the top
+of the report is one whose coverage number says the least about it, and
+is the next place worth reading for a hole.
 
 ## Editing
 

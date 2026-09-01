@@ -27,7 +27,15 @@ type FeatureFile struct {
 	Title       string   `yaml:"title"`
 	Specs       []string `yaml:"specs"`
 	Description string   `yaml:"description,omitempty"`
-	Rows        []*Row   `yaml:"rows"`
+
+	// ShapeExemptReason records why this file is right to demand only
+	// that things appear. It is the escape hatch for the shape gate, and
+	// it is deliberately a sentence rather than a boolean: a file whose
+	// rows can never pin a value should be able to say so, and a reader
+	// should be able to disagree.
+	ShapeExemptReason string `yaml:"shape_exempt_reason,omitempty"`
+
+	Rows []*Row `yaml:"rows"`
 }
 
 // Row mirrors one entry under FeatureFile.Rows.
@@ -49,6 +57,14 @@ type Row struct {
 	CrossRefs        []string `yaml:"cross_refs,omitempty"`
 	Notes            string   `yaml:"notes,omitempty"`
 	OutOfScopeReason string   `yaml:"out_of_scope_reason,omitempty"`
+
+	// Shape declares what the row demands — presence, value, order or
+	// identity. It is optional: the shape gate infers a shape from the
+	// behaviour text and only ever infers *upward*, out of presence, so
+	// leaving it empty is safe. Set it when the prose does not read the
+	// way the inference expects, or when the row's shape is the point
+	// being made. See shape.go.
+	Shape string `yaml:"shape,omitempty"`
 
 	// File is the parent feature file; populated post-parse for
 	// reverse-lookup convenience.
@@ -368,6 +384,14 @@ func validateRowContent(where string, r *Row) []string {
 	}
 	if strings.TrimSpace(r.Behaviour) == "" {
 		problems = append(problems, where+": 'behaviour' MUST be non-empty")
+	}
+	// The field is optional — the shape gate infers one when it is
+	// absent — but a misspelled value would be read as its own shape
+	// and quietly change what the file's profile says.
+	if r.Shape != "" && !validShapes[Shape(r.Shape)] {
+		problems = append(problems, fmt.Sprintf(
+			"%s: shape %q must be one of presence|value|order|identity", where, r.Shape,
+		))
 	}
 	return problems
 }
