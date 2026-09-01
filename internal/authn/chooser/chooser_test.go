@@ -185,10 +185,12 @@ func TestInteractionContinueBindsOnlySessionsInActiveChooserGroup(t *testing.T) 
 		t.Fatalf("Result.AuthTime = %v, want %v", step.Result.AuthTime, t0.Add(time.Minute))
 	}
 
-	foreign, err := mgr.Issue(ctx, sessions.Login{Subject: "other-group-user", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue foreign group: %v", err)
-	}
+	foreign := establishSession(t, ctx, mgr, sessions.EstablishPlan{
+		Login:                sessions.Login{Subject: "other-group-user", AuthTime: t0},
+		StableSessionID:      "session-foreign",
+		StableChooserGroupID: "chooser-group-foreign",
+		Now:                  t0,
+	})
 	_, err = ix.Continue(ctx, authn.ContinueInput{
 		ChooserGroupID: first.ChooserGroupID,
 		Submission: interaction.FormSubmission{Values: map[string]string{
@@ -294,20 +296,53 @@ func newChooserManager(tb testing.TB, now time.Time) *sessions.Manager {
 	return mgr
 }
 
+// establishSession seeds one account the way the authorization endpoint
+// does: the session and chooser group IDs are decided before the write,
+// PlanEstablishment resolves the mode, and Establish applies it.
+func establishSession(
+	tb testing.TB,
+	ctx context.Context,
+	mgr *sessions.Manager,
+	plan sessions.EstablishPlan,
+) sessions.Outcome {
+	tb.Helper()
+
+	establishment, err := mgr.PlanEstablishment(ctx, plan)
+	if err != nil {
+		tb.Fatalf("PlanEstablishment: %v", err)
+	}
+	out, err := mgr.Establish(ctx, establishment)
+	if err != nil {
+		tb.Fatalf("Establish: %v", err)
+	}
+	return out
+}
+
+// issueTwoAccounts seeds a chooser group holding user-a and user-b, the
+// second joined through the add-account path the chooser prompt's
+// AddAccountURL drives.
 func issueTwoAccounts(tb testing.TB, ctx context.Context, mgr *sessions.Manager, t0 time.Time) (sessions.Outcome, sessions.Outcome) {
 	tb.Helper()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		tb.Fatalf("Issue first: %v", err)
-	}
-	second, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
-		Subject:  "user-b",
-		AuthTime: t0.Add(time.Minute),
+	first := establishSession(tb, ctx, mgr, sessions.EstablishPlan{
+		Login:                sessions.Login{Subject: "user-a", AuthTime: t0},
+		StableSessionID:      "session-user-a",
+		StableChooserGroupID: "chooser-group",
+		Now:                  t0,
 	})
+	active, err := mgr.Resolve(ctx, first.Cookie)
 	if err != nil {
-		tb.Fatalf("AddAccount second: %v", err)
+		tb.Fatalf("Resolve first cookie: %v", err)
 	}
+	second := establishSession(tb, ctx, mgr, sessions.EstablishPlan{
+		Active:                   active,
+		Login:                    sessions.Login{Subject: "user-b", AuthTime: t0.Add(time.Minute)},
+		StableSessionID:          "session-user-b",
+		StableChooserGroupID:     "unused-chooser-group",
+		ChooserAddAccount:        true,
+		ChooserAddAccountGroupID: active.Payload.ChooserGroupID,
+		Now:                      t0,
+	})
 	if second.ChooserGroupID != first.ChooserGroupID {
 		tb.Fatalf("second chooser group = %q, want %q", second.ChooserGroupID, first.ChooserGroupID)
 	}

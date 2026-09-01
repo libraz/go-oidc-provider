@@ -27,9 +27,10 @@
 //  3. Follow the template's "Sign in to a different account" link →
 //     sign in as bob. Only that link joins alice's chooser group: it
 //     carries the OP-private marker the authorize endpoint matches
-//     against the active session before routing the fresh login to
-//     AddAccount instead of Issue. A bare prompt=login has no such
-//     marker and replaces the current account rather than adding one.
+//     against the active session before joining the fresh login to
+//     the existing group instead of starting a new one. A bare
+//     prompt=login has no such marker and replaces the current
+//     account rather than adding one.
 //  4. GET /oidc/auth?...&prompt=select_account → the chooser
 //     template enumerates both accounts and lets the user pick.
 //

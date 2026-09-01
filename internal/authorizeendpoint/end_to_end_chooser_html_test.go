@@ -81,17 +81,12 @@ func TestEndToEnd_ChooserRendersUsablePageOnDefaultHTMLSurface(t *testing.T) {
 	}
 
 	mgr, _ := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
-	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: accounts[0].subject, AuthTime: clock.Current()})
-	if err != nil {
-		t.Fatalf("Issue %s: %v", accounts[0].subject, err)
-	}
-	sessB, err := mgr.AddAccount(ctx, sessA.ChooserGroupID, sessions.Login{
+	sessA := establishFresh(t, mgr,
+		sessions.Login{Subject: accounts[0].subject, AuthTime: clock.Current()}, clock.Current())
+	sessB := establishAddAccount(t, mgr, sessA.Cookie, sessions.Login{
 		Subject:  accounts[1].subject,
 		AuthTime: clock.Current(),
-	})
-	if err != nil {
-		t.Fatalf("AddAccount %s: %v", accounts[1].subject, err)
-	}
+	}, clock.Current())
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {

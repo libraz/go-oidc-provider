@@ -28,13 +28,12 @@
 //  3. Follow AddAccountURL → log in as bob (second account in the
 //     SAME browser).
 //     ensureSession sees that this login originated from the chooser
-//     add-account link and routes to AddAccount instead of Issue —
-//     bob joins alice's chooser group.
+//     add-account link and joins bob to alice's chooser group rather
+//     than starting a new one.
 //  4. GET /oidc/auth?...&prompt=select_account again → the chooser
 //     interaction enumerates both accounts. Pick alice or bob; the
-//     orchestrator binds the picked subject and rebinds the cookie
-//     via [sessions.Manager.Switch] so the chooser group stays
-//     intact.
+//     orchestrator binds the picked subject and rebinds the cookie to
+//     that account, leaving the chooser group intact.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.

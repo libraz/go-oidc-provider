@@ -64,20 +64,13 @@ func newChooserFreshnessFixture(t *testing.T, siblingLogin sessions.Login) *choo
 	})
 
 	mgr, _ := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
-	ctx := context.Background()
-	entry, err := mgr.Issue(ctx, sessions.Login{
+	entry := establishFresh(t, mgr, sessions.Login{
 		Subject:  "user-entry",
 		AuthTime: clock.now,
 		ACR:      chooserStrongACR,
 		AMR:      []string{"pwd"},
-	})
-	if err != nil {
-		t.Fatalf("Issue entry session: %v", err)
-	}
-	sibling, err := mgr.AddAccount(ctx, entry.ChooserGroupID, siblingLogin)
-	if err != nil {
-		t.Fatalf("AddAccount sibling: %v", err)
-	}
+	}, clock.now)
+	sibling := establishAddAccount(t, mgr, entry.Cookie, siblingLogin, clock.now)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {

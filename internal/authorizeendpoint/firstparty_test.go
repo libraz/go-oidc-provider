@@ -157,14 +157,11 @@ func TestAuthorize_FirstParty_GrantAndCodeRollbackTogether(t *testing.T) {
 			t.Parallel()
 
 			h := newFirstPartyHarness(t)
-			session, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+			session := establishFresh(t, h.sessionMgr, sessions.Login{
 				Subject:  "user-fp",
 				AuthTime: h.clock.now.Add(-time.Minute),
 				AMR:      []string{"pwd"},
-			})
-			if err != nil {
-				t.Fatalf("Issue: %v", err)
-			}
+			}, h.clock.now)
 			fault := &completionFault{boundary: boundary}
 			fault.armed.Store(true)
 			h.deps.Transactions = faultCompletionTransactional{
@@ -260,15 +257,12 @@ func TestAuthorize_FirstParty_SameSiteSkipsConsentWhenRedirectOriginMatches(t *t
 func testAuthorizeFirstPartySkipsConsentAndMintsCode(t *testing.T, secFetchSite string) {
 	t.Helper()
 	h := newFirstPartyHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
 		AMR:      []string{"pwd"},
 		ACR:      "urn:test:acr:loa1",
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
@@ -364,13 +358,10 @@ func testAuthorizeFirstPartySkipsConsentAndMintsCode(t *testing.T, secFetchSite 
 func testAuthorizeFirstPartyFallsThroughToInteraction(t *testing.T, secFetchSite string) {
 	t.Helper()
 	h := newFirstPartyHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
 	r.Header.Set("Sec-Fetch-Site", secFetchSite)
@@ -404,13 +395,10 @@ func TestAuthorize_FirstParty_PromptConsentSuppressesSkip(t *testing.T) {
 	t.Parallel()
 
 	h := newFirstPartyHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 
 	v := goodAuthorizeValues()
 	v.Set("prompt", "consent")
@@ -452,13 +440,10 @@ func TestAuthorize_FirstParty_AuthorizationDetailsSuppressesSkip(t *testing.T) {
 			"payment_initiation": func(context.Context, map[string]any, *store.Client) error { return nil },
 		}
 	})
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 
 	v := goodAuthorizeValues()
 	v.Set("authorization_details", `[{"type":"payment_initiation","amount":"100"}]`)
@@ -503,13 +488,10 @@ func TestAuthorize_NewAuthorizationDetailsForcesConsent(t *testing.T) {
 			"payment_initiation": func(context.Context, map[string]any, *store.Client) error { return nil },
 		}
 	})
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-rar",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	// Seed a grant that already covers the requested scope but carries no
 	// authorization_details, so only the new RAR element should force a prompt.
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
@@ -578,13 +560,10 @@ func TestAuthorize_FirstParty_PromptNoneSilentMint(t *testing.T) {
 	t.Parallel()
 
 	h := newFirstPartyHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 
 	v := goodAuthorizeValues()
 	v.Set("prompt", "none")
@@ -617,13 +596,10 @@ func TestAuthorize_FirstParty_NotInSetGoesThroughInteraction(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t) // baseline harness — empty FirstPartyClients
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
@@ -656,13 +632,10 @@ func TestAuthorize_FirstParty_SameSiteDifferentOriginSuppressesSkip(t *testing.T
 	t.Parallel()
 
 	h := newFirstPartyHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
 	r.Header.Set("Sec-Fetch-Site", "same-site")
@@ -696,13 +669,10 @@ func TestAuthorize_FirstParty_OfflineAccessSuppressesSkip(t *testing.T) {
 	t.Parallel()
 
 	h := newFirstPartyHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	v := goodAuthorizeValues()
 	v.Set("scope", "openid profile offline_access")
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,

@@ -1140,13 +1140,10 @@ func TestInteractionPost_RotatesSessionIDAfterFreshAuthn(t *testing.T) {
 	h := newHarness(t)
 	// Seed an active session for the same subject the
 	// SubjectAuthenticator binds at the end of the interaction.
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now.Add(-time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -1267,13 +1264,10 @@ func TestInteractionPost_SessionLookupFaultFailsClosedOverHTTP(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now.Add(-time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-session-fault",
 		Subject:   "user-1",

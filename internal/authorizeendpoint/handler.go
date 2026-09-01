@@ -163,7 +163,8 @@ type Deps struct {
 
 	// Sessions is the chooser-group session manager. The handler reads
 	// the active session via [sessions.Manager.Resolve] before deciding
-	// whether interaction is required, and calls [sessions.Manager.Issue]
+	// whether interaction is required, and applies the completion
+	// intent's [sessions.Establishment] via [sessions.Manager.Establish]
 	// after a fresh login terminates the interaction.
 	Sessions *sessions.Manager
 

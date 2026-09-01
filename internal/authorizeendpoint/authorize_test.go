@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -168,6 +170,72 @@ func newHarness(t *testing.T, customise ...func(*authorizeendpoint.Deps)) *testH
 		authorizePath:  deps.AuthorizePath,
 		interactionPth: deps.InteractionPath,
 	}
+}
+
+// stableIDSeq backs nextStableID.
+var stableIDSeq atomic.Uint64
+
+// nextStableID mints the kind of caller-decided identifier the endpoint
+// derives from its interaction record before it persists a completion
+// intent. Only uniqueness within the test binary matters here.
+func nextStableID(label string) string {
+	return label + "-" + strconv.FormatUint(stableIDSeq.Add(1), 10)
+}
+
+// establishPlan runs the two-step establishment the endpoint performs at
+// terminal tick: PlanEstablishment resolves the mode and the exact record,
+// then Establish applies it idempotently.
+func establishPlan(tb testing.TB, mgr *sessions.Manager, plan sessions.EstablishPlan) sessions.Outcome {
+	tb.Helper()
+	ctx := context.Background()
+	establishment, err := mgr.PlanEstablishment(ctx, plan)
+	if err != nil {
+		tb.Fatalf("PlanEstablishment: %v", err)
+	}
+	out, err := mgr.Establish(ctx, establishment)
+	if err != nil {
+		tb.Fatalf("Establish: %v", err)
+	}
+	return out
+}
+
+// establishFresh seeds a brand-new chooser group holding a single account,
+// and returns the outcome whose Cookie drives the request under test.
+func establishFresh(tb testing.TB, mgr *sessions.Manager, login sessions.Login, now time.Time) sessions.Outcome {
+	tb.Helper()
+	return establishPlan(tb, mgr, sessions.EstablishPlan{
+		Login:                login,
+		StableSessionID:      nextStableID("session"),
+		StableChooserGroupID: nextStableID("chooser"),
+		Now:                  now,
+	})
+}
+
+// establishAddAccount joins a further account to the chooser group behind
+// cookie, the way the chooser prompt's AddAccountURL drives it: the current
+// cookie is resolved first so the group it names is the one the new account
+// lands in.
+func establishAddAccount(
+	tb testing.TB,
+	mgr *sessions.Manager,
+	cookieValue string,
+	login sessions.Login,
+	now time.Time,
+) sessions.Outcome {
+	tb.Helper()
+	active, err := mgr.Resolve(context.Background(), cookieValue)
+	if err != nil {
+		tb.Fatalf("Resolve current cookie: %v", err)
+	}
+	return establishPlan(tb, mgr, sessions.EstablishPlan{
+		Active:                   active,
+		Login:                    login,
+		StableSessionID:          nextStableID("session"),
+		StableChooserGroupID:     nextStableID("chooser"),
+		ChooserAddAccount:        true,
+		ChooserAddAccountGroupID: active.Payload.ChooserGroupID,
+		Now:                      now,
+	})
 }
 
 // registerTestClient seeds the store with the canonical RP fixture every
@@ -353,13 +421,10 @@ func TestAuthorize_HappyPathWithExistingSessionAndGrant_MintsCode(t *testing.T) 
 	h := newHarness(t)
 	// Seed an active session and a covering grant; the dispatcher should
 	// then mint a code and redirect to the RP without an interaction.
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -406,13 +471,10 @@ func TestAuthorize_HappyPathWithExistingSessionAndGrant_EmitsCodeIssued(t *testi
 	h := newHarness(t, func(d *authorizeendpoint.Deps) {
 		d.Audit = emitter
 	})
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -467,13 +529,10 @@ func TestAuthorize_ExistingSessionKeepsRecentCookie(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -524,13 +583,10 @@ func TestAuthorize_ExistingSessionTouchesIdleExpiry(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now.Add(-time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -596,13 +652,10 @@ func TestAuthorize_PromptLoginForcesInteraction_EvenWithSession(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now,
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	v := goodAuthorizeValues()
 	v.Set("prompt", "login")
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
@@ -623,13 +676,10 @@ func TestAuthorize_MaxAgeViolationForcesInteraction(t *testing.T) {
 
 	h := newHarness(t)
 	// Issue a session whose AuthTime is well in the past.
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now.Add(-time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -659,13 +709,10 @@ func TestAuthorize_MaxAgeZeroForcesInteraction(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now,
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -698,14 +745,11 @@ func TestAuthorize_ACRUnsatisfiedForcesInteraction(t *testing.T) {
 	// Session was authenticated at a weaker context than the RP now
 	// requests; RFC 9470 step-up must re-run the authn chain rather than
 	// silently mint against the weaker session.
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now,
 		ACR:      "urn:acr:low",
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -737,14 +781,11 @@ func TestAuthorize_ClaimsEssentialACRUnsatisfiedForcesInteraction(t *testing.T) 
 	h := newHarness(t, func(d *authorizeendpoint.Deps) {
 		d.ClaimsParameterEnabled = true
 	})
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now,
 		ACR:      "urn:acr:low",
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -776,14 +817,11 @@ func TestAuthorize_ACRSatisfiedSession_MintsCode(t *testing.T) {
 	h := newHarness(t)
 	// The session's recorded ACR is already one of the requested
 	// acr_values, so the dispatcher mints silently without a step-up.
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now,
 		ACR:      "urn:acr:high",
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -816,14 +854,11 @@ func TestAuthorize_PromptNoneACRUnsatisfied_RedirectsInteractionRequired(t *test
 	// prompt=none forbids an interaction; a session too weak for the
 	// requested acr_values resolves to interaction_required (§9①),
 	// distinct from the login_required a max_age expiry would yield.
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now,
 		ACR:      "urn:acr:low",
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	if err := h.store.Grants().Save(context.Background(), &store.Grant{
 		ID:        "grant-1",
 		Subject:   "user-1",
@@ -916,14 +951,11 @@ func TestAuthorize_GrantLookupFaultIsServerErrorNotMissingConsent(t *testing.T) 
 	h := newHarness(t, func(d *authorizeendpoint.Deps) {
 		d.Grants = grantLookupFaultStore{GrantStore: d.Grants, err: injected}
 	})
-	session, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	session := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: h.clock.now.Add(-time.Minute),
 		AMR:      []string{"pwd"},
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	values := goodAuthorizeValues()
 	values.Set("prompt", "none")
 	req := httptest.NewRequestWithContext(
@@ -975,13 +1007,10 @@ func TestAuthorize_CorruptGrantLookupIsServerErrorNotMissingConsent(t *testing.T
 					result:     tc.result,
 				}
 			})
-			session, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+			session := establishFresh(t, h.sessionMgr, sessions.Login{
 				Subject:  "user-1",
 				AuthTime: h.clock.now.Add(-time.Minute),
-			})
-			if err != nil {
-				t.Fatalf("Issue: %v", err)
-			}
+			}, h.clock.now)
 			values := goodAuthorizeValues()
 			values.Set("prompt", "none")
 			req := httptest.NewRequestWithContext(

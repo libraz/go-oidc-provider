@@ -3,6 +3,7 @@ package endsession_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -232,6 +233,30 @@ func TestHandler_StalledBackchannelTargetDoesNotHoldTheLogoutResponse(t *testing
 	}
 }
 
+// assertGroupSubjects pins how many sessions of each subject the seeded
+// chooser group holds. An add-account that the plan resolved to a reuse
+// instead would leave the group a row short, and the fan-out assertion
+// would then pass for a reason unrelated to per-subject deduplication.
+func assertGroupSubjects(t *testing.T, h *harness, cookieValue string, want map[string]int) {
+	t.Helper()
+	ctx := context.Background()
+	active, err := h.sessionMgr.Resolve(ctx, cookieValue)
+	if err != nil {
+		t.Fatalf("Resolve seeded cookie: %v", err)
+	}
+	snapshot, err := h.sessionMgr.SnapshotGroup(ctx, active.Payload.ChooserGroupID)
+	if err != nil {
+		t.Fatalf("SnapshotGroup: %v", err)
+	}
+	got := make(map[string]int, len(want))
+	for _, sess := range snapshot {
+		got[sess.Subject]++
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("chooser group subjects = %v, want %v", got, want)
+	}
+}
+
 // TestHandler_GroupLogoutNotifiesEachRPOncePerSubject pins the unit of a
 // back-channel fan-out. This OP issues subject-only logout tokens by
 // design — no sid — so N browser sessions of one account in a chooser
@@ -255,23 +280,26 @@ func TestHandler_GroupLogoutNotifiesEachRPOncePerSubject(t *testing.T) {
 	})
 	h := newDetachHarness(t, deliver)
 
-	// Three browser sessions of the same account share one chooser group,
-	// which is what a shared device with re-logins produces.
-	cookieValue, _ := h.issueSession(t)
-	active, err := h.sessionMgr.Resolve(context.Background(), cookieValue)
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
+	// Two user-1 sessions plus a user-2 session share one chooser group,
+	// which is what a shared device produces. The order matters: an
+	// add-account whose login repeats the subject the cookie currently
+	// points at is planned as a reuse of that session, so user-2 has to
+	// take the cookie in between before user-1 can join the same group a
+	// second time.
+	cookieValue, firstID := h.issueSession(t)
+	cookieValue = establishAddAccount(t, h.sessionMgr, cookieValue, sessions.Login{
+		Subject:  "user-2",
+		AuthTime: h.clock.now,
+	}, h.clock.now).Cookie
+	secondUser1 := establishAddAccount(t, h.sessionMgr, cookieValue, sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now,
+	}, h.clock.now)
+	cookieValue = secondUser1.Cookie
+	if secondUser1.SessionID == firstID {
+		t.Fatalf("the group holds one user-1 session, not two: %q", secondUser1.SessionID)
 	}
-	for range 2 {
-		out, err := h.sessionMgr.AddAccount(context.Background(), active.Payload.ChooserGroupID, sessions.Login{
-			Subject:  "user-1",
-			AuthTime: h.clock.now,
-		})
-		if err != nil {
-			t.Fatalf("AddAccount: %v", err)
-		}
-		cookieValue = out.Cookie
-	}
+	assertGroupSubjects(t, h.harness, cookieValue, map[string]int{"user-1": 2, "user-2": 1})
 
 	token := h.confirmToken(t, cookieValue)
 	resp := h.confirmLogout(t, cookieValue, token)

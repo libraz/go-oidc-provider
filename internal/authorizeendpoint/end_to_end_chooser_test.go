@@ -91,17 +91,11 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 
 	mgr, sessCodec := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
-	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.Current()})
-	if err != nil {
-		t.Fatalf("Issue user-A: %v", err)
-	}
-	sessB, err := mgr.AddAccount(ctx, sessA.ChooserGroupID, sessions.Login{
+	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.Current()}, clock.Current())
+	sessB := establishAddAccount(t, mgr, sessA.Cookie, sessions.Login{
 		Subject:  "user-B",
 		AuthTime: clock.Current(),
-	})
-	if err != nil {
-		t.Fatalf("AddAccount user-B: %v", err)
-	}
+	}, clock.Current())
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -341,21 +335,15 @@ func TestEndToEnd_ChooserSelectAccount_SeedsACRAMRFromSession(t *testing.T) {
 
 	mgr, _ := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
-	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.now})
-	if err != nil {
-		t.Fatalf("Issue user-A: %v", err)
-	}
+	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.now}, clock.now)
 	// user-B's session already reached AAL2 (password + TOTP). This is
 	// the assurance the chooser re-entry must carry into the id_token.
-	sessB, err := mgr.AddAccount(ctx, sessA.ChooserGroupID, sessions.Login{
+	sessB := establishAddAccount(t, mgr, sessA.Cookie, sessions.Login{
 		Subject:  "user-B",
 		AuthTime: clock.now,
 		ACR:      wantACR,
 		AMR:      wantAMR,
-	})
-	if err != nil {
-		t.Fatalf("AddAccount user-B: %v", err)
-	}
+	}, clock.now)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -521,10 +509,7 @@ func TestEndToEnd_ChooserAddAccountURL_AddsAccountToExistingGroup(t *testing.T) 
 
 	mgr, sessCodec := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
-	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.now})
-	if err != nil {
-		t.Fatalf("Issue user-A: %v", err)
-	}
+	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.now}, clock.now)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -724,10 +709,7 @@ func TestEndToEnd_FreshLoginDifferentSubjectStartsNewChooserGroup(t *testing.T) 
 
 	mgr, sessCodec := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
-	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.now})
-	if err != nil {
-		t.Fatalf("Issue user-A: %v", err)
-	}
+	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.now}, clock.now)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -737,8 +719,9 @@ func TestEndToEnd_FreshLoginDifferentSubjectStartsNewChooserGroup(t *testing.T) 
 
 	// Drive /authorize?prompt=login with user-A's session cookie
 	// attached. The orchestrator runs the testkit SubjectAuthenticator
-	// for "user-B"; ensureSession sees the subject mismatch and MUST
-	// issue a fresh chooser group instead of calling AddAccount.
+	// for "user-B"; the terminal establishment sees the subject
+	// mismatch and MUST plan a fresh chooser group rather than an
+	// add-account into user-A's.
 	values := e2eAuthorizeValues(rp.ID, rp.RedirectURIs[0])
 	values.Set("prompt", "login")
 	values.Set("nonce", "n-multi")

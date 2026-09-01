@@ -127,12 +127,22 @@ func issueManagerSession(t *testing.T, sessionsStore store.SessionStore) (*sessi
 	if err != nil {
 		t.Fatalf("sessions.NewManager: %v", err)
 	}
-	outcome, err := manager.Issue(context.Background(), sessions.Login{
-		Subject:  "subject-1",
-		AuthTime: time.Now(),
+	now := time.Now()
+	plan, err := manager.PlanEstablishment(context.Background(), sessions.EstablishPlan{
+		Login: sessions.Login{
+			Subject:  "subject-1",
+			AuthTime: now,
+		},
+		StableSessionID:      "stable-session",
+		StableChooserGroupID: "stable-chooser",
+		Now:                  now,
 	})
 	if err != nil {
-		t.Fatalf("Manager.Issue: %v", err)
+		t.Fatalf("Manager.PlanEstablishment: %v", err)
+	}
+	outcome, err := manager.Establish(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Manager.Establish: %v", err)
 	}
 	return manager, outcome
 }

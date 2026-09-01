@@ -3,6 +3,8 @@ package sessions_test
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +44,71 @@ func newManager(tb testing.TB, now time.Time) *sessions.Manager {
 	return mgr
 }
 
+// stableIDSeq backs nextStableID.
+var stableIDSeq atomic.Uint64
+
+// nextStableID mints the kind of caller-decided identifier the authorization
+// endpoint derives from its interaction record before it persists a
+// completion intent. Only uniqueness within the test binary matters here.
+func nextStableID(label string) string {
+	return label + "-" + strconv.FormatUint(stableIDSeq.Add(1), 10)
+}
+
+// establishPlan runs the two-step establishment the authorization endpoint
+// performs: PlanEstablishment resolves the mode and the exact record, then
+// Establish applies it idempotently.
+func establishPlan(tb testing.TB, mgr *sessions.Manager, plan sessions.EstablishPlan) sessions.Outcome {
+	tb.Helper()
+	ctx := context.Background()
+	establishment, err := mgr.PlanEstablishment(ctx, plan)
+	if err != nil {
+		tb.Fatalf("PlanEstablishment: %v", err)
+	}
+	out, err := mgr.Establish(ctx, establishment)
+	if err != nil {
+		tb.Fatalf("Establish: %v", err)
+	}
+	return out
+}
+
+// establishFresh seeds a brand-new chooser group holding a single account.
+func establishFresh(tb testing.TB, mgr *sessions.Manager, login sessions.Login, now time.Time) sessions.Outcome {
+	tb.Helper()
+	return establishPlan(tb, mgr, sessions.EstablishPlan{
+		Login:                login,
+		StableSessionID:      nextStableID("session"),
+		StableChooserGroupID: nextStableID("chooser"),
+		Now:                  now,
+	})
+}
+
+// establishAddAccount joins a further account to the chooser group behind
+// cookie, the way the chooser prompt's add-account link does: the current
+// cookie is resolved first so the group it names is the one the new account
+// lands in.
+func establishAddAccount(
+	tb testing.TB,
+	mgr *sessions.Manager,
+	cookie string,
+	login sessions.Login,
+	now time.Time,
+) sessions.Outcome {
+	tb.Helper()
+	active, err := mgr.Resolve(context.Background(), cookie)
+	if err != nil {
+		tb.Fatalf("Resolve current cookie: %v", err)
+	}
+	return establishPlan(tb, mgr, sessions.EstablishPlan{
+		Active:                   active,
+		Login:                    login,
+		StableSessionID:          nextStableID("session"),
+		StableChooserGroupID:     nextStableID("chooser"),
+		ChooserAddAccount:        true,
+		ChooserAddAccountGroupID: active.Payload.ChooserGroupID,
+		Now:                      now,
+	})
+}
+
 func TestNewManager_RejectsMissingDeps(t *testing.T) {
 	t.Parallel()
 
@@ -55,21 +122,18 @@ func TestNewManager_RejectsMissingDeps(t *testing.T) {
 	}
 }
 
-func TestManager_Issue_AndResolveRoundTrip(t *testing.T) {
+func TestManager_Establish_AndResolveRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	mgr := newManager(t, now)
 
-	out, err := mgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, mgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: now.Add(-time.Minute),
 		AMR:      []string{"pwd"},
 		ACR:      "urn:mace:incommon:iap:silver",
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, now)
 	if out.Cookie == "" || out.SessionID == "" || out.ChooserGroupID == "" {
 		t.Fatalf("Outcome incomplete: %+v", out)
 	}
@@ -92,13 +156,18 @@ func TestManager_Issue_AndResolveRoundTrip(t *testing.T) {
 	}
 }
 
-func TestManager_Issue_RejectsEmptySubject(t *testing.T) {
+func TestManager_PlanEstablishment_RejectsEmptySubject(t *testing.T) {
 	t.Parallel()
 
-	mgr := newManager(t, time.Now())
-	_, err := mgr.Issue(context.Background(), sessions.Login{})
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	mgr := newManager(t, now)
+	_, err := mgr.PlanEstablishment(context.Background(), sessions.EstablishPlan{
+		StableSessionID:      "stable-session",
+		StableChooserGroupID: "stable-chooser",
+		Now:                  now,
+	})
 	if err == nil {
-		t.Error("Issue accepted empty Subject")
+		t.Error("PlanEstablishment accepted empty Subject")
 	}
 }
 
@@ -117,10 +186,7 @@ func TestManager_Resolve_DetectsExpiredSession(t *testing.T) {
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	mgr := newManager(t, now)
 
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: now})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "user", AuthTime: now}, now)
 	// Delete the underlying session — the cookie is still valid but the
 	// store no longer has the record.
 	if err := mgr.Logout(context.Background(), out.SessionID); err != nil {
@@ -148,10 +214,7 @@ func TestManager_Resolve_RejectsIdleExpiredSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "user", AuthTime: t0}, t0)
 
 	cur = t0.Add(time.Hour + time.Nanosecond)
 	if _, err := mgr.Resolve(context.Background(), out.Cookie); !errors.Is(err, sessions.ErrCurrentSessionExpired) {
@@ -177,10 +240,7 @@ func TestManager_Touch_ExtendsExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "user", AuthTime: t0}, t0)
 
 	// Advance clock by one hour, touch the session.
 	cur = t0.Add(time.Hour)
@@ -214,10 +274,7 @@ func TestManager_TouchAndReissue_CapsIdleCookieAtAbsoluteExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "user", AuthTime: t0}, t0)
 	active, err := mgr.Resolve(context.Background(), out.Cookie)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -271,10 +328,7 @@ func TestManager_TouchAndReissue_RejectsAbsoluteExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "user", AuthTime: t0}, t0)
 	active, err := mgr.Resolve(context.Background(), out.Cookie)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -300,14 +354,12 @@ func TestManager_Touch_OnMissingSession(t *testing.T) {
 func TestManager_Logout_Idempotent(t *testing.T) {
 	t.Parallel()
 
-	mgr := newManager(t, time.Now())
-	out, err := mgr.Issue(context.Background(), sessions.Login{
+	now := time.Now()
+	mgr := newManager(t, now)
+	out := establishFresh(t, mgr, sessions.Login{
 		Subject:  "user",
-		AuthTime: time.Now(),
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+		AuthTime: now,
+	}, now)
 	// First logout: succeeds.
 	if err := mgr.Logout(context.Background(), out.SessionID); err != nil {
 		t.Errorf("first Logout: %v", err)
@@ -353,15 +405,12 @@ func TestManager_Rotate_IssuesFreshIDPreservingChooserGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, mgr, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: now,
 		AMR:      []string{"pwd", "otp"},
 		ACR:      "level-2",
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, now)
 	rotated, err := mgr.Rotate(context.Background(), out.SessionID)
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
@@ -398,7 +447,8 @@ func TestManager_Rotate_IssuesFreshIDPreservingChooserGroup(t *testing.T) {
 // closes the second half of the GHSA-xhpr-465j-7p9q class: an
 // attacker who manages to trigger a rotation does not gain
 // additional session lifetime even if they hold the new ID briefly,
-// because the absolute TTL still counts from the original Issue.
+// because the absolute TTL still counts from the original
+// establishment.
 //
 // Tracks: GHSA-xhpr-465j-7p9q — see
 // TestManager_Rotate_IssuesFreshIDPreservingChooserGroup for the
@@ -419,10 +469,7 @@ func TestManager_Rotate_PreservesCreatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "u", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "u", AuthTime: t0}, t0)
 	cur = t0.Add(2 * time.Hour)
 	rotated, err := mgr.Rotate(context.Background(), out.SessionID)
 	if err != nil {
@@ -479,10 +526,7 @@ func TestManager_Touch_AbsoluteTTLExpiresSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "u", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "u", AuthTime: t0}, t0)
 
 	// Within the cap: Touch keeps the session alive.
 	cur = t0.Add(12 * time.Hour)
@@ -517,10 +561,7 @@ func TestManager_Touch_NegativeAbsoluteTTLDisablesCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "u", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "u", AuthTime: t0}, t0)
 	cur = t0.Add(100 * 365 * 24 * time.Hour)
 	if err := mgr.Touch(context.Background(), out.SessionID); err != nil {
 		t.Errorf("Touch with cap disabled rejected: %v", err)
@@ -541,10 +582,7 @@ func TestManager_Resolve_RejectsChooserGroupMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: now})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	out := establishFresh(t, mgr, sessions.Login{Subject: "user", AuthTime: now}, now)
 	// Mutate the stored session so its ChooserGroupID no longer matches
 	// the one baked into the cookie.
 	sess, err := st.Find(context.Background(), out.SessionID)

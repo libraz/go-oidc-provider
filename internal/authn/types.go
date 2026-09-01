@@ -184,10 +184,11 @@ type State struct {
 	// the built-in account chooser screen. Populated by the
 	// orchestrator from the chooser submission's "session_id"
 	// field on a successful chooser Continue; the HTTP layer reads
-	// it at terminal-tick time to call [sessions.Manager.Switch]
-	// instead of [sessions.Manager.Issue] so the cookie rebinds
-	// within the existing chooser group rather than starting a new
-	// one. Empty for any chain that did not run the chooser.
+	// it at terminal-tick time to plan a
+	// [sessions.EstablishSwitch] rather than a
+	// [sessions.EstablishIssue], so the cookie rebinds within the
+	// existing chooser group rather than starting a new one. Empty
+	// for any chain that did not run the chooser.
 	ChooserSelectedSessionID string `json:"chooser_selected_session_id,omitempty"`
 
 	// ChooserBoundSubject reports whether the built-in chooser
@@ -205,14 +206,15 @@ type State struct {
 	// the chooser prompt's AddAccountURL. The HTTP layer sets it only
 	// after resolving an active session whose chooser group matches the
 	// internal add-account marker in the authorization request. Terminal
-	// session establishment reads the flag to call AddAccount instead
-	// of Issue for a different-subject fresh login.
+	// session establishment reads the flag to plan a
+	// [sessions.EstablishAddAccount] rather than a
+	// [sessions.EstablishIssue] for a different-subject fresh login.
 	ChooserAddAccount bool `json:"chooser_add_account,omitempty"`
 
 	// ChooserAddAccountGroupID is the chooser group that an
 	// AddAccountURL-derived fresh login should join after authentication
 	// succeeds. It is separate from ChooserGroupID because that field
-	// also tells the built-in chooser interaction to render; AddAccount
+	// also tells the built-in chooser interaction to render; add-account
 	// flows must run the authenticator chain instead.
 	ChooserAddAccountGroupID string `json:"chooser_add_account_group_id,omitempty"`
 

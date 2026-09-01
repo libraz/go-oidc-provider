@@ -29,29 +29,23 @@ func chooserManager(tb testing.TB, t0 time.Time) (*sessions.Manager, func(time.D
 	return mgr, advance
 }
 
-func TestManager_AddAccount_ReusesGroupAndSwitchesCurrent(t *testing.T) {
+func TestManager_EstablishAddAccount_ReusesGroupAndSwitchesCurrent(t *testing.T) {
 	t.Parallel()
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	mgr, _ := chooserManager(t, t0)
 	ctx := context.Background()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
-	second, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
+	second := establishAddAccount(t, mgr, first.Cookie, sessions.Login{
 		Subject:  "user-b",
 		AuthTime: t0,
-	})
-	if err != nil {
-		t.Fatalf("AddAccount: %v", err)
-	}
+	}, t0)
 	if second.ChooserGroupID != first.ChooserGroupID {
 		t.Errorf("group ID changed: %q vs %q", second.ChooserGroupID, first.ChooserGroupID)
 	}
 	if second.SessionID == first.SessionID {
-		t.Error("AddAccount returned the same SessionID")
+		t.Error("add-account returned the same SessionID")
 	}
 	// The cookie now points at the second account.
 	active, err := mgr.Resolve(ctx, second.Cookie)
@@ -63,15 +57,29 @@ func TestManager_AddAccount_ReusesGroupAndSwitchesCurrent(t *testing.T) {
 	}
 }
 
-func TestManager_AddAccount_RejectsBadInput(t *testing.T) {
+func TestManager_PlanEstablishment_RejectsIncompleteAddAccount(t *testing.T) {
 	t.Parallel()
 
-	mgr, _ := chooserManager(t, time.Now())
-	if _, err := mgr.AddAccount(context.Background(), "", sessions.Login{Subject: "x"}); err == nil {
-		t.Error("AddAccount accepted empty chooser group")
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	mgr, _ := chooserManager(t, t0)
+	// No group to join: neither the add-account marker nor the stable
+	// fallback names one.
+	if _, err := mgr.PlanEstablishment(context.Background(), sessions.EstablishPlan{
+		Login:             sessions.Login{Subject: "x"},
+		StableSessionID:   "stable-session",
+		ChooserAddAccount: true,
+		Now:               t0,
+	}); err == nil {
+		t.Error("PlanEstablishment accepted an add-account plan with no chooser group")
 	}
-	if _, err := mgr.AddAccount(context.Background(), "cg", sessions.Login{}); err == nil {
-		t.Error("AddAccount accepted empty subject")
+	if _, err := mgr.PlanEstablishment(context.Background(), sessions.EstablishPlan{
+		StableSessionID:          "stable-session",
+		StableChooserGroupID:     "stable-chooser",
+		ChooserAddAccount:        true,
+		ChooserAddAccountGroupID: "cg",
+		Now:                      t0,
+	}); err == nil {
+		t.Error("PlanEstablishment accepted an add-account plan with no subject")
 	}
 }
 
@@ -82,17 +90,11 @@ func TestManager_Switch_RebindsCookie(t *testing.T) {
 	mgr, _ := chooserManager(t, t0)
 	ctx := context.Background()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
-	second, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
+	second := establishAddAccount(t, mgr, first.Cookie, sessions.Login{
 		Subject:  "user-b",
 		AuthTime: t0,
-	})
-	if err != nil {
-		t.Fatalf("AddAccount: %v", err)
-	}
+	}, t0)
 	switched, err := mgr.Switch(ctx, first.ChooserGroupID, first.SessionID)
 	if err != nil {
 		t.Fatalf("Switch: %v", err)
@@ -118,16 +120,10 @@ func TestManager_Switch_RejectsForeignSession(t *testing.T) {
 	mgr, _ := chooserManager(t, t0)
 	ctx := context.Background()
 
-	groupA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue groupA: %v", err)
-	}
-	groupB, err := mgr.Issue(ctx, sessions.Login{Subject: "user-b", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue groupB: %v", err)
-	}
+	groupA := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
+	groupB := establishFresh(t, mgr, sessions.Login{Subject: "user-b", AuthTime: t0}, t0)
 	// Pretend an attacker sends groupA's cookie with groupB's session ID.
-	_, err = mgr.Switch(ctx, groupA.ChooserGroupID, groupB.SessionID)
+	_, err := mgr.Switch(ctx, groupA.ChooserGroupID, groupB.SessionID)
 	if !errors.Is(err, sessions.ErrCookieInvalid) {
 		t.Errorf("err=%v want ErrCookieInvalid", err)
 	}
@@ -140,14 +136,11 @@ func TestManager_Switch_ReportsExpiredTarget(t *testing.T) {
 	mgr, _ := chooserManager(t, t0)
 	ctx := context.Background()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
 	if err := mgr.Logout(ctx, first.SessionID); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	_, err = mgr.Switch(ctx, first.ChooserGroupID, first.SessionID)
+	_, err := mgr.Switch(ctx, first.ChooserGroupID, first.SessionID)
 	if !errors.Is(err, sessions.ErrCurrentSessionExpired) {
 		t.Errorf("err=%v want ErrCurrentSessionExpired", err)
 	}
@@ -160,16 +153,11 @@ func TestManager_Accounts_ReturnsLiveSessions(t *testing.T) {
 	mgr, _ := chooserManager(t, t0)
 	ctx := context.Background()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
-	if _, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
+	establishAddAccount(t, mgr, first.Cookie, sessions.Login{
 		Subject:  "user-b",
 		AuthTime: t0,
-	}); err != nil {
-		t.Fatalf("AddAccount: %v", err)
-	}
+	}, t0)
 	got, err := mgr.Accounts(ctx, first.ChooserGroupID)
 	if err != nil {
 		t.Fatalf("Accounts: %v", err)
@@ -190,17 +178,11 @@ func TestManager_Remove_NonCurrentLeavesCookieAlone(t *testing.T) {
 	mgr, _ := chooserManager(t, t0)
 	ctx := context.Background()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
-	second, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
+	second := establishAddAccount(t, mgr, first.Cookie, sessions.Login{
 		Subject:  "user-b",
 		AuthTime: t0,
-	})
-	if err != nil {
-		t.Fatalf("AddAccount: %v", err)
-	}
+	}, t0)
 	// Cookie is on user-b (the second account); remove the first.
 	rem, err := mgr.Remove(ctx, first.ChooserGroupID, second.SessionID, first.SessionID)
 	if err != nil {
@@ -221,26 +203,17 @@ func TestManager_Remove_CurrentRebindsToMostRecent(t *testing.T) {
 	mgr, advance := chooserManager(t, t0)
 	ctx := context.Background()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue first: %v", err)
-	}
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
 	advance(time.Minute)
-	second, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+	second := establishAddAccount(t, mgr, first.Cookie, sessions.Login{
 		Subject:  "user-b",
 		AuthTime: t0.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("AddAccount second: %v", err)
-	}
+	}, t0.Add(time.Minute))
 	advance(time.Minute)
-	third, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+	third := establishAddAccount(t, mgr, second.Cookie, sessions.Login{
 		Subject:  "user-c",
 		AuthTime: t0.Add(2 * time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("AddAccount third: %v", err)
-	}
+	}, t0.Add(2*time.Minute))
 	// Cookie is on user-c (most recent); remove user-c. Expect Remove to
 	// rebind the cookie to user-b (the next-most-recent).
 	rem, err := mgr.Remove(ctx, first.ChooserGroupID, third.SessionID, third.SessionID)
@@ -274,18 +247,12 @@ func TestManager_Remove_CarriesReboundSessionExpiry(t *testing.T) {
 	mgr, advance := chooserManager(t, t0)
 	ctx := context.Background()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
 	advance(time.Minute)
-	second, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+	second := establishAddAccount(t, mgr, first.Cookie, sessions.Login{
 		Subject:  "user-b",
 		AuthTime: t0.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("AddAccount: %v", err)
-	}
+	}, t0.Add(time.Minute))
 	rem, err := mgr.Remove(ctx, first.ChooserGroupID, second.SessionID, second.SessionID)
 	if err != nil {
 		t.Fatalf("Remove: %v", err)
@@ -313,10 +280,7 @@ func TestManager_Remove_LastSessionLeavesEmpty(t *testing.T) {
 	mgr, _ := chooserManager(t, t0)
 	ctx := context.Background()
 
-	only, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	only := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
 	rem, err := mgr.Remove(ctx, only.ChooserGroupID, only.SessionID, only.SessionID)
 	if err != nil {
 		t.Fatalf("Remove: %v", err)
@@ -329,40 +293,44 @@ func TestManager_Remove_LastSessionLeavesEmpty(t *testing.T) {
 	}
 }
 
-func TestManager_LogoutAll_DeletesGroup(t *testing.T) {
+func TestManager_LogoutAllSnapshot_DeletesGroup(t *testing.T) {
 	t.Parallel()
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	mgr, _ := chooserManager(t, t0)
 	ctx := context.Background()
 
-	first, err := mgr.Issue(ctx, sessions.Login{Subject: "user-a", AuthTime: t0})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
-	if _, err := mgr.AddAccount(ctx, first.ChooserGroupID, sessions.Login{
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
+	establishAddAccount(t, mgr, first.Cookie, sessions.Login{
 		Subject:  "user-b",
 		AuthTime: t0,
-	}); err != nil {
-		t.Fatalf("AddAccount: %v", err)
+	}, t0)
+	snapshot, err := mgr.SnapshotGroup(ctx, first.ChooserGroupID)
+	if err != nil {
+		t.Fatalf("SnapshotGroup: %v", err)
 	}
-	if err := mgr.LogoutAll(ctx, first.ChooserGroupID); err != nil {
-		t.Fatalf("LogoutAll: %v", err)
+	if err := mgr.LogoutAllSnapshot(ctx, snapshot); err != nil {
+		t.Fatalf("LogoutAllSnapshot: %v", err)
 	}
 	got, err := mgr.Accounts(ctx, first.ChooserGroupID)
 	if err != nil {
 		t.Fatalf("Accounts: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("len=%d want 0 after LogoutAll", len(got))
+		t.Errorf("len=%d want 0 after LogoutAllSnapshot", len(got))
 	}
 }
 
-func TestManager_LogoutAll_IdempotentOnEmptyGroup(t *testing.T) {
+func TestManager_LogoutAllSnapshot_IdempotentOnEmptyGroup(t *testing.T) {
 	t.Parallel()
 
-	mgr, _ := chooserManager(t, time.Now())
-	if err := mgr.LogoutAll(context.Background(), "no-such-group"); err != nil {
-		t.Errorf("LogoutAll empty: %v", err)
+	ctx := context.Background()
+	mgr, _ := chooserManager(t, time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC))
+	snapshot, err := mgr.SnapshotGroup(ctx, "no-such-group")
+	if err != nil {
+		t.Fatalf("SnapshotGroup: %v", err)
+	}
+	if err := mgr.LogoutAllSnapshot(ctx, snapshot); err != nil {
+		t.Errorf("LogoutAllSnapshot empty: %v", err)
 	}
 }

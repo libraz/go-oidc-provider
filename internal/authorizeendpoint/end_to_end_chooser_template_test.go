@@ -94,17 +94,11 @@ func TestEndToEnd_ChooserTemplate_RendersAndCompletes(t *testing.T) {
 
 	mgr, _ := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
-	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.now})
-	if err != nil {
-		t.Fatalf("Issue user-A: %v", err)
-	}
-	sessB, err := mgr.AddAccount(ctx, sessA.ChooserGroupID, sessions.Login{
+	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.now}, clock.now)
+	sessB := establishAddAccount(t, mgr, sessA.Cookie, sessions.Login{
 		Subject:  "user-B",
 		AuthTime: clock.now,
-	})
-	if err != nil {
-		t.Fatalf("AddAccount user-B: %v", err)
-	}
+	}, clock.now)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {

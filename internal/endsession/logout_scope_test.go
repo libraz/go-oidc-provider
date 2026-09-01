@@ -79,17 +79,10 @@ func sessionCookieFromResponse(resp *http.Response) string {
 
 func addSiblingSession(t *testing.T, h *harness, cookieValue string) (string, string) {
 	t.Helper()
-	active, err := h.sessionMgr.Resolve(context.Background(), cookieValue)
-	if err != nil {
-		t.Fatalf("Resolve initial session: %v", err)
-	}
-	out, err := h.sessionMgr.AddAccount(context.Background(), active.Payload.ChooserGroupID, sessions.Login{
+	out := establishAddAccount(t, h.sessionMgr, cookieValue, sessions.Login{
 		Subject:  "user-2",
 		AuthTime: h.clock.now,
-	})
-	if err != nil {
-		t.Fatalf("AddAccount: %v", err)
-	}
+	}, h.clock.now)
 	return out.Cookie, out.SessionID
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -225,19 +226,77 @@ func (h *harness) signIDToken(t *testing.T, build func(claims map[string]any)) s
 	return token
 }
 
+// stableIDSeq backs nextStableID.
+var stableIDSeq atomic.Uint64
+
+// nextStableID mints the kind of caller-decided identifier the
+// authorization endpoint derives from its interaction record before it
+// persists a completion intent. Only uniqueness within the test binary
+// matters here.
+func nextStableID(label string) string {
+	return label + "-" + strconv.FormatUint(stableIDSeq.Add(1), 10)
+}
+
+// establishSession runs the two-step establishment the authorization
+// endpoint performs: PlanEstablishment resolves the mode and the exact
+// record, then Establish applies it idempotently.
+func establishSession(t *testing.T, mgr *sessions.Manager, plan sessions.EstablishPlan) sessions.Outcome {
+	t.Helper()
+	ctx := context.Background()
+	establishment, err := mgr.PlanEstablishment(ctx, plan)
+	if err != nil {
+		t.Fatalf("PlanEstablishment: %v", err)
+	}
+	out, err := mgr.Establish(ctx, establishment)
+	if err != nil {
+		t.Fatalf("Establish: %v", err)
+	}
+	return out
+}
+
+// establishAddAccount joins a further account to the chooser group behind
+// cookieValue, the way the chooser prompt's AddAccountURL drives it: the
+// current cookie is resolved first so the group it names is the one the new
+// account lands in, and the resolved session is what the plan compares the
+// incoming subject against.
+func establishAddAccount(
+	t *testing.T,
+	mgr *sessions.Manager,
+	cookieValue string,
+	login sessions.Login,
+	now time.Time,
+) sessions.Outcome {
+	t.Helper()
+	active, err := mgr.Resolve(context.Background(), cookieValue)
+	if err != nil {
+		t.Fatalf("Resolve current cookie: %v", err)
+	}
+	return establishSession(t, mgr, sessions.EstablishPlan{
+		Active:                   active,
+		Login:                    login,
+		StableSessionID:          nextStableID("session"),
+		StableChooserGroupID:     nextStableID("chooser"),
+		ChooserAddAccount:        true,
+		ChooserAddAccountGroupID: active.Payload.ChooserGroupID,
+		Now:                      now,
+	})
+}
+
 // issueSession seeds the session store with a brand-new chooser group
 // and returns the cookie value plus the underlying session id so the
 // test can both attach the cookie to a request and verify post-logout
 // store state.
 func (h *harness) issueSession(t *testing.T) (cookieValue, sessionID string) {
 	t.Helper()
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
-		Subject:  "user-1",
-		AuthTime: h.clock.now.Add(-time.Minute),
+	out := establishSession(t, h.sessionMgr, sessions.EstablishPlan{
+		Login: sessions.Login{
+			Subject:  "user-1",
+			AuthTime: h.clock.now.Add(-time.Minute),
+		},
+		StableSessionID:      nextStableID("session"),
+		StableChooserGroupID: nextStableID("chooser"),
+		Now:                  h.clock.now,
 	})
-	if err != nil {
-		t.Fatalf("sessionMgr.Issue: %v", err)
-	}
 	return out.Cookie, out.SessionID
 }
 

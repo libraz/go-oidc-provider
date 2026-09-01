@@ -168,14 +168,11 @@ func armSilentConflict(t *testing.T, h *firstPartyHarness, fault *silentConflict
 // silentMintSession issues the session a first-party silent mint needs.
 func silentMintSession(t *testing.T, h *firstPartyHarness) sessions.Outcome {
 	t.Helper()
-	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
 		AMR:      []string{"pwd"},
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, h.clock.now)
 	return out
 }
 

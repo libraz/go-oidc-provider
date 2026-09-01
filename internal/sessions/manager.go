@@ -117,8 +117,9 @@ func NewManager(cfg Config) (*Manager, error) {
 	}, nil
 }
 
-// Login is the input bundle for [Manager.Issue]. The fields mirror the
-// [*store.Session] columns the OP populates from the authenticator output.
+// Login is the input bundle for [Manager.PlanEstablishment]. The fields
+// mirror the [*store.Session] columns the OP populates from the
+// authenticator output.
 type Login struct {
 	// Subject is the OP-internal stable identifier of the authenticated
 	// user (not the federated provider's external ID).
@@ -135,9 +136,10 @@ type Login struct {
 	ACR string
 }
 
-// Outcome is the result of an Issue / Switch operation: the freshly-minted
-// cookie value, plus the underlying chooser_group_id / session_id so the
-// caller can populate audit logs.
+// Outcome is the result of an [Manager.Establish], [Manager.Switch] or
+// [Manager.Rotate] operation: the freshly-minted cookie value, plus the
+// underlying chooser_group_id / session_id so the caller can populate audit
+// logs.
 type Outcome struct {
 	// Cookie is the encrypted, base64url-encoded value to place in the
 	// __Host-oidc_session cookie.
@@ -161,50 +163,6 @@ type TouchOutcome struct {
 	Cookie    string
 	ExpiresAt time.Time
 	UpdatedAt time.Time
-}
-
-// Issue creates a brand-new chooser group and a session inside it for the
-// supplied login. It is the operation invoked at the end of a "fresh login"
-// interaction (no prior cookie or after [Manager.LogoutAll]).
-//
-// Callers that want to add an account to an existing group should use
-// [Manager.AddAccount] instead.
-func (m *Manager) Issue(ctx context.Context, login Login) (Outcome, error) {
-	if login.Subject == "" {
-		return Outcome{}, errors.New("sessions: Issue requires Subject")
-	}
-	now := m.clock().UTC()
-	chooser, err := newID()
-	if err != nil {
-		return Outcome{}, err
-	}
-	sid, err := newID()
-	if err != nil {
-		return Outcome{}, err
-	}
-	sess := &store.Session{
-		ID:             sid,
-		Subject:        login.Subject,
-		AuthTime:       login.AuthTime,
-		AMR:            append([]string(nil), login.AMR...),
-		ACR:            login.ACR,
-		ChooserGroupID: chooser,
-		ExpiresAt:      now.Add(m.idleTTL),
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-	if err := m.store.Save(ctx, sess); err != nil {
-		return Outcome{}, fmt.Errorf("sessions: save: %w", err)
-	}
-	value, err := m.codec.Encode(Payload{
-		ChooserGroupID:   chooser,
-		CurrentSessionID: sid,
-		IssuedAt:         now.Unix(),
-	})
-	if err != nil {
-		return Outcome{}, err
-	}
-	return Outcome{Cookie: value, ChooserGroupID: chooser, SessionID: sid}, nil
 }
 
 // Active is the resolved view of a session cookie: the validated payload
@@ -420,7 +378,7 @@ func (m *Manager) Rotate(ctx context.Context, oldSessionID string) (Outcome, err
 }
 
 // Logout deletes the supplied session. It does not clear other accounts in
-// the same chooser group; that is [Manager.LogoutAll]'s job.
+// the same chooser group; that is [Manager.LogoutAllSnapshot]'s job.
 //
 // The function is idempotent: deleting an already-removed session returns
 // nil so a double-click on "log out" does not produce a 5xx.
@@ -430,50 +388,6 @@ func (m *Manager) Logout(ctx context.Context, sessionID string) error {
 		return nil
 	}
 	return fmt.Errorf("sessions: delete: %w", err)
-}
-
-// AddAccount adds a new authenticated account to an existing chooser group
-// and switches the cookie to point at it. It is the operation invoked when
-// the user clicks "sign in to another account" on the chooser screen.
-//
-// chooserGroupID identifies the existing group to add to; the caller MUST
-// have previously confirmed the cookie's group via [Manager.Resolve] so
-// that an attacker cannot graft a session into someone else's group.
-func (m *Manager) AddAccount(ctx context.Context, chooserGroupID string, login Login) (Outcome, error) {
-	if chooserGroupID == "" {
-		return Outcome{}, errors.New("sessions: AddAccount requires ChooserGroupID")
-	}
-	if login.Subject == "" {
-		return Outcome{}, errors.New("sessions: AddAccount requires Subject")
-	}
-	now := m.clock().UTC()
-	sid, err := newID()
-	if err != nil {
-		return Outcome{}, err
-	}
-	sess := &store.Session{
-		ID:             sid,
-		Subject:        login.Subject,
-		AuthTime:       login.AuthTime,
-		AMR:            append([]string(nil), login.AMR...),
-		ACR:            login.ACR,
-		ChooserGroupID: chooserGroupID,
-		ExpiresAt:      now.Add(m.idleTTL),
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-	if err := m.store.Save(ctx, sess); err != nil {
-		return Outcome{}, fmt.Errorf("sessions: save: %w", err)
-	}
-	value, err := m.codec.Encode(Payload{
-		ChooserGroupID:   chooserGroupID,
-		CurrentSessionID: sid,
-		IssuedAt:         now.Unix(),
-	})
-	if err != nil {
-		return Outcome{}, err
-	}
-	return Outcome{Cookie: value, ChooserGroupID: chooserGroupID, SessionID: sid}, nil
 }
 
 // Switch rebinds the cookie's "current session" to a different account
@@ -673,21 +587,6 @@ func (m *Manager) Remove(ctx context.Context, chooserGroupID, currentSessionID, 
 	return out, nil
 }
 
-// LogoutAll deletes every session in the chooser group. The caller MUST
-// clear the session cookie after a successful return. The function is
-// idempotent: an empty chooser group succeeds silently so a double-click on
-// "log out everywhere" does not produce a 5xx.
-func (m *Manager) LogoutAll(ctx context.Context, chooserGroupID string) error {
-	if chooserGroupID == "" {
-		return errors.New("sessions: LogoutAll requires ChooserGroupID")
-	}
-	sessions, err := m.SnapshotGroup(ctx, chooserGroupID)
-	if err != nil {
-		return err
-	}
-	return m.LogoutAllSnapshot(ctx, sessions)
-}
-
 // SnapshotGroup returns a defensive copy of every live session in a chooser
 // group. Callers that need a stable logout fan-out must take this snapshot
 // before deleting any row; later backend failures cannot erase the identity
@@ -711,7 +610,9 @@ func (m *Manager) SnapshotGroup(ctx context.Context, chooserGroupID string) ([]*
 
 // LogoutAllSnapshot deletes exactly the rows captured in snapshot. It is
 // idempotent and aggregates independent backend failures so one broken row
-// cannot prevent the remaining group members from being retired.
+// cannot prevent the remaining group members from being retired. When the
+// snapshot covers a whole chooser group the caller MUST clear the session
+// cookie after a successful return.
 func (m *Manager) LogoutAllSnapshot(ctx context.Context, snapshot []*store.Session) error {
 	var errs []error
 	for _, sess := range snapshot {

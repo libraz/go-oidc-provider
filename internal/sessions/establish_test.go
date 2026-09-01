@@ -162,14 +162,11 @@ func TestManager_EstablishRotateResumesAfterDeleteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	issued, err := manager.Issue(context.Background(), sessions.Login{
+	issued := establishFresh(t, manager, sessions.Login{
 		Subject:  "user-1",
 		AuthTime: now.Add(-time.Hour),
 		AMR:      []string{"pwd"},
-	})
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	}, now.Add(-time.Hour))
 	active, err := manager.Resolve(context.Background(), issued.Cookie)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
