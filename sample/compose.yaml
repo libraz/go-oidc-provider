@@ -8,7 +8,8 @@
 #              on 9090
 #
 # Neither datastore is published to the host; only the application container
-# exposes ports so a browser can drive the round-trip.
+# publishes ports, and only on 127.0.0.1, so a browser on this machine can
+# drive the round-trip and nothing else can reach it.
 #
 #   docker compose -f sample/compose.yaml up -d --build
 #   open http://127.0.0.1:8080/
@@ -56,9 +57,13 @@ services:
       MYSQL_PASS: sample
       MYSQL_DB: sample
       REDIS_DSN: redis://redis:6379/0
+    # Published on the loopback interface only. A bare "8080:8080" binds
+    # 0.0.0.0, and Docker's published ports are reached through the DOCKER
+    # chain rather than the host firewall, so on a shared network the whole
+    # LAN would get an OP holding key material and real credentials.
     ports:
-      - "8080:8080"
-      - "9090:9090"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9090:9090"
     depends_on:
       mysql:
         condition: service_healthy
