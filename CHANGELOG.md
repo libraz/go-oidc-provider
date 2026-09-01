@@ -715,6 +715,21 @@ signature change, which is the only breaking change in this release.
   already applies to `dpop_bound_access_tokens`: an enforcement flag the OP
   will not honour per client is refused rather than accepted and dropped.
 
+- The pinned Go toolchain moves to `go1.27.0` across the root module, the
+  storage-adapter sub-modules, the examples, the dev-tool module, the example
+  container images and CI. The declared minimum is unchanged — every module
+  still carries `go 1.25.0`, so an embedder building on Go 1.25 or Go 1.26
+  compiles as before and nothing is required on upgrade.
+
+- Dependencies are raised to their current releases: `go-webauthn/webauthn` to
+  `v0.18.0` (with `go-webauthn/x` `v0.3.0`), `fxamacker/cbor/v2` to `v2.9.3`,
+  and the `prometheus/client_model`, `prometheus/common` and
+  `prometheus/procfs` chain behind `op.WithPrometheus`. The bundled SQL adapter
+  moves to `modernc.org/sqlite` `v1.57.0`, and the DynamoDB adapter to
+  `aws-sdk-go-v2` `v1.45.1` with `service/dynamodb` `v1.66.0`, `credentials`
+  `v1.20.2` and `smithy-go` `v1.28.1`. No call site changed; the passkey,
+  JOSE and adapter suites pass unmodified on the new versions.
+
 ### Added
 
 - `op.AttemptLocked`, completing the `op.AttemptOutcome` re-export so an
