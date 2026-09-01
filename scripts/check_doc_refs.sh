@@ -95,11 +95,17 @@ fi
 # meant. Inside internal/ the working form is the imported package's own
 # name — [timex.Clock], which go doc and every editor resolve — so the
 # rule is the same everywhere: never put a path in the brackets.
+#
+# The bracket has to close on the same line for this to be a doc link at
+# all, so the pattern requires it. Without that, any bracketed list whose
+# first element starts with the prefix reads as a link — a YAML flow
+# sequence quoted into a test fixture is the case that arises, and it is
+# not documentation the rule has anything to say about.
 mapfile -t go_files < <(git ls-files -- '*.go')
 if [ "${#go_files[@]}" -eq 0 ]; then
   die "no tracked Go files matched: the scan is broken, not the tree"
 fi
-internal_links="$(grep -nE '\[[a-z0-9_.,/-]*internal/' "${go_files[@]}" || true)"
+internal_links="$(grep -nE '\[[a-z0-9_.,/-]*internal/[a-zA-Z0-9_./-]*\]' "${go_files[@]}" || true)"
 if [ -n "$internal_links" ]; then
   warn "doc links spell an internal/ path instead of a package name:"
   printf '%s\n' "$internal_links" >&2
