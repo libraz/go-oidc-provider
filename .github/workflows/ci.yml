@@ -1,9 +1,24 @@
 name: ci
 
+# Prose-only changes do not run the suite. A change that touches code as
+# well still does: paths-ignore skips a run only when every changed file
+# matches. Note the two consequences. The markdown gates inside
+# `make verify` — the doc-reference and version-literal scans, which read
+# README.md, README_ja.md, examples/README.md and CHANGELOG.md — then do
+# not run for a prose-only change, and are covered by the local verify a
+# release already runs. And a prose-only commit at the tip of main
+# produces no run at all, so a release step that waits for one has
+# nothing to wait for.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
 
 permissions:
