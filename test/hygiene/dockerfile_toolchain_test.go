@@ -21,7 +21,7 @@ import (
 // each stage's requirement from the module it builds.
 
 // goBaseImage matches a builder stage's base image and captures its Go
-// version. The tag is the major.minor stream (golang:1.26-alpine); a
+// version. The tag is the major.minor stream (golang:1.27-alpine); a
 // fully qualified patch tag parses the same way.
 var goBaseImage = regexp.MustCompile(`^FROM\s+golang:(\d+)\.(\d+)`)
 
