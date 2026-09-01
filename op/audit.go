@@ -205,6 +205,7 @@ const (
 	AuditLogoutBackChannelFailed        = AuditEvent(auditevent.AuditLogoutBackChannelFailed)
 	AuditLogoutBackChannelResolveFailed = AuditEvent(auditevent.AuditLogoutBackChannelResolveFailed)
 	AuditLogoutBackChannelOverflow      = AuditEvent(auditevent.AuditLogoutBackChannelOverflow)
+	AuditLogoutClientLookupFailed       = AuditEvent(auditevent.AuditLogoutClientLookupFailed)
 
 	// Reserved vocabulary: the library never emits
 	// AuditLogoutRPInitiated. /end_session records what it did to the

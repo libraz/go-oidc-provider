@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -736,7 +737,14 @@ func assembleClaims(
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
 ) (map[string]any, *store.Client, bool) {
-	grant := resolveGrant(ctx, deps, claims)
+	grant, err := resolveGrant(ctx, deps, claims)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		// The grant store did not answer. Serving the request anyway
+		// would fall back to scope-derived claim release and project a
+		// set the grant never authorised.
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return nil, nil, false
+	}
 	rawSubject, ok := resolveRawSubject(w, deps, claims, grant)
 	if !ok {
 		return nil, nil, false
@@ -784,26 +792,41 @@ func assembleClaims(
 // (subject, client_id) search would resolve to whichever grant is
 // currently active rather than the one that authorised this token.
 //
-// A nil return means "no grant lineage is available", which covers an
-// unwired [HandlerDeps.Grants], a token minted without a grant
-// (client_credentials), a record written before the OP recorded the
-// lineage, and a grant that has been deleted since issuance. Deciding
-// what that absence means belongs to the callers: [resolveRawSubject]
-// treats it as fatal while pairwise projection is configured, and
-// [claimsRequestFromGrant] falls back to scope-derived release.
+// [store.ErrNotFound] means "no grant lineage is available", which
+// covers an unwired [HandlerDeps.Grants], a token minted without a
+// grant (client_credentials), a record written before the OP recorded
+// the lineage, and a grant that has been deleted since issuance.
+// Deciding what that absence means belongs to the callers:
+// [resolveRawSubject] treats it as fatal while pairwise projection is
+// configured, and [claimsRequestFromGrant] falls back to scope-derived
+// release.
+//
+// Any other error means the backend could not answer, which is a
+// different thing and is kept different. Falling back to scope-derived
+// release because the grant store timed out would release a claim set
+// the grant never authorised, and do it silently. Absence and fault
+// travel as distinct errors for the same reason the user lookup below
+// separates them: a caller that cannot tell them apart has to guess,
+// and the safe guess and the useful guess are not the same one.
 func resolveGrant(
 	ctx context.Context,
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
-) *store.Grant {
+) (*store.Grant, error) {
 	if deps.Grants == nil || claims.GrantID == "" {
-		return nil
+		return nil, store.ErrNotFound
 	}
 	g, err := deps.Grants.Find(ctx, claims.GrantID)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("userinfo: resolve grant: %w", err)
 	}
-	return g
+	if g == nil {
+		// A nil record alongside a nil error violates the store
+		// contract; treat it as the absence it resembles rather than
+		// handing a nil grant to the projection.
+		return nil, store.ErrNotFound
+	}
+	return g, nil
 }
 
 // resolveRawSubject returns the OP-internal stable subject identifier

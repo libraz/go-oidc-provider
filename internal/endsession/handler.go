@@ -760,8 +760,23 @@ func resolveByClientID(
 	if err != nil {
 		// Both [store.ErrNotFound] and any transport fault surface
 		// identically on the wire so the response is not an existence
-		// oracle for client identifiers; the underlying error is
-		// preserved in logs (when wired) for operator diagnostics.
+		// oracle for client identifiers. The audit stream is not the
+		// wire and does carry the difference: a client that does not
+		// exist and a registry that stopped answering call for opposite
+		// operator responses, and "unknown client" on every request is
+		// what a failing registry looks like from the outside.
+		//
+		// A clean miss emits nothing. Every mistyped client_id would
+		// otherwise raise an event and bury the one that matters.
+		if !errors.Is(err, store.ErrNotFound) {
+			deps.audit().Emit(ctx, audit.Event{
+				Name:     string(auditevent.AuditLogoutClientLookupFailed),
+				Level:    audit.LevelError,
+				Message:  "client registry lookup failed; the request is refused but the client was not judged",
+				ClientID: id,
+				Extras:   map[string]any{"reason": "store_unavailable"},
+			})
+		}
 		writeLogoutError(w, http.StatusBadRequest, descClientNotFound)
 		return nil, false
 	}

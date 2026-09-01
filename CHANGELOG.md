@@ -331,6 +331,21 @@ signature change, which is the only breaking change in this release.
 
 ### Fixed
 
+- A `/userinfo` request whose grant lookup fails answers `500` rather than
+  serving claims. A backend that could not produce the grant was read as a
+  token with no grant lineage, which is a real and ordinary case — a
+  client-credentials token has none — so the handler fell through to
+  scope-derived claim release and returned a payload the grant had never
+  authorised. Absence and failure now travel as distinct errors, which is what
+  the neighbouring user lookup already did.
+
+- `/introspect` reports a token lookup it could not perform. The wire response
+  is unchanged and stays `active: false` for every rejection, as RFC 7662 §2.2
+  requires, but the audit stream now separates "no such token" from "the token
+  store did not answer" — a rise in the first is a client integrating badly and
+  a rise in the second is storage failing, and collapsing them left nothing to
+  tell an operator which was happening.
+
 - A silently issued authorization code reflects the `claims` parameter of the
   request that produced it. Two of the three grant-resolution paths already
   wrote the OIDC Core 1.0 §5.5 payload onto the grant and the third did not, so
@@ -791,6 +806,16 @@ signature change, which is the only breaking change in this release.
   JOSE and adapter suites pass unmodified on the new versions.
 
 ### Added
+
+- `op.AuditLogoutClientLookupFailed`, raised when `/end_session` cannot reach
+  the client registry. The wire answer is unchanged and stays deliberately
+  uniform — a registry miss and a registry outage both refuse the request, so
+  the endpoint is not an existence oracle for client identifiers — but the two
+  call for opposite operator responses, and until now the audit stream could
+  not tell them apart either. A registry that has stopped answering looks,
+  from outside, like every relying party suddenly sending an unknown
+  `client_id`. A clean miss raises nothing: every mistyped identifier would
+  otherwise emit an event and bury the one that matters.
 
 - `op.AttemptLocked`, completing the `op.AttemptOutcome` re-export so an
   embedder can write an exhaustive switch using public identifiers alone.

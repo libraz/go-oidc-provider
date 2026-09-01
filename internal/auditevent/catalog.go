@@ -110,6 +110,7 @@ const (
 	AuditLogoutBackChannelFailed        Name = "logout.back_channel.failed"
 	AuditLogoutBackChannelResolveFailed Name = "logout.back_channel.resolve_failed"
 	AuditLogoutBackChannelOverflow      Name = "logout.back_channel.overflow"
+	AuditLogoutClientLookupFailed       Name = "logout.client_lookup_failed"
 	AuditBCLNoSessionsForSubject        Name = "bcl.no_sessions_for_subject"
 
 	AuditRateLimitExceeded Name = "rate_limit.exceeded"
@@ -249,6 +250,7 @@ var definitions = []Definition{
 	{Name: AuditLogoutBackChannelFailed, Metric: MetricBackChannelLogout, Label: "failed"},
 	{Name: AuditLogoutBackChannelResolveFailed, Metric: MetricBackChannelLogout, Label: "resolve_failed"},
 	{Name: AuditLogoutBackChannelOverflow, Metric: MetricBackChannelLogout, Label: "overflow"},
+	{Name: AuditLogoutClientLookupFailed, Metric: MetricLogoutFailures, Label: "client_lookup"},
 	{Name: AuditBCLNoSessionsForSubject, Metric: MetricBackChannelLogout, Label: "no_sessions_for_subject"},
 	{Name: AuditRateLimitExceeded},
 	{Name: AuditRateLimitBypassed},

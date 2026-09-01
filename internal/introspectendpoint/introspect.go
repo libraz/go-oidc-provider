@@ -3,9 +3,11 @@ package introspectendpoint
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -279,7 +281,9 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 	if err != nil {
 		// ErrNotFound and any other store error collapse onto
 		// inactive: RFC 7662 §2.2 forbids leaking which sub-class
-		// produced the rejection.
+		// produced the rejection. The audit stream is not the wire, so
+		// a fault is still reported there — see emitLookupFault.
+		emitLookupFault(ctx, deps, "refresh token", authenticatedClientID, err)
 		return response{}, false
 	}
 	if rec == nil {
@@ -319,7 +323,13 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClientID, token string) (response, bool) {
 	rec, err := deps.OpaqueAccessTokens.Find(ctx, token)
 	if err != nil {
-		// ErrNotFound and any other store error collapse onto inactive.
+		// ErrNotFound and any other store error collapse onto inactive:
+		// RFC 7662 §2.2 constrains the wire, so the resource server
+		// must not be able to tell them apart. It says nothing about
+		// the audit stream, and an operator who cannot tell a token
+		// that does not exist from a token store that stopped
+		// answering reads a flood of "inactive" as a client problem.
+		emitLookupFault(ctx, deps, "opaque access token", authenticatedClientID, err)
 		return response{}, false
 	}
 	if rec == nil {
@@ -516,6 +526,33 @@ func cloneStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// emitLookupFault reports a token lookup that could not be answered,
+// as distinct from one answered "no such record".
+//
+// The wire cannot carry the difference: RFC 7662 §2.2 requires the
+// inactive response to be uniform, and an introspection endpoint that
+// leaked which sub-class produced a rejection would be an existence
+// oracle for tokens. The audit stream is under no such constraint, and
+// the two readings call for opposite operator responses — a rise in
+// genuine misses is a client integrating badly, a rise in faults is
+// storage failing. Collapsing them on the stream as well leaves nothing
+// to tell the operator which is happening.
+//
+// A clean miss emits nothing: every rejected token would otherwise
+// raise an event, and the signal that matters would be buried in it.
+func emitLookupFault(ctx context.Context, deps Deps, what, clientID string, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		return
+	}
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:     auditIntrospectionError,
+		Level:    audit.LevelError,
+		Message:  "introspection " + what + " lookup failed; the response is inactive but the token was not judged",
+		ClientID: clientID,
+		Extras:   map[string]any{"reason": "store_unavailable"},
+	})
 }
 
 // writeResponse marshals body and writes it with the cache-control and
