@@ -27,6 +27,13 @@ const (
 	approvedScopesField = "approved_scopes"
 )
 
+// chooserPromptType is the account chooser's prompt type. It is the one
+// prompt a driver cannot decline to implement: op.New registers the
+// chooser on every Provider, so it is emitted whenever an authorization
+// request carries prompt=select_account, whether or not the application
+// configured anything for it.
+const chooserPromptType = "interaction.chooser"
+
 // appDriver renders the OP's prompts as this application's own pages.
 //
 // Replacing the bundled driver is the reason it exists. The library decides
@@ -36,16 +43,9 @@ const (
 // only obligations here are to echo Prompt.StateRef and Prompt.CSRFToken
 // back and to read the reply as a form.
 //
-// Two header choices below are load-bearing rather than stylistic, and both
-// are easy to get wrong in a way that only shows up in a real browser:
-//
-//   - Referrer-Policy is same-origin, not no-referrer. A no-referrer page
-//     makes the browser serialise the form POST's Origin header as "null",
-//     which the interaction CSRF gate rejects with 403.
-//   - Content-Security-Policy does not pin form-action. A successful consent
-//     POST redirects to the relying party's cross-origin redirect_uri, and
-//     browsers enforce form-action across redirects, so form-action 'self'
-//     would block the flow at the last step.
+// The response headers a prompt carries are set by [stampHeaders], which
+// every HTML surface in this process shares; two of the choices it makes
+// are load-bearing rather than stylistic, and both are documented there.
 type appDriver struct {
 	tmpl *template.Template
 }
@@ -68,6 +68,11 @@ type pageData struct {
 	Fields    []fieldView
 	Scopes    []scopeView
 	Client    string
+
+	// Accounts, SessionIDField and AddAccountURL back the chooser page.
+	Accounts       []accountView
+	SessionIDField string
+	AddAccountURL  string
 }
 
 type fieldView struct {
@@ -76,6 +81,15 @@ type fieldView struct {
 	InputType    string
 	Required     bool
 	AutoComplete string
+}
+
+// accountView is one row of the account chooser. SessionID rides the
+// row's submit button rather than a text input: it is an opaque
+// identifier the member has never been shown, so asking them to type it
+// would be asking for something they cannot supply.
+type accountView struct {
+	SessionID string
+	Label     string
 }
 
 type scopeView struct {
@@ -101,6 +115,13 @@ func (d *appDriver) Render(w http.ResponseWriter, _ *http.Request, prompt intera
 // prompt type is an error rather than a generic fallback page: the
 // application opted into owning the UI, so a factor it has not been taught
 // to render is a gap to fix, not something to paper over at runtime.
+//
+// That reasoning covers the factors the application configured, and the
+// chooser is not one of them — it is registered on every Provider and
+// emitted on prompt=select_account regardless of what this application
+// wired up. A driver that erred on it would leave a 500 behind a request
+// parameter any relying party can send, so the chooser is drawn here even
+// though the sample never enables multi-account sign-in itself.
 func (d *appDriver) page(prompt interaction.Prompt) (pageData, string, error) {
 	page := pageData{
 		StateRef:  prompt.StateRef,
@@ -139,8 +160,41 @@ func (d *appDriver) page(prompt interaction.Prompt) (pageData, string, error) {
 			})
 		}
 		return page, "consent", nil
+	case chooserPromptType:
+		data, ok := prompt.Data.(interaction.ChooserPromptData)
+		if !ok {
+			return pageData{}, "", fmt.Errorf("chooser prompt carried %T", prompt.Data)
+		}
+		page.Title = "Choose an account"
+		page.Heading = "Choose an account"
+		page.Lead = "Continue as one of the accounts signed in on this browser."
+		// The chooser declares a session_id input, but the value is opaque
+		// and already known to the OP. Each row carries it on its own submit
+		// button instead, so the declared input is dropped rather than
+		// rendered as a field nobody can fill in.
+		page.Fields = nil
+		page.SessionIDField = interaction.ChooserSessionIDField
+		page.AddAccountURL = data.AddAccountURL
+		for _, a := range data.Accounts {
+			page.Accounts = append(page.Accounts, accountView{
+				SessionID: a.SessionID,
+				Label:     accountLabel(a),
+			})
+		}
+		return page, "chooser", nil
 	}
 	return pageData{}, "", fmt.Errorf("no page for prompt type %q", prompt.Type)
+}
+
+// accountLabel is what a chooser row is shown under. DisplayName comes
+// from the "name" claim the member store released; an account with no
+// name falls back to the subject, because losing the label must not lose
+// the account.
+func accountLabel(a interaction.ChooserAccount) string {
+	if a.DisplayName != "" {
+		return a.DisplayName
+	}
+	return a.Subject
 }
 
 func clientLabel(c interaction.ClientView) string {
@@ -243,8 +297,25 @@ func isFormURLEncoded(ct string) bool {
 	return strings.EqualFold(strings.TrimSpace(base), "application/x-www-form-urlencoded")
 }
 
-// stampHeaders sets the response headers for every rendered prompt. See the
-// appDriver godoc for why Referrer-Policy and form-action are what they are.
+// stampHeaders sets the response headers every HTML page in this process
+// carries: the OP's prompts, the application's own account pages, and the
+// relying party's three screens. One helper rather than three sites is the
+// point — a surface added later inherits the framing defence instead of
+// being the one page that quietly lacks it.
+//
+// Two of the choices are load-bearing rather than stylistic, and both are
+// easy to get wrong in a way that only shows up in a real browser:
+//
+//   - Referrer-Policy is same-origin, not no-referrer. A no-referrer page
+//     makes the browser serialise the form POST's Origin header as "null",
+//     which the interaction CSRF gate rejects with 403.
+//   - Content-Security-Policy does not pin form-action. A successful consent
+//     POST redirects to the relying party's cross-origin redirect_uri, and
+//     browsers enforce form-action across redirects, so form-action 'self'
+//     would block the flow at the last step. The screens that never post
+//     cross-origin could pin it, but one policy for every page is worth
+//     more here than a per-screen one: a reader copying this file gets the
+//     same headers on whatever page they add next.
 func stampHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")

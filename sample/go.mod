@@ -18,6 +18,7 @@ require (
 	github.com/libraz/go-oidc-provider v1.1.0
 	github.com/libraz/go-oidc-provider/op/storeadapter/redis v1.1.0
 	github.com/libraz/go-oidc-provider/op/storeadapter/sql v1.1.0
+	golang.org/x/crypto v0.55.0
 	golang.org/x/oauth2 v0.36.0
 )
 
@@ -51,7 +52,6 @@ require (
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect

@@ -4,11 +4,15 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/argon2"
 
 	"github.com/libraz/go-oidc-provider/op"
 	opstore "github.com/libraz/go-oidc-provider/op/store"
@@ -19,10 +23,18 @@ import (
 // display_name, signed_up_at, totp_enabled — exist for the application's
 // own screens and are never observed by the library. That is the point: the
 // OP reaches accounts only through the store interfaces below.
+//
+// The email column pins its own collation. MySQL 8.4's default for
+// utf8mb4 is utf8mb4_0900_ai_ci, which is accent-insensitive as well as
+// case-insensitive: under it "cafe@example.com" and "café@example.com"
+// are the same row, so a lookup by one address can resolve the other
+// member's account. utf8mb4_bin makes the unique key and every WHERE
+// clause compare bytes, which leaves normaliseEmail as the only place
+// that decides which addresses are the same person.
 const membersDDL = `
 CREATE TABLE IF NOT EXISTS members (
   member_id     VARCHAR(64)  NOT NULL PRIMARY KEY,
-  email         VARCHAR(320) NOT NULL,
+  email         VARCHAR(320) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   password_phc  VARBINARY(255) NOT NULL,
   display_name  VARCHAR(120) NOT NULL,
   totp_enabled  TINYINT(1)   NOT NULL DEFAULT 0,
@@ -34,6 +46,10 @@ CREATE TABLE IF NOT EXISTS members (
 // errEmailTaken is returned by signUp when the address is already
 // registered. Signup surfaces it as a form error rather than a 500.
 var errEmailTaken = errors.New("that email address is already registered")
+
+// errPasswordMismatch is returned when a re-authentication does not
+// present the member's current password.
+var errPasswordMismatch = errors.New("that password is not correct")
 
 // member is the application's own account record.
 type member struct {
@@ -65,6 +81,11 @@ func newMemberStore(ctx context.Context, db *sql.DB) (*memberStore, error) {
 // passes whatever the login form submitted verbatim, so case-folding is
 // the application's responsibility — and it has to be the same rule at
 // signup and at login or the two disagree.
+//
+// It is the only place that rule lives, which is why the email column's
+// collation is pinned to utf8mb4_bin: a case- or accent-insensitive
+// collation would fold addresses this function considers distinct, and
+// the identity rule would then be split between here and the schema.
 func normaliseEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
@@ -93,6 +114,68 @@ func (s *memberStore) ReadPasswordHash(ctx context.Context, sub string) ([]byte,
 		return nil, err
 	}
 	return phc, nil
+}
+
+// verifyPassword reports whether password is the member's current one.
+// Changing a credential has to present the credential it replaces, so
+// the password change and the second-factor enrolment both come through
+// here before they alter anything.
+func (s *memberStore) verifyPassword(ctx context.Context, subject, password string) error {
+	stored, err := s.ReadPasswordHash(ctx, subject)
+	if err != nil {
+		return err
+	}
+	return matchPasswordHash(password, string(stored))
+}
+
+// maxPasswordHashBytes bounds the derived-key length read out of a stored
+// record, so a record claiming an absurd length cannot turn one
+// verification into an allocation the process cannot serve.
+const maxPasswordHashBytes = 1024
+
+// matchPasswordHash checks a plaintext against the PHC argon2id encoding
+// op.HashPassword produced. The library hashes but does not export a
+// verifier: it verifies passwords itself inside the login flow, and an
+// application that adds a re-authentication step of its own does the
+// comparison on its own side.
+//
+// Every failure returns the same error. A malformed stored record and a
+// wrong password are both "not authenticated" here, and telling them
+// apart would only describe the stored value to whoever is guessing.
+func matchPasswordHash(password, encoded string) error {
+	// "$argon2id$v=19$m=65536,t=3,p=1$<salt>$<hash>" splits into six
+	// fields, the first of which is empty.
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" {
+		return errPasswordMismatch
+	}
+	var version int
+	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version {
+		return errPasswordMismatch
+	}
+	var (
+		memory      uint32
+		iterations  uint32
+		parallelism uint8
+	)
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism); err != nil {
+		return errPasswordMismatch
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return errPasswordMismatch
+	}
+	want, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil || len(want) == 0 || len(want) > maxPasswordHashBytes {
+		return errPasswordMismatch
+	}
+	//nolint:gosec // G115: len(want) is bounded by maxPasswordHashBytes on the line above.
+	keyLength := uint32(len(want))
+	got := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLength)
+	if subtle.ConstantTimeCompare(got, want) != 1 {
+		return errPasswordMismatch
+	}
+	return nil
 }
 
 // projectOne maps one row onto the library's view of a user. Only the

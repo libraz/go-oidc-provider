@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -127,11 +128,21 @@ func run(logger *slog.Logger) error {
 	}
 
 	// --- HTTP ---------------------------------------------------------
+	// The application's pages are served on the OP's listener, so the
+	// origin its own POSTs must name is the issuer's. An Origin header
+	// carries scheme and authority and nothing else, while an issuer may
+	// legitimately end in a path, so the two are not the same string.
+	issuerURL, err := url.Parse(cfg.Issuer)
+	if err != nil {
+		return fmt.Errorf("parse issuer: %w", err)
+	}
+	appOrigin := issuerURL.Scheme + "://" + issuerURL.Host
+
 	ui, err := newAppUI(members, newSessions(), totpEnrolment{
 		codec:  totpCodec,
 		store:  totps,
 		issuer: cfg.Issuer,
-	}, time.Now, cfg.RPBase, !cfg.Insecure, logger)
+	}, time.Now, appOrigin, cfg.RPBase, !cfg.Insecure, logger)
 	if err != nil {
 		return err
 	}

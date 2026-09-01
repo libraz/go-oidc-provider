@@ -14,10 +14,10 @@ package main
 // marks rather than decorates. Nothing is centred in a card, nothing is
 // rounded, and the only motion is one staggered reveal on load.
 
-// promptTemplates renders the OP's prompts. Two templates cover the three
+// promptTemplates renders the OP's prompts. Three templates cover the four
 // prompt types the application handles: credential factors share one form
 // because the orchestrator already describes their fields, while consent
-// needs the scope list.
+// needs the scope list and the account chooser needs one submit per row.
 //
 // html/template escapes every interpolated value, which matters most on
 // the consent screen: the client name and scope descriptions arrive from
@@ -91,6 +91,24 @@ const promptTemplates = `
 <div class="row"><button type="submit">Allow</button></div>
 </form>
 {{template "foot" .}}{{end}}
+
+{{define "chooser"}}{{template "head" .}}
+{{if .Accounts}}
+<p class="lead">{{.Lead}}</p>
+<form method="post" class="stack">
+<input type="hidden" name="state_ref" value="{{.StateRef}}">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<ul class="grants">
+{{range .Accounts}}
+<li><button type="submit" class="ghost" name="{{$.SessionIDField}}" value="{{.SessionID}}">{{.Label}}</button></li>
+{{end}}
+</ul>
+</form>
+{{else}}
+<p class="lead">No accounts are signed in on this browser.</p>
+{{end}}
+{{if .AddAccountURL}}<nav class="links"><a href="{{.AddAccountURL}}">Use another account</a></nav>{{end}}
+{{template "foot" .}}{{end}}
 `
 
 // appTemplates renders the application's own pages: the ones outside the
@@ -101,6 +119,11 @@ const promptTemplates = `
 // global in html/template, so one "layout" delegating to a per-page "body"
 // would need a separate parse tree per page; two partial calls cost less
 // than that indirection.
+//
+// Every form here carries the csrf_token hidden field. It is the same
+// field name the OP's interaction forms use, and the handler compares it
+// against the cookie half of the pair — the application defends its own
+// POSTs, because the library never sees them.
 const appTemplates = `
 {{define "open"}}<!DOCTYPE html>
 <html lang="en">
@@ -137,6 +160,7 @@ sign you in.</p>
   <a href="{{.RPURL}}">Relying party</a>
 </nav>
 <form method="post" action="/signout" class="stack">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <div class="row"><button type="submit" class="ghost">Sign out</button></div>
 </form>
 {{else}}
@@ -149,6 +173,7 @@ sign you in.</p>
 
 {{define "signup"}}{{template "open" .}}
 <form method="post" action="/signup" autocomplete="on" class="stack">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <div class="field">
   <label for="s-email">Email address</label>
   <input id="s-email" type="email" name="email" autocomplete="username" value="{{.Form.Email}}" required>
@@ -179,6 +204,11 @@ sign you in.</p>
 {{end}}
 <h2 class="subtitle">Change password</h2>
 <form method="post" action="/account/password" class="stack">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<div class="field">
+  <label for="a-current">Current password</label>
+  <input id="a-current" type="password" name="current_password" autocomplete="current-password" required>
+</div>
 <div class="field">
   <label for="a-pass">New password</label>
   <input id="a-pass" type="password" name="password" autocomplete="new-password" minlength="8" required>
@@ -189,16 +219,21 @@ sign you in.</p>
 
 {{define "enrol"}}{{template "open" .}}
 <p class="lead">Add this secret to your authenticator app, then confirm the
-current code. Nothing is saved until the code checks out.</p>
+current code and your password. Nothing is saved until both check out.</p>
 <dl class="spec">
   <dt>secret</dt><dd class="mono-wrap">{{.Secret}}</dd>
   <dt>otpauth uri</dt><dd><pre class="blob">{{.OTPAuthURI}}</pre></dd>
 </dl>
 <form method="post" action="/account/totp" class="stack">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <div class="field">
   <label for="t-code">Six-digit code</label>
   <input id="t-code" type="text" name="code" inputmode="numeric" autocomplete="one-time-code"
          pattern="[0-9]{6}" maxlength="6" required>
+</div>
+<div class="field">
+  <label for="t-current">Current password</label>
+  <input id="t-current" type="password" name="current_password" autocomplete="current-password" required>
 </div>
 <div class="row"><button type="submit">Confirm</button></div>
 </form>

@@ -54,7 +54,17 @@ load-bearing rather than stylistic, and both fail only in a real browser:
 `Referrer-Policy` must not be `no-referrer` (it makes the browser send
 `Origin: null`, which the CSRF gate rejects), and the policy must not pin
 `form-action` (consent redirects cross-origin to the relying party, and
-browsers enforce `form-action` across redirects).
+browsers enforce `form-action` across redirects). `stampHeaders` is the
+single place those headers are set, and all three HTML surfaces — the OP's
+prompts, the account pages, the relying party's screens — go through it, so
+a page added later cannot be the one that ships without `X-Frame-Options`
+and `frame-ancestors 'none'`.
+
+Owning the driver also means owning every prompt the library can emit. The
+account chooser is the one that arrives uninvited: `op.New` registers it on
+every provider, so `prompt=select_account` reaches the driver whether or not
+the application configured multi-account sign-in. A driver that errs on an
+unknown prompt type still has to draw that one.
 
 Owning the driver is also what makes granular consent possible. The consent
 page asks scope by scope; `ParseSubmission` folds the repeated checkbox
@@ -86,6 +96,16 @@ OP's, and the library never touches it. Sessions are held in process here;
 a multi-instance deployment moves them to shared storage. The OP's own
 sessions are in Redis, which is the part that governs the library's
 behaviour.
+
+**The application defends its own POSTs.** The library's CSRF gate covers
+the interaction endpoint and nothing else, so signup, sign-out, the
+password change and the enrolment confirmation carry a double-submit token
+of their own alongside an `Origin` check — stated in the request rather
+than left to `SameSite=Lax`, which is a property of whoever is browsing.
+Both operations that replace a credential also ask for the current
+password: a session cookie says only that this browser signed in at some
+point, and without a second check on the credential being replaced, one
+stolen cookie is the whole of an account takeover.
 
 **TOTP is opt-in per member.** `StepTOTP` fails when no enrolment exists, so
 the rule is `op.RuleWhen(...)` rather than `op.RuleAlways` — an

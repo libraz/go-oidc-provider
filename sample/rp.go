@@ -52,6 +52,15 @@ type pendingFlows struct {
 	m  map[string]pendingFlow
 }
 
+// pendingFlowSweepAt is the size at which put reclaims expired flows.
+// Only take removes an entry, and a sign-in the member abandons at the
+// provider never reaches a callback, so without this an unauthenticated
+// GET /login repeated in a loop grows the map for as long as the process
+// runs. Sweeping inside put puts the reclamation on the path that creates
+// the pressure, which is all a demonstration needs — a deployment that
+// held these in shared storage would let the store expire them instead.
+const pendingFlowSweepAt = 1024
+
 func newPendingFlows() *pendingFlows {
 	return &pendingFlows{m: make(map[string]pendingFlow)}
 }
@@ -72,6 +81,14 @@ func (p *pendingFlows) take(state string) (pendingFlow, bool) {
 func (p *pendingFlows) put(state string, f pendingFlow) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if len(p.m) >= pendingFlowSweepAt {
+		now := time.Now()
+		for key, flow := range p.m {
+			if now.After(flow.Expires) {
+				delete(p.m, key)
+			}
+		}
+	}
 	p.m[state] = f
 }
 
@@ -239,11 +256,13 @@ func (rp *relyingParty) fail(w http.ResponseWriter, status int, message string) 
 // the round-trip does not visibly change design language halfway through.
 // The fragment is composed here rather than templated because the relying
 // party has three screens and no user-supplied markup.
+//
+// The headers come from the same helper the provider's pages use. The
+// sign-in-complete screen shows the verified identity claims, so it needs
+// the framing defence at least as much as the pages that collected the
+// credential does.
 func (rp *relyingParty) page(w http.ResponseWriter, status int, title, body string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "same-origin")
+	stampHeaders(w)
 	w.WriteHeader(status)
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">

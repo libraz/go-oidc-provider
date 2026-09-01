@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeProvider serves the discovery document newRelyingParty consumes and
@@ -169,6 +171,28 @@ func TestCallbackAllowsAbsentIssuerWhenNotAdvertised(t *testing.T) {
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 from the code exchange; body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPendingFlowsPutReclaimsExpired pins that a sign-in nobody returns
+// from is reclaimed. Only take removes an entry, and a member who
+// abandons the flow at the provider never reaches the callback, so
+// without reclamation on insert a repeated GET /login grows the map for
+// as long as the process runs.
+func TestPendingFlowsPutReclaimsExpired(t *testing.T) {
+	t.Parallel()
+
+	p := newPendingFlows()
+	expired := time.Now().Add(-time.Hour)
+	for i := range pendingFlowSweepAt * 2 {
+		p.put(strconv.Itoa(i), pendingFlow{Nonce: "n", Verifier: "v", Expires: expired})
+	}
+
+	p.mu.Lock()
+	held := len(p.m)
+	p.mu.Unlock()
+	if held > pendingFlowSweepAt {
+		t.Errorf("the store holds %d abandoned flows, want at most %d", held, pendingFlowSweepAt)
 	}
 }
 
