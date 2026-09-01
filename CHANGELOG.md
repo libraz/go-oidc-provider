@@ -75,7 +75,9 @@ installations (three indexes and, on MySQL, a username collation change),
 existing DynamoDB installations (an index leaves `TableDefinitions`), FAPI 2.0
 deployments that configure `op.WithRefreshGracePeriod`, anyone whose
 `op.LoginFlow` declares a rule with no `When` predicate, anyone whose
-`op.LoginAttemptObserver` switches on the attempt outcome, anyone whose custom
+`op.LoginAttemptObserver` switches on the attempt outcome, anyone whose
+relying parties had adapted to the `auth_time` and `acr` an
+incremental-consent screen used to produce, anyone whose custom
 `interaction.Driver` renders the recovery-code prompt's remaining-attempt
 count, anyone serving a custom grant that returns a refresh token, and anyone
 who implements their own `op/store` backend — the last of these both for the
@@ -99,6 +101,36 @@ signature change, which is the only breaking change in this release.
   re-runs at the terminal against the ending subject's own grant, and a subject
   with no covering grant fails closed. An answered ceremony is authoritative
   for the subject it ran under and is unaffected.
+
+- An authorization served from a live session reports the authentication that
+  actually happened. On a consent-only exit — the ordinary incremental-consent
+  path, reached whenever a relying party asks for a scope the cached grant does
+  not cover — no credential chain runs during the attempt, and the endpoint
+  re-derived the response's authentication from that empty factor set anyway:
+  `auth_time` became the moment the consent screen was answered, and
+  aggregating no factors left `acr` empty and `amr` nil, so the claim vanished
+  from the id_token altogether. OIDC Core 1.0 §2 defines `auth_time` as the
+  time the End-User authentication occurred, and relying parties gate
+  re-authentication and step-up on it, so a client registered with
+  `require_auth_time` was handed a value that was simply false — while a
+  relying party inspecting `acr` read nothing where it had read the value the
+  login produced. It also persisted: the grant the code hangs off had all three
+  fields overwritten unconditionally, and every token later minted from that
+  grant reads them back off the record, so one incremental consent degraded
+  every refresh-issued id_token and every introspection response for the
+  remaining life of the grant. Silent authorization, the account chooser's
+  re-entry and the first-party skip already copied the backing session's values
+  verbatim, on the stated reasoning that the grant must not silently degrade to
+  no-acr / no-amr; the consent-only exit was the fourth such path and was not
+  on that list. One predicate now covers every exit that issues a code: a chain
+  that ran no authenticator of its own copies `auth_time` / `acr` / `amr` from
+  the session backing the response, the configured ACR resolver is consulted
+  only by a chain that authenticated somebody, and a recorded authentication is
+  never replaced by an empty one. A chain that reaches the code-issuing gate
+  having authenticated nobody and has no live session left to describe — it
+  expired, was signed out in another tab, or switched account mid-ceremony — is
+  refused with `login_required` rather than answered with an invented
+  `auth_time`.
 
 - `acr_values` naming a value outside `op.WithACRValuesSupported` is refused at
   `/authorize` and `/par`, not only at `/bc-authorize`. One option fed one
@@ -277,6 +309,25 @@ signature change, which is the only breaking change in this release.
   session sails through. `max_age` is a query parameter, so the caller picks
   which band they land in. The entry check and the chooser's terminal re-check
   both compare instants in seconds now, and they were changed together.
+
+- The reference application under `sample/` no longer demonstrates patterns
+  that are unsafe to copy. It is documented as a first-class copy-from source,
+  so each of these was propagating into readers' code. Its relying-party
+  screens set neither `X-Frame-Options` nor a `Content-Security-Policy`, so the
+  screen that renders the verified identity claims was framable; every HTML
+  surface in the process now stamps both through one helper. Its compose file
+  published on `0.0.0.0` while its own header said the stack is not built to be
+  exposed, and Docker's published ports bypass the host firewall, so it now
+  publishes on `127.0.0.1` only. Its `members.email` column carried no explicit
+  collation, which let MySQL 8.4's accent-insensitive default decide part of an
+  identity rule the sample's own code claims to own — a lookup for one address
+  resolved a different member's row, and the password check then ran against
+  that row — and it is pinned to `utf8mb4_bin` now, matching the library's own
+  schema. Changing a password and confirming a TOTP enrolment required only the
+  session cookie, so one stolen cookie completed an account takeover; both now
+  require the current password, and the application's own POSTs carry a
+  double-submit token and an `Origin` check rather than resting on
+  `SameSite=Lax` alone.
 
 ### Fixed
 
@@ -560,6 +611,15 @@ signature change, which is the only breaking change in this release.
   guard was a nil check, so a non-ECDSA signer assigned to the provider's
   exported `SigningKey` field produced a wrapped library error that matched
   nothing, which is the only reason the sentinel is exported.
+
+- The reference application draws the account chooser, bounds its in-process
+  caches, and reads its pending-enrolment field under the lock that guards it.
+  Its `interaction.Driver` had no chooser page and `op.New` registers the
+  chooser on every provider, so `prompt=select_account` answered 500. Two of
+  its in-process maps dropped expired entries only on lookup, so a repeated
+  unauthenticated `GET` grew one of them without bound; both reclaim on insert
+  now. The per-session pending-enrolment field was read and written outside the
+  mutex that guards the map holding it.
 
 - Public godoc that described behaviour the code does not have has been
   corrected where the code is right and the text was not:
