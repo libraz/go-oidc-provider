@@ -19,7 +19,9 @@
 //
 // MySQL, via op/storeadapter/sql, holds the durable substores: users,
 // clients, authorization codes, refresh tokens, grants, pushed
-// authorization requests, access tokens, and registration tokens.
+// authorization requests, access tokens, registration tokens, and the
+// DPoP / private_key_jwt replay markers (ConsumedJTIs), which an evicting
+// cache must not hold.
 //
 // Redis, via op/storeadapter/redis, holds the volatile ones:
 //
@@ -27,7 +29,6 @@
 //   - Interactions — the short-lived state of a login / consent
 //     ceremony, which is exactly what the SPA is reading and writing
 //     over the JSON state endpoints
-//   - ConsumedJTIs — DPoP and private_key_jwt replay protection
 //
 // Interactions on Redis is the pairing worth noticing. Every screen
 // the SPA renders is one read of that substore, and every submission
@@ -175,14 +176,14 @@ func run() error {
 
 	// Interactions is the substore the SPA exercises on every screen,
 	// which is the reason it belongs on the volatile tier alongside
-	// Sessions and ConsumedJTIs. Everything else defaults to MySQL;
-	// composite.New rejects any routing that would split the
-	// transactional cluster.
+	// Sessions. Everything else defaults to MySQL, ConsumedJTIs
+	// included: an evicting Redis would drop live replay markers under
+	// memory pressure. composite.New rejects any routing that would
+	// split the transactional cluster.
 	storage, err := composite.New(
 		composite.WithDefault(durable),
 		composite.With(composite.Sessions, volatile),
 		composite.With(composite.Interactions, volatile),
-		composite.With(composite.ConsumedJTIs, volatile),
 	)
 	if err != nil {
 		return fmt.Errorf("composite.New: %w", err)

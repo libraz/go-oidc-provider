@@ -3,7 +3,7 @@
 # Three services on a private network:
 #
 #   * mysql  — the OP's durable substores and the application's own tables
-#   * redis  — the volatile substores (sessions, interactions, consumed JTIs)
+#   * redis  — the volatile substores (sessions, interactions)
 #   * app    — the application, serving the OP on 8080 and the relying party
 #              on 9090
 #

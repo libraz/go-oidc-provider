@@ -7,9 +7,16 @@
 // Real deployments commonly want a hot/cold split: persistent records (clients,
 // authorization codes, refresh tokens, grants, sessions, PAR) live in a
 // durable store such as MySQL or Postgres, while ephemeral records
-// (interactions, DPoP/private_key_jwt JTIs) live in a fast volatile store
-// such as Redis. The library takes a single [store.Store] value, so the
-// composite adapter weaves several backends behind one [Store] facade.
+// (interactions) live in a fast volatile store such as Redis. The library
+// takes a single [store.Store] value, so the composite adapter weaves
+// several backends behind one [Store] facade.
+//
+// DPoP/private_key_jwt replay markers (ConsumedJTIs) are ephemeral too but
+// are not eviction-tolerant: routing them to Redis requires a noeviction
+// instance, never a volatile-* / allkeys-* one, since evicting a live
+// marker under memory pressure reopens the replay window it exists to
+// close. Routing ConsumedJTIs to the durable backend alongside the
+// transactional cluster avoids that requirement entirely.
 //
 // # Atomic-routing cluster invariant
 //

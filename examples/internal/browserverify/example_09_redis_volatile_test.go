@@ -10,7 +10,7 @@ import (
 
 // 09-redis-volatile runs the ordinary password + consent round-trip
 // over a split store: durable substores on a real MySQL, volatile
-// substores (sessions, interactions, consumed JTIs) on a real Redis.
+// substores (sessions, interactions) on a real Redis.
 // That makes this the only case in the suite that proves the two
 // adapters cooperate correctly across a single login on the path a
 // browser actually takes — a session or interaction record that fails

@@ -3,7 +3,7 @@
 // Example 09-redis-volatile is the canonical hot/cold deployment shape:
 // MySQL (or any [op/storeadapter/sql] target) handles every durable
 // substore, while Redis hosts the high-QPS volatile substores
-// (Sessions, Interactions, ConsumedJTIs). Example 08 demonstrates the
+// (Sessions, Interactions). Example 08 demonstrates the
 // same composite wiring with inmem as a stand-in for Redis; this
 // example swaps the stand-in for the real adapter and pairs the OP
 // with an in-process RP so an embedder can drive a full Authorization
@@ -12,7 +12,7 @@
 // # What lives where
 //
 // SQL durable backend (oidc_users, clients, codes, refresh tokens,
-// grants, PAR, access tokens, IATs, RATs).
+// grants, PAR, access tokens, IATs, RATs, and ConsumedJTIs — see below).
 //
 // Redis volatile backend:
 //
@@ -20,7 +20,15 @@
 //     Session writes with token-endpoint commits, so a volatile cache
 //     is the right tier)
 //   - Interactions — short-lived UI state during login / consent
-//   - ConsumedJTIs — DPoP and private_key_jwt replay protection
+//
+// ConsumedJTIs (DPoP and private_key_jwt replay protection) stays on the
+// durable backend rather than Redis. The Redis adapter's TTL keys for
+// this substore need a noeviction instance: a volatile-* or allkeys-*
+// maxmemory policy, appropriate for Sessions and Interactions, would
+// evict a live replay marker under memory pressure and let a captured
+// proof replay within its remaining lifetime. Routing it to MySQL
+// avoids provisioning a second, differently-configured Redis instance
+// for this one substore.
 //
 // The transactional cluster substores (AuthorizationCodes,
 // RefreshTokens, Grants, PushedAuthRequests, AccessTokens) are
@@ -191,15 +199,17 @@ func run() error {
 
 	// --- Composite wiring -------------------------------------------
 	// Every Kind in composite.TxClusterKinds resolves to durable via
-	// WithDefault. Three volatile Kinds (Sessions, Interactions,
-	// ConsumedJTIs) override to volatile via With(). composite.New
-	// rejects any configuration that would split TxClusterKinds across
-	// backends; Sessions is intentionally not in that set.
+	// WithDefault, which also picks up ConsumedJTIs: its replay markers
+	// are not eviction-tolerant, so it stays off this Redis instance's
+	// volatile-* maxmemory policy (see the package doc above). Two
+	// volatile Kinds (Sessions, Interactions) override to volatile via
+	// With(). composite.New rejects any configuration that would split
+	// TxClusterKinds across backends; Sessions is intentionally not in
+	// that set.
 	storage, err := composite.New(
 		composite.WithDefault(durable),
 		composite.With(composite.Sessions, volatile),
 		composite.With(composite.Interactions, volatile),
-		composite.With(composite.ConsumedJTIs, volatile),
 	)
 	if err != nil {
 		return fmt.Errorf("composite.New: %w", err)

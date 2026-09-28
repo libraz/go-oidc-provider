@@ -3,9 +3,8 @@
 # Boots three services on a private docker network:
 #
 #   * mysql  — the durable substores (oidc_users, clients, codes,
-#              refresh tokens, grants, PAR, access tokens)
-#   * redis  — the volatile substores (Sessions, Interactions,
-#              ConsumedJTIs)
+#              refresh tokens, grants, PAR, access tokens, ConsumedJTIs)
+#   * redis  — the volatile substores (Sessions, Interactions)
 #   * op     — the OP example (this repository) paired with a
 #              rpkit-driven RP, both in the same Go process. The
 #              shared SPA bundle (examples/internal/webui) is baked

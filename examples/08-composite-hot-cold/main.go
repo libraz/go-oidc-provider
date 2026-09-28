@@ -23,14 +23,16 @@
 //
 // # Where Redis goes
 //
-// The non-cluster volatile substores (Interactions, ConsumedJTIs, and
-// Sessions if the deployment accepts losing logins on a cache flush)
-// are the right fit for a fast key/value store. This example uses
+// The non-cluster volatile substores (Interactions, and Sessions if the
+// deployment accepts losing logins on a cache flush) are the right fit
+// for a fast key/value store. ConsumedJTIs is not: its replay markers
+// must survive until they expire, which an evicting cache does not
+// promise, so it stays on the durable side. This example uses
 // op/storeadapter/inmem as a deliberate stand-in so the example boots
 // without external dependencies. The live counterpart is
 // example 09-redis-volatile, which swaps inmem for the real
 // op/storeadapter/redis adapter. Swapping the backend leaves both
-// composite.With(...) calls below unchanged — but 09 also routes a
+// composite.With(...) call below unchanged — but 09 also routes a
 // third Kind, Sessions, to the volatile backend, because it accepts
 // losing logins when the cache is flushed and this example does not.
 // Which Kinds go volatile is a durability decision, separate from
@@ -148,7 +150,7 @@ func run() error {
 	// container. Example 09-redis-volatile shows the same wiring
 	// against op/storeadapter/redis. Both backends satisfy store.Store
 	// for the substores routed to them, so swapping one for the other
-	// changes nothing in the composite.With(...) calls below; 09 does
+	// changes nothing in the composite.With(...) call below; 09 does
 	// route one more Kind (Sessions) to its volatile backend, which is
 	// a durability choice this example makes differently.
 	volatile := inmem.New()
@@ -161,13 +163,12 @@ func run() error {
 
 	// --- Composite wiring --------------------------------------------
 	// Every Kind in composite.TxClusterKinds resolves to `durable` via
-	// WithDefault. Two volatile Kinds (Interactions, ConsumedJTIs)
-	// override to `volatile` via With(). Composite.New validates that
-	// the cluster is not split before returning.
+	// WithDefault, and so do ConsumedJTIs. Only Interactions overrides
+	// to `volatile` via With(). Composite.New validates that the
+	// cluster is not split before returning.
 	storage, err := composite.New(
 		composite.WithDefault(durable),
 		composite.With(composite.Interactions, volatile),
-		composite.With(composite.ConsumedJTIs, volatile),
 	)
 	if err != nil {
 		return fmt.Errorf("composite.New: %w", err)

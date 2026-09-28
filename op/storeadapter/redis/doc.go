@@ -14,7 +14,9 @@
 //     key. A bare SETNX cannot express it: taking over a marker whose own
 //     recorded expiry has passed is a decision about the stored value,
 //     and reading that value before writing would reopen the race SETNX
-//     exists to close.
+//     exists to close. Unlike the other two substores below, this one is
+//     not eviction-tolerant: run it on a noeviction instance, or route it
+//     to a durable backend instead (see [Store.ConsumedJTIs]).
 //   - [github.com/libraz/go-oidc-provider/op/store.InteractionStore] —
 //     short-lived UI state surviving redirects across login / consent /
 //     step-up screens.

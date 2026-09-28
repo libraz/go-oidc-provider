@@ -14,9 +14,15 @@ import (
 //
 // ConsumedJTIStore is explicitly NOT part of the atomic-routing cluster. The
 // operations are idempotent ("first writer wins; subsequent writers see
-// already-consumed") and the store is safe to lose: the worst outcome of a
-// total cache flush is a window of attacker-controlled replay equal to the
-// JWT's remaining lifetime, which the cnf binding limits in practice.
+// already-consumed") and a rare total loss — a backend replaced or wiped
+// outside normal operation — is tolerable: the worst outcome is a window of
+// attacker-controlled replay equal to the JWT's remaining lifetime, which the
+// cnf binding limits in practice. Routine eviction of still-live markers is a
+// different failure, not a tolerable one: a backend that reclaims memory by
+// evicting unexpired keys (e.g. Redis under a volatile-* or allkeys-*
+// maxmemory policy) reopens that replay window on every eviction cycle
+// instead of as a rare event, so a TTL-backed implementation MUST run on a
+// non-evicting instance (Redis: noeviction) or route to a durable backend.
 //
 // # Marker lifetime
 //

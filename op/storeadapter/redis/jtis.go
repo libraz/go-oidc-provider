@@ -39,8 +39,11 @@ import (
 //     considers live. Nothing is left to re-check, so Has reports the
 //     jti free and a genuine replay is accepted. The stored expiry does
 //     not help here and is not claimed to: guarding that direction
-//     needs a durable substore, which is the routing decision declared
-//     on [store.ConsumedJTIStore].
+//     needs either a noeviction Redis instance or routing to a durable
+//     substore, per the eviction requirement [store.ConsumedJTIStore]
+//     declares. A volatile-* or allkeys-* maxmemory policy is not safe
+//     for this store even though it is the right choice for the
+//     Interactions and Sessions substores on the same instance.
 type jtiStore struct {
 	parent     *Store
 	markScript *redis.Script

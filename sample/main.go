@@ -253,7 +253,8 @@ func openBackend(ctx context.Context, cfg config, logger *slog.Logger) (backend,
 		composite.WithDefault(durable),
 		composite.With(composite.Sessions, volatile),
 		composite.With(composite.Interactions, volatile),
-		composite.With(composite.ConsumedJTIs, volatile),
+		// ConsumedJTIs stays on the durable default: an evicting Redis
+		// would drop live replay markers under memory pressure.
 	)
 	if err != nil {
 		closeAll()

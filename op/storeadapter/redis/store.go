@@ -186,13 +186,17 @@ func WithMaxValueBytes(n int) Option {
 	}
 }
 
-// Store is the Redis adapter. It satisfies [store.Store] for the
-// volatile substores ([store.InteractionStore], [store.ConsumedJTIStore],
-// and [store.SessionStore]) plus [store.MetadataStore]; every other
-// accessor returns nil, which op.New turns into a construction-time
-// configuration error naming the missing substore, so a
-// misconfiguration never reaches a request. The adapter is intended to
-// be composed with
+// Store is the Redis adapter. It satisfies [store.Store] for
+// [store.InteractionStore], [store.SessionStore], [store.ConsumedJTIStore],
+// and [store.MetadataStore]; every other accessor returns nil, which
+// op.New turns into a construction-time configuration error naming the
+// missing substore, so a misconfiguration never reaches a request. These
+// four substores are not eviction-uniform: Interactions and Sessions
+// tolerate loss and belong on a volatile-* / allkeys-* evicting instance,
+// but ConsumedJTIs does not — see [Store.ConsumedJTIs] and
+// [store.ConsumedJTIStore] for the noeviction / durable-backend
+// requirement replay markers carry. The adapter is intended to be
+// composed with
 // [github.com/libraz/go-oidc-provider/op/storeadapter/composite] so
 // that out-of-scope substores resolve to a different backend.
 type Store struct {
@@ -381,7 +385,13 @@ func validateScheme(scheme string, allowPlaintext bool) error {
 // Interactions returns the [store.InteractionStore] handle.
 func (s *Store) Interactions() store.InteractionStore { return s.interactionsImpl }
 
-// ConsumedJTIs returns the [store.ConsumedJTIStore] handle.
+// ConsumedJTIs returns the [store.ConsumedJTIStore] handle. Unlike
+// [Store.Interactions] and [Store.Sessions], this substore's TTL keys must
+// not be exposed to a volatile-* or allkeys-* maxmemory policy: eviction of
+// a live marker under memory pressure reopens the replay window the store
+// exists to close. Run the JTI keyspace on a noeviction Redis instance, or
+// route this Kind to a durable backend through
+// [github.com/libraz/go-oidc-provider/op/storeadapter/composite].
 func (s *Store) ConsumedJTIs() store.ConsumedJTIStore { return s.jtisImpl }
 
 // The accessors below return nil for substores the Redis adapter
@@ -430,10 +440,15 @@ func (s *Store) Grants() store.GrantStore { return nil }
 // makes it the one Redis key whose loss is not self-healing: under a
 // maxmemory policy that evicts arbitrary keys (allkeys-lru /
 // allkeys-random) it can be evicted like any other, and the OP would
-// then boot as if the decision had never been recorded. Deployments
-// that keep metadata in Redis rather than in a durable backend should
-// use a volatile-* eviction policy, which only evicts keys that have
-// an expiry set.
+// then boot as if the decision had never been recorded. A volatile-*
+// eviction policy, which only evicts keys that have an expiry set,
+// leaves this TTL-less key untouched.
+//
+// That recommendation is scoped to Metadata alone and does not extend
+// to the instance as a whole: the same client also carries the
+// ConsumedJTIs keyspace, whose TTL keys a volatile-* policy WILL evict
+// under memory pressure. An instance hosting both substores needs
+// noeviction, not volatile-*; see [Store.ConsumedJTIs].
 func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s) }
 
 // DeviceCodes implements [store.Store]; out-of-scope on Redis.
