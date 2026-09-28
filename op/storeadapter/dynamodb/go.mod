@@ -12,7 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.6
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.69.1
-	github.com/libraz/go-oidc-provider v1.2.0
+	github.com/libraz/go-oidc-provider v1.3.0
 	github.com/testcontainers/testcontainers-go/modules/dynamodb v0.44.0
 )
 

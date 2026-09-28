@@ -11,9 +11,9 @@ go 1.26.0
 toolchain go1.27.1
 
 require (
-	github.com/libraz/go-oidc-provider v1.2.0
+	github.com/libraz/go-oidc-provider v1.3.0
 	github.com/libraz/go-oidc-provider/examples/internal/rpkit v0.0.0-20260727001405-2d3c5fc0c0bf
-	github.com/libraz/go-oidc-provider/op/storeadapter/sql v1.2.0
+	github.com/libraz/go-oidc-provider/op/storeadapter/sql v1.3.0
 	modernc.org/sqlite v1.59.0
 )
 

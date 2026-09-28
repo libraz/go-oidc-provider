@@ -10,7 +10,7 @@ go 1.26.0
 toolchain go1.27.1
 
 require (
-	github.com/libraz/go-oidc-provider v1.2.0
+	github.com/libraz/go-oidc-provider v1.3.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0

@@ -14,7 +14,8 @@ unchanged; one that implements its own `store.*`, `op.HintResolver`,
 `op.SubjectGenerator` or `op.CaptchaVerifier` does not. `v1.2.0` leaves the
 runtime surface intact and breaks only `op/store/contract`, the test harness a
 bring-your-own store runs against itself, so the adaptation is confined to test
-code.
+code. `v1.3.0` raises the minimum Go version to 1.26 and has `op.New` refuse a
+few configurations it used to accept; its `Changed` section names each one.
 
 The main module and the storage-adapter sub-modules
 (`op/storeadapter/sql`, `op/storeadapter/redis`, and from `v1.0.0`
@@ -22,7 +23,13 @@ The main module and the storage-adapter sub-modules
 each sub-module independently:
 
 ```
-# v1.2.0 (latest)
+# v1.3.0 (latest)
+go get github.com/libraz/go-oidc-provider@v1.3.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.3.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.3.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.3.0
+
+# v1.2.0
 go get github.com/libraz/go-oidc-provider@v1.2.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.2.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.2.0
@@ -71,7 +78,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
-## [Unreleased]
+## [v1.3.0] — 2026-09-28
 
 A conformance and consistency pass in the same spirit as the previous
 release: FAPI 2.0 and FAPI-CIBA enforcement that discovery had already
@@ -102,9 +109,31 @@ refuses construction otherwise — and that `AccessTokenRegistry.RevokeByJTI`
 `op/store/contract` suite now enforces. A deployment registering
 `op.TriggerBeforeToken` interactions will see them run on paths that
 previously skipped them, including `prompt=none`, which now answers
-`interaction_required` where it used to mint silently.
+`interaction_required` where it used to mint silently. A passkey step
+that sets `AAGUIDAllowlist` now needs `AttestationRoots` as well, and a
+test suite built on `op/testkit` or a custom `op.Authenticator` must make
+sure every subject it authenticates exists in the user store, since
+`/token` now refuses to redeem a grant for a subject the store cannot find.
 
 ### Security
+
+- The token endpoint now looks the grant's subject up in the user store
+  before every `authorization_code`, `refresh_token`, `device_code` and
+  CIBA redemption. A subject that is no longer present gets
+  `invalid_grant` and the grant's access and refresh tokens are revoked;
+  a user-store fault gets `server_error` and no token. A deleted user's
+  refresh chain previously kept rotating for as long as it was used, and
+  approvals granted before deprovisioning still redeemed.
+
+- A passkey step with an `AAGUIDAllowlist` no longer accepts an
+  attestation merely because its type claims a third party vouched for
+  it. The attestation's `x5c` chain must now verify, at the OP clock, up
+  to one of the new `PrimaryPasskey.AttestationRoots`; an attestation
+  without a chain (none, self, ECDAA) is refused, and the leaf
+  certificate's AAGUID extension must match the authenticator data for
+  every attestation format. A user could previously register a software
+  key under a self-minted certificate chain naming any allowlisted
+  authenticator model.
 
 - Single sign-on, cached-grant, and consent-only re-authorizations now
   re-evaluate the ACR policy for the requesting client against the
@@ -347,6 +376,46 @@ previously skipped them, including `prompt=none`, which now answers
 
 ### Changed
 
+- **BREAKING (Go toolchain).** Every module, the storage adapters included,
+  now declares `go 1.26.0`. `golang.org/x/crypto` v0.57.0 and
+  `go-webauthn/webauthn` v0.18.2 require it, and Go 1.25 no longer receives
+  upstream security fixes. The dependencies move with it: `go-jose` v4.1.5,
+  `go-webauthn/webauthn` v0.18.2, `fxamacker/cbor` v2.9.4,
+  `golang.org/x/crypto` v0.57.0 and `golang.org/x/sync` v0.23.0; the SQL
+  adapter moves to `modernc.org/sqlite` v1.59.0, `pgx` v5.11.0 and
+  `go-sql-driver/mysql` v1.10.1, and the DynamoDB adapter to
+  `aws-sdk-go-v2` v1.47.1.
+
+- **BREAKING (configuration).** `op.New` now refuses, at construction, a
+  configuration it used to accept: `op.WithPARLifetime` at or above 600
+  seconds under a FAPI 2.0 or FAPI-CIBA profile, and a store whose
+  `ConsumedJTIs()` or `Users()` returns nil. At runtime, the same profiles
+  reject RS256-signed client assertions and request objects, and a textual
+  `http://localhost` redirect URI needs `op.WithAllowLocalhostLoopback()`.
+  The `Fixed` and `Security` entries above give the reason for each.
+
+- **BREAKING (passkey AAGUID allowlists).** `op.New` and
+  `passkeykit.New` refuse a `PrimaryPasskey` whose `AAGUIDAllowlist` is
+  non-empty while `AttestationRoots` is empty or holds a nil entry.
+  Supply the attestation root certificates of the authenticator vendors
+  you allow, for example extracted from FIDO MDS3; the OP does not fetch
+  metadata itself.
+
+- **BREAKING (subjects missing from the user store).** A deployment, or a
+  test suite, that authenticates subjects its `UserStore` cannot find now
+  gets `invalid_grant` at `/token`. `op/testkit.NewProvider` seeds every
+  subject its login authenticator accepts, so suites built on it keep
+  working; one that wires `testkit.SubjectAuthenticator` into its own
+  provider must seed the user.
+
+- The Redis adapter's documentation no longer lets replay markers share
+  an evicting instance with sessions and interactions: `ConsumedJTIs` must
+  run on a `noeviction` Redis or a durable backend, because a
+  `volatile-*` / `allkeys-*` policy can evict a live marker under memory
+  pressure and reopen the replay window it exists to close. Examples 08,
+  09 and 17, the reference sample and `op-demo` now leave `ConsumedJTIs`
+  on their durable backend.
+
 - **Existing MySQL installations: apply the identifier collation
   change.** `oidc_clients.id`, `oidc_users.subject`, and every
   `client_id` / `subject` column across the authorization-code,
@@ -357,7 +426,7 @@ previously skipped them, including `prompt=none`, which now answers
   holds identifiers that collide under the case-insensitive default, the
   `MODIFY` fails and names the rows to reconcile first.
 
-- **BYO `op/store` backends implementing `AccessTokenRegistry`.** A
+- **BREAKING (BYO `op/store` backends implementing `AccessTokenRegistry`).** A
   backend that deletes a row on `RevokeByJTI` / `RevokeByGrant` now fails
   the `op/store/contract` suite; it must flip `Revoked` and leave the
   record readable instead. `op.New` also now requires
@@ -429,6 +498,17 @@ previously skipped them, including `prompt=none`, which now answers
   themselves.
 
 ### Added
+
+- `(*op.Provider).RevokeSubject(ctx, subject)` revokes every grant a
+  subject holds — its access and refresh tokens and the grant records —
+  for an embedder that disables or deprovisions a user without deleting
+  it. It is idempotent and leaves browser sessions alone. Device-code and
+  CIBA grants keep no grant record, so their tokens are not reached; they
+  stop at the token endpoint's subject check once the user is removed from
+  the user store.
+
+- `op.PrimaryPasskey.AttestationRoots`, the trust anchors an
+  `AAGUIDAllowlist` verifies attestation chains against.
 
 - `op/devicecodekit.ErrAttemptLimiterSaturated`, returned by the built-in
   in-memory manual-entry attempt limiter when it is at capacity, so a
@@ -4473,7 +4553,8 @@ from the access-token TTL (see Changed).
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.3.0...HEAD
+[v1.3.0]: https://github.com/libraz/go-oidc-provider/compare/v1.2.0...v1.3.0
 [v1.2.0]: https://github.com/libraz/go-oidc-provider/compare/v1.1.0...v1.2.0
 [v1.1.0]: https://github.com/libraz/go-oidc-provider/compare/v1.0.0...v1.1.0
 [v1.0.0]: https://github.com/libraz/go-oidc-provider/compare/v0.9.5...v1.0.0
