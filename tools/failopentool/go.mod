@@ -6,4 +6,4 @@ module github.com/libraz/go-oidc-provider/tools/failopentool
 
 go 1.25.0
 
-toolchain go1.27.0
+toolchain go1.27.1

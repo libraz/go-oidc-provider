@@ -23,7 +23,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 go get github.com/libraz/go-oidc-provider@v1.2.0
 ```
 
-Go 1.25 以上が必要です。DB / Redis / AWS SDK のドライバを引き込むストアアダプタは、同じタグで別モジュールとして公開しています。明示的に取り込むまで、利用者の `go.sum` に余計な依存は入りません。
+Go 1.26 以上が必要です。DB / Redis / AWS SDK のドライバを引き込むストアアダプタは、同じタグで別モジュールとして公開しています。明示的に取り込むまで、利用者の `go.sum` に余計な依存は入りません。
 
 ```sh
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.2.0

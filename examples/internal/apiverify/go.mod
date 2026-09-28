@@ -13,14 +13,14 @@
 // published library imports this module.
 module github.com/libraz/go-oidc-provider/examples/internal/apiverify
 
-go 1.26
+go 1.26.0
 
-toolchain go1.27.0
+toolchain go1.27.1
 
 require github.com/libraz/go-oidc-provider v1.2.0
 
 require (
-	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 )
 

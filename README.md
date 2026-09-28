@@ -38,7 +38,7 @@ library.
 go get github.com/libraz/go-oidc-provider@v1.2.0
 ```
 
-Go 1.25+. Storage adapters are published as sub-modules on the same tag, so
+Go 1.26+. Storage adapters are published as sub-modules on the same tag, so
 their drivers stay out of your `go.sum` until you opt in:
 
 ```sh
