@@ -229,6 +229,11 @@ sure every subject it authenticates exists in the user store, since
 
 ### Fixed
 
+- `op.FAPITLSConfig` no longer caps the listener at TLS 1.2. TLS 1.3 is
+  negotiated when the client offers it, as RFC 9325 §3.1.1 recommends;
+  the FAPI cipher allowlist governs TLS 1.2 only, so a TLS 1.2 client is
+  still held to the RSA-keyed AEAD suites.
+
 - Under an active FAPI 2.0 or FAPI-CIBA profile, client assertions and
   request objects signed with RS256 are now rejected, matching the
   profile's advertised algorithm lockdown and DPoP's existing exclusion;

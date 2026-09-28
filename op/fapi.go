@@ -8,13 +8,12 @@ import (
 )
 
 // FAPITLSConfig returns the [*tls.Config] FAPI 2.0 §6.1.2 mandates
-// for an authorization server endpoint: TLS 1.2 only with the
-// FAPI 1.0 Advanced §8.5 ECDHE_RSA AEAD allowlist.
+// for an authorization server endpoint: TLS 1.2 or later, with TLS 1.2
+// restricted to the FAPI 1.0 Advanced §8.5 ECDHE_RSA AEAD allowlist.
 //
-// MinVersion and MaxVersion are both pinned at [tls.VersionTLS12]
-// because Go's TLS 1.3 cipher list is not configurable, so the only
-// way to keep CHACHA20_POLY1305 (which is not on the FAPI allowlist)
-// off the wire is to negotiate TLS 1.2. The cipher list is
+// The FAPI cipher allowlists govern TLS 1.2 only; TLS 1.3 stays
+// enabled because RFC 9325 §3.1.1 says servers SHOULD support it, and
+// Go negotiates it in preference to TLS 1.2. The TLS 1.2 list is
 // RSA-keyed because the OFCS DisallowInsecureCipher condition follows
 // the strict FAPI 1.0 RW allowlist (RSA-keyed AEAD only) and the
 // matching deployment must therefore use an RSA server certificate.
@@ -24,10 +23,8 @@ import (
 // [*tls.Config]; the helper exists so the common FAPI conformance
 // case is one line instead of fifteen.
 func FAPITLSConfig() *tls.Config {
-	//nolint:gosec // G402: deliberate TLS-1.2 cap so the FAPI 1.0 RW cipher allowlist applies.
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		MaxVersion: tls.VersionTLS12,
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,

@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,12 +14,12 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 )
 
-// TestFAPITLSConfig_PinsTLS12 asserts the helper returns a
-// configuration that pins TLS to v1.2 and lists exactly the FAPI 1.0
-// Advanced §8.5 ECDHE_RSA AEAD allowlist. The list is RSA-keyed
-// because OFCS's DisallowInsecureCipher condition rejects ECDSA
-// variants even though FAPI 1.0 lists them.
-func TestFAPITLSConfig_PinsTLS12(t *testing.T) {
+// TestFAPITLSConfig_TLS12FloorAndAllowlist asserts the helper floors
+// TLS at v1.2, leaves TLS 1.3 negotiable, and restricts TLS 1.2 to
+// exactly the FAPI 1.0 Advanced §8.5 ECDHE_RSA AEAD allowlist. The
+// list is RSA-keyed because OFCS's DisallowInsecureCipher condition
+// rejects ECDSA variants even though FAPI 1.0 lists them.
+func TestFAPITLSConfig_TLS12FloorAndAllowlist(t *testing.T) {
 	t.Parallel()
 
 	cfg := op.FAPITLSConfig()
@@ -27,8 +29,8 @@ func TestFAPITLSConfig_PinsTLS12(t *testing.T) {
 	if cfg.MinVersion != tls.VersionTLS12 {
 		t.Errorf("MinVersion = %#x, want %#x", cfg.MinVersion, tls.VersionTLS12)
 	}
-	if cfg.MaxVersion != tls.VersionTLS12 {
-		t.Errorf("MaxVersion = %#x, want %#x", cfg.MaxVersion, tls.VersionTLS12)
+	if cfg.MaxVersion != 0 && cfg.MaxVersion < tls.VersionTLS13 {
+		t.Errorf("MaxVersion = %#x caps below TLS 1.3", cfg.MaxVersion)
 	}
 	want := []uint16{
 		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
@@ -58,6 +60,49 @@ func TestFAPITLSConfig_ReturnsFreshConfig(t *testing.T) {
 	a.CipherSuites[0] = 0
 	if b.CipherSuites[0] == 0 {
 		t.Fatal("mutation on one config bled into the next")
+	}
+}
+
+// TestFAPITLSConfig_Handshakes drives real handshakes against a
+// listener using the helper: a default client lands on TLS 1.3, and a
+// TLS 1.2 client offering only a suite outside the allowlist is
+// refused.
+func TestFAPITLSConfig_Handshakes(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	srv.TLS = op.FAPITLSConfig()
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	addr := srv.Listener.Addr().String()
+
+	dial := func(cfg *tls.Config) (*tls.Conn, error) {
+		conn, err := (&tls.Dialer{Config: cfg}).DialContext(t.Context(), "tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		return conn.(*tls.Conn), nil
+	}
+
+	//nolint:gosec // G402: the test server's certificate is self-signed; only protocol negotiation is under test.
+	conn, err := dial(&tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		t.Fatalf("default client handshake: %v", err)
+	}
+	if v := conn.ConnectionState().Version; v != tls.VersionTLS13 {
+		t.Errorf("negotiated version = %#x, want TLS 1.3", v)
+	}
+	_ = conn.Close()
+
+	//nolint:gosec // G402: see above; the TLS 1.2 cap is the point of this probe.
+	conn, err = dial(&tls.Config{
+		InsecureSkipVerify: true,
+		MaxVersion:         tls.VersionTLS12,
+		CipherSuites:       []uint16{tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256},
+	})
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("TLS 1.2 handshake with a suite outside the allowlist succeeded")
 	}
 }
 

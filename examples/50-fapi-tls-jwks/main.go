@@ -3,7 +3,8 @@
 // Example 50 demonstrates the FAPI helper functions [op.FAPITLSConfig]
 // and [op.LoadPublicJWKS]. Together they replace the per-deployment
 // boilerplate every FAPI 2.0 OP would otherwise rewrite by hand:
-// TLS 1.2 with the FAPI 1.0 RW cipher allowlist, and a JWKS loader
+// TLS 1.2 or later with TLS 1.2 held to the FAPI 1.0 RW cipher
+// allowlist, and a JWKS loader
 // that strips the private "d" parameter so the OP only ever holds
 // public material.
 //
@@ -14,13 +15,9 @@
 // The example expects a JWKS file at ./client.jwks.json (or the path in
 // FAPI_JWKS; any
 // well-formed RFC 7517 set will do — the loader strips "d" if
-// present). The OP listens on TLS 1.2 only because Go's TLS 1.3
-// cipher list is not configurable from crypto/tls — pinning to
-// TLS 1.2 is what lets [op.FAPITLSConfig] pass through the FAPI 1.0
-// Read-Write cipher allowlist. CHACHA20_POLY1305 is excluded from
-// the allowlist for the same reason. This is a Go-runtime constraint,
-// not a FAPI rejection of TLS 1.3 — operators wanting TLS 1.3 build
-// their own *tls.Config and forfeit the cipher pinning.
+// present). The OP negotiates TLS 1.3 when the client offers it; the
+// FAPI cipher allowlist governs TLS 1.2 only, so a TLS 1.2 client is
+// held to the RSA-keyed AEAD suites [op.FAPITLSConfig] lists.
 //
 // Manual verification:
 //
@@ -30,13 +27,14 @@
 //  2. Set FAPI_ISSUER to the public HTTPS origin the listener answers
 //     on, and FAPI_CERT / FAPI_KEY to a certificate and key for it.
 //     All three are required; set FAPI_ADDR when :8443 is unsuitable.
-//  3. Run `openssl s_client -connect 127.0.0.1:8443 -tls1_2` and
-//     inspect the negotiated TLS 1.2 cipher.
+//  3. Run `openssl s_client -connect 127.0.0.1:8443` and confirm
+//     TLS 1.3, then repeat with `-tls1_2` and inspect the negotiated
+//     TLS 1.2 cipher.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
-//   - Listener: TLS 1.2 with the operator-supplied FAPI_CERT / FAPI_KEY pair; a self-signed pair is fine for a local run, production replaces it with a chain the RPs trust.
+//   - Listener: TLS 1.2+ with the operator-supplied FAPI_CERT / FAPI_KEY pair; a self-signed pair is fine for a local run, production replaces it with a chain the RPs trust.
 package main
 
 import (
@@ -128,7 +126,7 @@ func main() {
 	if cert == "" || key == "" {
 		log.Fatal("FAPI_CERT and FAPI_KEY are required; TLS must be exercised by this example")
 	}
-	log.Printf("FAPI TLS example listening on %s (issuer %s; TLS 1.2 only, RSA-keyed AEAD allowlist)", srv.Addr, issuer)
+	log.Printf("FAPI TLS example listening on %s (issuer %s; TLS 1.3, or TLS 1.2 with the RSA-keyed AEAD allowlist)", srv.Addr, issuer)
 	// TLS listener; serve.Listen does not handle TLS termination.
 	if err := srv.ListenAndServeTLS(cert, key); err != nil {
 		log.Fatalf("listen: %v", err)
