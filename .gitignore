@@ -106,4 +106,5 @@ conformance/render/
 # material and not part of the published repository.
 CLAUDE.md
 .claude/
+.serena/
 backup/
