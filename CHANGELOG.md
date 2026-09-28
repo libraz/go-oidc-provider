@@ -71,6 +71,369 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
+## [Unreleased]
+
+A conformance and consistency pass in the same spirit as the previous
+release: FAPI 2.0 and FAPI-CIBA enforcement that discovery had already
+advertised but the runtime did not fully wire, storage-adapter races and
+consistency gaps under concurrent load, and documentation that had drifted
+from the behaviour it described. Most of the FAPI-facing changes tighten a
+MUST the OP was already claiming to meet; the storage-adapter changes close
+a window a concurrent request or a partial failure could exploit.
+
+Deployments that need to do something before upgrading: a FAPI 2.0 or
+FAPI-CIBA deployment whose relying parties sign client assertions or
+request objects with RS256 must move them to ES256, PS256, or EdDSA, and
+one configuring `op.WithPARLifetime` at or above 600 seconds must lower it
+below that ceiling. A relying party that signs a request object for
+`/par`, `/bc-authorize`, or a FAPI-profiled `/authorize` must now carry
+every authorization parameter inside the signed object, since an unsigned
+query or form parameter riding alongside it is no longer merged in. A
+native client redirecting to a textual `http://localhost` URI needs
+`op.WithAllowLocalhostLoopback()`; without it only the IP literals
+`127.0.0.1` and `[::1]` are accepted. MySQL-backed deployments must apply
+the `ALTER TABLE ... COLLATE utf8mb4_bin` statements in
+`op/storeadapter/sql/schema/MIGRATIONS.md` for the `client_id` and
+`subject` columns before relying on case- and accent-sensitive identifier
+matching. Anyone implementing their own `op/store` backend must confirm
+`ConsumedJTIs()` and `Users()` return non-nil accessors — `op.New` now
+refuses construction otherwise — and that `AccessTokenRegistry.RevokeByJTI`
+/ `RevokeByGrant` mark a record revoked rather than delete it, which the
+`op/store/contract` suite now enforces. A deployment registering
+`op.TriggerBeforeToken` interactions will see them run on paths that
+previously skipped them, including `prompt=none`, which now answers
+`interaction_required` where it used to mint silently.
+
+### Security
+
+- Single sign-on, cached-grant, and consent-only re-authorizations now
+  re-evaluate the ACR policy for the requesting client against the
+  assurance level the session actually reached, instead of echoing an
+  `acr` string an earlier client's request produced. A session records
+  only the canonical `acr` of the level it reached (for example
+  `urn:mace:incommon:iap:bronze`); a request whose `acr_values` names a
+  non-canonical string such as `"1"` no longer silently matches an
+  existing session, and triggers re-authentication instead.
+
+- Interactions registered with `op.TriggerBeforeToken` now run after
+  consent on every authorization-code `/authorize` that issues a code —
+  including a live session covered by a cached grant or the first-party
+  auto-grant, which previously minted a code without running them.
+  `prompt=none` now answers `interaction_required` in that case instead of
+  completing silently.
+
+- Token exchange now verifies both the DPoP and mTLS proof on a
+  `subject_token` that is bound to both, instead of accepting proof of
+  only one — closing a path where holding just the DPoP key, or just a
+  client certificate, was enough to exchange a token meant to require
+  both.
+
+- Token exchange over an opaque access token now issues the same
+  public/pairwise subject introspection does, instead of leaking the
+  internal OP subject identifier into the exchanged token's `sub`. Under
+  pairwise subjects, an opaque access token minted on a custom-grant
+  refresh chain now introspects and re-exchanges with the same `sub` as
+  the rest of the chain, rather than being pairwise-projected a second
+  time.
+
+- ID tokens issued from custom grants and token exchange are now
+  encrypted when the client registered for encrypted ID tokens, matching
+  every built-in grant. Both paths previously left the client's declared
+  `id_token` encryption preference unenforced.
+
+- An `*http.Transport` passed to `WithJWKSHTTPTransport` or
+  `WithBackchannelLogoutHTTPClient` no longer lets its `DialTLSContext` /
+  `DialTLS` carry HTTPS fetches past the SSRF dial-time check: the OP's
+  gated dialer now handles every connection on that transport, and a
+  caller's own dial functions are not called. A `CheckRedirect` hook set
+  through the same options can now only add a veto to a redirect the SSRF
+  gate would otherwise allow, never replace the gate's own deny-list and
+  cap decision; the redirect cap itself now admits exactly the configured
+  number of redirects rather than stopping one short.
+
+- A request object with no `iat` claim and a far-future `exp` can no
+  longer be replayed once the consumed-`jti` retention window has
+  expired; it is now rejected outright, or its replay marker is retained
+  for the request object's actual validity.
+
+- `NormalizeCSP` now rejects any policy string containing a comma,
+  closing a bypass that let a `frame-ancestors` or `base-uri` restriction
+  be silently defeated by folding a second, more permissive directive
+  list into the same header value.
+
+- MySQL now matches `subject` and `client_id` lookups case- and
+  accent-sensitively, pinning both columns to `utf8mb4_bin` across every
+  table that carries them. MySQL's default collation is case- and
+  accent-insensitive, so two identifiers differing only in case or
+  diacritics previously resolved to the same row — the same class of
+  defect the reference sample's `members.email` column carried, where one
+  address's login could resolve a different member's row.
+
+- The `AccessTokenRegistry` contract no longer permits a backend to
+  delete a revoked record; an adapter must keep it readable and marked
+  `Revoked` until `GC` is entitled to remove it, so a custom store can no
+  longer silently defeat JWT access-token revocation by dropping the row
+  instead of flagging it. The `op/store/contract` harness now asserts
+  `Revoked` on every revocation path, covers `Consume` through a
+  transaction handle, and races `Approve` / `Deny` / `Revoke` against each
+  other on the device-code and CIBA stores to pin a single winner.
+
+- `/userinfo` now rejects a `client_credentials` access token with
+  `invalid_token` instead of potentially releasing another user's claims
+  when that token's `client_id` happens to match a stored subject — a
+  `client_credentials` token names no end user, and its lack of grant
+  lineage was not previously, on its own, grounds for refusal.
+
+- `op.New` now fails at construction when a store's `ConsumedJTIs()` or
+  `Users()` accessor returns nil, instead of silently disabling JAR replay
+  protection or panicking on the first `/userinfo` request.
+
+- The DynamoDB-backed revocation cascades (`RevokeChain`, `RevokeByGrant`,
+  `RevokeByClient`) now reach refresh tokens through strongly consistent
+  reads in addition to their index query, so a token written just before a
+  cascade runs is reliably revoked. Records written before this upgrade
+  keep the secondary index's eventual-consistency gap until they expire;
+  no table or index change is needed. The device-code store's `Revoke`
+  no longer overwrites a concurrent `Consume`: a status check inside the
+  same guarded write now stops it from denying a record the instant it is
+  claimed.
+
+### Fixed
+
+- Under an active FAPI 2.0 or FAPI-CIBA profile, client assertions and
+  request objects signed with RS256 are now rejected, matching the
+  profile's advertised algorithm lockdown and DPoP's existing exclusion;
+  dynamic registration and discovery agree with the two verifiers.
+
+- Dynamic Client Registration under an active profile (FAPI 2.0, for
+  example) now rejects a `token_endpoint_auth_method`,
+  `token_endpoint_auth_signing_alg`, or `request_object_signing_alg` the
+  profile forbids, at registration time, with `invalid_client_metadata` —
+  matching what the token endpoint already enforced. An omitted
+  `token_endpoint_auth_method` no longer defaults to `client_secret_basic`
+  under such a profile; only a method the active profile allows can be
+  persisted, whether supplied or defaulted.
+
+- Under an active FAPI 2.0 or FAPI-CIBA profile, `op.New` now rejects a
+  `WithPARLifetime` configuration that would let `/par` responses exceed
+  the FAPI-required 600-second `expires_in` ceiling, instead of accepting
+  it silently.
+
+- Under a FAPI profile, and always at `/par` and `/bc-authorize`, a signed
+  request object now fully replaces the unsigned outer query/form
+  parameters (RFC 9101 §6.3) rather than being overlaid onto them; plain
+  OIDC `/authorize` keeps the OIDC Core §6.3.3 merge, where the object's
+  parameters override same-named wire values and everything else passes
+  through.
+
+- Combining a FAPI 2.0 profile with FAPI-CIBA no longer forces
+  FAPI-CIBA's `jti`/`iat` requirements onto `/authorize` and `/par`; each
+  endpoint now enforces only the request-object constraints of the
+  profile that actually governs it.
+
+- By default, a native client can no longer register a textual
+  `localhost` redirect URI; `op.WithAllowLocalhostLoopback()` is now
+  required for that, matching the option's documented DNS-rebinding
+  protection and the loopback-IP-literal carve-out that already applied
+  without it.
+
+- `GET /authorize` now enforces the same 64 KiB request-size ceiling as
+  `POST`, answering `414 Request-URI Too Long` for an oversized query
+  instead of persisting it into the interaction record.
+
+- The logout confirmation page's Content-Security-Policy no longer blocks
+  the final redirect back to the relying party.
+
+- The bundled sample app now wires its user store into the OP, so
+  `/userinfo` and the account chooser work against real member records
+  instead of failing or showing opaque subject identifiers. It also
+  provides a sign-in page, so a member can reach their account page again
+  after signing out or after their session expires, and example 26's
+  store now returns a stable value from `Users()`, which no longer trips
+  a spurious user-store mismatch warning at startup.
+
+- `op-demo` now starts successfully with the FAPI-CIBA profile against
+  composite storage.
+
+- Example 33's documentation now matches its actual behavior — the
+  process keeps running an insecure listener after the documented success
+  path — and its demo listener now binds to `127.0.0.1` instead of every
+  interface.
+
+- Examples 03 (FAPI 2.0) and 51 (DPoP nonce) now display the DPoP
+  confirmation thumbprint read from the issued access token's `cnf.jkt`,
+  and fail instead of silently mismatching when it does not match the
+  relying party's own key, rather than printing the RP's key thumbprint
+  regardless of what the token actually carries.
+
+- A custom grant handler that sets only `CustomGrantResponse.Audience`
+  now gets the same audience on the initial access token as on every
+  token minted by refreshing it, instead of the audience changing partway
+  through the chain.
+
+- Opaque access tokens are now invalidated when their client is deleted,
+  at `/userinfo`, `/introspect`, and generally, matching the existing
+  behavior for JWT access tokens; previously they stayed live at
+  `/userinfo` and `/introspect` until their own expiry.
+
+- `/revoke` now emits a `token.revoke_failed` audit event when a storage
+  fault prevents looking up the token to revoke, instead of silently
+  answering success.
+
+- `/par` now rejects a request whose backfilled default ACR values are
+  not advertised, instead of minting a `request_uri` that `/authorize`
+  would later refuse.
+
+- `/authorize` and `/par` now reject a client that is not registered for
+  the `authorization_code` grant or the `code` response type, instead of
+  letting it complete login and consent only to have `/token` refuse the
+  resulting code.
+
+- Authorization-code exchange now re-checks the client's currently
+  registered scopes, matching the device-code, CIBA, and refresh-token
+  paths, instead of trusting whatever scope the original `/authorize`
+  request recorded.
+
+- `/device_authorization` and `/bc-authorize` now reject a malformed or
+  untrusted client certificate the same way `/token` already does,
+  instead of silently falling back to treating the request as an unbound
+  bearer request.
+
+- Grant Management delete and end-session now go through the same
+  revocation and token-retention logic as `/revoke`, instead of a second,
+  independently drifted copy of it — every endpoint that tears down a
+  grant's credentials now does so consistently.
+
+- A brand-new device-code manual-entry attempt key is no longer reported
+  as locked once the in-memory attempt limiter reaches its 4096-key
+  capacity; a saturated limiter now returns a dedicated sentinel (see
+  **Added**) instead of a false lockout.
+
+- JAR `request_uri` fetches are now subject to the same concurrency cap
+  and short failure caching as `jwks_uri` fetches, so a slow or tarpit
+  `request_uri` can no longer force one new outbound socket per
+  `/authorize` request.
+
+- Deleting a client via `DELETE /clients/{id}` now completes within a
+  bounded fan-out budget, instead of potentially blocking for minutes
+  against an unresponsive back-channel logout audience.
+
+- TOTP and recovery-code prompts now report an accurate
+  attempts-remaining count that reflects the 24-hour rollover window and
+  any configured cross-factor lockout, instead of a value that could
+  understate or overstate what a user actually has left.
+
+- A failed `op.New` call no longer permanently pins a fresh store's
+  subject-mode strategy; a corrected retry against the same store now
+  succeeds instead of being refused by a marker the first, failed attempt
+  had already written.
+
+- The MySQL refresh-token replay cascade now locks concurrently inserted
+  descendants, closing a race that could leave a live descendant
+  unrevoked after a replay was detected.
+
+- A `client_credentials` request with no `scope` parameter no longer
+  returns the `openid` scope, which has no meaning outside an end-user
+  authorization.
+
+- The bundled `interaction.HTMLDriver`'s factor pages — the username
+  hint, attempts-remaining count, email-code destination, captcha
+  provider, and Continue button — now follow the configured locale
+  instead of always rendering English text.
+
+- An issuer configured with an IPv6 literal host now has that host
+  correctly allowlisted for trusted `X-Forwarded-Host` proxy headers,
+  instead of never matching.
+
+### Changed
+
+- **Existing MySQL installations: apply the identifier collation
+  change.** `oidc_clients.id`, `oidc_users.subject`, and every
+  `client_id` / `subject` column across the authorization-code,
+  refresh-token, access-token, and opaque-access-token tables move to
+  `utf8mb4_bin`. The statements are in
+  `op/storeadapter/sql/schema/MIGRATIONS.md`; SQLite and PostgreSQL
+  already compare bytes and need nothing. On a database that already
+  holds identifiers that collide under the case-insensitive default, the
+  `MODIFY` fails and names the rows to reconcile first.
+
+- **BYO `op/store` backends implementing `AccessTokenRegistry`.** A
+  backend that deletes a row on `RevokeByJTI` / `RevokeByGrant` now fails
+  the `op/store/contract` suite; it must flip `Revoked` and leave the
+  record readable instead. `op.New` also now requires
+  `Store.ConsumedJTIs()` and `Store.Users()` to be non-nil.
+
+- `op.WithAllowInsecureBackchannelLogoutForDev`'s effect is now visible on
+  the audit stream: the `startup_profile` event gains an
+  `insecure_backchannel_logout_for_dev: true` field, where it previously
+  reached only the operational logger, which discards by default.
+
+- `WithJWKSHTTPTransport` and `WithBackchannelLogoutHTTPClient`
+  documentation now states the SSRF gating per transport type precisely:
+  an `*http.Transport` is gated at dial time and on the URL; any other
+  `RoundTripper` (an `otelhttp` wrapper, for instance) is gated on the
+  request URL only, which does not cover DNS rebinding.
+
+- `WithStrictOfflineAccess` documentation now correctly describes that a
+  rejected legacy refresh token is left unconsumed, not burned, when
+  strict mode refuses it.
+
+- `WithAllowLocalhostLoopback` documentation no longer contradicts itself
+  about which examples the carve-out serves — it names `http://localhost`,
+  not `http://127.0.0.1` — and the README's separate local-development
+  note now limits the same carve-out to `redirect_uri` and issuer
+  validation, naming the opt-ins each outbound fetcher (JWKS, JAR
+  `request_uri`, `sector_identifier_uri`, back-channel delivery) still
+  requires for a loopback target.
+
+- `WithCORSOrigins` documentation now correctly states that only
+  `WithStaticClients` redirect URIs are folded into the automatic CORS
+  allowlist; store-backed and dynamically registered client origins still
+  require an explicit `WithCORSOrigins` entry.
+
+- `AuditStartupProfile` documentation now correctly states that its
+  `profiles` / `features` / `grants` lists are emitted in declaration
+  order, not sorted.
+
+- `Resolver.Message` documentation now documents the English fallback
+  tier in its resolution chain, matching what it actually returns.
+
+- The README's SemVer-exemption list now includes the DynamoDB storage
+  adapter and the `op/interaction` package, matching the generated
+  experimental-API inventory, and its "every example is its own module"
+  claim is narrowed to only the examples that pull a dependency beyond
+  the library — 15 of 44 are not.
+
+- The mutual-TLS feature's discovery-facing documentation no longer
+  claims RFC 8705 §2 client-authentication methods are published or
+  supported. The JARM feature's documentation now accurately describes
+  that enabling it adds signed-JWT response modes alongside the existing
+  unsigned ones, rather than making every authorization response a signed
+  JWT. The Revoke feature's documentation now states that `/revoke` is
+  routable for both confidential and public clients, per RFC 7009.
+  `resourceindicator`'s package documentation now correctly states that
+  every trailing slash on a resource path is stripped, not just one.
+
+- Store documentation across `op/store` and the bundled adapters now
+  matches the contract it describes: `MapSQLNotFound` godoc states a
+  non-matching error is returned unchanged; `AccessTokenRegistry.Find`'s
+  `(nil, nil)`-for-absent return is documented as an intentional
+  exception rather than a contradiction; `RecoveryStore.Put` godoc
+  describes it as used only during batch generation, not during
+  `Verify`-driven slot consumption; the composite adapter's documentation
+  no longer claims the OP core avoids opening transactions; the in-memory
+  adapter's package doc no longer claims initial access tokens filter
+  expired rows on read; and store documentation no longer implies the
+  library runs garbage collection automatically — embedders must schedule
+  GC for access tokens, opaque tokens, and grant revocation records
+  themselves.
+
+### Added
+
+- `op/devicecodekit.ErrAttemptLimiterSaturated`, returned by the built-in
+  in-memory manual-entry attempt limiter when it is at capacity, so a
+  caller can distinguish a full limiter from a genuinely locked key.
+
 ## [v1.2.0] — 2026-09-02
 
 A security and correctness pass across the whole surface. Most of what changed
