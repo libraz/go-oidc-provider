@@ -144,6 +144,12 @@ func TestParse_RejectsAlgNone(t *testing.T) {
 	}
 }
 
+// TestParse_RejectsHMAC pins that a JAR request object signed with
+// HS256 is refused before ParseSigned's own verification path.
+//
+// Tracks: CVE-2026-49852 — an HMAC verifier accepted an empty key. Here
+// HS256 is excluded from the allow-list outright, closing the class
+// without depending on any key-strength check.
 func TestParse_RejectsHMAC(t *testing.T) {
 	t.Parallel()
 

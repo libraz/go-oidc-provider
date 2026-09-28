@@ -134,6 +134,12 @@ func TestParseSigned_HeaderInjection_NeverFetches(t *testing.T) {
 // using a key under their control, hoping the verifier picks the
 // wrong one. The library's contract is "compact serialisation only"
 // — any multi-sig form rejected as malformed.
+//
+// Tracks: GHSA-jc38-x7x8-2xc8 — an alg taken from an unprotected /
+// per-signature header let one of several signatures on a JSON-form JWS
+// steer verification to a weaker algorithm. Compact-only parsing has no
+// per-signature header to read in the first place: this test pins that
+// the JSON multi-signature form never parses at all.
 func TestParseSigned_RejectsMultiSignatureForm(t *testing.T) {
 	t.Parallel()
 

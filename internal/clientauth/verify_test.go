@@ -132,6 +132,15 @@ func TestVerifyClient_PublicClientNonePath(t *testing.T) {
 	}
 }
 
+// TestVerifyClient_AllowedMethodsRejectsOutOfPolicy pins the policy
+// layer above the JOSE parser: a presented method weaker than the
+// policy requires is rejected even though it would independently
+// authenticate the client on the registered method alone.
+//
+// Tracks: CVE-2026-16093 — a weaker authentication method (here,
+// client_secret_basic) satisfied a policy that required private_key_jwt.
+// The generic "none never parses" half of the same class is pinned by
+// TestParseSigned_CaseVariantNoneRejected.
 func TestVerifyClient_AllowedMethodsRejectsOutOfPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -338,6 +347,13 @@ func TestPrivateKeyJWTVerifier_RejectsBadAudience(t *testing.T) {
 	}
 }
 
+// TestPrivateKeyJWTVerifier_RejectsExpired pins that a client_assertion
+// whose "exp" has already passed is refused rather than accepted on an
+// unchecked or loosely-checked expiry claim.
+//
+// Tracks: CVE-2026-53431 — a client_assertion JWT with an expired,
+// unbound, or otherwise unchecked exp/iat/aud claim was still accepted
+// for client authentication.
 func TestPrivateKeyJWTVerifier_RejectsExpired(t *testing.T) {
 	t.Parallel()
 

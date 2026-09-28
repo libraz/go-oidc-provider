@@ -144,6 +144,12 @@ func assertAuthorizeRefusesRedirect(t *testing.T, f *dcrFixture, clientID, redir
 // the request ever reaches the OP, so the stored value could never be
 // matched), and a relative reference (which has no authority to match at
 // all).
+//
+// Tracks: CVE-2026-12985 — a redirect_uri accepted at registration as a
+// glob, prefix, or bare scheme rather than a literal string, the same
+// class as CVE-2026-32235 one layer earlier: registration is where an
+// ambiguous shape must be refused, before it ever reaches the exact-match
+// gate at /authorize.
 func TestDCR_RejectsRedirectURIShapesThatBlurTheMatch(t *testing.T) {
 	t.Parallel()
 

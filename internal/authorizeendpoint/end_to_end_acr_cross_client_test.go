@@ -22,6 +22,11 @@ const hardwareACR = "http://idmanagement.gov/ns/assurance/loa/4"
 // another client's silent pass off a cached grant — reports the policy's
 // verdict for its own request over that level, never the string the
 // first request drew.
+//
+// Tracks: CVE-2026-97176 — a reused session reported (and so, on a
+// weaker implementation, could satisfy) an acr stronger than the level
+// it actually reached. The step-up half of the same class is pinned by
+// TestEndToEnd_ACRStepUp.
 func TestEndToEnd_SessionReuseReportsTheLevelReached(t *testing.T) {
 	t.Parallel()
 

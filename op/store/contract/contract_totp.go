@@ -384,6 +384,13 @@ func totpAcceptAdvances(t *testing.T, b TOTPBackend) {
 	assertTOTPEqual(t, got, &expected)
 }
 
+// totpAcceptReplay implements the "AcceptRejectsReplayedStep" case: a
+// second Accept at the same step the store just recorded must lose,
+// leaving the record exactly as the first Accept left it.
+//
+// Tracks: CVE-2026-20779 — a store-level TOCTOU between checking and
+// recording a TOTP step let a same-step replay through at the storage
+// layer even when the verifier above it intended to reject it.
 func totpAcceptReplay(t *testing.T, b TOTPBackend) {
 	t.Helper()
 	s := b.Store
@@ -453,6 +460,15 @@ func totpAcceptEarlier(t *testing.T, b TOTPBackend) {
 	}
 }
 
+// totpAcceptStaleEnrollment implements the "AcceptRejectsStaleEnrollment"
+// case: an Accept built against a snapshot from before the secret was
+// rotated must be refused, never applied against the newer enrollment.
+//
+// Tracks: CVE-2026-96445 — a TOTP secret rotated mid-challenge (or an
+// enrollment resolved via an untrusted forwarded-for header) let a code
+// verified against a stale secret or identity still succeed. The
+// untrusted-header half of the same class is pinned by
+// TestResolve_UntrustedRemote_IgnoresForwardedHeaders.
 func totpAcceptStaleEnrollment(t *testing.T, b TOTPBackend) {
 	t.Helper()
 	s := b.Store

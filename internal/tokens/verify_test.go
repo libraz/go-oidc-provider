@@ -450,6 +450,16 @@ func TestVerify_NotAJWTReturnsMalformed(t *testing.T) {
 	}
 }
 
+// TestVerify_RejectsHS256AsMalformed pins that an HS256-signed access
+// token is refused before any signature verification is attempted — HS*
+// is outside the project's allow-list, so a verifier that only guards
+// against an empty/weak HMAC key would still be exposed here.
+//
+// Tracks: CVE-2026-49852 — an HMAC verifier accepted an empty or
+// otherwise degenerate key, letting HS256 be forged trivially. This
+// project's structural answer is broader: HS256 never reaches key-based
+// verification at all, since the allow-list rejects the algorithm
+// itself at parse time.
 func TestVerify_RejectsHS256AsMalformed(t *testing.T) {
 	t.Parallel()
 

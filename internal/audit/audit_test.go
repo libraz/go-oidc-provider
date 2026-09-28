@@ -134,6 +134,10 @@ func TestSlog_OmitsEmptyCanonicalFields(t *testing.T) {
 // them to slog.Any, so an embedder that wires a plain slog.JSONHandler
 // (without [redact.WrapHandler]) still cannot leak refresh tokens or
 // client secrets that flowed through the audit pipeline.
+//
+// Tracks: CVE-2026-55221 — codes and tokens were written to event logs
+// in redeemable form. The authorization-code half of the same class is
+// pinned by TestEndToEnd_AuditNeverCarriesRawAuthorizationCode.
 func TestSlog_RedactsExtrasWithoutWrapper(t *testing.T) {
 	t.Parallel()
 

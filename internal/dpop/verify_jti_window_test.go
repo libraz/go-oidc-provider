@@ -128,6 +128,15 @@ func TestVerify_ReplayAtIatWindowUpperBoundary(t *testing.T) {
 // instant (iat - IatWindow) and the replay arrives at the LATEST
 // allowed instant (iat + IatWindow), a gap of 2 * IatWindow. The JTI
 // entry must remain authoritative across the entire window.
+//
+// Tracks: CVE-2026-41707 — a DPoP jti replay marker became evictable
+// under memory pressure before its own expiry, letting a flooded cache
+// forget a marker early and admit a replay. The store.ConsumedJTIStore
+// contract this verifier depends on has no early-eviction escape hatch
+// (op/storeadapter/redis documents that its backend needs a noeviction
+// policy so the contract holds in production too); this test pins that
+// a marked jti stays authoritative for its whole declared lifetime, not
+// merely until some backend decides to reclaim it.
 func TestVerify_ReplayAcrossFullIatWindow(t *testing.T) {
 	t.Parallel()
 	iat := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)

@@ -137,6 +137,32 @@ func TestMySQL_Contract(t *testing.T) {
 	runClientUpdateContracts(t, factory)
 }
 
+// TestMySQL_ClientFoundRows_FullContract runs the complete store contract
+// suite — every substore's conditional UPDATE/INSERT case, including the
+// single-use Consume paths (authorization code, PAR, refresh), TOTP
+// Accept/CompareAndSwap, session Touch, interaction CompareAndSwap,
+// device-code and CIBA poll recording, and IAT IncrementUses — with
+// CLIENT_FOUND_ROWS enabled. Several managed-MySQL proxies force this
+// compatibility mode on regardless of what the driver DSN requests, so the
+// adapter's affected-row handling (a matched-but-unchanged row counts as
+// zero rows without the flag, but as one row with it) must reach the same
+// observable outcome either way, not merely avoid a driver-level error.
+//
+// Tracks: CVE-2026-90997 (MySQL/MariaDB CLIENT_FOUND_ROWS compatibility
+// mode) — a store adapter that infers single-use consumption from a raw
+// RowsAffected count is fooled under this mode, since a matched row
+// that the UPDATE left unchanged (the code/token was already consumed)
+// reports as affected instead of as zero, defeating the single-use
+// guard. Structural property: consumption is judged from the row's own
+// state after the statement, not from the driver's affected-row count.
+func TestMySQL_ClientFoundRows_FullContract(t *testing.T) {
+	t.Parallel()
+	factory := newMySQLFactoryWithClientFoundRows(t, true)
+	contract.Run(t, factory)
+	runMFAContracts(t, factory)
+	runClientUpdateContracts(t, factory)
+}
+
 // TestMySQL_ClientFoundRowsMFAPut exercises the driver mode used by services
 // that want UPDATE matched-row counts. Put must not infer a row-version
 // overflow from RowsAffected: it installs a fresh opaque token in the INSERT

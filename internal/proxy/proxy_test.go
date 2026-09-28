@@ -79,6 +79,16 @@ func TestResolve_NoTrust_IgnoresForwardedHeaders(t *testing.T) {
 	}
 }
 
+// TestResolve_UntrustedRemote_IgnoresForwardedHeaders pins that a
+// request whose immediate peer is not in the trusted-proxy allowlist
+// gets its client identity from RemoteAddr alone; X-Forwarded-* headers
+// from an untrusted peer are never consulted.
+//
+// Tracks: CVE-2026-96445 — an OTP / MFA decision trusted a caller-
+// supplied forwarded-for header from an untrusted network position,
+// letting the header spoof the identity a step-up or rate-limit
+// decision was keyed on. The stale-enrollment half of the same class
+// is pinned by totpAcceptStaleEnrollment.
 func TestResolve_UntrustedRemote_IgnoresForwardedHeaders(t *testing.T) {
 	t.Parallel()
 

@@ -389,6 +389,14 @@ func AssertConcurrentJTIMark(t *testing.T, jtis store.ConsumedJTIStore, now time
 	}
 }
 
+// concurrentAuthCodeConsume implements the "AuthorizationCodeConsumeHasOneWinner"
+// case.
+//
+// Tracks: CVE-2026-53518 — an authorization code redeemed by two
+// concurrent requests let both succeed instead of exactly one, because
+// the store's consume path read-then-wrote the single-use record
+// rather than deciding atomically. A backend that passes the
+// sequential replay case can still fail this one.
 func concurrentAuthCodeConsume(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
@@ -410,6 +418,14 @@ func concurrentAuthCodeConsume(t *testing.T, f Factory) {
 	}
 }
 
+// concurrentRefreshConsume implements the "RefreshConsumeHasOneWinner"
+// case.
+//
+// Tracks: CVE-2026-53517 — concurrent redemption of the same refresh
+// token let rotation fork the token family into two live branches
+// instead of consuming the predecessor exactly once. Pinned here on
+// the Consume half; the rotation-retry half is pinned by
+// concurrentRefreshRotation.
 func concurrentRefreshConsume(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
@@ -429,6 +445,15 @@ func concurrentRefreshConsume(t *testing.T, f Factory) {
 	}
 }
 
+// concurrentPARConsume implements the "PushedAuthRequestConsumeHasOneWinner"
+// case.
+//
+// Tracks: CVE-2026-96446 — a pushed authorization request's request_uri
+// was reusable across concurrent /authorize calls, including a
+// prompt=none or error path that a lenient implementation may not
+// treat as a genuine consumption. The store contract has no such
+// distinction: Consume has exactly one winner regardless of what the
+// caller does with the result.
 func concurrentPARConsume(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
@@ -649,6 +674,11 @@ func concurrentCIBAApproveDeny(t *testing.T, f Factory) {
 // rotation sealed. A backend that let a losing attempt write its own
 // copy would answer the client's retry with a response describing tokens
 // that were never issued.
+//
+// Tracks: CVE-2026-53517 — concurrent redemption of the same refresh
+// token forked rotation into two live successor branches. Pinned here
+// on the rotation-retry half; the plain Consume half is pinned by
+// concurrentRefreshConsume.
 func concurrentRefreshRotation(t *testing.T, f Factory) {
 	b := f(t)
 	refreshes := b.Store.RefreshTokens()

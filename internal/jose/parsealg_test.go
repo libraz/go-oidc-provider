@@ -35,6 +35,13 @@ import (
 // inverse: an algorithm outside the allow-list is a hard reject at the
 // parse boundary, with no path that silently treats "unsupported" as
 // "valid".
+//
+// Tracks: GHSA-jc38-x7x8-2xc8 — a downgrade to a sibling algorithm in
+// the same family (e.g. ES512 to ES384) chosen from the JWS header was
+// accepted because the header's stated algorithm was trusted rather
+// than checked against a closed allow-list. This test drives exactly
+// that shape (sibling algorithms carrying real signatures) and requires
+// the out-of-allow-list ones to fail.
 func TestParseSigned_RejectsUnsupportedRegisteredAlg_NoFailOpen(t *testing.T) {
 	t.Parallel()
 

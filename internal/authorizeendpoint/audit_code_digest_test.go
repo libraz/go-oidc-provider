@@ -118,6 +118,10 @@ func findAuditExtra(extras []map[string]any, key string) string {
 // otherwise be able to redeem it. The recorded value must be the
 // irreversible digest instead, matching what the token endpoint stamps
 // on the consumption record so the two still correlate.
+//
+// Tracks: CVE-2026-55221 — bearer codes and tokens were written to
+// event logs in redeemable form. The redaction half of the same class
+// is pinned by TestSlog_RedactsExtrasWithoutWrapper.
 func TestEndToEnd_AuditNeverCarriesRawAuthorizationCode(t *testing.T) {
 	t.Parallel()
 

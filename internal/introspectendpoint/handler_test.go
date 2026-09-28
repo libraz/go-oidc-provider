@@ -455,6 +455,11 @@ func TestHandler_JWTAccessToken_WrongIssuer(t *testing.T) {
 // bypass) — a confidential client must not be able to retrieve claims
 // from another client's token merely because it has valid introspection
 // credentials.
+//
+// Tracks: CVE-2026-18208 — introspection answered active=true (or
+// leaked claims) for a token belonging to a client other than the
+// caller. Pinned here on the "wrong client" half; the withdrawn-token
+// half is pinned by TestHandler_OpaqueAccessToken_Revoked.
 func TestHandler_JWTAccessToken_DifferentClient(t *testing.T) {
 	t.Parallel()
 
@@ -763,6 +768,11 @@ func TestHandler_OpaqueAccessToken_Active(t *testing.T) {
 
 // TestHandler_OpaqueAccessToken_Revoked returns inactive when the
 // stored opaque record has been flipped to revoked.
+//
+// Tracks: CVE-2026-18208 — introspection returned active=true for a
+// token that had already been revoked. Pinned here on the withdrawn-
+// token half; the wrong-client half is pinned by
+// TestHandler_JWTAccessToken_DifferentClient.
 func TestHandler_OpaqueAccessToken_Revoked(t *testing.T) {
 	t.Parallel()
 

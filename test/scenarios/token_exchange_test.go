@@ -431,6 +431,13 @@ func TestScenario_TX_008_ActChainDepthExceedsLimitRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_TX_009_ScopeInflationRejected pins that a token exchange
+// cannot widen scope beyond what the subject token itself carries.
+//
+// Tracks: CVE-2026-97846 — token exchange escalated privilege by
+// letting the requested scope exceed the subject token's own grant.
+// The mTLS cnf-binding half of the same class is pinned by
+// TestScenario_TX_020_MTLSBoundSubjectRequiresMatchingCert.
 func TestScenario_TX_009_ScopeInflationRejected(t *testing.T) {
 	t.Parallel()
 	p := newTXProvider(t, txAllowAllPolicy{})
@@ -698,6 +705,15 @@ func TestScenario_TX_019_DPoPBoundSubjectRequiresMatchingProof(t *testing.T) {
 	}
 }
 
+// TestScenario_TX_020_MTLSBoundSubjectRequiresMatchingCert pins that a
+// token exchange cannot drop the subject token's mTLS confirmation: a
+// mismatched or absent client certificate on the exchange request is
+// refused rather than the cnf silently being dropped.
+//
+// Tracks: CVE-2026-97846 — token exchange dropped the subject token's
+// mTLS cnf binding, letting the exchange proceed without the caller
+// presenting the bound certificate. The scope-inflation half of the
+// same class is pinned by TestScenario_TX_009_ScopeInflationRejected.
 func TestScenario_TX_020_MTLSBoundSubjectRequiresMatchingCert(t *testing.T) {
 	t.Parallel()
 	// Mirror of TX-019 for mTLS: an mTLS-bound subject_token cannot be

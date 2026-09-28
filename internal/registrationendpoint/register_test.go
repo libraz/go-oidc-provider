@@ -792,6 +792,13 @@ func TestRegister_IATRace_AtomicallySerialised(t *testing.T) {
 
 // TestRegister_MetadataValidation_4xx exercises the structural-metadata
 // rejections.
+//
+// Tracks: GHSA-xwmw-prc4-v3cr — DCR trusted attacker-controlled
+// metadata, including a software_statement, without a trust boundary,
+// contributing to audience confusion. The "software_statement rejected"
+// case pins that registration never trusts an unverified
+// software_statement at all. The stored-XSS half of the same
+// disclosure is pinned by TestHTMLDriver_ConsentClientNameEscaped.
 func TestRegister_MetadataValidation_4xx(t *testing.T) {
 	t.Parallel()
 

@@ -38,6 +38,10 @@ const (
 // authorize_test.go: it proves the step-up not only redirects to an
 // interaction but ends with the requested authentication context on the
 // wire.
+//
+// Tracks: CVE-2026-97176 — a step-up acr requirement was satisfied by a
+// session that had only reached a weaker level, letting a stale or
+// reused session stand in for the stronger factor a policy demanded.
 func TestEndToEnd_ACRStepUp(t *testing.T) {
 	t.Parallel()
 	clock := fakeClock{now: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)}

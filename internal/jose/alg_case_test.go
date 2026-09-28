@@ -68,6 +68,11 @@ func TestParseAlgorithm_CaseVariantsRejected(t *testing.T) {
 // but exercises the wire path: a real attacker submits raw bytes, not
 // already-parsed alg strings. The seed is built by hand so we can
 // inject the unusual casing into the JSON header.
+//
+// Tracks: CVE-2026-16093 — an unsigned ("none") assertion satisfied a
+// policy that required a signed JWT auth method. The structural
+// property this test pins is upstream of the policy layer: "none" (in
+// any case) never parses as a usable signed JWS in the first place.
 func TestParseSigned_CaseVariantNoneRejected(t *testing.T) {
 	t.Parallel()
 

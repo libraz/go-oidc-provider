@@ -351,6 +351,11 @@ func TestReplayErrorPreservesSentinelAndGrantID(t *testing.T) {
 // (code, client_id, redirect_uri[, code_verifier]) tuple match — this
 // test pins the client_id half; sibling tests pin redirect_uri and
 // code_verifier.
+//
+// Tracks: CVE-2026-16089 — an authorization code accepted a redemption
+// from a client other than the one it was issued to. Pinned here on
+// the code half of the tuple match; the refresh-token half of the same
+// class is pinned by TestScenario_REF_004_RefreshClientMismatchRejected.
 func TestExchange_RejectsClientMismatch(t *testing.T) {
 	t.Parallel()
 

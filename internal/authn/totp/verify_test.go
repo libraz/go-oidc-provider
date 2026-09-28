@@ -144,6 +144,13 @@ func TestVerify_WrongCodeIncrementsCounter(t *testing.T) {
 	}
 }
 
+// TestVerify_LocksAtThirtyFailures pins the brute-force floor: thirty
+// consecutive wrong codes lock the factor regardless of how the
+// failures were spread out.
+//
+// Tracks: CVE-2026-20779 — a TOTP verifier accepted brute-force guessing
+// with no effective failure budget. The replay-window half of the same
+// row is pinned by TestVerify_ReplaysSameStepRejected.
 func TestVerify_LocksAtThirtyFailures(t *testing.T) {
 	t.Parallel()
 
@@ -313,6 +320,11 @@ func TestVerify_NilRecord(t *testing.T) {
 // the code single-use; the counter assertion matters too, since a
 // replay that advanced the brute-force counter would let a captured
 // code be used to lock the account out instead.
+//
+// Tracks: CVE-2026-20779 — the same TOTP replay-window class (TOCTOU
+// between check and consume, same-step replay), plus brute-force
+// lockout; the lockout half of this row is pinned separately by
+// TestVerify_LocksAtThirtyFailures.
 func TestVerify_ReplaysSameStepRejected(t *testing.T) {
 	t.Parallel()
 

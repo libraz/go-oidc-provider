@@ -54,6 +54,7 @@ var cibaRequestCases = []subtest{
 	{"ApproveConflictAfterDeny", cibaApproveConflictAfterDeny},
 	{"ConsumeConflictWhenDenied", cibaConsumeConflictWhenDenied},
 	{"RecordPollStampsTimestamp", cibaRecordPollStamps},
+	{"RecordPollRepeatedIdenticalValuesIsANoOp", cibaRecordPollRepeatedNoOp},
 	{"PollViolationsIncrement", cibaPollViolationsIncrement},
 	{"ConcurrentPollViolationsRecordEveryIncrement", cibaConcurrentPollViolations},
 	{"Expired", cibaExpired},
@@ -237,6 +238,38 @@ func cibaRecordPollStamps(t *testing.T, f Factory) {
 	}
 	if err := cr.RecordPoll(ctx, "absent", b.Now(), 10*time.Second); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("RecordPoll missing: want ErrNotFound, got %v", err)
+	}
+}
+
+// cibaRecordPollRepeatedNoOp pins that recording the identical (when,
+// nextInterval) pair a second time still reports success. A backend whose
+// UPDATE counts only changed rows (MySQL without CLIENT_FOUND_ROWS) sees
+// zero rows affected on the repeat even though the row exists and
+// matches; RecordPoll must resolve that ambiguity by re-checking the
+// record rather than surfacing it as [store.ErrNotFound].
+func cibaRecordPollRepeatedNoOp(t *testing.T, f Factory) {
+	b := f(t)
+	cr := requireCIBA(t, b.Store)
+	ctx := context.Background()
+	if err := cr.Save(ctx, newCIBARequest(b.Now(), "ar-poll-repeat")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	when := b.Now()
+	if err := cr.RecordPoll(ctx, "ar-poll-repeat", when, 10*time.Second); err != nil {
+		t.Fatalf("first RecordPoll: %v", err)
+	}
+	if err := cr.RecordPoll(ctx, "ar-poll-repeat", when, 10*time.Second); err != nil {
+		t.Fatalf("repeated identical RecordPoll: %v", err)
+	}
+	got, err := cr.FindByAuthReqID(ctx, "ar-poll-repeat")
+	if err != nil {
+		t.Fatalf("FindByAuthReqID: %v", err)
+	}
+	if got.LastPolledAt == nil {
+		t.Fatal("repeated RecordPoll lost LastPolledAt")
+	}
+	if got.Interval != 10*time.Second {
+		t.Fatalf("repeated RecordPoll Interval=%v want 10s", got.Interval)
 	}
 }
 

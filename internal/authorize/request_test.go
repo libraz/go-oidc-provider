@@ -1126,6 +1126,12 @@ func TestValidate_ScopeAllowedClients(t *testing.T) {
 // a sentinel that leaked into the "safe" set would let a caller that
 // consults the predicate on a parse error redirect to an attacker-chosen
 // target with the OAuth error parameters attached.
+//
+// Tracks: CVE-2026-41479 — an authorize-time error was redirected to an
+// unvalidated redirect_uri because the error path ran before the
+// client and its registered redirect_uri were resolved. Same class as
+// CVE-2026-44681, reached through a different parser error; both are
+// refused by the same "never redirect-safe before resolution" rule.
 func TestIsRedirectSafe_ParseTimeErrorsAreNeverRedirectSafe(t *testing.T) {
 	t.Parallel()
 

@@ -45,6 +45,12 @@ import (
 // Pinned here on the client-assertion surface, where an embedded key
 // must not displace the registered keyset; the generic parse-time
 // refusal is pinned by TestParseSigned_HeaderInjection_NeverFetches.
+//
+// Tracks: CVE-2026-47426 — a JWKS cache keyed only by "kid" let a kid
+// collision resolve to the wrong client's key, sharing key material
+// across tenants. Key selection here is scoped to the client being
+// authenticated before any kid is consulted, so a colliding kid across
+// two registered clients cannot cross-resolve.
 func TestPrivateKeyJWTVerifier_KeySelectionIgnoresTheAssertionsOwnHeader(t *testing.T) {
 	t.Parallel()
 

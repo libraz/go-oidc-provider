@@ -69,6 +69,22 @@ advisories:
       redirect_uri can never reach the response builder.
       TestParseValues_DuplicateParameter pins it (identical, conflicting,
       redirect_uri, and repeated-scope cases).
+  - id: CVE-2026-12985
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-12985
+    threat: T-01
+    status: covered
+    notes: |
+      Dynamic client registration accepted a redirect_uri shape that
+      reads as a glob, a prefix, or a bare scheme rather than a literal
+      string — a registration-time input-quality gap that later lets the
+      exact-match gate at /authorize be satisfied by an attacker host.
+      Same defect class as CVE-2026-32235 (Backstage), one layer
+      earlier: the OP registers only literal URIs, and
+      TestDCR_RejectsRedirectURIShapesThatBlurTheMatch pins that a
+      registration whose value has no single unambiguous reading is
+      refused outright.
+      Aliases: CVE-2026-67333, CVE-2026-18211.
 
   # --- T-02 State / nonce / PKCE required ---------------------------
   - id: CVE-2024-10318
@@ -119,6 +135,20 @@ advisories:
       harness (namespaceDisjoint / namespaceConsumeIsScoped) pins that
       one identifier planted in one substore is invisible and
       non-consumable through every other, across each reference adapter.
+  - id: CVE-2026-16089
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-16089
+    threat: T-03
+    status: covered
+    notes: |
+      An authorization code, and separately a refresh token, was
+      redeemable by a client other than the one it was originally issued
+      to — the code/token was not bound to the requesting client at
+      redemption. TestExchange_RejectsClientMismatch pins the
+      authorization-code half and TestScenario_REF_004_RefreshClientMismatchRejected
+      pins the refresh half; both require the (token, client_id) tuple
+      to match before redemption proceeds.
+      Aliases: CVE-2026-55672, GHSA-xqxv-4jc2-x56x.
 
   # --- T-04 Audience confusion --------------------------------------
   - id: CVE-2025-27370
@@ -168,6 +198,25 @@ advisories:
       authenticates. The OP-issuer surfaces (JAR audience,
       token-exchange external-issuer pin) resolve through the same
       whole-string comparison in tokens.AccessTokenVerifier.
+
+  - id: CVE-2026-86073
+    severity: P1
+    source: https://github.com/advisories/GHSA-cw9w-vv67-hf73
+    threat: T-04
+    status: covered
+    notes: |
+      An RFC 8707 resource indicator supplied on a refresh_token request
+      substituted the token's audience for one the original
+      authorization grant never approved — a request-time value
+      widening or switching what the refreshed access token could reach.
+      Structural property: refresh never reads a request-supplied
+      resource; the audience and the refresh record's own recorded
+      resource are carried forward from the grant unconditionally.
+      TestRefreshTokenIgnoresRequestSuppliedResource pins it by
+      requesting a different resource on refresh and asserting both the
+      issued access token's aud and the refresh record's own resource
+      stay the grant's original value.
+      Aliases: GHSA-p2fr-6hmx-4528.
 
   - id: CVE-2026-32235
     severity: P1
@@ -293,6 +342,40 @@ advisories:
       taking a published EC key's x||y bytes as an HS256 secret and
       requiring the token to fail as malformed rather than as a
       signature mismatch — the rejection happens before verification.
+  - id: CVE-2026-16093
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-16093
+    threat: T-05
+    status: covered
+    notes: |
+      An unsigned ("none") assertion satisfied a client-authentication
+      policy that required a signed JWT (private_key_jwt). Two layers
+      close it: "none" (in any header casing) never parses as a usable
+      signed JWS in the first place
+      (TestParseSigned_CaseVariantNoneRejected), and a weaker presented
+      method cannot satisfy a policy that names a stronger one even when
+      it would independently authenticate the client
+      (TestVerifyClient_AllowedMethodsRejectsOutOfPolicy).
+      Aliases: none known at scan time.
+  - id: GHSA-jc38-x7x8-2xc8
+    severity: P1
+    source: https://github.com/advisories/GHSA-jc38-x7x8-2xc8
+    threat: T-05
+    status: covered
+    notes: |
+      An alg taken from an unprotected / per-signature header let a
+      verifier downgrade to a weaker sibling algorithm (e.g. ES512 to
+      ES384) than the one the signer intended. Structural property: the
+      closed allow-list ({RS256, PS256, ES256, EdDSA}) is enforced
+      against the single protected header of a compact-serialised JWS;
+      there is no per-signature unprotected header to read, so a
+      multi-signature JSON-form JWS — the shape that would carry one —
+      is refused outright before any algorithm is even considered.
+      TestParseSigned_RejectsUnsupportedRegisteredAlg_NoFailOpen drives
+      cryptographically valid sibling-algorithm tokens and requires the
+      out-of-allow-list ones to fail; TestParseSigned_RejectsMultiSignatureForm
+      pins that the JSON multi-signature form never parses.
+      Aliases: CVE-2026-63761.
 
   # --- T-06 JOSE structural anomalies -------------------------------
   - id: CVE-2017-11424
@@ -505,6 +588,34 @@ advisories:
       Authlib — denial of service via oversized JOSE segments. Same
       defect and same mitigation as CVE-2026-48525; pinned by
       TestEndpoints_OversizedJWSIsRefusedBeforeItIsDecoded.
+  - id: CVE-2026-49852
+    severity: P2
+    source: https://github.com/advisories/GHSA-gg9x-qcx2-xmrh
+    threat: T-06
+    status: covered
+    notes: |
+      An HMAC verifier accepted an empty (or otherwise degenerate) key,
+      letting HS256 be forged trivially. The OP's structural answer is
+      broader than a key-strength check: HS256 is outside the signing
+      allow-list, so it is refused at parse time and never reaches any
+      key-based verification at all — on the access-token surface
+      (TestVerify_RejectsHS256AsMalformed) and on the JAR request-object
+      surface (TestParse_RejectsHMAC).
+      Aliases: CVE-2026-45363.
+  - id: CVE-2026-27932
+    severity: P2
+    source: https://github.com/advisories/GHSA-w5r5-m38g-f9f9
+    threat: T-06
+    status: covered
+    notes: |
+      An unbounded PBES2 "p2c" iteration count in a crafted JWE forced
+      expensive key-derivation work on the recipient — a DoS primitive.
+      Structural property: the JWE "alg" allow-list is closed and does
+      not include any PBES2 variant, so a PBES2-shaped JWE is refused at
+      the allow-list gate before its p2c parameter is ever read, let
+      alone iterated on. TestDecrypt_AlgAllowList drives
+      PBES2-HS256+A128KW through the gate and requires the refusal.
+      Aliases: GHSA-3prj-6hqw-cm82.
   - id: CVE-2025-62706
     severity: P2
     source: https://github.com/advisories/GHSA-g7f3-828f-7h7m
@@ -585,6 +696,72 @@ advisories:
       requires the superseded token to be refused as replayed past the
       grace window, with a control proving the restarted instance still
       exchanges an unspent token.
+  - id: CVE-2026-90997
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-90997
+    threat: T-07
+    status: covered
+    notes: |
+      MySQL/MariaDB's CLIENT_FOUND_ROWS compatibility mode (forced on by
+      several managed-MySQL proxies regardless of the driver DSN) makes
+      a matched-but-unchanged row report as affected instead of as zero,
+      defeating a store adapter that infers single-use consumption from
+      a raw RowsAffected count. TestMySQL_ClientFoundRows_FullContract
+      runs the complete store contract — every substore's single-use
+      Consume path plus TOTP/session/interaction CAS — with the flag
+      enabled, requiring the same observable outcome either way.
+      Aliases: none known at scan time.
+  - id: CVE-2026-96446
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-96446
+    threat: T-07
+    status: covered
+    notes: |
+      A pushed authorization request's request_uri was reusable across
+      concurrent /authorize calls, including on a prompt=none or error
+      path that a lenient implementation might not treat as a genuine
+      consumption. The store contract draws no such distinction: Consume
+      has exactly one winner regardless of what the caller does with the
+      result. Pinned by the "PushedAuthRequestConsumeHasOneWinner"
+      contract case (concurrentPARConsume).
+      Aliases: CVE-2026-41008.
+  - id: CVE-2026-53518
+    severity: P1
+    source: https://github.com/advisories/GHSA-7w99-5wm4-3g79
+    threat: T-07
+    status: covered
+    notes: |
+      An authorization code redeemed by two concurrent requests let both
+      succeed instead of exactly one, because the store's consume path
+      read-then-wrote the single-use record rather than deciding
+      atomically. Pinned by the "AuthorizationCodeConsumeHasOneWinner"
+      contract case (concurrentAuthCodeConsume).
+      Aliases: CVE-2026-73311, CVE-2026-26232.
+  - id: CVE-2026-53517
+    severity: P1
+    source: https://github.com/advisories/GHSA-392p-2q2v-4372
+    threat: T-07
+    status: covered
+    notes: |
+      Concurrent redemption of the same refresh token forked rotation
+      into two live successor branches instead of consuming the
+      predecessor exactly once. Two contract cases pin the two halves:
+      "RefreshConsumeHasOneWinner" (concurrentRefreshConsume) for the
+      plain Consume race, and "RefreshRotationHasOneWinner"
+      (concurrentRefreshRotation) for the rotation-retry race.
+      Aliases: none known at scan time.
+  - id: CVE-2026-53431
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-53431
+    threat: T-07
+    status: covered
+    notes: |
+      A client_assertion JWT with an expired, unbound, or otherwise
+      unchecked exp/iat/aud claim was still accepted for client
+      authentication, letting an old assertion be replayed past its
+      intended lifetime. TestPrivateKeyJWTVerifier_RejectsExpired pins
+      that an assertion whose exp has already passed is refused.
+      Aliases: CVE-2026-55669, CVE-2026-56664, CVE-2026-56665.
 
   # --- T-08 Outbound fetch / SSRF ----------------------------------
   - id: CVE-2026-1180
@@ -643,6 +820,22 @@ advisories:
       denylist and the grant tombstone — plus an unwithdrawn control, so
       an implementation that answers from whichever input it consults
       first fails on the row the other input owns.
+  - id: CVE-2026-55221
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-55221
+    threat: T-09
+    status: covered
+    notes: |
+      Bearer authorization codes and tokens were written to event logs
+      in redeemable form, so anyone with read access to the log
+      pipeline — aggregation, SIEM, on-call — could redeem them.
+      TestEndToEnd_AuditNeverCarriesRawAuthorizationCode pins that the
+      audit stream carries only an irreversible digest of the code, on
+      both the interactive and the silent issuance branch.
+      TestSlog_RedactsExtrasWithoutWrapper pins the general redaction
+      contract: the slog emitter masks sensitive extras keys even
+      against a bare handler that never wired the redaction wrapper.
+      Aliases: none known at scan time.
 
   # --- T-10 Timing ---------------------------------------------------
   - id: CVE-2026-22746
@@ -714,8 +907,40 @@ advisories:
       (CVE-2024-10318, T-02), so the specific Authlib vector cannot arise.
       CVE-2026-41479 is the same defect reached through a second door —
       an unsupported response_type raised its error with the raw
-      redirect_uri before the client and its registration were resolved
-      — and the same two tests pin it, so it carries no row of its own.
+      redirect_uri before the client and its registration were resolved.
+      It carries its own row below, pinned by
+      TestIsRedirectSafe_ParseTimeErrorsAreNeverRedirectSafe.
+  - id: CVE-2026-41479
+    severity: P1
+    source: https://github.com/advisories/GHSA-w8p2-r796-3vmq
+    threat: T-11
+    status: covered
+    notes: |
+      An authorize-time error was redirected to an unvalidated
+      redirect_uri because the error path ran before the client and its
+      registered redirect_uri were resolved — same class as
+      CVE-2026-44681, reached through a parser error (an unsupported
+      response_type) rather than the missing-openid-scope path.
+      TestIsRedirectSafe_ParseTimeErrorsAreNeverRedirectSafe drives
+      every rejection the parser can produce and requires none of them
+      to be classified redirect-safe, since the parser runs before any
+      client has been looked up.
+      Aliases: CVE-2026-55834, GHSA-2wvm-8mvp-22qv.
+  - id: CVE-2026-44203
+    severity: P1
+    source: https://github.com/advisories/GHSA-fq9h-c788-fx73
+    threat: T-11
+    status: covered
+    notes: |
+      A "state" value (and, in the broader class, other echoed request
+      parameters) was reflected into the form_post auto-submit response
+      body without HTML escaping — the same reflected-HTML class as
+      GHSA-27gc-wj6x-9w55 (Keycloak error pages) on a different emit
+      point. TestWriteFormPost_EscapesRedirectAndJWT and
+      TestWriteParamsFormPost_EscapesValues both require every hidden
+      input value and the form action to pass through html.EscapeString
+      before reaching the wire.
+      Aliases: none known at scan time.
 
   # --- T-12 Session fixation ---------------------------------------
   - id: GHSA-xhpr-465j-7p9q
@@ -769,6 +994,22 @@ advisories:
       refusals are not a handler that resolves nothing), then crosses
       the cookie against the other flow's identifier in both directions
       and drops the cookie entirely, requiring 404 each time.
+  - id: CVE-2026-97176
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-97176
+    threat: T-12
+    status: covered
+    notes: |
+      An acr step-up requirement was satisfied by a session that had
+      only reached a weaker authentication level, letting a stale or
+      reused session stand in for the stronger factor a policy demanded.
+      TestEndToEnd_ACRStepUp pins the step-up transition itself (a
+      request for a stronger acr than the session holds forces a fresh
+      interaction rather than being served silently);
+      TestEndToEnd_SessionReuseReportsTheLevelReached pins that every
+      later response served from that session reports the level it
+      actually reached, never a stronger string an earlier request drew.
+      Aliases: GHSA-hp74-gm6m-2qm5, CVE-2026-55377, CVE-2026-85056.
 
   # --- T-13 Confused deputy ----------------------------------------
   - id: CVE-2026-1486
@@ -806,6 +1047,69 @@ advisories:
       subject_token_type, and asserts each is refused with no token of
       any kind on the wire. A control exchange succeeds first, so the
       refusals are not the fixture failing.
+  - id: CVE-2026-47426
+    severity: P1
+    source: https://github.com/advisories/GHSA-f2cx-463q-7m2c
+    threat: T-13
+    status: covered
+    notes: |
+      A JWKS cache keyed only by "kid" let a kid collision across two
+      registered clients resolve to the wrong client's key, sharing key
+      material across tenants. Structural property: key selection is
+      scoped to the client being authenticated, resolved from storage,
+      before any kid is consulted — the same property already pinned
+      for CVE-2026-11800 and CVE-2026-27962.
+      TestPrivateKeyJWTVerifier_KeySelectionIgnoresTheAssertionsOwnHeader
+      drives a colliding kid (the attacker's own and the victim's) across
+      two legitimately registered clients and requires each cross-client
+      resolution to fail.
+      Aliases: CVE-2026-49998, CVE-2026-50202.
+  - id: CVE-2026-18208
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-18208
+    threat: T-13
+    status: covered
+    notes: |
+      Introspection answered active=true (or otherwise leaked claims)
+      for a token belonging to a client other than the caller, and
+      separately for a token that had already been withdrawn.
+      TestHandler_JWTAccessToken_DifferentClient pins the wrong-client
+      half; TestHandler_OpaqueAccessToken_Revoked pins the withdrawn-
+      token half.
+      Aliases: CVE-2026-58425, GHSA-vxv2-8j6r-pcpg.
+  - id: CVE-2026-53512
+    severity: P1
+    source: https://github.com/advisories/GHSA-pw9m-5jxm-xr6h
+    threat: T-13
+    status: covered
+    notes: |
+      A refresh_token grant was accepted with no client authentication
+      at all, letting possession of the refresh token stand in for the
+      confidential client's own credential.
+      TestRefreshTokenGrantRejectsMissingClientAuthentication pins the
+      no-credentials case; sibling tests in the same file pin the wrong-
+      secret and none-auth variants of the same gate.
+      Aliases: none known at scan time.
+  - id: CVE-2026-16103
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-16103
+    threat: T-13
+    status: covered
+    notes: |
+      Token redemption skipped the subject's disabled/deleted re-check,
+      letting a deprovisioned account's authorization code, refresh
+      token, and earlier-issued access token keep working. Structural
+      property: every redemption path re-resolves the subject through
+      the Store's UserStore and refuses (tearing down the backing grant)
+      the instant it reports gone. Pinned twice: the black-box surface
+      by TestSubjectDeprovisioning_RefreshRefusedAndAccessTokenDead (and
+      its siblings in the same file, covering the authorization-code and
+      CIBA paths), and the white-box surface by
+      TestDeprovisionedSubject_RefreshRefusedAndGrantTornDown (and its
+      siblings, covering authorization-code, CIBA, and the user-store-
+      fault distinction from a genuine "gone" answer).
+      Aliases: CVE-2026-88770, CVE-2026-43983, CVE-2026-9571,
+      CVE-2026-93999, CVE-2026-1609.
 
   # --- T-15 TOTP / RFC 6238 ----------------------------------------
   - id: GHSA-9r3w-4j8q-pw98
@@ -870,6 +1174,37 @@ advisories:
       floor rather than an equality test, so a code resolving to the
       last accepted step or any earlier one is refused; pinned by
       TestVerify_ReplaysSameStepRejected.
+  - id: CVE-2026-20779
+    severity: P1
+    source: https://github.com/advisories/GHSA-gx3v-q759-g323
+    threat: T-15
+    status: covered
+    notes: |
+      The same TOTP TOCTOU / same-step-replay class already tracked
+      under CVE-2026-33473 and its cluster, plus a brute-force budget
+      gap. TestVerify_ReplaysSameStepRejected pins the replay-window
+      half (same code, same test as the sibling rows); the store-level
+      TOCTOU is pinned separately by the "AcceptRejectsReplayedStep"
+      contract case (totpAcceptReplay); the brute-force half is pinned
+      by TestVerify_LocksAtThirtyFailures.
+      Aliases: CVE-2026-61630, CVE-2026-49870, CVE-2026-58271.
+  - id: CVE-2026-96445
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-96445
+    threat: T-15
+    status: covered
+    notes: |
+      An OTP / MFA step could be satisfied against a stale enrollment
+      (secret rotated mid-challenge) or by trusting a caller-supplied
+      forwarded-for header from an untrusted network position instead
+      of the actual peer. The "AcceptRejectsStaleEnrollment" contract
+      case (totpAcceptStaleEnrollment) pins the rotation half: an Accept
+      built against a snapshot from before rotation is refused rather
+      than applied to the newer enrollment.
+      TestResolve_UntrustedRemote_IgnoresForwardedHeaders pins that a
+      request from an untrusted peer never has its client identity taken
+      from X-Forwarded-* headers.
+      Aliases: CVE-2026-62669.
 
   # --- T-16 passkey / WebAuthn -------------------------------------
   - id: CVE-2026-28787
@@ -912,6 +1247,51 @@ advisories:
       control), and only attestation types signed by a key outside the
       credential — basic_full, attca, anonca, ecdaa — may reach the
       comparison, with unrecognised types refused rather than admitted.
+  - id: CVE-2026-73313
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-73313
+    threat: T-16
+    status: covered
+    notes: |
+      A passkey assertion was accepted without being bound to the
+      pending user's own registered credential set, letting an
+      unrelated (never-enrolled) authenticator complete someone else's
+      ceremony. TestCeremony_UnregisteredCredentialIsRefused pins that
+      the assertion is checked against the caller's credential list, not
+      merely against a well-formed signature.
+      Aliases: CVE-2026-82466, GHSA-f66q-9rf6-8795.
+  - id: CVE-2026-72780
+    severity: P1
+    source: https://github.com/advisories/GHSA-wg23-69c2-gjc8
+    threat: T-16
+    status: covered
+    notes: |
+      An authenticator's sign counter and its user-verification result
+      were not durably persisted across concurrent ceremony completions,
+      letting a later, stale write erase state an earlier verification
+      had already recorded — a clone-warning and UV-loss gap.
+      TestPersistCredentialReverseCompletionDoesNotRewind pins the
+      sign-counter half (two assertions verifying against the same
+      snapshot cannot complete persistence out of order and rewind the
+      record); TestAuthenticator_UVBitTravelsOnResult pins that the UV
+      bit set by the verifier reaches the orchestrator's result.
+      Aliases: CVE-2026-76214, CVE-2026-47841.
+  - id: GHSA-6hxq-p678-4hr2
+    severity: P1
+    source: https://github.com/advisories/GHSA-6hxq-p678-4hr2
+    threat: T-16
+    status: covered
+    notes: |
+      An AAGUID allowlist was applied to an attestation whose
+      certificate chain was never checked against a configured trust
+      anchor — the same shape as CVE-2026-6856: an unauthenticated
+      AAGUID claim let any authenticator assert a certified model's
+      identity. TestAAGUIDAllowlistRequiresATrustedAttestationChain pins
+      that the allowlist decides only on an AAGUID whose attestation
+      chains to a configured root, refusing a chain to a self-made root,
+      an AAGUID/authenticator-data mismatch, an expired chain, self
+      attestation, and no attestation at all.
+      Aliases: none known at scan time.
 
   # --- T-17 email-OTP -----------------------------------------------
   - id: CVE-2026-22751
@@ -936,6 +1316,21 @@ advisories:
       sequential half is pinned separately by
       TestContinueVerifyReplayRejected and TestVerify_RejectsConsumedCode.
 
+  # --- T-18 Recovery Codes -------------------------------------------
+  - id: CVE-2026-48505
+    severity: P1
+    source: https://github.com/advisories/GHSA-mc5j-f6wx-h9qh
+    threat: T-18
+    status: covered
+    notes: |
+      A recovery code was consumable concurrently, letting two
+      redemptions of the same single-use code both succeed and defeating
+      the code's role as an MFA factor. The "ConcurrentConsumeHasOneWinner"
+      contract case (recoveryConcurrentConsume) pins the store-interface
+      contract; TestRecoveryStore_ConsumeRaceSingleWinner pins the same
+      property against the concrete in-memory adapter.
+      Aliases: CVE-2026-77567.
+
   # --- T-19 DPoP (RFC 9449) ----------------------------------------
   - id: CVE-2026-54431
     severity: P1
@@ -951,6 +1346,41 @@ advisories:
       parseProof gates on !jwk.IsPublic(); TestVerify_RejectsPrivateKey-
       InJWKHeader pins it by minting a proof whose jwk header carries the
       private EC "d" component and asserting ErrProofMalformed.
+  - id: CVE-2026-41707
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-41707
+    threat: T-19
+    status: covered
+    notes: |
+      A DPoP jti replay marker became evictable under memory pressure
+      before its own expiry, letting a flooded cache forget a marker
+      early and admit a replay. The store.ConsumedJTIStore contract this
+      verifier depends on has no early-eviction escape hatch;
+      op/storeadapter/redis documents that its ConsumedJTIs keyspace
+      needs a noeviction Redis instance (or routing to a durable
+      backend) so the contract holds in production, not merely in the
+      reference adapter. TestVerify_ReplayAcrossFullIatWindow pins that
+      a marked jti stays authoritative across its full declared
+      lifetime — accepted at the earliest allowed instant, replayed at
+      the latest — rather than being reclaimable early.
+      Aliases: none known at scan time.
+
+  # --- T-20 PKCE Downgrade / input quality ---------------------------
+  - id: CVE-2026-26247
+    severity: P1
+    source: https://github.com/advisories/GHSA-m5ch-ppfx-xv3v
+    threat: T-20
+    status: covered
+    notes: |
+      A downgrade path let an S256 PKCE challenge be bypassed via
+      "plain" or an absent-challenge fallback (PKCE-or-secret skipping
+      both), defeating the binding PKCE exists to provide.
+      TestVerify_RejectsPlainMethod pins that "plain" is never accepted
+      by the PKCE verifier; TestAuthCode_PublicClient_NoPKCE_Rejected
+      pins that a public client cannot fall back to no PKCE and no
+      client secret.
+      Aliases: CVE-2026-92289, CVE-2026-48717, CVE-2026-90474,
+      GHSA-9h47-pqcx-hjr4.
 
   # --- T-21 mTLS bound token / x5t#S256 ----------------------------
   - id: CVE-2026-22747
@@ -987,6 +1417,20 @@ advisories:
       missed. The OP has one DN comparison rather than two, so the same
       test covers it:
       TestVerifyTLSClientAuth_SubjectDN_CraftedNameDoesNotCollideOnceRendered.
+  - id: CVE-2026-97846
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-97846
+    threat: T-21
+    status: covered
+    notes: |
+      Token exchange dropped the subject token's mTLS cnf binding and
+      separately let the requested scope escalate beyond what the
+      subject token itself carries.
+      TestScenario_TX_020_MTLSBoundSubjectRequiresMatchingCert pins the
+      cnf half (an exchange over a mismatched or absent client
+      certificate is refused); TestScenario_TX_009_ScopeInflationRejected
+      pins the scope-escalation half.
+      Aliases: CVE-2026-56668, GHSA-vrh8-c9cm-wh8v.
 
   # --- T-22 CIBA / device_code -------------------------------------
   - id: CVE-2026-9798
@@ -1036,6 +1480,38 @@ advisories:
       at the render rather than the write:
       TestHTMLDriver_ClientDisplayNameCannotBecomeMarkup pins that a
       registered client_name cannot become markup on the consent screen.
+  - id: CVE-2026-61466
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-61466
+    threat: T-23
+    status: covered
+    notes: |
+      Dynamic client registration accepted a self-asserted "scope" value
+      the OP's scope registry did not know, letting the registration
+      request itself widen what the client could later request tokens
+      for — and separately, a confidential-shaped client registering
+      itself as public. TestRegister_RejectsScopeNotInRegistry pins the
+      scope half: registration rejects an unregistered scope value
+      rather than silently admitting it into the client's registered
+      set.
+      Aliases: CVE-2026-70665, CVE-2026-44476.
+  - id: GHSA-xwmw-prc4-v3cr
+    severity: P2
+    source: https://github.com/advisories/GHSA-xwmw-prc4-v3cr
+    threat: T-23
+    status: covered
+    notes: |
+      DCR client metadata reached the consent screen unescaped (a
+      stored-XSS path from an attacker-controlled registration field)
+      and registration trusted an unverified software_statement without
+      a clear trust boundary, contributing to audience confusion.
+      TestHTMLDriver_ConsentClientNameEscaped pins the stored-XSS half:
+      a hostile client_name cannot become markup on the consent page.
+      TestRegister_MetadataValidation_4xx's "software_statement
+      rejected" case pins that registration never trusts an unverified
+      software_statement at all. Unbounded storage growth from
+      registration is not separately pinned by these tests.
+      Aliases: CVE-2026-86075, CVE-2026-59354.
 
   # --- Out-of-scope (not OP responsibility) ------------------------
   - id: GHSA-gr79-9v6v-gc9r
@@ -1120,3 +1596,15 @@ advisories:
       generation and callback verification are the relying-party's
       responsibility; the OP echoes state verbatim per RFC 6749 and does
       not own the client's state binding. Reviewed and excluded.
+  - id: CVE-2026-53622
+    severity: P2
+    source: https://github.com/advisories/GHSA-9cr8-q42q-g8m7
+    threat: T-14
+    status: out-of-scope
+    out_of_scope_reason: |
+      A reverse proxy's SNI routing / TLSOptions handling let an mTLS
+      requirement be bypassed by routing around the certificate check.
+      TLS termination and SNI-based routing are the embedder's HTTP
+      server layer, not OP logic; the library does not terminate TLS or
+      route by SNI. CLAUDE.md "library posture" states TLS configuration
+      is embedder-owned. Reviewed and excluded.

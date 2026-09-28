@@ -195,6 +195,11 @@ func TestScenario_REF_003_ExpiredRefreshTokenRejected(t *testing.T) {
 // the client that originally received the token.
 //
 // Spec: RFC 6749 §6 / §10.4.
+//
+// Tracks: CVE-2026-16089 — a refresh token accepted a redemption from a
+// client other than the one it was issued to. Pinned here on the
+// refresh half; the authorization-code half of the same class is
+// pinned by TestExchange_RejectsClientMismatch.
 func TestScenario_REF_004_RefreshClientMismatchRejected(t *testing.T) {
 	t.Parallel()
 

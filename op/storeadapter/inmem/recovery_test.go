@@ -227,6 +227,12 @@ func TestRecoveryStore_ConsumeRejectsStaleHashAfterRegenerate(t *testing.T) {
 	}
 }
 
+// TestRecoveryStore_ConsumeRaceSingleWinner pins the same one-winner
+// contract as the generic store-contract case, against the concrete
+// in-memory adapter.
+//
+// Tracks: CVE-2026-48505 — concurrent redemption let a single-use
+// recovery code be consumed more than once.
 func TestRecoveryStore_ConsumeRaceSingleWinner(t *testing.T) {
 	t.Parallel()
 

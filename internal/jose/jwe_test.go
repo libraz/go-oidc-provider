@@ -79,6 +79,12 @@ func TestEncryptDecrypt_RoundTrip(t *testing.T) {
 // go-jose's parse-time check (we want to verify that a hostile
 // caller who somehow crafts a parseable JWE with an excluded alg is
 // still rejected).
+//
+// Tracks: CVE-2026-27932 — an unbounded PBES2 "p2c" iteration count let
+// a crafted JWE force expensive key-derivation work, a DoS primitive.
+// PBES2-HS256+A128KW is one of the cases this test drives through the
+// allow-list gate: it is refused outright, so no p2c value is ever
+// read, let alone iterated on.
 func TestDecrypt_AlgAllowList(t *testing.T) {
 	t.Parallel()
 

@@ -73,6 +73,10 @@ func TestWriteFormPost_HappyPath(t *testing.T) {
 // is the analogous emit point in this library; the test exercises
 // the same threat shape (raw "<script>"-bearing input → must not
 // appear unescaped in the response body).
+//
+// Tracks: CVE-2026-44203 — the "state" value was reflected into the
+// form_post auto-submit body unescaped, the same reflected-HTML class
+// as GHSA-27gc-wj6x-9w55 on a different field.
 func TestWriteFormPost_EscapesRedirectAndJWT(t *testing.T) {
 	t.Parallel()
 
@@ -195,6 +199,10 @@ func TestWriteParamsFormPost_SkipsEmptyValues(t *testing.T) {
 //
 // Tracks: GHSA-27gc-wj6x-9w55 — analogous reflected-HTML class on the
 // form_post emit point.
+//
+// Tracks: CVE-2026-44203 — a reflected parameter (here error /
+// error_description, the multi-field sibling of "state") escaped into
+// the auto-submit body unescaped.
 func TestWriteParamsFormPost_EscapesValues(t *testing.T) {
 	t.Parallel()
 

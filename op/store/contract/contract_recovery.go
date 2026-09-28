@@ -324,6 +324,13 @@ func recoveryDefensiveCopies(t *testing.T, s store.RecoveryStore) {
 	}
 }
 
+// recoveryConcurrentConsume implements the "ConcurrentConsumeHasOneWinner"
+// case: two goroutines racing to consume the same recovery code slot
+// must leave exactly one winner, never both succeeding.
+//
+// Tracks: CVE-2026-48505 — a recovery code was consumable concurrently,
+// letting two redemptions of the same single-use code both succeed and
+// defeating the code's role as an MFA factor.
 func recoveryConcurrentConsume(t *testing.T, s store.RecoveryStore) {
 	t.Helper()
 	ctx := context.Background()

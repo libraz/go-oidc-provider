@@ -297,6 +297,16 @@ func TestHTMLDriver_RenderDeterministic(t *testing.T) {
 	}
 }
 
+// TestHTMLDriver_ConsentClientNameEscaped pins that a registered
+// client_name cannot become markup on the consent page: registration
+// treats display strings as free text, so their containment has to be
+// at render time.
+//
+// Tracks: GHSA-xwmw-prc4-v3cr — DCR client metadata reached the
+// consent screen unescaped, a stored-XSS path from an attacker-
+// controlled registration field. The software_statement trust-boundary
+// half of the same disclosure is pinned by
+// TestRegister_MetadataValidation_4xx.
 func TestHTMLDriver_ConsentClientNameEscaped(t *testing.T) {
 	t.Parallel()
 

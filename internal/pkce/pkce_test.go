@@ -42,6 +42,13 @@ func TestVerify_RejectsMismatch(t *testing.T) {
 	}
 }
 
+// TestVerify_RejectsPlainMethod pins that the "plain" challenge method
+// is never accepted by the PKCE verifier, regardless of what a caller
+// requests.
+//
+// Tracks: CVE-2026-26247 — a downgrade path let an S256 challenge be
+// bypassed via "plain" (or an absent-challenge fallback), defeating the
+// binding PKCE exists to provide.
 func TestVerify_RejectsPlainMethod(t *testing.T) {
 	t.Parallel()
 
