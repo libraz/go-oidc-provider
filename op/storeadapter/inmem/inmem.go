@@ -106,8 +106,11 @@
 // behind deliberately, so its rate-limit and brute-force counters stay
 // readable while their windows are live. The initial access tokens exist
 // only because an operator minted them, so nothing an unauthenticated
-// caller does grows that map either. Both filter expired rows on read,
-// like every other substore here.
+// caller does grows that map either. The email-OTP challenges filter
+// expired rows on read, like every other substore here; the initial
+// access tokens deliberately do not — [InitialAccessTokenStore.GetByHash]
+// MUST return a matching row past its ExpiresAt so the registration
+// endpoint can distinguish an expired credential from a forged one.
 //
 // Registration access tokens appear on none of those lists and belong
 // on none: [store.RegistrationAccessToken] carries no expiry or

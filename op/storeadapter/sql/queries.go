@@ -404,8 +404,14 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		refreshRevokeChainUpdate: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE id = ?",
 		),
+		// refreshRevokeChainChildren enumerates a cascade node's direct
+		// descendants. The FOR UPDATE suffix (see [Dialect.forUpdate])
+		// makes this a locking read instead of a consistent snapshot
+		// read, so it always observes a descendant a concurrent
+		// saveRotation has committed rather than one fixed by the
+		// transaction's earlier isolation snapshot (RFC 9700 §2.2.2).
 		refreshRevokeChainChildren: d.rebind(
-			"SELECT id FROM " + n.refreshes + " WHERE parent_id = ?",
+			"SELECT id FROM " + n.refreshes + " WHERE parent_id = ?" + d.forUpdate(),
 		),
 		refreshRevokeByGrant: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE grant_id = ?",

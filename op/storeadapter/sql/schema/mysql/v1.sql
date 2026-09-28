@@ -13,10 +13,14 @@
 --   * Column order follows the project convention:
 --     id > *_id (foreign keys) > data columns > notes >
 --     updated_at > created_at.
+--   * Every client_id, subject, and oidc_clients.id column is pinned to
+--     CHARACTER SET utf8mb4 COLLATE utf8mb4_bin: MySQL's default
+--     collation folds case and accents, and the other supported engines
+--     match these identifiers byte-exactly (see oidc_users below).
 -- Apply once before opening the adapter.
 
 CREATE TABLE IF NOT EXISTS oidc_clients (
-    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
     client_id_issued_at BIGINT NOT NULL DEFAULT 0,
     redirect_uris JSON NOT NULL,
     post_logout_redirect_uris JSON NOT NULL,
@@ -69,9 +73,9 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
 -- shared op/storeadapter/patterns.Digest helper.
 CREATE TABLE IF NOT EXISTS oidc_authorization_codes (
     id VARCHAR(64) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) NOT NULL,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     grant_id VARCHAR(255) NOT NULL,
-    subject VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     redirect_uri TEXT NOT NULL,
     scope JSON NOT NULL,
     resource TEXT NOT NULL,
@@ -95,10 +99,10 @@ CREATE TABLE IF NOT EXISTS oidc_authorization_codes (
 -- via the shared op/storeadapter/patterns.Digest helper.
 CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     id VARCHAR(64) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) NOT NULL,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     grant_id VARCHAR(255) NOT NULL,
     parent_id VARCHAR(64) NULL,
-    subject VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     subject_public TINYINT(1) NOT NULL DEFAULT 0,
     scope JSON NOT NULL,
     resource TEXT NOT NULL,
@@ -130,9 +134,9 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
 
 CREATE TABLE IF NOT EXISTS oidc_access_tokens (
     jti VARCHAR(255) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) NOT NULL,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     grant_id VARCHAR(255) NOT NULL DEFAULT '',
-    subject VARCHAR(255) NOT NULL DEFAULT '',
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '',
     scopes JSON NOT NULL,
     revoked TINYINT(1) NOT NULL DEFAULT 0,
     expires_at BIGINT NOT NULL,
@@ -145,8 +149,8 @@ CREATE TABLE IF NOT EXISTS oidc_access_tokens (
 CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
     token_hash VARBINARY(32) NOT NULL PRIMARY KEY,
     grant_id VARCHAR(255) NOT NULL DEFAULT '',
-    subject VARCHAR(255) NOT NULL DEFAULT '',
-    client_id VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '',
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     audience TEXT NOT NULL,
     scope JSON NOT NULL,
     acr VARCHAR(64) NOT NULL DEFAULT '',
@@ -179,8 +183,8 @@ CREATE TABLE IF NOT EXISTS oidc_revoked_jtis (
 
 CREATE TABLE IF NOT EXISTS oidc_grants (
     id VARCHAR(255) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) NOT NULL,
-    subject VARCHAR(255) NOT NULL,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     scope JSON NOT NULL,
     claims JSON NOT NULL,
     auth_time BIGINT NOT NULL DEFAULT 0,
@@ -200,7 +204,7 @@ CREATE TABLE IF NOT EXISTS oidc_grants (
 CREATE TABLE IF NOT EXISTS oidc_sessions (
     id VARCHAR(255) NOT NULL PRIMARY KEY,
     chooser_group_id VARCHAR(255) NOT NULL DEFAULT '',
-    subject VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     auth_time BIGINT NOT NULL DEFAULT 0,
     amr JSON NOT NULL,
     acr VARCHAR(64) NOT NULL DEFAULT '',
@@ -218,7 +222,7 @@ CREATE TABLE IF NOT EXISTS oidc_sessions (
 -- op/storeadapter/patterns.Digest helper.
 CREATE TABLE IF NOT EXISTS oidc_par_records (
     uri VARCHAR(64) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) NOT NULL,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     raw_params LONGBLOB NOT NULL,
     expires_at BIGINT NOT NULL,
     consumed_at BIGINT NULL,
@@ -228,7 +232,7 @@ CREATE TABLE IF NOT EXISTS oidc_par_records (
 
 CREATE TABLE IF NOT EXISTS oidc_interactions (
     id VARCHAR(255) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) NOT NULL,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     step VARCHAR(64) NOT NULL,
     raw_state LONGBLOB NOT NULL,
     expires_at BIGINT NOT NULL,
@@ -243,14 +247,18 @@ CREATE TABLE IF NOT EXISTS oidc_consumed_jtis (
     INDEX idx_oidc_consumed_jtis_expires (expires_at)
 );
 
--- username carries an explicit binary collation: the adapter matches it
--- verbatim, and MySQL's default (utf8mb4_0900_ai_ci / utf8mb4_general_ci)
--- is both case- and accent-insensitive. Under the default, a login
--- submitted as "ALICE" resolves alice's row here while the other engines
--- report no such user, and two accounts differing only in case collide on
--- the unique key that every other engine accepts as two rows.
+-- subject and username carry an explicit binary collation: the adapter
+-- matches both verbatim, and MySQL's default (utf8mb4_0900_ai_ci /
+-- utf8mb4_general_ci) is both case- and accent-insensitive. Under the
+-- default, a login submitted as "ALICE" resolves alice's row here while
+-- the other engines report no such user, and two accounts differing
+-- only in case collide on the unique key (username) or primary key
+-- (subject) that every other engine accepts as two rows. Every
+-- client_id and subject column across this schema carries the same
+-- pin, for the identical reason applied to the foreign-key-style
+-- references those identifiers are compared against.
 CREATE TABLE IF NOT EXISTS oidc_users (
-    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
     claims JSON NOT NULL,
     updated_at BIGINT NOT NULL,
     username VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
@@ -270,7 +278,7 @@ CREATE TABLE IF NOT EXISTS oidc_initial_access_tokens (
 );
 
 CREATE TABLE IF NOT EXISTS oidc_registration_access_tokens (
-    client_id VARCHAR(255) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
     hashed_value VARCHAR(128) NOT NULL,
     allowed_scopes JSON NULL,
     created_at BIGINT NOT NULL
@@ -292,9 +300,9 @@ CREATE TABLE IF NOT EXISTS oidc_op_metadata (
 -- a live record.
 CREATE TABLE IF NOT EXISTS oidc_device_codes (
     id VARCHAR(64) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) NOT NULL,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     user_code VARCHAR(64) NOT NULL,
-    subject VARCHAR(255) NOT NULL DEFAULT '',
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '',
     scope JSON NOT NULL,
     resource JSON NOT NULL,
     dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
@@ -319,8 +327,8 @@ CREATE TABLE IF NOT EXISTS oidc_device_codes (
 -- shared op/storeadapter/patterns.Digest helper.
 CREATE TABLE IF NOT EXISTS oidc_ciba_requests (
     id VARCHAR(64) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) NOT NULL,
-    subject VARCHAR(255) NOT NULL DEFAULT '',
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '',
     scope JSON NOT NULL,
     resource JSON NOT NULL,
     acr_values JSON NOT NULL,
@@ -355,7 +363,7 @@ CREATE TABLE IF NOT EXISTS oidc_ciba_requests (
 -- Nothing here may be logged or parsed by the backend.
 
 CREATE TABLE IF NOT EXISTS oidc_totp_secrets (
-    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
     secret_ciphertext VARBINARY(512) NOT NULL,
     row_version BIGINT NOT NULL DEFAULT 1,
     failed_count INT NOT NULL DEFAULT 0,
@@ -370,7 +378,7 @@ CREATE TABLE IF NOT EXISTS oidc_totp_secrets (
 -- actually emit while staying inside InnoDB's index-length ceiling.
 CREATE TABLE IF NOT EXISTS oidc_passkeys (
     credential_id VARBINARY(512) NOT NULL PRIMARY KEY,
-    subject VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     public_key VARBINARY(1024) NOT NULL,
     aaguid VARBINARY(64) NOT NULL,
     sign_count BIGINT NOT NULL DEFAULT 0,
@@ -392,7 +400,7 @@ CREATE TABLE IF NOT EXISTS oidc_passkeys (
 -- generated_at is denormalised across the batch's rows because the
 -- library reads and writes the batch as a unit.
 CREATE TABLE IF NOT EXISTS oidc_recovery_codes (
-    subject VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     slot_index INT NOT NULL,
     code_hash VARCHAR(255) NOT NULL,
     consumed_at BIGINT NOT NULL DEFAULT 0,
@@ -405,7 +413,7 @@ CREATE TABLE IF NOT EXISTS oidc_recovery_codes (
 -- were accumulated against, otherwise pacing sends to the code TTL
 -- silently resets them.
 CREATE TABLE IF NOT EXISTS oidc_email_otps (
-    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
     code_salt VARBINARY(64) NOT NULL,
     code_hash VARBINARY(64) NOT NULL,
     row_version BIGINT NOT NULL DEFAULT 1,
@@ -423,7 +431,7 @@ CREATE TABLE IF NOT EXISTS oidc_email_otps (
 );
 
 CREATE TABLE IF NOT EXISTS oidc_authn_lockouts (
-    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
     failed_count INT NOT NULL DEFAULT 0,
     record_version BIGINT NOT NULL DEFAULT 0,
     first_failure_at BIGINT NOT NULL DEFAULT 0,

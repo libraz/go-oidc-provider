@@ -285,14 +285,19 @@ type Client struct {
 	// issued ID tokens encrypted with the named JWE `alg` (OIDC Core
 	// 1.0 §10.2 / OIDC Dynamic Client Registration 1.0 §2). Empty
 	// means "no encryption" — the OP issues a plain signed ID token.
-	// The value is recorded for the metadata round-trip; outbound
-	// encryption is wired in a later step.
+	// A non-empty value applies to every grant that issues an
+	// id_token to this client (authorization_code, refresh_token,
+	// device_code, CIBA, and a custom grant that signs its own); it
+	// must be paired with a non-empty [IDTokenEncryptedResponseEnc] or
+	// token issuance fails.
 	IDTokenEncryptedResponseAlg string
 
 	// IDTokenEncryptedResponseEnc mirrors
 	// [IDTokenEncryptedResponseAlg] for the JWE content-encryption
-	// (`enc`) advertisement. Empty means "no preference"; the OP
-	// applies its v0.9.1 allow-list (`A128GCM` / `A256GCM`).
+	// (`enc`) advertisement. The two fields are set together: DCR
+	// registration enforces the pairing, and a client populated
+	// outside DCR with Alg set and Enc empty fails encryption at
+	// token-issuance time rather than falling back to a default.
 	IDTokenEncryptedResponseEnc string
 
 	// UserInfoEncryptedResponseAlg signals that the client wants

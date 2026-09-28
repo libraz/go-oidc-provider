@@ -156,8 +156,8 @@ type OpaqueAccessTokenStore interface {
 
 	// GC drops every record whose [OpaqueAccessToken.ExpiresAt] is
 	// strictly before cutoff and returns the number of rows removed.
-	// Embedders typically call GC from a periodic sweeper; the
-	// library's reference wiring runs it inside the same loop that
-	// sweeps codes and PAR records.
+	// The library never calls GC itself; scheduling it — from a
+	// periodic sweeper alongside the other substores' own GC methods,
+	// or otherwise — is the embedder's responsibility.
 	GC(ctx context.Context, cutoff time.Time) (int, error)
 }

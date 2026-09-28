@@ -123,6 +123,11 @@
 // The same rule applies to the record a Consume-style method returns
 // alongside [ErrAlreadyConsumed] when it returns one.
 //
+// [AccessTokenRegistry.Find] is the one documented exception: its own
+// godoc permits (nil, nil) for "absent" as an alternative to
+// [ErrNotFound], and both shapes are treated identically. No other
+// Find- or Consume-style method carries that exception.
+//
 // # Hash-on-store contract for opaque bearer tokens
 //
 // Authorization codes ([AuthorizationCode.ID]), refresh tokens

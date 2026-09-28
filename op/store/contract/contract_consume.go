@@ -120,6 +120,14 @@ type consumable struct {
 	// consume redeems id and reports whether a record came back.
 	consume func(ctx context.Context, s store.Store, id string) (bool, error)
 
+	// consumeTx is [consume] driven through a [store.Tx] handle instead
+	// of the top-level [store.Store]. nil for substores [store.Tx] does
+	// not expose (DeviceCodes and CIBARequests are intentionally outside
+	// the atomic-routing cluster; see their own package doc), which
+	// [consumeCoverageTx] excuses from the Tx half of the matrix for the
+	// same reason.
+	consumeTx func(ctx context.Context, tx store.Tx, id string) (bool, error)
+
 	// want maps a state onto the answer the interface declares.
 	want func(st consumeState) consumeOutcome
 
@@ -137,8 +145,9 @@ var consumeCases = buildConsumeCases()
 
 func buildConsumeCases() []subtest {
 	states := consumeStates()
-	cases := make([]subtest, 0, 1+len(consumables)*len(states))
+	cases := make([]subtest, 0, 2+len(consumables)*len(states)*2)
 	cases = append(cases, subtest{"Coverage", consumeCoverage})
+	cases = append(cases, subtest{"CoverageTx", consumeCoverageTx})
 	for _, sub := range consumables {
 		for _, st := range states {
 			cases = append(cases, subtest{
@@ -147,6 +156,14 @@ func buildConsumeCases() []subtest {
 					runConsumeCase(t, f, sub, st)
 				},
 			})
+			if sub.consumeTx != nil {
+				cases = append(cases, subtest{
+					name: sub.accessor + "/Tx/" + st.name(),
+					fn: func(t *testing.T, f Factory) {
+						runConsumeCaseTx(t, f, sub, st)
+					},
+				})
+			}
 		}
 	}
 	return cases
@@ -183,6 +200,46 @@ func runConsumeCase(t *testing.T, f Factory, sub consumable, st consumeState) {
 	}
 }
 
+// runConsumeCaseTx is [runConsumeCase] driven through a [store.Tx]
+// handle rather than the top-level [store.Store]. The record is
+// arranged through the non-transactional path exactly as any other
+// case, then redeemed inside a transaction, which is what pins the
+// invariant this coverage gap left untested: a backend's transactional
+// Consume is free to be a second implementation of the same interface
+// (as it is for at least one shipped backend), and nothing else forces
+// it to agree with the non-transactional one on expiry-before-consumed
+// precedence.
+func runConsumeCaseTx(t *testing.T, f Factory, sub consumable, st consumeState) {
+	b := f(t)
+	sub.require(t, b.Store)
+	txr := requireTransactional(t, b.Store)
+	ctx := context.Background()
+	id := sub.arrange(t, b, ctx, st)
+	want := sub.want(st)
+
+	tx := beginTx(t, txr, ctx)
+	found, err := sub.consumeTx(ctx, tx, id)
+	switch {
+	case want.err == nil && err != nil:
+		t.Fatalf("%s().Consume on a %s record (tx): want success, got %v", sub.accessor, st.name(), err)
+	case want.err != nil && !errors.Is(err, want.err):
+		t.Fatalf("%s().Consume on a %s record (tx): want %v, got %v — the transactional path must "+
+			"agree with the non-transactional one on expiry-before-consumed precedence",
+			sub.accessor, st.name(), want.err, err)
+	}
+	switch want.record {
+	case recordRequired:
+		if !found {
+			t.Fatalf("%s().Consume on a %s record (tx) answered %v without the record", sub.accessor, st.name(), err)
+		}
+	case recordForbidden:
+		if found {
+			t.Fatalf("%s().Consume on a %s record (tx) answered %v and handed the record back", sub.accessor, st.name(), err)
+		}
+	case recordOptional:
+	}
+}
+
 // consumeCoverage checks the matrix against the substores whose
 // interface declares an id-keyed Consume.
 //
@@ -197,6 +254,20 @@ func consumeCoverage(t *testing.T, _ Factory) {
 		covered[sub.accessor] = "consumables"
 	}
 	assertCovers(t, "id-keyed Consume substores", idKeyedConsumeAccessors(), covered)
+}
+
+// consumeCoverageTx is [consumeCoverage]'s [store.Tx] counterpart: every
+// accessor store.Tx exposes whose substore declares an id-keyed Consume
+// must have a matching Tx-driven row in the matrix, not only the
+// top-level Store row [consumeCoverage] already checks.
+func consumeCoverageTx(t *testing.T, _ Factory) {
+	covered := make(map[string]string, len(consumables))
+	for _, sub := range consumables {
+		if sub.consumeTx != nil {
+			covered[sub.accessor] = "consumables"
+		}
+	}
+	assertCovers(t, "store.Tx id-keyed Consume substores", txIDKeyedConsumeAccessors(), covered)
 }
 
 // consumeIDFor derives a per-cell record id so the four states of one
@@ -232,6 +303,10 @@ var consumables = []consumable{
 		},
 		consume: func(ctx context.Context, s store.Store, id string) (bool, error) {
 			got, err := s.AuthorizationCodes().Consume(ctx, id)
+			return got != nil, err
+		},
+		consumeTx: func(ctx context.Context, tx store.Tx, id string) (bool, error) {
+			got, err := tx.AuthorizationCodes().Consume(ctx, id)
 			return got != nil, err
 		},
 		want: func(st consumeState) consumeOutcome {
@@ -271,6 +346,10 @@ var consumables = []consumable{
 			got, err := s.RefreshTokens().Consume(ctx, id)
 			return got != nil, err
 		},
+		consumeTx: func(ctx context.Context, tx store.Tx, id string) (bool, error) {
+			got, err := tx.RefreshTokens().Consume(ctx, id)
+			return got != nil, err
+		},
 		want: func(st consumeState) consumeOutcome {
 			switch {
 			case st.expired:
@@ -306,6 +385,10 @@ var consumables = []consumable{
 		},
 		consume: func(ctx context.Context, s store.Store, id string) (bool, error) {
 			got, err := s.PushedAuthRequests().Consume(ctx, id)
+			return got != nil, err
+		},
+		consumeTx: func(ctx context.Context, tx store.Tx, id string) (bool, error) {
+			got, err := tx.PushedAuthRequests().Consume(ctx, id)
 			return got != nil, err
 		},
 		want: func(st consumeState) consumeOutcome {

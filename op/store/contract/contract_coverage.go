@@ -78,11 +78,13 @@ var allStoreInterfaces = []reflect.Type{
 	typeOf[store.UserStore](),
 }
 
-// singleWinnerNames are the five spellings the store package uses for a
+// singleWinnerNames are the spellings the store package uses for a
 // write whose effect is conditional on the state the caller read:
 // redemption (Consume), replacement (CompareAndSwap), conditional
-// removal (DeleteIfUnchanged), first-writer-wins marking (Mark), and a
-// counter with a ceiling (IncrementUses).
+// removal (DeleteIfUnchanged), first-writer-wins marking (Mark), a
+// counter with a ceiling (IncrementUses), and the closed-state-machine
+// transitions out of Pending (Approve, ApproveByUserCode, Deny,
+// DenyByUserCode, Revoke).
 //
 // Every one of them declares, in its own godoc, that concurrent callers
 // resolve to a bounded number of winners, and every one of them is
@@ -93,11 +95,16 @@ var allStoreInterfaces = []reflect.Type{
 //
 //nolint:gochecknoglobals // derived surface vocabulary; declared once and read-only.
 var singleWinnerNames = []string{
+	"Approve",
+	"ApproveByUserCode",
 	"CompareAndSwap",
 	"Consume",
 	"DeleteIfUnchanged",
+	"Deny",
+	"DenyByUserCode",
 	"IncrementUses",
 	"Mark",
+	"Revoke",
 }
 
 // methodRef names one method of one interface.
@@ -178,6 +185,24 @@ func declaresIDKeyedConsume(iface reflect.Type) bool {
 func idKeyedConsumeAccessors() []string {
 	var out []string
 	for _, accessor := range accessorMethods(typeOf[store.Store]()) {
+		if declaresIDKeyedConsume(substoreType(accessor)) {
+			out = append(out, accessor)
+		}
+	}
+	return out
+}
+
+// txIDKeyedConsumeAccessors is [idKeyedConsumeAccessors] restricted to
+// the accessors [store.Tx] also exposes. Every substore [store.Tx] MUST
+// read its own writes (see the interface doc), and Consume is no
+// exception to that promise, so the redemption matrix has to drive these
+// accessors through a Tx handle as well as through the top-level
+// [store.Store] -- a transactional Consume implementation is free to
+// differ from the non-transactional one, and nothing else pins the two
+// to agree on expiry-before-consumed precedence.
+func txIDKeyedConsumeAccessors() []string {
+	var out []string
+	for _, accessor := range accessorMethods(typeOf[store.Tx]()) {
 		if declaresIDKeyedConsume(substoreType(accessor)) {
 			out = append(out, accessor)
 		}

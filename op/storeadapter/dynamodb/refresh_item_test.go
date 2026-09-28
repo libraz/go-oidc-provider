@@ -3,11 +3,13 @@
 package oidcdynamo_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/store/contract"
@@ -56,9 +58,10 @@ func TestRefreshTokens_ItemsCarryOnlyQueriedAttributes(t *testing.T) {
 
 	// The attributes a stored refresh item may carry: its key, the
 	// document, the two expiry renderings, the three index keys, the two
-	// state flags, and the record version the transactional writes
-	// condition on.
+	// state flags, the record version the transactional writes condition
+	// on, and the children set the revocation cascades walk.
 	allowed := map[string]bool{
+		"children":       true,
 		"pk":             true,
 		"doc":            true,
 		"expires_at":     true,
@@ -78,15 +81,29 @@ func TestRefreshTokens_ItemsCarryOnlyQueriedAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan refresh tokens: %v", err)
 	}
-	if len(out.Items) != 2 {
-		t.Fatalf("scan returned %d items, want the 2 saved tokens", len(out.Items))
-	}
+	// The grant's root list shares the table; it is read by
+	// RevokeByGrant and carries its own, smaller attribute set.
+	rootList := map[string]bool{"pk": true, "roots": true, "record_version": true}
+	tokens := 0
 	for _, item := range out.Items {
+		pk, _ := item["pk"].(*types.AttributeValueMemberS)
+		if pk != nil && strings.HasPrefix(pk.Value, "grant-roots#") {
+			for attr := range item {
+				if !rootList[attr] {
+					t.Errorf("the grant root list carries attribute %q, which nothing reads", attr)
+				}
+			}
+			continue
+		}
+		tokens++
 		for attr := range item {
 			if !allowed[attr] {
 				t.Errorf("a stored refresh item carries attribute %q, which no index or condition reads; "+
 					"an attribute written on every rotation has to be read by something", attr)
 			}
 		}
+	}
+	if tokens != 2 {
+		t.Fatalf("scan returned %d token items, want the 2 saved tokens", tokens)
 	}
 }

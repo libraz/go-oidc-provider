@@ -144,9 +144,9 @@ type GrantRevocationStore interface {
 	// strictly before cutoff and returns the total number of rows
 	// removed. The zero time is treated as "no expiry" and is never
 	// collected; callers that need the original behaviour (drop
-	// everything) supply an explicit far-future cutoff. Embedders
-	// typically call GC from a periodic sweeper; the library's
-	// reference wiring runs it inside the same loop that sweeps codes
-	// and PAR records.
+	// everything) supply an explicit far-future cutoff. The library
+	// never calls GC itself; scheduling it — from a periodic sweeper
+	// alongside the other substores' own GC methods, or otherwise — is
+	// the embedder's responsibility.
 	GC(ctx context.Context, cutoff time.Time) (int, error)
 }

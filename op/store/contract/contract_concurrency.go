@@ -49,6 +49,10 @@ var concurrencyCases = []subtest{
 	{"IATIncrementUsesHasOneWinner", concurrentIATSingleUse},
 	{"IATIncrementUsesStopsAtTheCeiling", concurrentIATMultiUse},
 	{"GrantAmendKeepsEveryWriterScope", concurrentGrantAmend},
+	{"DeviceCodeApproveDenyHasOneWinner", concurrentDeviceCodeApproveDeny},
+	{"DeviceCodeApproveDenyByUserCodeHasOneWinner", concurrentDeviceCodeApproveDenyByUserCode},
+	{"DeviceCodeRevokeConsumeSettleOnOneTransition", concurrentDeviceCodeRevokeConsume},
+	{"CIBAApproveDenyHasOneWinner", concurrentCIBAApproveDeny},
 }
 
 // race runs attempt from [concurrentRacers] goroutines and returns their
@@ -101,6 +105,50 @@ func raceAfter(warm func(i int), attempt func(i int) error) []error {
 	close(start)
 	done.Wait()
 	return errs
+}
+
+// raceTwo is [raceAfter] for exactly two distinct operations racing each
+// other — a device-code Approve against a Deny, a Revoke against a
+// Consume — rather than [concurrentRacers] copies of one. The barrier
+// discipline is the same: both goroutines are released together so
+// neither wins by having started first.
+func raceTwo(a, b func() error) (errA, errB error) {
+	var ready, done sync.WaitGroup
+	start := make(chan struct{})
+	ready.Add(2)
+	done.Add(2)
+	go func() {
+		defer done.Done()
+		ready.Done()
+		<-start
+		errA = a()
+	}()
+	go func() {
+		defer done.Done()
+		ready.Done()
+		<-start
+		errB = b()
+	}()
+	ready.Wait()
+	close(start)
+	done.Wait()
+	return errA, errB
+}
+
+// assertExactlyOneWinsFromPending pins the closed-state-machine
+// guarantee [store.DeviceCodeStore.Approve] and its siblings declare:
+// racing the two transitions out of Pending leaves exactly one of them
+// with a nil error and the other with [store.ErrConflict]. A
+// read-decide-write implementation that passes the sequential cases can
+// still hand both racers nil, which is the state this pins closed.
+func assertExactlyOneWinsFromPending(t *testing.T, op string, first, second error) {
+	t.Helper()
+	switch {
+	case first == nil && errors.Is(second, store.ErrConflict):
+	case second == nil && errors.Is(first, store.ErrConflict):
+	default:
+		t.Fatalf("%s: want exactly one winner (nil) and the loser ErrConflict, got %v / %v", op, first, second)
+	}
 }
 
 // assertWinners reports the indices of the attempts that succeeded,
@@ -162,6 +210,13 @@ var singleWinnerCases = map[methodRef]string{
 	{iface: "TOTPStore", method: "CompareAndSwap"}:              "RunTOTPs/ConcurrentCompareAndSwapHasOneWinner",
 	{iface: "AuthnLockoutStore", method: "CompareAndSwap"}:      "RunAuthnLockouts/ConcurrentSameVersionHasOneWinner",
 	{iface: "RecoveryStore", method: "Consume"}:                 "RunRecoveryCodes/ConcurrentConsumeHasOneWinner",
+	{iface: "DeviceCodeStore", method: "Approve"}:               "Concurrency/DeviceCodeApproveDenyHasOneWinner",
+	{iface: "DeviceCodeStore", method: "Deny"}:                  "Concurrency/DeviceCodeApproveDenyHasOneWinner",
+	{iface: "DeviceCodeStore", method: "ApproveByUserCode"}:     "Concurrency/DeviceCodeApproveDenyByUserCodeHasOneWinner",
+	{iface: "DeviceCodeStore", method: "DenyByUserCode"}:        "Concurrency/DeviceCodeApproveDenyByUserCodeHasOneWinner",
+	{iface: "DeviceCodeStore", method: "Revoke"}:                "Concurrency/DeviceCodeRevokeConsumeSettleOnOneTransition",
+	{iface: "CIBARequestStore", method: "Approve"}:              "Concurrency/CIBAApproveDenyHasOneWinner",
+	{iface: "CIBARequestStore", method: "Deny"}:                 "Concurrency/CIBAApproveDenyHasOneWinner",
 }
 
 // singleWinnerCoverage checks that every conditional write the store
@@ -436,6 +491,152 @@ func concurrentCIBAConsume(t *testing.T, f Factory) {
 
 	if _, err := cr.Consume(ctx, "ar-race"); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("Consume after the race: want ErrAlreadyConsumed, got %v", err)
+	}
+}
+
+// concurrentDeviceCodeApproveDeny pins the closed state machine
+// [store.DeviceCodeStore.Approve] and [store.DeviceCodeStore.Deny]
+// declare: a device sitting at the verification page and a lockout
+// striking the same record at once must not both land, because a
+// backend that let both through would leave the device holding a
+// denied authorization it can still poll into tokens.
+func concurrentDeviceCodeApproveDeny(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	const id = "dc-approve-deny-race"
+	if err := dc.Save(ctx, newDeviceCode(b.Now(), id, "AAAA-0601")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	approveErr, denyErr := raceTwo(
+		func() error { return dc.Approve(ctx, id, "sub-race", b.Now()) },
+		func() error { return dc.Deny(ctx, id, "user_denied") },
+	)
+	assertExactlyOneWinsFromPending(t, "DeviceCodes().Approve/Deny", approveErr, denyErr)
+
+	got, err := dc.FindByDeviceCode(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after the race: %v", err)
+	}
+	if approveErr == nil && got.Status != store.DeviceCodeStatusApproved {
+		t.Fatalf("Approve won the race but the record reads %v, want Approved", got.Status)
+	}
+	if denyErr == nil && got.Status != store.DeviceCodeStatusDenied {
+		t.Fatalf("Deny won the race but the record reads %v, want Denied", got.Status)
+	}
+}
+
+// concurrentDeviceCodeApproveDenyByUserCode is
+// [concurrentDeviceCodeApproveDeny] for the user_code-keyed pair a
+// verification page drives without ever seeing the polling bearer
+// device_code.
+func concurrentDeviceCodeApproveDenyByUserCode(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	const id, userCode = "dc-approve-deny-usercode-race", "AAAA-0602"
+	if err := dc.Save(ctx, newDeviceCode(b.Now(), id, userCode)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	approveErr, denyErr := raceTwo(
+		func() error { return dc.ApproveByUserCode(ctx, userCode, "sub-race", b.Now()) },
+		func() error { return dc.DenyByUserCode(ctx, userCode, "user_denied") },
+	)
+	assertExactlyOneWinsFromPending(t, "DeviceCodes().ApproveByUserCode/DenyByUserCode", approveErr, denyErr)
+
+	got, err := dc.FindByDeviceCode(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after the race: %v", err)
+	}
+	if approveErr == nil && got.Status != store.DeviceCodeStatusApproved {
+		t.Fatalf("ApproveByUserCode won the race but the record reads %v, want Approved", got.Status)
+	}
+	if denyErr == nil && got.Status != store.DeviceCodeStatusDenied {
+		t.Fatalf("DenyByUserCode won the race but the record reads %v, want Denied", got.Status)
+	}
+}
+
+// concurrentDeviceCodeRevokeConsume pins the race
+// [store.DeviceCodeStore.Revoke] documents explicitly: a device polling
+// the instant its user approves races a concurrent revocation of the
+// same authorization. Unlike Approve-vs-Deny, Revoke reports nil on
+// either outcome — the two operations must settle on exactly one
+// terminal transition (Denied or Consumed) rather than each producing
+// its own.
+func concurrentDeviceCodeRevokeConsume(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	const id = "dc-revoke-consume-race"
+	if err := dc.Save(ctx, newDeviceCode(b.Now(), id, "AAAA-0603")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := dc.Approve(ctx, id, "sub-race", b.Now()); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	revokeErr, consumeErr := raceTwo(
+		func() error { return dc.Revoke(ctx, id, "device_revoked") },
+		func() error { _, err := dc.Consume(ctx, id); return err },
+	)
+	if revokeErr != nil {
+		t.Fatalf("Revoke: %v — Revoke MUST report nil whichever transition wins", revokeErr)
+	}
+
+	got, err := dc.FindByDeviceCode(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after the race: %v", err)
+	}
+	switch got.Status {
+	case store.DeviceCodeStatusDenied:
+		if !errors.Is(consumeErr, store.ErrConflict) {
+			t.Fatalf("Revoke won but Consume = %v, want ErrConflict", consumeErr)
+		}
+	case store.DeviceCodeStatusConsumed:
+		if consumeErr != nil {
+			t.Fatalf("Consume won the race but returned %v", consumeErr)
+		}
+	default:
+		t.Fatalf("terminal status = %v, want Denied or Consumed", got.Status)
+	}
+}
+
+// concurrentCIBAApproveDeny is [concurrentDeviceCodeApproveDeny] for the
+// CIBA backchannel-authentication record, which closes the same
+// Pending-to-{Approved,Denied} state machine.
+func concurrentCIBAApproveDeny(t *testing.T, f Factory) {
+	b := f(t)
+	cr := requireCIBA(t, b.Store)
+	ctx := context.Background()
+	const id = "ar-approve-deny-race"
+	req := newCIBARequest(b.Now(), id)
+	if err := cr.Save(ctx, req); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// req.Subject is already non-empty ([newCIBARequest] seeds it), so
+	// Approve must be given that same subject: a mismatch trips
+	// [store.CIBARequestStore.Approve]'s own ErrConflict independently of
+	// which racer reaches Pending first, which would test the wrong rule.
+	approveErr, denyErr := raceTwo(
+		func() error {
+			return cr.Approve(ctx, id, req.Subject, "urn:mace:incommon:iap:bronze", b.Now())
+		},
+		func() error { return cr.Deny(ctx, id, "user_denied") },
+	)
+	assertExactlyOneWinsFromPending(t, "CIBARequests().Approve/Deny", approveErr, denyErr)
+
+	got, err := cr.FindByAuthReqID(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByAuthReqID after the race: %v", err)
+	}
+	if approveErr == nil && got.Status != store.CIBARequestStatusApproved {
+		t.Fatalf("Approve won the race but the record reads %v, want Approved", got.Status)
+	}
+	if denyErr == nil && got.Status != store.CIBARequestStatusDenied {
+		t.Fatalf("Deny won the race but the record reads %v, want Denied", got.Status)
 	}
 }
 

@@ -71,9 +71,10 @@ type RecoveryStore interface {
 	Get(ctx context.Context, subject string) (*RecoveryBatch, error)
 
 	// Put creates or replaces the batch for b.Subject. Backends
-	// implement upsert semantics: the library uses Put both for the
-	// initial Generate and for every Verify-driven slot consumption.
-	// Regenerating a fresh batch overwrites the previous one wholesale.
+	// implement upsert semantics: the library calls Put only from
+	// Generate, to install a fresh batch. Verify-driven slot consumption
+	// goes through [RecoveryStore.Consume] instead; regenerating a fresh
+	// batch through Put overwrites the previous one wholesale.
 	Put(ctx context.Context, b *RecoveryBatch) error
 
 	// Consume atomically marks one recovery-code slot as consumed. It

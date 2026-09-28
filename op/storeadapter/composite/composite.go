@@ -224,10 +224,13 @@ var allKinds = []Kind{
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
-// backend. The OP core relies on per-substore CAS operations rather than
-// opening transactions, but routing two of these kinds to different backends
-// would still split the consistency domain for replay detection, refresh
-// rotation, and revocation cascades.
+// backend. The OP core opens [store.Transactional] transactions spanning
+// these substores on paths that require cross-substore atomicity (see
+// internal/tokenendpoint/refresh.go, internal/authorizeendpoint/completion.go,
+// and internal/authorizeendpoint/authorize.go); routing two of these kinds to
+// different backends would split the consistency domain a single transaction
+// needs for replay detection, refresh rotation, and revocation cascades, even
+// where a path relies on a per-substore CAS instead of an explicit Tx.
 //
 // [Sessions] is intentionally absent: the OP does not coordinate Session
 // writes with token-endpoint commits, and embedders are expected to route

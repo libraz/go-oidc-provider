@@ -385,7 +385,8 @@ func (s *Store) deleteLiveKey(ctx context.Context, table, pk string) (bool, erro
 
 // queryIndex enumerates every item whose indexed attribute equals
 // value. Index reads cannot be strongly consistent, so callers that act
-// on an individual result re-read it by primary key first.
+// on an individual result re-read it by primary key first, and a caller
+// that must not miss a recent write pairs it with a consistent read.
 func (s *Store) queryIndex(ctx context.Context, table, index, attr, value string) ([]item, error) {
 	var (
 		out   []item
@@ -467,6 +468,39 @@ func (s *Store) scanAll(ctx context.Context, table string, limit int32) ([]item,
 		}
 		if limit > 0 && len(out) >= int(limit) {
 			return out[:limit], nil
+		}
+		if len(page.LastEvaluatedKey) == 0 {
+			return out, nil
+		}
+		start = page.LastEvaluatedKey
+	}
+}
+
+// scanMatching returns every item whose attr equals value, projected to
+// its key, through a strongly consistent Scan of the whole table. It
+// serves the one enumeration that must see every committed item and has
+// no bounded key to read — the refresh cascade of client deletion — and
+// never a request path.
+func (s *Store) scanMatching(ctx context.Context, table, attr, value string) ([]item, error) {
+	var (
+		out   []item
+		start map[string]types.AttributeValue
+	)
+	for {
+		page, err := s.api.Scan(ctx, &dynamodb.ScanInput{
+			TableName:                 aws.String(table),
+			FilterExpression:          aws.String("#a = :v"),
+			ProjectionExpression:      aws.String("#pk"),
+			ExpressionAttributeNames:  map[string]string{"#a": attr, "#pk": attrPK},
+			ExpressionAttributeValues: map[string]types.AttributeValue{":v": avS(value)},
+			ExclusiveStartKey:         start,
+			ConsistentRead:            aws.Bool(true),
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, raw := range page.Items {
+			out = append(out, raw)
 		}
 		if len(page.LastEvaluatedKey) == 0 {
 			return out, nil

@@ -38,8 +38,10 @@ type Session struct {
 	AMR []string
 
 	// ACR is the Authentication Context Class Reference (OpenID Connect
-	// Core 1.0 §2) the session satisfies. Empty if no specific class was
-	// requested or asserted.
+	// Core 1.0 §2) the session reached: the canonical acr URI of the
+	// assurance level its authentication achieved, never a value a
+	// request asked for. The ACR policy re-resolves it per client each
+	// time a response is served from the session.
 	ACR string
 
 	// ChooserGroupID groups sessions that belong to the same browser-side

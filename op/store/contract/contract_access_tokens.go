@@ -16,7 +16,9 @@ import (
 // wrong on a backend that is not a relational database:
 //
 //   - "absent" is spelled either (nil, nil) or ErrNotFound, and both
-//     are permitted, so a caller must not distinguish them.
+//     are permitted, so a caller must not distinguish them — but a
+//     record retired by RevokeByJTI or RevokeByGrant is not "absent":
+//     it MUST stay findable, carrying Revoked, until GC drops it.
 //   - RevokeByJTI is idempotent and silent about a missing record,
 //     mirroring RFC 7009 §2.2: the revocation endpoint answers 200
 //     either way, so the substore has nothing to report.
@@ -148,10 +150,17 @@ func accessTokenRevokeByJTI(t *testing.T, f Factory) {
 	if err := registry.RevokeByJTI(ctx, rec.JTI); err != nil {
 		t.Fatalf("RevokeByJTI: %v", err)
 	}
-	// A retired entry may be reported either as absent or as a record
-	// carrying Revoked; both satisfy the contract.
-	if got, ok := findAccessToken(t, registry, rec.JTI); ok && !got.Revoked {
-		t.Fatalf("record after RevokeByJTI = %+v, want absent or Revoked", got)
+	// A retired entry MUST stay present and carry Revoked until GC is
+	// entitled to drop it: the shared JWT access-token verifier treats
+	// an absent record as "not revoked", so a backend that deletes here
+	// would silently defeat RFC 7009 revocation and the code-replay
+	// cascade.
+	got, ok := findAccessToken(t, registry, rec.JTI)
+	if !ok {
+		t.Fatal("record after RevokeByJTI is absent, want present and Revoked")
+	}
+	if !got.Revoked {
+		t.Fatalf("record after RevokeByJTI = %+v, want Revoked", got)
 	}
 }
 
@@ -202,7 +211,11 @@ func accessTokenRevokeByGrant(t *testing.T, f Factory) {
 		t.Fatalf("RevokeByGrant count = %d, want 3", n)
 	}
 	for _, jti := range []string{"at-g1", "at-g2", "at-g3"} {
-		if got, ok := findAccessToken(t, registry, jti); ok && !got.Revoked {
+		got, ok := findAccessToken(t, registry, jti)
+		if !ok {
+			t.Fatalf("%s is absent after the cascade, want present and Revoked", jti)
+		}
+		if !got.Revoked {
 			t.Fatalf("%s survived the cascade: %+v", jti, got)
 		}
 	}

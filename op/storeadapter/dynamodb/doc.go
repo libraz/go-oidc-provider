@@ -56,8 +56,20 @@
 // # Consistency
 //
 // Every read that feeds a security decision is a strongly consistent
-// GetItem. Index queries cannot be strongly consistent, so enumeration
-// paths re-read each item consistently before acting on it.
+// GetItem. Index queries cannot be strongly consistent — AWS does not
+// offer ConsistentRead on a Global Secondary Index — so the refresh-token
+// revocation cascades do not rely on them alone. Each refresh token is
+// written in one TransactWriteItems with the link a cascade follows to
+// it: a rotation joins its parent's children set, and a token that
+// starts a chain joins its grant's root list, an item stored in the
+// refresh table under "grant-roots#<grant id>". RevokeChain and
+// RevokeByGrant walk those links with strongly consistent reads, and
+// RevokeByClient scans the table with ConsistentRead. Each cascade also
+// takes the union with its index query, which is how records written
+// before the links existed are reached; those keep the index's gap — one
+// committed a moment before the cascade's query ran can be missed
+// permanently — until they expire. See "Transactions" for how the links
+// interact with a caller-owned transaction.
 //
 // # Atomicity
 //
@@ -111,10 +123,22 @@
 // update per record and converges, at the cost of no longer being
 // undoable.
 //
-// A cascade enumerates its targets through a secondary index, which
-// cannot see staged writes, so it covers the records committed when it
-// runs. A descendant written afterwards is caught by the parent-alive
-// re-check every rotation makes.
+// A cascade reads its links through the transaction, so a descendant
+// the same transaction has staged is part of it, and every node it stages
+// asserts on commit that its children set is still the one the walk
+// read: a rotation committed meanwhile fails the commit with
+// [github.com/libraz/go-oidc-provider/op/store.ErrConflict] rather than
+// escaping the cascade. The index half of the union sees only committed
+// data. A chain root saved inside a transaction rewrites the grant's root
+// list whole under a version guard, so two such transactions against one
+// grant conflict; the OP starts chains outside transactions.
+//
+// The root list drops a root once it expires, and DynamoDB reclaims an
+// expired record's item later still. RevokeByGrant then enters such a
+// chain through the records the by_grant index yields and follows the
+// links down from them, so the chain's recent rotations are missed only
+// if every record of it still stored committed within the index's
+// replication lag.
 //
 // # Uniqueness
 //

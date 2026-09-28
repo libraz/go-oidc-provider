@@ -62,10 +62,10 @@ type txOp struct {
 	// the stored item is still unconsumed before stamping it.
 	consumedAtGuard bool
 
-	// match is set for txPutIfMatch: the attribute values the stored
-	// item carried when the transaction first read it. The commit
-	// asserts each of them again; a nil value asserts the attribute is
-	// still absent.
+	// match is set for txPutIfMatch, and may be for txPutIfUnconsumed:
+	// the attribute values the stored item carried when the transaction
+	// first read it. The commit asserts each of them again; a nil value
+	// asserts the attribute is still absent.
 	match map[string]types.AttributeValue
 }
 
@@ -269,9 +269,13 @@ func (b *txBuffer) stampConsumed(ctx context.Context, table, pk string, at time.
 	}
 	next := cloneItem(base)
 	next.setTime(attrConsumedAt, at)
-	return b.record(&txOp{
-		kind: txPutIfUnconsumed, table: table, pk: pk, item: next, consumedAtGuard: true,
-	})
+	op := &txOp{kind: txPutIfUnconsumed, table: table, pk: pk, item: next, consumedAtGuard: true}
+	if prior, ok := b.ops[bufferKey(table, pk)]; ok {
+		// The replacement keeps the read-set assertions an earlier write
+		// to the item established.
+		op.match = prior.match
+	}
+	return b.record(op)
 }
 
 // attach adds one attribute to a record inside the transaction.
@@ -300,6 +304,66 @@ func (b *txBuffer) attach(ctx context.Context, table, pk, attr string, value typ
 	next := cloneItem(base)
 	next[attr] = value
 	return b.record(&txOp{kind: txPutIfPresent, table: table, pk: pk, item: next})
+}
+
+// attachGuarded is [txBuffer.attach] for a write justified by other
+// attributes of the same item: the commit also asserts that each guarded
+// attribute still holds what the transaction first read. Staging a whole
+// item replaces it, so without the assertion a value another writer
+// added in between — a rotation's link on its parent, say — would be
+// dropped rather than turning the commit into a conflict.
+func (b *txBuffer) attachGuarded(
+	ctx context.Context,
+	table, pk, attr string,
+	value types.AttributeValue,
+	guarded ...string,
+) error {
+	if b.settled {
+		return errTxClosed
+	}
+	op, staged := b.ops[bufferKey(table, pk)]
+	if staged && op.kind == txDelete {
+		return store.ErrNotFound
+	}
+	if staged && (op.kind == txPutIfAbsent || op.kind == txPut) {
+		// An insert asserts the key is unused, which already covers
+		// every attribute; an unconditional write asserts nothing.
+		op.item[attr] = value
+		return nil
+	}
+	base, err := b.observe(ctx, table, pk)
+	if err != nil {
+		return err
+	}
+	if !staged {
+		if base == nil {
+			return store.ErrNotFound
+		}
+		op = &txOp{kind: txPutIfMatch, table: table, pk: pk, item: cloneItem(base)}
+		if err := b.record(op); err != nil {
+			return err
+		}
+	} else if op.kind == txPutIfPresent {
+		// The match render asserts existence as well, so the upgrade only
+		// adds conditions.
+		op.kind = txPutIfMatch
+	}
+	op.item[attr] = value
+	op.assertObserved(base, guarded)
+	return nil
+}
+
+// assertObserved adds the observed value of each named attribute to the
+// write's read-set assertions, keeping any the write already carries.
+func (o *txOp) assertObserved(base item, attrs []string) {
+	if o.match == nil {
+		o.match = make(map[string]types.AttributeValue, len(attrs))
+	}
+	for _, name := range attrs {
+		if _, ok := o.match[name]; !ok {
+			o.match[name] = base[name]
+		}
+	}
 }
 
 // get resolves a read through the buffer first so a caller observes its
@@ -393,18 +457,14 @@ func (o *txOp) action() types.TransactWriteItem {
 			ConditionExpression: aws.String("attribute_exists(" + attrPK + ")"),
 		}}
 	case txPutIfUnconsumed:
-		return types.TransactWriteItem{Put: &types.Put{
-			TableName:           aws.String(o.table),
-			Item:                o.item,
-			ConditionExpression: aws.String("attribute_exists(#pk) AND #consumed = :zero"),
-			ExpressionAttributeNames: map[string]string{
-				"#pk":       attrPK,
-				"#consumed": attrConsumedAt,
-			},
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":zero": avN(0),
-			},
-		}}
+		put := o.matchPut()
+		put.ConditionExpression = aws.String(aws.ToString(put.ConditionExpression) + " AND #consumed = :zero")
+		put.ExpressionAttributeNames["#consumed"] = attrConsumedAt
+		if put.ExpressionAttributeValues == nil {
+			put.ExpressionAttributeValues = make(map[string]types.AttributeValue, 1)
+		}
+		put.ExpressionAttributeValues[":zero"] = avN(0)
+		return types.TransactWriteItem{Put: put}
 	case txPutIfMatch:
 		return types.TransactWriteItem{Put: o.matchPut()}
 	case txDelete:

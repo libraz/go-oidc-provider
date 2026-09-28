@@ -54,6 +54,14 @@ func avB(b []byte) types.AttributeValue {
 	return &types.AttributeValueMemberB{Value: b}
 }
 
+// avSS renders a string set. DynamoDB rejects an empty set, so callers
+// build one from at least one element.
+//
+//nolint:ireturn // types.AttributeValue is the SDK's own sum type.
+func avSS(values ...string) types.AttributeValue {
+	return &types.AttributeValueMemberSS{Value: values}
+}
+
 //nolint:ireturn // types.AttributeValue is the SDK's own sum type.
 func avBool(b bool) types.AttributeValue { return &types.AttributeValueMemberBOOL{Value: b} }
 
@@ -98,6 +106,13 @@ func readN(item map[string]types.AttributeValue, key string) int64 {
 		return 0
 	}
 	return n
+}
+
+func readSS(item map[string]types.AttributeValue, key string) []string {
+	if v, ok := item[key].(*types.AttributeValueMemberSS); ok {
+		return v.Value
+	}
+	return nil
 }
 
 func readBool(item map[string]types.AttributeValue, key string) bool {

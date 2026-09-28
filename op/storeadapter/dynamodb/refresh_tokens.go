@@ -3,6 +3,8 @@ package oidcdynamo
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,9 +24,52 @@ import (
 // (possession of a stored digest must not redeem a token), while the
 // chain resolver accepts either representation because it is reachable
 // only from the OP's own revocation walk.
+//
+// Every token is written together with the link a revocation cascade
+// follows to it, in one TransactWriteItems, so the cascades enumerate
+// through strongly consistent reads rather than through the
+// eventually consistent indexes: a rotation is added to its parent's
+// children set, and a token that starts a chain is added to its grant's
+// root list (see [grantRootsKey]). Records written without those links
+// are still reached through the indexes.
 type refreshStore struct {
 	parent *Store
 	tx     *txBuffer
+}
+
+// grantRootsPrefix keys the item listing a grant's chain roots, stored in
+// the refresh table beside the tokens. A token's key is a hex digest, so
+// the prefix cannot collide with one, and the item carries none of the
+// indexed attributes, so no index or cascade enumerates it as a token.
+const grantRootsPrefix = "grant-roots#"
+
+// grantRootsKey names the root list of a grant. Each element is a root's
+// key and its expiry (see [grantRootElement]); elements whose root has
+// expired are pruned when the next root is added, so the list holds one
+// element, about 85 bytes, per chain of the grant started within one
+// refresh-token lifetime. The 400 KB item ceiling therefore bounds a
+// single grant at a few thousand such chains.
+func grantRootsKey(grantID string) string { return grantRootsPrefix + grantID }
+
+// grantRootElement renders a root-list element. A zero expiry is
+// rendered as 0 and never prunes.
+func grantRootElement(digest string, expiresAt time.Time) string {
+	var nanos int64
+	if !expiresAt.IsZero() {
+		nanos = expiresAt.UnixNano()
+	}
+	return digest + "@" + formatInt(nanos)
+}
+
+// parseGrantRoot splits a root-list element into the root's key and its
+// expiry.
+func parseGrantRoot(element string) (string, time.Time) {
+	digest, expiry, _ := strings.Cut(element, "@")
+	nanos, err := parseInt(expiry)
+	if err != nil {
+		return digest, time.Time{}
+	}
+	return digest, nanosToTime(nanos)
 }
 
 func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
@@ -36,39 +81,243 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 		return err
 	}
 	if s.tx != nil {
-		if err := s.tx.putIfAbsent(s.parent.names.refreshes, entry); err != nil {
-			return err
-		}
-		if t.ParentID == nil {
-			return nil
-		}
-		return s.assertParentAlive(ctx, *t.ParentID)
-	}
-
-	placed, err := s.parent.putIfAbsent(ctx, s.parent.names.refreshes, entry)
-	if err != nil {
-		return wrapErr("refreshes.Save", err)
-	}
-	if !placed {
-		return store.ErrAlreadyExists
+		return s.saveStaged(ctx, t, entry)
 	}
 	if t.ParentID == nil {
+		return s.saveRoot(ctx, t, entry)
+	}
+	return s.saveRotation(ctx, t, entry)
+}
+
+// saveRotation writes a descendant and adds it to its parent's children
+// set in one transaction. The parent's guard is the RFC 9700 §2.2.2 rule:
+// a chain a replay cascade has already revoked takes no further
+// descendants. Because the cascade revokes a node before reading its
+// children, the two cannot interleave — a descendant is either in the
+// set the cascade reads or refused by the guard.
+func (s *refreshStore) saveRotation(ctx context.Context, t *store.RefreshToken, entry item) error {
+	_, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{
+				TableName:           aws.String(s.parent.names.refreshes),
+				Item:                entry,
+				ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+			}},
+			{Update: &types.Update{
+				TableName:                 aws.String(s.parent.names.refreshes),
+				Key:                       key(digestKey(*t.ParentID)),
+				UpdateExpression:          aws.String("ADD #children :child"),
+				ConditionExpression:       aws.String(parentAliveCondition),
+				ExpressionAttributeNames:  parentAliveNames(),
+				ExpressionAttributeValues: parentAliveValues(digestKey(t.ID)),
+			}},
+		},
+	})
+	if err == nil {
 		return nil
 	}
-	// A rotation must not survive a concurrent chain revocation: RFC
-	// 9700 §2.2.2 requires the whole chain to die once a replay is
-	// detected, and a descendant written after the cascade scanned
-	// would keep the attacker's chain redeemable until natural expiry.
-	// DynamoDB cannot hold a row lock across the insert and the
-	// re-check, so the descendant is removed again when the parent
-	// turns out to have been revoked meanwhile.
-	if err := s.assertParentAlive(ctx, *t.ParentID); err != nil {
-		if _, delErr := s.parent.deleteKey(ctx, s.parent.names.refreshes, digestKey(t.ID)); delErr != nil {
-			return wrapErr("refreshes.Save.undoRotation", delErr)
+	if !isTransactionCanceledByCondition(err) {
+		return wrapErr("refreshes.Save", err)
+	}
+	codes := transactionCancellationCodes(err)
+	if len(codes) > 0 && codes[0] == conditionalCheckFailed {
+		return store.ErrAlreadyExists
+	}
+	parent, err := s.parent.get(ctx, s.parent.names.refreshes, digestKey(*t.ParentID))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		// A missing parent proves no revocation happened — it may simply
+		// have been collected — so the rotation is kept, and with nothing
+		// to hang it from it starts a chain of its own.
+		return s.saveRoot(ctx, t, entry)
+	case err != nil:
+		return wrapErr("refreshes.Save.parent", err)
+	case readBool(parent, attrRevoked):
+		return store.ErrAlreadyConsumed
+	}
+	return store.ErrConflict
+}
+
+// parentAliveCondition admits a write to a rotation's parent only while
+// the parent is stored and not revoked.
+const parentAliveCondition = "attribute_exists(#pk) AND (attribute_not_exists(#revoked) OR #revoked = :false)"
+
+func parentAliveNames() map[string]string {
+	return map[string]string{"#pk": attrPK, "#revoked": attrRevoked, "#children": attrChildren}
+}
+
+func parentAliveValues(child string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{":false": avBool(false), ":child": avSS(child)}
+}
+
+// saveRoot writes a token that starts a chain and adds it to its grant's
+// root list in one transaction. A token without a grant has no cascade
+// that enumerates by grant, so it is written alone.
+func (s *refreshStore) saveRoot(ctx context.Context, t *store.RefreshToken, entry item) error {
+	if t.GrantID == "" {
+		placed, err := s.parent.putIfAbsent(ctx, s.parent.names.refreshes, entry)
+		if err != nil {
+			return wrapErr("refreshes.Save", err)
 		}
+		if !placed {
+			return store.ErrAlreadyExists
+		}
+		return nil
+	}
+	if err := s.pruneGrantRoots(ctx, t.GrantID); err != nil {
 		return err
 	}
+	_, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{
+				TableName:           aws.String(s.parent.names.refreshes),
+				Item:                entry,
+				ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+			}},
+			{Update: &types.Update{
+				TableName:        aws.String(s.parent.names.refreshes),
+				Key:              key(grantRootsKey(t.GrantID)),
+				UpdateExpression: aws.String("ADD #roots :root, #version :one"),
+				ExpressionAttributeNames: map[string]string{
+					"#roots":   attrRoots,
+					"#version": attrRecordVersion,
+				},
+				ExpressionAttributeValues: map[string]types.AttributeValue{
+					":root": avSS(grantRootElement(digestKey(t.ID), t.ExpiresAt)),
+					":one":  avN(1),
+				},
+			}},
+		},
+	})
+	if err != nil {
+		// The token's insert is the only guarded action.
+		if isTransactionCanceledByCondition(err) {
+			return store.ErrAlreadyExists
+		}
+		return wrapErr("refreshes.Save", err)
+	}
 	return nil
+}
+
+// pruneGrantRoots drops the elements of a grant's root list whose root has
+// expired. It runs as its own update ahead of the insert because one
+// update expression cannot both add to and remove from the same set;
+// removing a named element is idempotent, so it needs no guard against a
+// concurrent insert.
+func (s *refreshStore) pruneGrantRoots(ctx context.Context, grantID string) error {
+	found, err := s.parent.get(ctx, s.parent.names.refreshes, grantRootsKey(grantID))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return wrapErr("refreshes.Save.roots", err)
+	}
+	_, stale := s.splitGrantRoots(found)
+	if len(stale) == 0 {
+		return nil
+	}
+	_, err = s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:        aws.String(s.parent.names.refreshes),
+		Key:              key(grantRootsKey(grantID)),
+		UpdateExpression: aws.String("DELETE #roots :stale ADD #version :one"),
+		ExpressionAttributeNames: map[string]string{
+			"#roots":   attrRoots,
+			"#version": attrRecordVersion,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":stale": avSS(stale...),
+			":one":   avN(1),
+		},
+	})
+	if err != nil {
+		return wrapErr("refreshes.Save.roots", err)
+	}
+	return nil
+}
+
+// splitGrantRoots partitions a root list into the elements whose root is
+// still live and those whose root has expired.
+func (s *refreshStore) splitGrantRoots(found item) (live, stale []string) {
+	for _, element := range readSS(found, attrRoots) {
+		if _, expiresAt := parseGrantRoot(element); s.parent.isExpired(expiresAt) {
+			stale = append(stale, element)
+			continue
+		}
+		live = append(live, element)
+	}
+	return live, stale
+}
+
+// saveStaged is [refreshStore.Save] inside a transaction: the token, and
+// the link that makes it reachable, commit together with everything else
+// the caller staged.
+func (s *refreshStore) saveStaged(ctx context.Context, t *store.RefreshToken, entry item) error {
+	if err := s.tx.putIfAbsent(s.parent.names.refreshes, entry); err != nil {
+		return err
+	}
+	if t.ParentID == nil {
+		return s.stageGrantRoot(ctx, t)
+	}
+	if err := s.assertParentAlive(ctx, *t.ParentID); err != nil {
+		return err
+	}
+	parentDigest := digestKey(*t.ParentID)
+	parent, err := s.tx.get(ctx, s.parent.names.refreshes, parentDigest)
+	if errors.Is(err, store.ErrNotFound) {
+		return s.stageGrantRoot(ctx, t)
+	}
+	if err != nil {
+		return wrapErr("refreshes.Save.parent", err)
+	}
+	children := slices.Clone(readSS(parent, attrChildren))
+	if child := digestKey(t.ID); !slices.Contains(children, child) {
+		children = append(children, child)
+	}
+	// The guard on the parent's revoked flag is the transactional form of
+	// the parent-alive check above, and the guard on its children keeps a
+	// link another writer added meanwhile from being replaced.
+	return s.tx.attachGuarded(
+		ctx, s.parent.names.refreshes, parentDigest, attrChildren, avSS(children...),
+		attrChildren, attrRevoked,
+	)
+}
+
+// stageGrantRoot adds a chain root to its grant's root list inside a
+// transaction. The buffer stages whole items, so the write carries the
+// list's version and a concurrent addition fails the commit with
+// [store.ErrConflict] instead of being overwritten.
+func (s *refreshStore) stageGrantRoot(ctx context.Context, t *store.RefreshToken) error {
+	if t.GrantID == "" {
+		return nil
+	}
+	pk := grantRootsKey(t.GrantID)
+	found, err := s.tx.get(ctx, s.parent.names.refreshes, pk)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return wrapErr("refreshes.Save.roots", err)
+	}
+	live, _ := s.splitGrantRoots(found)
+	entry := newItem(pk)
+	entry[attrRoots] = avSS(append(live, grantRootElement(digestKey(t.ID), t.ExpiresAt))...)
+	return s.tx.putVersioned(ctx, s.parent.names.refreshes, pk, entry, attrRecordVersion)
+}
+
+// grantRoots reads a grant's root list with a strongly consistent read,
+// through the transaction when there is one.
+func (s *refreshStore) grantRoots(ctx context.Context, grantID string) ([]string, error) {
+	found, err := s.read(ctx, grantRootsKey(grantID))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, wrapErr("refreshes.RevokeByGrant.roots", err)
+	}
+	elements := readSS(found, attrRoots)
+	roots := make([]string, 0, len(elements))
+	for _, element := range elements {
+		digest, _ := parseGrantRoot(element)
+		roots = append(roots, digest)
+	}
+	return roots, nil
 }
 
 // assertParentAlive reports [store.ErrAlreadyConsumed] when the parent
@@ -98,10 +347,10 @@ func (s *refreshStore) assertParentAlive(ctx context.Context, parentID string) e
 // response, take the presentation for a replay, and revoke a chain the
 // client legitimately owns.
 //
-// The parent guard folded into the transaction is the same
-// replay-revocation check [refreshStore.Save] makes after the fact
-// (RFC 9700 §2.2.2), except that here it cannot leave a descendant to
-// undo: a chain tombstoned meanwhile simply fails the rotation.
+// The update that attaches the cache to the predecessor also links the
+// successor from it and carries the same parent guard as
+// [refreshStore.Save] (RFC 9700 §2.2.2): a chain tombstoned meanwhile
+// simply fails the rotation.
 func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.RefreshToken, sealed []byte) error {
 	if t == nil || t.ParentID == nil || len(sealed) == 0 {
 		return errors.New("oidcdynamo: retryable refresh rotation requires successor, parent, and sealed response")
@@ -124,6 +373,10 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 	if err != nil {
 		return err
 	}
+	retryNames := parentAliveNames()
+	retryNames["#retry"] = attrRetryResponse
+	retryValues := parentAliveValues(digestKey(t.ID))
+	retryValues[":sealed"] = avB(sealed)
 	_, err = s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Put: &types.Put{
@@ -132,21 +385,12 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 				ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
 			}},
 			{Update: &types.Update{
-				TableName:        aws.String(s.parent.names.refreshes),
-				Key:              key(parentDigest),
-				UpdateExpression: aws.String("SET #retry = :sealed"),
-				ConditionExpression: aws.String(
-					"attribute_exists(#pk) AND (attribute_not_exists(#revoked) OR #revoked = :false)",
-				),
-				ExpressionAttributeNames: map[string]string{
-					"#pk":      attrPK,
-					"#retry":   attrRetryResponse,
-					"#revoked": attrRevoked,
-				},
-				ExpressionAttributeValues: map[string]types.AttributeValue{
-					":sealed": avB(sealed),
-					":false":  avBool(false),
-				},
+				TableName:                 aws.String(s.parent.names.refreshes),
+				Key:                       key(parentDigest),
+				UpdateExpression:          aws.String("SET #retry = :sealed ADD #children :child"),
+				ConditionExpression:       aws.String(parentAliveCondition),
+				ExpressionAttributeNames:  retryNames,
+				ExpressionAttributeValues: retryValues,
 			}},
 		},
 	})
@@ -347,57 +591,81 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 // RevokeChain walks the rotation tree breadth-first from rootID and
 // stamps every node consumed and revoked.
 //
+// A node's descendants are read from its children set, with the same
+// strongly consistent write that revokes it: a rotation that committed
+// before the node was revoked is in the set, and one that arrives after
+// is refused by the parent guard in [refreshStore.Save]. The by_parent
+// index is followed as well, for descendants written before the set
+// existed; for those the walk is only as current as the index.
+//
 // Outside a transaction the walk is not one atomic operation, but it is
-// idempotent and converges: a descendant written while it runs is caught
-// either by this walk or by the parent-alive re-check in
-// [refreshStore.Save].
-//
-// Inside one it is atomic, and bounded: every node costs one of the
-// transaction's actions, so a chain longer than the TransactWriteItems
-// ceiling reports [ErrTransactionTooLarge] rather than retiring part of
-// itself. The caller's fallback is the same walk outside a transaction,
-// which has no ceiling.
-//
-// The child enumeration is an index read either way, so a descendant
-// this transaction has staged but not committed is not part of the walk.
-// The OP does not produce that shape — a rotation's successor is written
-// onto a chain the same request is not also revoking — and a descendant
-// that arrives afterwards is caught by the parent-alive re-check.
+// idempotent and converges. Inside one it is atomic, and bounded: every
+// node costs one of the transaction's actions, so a chain longer than the
+// TransactWriteItems ceiling reports [ErrTransactionTooLarge] rather than
+// retiring part of itself. The caller's fallback is the same walk outside
+// a transaction, which has no ceiling. The children set is read through
+// the transaction, so a descendant it has staged is part of the walk, and
+// each staged node asserts its set unchanged at commit, so one added
+// meanwhile fails the commit rather than escaping it.
 func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
 	root, err := s.resolveChainRoot(ctx, rootID)
 	if err != nil {
 		return err
 	}
+	return s.revokeTree(ctx, []string{root}, "", true)
+}
+
+// revokeTree retires every node reachable from starts through the
+// children sets. A non-empty grantID confines the walk to that grant's
+// tokens, and withParentIndex also follows the by_parent index from each
+// node.
+func (s *refreshStore) revokeTree(ctx context.Context, starts []string, grantID string, withParentIndex bool) error {
 	now := s.parent.now()
-	visited := map[string]struct{}{root: {}}
-	queue := []string{root}
+	visited := make(map[string]struct{}, len(starts))
+	var queue []string
+	enqueue := func(keys []string) {
+		for _, pk := range keys {
+			if pk == "" {
+				continue
+			}
+			if _, seen := visited[pk]; seen {
+				continue
+			}
+			visited[pk] = struct{}{}
+			queue = append(queue, pk)
+		}
+	}
+	enqueue(starts)
 
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
 
-		if err := s.revokeOne(ctx, current, now); err != nil {
+		children, err := s.revokeOne(ctx, current, grantID, now)
+		if err != nil {
 			return err
 		}
-		children, err := s.parent.queryIndex(
+		enqueue(children)
+		if !withParentIndex {
+			continue
+		}
+		indexed, err := s.parent.queryIndex(
 			ctx, s.parent.names.refreshes, indexByParent, attrParentID, current,
 		)
 		if err != nil {
 			return wrapErr("refreshes.RevokeChain.children", err)
 		}
-		for _, child := range children {
-			id := readS(child, attrPK)
-			if id == "" {
-				continue
-			}
-			if _, seen := visited[id]; seen {
-				continue
-			}
-			visited[id] = struct{}{}
-			queue = append(queue, id)
-		}
+		enqueue(itemKeys(indexed))
 	}
 	return nil
+}
+
+func itemKeys(items []item) []string {
+	keys := make([]string, 0, len(items))
+	for _, it := range items {
+		keys = append(keys, readS(it, attrPK))
+	}
+	return keys
 }
 
 // resolveChainRoot maps the caller's handle onto the stored key the
@@ -420,11 +688,17 @@ func (s *refreshStore) resolveChainRoot(ctx context.Context, rootID string) (str
 	return rootID, nil
 }
 
-func (s *refreshStore) revokeOne(ctx context.Context, pk string, now time.Time) error {
+// revokeOne retires one node and returns its children set. A node that
+// is not stored, or that belongs to another grant than a non-empty
+// grantID, is left alone and reports no children.
+//
+// The set comes back from the revoking write itself, so it is exactly
+// the set a concurrent rotation could still join before the guard shut.
+func (s *refreshStore) revokeOne(ctx context.Context, pk, grantID string, now time.Time) ([]string, error) {
 	if s.tx != nil {
-		return s.revokeOneStaged(ctx, pk, now)
+		return s.revokeOneStaged(ctx, pk, grantID, now)
 	}
-	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	in := &dynamodb.UpdateItemInput{
 		TableName:           aws.String(s.parent.names.refreshes),
 		Key:                 key(pk),
 		UpdateExpression:    aws.String("SET #revoked = :true"),
@@ -436,14 +710,24 @@ func (s *refreshStore) revokeOne(ctx context.Context, pk string, now time.Time) 
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":true": avBool(true),
 		},
-	})
+		ReturnValues: types.ReturnValueAllNew,
+	}
+	if grantID != "" {
+		in.ConditionExpression = aws.String("attribute_exists(#pk) AND #grant = :grant")
+		in.ExpressionAttributeNames["#grant"] = attrGrantID
+		in.ExpressionAttributeValues[":grant"] = avS(grantID)
+	}
+	out, err := s.parent.api.UpdateItem(ctx, in)
 	if err != nil {
 		if isConditionalCheckFailed(err) {
-			return nil
+			return nil, nil
 		}
-		return wrapErr("refreshes.revoke", err)
+		return nil, wrapErr("refreshes.revoke", err)
 	}
-	return s.stampConsumedIfUnset(ctx, pk, now)
+	if err := s.stampConsumedIfUnset(ctx, pk, now); err != nil {
+		return nil, err
+	}
+	return readSS(out.Attributes, attrChildren), nil
 }
 
 // revokeOneStaged retires one chain node inside a transaction. The
@@ -455,31 +739,41 @@ func (s *refreshStore) revokeOne(ctx context.Context, pk string, now time.Time) 
 // Both attributes join a single staged action for the item, so a node
 // costs one of the transaction's actions rather than two, and a node
 // this transaction has already stamped consumed keeps the guard that
-// stamping carried.
-func (s *refreshStore) revokeOneStaged(ctx context.Context, pk string, now time.Time) error {
+// stamping carried. The action also asserts the children set the walk
+// read, so a rotation that joins it before the commit fails the commit.
+func (s *refreshStore) revokeOneStaged(ctx context.Context, pk, grantID string, now time.Time) ([]string, error) {
 	found, err := s.tx.get(ctx, s.parent.names.refreshes, pk)
 	if errors.Is(err, store.ErrNotFound) {
 		// Nothing is stored under the key, so there is nothing to retire.
 		// The direct path reaches the same outcome through its existence
 		// guard.
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return wrapErr("refreshes.revoke", err)
+		return nil, wrapErr("refreshes.revoke", err)
 	}
+	if grantID != "" && readS(found, attrGrantID) != grantID {
+		return nil, nil
+	}
+	children := slices.Clone(readSS(found, attrChildren))
 	// consumed_at is read before the revoked flag is staged, so the
 	// decision below is made against the record as it stood rather than
 	// against the copy this call is amending.
 	consumed := readTime(found, attrConsumedAt)
-	if err := s.tx.attach(ctx, s.parent.names.refreshes, pk, attrRevoked, avBool(true)); err != nil {
-		return err
+	if err := s.tx.attachGuarded(
+		ctx, s.parent.names.refreshes, pk, attrRevoked, avBool(true), attrChildren,
+	); err != nil {
+		return nil, err
 	}
 	if !consumed.IsZero() {
 		// See [refreshStore.stampConsumedIfUnset]: the instant a
 		// legitimate rotation recorded is not overwritten.
-		return nil
+		return children, nil
 	}
-	return s.tx.attach(ctx, s.parent.names.refreshes, pk, attrConsumedAt, avTime(now))
+	if err := s.tx.attach(ctx, s.parent.names.refreshes, pk, attrConsumedAt, avTime(now)); err != nil {
+		return nil, err
+	}
+	return children, nil
 }
 
 // stampConsumedIfUnset sets consumed_at only when it is still zero, so
@@ -508,43 +802,67 @@ func (s *refreshStore) stampConsumedIfUnset(ctx context.Context, pk string, now 
 
 // RevokeByGrant stamps every token of a grant consumed and revoked. A
 // grant with no tokens is not an error.
+//
+// The walk starts from the grant's root list, read consistently, and
+// descends through the children sets; the by_grant index adds the tokens
+// written before either existed. Inside a transaction the index still
+// reads committed data only — DynamoDB has no way to query staged
+// writes — while every retirement is buffered, so the writes are
+// undoable. The same per-node action cost as [refreshStore.RevokeChain]
+// applies.
+//
+// Part of the enumeration runs outside the buffer, so the settled-handle
+// guard has to be explicit here: without it a grant that matches nothing
+// reports success through a handle that is no longer in a transaction.
 func (s *refreshStore) RevokeByGrant(ctx context.Context, grantID string) error {
-	return s.revokeByIndex(ctx, indexByGrant, attrGrantID, grantID, "refreshes.RevokeByGrant")
+	if err := s.tx.assertOpen(); err != nil {
+		return err
+	}
+	if grantID == "" {
+		return nil
+	}
+	roots, err := s.grantRoots(ctx, grantID)
+	if err != nil {
+		return err
+	}
+	indexed, err := s.parent.queryIndex(ctx, s.parent.names.refreshes, indexByGrant, attrGrantID, grantID)
+	if err != nil {
+		return wrapErr("refreshes.RevokeByGrant", err)
+	}
+	return s.revokeTree(ctx, append(roots, itemKeys(indexed)...), grantID, false)
 }
 
 // RevokeByClient implements [store.RevokeByClient]. The dynamic
 // registration cascade calls it after a client is deleted.
-func (s *refreshStore) RevokeByClient(ctx context.Context, clientID string) error {
-	if clientID == "" {
-		return nil
-	}
-	return s.revokeByIndex(ctx, indexByClient, attrClientID, clientID, "refreshes.RevokeByClient")
-}
-
-// revokeByIndex retires every token an index points at. Inside a
-// transaction the enumeration still reads the index — DynamoDB has no
-// way to query staged writes — while each retirement is buffered, so the
-// set is the committed one and the writes are undoable. The same
-// per-node action cost as [refreshStore.RevokeChain] applies.
 //
-// The enumeration runs outside the buffer, so the settled-handle guard
-// has to be explicit here: without it an index that matches nothing
-// reports success through a handle that is no longer in a transaction.
-func (s *refreshStore) revokeByIndex(ctx context.Context, index, attr, value, op string) error {
+// A client's tokens span every grant it holds and no bounded item lists
+// them, so the consistent half of the enumeration is a strongly
+// consistent scan of the table, affordable for a call that runs once per
+// client deletion. It is united with the by_client index the same way
+// the other two cascades unite their links with an index.
+func (s *refreshStore) RevokeByClient(ctx context.Context, clientID string) error {
 	if err := s.tx.assertOpen(); err != nil {
 		return err
 	}
-	matches, err := s.parent.queryIndex(ctx, s.parent.names.refreshes, index, attr, value)
+	if clientID == "" {
+		return nil
+	}
+	scanned, err := s.parent.scanMatching(ctx, s.parent.names.refreshes, attrClientID, clientID)
 	if err != nil {
-		return wrapErr(op, err)
+		return wrapErr("refreshes.RevokeByClient", err)
+	}
+	indexed, err := s.parent.queryIndex(ctx, s.parent.names.refreshes, indexByClient, attrClientID, clientID)
+	if err != nil {
+		return wrapErr("refreshes.RevokeByClient", err)
 	}
 	now := s.parent.now()
-	for _, match := range matches {
-		pk := readS(match, attrPK)
-		if pk == "" {
+	seen := make(map[string]struct{}, len(scanned))
+	for _, pk := range append(itemKeys(scanned), itemKeys(indexed)...) {
+		if _, dup := seen[pk]; dup || pk == "" {
 			continue
 		}
-		if err := s.revokeOne(ctx, pk, now); err != nil {
+		seen[pk] = struct{}{}
+		if _, err := s.revokeOne(ctx, pk, "", now); err != nil {
 			return err
 		}
 	}

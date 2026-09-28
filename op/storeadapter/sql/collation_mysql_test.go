@@ -195,3 +195,152 @@ func TestMySQL_UsernameCollation(t *testing.T) {
 		}
 	})
 }
+
+// TestMySQL_IdentifierCollation is [TestMySQL_UsernameCollation] for the
+// identifier columns store-adapters-003 pins: every subject and client_id
+// column, plus oidc_clients.id. Each is compared for exact equality against
+// a value the OP generated or an embedder chose, never freeform text, so
+// the same folding defect applies: on MySQL's default collation
+// PutUserWithPassword("Alice", ...) overwrites the row "alice" already
+// has, FindBySubject("ALICE") resolves "alice", and GetClient("MYAPP")
+// resolves "myapp".
+func TestMySQL_IdentifierCollation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	ctr, err := mysqlmod.Run(ctx, mysqlImage,
+		mysqlmod.WithUsername("root"),
+		mysqlmod.WithPassword("oidcpw"),
+		mysqlmod.WithDatabase("oidc_admin"),
+	)
+	if err != nil {
+		if os.Getenv("RELEASE_CONTRACT_REQUIRED") == "1" {
+			t.Fatalf("mysql container required for release contract: %v", err)
+		}
+		t.Skipf("mysql container unavailable (Docker not running?): %v", err)
+	}
+	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
+
+	adminDSN, err := ctr.ConnectionString(ctx, "parseTime=true", "multiStatements=true")
+	if err != nil {
+		t.Fatalf("ConnectionString: %v", err)
+	}
+	baseCfg, err := mysqldriver.ParseDSN(adminDSN)
+	if err != nil {
+		t.Fatalf("ParseDSN: %v", err)
+	}
+	admin, err := databasesql.Open("mysql", adminDSN)
+	if err != nil {
+		t.Fatalf("open admin: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+
+	if _, err := admin.ExecContext(ctx, "CREATE DATABASE `oidc_identifier_collation`"); err != nil {
+		t.Fatalf("CREATE DATABASE: %v", err)
+	}
+	cfg := *baseCfg
+	cfg.DBName = "oidc_identifier_collation"
+	db, err := databasesql.Open("mysql", cfg.FormatDSN())
+	if err != nil {
+		t.Fatalf("open oidc_identifier_collation: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	s, err := oidcsql.New(db, oidcsql.MySQL())
+	if err != nil {
+		t.Fatalf("oidcsql.New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Structural half: every column this schema uses to hold a subject or
+	// a client_id, read out of the live database rather than a hand-kept
+	// list, so a column added later is covered without anyone updating
+	// this test.
+	t.Run("EveryIdentifierColumnIsPinned", func(t *testing.T) {
+		rows, err := db.QueryContext(ctx, `
+			SELECT TABLE_NAME, COLUMN_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+			  AND (COLUMN_NAME IN ('subject', 'client_id')
+			       OR (TABLE_NAME = 'oidc_clients' AND COLUMN_NAME = 'id'))`)
+		if err != nil {
+			t.Fatalf("query information_schema: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+		checked := 0
+		for rows.Next() {
+			var table, column, collation string
+			if err := rows.Scan(&table, &column, &collation); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			checked++
+			if collation != "utf8mb4_bin" {
+				t.Errorf("%s.%s collation = %q, want utf8mb4_bin", table, column, collation)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("rows: %v", err)
+		}
+		if checked == 0 {
+			t.Fatal("no subject/client_id/oidc_clients.id columns matched: the query stopped tracking the schema")
+		}
+	})
+
+	// Behavioural half: the two lookups the finding names, driven through
+	// the public API exactly as an embedder would call it.
+	t.Run("SubjectDistinguishesCase", func(t *testing.T) {
+		if err := s.PutUser(ctx, &store.User{Subject: "Alice"}); err != nil {
+			t.Fatalf("PutUser(Alice): %v", err)
+		}
+		if err := s.PutUser(ctx, &store.User{Subject: "alice"}); err != nil {
+			t.Fatalf("PutUser(alice): %v", err)
+		}
+		users := s.Users()
+		upper, err := users.FindBySubject(ctx, "Alice")
+		if err != nil {
+			t.Fatalf("FindBySubject(Alice): %v", err)
+		}
+		lower, err := users.FindBySubject(ctx, "alice")
+		if err != nil {
+			t.Fatalf("FindBySubject(alice): %v", err)
+		}
+		if upper.Subject != "Alice" || lower.Subject != "alice" {
+			t.Fatalf("FindBySubject folded Alice/alice onto one record: got %q and %q", upper.Subject, lower.Subject)
+		}
+	})
+
+	t.Run("ClientIDDistinguishesCase", func(t *testing.T) {
+		if err := s.RegisterClient(ctx, &store.Client{
+			ID:           "MyApp",
+			RedirectURIs: []string{"https://rp.example.com/cb"},
+			GrantTypes:   []string{"authorization_code"},
+			Scopes:       []string{"openid"},
+		}); err != nil {
+			t.Fatalf("RegisterClient(MyApp): %v", err)
+		}
+		if err := s.RegisterClient(ctx, &store.Client{
+			ID:           "myapp",
+			RedirectURIs: []string{"https://rp2.example.com/cb"},
+			GrantTypes:   []string{"authorization_code"},
+			Scopes:       []string{"openid"},
+		}); err != nil {
+			t.Fatalf("RegisterClient(myapp): %v", err)
+		}
+		clients := s.Clients()
+		upper, err := clients.GetClient(ctx, "MyApp")
+		if err != nil {
+			t.Fatalf("GetClient(MyApp): %v", err)
+		}
+		lower, err := clients.GetClient(ctx, "myapp")
+		if err != nil {
+			t.Fatalf("GetClient(myapp): %v", err)
+		}
+		if upper.ID != "MyApp" || lower.ID != "myapp" {
+			t.Fatalf("GetClient folded MyApp/myapp onto one record: got %q and %q", upper.ID, lower.ID)
+		}
+		if len(upper.RedirectURIs) != 1 || upper.RedirectURIs[0] != "https://rp.example.com/cb" {
+			t.Fatalf("GetClient(MyApp) redirect_uris = %v, want its own record", upper.RedirectURIs)
+		}
+	})
+}

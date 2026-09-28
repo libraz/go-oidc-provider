@@ -66,14 +66,17 @@ type AccessTokenRecord struct {
 // be atomic for a single JTI; the OP runtime does not require a cross-substore
 // [Transactional] transaction.
 //
-// Backends MAY satisfy this interface with a positive list (revocation
-// removes the row) or a marked-revoked list (revocation flips a
-// column). The reference implementation in
-// [github.com/libraz/go-oidc-provider/op/storeadapter/inmem] uses the
-// marked-revoked variant because it makes the "revoked at" timestamp
-// recoverable for audit; either approach satisfies the contract as
-// long as [AccessTokenRegistry.Find] returns nil (or a record with
-// [AccessTokenRecord.Revoked] = true) for retired entries.
+// Backends MUST satisfy this interface with a marked-revoked list:
+// [AccessTokenRegistry.RevokeByJTI] and [AccessTokenRegistry.RevokeByGrant]
+// flip [AccessTokenRecord.Revoked] rather than removing the row, and
+// [AccessTokenRegistry.Find] MUST keep returning the record — with
+// Revoked set — until [AccessTokenRegistry.GC] is entitled to drop it
+// at [AccessTokenRecord.ExpiresAt]. A backend that deletes on
+// revocation instead defeats revocation silently: the shared JWT
+// access-token verifier (userinfo, introspection, RFC 7009 revocation,
+// the code-replay cascade) treats a missing record as "not revoked",
+// not as "revoked", because deletion is indistinguishable from a
+// record that was never registered.
 type AccessTokenRegistry interface {
 	// Register persists rec. It MUST return [ErrAlreadyExists] if a
 	// record with the same JTI already exists; the JTI is generated
@@ -83,31 +86,36 @@ type AccessTokenRegistry interface {
 
 	// Find returns the record identified by jti, or (nil, nil) when no
 	// such record exists. Returning a typed [ErrNotFound] is also
-	// permitted; the library treats both shapes as "absent". The
-	// returned record's Revoked flag MAY be true; callers (userinfo,
-	// introspection) inspect it before honouring the token.
+	// permitted; the library treats both shapes as "absent". A record
+	// retired by [AccessTokenRegistry.RevokeByJTI] or
+	// [AccessTokenRegistry.RevokeByGrant] is not "absent": Find MUST
+	// keep returning it, with Revoked true, until GC is entitled to
+	// drop it. Callers (userinfo, introspection) inspect Revoked
+	// before honouring the token.
 	Find(ctx context.Context, jti string) (*AccessTokenRecord, error)
 
-	// RevokeByJTI marks the record identified by jti as revoked. It
-	// MUST be idempotent: a second call against the same jti returns
-	// nil. A missing record is not an error (returning nil mirrors the
-	// RFC 7009 §2.2 idempotency posture; the revocation endpoint
-	// returns 200 either way).
+	// RevokeByJTI marks the record identified by jti as revoked; it
+	// MUST NOT remove the row (see the interface doc). It MUST be
+	// idempotent: a second call against the same jti returns nil. A
+	// missing record is not an error (returning nil mirrors the RFC
+	// 7009 §2.2 idempotency posture; the revocation endpoint returns
+	// 200 either way).
 	RevokeByJTI(ctx context.Context, jti string) error
 
 	// RevokeByGrant marks every record whose [AccessTokenRecord.GrantID]
-	// equals grantID as revoked, returning the number of rows touched.
-	// Used by the code-replay cascade (RFC 6749 §4.1.2): when the OP
-	// detects a replayed authorization code it revokes every access
-	// token derived from the same grant alongside the refresh-token
-	// chain. A missing grant is not an error (returning (0, nil) is
+	// equals grantID as revoked, returning the number of rows touched;
+	// it MUST NOT remove the rows (see the interface doc). Used by the
+	// code-replay cascade (RFC 6749 §4.1.2): when the OP detects a
+	// replayed authorization code it revokes every access token derived
+	// from the same grant alongside the refresh-token chain. A missing
+	// grant is not an error (returning (0, nil) is
 	// appropriate when no rows match).
 	RevokeByGrant(ctx context.Context, grantID string) (int, error)
 
 	// GC drops every record whose [AccessTokenRecord.ExpiresAt] is
 	// strictly before cutoff and returns the number of rows removed.
-	// Embedders typically call this from a periodic sweeper; the
-	// library's reference wiring runs it inside the same loop that
-	// sweeps codes and PAR records.
+	// The library never calls GC itself; scheduling it — from a
+	// periodic sweeper alongside the other substores' own GC methods,
+	// or otherwise — is the embedder's responsibility.
 	GC(ctx context.Context, cutoff time.Time) (int, error)
 }

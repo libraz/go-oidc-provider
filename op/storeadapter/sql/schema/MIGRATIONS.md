@@ -92,6 +92,56 @@ ALTER TABLE oidc_opaque_access_tokens
     ADD INDEX idx_oidc_opaque_access_tokens_client (client_id);
 ALTER TABLE oidc_users
     MODIFY username VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL;
+ALTER TABLE oidc_clients
+    MODIFY id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_users
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_authorization_codes
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_authorization_codes
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_refresh_tokens
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_refresh_tokens
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_access_tokens
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_access_tokens
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';
+ALTER TABLE oidc_opaque_access_tokens
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_opaque_access_tokens
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';
+ALTER TABLE oidc_grants
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_grants
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_sessions
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_par_records
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_interactions
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_registration_access_tokens
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_device_codes
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_device_codes
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';
+ALTER TABLE oidc_ciba_requests
+    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_ciba_requests
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';
+ALTER TABLE oidc_totp_secrets
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_passkeys
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_recovery_codes
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_email_otps
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
+ALTER TABLE oidc_authn_lockouts
+    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
 ```
 
 PostgreSQL:
@@ -146,14 +196,20 @@ The `expires_at` indexes bound the retention sweep: a `DELETE` filtered on an
 unindexed column scans the table, and on MySQL it takes a lock per row it
 examines rather than per row it removes, so the cost grows with the data the
 sweep exists to bound.
-The MySQL-only `oidc_users.username` collation change makes the lookup match
-bytes, which is what the adapter documents and what SQLite and PostgreSQL do
-already. MySQL's default collation is case- and accent-insensitive, so without
-it a login submitted as `ALICE` resolves `alice` on MySQL and nowhere else, and
-two usernames differing only in case cannot both exist. Apply it before
-provisioning usernames that differ only in case; on a database that already
-holds rows the `MODIFY` fails if two existing usernames collide under the
-binary collation, which names the accounts that have to be reconciled first.
+The MySQL-only collation changes make every `client_id` and `subject` column,
+plus `oidc_clients.id`, match bytes, which is what the adapter documents and
+what SQLite and PostgreSQL do already. MySQL's default collation is case- and
+accent-insensitive, so without them `PutUserWithPassword("Alice", ...)`
+overwrites the row `alice` already has instead of creating a second one,
+`FindBySubject("ALICE")` resolves `alice`, and `GetClient("MYAPP")` resolves
+`myapp` — on MySQL only. Every one of these columns is an identifier compared
+for exact equality against a value the OP itself generated or a client/subject
+string an embedder chose, never freeform text, so binary collation costs
+nothing but the case- and accent-folding the default was never supposed to
+apply to them. Apply the `MODIFY` statements before provisioning subjects or
+client IDs that differ only in case or accents; on a database that already
+holds rows a `MODIFY` fails if two existing values collide under the binary
+collation, which names the rows that have to be reconciled first.
 The three `client_id` indexes on the token tables bound the rest of that same
 cascade. It revokes with an `UPDATE` rather than a `DELETE`, which the engine
 plans identically: filtered on an unindexed column it scans, and on MySQL the

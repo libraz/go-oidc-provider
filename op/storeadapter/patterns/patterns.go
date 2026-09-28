@@ -98,9 +98,9 @@ func IsExpiredInclusive(t, now time.Time) bool {
 // SQL adapter is a sub-module). Callers pass database/sql.ErrNoRows
 // from their own package.
 //
-// The helper returns nil when err is nil, the supplied sqlNoRows when
-// err is anything else, and [store.ErrNotFound] specifically when err
-// matches sqlNoRows via [errors.Is].
+// The helper returns nil when err is nil, [store.ErrNotFound] when err
+// matches sqlNoRows via [errors.Is], and err unchanged for any other
+// non-nil error.
 func MapSQLNotFound(err, sqlNoRows error) error {
 	if err == nil {
 		return nil

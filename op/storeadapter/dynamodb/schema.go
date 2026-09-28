@@ -51,6 +51,8 @@ const (
 	attrSlotIndex     = "slot_index"
 	attrCodeHash      = "code_hash"
 	attrRetryResponse = "retry_response"
+	attrChildren      = "children"
+	attrRoots         = "roots"
 	attrTOTPStep      = "last_accepted_step"
 	// attrRecordVersion is deliberately independent from attrDoc. During the
 	// migration, deploy all writers together: an old writer's PutItem omits

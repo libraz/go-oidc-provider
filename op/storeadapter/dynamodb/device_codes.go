@@ -3,6 +3,8 @@ package oidcdynamo
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -226,6 +228,13 @@ func (s *deviceCodeStore) deny(ctx context.Context, pk, reason string) error {
 // refusal recorded, and a consumed record has already produced its
 // tokens, so rewriting either would only lose information. Revoke is
 // idempotent for the same reason.
+//
+// Revoke races safely with Consume (see [store.DeviceCodeStore.Revoke]):
+// the pending/approved guard on the conditional write, not the in-memory
+// check in the mutate closure, is what stops Revoke from overwriting a
+// Consume that lands between this method's read and its write — the
+// closure's check only catches a record already terminal at that read,
+// while the write's own condition catches one that changes underneath it.
 func (s *deviceCodeStore) Revoke(ctx context.Context, deviceCode, reason string) error {
 	pk := digestKey(deviceCode)
 	rec, _, err := s.findLive(ctx, pk)
@@ -243,8 +252,8 @@ func (s *deviceCodeStore) Revoke(ctx context.Context, deviceCode, reason string)
 		current.Status = store.DeviceCodeStatusDenied
 		current.DenyReason = reason
 		return nil
-	}, -1)
-	if errors.Is(err, errDeviceCodeTerminal) {
+	}, int64(store.DeviceCodeStatusPending), int64(store.DeviceCodeStatusApproved))
+	if errors.Is(err, errDeviceCodeTerminal) || errors.Is(err, store.ErrConflict) {
 		return nil
 	}
 	return err
@@ -270,7 +279,7 @@ func (s *deviceCodeStore) RecordPoll(
 			rec.Interval = nextInterval
 		}
 		return nil
-	}, -1)
+	})
 }
 
 func (s *deviceCodeStore) IncrementUserCodeStrike(ctx context.Context, deviceCode string) (uint8, error) {
@@ -337,8 +346,14 @@ func (s *deviceCodeStore) Consume(ctx context.Context, deviceCode string) (*stor
 // under a status guard, so the write only lands if the state the
 // decision was made against is still the state in the table.
 //
-// expectStatus is the status the record must still carry, or -1 when
-// the transition does not depend on one.
+// expectStatuses lists the statuses the record must still carry for the
+// write to land, or is empty when the transition does not depend on
+// one. The guard has to be enforced by the conditional write itself
+// rather than by mutate's own check against the stale read it was
+// handed: a status that changes between this method's read and its
+// write — Consume claiming a record Revoke is simultaneously denying,
+// for instance — must fail the write, not silently overwrite the
+// concurrent winner's outcome.
 //
 // The write is an update rather than a replacement so it leaves the
 // brute-force counters alone: they are incremented in place by callers
@@ -348,7 +363,7 @@ func (s *deviceCodeStore) transition(
 	ctx context.Context,
 	pk string,
 	mutate func(*store.DeviceCode) error,
-	expectStatus int64,
+	expectStatuses ...int64,
 ) error {
 	rec, found, err := s.findLive(ctx, pk)
 	if err != nil {
@@ -364,10 +379,14 @@ func (s *deviceCodeStore) transition(
 
 	in := updateFromItem(s.parent.names.deviceCodes, entry, attrUserCodeStrikes, attrPollViolations)
 	in.ExpressionAttributeNames["#pk"] = attrPK
-	if expectStatus >= 0 {
-		in.ConditionExpression = aws.String("attribute_exists(#pk) AND #status = :expected")
+	if len(expectStatuses) > 0 {
 		in.ExpressionAttributeNames["#status"] = attrStatus
-		in.ExpressionAttributeValues[":expected"] = avN(expectStatus)
+		names := make([]string, len(expectStatuses))
+		for i, st := range expectStatuses {
+			names[i] = ":expected" + strconv.Itoa(i)
+			in.ExpressionAttributeValues[names[i]] = avN(st)
+		}
+		in.ConditionExpression = aws.String("attribute_exists(#pk) AND #status IN (" + strings.Join(names, ", ") + ")")
 	} else {
 		in.ConditionExpression = aws.String("attribute_exists(#pk)")
 	}
