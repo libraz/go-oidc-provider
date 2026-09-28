@@ -25,3 +25,8 @@
 # Line numbers move. A row whose line no longer holds the shape simply
 # stops matching, and the gate reports the branch at its new line — so a
 # stale row is visible as a new finding rather than as silent coverage.
+
+internal/tokenendpoint/authcode.go:414	The branch writes 500 server_error and returns false before the gate's window ends — the error is carried to the client as a distinct status, not dropped. /token has no fault-audit channel the way /introspect and /userinfo do; adding one here would be additive, not a fix for this branch.
+internal/tokenendpoint/refresh.go:1211	Same shape as authcode.go:414: the branch writes 500 server_error and returns false, so the fault reaches the client as a distinct response rather than reading as a fabricated "not revoked". No fault-audit channel exists on /token to carry it further.
+internal/tokenendpoint/refresh.go:222	BeginTx failing sets ok=false; the caller (runRefreshTokenTransaction's caller, ~handleRefreshTokenTransaction) writes 500 server_error when !ok. The transaction never opened, so nothing it would have covered runs — this is fail-closed, not a negative answer standing in for a fault.
+internal/authn/emailotp/authenticator.go:677	retryVerifyStep is a UX retry-prompt helper: a store fault degrades the re-shown prompt to a bare Step, which the orchestrator reads as "restart the factor" — never as "authenticated" or "not authenticated". No security decision rides on this branch's answer.

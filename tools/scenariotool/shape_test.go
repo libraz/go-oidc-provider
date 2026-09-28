@@ -67,6 +67,47 @@ func TestInferShapeHonoursAnExplicitDeclaration(t *testing.T) {
 	}
 }
 
+// TestCheckShapesIsNotFooledByAnIncidentalOrderKeyword pins the defect
+// four catalog rows hit in practice: REV-020 asserts nothing beyond a
+// status code and a header, but a parenthetical aside about when a
+// different audit event applies happens to contain "after", which the
+// order pattern reads as a sequencing claim. Undeclared, that single
+// misread exempts the whole file from the presence-only check; declared
+// `shape: presence`, as the real catalog row now is, it does not.
+func TestCheckShapesIsNotFooledByAnIncidentalOrderKeyword(t *testing.T) {
+	t.Parallel()
+	behaviour := "A client presenting an incorrect basic-auth secret at /revoke " +
+		"receives 401 invalid_client with WWW-Authenticate: Basic " +
+		"realm=\"oidc\". (v1.0's /revoke does not currently emit a " +
+		"client-auth failure audit event; a token.revoke_failed event is " +
+		"reserved for non-NotFound store faults after successful auth.)"
+
+	undeclared := row("REV-020", behaviour)
+	if got := undeclared.InferShape(); got != ShapeOrder {
+		t.Fatalf("InferShape(%q) = %q, want the known misread (order), undeclared", behaviour, got)
+	}
+	thinUndeclared := &Catalog{Files: []*FeatureFile{{Feature: "thin", Rows: []*Row{
+		undeclared,
+		row("T-002", "The response MUST include a."),
+		row("T-003", "The response MUST include b."),
+	}}}}
+	if got := CheckShapes(thinUndeclared); len(got) != 0 {
+		t.Fatalf("undeclared REV-020 wording should still silently clear the gate today: %v", got)
+	}
+
+	declared := row("REV-020", behaviour)
+	declared.Shape = string(ShapePresence)
+	thinDeclared := &Catalog{Files: []*FeatureFile{{Feature: "thin", Rows: []*Row{
+		declared,
+		row("T-002", "The response MUST include a."),
+		row("T-003", "The response MUST include b."),
+	}}}}
+	got := CheckShapes(thinDeclared)
+	if len(got) != 1 || got[0].Feature != "thin" {
+		t.Fatalf("CheckShapes(declared) = %v, want the file flagged once the misread is declared away", got)
+	}
+}
+
 // TestCheckShapesFlagsAPresenceOnlyFile is the case the gate exists
 // for: every row says a claim appears, so an implementation that emits
 // every claim with the wrong contents satisfies the file while coverage

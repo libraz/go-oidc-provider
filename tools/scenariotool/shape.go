@@ -48,11 +48,15 @@ var validShapes = map[Shape]bool{
 }
 
 // shapePatterns infer a row's shape from its behaviour text when the row
-// does not declare one. Inference is deliberately one-directional: a
-// match promotes a row out of "presence", and no pattern ever demotes
-// one. A misread therefore costs a file nothing — the gate only asks
-// whether a file has *any* non-presence row — while a row the patterns
-// cannot read is fixed by declaring `shape:` on it.
+// does not declare one. Inference is deliberately one-directional in
+// code — a match promotes a row out of "presence", and no pattern ever
+// demotes one — but that does not make a misread free: [CheckShapes]
+// only asks whether a file has *any* non-presence row, so a single row
+// whose prose incidentally contains an order/value/identity keyword
+// exempts a genuinely presence-only file from the check for every other
+// row in it. A row the patterns read wrong, in either direction, is
+// fixed the same way: declaring `shape:` on it, including
+// `shape: presence` to overrule an incidental match.
 //
 // Order matters, most specific first. "bound to the same client" is an
 // identity claim that also contains the value pattern's "the same", so

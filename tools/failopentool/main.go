@@ -76,7 +76,21 @@ func run(root string) error {
 		return err
 	}
 
-	findings, scanned, err := scan(root)
+	methods, err := loadStoreMethods(root)
+	if err != nil {
+		return err
+	}
+	// The interfaces in op/store have declared well over this many
+	// (T, error) methods since the gate was written, so a count below
+	// it means the parse missed the package, not that the interfaces
+	// shrank.
+	const minStoreMethods = 15
+	if len(methods) < minStoreMethods {
+		return fmt.Errorf("failopentool: found %d store read methods (want at least %d): "+
+			"the parse is broken, not that the interfaces shrank", len(methods), minStoreMethods)
+	}
+
+	findings, scanned, err := scan(root, methods)
 	if err != nil {
 		return err
 	}
@@ -89,20 +103,25 @@ func run(root string) error {
 	}
 
 	kept := keep(findings, allowed)
-	fmt.Printf("failopentool: %d library files scanned, %d allowlisted\n", scanned, len(allowed))
-	if len(kept) == 0 {
+	stale := allowed.stale()
+	fmt.Printf("failopentool: %d library files scanned, %d allowlisted\n", scanned, len(allowed.rows))
+	if len(kept) == 0 && len(stale) == 0 {
 		fmt.Println("failopentool: OK")
 		return nil
 	}
 	for _, f := range kept {
 		fmt.Fprintln(os.Stderr, "  - "+f.String())
 	}
-	return fmt.Errorf("%d fail-open finding(s)", len(kept))
+	for _, key := range stale {
+		fmt.Fprintf(os.Stderr, "  - %s: allowlisted but nothing here answers negatively any more; drop the row — recorded reason: %s\n",
+			key, allowed.rows[key])
+	}
+	return fmt.Errorf("%d fail-open finding(s), %d stale allowlist row(s)", len(kept), len(stale))
 }
 
 // scan walks the library sources under root and returns every finding
 // plus how many files were actually read.
-func scan(root string) ([]Finding, int, error) {
+func scan(root string, methods map[string]bool) ([]Finding, int, error) {
 	var findings []Finding
 	scanned := 0
 	fset := token.NewFileSet()
@@ -126,7 +145,7 @@ func scan(root string) ([]Finding, int, error) {
 			return nil //nolint:nilerr // an unparseable file contributes nothing; reporting it is not this gate's job.
 		}
 		scanned++
-		findings = append(findings, Analyze(rel, fset, f)...)
+		findings = append(findings, Analyze(rel, fset, f, methods)...)
 		return nil
 	})
 	if err != nil {
@@ -151,10 +170,10 @@ func libraryGoFile(root, path, name string) (string, bool) {
 
 // keep drops the allowlisted findings and orders the rest so a failure
 // names the same site first on every run.
-func keep(findings []Finding, allowed map[string]bool) []Finding {
+func keep(findings []Finding, allowed *allowlist) []Finding {
 	kept := make([]Finding, 0, len(findings))
 	for _, f := range findings {
-		if allowed[fmt.Sprintf("%s:%d", f.File, f.Line)] {
+		if allowed.allows(fmt.Sprintf("%s:%d", f.File, f.Line)) {
 			continue
 		}
 		kept = append(kept, f)
@@ -168,16 +187,53 @@ func keep(findings []Finding, allowed map[string]bool) []Finding {
 	return kept
 }
 
+// allowlist records the deliberate exceptions to the fail-open check,
+// one row per branch's file:line, each carrying a reason.
+//
+// A row [keep] never consulted is reported as stale rather than left to
+// accumulate silently: the allowlist is the record of what the gate is
+// deliberately not looking at, and a row whose line moved or whose
+// branch was fixed is the gate quietly covering ground nobody
+// re-examined.
+type allowlist struct {
+	rows map[string]string // file:line -> reason
+	used map[string]bool
+}
+
+// allows reports whether the given file:line is listed, and marks the
+// row as consulted so a row nothing matches any more can be told apart
+// from one still doing work.
+func (a *allowlist) allows(key string) bool {
+	if _, ok := a.rows[key]; !ok {
+		return false
+	}
+	a.used[key] = true
+	return true
+}
+
+// stale returns the file:line of every row [keep] never consulted this
+// run, sorted for stable output.
+func (a *allowlist) stale() []string {
+	var out []string
+	for key := range a.rows {
+		if !a.used[key] {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // loadAllowlist reads the deliberate exceptions. Each row is
 // `<file>:<line> TAB <reason>`; a row without a reason is rejected,
 // because an exception nobody had to justify is how this class survives
 // a review.
-func loadAllowlist(path string) (map[string]bool, error) {
-	out := map[string]bool{}
+func loadAllowlist(path string) (*allowlist, error) {
+	al := &allowlist{rows: map[string]string{}, used: map[string]bool{}}
 	f, err := os.Open(path) //nolint:gosec // path is the checked-in allowlist, supplied by the gate wrapper.
 	if err != nil {
 		if os.IsNotExist(err) {
-			return out, nil
+			return al, nil
 		}
 		return nil, fmt.Errorf("failopentool: open %s: %w", path, err)
 	}
@@ -195,12 +251,12 @@ func loadAllowlist(path string) (map[string]bool, error) {
 		if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
 			return nil, fmt.Errorf("failopentool: %s:%d: row needs '<file>:<line> TAB <reason>'", path, line)
 		}
-		out[strings.TrimSpace(parts[0])] = true
+		al.rows[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("failopentool: read %s: %w", path, err)
 	}
-	return out, nil
+	return al, nil
 }
 
 // writeFile is a thin os.WriteFile wrapper the tests use to build

@@ -19,37 +19,6 @@ func (f Finding) String() string {
 	return fmt.Sprintf("%s:%d: %s: %s", f.File, f.Line, f.Callee, f.Detail)
 }
 
-// storeMethods are the storage reads whose error the OP has repeatedly
-// collapsed into a negative answer: a transport failure reported as
-// "no such session", "no consent", "no ancestor", "not found".
-//
-// The set is a list of method names rather than a type test because the
-// gate parses without type information — it has to run on a tree that
-// does not build. A same-named method on something that is not a store
-// is a false positive the allowlist absorbs; the alternative, a check
-// that needs a green build, is a check that is not there when it is
-// most useful.
-//
-//nolint:gochecknoglobals // closed enumeration; declared once and treated as a constant lookup table.
-var storeMethods = map[string]bool{
-	"Get":         true,
-	"Find":        true,
-	"FindByID":    true,
-	"Lookup":      true,
-	"Load":        true,
-	"Read":        true,
-	"Fetch":       true,
-	"Resolve":     true,
-	"List":        true,
-	"ListBy":      true,
-	"Exists":      true,
-	"GetClient":   true,
-	"GetSession":  true,
-	"GetGrant":    true,
-	"FindSession": true,
-	"FindGrant":   true,
-}
-
 // Analyze reports the branches in one file that answer a storage read's
 // error without carrying the error anywhere.
 //
@@ -66,7 +35,15 @@ var storeMethods = map[string]bool{
 // branch that discards it, because the caller then cannot tell "there
 // is no such record" from "the database did not answer" — and every
 // caller that has confused those two has failed open.
-func Analyze(file string, fset *token.FileSet, f *ast.File) []Finding {
+//
+// methods names the storage reads whose error this file must carry;
+// [loadStoreMethods] derives it from the op/store interfaces themselves
+// rather than a hand-maintained guess, because the gate parses without
+// type information and so cannot resolve a call by its receiver's type.
+// A same-named method on something that is not a store is a false
+// positive the allowlist absorbs; the alternative, a check that needs a
+// green build, is a check that is not there when it is most useful.
+func Analyze(file string, fset *token.FileSet, f *ast.File, methods map[string]bool) []Finding {
 	var out []Finding
 	prev := neighbours(f)
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -78,7 +55,7 @@ func Analyze(file string, fset *token.FileSet, f *ast.File) []Finding {
 		if !ok {
 			return true
 		}
-		callee, ok := storeCallBefore(stmt, prev, errName)
+		callee, ok := storeCallBefore(stmt, prev, errName, methods)
 		if !ok {
 			return true
 		}
@@ -125,14 +102,14 @@ func looksLikeError(name string) bool {
 // storeCallBefore reports the storage method whose call produced the
 // error the if-statement tests, looking at the statement's own
 // initialiser and then at the assignment immediately preceding it.
-func storeCallBefore(stmt *ast.IfStmt, prev map[*ast.IfStmt]ast.Stmt, errName string) (string, bool) {
+func storeCallBefore(stmt *ast.IfStmt, prev map[*ast.IfStmt]ast.Stmt, errName string, methods map[string]bool) (string, bool) {
 	if stmt.Init != nil {
-		if callee, ok := assignCallsStore(stmt.Init, errName); ok {
+		if callee, ok := assignCallsStore(stmt.Init, errName, methods); ok {
 			return callee, true
 		}
 	}
 	if before := prev[stmt]; before != nil {
-		return assignCallsStore(before, errName)
+		return assignCallsStore(before, errName, methods)
 	}
 	return "", false
 }
@@ -165,7 +142,7 @@ func neighbours(f *ast.File) map[*ast.IfStmt]ast.Stmt {
 
 // assignCallsStore reports whether an assignment binds errName from a
 // call to one of the storage reads.
-func assignCallsStore(s ast.Stmt, errName string) (string, bool) {
+func assignCallsStore(s ast.Stmt, errName string, methods map[string]bool) (string, bool) {
 	assign, ok := s.(*ast.AssignStmt)
 	if !ok {
 		return "", false
@@ -184,7 +161,7 @@ func assignCallsStore(s ast.Stmt, errName string) (string, bool) {
 		return "", false
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || !storeMethods[sel.Sel.Name] {
+	if !ok || !methods[sel.Sel.Name] {
 		return "", false
 	}
 	recv := ""
@@ -224,17 +201,53 @@ func carriesError(body *ast.BlockStmt, errName string) bool {
 // this gate speaks about.
 func answersNegatively(body *ast.BlockStmt) bool {
 	for _, s := range body.List {
-		ret, ok := s.(*ast.ReturnStmt)
-		if !ok {
-			continue
-		}
-		if len(ret.Results) == 0 {
-			return true
-		}
-		for _, r := range ret.Results {
-			if isNegativeLiteral(r) {
+		switch stmt := s.(type) {
+		case *ast.ReturnStmt:
+			if returnsANegative(stmt) {
 				return true
 			}
+		case *ast.AssignStmt:
+			if setsANegativeFlag(stmt) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// returnsANegative reports whether a return statement is bare or hands
+// back at least one fabricated-negative literal.
+func returnsANegative(ret *ast.ReturnStmt) bool {
+	if len(ret.Results) == 0 {
+		return true
+	}
+	for _, r := range ret.Results {
+		if isNegativeLiteral(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// setsANegativeFlag reports whether an assignment sets a plain
+// identifier — a "not found" flag, typically — to one of the values a
+// fabricated negative answer is made of. A branch that sets such a flag
+// and falls through answers the caller exactly as a `return false`
+// would, one statement later.
+//
+// The token is required to be plain `=`: a `:=` declares a new local
+// scoped to the if-block, which cannot be the flag the code after the
+// block reads, so it is not this shape.
+func setsANegativeFlag(assign *ast.AssignStmt) bool {
+	if assign.Tok != token.ASSIGN || len(assign.Lhs) != len(assign.Rhs) {
+		return false
+	}
+	for i, lhs := range assign.Lhs {
+		if _, ok := lhs.(*ast.Ident); !ok {
+			continue
+		}
+		if isNegativeLiteral(assign.Rhs[i]) {
+			return true
 		}
 	}
 	return false

@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+// fixtureStoreMethods are the storage-read names the fixtures below
+// call; [loadStoreMethods]'s own derivation from the real op/store
+// interfaces is covered separately in storemethods_test.go.
+var fixtureStoreMethods = map[string]bool{"Get": true, "Find": true, "List": true}
+
 // analyze parses one source body and runs the check over it.
 func analyze(t *testing.T, src string) []Finding {
 	t.Helper()
@@ -15,7 +20,7 @@ func analyze(t *testing.T, src string) []Finding {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	return Analyze("internal/x/x.go", fset, f)
+	return Analyze("internal/x/x.go", fset, f, fixtureStoreMethods)
 }
 
 // callees reduces findings to the storage calls they name.
@@ -161,6 +166,46 @@ func warm(deps D, ids []string) {
 `))
 }
 
+// TestAnalyze_ReportsALiteralAssignmentThatFallsThrough covers the
+// shape the doc comment on [answersNegatively] names alongside a
+// return: a branch that sets a "not found" flag to a fabricated
+// negative and lets the caller read it after the if-statement, rather
+// than returning from inside it.
+func TestAnalyze_ReportsALiteralAssignmentThatFallsThrough(t *testing.T) {
+	t.Parallel()
+	got := analyze(t, `package x
+
+func resolve(deps D, id string) bool {
+	found := true
+	s, err := deps.Sessions.Find(ctx, id)
+	if err != nil {
+		found = false
+	}
+	return found && use(s)
+}
+`)
+	wantCallees(t, got, "Sessions.Find")
+}
+
+// TestAnalyze_IgnoresALocalDeclarationInTheBranch keeps the
+// literal-assignment check to a flag the caller can still read: a `:=`
+// declares a variable scoped to the if-block itself, so nothing after
+// the statement can observe it.
+func TestAnalyze_IgnoresALocalDeclarationInTheBranch(t *testing.T) {
+	t.Parallel()
+	wantCallees(t, analyze(t, `package x
+
+func resolve(deps D, id string) *Session {
+	s, err := deps.Sessions.Find(ctx, id)
+	if err != nil {
+		unused := false
+		_ = unused
+	}
+	return s
+}
+`))
+}
+
 // TestAnalyze_ReportsABareReturn covers the void shape: the caller is
 // told nothing happened, which reads as "there was nothing to do".
 func TestAnalyze_ReportsABareReturn(t *testing.T) {
@@ -238,7 +283,51 @@ func TestLoadAllowlist_AcceptsAJustifiedRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAllowlist: %v", err)
 	}
-	if !got["internal/x/x.go:12"] {
-		t.Errorf("allowlist = %v, want the justified row", got)
+	if !got.allows("internal/x/x.go:12") {
+		t.Errorf("allowlist = %v, want the justified row", got.rows)
+	}
+}
+
+// TestAllowlist_StaleRowIsReported keeps a row from silently outliving
+// the branch it once excused: a row [keep] never consults this run is
+// reported instead of counted as coverage.
+func TestAllowlist_StaleRowIsReported(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := dir + "/failopen.txt"
+	if err := writeFile(path, "internal/x/x.go:99\tThe branch was fixed; the line no longer matches.\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	allowed, err := loadAllowlist(path)
+	if err != nil {
+		t.Fatalf("loadAllowlist: %v", err)
+	}
+	if got := keep(nil, allowed); len(got) != 0 {
+		t.Fatalf("keep() = %v, want none", got)
+	}
+	if got := allowed.stale(); len(got) != 1 || got[0] != "internal/x/x.go:99" {
+		t.Fatalf("stale() = %v, want [internal/x/x.go:99]", got)
+	}
+}
+
+// TestAllowlist_ConsultedRowIsNotStale keeps a row that actually
+// matched a finding this run out of the stale report.
+func TestAllowlist_ConsultedRowIsNotStale(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := dir + "/failopen.txt"
+	if err := writeFile(path, "internal/x/x.go:12\tThe caller cannot act on the difference.\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	allowed, err := loadAllowlist(path)
+	if err != nil {
+		t.Fatalf("loadAllowlist: %v", err)
+	}
+	findings := []Finding{{File: "internal/x/x.go", Line: 12, Callee: "Sessions.Find"}}
+	if got := keep(findings, allowed); len(got) != 0 {
+		t.Fatalf("keep() = %v, want the allowlisted finding dropped", got)
+	}
+	if got := allowed.stale(); len(got) != 0 {
+		t.Fatalf("stale() = %v, want none", got)
 	}
 }

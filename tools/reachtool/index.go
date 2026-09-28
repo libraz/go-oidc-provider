@@ -407,7 +407,16 @@ func (ix *index) consultedIn(name string, want func(file string) bool) bool {
 
 // declaredIdents collects the identifiers that introduce a name rather
 // than reach one: the package clause, declaration names, struct fields
-// and interface methods, parameters, and import aliases.
+// and interface methods, parameters, import aliases, and — for a
+// same-name re-export — the RHS identifier that spells the declared
+// name a second time.
+//
+// `TriggerBeforeToken = authn.TriggerBeforeToken` names the same symbol
+// on both sides of the `=`. Left unmarked, the RHS Ident would be
+// recorded as a use and a consult of TriggerBeforeToken in the very
+// file that declares it, so the declaration would satisfy its own
+// reach and consulted checks regardless of whether anything outside
+// the declaration ever names it.
 func declaredIdents(f *ast.File) map[*ast.Ident]bool {
 	out := map[*ast.Ident]bool{}
 	mark := func(ids ...*ast.Ident) {
@@ -425,6 +434,11 @@ func declaredIdents(f *ast.File) map[*ast.Ident]bool {
 			mark(node.Name)
 		case *ast.ValueSpec:
 			mark(node.Names...)
+			for i, name := range node.Names {
+				if i < len(node.Values) {
+					mark(selfRefIdent(node.Values[i], name.Name))
+				}
+			}
 		case *ast.TypeSpec:
 			mark(node.Name)
 		case *ast.Field:
@@ -435,6 +449,24 @@ func declaredIdents(f *ast.File) map[*ast.Ident]bool {
 		return true
 	})
 	return out
+}
+
+// selfRefIdent returns the identifier within a re-export's value
+// expression that names the same symbol being declared, mirroring the
+// two shapes [aliasTarget] resolves: a bare identifier, or a selector's
+// final name.
+func selfRefIdent(value ast.Expr, name string) *ast.Ident {
+	switch e := value.(type) {
+	case *ast.Ident:
+		if e.Name == name {
+			return e
+		}
+	case *ast.SelectorExpr:
+		if e.Sel.Name == name {
+			return e.Sel
+		}
+	}
+	return nil
 }
 
 // record adds one file to the set stored under key.

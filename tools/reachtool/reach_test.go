@@ -167,6 +167,40 @@ func window() time.Duration { return DefaultCodeTTL }
 	}
 }
 
+// A same-name re-export — `TriggerBeforeToken = authn.TriggerBeforeToken`
+// — names the declared symbol on both sides of the `=`. The RHS must
+// not count as a use or a consult of its own name: nothing outside the
+// declaration ever names this one, so it has to be reported exactly
+// like an alias whose target is genuinely unread.
+func TestCheckSymbols_DoesNotCountASameNameReExportAsItsOwnUse(t *testing.T) {
+	t.Parallel()
+	ix := indexTree(t, map[string]string{
+		"op/events.go": `package op
+
+import "github.com/libraz/go-oidc-provider/internal/authn"
+
+// TriggerBeforeToken is the embedder-facing name for the internal trigger.
+const TriggerBeforeToken = authn.TriggerBeforeToken
+`,
+		"internal/authn/authenticator.go": `package authn
+
+type InteractionTrigger int
+
+const (
+	TriggerBeforeAuthn InteractionTrigger = iota
+	TriggerBeforeToken
+)
+`,
+		"internal/authn/phases.go": `package authn
+
+func advance(t InteractionTrigger) {}
+
+func run() { advance(TriggerBeforeAuthn) }
+`,
+	})
+	wantIDs(t, checkSymbols(ix, emptyAllowlist(t)), "op.TriggerBeforeToken")
+}
+
 // iota is the value, not a declaration. Resolving through it would make
 // every enumeration in the tree look reached.
 func TestCheckSymbols_DoesNotResolveAnEnumerationThroughIota(t *testing.T) {
