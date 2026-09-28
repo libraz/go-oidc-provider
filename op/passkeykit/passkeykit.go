@@ -161,10 +161,10 @@ type Registrar struct {
 // Validation matches the login step's own: RPID, RPDisplayName, and at
 // least one RPOrigin are required, every origin must be a registrable
 // suffix of the RPID over https (http being allowed for loopback), and
-// a non-empty AAGUIDAllowlist must name canonical UUIDs. A step this
-// function accepts is one op.New will accept, so a misconfiguration
-// surfaces once, at startup, from whichever call the embedder makes
-// first.
+// a non-empty AAGUIDAllowlist must name canonical UUIDs and come with
+// AttestationRoots. A step this function accepts is one op.New will
+// accept, so a misconfiguration surfaces once, at startup, from
+// whichever call the embedder makes first.
 func New(step op.PrimaryPasskey) (*Registrar, error) {
 	if isNilStore(step.Store) {
 		return nil, ErrStoreRequired
@@ -176,6 +176,7 @@ func New(step op.PrimaryPasskey) (*Registrar, error) {
 		SessionTTL:               step.SessionTTL,
 		RequireUserVerification:  step.RequireUserVerification,
 		AAGUIDAllowlist:          step.AAGUIDAllowlist,
+		AttestationRoots:         step.AttestationRoots,
 		AAGUIDReCheckOnAssertion: step.AAGUIDReCheckOnAssertion,
 	}))
 	if err != nil {

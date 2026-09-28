@@ -3,6 +3,8 @@ package passkey
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/asn1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -190,16 +192,16 @@ func (v *Verifier) FinishRegistration(ctx context.Context, owners store.PasskeyS
 	//
 	// When an allowlist IS configured the AAGUID must first be shown to
 	// be authentic. Requesting "direct" conveyance only asks for an
-	// attestation statement; it does not guarantee one that vouches for
-	// the authenticator model. A response carrying self attestation
-	// ("basic_surrogate") or no attestation at all is signed by the
-	// credential's own key, which says nothing about which model
-	// produced it — so the AAGUID is a value the caller chose. Checking
-	// such a value against the allowlist would let any software
-	// authenticator claim the identifier of a certified hardware key,
-	// which is the whole thing the allowlist exists to prevent.
+	// attestation statement, and the attestation type the library
+	// reports only says which key signed it, not whether anyone trusts
+	// that key: a certificate chain to a self-made root reports the same
+	// type as a vendor's. The AAGUID is therefore compared only after
+	// the x5c chain verifies up to a configured root.
 	if len(v.aaguidAllowlist) > 0 {
 		if err := requireVouchedAttestation(wc.AttestationType); err != nil {
+			return nil, err
+		}
+		if err := v.verifyAttestationChain(parsed.Response.AttestationObject.AttStatement, wc.Authenticator.AAGUID); err != nil {
 			return nil, err
 		}
 	}
@@ -245,8 +247,10 @@ func ensureCredentialUnclaimed(ctx context.Context, owners store.PasskeyStore, s
 }
 
 // requireVouchedAttestation reports whether an attestation of the given
-// FIDO attestation type establishes the authenticator model, and so
-// whether the AAGUID it carried may be compared against an allowlist.
+// FIDO attestation type can establish the authenticator model. It is a
+// first filter only: the type names who signed, and
+// [Verifier.verifyAttestationChain] decides whether that signer is
+// trusted.
 //
 // The vocabulary is the one the upstream library reports in
 // [webauthn.Credential.AttestationType], per the FIDO Metadata
@@ -255,8 +259,8 @@ func ensureCredentialUnclaimed(ctx context.Context, owners store.PasskeyStore, s
 // model:
 //
 //   - "basic_full", "attca", "anonca", "ecdaa" — an attestation key or
-//     CA outside the credential vouches for the authenticator, so the
-//     AAGUID in the authenticator data is authenticated.
+//     CA outside the credential signed for the authenticator; whether
+//     that key is trusted is left to the chain check.
 //   - "basic_surrogate" — self attestation: the attestation statement
 //     is signed by the newly created credential key itself, so it
 //     proves possession of that key and nothing about the hardware.
@@ -275,6 +279,74 @@ func requireVouchedAttestation(attestationType string) error {
 			ErrAttestationInvalid, attestationType,
 		)
 	}
+}
+
+// verifyAttestationChain refuses an attestation whose certificate chain
+// (x5c) does not verify up to [Config.AttestationRoots] at the
+// verifier's clock, and one whose leaf names a different AAGUID than the
+// authenticator data. An attestation without x5c (none, self, ECDAA,
+// compound, SafetyNet) is refused, as nothing it carries can be chained
+// to a root.
+func (v *Verifier) verifyAttestationChain(attStmt map[string]any, aaguid []byte) error {
+	certs, err := parseX5C(attStmt)
+	if err != nil {
+		return err
+	}
+	intermediates := x509.NewCertPool()
+	for _, c := range certs[1:] {
+		intermediates.AddCert(c)
+	}
+	// FIDO attestation certificates commonly carry no EKU, so any is accepted.
+	if _, err := certs[0].Verify(x509.VerifyOptions{
+		Roots:         v.attestationRoots,
+		Intermediates: intermediates,
+		CurrentTime:   v.clock().Now(),
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}); err != nil {
+		return fmt.Errorf("%w: attestation chain does not verify to a configured root: %w", ErrAttestationInvalid, err)
+	}
+	return checkCertAAGUID(certs[0], aaguid)
+}
+
+// parseX5C decodes the attestation statement's x5c array, leaf first.
+func parseX5C(attStmt map[string]any) ([]*x509.Certificate, error) {
+	raw, ok := attStmt["x5c"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil, fmt.Errorf("%w: attestation carries no certificate chain, so it cannot satisfy the allowlist", ErrAttestationInvalid)
+	}
+	certs := make([]*x509.Certificate, 0, len(raw))
+	for i, entry := range raw {
+		der, ok := entry.([]byte)
+		if !ok {
+			return nil, fmt.Errorf("%w: x5c[%d] is not a certificate", ErrAttestationInvalid, i)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, fmt.Errorf("%w: x5c[%d]: %w", ErrAttestationInvalid, i, err)
+		}
+		certs = append(certs, cert)
+	}
+	return certs, nil
+}
+
+// checkCertAAGUID refuses a leaf whose id-fido-gen-ce-aaguid extension
+// names a different AAGUID than the authenticator data. The library
+// matches it for packed and TPM only; the check here covers every format.
+func checkCertAAGUID(leaf *x509.Certificate, aaguid []byte) error {
+	oid := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 1, 1, 4}
+	for _, ext := range leaf.Extensions {
+		if !ext.Id.Equal(oid) {
+			continue
+		}
+		var certAAGUID []byte
+		if rest, err := asn1.Unmarshal(ext.Value, &certAAGUID); err != nil || len(rest) != 0 {
+			return fmt.Errorf("%w: malformed AAGUID extension in attestation certificate", ErrAttestationInvalid)
+		}
+		if !bytes.Equal(certAAGUID, aaguid) {
+			return fmt.Errorf("%w: attestation certificate AAGUID does not match the authenticator data", ErrAttestationInvalid)
+		}
+	}
+	return nil
 }
 
 // buildExclusions projects the caller-supplied credentials onto the

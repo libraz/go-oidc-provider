@@ -1,6 +1,7 @@
 package passkey
 
 import (
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/url"
@@ -82,17 +83,27 @@ type Config struct {
 	// the set.
 	//
 	// A non-empty allowlist requires [AttestationPreference] to be
-	// [protocol.PreferDirectAttestation]; [New] refuses any other
-	// pairing. [Verifier.FinishRegistration] additionally refuses a
-	// registration whose attestation does not vouch for the model
-	// (self attestation or none), because the allowlist would
-	// otherwise be comparing an identifier the caller chose.
+	// [protocol.PreferDirectAttestation] and a non-empty
+	// [AttestationRoots]; [New] refuses any other pairing.
+	// [Verifier.FinishRegistration] compares the AAGUID only after the
+	// attestation certificate chain has verified up to one of those
+	// roots, because the allowlist would otherwise be comparing an
+	// identifier the caller chose.
 	//
 	// AAGUID strings are case-insensitive and tolerate canonical
 	// UUID formatting only ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx").
 	// Construction returns [ErrInvalidConfig] for any malformed
 	// entry so a typo cannot silently widen the policy.
 	AAGUIDAllowlist []string
+
+	// AttestationRoots are the trust anchors the attestation
+	// certificate chain (x5c) must verify up to before the AAGUID is
+	// compared against [AAGUIDAllowlist]. The package fetches no FIDO
+	// Metadata Service, so the caller supplies the roots, for example
+	// extracted from FIDO MDS3. Required when the allowlist is
+	// non-empty, ignored otherwise; a nil entry returns
+	// [ErrInvalidConfig].
+	AttestationRoots []*x509.Certificate
 
 	// UserVerification is the WebAuthn user-verification requirement
 	// bound into every ceremony. Empty falls back to
@@ -146,9 +157,11 @@ type StepPolicy struct {
 	// subsequent login.
 	RequireUserVerification bool
 
-	// AAGUIDAllowlist and AAGUIDReCheckOnAssertion carry the
-	// authenticator-model policy. See the matching [Config] fields.
+	// AAGUIDAllowlist, AttestationRoots and AAGUIDReCheckOnAssertion
+	// carry the authenticator-model policy. See the matching [Config]
+	// fields.
 	AAGUIDAllowlist          []string
+	AttestationRoots         []*x509.Certificate
 	AAGUIDReCheckOnAssertion bool
 }
 
@@ -181,6 +194,7 @@ func ConfigFrom(p StepPolicy) Config {
 		AttestationPreference:    attestation,
 		UserVerification:         uv,
 		AAGUIDAllowlist:          p.AAGUIDAllowlist,
+		AttestationRoots:         p.AttestationRoots,
 		AAGUIDReCheckOnAssertion: p.AAGUIDReCheckOnAssertion,
 	}
 }
@@ -221,6 +235,10 @@ type Verifier struct {
 	// is O(1). nil means "no allowlist configured" — every AAGUID
 	// is accepted.
 	aaguidAllowlist map[string]struct{}
+
+	// attestationRoots is the pool built from [Config.AttestationRoots].
+	// It is non-nil exactly when aaguidAllowlist is.
+	attestationRoots *x509.CertPool
 
 	// aaguidReCheckOnAssertion mirrors [Config.AAGUIDReCheckOnAssertion].
 	// When true the verifier re-checks the matched credential's
@@ -276,6 +294,10 @@ func New(cfg Config) (*Verifier, error) {
 				"under any other conveyance the AAGUID is self-asserted and the allowlist cannot be enforced",
 			ErrInvalidConfig, protocol.PreferDirectAttestation, pref,
 		)
+	}
+	roots, err := buildAttestationRoots(cfg.AttestationRoots, len(allow) > 0)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	ttl := cfg.SessionTTL
 	if ttl <= 0 {
@@ -334,6 +356,7 @@ func New(cfg Config) (*Verifier, error) {
 		wa:                       wa,
 		userVerification:         uv,
 		aaguidAllowlist:          allow,
+		attestationRoots:         roots,
 		aaguidReCheckOnAssertion: cfg.AAGUIDReCheckOnAssertion,
 	}, nil
 }
@@ -483,6 +506,31 @@ func normaliseAAGUIDAllowlist(raw []string) (map[string]struct{}, error) {
 		out[canonical] = struct{}{}
 	}
 	return out, nil
+}
+
+// buildAttestationRoots copies the configured trust anchors into a
+// pool. A nil entry is refused whether or not an allowlist is set; with
+// an allowlist the set must be non-empty, and without one no pool is
+// built because nothing consults it.
+func buildAttestationRoots(certs []*x509.Certificate, allowlist bool) (*x509.CertPool, error) {
+	for i, c := range certs {
+		if c == nil {
+			return nil, fmt.Errorf("AttestationRoots[%d] is nil", i)
+		}
+	}
+	if !allowlist {
+		return nil, nil //nolint:nilnil // no allowlist means no chain check, so no pool.
+	}
+	if len(certs) == 0 {
+		return nil, errors.New(
+			"AAGUIDAllowlist requires AttestationRoots; without trust anchors the attestation chain cannot be verified and the AAGUID is self-asserted",
+		)
+	}
+	pool := x509.NewCertPool()
+	for _, c := range certs {
+		pool.AddCert(c)
+	}
+	return pool, nil
 }
 
 // isCanonicalUUID reports whether s matches the UUID textual form

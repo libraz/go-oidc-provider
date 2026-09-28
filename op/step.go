@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"strings"
 	"time"
@@ -234,12 +235,24 @@ type PrimaryPasskey struct {
 	//
 	// Setting this switches the ceremony to "direct" attestation
 	// conveyance, because an AAGUID reported without attestation is
-	// self-asserted and could name any model. Registrations whose
-	// attestation does not vouch for the model — self-attested or
-	// unattested — are refused rather than matched against the list.
-	// Expect a user-agent attestation prompt on registration, and
-	// leave the field empty if that disclosure is not wanted.
+	// self-asserted and could name any model. A signed attestation only
+	// vouches for the model when its certificate chain verifies up to
+	// one of [AttestationRoots], which a non-empty allowlist therefore
+	// requires; a registration whose chain does not verify, or that
+	// carries none (self-attested, unattested), is refused rather than
+	// matched against the list. Expect a user-agent attestation prompt
+	// on registration, and leave the field empty if that disclosure is
+	// not wanted.
 	AAGUIDAllowlist []string
+
+	// AttestationRoots are the trust anchors for [AAGUIDAllowlist]: a
+	// registration is admitted only when its attestation certificate
+	// chain (x5c) verifies up to one of them. The OP does not fetch
+	// FIDO MDS, so the embedder supplies the roots, for example
+	// extracted from FIDO MDS3 metadata statements. [New] refuses a
+	// non-empty allowlist with no roots, and a nil entry. Ignored when
+	// the allowlist is empty.
+	AttestationRoots []*x509.Certificate
 
 	// RequireUserVerification makes every ceremony demand the WebAuthn
 	// user-verification gesture (PIN, biometric) instead of merely

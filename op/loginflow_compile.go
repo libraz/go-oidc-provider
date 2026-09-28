@@ -116,6 +116,17 @@ func validatePrimaryPasskeyDependencies(where string, step PrimaryPasskey) error
 	if step.CloneDetectionHandler != nil && isNilLike(step.CloneDetectionHandler) {
 		return loginFlowDependencyError(where + ".PrimaryPasskey.CloneDetectionHandler")
 	}
+	for i, root := range step.AttestationRoots {
+		if root == nil {
+			return loginFlowDependencyError(where + ".PrimaryPasskey.AttestationRoots[" + strconv.Itoa(i) + "]")
+		}
+	}
+	if len(step.AAGUIDAllowlist) > 0 && len(step.AttestationRoots) == 0 {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + ".PrimaryPasskey.AAGUIDAllowlist requires AttestationRoots",
+		}
+	}
 	return nil
 }
 
@@ -289,6 +300,7 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 		SessionTTL:               s.SessionTTL,
 		RequireUserVerification:  s.RequireUserVerification,
 		AAGUIDAllowlist:          s.AAGUIDAllowlist,
+		AttestationRoots:         s.AttestationRoots,
 		AAGUIDReCheckOnAssertion: s.AAGUIDReCheckOnAssertion,
 	}))
 	if err != nil {

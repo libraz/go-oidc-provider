@@ -64,6 +64,12 @@ func TestAuthenticator_NoLongerImplementsUVReporter(t *testing.T) {
 // [interaction.Result.UserVerified]. The test exercises the
 // continueResult dispatcher directly through a test seam so we do
 // not need a soft authenticator that mints a valid assertion.
+//
+// Tracks: CVE-2026-72780 — an authenticator's user-verification result
+// was lost between the verifier and the orchestrator, letting a
+// UV-required policy be satisfied by a ceremony that never actually
+// verified the user. The sign-counter-persistence half of the same
+// class is pinned by TestPersistCredentialReverseCompletionDoesNotRewind.
 func TestAuthenticator_UVBitTravelsOnResult(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)

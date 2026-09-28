@@ -50,10 +50,11 @@ func TestAAGUIDAllowlistOnlyDecidesOnAVouchedAAGUID(t *testing.T) {
 			protocol.PreferNoAttestation,
 		} {
 			_, err := passkey.New(passkey.Config{
-				RPID:            "op.test.invalid",
-				RPDisplayName:   "OP",
-				RPOrigins:       []string{"https://op.test.invalid"},
-				AAGUIDAllowlist: []string{aaguid},
+				RPID:             "op.test.invalid",
+				RPDisplayName:    "OP",
+				RPOrigins:        []string{"https://op.test.invalid"},
+				AAGUIDAllowlist:  []string{aaguid},
+				AttestationRoots: testAttestationRoots(t),
 
 				AttestationPreference: pref,
 			})
@@ -73,6 +74,7 @@ func TestAAGUIDAllowlistOnlyDecidesOnAVouchedAAGUID(t *testing.T) {
 			RPDisplayName:         "OP",
 			RPOrigins:             []string{"https://op.test.invalid"},
 			AAGUIDAllowlist:       []string{aaguid},
+			AttestationRoots:      testAttestationRoots(t),
 			AttestationPreference: protocol.PreferDirectAttestation,
 		})
 		if err != nil {

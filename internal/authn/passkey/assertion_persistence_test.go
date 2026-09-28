@@ -36,6 +36,16 @@ func (s *reverseAssertionStore) UpdateAssertion(
 	return rec, err
 }
 
+// TestPersistCredentialReverseCompletionDoesNotRewind pins that a
+// passkey's persisted SignCount can never move backward, even when two
+// concurrent assertions verify against the same snapshot and complete
+// persistence out of order.
+//
+// Tracks: CVE-2026-72780 — an authenticator's sign counter (and, on the
+// sibling surface, its UV bit) was not durably persisted across
+// concurrent completions, letting a later, stale write erase state a
+// previous verification had already recorded. The UV-loss half of the
+// same class is pinned by TestAuthenticator_UVBitTravelsOnResult.
 func TestPersistCredentialReverseCompletionDoesNotRewind(t *testing.T) {
 	t.Parallel()
 

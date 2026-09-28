@@ -128,6 +128,10 @@ func TestCeremony_RegisteredCredentialAuthenticates(t *testing.T) {
 // checked against the caller's credential list, not merely against a
 // well-formed signature: a second authenticator that never enrolled
 // cannot sign its way in.
+//
+// Tracks: CVE-2026-73313 — a passkey assertion was accepted without
+// being bound to the pending user's own registered credential set,
+// letting an unrelated authenticator complete someone else's ceremony.
 func TestCeremony_UnregisteredCredentialIsRefused(t *testing.T) {
 	t.Parallel()
 

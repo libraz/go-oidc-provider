@@ -32,6 +32,7 @@ func newVerifierWithRecheck(t *testing.T, allowlist []string, recheck bool) *pas
 		RPDisplayName:            "Example Identity",
 		RPOrigins:                []string{"https://id.example.com"},
 		AAGUIDAllowlist:          allowlist,
+		AttestationRoots:         testAttestationRoots(t),
 		AAGUIDReCheckOnAssertion: recheck,
 		// An allowlist is only configurable alongside direct
 		// attestation, since otherwise the AAGUID it compares is

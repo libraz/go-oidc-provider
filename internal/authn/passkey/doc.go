@@ -26,22 +26,23 @@
 // A deployment that must restrict registration to approved
 // authenticator models sets [Config.AttestationPreference] to
 // [protocol.PreferDirectAttestation] together with a non-empty
-// [Config.AAGUIDAllowlist]; [New] refuses either one without the other.
-// "indirect" and "enterprise" are not supported.
+// [Config.AAGUIDAllowlist] and [Config.AttestationRoots]; [New] refuses
+// the allowlist without the other two. "indirect" and "enterprise" are
+// not supported.
 //
 // Requesting direct conveyance only asks for an attestation statement —
-// it does not guarantee one that identifies the model. A response may
-// still arrive self-attested or unattested, in which case the AAGUID is
-// a value the caller chose rather than one the hardware proved.
-// [Verifier.FinishRegistration] therefore refuses such a registration
-// whenever an allowlist is configured, instead of comparing an
-// unauthenticated identifier against it.
+// it does not guarantee one that identifies the model, and a signed
+// statement only identifies it if the signer is trusted. Anyone can
+// mint a CA and an attestation certificate naming any AAGUID.
+// [Verifier.FinishRegistration] therefore compares the AAGUID only after
+// the statement's x5c chain verifies up to a configured root; a
+// self-attested, unattested or chainless response is refused.
 //
 // The package deliberately ships no FIDO Metadata Service (MDS3)
-// client: the allowlist is the operator's own list of AAGUIDs, so the
+// client: the allowlist and the roots are the operator's own, so the
 // library takes on no blob rotation or data-licensing obligation. An
 // embedder that wants MDS-driven policy resolves the metadata
-// out-of-band and supplies the resulting AAGUIDs.
+// out-of-band and supplies the resulting AAGUIDs and root certificates.
 // # Authenticator selection
 // v1.0 also uses the library defaults for [protocol.AuthenticatorSelection]:
 // no AuthenticatorAttachment filter (platform and cross-platform are
