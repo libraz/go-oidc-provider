@@ -116,7 +116,7 @@ var (
 
 	// ErrEncryptionAlgNotAllowed signals that the JWE protected
 	// header carries an `alg` or `enc` outside the OP allow-list
-	// (RFC 7518 §4 / §5 narrowed by the v0.9.1 ship list — see
+	// (RFC 7518 §4 / §5 narrowed by the supported list — see
 	// internal/jose.AllowedJWEAlgs / internal/jose.AllowedJWEEncs).
 	// The class is collapsed because an attacker probing for sub-
 	// causes through the wire response would learn nothing useful;

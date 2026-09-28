@@ -278,7 +278,7 @@ type Client struct {
 	// RequestObjectEncryptionEnc mirrors [RequestObjectEncryptionAlg]
 	// for the JWE content-encryption (`enc`) advertisement. Empty
 	// means "no preference" — the OP still validates the inbound
-	// `enc` against the v0.9.1 allow-list (`A128GCM` / `A256GCM`).
+	// `enc` against the allow-list (`A128GCM` / `A256GCM`).
 	RequestObjectEncryptionEnc string
 
 	// IDTokenEncryptedResponseAlg signals that the client wants

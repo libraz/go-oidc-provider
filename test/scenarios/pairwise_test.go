@@ -1619,7 +1619,7 @@ func TestScenario_PW_65_SectorURIResponseCacheablePolicyOPDefined(t *testing.T) 
 // op-init sentinel directly to simulate the post-wipe shape because
 // no public API exposes a metadata-only truncation.
 //
-// Spec: OIDC Core 1.0 §8 (sub stability) / project v0.9.1 contract.
+// Spec: OIDC Core 1.0 §8 (sub stability) / the sub-stability contract.
 func TestScenario_PW_70_RejectsSwitchOnUsedStoreWithWipedMarker(t *testing.T) {
 	t.Parallel()
 	st := inmem.New()

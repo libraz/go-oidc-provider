@@ -12,7 +12,7 @@ import (
 
 // metadataStore implements [store.MetadataStore] against a Redis hash.
 // The substore is the persistence path for coarse construction-time
-// decisions (subject_mode in v0.9.1); future keys land on the same
+// decisions (subject_mode today); future keys land on the same
 // surface without further interface change.
 //
 // Storage shape: every key/value lives in a single Redis hash so

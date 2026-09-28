@@ -14,8 +14,7 @@ import (
 // advanceAuthn that dispatches into [Orchestrator.advanceLoginFlow]
 // when a [CompiledLoginFlow] is configured.
 //
-// The helpers were extracted from orchestrator.go in the v0.9.1
-// readability pass. They share the [Orchestrator] receiver because the
+// They share the [Orchestrator] receiver because the
 // state machine is dense — every advance step reads cfg.Authenticators
 // / cfg.Interactions / cfg.LoginFlow, dispatches to the per-step audit
 // fan-out, and asks the StateRefSigner to mint a fresh token. The

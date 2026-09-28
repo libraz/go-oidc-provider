@@ -486,7 +486,7 @@ func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRe
 
 // Metadata implements [store.Store] against the oidc_op_metadata
 // table. The substore is the persistence path for coarse construction-
-// time decisions (subject_mode in v0.9.1; future keys land on the same
+// time decisions (subject_mode today; future keys land on the same
 // surface without further interface change).
 func (s *Store) Metadata() store.MetadataStore { return s.metadataImpl }
 

@@ -13,8 +13,8 @@ import (
 
 // TestSQLite_ClientStore_EncryptionMetadata_RoundTrip pins that every
 // outbound-encryption metadata field round-trips faithfully through the
-// SQLite-backed client store. The eight fields land in fresh columns
-// added in v0.9.1; a missing column or a swapped scan position would
+// SQLite-backed client store. The eight fields land in dedicated
+// columns; a missing column or a swapped scan position would
 // surface here as a value-mismatch rather than as a silent loss in
 // production. Postgres / MySQL share the column manifest via
 // clientColumns / clientArgs / scanClient, so a passing SQLite case

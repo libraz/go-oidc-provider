@@ -6,7 +6,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jose"
 )
 
-// SupportedEncryptionAlgs returns the closed v0.9.1 list of JWE `alg`
+// SupportedEncryptionAlgs returns the closed list of JWE `alg`
 // values the OP can negotiate. The list is the union of every
 // shipping alg across the five encryption targets (request_object,
 // id_token, userinfo, JARM, introspection); embedders narrow it
@@ -25,8 +25,8 @@ func SupportedEncryptionAlgs() []string {
 	return out
 }
 
-// SupportedEncryptionEncs returns the closed v0.9.1 list of JWE `enc`
-// values the OP can negotiate. As of v0.9.1 the set is `A128GCM` and
+// SupportedEncryptionEncs returns the closed list of JWE `enc`
+// values the OP can negotiate. The set is `A128GCM` and
 // `A256GCM`; symmetric AES-CBC-HS variants and `A192*` are
 // intentionally excluded.
 //
@@ -113,7 +113,7 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 }
 
 // WithSupportedEncryptionAlgs narrows the JWE algorithms the OP will
-// negotiate, below the v0.9.1 default ([SupportedEncryptionAlgs] /
+// negotiate, below the default ([SupportedEncryptionAlgs] /
 // [SupportedEncryptionEncs]).
 //
 // The narrowing is enforced, not merely advertised. It reaches every
@@ -130,7 +130,7 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 //   - client registration — a dynamic registration or a static seed
 //     declaring an excluded pair is rejected.
 //
-// Embedders cannot extend the allow-list — values outside the v0.9.1
+// Embedders cannot extend the allow-list — values outside the
 // default are rejected at [op.New]. The option exists for
 // deployments that want to mandate a stricter alg/enc subset
 // (e.g. ECDH-ES + A256GCM only) without rebuilding the library.
@@ -153,7 +153,7 @@ func WithSupportedEncryptionAlgs(algs, encs []string) Option {
 
 // applyAlgNarrowing validates the embedder-supplied alg subset and
 // stores it on the config when non-nil. A nil slice leaves the
-// default (the closed v0.9.1 allow-list) untouched; an empty
+// default (the closed allow-list) untouched; an empty
 // non-nil slice records "permit no algs".
 func applyAlgNarrowing(c *config, algs []string) error {
 	if algs == nil {
@@ -163,7 +163,7 @@ func applyAlgNarrowing(c *config, algs []string) error {
 		if _, ok := jose.ParseJWEAlg(a); !ok {
 			return &Error{
 				Code: codeConfiguration,
-				Description: "WithSupportedEncryptionAlgs received alg outside the v0.9.1 allow-list: " +
+				Description: "WithSupportedEncryptionAlgs received alg outside the supported allow-list: " +
 					a,
 			}
 		}
@@ -183,7 +183,7 @@ func applyEncNarrowing(c *config, encs []string) error {
 		if _, ok := jose.ParseJWEEnc(e); !ok {
 			return &Error{
 				Code: codeConfiguration,
-				Description: "WithSupportedEncryptionAlgs received enc outside the v0.9.1 allow-list: " +
+				Description: "WithSupportedEncryptionAlgs received enc outside the supported allow-list: " +
 					e,
 			}
 		}
@@ -197,7 +197,7 @@ func applyEncNarrowing(c *config, encs []string) error {
 // works from: the discovery advertisement, the inbound decryption
 // gate, the outbound recipient selection, and the client-registration
 // validator. The embedder-supplied narrowing wins if it was explicitly
-// set; otherwise the closed v0.9.1 default applies.
+// set; otherwise the closed default applies.
 //
 // The result does not depend on [WithEncryptionKeyset]. That keyset is
 // what the OP decrypts *with*; the algorithms it can negotiate are a

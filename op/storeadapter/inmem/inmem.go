@@ -287,8 +287,8 @@ func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRe
 
 // Metadata implements [store.Store]. The reference implementation
 // keeps a single map under one mutex; the substore is consulted by
-// the pairwise immutability gate at op.New and by no other code path
-// in v0.9.1, so a simple key/value map satisfies every documented
+// the pairwise immutability gate at op.New and by no other code path,
+// so a simple key/value map satisfies every documented
 // access pattern.
 func (s *Store) Metadata() store.MetadataStore { return s.metadata }
 

@@ -435,7 +435,7 @@ func (f *encJARFixture) signES256(t *testing.T, claims map[string]any) string {
 // string carries error=invalid_request_object" but the actual
 // implementation surfaces the failure as a JSON 400 envelope with
 // `error: "invalid_request_object"` (writeJAREnvelopeError). The test
-// pins the JSON-envelope shape because that is the v0.9.1 wire form;
+// pins the JSON-envelope shape because that is the wire form;
 // the same wire code is asserted either way.
 //
 // The hostile JWE is constructed by encrypting under RSA-OAEP-256 then
@@ -1391,7 +1391,7 @@ func TestScenario_ENC_120_JARMSuccessJWE(t *testing.T) {
 // The fixture publishes a JWKS containing only a `use=sig` key so the
 // clientencjwks resolver surfaces ErrNoMatchingKey at JWE-wrap time.
 // The bad request that triggers the JARM error path is an unsupported
-// `response_type` ("token" is not in the v0.9.1 ship list).
+// `response_type` ("token" is not in the supported list).
 //
 // Spec: FAPI 2.0 Message Signing §5.5.
 func TestScenario_ENC_121_JARMErrorFailsClosed(t *testing.T) {

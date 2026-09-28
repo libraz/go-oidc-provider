@@ -40,7 +40,7 @@
 //     rejection surfaces as invalid_request before any record is
 //     persisted.
 //
-//   - Poll mode only. v0.9.1 implements only the poll delivery
+//   - Poll mode only: the OP implements only poll delivery
 //     mode. Push and ping delivery modes are deferred; the grant's
 //     token-endpoint contract assumes the consuming device discovers
 //     state via repeated /token polls subject to the slow_down

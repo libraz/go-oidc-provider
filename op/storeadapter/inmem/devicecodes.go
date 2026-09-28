@@ -170,7 +170,7 @@ func (s *deviceCodeStore) FindByUserCode(_ context.Context, userCode string) (*s
 	// verification page only needs the metadata, and exposing the
 	// device_code through this lookup would let a malicious page
 	// poll on the device's behalf. Callers that legitimately need
-	// the device_code (none in v0.9.1) can call FindByDeviceCode
+	// the device_code (none today) can call FindByDeviceCode
 	// once they have it.
 	out := cloneDeviceCode(rec)
 	out.ID = ""

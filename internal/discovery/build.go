@@ -136,7 +136,7 @@ type Input struct {
 
 	// EncryptionAlgsSupported lists the JWE alg values the OP
 	// advertises across the *_encryption_alg_values_supported
-	// fields. The op layer supplies the closed v0.9.1 default
+	// fields. The op layer supplies the closed default
 	// (op.SupportedEncryptionAlgs) or the embedder's narrowed
 	// subset (op.WithSupportedEncryptionAlgs). An empty list
 	// suppresses every *_encryption_* array: the OP negotiates no
@@ -569,7 +569,7 @@ func applyCIBAFeature(in Input, doc *Document) {
 // invalid_request_object.
 //
 // The alg / enc lists are the embedder's narrowed subset (or the
-// closed v0.9.1 default when no narrowing was applied). An empty list
+// closed default when no narrowing was applied). An empty list
 // on either side means no pair can be negotiated, so nothing is
 // advertised.
 func applyEncryptionFeature(in Input, doc *Document) {

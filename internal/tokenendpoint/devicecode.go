@@ -527,7 +527,7 @@ type deviceCodeIDTokenInput struct {
 // c_hash is omitted because the device flow has no authorization
 // code to bind. nonce is omitted because RFC 8628 has no path for
 // the device to commit one at /device_authorization (the embedder
-// MAY surface one through the verification page, but the v0.9.1
+// MAY surface one through the verification page, but the
 // substore does not retain it). auth_time is populated when the
 // substore stamped a non-zero value at Approve time; the encoder
 // omits the claim on zero.

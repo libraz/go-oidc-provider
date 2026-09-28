@@ -1,6 +1,6 @@
 // Package devicecodekit ships the small embedder helpers that close
 // the two foot-guns left around the RFC 8628 device-authorization
-// surface in v0.9.1: the user_code brute-force gate that the
+// surface: the user_code brute-force gate that the
 // embedder's verification page must run on every form POST, and the
 // audit-emitting revoke wrapper that an embedder calls when the user
 // denies a pending request or revokes a previously approved device.

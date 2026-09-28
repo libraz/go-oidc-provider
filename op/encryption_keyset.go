@@ -48,7 +48,7 @@ type EncryptionKey struct {
 	//
 	// Embedders who need to pin an ECDH-ES key-wrap variant
 	// (A128KW / A256KW) supply the explicit value here. Algorithms
-	// outside the v0.9.1 closed allow-list ([op.SupportedEncryptionAlgs])
+	// outside the closed allow-list ([op.SupportedEncryptionAlgs])
 	// are rejected at construction time.
 	Algorithm string
 

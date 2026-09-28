@@ -8,7 +8,7 @@
 // its own `use=enc` JWKS inline on the client metadata, drives an
 // authorization_code + PKCE flow, and decrypts the five-part JWE wrap
 // with the RP's private key before verifying the inner JWS against
-// the OP's signing JWKS. The example exists to make the v0.9.1
+// the OP's signing JWKS. The example exists to make the
 // outbound id_token JWE wire shape readable end-to-end.
 //
 // Run with the example build tag:

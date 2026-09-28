@@ -148,7 +148,7 @@ func TestWithEncryptionKeyset_RejectsKidCollision(t *testing.T) {
 }
 
 // TestWithEncryptionKeyset_RejectsBadAlg asserts that an alg outside
-// the v0.9.1 closed allow-list (e.g. RSA1_5) is rejected at
+// the closed allow-list (e.g. RSA1_5) is rejected at
 // construction time, even when paired with a structurally valid RSA
 // key.
 func TestWithEncryptionKeyset_RejectsBadAlg(t *testing.T) {

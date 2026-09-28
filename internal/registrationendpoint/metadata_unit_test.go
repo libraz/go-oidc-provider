@@ -304,7 +304,7 @@ func TestValidatePolicy_RejectsUnsupportedTokenEndpointAuthSigningAlg(t *testing
 	}
 }
 
-// TestValidatePolicy_AcceptsRequestObjectEncryption pins the v0.9.1
+// TestValidatePolicy_AcceptsRequestObjectEncryption pins the
 // allow-list for [request_object_encryption_alg / _enc]: every entry
 // on the JOSE wrapper's allow-list flows through the DCR validator
 // unchanged when both halves are present. The test fails closed if
@@ -383,7 +383,7 @@ func TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist(t *testin
 	}
 }
 
-// TestValidatePolicy_AcceptsResponseEncryption pins the v0.9.1 allow-list
+// TestValidatePolicy_AcceptsResponseEncryption pins the allow-list
 // for the four outbound-encryption metadata pairs (id_token, userinfo,
 // JARM authorization, introspection). Each path mirrors
 // [TestValidatePolicy_AcceptsRequestObjectEncryption]: every alg/enc on
@@ -396,7 +396,7 @@ func TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist(t *testin
 // Half-pair cases are pinned as rejections by
 // [TestRegister_JWEAlgEncPair_Matrix] in
 // metadata_validate_encryption_test.go (M6: half-pair admits used to
-// land here and fail at first-use; v0.9.1 rejects them at registration).
+// land here and fail at first-use; registration now rejects them).
 func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
 	t.Parallel()
 
@@ -465,7 +465,7 @@ func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
 
 // TestValidatePolicy_RejectsResponseEncryptionOutsideAllowlist pins the
 // negative half across the four outbound-encryption metadata pairs:
-// any alg/enc value off the v0.9.1 allow-list MUST return
+// any alg/enc value off the allow-list MUST return
 // invalid_client_metadata, and the description MUST name the offending
 // wire field so embedders can self-correct.
 func TestValidatePolicy_RejectsResponseEncryptionOutsideAllowlist(t *testing.T) {

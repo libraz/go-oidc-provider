@@ -164,7 +164,7 @@ func isNilPrivateKey(key crypto.PrivateKey) bool {
 // JWK "alg" advertisement. The selection rules:
 //
 //   - RSA: must be at least [jose.MinRSAKeyBits]; alg defaults to
-//     "RSA-OAEP-256" (the v0.9.1 ship list does not include 384/512
+//     "RSA-OAEP-256" (the supported list does not include 384/512
 //     for dependency reasons).
 //   - ECDSA: must be on P-256 / P-384 / P-521; alg defaults to
 //     "ECDH-ES". Embedders may pin "ECDH-ES+A128KW" / "ECDH-ES+A256KW"
@@ -269,7 +269,7 @@ func algMatchesKeyFamily(alg jose.JWEAlg, family string) bool {
 }
 
 // isAllowedECDHCurve reports whether the curve name (Curve.Params().Name)
-// is on the v0.9.1 ECDH-ES allow-list. P-256 / P-384 / P-521 are
+// is on the ECDH-ES allow-list. P-256 / P-384 / P-521 are
 // permitted; P-224 and any custom curve are rejected.
 func isAllowedECDHCurve(name string) bool {
 	switch name {

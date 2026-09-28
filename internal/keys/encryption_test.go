@@ -90,7 +90,7 @@ func TestNewEncryptionSet_RejectsSubMinimumRSA(t *testing.T) {
 }
 
 // TestNewEncryptionSet_RejectsP224 pins the curve allow-list. P-224
-// is rejected because no JWE alg in the v0.9.1 ship list pairs with
+// is rejected because no JWE alg in the supported list pairs with
 // it, and admitting unsupported curves quietly would just defer the
 // failure to the first decrypt attempt.
 func TestNewEncryptionSet_RejectsP224(t *testing.T) {
@@ -311,7 +311,7 @@ func TestEncryptionSet_All_HoldsLiveKeysOnly(t *testing.T) {
 }
 
 // TestEncryptionSet_JWKS_PublishesUseEnc asserts every published JWK
-// carries use=enc, the right kid, and an alg label the v0.9.1 ship
+// carries use=enc, the right kid, and an alg label the supported
 // list recognises.
 func TestEncryptionSet_JWKS_PublishesUseEnc(t *testing.T) {
 	t.Parallel()
