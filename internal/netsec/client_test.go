@@ -261,7 +261,10 @@ func TestNewHTTPClient_RedirectExceeded(t *testing.T) {
 	opts := Options{MaxRedirects: 2}
 	check := makeCheckRedirect(opts)
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com/x", http.NoBody)
-	via := []*http.Request{req, req}
+	if err := check(req, []*http.Request{req, req}); err != nil {
+		t.Fatalf("second redirect: err=%v want nil", err)
+	}
+	via := []*http.Request{req, req, req}
 	if err := check(req, via); !errors.Is(err, ErrRedirectBlocked) {
 		t.Fatalf("err=%v want ErrRedirectBlocked", err)
 	}

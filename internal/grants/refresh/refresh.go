@@ -821,10 +821,18 @@ func (e *Exchanger) presentedGrantID(ctx context.Context, presentedID string) st
 // successors — the walk produced no root, or the store rejected the cascade —
 // so the caller MUST run the grant-scoped rung.
 func (e *Exchanger) revokeChainFromRoot(ctx context.Context, presentedID string) bool {
-	rootID, ok := e.findChainRoot(ctx, presentedID)
+	rootID, ok, err := e.findChainRoot(ctx, presentedID)
 	if !ok {
+		// A store fault resolving the presented token is reported by its
+		// own error text, mirroring the RevokeChain / RevokeByGrant rungs
+		// below; a genuinely empty walk (no fault, nothing to resolve)
+		// keeps the symbolic reason since there is no error to report.
+		reason := "chain_root_lookup_failed"
+		if err != nil {
+			reason = err.Error()
+		}
 		e.emitChainRevokeFailed(ctx,
-			"refresh chain root lookup failed after replay detection", "chain_root_lookup_failed")
+			"refresh chain root lookup failed after replay detection", reason)
 		return false
 	}
 	if err := e.store.RevokeChain(ctx, rootID); err != nil {
@@ -867,8 +875,10 @@ func (e *Exchanger) emitChainRevokeFailed(ctx context.Context, message, reason s
 
 // findChainRoot follows parent pointers up to the chain's root or returns
 // ok=false if the walk fails / loops / exceeds [chainWalkLimit]. The walk
-// terminates at the first record whose ParentID is nil.
-func (e *Exchanger) findChainRoot(ctx context.Context, startID string) (string, bool) {
+// terminates at the first record whose ParentID is nil. The error is non-nil
+// only when resolving startID itself hit a store fault rather than an
+// ordinary miss; see [refreshchain.FindRoot].
+func (e *Exchanger) findChainRoot(ctx context.Context, startID string) (string, bool, error) {
 	return refreshchain.FindRoot(ctx, e.store, startID, chainWalkLimit)
 }
 

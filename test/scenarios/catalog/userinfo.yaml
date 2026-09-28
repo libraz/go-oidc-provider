@@ -90,12 +90,12 @@ rows:
     severity: P0
     spec: RFC 6749 §10.4; RFC 6750 §3.1
     behaviour: |
-      When the access_token is otherwise valid but its bound client
-      can no longer be loaded, the endpoint returns 401 with
-      error=invalid_token and the description "invalid token
-      provided".
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 /userinfo never resolves the client by id (no GetClient call on the path). 'Client gone' has no observable wire effect. Out-of-scope until the userinfo handler grows a per-request client check."
+      When the access_token (JWT or opaque) is otherwise valid but its
+      bound client can no longer be loaded, the endpoint returns 401
+      with error=invalid_token and the description "The access token
+      has been revoked", whether or not a revocation cascade ran when
+      the client was removed.
+    status: active
 
   - id: UI-009
     severity: P0

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
-	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -154,8 +153,8 @@ func TestResolveSilentGrant_RejectsSameOwnerDifferentID(t *testing.T) {
 		context.Background(),
 		resolved{Deps: Deps{Grants: grants}},
 		&authorize.Request{ClientID: "client-1", Scope: []string{"openid"}},
-		&sessions.Active{Session: &store.Session{Subject: "user-1"}},
 		authorizeHint{grant: &store.Grant{ID: "grant-1"}},
+		grantAuthContext{},
 	)
 	if err == nil {
 		t.Fatal("same-owner grant with a different ID was accepted")

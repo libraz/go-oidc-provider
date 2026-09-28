@@ -411,10 +411,19 @@ func TestHandler_GETLogoutNoHint(t *testing.T) {
 	if got := resp.Header.Get("Content-Security-Policy"); got == "" {
 		t.Error("Content-Security-Policy header missing")
 	} else {
-		for _, want := range []string{"form-action 'self'", "sandbox allow-forms allow-same-origin"} {
+		for _, want := range []string{"frame-ancestors 'none'", "base-uri 'none'", "sandbox allow-forms allow-same-origin"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("Content-Security-Policy=%q missing %q", got, want)
 			}
+		}
+		// form-action MUST be absent: the interstitial's own POST is
+		// same-origin, but a successful confirmation completes with a
+		// redirect to the RP's cross-origin post_logout_redirect_uri,
+		// and browsers apply form-action to that redirect target too.
+		// A 'self' value here would block RP-Initiated Logout from
+		// ever completing.
+		if strings.Contains(got, "form-action") {
+			t.Errorf("Content-Security-Policy=%q must not carry form-action", got)
 		}
 	}
 	if got := resp.Header.Get("Referrer-Policy"); got != "same-origin" {

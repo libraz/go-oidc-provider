@@ -57,6 +57,9 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !checkTokenScopeAllowlist(w, deps, client.ID, exchanged.Scope) {
 		return
 	}
+	if !requireRegisteredScopes(w, client, exchanged.Scope) {
+		return
+	}
 	if !enforcePKCEDowngradeGuard(w, client, exchanged) {
 		return
 	}

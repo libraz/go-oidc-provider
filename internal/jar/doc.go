@@ -38,9 +38,10 @@
 // # Algorithm policy
 //
 // The verifier accepts whichever signing algorithms internal/jose
-// admits (currently RS256, PS256, ES256, EdDSA). FAPI 2.0 Message
-// Signing prefers PS256 / ES256 / EdDSA; RS256 is allowed for OIDC
-// Core compatibility but operators SHOULD restrict per-client via
+// admits (currently RS256, PS256, ES256, EdDSA), narrowed by
+// [VerifierConfig.AllowedAlgs]; the op layer drops RS256 there under
+// the FAPI profiles (FAPI 2.0 Security Profile §5.4.1). Operators may
+// narrow further per client via
 // [op/store.Client.RequestObjectSigningAlg]. The "none" algorithm and
 // the HMAC family are rejected structurally because the input goes
 // through internal/jose.ParseSigned, which already enforces the

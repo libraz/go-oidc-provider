@@ -90,8 +90,9 @@ type config struct {
 	trustedProxyHosts []string
 
 	// corsOrigins holds the explicit cross-origin entries from
-	// [WithCORSOrigins]. The full allowlist is the union of these plus
-	// every redirect_uri origin registered via the [store.ClientStore].
+	// [WithCORSOrigins]. The full allowlist is the union of these, the
+	// issuer origin and the redirect_uri origins of [WithStaticClients]
+	// entries; clients that exist only in the store contribute none.
 	corsOrigins []string
 
 	// scopes captures the [Scope] values registered through

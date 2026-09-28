@@ -78,11 +78,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	applyClaimsToggle(req, deps.ClaimsParameterEnabled)
-	if err := req.Validate(client, deps.Scopes, deps.RequestPolicy); err != nil {
+	// RFC 9126 §2.1 has the AS validate the pushed parameters here, so
+	// /par admits exactly the effective request /authorize would.
+	if err := req.ValidateEffectiveRequest(client, deps.Scopes, deps.RequestPolicy, deps.ACRValuesSupported); err != nil {
 		writeAuthorizeError(w, err)
-		return
-	}
-	if !validateACRValuesSupported(w, deps, req) {
 		return
 	}
 	if !validateRequestExtensions(w, r, deps, req, client) {
@@ -121,30 +120,6 @@ func validateRequestExtensions(
 		return true
 	}
 	writeError(w, http.StatusBadRequest, rejection.Code, rejection.Description)
-	return false
-}
-
-// validateACRValuesSupported rejects a pushed request that names an
-// authentication context the OP has not advertised in
-// `acr_values_supported`.
-//
-// Pushing is the point at which RFC 9126 has the AS validate the
-// authorization parameters, so a value /authorize would refuse must be
-// refused here too: minting a request_uri for it would spend the
-// client's one-time reference on a request the next gate rejects. The
-// predicate and the wording are shared with the other two
-// authentication-request surfaces, so the same acr_values is answered
-// the same way whether the client pushes it, posts it inline, or sends
-// it on the backchannel.
-//
-// Returns false when it wrote an error response.
-func validateACRValuesSupported(w http.ResponseWriter, deps Deps, req *authorize.Request) bool {
-	value, unsupported := req.UnsupportedACRValue(deps.ACRValuesSupported)
-	if !unsupported {
-		return true
-	}
-	writeError(w, http.StatusBadRequest, errInvalidRequest,
-		"acr_values entry "+value+" is not advertised in acr_values_supported")
 	return false
 }
 
@@ -193,7 +168,8 @@ func consumeJARRequestObject(
 		writeJARError(w, err)
 		return nil, false
 	}
-	merged, err := jar.Merge(values, obj)
+	// RFC 9101 §6.3: only the signed object's parameters are used here.
+	merged, err := jar.Merge(values, obj, jar.MergeObjectOnly)
 	if err != nil {
 		writeJARError(w, err)
 		return nil, false

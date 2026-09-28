@@ -32,9 +32,13 @@ func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispat
 			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
 			Grants:             cfg.store.Grants(),
 			Clients:            cfg.store.Clients(),
-			Audit:              cfg.effectiveAuditEmitter(),
-			Clock:              clock,
-			MaxAccessTTL:       cfg.accessTokenTTL,
+			// An opaque subject_token records the OP-internal subject;
+			// the exchanged token must carry the per-client public one a
+			// JWT subject_token already does.
+			SubjectProjector: backchannelSubjectProjector(cfg),
+			Audit:            cfg.effectiveAuditEmitter(),
+			Clock:            clock,
+			MaxAccessTTL:     cfg.accessTokenTTL,
 			// The same tolerance /userinfo is wired with, so a
 			// subject_token the resource-server surfaces still accept is
 			// not rejected here under clock skew.

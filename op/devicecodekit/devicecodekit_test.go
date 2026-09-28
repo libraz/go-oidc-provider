@@ -276,8 +276,20 @@ func TestInMemoryAttemptLimiterExpiresKeysAndRemainsBounded(t *testing.T) {
 			t.Fatalf("fill key %d: allowed=%v err=%v", i, allowed, err)
 		}
 	}
-	if allowed, err := limiter.Allow(ctx, "ceremony-over-cap"); err != nil || allowed {
-		t.Fatalf("over-cap key: allowed=%v err=%v, want fail-closed", allowed, err)
+	if allowed, err := limiter.Allow(ctx, "ceremony-over-cap"); allowed || !errors.Is(err, devicecodekit.ErrAttemptLimiterSaturated) {
+		t.Fatalf("over-cap key: allowed=%v err=%v, want fail-closed with ErrAttemptLimiterSaturated", allowed, err)
+	}
+	if strikes, err := limiter.Count(ctx, "ceremony-over-cap"); err != nil || strikes != 0 {
+		t.Fatalf("over-cap key count=%d err=%v, want no charge", strikes, err)
+	}
+	// A tracked key that spent its own budget is still the one reported locked.
+	if allowed, err := limiter.Allow(ctx, "ceremony-0"); err != nil || allowed {
+		t.Fatalf("spent key at saturation: allowed=%v err=%v, want locked", allowed, err)
+	}
+	deps := &devicecodekit.Deps{DeviceCodes: inmem.New().DeviceCodes(), AttemptLimiter: limiter}
+	if _, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "ceremony-fresh", "ABCDEFGH"); errors.Is(err, devicecodekit.ErrAttemptLocked) ||
+		!errors.Is(err, devicecodekit.ErrAttemptLimiterSaturated) {
+		t.Fatalf("fresh key at saturation: err=%v, want ErrAttemptLimiterSaturated, never ErrAttemptLocked", err)
 	}
 
 	clock.now = clock.now.Add(time.Minute)

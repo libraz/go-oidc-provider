@@ -12,28 +12,28 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
-	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// resolveGrantACRAMR names the exit a completed ceremony took and asks
-// the record it points at for the authentication the response reports.
+// resolveGrantACRAMR names the exit a completed ceremony took, reads the
+// authentication off the record it points at, and resolves what the
+// grant reports for the request.
 //
-// It is the two production statements that precede the terminal gate,
-// spelled as one call: the endpoint itself resolves the same pair inside
-// [validateTerminalAuthorization], which returns what it validated. The
-// tests below drive it directly because their subject is the resolution
-// — which record is read, and what the ACR policy is handed — rather
-// than the request constraints the gate goes on to apply.
+// It is the production statements around the terminal gate, spelled as
+// one call: the endpoint reads the record inside
+// [validateTerminalAuthorization] and then hands what it validated to
+// [reportAuthContext]. The tests below drive it directly because their
+// subject is the resolution — which record is read, and what the ACR
+// policy is handed — rather than the request constraints the gate
+// applies in between.
 func resolveGrantACRAMR(
 	r *http.Request,
 	deps resolved,
-	rec *store.Interaction,
 	req *authorize.Request,
 	authnState authn.State,
 	subject string,
 	authTime time.Time,
 ) (string, []string, time.Time, error) {
-	_, backing := interactionExit(r, deps, rec, req, authnState, subject, authTime)
+	exit, backing := interactionExit(r, deps, authnState, subject, authTime)
 	authCtx, err := backing.authContext(r.Context())
 	if err != nil {
 		return "", nil, time.Time{}, err
@@ -41,7 +41,15 @@ func resolveGrantACRAMR(
 	if !authCtx.AuthTime.IsZero() {
 		authTime = authCtx.AuthTime
 	}
-	return authCtx.ACR, authCtx.AMR, authTime, nil
+	st := authnState
+	if exit.spec().ServesEstablishedSession {
+		st.CompletedStepKinds = nil
+	}
+	reported, err := reportAuthContext(r.Context(), r, deps, req, subject, st, authCtx)
+	if err != nil {
+		return "", nil, time.Time{}, err
+	}
+	return reported.ACR, reported.AMR, authTime, nil
 }
 
 // acrCapture records the input the ACR policy was handed and answers
@@ -102,7 +110,6 @@ func TestResolveGrantACRAMR_ClaimsOnlyACRReachesPolicy(t *testing.T) {
 	acr, _, _, err := resolveGrantACRAMR(
 		acrTestRequest(t),
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
-		&store.Interaction{ClientID: "client-1"},
 		req,
 		acrTestState(authn.State{}),
 		"user-1",
@@ -139,7 +146,6 @@ func TestResolveGrantACRAMR_UnionsBothACRSpellings(t *testing.T) {
 	if _, _, _, err := resolveGrantACRAMR(
 		acrTestRequest(t),
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
-		&store.Interaction{ClientID: "client-1"},
 		req,
 		acrTestState(authn.State{}),
 		"user-1",
@@ -169,7 +175,6 @@ func TestResolveGrantACRAMR_RemoteHintsReachPolicy(t *testing.T) {
 	if _, _, _, err := resolveGrantACRAMR(
 		acrTestRequest(t),
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
-		&store.Interaction{ClientID: "client-1"},
 		&authorize.Request{ClientID: "client-1", ACRValues: []string{"urn:example:strong"}},
 		acrTestState(state),
 		"user-1",
@@ -205,7 +210,6 @@ func TestResolveGrantACRAMR_RemoteHintsFallBackToRequest(t *testing.T) {
 	if _, _, _, err := resolveGrantACRAMR(
 		r,
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
-		&store.Interaction{ClientID: "client-1"},
 		&authorize.Request{ClientID: "client-1", ACRValues: []string{"urn:example:strong"}},
 		acrTestState(authn.State{}),
 		"user-1",
@@ -239,7 +243,6 @@ func TestResolveGrantACRAMR_EssentialUnsatisfiedFails(t *testing.T) {
 	_, _, _, err := resolveGrantACRAMR(
 		acrTestRequest(t),
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
-		&store.Interaction{ClientID: "client-1"},
 		req,
 		acrTestState(authn.State{}),
 		"user-1",
@@ -260,7 +263,6 @@ func TestResolveGrantACRAMR_VoluntaryUnsatisfiedOmitsACR(t *testing.T) {
 	acr, _, _, err := resolveGrantACRAMR(
 		acrTestRequest(t),
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
-		&store.Interaction{ClientID: "client-1"},
 		&authorize.Request{ClientID: "client-1", ACRValues: []string{"urn:example:strong"}},
 		acrTestState(authn.State{}),
 		"user-1",
@@ -292,7 +294,6 @@ func TestResolveGrantACRAMR_NonEssentialClaimsSpecOmitsACR(t *testing.T) {
 	acr, _, _, err := resolveGrantACRAMR(
 		acrTestRequest(t),
 		resolved{Deps: Deps{ACRResolver: capture.resolver()}},
-		&store.Interaction{ClientID: "client-1"},
 		req,
 		acrTestState(authn.State{}),
 		"user-1",

@@ -40,11 +40,14 @@ rows:
 
   - id: JAR-003
     severity: P0
-    spec: RFC 9101 §5 / OIDC Core §6.1
+    spec: RFC 9101 §5, §6.3 / OIDC Core §6.1, §6.3.3
     behaviour: |
-      Request Object claims override outer query/form parameters at
-      both the authorization and device authorization endpoints; the
-      OP honours only the Request Object values.
+      Request Object claims override outer query/form parameters of the
+      same name at the authorization endpoint. Under a FAPI profile the
+      OP uses only the Request Object values (RFC 9101 §6.3) and drops
+      outer-only parameters; on plain OIDC /authorize an outer
+      parameter the Request Object does not carry is kept
+      (OIDC Core §6.3.3).
     status: active
 
   - id: JAR-004
@@ -54,6 +57,7 @@ rows:
       Numeric Request Object claims (e.g. max_age) MUST be coerced to
       strings before downstream processing so all authorization
       parameters share a single representation.
+    shape: presence
     status: active
 
   - id: JAR-005

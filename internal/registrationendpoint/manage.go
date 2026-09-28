@@ -94,6 +94,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		deps.AllowLocalhostLoopback,
 		deps.AllowInsecureBackchannelLogoutForDev,
 		deps.JWEPolicy,
+		deps.profilePolicy(),
 	)
 	if err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, clientID)

@@ -521,7 +521,11 @@ func TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret(t *testing.T) {
 	// an attacker would obtain by fetching the published JWKS and
 	// concatenating x||y, or by pulling the SubjectPublicKeyInfo bytes.
 	// Treat the resulting bytes as a raw HMAC secret.
-	hmacSecret := append(pub.X.Bytes(), pub.Y.Bytes()...)
+	uncompressed, err := pub.Bytes()
+	if err != nil {
+		t.Fatalf("PublicKey.Bytes: %v", err)
+	}
+	hmacSecret := uncompressed[1:]
 
 	signer, err := josev4.NewSigner(
 		josev4.SigningKey{Algorithm: josev4.HS256, Key: hmacSecret},

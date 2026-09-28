@@ -453,6 +453,7 @@ func TestIntegration_UserInfo_CustomScopeClaimsAreWired(t *testing.T) {
 		Subject:   "user-1",
 		Audience:  []string{validIssuer},
 		ClientID:  userInfoTokenClientID,
+		GrantID:   "grant-custom-scope",
 		IssuedAt:  time.Now().Add(-time.Minute).Unix(),
 		ExpiresAt: time.Now().Add(time.Hour).Unix(),
 		JTI:       "at-custom-scope",

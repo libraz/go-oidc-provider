@@ -28,8 +28,8 @@ func prepareCompletionIntent(
 	rec *store.Interaction,
 	authnState authn.State,
 	result interaction.Result,
-	acr string,
-	amr []string,
+	recorded grantAuthContext,
+	reported grantAuthContext,
 	decision scopeDecision,
 	requestedScope []string,
 ) (*authorize.CompletionIntent, error) {
@@ -48,8 +48,8 @@ func prepareCompletionIntent(
 		Login: sessions.Login{
 			Subject:  result.Subject,
 			AuthTime: result.AuthTime,
-			AMR:      slices.Clone(amr),
-			ACR:      acr,
+			AMR:      slices.Clone(recorded.AMR),
+			ACR:      recorded.ACR,
 		},
 		FreshAuthn:               len(authnState.Factors) > 0,
 		StableSessionID:          deriveCompletionID(deps.CompletionKey, rec.ID, "session"),
@@ -69,8 +69,8 @@ func prepareCompletionIntent(
 		NewGrantID: deriveCompletionID(deps.CompletionKey, rec.ID, "grant"),
 		Subject:    result.Subject,
 		AuthTime:   result.AuthTime,
-		ACR:        acr,
-		AMR:        slices.Clone(amr),
+		ACR:        reported.ACR,
+		AMR:        slices.Clone(reported.AMR),
 		GrantScope: decision.grantScope(requestedScope),
 		// DeclinedScope travels with the intent so a retried or resumed
 		// completion applies the same grant amendment the ceremony
@@ -241,7 +241,7 @@ func resumeInteractionCompletion(
 	// failed during Session establishment or anchor deletion, and prevents
 	// concurrent resumptions from emitting duplicates.
 	if deleteErr == nil {
-		emitCompletionAudit(r.Context(), deps, intent, req.ClientID, code.GrantID, out)
+		emitCompletionAudit(r.Context(), deps, intent, req.ClientID, code.GrantID, out, consentAutoGranted(state))
 	}
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
@@ -494,14 +494,19 @@ func emitCompletionAudit(
 	clientID string,
 	grantID string,
 	out sessions.Outcome,
+	autoGranted bool,
 ) {
 	if out.Cookie != "" && intent.Session.Mode != string(sessions.EstablishReuse) {
 		emitSessionCreated(ctx, deps, intent.Subject, out.SessionID, out.ChooserGroupID, intent.Session.Mode)
 	}
+	consentEvent, consentMessage := opAuditConsentGranted, "consent grant recorded"
+	if autoGranted {
+		consentEvent, consentMessage = opAuditConsentGrantedFirstParty, "first-party consent auto-granted"
+	}
 	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:     opAuditConsentGranted,
+		Name:     consentEvent,
 		Level:    audit.LevelInfo,
-		Message:  "consent grant recorded",
+		Message:  consentMessage,
 		ActorID:  intent.Subject,
 		ClientID: clientID,
 		Extras: map[string]any{
@@ -530,4 +535,13 @@ func emitCompletionAudit(
 			"scope":    slices.Clone(intent.GrantScope),
 		},
 	})
+}
+
+// consentAutoGranted reports whether the completing chain's consent was
+// the first-party auto-grant rather than a ceremony or a cached grant.
+// The chain state was decoded to reach the terminal step, so a record
+// that no longer decodes reports the ordinary consent event.
+func consentAutoGranted(state authorize.RequestState) bool {
+	st, err := decodeAuthnState(state.Authn)
+	return err == nil && st.ConsentAutoGranted
 }

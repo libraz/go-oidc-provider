@@ -736,7 +736,7 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
 		return
 	}
-	exit, backing := interactionExit(r, deps, rec, req, authnState, result.Subject, result.AuthTime)
+	exit, backing := interactionExit(r, deps, authnState, result.Subject, result.AuthTime)
 	decision := resolveScopeDecision(authnState, result, req.Scope)
 	authCtx, err := validateTerminalAuthorization(r.Context(), deps, req, terminalAuthorization{
 		Exit:                   exit,
@@ -744,8 +744,18 @@ func terminateInteraction(
 		Subject:                result.Subject,
 		Scope:                  decision.grantScope(req.Scope),
 		ConsentAnswered:        decision.answered,
-		ConsentFromCachedGrant: authnState.InteractionsRun[consent.Name],
+		ConsentFromCachedGrant: authnState.InteractionsRun[consent.Name] && !authnState.ConsentAutoGranted,
 	})
+	if err != nil {
+		failTerminalAuthorization(w, r, deps, rec, req, err)
+		return
+	}
+	reportState := authnState
+	if exit.spec().ServesEstablishedSession {
+		// Steps run this attempt did not produce the session's level.
+		reportState.CompletedStepKinds = nil
+	}
+	reported, err := reportAuthContext(r.Context(), r, deps, req, result.Subject, reportState, authCtx)
 	if err != nil {
 		failTerminalAuthorization(w, r, deps, rec, req, err)
 		return
@@ -762,8 +772,8 @@ func terminateInteraction(
 		rec,
 		authnState,
 		result,
-		authCtx.ACR,
-		authCtx.AMR,
+		authCtx,
+		reported,
 		decision,
 		req.Scope,
 	)

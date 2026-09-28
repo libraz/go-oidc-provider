@@ -50,6 +50,12 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			wantScope: []string{"read", "write"},
 		},
 		{
+			name:      "confidential_no_scope_param_drops_registered_openid",
+			client:    confidential([]string{"client_credentials"}, []string{"openid", "read", "offline_access"}),
+			requested: nil,
+			wantScope: []string{"read", "offline_access"},
+		},
+		{
 			name:      "confidential_subset_scope_returns_subset",
 			client:    confidential([]string{"client_credentials"}, []string{"read", "write", "delete"}),
 			requested: []string{"read", "write"},

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -27,10 +28,14 @@ type StaticClientValidationOptions struct {
 	// applies the library default {"code"}.
 	AllowedResponseTypes []string
 
-	// AllowedClientAuthMethods is the optional profile-level
-	// token_endpoint_auth_method whitelist. Empty applies no additional
-	// restriction beyond the library-supported method set.
-	AllowedClientAuthMethods []string
+	// AllowedClientAuthMethods mirrors [Deps.AllowedClientAuthMethods]:
+	// the optional profile-level token_endpoint_auth_method whitelist.
+	// Empty applies no additional restriction beyond the
+	// library-supported method set.
+	AllowedClientAuthMethods []clientauth.Method
+
+	// AllowedClientSigningAlgs mirrors [Deps.AllowedClientSigningAlgs].
+	AllowedClientSigningAlgs []internaljose.Algorithm
 
 	// PairwiseEnabled mirrors [Deps.PairwiseEnabled]. When false,
 	// "subject_type": "pairwise" is rejected.
@@ -142,9 +147,10 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 		opts.AllowLocalhostLoopback,
 		opts.AllowInsecureBackchannelLogoutForDev,
 		opts.JWEPolicy,
+		profilePolicy{authMethods: opts.AllowedClientAuthMethods, signingAlgs: opts.AllowedClientSigningAlgs},
 	)
 	if err == nil {
-		return validateStaticClientAuthMethod(metadata.TokenEndpointAuthMethod, opts.AllowedClientAuthMethods)
+		return nil
 	}
 	if ve, ok := asValidationError(err); ok {
 		return &StaticClientValidationError{
@@ -158,24 +164,6 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 	return &StaticClientValidationError{
 		Code:        codeInvalidClientMetadata,
 		Description: err.Error(),
-	}
-}
-
-func validateStaticClientAuthMethod(method string, allowed []string) error {
-	if len(allowed) == 0 {
-		return nil
-	}
-	if method == "" {
-		method = defaultAuthMethod
-	}
-	for _, candidate := range allowed {
-		if method == candidate {
-			return nil
-		}
-	}
-	return &StaticClientValidationError{
-		Code:        codeInvalidClientMetadata,
-		Description: "token_endpoint_auth_method " + method + " is not allowed by active profile",
 	}
 }
 

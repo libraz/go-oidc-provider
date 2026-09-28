@@ -66,6 +66,14 @@ type Input struct {
 	// regardless of which features are otherwise enabled.
 	ProfileAllowedAuthMethods []string
 
+	// ClientSigningAlgs, when non-empty, is the JWS alg set the active
+	// profile admits on client-signed input. It replaces the library
+	// allow-list in token_endpoint_auth_signing_alg_values_supported,
+	// request_object_signing_alg_values_supported and
+	// backchannel_authentication_request_signing_alg_values_supported,
+	// the same set the verifiers behind those surfaces enforce.
+	ClientSigningAlgs []string
+
 	// ScopesSupported lists the scope identifiers the OP advertises
 	// in the discovery document. The op layer pre-filters this list
 	// (built-in standard scopes plus every registered scope whose
@@ -531,9 +539,7 @@ func applyCIBAFeature(in Input, doc *Document) {
 	doc.BackchannelTokenDeliveryModesSupported = []string{"poll"}
 	doc.BackchannelUserCodeParameterSupported = false
 	if in.Features.JAR {
-		doc.BackchannelAuthenticationRequestSigningAlgValuesSupported = []string{
-			"RS256", "PS256", "ES256", "EdDSA",
-		}
+		doc.BackchannelAuthenticationRequestSigningAlgValuesSupported = clientSigningAlgs(in)
 	}
 }
 
@@ -718,13 +724,11 @@ func applyJARFeature(in Input, doc *Document) {
 	// any outbound request.
 	doc.RequireRequestURIRegistration = true
 	// RFC 9101 §10.1: advertise the JWS alg values the verifier
-	// accepts on request objects. The list mirrors the project-
-	// wide allow-list (internal/jose); operators that want to
-	// pin a narrower set per-client use
+	// accepts on request objects: the project-wide allow-list
+	// (internal/jose), narrowed by the active profile. Operators that
+	// want to pin a narrower set per-client use
 	// [op/store.Client.RequestObjectSigningAlg].
-	doc.RequestObjectSigningAlgValuesSupported = []string{
-		"RS256", "PS256", "ES256", "EdDSA",
-	}
+	doc.RequestObjectSigningAlgValuesSupported = clientSigningAlgs(in)
 }
 
 // applyDPoPFeature publishes the RFC 9449 §5.1 alg list when DPoP is
@@ -737,18 +741,19 @@ func applyDPoPFeature(in Input, doc *Document) {
 	doc.DPoPSigningAlgValuesSupported = []string{"ES256", "EdDSA", "PS256"}
 }
 
-// applyMTLSFeature publishes the RFC 8705 binding signal, the §2 auth
-// methods, and (when supplied) the §5 endpoint aliases. Aliases stay
-// absent when MTLS itself is disabled even if the embedder pre-staged
-// the option, so a feature toggle never leaks the alias map.
+// applyMTLSFeature publishes the RFC 8705 §3 binding signal and (when
+// supplied) the §5 endpoint aliases. It publishes no §2 client
+// authentication method: tls_client_auth / self_signed_tls_client_auth
+// are not implemented. Aliases stay absent when MTLS itself is disabled
+// even if the embedder pre-staged the option, so a feature toggle never
+// leaks the alias map.
 func applyMTLSFeature(in Input, doc *Document) {
 	if !in.Features.MTLS {
 		return
 	}
 	// RFC 8705 §3.3: the OP signals that it issues certificate-bound
-	// access tokens. The flag covers both the §2 client-authentication
-	// path and the §3 binding path; clients use it to decide whether
-	// to present a certificate at /token in the first place.
+	// access tokens; clients use it to decide whether to present a
+	// certificate at /token in the first place.
 	doc.TLSClientCertificateBoundAccessTokens = true
 	// RFC 8705 §5: an OP that serves separate hostnames for its
 	// mTLS-required endpoints publishes the alternative URLs here.
@@ -827,10 +832,18 @@ func applyEndpointAuthMirrors(in Input, doc *Document) {
 			doc.TokenEndpointAuthMethodsSupported...)
 	}
 	if containsAssertionBearingMethod(doc.TokenEndpointAuthMethodsSupported) {
-		doc.TokenEndpointAuthSigningAlgValuesSupported = []string{
-			"RS256", "PS256", "ES256", "EdDSA",
-		}
+		doc.TokenEndpointAuthSigningAlgValuesSupported = clientSigningAlgs(in)
 	}
+}
+
+// clientSigningAlgs returns the JWS alg list advertised for client-signed
+// input: [Input.ClientSigningAlgs] when the profile narrows it, the
+// project-wide allow-list otherwise.
+func clientSigningAlgs(in Input) []string {
+	if len(in.ClientSigningAlgs) > 0 {
+		return append([]string(nil), in.ClientSigningAlgs...)
+	}
+	return []string{"RS256", "PS256", "ES256", "EdDSA"}
 }
 
 func confidentialAuthMethods(methods []string) []string {

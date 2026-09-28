@@ -43,7 +43,7 @@ rows:
       token MUST be rejected (401) and the refresh exchange MUST fail
       (400 with an OAuth error).
     status: out-of-scope
-    out_of_scope_reason: "The scenario presupposes that v1.0 issues a refresh token for an authorization_code exchange whose granted scope contains 'openid' but NOT 'offline_access'. v1.0 explicitly forbids this combination: internal/tokenendpoint/handler.go clientPermitsRefresh requires both scopeContainsOpenID(scope) AND scopeContainsOfflineAccess(scope) before issuing a refresh token, and the refresh grant itself rejects exchanges whose scope omits offline_access (refresh.go: 'refresh issued without offline_access; refresh disabled by current policy'). The 'session-bound refresh token without offline_access' state the row asserts is therefore unreachable at v1.0's wire. The session-bound semantics piece is also vendor-internal (see SBT-001 OOS reason)."
+    out_of_scope_reason: "The row's precondition is reachable at v1.0's wire: internal/tokenendpoint/handler.go clientPermitsRefresh only requires 'offline_access' in scope when the deployment opts into op.WithStrictOfflineAccess, so under the default policy a refresh token is issued for openid-only scope. What is unreachable is the 'expiresWithSession' per-token binding the row layers on top of that reachable precondition — the same vendor-internal model SBT-001 addresses. v1.0 carries no such marker (see SBT-001 OOS reason): no store type has a SessionID column, and neither /userinfo nor the refresh grant consults session membership. Binding this row would require asserting a session-binding model the OP does not have."
 
   - id: SBT-003
     severity: P0

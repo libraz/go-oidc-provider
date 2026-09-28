@@ -277,9 +277,60 @@ func TestScenario_UI_007_MissingOpenIDScopeReturnsInsufficientScope(t *testing.T
 	t.Skip("out-of-scope: UI-007 (v1.0 /userinfo does not enforce per-request scope)")
 }
 
+// TestScenario_UI_008_ClientGoneReturnsInvalidToken asserts that once
+// the client an access token was issued to leaves the registry,
+// /userinfo answers 401 with error=invalid_token and the revoked
+// description, for JWT and opaque access tokens alike. The client is
+// removed through the store directly, so no revocation cascade runs and
+// the rejection comes from the per-request client check alone.
+//
+// Spec: RFC 6749 §10.4 / RFC 6750 §3.1.
 func TestScenario_UI_008_ClientGoneReturnsInvalidToken(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: UI-008 (v1.0 /userinfo does not lookup the client)")
+
+	formats := []struct {
+		name string
+		opts []op.Option
+	}{
+		{name: "jwt"},
+		{name: "opaque", opts: []op.Option{op.WithAccessTokenFormat(op.AccessTokenFormatOpaque)}},
+	}
+	for _, format := range formats {
+		t.Run(format.name, func(t *testing.T) {
+			t.Parallel()
+
+			tk := testkit.NewProvider(t, testkit.WithOptions(format.opts...))
+			uiSeedClientAndUser(t, tk)
+			at := uiMintAccessToken(t, tk, "openid email")
+			if err := tk.Store.DeleteClient(context.Background(), uiTestClientID); err != nil {
+				t.Fatalf("DeleteClient: %v", err)
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+				tk.Server.URL+"/oidc/userinfo", http.NoBody)
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+at)
+			resp, err := tk.HTTPClient(nil).Do(req)
+			if err != nil {
+				t.Fatalf("GET /oidc/userinfo: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusUnauthorized {
+				raw, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
+			}
+			wwwAuth := resp.Header.Get("WWW-Authenticate")
+			if !strings.Contains(wwwAuth, `error="invalid_token"`) {
+				t.Errorf("WWW-Authenticate=%q must carry error=\"invalid_token\"", wwwAuth)
+			}
+			if !strings.Contains(wwwAuth, `error_description="The access token has been revoked"`) {
+				t.Errorf("WWW-Authenticate=%q must word a deleted client's token as revoked", wwwAuth)
+			}
+		})
+	}
 }
 
 // uiMissingSubjectStore wraps an inmem.Store and shadows Users() so

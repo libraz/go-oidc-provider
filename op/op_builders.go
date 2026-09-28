@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -211,9 +212,9 @@ func buildProxyTrust(cfg *config) (*proxy.Trust, error) {
 }
 
 // issuerHost returns the lowercase host of the canonical issuer URL
-// or "" when issuer is empty / malformed. The helper is split so the
-// proxy-trust builder and any future runtime check (e.g., a future
-// XFH-aware redirect validator) read the same canonical value.
+// or "" when issuer is empty / malformed. An IPv6 literal keeps its
+// brackets, the RFC 7239 form the proxy trust extracts from an
+// X-Forwarded-Host value, so the auto-allowlisted entry matches it.
 func issuerHost(issuer string) string {
 	if issuer == "" {
 		return ""
@@ -222,7 +223,11 @@ func issuerHost(issuer string) string {
 	if err != nil || u.Host == "" {
 		return ""
 	}
-	return u.Hostname()
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // buildInteractionOriginAllowlist composes the Origin / Referer allowlist
@@ -421,21 +426,30 @@ func buildMTLSVerifier(cfg *config) (*mtls.Verifier, error) {
 	return v, nil
 }
 
-// buildJARVerifier constructs the JAR verifier when the [feature.JAR]
+// jarVerifiers carries one [jar.Verifier] per request-object use. The
+// two share the JWKS resolver, the consumed-JTI store and every
+// profile-wide setting; they differ only in the constraints a profile
+// scopes to one endpoint family, so a CIBA-only MUST never reaches
+// /authorize or /par. Both fields are nil when [feature.JAR] is off.
+type jarVerifiers struct {
+	// Authorize verifies request objects at /authorize and /par.
+	Authorize *jar.Verifier
+	// CIBA verifies signed authentication requests at /bc-authorize.
+	CIBA *jar.Verifier
+}
+
+// buildJARVerifiers constructs the JAR verifiers when the [feature.JAR]
 // flag is enabled. The shape mirrors [buildDPoPVerifier] /
-// [buildMTLSVerifier]: nil verifier means "feature off" everywhere
-// downstream, and the (*jar.Verifier, error) signature returns
-// (nil, nil) on the "feature off" path on purpose.
+// [buildMTLSVerifier]: nil verifiers mean "feature off" everywhere
+// downstream.
 //
-// The verifier uses the default in-process JWKS resolver, which pulls
+// The verifiers use the default in-process JWKS resolver, which pulls
 // inline JWKs from [op/store.Client.JWKs] first and falls back to
 // [op/store.Client.JWKsURI] (with hardened HTTP fetch + caching) when
 // the inline value is absent.
-//
-//nolint:nilnil // (nil, nil) is the documented "JAR not enabled" signal.
-func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, error) {
+func buildJARVerifiers(cfg *config, encSet *keys.EncryptionSet) (jarVerifiers, error) {
 	if !featureEnabled(cfg.features, feature.JAR) {
-		return nil, nil
+		return jarVerifiers{}, nil
 	}
 	// FAPI 2.0 Message Signing §5.6 mandates "nbf" and a request-object
 	// lifetime no longer than 60 minutes. The library implements that
@@ -445,28 +459,8 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	// "ensure-request-object-with-exp-over-60-fails" and
 	// "-with-nbf-over-60-fails" push the claim 70 minutes out and expect
 	// rejection, while the happy-flow shape (nbf=now, exp=now+5min) sits
-	// well within the cap. Baseline (where JAR is rarely exercised)
-	// inherits the same posture so a deployment that opts in to JAR
-	// without a Message-Signing-only switch still gets the bound. Other
-	// JAR-enabling profiles inherit the relaxed (back-compat) behaviour.
-	//
-	// AllowMissingJTI stays true for OIDC Core / FAPI 2.0 baseline /
-	// FAPI 2.0 Message Signing: RFC 9101 §6.1 marks "jti" as OPTIONAL on
-	// the wire, RFC 9101 §10.8 uses SHOULD (not MUST) for AS-side jti
-	// tracking, and the FAPI 2.0 Security Profile / FAPI 2.0 Message
-	// Signing do not promote it to MUST either. Rejecting jti-less
-	// request objects refuses spec-conformant clients (the OpenID
-	// Foundation Conformance Suite emits jti-less request objects for
-	// fapi2-message-signing); the §10.8 replay-defence floor is
-	// preserved through the JTIs store, which the verifier still
-	// consumes for every jti it does see.
-	//
-	// FAPI-CIBA flips the default: §5.2.2 of the FAPI-CIBA Profile
-	// promotes jti from OPTIONAL to MUST on the backchannel
-	// authentication request object, and OFCS' CIBA-13 row drives the
-	// negative test "ensure-request-object-missing-jti-fails" against
-	// it. The flag below tracks that requirement and applies only when
-	// no other profile loosened the constraint.
+	// well within the cap. Every FAPI profile carries the bound, and it
+	// applies to both uses.
 	//
 	// MaxAge is the third arm of the same window and must be raised in
 	// step with MaxLifetime: it caps how old "iat" may be, and the
@@ -478,23 +472,23 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	// wins, and a zero leaves the verifier default in place for
 	// non-FAPI deployments.
 	var (
-		requireNbf      bool
-		requireIAT      bool
-		maxLifetime     time.Duration
-		maxAge          time.Duration
-		allowMissingJTI = true
+		requireNbf  bool
+		fapi        bool
+		fapiCIBA    bool
+		maxLifetime time.Duration
+		maxAge      time.Duration
 	)
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
 			requireNbf = true
+			fapi = true
 			maxLifetime = 60 * time.Minute
 		}
 		if age := profile.MaxRequestObjectAge(p); age > maxAge {
 			maxAge = age
 		}
 		if p == profile.FAPICIBA {
-			allowMissingJTI = false
-			requireIAT = true
+			fapiCIBA = true
 		}
 	}
 	resolverOpts := []jar.ResolverOption{}
@@ -504,26 +498,56 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	if cfg.jwksHTTPTransport != nil {
 		resolverOpts = append(resolverOpts, jar.WithBaseTransport(cfg.jwksHTTPTransport))
 	}
-	v, err := jar.NewVerifier(jar.VerifierConfig{
+	// AllowMissingJTI stays true for /authorize and /par: RFC 9101 §6.1
+	// marks "jti" as OPTIONAL on the wire, RFC 9101 §10.8 uses SHOULD
+	// (not MUST) for AS-side jti tracking, and the FAPI 2.0 Security
+	// Profile / Message Signing do not promote it to MUST either. The
+	// OpenID Foundation Conformance Suite emits jti-less request objects
+	// for fapi2-message-signing; the §10.8 replay-defence floor is kept
+	// through the JTIs store, which the verifier consumes for every jti
+	// it does see.
+	authorizeCfg := jar.VerifierConfig{
 		Issuer:             cfg.issuer,
 		Resolver:           jar.NewDefaultResolver(cfg.clock, resolverOpts...),
 		Clock:              cfg.clock,
 		RequireNbf:         requireNbf,
-		RequireIAT:         requireIAT,
 		JTIs:               cfg.store.ConsumedJTIs(),
 		EncryptionResolver: jarEncryptionResolver(encSet),
-		AllowMissingJTI:    allowMissingJTI,
+		AllowMissingJTI:    true,
 		MaxLifetime:        maxLifetime,
 		MaxAge:             maxAge,
-	})
-	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "JAR verifier construction failed",
-			Cause:       err,
-		}
+		AllowedAlgs:        cfg.clientSigningJOSEAlgs(),
 	}
-	return v, nil
+	// A FAPI profile holds /authorize to RFC 9101 §6.3 (request object
+	// parameters only); plain OIDC keeps the Core §6.3.3 overlay, which
+	// the OIDC conformance plans rely on.
+	if fapi {
+		authorizeCfg.AuthorizeMergeMode = jar.MergeObjectOnly
+	}
+	authorize, err := jar.NewVerifier(authorizeCfg)
+	if err != nil {
+		return jarVerifiers{}, jarVerifierError(err)
+	}
+	// FAPI-CIBA §5.2.2 promotes jti and iat from OPTIONAL to MUST on the
+	// backchannel authentication request object (OFCS CIBA-13 drives
+	// "ensure-request-object-missing-jti-fails"). The profile governs
+	// /bc-authorize only, so the requirement is confined to this use.
+	cibaCfg := authorizeCfg
+	cibaCfg.RequireIAT = fapiCIBA
+	cibaCfg.AllowMissingJTI = !fapiCIBA
+	ciba, err := jar.NewVerifier(cibaCfg)
+	if err != nil {
+		return jarVerifiers{}, jarVerifierError(err)
+	}
+	return jarVerifiers{Authorize: authorize, CIBA: ciba}, nil
+}
+
+func jarVerifierError(err error) error {
+	return &Error{
+		Code:        codeConfiguration,
+		Description: "JAR verifier construction failed",
+		Cause:       err,
+	}
 }
 
 // jarEncryptionResolver returns the [jar.EncryptionResolver] backing
@@ -643,6 +667,7 @@ func buildAssertionVerifier(
 		Audience:     audience,
 		AuxAudiences: append([]string(nil), auxAudiences...),
 		Clock:        cfg.clock.Now,
+		AllowedAlgs:  cfg.clientSigningJOSEAlgs(),
 	}
 }
 
@@ -992,6 +1017,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 		GrantsSupported:                    grantStrings,
 		ScopesSupported:                    scopes.PublicNames(),
 		ProfileAllowedAuthMethods:          cfg.profileAllowedAuthMethodNames(),
+		ClientSigningAlgs:                  cfg.clientSigningAlgs(),
 		ClaimsParameterSupported:           cfg.claimsParameterSupported(),
 		ClaimsSupported:                    cfg.claimsSupported,
 		ACRValuesSupported:                 cfg.acrValuesSupportedCopy(),

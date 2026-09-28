@@ -35,8 +35,11 @@ const (
 	JAR
 
 	// JARM enables JWT Secured Authorization Response Mode (OpenID
-	// Foundation FAPI 2.0). Authorization responses are signed JWTs
-	// rather than query parameters or fragments.
+	// Foundation FAPI 2.0). It adds the signed response modes
+	// (query.jwt, fragment.jwt, form_post.jwt, jwt) alongside the
+	// unsigned ones; a response is a signed JWT when the client requests
+	// one of those modes, or when a profile that mandates JARM
+	// (FAPI 2.0 Message Signing) is active.
 	JARM
 
 	// DPoP enables RFC 9449 Demonstrating Proof of Possession. Access
@@ -67,7 +70,8 @@ const (
 	Introspect
 
 	// Revoke enables RFC 7009 OAuth 2.0 Token Revocation. The /revoke
-	// endpoint becomes routable for confidential clients.
+	// endpoint becomes routable for confidential and public clients,
+	// each revoking only tokens issued to itself.
 	Revoke
 
 	// DynamicRegistration enables RFC 7591 / RFC 7592 / OpenID Connect

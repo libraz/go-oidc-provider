@@ -178,6 +178,19 @@ func New(cfg Config) (*Orchestrator, error) {
 	}, nil
 }
 
+// HasInteractions reports whether any registered [Interaction] declares
+// trigger. The HTTP layer consults it for [TriggerBeforeToken]: an exit
+// that mints a code without driving the chain would otherwise skip
+// those interactions.
+func (o *Orchestrator) HasInteractions(trigger InteractionTrigger) bool {
+	for _, ix := range o.cfg.Interactions {
+		if ix.Trigger() == trigger {
+			return true
+		}
+	}
+	return false
+}
+
 // validateChainShape enforces the LoginFlow / Authenticators
 // either-or invariant: exactly one of the two must be supplied.
 // Split out so [New] stays under the gocognit ceiling now that
@@ -223,8 +236,9 @@ func validateAuthenticators(auths []Authenticator) error {
 //     interaction) and advance.
 //  3. Run the [PhaseBeforeAuthn] interaction queue.
 //  4. Run [PhaseAuthn]: consult risk, pick a candidate, emit Begin.
-//  5. Run the [PhaseAfterAuthn] interaction queue.
-//  6. Emit the terminal [interaction.Step] from [PhaseDone].
+//  5. Run the [PhaseAfterAuthn] interaction queue (consent first).
+//  6. Run the [PhaseBeforeToken] interaction queue.
+//  7. Emit the terminal [interaction.Step] from [PhaseDone].
 func (o *Orchestrator) Tick(ctx context.Context, st State, in Input) (State, interaction.Step, error) {
 	if st.Phase == PhaseDone {
 		return st, interaction.Step{}, ErrChainComplete

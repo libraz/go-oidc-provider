@@ -75,8 +75,12 @@ func WithTrustedProxyHosts(hosts ...string) Option {
 //
 // Two allowlists are built from it, because the routes have different trust
 // boundaries. The API endpoints (/token, /userinfo, /introspect, /revoke,
-// /par) admit these origins plus every redirect_uri origin the
-// [store.ClientStore] returns. The interaction ceremony routes
+// /par) admit these origins, the issuer origin, and the redirect_uri
+// origins of the [WithStaticClients] entries. A client that exists only
+// in the [store.ClientStore] — seeded there directly or created through
+// dynamic client registration — contributes no origin, so a browser
+// client of that kind needs its origin named here. The interaction
+// ceremony routes
 // (/interaction/{uid}, and in SPA mode the state and asset routes under
 // [SPAUI.LoginMount]) admit only the issuer origin plus these explicit
 // entries: a ceremony response carries the CSRF token and the account list
@@ -124,10 +128,15 @@ func WithCORSOrigins(origins ...string) Option {
 // default is correct for the spec posture.
 //
 // The coordinator copies only [http.Client.Transport]. It always applies
-// [WithBackchannelLogoutTimeout], rejects redirects, and wraps the transport
-// with URL-time and dial-time SSRF checks. This keeps instrumentation, proxy
-// resolution, and custom dialers available without allowing a full client
-// override to weaken delivery integrity.
+// [WithBackchannelLogoutTimeout], rejects redirects, and checks every
+// request URL against the SSRF deny-list. A client whose Transport is nil
+// or an [*http.Transport] also gets the dial-time check: the transport is
+// cloned and its DialContext, DialTLSContext and DialTLS are replaced by
+// the OP's gated dialer, so the proxy, TLS and pool settings carry over
+// but a custom dial function does not. Any other [http.RoundTripper]
+// (an otelhttp wrap, for instance) is gated on the request URL only,
+// which does not stop a DNS-rebinding peer that resolves public when the
+// URL is checked and private when it is dialled.
 // Stable since v1.0.
 func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 	return optionFunc(func(c *config) error {
@@ -404,10 +413,10 @@ func WithAllowPrivateNetworkSector() Option {
 // stand. The DNS-rebinding reasoning above does not stop applying — the
 // carve-out is acceptable on a developer's machine and nowhere else.
 //
-// Many of the example demos under examples/ register
-// http://127.0.0.1 redirect URIs and refuse to start without this
-// opt-in; production embedders typically leave it off and instead
-// front their RPs over https.
+// Many of the example demos under examples/ serve their issuer on, or
+// register redirect URIs under, http://localhost and refuse to start
+// without this opt-in; production embedders typically leave it off and
+// instead front their RPs over https.
 // Stable since v1.0.
 func WithAllowLocalhostLoopback() Option {
 	return optionFunc(func(c *config) error {
@@ -434,10 +443,12 @@ func WithAllowLocalhostLoopback() Option {
 // "localhost" is admitted only while it resolves to a loopback
 // address, so a split-horizon resolver cannot widen the opt-in.
 // Reaching an RP on a private LAN is a different decision with a
-// different option: [WithBackchannelAllowPrivateNetwork]. The
-// option emits a loud audit-stream warning at op.New so a
-// deployment cannot silently leave it on after promoting from CI
-// to production.
+// different option: [WithBackchannelAllowPrivateNetwork]. [New]
+// records the opt-in on the audit stream, as
+// insecure_backchannel_logout_for_dev on the [AuditStartupProfile]
+// event, and logs a warning on the operational logger, so a
+// deployment cannot silently leave it on after promoting from CI to
+// production.
 //
 // Use this option for the in-process demos under examples/ and for
 // CI fixtures that bind a stub RP on a loopback port; never combine
@@ -465,9 +476,15 @@ func WithAllowInsecureBackchannelLogoutForDev() Option {
 // with a self-signed runner cert, supply a transport with the
 // matching TLSClientConfig.
 //
-// The supplied transport's DialContext is rewired by the package so
-// the dial-time SSRF gate continues to fire — passing a custom
-// transport widens trust, not the SSRF surface. The option is
+// An [*http.Transport] is cloned with its DialContext, DialTLSContext
+// and DialTLS replaced by the OP's gated dialer, so the dial-time SSRF
+// gate fires on every connection and the transport widens trust (its
+// TLSClientConfig, proxy and pool settings carry over), not the SSRF
+// surface; a custom dial function on it is not called. Any other
+// [http.RoundTripper] is gated on the request URL of every request and
+// redirect hop only, which does not stop a DNS-rebinding peer that
+// resolves public when the URL is checked and private when it is
+// dialled. The option is
 // independent of [WithAllowPrivateNetworkJWKS] and
 // [WithAllowPrivateNetworkJAR]; embedders typically pair it with one
 // of those when their RP runs on a private network behind the

@@ -325,7 +325,10 @@ func resolveDeps(d Deps) Deps {
 //
 // The gates are enumerated in flat shape so each one maps onto the
 // CIBA Core clause it enforces; folding them into helpers would
-// obscure the request ordering.
+// obscure the request ordering. The exception is the parameter-parsing
+// tail (acr_values through client_notification_token), extracted into
+// [parseRemainingParams] to stay under the linter's complexity budget;
+// it runs the same gates in the same order.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !parseAndValidateForm(w, r) {
 		return
@@ -334,7 +337,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	mtlsThumbprint := extractMTLSThumbprint(r, deps)
+	mtlsThumbprint, ok := extractMTLSThumbprint(w, r, deps)
+	if !ok {
+		return
+	}
 	if !enforceSenderConstraint(r.Context(), w, deps, dpopJKT, mtlsThumbprint, client.ID) {
 		return
 	}
@@ -361,23 +367,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	acrValues, ok := parseACRValues(w, merged.Get("acr_values"), deps)
+	params, ok := parseRemainingParams(w, deps, merged)
 	if !ok {
-		return
-	}
-	bindingMessage, ok := parseBindingMessage(w, merged.Get("binding_message"))
-	if !ok {
-		return
-	}
-	expiresIn, ok := parseRequestedExpiry(w, merged.Get("requested_expiry"), deps)
-	if !ok {
-		return
-	}
-	userCode, ok := parseUserCode(w, merged.Get("user_code"))
-	if !ok {
-		return
-	}
-	if !parseClientNotificationToken(w, merged.Get("client_notification_token")) {
 		return
 	}
 	persist(r.Context(), w, deps, persistInput{
@@ -386,13 +377,54 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		HintKind:       hintKind,
 		Scope:          scope,
 		Resource:       resource,
-		ACRValues:      acrValues,
-		BindingMessage: bindingMessage,
-		UserCode:       userCode,
-		ExpiresIn:      expiresIn,
+		ACRValues:      params.ACRValues,
+		BindingMessage: params.BindingMessage,
+		UserCode:       params.UserCode,
+		ExpiresIn:      params.ExpiresIn,
 		DPoPJKT:        dpopJKT,
 		MTLSThumbprint: mtlsThumbprint,
 	})
+}
+
+// parsedRequestParams bundles the fields [parseRemainingParams] parses
+// out of the tail of a CIBA request.
+type parsedRequestParams struct {
+	ACRValues      []string
+	BindingMessage string
+	ExpiresIn      time.Duration
+	UserCode       string
+}
+
+// parseRemainingParams runs the parameter gates that follow scope and
+// resource resolution in [serve]: acr_values, binding_message,
+// requested_expiry, user_code and client_notification_token. See
+// serve's doc comment for why this tail alone is factored out.
+func parseRemainingParams(w http.ResponseWriter, deps Deps, merged url.Values) (parsedRequestParams, bool) {
+	acrValues, ok := parseACRValues(w, merged.Get("acr_values"), deps)
+	if !ok {
+		return parsedRequestParams{}, false
+	}
+	bindingMessage, ok := parseBindingMessage(w, merged.Get("binding_message"))
+	if !ok {
+		return parsedRequestParams{}, false
+	}
+	expiresIn, ok := parseRequestedExpiry(w, merged.Get("requested_expiry"), deps)
+	if !ok {
+		return parsedRequestParams{}, false
+	}
+	userCode, ok := parseUserCode(w, merged.Get("user_code"))
+	if !ok {
+		return parsedRequestParams{}, false
+	}
+	if !parseClientNotificationToken(w, merged.Get("client_notification_token")) {
+		return parsedRequestParams{}, false
+	}
+	return parsedRequestParams{
+		ACRValues:      acrValues,
+		BindingMessage: bindingMessage,
+		ExpiresIn:      expiresIn,
+		UserCode:       userCode,
+	}, true
 }
 
 // parseAndValidateForm runs the request-shape gates that must clear
@@ -485,18 +517,41 @@ func authenticate(
 }
 
 // extractMTLSThumbprint returns the SHA-256 thumbprint of the
-// inbound mTLS leaf certificate. Returns an empty string when
-// [Deps.MTLS] is nil, the request did not present a usable
-// certificate, or the verifier could not parse one.
-func extractMTLSThumbprint(r *http.Request, deps Deps) string {
+// inbound mTLS leaf certificate. Returns ("", true) when [Deps.MTLS]
+// is nil or the request did not present a certificate at all; a
+// certificate that was presented but unusable writes the wire error
+// and returns ("", false) so the caller fails closed instead of
+// silently treating the request as unbound, matching how the token
+// endpoint's verifyTokenMTLS behaves.
+func extractMTLSThumbprint(w http.ResponseWriter, r *http.Request, deps Deps) (string, bool) {
 	if deps.MTLS == nil {
-		return ""
+		return "", true
 	}
 	thumb, err := deps.MTLS.ThumbprintFromRequest(r)
 	if err != nil {
-		return ""
+		if errors.Is(err, mtls.ErrNoClientCert) {
+			return "", true
+		}
+		writeMTLSError(w, err)
+		return "", false
 	}
-	return thumb
+	return thumb, true
+}
+
+// writeMTLSError translates an mtls.Err* sentinel onto the wire
+// form, mirroring the mapping the token endpoint uses:
+// invalid_request for a certificate that could not be parsed, and
+// invalid_client (RFC 8705 §3) for one that failed chain
+// validation against the configured trust anchors.
+func writeMTLSError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, mtls.ErrCertMalformed):
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "client certificate malformed")
+	case errors.Is(err, mtls.ErrCertUntrusted):
+		endpointsupport.WriteInvalidClient(w, false, "client certificate is not trusted")
+	default:
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+	}
 }
 
 // enforceSenderConstraint applies the FAPI 2.0 / FAPI-CIBA rule
@@ -621,7 +676,8 @@ func consumeJARRequestObject(
 		writeJARError(w, err)
 		return nil, false
 	}
-	merged, err := jar.Merge(values, obj)
+	// RFC 9101 §6.3: only the signed object's parameters are used here.
+	merged, err := jar.Merge(values, obj, jar.MergeObjectOnly)
 	if err != nil {
 		deps.auditEmitter().Emit(ctx, audit.Event{
 			Name:     ciba.AuditAuthorizationRejected,

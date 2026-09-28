@@ -345,7 +345,8 @@ func (c *config) validateStaticClients() error {
 	opts := registrationendpoint.StaticClientValidationOptions{
 		AllowedGrantTypes:                    c.staticClientAllowedGrantTypes(),
 		AllowedResponseTypes:                 c.staticClientAllowedResponseTypes(),
-		AllowedClientAuthMethods:             c.profileAllowedAuthMethodNames(),
+		AllowedClientAuthMethods:             c.allowedClientAuthMethods(),
+		AllowedClientSigningAlgs:             c.clientSigningJOSEAlgs(),
 		PairwiseEnabled:                      c.pairwiseEnabled(),
 		AllowLocalhostLoopback:               c.allowLocalhostLoopback,
 		AllowInsecureBackchannelLogoutForDev: c.allowInsecureBackchannelLogoutForDev,
@@ -766,12 +767,30 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 	if err := c.validateProfileGrants(p); err != nil {
 		return err
 	}
+	return c.validateProfileTiming(p, enabled)
+}
+
+// validateProfileTiming checks the [profile.Profile] MUST clauses that
+// bound a TTL or a window: the max access-token TTL, the PAR lifetime
+// ceiling, the DPoP nonce-source requirement, and the FAPI 2.0 refresh-
+// grace cap. Extracted from [config.validateProfile] so the outer
+// function stays under the linter's complexity budget; the checks run
+// in the same order.
+func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Flag]struct{}) error {
 	if maxTTL := profile.MaxAccessTokenTTL(p); maxTTL > 0 && c.accessTokenTTL > maxTTL {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "WithProfile " + p.String() +
 				" caps WithAccessTokenTTL at " + maxTTL.String() +
 				"; got " + c.accessTokenTTL.String(),
+		}
+	}
+	if ceiling := profile.PARLifetimeCeiling(p); ceiling > 0 && c.parLifetime >= ceiling {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithProfile " + p.String() +
+				" requires WithPARLifetime below " + ceiling.String() +
+				"; got " + c.parLifetime.String(),
 		}
 	}
 	if profileForcesDPoPNonce(p) && hasDPoPFeature(enabled) && c.dpopNonces == nil {
@@ -1135,9 +1154,9 @@ func (c *config) validateScopes() error {
 // Substore-specific validators (validateAccessTokenFormat,
 // validateAccessTokenRevocation, validateRegistration, ...) keep
 // their existing checks; this function fills the gap for the
-// always-on substores (Clients, AuthorizationCodes, RefreshTokens,
-// Grants) and the grant-gated specialty substores (DeviceCodes,
-// CIBARequests, PushedAuthRequests).
+// always-on substores (Clients, ConsumedJTIs, Users, AuthorizationCodes,
+// RefreshTokens, Grants) and the grant-gated specialty substores
+// (DeviceCodes, CIBARequests, PushedAuthRequests).
 func (c *config) validateStoreCapabilities() error {
 	for _, check := range []struct {
 		need    bool
@@ -1150,6 +1169,18 @@ func (c *config) validateStoreCapabilities() error {
 			got:     c.store.Clients(),
 			desc:    "ClientStore",
 			because: "every client lookup at the authorize / token endpoints requires it",
+		},
+		{
+			need:    true,
+			got:     c.store.ConsumedJTIs(),
+			desc:    "ConsumedJTIStore",
+			because: "every client-authenticating endpoint's private_key_jwt verifier, and the JAR and DPoP replay gates, consume it",
+		},
+		{
+			need:    true,
+			got:     c.effectiveUserStore(),
+			desc:    "UserStore",
+			because: "the always-mounted /userinfo endpoint resolves every subject through it (supply WithUserStore to source users elsewhere)",
 		},
 		{
 			need:    slices.Contains(c.grants, grant.AuthorizationCode),

@@ -35,7 +35,8 @@ func (PasswordPromptData) isPromptData() {}
 // TOTPPromptData backs Prompt.Type "auth.totp".
 type TOTPPromptData struct {
 	// AttemptsRemaining is the number of failed submissions left
-	// before the orchestrator locks the factor for this attempt.
+	// before the factor locks, the lower of every counter that can
+	// lock it. Zero means none remain or no count is known.
 	AttemptsRemaining int
 }
 
@@ -103,7 +104,8 @@ type PasskeyCredentialDescriptor struct {
 // RecoveryCodePromptData backs Prompt.Type "auth.recovery_code".
 type RecoveryCodePromptData struct {
 	// AttemptsRemaining is the number of failed submissions left
-	// before the orchestrator locks the factor for this attempt.
+	// before the factor locks, the lower of every counter that can
+	// lock it. Zero means none remain or no count is known.
 	AttemptsRemaining int
 }
 

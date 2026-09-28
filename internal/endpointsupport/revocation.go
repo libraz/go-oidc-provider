@@ -16,6 +16,27 @@ type JWTRevocationOpts struct {
 	GrantRevocations   store.GrantRevocationStore
 	Clients            store.ClientStore
 	RevocationStrategy store.AccessTokenRevocationStrategy
+
+	// OnStoreFault, when set, is called with the underlying error every
+	// time a substore lookup [JWTAccessTokenRevoked] makes cannot be
+	// answered — the case the return value otherwise reports only as
+	// (false, false). The wire answer for a lookup fault never carries
+	// the error (every caller collapses it onto the same result a
+	// genuine miss produces, by RFC 7662 §2.2 / RFC 6750 §3 posture);
+	// this is the only way a caller can still tell a fault from a miss,
+	// for its own audit stream. Callers indifferent to the distinction
+	// leave it nil.
+	OnStoreFault func(err error)
+}
+
+// reportFault hands err to opts.OnStoreFault when the caller supplied
+// one. It never changes the (false, false) answer the caller already
+// returns on this path — it only gives a caller with its own audit
+// stream a way to see the fault the wire cannot carry.
+func reportFault(opts JWTRevocationOpts, err error) {
+	if opts.OnStoreFault != nil {
+		opts.OnStoreFault(err)
+	}
 }
 
 // RequireJTIFor reports whether an access-token verifier built for
@@ -71,7 +92,7 @@ func JWTAccessTokenRevoked(
 		// consulted, so the client probe belongs behind it too.
 		return false, true
 	}
-	gone, resolved := clientDeleted(ctx, opts.Clients, claims.ClientID)
+	gone, resolved := clientDeleted(ctx, opts, claims.ClientID)
 	if !resolved {
 		return false, false
 	}
@@ -82,7 +103,7 @@ func JWTAccessTokenRevoked(
 	case store.RevocationStrategyNone:
 		return false, true
 	case store.RevocationStrategyJTIRegistry:
-		return jwtAccessTokenRevokedByJTI(ctx, opts.AccessTokens, claims)
+		return jwtAccessTokenRevokedByJTI(ctx, opts, claims)
 	default:
 		return jwtAccessTokenRevokedByTombstone(ctx, opts, claims)
 	}
@@ -109,15 +130,18 @@ func JWTAccessTokenRevoked(
 // A nil registry or an empty client_id skips the probe rather than
 // failing closed — a token minted outside the registry is not evidence
 // of a deletion. A lookup error other than [store.ErrNotFound] is
-// reported as unresolved so the caller applies its own posture.
-func clientDeleted(ctx context.Context, clients store.ClientStore, clientID string) (gone, resolved bool) {
-	if clients == nil || clientID == "" {
+// reported as unresolved so the caller applies its own posture, and
+// handed to opts.OnStoreFault so a caller with its own audit stream can
+// still see it.
+func clientDeleted(ctx context.Context, opts JWTRevocationOpts, clientID string) (gone, resolved bool) {
+	if opts.Clients == nil || clientID == "" {
 		return false, true
 	}
-	if _, err := clients.GetClient(ctx, clientID); err != nil {
+	if _, err := opts.Clients.GetClient(ctx, clientID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return true, true
 		}
+		reportFault(opts, err)
 		return false, false
 	}
 	return false, true
@@ -143,6 +167,7 @@ func jwtAccessTokenRevokedByTombstone(
 			time.Unix(claims.IssuedAt, 0).UTC(),
 		)
 		if err != nil {
+			reportFault(opts, err)
 			return false, false
 		}
 		if got {
@@ -157,14 +182,15 @@ func jwtAccessTokenRevokedByTombstone(
 	if opts.AccessTokens == nil {
 		return false, true
 	}
-	return jwtAccessTokenRevokedByJTI(ctx, opts.AccessTokens, claims)
+	return jwtAccessTokenRevokedByJTI(ctx, opts, claims)
 }
 
 func jwtAccessTokenRevokedByJTI(
 	ctx context.Context,
-	reg store.AccessTokenRegistry,
+	opts JWTRevocationOpts,
 	claims *tokens.AccessTokenClaims,
 ) (revoked, ok bool) {
+	reg := opts.AccessTokens
 	if reg == nil {
 		return false, true
 	}
@@ -173,6 +199,7 @@ func jwtAccessTokenRevokedByJTI(
 		if errors.Is(err, store.ErrNotFound) {
 			return false, true
 		}
+		reportFault(opts, err)
 		return false, false
 	}
 	return rec != nil && rec.Revoked, true

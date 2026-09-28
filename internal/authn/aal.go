@@ -104,6 +104,19 @@ func (l AAL) ACRURI() string {
 	}
 }
 
+// AALFromACRURI is the inverse of [AAL.ACRURI]: it returns the level whose
+// canonical URI is uri, and [AAL0] for any other string. A session records
+// the canonical URI of the level it reached, so this recovers that level
+// without trusting an acr string a relying party chose.
+func AALFromACRURI(uri string) AAL {
+	for _, l := range []AAL{AAL1, AAL2, AAL3} {
+		if uri == l.ACRURI() {
+			return l
+		}
+	}
+	return AAL0
+}
+
 // Valid reports whether l is one of the defined AAL constants. The check
 // is used by storage layers and tests that round-trip the value through
 // an int column; callers that build an [AAL] from a literal constant in

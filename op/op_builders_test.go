@@ -220,3 +220,40 @@ func TestBuildProxyTrust_RejectsInvalidCIDR(t *testing.T) {
 		t.Fatal("buildProxyTrust accepted invalid CIDR")
 	}
 }
+
+// TestBuildProxyTrust_IssuerHostMatchesForwardedHost pins that the
+// issuer host auto-allowlisted for X-Forwarded-Host is in the form the
+// proxy trust extracts from the header, so a trusted proxy forwarding the
+// issuer's own host is honoured for an IPv6-literal issuer exactly as for
+// a hostname one.
+func TestBuildProxyTrust_IssuerHostMatchesForwardedHost(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		issuer string
+		xfh    string
+	}{
+		{"hostname", "https://OP.Example.com:8443", "op.example.com:8443"},
+		{"ipv6-with-port", "https://[::1]:8443", "[::1]:8443"},
+		{"ipv6-default-port", "https://[2001:DB8::1]", "[2001:db8::1]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trust, err := buildProxyTrust(&config{
+				issuer:         tc.issuer,
+				trustedProxies: []string{"10.0.0.0/8"},
+			})
+			if err != nil {
+				t.Fatalf("buildProxyTrust: %v", err)
+			}
+			r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://internal/", nil)
+			r.RemoteAddr = "10.0.0.1:1234"
+			r.Header.Set("X-Forwarded-Host", tc.xfh)
+			if got := proxy.Resolve(r, trust).Host; got != tc.xfh {
+				t.Errorf("resolved host=%q want %q (issuer host not allowlisted in forwarded form)", got, tc.xfh)
+			}
+		})
+	}
+}

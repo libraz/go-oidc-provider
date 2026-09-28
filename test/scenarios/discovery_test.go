@@ -691,8 +691,10 @@ func TestScenario_DIS_041_OAuthMirrorMatchesOIDCConfig(t *testing.T) {
 // reads the document once and addresses every later request to the URLs
 // it found there, so a field advertising a path the router never bound
 // is indistinguishable from a correct document until the first real
-// request 404s. The provider below turns on the optional endpoints
-// precisely so the conditional advertisements are covered too.
+// request 404s. The provider below turns on every feature that adds an
+// *_endpoint / jwks_uri field, or an mtls_endpoint_aliases entry, so the
+// conditional advertisements are covered too — not just the four the
+// device/PAR/JAR/JARM set happens to leave on by default.
 //
 // A handler that then rejects the request — 400, 401, 405 — is a pass:
 // the claim under test is that the route exists, not that a bare GET
@@ -702,17 +704,52 @@ func TestScenario_DIS_041_OAuthMirrorMatchesOIDCConfig(t *testing.T) {
 func TestScenario_DIS_042_AdvertisedEndpointsAreRouted(t *testing.T) {
 	t.Parallel()
 
+	// RFC 8705 §5 aliases repeat the canonical paths under a hostname
+	// that requires client-certificate authentication; the alias values
+	// only need to resolve to the same router the top-level fields do,
+	// so the probe below (which replays the path, not the host) reaches
+	// the same handlers either way.
+	//nolint:gosec // G101 false positive: RFC 8705 §5 metadata key names, not credentials.
+	mtlsAliases := map[string]string{
+		"token_endpoint":                        "https://mtls.op.testkit.invalid/oidc/token",
+		"introspection_endpoint":                "https://mtls.op.testkit.invalid/oidc/introspect",
+		"revocation_endpoint":                   "https://mtls.op.testkit.invalid/oidc/revoke",
+		"userinfo_endpoint":                     "https://mtls.op.testkit.invalid/oidc/userinfo",
+		"registration_endpoint":                 "https://mtls.op.testkit.invalid/oidc/register",
+		"device_authorization_endpoint":         "https://mtls.op.testkit.invalid/oidc/device_authorization",
+		"pushed_authorization_request_endpoint": "https://mtls.op.testkit.invalid/oidc/par",
+		"backchannel_authentication_endpoint":   "https://mtls.op.testkit.invalid/oidc/bc-authorize",
+	}
+
 	p := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithDeviceCodeGrant(),
 		op.WithFeature(feature.PAR),
 		op.WithFeature(feature.JAR),
 		op.WithFeature(feature.JARM),
+		op.WithFeature(feature.Introspect),
+		op.WithFeature(feature.Revoke),
+		op.WithFeature(feature.MTLS),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		op.WithGrantManagement([]op.GrantManagementAction{
+			op.GrantActionCreate, op.GrantActionQuery, op.GrantActionRevoke,
+		}, false),
+		op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+			MTLSEndpointAliases: mtlsAliases,
+		}),
 	))
 	_, _, doc := fetchDiscovery(t, p.Server.URL)
 
 	advertised := advertisedURLs(t, doc)
-	if len(advertised) < 2 {
-		t.Fatalf("discovery advertised %d absolute URLs, want the endpoint set: %v", len(advertised), advertised)
+	// authorization, end_session, token, userinfo, jwks_uri,
+	// introspection, revocation, registration, device_authorization,
+	// pushed_authorization_request, backchannel_authentication,
+	// grant_management (12 top-level fields) plus one mtls_endpoint_aliases
+	// entry per aliased endpoint above (8).
+	const topLevelEndpoints = 12
+	wantEndpoints := topLevelEndpoints + len(mtlsAliases)
+	if len(advertised) != wantEndpoints {
+		t.Fatalf("discovery advertised %d absolute URLs, want exactly %d: %v", len(advertised), wantEndpoints, advertised)
 	}
 
 	probed := 0
@@ -729,7 +766,16 @@ func TestScenario_DIS_042_AdvertisedEndpointsAreRouted(t *testing.T) {
 			t.Errorf("%s=%q is not a usable URL: %v", field, raw, err)
 			continue
 		}
-		probe := p.Server.URL + target.EscapedPath()
+		path := target.EscapedPath()
+		if field == "grant_management_endpoint" {
+			// mountGrantManagementEndpoint (op_router.go) registers only
+			// "{endpoint}/{grant_id}" — GET / DELETE act on one grant,
+			// and the draft defines no request against the bare
+			// collection path — so the base path alone is never a route
+			// by design and needs a placeholder id to reach the handler.
+			path += "/probe-grant-id"
+		}
+		probe := p.Server.URL + path
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, probe, http.NoBody)
 		if err != nil {
 			t.Errorf("%s: cannot probe %q: %v", field, probe, err)
@@ -745,7 +791,7 @@ func TestScenario_DIS_042_AdvertisedEndpointsAreRouted(t *testing.T) {
 		probed++
 		if status == http.StatusNotFound {
 			t.Errorf("%s=%q is advertised but the router serves no such route (404 at %s); "+
-				"an RP that believes the document fails at its first request", field, raw, target.EscapedPath())
+				"an RP that believes the document fails at its first request", field, raw, path)
 		}
 	}
 	// Without this the test passes by probing nothing, which is how a
@@ -757,9 +803,12 @@ func TestScenario_DIS_042_AdvertisedEndpointsAreRouted(t *testing.T) {
 }
 
 // advertisedURLs collects every discovery field whose value is an
-// absolute URL the OP is claiming to serve: the *_endpoint family plus
-// jwks_uri. Informational URLs that deliberately point at documentation
-// rather than at a protocol route are excluded by name.
+// absolute URL the OP is claiming to serve: the *_endpoint family, plus
+// jwks_uri, plus every entry of the mtls_endpoint_aliases object
+// (RFC 8705 §5), flattened under a "mtls_endpoint_aliases." prefix so a
+// failure names the specific alias that is unrouted. Informational URLs
+// that deliberately point at documentation rather than at a protocol
+// route are excluded by name.
 func advertisedURLs(tb testing.TB, doc map[string]any) map[string]string {
 	tb.Helper()
 	informational := map[string]bool{
@@ -769,24 +818,39 @@ func advertisedURLs(tb testing.TB, doc map[string]any) map[string]string {
 	}
 	out := map[string]string{}
 	for key, value := range doc {
-		if informational[key] {
+		switch {
+		case informational[key]:
 			continue
+		case key == "mtls_endpoint_aliases":
+			aliases, ok := value.(map[string]any)
+			if !ok {
+				tb.Errorf("mtls_endpoint_aliases is %v, which is not an object", value)
+				continue
+			}
+			for aliasKey, aliasValue := range aliases {
+				addAdvertisedURL(tb, out, "mtls_endpoint_aliases."+aliasKey, aliasValue)
+			}
+		case strings.HasSuffix(key, "_endpoint") || key == "jwks_uri":
+			addAdvertisedURL(tb, out, key, value)
 		}
-		if !strings.HasSuffix(key, "_endpoint") && key != "jwks_uri" {
-			continue
-		}
-		raw, ok := value.(string)
-		if !ok || raw == "" {
-			tb.Errorf("%s is advertised as %v, which is not a URL", key, value)
-			continue
-		}
-		if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
-			tb.Errorf("%s=%q must be an absolute URL (RFC 8414 §2)", key, raw)
-			continue
-		}
-		out[key] = raw
 	}
 	return out
+}
+
+// addAdvertisedURL validates that value is a non-empty absolute http(s)
+// URL and, if so, records it under field.
+func addAdvertisedURL(tb testing.TB, out map[string]string, field string, value any) {
+	tb.Helper()
+	raw, ok := value.(string)
+	if !ok || raw == "" {
+		tb.Errorf("%s is advertised as %v, which is not a URL", field, value)
+		return
+	}
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		tb.Errorf("%s=%q must be an absolute URL (RFC 8414 §2)", field, raw)
+		return
+	}
+	out[field] = raw
 }
 
 // sortedKeys orders a map's keys so a failure names the same field

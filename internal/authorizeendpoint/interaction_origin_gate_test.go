@@ -1,8 +1,8 @@
 package authorizeendpoint_test
 
 // The consent ceremony's Origin gate must not inherit the CORS
-// allowlist. That list carries the origin of every registered client's
-// redirect_uri — correct for CORS, where an SPA relying party calls
+// allowlist. That list carries the redirect_uri origins of the static
+// clients — correct for CORS, where an SPA relying party calls
 // /token from its callback page — but at /interaction the same entry
 // means a page belonging to one client can drive another client's
 // consent. This test drives the wire endpoint through the real op.New

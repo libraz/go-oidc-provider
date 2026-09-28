@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sector"
@@ -161,6 +162,22 @@ type Deps struct {
 	// runtime would otherwise reject on the client's first encrypted
 	// exchange.
 	JWEPolicy internaljose.JWEPolicy
+
+	// AllowedClientAuthMethods is the active profile's
+	// token_endpoint_auth_method whitelist, the same list the token,
+	// PAR, CIBA, device, revoke, introspect and grant-management
+	// endpoints enforce at authentication time. A registration or
+	// update naming (or defaulting to) a method outside it is refused
+	// with invalid_client_metadata before any store write. Nil applies
+	// no restriction beyond the library-supported method set.
+	AllowedClientAuthMethods []clientauth.Method
+
+	// AllowedClientSigningAlgs is the active profile's JWS alg set for
+	// client-signed input, the same set the assertion and request-object
+	// verifiers enforce. token_endpoint_auth_signing_alg and
+	// request_object_signing_alg values outside it are refused with
+	// invalid_client_metadata. Nil leaves the library allow-list in force.
+	AllowedClientSigningAlgs []internaljose.Algorithm
 
 	// SectorResolver is the SSRF-defended sector_identifier_uri fetcher
 	// the validator drives at registration time (OIDC Core 1.0 §5 /
@@ -319,6 +336,12 @@ func (d *Deps) audit() audit.Emitter {
 		return audit.Discard()
 	}
 	return d.Audit
+}
+
+// profilePolicy bundles the profile-level client-authentication
+// narrowing the metadata validator applies.
+func (d *Deps) profilePolicy() profilePolicy {
+	return profilePolicy{authMethods: d.AllowedClientAuthMethods, signingAlgs: d.AllowedClientSigningAlgs}
 }
 
 // serve routes the request to the matching method+path handler. The

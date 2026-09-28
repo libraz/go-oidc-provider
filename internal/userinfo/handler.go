@@ -737,6 +737,13 @@ func assembleClaims(
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
 ) (map[string]any, *store.Client, bool) {
+	if claims.GrantID == "" {
+		// A token with no grant lineage (client_credentials) names no
+		// end-user; its "sub" is a client_id and must never key a user
+		// lookup, whatever the subject configuration.
+		respondGenericInvalidToken(w)
+		return nil, nil, false
+	}
 	grant, err := resolveGrant(ctx, deps, claims)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		// The grant store did not answer. Serving the request anyway
@@ -793,9 +800,8 @@ func assembleClaims(
 // currently active rather than the one that authorised this token.
 //
 // [store.ErrNotFound] means "no grant lineage is available", which
-// covers an unwired [HandlerDeps.Grants], a token minted without a
-// grant (client_credentials), a record written before the OP recorded
-// the lineage, and a grant that has been deleted since issuance.
+// covers an unwired [HandlerDeps.Grants] and a grant that has been
+// deleted since issuance.
 // Deciding what that absence means belongs to the callers:
 // [resolveRawSubject] treats it as fatal while pairwise projection is
 // configured, and [claimsRequestFromGrant] falls back to scope-derived
@@ -813,7 +819,7 @@ func resolveGrant(
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
 ) (*store.Grant, error) {
-	if deps.Grants == nil || claims.GrantID == "" {
+	if deps.Grants == nil {
 		return nil, store.ErrNotFound
 	}
 	g, err := deps.Grants.Find(ctx, claims.GrantID)
@@ -834,10 +840,9 @@ func resolveGrant(
 // SubjectProjector carry the per-client pairwise value in "sub" and the
 // stable identifier on the originating grant, so the raw value is read
 // off the grant [resolveGrant] recovered from the token's own lineage.
-// Opaque records carry the raw subject in "sub" and the same GrantID in
-// persistent storage, allowing both token formats to follow this path.
-// Legacy records without GrantID are rejected while pairwise projection
-// is configured.
+// Opaque records carry the same GrantID in persistent storage, allowing
+// both token formats to follow this path. A token without a GrantID
+// never gets here: [assembleClaims] refuses it first.
 //
 // A missing or unrecoverable grant collapses onto invalid_token rather
 // than silently falling back to the pairwise value: the grant being

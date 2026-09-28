@@ -76,6 +76,24 @@ func TestAALStringAndACRURIStableWireValues(t *testing.T) {
 	}
 }
 
+// TestAALFromACRURI pins the inverse mapping: every canonical URI maps
+// back to its level, and any other string, including one a relying party
+// asked for, carries no assurance.
+func TestAALFromACRURI(t *testing.T) {
+	t.Parallel()
+
+	for _, level := range []authn.AAL{authn.AAL1, authn.AAL2, authn.AAL3} {
+		if got := authn.AALFromACRURI(level.ACRURI()); got != level {
+			t.Errorf("AALFromACRURI(%q) = %v, want %v", level.ACRURI(), got, level)
+		}
+	}
+	for _, uri := range []string{"", "1", "urn:example:gold", "URN:MACE:INCOMMON:IAP:SILVER"} {
+		if got := authn.AALFromACRURI(uri); got != authn.AAL0 {
+			t.Errorf("AALFromACRURI(%q) = %v, want AAL0", uri, got)
+		}
+	}
+}
+
 func TestFactorTypeNamespaceClassification(t *testing.T) {
 	t.Parallel()
 

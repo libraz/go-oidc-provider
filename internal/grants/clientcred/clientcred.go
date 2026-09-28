@@ -59,15 +59,15 @@ type AuthorizeInput struct {
 	// RequestedScope is the optional space-delimited scope the RP
 	// sent on the wire (already split into a slice). An empty slice
 	// means "no scope param"; the function falls back to the
-	// client's full registered set.
+	// client's registered set minus "openid".
 	RequestedScope []string
 }
 
 // Authorized is the successful return of [Authorize].
 type Authorized struct {
 	// Scope is the granted scope set: either the validated requested
-	// scope (when non-empty) or the client's full registered set
-	// (when the request omitted scope). The slice is freshly
+	// scope (when non-empty) or the client's registered set minus
+	// "openid" (when the request omitted scope). The slice is freshly
 	// allocated so the caller may mutate it without affecting the
 	// input.
 	Scope []string
@@ -92,7 +92,13 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 		return nil, ErrOpenIDScope
 	}
 	if len(in.RequestedScope) == 0 {
-		return &Authorized{Scope: slices.Clone(in.Client.Scopes)}, nil
+		// The fallback set obeys the same openid ban as an explicit
+		// request: a client registered for openid on its user-facing
+		// grants gets every other registered scope here.
+		scope := slices.DeleteFunc(slices.Clone(in.Client.Scopes), func(s string) bool {
+			return s == oidcscope.ScopeOpenID
+		})
+		return &Authorized{Scope: scope}, nil
 	}
 	allowed := make(map[string]struct{}, len(in.Client.Scopes))
 	for _, s := range in.Client.Scopes {

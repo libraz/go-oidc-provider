@@ -15,6 +15,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
+	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
@@ -184,7 +185,7 @@ type Deps struct {
 	// every state-changing /interaction request.
 	//
 	// It is deliberately NOT the OP's CORS allowlist. That list also
-	// carries the origin of every registered client's redirect_uri, so
+	// carries the redirect_uri origins of the static clients, so
 	// reusing it here would let an origin registered by one client post
 	// to another client's consent ceremony. The interaction endpoint is
 	// reached from the OP's own login UI (same origin as the issuer) or,
@@ -397,6 +398,12 @@ type resolved struct {
 	// leave a pool behind that nothing can reuse. One instance is safe
 	// for concurrent use.
 	jarFetch *securefetch.Client
+
+	// jarRequestURIs collapses concurrent fetches of one request_uri and
+	// remembers its failures; jarLoads is the process-wide URL-load gate
+	// every fetch acquires. Both are built once, like jarFetch.
+	jarRequestURIs *remotecache.Cache[string]
+	jarLoads       remotecache.LoadGate
 }
 
 // resolveDeps fills in defaults the caller chose to omit. The returned
@@ -412,8 +419,10 @@ func resolveDeps(d Deps) resolved {
 		d.Driver = interaction.JSONDriver{}
 	}
 	return resolved{
-		Deps:     d,
-		jarFetch: securefetch.NewClient(jarRequestURIPolicy(d.AllowPrivateNetworkJAR)),
+		Deps:           d,
+		jarFetch:       securefetch.NewClient(jarRequestURIPolicy(d.AllowPrivateNetworkJAR)),
+		jarRequestURIs: newJARRequestURICache(d.Clock),
+		jarLoads:       remotecache.SharedLoadGate(remotecache.DefaultMaxInflight),
 	}
 }
 

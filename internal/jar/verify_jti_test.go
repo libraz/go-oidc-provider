@@ -406,3 +406,53 @@ func (s *captureJTIStore) Mark(_ context.Context, key string, expiresAt time.Tim
 func (s *captureJTIStore) Has(_ context.Context, key string) (bool, error) {
 	return s.key == key, nil
 }
+
+// steppingClock is a clock a test advances by assigning now.
+type steppingClock struct{ now time.Time }
+
+func (c *steppingClock) Now() time.Time { return c.now }
+
+// TestVerify_IATlessObjectCannotOutliveItsReplayMarker pins that a
+// request object without "iat", verified with no MaxLifetime, is never
+// acceptable after its consumed-jti marker has expired. An exp beyond
+// the max-age window is refused outright; one inside it stays refused as
+// a replay for as long as it remains otherwise valid.
+func TestVerify_IATlessObjectCannotOutliveItsReplayMarker(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	clock := &steppingClock{now: start}
+	jtis := inmem.New(inmem.WithClock(clock)).ConsumedJTIs()
+	priv, keys := jtiKey(t, testKID)
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:   testIssuer,
+		Resolver: &staticResolver{keys: keys},
+		Clock:    clock,
+		JTIs:     jtis,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	iatless := func(jti string, exp time.Time) string {
+		c := happyClaims(start)
+		delete(c, "iat")
+		c["jti"] = jti
+		c["exp"] = exp.Unix()
+		return signClaims(t, priv, testKID, c, josev4.ES256)
+	}
+
+	farFuture := iatless("iatless-far", start.Add(24*time.Hour))
+	if _, err := v.Verify(context.Background(), farFuture, testClientID, newClient()); !errors.Is(err, jar.ErrExpired) {
+		t.Fatalf("iat-less object with exp beyond the max-age window: err=%v want ErrExpired", err)
+	}
+
+	exp := start.Add(jar.DefaultMaxAge)
+	raw := iatless("iatless-bounded", exp)
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("first Verify: %v", err)
+	}
+	clock.now = exp.Add(-time.Second)
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); !errors.Is(err, jar.ErrJTIReplayed) {
+		t.Fatalf("replay one second before exp: err=%v want ErrJTIReplayed", err)
+	}
+}

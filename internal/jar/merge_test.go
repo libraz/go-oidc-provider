@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"reflect"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/jar"
@@ -18,7 +19,7 @@ func objectWithClaims(claims map[string]any) *jar.Object {
 
 func TestMerge_NilObjectIsParseError(t *testing.T) {
 	t.Parallel()
-	if _, err := jar.Merge(url.Values{}, nil); !errors.Is(err, jar.ErrParse) {
+	if _, err := jar.Merge(url.Values{}, nil, jar.MergeOverlay); !errors.Is(err, jar.ErrParse) {
 		t.Fatalf("err=%v want ErrParse", err)
 	}
 }
@@ -26,7 +27,7 @@ func TestMerge_NilObjectIsParseError(t *testing.T) {
 func TestMerge_RejectsNestedRequest(t *testing.T) {
 	t.Parallel()
 	obj := objectWithClaims(map[string]any{"request": "x"})
-	if _, err := jar.Merge(url.Values{}, obj); !errors.Is(err, jar.ErrNestedRequest) {
+	if _, err := jar.Merge(url.Values{}, obj, jar.MergeOverlay); !errors.Is(err, jar.ErrNestedRequest) {
 		t.Fatalf("err=%v want ErrNestedRequest", err)
 	}
 }
@@ -34,7 +35,7 @@ func TestMerge_RejectsNestedRequest(t *testing.T) {
 func TestMerge_RejectsNestedRequestURI(t *testing.T) {
 	t.Parallel()
 	obj := objectWithClaims(map[string]any{"request_uri": "x"})
-	if _, err := jar.Merge(url.Values{}, obj); !errors.Is(err, jar.ErrNestedRequest) {
+	if _, err := jar.Merge(url.Values{}, obj, jar.MergeOverlay); !errors.Is(err, jar.ErrNestedRequest) {
 		t.Fatalf("err=%v want ErrNestedRequest", err)
 	}
 }
@@ -46,7 +47,7 @@ func TestMerge_AcceptsClientIDAgreement(t *testing.T) {
 		"client_id": "abc",
 		"scope":     "openid profile",
 	})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestMerge_RejectsClientIDDisagreement(t *testing.T) {
 	t.Parallel()
 	wire := url.Values{"client_id": {"abc"}}
 	obj := objectWithClaims(map[string]any{"client_id": "different"})
-	_, err := jar.Merge(wire, obj)
+	_, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if !errors.Is(err, jar.ErrClientIDMismatch) {
 		t.Fatalf("err=%v want ErrClientIDMismatch", err)
 	}
@@ -72,7 +73,7 @@ func TestMerge_OmittedClientIDInJWTOK(t *testing.T) {
 	t.Parallel()
 	wire := url.Values{"client_id": {"abc"}}
 	obj := objectWithClaims(map[string]any{"scope": "openid"})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestMerge_StripsRequestParametersFromWire(t *testing.T) {
 		"request_uri": {"https://rp/req"},
 	}
 	obj := objectWithClaims(map[string]any{"scope": "openid"})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestMerge_OverridesWireValues(t *testing.T) {
 	obj := objectWithClaims(map[string]any{
 		"scope": "openid profile email",
 	})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -120,6 +121,58 @@ func TestMerge_OverridesWireValues(t *testing.T) {
 	}
 	if got := out.Get("response_type"); got != "code" {
 		t.Errorf("response_type=%q want preserved wire value", got)
+	}
+}
+
+// TestMerge_ObjectOnlyDropsOuterParameters pins RFC 9101 §6.3 under
+// [jar.MergeObjectOnly]: an outer parameter the signed object does not
+// carry never reaches the parser, whatever its name, and client_id is
+// the single wire value kept. The same inputs under [jar.MergeOverlay]
+// keep the outer-only keys (OIDC Core §6.3.3).
+func TestMerge_ObjectOnlyDropsOuterParameters(t *testing.T) {
+	t.Parallel()
+	wire := url.Values{
+		"client_id":             {"abc"},
+		"request":               {"the-signed-object"},
+		"prompt":                {"none"},
+		"claims":                {`{"id_token":{"acr":{"essential":true}}}`},
+		"max_age":               {"0"},
+		"acr_values":            {"urn:weak"},
+		"response_mode":         {"fragment"},
+		"authorization_details": {`[{"type":"payment"}]`},
+		"dpop_jkt":              {"attacker-jkt"},
+		"login_hint":            {"victim"},
+		"binding_message":       {"unsigned"},
+		"resource":              {"https://attacker.example"},
+		"nonce":                 {"outer-nonce"},
+	}
+	obj := objectWithClaims(map[string]any{
+		"response_type": "code",
+		"scope":         "openid",
+		"redirect_uri":  "https://rp.example/cb",
+	})
+	out, err := jar.Merge(wire, obj, jar.MergeObjectOnly)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	want := url.Values{
+		"client_id":     {"abc"},
+		"response_type": {"code"},
+		"scope":         {"openid"},
+		"redirect_uri":  {"https://rp.example/cb"},
+	}
+	if !reflect.DeepEqual(out, want) {
+		t.Errorf("object-only merge=%v want %v", out, want)
+	}
+	overlay, err := jar.Merge(wire, obj, jar.MergeOverlay)
+	if err != nil {
+		t.Fatalf("Merge overlay: %v", err)
+	}
+	if got := overlay.Get("nonce"); got != "outer-nonce" {
+		t.Errorf("overlay nonce=%q want outer-nonce", got)
+	}
+	if overlay.Has("request") {
+		t.Errorf("overlay kept the wire request parameter: %v", overlay)
 	}
 }
 
@@ -135,7 +188,7 @@ func TestMerge_IgnoresJOSEClaims(t *testing.T) {
 		"nbf":   1234567880,
 		"scope": "openid",
 	})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -155,7 +208,7 @@ func TestMerge_RejectsUnsupportedClaimShape(t *testing.T) {
 	obj := objectWithClaims(map[string]any{
 		"weird": map[string]any{"nested": "object"},
 	})
-	_, err := jar.Merge(wire, obj)
+	_, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if !errors.Is(err, jar.ErrParse) {
 		t.Fatalf("err=%v want ErrParse", err)
 	}
@@ -168,7 +221,7 @@ func TestMerge_LowersBoolAndNumber(t *testing.T) {
 		"flag":    true,
 		"max_age": float64(60),
 	})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -186,7 +239,7 @@ func TestMerge_LowersStringArray(t *testing.T) {
 	obj := objectWithClaims(map[string]any{
 		"acr_values": []any{"urn:1", "urn:2"},
 	})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -210,7 +263,7 @@ func TestMerge_LowersClaimsObject(t *testing.T) {
 			},
 		},
 	})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -243,7 +296,7 @@ func TestMerge_LowersAuthorizationDetailsArray(t *testing.T) {
 			map[string]any{"type": "payment_initiation", "amount": "10.00"},
 		},
 	})
-	out, err := jar.Merge(wire, obj)
+	out, err := jar.Merge(wire, obj, jar.MergeOverlay)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}

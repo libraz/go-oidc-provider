@@ -41,7 +41,7 @@ rows:
       GET /reg/<encoded> is accepted; the OP decodes the path segment
       internally before looking up the client.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 mints URL-safe base64url client_ids, so the encoded vs decoded path-segment dichotomy never arises. The handler routes via http.ServeMux 'GET /reg/{client_id}' (registrationendpoint/handler.go) — go's mux passes the raw segment through with no decoding step. There is no 'encoded path' for v1.0 to decode."
+    out_of_scope_reason: "v1.0 mints URL-safe base64url client_ids, so the encoded vs decoded path-segment dichotomy never arises. The handler routes via http.ServeMux 'GET /reg/{client_id}' (internal/registrationendpoint/handler.go) — go's mux passes the raw segment through with no decoding step. There is no 'encoded path' for v1.0 to decode."
 
   - id: CIDU-04
     severity: P0
@@ -97,7 +97,7 @@ rows:
       client_id values are restricted to VSCHAR (%x20-%x7E); control
       characters and non-ASCII code points are forbidden.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not accept user-supplied client_ids. The OP itself mints every client_id via newOpaqueID(16) (registrationendpoint/secret.go) producing base64url-no-pad strings drawn from [A-Za-z0-9_-]; every issued client_id satisfies VSCHAR by construction. The 'enforcement' contract collapses because the OP never reads an external client_id at registration time."
+    out_of_scope_reason: "v1.0 does not accept user-supplied client_ids. The OP itself mints every client_id via newOpaqueID(16) (internal/registrationendpoint/secret.go) producing base64url-no-pad strings drawn from [A-Za-z0-9_-]; every issued client_id satisfies VSCHAR by construction. The 'enforcement' contract collapses because the OP never reads an external client_id at registration time."
 
   - id: CIDU-CHR-02
     severity: P1
@@ -116,4 +116,4 @@ rows:
       When a percent-encoded path is written back into a Location
       header, the same encoding rules apply.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 DCR responses do NOT issue a Location header — the success envelope is a 201 JSON body containing registration_client_uri (per RFC 7591 §3, RFC 7592 §3). registrationendpoint/register.go writes the body via JSON encoder and never sets w.Header().Set(\"Location\", ...). The 'Location header same encoding' contract has no surface to test against."
+    out_of_scope_reason: "v1.0 DCR responses do NOT issue a Location header — the success envelope is a 201 JSON body containing registration_client_uri (per RFC 7591 §3, RFC 7592 §3). internal/registrationendpoint/register.go writes the body via JSON encoder and never sets w.Header().Set(\"Location\", ...). The 'Location header same encoding' contract has no surface to test against."

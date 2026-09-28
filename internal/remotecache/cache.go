@@ -48,6 +48,12 @@ type Config struct {
 	// ShouldCacheError may exclude protocol signals that should be observable
 	// once but retried immediately. nil caches every non-context loader error.
 	ShouldCacheError func(error) bool
+
+	// NegativeOnly keeps successful loads out of the cache: concurrent
+	// callers still share one load, but only failures are remembered. It is
+	// for documents that must be read fresh on every use yet whose failing
+	// URL must not be re-fetched on every inbound request.
+	NegativeOnly bool
 }
 
 // Loader fetches a value for key. When an expired positive entry existed,
@@ -75,6 +81,7 @@ type Cache[V any] struct {
 	negativeTTL      time.Duration
 	maxEntries       int
 	shouldCacheError func(error) bool
+	negativeOnly     bool
 	flight           singleflight.Group
 }
 
@@ -127,6 +134,7 @@ func New[V any](cfg Config) *Cache[V] {
 		negativeTTL:      cfg.NegativeTTL,
 		maxEntries:       cfg.MaxEntries,
 		shouldCacheError: cfg.ShouldCacheError,
+		negativeOnly:     cfg.NegativeOnly,
 	}
 }
 
@@ -337,6 +345,9 @@ func (c *Cache[V]) peek(key string) staleResult[V] {
 // a protocol layer that forgot to bound it would otherwise let that document
 // choose how long the cache retains it.
 func (c *Cache[V]) putPositive(key string, value V, ttl time.Duration) {
+	if c.negativeOnly {
+		return
+	}
 	if ttl <= 0 || ttl > c.ttl {
 		ttl = c.ttl
 	}

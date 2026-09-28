@@ -35,7 +35,7 @@ func (c *config) effectiveSubjectMode() string {
 	}
 }
 
-// enforceSubjectModeGate runs the subject-mode immutability check
+// checkSubjectModeGate runs the subject-mode immutability check
 // at op.New. The gate consults [store.MetadataStore] for the persisted
 // subject-mode marker and compares it to the construction-time mode.
 // On a fresh store the gate writes the marker so a later boot can
@@ -59,7 +59,13 @@ func (c *config) effectiveSubjectMode() string {
 // warning rather than refusing to boot. Embedders running pairwise or a
 // custom subject generator on such a store carry the switch-by-accident
 // risk explicitly until the store implements MetadataStore.
-func (c *config) enforceSubjectModeGate(ctx context.Context) error {
+//
+// The gate only reads. The marker writes it decides on are returned as
+// commit, which [New] runs once every later fallible stage has
+// succeeded: a construction that fails afterwards must not pin a fresh
+// store to a mode no Provider ever served, or a corrected retry would be
+// refused as a strategy switch.
+func (c *config) checkSubjectModeGate(ctx context.Context) (commit func(context.Context) error, err error) {
 	current := c.effectiveSubjectMode()
 	meta := c.store.Metadata()
 	if meta == nil {
@@ -69,17 +75,17 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 				"mode", current,
 			)
 		}
-		return nil
+		return func(context.Context) error { return nil }, nil
 	}
 	persisted, err := meta.Get(ctx, store.SubjectModeKey)
 	if err == nil {
 		if persisted == current {
-			return c.writeOpInitMarker(ctx, meta)
+			return func(ctx context.Context) error { return c.writeOpInitMarker(ctx, meta) }, nil
 		}
-		return subjectModeMismatch("persisted=" + persisted + ", configured=" + current)
+		return nil, subjectModeMismatch("persisted=" + persisted + ", configured=" + current)
 	}
 	if !errors.Is(err, store.ErrNotFound) {
-		return &Error{
+		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "subject-mode marker read failed",
 			Cause:       err,
@@ -93,6 +99,27 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 	// OpInitKey probe distinguishes the two: presence means the store
 	// has been used by some OP before so a "no marker" reading cannot
 	// be trusted as fresh.
+	if err := c.checkAbsentMarkerGate(ctx, meta, current); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context) error {
+		if err := meta.Set(ctx, store.SubjectModeKey, current); err != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "subject-mode marker write failed",
+				Cause:       err,
+			}
+		}
+		return c.writeOpInitMarker(ctx, meta)
+	}, nil
+}
+
+// checkAbsentMarkerGate applies the fresh-install / legacy-upgrade
+// disambiguation described on [config.checkSubjectModeGate] once the
+// persisted subject-mode marker has been confirmed absent (not merely
+// unreadable): it returns nil when construction may proceed. Extracted
+// so checkSubjectModeGate stays under the linter's complexity budget.
+func (c *config) checkAbsentMarkerGate(ctx context.Context, meta store.MetadataStore, current string) error {
 	priorInit, initErr := c.metadataHasOpInit(ctx, meta)
 	if initErr != nil {
 		return initErr
@@ -107,18 +134,11 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 	if hasGrants && current != store.SubjectModePublic {
 		return subjectModeMismatch("persisted marker absent on a populated store (legacy upgrade infers " + store.SubjectModePublic + "), configured=" + current)
 	}
-	if err := meta.Set(ctx, store.SubjectModeKey, current); err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "subject-mode marker write failed",
-			Cause:       err,
-		}
-	}
-	return c.writeOpInitMarker(ctx, meta)
+	return nil
 }
 
 // storeHasAnyGrant probes the grant store for the legacy-upgrade inference
-// in [config.enforceSubjectModeGate].
+// in [config.checkSubjectModeGate].
 //
 // A nil grant substore is a supported configuration, not an oversight:
 // validate() admits it whenever needsGrantStore reports that the enabled

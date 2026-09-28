@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -1051,7 +1052,10 @@ func notifyBackchannelForSnapshot(ctx context.Context, deps Deps, snapshot []*st
 // user-visible-successful, but receives any store errors to emit an accurate
 // audit event.
 //
-//nolint:gocognit // The cascade deliberately records independent JWT, opaque, and refresh outcomes per grant.
+// Each grant is torn down through [teardown.Revoker], the same dispatch
+// /revoke and grant management use, so the JWT / opaque / refresh rungs
+// and the tombstone-retention formula cannot drift between the three
+// endpoints.
 func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 	if deps.Grants == nil {
 		return nil
@@ -1060,24 +1064,24 @@ func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 	if err != nil {
 		return fmt.Errorf("list grants: %w", err)
 	}
-	now := endSessionNow(deps)
+	revoker := teardown.Revoker{
+		RefreshTokens:      deps.RefreshTokens,
+		OpaqueAccessTokens: deps.OpaqueAccessTokens,
+		AccessTokens:       deps.AccessTokens,
+		GrantRevocations:   deps.GrantRevocations,
+		Strategy:           deps.RevocationStrategy,
+		Now:                endSessionNow(deps),
+		TombstoneRetention: tombstoneRetention(deps.AccessTokenTTL),
+		Reason:             "logout",
+	}
 	var errs []error
 	for _, g := range grants {
 		if g == nil || g.ID == "" {
 			continue
 		}
-		if err := revokeJWTAccessTokensForGrant(ctx, deps, g.ID, now); err != nil {
-			errs = append(errs, fmt.Errorf("grant %s JWT: %w", g.ID, err))
-		}
-		if deps.OpaqueAccessTokens != nil {
-			if _, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, g.ID); err != nil {
-				errs = append(errs, fmt.Errorf("grant %s opaque: %w", g.ID, err))
-			}
-		}
-		if deps.RefreshTokens != nil {
-			if err := deps.RefreshTokens.RevokeByGrant(ctx, g.ID); err != nil {
-				errs = append(errs, fmt.Errorf("grant %s refresh: %w", g.ID, err))
-			}
+		out := revoker.Run(ctx, teardown.WholeGrant(g.ID))
+		for _, f := range out.Failures {
+			errs = append(errs, fmt.Errorf("grant %s %s: %w", g.ID, f.Surface, f.Err))
 		}
 	}
 	return errors.Join(errs...)
@@ -1104,23 +1108,6 @@ func revokeAccessTokensForSnapshot(ctx context.Context, deps Deps, snapshot []*s
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// revokeJWTAccessTokensForGrant applies the JWT cascade for one grant
-// per the configured strategy. The function is the per-grant body of
-// [revokeAccessTokens]; it is split out so the strategy switch is
-// readable next to the cascade order.
-func revokeJWTAccessTokensForGrant(
-	ctx context.Context,
-	deps Deps,
-	grantID string,
-	now time.Time,
-) error {
-	return endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
-		AccessTokens:       deps.AccessTokens,
-		GrantRevocations:   deps.GrantRevocations,
-		RevocationStrategy: deps.RevocationStrategy,
-	}, grantID, now, tombstoneRetention(deps.AccessTokenTTL), "logout")
 }
 
 // tombstoneRetention returns the period a grant tombstone must live

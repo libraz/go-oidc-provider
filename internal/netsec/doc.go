@@ -53,7 +53,9 @@
 // and re-runs the deny-list against every Location target so a peer
 // cannot use a 30x to bypass the gate. A redirect to a deny-listed
 // host returns a non-nil error from [http.Client.CheckRedirect] so the
-// caller surfaces the rejection rather than silently following.
+// caller surfaces the rejection rather than silently following. A
+// caller hook ([Options.CheckRedirect]) is layered on this check and
+// can only add a veto.
 //
 // # Body cap
 //

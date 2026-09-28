@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -100,6 +101,19 @@ func (noClientsStore) Clients() store.ClientStore { return nil }
 type noSessionsStore struct{ stubStore }
 
 func (noSessionsStore) Sessions() store.SessionStore { return nil }
+
+// noJTIsStore and noUsersStore return nil from the substore every
+// deployment dereferences at request time — the consumed-JTI store
+// behind private_key_jwt / JAR / DPoP replay defence, and the user
+// store behind the always-mounted /userinfo — so op.New must refuse
+// them regardless of grant or feature set.
+type noJTIsStore struct{ stubStore }
+
+func (noJTIsStore) ConsumedJTIs() store.ConsumedJTIStore { return nil }
+
+type noUsersStore struct{ stubStore }
+
+func (noUsersStore) Users() store.UserStore { return nil }
 
 type storeWithoutTransactions struct {
 	store.Store
@@ -471,6 +485,47 @@ func TestNew_RejectsMissingSessionStore(t *testing.T) {
 	}
 	if !op.IsServerError(err) {
 		t.Errorf("missing SessionStore must surface as server configuration error: %v", err)
+	}
+}
+
+// TestNew_RejectsMissingRequestTimeSubstores pins that a nil
+// ConsumedJTIs() or Users() fails op.New as a configuration error
+// naming the substore, instead of silently disabling JAR replay defence
+// or nil-dereferencing on the first /userinfo request, and that
+// WithUserStore satisfies the user-store requirement on its own.
+func TestNew_RejectsMissingRequestTimeSubstores(t *testing.T) {
+	t.Parallel()
+
+	build := func(s store.Store, extra ...op.Option) error {
+		_, err := op.New(append([]op.Option{
+			op.WithIssuer(validIssuer),
+			op.WithStore(s),
+			op.WithKeyset(validKeyset(t)),
+			op.WithCookieKeys(newRandomCookieKey(t)),
+			op.WithFeature(feature.JAR),
+			fixtureAuthenticator(),
+		}, extra...)...)
+		return err
+	}
+	for _, tc := range []struct {
+		name  string
+		store store.Store
+		want  string
+	}{
+		{"consumed-jtis", noJTIsStore{}, "ConsumedJTIStore"},
+		{"users", noUsersStore{}, "UserStore"},
+	} {
+		err := build(tc.store)
+		if err == nil {
+			t.Errorf("%s: expected configuration error, got nil", tc.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.want) || !op.IsServerError(err) {
+			t.Errorf("%s: err = %v, want a server configuration error naming %s", tc.name, err, tc.want)
+		}
+	}
+	if err := build(noUsersStore{}, op.WithUserStore(stubUserStore{})); err != nil {
+		t.Errorf("WithUserStore over a store without Users(): %v", err)
 	}
 }
 

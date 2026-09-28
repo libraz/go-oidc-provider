@@ -151,7 +151,8 @@ func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 // at code emission. Deployments whose clients push a request_uri and
 // only redirect the browser some time later can raise this to widen the
 // presentation window; RFC 9126 §2.2 suggests a short value (typically
-// 60 seconds).
+// 60 seconds). Under a FAPI profile the lifetime must stay below
+// [profile.PARLifetimeCeiling] (600 seconds); [New] rejects a longer one.
 // Stable since v1.0.
 func WithPARLifetime(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
@@ -178,10 +179,11 @@ func WithPARLifetime(ttl time.Duration) Option {
 // At /token (grant_type=refresh_token), a refresh request whose
 // originating grant did not carry `offline_access` fails with
 // `invalid_grant` ("refresh disabled by current policy"). The check
-// runs after the underlying refresh-token exchange, so the presented
-// token is consumed exactly once even when the policy rejects it —
-// embedders flipping this flag mid-deployment must accept that
-// pre-flag refresh tokens are invalidated on first use.
+// runs before the refresh token is consumed, so a refused pre-flag
+// token is left unconsumed: it stays refused while the flag is on and
+// becomes redeemable again if the flag is lifted. A token presented
+// again inside its rotation grace window, already consumed by the
+// first use, is held to the same check after the exchange.
 //
 // The flag is incompatible with [WithOpenIDScopeOptional]: §11 has
 // no meaning for non-OIDC requests, so combining the two would

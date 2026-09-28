@@ -128,19 +128,20 @@ type Options struct {
 	// BaseTransport overrides the [http.RoundTripper] base. The
 	// package installs its own [http.Transport] when this is nil.
 	//
-	// When a non-nil value is supplied, the dial-time SSRF gate is
-	// only installed if the value is a [*http.Transport]: the package
-	// clones it and replaces [http.Transport.DialContext] so the
-	// deny-list fires at kernel-resolution time. For any other
-	// [http.RoundTripper] (otelhttp wrap, in-process round-tripper,
-	// recording transport for tests) the package CANNOT reach the
-	// dialer, so it falls back to a per-RoundTrip URL re-check that
-	// runs [AssertSafeURLParsed] before delegating. The fallback
-	// catches gross URL-level SSRF (private literal IP, cloud metadata
-	// host) but does not protect against a DNS-rebinding peer that
-	// hands out a public address at gate-time and a private one at
-	// dial-time. Embedders requiring full dial-time protection MUST
-	// supply a [*http.Transport].
+	// The dial-time SSRF gate is installed only when the value is a
+	// [*http.Transport]: the package clones it and takes over every dial
+	// hook — DialContext, DialTLSContext and the deprecated DialTLS —
+	// so each connection, plain or TLS, goes through the gated dialer.
+	// A caller's own dial functions are not called; TLS is configured
+	// through [http.Transport.TLSClientConfig], which the clone keeps.
+	//
+	// Any other [http.RoundTripper] (otelhttp wrap, in-process
+	// round-tripper, recording transport for tests) keeps its dialer out
+	// of reach, so the package wraps it with a per-RoundTrip
+	// [AssertSafeURLParsed] re-check instead. That catches URL-level
+	// SSRF (private literal IP, cloud metadata host) on the first
+	// request and on every redirect hop, but not a DNS-rebinding peer
+	// that resolves public at gate time and private at dial time.
 	BaseTransport http.RoundTripper
 
 	// Proxy is the per-request proxy resolver installed on the default
@@ -155,6 +156,15 @@ type Options struct {
 	// The field is consulted only when [BaseTransport] is nil; a
 	// caller-supplied transport carries its own proxy configuration.
 	Proxy func(*http.Request) (*url.URL, error)
+
+	// CheckRedirect is an additional redirect veto layered on the
+	// package's own redirect gate, never in place of it. The package
+	// check runs first: a redirect over [Options.MaxRedirects] or to a
+	// deny-listed target is refused whatever the hook returns. The hook
+	// runs on every redirect the package did not hard-refuse, and a
+	// non-nil return replaces the package verdict; a nil return leaves
+	// it standing, so the hook can only make the policy stricter.
+	CheckRedirect func(req *http.Request, via []*http.Request) error
 }
 
 // allowedSchemes returns the resolved scheme allow-list, applying the
@@ -352,15 +362,10 @@ func schemeAllowed(scheme string, allowed []string) bool {
 // surfaces as [ErrRedirectBlocked]; otherwise the redirect count is
 // capped at [Options.MaxRedirects].
 //
-// When [Options.BaseTransport] is a non-nil [http.RoundTripper] that
-// is NOT a [*http.Transport], the package cannot reach the dialer.
-// In that case the function wraps the supplied round-tripper with a
-// per-request [AssertSafeURLParsed] re-check — the kernel-level
-// dial gate is unreachable, but URL-level SSRF (private IP literal,
-// cloud metadata host, scheme outside the allow-list) still fires
-// before the round-trip is delegated. Embedders that require the
-// dial-time gate MUST pass a [*http.Transport] (or leave the field
-// nil so the package builds its own).
+// When [Options.BaseTransport] is a [*http.Transport], the clone's
+// DialContext, DialTLSContext and DialTLS are all replaced by the gated
+// dialer. Any other [http.RoundTripper] is wrapped with a per-request
+// [AssertSafeURLParsed] re-check only; see [Options.BaseTransport].
 //
 // The default [http.Transport] is built with [Options.Proxy] (nil
 // by default — no proxy). Callers that need an outbound proxy pass
@@ -390,12 +395,14 @@ func NewHTTPClient(opts Options) *http.Client {
 			DialContext:           dialer.DialContext,
 		}
 	} else if t, ok := transport.(*http.Transport); ok {
-		// Clone so we do not mutate the caller's transport.
-		// Replacing DialContext is the only way the deny-list
-		// reaches the kernel-level resolution; the clone preserves
-		// the caller's other settings (proxy, TLS config) verbatim.
+		// Clone so we do not mutate the caller's transport. Every dial
+		// hook is taken over: a DialTLSContext / DialTLS left in place
+		// would carry HTTPS connections past the gated dialer. The
+		// clone keeps the caller's other settings (proxy, TLS config).
 		clone := t.Clone()
 		clone.DialContext = dialer.DialContext
+		clone.DialTLSContext = nil
+		clone.DialTLS = nil //nolint:staticcheck // the deprecated hook must be cleared too, or HTTPS dials bypass the gate.
 		transport = clone
 	} else {
 		// The supplied round-tripper is not a [*http.Transport],
@@ -407,7 +414,7 @@ func NewHTTPClient(opts Options) *http.Client {
 	return &http.Client{
 		Transport:     transport,
 		Timeout:       opts.resolveTimeout(),
-		CheckRedirect: makeCheckRedirect(opts),
+		CheckRedirect: CheckRedirect(opts),
 	}
 }
 
@@ -465,6 +472,28 @@ func makeDialControl(opts Options) func(network, address string, c syscall.RawCo
 	}
 }
 
+// CheckRedirect returns the [http.Client.CheckRedirect] hook
+// [NewHTTPClient] installs: the package redirect gate composed with
+// [Options.CheckRedirect]. Callers that build their own [*http.Client]
+// install it so the redirect posture matches the hardened client.
+func CheckRedirect(opts Options) func(req *http.Request, via []*http.Request) error {
+	gate := makeCheckRedirect(opts)
+	hook := opts.CheckRedirect
+	if hook == nil {
+		return gate
+	}
+	return func(req *http.Request, via []*http.Request) error {
+		verdict := gate(req, via)
+		if verdict != nil && !errors.Is(verdict, http.ErrUseLastResponse) {
+			return verdict
+		}
+		if err := hook(req, via); err != nil {
+			return err
+		}
+		return verdict
+	}
+}
+
 // makeCheckRedirect returns the [http.Client.CheckRedirect] hook that
 // caps redirects at [Options.MaxRedirects] and re-runs the deny-list
 // against every Location target. The function returns
@@ -476,7 +505,9 @@ func makeCheckRedirect(opts Options) func(req *http.Request, via []*http.Request
 		if opts.MaxRedirects <= 0 {
 			return http.ErrUseLastResponse
 		}
-		if len(via) >= opts.MaxRedirects {
+		// via holds the original request plus every redirect already
+		// followed, so this redirect is number len(via).
+		if len(via) > opts.MaxRedirects {
 			return fmt.Errorf("%w: exceeded MaxRedirects=%d", ErrRedirectBlocked, opts.MaxRedirects)
 		}
 		if err := AssertSafeURLParsed(req.Context(), req.URL, opts); err != nil {

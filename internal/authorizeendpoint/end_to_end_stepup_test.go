@@ -16,15 +16,23 @@ import (
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
+// The canonical acr URIs of AAL1 and AAL2, which is what a session records.
+const (
+	bronzeACR = "urn:mace:incommon:iap:bronze"
+	silverACR = "urn:mace:incommon:iap:silver"
+)
+
 // TestEndToEnd_ACRStepUp exercises the RFC 9470 step-up transition end to
-// end against a real session. After a first login binds the session to
-// acr "1":
+// end against a real session. A first login binds the session at AAL1,
+// which the session records as that level's canonical acr:
 //
-//   - a repeat /authorize requesting acr_values=1 is served silently (the
+//   - a repeat /authorize requesting that acr is served silently (the
 //     session already satisfies the request), and
-//   - a subsequent /authorize requesting acr_values=2 forces a re-auth
+//   - a subsequent /authorize requesting the AAL2 acr forces a re-auth
 //     interaction (the session's acr is not in the requested set), after
-//     which the issued id_token echoes the stronger acr "2".
+//     which the configured policy's verdict for the new request is
+//     reported. The default policy echoes a requested value once any
+//     factor ran, so that verdict is the AAL2 acr.
 //
 // This is the full-flow counterpart to the decision-matrix unit tests in
 // authorize_test.go: it proves the step-up not only redirects to an
@@ -153,8 +161,8 @@ func TestEndToEnd_ACRStepUp(t *testing.T) {
 		return decodeIDTokenPayload(t, idt)
 	}
 
-	// Pass 1: no session yet → interaction → id_token acr "1".
-	resp1 := authorize(t, "1")
+	// Pass 1: no session yet → interaction → id_token acr bronze.
+	resp1 := authorize(t, bronzeACR)
 	loc1, err := resp1.Location()
 	resp1.Body.Close()
 	if err != nil {
@@ -164,12 +172,12 @@ func TestEndToEnd_ACRStepUp(t *testing.T) {
 		t.Fatalf("pass 1 expected an interaction redirect, got direct code: %s", loc1.String())
 	}
 	claims1 := exchange(t, completeLogin(t, loc1))
-	if got, _ := claims1["acr"].(string); got != "1" {
-		t.Fatalf("pass 1 id_token acr=%q want 1", got)
+	if got, _ := claims1["acr"].(string); got != bronzeACR {
+		t.Fatalf("pass 1 id_token acr=%q want %s", got, bronzeACR)
 	}
 
-	// Pass 2: session satisfies acr_values=1 → silent code, no interaction.
-	resp2 := authorize(t, "1")
+	// Pass 2: session satisfies acr_values=bronze → silent code, no interaction.
+	resp2 := authorize(t, bronzeACR)
 	loc2, err := resp2.Location()
 	resp2.Body.Close()
 	if err != nil {
@@ -179,13 +187,13 @@ func TestEndToEnd_ACRStepUp(t *testing.T) {
 	if code2 == "" {
 		t.Fatalf("pass 2 expected a silent code redirect, got: %s", loc2.String())
 	}
-	if claims2 := exchange(t, code2); claims2["acr"] != "1" {
-		t.Errorf("pass 2 id_token acr=%v want 1", claims2["acr"])
+	if claims2 := exchange(t, code2); claims2["acr"] != bronzeACR {
+		t.Errorf("pass 2 id_token acr=%v want %s", claims2["acr"], bronzeACR)
 	}
 
-	// Pass 3: session acr "1" is not in acr_values=2 → step-up interaction,
-	// then the stronger acr "2" is echoed on the id_token.
-	resp3 := authorize(t, "2")
+	// Pass 3: session acr bronze is not in acr_values=silver → step-up
+	// interaction, then the policy's verdict silver is reported.
+	resp3 := authorize(t, silverACR)
 	loc3, err := resp3.Location()
 	resp3.Body.Close()
 	if err != nil {
@@ -198,7 +206,7 @@ func TestEndToEnd_ACRStepUp(t *testing.T) {
 		t.Fatalf("pass 3 redirect=%s want interaction path", loc3.String())
 	}
 	claims3 := exchange(t, completeLogin(t, loc3))
-	if got, _ := claims3["acr"].(string); got != "2" {
-		t.Errorf("pass 3 id_token acr=%q want 2 (stepped up)", got)
+	if got, _ := claims3["acr"].(string); got != silverACR {
+		t.Errorf("pass 3 id_token acr=%q want %s (stepped up)", got, silverACR)
 	}
 }

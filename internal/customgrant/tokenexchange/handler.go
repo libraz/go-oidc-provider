@@ -83,11 +83,17 @@ type Config struct {
 	Grants store.GrantStore
 
 	// Clients is the read-only client registry. The lookup path uses it
-	// to reject a JWT subject_token whose client has been deleted; a
+	// to reject a subject_token whose client has been deleted; a
 	// deletion leaves no grant IDs to tombstone and a client_credentials
 	// token has no grant at all, so the client_id claim is the only
 	// handle either case shares. A nil value disables that check.
 	Clients store.ClientStore
+
+	// SubjectProjector converts the OP-internal subject an opaque
+	// subject_token records into the per-client public subject, the
+	// value a JWT subject_token for the same grant already carries in
+	// "sub". Nil means the recorded subject is already public.
+	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 
 	// Audit is the structured audit-event sink.
 	Audit audit.Emitter
@@ -128,6 +134,7 @@ type Handler struct {
 	opaqueAccessTokens store.OpaqueAccessTokenStore
 	grants             store.GrantStore
 	clients            store.ClientStore
+	subjectProjector   func(ctx context.Context, raw string, client *store.Client) (string, error)
 	audit              audit.Emitter
 	clock              interface{ Now() time.Time }
 	maxAccessTTL       time.Duration
@@ -161,6 +168,7 @@ func New(cfg Config) (*Handler, error) {
 		opaqueAccessTokens: cfg.OpaqueAccessTokens,
 		grants:             cfg.Grants,
 		clients:            cfg.Clients,
+		subjectProjector:   cfg.SubjectProjector,
 		audit:              cfg.Audit,
 		clock:              cfg.Clock,
 		maxAccessTTL:       cfg.MaxAccessTTL,

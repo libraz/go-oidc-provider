@@ -98,6 +98,27 @@ func TestNormalizeCSP_RejectsDirectivesTheOPOwns(t *testing.T) {
 	}
 }
 
+// A browser reads a header value as a comma-separated list of
+// independent policies, and splits directives on ASCII whitespace only.
+// A policy that reaches it through either rule in a shape this parser
+// read differently must be refused, not normalized into a header whose
+// appended protections the browser discards.
+func TestNormalizeCSP_RejectsInputsABrowserParsesDifferently(t *testing.T) {
+	t.Parallel()
+
+	for name, policy := range map[string]string{
+		"comma opens a second policy":           "default-src 'self', frame-ancestors *",
+		"comma after a complete directive":      "default-src 'self'; style-src 'self', base-uri *",
+		"comma inside a source list":            "img-src https://a.example,https://b.example",
+		"no-break space hides a directive name": "default-src 'none'; frame-ancestors\u00a0'none'",
+		"vertical tab hides a directive name":   "default-src 'none'; frame-ancestors\v'none'",
+	} {
+		if got, err := interaction.NormalizeCSP(policy); !errors.Is(err, interaction.ErrCSPNotPermitted) {
+			t.Errorf("%s: NormalizeCSP(%q) = (%q, %v), want ErrCSPNotPermitted", name, policy, got, err)
+		}
+	}
+}
+
 func TestNormalizeCSP_DirectiveNamesAreCaseInsensitive(t *testing.T) {
 	t.Parallel()
 

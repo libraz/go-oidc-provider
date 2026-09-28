@@ -234,38 +234,25 @@ func (h *Handler) idTokenScope(ctx context.Context, subject, clientID string) ([
 
 // lookupOpaqueAccessToken resolves an opaque AT against the configured
 // substore. A nil substore means opaque tokens are not in use; the
-// caller surfaces the value as invalid_grant.
+// caller surfaces the value as invalid_grant. Liveness, the live
+// client check, the public subject and both cnf members come from
+// [tokens.ResolveOpaqueAccessToken], the resolver /introspect and
+// /userinfo share, so the exchanged token names the same "sub" a JWT
+// subject_token for the same grant would.
 func (h *Handler) lookupOpaqueAccessToken(ctx context.Context, raw string) (lookupResult, error) {
 	if h.opaqueAccessTokens == nil {
 		return lookupResult{reason: "no_substore"}, fmt.Errorf("%w: opaque substore unavailable", errTokenInvalid)
 	}
-	rec, err := h.opaqueAccessTokens.Find(ctx, raw)
+	view, err := tokens.ResolveOpaqueAccessToken(ctx, tokens.OpaqueAccessTokenLookup{
+		Store:            h.opaqueAccessTokens,
+		Clients:          h.clients,
+		SubjectProjector: h.subjectProjector,
+		Grants:           h.grants,
+	}, raw, h.now())
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return lookupResult{reason: "unknown"}, errTokenInvalid
-		}
-		return lookupResult{reason: "store_error"}, fmt.Errorf("%w: store: %w", errTokenInvalid, err)
+		return lookupResult{reason: classifyOpaqueErr(err)}, fmt.Errorf("%w: %w", errTokenInvalid, err)
 	}
-	if rec == nil {
-		return lookupResult{reason: "unknown"}, errTokenInvalid
-	}
-	if rec.Revoked {
-		return lookupResult{reason: "revoked"}, errTokenInvalid
-	}
-	now := h.now()
-	if rec.ExpiresAt.IsZero() {
-		return lookupResult{reason: "missing_claim"}, fmt.Errorf("%w: opaque access token expiry missing", errTokenInvalid)
-	}
-	if !now.Before(rec.ExpiresAt) {
-		return lookupResult{reason: "expired"}, errTokenInvalid
-	}
-	var cnf *Confirmation
-	switch {
-	case rec.DPoPJKT != "":
-		cnf = &Confirmation{JKT: rec.DPoPJKT}
-	case rec.MTLSCertThumbprint != "":
-		cnf = &Confirmation{X5tS256: rec.MTLSCertThumbprint}
-	}
+	rec := view.Record
 	var aud []string
 	if rec.Audience != "" {
 		aud = []string{resourceindicator.NormalizeLabel(rec.Audience)}
@@ -274,13 +261,32 @@ func (h *Handler) lookupOpaqueAccessToken(ctx context.Context, raw string) (look
 		view: TokenView{
 			Type:         TokenTypeAccessToken,
 			ClientID:     rec.ClientID,
-			Subject:      rec.Subject,
+			Subject:      view.Subject,
 			Scope:        append([]string(nil), rec.Scope...),
 			Audience:     aud,
 			ExpiresAt:    rec.ExpiresAt,
-			Confirmation: cnf,
+			Confirmation: confirmationFromCnf(view.Confirmation()),
 		},
 	}, nil
+}
+
+// classifyOpaqueErr maps a [tokens.ResolveOpaqueAccessToken] error
+// onto a short audit reason string.
+func classifyOpaqueErr(err error) string {
+	switch {
+	case errors.Is(err, tokens.ErrOpaqueAccessTokenUnknown):
+		return "unknown"
+	case errors.Is(err, tokens.ErrOpaqueAccessTokenRevoked):
+		return "revoked"
+	case errors.Is(err, tokens.ErrOpaqueAccessTokenExpired):
+		return "expired"
+	case errors.Is(err, tokens.ErrOpaqueAccessTokenClientGone):
+		return "client_deleted"
+	case errors.Is(err, tokens.ErrOpaqueAccessTokenSubject):
+		return "subject_projection"
+	default:
+		return "store_error"
+	}
 }
 
 // looksLikeJWS reports whether s has the three-part shape of a

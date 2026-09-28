@@ -2,6 +2,7 @@ package userinfo
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -29,10 +30,11 @@ func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDep
 }
 
 // resolveOpaqueAccessTokenAt handles the opaque-format path at
-// /userinfo. The substore lookup is hashed inside the implementation;
-// this function applies the revoked / expired / cnf-mismatch checks
-// and projects a successful record onto an
-// [*tokens.AccessTokenClaims] so the caller can reuse
+// /userinfo. Liveness (unknown / revoked / expired / deleted client)
+// and the public subject come from [tokens.ResolveOpaqueAccessToken],
+// the resolver /introspect and token exchange share; this function
+// adds the audience and cnf checks and projects a successful view onto
+// an [*tokens.AccessTokenClaims] so the caller can reuse
 // [assembleClaims] verbatim. The projection preserves the originating
 // grant ID because pairwise subject configurations recover the
 // OP-internal subject through that lineage before looking the user
@@ -49,30 +51,38 @@ func resolveOpaqueAccessTokenAt(
 	deps HandlerDeps,
 	raw string,
 ) (*tokens.AccessTokenClaims, bool) {
-	rec, err := deps.OpaqueAccessTokens.Find(ctx, raw)
-	if err != nil || rec == nil {
-		// ErrNotFound and any other store error surface as
-		// invalid_token. RFC 6750 §3.1 forbids leaking which
-		// sub-class produced the rejection.
+	view, err := tokens.ResolveOpaqueAccessToken(ctx, tokens.OpaqueAccessTokenLookup{
+		Store:            deps.OpaqueAccessTokens,
+		Clients:          deps.Clients,
+		SubjectProjector: deps.SubjectProjector,
+		Grants:           deps.Grants,
+	}, raw, userInfoNow(deps).UTC())
+	switch {
+	case err == nil:
+	case errors.Is(err, tokens.ErrOpaqueAccessTokenRevoked),
+		errors.Is(err, tokens.ErrOpaqueAccessTokenClientGone):
+		// A deleted client retires its tokens; the JWT path words that
+		// outcome the same way.
+		respondOpaqueInvalid(w, "The access token has been revoked")
+		return nil, false
+	case errors.Is(err, tokens.ErrOpaqueAccessTokenExpired):
+		respondOpaqueInvalid(w, "The access token has expired")
+		return nil, false
+	default:
+		// Unknown, projection failure and store faults all surface as
+		// invalid_token. RFC 6750 §3.1 forbids leaking
+		// which sub-class produced the rejection.
 		respondOpaqueInvalid(w, "The access token is invalid")
 		return nil, false
 	}
-	if rec.Revoked {
-		respondOpaqueInvalid(w, "The access token has been revoked")
-		return nil, false
-	}
-	now := userInfoNow(deps).UTC()
-	if !rec.ExpiresAt.After(now) {
-		respondOpaqueInvalid(w, "The access token has expired")
-		return nil, false
-	}
+	rec := view.Record
 	if !enforceAudience(w, deps.Issuer, opaqueAudience(rec)) {
 		return nil, false
 	}
-	if !enforceOpaqueCnf(w, r, deps, rec, raw) {
+	if !enforceOpaqueCnf(w, r, deps, view.Confirmation(), raw) {
 		return nil, false
 	}
-	return projectOpaqueAccessTokenClaims(rec), true
+	return projectOpaqueAccessTokenClaims(view), true
 }
 
 // opaqueAudience normalises the opaque-access-token record's audience
@@ -101,8 +111,7 @@ func userInfoNow(deps HandlerDeps) time.Time {
 }
 
 // enforceOpaqueCnf re-verifies the sender-constraint proof on the
-// request when the opaque-access-token record was issued with a cnf
-// thumbprint. Mirrors [enforceCnfBinding] so the wire response stays
+// request for every cnf member the opaque access token is bound to. Mirrors [enforceCnfBinding] so the wire response stays
 // uniform between the JWT and opaque paths; the difference is that
 // the bound thumbprint comes from the persistent record rather than
 // from a JWT claim. The raw bearer value is threaded in by the caller
@@ -113,32 +122,33 @@ func enforceOpaqueCnf(
 	w http.ResponseWriter,
 	r *http.Request,
 	deps HandlerDeps,
-	rec *store.OpaqueAccessToken,
+	cnf map[string]string,
 	raw string,
 ) bool {
-	if rec.DPoPJKT != "" {
-		if !enforceDPoPCnf(w, r, deps, rec.DPoPJKT, raw) {
+	if jkt := cnf["jkt"]; jkt != "" {
+		if !enforceDPoPCnf(w, r, deps, jkt, raw) {
 			return false
 		}
 	}
-	if rec.MTLSCertThumbprint != "" {
-		if !enforceMTLSCnf(w, r, deps, rec.MTLSCertThumbprint) {
+	if x5t := cnf["x5t#S256"]; x5t != "" {
+		if !enforceMTLSCnf(w, r, deps, x5t) {
 			return false
 		}
 	}
 	return true
 }
 
-// projectOpaqueAccessTokenClaims projects an opaque-access-token
-// record onto the [*tokens.AccessTokenClaims] shape the rest of the
+// projectOpaqueAccessTokenClaims projects a live opaque-access-token
+// view onto the [*tokens.AccessTokenClaims] shape the rest of the
 // /userinfo pipeline consumes. Only the fields downstream code reads
 // (Subject, ClientID, GrantID, Scope) are populated; cnf / JTI are
 // intentionally omitted because the opaque path has already enforced them
 // and the revocation registry keys on JTI which has no counterpart for the
 // opaque format.
-func projectOpaqueAccessTokenClaims(rec *store.OpaqueAccessToken) *tokens.AccessTokenClaims {
+func projectOpaqueAccessTokenClaims(view *tokens.OpaqueAccessTokenView) *tokens.AccessTokenClaims {
+	rec := view.Record
 	return &tokens.AccessTokenClaims{
-		Subject:  rec.Subject,
+		Subject:  view.Subject,
 		ClientID: rec.ClientID,
 		GrantID:  rec.GrantID,
 		Scope:    append([]string(nil), rec.Scope...),

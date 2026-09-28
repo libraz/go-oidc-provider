@@ -224,16 +224,15 @@ rows:
 
   - id: PAR-021
     severity: P0
-    spec: RFC 9126 §2.1 / RFC 9101 §6.1
+    spec: RFC 9126 §2.1 / RFC 9101 §6.3
     behaviour: |
-      RFC 9101 §6.1 precedence rule: when a push pairs outer form
-      parameters with a signed Request Object, every authorization
-      parameter inside the JWT overrides the wire-form value of the
-      same name. Wire values whose key is absent from the JWT
-      survive — the merge does NOT erase them. The persisted
-      RequestSnapshot reflects this rule (e.g. JWT response_type=code
-      defeats outer response_type=code+token; outer nonce survives
-      when the JWT omits a nonce claim).
+      RFC 9101 §6.3: when a push pairs outer form parameters with a
+      signed Request Object, only the parameters inside the JWT are
+      used. A wire-form value the JWT also carries is overridden, and
+      an outer-only key is dropped at /par rather than persisted as if
+      signed. The persisted RequestSnapshot reflects this rule (e.g.
+      JWT response_type=code defeats outer response_type=code+token;
+      an outer nonce is absent when the JWT omits a nonce claim).
     status: active
 
   - id: PAR-022

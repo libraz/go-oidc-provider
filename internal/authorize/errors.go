@@ -11,8 +11,9 @@
 // embedder-supplied RFC 9396 authorization_details validators.
 // # Wire mapping
 // Each sentinel returned by the package carries an OAuth wire code (one of
-// "invalid_request", "unsupported_response_type", "invalid_scope") via the
-// [Error] type. The HTTP layer translates those codes uniformly: the
+// "invalid_request", "unsupported_response_type", "unauthorized_client",
+// "invalid_scope") via the [Error] type. The HTTP layer translates those
+// codes uniformly: the
 // validation errors that fire BEFORE the redirect_uri has been confirmed
 // against the client are not safe to redirect on (the redirect target is not
 // trusted yet); errors that fire AFTER may propagate to the RP via a
@@ -80,6 +81,19 @@ var (
 	// The library only ships the Code flow in v1.0; Implicit / Hybrid are
 	// rejected. Maps to unsupported_response_type.
 	ErrResponseTypeUnsupported = newErr("unsupported_response_type", "response_type must be code")
+
+	// ErrClientGrantNotPermitted indicates the client's registered
+	// GrantTypes do not include authorization_code, so /token would
+	// refuse any code this request produced. Maps to unauthorized_client
+	// (RFC 6749 §4.1.2.1).
+	ErrClientGrantNotPermitted = newErr("unauthorized_client",
+		"client is not authorized for the authorization_code grant")
+
+	// ErrClientResponseTypeNotPermitted indicates the requested
+	// response_type is absent from the client's registered
+	// ResponseTypes. Maps to unauthorized_client (RFC 6749 §4.1.2.1).
+	ErrClientResponseTypeNotPermitted = newErr("unauthorized_client",
+		"client is not authorized for this response_type")
 
 	// ErrRedirectURIRequired indicates redirect_uri was omitted. Maps to
 	// invalid_request. NOT redirect-safe.
@@ -276,6 +290,14 @@ var (
 // rather than a singleton sentinel.
 func grantIDRequiredFor(action string) *Error {
 	return newErr("invalid_request", "grant_id is required for grant_management_action="+action)
+}
+
+// acrValueUnsupported builds the rejection for an acr_values entry the
+// OP has not advertised in acr_values_supported. The offending value is
+// named in the description, which is why this is a constructor rather
+// than a singleton sentinel.
+func acrValueUnsupported(value string) *Error {
+	return newErr("invalid_request", "acr_values entry "+value+" is not advertised in acr_values_supported")
 }
 
 // IsRedirectSafe reports whether err arose AFTER redirect_uri validation

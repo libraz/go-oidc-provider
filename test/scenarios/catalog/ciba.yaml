@@ -113,7 +113,7 @@ rows:
       clientId differs from the Grant's clientId; cross-client grant
       binding is forbidden.
     status: out-of-scope
-    out_of_scope_reason: "Client-mismatch guard via the provider-side approval API is a JS-runtime hook not modelled; v1.0's /token grant handler enforces client binding via store.CIBARequestStore (internal/grants/ciba.go)."
+    out_of_scope_reason: "Client-mismatch guard via the provider-side approval API is a JS-runtime hook not modelled; v1.0's /token grant handler enforces client binding via store.CIBARequestStore (internal/grants/ciba/ciba.go)."
 
   - id: CIBA-010
     severity: P0

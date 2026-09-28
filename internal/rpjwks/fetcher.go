@@ -56,7 +56,7 @@ const (
 	// may be in flight across all Fetcher instances in this process. The
 	// nonblocking gate fails closed when saturated; callers can retry without
 	// turning a burst of open-DCR URLs into an unbounded socket/goroutine fanout.
-	DefaultMaxInflight = 64
+	DefaultMaxInflight = remotecache.DefaultMaxInflight
 
 	// MaxKeys bounds how many members a keyset may declare, in addition to the
 	// body cap. It is not configurable: no deployment has a reason to publish
@@ -82,7 +82,7 @@ var ErrFetch = errors.New("rpjwks: jwks fetch failed")
 // ErrOverloaded identifies a transient refusal caused by the shared
 // in-flight URL-load bound. It is intentionally distinct from an upstream
 // fetch failure so the cache never negative-caches capacity pressure.
-var ErrOverloaded = errors.New("rpjwks: URL-load capacity exhausted")
+var ErrOverloaded = remotecache.ErrOverloaded
 
 // TransientError marks a failure that callers should retry rather than treat
 // as evidence that the RP's JWKS document is bad. Overload currently uses this
@@ -169,8 +169,9 @@ type Config struct {
 	// is built on. Production callers leave it nil; a caller that needs a
 	// private CA (an internal CA-issued RP endpoint, a conformance harness with
 	// a self-signed cert) or an already-instrumented transport injects one here.
-	// The dial-time SSRF hook is reinstalled on the supplied transport, so a
-	// custom transport does not widen the surface.
+	// A [*http.Transport] is cloned with its dial hooks replaced by the
+	// dial-time SSRF gate; any other RoundTripper gets the URL-time gate on
+	// every request and redirect hop only. See [netsec.Options.BaseTransport].
 	BaseTransport http.RoundTripper
 }
 
@@ -199,9 +200,9 @@ type Fetcher struct {
 	// whose response advertised nothing and the ceiling every advertised
 	// max-age is clamped to, so no RP can hold a keyset in the cache longer
 	// than the OP configured.
-	ttl      time.Duration
-	maxBody  int64
-	inflight chan struct{}
+	ttl     time.Duration
+	maxBody int64
+	loads   remotecache.LoadGate
 
 	// clientOnce / client wire the lazy [*securefetch.Client] construction so a
 	// caller can flip the posture setters after [New] returned but before the
@@ -211,30 +212,6 @@ type Fetcher struct {
 
 	allowPrivate  bool
 	baseTransport http.RoundTripper
-}
-
-// globalURLLoadSlots is the process-wide hard ceiling. The per-policy groups
-// below provide tighter local budgets while this channel keeps independently
-// configured components from exceeding the safe process default in aggregate.
-//
-//nolint:gochecknoglobals // one process-wide capacity gate is the contract.
-var (
-	globalURLLoadSlots        = make(chan struct{}, DefaultMaxInflight)
-	globalURLLoadSlotsMu      sync.Mutex
-	globalURLLoadSlotsByLimit = map[int]chan struct{}{
-		DefaultMaxInflight: make(chan struct{}, DefaultMaxInflight),
-	}
-)
-
-func sharedURLLoadSlots(limit int) chan struct{} {
-	globalURLLoadSlotsMu.Lock()
-	defer globalURLLoadSlotsMu.Unlock()
-	if slots := globalURLLoadSlotsByLimit[limit]; slots != nil {
-		return slots
-	}
-	slots := make(chan struct{}, limit)
-	globalURLLoadSlotsByLimit[limit] = slots
-	return slots
 }
 
 // New returns a fetcher with the [Config] defaults applied.
@@ -288,7 +265,7 @@ func New(cfg Config) *Fetcher {
 		timeout:       cfg.Timeout,
 		ttl:           cfg.TTL,
 		maxBody:       cfg.MaxBodyBytes,
-		inflight:      sharedURLLoadSlots(cfg.MaxInflight),
+		loads:         remotecache.SharedLoadGate(cfg.MaxInflight),
 		allowPrivate:  cfg.AllowPrivateNetwork,
 		baseTransport: cfg.BaseTransport,
 	}
@@ -460,30 +437,16 @@ func (f *Fetcher) doFetch(ctx context.Context, jwksURI string, cached *entry) (*
 	return &entry{keys: keys, etag: resp.Header.Get("ETag")}, ttlFromResponse(resp, f.ttl), nil
 }
 
-// acquireLoad takes both the process-wide hard ceiling and this fetcher's
-// tighter policy group. The operation is deliberately nonblocking: a
+// acquireLoad takes a slot from the process-wide URL-load ceiling and this
+// fetcher's tighter policy group. The operation is deliberately nonblocking: a
 // saturated attacker-controlled URL population receives a typed transient
-// error rather than queuing goroutines behind a semaphore. The release closure
-// always returns both slots, including every request/parse error path.
+// error rather than queuing goroutines behind a semaphore.
 func (f *Fetcher) acquireLoad(ctx context.Context) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	select {
-	case globalURLLoadSlots <- struct{}{}:
-	default:
+	release, err := f.loads.Acquire(ctx)
+	if errors.Is(err, remotecache.ErrOverloaded) {
 		return nil, &TransientError{Cause: ErrOverloaded}
 	}
-	select {
-	case f.inflight <- struct{}{}:
-		return func() {
-			<-f.inflight
-			<-globalURLLoadSlots
-		}, nil
-	default:
-		<-globalURLLoadSlots
-		return nil, &TransientError{Cause: ErrOverloaded}
-	}
+	return release, err
 }
 
 // result maps a cache outcome onto the caller's keyset / sentinel contract.

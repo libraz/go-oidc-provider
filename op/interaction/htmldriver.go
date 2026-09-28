@@ -328,27 +328,19 @@ const (
 func (d HTMLDriver) writePromptIntro(b *strings.Builder, prompt Prompt) {
 	switch data := prompt.Data.(type) {
 	case PasswordPromptData:
-		if data.UsernameHint != "" {
-			b.WriteString(`<p>Hint: `)
-			b.WriteString(html.EscapeString(data.UsernameHint))
-			b.WriteString(`</p>`)
-		}
+		d.writeIntroLine(b, prompt.Locale, "login.username_hint", "hint", data.UsernameHint, introHintFallback)
 	case TOTPPromptData:
-		writeAttemptsRemaining(b, data.AttemptsRemaining)
+		d.writeAttemptsRemaining(b, prompt.Locale, data.AttemptsRemaining)
 	case RecoveryCodePromptData:
-		writeAttemptsRemaining(b, data.AttemptsRemaining)
+		d.writeAttemptsRemaining(b, prompt.Locale, data.AttemptsRemaining)
 	case EmailOTPVerifyPromptData:
 		if data.MaskedEmail != "" {
-			b.WriteString(`<p>Code sent to `)
-			b.WriteString(html.EscapeString(data.MaskedEmail))
-			b.WriteString(`.</p>`)
+			line := d.messageOr(prompt.Locale, "auth.email_otp.sent_to",
+				map[string]string{"email": data.MaskedEmail}, "Code sent to "+data.MaskedEmail+".")
+			writeParagraph(b, line)
 		}
 	case CaptchaPromptData:
-		if data.Provider != "" {
-			b.WriteString(`<p>Captcha provider: `)
-			b.WriteString(html.EscapeString(data.Provider))
-			b.WriteString(`</p>`)
-		}
+		d.writeIntroLine(b, prompt.Locale, "interaction.captcha_provider", "provider", data.Provider, introCaptchaFallback)
 	case ConsentScopePromptData:
 		d.writeConsentScopeList(b, prompt.Locale, data)
 	default:
@@ -356,6 +348,32 @@ func (d HTMLDriver) writePromptIntro(b *strings.Builder, prompt Prompt) {
 		// extension PromptData values share this branch: no
 		// introductory text — the form fields carry the affordance.
 	}
+}
+
+// Built-in English prefixes for the informational lines no [FieldSpec]
+// carries. They follow the same rule as [htmlLabelFor]: the catalogue
+// answers first, these answer when it does not.
+const (
+	introHintFallback     = "Hint: "
+	introCaptchaFallback  = "Captcha provider: "
+	introAttemptsFallback = "Attempts remaining: "
+)
+
+// writeIntroLine emits "<fallback><value>" as one paragraph, resolving
+// the line through key with value bound to placeholder. An empty value
+// emits nothing.
+func (d HTMLDriver) writeIntroLine(b *strings.Builder, locale, key, placeholder, value, fallback string) {
+	if value == "" {
+		return
+	}
+	writeParagraph(b, d.messageOr(locale, key, map[string]string{placeholder: value}, fallback+value))
+}
+
+// writeParagraph emits text, escaped, as one paragraph.
+func writeParagraph(b *strings.Builder, text string) {
+	b.WriteString(`<p>`)
+	b.WriteString(html.EscapeString(text))
+	b.WriteString(`</p>`)
 }
 
 // writePromptBody emits the form-internal markup. Most prompts render
@@ -375,13 +393,11 @@ func (d HTMLDriver) writePromptBody(b *strings.Builder, prompt Prompt) {
 // orchestrator has reported a non-zero count. Zero is suppressed
 // because zero either means "unknown" or "no further attempts" and
 // surfacing either to the user is misleading without context.
-func writeAttemptsRemaining(b *strings.Builder, attempts int) {
+func (d HTMLDriver) writeAttemptsRemaining(b *strings.Builder, locale string, attempts int) {
 	if attempts <= 0 {
 		return
 	}
-	b.WriteString(`<p>Attempts remaining: `)
-	b.WriteString(strconv.Itoa(attempts))
-	b.WriteString(`</p>`)
+	d.writeIntroLine(b, locale, "auth.attempts_remaining", "count", strconv.Itoa(attempts), introAttemptsFallback)
 }
 
 // writeConsentScopeList renders the read-only list of scopes the user
@@ -629,7 +645,7 @@ func (d HTMLDriver) titleFor(prompt Prompt) string {
 }
 
 func (d HTMLDriver) buttonFor(prompt Prompt) string {
-	key := ""
+	key := "interaction.button.continue"
 	switch prompt.Type {
 	case "auth.password":
 		key = "login.button.submit"

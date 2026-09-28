@@ -323,9 +323,9 @@ type Notice struct {
 	// to a particular RP.
 	SessionID string
 
-	// RequestID is the per-request correlation identifier propagated
-	// to the audit record so operators can join the back-channel
-	// outcome to the originating /end_session call.
+	// RequestID is copied verbatim onto every audit record the fan-out
+	// emits. The OP's own callers leave it empty: HTTP request-id
+	// correlation belongs to the embedder, not the library.
 	RequestID string
 }
 
@@ -377,8 +377,12 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 // NotifyClientDeleted delivers Logout Tokens for a client that has just been
 // removed from the registry. It consumes only the caller's pre-delete
 // snapshot, so the method remains usable after the ClientStore and GrantStore
-// rows have been deleted. The operation is synchronous and bounded by the
-// snapshot's subject count, coordinator concurrency, and caller context.
+// rows have been deleted. The operation is synchronous and runs for at most
+// Config.FanOutBudget (the same budget [Coordinator.NotifyDetached]
+// applies), so an unresponsive audience cannot hold the caller's request
+// open for DefaultMaxTargets / DefaultMaxConcurrentDeliveries waves of the
+// per-RP timeout. Targets still pending when the budget elapses fail with
+// the context error and are audited as failures.
 //
 //nolint:gocognit // This linear target build retains every skip and audit reason beside its condition.
 func (c *Coordinator) NotifyClientDeleted(ctx context.Context, snapshot ClientDeletionSnapshot) (int, error) {
@@ -424,7 +428,9 @@ func (c *Coordinator) NotifyClientDeleted(ctx context.Context, snapshot ClientDe
 			URL:      snapshot.Client.BackchannelLogoutURI,
 		})
 	}
-	return c.dispatchTargets(ctx, targets, Notice{}), nil
+	bounded, cancel := context.WithTimeout(ctx, c.fanOutBudget)
+	defer cancel()
+	return c.dispatchTargets(bounded, targets, Notice{}), nil
 }
 
 func (c *Coordinator) dispatchTargets(ctx context.Context, targets []Target, notice Notice) int {

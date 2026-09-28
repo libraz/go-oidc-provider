@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
@@ -147,7 +148,31 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	if !rec.ConfirmedAt.IsZero() && !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
 		return interaction.Step{}, ErrLocked
 	}
-	return interaction.Step{Prompt: a.prompt(rec)}, nil
+	remaining, err := a.attemptsRemaining(ctx, in.Subject, rec, now)
+	if err != nil {
+		return interaction.Step{}, err
+	}
+	return interaction.Step{Prompt: a.prompt(remaining)}, nil
+}
+
+// attemptsRemaining is the number of wrong codes subject may still submit
+// before either counter that can lock this factor does: the record's own,
+// read with the same rolling window [Verifier.Verify] applies, and the
+// cross-factor counter when one is wired.
+func (a *Authenticator) attemptsRemaining(ctx context.Context, subject string, rec *store.TOTPRecord, now time.Time) (int, error) {
+	spent := rec.FailedCount
+	if !rec.FirstFailureAt.IsZero() && now.Sub(rec.FirstFailureAt) > counterWindow {
+		spent = 0
+	}
+	remaining := max(lockThresholdShort-spent, 0)
+	if a.lockout != nil {
+		shared, err := a.lockout.RemainingAttempts(ctx, subject)
+		if err != nil {
+			return 0, fmt.Errorf("totp: lockout budget: %w", err)
+		}
+		remaining = min(remaining, shared)
+	}
+	return remaining, nil
 }
 
 // Continue implements [authn.Authenticator]. It reads the persisted
@@ -290,11 +315,7 @@ func cloneRecord(r *store.TOTPRecord) *store.TOTPRecord {
 // the wrong-code re-emit branch of Continue. Centralising the shape
 // here keeps the two call sites in sync; a SPA seeing two different
 // prompt shapes for the same factor would be a contract bug.
-func (*Authenticator) prompt(rec *store.TOTPRecord) *interaction.Prompt {
-	remaining := lockThresholdShort - rec.FailedCount
-	if remaining < 0 {
-		remaining = 0
-	}
+func (*Authenticator) prompt(remaining int) *interaction.Prompt {
 	return &interaction.Prompt{
 		Type: PromptType,
 		Data: interaction.TOTPPromptData{AttemptsRemaining: remaining},

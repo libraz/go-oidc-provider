@@ -8,9 +8,18 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 )
+
+// profilePolicy carries the active profile's narrowing of the
+// client-authentication surface. Each nil list leaves the library
+// allow-list in force.
+type profilePolicy struct {
+	authMethods []clientauth.Method
+	signingAlgs []internaljose.Algorithm
+}
 
 // validatePolicy enforces the OP's structural rules on client metadata:
 // redirect / logout URI shape, the grant + response_type whitelists and
@@ -42,6 +51,7 @@ func validatePolicy(
 	allowLocalhostLoopback bool,
 	allowInsecureBackchannelLogoutForDev bool,
 	jwePolicy internaljose.JWEPolicy,
+	profile profilePolicy,
 ) (ClientMetadata, error) {
 	if len(m.RedirectURIs) == 0 {
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
@@ -60,15 +70,19 @@ func validatePolicy(
 		func() error {
 			return validateGrantResponseTypeConsistency(canonical.GrantTypes, canonical.ResponseTypes)
 		},
-		func() error { return validateAuthMethod(canonical.TokenEndpointAuthMethod) },
-		func() error { return validateTokenEndpointAuthSigningAlg(canonical.TokenEndpointAuthSigningAlg) },
+		func() error { return validateAuthMethod(canonical.TokenEndpointAuthMethod, profile.authMethods) },
+		func() error {
+			return validateTokenEndpointAuthSigningAlg(canonical.TokenEndpointAuthSigningAlg, profile.signingAlgs)
+		},
 		func() error { return validateSubjectType(canonical.SubjectType, pairwiseEnabled) },
 		func() error {
 			return validateSignedResponseAlg(idTokenSignedResponseSurface(), canonical.IDTokenSignedResponseAlg)
 		},
 		func() error { return validateRequestedScopes(canonical.Scope, iatScopes, scopes) },
 		func() error { return validateMetadataURIs(canonical, allowInsecureBackchannelLogoutForDev) },
-		func() error { return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg) },
+		func() error {
+			return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg, profile.signingAlgs)
+		},
 		func() error {
 			return validateRequestObjectEncryption(canonical.RequestObjectEncryptionAlg, canonical.RequestObjectEncryptionEnc, jwePolicy)
 		},
@@ -419,10 +433,15 @@ func validateGrantResponseTypeConsistency(grantTypes, responseTypes []string) er
 // validateAuthMethod rejects token_endpoint_auth_method values the
 // library does not implement (client_secret_jwt is rejected because
 // the library does not negotiate symmetric JWT algorithms) and any
-// value outside the closed set the OP advertises.
-func validateAuthMethod(m string) error {
+// value outside the closed set the OP advertises. A non-empty allowed
+// list is the active profile's restriction, the same one every runtime
+// client-authentication site enforces.
+func validateAuthMethod(m string, allowed []clientauth.Method) error {
 	switch m {
 	case "client_secret_basic", "client_secret_post", "private_key_jwt", "none":
+		if len(allowed) > 0 && !slices.Contains(allowed, clientauth.Method(m)) {
+			return errInvalidClientMetadata("token_endpoint_auth_method " + m + " is not allowed by active profile")
+		}
 		return nil
 	case "client_secret_jwt":
 		return errInvalidClientMetadata("token_endpoint_auth_method client_secret_jwt is not supported")
@@ -431,12 +450,15 @@ func validateAuthMethod(m string) error {
 	}
 }
 
-func validateTokenEndpointAuthSigningAlg(alg string) error {
+func validateTokenEndpointAuthSigningAlg(alg string, allowed []internaljose.Algorithm) error {
 	if alg == "" {
 		return nil
 	}
 	switch alg {
 	case "RS256", "PS256", "ES256", "EdDSA":
+		if !signingAlgAllowed(alg, allowed) {
+			return errInvalidClientMetadata("token_endpoint_auth_signing_alg " + alg + " is not allowed by active profile")
+		}
 		return nil
 	default:
 		return errInvalidClientMetadata("token_endpoint_auth_signing_alg " + alg + " is not supported")
@@ -841,16 +863,25 @@ func hasEncryptionKey(keys []internaljose.JWK, requestedAlg string, policy inter
 	return false
 }
 
-func validateRequestObjectSigningAlg(alg string) error {
+func validateRequestObjectSigningAlg(alg string, allowed []internaljose.Algorithm) error {
 	if alg == "" {
 		return nil
 	}
 	switch alg {
 	case "RS256", "PS256", "ES256", "EdDSA":
+		if !signingAlgAllowed(alg, allowed) {
+			return errInvalidClientMetadata("request_object_signing_alg " + alg + " is not allowed by active profile")
+		}
 		return nil
 	default:
 		return errInvalidClientMetadata("request_object_signing_alg " + alg + " is not supported")
 	}
+}
+
+// signingAlgAllowed reports whether alg is inside the profile's
+// client-signing set; an empty set admits every library-supported alg.
+func signingAlgAllowed(alg string, allowed []internaljose.Algorithm) bool {
+	return len(allowed) == 0 || slices.Contains(allowed, internaljose.Algorithm(alg))
 }
 
 // validateRequestObjectEncryption pins the JWE alg/enc the client may

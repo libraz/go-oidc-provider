@@ -15,9 +15,11 @@ import (
 // file does not depend on private fixtures from request_test.go.
 func jarmTestClient() *store.Client {
 	return &store.Client{
-		ID:           "client-1",
-		RedirectURIs: []string{"https://rp.example.com/cb"},
-		Scopes:       []string{"openid", "profile"},
+		ID:            "client-1",
+		RedirectURIs:  []string{"https://rp.example.com/cb"},
+		Scopes:        []string{"openid", "profile"},
+		GrantTypes:    []string{"authorization_code"},
+		ResponseTypes: []string{"code"},
 	}
 }
 

@@ -297,6 +297,34 @@ func TestWithAccessTokenTTL_FAPI2BaselineAcceptsAtCap(t *testing.T) {
 	}
 }
 
+func TestWithPARLifetime_FAPIProfilesRejectTenMinutesOrMore(t *testing.T) {
+	t.Parallel()
+
+	for _, ttl := range []time.Duration{600 * time.Second, 30 * time.Minute} {
+		_, err := op.New(append(validBaseOptsWithInmem(t),
+			op.WithProfile(profile.FAPI2Baseline),
+			op.WithFeature(feature.DPoP),
+			op.WithPARLifetime(ttl),
+		)...)
+		if err == nil {
+			t.Fatalf("WithPARLifetime(%s) under fapi2-baseline: expected error, got nil", ttl)
+		}
+		if !strings.Contains(err.Error(), "fapi2-baseline") || !strings.Contains(err.Error(), "WithPARLifetime") {
+			t.Errorf("err = %v, want it to name fapi2-baseline and WithPARLifetime", err)
+		}
+	}
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.DPoP),
+		op.WithPARLifetime(599*time.Second),
+	)...); err != nil {
+		t.Fatalf("WithPARLifetime(599s) under fapi2-baseline: %v", err)
+	}
+	if _, err := op.New(append(validBaseOptsWithInmem(t), op.WithPARLifetime(30*time.Minute))...); err != nil {
+		t.Fatalf("WithPARLifetime(30m) without a profile: %v", err)
+	}
+}
+
 func TestWithRefreshTokenTTL_RejectsNegative(t *testing.T) {
 	t.Parallel()
 

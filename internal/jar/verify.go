@@ -123,6 +123,7 @@ type Verifier struct {
 	allowMissJTI  bool
 	jtis          store.ConsumedJTIStore
 	maxLifetime   time.Duration
+	authorizeMode MergeMode
 }
 
 // VerifierConfig is the parameter bundle for [NewVerifier].
@@ -145,6 +146,13 @@ type VerifierConfig struct {
 	// pin in [op/store.Client.RequestObjectSigningAlg] at verification
 	// time.
 	AllowedAlgs []jose.Algorithm
+
+	// AuthorizeMergeMode is the [MergeMode] /authorize applies to a
+	// request object this verifier accepted. The zero value is
+	// [MergeOverlay] (OIDC Core §6.3.3); a FAPI profile sets
+	// [MergeObjectOnly]. /par and /bc-authorize always use
+	// [MergeObjectOnly] and do not consult it.
+	AuthorizeMergeMode MergeMode
 
 	// MaxFutureSkew overrides [DefaultMaxFutureSkew]. Zero or negative
 	// falls back to the default.
@@ -314,6 +322,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		allowMissJTI:  cfg.AllowMissingJTI,
 		jtis:          cfg.JTIs,
 		maxLifetime:   cfg.MaxLifetime,
+		authorizeMode: cfg.AuthorizeMergeMode,
 	}, nil
 }
 
@@ -327,6 +336,13 @@ func defaultAllowedAlgs() []jose.Algorithm {
 		jose.AlgES256,
 		jose.AlgEdDSA,
 	}
+}
+
+// AuthorizeMergeMode returns the [MergeMode] /authorize applies to a
+// request object this verifier accepted; see
+// [VerifierConfig.AuthorizeMergeMode].
+func (v *Verifier) AuthorizeMergeMode() MergeMode {
+	return v.authorizeMode
 }
 
 // AllowedAlgs returns the alg values the verifier accepts, sorted
@@ -728,7 +744,7 @@ func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
 		return err
 	}
 	now := v.clock.Now()
-	if err := assertExp(obj, now, v.maxLifetime); err != nil {
+	if err := assertExp(obj, now, v.expCeiling(obj)); err != nil {
 		return err
 	}
 	if err := assertNbf(obj, now, v.maxFutureSkew, v.maxLifetime, v.requireNbf); err != nil {
@@ -738,6 +754,23 @@ func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
 		return err
 	}
 	return nil
+}
+
+// expCeiling returns how far in the future "exp" may lie. A configured
+// MaxLifetime governs when set. Otherwise an object without "iat" is held
+// to the max-age window: nothing else bounds how long it stays
+// acceptable, and [jtiExpiry] retains its replay marker for no longer
+// than that window, so a later exp would outlive the marker. Zero means
+// unbounded, which is safe only because "iat" then bounds acceptance to
+// the same window.
+func (v *Verifier) expCeiling(obj *Object) time.Duration {
+	if v.maxLifetime > 0 {
+		return v.maxLifetime
+	}
+	if _, ok := claimSeconds(obj.Claims, "iat"); !ok {
+		return v.maxAge
+	}
+	return 0
 }
 
 const requestObjectType = "oauth-authz-req+jwt"
@@ -815,11 +848,11 @@ func assertAudience(obj *Object, issuer string) error {
 
 // assertExp enforces a non-empty "exp" claim that has not already
 // passed. The verifier does not apply a skew tolerance here: an "exp"
-// in the past is unambiguous. When maxLifetime is positive (FAPI 2.0
-// Message Signing §5.6 imposes a 60-minute cap) the function additionally
-// rejects request objects whose "exp" lies further in the future than
-// that — the strict ceiling matches the OFCS conformance test
-// "ensure-request-object-with-exp-over-60-fails".
+// in the past is unambiguous. When maxLifetime is positive (see
+// [Verifier.expCeiling]; FAPI 2.0 Message Signing §5.6 imposes a
+// 60-minute cap) the function additionally rejects request objects whose
+// "exp" lies further in the future than that — the strict ceiling matches
+// the OFCS conformance test "ensure-request-object-with-exp-over-60-fails".
 func assertExp(obj *Object, now time.Time, maxLifetime time.Duration) error {
 	exp, ok := claimSeconds(obj.Claims, "exp")
 	if !ok {

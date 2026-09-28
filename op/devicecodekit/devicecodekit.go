@@ -130,6 +130,13 @@ var (
 	// cannot bypass a locked ceremony.
 	ErrAttemptLocked = errors.New("devicecodekit: manual-entry attempt locked")
 
+	// ErrAttemptLimiterSaturated is returned by the built-in in-memory
+	// [AttemptLimiter] for a key it is not yet tracking once it already
+	// holds [DefaultMaxAttemptKeys] live keys. It is an overload signal,
+	// not a verdict on that key: no attempt was charged, and the caller
+	// may retry once earlier ceremonies expire.
+	ErrAttemptLimiterSaturated = errors.New("devicecodekit: manual-entry attempt limiter saturated")
+
 	// ErrMissingRevocationBackend is returned by [Revoke] when the
 	// selected JWT revocation strategy has no configured persistence
 	// backend. Revoke has already made the device authorization
@@ -238,7 +245,8 @@ type Deps struct {
 }
 
 // AttemptLimiter atomically charges an opaque manual-entry key. Allow returns
-// false without an error when the key is at capacity. Reset is an explicit
+// false without an error only when that key has spent its own budget; a
+// limiter that cannot take a new key reports that as an error instead. Reset is an explicit
 // ceremony-owner operation; VerifyUserCodeByAttemptKey does not call it
 // because a valid code alone does not authenticate ownership of the opaque
 // key. Implementations backed by a distributed store should make Allow a
@@ -341,12 +349,12 @@ func (l *InMemoryAttemptLimiter) Allow(ctx context.Context, attemptKey string) (
 	l.evictExpiredLocked(now)
 	entry, exists := l.attempts[attemptKey]
 	if !exists && len(l.attempts) >= l.maxKeys {
-		// Fail closed when the local key budget is exhausted. A distributed
-		// limiter can choose a different bounded policy; this fallback must
-		// never grow in response to caller-controlled key material. Expired
-		// ceremonies were evicted above, so a key can become available again
-		// without an unbounded active-key eviction policy.
-		return false, nil
+		// Fail closed when the local key budget is exhausted, but with an
+		// overload error rather than a lock verdict: this key has no strikes.
+		// Evicting a live key instead would let a flood of fresh keys reset a
+		// locked key's budget. Expired ceremonies were evicted above, so a
+		// key can become available again.
+		return false, ErrAttemptLimiterSaturated
 	}
 	if exists && entry.strikes >= l.max {
 		return false, nil
@@ -576,7 +584,9 @@ func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, s
 // limiter key. Allow is charged before normalization and before the store
 // lookup, so malformed and unknown codes consume the same budget as valid
 // guesses. A key at capacity returns [ErrAttemptLocked], even when the next
-// code is correct, while a different key has an independent budget.
+// code is correct, while a different key has an independent budget. A limiter
+// error is returned as is; the built-in limiter reports running out of room
+// for new keys as [ErrAttemptLimiterSaturated].
 //
 // A successful normalized lookup and constant-time comparison still consume
 // the current key's charge. The helper cannot prove that an opaque key is an

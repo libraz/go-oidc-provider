@@ -73,9 +73,8 @@ var (
 	// when the resend rate limit is hit: either the previous send
 	// happened too recently (per [resendMinInterval]) or the rolling
 	// window cap has been reached (per [resendWindow] /
-	// [resendWindowCap]). The orchestrator surfaces it as a soft
-	// retryable failure (the SPA shows "please wait before
-	// requesting another code") rather than a chain-fatal error.
+	// [resendWindowCap]). It wraps [authn.ErrFactorAbort], so the
+	// interaction ends with a terminal 400 rather than a re-prompt.
 	ErrTooManyOutstanding = fmt.Errorf("emailotp: too many outstanding send attempts: %w", authn.ErrFactorAbort)
 
 	// ErrRetry is returned by [Authenticator.Continue] on a recoverable
@@ -519,8 +518,8 @@ func (a *Authenticator) loadPriorRecord(ctx context.Context, subject string) (*s
 //
 // A nil prior record (first send for the subject) passes both gates
 // trivially. Both gates surface as [ErrTooManyOutstanding] so the SPA
-// renders a single error message; the orchestrator surfaces it as a
-// soft retryable failure rather than a chain-fatal error.
+// renders a single error message; it is a terminal factor abort (400),
+// not a re-prompt.
 func (a *Authenticator) checkResendRate(prior *store.EmailOTPRecord, now time.Time) error {
 	if prior == nil {
 		return nil

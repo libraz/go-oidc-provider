@@ -105,14 +105,15 @@ func appendNonNil(branches ...branchFn) []branchFn {
 	return out
 }
 
-// revokeJWT verifies token as a JWT-formatted access token and
-// acknowledges the revocation when the embedded "client_id" matches
-// the authenticated client. The acknowledgement is a no-op: v1.0
-// does not maintain an access-token denylist, and the JWT will
-// expire on its own at "exp". The bool return reports a successful
-// acknowledgement so [revokeToken] can stop searching; false means
-// the verifier rejected the token (or same-client-only failed) and
-// the caller MUST fall through.
+// revokeJWT verifies token as a JWT-formatted access token and, when
+// the embedded "client_id" matches the authenticated client, persists
+// the revocation as a per-JTI denylist row (the GrantTombstone
+// strategy's default) or a registry row (JTIRegistry), so a
+// subsequent verify rejects the token before its own "exp" elapses.
+// The bool return reports a successful acknowledgement so
+// [revokeToken] can stop searching; false means the verifier rejected
+// the token (or same-client-only failed) and the caller MUST fall
+// through.
 func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerifier, authenticatedClientID, token string) bool {
 	claims, _, err := verifier.Verify(ctx, token)
 	if err != nil {
@@ -183,10 +184,17 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 	// at /revoke matches the stored ID). Either shape passes
 	// through this lookup unchanged.
 	rec, err := deps.RefreshTokens.Find(ctx, token)
-	if err != nil || rec == nil {
-		// ErrNotFound and any other store error collapse onto a
-		// silent miss: RFC 7009 §2.2 forbids leaking which
-		// sub-class produced the rejection.
+	if err != nil {
+		// RFC 7009 §2.2 forbids leaking which sub-class produced the
+		// rejection, so the wire response still collapses onto a
+		// silent miss; a non-ErrNotFound fault still needs to reach
+		// the audit channel so a store brown-out that leaves the
+		// token live is not reported as a successful revoke
+		// ([emitRevokeFailed] no-ops on ErrNotFound itself).
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_token_lookup", err)
+		return false
+	}
+	if rec == nil {
 		return false
 	}
 	if rec.ClientID != authenticatedClientID {
@@ -195,7 +203,7 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 		// sees the same 200 a legitimate revoker would.
 		return false
 	}
-	rootID, ok := findChainRoot(ctx, deps, rec.ID)
+	rootID, ok := findChainRoot(ctx, deps, authenticatedClientID, rec.ID)
 	if !ok {
 		return false
 	}
@@ -280,10 +288,15 @@ func revokeNow(deps Deps) time.Time {
 // legitimate revoker would.
 func revokeOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClientID, token string) bool {
 	rec, err := deps.OpaqueAccessTokens.Find(ctx, token)
-	if err != nil || rec == nil {
-		// ErrNotFound and any other store error collapse onto a
-		// silent miss so the caller can fall through to the
-		// refresh-token branch without leaking metadata.
+	if err != nil {
+		// See [revokeOpaque]'s RefreshTokens.Find branch: the wire
+		// response still falls through to the refresh-token branch
+		// without leaking metadata, but a non-ErrNotFound fault must
+		// reach the audit channel.
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "opaque_access_token_lookup", err)
+		return false
+	}
+	if rec == nil {
 		return false
 	}
 	if rec.ClientID != authenticatedClientID {
@@ -364,7 +377,14 @@ func emitRevokeFailed(ctx context.Context, deps Deps, clientID, surface string, 
 
 // findChainRoot follows parent pointers from startID up to the chain's root,
 // using the shared refreshchain helper so /revoke and the refresh-token grant
-// honour the same ParentID round-trip contract.
-func findChainRoot(ctx context.Context, deps Deps, startID string) (string, bool) {
-	return refreshchain.FindRoot(ctx, deps.RefreshTokens, startID, chainWalkLimit)
+// honour the same ParentID round-trip contract. A store fault on resolving
+// startID itself (as opposed to an ordinary miss) is audited here before the
+// caller's existing false-return path runs, so a lookup fault at this step
+// is no longer silently indistinguishable from a legitimate empty walk.
+func findChainRoot(ctx context.Context, deps Deps, authenticatedClientID, startID string) (string, bool) {
+	rootID, ok, err := refreshchain.FindRoot(ctx, deps.RefreshTokens, startID, chainWalkLimit)
+	if err != nil {
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain_walk", err)
+	}
+	return rootID, ok
 }

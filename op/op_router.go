@@ -76,7 +76,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if err != nil {
 		return nil, err
 	}
-	jarVerifier, err := buildJARVerifier(cfg, encSet)
+	jarVerifiers, err := buildJARVerifiers(cfg, encSet)
 	if err != nil {
 		return nil, err
 	}
@@ -195,17 +195,17 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		})),
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)
-	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifier, strictCORS)
+	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifiers.CIBA, strictCORS)
 	// The interaction mount is deliberately not handed strictCORS: its
 	// routes run on the narrower ceremony allowlist.
 	sessMgr, err := mountAuthorizeHandlers(
-		mux, cfg, scopes, keySet, encResolver, jarVerifier, locales, proxyTrust,
+		mux, cfg, scopes, keySet, encResolver, jarVerifiers.Authorize, locales, proxyTrust,
 		interactionOrigins, ceremonyCORS,
 	)
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, scopes, jarVerifier, assertionVerifiers.PAR, dpopVerifier, strictCORS); err != nil {
+	if err := mountPAREndpoint(mux, cfg, scopes, jarVerifiers.Authorize, assertionVerifiers.PAR, dpopVerifier, strictCORS); err != nil {
 		return nil, err
 	}
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
@@ -380,6 +380,8 @@ func mountRegistrationEndpoint(
 		AllowLocalhostLoopback:               cfg.allowLocalhostLoopback,
 		AllowInsecureBackchannelLogoutForDev: cfg.allowInsecureBackchannelLogoutForDev,
 		JWEPolicy:                            cfg.jwePolicy(),
+		AllowedClientAuthMethods:             cfg.allowedClientAuthMethods(),
+		AllowedClientSigningAlgs:             cfg.clientSigningJOSEAlgs(),
 		SectorResolver:                       buildSectorResolver(cfg),
 		ValidateMetadata:                     wrapValidateMetadata(cfg.dcr.ValidateMetadata),
 		Logger:                               cfg.logger,
@@ -403,9 +405,9 @@ func mountRegistrationEndpoint(
 // gates the advertisement on the same flag, so the OP cannot tell clients
 // the endpoint exists while quietly serving 404.
 //
-// The JAR verifier is built once at the router scope so /par,
-// /authorize, and /bc-authorize share the same instance (one JTI
-// replay-defence pool, one HTTP-fetch client, one resolver cache).
+// The JAR verifier is built once at the router scope (see
+// [buildJARVerifiers]) and /par shares the /authorize instance; the
+// /bc-authorize verifier shares its JTI store and resolver cache.
 // A nil verifier signals that [feature.JAR] is off; the PAR handler
 // surfaces invalid_request_object for any inbound request that
 // carries a "request" parameter.
@@ -535,8 +537,8 @@ func mountRevocationEndpoint(
 // because no name in this function is bound to it.
 //
 // The JAR verifier is built once at the router scope (see
-// [buildRouter]) so /par, /authorize, and /bc-authorize share the
-// same instance. A nil verifier signals that [feature.JAR] is off;
+// [buildJARVerifiers]) and /par shares the same instance. A nil
+// verifier signals that [feature.JAR] is off;
 // the authorize handler treats it as "request_uri / request not
 // supported" rather than panicking.
 func mountAuthorizeHandlers(
@@ -790,8 +792,9 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 // any residual misconfiguration surfaces as 500 server_error rather
 // than a nil-interface panic.
 //
-// The JAR verifier is built once at the router scope so /par,
-// /authorize, and /bc-authorize share the same instance. A nil
+// The JAR verifier is the /bc-authorize use built by
+// [buildJARVerifiers]: it shares the JTI store and resolver cache with
+// the /authorize one but carries the FAPI-CIBA jti/iat MUSTs. A nil
 // verifier signals that [feature.JAR] is off; the cibaendpoint
 // handler surfaces invalid_request_object for any inbound request
 // that carries a "request" parameter, and rejects requests under

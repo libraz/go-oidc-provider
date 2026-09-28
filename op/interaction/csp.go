@@ -45,7 +45,10 @@ var ErrCSPNotPermitted = errors.New("interaction: content security policy direct
 //
 // A missing frame-ancestors or base-uri is appended rather than
 // rejected; every other directive is passed through untouched, in the
-// order given.
+// order given. A comma, a control character or a non-ASCII byte is
+// rejected: the header grammar reads a comma as the start of another,
+// independent policy the checks above would never see, and the others
+// make a browser read a directive differently from this parser.
 //
 // Relaxing script-src (directly or through default-src) is permitted
 // and carries a real cost worth stating: the interaction page holds the
@@ -58,6 +61,12 @@ func NormalizeCSP(policy string) (string, error) {
 	if strings.TrimSpace(policy) == "" {
 		return defaultCSP, nil
 	}
+	if strings.Contains(policy, ",") {
+		return "", fmt.Errorf("%w: a comma starts a separate policy", ErrCSPNotPermitted)
+	}
+	if strings.IndexFunc(policy, outsideCSPGrammar) >= 0 {
+		return "", fmt.Errorf("%w: policy contains a character outside the CSP grammar", ErrCSPNotPermitted)
+	}
 	var (
 		directives         []string
 		haveFrameAncestors bool
@@ -68,25 +77,14 @@ func NormalizeCSP(policy string) (string, error) {
 		if directive == "" {
 			continue
 		}
-		fields := strings.Fields(directive)
-		name := strings.ToLower(fields[0])
-		values := fields[1:]
-		switch name {
-		case "form-action":
-			return "", fmt.Errorf(
-				"%w: form-action is applied to redirect targets and would block the "+
-					"cross-origin redirect that completes a successful consent",
-				ErrCSPNotPermitted,
-			)
-		case "frame-ancestors":
-			if !isNoneOnly(values) {
-				return "", fmt.Errorf("%w: frame-ancestors must be 'none'", ErrCSPNotPermitted)
-			}
+		isFrameAncestors, isBaseURI, err := classifyDirective(directive)
+		if err != nil {
+			return "", err
+		}
+		if isFrameAncestors {
 			haveFrameAncestors = true
-		case "base-uri":
-			if !isNoneOnly(values) {
-				return "", fmt.Errorf("%w: base-uri must be 'none'", ErrCSPNotPermitted)
-			}
+		}
+		if isBaseURI {
 			haveBaseURI = true
 		}
 		directives = append(directives, directive)
@@ -105,6 +103,43 @@ func NormalizeCSP(policy string) (string, error) {
 		directives = append(directives, "base-uri 'none'")
 	}
 	return strings.Join(directives, "; "), nil
+}
+
+// classifyDirective validates one semicolon-separated directive against
+// the three protections [NormalizeCSP] does not let an embedder relax,
+// and reports whether it is frame-ancestors or base-uri so the caller
+// can track which of those still need appending. Extracted from
+// NormalizeCSP's loop so the loop body stays under the linter's
+// cognitive-complexity budget; behavior is unchanged.
+func classifyDirective(directive string) (isFrameAncestors, isBaseURI bool, err error) {
+	fields := strings.Fields(directive)
+	name := strings.ToLower(fields[0])
+	values := fields[1:]
+	switch name {
+	case "form-action":
+		return false, false, fmt.Errorf(
+			"%w: form-action is applied to redirect targets and would block the "+
+				"cross-origin redirect that completes a successful consent",
+			ErrCSPNotPermitted,
+		)
+	case "frame-ancestors":
+		if !isNoneOnly(values) {
+			return false, false, fmt.Errorf("%w: frame-ancestors must be 'none'", ErrCSPNotPermitted)
+		}
+		return true, false, nil
+	case "base-uri":
+		if !isNoneOnly(values) {
+			return false, false, fmt.Errorf("%w: base-uri must be 'none'", ErrCSPNotPermitted)
+		}
+		return false, true, nil
+	}
+	return false, false, nil
+}
+
+// outsideCSPGrammar reports whether r cannot appear in a single
+// serialized policy: anything but space, tab and printable ASCII.
+func outsideCSPGrammar(r rune) bool {
+	return r != ' ' && r != '\t' && (r < 0x21 || r > 0x7e)
 }
 
 // isNoneOnly reports whether a directive's source list is exactly

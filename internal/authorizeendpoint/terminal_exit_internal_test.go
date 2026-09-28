@@ -425,14 +425,12 @@ func TestInteractionExitNamesTheRoute(t *testing.T) {
 
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
 		"https://op.example.com/interaction/i-1", http.NoBody)
-	rec := &store.Interaction{ID: "i-1", ClientID: "client-1"}
-	req := &authorize.Request{ClientID: "client-1", Scope: []string{"openid"}}
 
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
 			kind, backing := interactionExit(
-				r, terminalDeps(nil), rec, req, row.state, "user-1", terminalNow,
+				r, terminalDeps(nil), row.state, "user-1", terminalNow,
 			)
 			if kind != row.want {
 				t.Errorf("interactionExit = %s, want %s", kind, row.want)

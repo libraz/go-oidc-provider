@@ -69,11 +69,15 @@ var (
 	// private destination.
 	ErrSectorRedirectFollowed = errors.New("sector: refused to follow redirect")
 
-	// ErrSectorContentChanged signals the cache held an entry whose
-	// SHA-256 hash differs from the freshly fetched document. The
-	// surface lets operators distinguish a deliberate RP rotation
-	// from a sector hijack; the resolver does not auto-promote the
-	// new content.
+	// ErrSectorContentChanged signals that a just-expired cache entry's
+	// SHA-256 hash differs from the freshly fetched document, so this
+	// one Resolve call fails rather than silently switching to
+	// unverified content. The mismatch itself is not cached (see
+	// [New]'s ShouldCacheError), and the expired entry is already gone
+	// by the time the fetch runs, so the very next Resolve call has no
+	// stale entry to compare against and adopts the new content — a
+	// legitimate RP rotation recovers on the next request with no
+	// operator action.
 	ErrSectorContentChanged = errors.New("sector: document hash differs from cached value")
 
 	// ErrSectorRedirectMissing signals one or more of the client's

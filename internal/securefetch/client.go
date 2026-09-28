@@ -151,19 +151,14 @@ type Policy struct {
 	// inheritance.
 	Proxy func(*http.Request) (*url.URL, error)
 
-	// CheckRedirect overrides the [http.Client.CheckRedirect] hook
-	// installed on the underlying client. Production callers leave
-	// this nil so the [netsec.NewHTTPClient] default applies (every
-	// redirect is refused via [http.ErrUseLastResponse], at which
-	// point the response-side status gate surfaces the 3xx as a
-	// failure). The sector_identifier_uri resolver overrides the
-	// hook to surface a sentinel error instead of a 3xx so callers
-	// can distinguish "redirect refused" from "upstream returned
-	// 3xx" via [errors.Is].
-	//
-	// Embedders that supply a hook MUST NOT bypass [Policy.MaxRedirects];
-	// the hook is invoked per redirect, not in place of the cap, so a
-	// hook that returns nil is bounded by the policy's redirect budget.
+	// CheckRedirect is an extra redirect veto layered on the envelope's
+	// own redirect gate; it never replaces it. The gate runs first and
+	// refuses any redirect over [Policy.MaxRedirects] or to a
+	// deny-listed target whatever the hook returns; a non-nil hook
+	// return then refuses a redirect the gate would have allowed or
+	// sharpens the gate's plain refusal (the sector_identifier_uri
+	// resolver surfaces a sentinel instead of the 3xx this way). See
+	// [netsec.Options.CheckRedirect].
 	CheckRedirect func(req *http.Request, via []*http.Request) error
 
 	// httpClientOverride lets tests inject a fully-formed [*http.Client]
@@ -201,6 +196,7 @@ func (p Policy) netsecOptions() netsec.Options {
 		DialControlHook: p.DialControlHook,
 		DialTimeout:     p.DialTimeout,
 		Proxy:           p.Proxy,
+		CheckRedirect:   p.CheckRedirect,
 	}
 }
 
@@ -239,11 +235,9 @@ func NewClient(p Policy) *Client {
 	c := &Client{policy: p}
 	if p.httpClientOverride != nil {
 		c.http = p.httpClientOverride
+		c.http.CheckRedirect = netsec.CheckRedirect(p.netsecOptions())
 	} else {
 		c.http = netsec.NewHTTPClient(p.netsecOptions())
-	}
-	if p.CheckRedirect != nil {
-		c.http.CheckRedirect = p.CheckRedirect
 	}
 	return c
 }

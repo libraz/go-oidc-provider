@@ -15,6 +15,13 @@ import (
 // PKCE verifier and the redirect URI the caller replays at /token.
 func seedPlainOAuthCode(tb testing.TB, f *fixture, client *store.Client, codeID, grantID string) (verifier, redirect string) {
 	tb.Helper()
+	// /authorize only issues codes within the client's registered Scopes,
+	// and redemption re-applies them, so the plain OAuth scope has to be
+	// part of the registration.
+	client.Scopes = append(client.Scopes, "api:read")
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		tb.Fatalf("UpdateClient: %v", err)
+	}
 	verifier, challenge := pkcePair()
 	redirect = client.RedirectURIs[0]
 	f.seedGrant(tb, &store.Grant{

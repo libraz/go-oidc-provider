@@ -12,6 +12,13 @@ import "context"
 // is more correct than the others — which is why this is a seam rather
 // than a built-in rule.
 //
+// Resolve runs for every response, including one served from an
+// existing session without a new ceremony. There internal is the level
+// the session recorded, [LoginContext.CompletedSteps] is empty, and the
+// verdict is for the requesting client alone: a session records the
+// canonical acr of the level it reached ([AAL.ACRURI]), never an acr an
+// earlier request drew from the policy.
+//
 // The library default is [DefaultACRPolicy], which echoes the first
 // requested acr_values entry whenever the ceremony reached at least
 // [AAL1]. Embedders that need a stricter mapping (e.g. a NIST SP

@@ -294,9 +294,10 @@ func (r *Resolver) Available() []Locale {
 // Message looks up key in locale's merged message catalogue. An exact
 // registered locale wins, followed by its registered language subtag (for
 // example, "ja-JP" uses "ja"). If that bundle does not contain key, the
-// configured default locale is consulted. The boolean is false when neither
-// bundle defines key; callers can then apply a surface-specific fallback
-// without displaying an internal message key.
+// configured default locale's chain is consulted, and finally the library's
+// English catalogue. The boolean is false only when none of those bundles
+// defines key; callers can then apply a surface-specific fallback without
+// displaying an internal message key.
 //
 // Values in data replace matching "{name}" placeholders. Unknown
 // placeholders remain visible verbatim, and substituted values are treated as

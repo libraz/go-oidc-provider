@@ -116,6 +116,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 		deps.AllowLocalhostLoopback,
 		deps.AllowInsecureBackchannelLogoutForDev,
 		deps.JWEPolicy,
+		deps.profilePolicy(),
 	)
 	if err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, "")

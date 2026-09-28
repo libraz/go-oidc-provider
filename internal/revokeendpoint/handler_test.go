@@ -313,8 +313,9 @@ func TestHandler_MissingTokenParam(t *testing.T) {
 
 // TestHandler_JWTAccessToken_Active acknowledges a valid JWT-
 // formatted access token with HTTP 200 + empty body. The
-// acknowledgement is a no-op (v1.0 does not maintain a denylist),
-// but the response still confirms receipt.
+// acknowledgement also persists a per-JTI denylist / registry row
+// (see [revokeJWT]) so a subsequent verify rejects the token before
+// its own "exp"; this test only pins the wire response shape.
 func TestHandler_JWTAccessToken_Active(t *testing.T) {
 	t.Parallel()
 

@@ -185,6 +185,31 @@ func TestMaxAccessTokenTTL(t *testing.T) {
 	}
 }
 
+func TestPARLifetimeCeiling(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want time.Duration
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, 600 * time.Second},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, 600 * time.Second},
+		{"fapi-ciba", profile.FAPICIBA, 600 * time.Second},
+		{"baseline", profile.Baseline, 0},
+		{"zero", profile.Profile(0), 0},
+		{"unknown", profile.Profile(99), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := profile.PARLifetimeCeiling(tc.in); got != tc.want {
+				t.Errorf("PARLifetimeCeiling(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestMaxRequestObjectAge pins the request-object age cap each profile
 // carries. The FAPI family grants a 60-minute validity window
 // (FAPI 2.0 Message Signing §5.6); a verifier left on its own, shorter
@@ -255,6 +280,36 @@ func TestAllowedClientAuthMethods(t *testing.T) {
 			t.Error("AllowedClientAuthMethods returned aliased slice; mutation leaked across calls")
 		}
 	})
+}
+
+func TestAllowedClientSigningAlgs(t *testing.T) {
+	t.Parallel()
+
+	// FAPI 2.0 Security Profile §5.4.1: RS256 (PKCS#1 v1.5) is outside
+	// the set on every FAPI profile.
+	fapiAllowed := []string{"PS256", "ES256", "EdDSA"}
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want []string
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, fapiAllowed},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, fapiAllowed},
+		{"fapi-ciba", profile.FAPICIBA, fapiAllowed},
+		{"baseline", profile.Baseline, nil},
+		{"zero", profile.Profile(0), nil},
+		{"unknown", profile.Profile(99), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := profile.AllowedClientSigningAlgs(tc.in)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("AllowedClientSigningAlgs(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestRequiresNonce(t *testing.T) {

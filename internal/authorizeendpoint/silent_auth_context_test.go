@@ -28,12 +28,14 @@ func TestEndToEnd_SilentMint_IDTokenCarriesSessionAuthContext(t *testing.T) {
 	const subject = "user-silent-authctx"
 	ctx := context.Background()
 
-	// Pass 1: interactive login binds the session at acr "1", auth_time now.
+	// Pass 1: interactive login binds the session at AAL1, auth_time now.
+	// The request names the level's canonical URI, which is what the
+	// session records and what a silent pass is matched against.
 	first := f.values()
-	first.Set("acr_values", "1")
+	first.Set("acr_values", bronzeACR)
 	claims1 := f.exchange(t, f.completeLogin(t, f.authorize(t, first), subject))
-	if got, _ := claims1["acr"].(string); got != "1" {
-		t.Fatalf("first pass id_token acr=%q want 1", got)
+	if got, _ := claims1["acr"].(string); got != bronzeACR {
+		t.Fatalf("first pass id_token acr=%q want %s", got, bronzeACR)
 	}
 	if got := idTokenAuthTime(t, claims1); got != now.Unix() {
 		t.Fatalf("first pass id_token auth_time=%d want %d", got, now.Unix())
@@ -56,7 +58,7 @@ func TestEndToEnd_SilentMint_IDTokenCarriesSessionAuthContext(t *testing.T) {
 	// now) but not by the rewritten grant, and the scope is covered, so
 	// the request is served silently.
 	second := f.values()
-	second.Set("acr_values", "1")
+	second.Set("acr_values", bronzeACR)
 	second.Set("max_age", "3600")
 	loc := f.authorize(t, second)
 	code := loc.Query().Get("code")
@@ -69,8 +71,8 @@ func TestEndToEnd_SilentMint_IDTokenCarriesSessionAuthContext(t *testing.T) {
 		t.Errorf("silent mint id_token auth_time=%d want %d (the session's authentication, not the grant's)",
 			got, now.Unix())
 	}
-	if got, _ := claims2["acr"].(string); got != "1" {
-		t.Errorf("silent mint id_token acr=%q want 1 (the session's context, not the grant's)", got)
+	if got, _ := claims2["acr"].(string); got != bronzeACR {
+		t.Errorf("silent mint id_token acr=%q want %s (the session's context, not the grant's)", got, bronzeACR)
 	}
 	if raw, ok := claims2["amr"]; ok {
 		values, _ := raw.([]any)
@@ -90,8 +92,8 @@ func TestEndToEnd_SilentMint_IDTokenCarriesSessionAuthContext(t *testing.T) {
 	if !reloaded.AuthTime.Equal(now) {
 		t.Errorf("grant AuthTime=%v want %v", reloaded.AuthTime, now)
 	}
-	if reloaded.ACR != "1" {
-		t.Errorf("grant ACR=%q want 1", reloaded.ACR)
+	if reloaded.ACR != bronzeACR {
+		t.Errorf("grant ACR=%q want %s", reloaded.ACR, bronzeACR)
 	}
 	if len(reloaded.AMR) != 0 {
 		t.Errorf("grant AMR=%v want empty (the session records none)", reloaded.AMR)

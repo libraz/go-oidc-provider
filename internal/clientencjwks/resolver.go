@@ -62,9 +62,10 @@ type Config struct {
 	// BaseTransport overrides the [http.RoundTripper] base inside
 	// the SSRF-hardened client. Production callers leave it nil; a
 	// caller that already maintains an instrumented transport
-	// (otelhttp wrap, custom dial pool) injects it here. The SSRF
-	// dial hook is reinstalled on the supplied transport so the
-	// deny-list still fires regardless.
+	// (otelhttp wrap, custom dial pool) injects it here. A
+	// [*http.Transport] is cloned with its dial hooks replaced by the
+	// dial-time SSRF gate; any other RoundTripper gets the URL-time
+	// gate only. See [netsec.Options.BaseTransport].
 	BaseTransport http.RoundTripper
 
 	// Policy narrows the (alg, enc) pairs this resolver will build a

@@ -147,9 +147,14 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	if batch == nil {
 		return interaction.Step{}, store.ErrNotFound
 	}
-	remaining, err := a.lockout.RemainingAttempts(ctx, in.Subject)
-	if err != nil {
-		return interaction.Step{}, fmt.Errorf("recovery: lockout budget: %w", err)
+	// Without the cross-factor counter nothing locks this factor, so no
+	// count is known and zero is reported.
+	remaining := 0
+	if a.lockout != nil {
+		remaining, err = a.lockout.RemainingAttempts(ctx, in.Subject)
+		if err != nil {
+			return interaction.Step{}, fmt.Errorf("recovery: lockout budget: %w", err)
+		}
 	}
 	return interaction.Step{Prompt: a.prompt(remaining)}, nil
 }

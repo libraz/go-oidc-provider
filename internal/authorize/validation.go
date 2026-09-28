@@ -11,9 +11,52 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/pkce"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// ValidateEffectiveRequest builds the effective request for client and
+// validates it. It is the single admission path the authorization and
+// pushed-authorization-request endpoints share, so neither can accept a
+// request the other would refuse.
+//
+// The client's DefaultMaxAge and DefaultACRValues are backfilled onto req
+// in place when the request omits them, before anything is checked, so
+// the backfilled values face the same gates as wire values. [Validate]
+// then runs, followed by the acr_values_supported gate
+// ([UnsupportedACRValue]) against acrValuesSupported. Every error is an
+// [*Error]; [IsRedirectSafe] classifies it.
+func (req *Request) ValidateEffectiveRequest(
+	client *store.Client,
+	scopes *scoperegistry.Registry,
+	policy Policy,
+	acrValuesSupported []string,
+) error {
+	req.applyClientDefaults(client)
+	if err := req.Validate(client, scopes, policy); err != nil {
+		return err
+	}
+	if value, unsupported := req.UnsupportedACRValue(acrValuesSupported); unsupported {
+		return acrValueUnsupported(value)
+	}
+	return nil
+}
+
+// applyClientDefaults copies the client's DefaultMaxAge and
+// DefaultACRValues onto req where the request left them unset.
+func (req *Request) applyClientDefaults(client *store.Client) {
+	if client == nil {
+		return
+	}
+	if req.MaxAge == nil && client.DefaultMaxAge != nil {
+		v := *client.DefaultMaxAge
+		req.MaxAge = &v
+	}
+	if len(req.ACRValues) == 0 && len(client.DefaultACRValues) > 0 {
+		req.ACRValues = append([]string(nil), client.DefaultACRValues...)
+	}
+}
 
 // Validate cross-checks the parsed [Request] against the registered client
 // and the OP's policy. The order is deliberate: client_id and redirect_uri
@@ -38,6 +81,9 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 		return err
 	}
 	if err := req.validateResponseType(); err != nil {
+		return err
+	}
+	if err := req.validateClientRegistration(client); err != nil {
 		return err
 	}
 	if err := req.validateResponseMode(); err != nil {
@@ -167,6 +213,22 @@ func isWildcardLoopbackHost(host string) bool {
 func (req *Request) validateResponseType() error {
 	if req.ResponseType != "code" {
 		return ErrResponseTypeUnsupported
+	}
+	return nil
+}
+
+// validateClientRegistration rejects a client that is not registered for
+// the flow the request starts: the authorization_code grant and the
+// requested response_type. Failing here, before any login or consent,
+// keeps /token from being the first gate to refuse the resulting code;
+// the device-authorization and backchannel-authentication endpoints gate
+// their own grants the same way.
+func (req *Request) validateClientRegistration(client *store.Client) error {
+	if !slices.Contains(client.GrantTypes, grant.AuthorizationCode.String()) {
+		return ErrClientGrantNotPermitted
+	}
+	if !slices.Contains(client.ResponseTypes, req.ResponseType) {
+		return ErrClientResponseTypeNotPermitted
 	}
 	return nil
 }

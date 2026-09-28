@@ -61,6 +61,8 @@ func (c *config) startupProfileExtras() map[string]any {
 		"signed_backchannel_request_required": c.requireSignedBackchannelRequest(),
 		"jarm_required":                       c.requireJARMResponseMode(),
 		"signed_introspection_required":       c.requireSignedIntrospection(),
+
+		"insecure_backchannel_logout_for_dev": c.allowInsecureBackchannelLogoutForDev,
 	}
 }
 

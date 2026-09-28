@@ -471,3 +471,55 @@ func (s faultingAudienceStore) ListClientIDsBySubject(
 ) (store.GrantClientPage, error) {
 	return store.GrantClientPage{}, s.err
 }
+
+// TestCoordinator_NotifyClientDeletedIsBoundedByBudget pins that the
+// synchronous client-deletion fan-out ends within the same budget the
+// detached path uses: the deliverer here waits for its context and
+// nothing else, so without the budget the call — and the DELETE request
+// behind it — would never return. The budget is set below scheduling
+// granularity so the test asserts an outcome, not a duration.
+func TestCoordinator_NotifyClientDeletedIsBoundedByBudget(t *testing.T) {
+	t.Parallel()
+	deliver := backchannel.DelivererFunc(func(ctx context.Context, _ backchannel.Target, _ string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	_, signing := mustKey(t)
+	st := inmem.New()
+	rec := &recordingEmitter{}
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:       "https://op.example.com",
+		Signing:      signing,
+		Clients:      st.Clients(),
+		Grants:       st.Grants().(store.GrantClientLister),
+		Deliverer:    deliver,
+		Emitter:      rec,
+		Clock:        fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
+		FanOutBudget: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = coord.NotifyClientDeleted(context.Background(), backchannel.ClientDeletionSnapshot{
+			Client:   &store.Client{ID: "rp-deleted", BackchannelLogoutURI: "https://rp-deleted.example/logout"},
+			Subjects: []string{"user-a", "user-b"},
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(drainTimeout):
+		t.Fatal("NotifyClientDeleted did not return while the relying party hung; the fan-out budget is not applied")
+	}
+
+	ev := findEvent(rec.snapshot(), "logout.back_channel.failed")
+	if ev == nil {
+		t.Fatalf("abandoned delivery not audited: %#v", rec.snapshot())
+	}
+	if got, _ := ev.Extras["error"].(string); !strings.Contains(got, context.DeadlineExceeded.Error()) {
+		t.Errorf("failure event error=%q does not name the elapsed budget", got)
+	}
+}

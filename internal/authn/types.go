@@ -36,9 +36,16 @@ const (
 	PhaseAuthn
 
 	// PhaseAfterAuthn is the stage between the last factor and the
-	// chain terminating. The orchestrator inserts every pending
-	// [TriggerAfterAuthn] interaction here.
+	// token-gate stage. The orchestrator inserts every pending
+	// [TriggerAfterAuthn] interaction here, the built-in consent
+	// interaction first.
 	PhaseAfterAuthn
+
+	// PhaseBeforeToken is the stage between consent and the chain
+	// terminating. The orchestrator inserts every pending
+	// [TriggerBeforeToken] interaction here, so none of them can be
+	// skipped by a chain that reaches the terminal Result.
+	PhaseBeforeToken
 
 	// PhaseDone is the terminal stage. [Tick] returns
 	// [ErrChainComplete] when called with a [State] in this phase.
@@ -217,6 +224,13 @@ type State struct {
 	// also tells the built-in chooser interaction to render; add-account
 	// flows must run the authenticator chain instead.
 	ChooserAddAccountGroupID string `json:"chooser_add_account_group_id,omitempty"`
+
+	// ConsentAutoGranted reports that the HTTP layer marked consent as
+	// run because the first-party policy grants it on the subject's
+	// behalf, not because a cached grant covers the request. The
+	// orchestrator does not read it; the terminal step skips the
+	// cached-grant re-check and audits the first-party auto-grant.
+	ConsentAutoGranted bool `json:"consent_auto_granted,omitempty"`
 
 	// ApprovedScopes is the scope subset the user accepted at the
 	// consent screen, recorded from the most recent

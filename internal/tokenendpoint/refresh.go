@@ -273,12 +273,12 @@ func runRefreshTokenTransaction(
 //
 // The set was already a subset of the registration when the grant was
 // created, so the only way this fails is that the registration was
-// narrowed while the chain was live — which is exactly the case it
-// exists for. Without it, tightening a compromised client's Scopes stops
-// /authorize, /device_authorization and client_credentials but leaves
-// every running refresh chain minting access tokens at the original
-// scope indefinitely, so containment would need the coarser step of
-// revoking the grants.
+// narrowed while the chain (or an unredeemed authorization code) was
+// live — which is exactly the case it exists for. Without it, tightening
+// a compromised client's Scopes stops /authorize, /device_authorization
+// and client_credentials but leaves every running refresh chain minting
+// access tokens at the original scope indefinitely, so containment would
+// need the coarser step of revoking the grants.
 //
 // The check runs on both sides of the exchanger: before Consume, so a
 // rejected rotation does not spend the presented token, and after it as
@@ -649,13 +649,12 @@ func exchangeRefresh(
 }
 
 // enforceStrictOfflineAccess rejects a refresh exchange when the
-// strict-mode flag is set and the consumed token's bound scope does
-// not contain "offline_access". The check runs after the exchanger
-// has already consumed the token, so the rejection is single-shot:
-// embedders flipping [op.WithStrictOfflineAccess] on a live
-// deployment must accept that pre-flag refresh tokens are
-// invalidated on first use, which matches the ADR's "rejected on
-// first use" stance. Returns true when the request may proceed.
+// strict-mode flag is set and the token's bound scope does not contain
+// "offline_access". A first use is checked in
+// [preflightRefreshBeforeConsume], before Consume, so a refused pre-flag
+// token stays unconsumed and redeems again if the flag is lifted. Only
+// the grace path, whose record is already consumed, relies on the
+// post-exchange call. Returns true when the request may proceed.
 func enforceStrictOfflineAccess(w http.ResponseWriter, deps Deps, scope []string, origin store.RefreshTokenOrigin) bool {
 	if !deps.StrictOfflineAccess {
 		return true

@@ -23,15 +23,14 @@ import (
 // the client record is already gone and re-creating it under the
 // same id would clash with the RFC 7591 §3 contract.
 //
-// JWT access tokens are deliberately not part of this cascade. They
-// carry no row to revoke, and the two per-token mechanisms cannot be
-// driven from a client_id: a tombstone is keyed on grant_id and a
-// deletion produces no list of grants to write tombstones for, while a
-// client_credentials token has no grant at all. Instead the endpoints
-// that answer for a JWT AT — userinfo, introspection, token exchange —
-// require the token's client to still be registered, so the deletion
-// performed here is itself what closes them. Deleting the client record
-// is the whole cascade for that token class; see the client probe in
+// A JWT access-token registry that implements [store.RevokeByClient]
+// marks its rows revoked here rather than deleting them, matching the
+// interface's mark-revoked contract. A backend that does not
+// implement it is still covered: the endpoints that verify a JWT AT
+// — userinfo, introspection, token exchange — require the token's
+// client to still be registered and treat a deleted client as
+// revoked, so client deletion alone closes that token class even
+// without this cascade step; see the client probe in
 // internal/endpointsupport.
 func cascadeRevokeByClient(ctx context.Context, deps Deps, clientID string) {
 	probeRevokeByClient(ctx, deps, clientID, deps.RefreshTokens, auditevent.AuditDCRCascadeRefreshRevokeFailed)

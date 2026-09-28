@@ -167,6 +167,9 @@ func (p *txProvider) mintLeewayToken(t *testing.T, jti string, issuedAhead time.
 		// then runs as a self-exchange, so one credential drives all
 		// four probes.
 		ClientID: txCallerID,
+		// A user token always descends from a grant; /userinfo refuses
+		// one that names none.
+		GrantID: "grant-leeway",
 		// The issuer rides in the audience alongside the resource:
 		// /userinfo refuses a token that does not name the OP itself
 		// (its own audience gate), and the probe has to clear every

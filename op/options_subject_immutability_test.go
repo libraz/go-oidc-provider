@@ -298,3 +298,62 @@ type passthroughGenerator struct{}
 func (passthroughGenerator) Generate(_ context.Context, in op.SubjectGeneratorInput) (op.Subject, error) {
 	return op.Subject(in.InternalUserID), nil
 }
+
+// TestSubjectModeGate_FailedNewLeavesNoMarker pins that an op.New which
+// passes the gate and then fails at a later stage (here, static-client
+// reconciliation colliding with a dynamic record) writes neither the
+// subject-mode marker nor the op-init sentinel, so a corrected retry on
+// the same fresh store may choose either mode.
+func TestSubjectModeGate_FailedNewLeavesNoMarker(t *testing.T) {
+	t.Parallel()
+
+	pairwise := func(opts []op.Option) []op.Option { return append(opts, op.WithPairwiseSubject(minSalt())) }
+	public := func(opts []op.Option) []op.Option { return opts }
+	cases := []struct {
+		name            string
+		failing, retry  func([]op.Option) []op.Option
+		wantMarkerAfter string
+	}{
+		{"public-then-pairwise", public, pairwise, store.SubjectModePairwise},
+		{"pairwise-then-public", pairwise, public, store.SubjectModePublic},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := inmem.New()
+			dynamic := &store.Client{
+				ID:                      "dynamic-client",
+				RedirectURIs:            []string{"https://app.example.com/cb"},
+				Scopes:                  []string{"openid"},
+				GrantTypes:              []string{"authorization_code", "refresh_token"},
+				ResponseTypes:           []string{"code"},
+				TokenEndpointAuthMethod: "none",
+				PublicClient:            true,
+				Source:                  store.ClientSourceDynamic,
+			}
+			if err := st.RegisterClient(context.Background(), dynamic); err != nil {
+				t.Fatalf("RegisterClient: %v", err)
+			}
+			failing := append(tc.failing(validBaseOptsWithStore(t, st)), op.WithStaticClients(op.PublicClient{
+				ID:           dynamic.ID,
+				RedirectURIs: dynamic.RedirectURIs,
+				Scopes:       dynamic.Scopes,
+			}))
+			if _, err := op.New(failing...); !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("failing op.New err=%v, want ErrConflict from static-client reconciliation", err)
+			}
+			for _, key := range []string{store.SubjectModeKey, store.OpInitKey} {
+				if v, err := st.Metadata().Get(context.Background(), key); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("after failed op.New: %s=%q err=%v, want ErrNotFound", key, v, err)
+				}
+			}
+			if _, err := op.New(tc.retry(validBaseOptsWithStore(t, st))...); err != nil {
+				t.Fatalf("corrected op.New: %v", err)
+			}
+			got, err := st.Metadata().Get(context.Background(), store.SubjectModeKey)
+			if err != nil || got != tc.wantMarkerAfter {
+				t.Errorf("marker=%q err=%v, want %q", got, err, tc.wantMarkerAfter)
+			}
+		})
+	}
+}

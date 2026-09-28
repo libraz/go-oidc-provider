@@ -71,14 +71,14 @@ func TestAuthenticator_Metadata(t *testing.T) {
 	}
 }
 
-// TestAuthenticator_BeginEmitsPromptWithFullAttemptBudget pins what the
-// prompt's AttemptsRemaining counts: failed submissions left, not
-// unconsumed slots. A subject with a fresh batch and no failures has the
-// whole shared budget, which is a different number from the ten codes
-// sitting in the batch — and publishing the latter would tell whoever
-// cleared the first factor how much recovery material the account has
-// left.
-func TestAuthenticator_BeginEmitsPromptWithFullAttemptBudget(t *testing.T) {
+// TestAuthenticator_BeginWithoutCounterReportsNoCount pins what the
+// prompt's AttemptsRemaining counts when no cross-factor counter is
+// wired: nothing can lock the factor, so no count exists and zero is
+// reported. It is not the full budget of a counter that is absent, and
+// not the ten unconsumed codes either — publishing the latter would tell
+// whoever cleared the first factor how much recovery material the
+// account has left.
+func TestAuthenticator_BeginWithoutCounterReportsNoCount(t *testing.T) {
 	t.Parallel()
 
 	f := newAdapterFixture(t)
@@ -96,8 +96,8 @@ func TestAuthenticator_BeginEmitsPromptWithFullAttemptBudget(t *testing.T) {
 	if !ok {
 		t.Fatalf("Prompt.Data type = %T, want interaction.RecoveryCodePromptData", step.Prompt.Data)
 	}
-	if data.AttemptsRemaining != 30 {
-		t.Errorf("AttemptsRemaining = %d, want 30 (the failure budget, not the %d unconsumed codes)",
+	if data.AttemptsRemaining != 0 {
+		t.Errorf("AttemptsRemaining = %d, want 0 (no counter can lock the factor; %d codes are unconsumed)",
 			data.AttemptsRemaining, len(f.plaintext))
 	}
 }

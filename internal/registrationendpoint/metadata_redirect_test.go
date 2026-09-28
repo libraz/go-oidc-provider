@@ -138,9 +138,9 @@ func TestValidateRedirectURIs_ErrorMessageMentionsLoopback(t *testing.T) {
 }
 
 // TestValidateRedirectURIs_NativeApplicationType covers the
-// application_type=native carve-outs: the
-// loopback "localhost" textual host is admitted unconditionally
-// (no AllowLocalhostLoopback gate, per OIDC Registration §2), https
+// application_type=native carve-outs: loopback http admits the IP
+// literals, and the textual "localhost" host only under the
+// AllowLocalhostLoopback opt-in (RFC 8252 §8.3), https
 // targets are accepted (RFC 8252 §7.2 claimed https), reverse-DNS
 // custom URI schemes are accepted (RFC 8252 §7.1), and non-reverse-DNS
 // or web-reserved schemes are rejected with a remediation hint.
@@ -157,7 +157,7 @@ func TestValidateRedirectURIs_NativeApplicationType(t *testing.T) {
 		{"https-with-userinfo", "https://user@app.example.com/cb", true},
 		{"http-loopback-v4", "http://127.0.0.1:53682/cb", false},
 		{"http-loopback-v6", "http://[::1]:53682/cb", false},
-		{"http-localhost-no-flag", "http://localhost:53682/cb", false},
+		{"http-localhost-no-flag", "http://localhost:53682/cb", true},
 		{"http-public", "http://rp.example.com/cb", true},
 		{"custom-reverse-dns", "com.example.app:/cb", false},
 		{"custom-reverse-dns-with-host", "com.example.app://callback/cb", false},
@@ -179,6 +179,26 @@ func TestValidateRedirectURIs_NativeApplicationType(t *testing.T) {
 				t.Fatalf("validateRedirectURIs(%q, native) unexpected error: %v", tc.uri, err)
 			}
 		})
+	}
+}
+
+// TestValidateRedirectURIs_NativeLocalhostNeedsOptIn pins that the
+// AllowLocalhostLoopback opt-in is what admits a textual "localhost"
+// loopback redirect for a native client, for redirect_uris and
+// post_logout_redirect_uris alike.
+func TestValidateRedirectURIs_NativeLocalhostNeedsOptIn(t *testing.T) {
+	t.Parallel()
+
+	for _, uri := range []string{"http://localhost:53682/cb", "http://LocalHost/cb"} {
+		if err := validateRedirectURIs([]string{uri}, "native", false, true); err != nil {
+			t.Errorf("redirect_uri %q with opt-in: %v", uri, err)
+		}
+		if err := validatePostLogoutRedirectURIs([]string{uri}, "native", true); err != nil {
+			t.Errorf("post_logout_redirect_uri %q with opt-in: %v", uri, err)
+		}
+		if err := validatePostLogoutRedirectURIs([]string{uri}, "native", false); err == nil {
+			t.Errorf("post_logout_redirect_uri %q without opt-in accepted", uri)
+		}
 	}
 }
 

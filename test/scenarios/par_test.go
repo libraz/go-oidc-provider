@@ -833,21 +833,18 @@ func TestScenario_PAR_020_JARExpClampedToMaxTTL(t *testing.T) {
 	t.Skip("out-of-scope: PAR-020 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_PAR_021_JAROverridesOuterParams confirms the RFC 9101
-// §6.1 precedence rule for a /par push that pairs outer form parameters
-// with a signed Request Object: every authorization parameter inside
-// the JWT overrides the wire-form value of the same name, while wire
-// values whose name is absent from the JWT survive (so a richer outer
-// form does NOT silently overrule a leaner request object).
+// TestScenario_PAR_021_JAROverridesOuterParams confirms RFC 9101 §6.3
+// for a /par push that pairs outer form parameters with a signed Request
+// Object: only the parameters inside the JWT are used. A wire value the
+// JWT also carries is overridden, and a wire value whose name is absent
+// from the JWT is dropped rather than persisted as if it were signed.
 //
 // v1.0's authorize parser only accepts response_type=code; passing
 // response_type=code+token on the wire alongside response_type=code in
 // the JWT is the canonical way to drive the override rule on the
-// happy path. The earlier catalog text claimed the outer "nonce" was
-// erased — the v1.0 merge keeps any wire value whose key is absent
-// from the request object, so this test pins the actual contract.
+// happy path.
 //
-// Spec: RFC 9101 §6.1 / RFC 9126 §2.1.
+// Spec: RFC 9101 §6.3 / RFC 9126 §2.1.
 func TestScenario_PAR_021_JAROverridesOuterParams(t *testing.T) {
 	t.Parallel()
 
@@ -858,14 +855,14 @@ func TestScenario_PAR_021_JAROverridesOuterParams(t *testing.T) {
 	// JWT must defeat.
 	claims["response_type"] = "code"
 	// Drop nonce from the JWT so the wire-side nonce can demonstrate
-	// "absent from JWT → wire survives" semantics.
+	// "absent from JWT → wire dropped" semantics.
 	delete(claims, "nonce")
 	signed := f.signES256(t, claims)
 	form := url.Values{
 		"client_id":     {f.client.ID},
 		"request":       {signed},
 		"response_type": {"code token"},  // overruled by JWT response_type=code
-		"nonce":         {"outer-nonce"}, // survives: not present in JWT
+		"nonce":         {"outer-nonce"}, // dropped: not present in JWT
 	}
 	resp := f.post(t, form)
 	defer resp.Body.Close()
@@ -896,8 +893,8 @@ func TestScenario_PAR_021_JAROverridesOuterParams(t *testing.T) {
 	if got, _ := snap["response_type"].(string); got != "code" {
 		t.Errorf("snapshot response_type=%q want code (JWT must override outer)", got)
 	}
-	if got, _ := snap["nonce"].(string); got != "outer-nonce" {
-		t.Errorf("snapshot nonce=%q want outer-nonce (wire-only key must survive)", got)
+	if got, ok := snap["nonce"]; ok && got != "" {
+		t.Errorf("snapshot nonce=%v want absent (a wire-only key must not be persisted as signed)", got)
 	}
 }
 

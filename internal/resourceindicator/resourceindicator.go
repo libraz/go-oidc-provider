@@ -19,9 +19,9 @@
 //     case-sensitive per RFC 3986 §6.2.2.
 //   - The default port for the scheme (80 for http, 443 for https) is
 //     stripped. Non-default ports are preserved verbatim.
-//   - A single trailing '/' on the path is stripped. The empty path is
-//     treated as equivalent to '/' per RFC 3986 §6.2.3, so both values
-//     canonicalise to the empty path.
+//   - Every trailing '/' on the path is stripped ("/api//" canonicalises to
+//     "/api"). The empty path is treated as equivalent to '/' per RFC 3986
+//     §6.2.3, so both values canonicalise to the empty path.
 //   - The fragment component is FORBIDDEN: RFC 8707 §2 says the resource
 //     MUST NOT contain a fragment. A fragment-bearing value is rejected
 //     even if it is empty after the '#'.

@@ -63,6 +63,7 @@ func userInfoEmail(tb testing.TB, provider *op.Provider, key op.SigningKey, subj
 		Subject:   subject,
 		Audience:  []string{validIssuer},
 		ClientID:  userInfoTokenClientID,
+		GrantID:   "grant-userstore-" + subject,
 		IssuedAt:  time.Now().Add(-time.Minute).Unix(),
 		ExpiresAt: time.Now().Add(time.Hour).Unix(),
 		JTI:       "at-userstore-" + subject,

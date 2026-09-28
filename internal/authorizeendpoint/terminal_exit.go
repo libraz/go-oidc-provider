@@ -8,9 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
-	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
-	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // exitKind enumerates every route by which /authorize reaches the
@@ -201,52 +199,19 @@ func (e entrySessionAuthn) authContext(context.Context) (grantAuthContext, error
 	return currentSessionAuthContext(e.r, e.deps, e.subject)
 }
 
-// chainAuthn resolves the authentication a ceremony produced during this
-// attempt: [authn.Aggregate] over the factors that ran, then the
-// configured ACR policy's verdict over that aggregate.
+// chainAuthn reads the authentication a ceremony produced during this
+// attempt: [authn.Aggregate] over the factors that ran. The ACR policy's
+// verdict for the request is applied afterwards, by [reportAuthContext],
+// so the session records the level reached rather than that verdict.
 //
-// authTime is the ceremony's own reading; the policy does not move it.
+// authTime is the ceremony's own reading.
 type chainAuthn struct {
-	r        *http.Request
-	deps     resolved
-	rec      *store.Interaction
-	req      *authorize.Request
 	state    authn.State
-	subject  string
 	authTime time.Time
 }
 
-func (c chainAuthn) authContext(ctx context.Context) (grantAuthContext, error) {
-	acr, amr, level := authn.Aggregate(c.state.Factors)
-	if c.deps.ACRResolver == nil {
-		return grantAuthContext{AuthTime: c.authTime, ACR: acr, AMR: amr}, nil
-	}
-	out := c.deps.ACRResolver(ctx, ACRResolveInput{
-		RequestedACRValues: requestedACRValues(c.req),
-		CompletedKinds:     append([]string(nil), c.state.CompletedStepKinds...),
-		InternalAAL:        level,
-		Subject:            c.subject,
-		ClientID:           c.rec.ClientID,
-		RequestedScopes:    append([]string(nil), c.req.Scope...),
-		RemoteIP:           acrRemoteIP(c.r, c.deps, c.state),
-		UserAgent:          acrUserAgent(c.r, c.state),
-		AcceptLanguage:     c.r.Header.Get("Accept-Language"),
-	})
-	switch {
-	case out.OK:
-		acr = out.ACR
-		if out.AMR != nil {
-			amr = append([]string(nil), out.AMR...)
-		}
-	case essentialACRRequested(c.req):
-		// A voluntary acr_values request is served with the acr claim
-		// omitted when the policy cannot satisfy it; an essential one is
-		// refused, because flattening it to "" would hand the relying
-		// party a code for an authentication it declared insufficient.
-		return grantAuthContext{}, errACRUnmet
-	default:
-		acr = ""
-	}
+func (c chainAuthn) authContext(context.Context) (grantAuthContext, error) {
+	acr, amr, _ := authn.Aggregate(c.state.Factors)
 	return grantAuthContext{AuthTime: c.authTime, ACR: acr, AMR: amr}, nil
 }
 
@@ -260,31 +225,19 @@ func (c chainAuthn) authContext(ctx context.Context) (grantAuthContext, error) {
 // authenticated. Both such routes therefore read a session — the one the
 // account chooser picked, or the one the request arrived with — so the
 // grant never silently downgrades to no-acr / no-amr and the reported
-// auth_time keeps naming the authentication that actually happened. Only
-// a chain that authenticated somebody reaches the configured ACR
-// resolver.
+// auth_time keeps naming the authentication that actually happened.
 //
 //nolint:ireturn // the return is the point: the route names which record the gate reads, and the reader stays unexported.
 func interactionExit(
 	r *http.Request,
 	deps resolved,
-	rec *store.Interaction,
-	req *authorize.Request,
 	st authn.State,
 	subject string,
 	authTime time.Time,
 ) (exitKind, terminalAuthn) {
 	switch {
 	case !noCredentialChainRan(st):
-		return exitInteractiveChain, chainAuthn{
-			r:        r,
-			deps:     deps,
-			rec:      rec,
-			req:      req,
-			state:    st,
-			subject:  subject,
-			authTime: authTime,
-		}
+		return exitInteractiveChain, chainAuthn{state: st, authTime: authTime}
 	case chooserReentryBound(st):
 		return exitInteractiveChooserSession, chooserSessionAuthn{
 			deps:      deps,

@@ -296,7 +296,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	mtlsThumbprint := extractMTLSThumbprint(r, deps)
+	mtlsThumbprint, ok := extractMTLSThumbprint(w, r, deps)
+	if !ok {
+		return
+	}
 	if !enforceSenderConstraint(r.Context(), w, deps, dpopJKT, mtlsThumbprint, client.ID) {
 		return
 	}
@@ -379,18 +382,41 @@ func authenticate(
 }
 
 // extractMTLSThumbprint returns the SHA-256 thumbprint of the
-// inbound mTLS leaf certificate. Returns an empty string when
-// [Deps.MTLS] is nil, the request did not present a usable
-// certificate, or the verifier could not parse one.
-func extractMTLSThumbprint(r *http.Request, deps Deps) string {
+// inbound mTLS leaf certificate. Returns ("", true) when [Deps.MTLS]
+// is nil or the request did not present a certificate at all; a
+// certificate that was presented but unusable writes the wire error
+// and returns ("", false) so the caller fails closed instead of
+// silently treating the request as unbound, matching how the token
+// endpoint's verifyTokenMTLS behaves.
+func extractMTLSThumbprint(w http.ResponseWriter, r *http.Request, deps Deps) (string, bool) {
 	if deps.MTLS == nil {
-		return ""
+		return "", true
 	}
 	thumb, err := deps.MTLS.ThumbprintFromRequest(r)
 	if err != nil {
-		return ""
+		if errors.Is(err, mtls.ErrNoClientCert) {
+			return "", true
+		}
+		writeMTLSError(w, err)
+		return "", false
 	}
-	return thumb
+	return thumb, true
+}
+
+// writeMTLSError translates an mtls.Err* sentinel onto the wire
+// form, mirroring the mapping the token endpoint uses:
+// invalid_request for a certificate that could not be parsed, and
+// invalid_client (RFC 8705 §3) for one that failed chain
+// validation against the configured trust anchors.
+func writeMTLSError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, mtls.ErrCertMalformed):
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "client certificate malformed")
+	case errors.Is(err, mtls.ErrCertUntrusted):
+		endpointsupport.WriteInvalidClient(w, false, "client certificate is not trusted")
+	default:
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+	}
 }
 
 // enforceSenderConstraint applies the FAPI 2.0 baseline rule that

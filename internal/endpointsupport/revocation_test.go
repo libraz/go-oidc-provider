@@ -210,6 +210,83 @@ func TestJWTAccessTokenRevoked_GrantTombstoneLookupErrorWithoutGrantID(t *testin
 	}
 }
 
+// faultRecorder collects the errors handed to [endpointsupport.JWTRevocationOpts.OnStoreFault]
+// so a test can pin both that the callback fired and what it carried.
+type faultRecorder struct {
+	errs []error
+}
+
+func (r *faultRecorder) record(err error) { r.errs = append(r.errs, err) }
+
+// TestJWTAccessTokenRevoked_GrantTombstoneLookupErrorReportsFault pins the
+// fix for the fail-open gate's finding: a GrantRevocations.IsRevoked fault
+// still answers (false, false) on the wire, but the underlying error now
+// reaches OnStoreFault so a caller with its own audit stream — /introspect
+// — can tell a storage outage from a genuine miss.
+func TestJWTAccessTokenRevoked_GrantTombstoneLookupErrorReportsFault(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("boom")
+	revs := &fakeGrantRevocations{err: boom}
+	rec := &faultRecorder{}
+	claims := &tokens.AccessTokenClaims{JTI: "jti-3", GrantID: "grant-3"}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		GrantRevocations:   revs,
+		RevocationStrategy: store.RevocationStrategyGrantTombstone,
+		OnStoreFault:       rec.record,
+	}, claims)
+	if revoked || ok {
+		t.Fatalf("got revoked=%v ok=%v want false,false", revoked, ok)
+	}
+	if len(rec.errs) != 1 || !errors.Is(rec.errs[0], boom) {
+		t.Fatalf("OnStoreFault recorded %v, want exactly [%v]", rec.errs, boom)
+	}
+}
+
+// TestJWTAccessTokenRevoked_JTIRegistryLookupErrorReportsFault is the
+// JTI-registry strategy's counterpart: [store.AccessTokenRegistry.Find]
+// faulting must reach OnStoreFault the same way the tombstone path does.
+func TestJWTAccessTokenRevoked_JTIRegistryLookupErrorReportsFault(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("boom")
+	rec := &faultRecorder{}
+	claims := &tokens.AccessTokenClaims{JTI: "jti-fault"}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		AccessTokens:       &fakeATRegistry{findErr: boom},
+		RevocationStrategy: store.RevocationStrategyJTIRegistry,
+		OnStoreFault:       rec.record,
+	}, claims)
+	if revoked || ok {
+		t.Fatalf("got revoked=%v ok=%v want false,false", revoked, ok)
+	}
+	if len(rec.errs) != 1 || !errors.Is(rec.errs[0], boom) {
+		t.Fatalf("OnStoreFault recorded %v, want exactly [%v]", rec.errs, boom)
+	}
+}
+
+// TestJWTAccessTokenRevoked_ErrNotFoundNeverReportsAsAFault keeps a
+// genuine miss off the fault channel: [store.ErrNotFound] is the answer
+// "no such row", not a lookup that could not be made, and OnStoreFault
+// exists to separate the two.
+func TestJWTAccessTokenRevoked_ErrNotFoundNeverReportsAsAFault(t *testing.T) {
+	t.Parallel()
+
+	rec := &faultRecorder{}
+	claims := &tokens.AccessTokenClaims{JTI: "jti-404"}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		AccessTokens:       &fakeATRegistry{findErr: store.ErrNotFound},
+		RevocationStrategy: store.RevocationStrategyJTIRegistry,
+		OnStoreFault:       rec.record,
+	}, claims)
+	if revoked || !ok {
+		t.Fatalf("got revoked=%v ok=%v want false,true", revoked, ok)
+	}
+	if len(rec.errs) != 0 {
+		t.Errorf("OnStoreFault recorded %v on a plain miss, want none", rec.errs)
+	}
+}
+
 // TestJWTAccessTokenRevoked_GrantlessLiveTokenStillFallsBackToRegistry
 // keeps the migration window intact: when the tombstone substore reports
 // a grantless token live, a legacy registry row marking the same jti

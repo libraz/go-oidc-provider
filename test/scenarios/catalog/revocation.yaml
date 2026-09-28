@@ -200,6 +200,7 @@ rows:
       realm="oidc". (v1.0's /revoke does not currently emit a
       client-auth failure audit event; a token.revoke_failed event is
       reserved for non-NotFound store faults after successful auth.)
+    shape: presence
     status: active
 
   - id: REV-021

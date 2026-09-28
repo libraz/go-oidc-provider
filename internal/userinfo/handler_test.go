@@ -86,6 +86,7 @@ func (f *userInfoFixture) signAccessToken(tb testing.TB, build func(*tokens.Acce
 		Subject:   "user-1",
 		Audience:  []string{f.prov.Issuer},
 		ClientID:  fixtureClientID,
+		GrantID:   "grant-1",
 		IssuedAt:  f.clock.now.Unix(),
 		ExpiresAt: f.clock.now.Add(time.Hour).Unix(),
 		JTI:       "at-1",
@@ -599,6 +600,7 @@ func TestHandler_OpaqueAccessToken_HappyPath(t *testing.T) {
 	})
 	rec := &store.OpaqueAccessToken{
 		ID:        "opaque-userinfo-1",
+		GrantID:   "grant-opaque-1",
 		ClientID:  fixtureClientID,
 		Subject:   "user-opaque",
 		Scope:     []string{"openid", "email"},

@@ -326,6 +326,11 @@ const (
 
 	// TriggerBeforeToken fires after consent and before the token
 	// endpoint can mint tokens. Suitable for device trust prompts.
+	// It runs on every authorization code /authorize issues, including
+	// one served from an existing session and a cached grant, so
+	// registering it turns such silent reuse into an interaction and
+	// prompt=none into interaction_required. Device authorization and
+	// CIBA approvals are embedder-driven and do not run the chain.
 	TriggerBeforeToken
 
 	// TriggerAlways fires at every chain stage. Reserved for cross-

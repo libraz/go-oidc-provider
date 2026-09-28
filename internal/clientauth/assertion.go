@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
@@ -126,6 +127,12 @@ type PrivateKeyJWTVerifier struct {
 	// Leeway tolerates small clock skew on iat / nbf / exp comparisons.
 	// Defaults to [DefaultAssertionLeeway] when zero.
 	Leeway time.Duration
+
+	// AllowedAlgs narrows the JWS "alg" values an assertion may carry
+	// below the project allow-list, independently of any per-client pin.
+	// The op layer populates it from the active profile. Empty leaves the
+	// project allow-list in force.
+	AllowedAlgs []jose.Algorithm
 }
 
 // Verify implements [AssertionVerifier].
@@ -145,7 +152,7 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrAssertionMalformed, err)
 	}
-	if !assertionAlgAllowed(ctx, v.Resolver, clientID, jws) {
+	if !v.policyAllowsAlg(jws) || !assertionAlgAllowed(ctx, v.Resolver, clientID, jws) {
 		return ErrCredentialsInvalid
 	}
 	payload, err := resolveAndVerify(ctx, v.Resolver, clientID, jws)
@@ -264,6 +271,19 @@ func assertionKIDAbsent(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet
 		}
 	}
 	return true
+}
+
+// policyAllowsAlg reports whether the assertion's alg is inside
+// [PrivateKeyJWTVerifier.AllowedAlgs]; an empty list admits every alg
+// [jose.ParseSigned] already accepted.
+func (v *PrivateKeyJWTVerifier) policyAllowsAlg(jws *josev4.JSONWebSignature) bool {
+	if len(v.AllowedAlgs) == 0 {
+		return true
+	}
+	if len(jws.Signatures) == 0 {
+		return false
+	}
+	return slices.Contains(v.AllowedAlgs, jose.Algorithm(jws.Signatures[0].Header.Algorithm))
 }
 
 func assertionAlgAllowed(ctx context.Context, resolver JWKSResolver, clientID string, jws *josev4.JSONWebSignature) bool {

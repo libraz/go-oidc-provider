@@ -9,7 +9,7 @@ import (
 
 // This file is the "phases" responsibility within the authn package:
 // the chain dispatcher (advance / advanceOnce), the BeforeAuthn /
-// AfterAuthn interaction queues (advancePhaseInteractions /
+// AfterAuthn / BeforeToken interaction queues (advancePhaseInteractions /
 // advanceInteractions), and the legacy Authenticators-driven
 // advanceAuthn that dispatches into [Orchestrator.advanceLoginFlow]
 // when a [CompiledLoginFlow] is configured.
@@ -79,7 +79,9 @@ func (o *Orchestrator) advanceOnce(ctx context.Context, st State, in Input) (Sta
 		transition := next.Phase != PhaseAuthn
 		return next, step, transition, err
 	case PhaseAfterAuthn:
-		return o.advancePhaseInteractions(ctx, st, in.Now, TriggerAfterAuthn, PhaseDone)
+		return o.advancePhaseInteractions(ctx, st, in.Now, TriggerAfterAuthn, PhaseBeforeToken)
+	case PhaseBeforeToken:
+		return o.advancePhaseInteractions(ctx, st, in.Now, TriggerBeforeToken, PhaseDone)
 	case PhaseDone:
 		next, step, err := o.emitTerminal(st)
 		return next, step, false, err
@@ -87,8 +89,8 @@ func (o *Orchestrator) advanceOnce(ctx context.Context, st State, in Input) (Sta
 	return st, interaction.Step{}, false, ErrInvalidStep
 }
 
-// advancePhaseInteractions runs the BeforeAuthn / AfterAuthn interaction
-// loop and signals a phase transition when the queue is drained.
+// advancePhaseInteractions runs the BeforeAuthn / AfterAuthn /
+// BeforeToken interaction loop and signals a phase transition when the queue is drained.
 func (o *Orchestrator) advancePhaseInteractions(ctx context.Context, st State, now time.Time, trigger InteractionTrigger, nextPhase Phase) (State, interaction.Step, bool, error) {
 	next, step, done, err := o.advanceInteractions(ctx, st, now, trigger)
 	if err != nil {

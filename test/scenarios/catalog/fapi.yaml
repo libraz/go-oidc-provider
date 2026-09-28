@@ -168,6 +168,7 @@ rows:
       A Request Object on FAPI 2 MUST carry both exp and nbf; missing
       either yields the same invalid_request_object envelope as
       FAPI 1.
+    shape: presence
     status: active
 
   - id: FAPI-V2-024

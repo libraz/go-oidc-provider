@@ -1,6 +1,7 @@
 package authorizeendpoint
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/netsec"
+	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -120,7 +122,7 @@ func resolveJARRequestIfNeeded(
 		writeJAREnvelopeError(w, r, deps, err, state)
 		return nil, true, true
 	}
-	merged, err := jar.Merge(values, obj)
+	merged, err := jar.Merge(values, obj, deps.JAR.AuthorizeMergeMode())
 	if err != nil {
 		writeJAREnvelopeError(w, r, deps, err, state)
 		return nil, true, true
@@ -158,6 +160,9 @@ func renderJARError(w http.ResponseWriter, r *http.Request, deps resolved, code,
 //   - No redirects. RFC 9101 leaves the matter open, but a 30x is the
 //     easiest way an attacker upstream of the RP could pivot the OP
 //     onto a different host whose SSRF disposition was not validated.
+//   - The process-wide URL-load gate shared with the JWKS fetcher, and a
+//     short negative cache per URI, so a slow or failing request_uri
+//     cannot turn each /authorize into a new outbound socket.
 //   - Content-Type whitelist. The body is permitted to declare
 //     application/oauth-authz-req+jwt (RFC 9101 §10.6),
 //     application/jwt, text/plain, or be absent (some IdPs publish
@@ -181,20 +186,51 @@ func fetchJARRequestURI(
 			"request_uri is not preregistered for this client", state)
 		return "", false
 	}
+	body, err := deps.jarRequestURIs.Load(ctx, uri, func(ctx context.Context, _ string, _ bool) (string, error) {
+		return loadJARRequestURI(ctx, deps, uri)
+	})
+	if errors.Is(err, remotecache.ErrOverloaded) {
+		renderBrowserError(w, r, deps.Driver, http.StatusServiceUnavailable, errServerError,
+			"request_uri fetch capacity is exhausted; retry later", state)
+		return "", false
+	}
+	if err != nil {
+		var fetchErr jarRequestURIError
+		description := "request_uri could not be fetched"
+		if errors.As(err, &fetchErr) {
+			description = string(fetchErr)
+		}
+		renderJARError(w, r, deps, errInvalidRequestURI, description, state)
+		return "", false
+	}
+	return body, true
+}
+
+// jarRequestURIError is a request_uri fetch failure carrying the wire
+// description it is rendered with, so a failure served from the negative
+// cache reads the same as the fetch that produced it.
+type jarRequestURIError string
+
+func (e jarRequestURIError) Error() string { return string(e) }
+
+// loadJARRequestURI performs one request_uri fetch under the process-wide
+// URL-load gate the JWKS fetcher also draws from.
+func loadJARRequestURI(ctx context.Context, deps resolved, uri string) (string, error) {
+	release, err := deps.jarLoads.Acquire(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	// NewRequest runs the URL-time SSRF gate; the dial-time gate rides on
 	// the shared client's transport.
 	fetchReq, err := deps.jarFetch.NewRequest(ctx, http.MethodGet, uri, nil)
 	if err != nil {
-		renderJARError(w, r, deps, errInvalidRequestURI,
-			classifyJARRequestURINewRequestError(err), state)
-		return "", false
+		return "", jarRequestURIError(classifyJARRequestURINewRequestError(err))
 	}
 	fetchReq.Header.Set("Accept", "application/oauth-authz-req+jwt, application/jwt, text/plain;q=0.5")
 	body, resp, err := deps.jarFetch.Do(fetchReq) //nolint:bodyclose // securefetch.Do drains and closes the body internally.
 	if err != nil {
-		renderJARError(w, r, deps, errInvalidRequestURI,
-			classifyJARRequestURIFetchError(err, resp), state)
-		return "", false
+		return "", jarRequestURIError(classifyJARRequestURIFetchError(err, resp))
 	}
 	// The media-type gate stays here rather than in the policy's
 	// AcceptContentTypes: an absent Content-Type is admitted (RFC 9101
@@ -203,11 +239,24 @@ func fetchJARRequestURI(
 	// the policy's cap, so a wrong media type costs a capped read and
 	// nothing more.
 	if !isJARRequestObjectContentType(resp.Header.Get("Content-Type")) {
-		renderJARError(w, r, deps, errInvalidRequestURI,
-			fmt.Sprintf("request_uri content-type %q is not a JWS media type", resp.Header.Get("Content-Type")), state)
-		return "", false
+		return "", jarRequestURIError(fmt.Sprintf("request_uri content-type %q is not a JWS media type",
+			resp.Header.Get("Content-Type")))
 	}
-	return strings.TrimSpace(string(body)), true
+	return strings.TrimSpace(string(body)), nil
+}
+
+// newJARRequestURICache returns the cache request_uri fetches run through.
+// A request object is read fresh on every use, so only failures are kept:
+// a failing URI is not re-fetched on every inbound request for
+// [remotecache.DefaultNegativeTTL]. Capacity refusals are never cached.
+func newJARRequestURICache(clock Clock) *remotecache.Cache[string] {
+	return remotecache.New[string](remotecache.Config{
+		Clock:        clock,
+		NegativeOnly: true,
+		ShouldCacheError: func(err error) bool {
+			return !errors.Is(err, remotecache.ErrOverloaded)
+		},
+	})
 }
 
 // jarRequestURIPolicy returns the [securefetch.Policy] the JAR

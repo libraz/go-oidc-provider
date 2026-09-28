@@ -1,12 +1,12 @@
 package jwks_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"encoding/base64"
 	"encoding/json"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -41,13 +41,16 @@ func decodeFixedKey(tb testing.TB) *ecdsa.PrivateKey {
 	xb := mustB64(tb, fixedTestKeyX)
 	yb := mustB64(tb, fixedTestKeyY)
 	db := mustB64(tb, fixedTestKeyD)
-	priv := &ecdsa.PrivateKey{
-		PublicKey: ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     new(big.Int).SetBytes(xb),
-			Y:     new(big.Int).SetBytes(yb),
-		},
-		D: new(big.Int).SetBytes(db),
+	priv, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), db)
+	if err != nil {
+		tb.Fatalf("ParseRawPrivateKey: %v", err)
+	}
+	pub, err := priv.PublicKey.Bytes()
+	if err != nil {
+		tb.Fatalf("PublicKey.Bytes: %v", err)
+	}
+	if !bytes.Equal(pub, append(append([]byte{4}, xb...), yb...)) {
+		tb.Fatal("fixed test key: x/y do not match d")
 	}
 	return priv
 }

@@ -51,6 +51,7 @@ rows:
       The same client repeating the request with
       Accept: application/token-introspection+jwt receives a JWT body
       with content-type application/token-introspection+jwt.
+    shape: presence
     status: active
 
   - id: JINT-005

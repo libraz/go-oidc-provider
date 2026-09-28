@@ -41,9 +41,25 @@ var mergeJSONClaims = map[string]struct{}{
 	"authorization_details": {},
 }
 
-// Merge folds the verified [Object]'s claims onto the wire-level form
-// values, returning a fresh [url.Values] suitable for the existing
-// authorize parser. Per RFC 9101 §6.1:
+// MergeMode selects which parameter set [Merge] hands to the parser.
+type MergeMode int
+
+const (
+	// MergeOverlay is OIDC Core 1.0 §6.3.3: the request object's
+	// parameters override the wire values of the same name, and a wire
+	// parameter the object does not carry is kept.
+	MergeOverlay MergeMode = iota
+	// MergeObjectOnly is RFC 9101 §6.3: only the request object's
+	// parameters are used. Every wire parameter except client_id is
+	// dropped, so an unsigned value cannot ride along with a signed
+	// request.
+	MergeObjectOnly
+)
+
+// Merge projects the verified [Object]'s claims onto a fresh
+// [url.Values] suitable for the existing authorize parser, starting from
+// the wire values under [MergeOverlay] and from nothing under
+// [MergeObjectOnly]. In both modes:
 //
 //   - Every authorization parameter inside the request object overrides
 //     the wire-level value of the same name.
@@ -56,7 +72,7 @@ var mergeJSONClaims = map[string]struct{}{
 //
 // Merge does NOT validate the merged result; that is the authorize
 // parser's job.
-func Merge(wire url.Values, obj *Object) (url.Values, error) {
+func Merge(wire url.Values, obj *Object, mode MergeMode) (url.Values, error) {
 	if obj == nil {
 		return nil, fmt.Errorf("%w: nil object", ErrParse)
 	}
@@ -69,39 +85,19 @@ func Merge(wire url.Values, obj *Object) (url.Values, error) {
 	if err := assertClientIDAgrees(wire, obj); err != nil {
 		return nil, err
 	}
-	out := cloneValues(wire)
-	// "request" / "request_uri" on the wire are stripped; the merged
-	// values are presented to the authorize parser as if the request
-	// arrived in the clear.
-	out.Del("request")
-	out.Del("request_uri")
+	out := make(url.Values, len(obj.Claims))
+	if mode == MergeOverlay {
+		out = cloneValues(wire)
+		// "request" / "request_uri" on the wire are stripped; the merged
+		// values are presented to the authorize parser as if the request
+		// arrived in the clear.
+		out.Del("request")
+		out.Del("request_uri")
+	}
 	for name, raw := range obj.Claims {
-		if _, ignored := mergeIgnoredClaims[name]; ignored {
-			continue
+		if err := projectClaim(out, name, raw); err != nil {
+			return nil, err
 		}
-		if _, isJSON := mergeJSONClaims[name]; isJSON {
-			// "claims" / "authorization_details" arrive inside the
-			// request object as decoded JSON shapes (map / slice); the
-			// downstream form-level parser expects the canonical JSON
-			// document, so re-encode rather than passing the structure
-			// through stringifyClaim (which only flattens primitives).
-			encoded, err := json.Marshal(raw)
-			if err != nil {
-				return nil, fmt.Errorf("%w: claim %q is not JSON-encodable: %w", ErrParse, name, err)
-			}
-			out.Set(name, string(encoded))
-			continue
-		}
-		s, ok := stringifyClaim(raw)
-		if !ok {
-			// A claim shape the projector cannot lower onto a query
-			// string is a programming bug on the RP side, not a
-			// signature failure. Surface it as a parse error so the
-			// HTTP layer returns invalid_request_object rather than
-			// silently dropping the value.
-			return nil, fmt.Errorf("%w: claim %q has unsupported shape %T", ErrParse, name, raw)
-		}
-		out.Set(name, s)
 	}
 	// The wire client_id always wins after the merge: even if the
 	// request object carried a matching client_id, we re-stamp the
@@ -111,6 +107,40 @@ func Merge(wire url.Values, obj *Object) (url.Values, error) {
 		out.Set("client_id", id)
 	}
 	return out, nil
+}
+
+// projectClaim lowers one request-object claim onto out, following the
+// ignore-list / JSON-reencode / stringify rules documented on [Merge].
+// Extracted so Merge's loop body stays under the linter's cognitive-
+// complexity budget; behavior is unchanged.
+func projectClaim(out url.Values, name string, raw any) error {
+	if _, ignored := mergeIgnoredClaims[name]; ignored {
+		return nil
+	}
+	if _, isJSON := mergeJSONClaims[name]; isJSON {
+		// "claims" / "authorization_details" arrive inside the
+		// request object as decoded JSON shapes (map / slice); the
+		// downstream form-level parser expects the canonical JSON
+		// document, so re-encode rather than passing the structure
+		// through stringifyClaim (which only flattens primitives).
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return fmt.Errorf("%w: claim %q is not JSON-encodable: %w", ErrParse, name, err)
+		}
+		out.Set(name, string(encoded))
+		return nil
+	}
+	s, ok := stringifyClaim(raw)
+	if !ok {
+		// A claim shape the projector cannot lower onto a query
+		// string is a programming bug on the RP side, not a
+		// signature failure. Surface it as a parse error so the
+		// HTTP layer returns invalid_request_object rather than
+		// silently dropping the value.
+		return fmt.Errorf("%w: claim %q has unsupported shape %T", ErrParse, name, raw)
+	}
+	out.Set(name, s)
+	return nil
 }
 
 // assertClientIDAgrees enforces RFC 9101 §6.1 client_id matching. A

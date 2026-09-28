@@ -522,9 +522,11 @@ const (
 	// later per-request record has a configuration to be read
 	// against.
 	//
-	// Extras carry the declared axes — profiles, features, grants
-	// (each a sorted string slice of the canonical identifiers) —
-	// followed by the resolved policy: pkce_required, par_required,
+	// Extras carry the declared axes — profiles (in declaration order),
+	// features and grants (in resolved order, including the flags a
+	// profile auto-enabled and the default grant set), each a string
+	// slice of the canonical identifiers — followed by the resolved
+	// policy: pkce_required, par_required,
 	// state_or_nonce_required, nonce_required, sender_constrained
 	// ("dpop", "mtls", "dpop+mtls", or "" when bearer tokens are
 	// permitted), client_auth_methods (the set the runtime actually
@@ -533,7 +535,8 @@ const (
 	// access_token_format, refresh_token_ttl_seconds,
 	// refresh_grace_period_seconds, dpop_nonce_required,
 	// signed_request_object_required, signed_backchannel_request_required,
-	// jarm_required, signed_introspection_required.
+	// jarm_required, signed_introspection_required,
+	// insecure_backchannel_logout_for_dev.
 	//
 	// The event rides the audit emitter rather than the operational
 	// logger: the two are structurally separate so audit records

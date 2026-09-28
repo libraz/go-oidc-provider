@@ -140,7 +140,7 @@ func issueCustomGrantTokens(
 	if err != nil {
 		return customGrantIssued{}, err
 	}
-	idToken, err := resolveCustomGrantIDToken(deps, client, resp)
+	idToken, err := resolveCustomGrantIDToken(ctx, deps, client, resp)
 	if err != nil {
 		return customGrantIssued{}, err
 	}
@@ -300,7 +300,13 @@ func resolveCustomGrantAccessToken(
 	if subject == "" {
 		return "", 0, customgrant.ErrEmptyBoundSubject
 	}
+	// The response-level Audience is the one the refresh chain is rooted
+	// on, so it also bounds the first access token; client.ID is the
+	// fallback only when the handler named no audience at all.
 	audience := resp.BoundAccessToken.Audience
+	if len(audience) == 0 {
+		audience = resp.Audience
+	}
 	if len(audience) == 0 {
 		audience = []string{client.ID}
 	}
@@ -384,7 +390,10 @@ func customGrantBoundSubject(in customgrant.DispatchInput, resp customgrant.Resp
 // that belong on it, so emitting one anyway would ship a delegated
 // credential laundered of both. An empty Subject on the mint path is a
 // handler bug because id_token "sub" is REQUIRED per OIDC Core 1.0 §2.
-func resolveCustomGrantIDToken(deps Deps, client *store.Client, resp customgrant.Response) (string, error) {
+// The OP-signed token goes through [maybeEncryptIDToken] like every
+// built-in grant's, so a client registered for encrypted id_tokens is
+// never handed the plain JWS.
+func resolveCustomGrantIDToken(ctx context.Context, deps Deps, client *store.Client, resp customgrant.Response) (string, error) {
 	if resp.IDToken != "" {
 		return resp.IDToken, nil
 	}
@@ -413,7 +422,11 @@ func resolveCustomGrantIDToken(deps Deps, client *store.Client, resp customgrant
 	if !resp.AuthTime.IsZero() {
 		claims.AuthTime = resp.AuthTime.Unix()
 	}
-	return tokens.SignIDToken(activeSigningKey(deps), claims)
+	signed, err := tokens.SignIDToken(activeSigningKey(deps), claims)
+	if err != nil {
+		return "", err
+	}
+	return maybeEncryptIDToken(ctx, deps, client, signed)
 }
 
 // writeCustomGrantError translates the dispatcher's typed sentinels

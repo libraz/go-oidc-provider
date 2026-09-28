@@ -177,8 +177,10 @@ type ClientMetadata struct {
 	// client_assertion signatures to this JWS alg when non-empty.
 	TokenEndpointAuthSigningAlg string
 
-	// ApplicationType is "web" or "native"; the library forces
-	// "native" for loopback / custom-scheme redirect URIs.
+	// ApplicationType is "web" (the default when omitted) or "native".
+	// Custom-scheme redirect URIs require "native"; loopback http
+	// redirect URIs admit the IP literals for either type and the
+	// textual "localhost" only under [WithAllowLocalhostLoopback].
 	ApplicationType string
 
 	// SubjectType is "public" or "pairwise". v1.0 only accepts
@@ -269,16 +271,20 @@ type ClientMetadata struct {
 	// client wants the OP to encrypt issued ID tokens with the named
 	// JWE `alg` (OIDC Core 1.0 §10.2 / OIDC Dynamic Client
 	// Registration 1.0 §2). The value must be on the OP allow-list
-	// (see [SupportedEncryptionAlgs]). The metadata is recorded for
-	// the registration round-trip; outbound encryption is wired in a
-	// later step.
+	// (see [SupportedEncryptionAlgs]) and, per DCR validation, must be
+	// paired with a non-empty [IDTokenEncryptedResponseEnc]. Every
+	// id_token the OP issues to the client — from the
+	// authorization_code, refresh_token, device_code, and CIBA grants,
+	// and from a custom grant that signs its own id_token — is then
+	// encrypted before it reaches the wire.
 	//
 	// Stable since v1.0.
 	IDTokenEncryptedResponseAlg string
 
 	// IDTokenEncryptedResponseEnc mirrors [IDTokenEncryptedResponseAlg]
 	// for the JWE content-encryption (`enc`) advertisement. Allowed
-	// values are listed by [SupportedEncryptionEncs].
+	// values are listed by [SupportedEncryptionEncs]; DCR rejects a
+	// registration that sets one of the pair without the other.
 	//
 	// Stable since v1.0.
 	IDTokenEncryptedResponseEnc string

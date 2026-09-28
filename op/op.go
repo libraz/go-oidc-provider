@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
@@ -187,7 +188,8 @@ func New(opts ...Option) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := cfg.enforceSubjectModeGate(context.Background()); err != nil {
+	commitSubjectMode, err := cfg.checkSubjectModeGate(context.Background())
+	if err != nil {
 		return nil, err
 	}
 	if err := buildMetricsCollector(cfg); err != nil {
@@ -243,6 +245,9 @@ func New(opts ...Option) (*Provider, error) {
 		handler: handler,
 	}
 	if err := seedStaticClients(cfg); err != nil {
+		return nil, err
+	}
+	if err := commitSubjectMode(context.Background()); err != nil {
 		return nil, err
 	}
 	// Emitted last so the record only describes a Provider the caller
@@ -655,16 +660,6 @@ func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
 	return false
 }
 
-// allowedClientAuthMethods returns the [clientauth.Method] subset
-// imposed on /token, /par, /introspect, /revoke by the active
-// [profile.Profile] set, or nil when no profile constrains client
-// authentication.
-//
-// Profile values that name authentication methods outside the
-// [clientauth] enum (tls_client_auth, self_signed_tls_client_auth)
-// do not appear in the returned slice because they are handled
-// outside the package; the FAPI 2.0 §3.1.3 enforcement ladder for
-// those methods lives in internal/mtls.
 // requireSenderConstrainedTokens reports whether the active
 // [profile.Profile] set forbids the issuance of bearer access
 // tokens. FAPI 2.0 §3.1.4 imposes the mandate on the FAPI 2.0
@@ -891,6 +886,16 @@ func (c *config) clientSecretVerifier() clientauth.SecretVerifier { //nolint:ire
 	return clientauth.HighEntropy{}
 }
 
+// allowedClientAuthMethods returns the [clientauth.Method] subset the
+// active [profile.Profile] set imposes on every client-authenticating
+// endpoint and on the clients static seeding and dynamic registration
+// may persist, or nil when no profile constrains client authentication.
+//
+// Profile values that name authentication methods outside the
+// [clientauth] enum (tls_client_auth, self_signed_tls_client_auth)
+// do not appear in the returned slice because they are handled
+// outside the package; the FAPI 2.0 §3.1.3 enforcement ladder for
+// those methods lives in internal/mtls.
 func (c *config) allowedClientAuthMethods() []clientauth.Method {
 	allowedNames := c.profileAllowedAuthMethodNames()
 	if allowedNames == nil {
@@ -1411,27 +1416,58 @@ func deriveCompletionKey(cookieKey []byte) []byte {
 // it, independent of the global support allowlist in the registration
 // validator.
 func (c *config) profileAllowedAuthMethodNames() []string {
-	if len(c.profiles) == 0 {
+	allowed := c.profileIntersection(profile.AllowedClientAuthMethods)
+	if allowed == nil {
 		return nil
 	}
+	return withoutMTLSAuthMethods(allowed)
+}
+
+// clientSigningAlgs returns the JWS alg set the active profiles admit on
+// client-signed input (client assertions, request objects, CIBA signed
+// requests), or nil when no profile narrows the library allow-list. It
+// is the single source every verifier, the discovery advertisement and
+// the registration validator read, so the three cannot disagree.
+func (c *config) clientSigningAlgs() []string {
+	return c.profileIntersection(profile.AllowedClientSigningAlgs)
+}
+
+// clientSigningJOSEAlgs is [config.clientSigningAlgs] in the typed form
+// the internal verifiers take.
+func (c *config) clientSigningJOSEAlgs() []jose.Algorithm {
+	names := c.clientSigningAlgs()
+	if names == nil {
+		return nil
+	}
+	out := make([]jose.Algorithm, 0, len(names))
+	for _, name := range names {
+		out = append(out, jose.Algorithm(name))
+	}
+	return out
+}
+
+// profileIntersection returns the intersection of list over every active
+// profile that constrains it, or nil when none does. The most
+// restrictive policy wins when several profiles are active.
+func (c *config) profileIntersection(list func(profile.Profile) []string) []string {
 	var allowed []string
 	first := true
 	for _, p := range c.profiles {
-		methods := profile.AllowedClientAuthMethods(p)
-		if methods == nil {
+		values := list(p)
+		if values == nil {
 			continue
 		}
 		if first {
-			allowed = methods
+			allowed = values
 			first = false
 			continue
 		}
-		allowed = intersectStrings(allowed, methods)
+		allowed = intersectStrings(allowed, values)
 	}
 	if first {
 		return nil
 	}
-	return withoutMTLSAuthMethods(allowed)
+	return allowed
 }
 
 // withoutMTLSAuthMethods returns names with the RFC 8705 mTLS client-auth

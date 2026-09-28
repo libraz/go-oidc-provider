@@ -70,7 +70,6 @@ func TestResolveGrantACRAMR_ChooserStoreFaultFailsClosed(t *testing.T) {
 	_, _, _, err = resolveGrantACRAMR(
 		request,
 		resolved{Deps: Deps{Sessions: manager}},
-		&store.Interaction{ClientID: "client-1"},
 		&authorize.Request{ClientID: "client-1"},
 		authn.State{
 			ChooserBoundSubject:      true,

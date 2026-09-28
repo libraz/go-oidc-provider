@@ -28,6 +28,10 @@ const (
 	supSecret   = "rp-sup-secret" //nolint:gosec // test fixture: not a real credential.
 	supSubject  = "user-stepup"
 	supScope    = "openid profile"
+
+	// The canonical acr URIs of AAL1 and AAL2: what a session records.
+	supBronzeACR = "urn:mace:incommon:iap:bronze"
+	supSilverACR = "urn:mace:incommon:iap:silver"
 )
 
 // TestScenario_SUP_001_MaxAgeZeroForcesReauthentication drives a first
@@ -67,28 +71,30 @@ func TestScenario_SUP_002_MaxAgeExpiryForcesReauthentication(t *testing.T) {
 	t.Skip("covered outside the suite; see the step_up catalog row's covered_by")
 }
 
-// TestScenario_SUP_003_ACRUnsatisfiedForcesStepUp seats a session at acr
-// "1", then requests acr_values=2. RFC 9470 §3/§4: the session no longer
-// satisfies the requested context, so the OP re-authenticates and the
-// issued ID Token's acr equals the stepped-up value.
+// TestScenario_SUP_003_ACRUnsatisfiedForcesStepUp seats a session at
+// AAL1, which the session records as the bronze acr, then requests the
+// silver acr. RFC 9470 §3/§4: the session does not satisfy the requested
+// context, so the OP re-authenticates and the issued ID Token's acr is the
+// configured policy's verdict for the new request — the default policy
+// echoes the requested value.
 func TestScenario_SUP_003_ACRUnsatisfiedForcesStepUp(t *testing.T) {
 	t.Parallel()
 	env := newSUPEnv(t)
 
-	code, interacted := env.authorize(t, url.Values{"acr_values": {"1"}})
+	code, interacted := env.authorize(t, url.Values{"acr_values": {supBronzeACR}})
 	if !interacted {
 		t.Fatal("first login should run an interaction")
 	}
-	if got, _ := env.exchange(t, code)["acr"].(string); got != "1" {
-		t.Fatalf("first id_token acr=%q want 1", got)
+	if got, _ := env.exchange(t, code)["acr"].(string); got != supBronzeACR {
+		t.Fatalf("first id_token acr=%q want %s", got, supBronzeACR)
 	}
 
-	code, interacted = env.authorize(t, url.Values{"acr_values": {"2"}})
+	code, interacted = env.authorize(t, url.Values{"acr_values": {supSilverACR}})
 	if !interacted {
-		t.Fatal("acr_values=2 unsatisfied by the acr-1 session must force a step-up interaction")
+		t.Fatal("acr_values=silver unsatisfied by the bronze session must force a step-up interaction")
 	}
-	if got, _ := env.exchange(t, code)["acr"].(string); got != "2" {
-		t.Errorf("stepped-up id_token acr=%q want 2", got)
+	if got, _ := env.exchange(t, code)["acr"].(string); got != supSilverACR {
+		t.Errorf("stepped-up id_token acr=%q want %s", got, supSilverACR)
 	}
 }
 
@@ -112,25 +118,27 @@ func TestScenario_SUP_004_ChallengeHelperShape(t *testing.T) {
 }
 
 // TestScenario_SUP_005_SatisfiedSessionServedSilently seats a session at
-// acr "1" then re-requests acr_values=1. RFC 9470 §4: the session already
-// satisfies the request, so no new interaction runs and the ID Token
-// echoes the satisfied acr.
+// AAL1, which the session records as the bronze acr, then re-requests that
+// acr. RFC 9470 §4: the session already satisfies the request, so no new
+// interaction runs and the ID Token carries the satisfied acr. A session
+// records only the canonical acr of the level it reached, so a request
+// naming any other string re-authenticates instead.
 func TestScenario_SUP_005_SatisfiedSessionServedSilently(t *testing.T) {
 	t.Parallel()
 	env := newSUPEnv(t)
 
-	code, interacted := env.authorize(t, url.Values{"acr_values": {"1"}})
+	code, interacted := env.authorize(t, url.Values{"acr_values": {supBronzeACR}})
 	if !interacted {
 		t.Fatal("first login should run an interaction")
 	}
 	env.exchange(t, code)
 
-	code, interacted = env.authorize(t, url.Values{"acr_values": {"1"}})
+	code, interacted = env.authorize(t, url.Values{"acr_values": {supBronzeACR}})
 	if interacted {
-		t.Fatal("a session already satisfying acr_values=1 must be served silently")
+		t.Fatal("a session already satisfying acr_values=bronze must be served silently")
 	}
-	if got, _ := env.exchange(t, code)["acr"].(string); got != "1" {
-		t.Errorf("silently-served id_token acr=%q want 1", got)
+	if got, _ := env.exchange(t, code)["acr"].(string); got != supBronzeACR {
+		t.Errorf("silently-served id_token acr=%q want %s", got, supBronzeACR)
 	}
 }
 

@@ -4,6 +4,7 @@ package refreshchain
 
 import (
 	"context"
+	"errors"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -47,35 +48,54 @@ import (
 // is not trustworthy, and following it further could retire another client's
 // tokens). Exhausting limit also fails: a chain that long is a loop or a
 // corrupted graph, not a rotation history.
-func FindRoot(ctx context.Context, tokens store.RefreshTokenStore, startID string, limit int) (string, bool) {
+//
+// The returned error is non-nil only for the startID-unresolvable hard
+// failure, and only when the cause was not a plain [store.ErrNotFound]: a
+// caller needs to tell "startID does not exist" (an ordinary miss, nothing to
+// audit) from "the store could not answer" (a fault worth surfacing). Every
+// other hard failure (client mismatch, limit exhausted, a malformed call) and
+// every best-effort ancestor failure return a nil error — the walk already
+// treats those as resolved, one way or another.
+func FindRoot(ctx context.Context, tokens store.RefreshTokenStore, startID string, limit int) (string, bool, error) {
 	if tokens == nil || startID == "" || limit <= 0 {
-		return "", false
+		return "", false, nil
 	}
 	current := startID
 	var clientID, deepest string
 	for i := range limit {
 		rec, err := lookup(ctx, tokens, current, i == 0)
-		if err != nil || rec == nil {
-			// deepest is only ever set once a hop has been resolved, so a
-			// non-empty value means the failure is on an ancestor and the
-			// walk has a node worth cascading from.
-			if deepest != "" {
-				return deepest, true
-			}
-			return "", false
+		if err != nil {
+			return findRootErrorOutcome(err, i == 0, deepest)
 		}
 		if clientID == "" {
 			clientID = rec.ClientID
 		} else if rec.ClientID != clientID {
-			return "", false
+			return "", false, nil
 		}
 		if rec.ParentID == nil {
-			return current, true
+			return current, true, nil
 		}
 		deepest = current
 		current = *rec.ParentID
 	}
-	return "", false
+	return "", false, nil
+}
+
+// findRootErrorOutcome classifies a lookup failure encountered while
+// walking a chain in [FindRoot]: deepest is only ever set once a hop
+// has been resolved, so a non-empty value means the failure is on an
+// ancestor and the walk has a node worth cascading from. See FindRoot's
+// "An unresolvable ancestor is not a failed walk" section for the
+// policy this encodes. Extracted so FindRoot's loop body stays under
+// the linter's cognitive-complexity budget.
+func findRootErrorOutcome(err error, firstHop bool, deepest string) (string, bool, error) {
+	if deepest != "" {
+		return deepest, true, nil
+	}
+	if firstHop && !errors.Is(err, store.ErrNotFound) {
+		return "", false, err
+	}
+	return "", false, nil
 }
 
 // FindByHandle resolves a record by a chain handle — a value previously

@@ -192,7 +192,7 @@ func resolveJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVeri
 		// reading and returns inactive without leaking why.
 		return response{}, false
 	}
-	if revoked, ok := isJWTAccessTokenRevoked(ctx, deps, claims); !ok || revoked {
+	if revoked, ok := isJWTAccessTokenRevoked(ctx, deps, authenticatedClientID, claims); !ok || revoked {
 		return response{}, false
 	}
 	return projectAccessTokenClaims(claims), true
@@ -202,10 +202,13 @@ func resolveJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVeri
 // [Deps.RevocationStrategy]. The bool return is `revoked`; the second
 // bool reports whether the lookup succeeded. A failed lookup ((false,
 // false)) collapses onto {"active": false} per RFC 7662 §2.2 — the
-// introspection endpoint never exposes a 5xx for a credential check.
+// introspection endpoint never exposes a 5xx for a credential check —
+// but the fault still reaches the audit stream via [emitLookupFault],
+// the same as the opaque / refresh-token lookups below.
 func isJWTAccessTokenRevoked(
 	ctx context.Context,
 	deps Deps,
+	authenticatedClientID string,
 	claims *tokens.AccessTokenClaims,
 ) (revoked, ok bool) {
 	return endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
@@ -213,6 +216,9 @@ func isJWTAccessTokenRevoked(
 		GrantRevocations:   deps.GrantRevocations,
 		Clients:            deps.Clients,
 		RevocationStrategy: deps.RevocationStrategy,
+		OnStoreFault: func(err error) {
+			emitLookupFault(ctx, deps, "access token revocation state", authenticatedClientID, err)
+		},
 	}, claims)
 }
 
@@ -313,46 +319,43 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 // resolveOpaqueAccessToken looks token up in the opaque-access-token
 // substore and projects a live record onto the introspection
 // response. The bool return reports success; false means the lookup
-// missed, the record was revoked / expired, or another client owns
-// it, and the caller MUST fall through to the refresh-token branch.
+// missed, the record was revoked / expired, its client is gone,
+// another client owns it, or the subject could not be projected, and
+// the caller MUST fall through to the refresh-token branch.
 //
-// Every miss path returns the zero response so the caller cannot
-// observe which sub-class produced the rejection — RFC 7662 §2.2
-// requires the wire shape for "inactive" to be uniform regardless of
-// the underlying cause.
+// Liveness and the public subject come from
+// [tokens.ResolveOpaqueAccessToken], the resolver /userinfo and token
+// exchange share. Every miss path returns the zero response so the
+// caller cannot observe which sub-class produced the rejection — RFC
+// 7662 §2.2 requires the wire shape for "inactive" to be uniform
+// regardless of the underlying cause.
 func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClientID, token string) (response, bool) {
-	rec, err := deps.OpaqueAccessTokens.Find(ctx, token)
+	view, err := tokens.ResolveOpaqueAccessToken(ctx, tokens.OpaqueAccessTokenLookup{
+		Store:            deps.OpaqueAccessTokens,
+		Clients:          deps.Clients,
+		SubjectProjector: deps.SubjectProjector,
+		Grants:           deps.Grants,
+	}, token, deps.now().UTC())
 	if err != nil {
-		// ErrNotFound and any other store error collapse onto inactive:
-		// RFC 7662 §2.2 constrains the wire, so the resource server
-		// must not be able to tell them apart. It says nothing about
-		// the audit stream, and an operator who cannot tell a token
-		// that does not exist from a token store that stopped
-		// answering reads a flood of "inactive" as a client problem.
-		emitLookupFault(ctx, deps, "opaque access token", authenticatedClientID, err)
+		if errors.Is(err, tokens.ErrOpaqueAccessTokenLookup) {
+			// RFC 7662 §2.2 constrains the wire, so the resource server
+			// must not be able to tell a fault from a miss. It says
+			// nothing about the audit stream, and an operator who cannot
+			// tell a token that does not exist from a token store that
+			// stopped answering reads a flood of "inactive" as a client
+			// problem.
+			emitLookupFault(ctx, deps, "opaque access token", authenticatedClientID, err)
+		}
 		return response{}, false
 	}
-	if rec == nil {
-		return response{}, false
-	}
-	if rec.Revoked {
-		return response{}, false
-	}
-	now := deps.now().UTC()
-	if !rec.ExpiresAt.After(now) {
-		return response{}, false
-	}
+	rec := view.Record
 	if rec.ClientID != authenticatedClientID &&
 		!deps.mayIntrospectForResource(authenticatedClientID, audienceList(rec.Audience)) {
 		// Same-client-only unless the caller is a registered
 		// introspection client for the resource this token names.
 		return response{}, false
 	}
-	publicSubject, ok := projectIntrospectionSubject(ctx, deps, rec.Subject, rec.ClientID)
-	if !ok {
-		return response{}, false
-	}
-	out := projectOpaqueAccessToken(rec, publicSubject, deps.Issuer)
+	out := projectOpaqueAccessToken(view, deps.Issuer)
 	out.AuthorizationDetails = grantAuthorizationDetails(ctx, deps, rec.GrantID)
 	return out, true
 }
@@ -373,7 +376,7 @@ func grantAuthorizationDetails(ctx context.Context, deps Deps, grantID string) [
 }
 
 // projectIntrospectionSubject converts the OP-internal raw subject on
-// an opaque-access-token or refresh-token record into the per-client
+// a refresh-token record into the per-client
 // pairwise value the introspection response carries. A nil
 // SubjectProjector (the OP is not configured for pairwise) returns the
 // raw value verbatim. A configured projector that errors, returns the
@@ -401,10 +404,7 @@ func projectIntrospectionSubject(ctx context.Context, deps Deps, rawSubject, cli
 // projectOpaqueAccessToken builds an active introspection response
 // from a live opaque-access-token record. Fields the record does not
 // carry stay zero-valued and are dropped by omitempty on the wire.
-// publicSubject is the per-client pairwise value (or rec.Subject when
-// no SubjectProjector is configured) that the wire response carries;
-// the caller resolves it through [projectIntrospectionSubject] so the
-// "sub" returned here matches what the JWT access-token branch would
+// The "sub" is the view's per-client public subject, so it matches what the JWT access-token branch would
 // emit for the same chain (RFC 9068 §3 / OIDC Core §8.1). issuer is
 // carried for the same reason: a resource server validating "iss"
 // must not start failing because the deployment switched the access
@@ -416,12 +416,13 @@ func projectIntrospectionSubject(ctx context.Context, deps Deps, rawSubject, cli
 // handed to the client; publishing it as "jti" would echo a bearer
 // token back into a response body that routinely lands in resource
 // server logs.
-func projectOpaqueAccessToken(rec *store.OpaqueAccessToken, publicSubject, issuer string) response {
+func projectOpaqueAccessToken(view *tokens.OpaqueAccessTokenView, issuer string) response {
+	rec := view.Record
 	out := response{
 		Active:    true,
 		ClientID:  rec.ClientID,
 		TokenType: tokenTypeBearer,
-		Sub:       publicSubject,
+		Sub:       view.Subject,
 		Iss:       issuer,
 		ACR:       rec.ACR,
 	}
@@ -443,28 +444,10 @@ func projectOpaqueAccessToken(rec *store.OpaqueAccessToken, publicSubject, issue
 	if len(rec.AMR) > 0 {
 		out.AMR = append([]string(nil), rec.AMR...)
 	}
-	if cnf := opaqueAccessTokenCnf(rec); cnf != nil {
+	if cnf := view.Confirmation(); cnf != nil {
 		out.Cnf = cnf
 	}
 	return out
-}
-
-// opaqueAccessTokenCnf returns the cnf map for an opaque-access-token
-// record, or nil when the token is bearer (neither DPoP nor mTLS
-// bound). Mirrors [refreshTokenCnf]; the wire format treats the two
-// fields as independent (RFC 9449 §6.1, RFC 8705 §3.1).
-func opaqueAccessTokenCnf(rec *store.OpaqueAccessToken) map[string]string {
-	if rec.DPoPJKT == "" && rec.MTLSCertThumbprint == "" {
-		return nil
-	}
-	cnf := make(map[string]string, 2)
-	if rec.DPoPJKT != "" {
-		cnf["jkt"] = rec.DPoPJKT
-	}
-	if rec.MTLSCertThumbprint != "" {
-		cnf["x5t#S256"] = rec.MTLSCertThumbprint
-	}
-	return cnf
 }
 
 // projectRefreshToken builds an active introspection response from a

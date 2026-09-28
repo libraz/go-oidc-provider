@@ -145,6 +145,29 @@ func TestJWTAccessTokenRevoked_ClientLookupFaultIsUnresolved(t *testing.T) {
 	}
 }
 
+// TestJWTAccessTokenRevoked_ClientLookupFaultReportsFault extends the
+// unresolved-answer pin above: the GetClient error that produces
+// (false, false) on the wire must also reach OnStoreFault, the same way
+// a GrantRevocations or AccessTokenRegistry fault does.
+func TestJWTAccessTokenRevoked_ClientLookupFaultReportsFault(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("backend down")
+	rec := &faultRecorder{}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		GrantRevocations:   &fakeGrantRevocations{},
+		Clients:            &fakeClientStore{err: boom},
+		RevocationStrategy: store.RevocationStrategyGrantTombstone,
+		OnStoreFault:       rec.record,
+	}, grantBoundClaims())
+	if ok || revoked {
+		t.Fatalf("revoked=%v ok=%v want false/false", revoked, ok)
+	}
+	if len(rec.errs) != 1 || !errors.Is(rec.errs[0], boom) {
+		t.Fatalf("OnStoreFault recorded %v, want exactly [%v]", rec.errs, boom)
+	}
+}
+
 // A deployment that wires no registry, and a token minted outside one,
 // are not evidence of a deletion — neither may fail closed.
 func TestJWTAccessTokenRevoked_NoRegistryOrNoClientIDSkipsTheProbe(t *testing.T) {

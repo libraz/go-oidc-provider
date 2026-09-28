@@ -155,6 +155,23 @@ func MaxRequestObjectAge(p Profile) time.Duration {
 	}
 }
 
+// PARLifetimeCeiling returns the exclusive upper bound p places on a
+// pushed authorization request's request_uri lifetime, or zero when p
+// sets none. FAPI 2.0 Security Profile §5.3.2.2 requires the PAR
+// response's expires_in to be less than 600 seconds, and FAPI-CIBA
+// inherits the bound; a configured lifetime must therefore be strictly
+// below the returned value.
+func PARLifetimeCeiling(p Profile) time.Duration {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+		return 600 * time.Second
+	case Baseline, profileUnspecified:
+		return 0
+	default:
+		return 0
+	}
+}
+
 // RequiresPKCE reports whether p mandates that every authorization-
 // code request carries a code_challenge. The library's overall posture
 // is OAuth 2.1 / RFC 9700 — PKCE is good practice on every flow — but
@@ -304,6 +321,30 @@ func AllowedClientAuthMethods(p Profile) []string {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return []string{"private_key_jwt"}
+	case Baseline, profileUnspecified:
+		return nil
+	default:
+		return nil
+	}
+}
+
+// AllowedClientSigningAlgs returns the JWS "alg" values the profile
+// admits on client-signed input the OP verifies: private_key_jwt client
+// assertions, JAR / PAR request objects, and CIBA signed authentication
+// requests. The same set bounds what discovery advertises for those
+// surfaces and what dynamic registration accepts for
+// token_endpoint_auth_signing_alg and request_object_signing_alg.
+//
+// The FAPI family returns PS256, ES256 and EdDSA (FAPI 2.0 Security
+// Profile §5.4.1); FAPI-CIBA inherits the set. [Baseline] returns nil,
+// leaving the library-wide allow-list in force.
+//
+// The slice is freshly allocated on each call; callers may mutate
+// it freely.
+func AllowedClientSigningAlgs(p Profile) []string {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+		return []string{"PS256", "ES256", "EdDSA"}
 	case Baseline, profileUnspecified:
 		return nil
 	default:

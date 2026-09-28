@@ -136,8 +136,11 @@ type HTTPDeliverer struct {
 // [HTTPDeliverer.Resolver]) after construction sees the change
 // reflected in the dial-time deny-list. Callers may set
 // [HTTPDeliverer.Client] to supply a custom outbound transport. Only its
-// Transport is used: redirect handling, request timeout, and the dial-time
-// deny-list always remain under this deliverer's policy.
+// Transport is used: redirect handling, request timeout, and the SSRF
+// deny-list always remain under this deliverer's policy. The deny-list
+// runs at dial time only when that Transport is a [*http.Transport]; any
+// other RoundTripper is gated on the request URL alone (see
+// [netsec.Options.BaseTransport]).
 //
 // The dial-time hook in [netsec.NewHTTPClient] re-checks the
 // kernel-resolved address against the same deny-list that fires at

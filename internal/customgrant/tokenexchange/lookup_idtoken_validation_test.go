@@ -337,7 +337,7 @@ func TestLookupOpaqueAccessToken_RejectsUnknownExpiry(t *testing.T) {
 	if !errors.Is(lookupErr, errTokenInvalid) {
 		t.Fatalf("lookupOpaqueAccessToken err=%v want errTokenInvalid", lookupErr)
 	}
-	if result.reason != "missing_claim" {
-		t.Errorf("reason=%q want missing_claim", result.reason)
+	if result.reason != "expired" {
+		t.Errorf("reason=%q want expired", result.reason)
 	}
 }

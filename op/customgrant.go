@@ -364,8 +364,10 @@ type BoundAccessToken struct {
 	// one of the two Subject fields.
 	Subject Subject
 
-	// Audience is the "aud" claim. When empty, the OP defaults to a
-	// single-element slice containing client.ID. Each entry is
+	// Audience is the "aud" claim. When empty, the OP uses
+	// [CustomGrantResponse.Audience], the audience the refresh chain is
+	// rooted on, and falls back to a single-element slice containing
+	// client.ID when that is empty too. Each entry is
 	// intersected with the client's registered resources by the
 	// dispatcher's existing [CustomGrantResponse.Audience] gate.
 	Audience []string
