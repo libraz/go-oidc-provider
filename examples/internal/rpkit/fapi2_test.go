@@ -3,6 +3,7 @@
 package rpkit_test
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"encoding/base64"
@@ -20,32 +21,33 @@ const p256CoordLen = 32
 
 // TestPublicJWKSetJSONCoordinatesAreFixedWidth pins that rule.
 //
-// The natural implementation — base64url of big.Int.Bytes — is correct for
-// most keys and wrong for the roughly one coordinate in 256 that starts
-// with a zero byte, which encodes to 31 octets and yields a JWK a
-// conforming parser rejects as malformed. Because every caller generates
-// an ephemeral key at boot, that defect shows up as an occasional startup
-// failure rather than a reproducible one, so the test supplies the small
-// coordinates where the difference is deterministic instead of generating
-// a key and hoping. PublicJWKSetJSON only encodes the coordinates it is
-// handed, so a point that is not on the curve exercises it faithfully.
+// Base64url of a coordinate's minimal big-endian form is correct for most
+// keys and wrong for the roughly one coordinate in 256 that starts with a
+// zero byte. Callers generate an ephemeral key at boot, so the defect would
+// surface as an occasional startup failure; the test instead uses fixed
+// scalars whose public points have a leading zero byte in X (d=379) and
+// in Y (d=43), which makes the difference deterministic.
 func TestPublicJWKSetJSONCoordinatesAreFixedWidth(t *testing.T) {
 	t.Parallel()
 
-	full := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
-	cases := map[string]struct{ x, y *big.Int }{
-		"leading zero bytes": {x: big.NewInt(1), y: big.NewInt(0xff)},
-		"one byte short":     {x: new(big.Int).Rsh(full, 8), y: new(big.Int).Rsh(full, 8)},
-		"full width":         {x: full, y: full},
-	}
+	for name, d := range map[string]int64{"x leading zero": 379, "y leading zero": 43} {
+		priv, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), big.NewInt(d).FillBytes(make([]byte, p256CoordLen)))
+		if err != nil {
+			t.Fatalf("%s: ParseRawPrivateKey: %v", name, err)
+		}
+		point, err := priv.PublicKey.Bytes()
+		if err != nil {
+			t.Fatalf("%s: PublicKey.Bytes: %v", name, err)
+		}
+		wantX, wantY := point[1:1+p256CoordLen], point[1+p256CoordLen:]
+		if wantX[0] != 0 && wantY[0] != 0 {
+			t.Fatalf("%s: fixture no longer has a leading zero coordinate byte", name)
+		}
 
-	for name, tc := range cases {
-		pub := &ecdsa.PublicKey{Curve: elliptic.P256(), X: tc.x, Y: tc.y}
-		raw, err := rpkit.PublicJWKSetJSON(pub, "kid-1")
+		raw, err := rpkit.PublicJWKSetJSON(&priv.PublicKey, "kid-1")
 		if err != nil {
 			t.Fatalf("%s: PublicJWKSetJSON: %v", name, err)
 		}
-
 		var set struct {
 			Keys []struct {
 				X string `json:"x"`
@@ -61,22 +63,18 @@ func TestPublicJWKSetJSONCoordinatesAreFixedWidth(t *testing.T) {
 
 		for label, coord := range map[string]struct {
 			encoded string
-			want    *big.Int
+			want    []byte
 		}{
-			"x": {set.Keys[0].X, tc.x},
-			"y": {set.Keys[0].Y, tc.y},
+			"x": {set.Keys[0].X, wantX},
+			"y": {set.Keys[0].Y, wantY},
 		} {
 			decoded, err := base64.RawURLEncoding.DecodeString(coord.encoded)
 			if err != nil {
 				t.Fatalf("%s/%s: decode: %v", name, label, err)
 			}
-			if len(decoded) != p256CoordLen {
-				t.Errorf("%s/%s: encoded to %d octets, want %d",
-					name, label, len(decoded), p256CoordLen)
-			}
-			if got := new(big.Int).SetBytes(decoded); got.Cmp(coord.want) != 0 {
-				t.Errorf("%s/%s: round-tripped to %s, want %s",
-					name, label, got, coord.want)
+			if !bytes.Equal(decoded, coord.want) {
+				t.Errorf("%s/%s: encoded to %x (%d octets), want %x (%d octets)",
+					name, label, decoded, len(decoded), coord.want, len(coord.want))
 			}
 		}
 	}

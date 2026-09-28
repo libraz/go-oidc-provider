@@ -23,10 +23,12 @@ library.
 > **Status: `v1.2.0`.** The public `op` surface follows strict
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the 1.0
 > release on. Symbols documented with an `Experimental:` marker are exempt: the
-> authentication-step seam, the interaction UI types, and Grant Management.
-> They are inventoried in [`api/experimental.txt`](api/experimental.txt), which
-> `make verify` regenerates and diffs, so the exempt set cannot grow without
-> review. [`CHANGELOG.md`](CHANGELOG.md) carries the migration notes.
+> authentication-step seam, the interaction UI types, and Grant Management,
+> plus two packages in full — `op/interaction` and the DynamoDB storage
+> adapter (`op/storeadapter/dynamodb`). They are inventoried in
+> [`api/experimental.txt`](api/experimental.txt), which `make verify`
+> regenerates and diffs, so the exempt set cannot grow without review.
+> [`CHANGELOG.md`](CHANGELOG.md) carries the migration notes.
 >
 > This is an independently maintained project, not a vendor product. Every
 > release is regressed against the OpenID Foundation conformance suite, but the
@@ -86,10 +88,13 @@ Next steps: [Quick Start](https://go-oidc-provider.libraz.net/getting-started/in
 end, including key generation, store wiring and graceful shutdown.
 
 The defaults assume production: https only, public network only.
-`http://127.0.0.1` is exempt from both checks, so most examples run without any
-development option. Two options cover the cases the IP literal does not: the
-textual host `localhost`, and a plain-http `backchannel_logout_uri`. Both are
-documented under
+`http://127.0.0.1` is exempt from the `redirect_uri` and issuer checks, so
+most examples run without any development option there. Two options cover
+what the IP literal does not: the textual host `localhost`, and a plain-http
+`backchannel_logout_uri`. That carve-out does not extend to the OP's other
+SSRF gates: JWKS, the JAR `request_uri`, `sector_identifier_uri`, and
+back-channel delivery each reject a loopback target by default too and need
+their own opt-in. Documented under
 [`redirect_uri`](https://go-oidc-provider.libraz.net/concepts/redirect-uri) and
 [Issuer](https://go-oidc-provider.libraz.net/concepts/issuer).
 
@@ -184,8 +189,12 @@ feature apiece, each mapped to a
 (cd examples/01-minimal && GOWORK=off go run -tags example .)
 ```
 
-Each example is its own module resolved through a development `replace`, so it
-is run with the repository workspace disabled; `make example-01` does the same.
+An example that pulls a dependency beyond the library — a store adapter, a
+metrics client — is its own module resolved through a development `replace`
+and runs with the repository workspace disabled, like `01-minimal` above. The
+rest carry no `go.mod` and run from the checkout as-is; see
+[`examples/README.md`](examples/README.md) for the split. `make example-01`
+runs the smoke-tested subset the same way.
 
 [`sample/`](sample/README.md) is one worked application rather than one option
 apiece. It owns its accounts, embeds the OP in the same process, and completes

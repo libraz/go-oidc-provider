@@ -4,8 +4,8 @@
 // and JWKS endpoints to a Single Page Application served from a
 // different origin. The CORS allowlist is the union of two sources:
 //
-//  1. Every redirect_uri origin the OP knows about (from registered
-//     clients) — added automatically.
+//  1. The redirect_uri origins of op.WithStaticClients entries —
+//     added automatically (store-only / DCR clients contribute none).
 //  2. Extra origins passed to op.WithCORSOrigins — used for admin
 //     SPAs or management consoles whose origin does not appear in
 //     a redirect_uri.

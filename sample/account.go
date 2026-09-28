@@ -176,6 +176,7 @@ type appUI struct {
 // reach keeps the account table's other columns out of them.
 type memberDirectory interface {
 	find(ctx context.Context, subject string) (*member, error)
+	findByEmail(ctx context.Context, email string) (*member, error)
 	signUp(ctx context.Context, email, displayName, password string, now time.Time) (string, error)
 	verifyPassword(ctx context.Context, subject, password string) error
 	changePassword(ctx context.Context, subject, password string, now time.Time) error
@@ -241,6 +242,8 @@ func (a *appUI) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", a.home)
 	mux.HandleFunc("GET /signup", a.signupForm)
 	mux.HandleFunc("POST /signup", a.signupSubmit)
+	mux.HandleFunc("GET /login", a.loginForm)
+	mux.HandleFunc("POST /login", a.loginSubmit)
 	mux.HandleFunc("GET /account", a.account)
 	mux.HandleFunc("POST /account/password", a.changePassword)
 	mux.HandleFunc("GET /account/totp", a.totpStart)
@@ -401,6 +404,50 @@ func (a *appUI) signupSubmit(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/account", http.StatusSeeOther)
 }
 
+// loginForm renders the application's own sign-in page. It exists
+// separately from /signup so a member whose app session cookie expired —
+// or who returns after the process restarted, since sessions live only in
+// memory — can get back to /account without /signup turning them away
+// with errEmailTaken for an address that is already registered.
+func (a *appUI) loginForm(w http.ResponseWriter, r *http.Request) {
+	if _, sess := a.current(r); sess != nil {
+		http.Redirect(w, r, "/account", http.StatusSeeOther)
+		return
+	}
+	a.render(w, r, http.StatusOK, "login", pageView{Title: "Sign in"})
+}
+
+// loginSubmit authenticates an existing member and starts a session. An
+// unknown email and a wrong password render the same error, the same way
+// the OP's own login Step does not say which one failed.
+func (a *appUI) loginSubmit(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	if err := r.ParseForm(); err != nil {
+		a.render(w, r, http.StatusBadRequest, "login",
+			pageView{Title: "Sign in", Error: "That form could not be read."})
+		return
+	}
+	if !a.checkCSRF(r) {
+		http.Error(w, "that request did not come from this application", http.StatusForbidden)
+		return
+	}
+	email := r.PostForm.Get("email")
+	password := r.PostForm.Get("password")
+	m, err := a.members.findByEmail(r.Context(), email)
+	if err != nil || a.members.verifyPassword(r.Context(), m.ID, password) != nil {
+		a.render(w, r, http.StatusUnauthorized, "login", pageView{
+			Title: "Sign in", Error: "That email or password is not correct.",
+		})
+		return
+	}
+	if err := a.startSession(w, m.ID); err != nil {
+		a.logger.Error("start session", "err", err)
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/account", http.StatusSeeOther)
+}
+
 // startSession issues the application's session cookie. Secure is set from
 // configuration rather than hardcoded so the loopback demo works over
 // plain http while a TLS deployment gets the flag.
@@ -440,13 +487,13 @@ func (a *appUI) signOut(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// requireMember resolves the signed-in member or redirects to signup. It
+// requireMember resolves the signed-in member or redirects to sign-in. It
 // returns the session identifier rather than the session itself, so the
 // caller reaches session state through the store's methods.
 func (a *appUI) requireMember(w http.ResponseWriter, r *http.Request) (string, *member, bool) {
 	id, sess := a.current(r)
 	if sess == nil {
-		http.Redirect(w, r, "/signup", http.StatusSeeOther)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return "", nil, false
 	}
 	m, err := a.members.find(r.Context(), sess.Subject)

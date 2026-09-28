@@ -123,6 +123,43 @@ func fapiCIBAClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
 	return seeds, nil
 }
 
+// clientRegistryProvider and staticClientReconcilerProvider mirror the
+// conditional capability accessors composite.Store exposes: a composite
+// store's own method set cannot honestly implement store.ClientRegistry or
+// store.StaticClientReconciler for every possible Clients route, so it
+// reports the capability of the backend actually routed for Clients
+// through these accessors instead. op.New resolves both interfaces the
+// same way (see the identically-named unexported resolvers in the op
+// package), so wrapStoreForCIBA has to check for them too or it rejects
+// -store=composite, which op.New itself would accept.
+type clientRegistryProvider interface {
+	ClientRegistry() (store.ClientRegistry, bool)
+}
+
+type staticClientReconcilerProvider interface {
+	StaticClientReconciler() (store.StaticClientReconciler, bool)
+}
+
+func resolveClientRegistry(s store.Store) (store.ClientRegistry, bool) {
+	if registry, ok := s.(store.ClientRegistry); ok {
+		return registry, true
+	}
+	if provider, ok := s.(clientRegistryProvider); ok {
+		return provider.ClientRegistry()
+	}
+	return nil, false
+}
+
+func resolveStaticClientReconciler(s store.Store) (store.StaticClientReconciler, bool) {
+	if reconciler, ok := s.(store.StaticClientReconciler); ok {
+		return reconciler, true
+	}
+	if provider, ok := s.(staticClientReconcilerProvider); ok {
+		return provider.StaticClientReconciler()
+	}
+	return nil, false
+}
+
 // wrapStoreForCIBA wraps the in-memory store with cibaAutoApproveStore
 // so Save schedules an out-of-band approval after cfg.cibaAutoApproveDelay.
 // The wrapper exists because OFCS drives the fapi-ciba plan without a
@@ -152,11 +189,11 @@ func wrapStoreForCIBA(
 	base store.Store,
 	logger *slog.Logger,
 ) (store.Store, error) {
-	registry, ok := base.(store.ClientRegistry)
+	registry, ok := resolveClientRegistry(base)
 	if !ok {
 		return nil, errors.New("op-demo: CIBA store wrapper requires a store.ClientRegistry backend")
 	}
-	reconciler, ok := base.(store.StaticClientReconciler)
+	reconciler, ok := resolveStaticClientReconciler(base)
 	if !ok {
 		return nil, errors.New("op-demo: CIBA store wrapper requires a store.StaticClientReconciler backend")
 	}

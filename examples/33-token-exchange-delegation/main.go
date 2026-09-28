@@ -4,7 +4,8 @@
 // Token Exchange in the canonical on-behalf-of (delegation) shape.
 // Three actors live in one process:
 //
-//   - The OP (gated by [op.RegisterTokenExchange]) on :8090.
+//   - The OP (gated by [op.RegisterTokenExchange]) on an ephemeral
+//     loopback port.
 //   - Service A — the "exchanger". A confidential client that already
 //     holds a user's access_token (issued for service-a's audience)
 //     and wants to call service-b on the user's behalf with a
@@ -35,15 +36,14 @@
 //
 //	(cd examples/33-token-exchange-delegation && GOWORK=off go run -tags example .)
 //
-// The example is self-contained: a single binary stands up the OP on
-// :8090, runs a self-verify probe in-process, and exits 0 on success.
-// End-to-end runtime is well under five seconds.
+// The example is self-contained: a single binary stands up the OP on an
+// ephemeral loopback port, runs a self-verify probe in-process, and
+// exits 0 on success. End-to-end runtime is well under five seconds.
 //
 // The codebase is split by role across this directory:
 //
-//   - main.go      — entrypoint, package godoc, OP listener
-//     (probe + public). Owns the high-level run() sequence and the
-//     httptest probe-OP boot helper.
+//   - main.go      — entrypoint, package godoc, the high-level run()
+//     sequence and the httptest probe-OP boot helper.
 //   - op.go        — OP-side wiring: buildProvider plus the
 //     [op.TokenExchangePolicy] implementation the OP dispatches the
 //     business decision to.
@@ -84,10 +84,8 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"time"
@@ -158,10 +156,13 @@ func main() {
 	}
 }
 
-// run boots the OP, runs the in-process self-verify probe, and (on
-// success) opens a public listener on :8090 so an embedder can curl
-// the discovery endpoint. The probe is the canonical assertion the
-// example ships; the listener is convenience for ad-hoc inspection.
+// run boots the OP, runs the in-process self-verify probe, and returns.
+// The probe is the canonical assertion the example ships; it needs no
+// listener beyond the probe OP's own ephemeral, loopback-only one,
+// which the deferred shutdown below tears down before run returns —
+// unlike a listener left open for ad-hoc curling, which would expose
+// [testkit.SubjectAuthenticator]'s SPA-trusts-any-subject bypass to
+// the network for as long as the process keeps running.
 func run(logger *slog.Logger) error {
 	probeIssuer, probeShutdown, err := startProbeOP(logger)
 	if err != nil {
@@ -174,13 +175,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	fmt.Println("✓ self-verify: token-exchange round-trip OK with act-chain verified")
-
-	// The probe OP and its listener are torn down by the deferred
-	// shutdown above. The public listener below is a fresh OP bound
-	// to :8090 so an embedder running `go run -tags example ...` can
-	// curl the discovery endpoint after the probe prints its summary.
-	logger.Info("opening public listener", slog.String("addr", ":8090"))
-	return runPublicListener(logger)
+	return nil
 }
 
 // startProbeOP boots an OP backed by an httptest.NewServer (so it
@@ -208,28 +203,4 @@ func startProbeOP(logger *slog.Logger) (issuer string, shutdown func(), err erro
 	srv.Start()
 	logger.Info("probe OP listening", slog.String("issuer", srv.URL))
 	return srv.URL, srv.Close, nil
-}
-
-// runPublicListener boots a fresh OP on :8090 (the issuer the
-// package banner advertises) and blocks until SIGINT. The block is
-// short — examples run as one-shot demos — so the surface here is
-// intentionally minimal.
-func runPublicListener(logger *slog.Logger) error {
-	const addr = ":8090"
-	const issuer = "http://127.0.0.1:8090"
-	provider, err := buildProvider(issuer)
-	if err != nil {
-		return fmt.Errorf("build provider: %w", err)
-	}
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           provider,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	logger.Info("OP listening", slog.String("addr", addr))
-	logger.Info("hint: curl http://127.0.0.1:8090/.well-known/openid-configuration | jq")
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
 }

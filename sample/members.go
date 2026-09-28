@@ -188,15 +188,33 @@ func (s *memberStore) signUp(ctx context.Context, email, displayName, password s
 	return subject, nil
 }
 
-// find returns the application's own view of an account.
+// find returns the application's own view of an account by subject.
 func (s *memberStore) find(ctx context.Context, subject string) (*member, error) {
 	const q = `SELECT member_id, email, display_name, totp_enabled, updated_at
 	           FROM members WHERE member_id = ?`
+	return s.scanMember(ctx, q, subject)
+}
+
+// findByEmail returns the application's own view of an account by email,
+// normalised the same way signup and FindByUsername are. It is what the
+// sign-in page uses: unlike /signup, which resolves a session from
+// credentials it was just handed, this looks an existing member up before
+// there is a subject to check a password against.
+func (s *memberStore) findByEmail(ctx context.Context, email string) (*member, error) {
+	const q = `SELECT member_id, email, display_name, totp_enabled, updated_at
+	           FROM members WHERE email = ?`
+	return s.scanMember(ctx, q, normaliseEmail(email))
+}
+
+// scanMember runs query with arg and scans the single-row result into the
+// application's own view of an account. find and findByEmail share it;
+// only the WHERE clause differs between them.
+func (s *memberStore) scanMember(ctx context.Context, query, arg string) (*member, error) {
 	var (
 		m       member
 		enabled int
 	)
-	switch err := s.db.QueryRowContext(ctx, q, subject).
+	switch err := s.db.QueryRowContext(ctx, query, arg).
 		Scan(&m.ID, &m.Email, &m.DisplayName, &enabled, &m.UpdatedAt); {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, opstore.ErrNotFound

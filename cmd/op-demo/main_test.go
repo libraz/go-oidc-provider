@@ -26,6 +26,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/composite"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -231,6 +232,41 @@ func TestBuildOPStore_WrapsForCIBAProfile(t *testing.T) {
 	}
 	if _, ok := got.(store.Transactional); !ok {
 		t.Error("wrapped store no longer implements store.Transactional; the token endpoint stops staging")
+	}
+}
+
+// TestBuildOPStore_WrapsForCIBAProfileWithCompositeStore pins
+// wrapStoreForCIBA against -store=composite: composite.Store withholds
+// the plain store.ClientRegistry and store.StaticClientReconciler
+// interfaces and reports both capabilities only through its
+// ClientRegistry()/StaticClientReconciler() accessors, which is exactly
+// the shape op.New itself already resolves. A wrapper checking only the
+// direct interface rejects a backend op.New would accept.
+func TestBuildOPStore_WrapsForCIBAProfileWithCompositeStore(t *testing.T) {
+	t.Parallel()
+
+	cfg := runConfig{profile: "fapi-ciba", cibaAutoApproveDelay: time.Second}
+	backend := newSeededInmem(t)
+	st, err := composite.New(composite.WithDefault(backend))
+	if err != nil {
+		t.Fatalf("composite.New: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	got, err := buildOPStore(ctx, cfg, st, logger)
+	if err != nil {
+		t.Fatalf("buildOPStore: %v", err)
+	}
+	if _, ok := got.(store.ClientRegistry); !ok {
+		t.Error("wrapped composite store no longer implements store.ClientRegistry; dynamic registration cannot boot")
+	}
+	if _, ok := got.(store.StaticClientReconciler); !ok {
+		t.Error("wrapped composite store no longer implements store.StaticClientReconciler; the atomic seed path is gone")
+	}
+	if _, ok := got.(store.Transactional); !ok {
+		t.Error("wrapped composite store no longer implements store.Transactional; the token endpoint stops staging")
 	}
 }
 

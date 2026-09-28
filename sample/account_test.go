@@ -67,6 +67,18 @@ func (f *fakeMembers) find(_ context.Context, subject string) (*member, error) {
 	return &clone, nil
 }
 
+func (f *fakeMembers) findByEmail(_ context.Context, email string) (*member, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.records {
+		if m.Email == normaliseEmail(email) {
+			clone := *m
+			return &clone, nil
+		}
+	}
+	return nil, errors.New("no such member")
+}
+
 func (f *fakeMembers) signUp(_ context.Context, email, displayName, password string, _ time.Time) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -162,6 +174,20 @@ func appPost(t *testing.T, path, origin, sessionID, csrfToken string, form url.V
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", origin)
 	req.AddCookie(&http.Cookie{Name: appSessionCookie, Value: sessionID})
+	req.AddCookie(&http.Cookie{Name: appCSRFCookie, Value: csrfToken})
+	return req
+}
+
+// anonPost builds one POST from a browser holding no application session,
+// carrying the CSRF cookie any rendered form would have set. /login is
+// reached this way: nothing has signed the browser in yet.
+func anonPost(t *testing.T, path, origin, csrfToken string, form url.Values) *http.Request {
+	t.Helper()
+	form.Set(csrfField, csrfToken)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path,
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", origin)
 	req.AddCookie(&http.Cookie{Name: appCSRFCookie, Value: csrfToken})
 	return req
 }
@@ -264,6 +290,12 @@ func TestStateChangingPostsRejectForeignOrigin(t *testing.T) {
 			form: url.Values{
 				"email": {"new@example.com"}, "display_name": {"New"}, "password": {"long-enough"},
 			},
+		},
+		{
+			name:    "sign in",
+			path:    "/login",
+			handler: func(a *appUI) http.HandlerFunc { return a.loginSubmit },
+			form:    url.Values{"email": {"member@example.com"}, "password": {"correct-horse"}},
 		},
 		{
 			name:    "sign out",
@@ -433,4 +465,105 @@ func TestPendingTOTPIsGuardedByTheStore(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestRequireMemberRedirectsToSignIn pins the fix: a browser with no app
+// session — the cookie expired, or the process restarted, since sessions
+// live only in memory — is sent to /login, which an already-registered
+// member can complete. Redirecting to /signup instead would route them
+// into a path that structurally rejects them with errEmailTaken.
+func TestRequireMemberRedirectsToSignIn(t *testing.T) {
+	t.Parallel()
+
+	members := newFakeMembers()
+	members.seed("member-1", "member@example.com", "correct-horse")
+	ui := newTestAppUI(t, members, &recordingTOTPs{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/account", nil)
+	ui.account(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/login" {
+		t.Errorf("redirect = %q, want /login", got)
+	}
+}
+
+// TestLoginSubmitSignsInAnExistingMember is the sign-in page's whole
+// point: a member who already holds credentials reaches /account without
+// going through /signup again.
+func TestLoginSubmitSignsInAnExistingMember(t *testing.T) {
+	t.Parallel()
+
+	members := newFakeMembers()
+	members.seed("member-1", "member@example.com", "correct-horse")
+	ui := newTestAppUI(t, members, &recordingTOTPs{})
+	token, err := newOpaqueID()
+	if err != nil {
+		t.Fatalf("newOpaqueID: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	ui.loginSubmit(rec, anonPost(t, "/login", testOrigin, token, url.Values{
+		"email":    {"member@example.com"},
+		"password": {"correct-horse"},
+	}))
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body = %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); got != "/account" {
+		t.Errorf("redirect = %q, want /account", got)
+	}
+	var sessionID string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == appSessionCookie {
+			sessionID = c.Value
+		}
+	}
+	if sessionID == "" {
+		t.Fatal("no app session cookie was issued")
+	}
+	if sess := ui.sessions.get(sessionID, ui.now()); sess == nil || sess.Subject != "member-1" {
+		t.Errorf("session = %+v, want subject member-1", sess)
+	}
+}
+
+// TestLoginSubmitRejectsWrongCredentials covers both halves of the
+// negative case with the same expected outcome: neither a wrong password
+// nor an unknown email tells the caller which one was wrong.
+func TestLoginSubmitRejectsWrongCredentials(t *testing.T) {
+	t.Parallel()
+
+	members := newFakeMembers()
+	members.seed("member-1", "member@example.com", "correct-horse")
+	ui := newTestAppUI(t, members, &recordingTOTPs{})
+
+	for _, tc := range []struct {
+		name  string
+		email string
+		pass  string
+	}{
+		{"wrong password", "member@example.com", "not-the-password"},
+		{"unknown email", "nobody@example.com", "correct-horse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			token, err := newOpaqueID()
+			if err != nil {
+				t.Fatalf("newOpaqueID: %v", err)
+			}
+			rec := httptest.NewRecorder()
+			ui.loginSubmit(rec, anonPost(t, "/login", testOrigin, token, url.Values{
+				"email":    {tc.email},
+				"password": {tc.pass},
+			}))
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401; body = %q", rec.Code, rec.Body.String())
+			}
+		})
+	}
 }

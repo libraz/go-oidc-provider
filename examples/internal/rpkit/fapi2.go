@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -259,8 +258,13 @@ func (f *FAPI2Flow) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rpkit: decode claims: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	jkt, err := accessTokenCnfJKT(tokens.AccessToken)
+	if err != nil {
+		http.Error(w, "rpkit: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 	claims["_token_type"] = tokens.TokenType
-	claims["_access_token_cnf_jkt"] = jwkThumbprint(&f.dpopKey.PublicKey)
+	claims["_access_token_cnf_jkt"] = jkt
 
 	f.mu.Lock()
 	f.last = claims
@@ -440,9 +444,11 @@ func (f *FAPI2Flow) signDPoPWithNonce(htm, htu, ath, nonce string) (string, erro
 	if nonce != "" {
 		pc.Nonce = nonce
 	}
-	headers := map[string]any{
-		"jwk": ecPublicJWK(&f.dpopKey.PublicKey),
+	jwk, err := ecPublicJWK(&f.dpopKey.PublicKey)
+	if err != nil {
+		return "", err
 	}
+	headers := map[string]any{"jwk": jwk}
 	return signJWT(f.dpopKey, "" /* no kid for DPoP */, "dpop+jwt", pc, headers)
 }
 
@@ -469,39 +475,58 @@ func signJWT(key *ecdsa.PrivateKey, kid, typ string, claims any, extraHeaders ma
 // a P-256 coordinate.
 const p256CoordLen = 32
 
-// ecCoord encodes an EC coordinate the way RFC 7518 §6.2.1.2 demands:
-// zero-padded on the left to the full size of a coordinate for the
-// curve. big.Int.Bytes returns the minimal representation instead, so a
-// key whose coordinate happens to start with a zero byte — roughly one
-// generated key in 256, per coordinate — would encode to 31 octets and
-// produce a JWK that a conforming parser rejects as malformed. Every
-// caller here feeds a freshly generated ephemeral key, which is exactly
-// the shape that turns the defect into an occasional startup failure
-// rather than a reproducible one.
-func ecCoord(v *big.Int) string {
-	return base64.RawURLEncoding.EncodeToString(v.FillBytes(make([]byte, p256CoordLen)))
+// ecCoords encodes pub's coordinates the way RFC 7518 §6.2.1.2 demands:
+// each zero-padded on the left to the full coordinate size. The minimal
+// big-endian form would give roughly one generated key in 256 a 31-octet
+// coordinate, a JWK a conforming parser rejects.
+func ecCoords(pub *ecdsa.PublicKey) (x, y string, err error) {
+	raw, err := pub.Bytes()
+	if err != nil {
+		return "", "", fmt.Errorf("encode EC public key: %w", err)
+	}
+	// raw is the SEC 1 uncompressed point: 0x04 || X || Y.
+	enc := base64.RawURLEncoding
+	return enc.EncodeToString(raw[1 : 1+p256CoordLen]), enc.EncodeToString(raw[1+p256CoordLen:]), nil
 }
 
 // ecPublicJWK returns the JSON Web Key form of pub. The DPoP proof
 // embeds this in its protected header so the OP can verify the proof
 // signature without prior key registration.
-func ecPublicJWK(pub *ecdsa.PublicKey) map[string]string {
-	return map[string]string{
-		"kty": "EC",
-		"crv": "P-256",
-		"x":   ecCoord(pub.X),
-		"y":   ecCoord(pub.Y),
+func ecPublicJWK(pub *ecdsa.PublicKey) (map[string]string, error) {
+	x, y, err := ecCoords(pub)
+	if err != nil {
+		return nil, err
 	}
+	return map[string]string{"kty": "EC", "crv": "P-256", "x": x, "y": y}, nil
 }
 
-// jwkThumbprint computes the RFC 7638 thumbprint the OP records in the
-// access token's "cnf" claim. The RP renders it on /me so an embedder
-// can confirm DPoP binding worked end-to-end.
-func jwkThumbprint(pub *ecdsa.PublicKey) string {
-	canon := fmt.Sprintf(`{"crv":"P-256","kty":"EC","x":%q,"y":%q}`,
-		ecCoord(pub.X), ecCoord(pub.Y))
-	sum := sha256.Sum256([]byte(canon))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
+// accessTokenCnfJKT reads the RFC 7638 thumbprint off the access token's
+// own "cnf.jkt" claim (RFC 9449 §6.1). The RP renders it on /me so an
+// embedder can confirm DPoP binding worked end-to-end — which the value
+// has to come from the issued token itself: a thumbprint recomputed from
+// the RP's own DPoP key would render identically whether or not the OP
+// actually stamped it, proving nothing about the round-trip.
+//
+// The token's signature is not verified here: the RP is not its
+// audience, and RFC 9449 access tokens are typically opaque to the party
+// that requested them. The claim only feeds this display.
+func accessTokenCnfJKT(rawAccessToken string) (string, error) {
+	parsed, err := jwt.ParseSigned(rawAccessToken, []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		return "", fmt.Errorf("parse access_token as JWT: %w", err)
+	}
+	var claims struct {
+		Cnf struct {
+			JKT string `json:"jkt"`
+		} `json:"cnf"`
+	}
+	if err := parsed.UnsafeClaimsWithoutVerification(&claims); err != nil {
+		return "", fmt.Errorf("decode access_token claims: %w", err)
+	}
+	if claims.Cnf.JKT == "" {
+		return "", errors.New("access_token carries no cnf.jkt claim")
+	}
+	return claims.Cnf.JKT, nil
 }
 
 // PublicJWKSetJSON returns the JWK Set the OP registers as the
@@ -520,11 +545,15 @@ func PublicJWKSetJSON(pub *ecdsa.PublicKey, kid string) ([]byte, error) {
 	type set struct {
 		Keys []jwk `json:"keys"`
 	}
+	x, y, err := ecCoords(pub)
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(set{Keys: []jwk{{
 		KTY: "EC",
 		Crv: "P-256",
-		X:   ecCoord(pub.X),
-		Y:   ecCoord(pub.Y),
+		X:   x,
+		Y:   y,
 		Use: "sig",
 		KID: kid,
 		Alg: "ES256",

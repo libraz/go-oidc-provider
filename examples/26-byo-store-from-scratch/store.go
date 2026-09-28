@@ -21,8 +21,8 @@ import (
 )
 
 // scratchStore is the hand-rolled store.Store. It holds only the
-// *sql.DB and a clock; every substore is a tiny value constructed on
-// demand against the shared querier.
+// *sql.DB and a clock; every substore but users is a tiny value
+// constructed on demand against the shared querier.
 type scratchStore struct {
 	db  *databasesql.DB
 	now func() time.Time
@@ -30,17 +30,26 @@ type scratchStore struct {
 	// txGate admits one transaction at a time. See BeginTx for why a
 	// SQLite-backed store needs it.
 	txGate chan struct{}
+
+	// users is built once and reused by every call to Users(), unlike
+	// the other substores. op.New compares the login step's store
+	// against WithStore(...).Users() with == to warn about a
+	// misconfigured split; a fresh *userStore on every call would make
+	// that comparison fail on a store that is correctly wired to itself.
+	users *userStore
 }
 
 // newScratchStore builds the aggregate. The clock is time.Now wrapped
 // once here; examples MAY call time.Now (internal/timex is unreachable
 // from examples/).
 func newScratchStore(db *databasesql.DB) *scratchStore {
-	return &scratchStore{
+	s := &scratchStore{
 		db:     db,
 		now:    time.Now, //nolint:forbidigo // example store — not OP business logic; internal/timex is unreachable from examples/.
 		txGate: make(chan struct{}, 1),
 	}
+	s.users = &userStore{q: s.q()}
+	return s
 }
 
 // Migrate applies the hand-rolled DDL. Production embedders run this
@@ -83,7 +92,7 @@ func (s *scratchStore) Interactions() store.InteractionStore {
 
 func (s *scratchStore) ConsumedJTIs() store.ConsumedJTIStore { return &jtiStore{q: s.q(), now: s.now} }
 
-func (s *scratchStore) Users() store.UserStore { return &userStore{q: s.q()} }
+func (s *scratchStore) Users() store.UserStore { return s.users }
 
 func (s *scratchStore) AccessTokens() store.AccessTokenRegistry {
 	return &accessTokenStore{q: s.q()}

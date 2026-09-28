@@ -25,16 +25,14 @@ import (
 // buildProvider assembles the OP option list. The token-exchange
 // policy admits every exchange between the two demo clients; a
 // production embedder reads tenant / risk context off [req] before
-// returning nil. The ephemeral keys are regenerated on every call so
-// the probe and the public listener cannot share signing material.
+// returning nil.
 func buildProvider(issuer string) (*op.Provider, error) {
 	keys := devkeys.MustEphemeral("token-exchange-1")
 	st := inmem.New()
 
 	provider, err := op.New(
-		// Issuer is whatever the listener actually serves. The probe
-		// uses httptest's ephemeral URL; the public listener uses the
-		// fixed :8090 binding the package banner advertises.
+		// Issuer is httptest's ephemeral, loopback-only URL — the only
+		// listener this example opens.
 		op.WithIssuer(issuer),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),

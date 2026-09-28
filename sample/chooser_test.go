@@ -81,11 +81,37 @@ func TestSelectAccountRendersChooserAndCompletes(t *testing.T) {
 	}
 }
 
+// TestUserInfoResolvesFromTheApplicationsOwnStore pins the wiring main.go
+// depends on: op.WithUserStore(members) is what makes /userinfo (and
+// every ID-token claim) read from the store the login flow authenticated
+// against, when that store is not the one passed to WithStore. Dropping
+// the option would leave effectiveUserStore() resolving against the
+// backend's own Users(), which this member's account never touches.
+func TestUserInfoResolvesFromTheApplicationsOwnStore(t *testing.T) {
+	t.Parallel()
+
+	b := newSplitStoreBrowser(t)
+
+	code := b.completeFlow(b.authorizeURL())
+	if code == "" {
+		t.Fatal("sign-in did not reach the redirect_uri with a code")
+	}
+
+	claims := b.userInfo(code)
+	if got := claims["email"]; got != chooserTestEmail {
+		t.Errorf("userinfo email = %v, want %q from the application's own store", got, chooserTestEmail)
+	}
+	if got := claims["name"]; got != chooserTestName {
+		t.Errorf("userinfo name = %v, want %q from the application's own store", got, chooserTestName)
+	}
+}
+
 // sampleBrowser drives the sample's own interaction driver against a
 // provider wired the way main.go wires it, minus the datastores: the OP's
-// records go to the in-memory adapter and the member is seeded straight
-// into it, so what the case exercises is the driver rather than the
-// storage split.
+// records go to the in-memory adapter rather than MySQL and Redis.
+// newSampleBrowser folds every store onto one instance, which exercises
+// the driver; newSplitStoreBrowser keeps login and claims on separate
+// instances, which exercises the storage split main.go actually has.
 //
 // The listener is TLS because the OP marks its cookies Secure and a
 // cookie jar drops those over plain HTTP.
@@ -107,14 +133,53 @@ func newSampleBrowser(t *testing.T) *sampleBrowser {
 	t.Helper()
 
 	users := inmem.New()
+	seedMember(t, users)
+	return buildSampleBrowser(t,
+		op.WithStore(users),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: users.UserPasswords()}}),
+	)
+}
+
+// newSplitStoreBrowser wires a provider the way main.go actually does: the
+// login flow authenticates against the application's own account store,
+// a separate store from the one passed to WithStore, and WithUserStore is
+// what joins the two for claim reads. newSampleBrowser folds both roles
+// onto a single store instead, which is why it cannot notice main.go
+// dropping WithUserStore — this reproduces the split so a case can.
+func newSplitStoreBrowser(t *testing.T) *sampleBrowser {
+	t.Helper()
+
+	storage := inmem.New()
+	members := inmem.New()
+	seedMember(t, members)
+	return buildSampleBrowser(t,
+		op.WithStore(storage),
+		op.WithUserStore(members.Users()),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: members.UserPasswords()}}),
+	)
+}
+
+// seedMember puts the chooser test's member into s, keyed by both its
+// subject (for claim reads) and its email (for password login).
+func seedMember(t *testing.T, s *inmem.Store) {
+	t.Helper()
+
 	hash, err := op.HashPassword(chooserTestPassword)
 	if err != nil {
 		t.Fatalf("op.HashPassword: %v", err)
 	}
-	users.PutUserWithPassword(context.Background(), &store.User{
+	s.PutUserWithPassword(context.Background(), &store.User{
 		Subject: "member-1",
 		Claims:  map[string]any{"name": chooserTestName, "email": chooserTestEmail},
 	}, chooserTestEmail, hash)
+}
+
+// buildSampleBrowser starts a provider on its own TLS listener and returns
+// the browser driving it. storeOpts carries the store and login-flow
+// wiring a case cares about; everything else — keys, driver, static
+// client, cookie jar — is common setup no case has reason to vary.
+func buildSampleBrowser(t *testing.T, storeOpts ...op.Option) *sampleBrowser {
+	t.Helper()
 
 	driver, err := newAppDriver()
 	if err != nil {
@@ -132,19 +197,18 @@ func newSampleBrowser(t *testing.T) *sampleBrowser {
 	srv := httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
 
-	provider, err := op.New(
+	opts := append([]op.Option{
 		op.WithIssuer(srv.URL),
-		op.WithStore(users),
 		op.WithKeyset(keys.set),
 		op.WithCookieKeys(keys.cookie),
-		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: users.UserPasswords()}}),
 		op.WithInteractionDriver(driver),
 		op.WithStaticClients(op.PublicClient{
 			ID:           chooserTestClientID,
 			RedirectURIs: []string{chooserTestRedirect},
 			Scopes:       []string{"openid", "profile", "email"},
 		}),
-	)
+	}, storeOpts...)
+	provider, err := op.New(opts...)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}
@@ -290,6 +354,68 @@ func (b *sampleBrowser) finish(target string) bool {
 	}
 	b.code = u.Query().Get("code")
 	return true
+}
+
+// userInfo exchanges code at the token endpoint and returns the claims
+// /userinfo serves for the resulting access token, so a case can check
+// whose store the OP actually read rather than only that the flow reached
+// a code.
+func (b *sampleBrowser) userInfo(code string) map[string]any {
+	b.t.Helper()
+
+	status, _, body := b.do(http.MethodGet, b.base+"/.well-known/openid-configuration", "", "")
+	if status != http.StatusOK {
+		b.t.Fatalf("discovery status = %d", status)
+	}
+	var doc struct {
+		TokenEndpoint    string `json:"token_endpoint"`
+		UserInfoEndpoint string `json:"userinfo_endpoint"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		b.t.Fatalf("decode discovery: %v", err)
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {chooserTestRedirect},
+		"client_id":     {chooserTestClientID},
+		"code_verifier": {b.verifier},
+	}
+	status, _, body = b.do(http.MethodPost, doc.TokenEndpoint,
+		"application/x-www-form-urlencoded", form.Encode())
+	if status != http.StatusOK {
+		b.t.Fatalf("token endpoint status = %d: %s", status, body)
+	}
+	var tok struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal([]byte(body), &tok); err != nil {
+		b.t.Fatalf("decode token response: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(b.t.Context(), http.MethodGet, doc.UserInfoEndpoint, nil)
+	if err != nil {
+		b.t.Fatalf("build userinfo request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		b.t.Fatalf("GET userinfo: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		b.t.Fatalf("read userinfo response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b.t.Fatalf("userinfo status = %d: %s", resp.StatusCode, raw)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		b.t.Fatalf("decode userinfo claims: %v", err)
+	}
+	return claims
 }
 
 var (

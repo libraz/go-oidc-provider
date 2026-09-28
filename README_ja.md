@@ -13,7 +13,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 
 **ドキュメント: [go-oidc-provider.libraz.net](https://go-oidc-provider.libraz.net/ja/)** — 概念・ユースケース・オプションリファレンス・運用ガイド・セキュリティ方針・適合試験スコアボードを掲載しています。本 README では、インストール手順、リポジトリの構成、採用前に把握しておくべき設計判断を扱います。
 
-> **ステータス: `v1.2.0`**。1.0 リリース以降、公開 `op` API は [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。godoc に `Experimental:` マーカーを持つシンボルだけが例外で、対象は認証ステップのシーム、interaction の UI 型、Grant Management の 3 つです。一覧は [`api/experimental.txt`](api/experimental.txt) に機械生成され、`make verify` が再生成して差分を検査するため、例外の範囲がレビューを経ずに広がることはありません。移行時の注意点は [`CHANGELOG.md`](CHANGELOG.md) にまとめています。
+> **ステータス: `v1.2.0`**。1.0 リリース以降、公開 `op` API は [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。godoc に `Experimental:` マーカーを持つシンボルだけが例外で、対象は認証ステップのシーム、interaction の UI 型、Grant Management に加え、パッケージ全体を対象とする 2 つ — `op/interaction` と DynamoDB ストレージアダプタ（`op/storeadapter/dynamodb`）です。一覧は [`api/experimental.txt`](api/experimental.txt) に機械生成され、`make verify` が再生成して差分を検査するため、例外の範囲がレビューを経ずに広がることはありません。移行時の注意点は [`CHANGELOG.md`](CHANGELOG.md) にまとめています。
 >
 > 本プロジェクトは独立して開発・保守しているもので、ベンダー製品ではありません。リリースごとに OpenID Foundation の適合試験スイートで回帰検証していますが、正式な認定は受けておらず、サポートはベストエフォートです。
 
@@ -60,7 +60,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 
 次に読むもの: [クイックスタート](https://go-oidc-provider.libraz.net/ja/getting-started/install)・[必須オプション](https://go-oidc-provider.libraz.net/ja/getting-started/required-options)・[ハンドラのマウント](https://go-oidc-provider.libraz.net/ja/getting-started/mount)・[セキュリティプロファイル](https://go-oidc-provider.libraz.net/ja/use-cases/security-profile)。[`examples/01-minimal`](examples/01-minimal/main.go) は同じ構成を、鍵生成・ストア接続・グレースフルシャットダウンまで含めた形で示しています。
 
-既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` はこの 2 つの検査から除外されているため、サンプルの大半は開発用オプションなしで動きます。IP リテラルでは足りないケースは 2 つあり、文字列ホストの `localhost` を使う場合と、平文 http の `backchannel_logout_uri` を登録する場合です。いずれも [`redirect_uri`](https://go-oidc-provider.libraz.net/ja/concepts/redirect-uri) と [Issuer](https://go-oidc-provider.libraz.net/ja/concepts/issuer) で説明しています。
+既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` は `redirect_uri` と issuer の検査から除外されているため、サンプルの大半はそこでは開発用オプションなしで動きます。IP リテラルでは足りないケースは 2 つあり、文字列ホストの `localhost` を使う場合と、平文 http の `backchannel_logout_uri` を登録する場合です。この除外は OP が持つ他の SSRF ゲート — JWKS、JAR の `request_uri`、`sector_identifier_uri`、バックチャネル配送 — には及びません。いずれもループバック宛てを既定で拒否し、それぞれ個別のオプトインが必要です。詳細は [`redirect_uri`](https://go-oidc-provider.libraz.net/ja/concepts/redirect-uri) と [Issuer](https://go-oidc-provider.libraz.net/ja/concepts/issuer) で説明しています。
 
 ## スコープ
 
@@ -112,7 +112,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 (cd examples/01-minimal && GOWORK=off go run -tags example .)
 ```
 
-各サンプルは開発用の `replace` でチェックアウトを参照する独立モジュールなので、リポジトリのワークスペースを無効にして実行します。`make example-01` も同じことをします。
+ライブラリ本体を超える依存（ストアアダプタ、メトリクスクライアントなど）を引き込むサンプルは、開発用の `replace` でチェックアウトを参照する独立モジュールで、`01-minimal` と同様にリポジトリのワークスペースを無効にして実行します。それ以外は `go.mod` を持たず、チェックアウトからそのまま実行できます。内訳は [`examples/README.md`](examples/README.md) を参照してください。`make example-01` も同じことをします。
 
 [`sample/`](sample/README.md) は、オプションを 1 つずつ見せるのではなく、ひとつのアプリケーションとして組み上げたものです。アカウントを自前で持ち、同一プロセスに OP を組み込み、リライングパーティとの往復まで完結させます。ストレージは永続サブストアが MySQL、揮発性サブストアが Redis で、`op/storeadapter/composite` で束ねています。起動は `docker compose -f sample/compose.yaml up -d --build` です。デモンストレーション用であり、公開ホスティングを想定したものではありません。
 

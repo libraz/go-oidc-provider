@@ -166,6 +166,7 @@ sign you in.</p>
 {{else}}
 <nav class="links">
   <a href="/signup">Create an account</a>
+  <a href="/login">Sign in</a>
   <a href="{{.RPURL}}">Relying party</a>
 </nav>
 {{end}}
@@ -189,6 +190,23 @@ sign you in.</p>
 </div>
 <div class="row"><button type="submit">Create account</button></div>
 </form>
+<nav class="links"><a href="/login">Already have an account? Sign in</a></nav>
+{{template "close" .}}{{end}}
+
+{{define "login"}}{{template "open" .}}
+<form method="post" action="/login" autocomplete="on" class="stack">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<div class="field">
+  <label for="l-email">Email address</label>
+  <input id="l-email" type="email" name="email" autocomplete="username" required>
+</div>
+<div class="field">
+  <label for="l-pass">Password</label>
+  <input id="l-pass" type="password" name="password" autocomplete="current-password" required>
+</div>
+<div class="row"><button type="submit">Sign in</button></div>
+</form>
+<nav class="links"><a href="/signup">Need an account? Create one</a></nav>
 {{template "close" .}}{{end}}
 
 {{define "account"}}{{template "open" .}}
