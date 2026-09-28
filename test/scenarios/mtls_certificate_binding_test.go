@@ -1070,6 +1070,7 @@ func (f *mtlsAsyncFixture) redeemDeviceCodeStatus(
 	if deviceCode == "" {
 		t.Fatalf("device_code missing: %v", initiated)
 	}
+	scenariokit.SeedSubject(t, f.tk, devDefaultSubject)
 	if err := f.tk.Store.DeviceCodes().Approve(
 		context.Background(), deviceCode, devDefaultSubject, mtlsAsyncAuthTime,
 	); err != nil {
@@ -1112,6 +1113,7 @@ func (f *mtlsAsyncFixture) redeemCIBAStatus(
 	if authReqID == "" {
 		t.Fatalf("auth_req_id missing: %v", initiated)
 	}
+	scenariokit.SeedSubject(t, f.tk, cibaDefaultSubject)
 	if err := f.tk.Store.CIBARequests().Approve(
 		context.Background(), authReqID, cibaDefaultSubject, "", mtlsAsyncAuthTime,
 	); err != nil {

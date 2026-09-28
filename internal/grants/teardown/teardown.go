@@ -27,6 +27,8 @@ package teardown
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
@@ -156,6 +158,29 @@ func (o Outcome) Complete() bool {
 	return len(o.Failures) == 0 && !o.UnresolvedGrant
 }
 
+// Err folds an incomplete Outcome into one error naming every rung that
+// did not run. It is nil when the Outcome is [Outcome.Complete].
+func (o Outcome) Err() error {
+	if o.UnresolvedGrant {
+		return errors.New("grant could not be resolved")
+	}
+	errs := make([]error, len(o.Failures))
+	for i, f := range o.Failures {
+		errs[i] = fmt.Errorf("%s: %w", f.Surface, f.Err)
+	}
+	return errors.Join(errs...)
+}
+
+// TombstoneRetention returns how long past its RevokedAt a grant
+// tombstone must survive: the access-token TTL (one hour when unset)
+// plus five minutes for a verifier whose clock trails the OP's.
+func TombstoneRetention(accessTokenTTL time.Duration) time.Duration {
+	if accessTokenTTL <= 0 {
+		accessTokenTTL = time.Hour
+	}
+	return accessTokenTTL + 5*time.Minute
+}
+
 // Revoker retires grant-issued credentials. All substore fields are
 // optional: a nil substore means the deployment does not run that
 // credential shape, and its rung is skipped.
@@ -204,6 +229,20 @@ func (r Revoker) Run(ctx context.Context, s Scope) Outcome {
 	default:
 		return Outcome{}
 	}
+}
+
+// RevokeGrant retires every credential issued under grantID and then
+// deletes the grant record. The record is deleted only when every rung
+// completed, so a partial teardown leaves the grant live for a retry; a
+// record that is already gone counts as deleted.
+func (r Revoker) RevokeGrant(ctx context.Context, grants store.GrantStore, grantID string) error {
+	if err := r.Run(ctx, WholeGrant(grantID)).Err(); err != nil {
+		return err
+	}
+	if err := grants.Delete(ctx, grantID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("delete grant: %w", err)
+	}
+	return nil
 }
 
 // runGrant retires every credential of the classes in scope under

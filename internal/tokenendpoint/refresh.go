@@ -151,8 +151,46 @@ func completeRefreshToken(
 	if !enforceSenderConstraint(w, deps, binding) {
 		return rollback
 	}
-	issueRefreshResponse(ctx, w, deps, client, exchanged, binding, authorizationDetails, transactional)
+	user, ok := requireLiveRefreshSubject(ctx, w, deps, client.ID, exchanged, cascade)
+	if !ok {
+		return rollback
+	}
+	issueRefreshResponse(ctx, w, deps, client, exchanged, user, binding, authorizationDetails, transactional)
 	return false
+}
+
+// requireLiveRefreshSubject resolves the chain's subject before anything
+// is minted, grace retries included. A subject the user store no longer
+// holds arms cascade to tear the grant down at the settle point and
+// answers invalid_grant; a store fault answers server_error. A chain a
+// custom grant rooted carries a subject the handler, not the user store,
+// vouches for, so it is not looked up. Returns false when a response
+// has already been written.
+func requireLiveRefreshSubject(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	clientID string,
+	exchanged *refresh.Exchanged,
+	cascade *replayCascade,
+) (*store.User, bool) {
+	if exchanged.Origin == store.RefreshOriginCustomGrant {
+		return nil, true
+	}
+	user, err := lookupLiveSubject(ctx, deps, exchanged.Subject)
+	if err != nil {
+		if errors.Is(err, errSubjectDeprovisioned) {
+			cascade.armDeprovisioned(deprovisionedRedemption{
+				ClientID:  clientID,
+				Subject:   exchanged.Subject,
+				GrantType: grantTypeRefreshToken,
+				GrantID:   exchanged.GrantID,
+			})
+		}
+		writeSubjectLookupError(w, err)
+		return nil, false
+	}
+	return user, true
 }
 
 // handleRefreshTokenTransaction stages every post-preflight refresh mutation
@@ -552,6 +590,7 @@ func newRefreshExchanger(deps Deps) (*refresh.Exchanger, error) {
 // replayCascade carries a detected refresh-token replay out of the
 // exchange so the RFC 9700 §2.2.2 chain cascade runs once the surrounding
 // transaction has settled, against non-transactional substore handles.
+// The grant teardown owed to a deprovisioned subject rides the same way.
 //
 // Running the cascade on transaction-bound handles bounds it by whatever
 // action limit the backend's transaction imposes, and a chain long enough
@@ -566,6 +605,19 @@ type replayCascade struct {
 	// the grant it belongs to are derived by walking parent pointers from
 	// this value.
 	token string
+
+	// deprovisioned names the grant whose subject no longer exists; its
+	// GrantID is empty until the exchange finds one.
+	deprovisioned deprovisionedRedemption
+}
+
+// armDeprovisioned records a grant to tear down because its subject no
+// longer exists, so the teardown runs at the next settle point.
+func (c *replayCascade) armDeprovisioned(in deprovisionedRedemption) {
+	if c == nil {
+		return
+	}
+	c.deprovisioned = in
 }
 
 // arm records that presented was replayed, so the cascade runs at the
@@ -577,16 +629,20 @@ func (c *replayCascade) arm(presented string) {
 	c.token = presented
 }
 
-// armed reports whether a replay was detected during the exchange.
-func (c *replayCascade) armed() bool { return c != nil && c.token != "" }
+// armed reports whether the exchange detected a replay or a
+// deprovisioned subject.
+func (c *replayCascade) armed() bool {
+	return c != nil && (c.token != "" || c.deprovisioned.Subject != "")
+}
 
-// run retires every credential still redeemable under the replayed
-// grant, through non-transactional substores. It is a no-op unless a
-// replay was detected and it never reports failure: a transport fault
-// raises a warn-level audit event and the client keeps the invalid_grant
-// answer it has already been given.
+// run retires every credential still redeemable under the replayed or
+// deprovisioned grant, through non-transactional substores. It is a
+// no-op unless the exchange armed it and it never reports failure: a
+// transport fault raises a warn-level audit event and the client keeps
+// the invalid_grant answer it has already been given.
 //
-// Two rungs run, in this order:
+// A deprovisioned grant is torn down whole through [teardown.Revoker].
+// A replay runs two rungs, in this order:
 //
 //   - The refresh chain, through the exchanger, which walks parent
 //     pointers to the root and falls back to the whole grant. It hands
@@ -600,6 +656,12 @@ func (c *replayCascade) armed() bool { return c != nil && c.token != "" }
 //     access token this rung retires.
 func (c *replayCascade) run(ctx context.Context, deps Deps) {
 	if !c.armed() {
+		return
+	}
+	if c.deprovisioned.Subject != "" {
+		retireDeprovisionedGrant(ctx, deps, c.deprovisioned)
+	}
+	if c.token == "" {
 		return
 	}
 	exchanger, err := newRefreshExchanger(deps)
@@ -766,6 +828,7 @@ func issueRefreshResponse(
 	deps Deps,
 	client *store.Client,
 	exchanged *refresh.Exchanged,
+	user *store.User,
 	binding tokenBinding,
 	authorizationDetails []map[string]any,
 	transactional bool,
@@ -823,7 +886,7 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
+	idTokenExtra := projectIDTokenClaims(user, authCtx.Claims)
 	idToken, err := maybeMintRefreshIDToken(deps, refreshIDTokenInput{
 		Subject:  publicSubject,
 		ClientID: client.ID,

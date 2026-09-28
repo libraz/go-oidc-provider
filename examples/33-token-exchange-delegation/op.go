@@ -18,6 +18,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -29,6 +30,9 @@ import (
 func buildProvider(issuer string) (*op.Provider, error) {
 	keys := devkeys.MustEphemeral("token-exchange-1")
 	st := inmem.New()
+	// The token endpoint re-checks the grant subject against the user
+	// store on every redemption, so the demo user has to exist there.
+	st.PutUser(context.Background(), &store.User{Subject: userSubject})
 
 	provider, err := op.New(
 		// Issuer is httptest's ephemeral, loopback-only URL — the only

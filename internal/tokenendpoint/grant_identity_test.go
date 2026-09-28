@@ -69,6 +69,7 @@ func TestHandleDeviceCode_GrantIdentityIsNotTheDeviceCode(t *testing.T) {
 		UserCode: "GRNT-IDNT",
 		Scope:    []string{"openid"},
 	})
+	seedSubject(t, f.store, "user-grant-identity")
 	if err := f.store.DeviceCodes().Approve(context.Background(), deviceCode, "user-grant-identity", f.clock.now); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -120,6 +121,7 @@ func TestHandleCIBA_GrantIdentityIsNotTheAuthReqID(t *testing.T) {
 		ID:    authReqID,
 		Scope: []string{"openid"},
 	})
+	seedSubject(t, f.store, "user-grant-identity")
 	if err := f.store.CIBARequests().Approve(context.Background(), authReqID, "user-grant-identity", "", f.clock.now); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -174,6 +176,7 @@ func TestHandleDeviceCode_RotatedRefreshKeepsAllocatedGrantIdentity(t *testing.T
 		UserCode: "ROTA-IDNT",
 		Scope:    []string{"openid"},
 	})
+	seedSubject(t, f.store, "user-rotation-identity")
 	if err := f.store.DeviceCodes().Approve(context.Background(), deviceCode, "user-rotation-identity", f.clock.now); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}

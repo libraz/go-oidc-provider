@@ -6,6 +6,8 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // SubjectFieldName is the [interaction.FieldSpec.Name] [SubjectAuthenticator]
@@ -31,7 +33,10 @@ var ErrSubjectMissing = errors.New("testkit: subject field is missing")
 // NOT register it: trusting a SPA-supplied subject is the inverse of
 // authentication.
 //
-// The struct is safe for concurrent use; it carries no state.
+// The struct is safe for concurrent use; it carries no state. It does
+// not touch any user store: the token endpoint refuses to redeem for a
+// subject the user store cannot find, so a provider built around it
+// must seed the users it logs in. [NewProvider] does that for you.
 type SubjectAuthenticator struct{}
 
 // Type implements [op.Authenticator]. Returns a dotted-prefix value
@@ -83,3 +88,25 @@ func (SubjectAuthenticator) Continue(_ context.Context, in op.ContinueInput) (in
 // Compile-time confirmation that SubjectAuthenticator satisfies the
 // public interface.
 var _ op.Authenticator = SubjectAuthenticator{}
+
+// seedingSubjectAuthenticator is the [SubjectAuthenticator] [NewProvider]
+// installs. On a successful Continue it puts the subject into users,
+// unless the subject is already there, so the testkit login mirrors a
+// real authenticator that only authenticates users that exist.
+type seedingSubjectAuthenticator struct {
+	SubjectAuthenticator
+	users *inmem.Store
+}
+
+// Continue implements [op.Authenticator].
+func (a seedingSubjectAuthenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
+	step, err := a.SubjectAuthenticator.Continue(ctx, in)
+	if err != nil || step.Result == nil {
+		return step, err
+	}
+	sub := step.Result.Subject
+	if _, err := a.users.Users().FindBySubject(ctx, sub); errors.Is(err, store.ErrNotFound) {
+		a.users.PutUser(ctx, &store.User{Subject: sub})
+	}
+	return step, nil
+}

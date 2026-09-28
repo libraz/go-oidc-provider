@@ -203,6 +203,9 @@ func (f *hintFixture) mintIDToken(t *testing.T, clientID, secret, subject string
 	if authReqID == "" {
 		t.Fatalf("auth_req_id missing: %v", body)
 	}
+	// The approval is written straight to the store, bypassing the login
+	// that seeds users, and /token refuses subjects it cannot find.
+	f.tk.Store.PutUser(context.Background(), &store.User{Subject: subject})
 	if err := f.tk.Store.CIBARequests().Approve(
 		context.Background(), authReqID, subject, "", f.clock.Now(),
 	); err != nil {

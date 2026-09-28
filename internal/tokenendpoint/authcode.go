@@ -66,7 +66,20 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !enforceDPoPJKTBinding(w, exchanged, binding) {
 		return
 	}
-	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, binding, authorizationDetails)
+	user, err := lookupLiveSubject(ctx, deps, exchanged.Subject)
+	if err != nil {
+		if errors.Is(err, errSubjectDeprovisioned) {
+			retireDeprovisionedGrant(ctx, deps, deprovisionedRedemption{
+				ClientID:  client.ID,
+				Subject:   exchanged.Subject,
+				GrantType: grantTypeAuthorizationCode,
+				GrantID:   exchanged.GrantID,
+			})
+		}
+		writeSubjectLookupError(w, err)
+		return
+	}
+	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, user, binding, authorizationDetails)
 }
 
 // authCodeInputs is the de-structured view of the form parameters the
@@ -255,7 +268,8 @@ func revokeChainForCode(ctx context.Context, deps Deps, code, replayGrantID stri
 // token, and the id_token, then writes the success body. The binding
 // argument carries the sender-constraint fields (cnf.jkt for DPoP,
 // cnf.x5t#S256 for mTLS) extracted from the inbound request; an
-// empty binding produces a plain bearer response.
+// empty binding produces a plain bearer response. user is the subject's
+// record [lookupLiveSubject] resolved.
 func issueAuthCodeResponse(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -263,6 +277,7 @@ func issueAuthCodeResponse(
 	client *store.Client,
 	code string,
 	exchanged *authcode.Exchanged,
+	user *store.User,
 	binding tokenBinding,
 	requestedAuthorizationDetails []map[string]any,
 ) {
@@ -301,7 +316,7 @@ func issueAuthCodeResponse(
 	}
 	var idToken string
 	if oidcscope.ContainsOpenID(exchanged.Scope) {
-		idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
+		idTokenExtra := projectIDTokenClaims(user, authCtx.Claims)
 		idToken, err = mintAuthCodeIDToken(deps, mintIDTokenInput{
 			Subject:     publicSubject,
 			ClientID:    client.ID,
@@ -920,23 +935,11 @@ func lookupAuthContext(ctx context.Context, deps Deps, grantID string) authConte
 // library synthesises from [store.User]'s own columns rather than from
 // its Claims map.
 //
-// The function returns nil for an empty request, no user lookup, or a
-// nil deps.UserStore so the caller can guard the Extra assignment
-// with a simple non-nil check.
-func projectIDTokenClaims(
-	ctx context.Context,
-	deps Deps,
-	subject string,
-	req *authorize.ClaimsRequest,
-) map[string]any {
-	if req == nil || len(req.IDToken) == 0 {
-		return nil
-	}
-	if deps.UserStore == nil || subject == "" {
-		return nil
-	}
-	user, err := deps.UserStore.FindBySubject(ctx, subject)
-	if err != nil || user == nil {
+// user is the record [lookupLiveSubject] resolved before the mint. The
+// function returns nil for an empty request or a nil user so the caller
+// can guard the Extra assignment with a simple non-nil check.
+func projectIDTokenClaims(user *store.User, req *authorize.ClaimsRequest) map[string]any {
+	if req == nil || len(req.IDToken) == 0 || user == nil {
 		return nil
 	}
 	source := userclaims.Source(user)

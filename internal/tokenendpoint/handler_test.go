@@ -18,6 +18,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -146,9 +147,32 @@ func (f *fixture) seedAuthCode(tb testing.TB, ac *store.AuthorizationCode) {
 	if ac.CreatedAt.IsZero() {
 		ac.CreatedAt = f.clock.now
 	}
+	f.seedUser(tb, ac.Subject)
 	if err := f.prov.Store.AuthorizationCodes().Save(context.Background(), ac); err != nil {
 		tb.Fatalf("AuthorizationCodes.Save: %v", err)
 	}
+}
+
+// seedUser puts subject into the user store unless it is already there,
+// since the token endpoint refuses to redeem for a subject it cannot
+// find. A record the test seeded itself is left as it is.
+func (f *fixture) seedUser(tb testing.TB, subject string) {
+	tb.Helper()
+	if subject == "" {
+		return
+	}
+	seedSubject(tb, f.prov.Store, subject)
+}
+
+// seedSubject puts subject into s's user store unless it is already
+// there. The token endpoint refuses to redeem for a subject it cannot
+// find, so every fixture that issues for a subject seeds it first.
+func seedSubject(tb testing.TB, s *inmem.Store, subject string) {
+	tb.Helper()
+	if _, err := s.Users().FindBySubject(context.Background(), subject); err == nil {
+		return
+	}
+	s.PutUser(context.Background(), &store.User{Subject: subject})
 }
 
 // seedRefreshToken persists a [store.RefreshToken] directly.
@@ -160,6 +184,7 @@ func (f *fixture) seedRefreshToken(tb testing.TB, rt *store.RefreshToken) {
 	if rt.CreatedAt.IsZero() {
 		rt.CreatedAt = f.clock.now
 	}
+	f.seedUser(tb, rt.Subject)
 	if err := f.prov.Store.RefreshTokens().Save(context.Background(), rt); err != nil {
 		tb.Fatalf("RefreshTokens.Save: %v", err)
 	}

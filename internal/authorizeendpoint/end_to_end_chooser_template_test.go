@@ -17,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -94,6 +95,9 @@ func TestEndToEnd_ChooserTemplate_RendersAndCompletes(t *testing.T) {
 
 	mgr, _ := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
+	// Sessions are seated directly, bypassing the login that seeds users.
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-A"})
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-B"})
 	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.now}, clock.now)
 	sessB := establishAddAccount(t, mgr, sessA.Cookie, sessions.Login{
 		Subject:  "user-B",

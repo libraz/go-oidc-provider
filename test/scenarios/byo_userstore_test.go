@@ -386,8 +386,8 @@ func TestScenario_BUS_003_EmbeddingOverrideShadowsBaseUsers(t *testing.T) {
 func TestScenario_BUS_004_UserInfoNotFoundReturnsInvalidToken(t *testing.T) {
 	t.Parallel()
 	f := newBUSFixture(t)
-	// Seed so the code flow itself succeeds (token issuance does not
-	// require a user record outside §5.5 projection).
+	// Seed so the code flow itself succeeds: the token endpoint refuses
+	// to redeem for a subject the user store cannot find.
 	f.putUser(t, &store.User{Subject: busSubject})
 	tok := f.runCodeFlow(t, "openid email", nil)
 
@@ -406,38 +406,48 @@ func TestScenario_BUS_004_UserInfoNotFoundReturnsInvalidToken(t *testing.T) {
 	}
 }
 
-// TestScenario_BUS_005_IDTokenAssemblyNotFoundOmitsClaims checks the
-// silent-omit policy at the token endpoint: when §5.5 projection
-// observes store.ErrNotFound, the OP issues the id_token without the
-// affected claims and the grant exchange still succeeds (no 500, no
-// invalid_grant).
+// TestScenario_BUS_005_IDTokenAssemblyNotFoundRefusesRedemption checks
+// that a subject the user store no longer finds at the token endpoint
+// earns invalid_grant: no id_token is assembled without the user
+// record, and no access token is minted for it.
 //
-// Spec: OIDC Core §5.5 / implementation contract.
-func TestScenario_BUS_005_IDTokenAssemblyNotFoundOmitsClaims(t *testing.T) {
+// Spec: RFC 6749 §5.2 / implementation contract.
+func TestScenario_BUS_005_IDTokenAssemblyNotFoundRefusesRedemption(t *testing.T) {
 	t.Parallel()
 	f := newBUSFixture(t)
 	f.putUser(t, &store.User{Subject: busSubject})
-	// Stub Users() so §5.5 projection at /token cannot resolve the
-	// user, while authorize-time persistence is still satisfied by
-	// the seeded record.
-	f.recorder.override = func(_ context.Context, _ string) (*store.User, error) {
-		return nil, store.ErrNotFound
-	}
 	extra := claimsRequestExtra(t, map[string]any{
 		"id_token": map[string]any{
 			"email": map[string]any{"essential": true},
 		},
 	})
-	tok := f.runCodeFlow(t, "openid email", extra)
-	if tok.IDToken == "" {
-		t.Fatal("id_token missing from successful /token response")
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, f.tk, busSubject, scenariokit.AuthorizeParams{
+		ClientID:    f.client.ID,
+		RedirectURI: busCallback,
+		Scope:       "openid email",
+		PKCE:        pkce,
+		Extra:       extra,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
 	}
-	claims := decodeBUSJWTClaims(t, tok.IDToken)
-	if _, ok := claims["email"]; ok {
-		t.Errorf("id_token carried email=%v despite ErrNotFound projection", claims["email"])
+	// The user leaves the store between authorization and redemption.
+	f.recorder.override = func(_ context.Context, _ string) (*store.User, error) {
+		return nil, store.ErrNotFound
 	}
-	if got, want := claims["sub"], busSubject; got != want {
-		t.Errorf("id_token sub=%v want %q", got, want)
+	tok := scenariokit.ExchangeCode(t, f.tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  busCallback,
+		Verifier:     pkce.Verifier,
+		ClientID:     f.client.ID,
+		ClientSecret: busClientSecret,
+	})
+	if tok.StatusCode != http.StatusBadRequest || tok.Raw["error"] != "invalid_grant" {
+		t.Fatalf("/token status=%d body=%v, want 400 invalid_grant", tok.StatusCode, tok.Raw)
+	}
+	if tok.AccessToken != "" || tok.IDToken != "" {
+		t.Fatalf("refused redemption still carried tokens: %v", tok.Raw)
 	}
 }
 

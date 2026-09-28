@@ -269,6 +269,7 @@ func TestHandleCIBA_ConsumedRecord_InvalidGrant(t *testing.T) {
 		Status: store.CIBARequestStatusPending,
 	})
 	// Approve then consume to land in the Consumed state.
+	seedSubject(t, f.store, "user-1")
 	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-consumed", "user-1", "", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -298,6 +299,7 @@ func TestHandleCIBA_ApprovedRecord_HappyPath(t *testing.T) {
 		Scope:  []string{"openid", "profile"},
 		Status: store.CIBARequestStatusPending,
 	})
+	seedSubject(t, f.store, "user-42")
 	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-ok", "user-42", "", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -336,6 +338,7 @@ func TestHandleCIBA_IssuanceFaultLeavesApprovalRetryable(t *testing.T) {
 	f := newCIBAFixture(t)
 	const authReqID = "auth-req-issuance-retry"
 	f.seedCIBARequest(t, &store.CIBARequest{ID: authReqID, Scope: []string{"openid"}})
+	seedSubject(t, f.store, "user-42")
 	if err := f.store.CIBARequests().Approve(context.Background(), authReqID, "user-42", "", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -377,6 +380,7 @@ func TestHandleCIBA_AuthorizeFailureAuditReasonMatchesWireError(t *testing.T) {
 		IssuedAt:  f.clock.now,
 		Status:    store.CIBARequestStatusPending,
 	})
+	seedSubject(t, f.store, "user-42")
 	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-scope-denied", "user-42", "", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -617,6 +621,7 @@ func TestHandleCIBA_IDTokenStampsAuthTime(t *testing.T) {
 		Scope:  []string{"openid"},
 		Status: store.CIBARequestStatusPending,
 	})
+	seedSubject(t, f.store, "user-7")
 	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-at", "user-7", "", authTime); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -662,6 +667,7 @@ func TestHandleCIBA_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 		Scope:  []string{"openid"},
 		Status: store.CIBARequestStatusPending,
 	})
+	seedSubject(t, f.store, "user-x")
 	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-need-at", "user-x", "", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -688,6 +694,7 @@ func TestHandleCIBA_IDTokenStampsApprovedACRWithoutAMR(t *testing.T) {
 		Status:    store.CIBARequestStatusPending,
 		ACRValues: []string{"urn:mace:incommon:iap:bronze", "urn:mace:incommon:iap:silver"},
 	})
+	seedSubject(t, f.store, "user-42")
 	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-acr", "user-42", "urn:mace:incommon:iap:silver", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}

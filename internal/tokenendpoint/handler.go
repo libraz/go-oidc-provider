@@ -37,6 +37,7 @@ const (
 	auditTokenIssued                         = string(auditevent.AuditTokenIssued)
 	auditTokenRefreshed                      = string(auditevent.AuditTokenRefreshed)
 	auditRefreshPriorAccessTokenRevokeFailed = string(auditevent.AuditRefreshPriorAccessTokenRevokeFailed)
+	auditTokenRevoked                        = string(auditevent.AuditTokenRevoked)
 	auditTokenRevokeFailed                   = string(auditevent.AuditTokenRevokeFailed)
 	auditRefreshGrantRevokeFailed            = string(auditevent.AuditRefreshGrantRevokeFailed)
 	auditCodeConsumed                        = string(auditevent.AuditCodeConsumed)
@@ -171,9 +172,11 @@ type Deps struct {
 	Grants store.GrantStore
 
 	// UserStore is the read-only end-user lookup the handler consults
-	// when projecting the OIDC Core 1.0 §5.5 "claims" request payload
-	// onto the id_token. A nil value silently disables
-	// the projection — the issued id_token then carries only the
+	// before every authorization_code, refresh_token, device_code and
+	// CIBA redemption — a subject it no longer holds earns invalid_grant
+	// and a grant teardown — and when projecting the OIDC Core 1.0 §5.5
+	// "claims" request payload onto the id_token. A nil value disables
+	// both: the redemption proceeds and the id_token carries only the
 	// standard claims plus the per-grant ACR/AMR/auth_time.
 	UserStore store.UserStore
 

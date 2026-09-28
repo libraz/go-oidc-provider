@@ -1189,6 +1189,7 @@ func TestScenario_DPOP_030_DeviceCodeBindingConfidential(t *testing.T) {
 	if deviceCode == "" {
 		t.Fatalf("device_code missing: %v", initiated)
 	}
+	scenariokit.SeedSubject(t, f.tk, devDefaultSubject)
 	if err := f.tk.Store.DeviceCodes().Approve(
 		context.Background(), deviceCode, devDefaultSubject, dpopAnchor,
 	); err != nil {
@@ -1223,6 +1224,7 @@ func TestScenario_DPOP_031_DeviceCodeBindingPublic(t *testing.T) {
 	if deviceCode == "" {
 		t.Fatalf("device_code missing: %v", initiated)
 	}
+	scenariokit.SeedSubject(t, f.tk, devDefaultSubject)
 	if err := f.tk.Store.DeviceCodes().Approve(
 		context.Background(), deviceCode, devDefaultSubject, dpopAnchor,
 	); err != nil {
@@ -1261,6 +1263,7 @@ func TestScenario_DPOP_032_CIBABindingConfidential(t *testing.T) {
 	if authReqID == "" {
 		t.Fatalf("auth_req_id missing: %v", initiated)
 	}
+	scenariokit.SeedSubject(t, f.tk, cibaDefaultSubject)
 	if err := f.tk.Store.CIBARequests().Approve(
 		context.Background(), authReqID, cibaDefaultSubject, "", dpopAnchor,
 	); err != nil {
@@ -1298,6 +1301,7 @@ func TestScenario_DPOP_033_CIBABindingPublic(t *testing.T) {
 	if authReqID == "" {
 		t.Fatalf("auth_req_id missing: %v", initiated)
 	}
+	scenariokit.SeedSubject(t, f.tk, cibaDefaultSubject)
 	if err := f.tk.Store.CIBARequests().Approve(
 		context.Background(), authReqID, cibaDefaultSubject, "", dpopAnchor,
 	); err != nil {

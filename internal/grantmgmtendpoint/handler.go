@@ -304,51 +304,22 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 // duplicate from a grant the client created deliberately, and only the
 // addressed grant_id was authenticated against the client.
 func revokeGrantCascade(ctx context.Context, deps Deps, grantID string) error {
-	out := teardown.Revoker{
+	err := teardown.Revoker{
 		RefreshTokens:      deps.RefreshTokens,
 		OpaqueAccessTokens: deps.OpaqueAccessTokens,
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		Strategy:           deps.RevocationStrategy,
 		Now:                deps.now().UTC(),
-		TombstoneRetention: tombstoneRetention(deps.AccessTokenTTL),
+		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             "grant_management_revoke",
-	}.Run(ctx, teardown.WholeGrant(grantID))
-	if !out.Complete() {
-		return fmt.Errorf("grant management: revoke grant %s: %w", grantID, teardownFailureError(out))
+	}.RevokeGrant(ctx, deps.Grants, grantID)
+	if err != nil {
+		// DELETE is an idempotent security operation: RevokeGrant already
+		// reads a concurrently removed record as the desired absent state.
+		return fmt.Errorf("grant management: revoke grant %s: %w", grantID, err)
 	}
-	if err := deps.Grants.Delete(ctx, grantID); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
-	}
-	// DELETE is an idempotent security operation. A concurrent cascade may
-	// have removed this grant after resolve/list but before this request's
-	// final delete; ErrNotFound then means the desired absent state already
-	// holds, not that the cascade failed.
 	return nil
-}
-
-// tombstoneRetention returns the grant-tombstone retention window (AT
-// TTL + 5-minute clock-skew grace; one-hour fallback for a zero TTL),
-// mirroring the /revoke and /end_session cascades' tombstoneRetention.
-func tombstoneRetention(ttl time.Duration) time.Duration {
-	if ttl <= 0 {
-		ttl = time.Hour
-	}
-	return ttl + 5*time.Minute
-}
-
-// teardownFailureError renders a [teardown.Outcome] that did not fully
-// complete into a single error so revokeGrantCascade's caller can log
-// and leave the grant record in place instead of deleting it.
-func teardownFailureError(out teardown.Outcome) error {
-	if out.UnresolvedGrant {
-		return errors.New("grant could not be resolved")
-	}
-	errs := make([]error, len(out.Failures))
-	for i, f := range out.Failures {
-		errs[i] = fmt.Errorf("%s: %w", f.Surface, f.Err)
-	}
-	return errors.Join(errs...)
 }
 
 // stampNoStore sets the no-cache headers every grant management response

@@ -138,6 +138,7 @@ func TestProvider_WithPrometheus_TokenIssuedLabelsTheRedeemingGrant(t *testing.T
 	if deviceCode == "" {
 		t.Fatalf("/device_authorization body missing device_code: %v", body)
 	}
+	st.PutUser(context.Background(), &store.User{Subject: "user-1"})
 	if err := st.DeviceCodes().Approve(context.Background(), deviceCode, "user-1", time.Now().UTC()); err != nil {
 		t.Fatalf("DeviceCodes.Approve: %v", err)
 	}

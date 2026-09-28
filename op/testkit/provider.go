@@ -179,7 +179,11 @@ func MinimalOptions(tb testing.TB, extra ...op.Option) []op.Option {
 
 // NewProvider builds a fully wired [Provider] for use in tests. It registers
 // a cleanup that closes the underlying [httptest.Server] when the test
-// finishes. The returned Provider is non-nil; failures fail the test via
+// finishes. Its [SubjectAuthenticator] puts each subject it logs in into
+// [Provider.Store] as a minimal user record unless the test already
+// seeded that subject, because the token endpoint refuses to redeem for
+// a subject the user store cannot find. A caller that replaces the store
+// through [WithOptions] seeds its own users. The returned Provider is non-nil; failures fail the test via
 // [testing.TB.Fatalf] before returning.
 func NewProvider(tb testing.TB, opts ...Option) *Provider {
 	tb.Helper()
@@ -204,7 +208,7 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(generateCookieKey(tb)),
 		op.WithInteractionDriver(AutoConsentDriver{}),
-		op.WithAuthenticators(SubjectAuthenticator{}),
+		op.WithAuthenticators(seedingSubjectAuthenticator{users: store}),
 	}
 	if cfg.clock != nil {
 		baseOpts = append(baseOpts, op.WithClock(cfg.clock))

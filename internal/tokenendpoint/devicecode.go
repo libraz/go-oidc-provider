@@ -80,6 +80,13 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 		emitDeviceCodeReject(ctx, deps, client.ID, reason)
 		return
 	}
+	if _, err := lookupLiveSubject(ctx, deps, authorized.Subject); err != nil {
+		if errors.Is(err, errSubjectDeprovisioned) {
+			retireDeprovisionedDeviceCode(ctx, deps, client.ID, authorized.Subject, in.DeviceCode)
+		}
+		writeSubjectLookupError(w, err)
+		return
+	}
 	issued, err := prepareDeviceCodeResponse(ctx, deps, client, authorized, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -331,6 +338,21 @@ func writeDeviceCodeAuthError(w http.ResponseWriter, err error) {
 	default:
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 	}
+}
+
+// retireDeprovisionedDeviceCode spends an approval whose subject no
+// longer exists and records the refusal. The grant is allocated only at
+// redemption, so no credential exists yet to tear down. A Consume fault
+// is dropped: the approval then lapses on its TTL, and every poll until
+// then meets the same subject lookup.
+func retireDeprovisionedDeviceCode(ctx context.Context, deps Deps, clientID, subject, deviceCode string) {
+	_, _ = deps.DeviceCodes.Consume(ctx, deviceCode)
+	emitDeviceCodeReject(ctx, deps, clientID, errInvalidGrant)
+	retireDeprovisionedGrant(ctx, deps, deprovisionedRedemption{
+		ClientID:  clientID,
+		Subject:   subject,
+		GrantType: grantTypeDeviceCode,
+	})
 }
 
 // consumeDeviceCode atomically transitions the record from Approved

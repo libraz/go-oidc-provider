@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
@@ -334,21 +335,24 @@ func TestScenario_UI_008_ClientGoneReturnsInvalidToken(t *testing.T) {
 }
 
 // uiMissingSubjectStore wraps an inmem.Store and shadows Users() so
-// every FindBySubject lookup returns store.ErrNotFound. UI-009 uses
+// FindBySubject returns store.ErrNotFound once gone is set. UI-009 uses
 // this to drive the "account gone after issuance" branch without
 // poking at the inmem internals: we mint a token with the real
-// UserStore, then swap the OP onto a hybrid that always reports
-// ErrNotFound for the subject.
+// UserStore, then flip the lookup to report ErrNotFound for the subject.
 type uiMissingSubjectStore struct {
 	*inmem.Store
+	gone atomic.Bool
 }
 
-func (s *uiMissingSubjectStore) Users() store.UserStore { return uiMissingSubjectUsers{} }
+func (s *uiMissingSubjectStore) Users() store.UserStore { return uiMissingSubjectUsers{store: s} }
 
-type uiMissingSubjectUsers struct{}
+type uiMissingSubjectUsers struct{ store *uiMissingSubjectStore }
 
-func (uiMissingSubjectUsers) FindBySubject(_ context.Context, _ string) (*store.User, error) {
-	return nil, store.ErrNotFound
+func (u uiMissingSubjectUsers) FindBySubject(ctx context.Context, sub string) (*store.User, error) {
+	if u.store.gone.Load() {
+		return nil, store.ErrNotFound
+	}
+	return u.store.Store.Users().FindBySubject(ctx, sub)
 }
 
 // TestScenario_UI_009_AccountGoneReturnsInvalidToken asserts that when
@@ -386,7 +390,9 @@ func TestScenario_UI_009_AccountGoneReturnsInvalidToken(t *testing.T) {
 		t.Fatalf("RegisterClient: %v", err)
 	}
 
+	base.PutUser(context.Background(), &store.User{Subject: scenariokit.DefaultSubject})
 	at := uiMintAccessToken(t, tk, "openid email")
+	hybrid.gone.Store(true)
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
 		tk.Server.URL+"/oidc/userinfo", http.NoBody)

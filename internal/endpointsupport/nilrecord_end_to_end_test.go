@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +56,9 @@ type brokenSubstores struct {
 type nilRecordStore struct {
 	*inmem.Store
 	broken brokenSubstores
+	// usersGone makes the user substore lose every subject once set, so a
+	// token can be minted for a subject that is then gone at /userinfo.
+	usersGone *atomic.Bool
 }
 
 func (s nilRecordStore) Clients() store.ClientStore {
@@ -86,10 +90,7 @@ func (s nilRecordStore) PushedAuthRequests() store.PushedAuthRequestStore {
 }
 
 func (s nilRecordStore) Users() store.UserStore {
-	if s.broken.users {
-		return nilUserStore{UserStore: s.Store.Users()}
-	}
-	return s.Store.Users()
+	return goneUserStore{UserStore: s.Store.Users(), gone: s.usersGone, nilRecord: s.broken.users}
 }
 
 func (s nilRecordStore) BeginTx(ctx context.Context) (store.Tx, error) {
@@ -171,17 +172,32 @@ func (nilPARStore) Find(context.Context, string) (*store.PushedAuthRequest, erro
 	return nil, nil
 }
 
-type nilUserStore struct{ store.UserStore }
+// goneUserStore serves the reference user store until gone is set, then
+// reports every subject absent: as (nil, nil) when nilRecord breaks the
+// contract, as [store.ErrNotFound] otherwise.
+type goneUserStore struct {
+	store.UserStore
+	gone      *atomic.Bool
+	nilRecord bool
+}
 
-//nolint:nilnil // the (nil, nil) pair is the store-contract violation under test.
-func (nilUserStore) FindBySubject(context.Context, string) (*store.User, error) { return nil, nil }
+func (u goneUserStore) FindBySubject(ctx context.Context, sub string) (*store.User, error) {
+	if !u.gone.Load() {
+		return u.UserStore.FindBySubject(ctx, sub)
+	}
+	if u.nilRecord {
+		return nil, nil //nolint:nilnil // the (nil, nil) pair is the store-contract violation under test.
+	}
+	return nil, store.ErrNotFound
+}
 
 // nilRecordFixture is one OP wired over a backend whose named substores
 // break the contract, together with the conforming handle tests seed
 // records through.
 type nilRecordFixture struct {
-	server  *httptest.Server
-	backing *inmem.Store
+	server    *httptest.Server
+	backing   *inmem.Store
+	usersGone *atomic.Bool
 }
 
 // newNilRecordFixture builds an OP whose store breaks the named substores.
@@ -192,8 +208,9 @@ func newNilRecordFixture(t *testing.T, broken brokenSubstores, extra ...op.Optio
 	t.Helper()
 	clock := nilRecordClock{}
 	backing := inmem.New(inmem.WithClock(clock))
+	usersGone := &atomic.Bool{}
 	opts := append([]op.Option{
-		op.WithStore(nilRecordStore{Store: backing, broken: broken}),
+		op.WithStore(nilRecordStore{Store: backing, broken: broken, usersGone: usersGone}),
 		op.WithClock(clock),
 	}, extra...)
 	provider, err := op.New(testkit.MinimalOptions(t, opts...)...)
@@ -202,7 +219,7 @@ func newNilRecordFixture(t *testing.T, broken brokenSubstores, extra ...op.Optio
 	}
 	srv := httptest.NewServer(provider)
 	t.Cleanup(srv.Close)
-	return &nilRecordFixture{server: srv, backing: backing}
+	return &nilRecordFixture{server: srv, backing: backing, usersGone: usersGone}
 }
 
 // seedClient registers the confidential fixture client on the backing
@@ -558,18 +575,20 @@ func TestNilRecordStore_UserInfoEndpoint(t *testing.T) {
 			ID: tokenID, ClientID: clientID, Subject: subject,
 			Scope: []string{"openid"},
 		})
+		f.backing.PutUser(context.Background(), &store.User{Subject: subject})
 		res := f.post(t, "/oidc/token", url.Values{
 			"grant_type": {"refresh_token"}, "refresh_token": {tokenID},
 		}, clientID)
 		if res.status != http.StatusOK {
 			t.Fatalf("/token status=%d want 200; body=%s", res.status, res.body)
 		}
+		// The subject leaves the user store after the token is minted.
+		f.usersGone.Store(true)
 		return accessTokenFromTokenResponse(t, res.body)
 	}
 
-	// Absent baseline: a conforming store that simply has no row for the
-	// subject. The user substore is never seeded in either fixture, so the
-	// two runs differ only in how the miss is reported.
+	// Absent baseline: a conforming store that reports the subject gone.
+	// The two runs differ only in how the miss is reported.
 	absentFixture := newNilRecordFixture(t, brokenSubstores{})
 	absent := userInfoWithBearer(t, absentFixture, mint(absentFixture))
 

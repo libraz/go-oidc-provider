@@ -91,6 +91,9 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 
 	mgr, sessCodec := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
+	// Sessions are seated directly, bypassing the login that seeds users.
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-A"})
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-B"})
 	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.Current()}, clock.Current())
 	sessB := establishAddAccount(t, mgr, sessA.Cookie, sessions.Login{
 		Subject:  "user-B",
@@ -335,6 +338,9 @@ func TestEndToEnd_ChooserSelectAccount_SeedsACRAMRFromSession(t *testing.T) {
 
 	mgr, _ := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
+	// Sessions are seated directly, bypassing the login that seeds users.
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-A"})
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-B"})
 	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.now}, clock.now)
 	// user-B's session already reached AAL2 (password + TOTP). This is
 	// the assurance the chooser re-entry must carry into the id_token.
@@ -509,6 +515,9 @@ func TestEndToEnd_ChooserAddAccountURL_AddsAccountToExistingGroup(t *testing.T) 
 
 	mgr, sessCodec := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
+	// Sessions are seated directly, bypassing the login that seeds users.
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-A"})
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-B"})
 	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.now}, clock.now)
 
 	jar, err := cookiejar.New(nil)
@@ -709,6 +718,9 @@ func TestEndToEnd_FreshLoginDifferentSubjectStartsNewChooserGroup(t *testing.T) 
 
 	mgr, sessCodec := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
 	ctx := context.Background()
+	// Sessions are seated directly, bypassing the login that seeds users.
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-A"})
+	tk.Store.PutUser(context.Background(), &store.User{Subject: "user-B"})
 	sessA := establishFresh(t, mgr, sessions.Login{Subject: "user-A", AuthTime: clock.now}, clock.now)
 
 	jar, err := cookiejar.New(nil)

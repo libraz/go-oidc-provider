@@ -28,6 +28,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/devicecodekit"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 // devURNDeviceCode is the wire form of the device_code grant_type. The
@@ -205,6 +206,7 @@ func (p *devProvider) approveDeviceCode(t *testing.T, deviceCode, subject string
 // stamps so id_token auth_time assertions remain stable across runs.
 func (p *devProvider) approveDeviceCodeAt(t *testing.T, deviceCode, subject string, authTime time.Time) {
 	t.Helper()
+	scenariokit.SeedSubject(t, p.tk, subject)
 	if err := p.tk.Store.DeviceCodes().Approve(context.Background(), deviceCode, subject, authTime); err != nil {
 		t.Fatalf("DeviceCodes.Approve: %v", err)
 	}
@@ -568,13 +570,8 @@ func TestScenario_DEV_025_TokenRequestUnknownDeviceCode(t *testing.T) {
 	t.Skip("out-of-scope: DEV-025 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_DEV_026_TokenRequestAccountNotFound is OOS — no
-// findAccount hook on the device-code redemption path. See catalog
-// out_of_scope_reason.
-func TestScenario_DEV_026_TokenRequestAccountNotFound(t *testing.T) {
-	t.Parallel()
-	t.Skip("out-of-scope: DEV-026 (see catalog out_of_scope_reason)")
-}
+// DEV-026 is TestScenario_DEV_026_TokenRequestAccountNotFound in
+// subject_deprovisioning_test.go, beside the other redemption paths.
 
 // TestScenario_DEV_027_TokenRequestClientMismatch pins the cross-
 // client gate: a device_code issued for client A but presented by

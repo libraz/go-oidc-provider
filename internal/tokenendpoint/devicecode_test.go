@@ -317,6 +317,7 @@ func TestHandleDeviceCode_IssuanceFaultLeavesApprovalRetryable(t *testing.T) {
 	f := newDeviceCodeFixture(t)
 	const deviceCode = "device-code-issuance-retry"
 	f.seedDeviceCode(t, &store.DeviceCode{ID: deviceCode, UserCode: "ABCD-EFGH", Scope: []string{"openid"}})
+	seedSubject(t, f.store, "user-42")
 	if err := f.store.DeviceCodes().Approve(context.Background(), deviceCode, "user-42", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}

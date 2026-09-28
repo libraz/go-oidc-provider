@@ -71,6 +71,13 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 		emitCIBAReject(ctx, deps, client.ID, reason)
 		return
 	}
+	if _, err := lookupLiveSubject(ctx, deps, authorized.Subject); err != nil {
+		if errors.Is(err, errSubjectDeprovisioned) {
+			retireDeprovisionedCIBARequest(ctx, deps, client.ID, authorized.Subject, in.AuthReqID)
+		}
+		writeSubjectLookupError(w, err)
+		return
+	}
 	issued, err := prepareCIBAResponse(ctx, deps, client, authorized, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -347,6 +354,21 @@ func writeCIBAAuthError(w http.ResponseWriter, err error) {
 	default:
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 	}
+}
+
+// retireDeprovisionedCIBARequest spends an approval whose subject no
+// longer exists and records the refusal. The grant is allocated only at
+// redemption, so no credential exists yet to tear down. A Consume fault
+// is dropped: the approval then lapses on its TTL, and every poll until
+// then meets the same subject lookup.
+func retireDeprovisionedCIBARequest(ctx context.Context, deps Deps, clientID, subject, authReqID string) {
+	_, _ = deps.CIBARequests.Consume(ctx, authReqID)
+	emitCIBAReject(ctx, deps, clientID, errInvalidGrant)
+	retireDeprovisionedGrant(ctx, deps, deprovisionedRedemption{
+		ClientID:  clientID,
+		Subject:   subject,
+		GrantType: grantTypeCIBA,
+	})
 }
 
 // consumeCIBARequest atomically transitions the record from

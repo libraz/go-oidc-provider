@@ -589,6 +589,13 @@ func TestAuthCode_PublicClient_PKCE_OK(t *testing.T) {
 // Tracks: RFC 9700 §2.1.1 (Security BCP), which mandates PKCE on
 // every public-client code flow, and the analogous PKCE-downgrade
 // threat shape against public SPAs / native clients.
+// TestAuthCode_PublicClient_NoPKCE_Rejected pins that a public client
+// cannot fall back to no PKCE and no client secret: the request is
+// refused, never silently authenticated on the code alone.
+//
+// Tracks: CVE-2026-26247 — a PKCE-or-secret policy that fell through
+// when neither side was actually presented, admitting an unauthenticated
+// public-client redemption.
 func TestAuthCode_PublicClient_NoPKCE_Rejected(t *testing.T) {
 	t.Parallel()
 

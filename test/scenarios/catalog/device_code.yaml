@@ -205,11 +205,11 @@ rows:
     severity: P0
     spec: RFC 6749 §5.2
     behaviour: |
-      When the OP's findAccount hook returns nothing for the subject
-      a resolved DeviceCode names, the response is 400 invalid_grant
-      ("referenced account not found").
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 does not have a findAccount hook on the device_code redemption path: the substore record persists Subject at Approve time, and the token endpoint trusts that value verbatim. Embedders that need a post-Approve account-presence check enforce it on their interaction.Driver before calling Approve. Revisit only if the substore contract grows a 're-resolve subject at consume' phase."
+      When the user store no longer finds the subject an approved
+      DeviceCode names, the device_code redemption is 400
+      invalid_grant and the approval is spent; refresh tokens the
+      subject was issued earlier are refused at their next redemption.
+    status: active
 
   - id: DEV-027
     severity: P0

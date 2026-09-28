@@ -542,6 +542,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultAndTxBarrierDoNotConsume(t 
 		{"type": "payment", "amount": "100"},
 		{"type": "payment", "amount": "200"},
 	}
+	seedSubject(t, backing, "user-rar-grant-fault")
 	if err := backing.Grants().Save(context.Background(), &store.Grant{
 		ID:                   grantID,
 		Subject:              "user-rar-grant-fault",
@@ -1003,6 +1004,7 @@ func TestRefresh_GraceWindow_WithoutRetryCache(t *testing.T) {
 	cur := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	f := newKeylessRefreshFixture(t, movableClock{cur: &cur})
 	const refreshID = "rt-keyless-grace"
+	seedSubject(t, f.store, "user-1")
 	if err := f.store.RefreshTokens().Save(context.Background(), &store.RefreshToken{
 		ID:        refreshID,
 		ClientID:  f.client.ID,
@@ -1537,6 +1539,7 @@ func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
 	const grantID = "grant-opaque-revoke-failure"
 	const refreshID = "rt-opaque-revoke-failure"
 	const priorAT = "prior-opaque-revoke-failure-token-123456"
+	seedSubject(t, backing, "user-opaque-revoke-failure")
 	if err := backing.Grants().Save(context.Background(), &store.Grant{
 		ID: grantID, Subject: "user-opaque-revoke-failure", ClientID: client.ID,
 		Scope: []string{"openid"}, CreatedAt: clock.now, UpdatedAt: clock.now,
@@ -1647,6 +1650,7 @@ func TestRefresh_OpaqueRevokeFailureInTxIsRetryable(t *testing.T) {
 	const grantID = "grant-opaque-revoke-failure-tx"
 	const refreshID = "rt-opaque-revoke-failure-tx"
 	const priorAT = "prior-opaque-revoke-failure-tx-token-123456"
+	seedSubject(t, backing, "user-opaque-revoke-failure-tx")
 	if err := backing.Grants().Save(context.Background(), &store.Grant{
 		ID: grantID, Subject: "user-opaque-revoke-failure-tx", ClientID: client.ID,
 		Scope: []string{"openid"}, CreatedAt: clock.now, UpdatedAt: clock.now,

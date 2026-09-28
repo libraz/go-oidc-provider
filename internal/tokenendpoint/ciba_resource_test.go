@@ -39,6 +39,7 @@ func TestHandleCIBA_AccessTokenBoundToRequestedResource(t *testing.T) {
 		Status:   store.CIBARequestStatusPending,
 		Resource: []string{resource},
 	})
+	seedSubject(t, f.store, "user-77")
 	if err := f.store.CIBARequests().Approve(
 		context.Background(), "auth-req-resource", "user-77", "", f.clock.now,
 	); err != nil {

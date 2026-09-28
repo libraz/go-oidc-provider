@@ -72,15 +72,13 @@ rows:
 
   - id: BUS-005
     severity: P1
-    spec: OIDC Core §5.5 / implementation contract
+    spec: RFC 6749 §5.2 / implementation contract
     behaviour: |
-      When store.UserStore.FindBySubject returns store.ErrNotFound
-      while projecting an OIDC Core 1.0 §5.5 "claims" payload at the
-      token endpoint, the OP silently omits the affected claims and
-      completes the grant exchange normally. The id_token is still
-      issued (without the unresolvable claim names) and the OP does
-      NOT return HTTP 500 or error="invalid_grant" for a missing
-      user during projection.
+      When store.UserStore.FindBySubject returns store.ErrNotFound at
+      the token endpoint, the redemption is refused with 400
+      error="invalid_grant": no access token or id_token is issued,
+      and every credential issued under the grant is revoked. Any
+      other lookup error is 500 server_error with no token issued.
     status: active
 
   - id: BUS-006

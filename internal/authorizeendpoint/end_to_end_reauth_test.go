@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -28,6 +29,9 @@ type reauthDriver struct {
 
 func newReauthDriver(t *testing.T, fix *flowFixture) *reauthDriver {
 	t.Helper()
+	// The fixture's own authenticator logs reauthSubject in without a
+	// user store, and the token endpoint refuses subjects it cannot find.
+	fix.store.PutUser(context.Background(), &store.User{Subject: reauthSubject})
 	return &reauthDriver{t: t, fix: fix, cl: fix.httpClient(t)}
 }
 

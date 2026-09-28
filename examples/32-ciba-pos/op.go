@@ -19,6 +19,7 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/grant"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -26,6 +27,9 @@ func buildProvider() (http.Handler, *inmem.Store, error) {
 	keys := devkeys.MustEphemeral("ciba-poll-1")
 
 	st := inmem.New()
+	// The token endpoint re-checks the approved subject against the user
+	// store on every redemption, so the demo user has to exist there.
+	st.PutUser(context.Background(), &store.User{Subject: demoSubject})
 
 	resolver := op.HintResolverFunc(func(_ context.Context, _ op.HintKind, value string) (string, error) {
 		if value == loginHint {
