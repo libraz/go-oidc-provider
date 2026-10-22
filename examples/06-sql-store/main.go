@@ -131,7 +131,7 @@ func run() error {
 
 	log.Printf("OP backed by SQLite listening on %s (issuer %s)", opAddr, issuer)
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	return nil

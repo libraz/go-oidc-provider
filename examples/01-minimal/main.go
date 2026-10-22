@@ -110,7 +110,7 @@ func run() error {
 	opErrCh := make(chan error, 1)
 	go func() {
 		log.Printf("OP listening on %s (issuer %s)", opAddr, issuer)
-		opErrCh <- serve.Listen(opAddr, opMux)
+		opErrCh <- serve.Listen(opAddr, opMux, provider)
 	}()
 
 	// rpkit runs OIDC discovery synchronously, so wait until the OP

@@ -129,7 +129,7 @@ func main() {
 	log.Printf("prometheus-metrics example listening on %s (issuer %s; /metrics on the same listener)", opAddr, issuer)
 	log.Printf("after at least one /token round-trip, curl -s %s/metrics | grep oidc_", issuer)
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

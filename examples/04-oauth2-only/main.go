@@ -131,7 +131,7 @@ func main() {
 	log.Println("oauth2-only example listening on :8080 (issuer http://127.0.0.1:8080)")
 	log.Println("OIDC client:   oidc-rp   (scope=openid profile email → id_token issued)")
 	log.Println("OAuth client:  oauth-cli (scope=api:read              → no id_token)")
-	if err := serve.Listen(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux, provider); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

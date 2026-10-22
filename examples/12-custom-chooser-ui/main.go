@@ -138,7 +138,7 @@ func main() {
 	log.Printf("custom-chooser-ui example listening on %s (issuer %s, HTML chooser via WithChooserUI)", opAddr, issuer)
 	log.Println("flow: sign in as alice → /authorize?prompt=select_account → follow the add-account link as bob → /authorize?prompt=select_account")
 	log.Println("demo users: alice/alice-password, bob/bob-password")
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

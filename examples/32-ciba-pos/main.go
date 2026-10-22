@@ -130,6 +130,7 @@ func run(logger *slog.Logger) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		_ = provider.Shutdown(shutdownCtx)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)

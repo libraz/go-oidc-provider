@@ -134,8 +134,8 @@ func main() {
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
 
 	errCh := make(chan error, 2)
-	go func() { errCh <- serve.Listen(unprofiledAddr, mount(unprofiled)) }()
-	go func() { errCh <- serve.Listen(baselineAddr, mount(baseline)) }()
+	go func() { errCh <- serve.Listen(unprofiledAddr, mount(unprofiled), unprofiled) }()
+	go func() { errCh <- serve.Listen(baselineAddr, mount(baseline), baseline) }()
 	log.Fatal(<-errCh)
 }
 

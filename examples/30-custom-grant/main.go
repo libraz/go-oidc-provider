@@ -189,5 +189,5 @@ func runListener() error {
 		fmt.Sprintf(`curl -s -d 'grant_type=%s&client_id=%s&client_secret=%s&service_token=%s' %s%s`,
 			grantURN, clientID, clientSecret, demoToken, issuer, tokenPath),
 	)
-	return serve.Listen(opAddr, mux)
+	return serve.Listen(opAddr, mux, provider)
 }

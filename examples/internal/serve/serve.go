@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -39,10 +40,15 @@ import (
 //     setting them at this layer would cap legitimate slow consumers
 //     of /jwks or /.well-known and produce noisy 408s in the demo.
 //
-// On signal, Listen calls Shutdown with a 5 s grace and returns the
-// first non-nil error (Shutdown's or ListenAndServe's, whichever
-// fired first).
-func Listen(addr string, h http.Handler) error {
+// On signal, Listen calls Shutdown with a 5 s grace, then calls
+// Shutdown on each drain value (typically the *op.Provider, so queued
+// back-channel Logout Tokens are delivered after the listener stops),
+// and returns the first non-nil error (Shutdown's or ListenAndServe's,
+// whichever fired first). A listener failure drains the same way.
+// Every Listen that runs on a signal waits for the drains of the
+// others to finish, so a main that returns when the first listener
+// does cannot cut a drain short.
+func Listen(addr string, h http.Handler, drain ...Drainer) error {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,
@@ -50,6 +56,9 @@ func Listen(addr string, h http.Handler) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	if len(drain) > 0 {
+		draining.Add(1)
+	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
@@ -66,13 +75,52 @@ func Listen(addr string, h http.Handler) error {
 	case <-stop:
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if shutErr := srv.Shutdown(ctx); shutErr != nil {
+		shutErr := srv.Shutdown(ctx)
+		drainErr := runDrains(ctx, drain)
+		draining.Wait()
+		if shutErr != nil {
 			return shutErr
+		}
+		if drainErr != nil {
+			return drainErr
 		}
 		return <-errCh
 	case err := <-errCh:
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if drainErr := runDrains(ctx, drain); err == nil {
+			err = drainErr
+		}
 		return err
 	}
+}
+
+// Drainer is the lifecycle seam Listen calls after the listener has
+// stopped accepting; *op.Provider satisfies it through its Shutdown
+// method.
+type Drainer interface {
+	Shutdown(ctx context.Context) error
+}
+
+// draining counts the Listen calls that own a drain and have not
+// finished it.
+var draining sync.WaitGroup
+
+// runDrains calls Shutdown on each drain value and releases the
+// drain-owning Listen's slot in [draining]. It returns the first
+// error.
+func runDrains(ctx context.Context, drain []Drainer) error {
+	if len(drain) == 0 {
+		return nil
+	}
+	defer draining.Done()
+	var first error
+	for _, d := range drain {
+		if err := d.Shutdown(ctx); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // Demo logs a uniform "<name> listening on <addr> (issuer <issuer>)"

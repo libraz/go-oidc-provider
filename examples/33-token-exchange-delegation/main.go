@@ -84,6 +84,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http/httptest"
@@ -202,5 +203,10 @@ func startProbeOP(logger *slog.Logger) (issuer string, shutdown func(), err erro
 	srv.Config.Handler = provider
 	srv.Start()
 	logger.Info("probe OP listening", slog.String("issuer", srv.URL))
-	return srv.URL, srv.Close, nil
+	return srv.URL, func() {
+		srv.Close()
+		drainCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = provider.Shutdown(drainCtx)
+	}, nil
 }

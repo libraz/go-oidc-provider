@@ -164,7 +164,7 @@ func main() {
 
 	log.Printf("custom-consent-ui example listening on %s (issuer %s)", opAddr, issuer)
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

@@ -83,7 +83,7 @@ func main() {
 	log.Println("try: curl -u backend-service:cc-demo-secret-rotate-me \\")
 	log.Println("         -d 'grant_type=client_credentials&scope=api:read' \\")
 	log.Printf("         %s/oidc/token | jq", issuer)
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

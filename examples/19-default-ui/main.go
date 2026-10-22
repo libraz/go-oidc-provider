@@ -110,7 +110,7 @@ func main() {
 	log.Printf("default-ui example listening on %s (issuer %s, built-in HTML screens, no driver configured)", opAddr, issuer)
 	log.Println("flow: sign in as alice → /authorize?prompt=select_account → follow the add-account link as bob → /authorize?prompt=select_account")
 	log.Println("demo users: alice/alice-password, bob/bob-password")
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

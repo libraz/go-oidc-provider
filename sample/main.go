@@ -38,6 +38,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -162,7 +164,7 @@ func run(logger *slog.Logger) error {
 	opErr := make(chan error, 1)
 	go func() {
 		logger.Info("op listening", "addr", cfg.OPAddr, "issuer", cfg.Issuer)
-		opErr <- listen(cfg.OPAddr, mux)
+		opErr <- listen(cfg.OPAddr, mux, provider)
 	}()
 
 	if err := waitForIssuer(ctx, cfg.Issuer, cfg.StartupTimeout); err != nil {
@@ -179,15 +181,23 @@ func run(logger *slog.Logger) error {
 	rpErr := make(chan error, 1)
 	go func() {
 		logger.Info("relying party listening", "addr", cfg.RPAddr, "url", cfg.RPBase)
-		rpErr <- listen(cfg.RPAddr, rpMux)
+		rpErr <- listen(cfg.RPAddr, rpMux, nil)
 	}()
 
 	logger.Info("ready", "open", "http://"+cfg.OPAddr+"/")
+	// A signal stops both listeners; wait for the other one so the
+	// provider's drain is not cut short by the process exiting.
 	select {
 	case err := <-opErr:
-		return err
+		if err != nil {
+			return err
+		}
+		return <-rpErr
 	case err := <-rpErr:
-		return err
+		if err != nil {
+			return err
+		}
+		return <-opErr
 	}
 }
 
@@ -288,15 +298,46 @@ func hasTOTPEnrolment(totps opstore.TOTPStore, logger *slog.Logger) func(op.Logi
 }
 
 // listen serves h with timeouts set, so a stalled client cannot hold a
-// connection open indefinitely.
-func listen(addr string, h http.Handler) error {
+// connection open indefinitely. On SIGINT / SIGTERM it stops accepting
+// requests and then drains provider (when non-nil), so back-channel
+// Logout Tokens already queued are delivered before the process exits.
+func listen(addr string, h http.Handler, provider *op.Provider) error {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	return srv.ListenAndServe()
+	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		err := srv.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		errCh <- err
+	}()
+
+	var err error
+	select {
+	case <-stop.Done():
+		ctx, done := context.WithTimeout(context.Background(), 5*time.Second)
+		defer done()
+		err = srv.Shutdown(ctx)
+		if provider != nil {
+			if drainErr := provider.Shutdown(ctx); err == nil {
+				err = drainErr
+			}
+		}
+		<-errCh
+	case err = <-errCh:
+		if provider != nil {
+			_ = provider.Shutdown(context.Background())
+		}
+	}
+	return err
 }
 
 // waitForDB blocks until MySQL answers, so the process survives being

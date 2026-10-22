@@ -12,7 +12,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
@@ -26,7 +25,7 @@ import (
 // and the CLI flow call this helper so they exercise an identical
 // configuration path; the only difference between the two phases
 // is the listener that sits in front of the handler.
-func buildProvider() (http.Handler, *inmem.Store, error) {
+func buildProvider() (*op.Provider, *inmem.Store, error) {
 	keys := devkeys.MustEphemeral("device-code-1")
 	st := inmem.New()
 	// Seed the user record so the access token's sub/profile claims

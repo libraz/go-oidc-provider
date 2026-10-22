@@ -14,7 +14,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
@@ -23,7 +22,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-func buildProvider() (http.Handler, *inmem.Store, error) {
+func buildProvider() (*op.Provider, *inmem.Store, error) {
 	keys := devkeys.MustEphemeral("ciba-poll-1")
 
 	st := inmem.New()

@@ -173,7 +173,7 @@ func main() {
 		opAddr, clientID, rpAddr)
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
 	log.Println("drive /authorize → /token to seed a session, then call /oidc/end_session with the id_token_hint to fire delivery")
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		log.Fatalf("OP listen: %v", err)
 	}
 }

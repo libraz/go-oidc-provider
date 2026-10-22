@@ -249,7 +249,7 @@ func run() error {
 	opErrCh := make(chan error, 1)
 	go func() {
 		log.Printf("OP listening on %s (issuer %s, SPA at /login, enrolment at /account)", opAddr, issuer)
-		opErrCh <- serve.Listen(opAddr, opMux)
+		opErrCh <- serve.Listen(opAddr, opMux, provider)
 	}()
 
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

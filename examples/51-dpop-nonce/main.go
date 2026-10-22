@@ -164,7 +164,7 @@ func run() error {
 	go func() {
 		log.Printf("OP listening on %s (issuer %s, FAPI 2.0 Baseline + DPoP nonce, rotation %s)",
 			opAddr, issuer, nonceRotation)
-		opErrCh <- serve.Listen(opAddr, opMux)
+		opErrCh <- serve.Listen(opAddr, opMux, provider)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

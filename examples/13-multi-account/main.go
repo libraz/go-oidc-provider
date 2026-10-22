@@ -108,7 +108,7 @@ func main() {
 	log.Println("flow: log in as alice → /authorize?prompt=select_account → follow AddAccountURL as bob → /authorize?prompt=select_account")
 	log.Println("the chooser response is a Prompt{Type: \"interaction.chooser\", Data: ChooserPromptData{Accounts: [...], AddAccountURL: \"...\"}}")
 	log.Println("demo users: alice/alice-password, bob/bob-password")
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

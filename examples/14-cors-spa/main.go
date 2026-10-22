@@ -111,7 +111,7 @@ func main() {
 	log.Println("         -H 'Origin: https://spa.example.com' \\")
 	log.Println("         -H 'Access-Control-Request-Method: POST'")
 	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
-	if err := serve.Listen(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux, provider); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

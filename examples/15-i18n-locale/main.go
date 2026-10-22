@@ -91,5 +91,5 @@ func run() error {
 	log.Println("registered locales: en, ja (seed) + fr (custom); default = fr")
 	log.Println("self-verify probe PASSED — listening on :8080")
 	log.Println("hit /.well-known/openid-configuration and read ui_locales_supported to verify discovery")
-	return serve.Listen(":8080", mux)
+	return serve.Listen(":8080", mux, provider)
 }

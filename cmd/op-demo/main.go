@@ -301,6 +301,9 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Error("op-demo: shutdown", "err", err)
 		}
+		if err := provider.Shutdown(shutdownCtx); err != nil {
+			logger.Error("op-demo: drain", "err", err)
+		}
 		close(idleClosed)
 	}()
 
