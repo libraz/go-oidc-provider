@@ -315,7 +315,10 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 	out := projectRefreshToken(rec, publicSubject, deps.Issuer)
 	var g *store.Grant
 	if rec.Origin != store.RefreshOriginCustomGrant {
-		g = findGrant(ctx, deps, rec.GrantID)
+		if g, err = findGrant(ctx, deps, rec.GrantID); err != nil {
+			emitLookupFault(ctx, deps, "grant", authenticatedClientID, err)
+			return response{}, false
+		}
 	}
 	out.AuthorizationDetails = tokens.ResolveAuthorization(
 		tokens.Authorization{AuthorizationDetails: rec.AuthorizationDetails},
@@ -363,26 +366,32 @@ func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClien
 		// introspection client for the resource this token names.
 		return response{}, false
 	}
+	g, err := findGrant(ctx, deps, rec.GrantID)
+	if err != nil {
+		emitLookupFault(ctx, deps, "grant", authenticatedClientID, err)
+		return response{}, false
+	}
 	out := projectOpaqueAccessToken(view, deps.Issuer)
 	out.AuthorizationDetails = tokens.ResolveAuthorization(
 		tokens.Authorization{AuthorizationDetails: rec.AuthorizationDetails},
-		rec.AuthorizationRecorded, findGrant(ctx, deps, rec.GrantID), rec.ClientID,
+		rec.AuthorizationRecorded, g, rec.ClientID,
 	).AuthorizationDetails
 	return out, true
 }
 
 // findGrant reads the grant a token descends from, for the RFC 9396 §9
-// authorization_details echo. A nil store, an empty grantID, or any
-// lookup failure yields nil — introspection never fails on the echo.
-func findGrant(ctx context.Context, deps Deps, grantID string) *store.Grant {
+// authorization_details echo. A nil store, an empty grantID, or a grant the
+// store does not hold yields nil; any other lookup failure is returned, so
+// the echo is never projected from a grant that could not be read.
+func findGrant(ctx context.Context, deps Deps, grantID string) (*store.Grant, error) {
 	if deps.Grants == nil || grantID == "" {
-		return nil
+		return nil, nil //nolint:nilnil // no grant to consult
 	}
 	g, err := deps.Grants.Find(ctx, grantID)
-	if err != nil {
-		return nil
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil //nolint:nilnil // no grant to consult
 	}
-	return g
+	return g, err
 }
 
 // projectIntrospectionSubject converts the OP-internal raw subject on

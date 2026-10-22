@@ -70,18 +70,31 @@ func (t opaqueRevokeFailTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 }
 
 // failOnceGrantStore is a deterministic fault-injection decorator over the
-// real in-memory GrantStore. It fails the first Find only; all persistence and
-// subsequent reads remain owned by the reference adapter.
+// real in-memory GrantStore. It fails one Find only, the first after skip
+// successful ones; all persistence and other reads remain owned by the
+// reference adapter.
 type failOnceGrantStore struct {
-	store.GrantStore
-	failed atomic.Bool
+	store.GrantClientLister
+	skip  int32
+	calls atomic.Int32
+}
+
+// newFailOnceGrantStore decorates backing's GrantStore so its Find call
+// numbered skip+1 fails.
+func newFailOnceGrantStore(tb testing.TB, backing *inmem.Store, skip int32) *failOnceGrantStore {
+	tb.Helper()
+	lister, ok := backing.Grants().(store.GrantClientLister)
+	if !ok {
+		tb.Fatal("inmem GrantStore does not implement store.GrantClientLister")
+	}
+	return &failOnceGrantStore{GrantClientLister: lister, skip: skip}
 }
 
 func (s *failOnceGrantStore) Find(ctx context.Context, id string) (*store.Grant, error) {
-	if s.failed.CompareAndSwap(false, true) {
+	if s.calls.Add(1) == s.skip+1 {
 		return nil, errInjectedGrantFind
 	}
-	return s.GrantStore.Find(ctx, id)
+	return s.GrantClientLister.Find(ctx, id)
 }
 
 type grantFindFailsOnceStore struct {
@@ -483,7 +496,7 @@ func TestRefresh_AuthorizationDetailsGrantLookupFaultAndTxBarrierDoNotConsume(t 
 
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	backing := inmem.New(inmem.WithClock(clock))
-	faultingGrants := &failOnceGrantStore{GrantStore: backing.Grants()}
+	faultingGrants := newFailOnceGrantStore(t, backing, 0)
 	var beginCount atomic.Int32
 	var narrowAtBegin atomic.Bool
 	beforeBegin := func() {

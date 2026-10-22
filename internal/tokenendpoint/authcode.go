@@ -293,7 +293,11 @@ func issueAuthCodeResponse(
 	requestedAuthorizationDetails []map[string]any,
 ) {
 	now := deps.now().UTC()
-	authCtx := codeAuthContext(ctx, deps, exchanged)
+	authCtx, err := codeAuthContext(ctx, deps, exchanged)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
@@ -973,8 +977,9 @@ func authContextOf(deps Deps, a tokens.Authorization) authContext {
 
 // codeAuthContext resolves the per-authorization state of a redeemed
 // code: what the code recorded at issuance, with the grant consulted only
-// for a code written without it.
-func codeAuthContext(ctx context.Context, deps Deps, exchanged *authcode.Exchanged) authContext {
+// for a code written without it. A grant that cannot be read is an error:
+// the code's own state is only ever narrowed by it, never trusted in its place.
+func codeAuthContext(ctx context.Context, deps Deps, exchanged *authcode.Exchanged) (authContext, error) {
 	own := tokens.Authorization{
 		AuthTime:             exchanged.AuthTime,
 		ACR:                  exchanged.ACR,
@@ -982,21 +987,34 @@ func codeAuthContext(ctx context.Context, deps Deps, exchanged *authcode.Exchang
 		AuthorizationDetails: exchanged.AuthorizationDetails,
 		Claims:               exchanged.Claims,
 	}
-	g := findGrant(ctx, deps, exchanged.GrantID)
-	return authContextOf(deps, tokens.ResolveAuthorization(own, exchanged.AuthorizationRecorded, g, exchanged.ClientID))
+	g, err := findGrant(ctx, deps, exchanged.GrantID)
+	if err != nil {
+		return authContext{}, err
+	}
+	return authContextOf(deps, tokens.ResolveAuthorization(own, exchanged.AuthorizationRecorded, g, exchanged.ClientID)), nil
 }
 
-// findGrant returns the grant grantID names, or nil when there is none or
-// it cannot be read.
-func findGrant(ctx context.Context, deps Deps, grantID string) *store.Grant {
+// errGrantStoreContract reports a GrantStore.Find that returned neither a
+// grant nor an error.
+var errGrantStoreContract = errors.New("tokenendpoint: grant store returned no grant and no error")
+
+// findGrant returns the grant grantID names, or nil when grantID is empty,
+// no grant store is wired, or the store holds no such grant. Any other
+// lookup failure is returned, so a fault never reads as an absent grant.
+func findGrant(ctx context.Context, deps Deps, grantID string) (*store.Grant, error) {
 	if grantID == "" || deps.Grants == nil {
-		return nil
+		return nil, nil //nolint:nilnil // no grant to consult
 	}
 	g, err := deps.Grants.Find(ctx, grantID)
-	if err != nil {
-		return nil
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil, nil //nolint:nilnil // no grant to consult
+	case err != nil:
+		return nil, err
+	case g == nil:
+		return nil, errGrantStoreContract
 	}
-	return g
+	return g, nil
 }
 
 // projectIDTokenClaims walks the grant's id_token "claims" payload

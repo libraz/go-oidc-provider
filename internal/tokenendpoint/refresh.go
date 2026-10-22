@@ -204,7 +204,7 @@ func requireLiveRefreshSubject(
 ) (*store.User, bool) {
 	subject := exchanged.Subject
 	if !grantIsOwnConsent(exchanged.Origin) {
-		lineage, err := customChainLineage(ctx, deps, exchanged.GrantID)
+		lineage, err := findGrant(ctx, deps, exchanged.GrantID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return nil, false
@@ -237,19 +237,6 @@ func requireLiveRefreshSubject(
 // liveness only, never as a source of per-authorization state.
 func grantIsOwnConsent(origin store.RefreshTokenOrigin) bool {
 	return origin != store.RefreshOriginCustomGrant
-}
-
-// customChainLineage returns the grant a custom-grant chain descends
-// from, or nil when its GrantID is backed by no record.
-func customChainLineage(ctx context.Context, deps Deps, grantID string) (*store.Grant, error) {
-	if grantID == "" || deps.Grants == nil {
-		return nil, nil //nolint:nilnil // no lineage
-	}
-	g, err := deps.Grants.Find(ctx, grantID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, nil //nolint:nilnil // no lineage
-	}
-	return g, err
 }
 
 // handleRefreshTokenTransaction stages every post-preflight refresh mutation
@@ -553,21 +540,10 @@ func preflightRefreshAuthorizationDetails(
 		return nil, true
 	}
 
-	var grant *store.Grant
-	if rec.GrantID != "" && deps.Grants != nil && grantIsOwnConsent(rec.Origin) {
-		var findErr error
-		grant, findErr = deps.Grants.Find(ctx, rec.GrantID)
-		switch {
-		case findErr == nil && grant == nil:
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return nil, false
-		case findErr == nil:
-		case errors.Is(findErr, store.ErrNotFound):
-			grant = nil
-		default:
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return nil, false
-		}
+	grant, err := chainGrant(ctx, deps, rec.Origin, rec.GrantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return nil, false
 	}
 	granted := chainAuthorizationDetails(grant, rec.ClientID, rec.AuthorizationDetails, rec.AuthorizationRecorded)
 	return reduceAuthorizationDetails(w, requested, granted)
@@ -599,16 +575,8 @@ func revalidateRefreshAuthorizationDetails(
 		!grantIsOwnConsent(exchanged.Origin) {
 		return true
 	}
-	grant, err := deps.Grants.Find(ctx, exchanged.GrantID)
+	grant, err := findGrant(ctx, deps, exchanged.GrantID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			grant = nil
-		} else {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return false
-		}
-	}
-	if err == nil && grant == nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
@@ -912,7 +880,11 @@ func issueRefreshResponse(
 		return
 	}
 	now := deps.now().UTC()
-	authCtx := refreshAuthContext(ctx, deps, exchanged)
+	authCtx, err := refreshAuthContext(ctx, deps, exchanged)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
@@ -932,7 +904,7 @@ func issueRefreshResponse(
 	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
 		return
 	}
-	exchanged, err := withChainID(exchanged)
+	exchanged, err = withChainID(exchanged)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -1050,7 +1022,11 @@ func reissueGraceAccessToken(
 		return
 	}
 	now := deps.now().UTC()
-	authCtx := refreshAuthContext(ctx, deps, exchanged)
+	authCtx, err := refreshAuthContext(ctx, deps, exchanged)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	publicSubject := exchanged.Subject
 	if !exchanged.SubjectPublic {
 		projected, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
@@ -1127,8 +1103,9 @@ func refreshExchangedForRotation(exchanged *refresh.Exchanged, authCtx authConte
 // refreshAuthContext resolves the per-authorization state of the chain the
 // consumed token belongs to: what the chain recorded at its root, with
 // its own-consent grant only narrowing authorization_details or standing
-// in for a row written without the state.
-func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Exchanged) authContext {
+// in for a row written without the state. A grant that cannot be read is
+// an error rather than a skipped narrowing.
+func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Exchanged) (authContext, error) {
 	own := tokens.Authorization{
 		AuthTime:             exchanged.AuthTime,
 		ACR:                  exchanged.ACR,
@@ -1136,8 +1113,11 @@ func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Excha
 		AuthorizationDetails: exchanged.AuthorizationDetails,
 		Claims:               exchanged.Claims,
 	}
-	g := chainGrant(ctx, deps, exchanged.Origin, exchanged.GrantID)
-	return authContextOf(deps, tokens.ResolveAuthorization(own, exchanged.AuthorizationRecorded, g, exchanged.ClientID))
+	g, err := chainGrant(ctx, deps, exchanged.Origin, exchanged.GrantID)
+	if err != nil {
+		return authContext{}, err
+	}
+	return authContextOf(deps, tokens.ResolveAuthorization(own, exchanged.AuthorizationRecorded, g, exchanged.ClientID)), nil
 }
 
 // chainAuthorizationDetails is the authorization_details a chain may still
@@ -1149,10 +1129,11 @@ func chainAuthorizationDetails(g *store.Grant, clientID string, snapshot []map[s
 }
 
 // chainGrant returns the grant a chain may consult: its own consent, never
-// the grant a custom-grant chain descends from.
-func chainGrant(ctx context.Context, deps Deps, origin store.RefreshTokenOrigin, grantID string) *store.Grant {
+// the grant a custom-grant chain descends from. A lookup fault is returned,
+// per [findGrant].
+func chainGrant(ctx context.Context, deps Deps, origin store.RefreshTokenOrigin, grantID string) (*store.Grant, error) {
 	if !grantIsOwnConsent(origin) {
-		return nil
+		return nil, nil //nolint:nilnil // the chain has no own-consent grant
 	}
 	return findGrant(ctx, deps, grantID)
 }

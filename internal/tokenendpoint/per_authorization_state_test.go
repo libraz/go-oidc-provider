@@ -4,14 +4,19 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	httptestutil "github.com/libraz/go-oidc-provider/internal/testutil/httptest"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
 // One (subject, client) grant is shared by every authorization of the pair,
@@ -319,4 +324,105 @@ func TestAuthCode_OpaqueAccessTokenRecordsItsAuthorization(t *testing.T) {
 	if amr, _ := ib["amr"].([]any); len(amr) != 1 || amr[0] != "pwd" {
 		t.Errorf("introspection amr=%v want [pwd]", ib["amr"])
 	}
+}
+
+// grantFindFaultStore is the reference store with its GrantStore replaced
+// by a fault-injecting decorator. It carries no BeginTx, so the refresh
+// path runs against these substores rather than a transaction's.
+type grantFindFaultStore struct {
+	store.Store
+	grants store.GrantStore
+}
+
+func (s grantFindFaultStore) Grants() store.GrantStore {
+	return s.grants
+}
+
+// newGrantFindFaultFixture builds a fixture over decorated while seeding
+// lands in backing, the reference store decorated wraps.
+func newGrantFindFaultFixture(t *testing.T, decorated store.Store, backing *inmem.Store, clock fixedClock, opts ...op.Option) *fixture {
+	t.Helper()
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(append([]op.Option{op.WithStore(decorated)}, opts...)...),
+	)
+	prov.Store = backing
+	return &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		signer:   tokens.SigningKey{KeyID: prov.SigningKey.KeyID, Signer: prov.SigningKey.Signer},
+		clock:    clock,
+	}
+}
+
+// assertServerError requires a 500 server_error answer.
+func assertServerError(tb testing.TB, resp *http.Response) {
+	tb.Helper()
+	body := decodeJSON(tb, resp)
+	if resp.StatusCode != http.StatusInternalServerError || body["error"] != "server_error" {
+		tb.Fatalf("status=%d body=%v want 500 server_error", resp.StatusCode, body)
+	}
+}
+
+// TestAuthCode_GrantLookupFaultAnswersServerError redeems a recorded code
+// while its grant cannot be read: the grant could have withdrawn
+// authorization_details, so the exchange must not proceed without it.
+func TestAuthCode_GrantLookupFaultAnswersServerError(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	backing := inmem.New(inmem.WithClock(clock))
+	var beginCount atomic.Int32
+	f := newGrantFindFaultFixture(t, grantFindFailsOnceStore{
+		Store:         backing,
+		grants:        newFailOnceGrantStore(t, backing, 0),
+		transactional: backing,
+		beginCount:    &beginCount,
+	}, backing, clock)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	f.seedGrant(t, &store.Grant{
+		ID: "grant-code-fault", Subject: "user-code-fault", ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID: "code-grant-fault", ClientID: client.ID, Subject: "user-code-fault",
+		GrantID: "grant-code-fault", RedirectURI: client.RedirectURIs[0],
+		Scope: []string{"openid"}, CodeChallenge: challenge, CodeChallengeMethod: "S256",
+		AuthTime: f.clock.now, AuthorizationRecorded: true,
+	})
+
+	resp := f.post(t, authCodeForm("code-grant-fault", client.RedirectURIs[0], verifier), client.ID, secret)
+	defer resp.Body.Close()
+	assertServerError(t, resp)
+}
+
+// TestRefresh_GrantLookupFaultAnswersServerError rotates a recorded chain
+// whose grant reads at the preflight and then faults when the issued
+// authorization is resolved.
+func TestRefresh_GrantLookupFaultAnswersServerError(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	backing := inmem.New(inmem.WithClock(clock))
+	f := newGrantFindFaultFixture(t, grantFindFaultStore{
+		Store:  backing,
+		grants: newFailOnceGrantStore(t, backing, 1),
+	}, backing, clock, op.WithGrants(grant.RefreshToken), paymentAuthorizationDetailsOption())
+	client, secret := f.confidentialClientFixture(t)
+	f.seedGrant(t, &store.Grant{
+		ID: "grant-rt-fault", Subject: "user-rt-fault", ClientID: client.ID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: []map[string]any{{"type": "payment", "amount": "100"}},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID: "rt-grant-fault", ClientID: client.ID, Subject: "user-rt-fault", GrantID: "grant-rt-fault",
+		Scope: []string{"openid", "offline_access"}, AuthTime: f.clock.now,
+		AuthorizationDetails:  []map[string]any{{"type": "payment", "amount": "100"}},
+		AuthorizationRecorded: true,
+	})
+
+	resp := f.post(t, refreshForm("rt-grant-fault", ""), client.ID, secret)
+	defer resp.Body.Close()
+	assertServerError(t, resp)
 }
