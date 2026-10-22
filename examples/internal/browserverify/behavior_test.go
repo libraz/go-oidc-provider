@@ -72,11 +72,10 @@ func TestBehavior01MinimalSSO(t *testing.T) {
 		t.Fatalf("initial login: %v", err)
 	}
 
-	// Second authorization: leave /me, start a fresh authorize.
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(defaultRPBase+"/"),
-		chromedp.Click(`a[href="/login"]`, chromedp.ByQuery),
-	); err != nil {
+	// Second authorization: navigate to the RP's /login link target directly.
+	// A click on the index page reloaded from /me can land before the link
+	// is live and leave the browser on "/" with no navigation.
+	if err := chromedp.Run(ctx, chromedp.Navigate(defaultRPBase+"/login")); err != nil {
 		t.Fatalf("second authorize start: %v", err)
 	}
 
