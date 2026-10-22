@@ -150,7 +150,121 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   one success and an `invalid_grant` that runs the RFC 9700 §2.2.2 replay
   cascade, instead of a 500 that skipped it.
 
+- A statically seeded confidential client with no secret is now refused by
+  `op.New` for `client_secret_basic` and `client_secret_post`. It used to be
+  built with an empty secret hash that accepted an empty `client_secret`.
+
+- A `LoginFlow` rule predicate or `Decider` that panics now fails closed: a
+  panicking `Rule.When` counts as a match, so the step is still demanded, and
+  a panicking `Decider` denies. A `Decider` that returns a pointer verdict is
+  honoured and one that returns nil, a nil pointer or an unknown shape now
+  denies; each used to let the request through.
+
+- Credentials minted by token exchange now live under the subject_token's
+  grant, so revoking that grant (`RevokeSubject`, Grant Management revoke,
+  `/end_session` teardown) revokes them, and a refresh token obtained through
+  exchange stops rotating once the subject is deleted or deprovisioned. They
+  previously outlived both.
+
+- Tokens issued by the device-code grant are now revoked by
+  `devicecodekit.Revoke`, which cascades under the grant the device flow
+  allocates. Pass the new optional `Deps.Grants` to also delete the grant
+  record.
+
+- A step-up on a reused session keeps the session's `acr`, `amr` and
+  `auth_time` in the issued tokens, instead of reporting only the step-up
+  factors. Risk assessors see the entry session's methods in `AMRSoFar`, and
+  ACR policy and `LoginFlow` rules see the primary step as completed, as
+  after a fresh login. Step-up factors on a reused session are audited as
+  `mfa.*` events rather than `login.*`.
+
+- With the legacy `Authenticators` option, `prompt=login` or a stale
+  `max_age` now requires a full re-authentication; a lone risk-required
+  second factor no longer satisfies it. Picking a stale or weaker session in
+  the account chooser prompts for re-authentication instead of ending the
+  request in an error.
+
+- Password login takes the same time for an account whose stored hash is
+  below the Argon2id policy, or in another encoding, as for any other failed
+  login. The shorter path was an account-enumeration timing signal.
+
+- An authorization code presented by the wrong client, or failing the
+  `redirect_uri` or PKCE check, no longer consumes the code or tears down the
+  legitimate holder's grant; only a genuine replay does.
+
+- Narrowing the scope on a refresh no longer permanently narrows the rotated
+  refresh token; the successor keeps the scope of the token it replaces.
+
+- Token-exchange delegation preserves the subject_token's `act` chain under
+  the new actor entry (RFC 8693 §4.1) and enforces `MaxActChainDepth` before
+  the policy runs.
+
+- A custom-grant handler receives a copy of the client, so it can no longer
+  widen the scope or audience limits the token endpoint enforces after it.
+
+- A `private_key_jwt` assertion with an empty or over-long `jti` is rejected
+  as malformed, and the replay key escapes the client id so two clients
+  cannot collide. Under a client-store outage or JWKS fetch overload, client
+  authentication answers 503 or `server_error` instead of `invalid_client`.
+
+- An `id_token_hint` that is a logout token or an access token (any `typ`
+  other than absent or `JWT`) is rejected at `/end_session` and for CIBA.
+
+- Request bodies with data after the first JSON value, such as a stray `}`,
+  are rejected on every JSON-reading endpoint and driver.
+
+- Outbound fetches through an embedder-supplied proxy now run the SSRF check
+  on the target host before the hand-off; they used to check the proxy
+  address only.
+
+- A correct TOTP or email-OTP code is no longer rejected when a concurrent
+  failed attempt commits first.
+
+- Account lockout and reset-required events now reach the audit stream as a
+  failure event.
+
+- SQL adapter: a concurrent passkey registration from another account can no
+  longer take over an existing credential; `Put` rewrites only a row owned by
+  the same subject and otherwise returns `ErrAlreadyExists`. On MySQL, a
+  refresh rotation racing a replay cascade now retries on a lock conflict
+  instead of failing with a deadlock error.
+
 ### Changed
+
+- `op.New` now refuses, at construction: a `LoginFlow.Primary` that needs an
+  already-bound subject (`PrimaryPasskey`, `StepTOTP`, `StepEmailOTP`,
+  `StepRecoveryCode`, which run as `Rule` steps after a subject-binding
+  primary); a typed-nil substore; a second `WithGrantManagement` (and a
+  second narrowing of the same half by `WithSupportedEncryptionAlgs`); a
+  `WithInteractions` entry named `consent` or `chooser`, which are reserved
+  for the built-ins; a negative `WithCIBADefaultExpiresIn` or
+  `WithCIBAPollInterval`; and, under FAPI-CIBA, a CIBA default or maximum
+  expiry above 10 minutes. `NewEmailOTPAuthenticator` also rejects a
+  typed-nil `Mailer`, `Store`, `Users` or `Clock`. Each used to be accepted
+  and either ignored the setting or failed on first use.
+
+- Device-code and CIBA redemptions now record a `store.Grant`, and their
+  tokens resolve it at introspection and `/userinfo`, which report the
+  public (pairwise) subject. `/authorize` treats that grant as consent for
+  that client, so a later request for the same scopes skips the consent
+  screen. Tokens minted by a custom grant or by token exchange are projected
+  the same way; a custom grant's own refresh rotations always mint JWT
+  access tokens. A custom-grant handler must still stamp `cnf` itself.
+
+- `devicecodekit.Deps` gains the optional `Grants` field; without it
+  `devicecodekit.Revoke` leaves the grant record in place.
+
+- Token exchange applies the configured leeway to the subject_token `exp`
+  and id_token `iat` checks, and audits `token_exchange.granted` and
+  `refresh_issued` only after issuance succeeds, recording
+  `custom_grant.failed` otherwise. Delegation now emits the nested `act`
+  chain, so the token's `act` is longer than before.
+
+- A custom grant's credentials are bound to a grant only for the lineages
+  that allocate one. `RevokeSubject` reaches a generic custom grant's tokens
+  only through a grant your handler records, and pairwise `/userinfo` for
+  them needs the same; the `CustomGrantHandler` documentation states both
+  limits.
 
 - `store.AuthorizationCode`, `store.RefreshToken` and
   `store.OpaqueAccessToken` gain fields for the per-authorization state
@@ -204,6 +318,40 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 - With `AccessTokenTTL` unset, grant tombstones written by the token
   endpoint's replay cascades now outlive the access tokens they cover, like
   those written by `/revoke`, `/end_session` and grant management.
+
+- Refresh responses for device-code, CIBA and custom-grant chains no longer
+  carry a `grant_id` with no backing grant record. Pairwise `/userinfo` now
+  works for access tokens from device-code, CIBA and token exchange.
+
+- Authentication rejections caused by the submission now answer 4xx instead
+  of 500: declining a required consent scope, a tampered or stale consent
+  submission, an expired or foreign chooser `session_id`, and a subject
+  mismatch or AAL3-without-UV rejection (which also invalidates the active
+  factor token). A chooser-selected session that expired or was signed out is
+  answered as `login_required`, not a transient `server_error`.
+
+- A failed captcha under `WithLoginFlow` returns a fresh challenge instead of
+  a 500. `LoginFlow` rules that check whether the primary step completed
+  answer the same on a reused session as on a fresh login.
+
+- A client-store fault at `/authorize` returns 500 `server_error` instead of
+  reporting `client_id` as unregistered.
+
+- A wrapped `op.Error` returned from a custom grant or token-exchange policy
+  keeps its error code on the wire instead of becoming `invalid_grant`.
+
+- The logout confirmation page keeps `ui_locales`, so it matches the language
+  of the signed-out page.
+
+- The startup audit record reports `dpop_nonce_required` as true whenever
+  DPoP nonces are enforced, not only when a profile mandates them.
+
+- Documentation now matches behaviour for `WithSPAUI` (no SPA-owned logout
+  screen), `RiskTokenExchange` (reserved, never raised), CIBA option
+  validation, `op/testkit` (a fresh signing key per provider), custom-grant
+  rate limiting and TTL warnings, `TokenExchangeDecision.GrantedTTL`, and
+  the profile, audit, logger and risk-rule comments; the READMEs state the
+  real minimum Go version and what `make example-01` runs.
 
 ## [v1.3.0] — 2026-09-28
 
