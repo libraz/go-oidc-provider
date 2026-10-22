@@ -12,7 +12,7 @@ toolchain go1.27.3
 
 require (
 	github.com/go-jose/go-jose/v4 v4.1.6
-	github.com/libraz/go-oidc-provider v1.3.0
+	github.com/libraz/go-oidc-provider v1.4.0
 )
 
 require (

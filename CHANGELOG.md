@@ -16,6 +16,9 @@ runtime surface intact and breaks only `op/store/contract`, the test harness a
 bring-your-own store runs against itself, so the adaptation is confined to test
 code. `v1.3.0` raises the minimum Go version to 1.26 and has `op.New` refuse a
 few configurations it used to accept; its `Changed` section names each one.
+`v1.4.0` adds columns to the SQL adapter's tables, which must be applied
+before upgrading, and adds fields and optional interfaces to `op/store` that a
+bring-your-own store may adopt; one that does not keeps working as before.
 
 The main module and the storage-adapter sub-modules
 (`op/storeadapter/sql`, `op/storeadapter/redis`, and from `v1.0.0`
@@ -23,7 +26,13 @@ The main module and the storage-adapter sub-modules
 each sub-module independently:
 
 ```
-# v1.3.0 (latest)
+# v1.4.0 (latest)
+go get github.com/libraz/go-oidc-provider@v1.4.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.4.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.4.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0
+
+# v1.3.0
 go get github.com/libraz/go-oidc-provider@v1.3.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.3.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.3.0
@@ -79,6 +88,26 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
 ## [Unreleased]
+
+## [v1.4.0] — 2026-10-23
+
+A revocation and authorization-state pass. Credentials issued by the
+device-code, CIBA and token-exchange grants now sit under a grant record, so
+revocation, user deletion and pairwise subject resolution reach them. Each
+authorization code, refresh chain and access token carries the `auth_time`,
+`acr`, `amr` and claims request of the authorization that issued it instead of
+reading the shared grant, and revoking or rotating one refresh chain no longer
+touches the user's other sessions on the same client. `LoginFlow` rules and the
+`Decider` now also apply to authorizations served from an existing session.
+
+Deployments that need to do something before upgrading: a SQL adapter
+deployment must apply the `ALTER TABLE` statements for its engine in
+[`op/storeadapter/sql/schema/MIGRATIONS.md`](op/storeadapter/sql/schema/MIGRATIONS.md),
+since `Store.Migrate` refuses to start without the new columns. A statically
+seeded confidential client using `client_secret_basic` or
+`client_secret_post` needs a secret, and a client record must not carry both
+`jwks` and `jwks_uri`. The `Changed` section lists the other configurations
+`op.New` now refuses.
 
 ### Security
 
@@ -4835,7 +4864,8 @@ from the access-token TTL (see Changed).
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.4.0...HEAD
+[v1.4.0]: https://github.com/libraz/go-oidc-provider/compare/v1.3.0...v1.4.0
 [v1.3.0]: https://github.com/libraz/go-oidc-provider/compare/v1.2.0...v1.3.0
 [v1.2.0]: https://github.com/libraz/go-oidc-provider/compare/v1.1.0...v1.2.0
 [v1.1.0]: https://github.com/libraz/go-oidc-provider/compare/v1.0.0...v1.1.0
