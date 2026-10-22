@@ -112,12 +112,12 @@ func TestRevokeJWTAccessTokenByJTI_GrantTombstoneWritesDenylist(t *testing.T) {
 
 	exp := time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC)
 	revs := &fakeGrantRevocations{}
-	err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	persisted, err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "jti-1", "grant-1", exp)
-	if err != nil {
-		t.Fatalf("RevokeJWTAccessTokenByJTI: %v", err)
+	if err != nil || !persisted {
+		t.Fatalf("RevokeJWTAccessTokenByJTI: persisted=%v err=%v", persisted, err)
 	}
 
 	if len(revs.revokedJTIs) != 1 {
@@ -133,16 +133,38 @@ func TestRevokeJWTAccessTokenByJTI_FallsBackToRegistry(t *testing.T) {
 	t.Parallel()
 
 	reg := &fakeATRegistry{}
-	err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	persisted, err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "jti-2", "grant-2", time.Now().UTC())
-	if err != nil {
-		t.Fatalf("RevokeJWTAccessTokenByJTI: %v", err)
+	if err != nil || !persisted {
+		t.Fatalf("RevokeJWTAccessTokenByJTI: persisted=%v err=%v", persisted, err)
 	}
 
 	if len(reg.revokeByJTI) != 1 || reg.revokeByJTI[0] != "jti-2" {
 		t.Fatalf("revokeByJTI=%v want [jti-2]", reg.revokeByJTI)
+	}
+}
+
+// A strategy that writes nothing must say so, so /revoke does not audit a
+// revocation of a token that keeps verifying.
+func TestRevokeJWTAccessTokenByJTI_ReportsNothingPersisted(t *testing.T) {
+	t.Parallel()
+
+	reg := &fakeATRegistry{}
+	revs := &fakeGrantRevocations{}
+	for name, opts := range map[string]endpointsupport.JWTGrantCascadeOpts{
+		"none":                  {AccessTokens: reg, GrantRevocations: revs, RevocationStrategy: store.RevocationStrategyNone},
+		"jti registry unwired":  {GrantRevocations: revs, RevocationStrategy: store.RevocationStrategyJTIRegistry},
+		"grant tombstone empty": {RevocationStrategy: store.RevocationStrategyGrantTombstone},
+	} {
+		persisted, err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), opts, "jti-3", "grant-3", time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC))
+		if err != nil || persisted {
+			t.Errorf("%s: persisted=%v err=%v want false, nil", name, persisted, err)
+		}
+	}
+	if len(reg.revokeByJTI) != 0 || len(revs.revokedJTIs) != 0 {
+		t.Fatalf("nothing should be written: revokeByJTI=%v revokedJTIs=%v", reg.revokeByJTI, revs.revokedJTIs)
 	}
 }
 

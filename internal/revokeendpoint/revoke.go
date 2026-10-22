@@ -133,14 +133,18 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 	// call against the same token returns invalid_token / {"active":
 	// false}. The shape depends on the configured strategy; every branch
 	// is idempotent (missing row → nil) and keeps the endpoint on the
-	// RFC 7009 §2.2 "always 200" path.
-	if err := endpointsupport.RevokeJWTAccessTokenByJTI(ctx, endpointsupport.JWTGrantCascadeOpts{
+	// RFC 7009 §2.2 "always 200" path. token.revoked is recorded only when
+	// a row was written: under the None strategy, or with no substore
+	// behind the active one, the token keeps verifying until exp.
+	persisted, err := endpointsupport.RevokeJWTAccessTokenByJTI(ctx, endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		RevocationStrategy: deps.RevocationStrategy,
-	}, claims.JTI, claims.GrantID, time.Unix(claims.ExpiresAt, 0).Add(5*time.Minute).UTC()); err != nil {
+	}, claims.JTI, claims.GrantID, time.Unix(claims.ExpiresAt, 0).Add(5*time.Minute).UTC())
+	switch {
+	case err != nil:
 		emitRevokeFailed(ctx, deps, authenticatedClientID, "jwt_access_token", err)
-	} else {
+	case persisted:
 		emitRevoked(ctx, deps, revokedEvent{
 			ClientID: authenticatedClientID,
 			Subject:  claims.Subject,
@@ -203,16 +207,8 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 		// sees the same 200 a legitimate revoker would.
 		return false
 	}
-	rootID, ok := findChainRoot(ctx, deps, authenticatedClientID, rec.ID)
+	surface, ok := retireRefreshChain(ctx, deps, authenticatedClientID, rec)
 	if !ok {
-		return false
-	}
-	if err := deps.RefreshTokens.RevokeChain(ctx, rootID); err != nil {
-		// Store fault: the wire stays 200 (RFC 7009 §2.2) but the
-		// audit channel surfaces the silent failure so SOC tooling
-		// can detect a fosite-class GHSA-7mqr-2v3q-v2wm regression
-		// where the OP claims success while persistence broke.
-		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain", err)
 		return false
 	}
 	// RFC 7009 §2.1 SHOULD: revoking a refresh token also invalidates the
@@ -223,10 +219,35 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 	emitRevoked(ctx, deps, revokedEvent{
 		ClientID: authenticatedClientID,
 		Subject:  rec.Subject,
-		Surface:  "refresh_chain",
+		Surface:  surface,
 		GrantID:  rec.GrantID,
 	})
 	return true
+}
+
+// retireRefreshChain revokes the rotation chain holding rec through the
+// shared [refreshchain.Retire], which falls back to the grant's refresh
+// tokens when no chain root resolves, so chain depth never decides whether
+// the token dies. Each store fault is audited; the wire stays 200 (RFC 7009
+// §2.2). The surface names the rung that retired the chain.
+func retireRefreshChain(ctx context.Context, deps Deps, authenticatedClientID string, rec *store.RefreshToken) (string, bool) {
+	r := refreshchain.Retire(ctx, deps.RefreshTokens, rec.ID, rec.GrantID)
+	if r.RootErr != nil {
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain_walk", r.RootErr)
+	}
+	if r.ChainErr != nil {
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain", r.ChainErr)
+	}
+	if r.GrantErr != nil {
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_grant", r.GrantErr)
+	}
+	if !r.Retired() {
+		return "", false
+	}
+	if r.FellBackToGrant() {
+		return "refresh_grant", true
+	}
+	return "refresh_chain", true
 }
 
 // cascadeRevokeAccessTokens propagates a refresh-token revocation to the
@@ -248,22 +269,12 @@ func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, clientID, grantID
 		GrantRevocations:   deps.GrantRevocations,
 		Strategy:           deps.RevocationStrategy,
 		Now:                revokeNow(deps),
-		TombstoneRetention: revokeTombstoneRetention(deps.AccessTokenTTL),
+		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             "revoke",
 	}.Run(ctx, teardown.AccessTokensOfGrant(grantID))
 	for _, f := range out.Failures {
 		emitRevokeFailed(ctx, deps, clientID, f.Surface, f.Err)
 	}
-}
-
-// revokeTombstoneRetention returns the grant-tombstone retention window
-// (AT TTL + 5-minute clock-skew grace; one-hour fallback for a zero TTL),
-// mirroring the /end_session cascade's tombstoneRetention.
-func revokeTombstoneRetention(ttl time.Duration) time.Duration {
-	if ttl <= 0 {
-		ttl = time.Hour
-	}
-	return ttl + 5*time.Minute
 }
 
 // revokeNow returns the wall-clock reading the cascade stamps on tombstone
@@ -373,18 +384,4 @@ func emitRevokeFailed(ctx context.Context, deps Deps, clientID, surface string, 
 			"err":     err.Error(),
 		},
 	})
-}
-
-// findChainRoot follows parent pointers from startID up to the chain's root,
-// using the shared refreshchain helper so /revoke and the refresh-token grant
-// honour the same ParentID round-trip contract. A store fault on resolving
-// startID itself (as opposed to an ordinary miss) is audited here before the
-// caller's existing false-return path runs, so a lookup fault at this step
-// is no longer silently indistinguishable from a legitimate empty walk.
-func findChainRoot(ctx context.Context, deps Deps, authenticatedClientID, startID string) (string, bool) {
-	rootID, ok, err := refreshchain.FindRoot(ctx, deps.RefreshTokens, startID, chainWalkLimit)
-	if err != nil {
-		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain_walk", err)
-	}
-	return rootID, ok
 }

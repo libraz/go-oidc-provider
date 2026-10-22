@@ -113,18 +113,6 @@ var (
 	ErrScopeWidening = errors.New("refresh: requested scope widens grant")
 )
 
-// chainWalkLimit caps how far [Exchanger] walks parent pointers when
-// computing a chain root after a replay detection. It is a resource guard
-// against a pointer graph that loops or is otherwise corrupted, not a depth
-// an honest rotation history cannot reach: nothing bounds the length of a
-// legitimate chain, because every rotation slides the refresh-token expiry
-// forward, so a grant that keeps being refreshed grows one node per refresh
-// for as long as the client keeps refreshing it. Reaching the limit
-// therefore MUST NOT weaken the RFC 9700 §2.2.2 cascade — see
-// [Exchanger.revokeChainBestEffort], which falls back to the grant-scoped
-// revocation, a superset of the chain.
-const chainWalkLimit = 1024
-
 // Issuer mints refresh tokens and persists them via a
 // [store.RefreshTokenStore]. It is immutable after construction and safe
 // for concurrent use.
@@ -782,25 +770,12 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 // and from [Exchanger.RevokeReplayedChain] when the caller deferred the
 // cascade.
 //
-// The cascade has two rungs, and it takes the second whenever the first
-// cannot be shown to have run:
-//
-//   - Walk parent pointers to the chain root and call
-//     [store.RefreshTokenStore.RevokeChain] on it. This retires exactly the
-//     replayed chain.
-//   - Otherwise call [store.RefreshTokenStore.RevokeByGrant] on the grant the
-//     presented token was issued under. Every token in a chain inherits the
-//     grant it was issued under, so the grant is a superset of the chain: the
-//     fallback may retire sibling chains issued under the same consent, but it
-//     cannot leave a live successor of the replayed chain behind.
-//
-// The second rung is what keeps [chainWalkLimit] from being load-bearing. A
-// chain longer than the limit resolves no root, and a chain that long is the
-// ordinary outcome of a client that has simply kept refreshing — the exact
-// case where an attacker holding a live successor has had the most time to
-// work with it. Retiring the whole grant is the safe direction there: RFC 9700
-// §2.2.2 requires the compromised chain to die, and a warn-level log is not a
-// revocation.
+// [refreshchain.Retire] revokes from the chain root, or from the grant the
+// presented token was issued under whenever the chain rung cannot be shown
+// to have run. A chain longer than the walk limit is the ordinary outcome of
+// a client that has kept refreshing, and RFC 9700 §2.2.2 requires the
+// compromised chain to die, so over-revoking the grant is the safe
+// direction.
 //
 // Access tokens descended from the replayed chain are NOT retired here.
 // Which mechanism makes a JWT access token stop verifying is a property of
@@ -817,14 +792,10 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 // tooling can spot a silent failure even though the wire response stays at the
 // user-visible invalid_grant contract via [ErrTokenReplayed].
 func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) string {
-	// The grant is resolved before anything is revoked. The fallback rung
-	// and the caller's access-token teardown both key on it, and either
-	// cascade rewrites the records it would otherwise have to be read back
-	// from.
+	// The grant is resolved before anything is revoked: either rung rewrites
+	// the records it would otherwise have to be read back from.
 	grantID := e.presentedGrantID(ctx, presentedID)
-	if !e.revokeChainFromRoot(ctx, presentedID) {
-		e.revokeWholeGrant(ctx, grantID)
-	}
+	e.reportRetirement(ctx, refreshchain.Retire(ctx, e.store, presentedID, grantID))
 	return grantID
 }
 
@@ -841,45 +812,31 @@ func (e *Exchanger) presentedGrantID(ctx context.Context, presentedID string) st
 	return rec.GrantID
 }
 
-// revokeChainFromRoot runs the chain-scoped rung and reports whether it
-// completed. A false result means the replayed chain still has redeemable
-// successors — the walk produced no root, or the store rejected the cascade —
-// so the caller MUST run the grant-scoped rung.
-func (e *Exchanger) revokeChainFromRoot(ctx context.Context, presentedID string) bool {
-	rootID, ok, err := e.findChainRoot(ctx, presentedID)
-	if !ok {
+// reportRetirement raises one warn-level event per rung of the cascade that
+// did not run. An unresolved grant is reported rather than ignored: it is the
+// only state in which the OP has confirmed a replay and retired nothing.
+func (e *Exchanger) reportRetirement(ctx context.Context, r refreshchain.Retirement) {
+	switch {
+	case r.RootUnresolved:
 		// A store fault resolving the presented token is reported by its
-		// own error text, mirroring the RevokeChain / RevokeByGrant rungs
-		// below; a genuinely empty walk (no fault, nothing to resolve)
-		// keeps the symbolic reason since there is no error to report.
+		// own error text; a genuinely empty walk keeps the symbolic reason.
 		reason := "chain_root_lookup_failed"
-		if err != nil {
-			reason = err.Error()
+		if r.RootErr != nil {
+			reason = r.RootErr.Error()
 		}
 		e.emitChainRevokeFailed(ctx,
 			"refresh chain root lookup failed after replay detection", reason)
-		return false
-	}
-	if err := e.store.RevokeChain(ctx, rootID); err != nil {
+	case r.ChainErr != nil:
 		e.emitChainRevokeFailed(ctx,
-			"refresh chain revoke failed after replay detection", err.Error())
-		return false
+			"refresh chain revoke failed after replay detection", r.ChainErr.Error())
 	}
-	return true
-}
-
-// revokeWholeGrant runs the grant-scoped rung of the cascade. An empty
-// grantID is reported rather than ignored: it is the only state in which the
-// OP has confirmed a replay and retired nothing.
-func (e *Exchanger) revokeWholeGrant(ctx context.Context, grantID string) {
-	if grantID == "" {
+	switch {
+	case r.GrantUnresolved:
 		e.emitChainRevokeFailed(ctx,
 			"refresh grant lookup failed after replay detection", "grant_lookup_failed")
-		return
-	}
-	if err := e.store.RevokeByGrant(ctx, grantID); err != nil {
+	case r.GrantErr != nil:
 		e.emitChainRevokeFailed(ctx,
-			"refresh grant revoke failed after replay detection", err.Error())
+			"refresh grant revoke failed after replay detection", r.GrantErr.Error())
 	}
 }
 
@@ -896,15 +853,6 @@ func (e *Exchanger) emitChainRevokeFailed(ctx context.Context, message, reason s
 			"reason": reason,
 		},
 	})
-}
-
-// findChainRoot follows parent pointers up to the chain's root or returns
-// ok=false if the walk fails / loops / exceeds [chainWalkLimit]. The walk
-// terminates at the first record whose ParentID is nil. The error is non-nil
-// only when resolving startID itself hit a store fault rather than an
-// ordinary miss; see [refreshchain.FindRoot].
-func (e *Exchanger) findChainRoot(ctx context.Context, startID string) (string, bool, error) {
-	return refreshchain.FindRoot(ctx, e.store, startID, chainWalkLimit)
 }
 
 // resolveScope returns the scope to bind to the rotated token. When the

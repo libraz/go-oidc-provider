@@ -579,7 +579,7 @@ func resolveSession(w http.ResponseWriter, r *http.Request, deps resolved) (*ses
 	active.Session.ExpiresAt = touch.ExpiresAt
 	active.Session.UpdatedAt = touch.UpdatedAt
 	if w != nil && sessionCookieNeedsRefresh(active.Payload, now) {
-		if err := setSessionCookieWithMaxAge(w, touch.Cookie, touch.ExpiresAt, now); err != nil {
+		if err := setSessionCookie(w, touch.Cookie, touch.ExpiresAt, now); err != nil {
 			return nil, err
 		}
 	}

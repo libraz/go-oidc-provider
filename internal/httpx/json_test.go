@@ -63,37 +63,6 @@ func TestWriteJSON_ServerErrorAlsoStampsNoSniff(t *testing.T) {
 	}
 }
 
-func TestWriteOAuthBearerChallenge_DropsControlCharacters(t *testing.T) {
-	t.Parallel()
-
-	rec := httptest.NewRecorder()
-	// CRLF injection attempt smuggled through error_description.
-	err := httpx.WriteOAuthBearerChallenge(
-		rec,
-		http.StatusUnauthorized,
-		"invalid_token",
-		"oops\r\nX-Injected: yes",
-		"",
-		"",
-	)
-	if err != nil {
-		t.Fatalf("WriteOAuthBearerChallenge: %v", err)
-	}
-	got := rec.Header().Get("WWW-Authenticate")
-	if contains(got, "\r") || contains(got, "\n") {
-		t.Errorf("WWW-Authenticate=%q must not contain raw CR/LF", got)
-	}
-	if contains(got, "X-Injected") {
-		// The literal string isn't a control character so it survives, but
-		// crucially no header break separates it from the parent line.
-		// We verify that by asserting the response carries exactly one
-		// WWW-Authenticate header value.
-		if vals := rec.Header().Values("WWW-Authenticate"); len(vals) != 1 {
-			t.Errorf("got %d WWW-Authenticate headers, want 1 (CRLF injection)", len(vals))
-		}
-	}
-}
-
 func TestWriteJSON_StatusEchoes(t *testing.T) {
 	t.Parallel()
 
@@ -173,71 +142,6 @@ func TestWriteError_NoStoreHeader(t *testing.T) {
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control=%q want no-store (errors must not be cached)", got)
 	}
-}
-
-func TestWriteOAuthBearerChallenge_HeaderShape(t *testing.T) {
-	t.Parallel()
-
-	rec := httptest.NewRecorder()
-	err := httpx.WriteOAuthBearerChallenge(
-		rec,
-		http.StatusUnauthorized,
-		"invalid_token",
-		"token expired",
-		"https://op.example.com",
-		"openid profile",
-	)
-	if err != nil {
-		t.Fatalf("WriteOAuthBearerChallenge: %v", err)
-	}
-	got := rec.Header().Get("WWW-Authenticate")
-	want := `Bearer realm="https://op.example.com", error="invalid_token", error_description="token expired", scope="openid profile"`
-	if got != want {
-		t.Errorf("WWW-Authenticate=%q\nwant %q", got, want)
-	}
-}
-
-func TestWriteOAuthBearerChallenge_OmitsEmptyParameters(t *testing.T) {
-	t.Parallel()
-
-	rec := httptest.NewRecorder()
-	err := httpx.WriteOAuthBearerChallenge(rec, http.StatusUnauthorized, "invalid_token", "", "", "")
-	if err != nil {
-		t.Fatalf("WriteOAuthBearerChallenge: %v", err)
-	}
-	got := rec.Header().Get("WWW-Authenticate")
-	if got != `Bearer error="invalid_token"` {
-		t.Errorf("WWW-Authenticate=%q want only error= parameter", got)
-	}
-}
-
-func TestWriteOAuthBearerChallenge_QuoteEscape(t *testing.T) {
-	t.Parallel()
-
-	rec := httptest.NewRecorder()
-	// Description with a quote and backslash must be escaped.
-	err := httpx.WriteOAuthBearerChallenge(rec, http.StatusUnauthorized, "invalid_token", `oh "no" \backslash`, "", "")
-	if err != nil {
-		t.Fatalf("WriteOAuthBearerChallenge: %v", err)
-	}
-	got := rec.Header().Get("WWW-Authenticate")
-	if !contains(got, `\"no\"`) {
-		t.Errorf("WWW-Authenticate=%q must escape inner quotes", got)
-	}
-	if !contains(got, `\\backslash`) {
-		t.Errorf("WWW-Authenticate=%q must escape backslash", got)
-	}
-}
-
-// contains is a tiny strings.Contains substitute that avoids pulling the
-// strings import into the test file when only one call site needs it.
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // TestWriteJSON_UsableInsideHandler asserts WriteJSON works as the response

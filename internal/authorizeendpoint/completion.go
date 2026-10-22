@@ -226,7 +226,7 @@ func resumeInteractionCompletion(
 		return
 	}
 	if out.Cookie != "" {
-		if err := setSessionCookieWithMaxAge(w, out.Cookie, intent.Session.ExpiresAt, deps.now()); err != nil {
+		if err := setSessionCookie(w, out.Cookie, intent.Session.ExpiresAt, deps.now()); err != nil {
 			renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not establish session", "")
 			return
 		}

@@ -267,33 +267,40 @@ func RevokeJWTAccessTokensByGrant(
 // denylist row (not a grant tombstone); when GrantRevocations is nil it
 // falls back to AccessTokens.RevokeByJTI for the migration window.
 //
-// Store errors are returned; callers keep their wire-level success
-// posture and report the error through audit.
+// persisted reports whether a revocation row was written: it is false
+// under RevocationStrategyNone and when no substore backs the strategy,
+// where the token keeps verifying until exp. Store errors are returned;
+// callers keep their wire-level success posture and report the error
+// through audit.
 func RevokeJWTAccessTokenByJTI(
 	ctx context.Context,
 	opts JWTGrantCascadeOpts,
 	jti, grantID string,
 	expiresAt time.Time,
-) error {
+) (persisted bool, err error) {
 	switch opts.RevocationStrategy {
 	case store.RevocationStrategyNone:
-		return nil
+		return false, nil
 	case store.RevocationStrategyJTIRegistry:
 		if opts.AccessTokens != nil {
-			return opts.AccessTokens.RevokeByJTI(ctx, jti)
+			return revokedOutcome(opts.AccessTokens.RevokeByJTI(ctx, jti))
 		}
-		return nil
+		return false, nil
 	default:
 		if opts.GrantRevocations != nil {
-			return opts.GrantRevocations.RevokeJTI(ctx, store.RevokedJTI{
+			return revokedOutcome(opts.GrantRevocations.RevokeJTI(ctx, store.RevokedJTI{
 				JTI:       jti,
 				GrantID:   grantID,
 				ExpiresAt: expiresAt,
-			})
+			}))
 		}
 		if opts.AccessTokens != nil {
-			return opts.AccessTokens.RevokeByJTI(ctx, jti)
+			return revokedOutcome(opts.AccessTokens.RevokeByJTI(ctx, jti))
 		}
-		return nil
+		return false, nil
 	}
+}
+
+func revokedOutcome(err error) (bool, error) {
+	return err == nil, err
 }

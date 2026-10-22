@@ -2,7 +2,6 @@ package tokenendpoint
 
 import (
 	"context"
-	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
@@ -19,12 +18,6 @@ const (
 	teardownReasonPreparedPoll    = "prepared_poll_lost"
 )
 
-// tombstoneGrace is how far past an access token's expiry a grant
-// tombstone must survive so a verifier whose clock trails the OP's
-// still sees the revocation. Five minutes matches the floor the
-// access-token registry GC uses.
-const tombstoneGrace = 5 * time.Minute
-
 // grantTeardown returns the [teardown.Revoker] every credential
 // retirement on this endpoint runs through. Building it from Deps in
 // one place is what keeps the substore set and the revocation-strategy
@@ -38,24 +31,9 @@ func grantTeardown(deps Deps, reason string) teardown.Revoker {
 		GrantRevocations:   deps.GrantRevocations,
 		Strategy:           deps.RevocationStrategy,
 		Now:                deps.now().UTC(),
-		TombstoneRetention: tombstoneRetention(deps),
+		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             reason,
 	}
-}
-
-// tombstoneRetention bounds the lifetime of a tombstone written by a
-// teardown. The value is (access-token TTL + [tombstoneGrace]) so any
-// access token issued before the cascade is guaranteed to have expired
-// before its tombstone disappears. A zero/negative [Deps.AccessTokenTTL]
-// is normalised to the token-endpoint default here as a defensive
-// backstop so a partially constructed Deps value cannot accidentally
-// disable tombstone GC.
-func tombstoneRetention(deps Deps) time.Duration {
-	ttl := deps.AccessTokenTTL
-	if ttl <= 0 {
-		ttl = defaultAccessTokenTTL
-	}
-	return ttl + tombstoneGrace
 }
 
 // reportTeardown raises the warn-level audit signal for a teardown that

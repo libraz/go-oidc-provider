@@ -3,24 +3,19 @@ package tokenendpoint
 import (
 	"testing"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
 )
 
-func TestTombstoneRetention_DefaultsWhenAccessTokenTTLUnset(t *testing.T) {
+// The token endpoint's replay cascades must write tombstones with the same
+// retention /revoke, /end_session and grant management do, unset TTL included.
+func TestGrantTeardown_RetentionMatchesSharedFormula(t *testing.T) {
 	t.Parallel()
 
-	got := tombstoneRetention(Deps{})
-	want := defaultAccessTokenTTL + tombstoneGrace
-	if got != want {
-		t.Fatalf("tombstoneRetention=%v want %v", got, want)
-	}
-}
-
-func TestTombstoneRetention_AddsGraceToConfiguredTTL(t *testing.T) {
-	t.Parallel()
-
-	got := tombstoneRetention(Deps{AccessTokenTTL: 42 * time.Minute})
-	want := 42*time.Minute + tombstoneGrace
-	if got != want {
-		t.Fatalf("tombstoneRetention=%v want %v", got, want)
+	for _, ttl := range []time.Duration{0, -time.Second, 42 * time.Minute} {
+		got := grantTeardown(Deps{AccessTokenTTL: ttl}, teardownReasonRefreshReplay).TombstoneRetention
+		if want := teardown.TombstoneRetention(ttl); got != want {
+			t.Errorf("AccessTokenTTL=%v: TombstoneRetention=%v want %v", ttl, got, want)
+		}
 	}
 }

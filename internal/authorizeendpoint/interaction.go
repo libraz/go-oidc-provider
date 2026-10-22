@@ -960,33 +960,18 @@ func emitSessionCreated(ctx context.Context, deps resolved, subject, sessionID, 
 	})
 }
 
-// setSessionCookieWithMaxAge writes the encrypted browser-session cookie. A
-// non-zero expiresAt is used to cap the browser idle lifetime at the same
-// absolute expiry the session manager enforced server-side.
-func setSessionCookieWithMaxAge(w http.ResponseWriter, value string, expiresAt, now time.Time) error {
-	profile := cookie.SessionProfile
-	if !expiresAt.IsZero() {
-		remaining := expiresAt.UTC().Sub(now.UTC())
-		if remaining <= 0 {
-			return sessions.ErrCurrentSessionExpired
-		}
-		if remaining < profile.MaxAge {
-			// Cookie Max-Age is expressed in whole seconds. Preserve a
-			// positive sub-second server-side lifetime as one second rather
-			// than truncating it to zero, which would silently turn the
-			// authenticated cookie into a browser-session cookie.
-			seconds := remaining / time.Second
-			if remaining%time.Second != 0 {
-				seconds++
-			}
-			profile.MaxAge = seconds * time.Second
-		}
+// setSessionCookie writes the browser-session cookie through
+// [cookie.SetSession], capping its lifetime at the server-side expiry. An
+// elapsed expiry is reported as [sessions.ErrCurrentSessionExpired] so the
+// caller treats it like any other expired session.
+func setSessionCookie(w http.ResponseWriter, value string, expiresAt, now time.Time) error {
+	err := cookie.SetSession(w, value, expiresAt, now)
+	if errors.Is(err, cookie.ErrSessionExpired) {
+		return sessions.ErrCurrentSessionExpired
 	}
-	c, err := cookie.Build(profile, value)
 	if err != nil {
 		return fmt.Errorf("authorizeendpoint: build session cookie: %w", err)
 	}
-	http.SetCookie(w, c)
 	return nil
 }
 

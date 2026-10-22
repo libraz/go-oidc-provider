@@ -45,14 +45,6 @@ const (
 	// to skip a lookup but always falls through on miss.
 	hintAccessToken  = "access_token"
 	hintRefreshToken = "refresh_token"
-
-	// chainWalkLimit caps how far the handler walks parent pointers
-	// when computing the chain root for a refresh-token revocation.
-	// The value mirrors internal/grants/refresh.chainWalkLimit so
-	// a corrupted store cannot loop forever; production grants
-	// rotate at most once per access-token lifetime, well below the
-	// limit.
-	chainWalkLimit = 1024
 )
 
 // Clock is the package-local view of the wall clock. It mirrors the
@@ -121,14 +113,15 @@ type Deps struct {
 	// back to [defaultLeeway].
 	Leeway time.Duration
 
-	// AccessTokens is the [store.AccessTokenRegistry] consulted by the
-	// JWT branch to flip the access-token shadow row to revoked (RFC
-	// 7009 §2). The call is idempotent: a missing row returns nil so
-	// the endpoint stays on the §2.2 "always 200" path. A nil value
-	// disables the per-token revocation surface and the JWT branch
-	// falls back to the legacy "no-op acknowledgement" behaviour: the
-	// wire response stays 200 but the token continues
-	// to verify until exp.
+	// AccessTokens is the [store.AccessTokenRegistry] the JWT branch
+	// flips to revoked (RFC 7009 §2) under
+	// [store.RevocationStrategyJTIRegistry], and under the grant-tombstone
+	// strategy when [Deps.GrantRevocations] is nil. The call is
+	// idempotent: a missing row returns nil so the endpoint stays on the
+	// §2.2 "always 200" path. When neither substore backs the active
+	// strategy the JWT branch persists nothing: the wire response stays
+	// 200, no token.revoked event is recorded, and the token verifies
+	// until exp.
 	AccessTokens store.AccessTokenRegistry
 
 	// OpaqueAccessTokens is the [store.OpaqueAccessTokenStore] the

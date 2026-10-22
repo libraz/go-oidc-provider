@@ -981,7 +981,7 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 		return sessionErr
 	}
 	if scope == logoutScopeCurrent && removal.Cookie != "" && len(removal.Remaining) > 0 {
-		if err := setSessionCookie(w, removal.Cookie, removal.ExpiresAt, endSessionNow(deps)); err == nil {
+		if err := cookie.SetSession(w, removal.Cookie, removal.ExpiresAt, endSessionNow(deps)); err == nil {
 			return nil
 		}
 	}
@@ -1071,7 +1071,7 @@ func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 		GrantRevocations:   deps.GrantRevocations,
 		Strategy:           deps.RevocationStrategy,
 		Now:                endSessionNow(deps),
-		TombstoneRetention: tombstoneRetention(deps.AccessTokenTTL),
+		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             "logout",
 	}
 	var errs []error
@@ -1108,18 +1108,6 @@ func revokeAccessTokensForSnapshot(ctx context.Context, deps Deps, snapshot []*s
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// tombstoneRetention returns the period a grant tombstone must live
-// after [store.RevocationStrategyGrantTombstone] writes it. The
-// window is "AT TTL + 5-minute clock-skew grace"; a zero
-// AccessTokenTTL falls back to one hour, which is the project's
-// default AT TTL ceiling.
-func tombstoneRetention(ttl time.Duration) time.Duration {
-	if ttl <= 0 {
-		ttl = time.Hour
-	}
-	return ttl + 5*time.Minute
 }
 
 // endSessionNow returns the wall-clock reading the cascade uses for
@@ -1192,24 +1180,6 @@ func clearSessionCookie(w http.ResponseWriter) {
 	if c, err := cookie.Clear(cookie.SessionProfile); err == nil {
 		http.SetCookie(w, c)
 	}
-}
-
-// setSessionCookie writes a newly sealed session payload. It is used by the
-// current-session logout path when the manager has rebound the browser to a
-// surviving chooser sibling.
-//
-// expiresAt is the sibling's server-side expiry and now the endpoint's clock
-// reading; [cookie.BuildSession] requires both so the rebound cookie cannot be
-// handed a browser lifetime longer than the session it was just bound to. A
-// sibling with nothing left returns [cookie.ErrSessionExpired] and the caller
-// clears the cookie instead.
-func setSessionCookie(w http.ResponseWriter, value string, expiresAt, now time.Time) error {
-	c, err := cookie.BuildSession(value, expiresAt, now)
-	if err != nil {
-		return err
-	}
-	http.SetCookie(w, c)
-	return nil
 }
 
 // emitResponse writes the success response: a 302 to the post-logout

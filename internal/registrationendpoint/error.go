@@ -48,13 +48,14 @@ func writeRegistrationError(w http.ResponseWriter, status int, code, description
 // code. RFC 6750 §3 mandates a WWW-Authenticate Bearer challenge so
 // RP libraries that follow the bearer state machine retry intelligently.
 // The realm value is the OP issuer, which names the protection space
-// unambiguously even when several OPs sit behind one host.
+// unambiguously even when several OPs sit behind one host. Every value
+// passes the shared challenge sanitiser.
 func writeInvalidToken(w http.ResponseWriter, issuer, description string) {
-	header := `Bearer realm="` + issuer + `", error="invalid_token"`
-	if description != "" {
-		header += `, error_description="` + sanitizeHeaderValue(description) + `"`
-	}
-	w.Header().Set("WWW-Authenticate", header)
+	w.Header().Set("WWW-Authenticate", endpointsupport.BuildBearerChallenge(endpointsupport.BearerSchemeBearer,
+		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeRealm, Value: issuer},
+		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeError, Value: codeInvalidToken},
+		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeErrorDescription, Value: sanitizeDescription(description)},
+	))
 	writeRegistrationError(w, http.StatusUnauthorized, codeInvalidToken, description)
 }
 
@@ -90,22 +91,6 @@ func sanitizeDescription(s string) string {
 	if len(s) > maxDescriptionBytes {
 		s = s[:maxDescriptionBytes]
 	}
-	return s
-}
-
-// sanitizeHeaderValue is the strict variant used on values that flow
-// into HTTP response headers: the WWW-Authenticate description must
-// not contain " or \ characters that would terminate the auth-param
-// quoted-string, and CR/LF would split the response. The function
-// runs after [sanitizeDescription] semantics; the additional escape
-// is restricted to the header context.
-func sanitizeHeaderValue(s string) string {
-	s = sanitizeDescription(s)
-	// RFC 7235 quoted-string: " and \ MUST be escaped or removed.
-	// Library posture: remove rather than escape so the header stays
-	// reproducible across slog redactors that re-quote fields.
-	s = strings.ReplaceAll(s, `"`, "")
-	s = strings.ReplaceAll(s, `\`, "")
 	return s
 }
 

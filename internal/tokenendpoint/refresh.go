@@ -248,22 +248,35 @@ func handleRefreshTokenTransaction(
 	authorizationDetails []map[string]any,
 ) {
 	var cascade replayCascade
-	staged, ok := runRefreshTokenTransaction(
-		ctx,
-		r,
-		deps,
-		client,
-		in,
-		dpopOut,
-		requestedAuthorizationDetails,
-		authorizationDetails,
-		&cascade,
-	)
+	run := func() (*stagedResponseWriter, error) {
+		return runRefreshTokenTransaction(
+			ctx,
+			r,
+			deps,
+			client,
+			in,
+			dpopOut,
+			requestedAuthorizationDetails,
+			authorizationDetails,
+			&cascade,
+		)
+	}
+	staged, err := run()
+	if errors.Is(err, store.ErrConflict) {
+		// A backend that checks consumed_at only at Commit (an optimistic
+		// conditional write) lets two concurrent presentations of one token
+		// both pass Consume; the loser learns of the race here. Its writes
+		// were discarded, so one re-run sees the winner's committed
+		// consumed_at and ends exactly as a serialising backend would:
+		// invalid_grant with the RFC 9700 §2.2.2 cascade armed, or the grace
+		// response.
+		staged, err = run()
+	}
 	// The transaction has settled by the time the helper returns, so the direct
 	// substore handles are free and a replayed chain is retired here — before
 	// the client is told anything, and in both settle directions.
 	cascade.run(ctx, deps)
-	if !ok {
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
@@ -272,8 +285,8 @@ func handleRefreshTokenTransaction(
 
 // runRefreshTokenTransaction stages the refresh exchange behind a transaction
 // and settles it, handing the staged response back for the caller to forward.
-// ok=false means the transaction could not be opened or could not be settled,
-// and the caller owes the client a server_error.
+// A non-nil error means the transaction could not be opened or could not be
+// settled, and the caller owes the client a server_error.
 //
 // The staged response is deliberately NOT written here: the caller runs the
 // replay cascade between the settle and the write, so nothing observable
@@ -288,10 +301,10 @@ func runRefreshTokenTransaction(
 	requestedAuthorizationDetails []map[string]any,
 	authorizationDetails []map[string]any,
 	cascade *replayCascade,
-) (*stagedResponseWriter, bool) {
+) (*stagedResponseWriter, error) {
 	tx, err := deps.Transactions.BeginTx(ctx)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	txDeps := deps
@@ -322,7 +335,7 @@ func runRefreshTokenTransaction(
 	// failures in token assembly/persistence. Request-shape and narrowing
 	// rejections are handled before Exchange.
 	if rollback || staged.status >= http.StatusInternalServerError || staged.status == 0 {
-		return staged, true
+		return staged, nil
 	}
 	if err := tx.Commit(); err != nil {
 		if cascade.armed() {
@@ -331,11 +344,11 @@ func runRefreshTokenTransaction(
 			// hear about. Reporting the settle fault as server_error would
 			// replace a correct RFC 6749 §5.2 invalid_grant with a 5xx and bury
 			// the finding; the cascade retires the chain either way.
-			return staged, true
+			return staged, nil
 		}
-		return nil, false
+		return nil, err
 	}
-	return staged, true
+	return staged, nil
 }
 
 // requireRegisteredScopes re-applies the client's registered Scopes to a

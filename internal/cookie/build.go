@@ -75,6 +75,17 @@ func BuildSession(value string, expiresAt, now time.Time) (*http.Cookie, error) 
 	return Build(profile, value)
 }
 
+// SetSession writes the browser-session cookie [BuildSession] constructs. It
+// is the one writer every endpoint that issues the session cookie calls.
+func SetSession(w http.ResponseWriter, value string, expiresAt, now time.Time) error {
+	c, err := BuildSession(value, expiresAt, now)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, c)
+	return nil
+}
+
 // Clear constructs an [http.Cookie] that instructs the browser to delete the
 // cookie defined by [Profile]. The empty value plus MaxAge=-1 is the standard
 // recipe per RFC 6265 §4.1.2.
