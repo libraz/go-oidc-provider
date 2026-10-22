@@ -25,6 +25,10 @@ var ErrJWKSNotConfigured = errors.New("clientauth: client has no JWKs configured
 // "you forgot to wire the fetcher" to the client.
 var ErrJWKSURIUnsupported = errors.New("clientauth: JWKsURI is not configured on this resolver")
 
+// errClientLookup marks a client-store failure other than
+// [store.ErrNotFound], which the verifier surfaces as a server-side fault.
+var errClientLookup = errors.New("clientauth: client lookup")
+
 // URLFetcher fetches a parsed JWK Set from a remote URL. The
 // production wiring backs this with internal/jar.Fetcher,
 // which adds caching, singleflight, an SSRF deny-list, and a body cap.
@@ -92,7 +96,7 @@ func (r *StoreJWKSResolver) AssertionSigningAlg(ctx context.Context, clientID st
 		if errors.Is(err, store.ErrNotFound) {
 			return "", ErrJWKSNotConfigured
 		}
-		return "", fmt.Errorf("clientauth: client lookup: %w", err)
+		return "", fmt.Errorf("%w: %w", errClientLookup, err)
 	}
 	return client.TokenEndpointAuthSigningAlg, nil
 }
@@ -109,7 +113,7 @@ func (r *StoreJWKSResolver) JWKS(ctx context.Context, clientID string) (*josev4.
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, ErrJWKSNotConfigured
 		}
-		return nil, fmt.Errorf("clientauth: client lookup: %w", err)
+		return nil, fmt.Errorf("%w: %w", errClientLookup, err)
 	}
 	if len(client.JWKs) == 0 {
 		if client.JWKsURI == "" {
@@ -159,7 +163,7 @@ func (r *StoreJWKSResolver) RefreshJWKS(ctx context.Context, clientID string) (*
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, ErrJWKSNotConfigured
 		}
-		return nil, fmt.Errorf("clientauth: client lookup: %w", err)
+		return nil, fmt.Errorf("%w: %w", errClientLookup, err)
 	}
 	if len(client.JWKs) != 0 {
 		return r.JWKS(ctx, clientID)

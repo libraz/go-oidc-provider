@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -82,6 +84,10 @@ type assertionSigningAlgResolver interface {
 
 const maxAssertionLifetime = 5 * time.Minute
 
+// maxJTILen bounds the "jti" claim length, matching the DPoP proof and
+// request-object replay gates so no replay-store key grows unbounded.
+const maxJTILen = 256
+
 // DefaultAssertionLeeway is the skew tolerance applied to the time
 // claims of a client assertion when [PrivateKeyJWTVerifier.Leeway] is
 // zero.
@@ -152,8 +158,11 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrAssertionMalformed, err)
 	}
-	if !v.policyAllowsAlg(jws) || !assertionAlgAllowed(ctx, v.Resolver, clientID, jws) {
+	if !v.policyAllowsAlg(jws) {
 		return ErrCredentialsInvalid
+	}
+	if err := checkAssertionAlgPin(ctx, v.Resolver, clientID, jws); err != nil {
+		return err
 	}
 	payload, err := resolveAndVerify(ctx, v.Resolver, clientID, jws)
 	if err != nil {
@@ -168,8 +177,12 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if err := validateAssertionClaims(claims, clientID, accepted, now, leeway); err != nil {
 		return err
 	}
+	replayKey, err := assertionReplayKey(clientID, claims.JTI)
+	if err != nil {
+		return err
+	}
 	expiresAt := assertionJTIExpiry(claims, now, leeway)
-	if err := v.JTIStore.Mark(ctx, assertionJTIKey(clientID, claims.JTI), expiresAt); err != nil {
+	if err := v.JTIStore.Mark(ctx, replayKey, expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return ErrAssertionReplayed
 		}
@@ -181,11 +194,15 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 // resolveAndVerify resolves the client's keyset and verifies the
 // assertion signature against it. On a verification miss that a key
 // rotation could explain (see [refreshedKeysOnKIDMiss]) it refetches the
-// keyset once and retries. Any failure collapses to
+// keyset once and retries. Every client-side failure collapses to
 // [ErrCredentialsInvalid] so the wire response never distinguishes
-// "unknown client" / "no keys" / "bad signature".
+// "unknown client" / "no keys" / "bad signature"; a server-side
+// key-source failure passes through [classifyKeyResolution] instead.
 func resolveAndVerify(ctx context.Context, resolver JWKSResolver, clientID string, jws *josev4.JSONWebSignature) ([]byte, error) {
 	keys, err := resolver.JWKS(ctx, clientID)
+	if err != nil && keySourceUnavailable(err) {
+		return nil, classifyKeyResolution(err)
+	}
 	if err != nil || keys == nil || len(keys.Keys) == 0 {
 		// Timing uniformity (L-14): a known client with no usable JWKS
 		// (unconfigured keys, a resolver/fetch error, or an empty set)
@@ -206,7 +223,10 @@ func resolveAndVerify(ctx context.Context, resolver JWKSResolver, clientID strin
 	// rotated in after the OP last cached its jwks_uri keyset. When the
 	// signing kid is absent from the cached set and the resolver supports
 	// a (throttled) refetch, pull the current keyset once and retry.
-	refreshed, ok := refreshedKeysOnKIDMiss(ctx, resolver, clientID, jws, keys)
+	refreshed, ok, err := refreshedKeysOnKIDMiss(ctx, resolver, clientID, jws, keys)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, ErrCredentialsInvalid
 	}
@@ -231,23 +251,45 @@ type jwksRefresher interface {
 // keyset just tried. It returns ok=false when rotation cannot explain the
 // miss (resolver has no refetch, kid is present so the signature is
 // simply wrong, or the refetch failed), so the caller rejects without a
-// wasted retry.
+// wasted retry. A server-side refetch failure is returned as an error.
 func refreshedKeysOnKIDMiss(
 	ctx context.Context,
 	resolver JWKSResolver,
 	clientID string,
 	jws *josev4.JSONWebSignature,
 	tried *josev4.JSONWebKeySet,
-) (*josev4.JSONWebKeySet, bool) {
+) (*josev4.JSONWebKeySet, bool, error) {
 	refresher, ok := resolver.(jwksRefresher)
 	if !ok || !assertionKIDAbsent(jws, tried) {
-		return nil, false
+		return nil, false, nil
 	}
 	fresh, err := refresher.RefreshJWKS(ctx, clientID)
-	if err != nil || fresh == nil || len(fresh.Keys) == 0 {
-		return nil, false
+	if err != nil && keySourceUnavailable(err) {
+		return nil, false, classifyKeyResolution(err)
 	}
-	return fresh, true
+	if err != nil || fresh == nil || len(fresh.Keys) == 0 {
+		return nil, false, nil
+	}
+	return fresh, true, nil
+}
+
+// keySourceUnavailable reports whether a key-resolution failure is a
+// server-side fault (client-store outage, or URL-load capacity pressure on
+// the jwks_uri fetch) rather than evidence about the client's credentials.
+func keySourceUnavailable(err error) bool {
+	var transient *rpjwks.TransientError
+	return errors.Is(err, errClientLookup) || errors.Is(err, rpjwks.ErrOverloaded) || errors.As(err, &transient)
+}
+
+// classifyKeyResolution maps a key-resolution failure onto the verifier's
+// error contract: a server-side fault keeps its cause so the endpoint
+// answers server_error and the client retries; anything else collapses to
+// [ErrCredentialsInvalid].
+func classifyKeyResolution(err error) error {
+	if keySourceUnavailable(err) {
+		return fmt.Errorf("authn: client key resolution: %w", err)
+	}
+	return ErrCredentialsInvalid
 }
 
 // assertionKIDAbsent reports whether the assertion's signing key id is
@@ -286,19 +328,24 @@ func (v *PrivateKeyJWTVerifier) policyAllowsAlg(jws *josev4.JSONWebSignature) bo
 	return slices.Contains(v.AllowedAlgs, jose.Algorithm(jws.Signatures[0].Header.Algorithm))
 }
 
-func assertionAlgAllowed(ctx context.Context, resolver JWKSResolver, clientID string, jws *josev4.JSONWebSignature) bool {
+// checkAssertionAlgPin rejects an assertion whose alg differs from the
+// client's registered token_endpoint_auth_signing_alg, when one is pinned.
+func checkAssertionAlgPin(ctx context.Context, resolver JWKSResolver, clientID string, jws *josev4.JSONWebSignature) error {
 	algResolver, ok := resolver.(assertionSigningAlgResolver)
 	if !ok {
-		return true
+		return nil
 	}
 	pin, err := algResolver.AssertionSigningAlg(ctx, clientID)
-	if err != nil || pin == "" {
-		return err == nil
+	if err != nil {
+		return classifyKeyResolution(err)
 	}
-	if len(jws.Signatures) == 0 {
-		return false
+	if pin == "" {
+		return nil
 	}
-	return jws.Signatures[0].Header.Algorithm == pin
+	if len(jws.Signatures) == 0 || jws.Signatures[0].Header.Algorithm != pin {
+		return ErrCredentialsInvalid
+	}
+	return nil
 }
 
 // verifySignature returns the verified payload on the first candidate key
@@ -415,17 +462,14 @@ func decodeAssertionClaims(payload []byte) (AssertionClaims, error) {
 
 // validateAssertionClaims enforces the standard claim invariants
 // required by OIDC Core §9: iss == sub == clientID, aud contains one
-// of the accepted audience values, jti is non-empty, exp is in the
-// future, iat is not in the future (within leeway), nbf if present
-// is past.
+// of the accepted audience values, exp is in the future, iat is not in
+// the future (within leeway), nbf if present is past. The jti is
+// checked by [assertionReplayKey].
 func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAud []string, now time.Time, leeway time.Duration) error {
 	if claims.Issuer != clientID || claims.Subject != clientID {
 		return ErrAssertionMalformed
 	}
 	if !audienceMatchesAny(claims.Audience, acceptedAud) {
-		return ErrAssertionMalformed
-	}
-	if claims.JTI == "" {
 		return ErrAssertionMalformed
 	}
 	if claims.ExpiresAt == 0 {
@@ -453,8 +497,17 @@ func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAu
 	return nil
 }
 
-func assertionJTIKey(clientID, jti string) string {
-	return "clientassertion:" + clientID + ":" + jti
+// replayKeyEscaper percent-encodes the key separator in the client id so
+// each (client, jti) pair maps to exactly one replay key.
+var replayKeyEscaper = strings.NewReplacer("%", "%25", ":", "%3A")
+
+// assertionReplayKey builds the consumed-JTI key for an assertion,
+// rejecting a jti that is empty or longer than [maxJTILen].
+func assertionReplayKey(clientID, jti string) (string, error) {
+	if jti == "" || len(jti) > maxJTILen {
+		return "", ErrAssertionMalformed
+	}
+	return "clientassertion:" + replayKeyEscaper.Replace(clientID) + ":" + jti, nil
 }
 
 func assertionJTIExpiry(claims AssertionClaims, now time.Time, leeway time.Duration) time.Time {
