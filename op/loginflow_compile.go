@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -43,7 +44,14 @@ const captchaSubmissionMaxLen = 4 * 1024
 // errCaptchaTokenMissing surfaces when the SPA omits the captcha token
 // field. The orchestrator's [interaction.FieldSpec] validation should
 // already have caught this; the adapter re-checks at the trust boundary.
-var errCaptchaTokenMissing = errors.New("op: captcha_token field is missing")
+// Like a rejected token it wraps [authn.ErrFactorRetry], so the challenge
+// is re-issued rather than failing the request.
+var errCaptchaTokenMissing = fmt.Errorf("op: captcha_token field is missing: %w", authn.ErrFactorRetry)
+
+// errCaptchaRejected wraps a [CaptchaVerifier] refusal in
+// [authn.ErrFactorRetry]: the orchestrator re-issues the challenge until
+// its failure budget runs out, exactly as on the threshold captcha path.
+var errCaptchaRejected = fmt.Errorf("op: captcha token rejected: %w", authn.ErrFactorRetry)
 
 // errCaptchaVerifierNil surfaces when [StepCaptcha.Verifier] is nil at
 // the time the orchestrator dispatches Continue. The compile path
@@ -56,7 +64,17 @@ var errCaptchaVerifierNil = errors.New("op: StepCaptcha.Verifier is nil")
 // before Provider construction performs externally visible work (metrics
 // registration and static-client reconciliation), so typed-nil values surface
 // as field-specific configuration errors instead of a later method-call panic.
+// It also refuses a Primary that cannot run on a fresh login: Primary is what
+// binds the subject, and the built-in steps that assert for a known subject
+// need one already bound.
 func validateLoginFlowDependencies(flow LoginFlow) error {
+	if name := subjectBoundStepName(flow.Primary); name != "" {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithLoginFlow: Primary must not be " + name + " — the step needs a subject a previous" +
+				" step bound; use PrimaryPassword or an ExternalStep as Primary and " + name + " in a Rule",
+		}
+	}
 	if flow.Decider != nil && isNilLike(flow.Decider) {
 		return loginFlowDependencyError("LoginFlow.Decider")
 	}
@@ -73,6 +91,22 @@ func validateLoginFlowDependencies(flow LoginFlow) error {
 		}
 	}
 	return nil
+}
+
+// subjectBoundStepName names a built-in [Step] that can only run for a
+// subject an earlier step bound, or returns "" for any other Step.
+func subjectBoundStepName(step Step) string {
+	switch step.(type) {
+	case PrimaryPasskey:
+		return "PrimaryPasskey"
+	case StepTOTP:
+		return "StepTOTP"
+	case StepEmailOTP:
+		return "StepEmailOTP"
+	case StepRecoveryCode:
+		return "StepRecoveryCode"
+	}
+	return ""
 }
 
 // validateStepDependencies validates the public dependencies owned by one
@@ -238,10 +272,10 @@ func (a captchaStepAdapter) Begin(_ context.Context, _ authn.BeginInput) (intera
 
 // Continue implements [authn.Authenticator]. It extracts the captcha
 // token from the SPA submission, calls [CaptchaVerifier.Verify], and
-// returns a populated [interaction.Result] on success or the verifier
-// error on failure. The error never carries the upstream reason — the
-// orchestrator surfaces a generic challenge_required so the SPA cannot
-// enumerate provider-side rejection codes.
+// returns a populated [interaction.Result] on success or
+// [errCaptchaRejected] on failure. The upstream reason stays in the
+// wrapped error for the log; the SPA only sees a fresh challenge, so it
+// cannot enumerate provider-side rejection codes.
 func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
 	if isNilLike(a.verifier) {
 		return interaction.Step{}, errCaptchaVerifierNil
@@ -254,7 +288,7 @@ func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput
 		Token:    token,
 		RemoteIP: in.RemoteIP,
 	}); err != nil {
-		return interaction.Step{}, err
+		return interaction.Step{}, fmt.Errorf("%w: %w", errCaptchaRejected, err)
 	}
 	return interaction.Step{Result: &interaction.Result{
 		Subject:  in.Subject,

@@ -179,10 +179,13 @@ func (PrimaryPassword) Continue(_ context.Context, _ ContinueInput) (interaction
 // Kind implements [Step]. Returns [StepKindPassword].
 func (PrimaryPassword) Kind() StepKind { return StepKindPassword }
 
-// PrimaryPasskey is the built-in primary-credential [Step] backed by a
-// [store.PasskeyStore]. The factor performs a WebAuthn assertion as
-// the first authentication step; a successful assertion binds the
-// subject without requiring a prior password entry.
+// PrimaryPasskey is the built-in passkey [Step] backed by a
+// [store.PasskeyStore]. The factor performs a WebAuthn assertion
+// against the credentials of a subject an earlier step already bound,
+// so it runs as a [Rule] step after [PrimaryPassword]. Discoverable
+// credentials, where the assertion itself names the user, are not
+// supported, and [New] rejects a [LoginFlow] whose Primary is a
+// PrimaryPasskey.
 type PrimaryPasskey struct {
 	// Store is the passkey credential store. MUST be non-nil.
 	Store store.PasskeyStore

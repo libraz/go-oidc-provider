@@ -47,7 +47,7 @@ func TestPrimaryPasskey_AAGUIDAllowlistRequiresAttestationRoots(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			st := inmem.New()
-			opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(op.LoginFlow{Primary: step(st, tc.roots)}))
+			opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(flowWithRule(step(st, tc.roots))))
 			_, err := op.New(opts...)
 			if tc.wantSubstr == "" {
 				if err != nil {

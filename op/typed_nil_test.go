@@ -95,32 +95,32 @@ func TestWithLoginFlow_RejectsTypedNilDependencies(t *testing.T) {
 			},
 		},
 		{
-			name:  "primary-passkey-store",
-			field: "Primary.PrimaryPasskey.Store",
+			name:  "passkey-store",
+			field: "Rules[0].Then.PrimaryPasskey.Store",
 			buildFlow: func(t *testing.T, st *inmem.Store) op.LoginFlow {
 				t.Helper()
 				passkeys := typedNilFrom[store.PasskeyStore](t, st.Passkeys())
-				return op.LoginFlow{Primary: op.PrimaryPasskey{
+				return flowWithRule(op.PrimaryPasskey{
 					Store:         passkeys,
 					RPID:          "id.example.com",
 					RPDisplayName: "Example",
 					RPOrigins:     []string{"https://id.example.com"},
-				}}
+				})
 			},
 		},
 		{
-			name:  "primary-passkey-clone-handler",
-			field: "Primary.PrimaryPasskey.CloneDetectionHandler",
+			name:  "passkey-clone-handler",
+			field: "Rules[0].Then.PrimaryPasskey.CloneDetectionHandler",
 			buildFlow: func(t *testing.T, st *inmem.Store) op.LoginFlow {
 				t.Helper()
 				hook := typedNilFrom[op.PasskeyCloneDetectionHandler](t, &typedNilCloneHandler{})
-				return op.LoginFlow{Primary: op.PrimaryPasskey{
+				return flowWithRule(op.PrimaryPasskey{
 					Store:                 st.Passkeys(),
 					RPID:                  "id.example.com",
 					RPDisplayName:         "Example",
 					RPOrigins:             []string{"https://id.example.com"},
 					CloneDetectionHandler: hook,
-				}}
+				})
 			},
 		},
 		{

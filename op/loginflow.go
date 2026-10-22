@@ -22,7 +22,10 @@ type LoginFlow struct {
 	// Primary is the first step the orchestrator runs. It is the step
 	// that establishes the [Identity] consumed by every subsequent
 	// rule predicate. Primary MUST be non-nil; the orchestrator
-	// rejects a LoginFlow with a nil Primary at construction time.
+	// rejects a LoginFlow with a nil Primary at construction time, and
+	// one whose Primary is a built-in step that needs a subject already
+	// bound ([PrimaryPasskey], [StepTOTP], [StepEmailOTP],
+	// [StepRecoveryCode]).
 	Primary Step
 
 	// Rules is the ordered list of conditional follow-up steps the

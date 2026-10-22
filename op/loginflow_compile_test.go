@@ -48,14 +48,12 @@ func TestProjectStepToFlow_BuiltinSteps_BuildSuccessfully(t *testing.T) {
 		{
 			name: "PrimaryPasskey",
 			flow: func(st *inmem.Store) op.LoginFlow {
-				return op.LoginFlow{
-					Primary: op.PrimaryPasskey{
-						Store:         st.Passkeys(),
-						RPID:          "id.example.com",
-						RPDisplayName: "Example",
-						RPOrigins:     []string{"https://id.example.com"},
-					},
-				}
+				return flowWithRule(op.PrimaryPasskey{
+					Store:         st.Passkeys(),
+					RPID:          "id.example.com",
+					RPDisplayName: "Example",
+					RPOrigins:     []string{"https://id.example.com"},
+				})
 			},
 		},
 		{
@@ -143,22 +141,22 @@ func TestProjectStepToFlow_BuiltinSteps_RejectMissingDeps(t *testing.T) {
 		{
 			name: "PrimaryPasskey/nil-store",
 			buildFlow: func(*inmem.Store) op.LoginFlow {
-				return op.LoginFlow{Primary: op.PrimaryPasskey{
+				return flowWithRule(op.PrimaryPasskey{
 					RPID:          "x",
 					RPDisplayName: "x",
 					RPOrigins:     []string{"https://x"},
-				}}
+				})
 			},
 			wantSubstr: "PrimaryPasskey.Store is nil",
 		},
 		{
 			name: "PrimaryPasskey/empty-RPID",
 			buildFlow: func(st *inmem.Store) op.LoginFlow {
-				return op.LoginFlow{Primary: op.PrimaryPasskey{
+				return flowWithRule(op.PrimaryPasskey{
 					Store:         st.Passkeys(),
 					RPDisplayName: "x",
 					RPOrigins:     []string{"https://x"},
-				}}
+				})
 			},
 			wantSubstr: "RPID is required",
 		},
@@ -283,6 +281,49 @@ func TestProjectStepToFlow_PrimaryPassword_RejectsNilStore(t *testing.T) {
 	}
 	if typed.Code != "configuration_error" {
 		t.Fatalf("op.Error.Code = %q, want %q", typed.Code, "configuration_error")
+	}
+}
+
+// TestNew_RejectsSubjectBoundStepAsPrimary pins that a LoginFlow whose
+// Primary is a built-in step that asserts for a known subject fails
+// construction. Primary binds the subject on a fresh login, so such a
+// flow would answer every first login with a server error.
+func TestNew_RejectsSubjectBoundStepAsPrimary(t *testing.T) {
+	t.Parallel()
+	totpKey := bytes32("totp-encryption-key-32-bytes-aaa")
+	cases := map[string]func(st *inmem.Store) op.Step{
+		"PrimaryPasskey": func(st *inmem.Store) op.Step {
+			return op.PrimaryPasskey{
+				Store:         st.Passkeys(),
+				RPID:          "id.example.com",
+				RPDisplayName: "Example",
+				RPOrigins:     []string{"https://id.example.com"},
+			}
+		},
+		"StepTOTP": func(st *inmem.Store) op.Step {
+			return op.StepTOTP{Store: st.TOTPs(), EncryptionKey: totpKey}
+		},
+		"StepEmailOTP": func(st *inmem.Store) op.Step {
+			return op.StepEmailOTP{Store: st.EmailOTPs(), Sender: stubMailer{}, Users: st.Users()}
+		},
+		"StepRecoveryCode": func(st *inmem.Store) op.Step {
+			return op.StepRecoveryCode{Store: st.RecoveryCodes()}
+		},
+	}
+	for name, build := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := inmem.New()
+			flow := op.LoginFlow{Primary: build(st)}
+			_, err := op.New(append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(flow))...)
+			var typed *op.Error
+			if !errors.As(err, &typed) || typed.Code != "configuration_error" {
+				t.Fatalf("op.New: err = %v, want a configuration_error", err)
+			}
+			if !strings.Contains(err.Error(), "Primary must not be "+name) {
+				t.Fatalf("op.New: error %q does not name the Primary placement", err.Error())
+			}
+		})
 	}
 }
 

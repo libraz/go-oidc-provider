@@ -100,20 +100,18 @@ func TestNew_DoesNotWarnWithoutACaptcha(t *testing.T) {
 	}
 }
 
-// passkeyFlowOpts is a login flow whose primary step is the WebAuthn
-// ceremony.
+// passkeyFlowOpts is a login flow that runs the WebAuthn ceremony as a
+// rule step after the primary.
 func passkeyFlowOpts(tb testing.TB) []op.Option {
 	tb.Helper()
 	st := inmem.New()
 	return append(validBaseOptsWithStoreNoAuthn(tb, st),
-		op.WithLoginFlow(op.LoginFlow{
-			Primary: op.PrimaryPasskey{
-				Store:         st.Passkeys(),
-				RPID:          "id.example.com",
-				RPDisplayName: "Example",
-				RPOrigins:     []string{"https://id.example.com"},
-			},
-		}),
+		op.WithLoginFlow(flowWithRule(op.PrimaryPasskey{
+			Store:         st.Passkeys(),
+			RPID:          "id.example.com",
+			RPDisplayName: "Example",
+			RPOrigins:     []string{"https://id.example.com"},
+		})),
 	)
 }
 
