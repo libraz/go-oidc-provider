@@ -36,6 +36,13 @@ import (
 // RFC 6749 server_error with the stack trace routed to the audit
 // log only — the response body never leaks the panic message.
 //
+// The handler, not a grant record, vouches for the subject of what it
+// issues, so the subject-wide paths do not reach these credentials:
+// [Provider.RevokeSubject] leaves them live until they expire or are
+// revoked individually, and under pairwise subjects /userinfo answers
+// invalid_token for them. Revoking them on account removal is the
+// handler's responsibility.
+//
 // Stable since v1.0.
 type CustomGrantHandler interface {
 	// Name returns the grant_type URN this handler answers to. The
