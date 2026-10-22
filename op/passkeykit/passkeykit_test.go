@@ -308,6 +308,10 @@ func TestFinish_RejectsForeignOrigin(t *testing.T) {
 // TestFinish_RejectsForeignChallenge asserts the challenge is what binds
 // the two halves of the ceremony: a response the authenticator produced
 // for some other challenge does not complete this one.
+//
+// Tracks: CVE-2026-111911 (phpMyFAQ — WebAuthn registration attached a
+// credential with no challenge validation, so a forged fmt=none
+// attestation bypassed every other factor).
 func TestFinish_RejectsForeignChallenge(t *testing.T) {
 	t.Parallel()
 
@@ -340,6 +344,10 @@ func TestFinish_RejectsForeignChallenge(t *testing.T) {
 // TestFinish_RejectsSubjectMismatch covers the guard that stops one
 // account's challenge being redeemed into another account's credential
 // list.
+//
+// Tracks: CVE-2026-111911 — registration attached a credential to an
+// arbitrary account; here the ceremony completes only for the subject
+// its challenge was issued to.
 func TestFinish_RejectsSubjectMismatch(t *testing.T) {
 	t.Parallel()
 

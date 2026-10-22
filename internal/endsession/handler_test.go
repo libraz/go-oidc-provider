@@ -815,6 +815,13 @@ func TestHandler_IDTokenAZPMismatch(t *testing.T) {
 	}
 }
 
+// TestHandler_BadIDTokenSignature pins that an id_token_hint failing
+// signature verification is refused before its aud can select a client,
+// so the registered post_logout_redirect_uri is not honoured and the
+// session survives.
+//
+// Tracks: CVE-2026-105118 (OpenAM — an unverified id_token_hint naming
+// any client unlocked a redirect to that client's post-logout URI).
 func TestHandler_BadIDTokenSignature(t *testing.T) {
 	t.Parallel()
 

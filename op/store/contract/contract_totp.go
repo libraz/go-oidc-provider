@@ -431,6 +431,12 @@ func totpAcceptReplay(t *testing.T, b TOTPBackend) {
 	assertTOTPEqual(t, got, &expected)
 }
 
+// totpAcceptEarlier implements the "AcceptRejectsEarlierStep" case: once
+// a step is accepted, a code from that step or any earlier one never
+// authenticates again.
+//
+// Tracks: CVE-2026-61630 (nginx-ignition — a TOTP code was reusable
+// within its validity window).
 func totpAcceptEarlier(t *testing.T, b TOTPBackend) {
 	t.Helper()
 	s := b.Store

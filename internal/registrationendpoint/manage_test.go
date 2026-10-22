@@ -274,6 +274,11 @@ func ratFromBody(tb testing.TB, body map[string]any) string {
 }
 
 // TestManage_Read_4xx covers the RAT verification error matrix.
+//
+// Tracks: GHSA-c73q-w75p-j82v (Authlib — the RFC 7592 reference
+// implementation never checked that the registration_access_token
+// belonged to the target client). The "RAT for a different client" case
+// pins that binding; GET, PUT and DELETE share the same RAT check.
 func TestManage_Read_4xx(t *testing.T) {
 	t.Parallel()
 

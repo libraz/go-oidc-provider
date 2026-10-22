@@ -432,6 +432,11 @@ func TestPrivateKeyJWTVerifier_AudIssuer_AcceptedViaAuxAudiences(t *testing.T) {
 // CVE-2025-27370 / CVE-2025-27371 fix: a malicious AS_att cannot relay
 // an assertion forged "aud=AS_hon/token" to AS_hon, because AS_hon's
 // expected aud set must not contain AS_att's identifier.
+//
+// Tracks: GHSA-fch4-3c6x-j4gc (Authlib) — an RFC 7523 JWT bearer
+// grant checked only that an assertion carried an aud, not that the aud
+// named this AS, so an assertion minted for a sibling AS sharing the
+// signing key was accepted. The same binding governs client_assertion.
 func TestPrivateKeyJWTVerifier_AudOtherAS_Rejected(t *testing.T) {
 	t.Parallel()
 

@@ -24,6 +24,11 @@ import (
 // The observable is the /authorize outcome itself: a session the request
 // may be served from mints a code without an interaction, and a stale
 // one redirects to the credential ceremony.
+//
+// Tracks: CVE-2026-71575 (Apache CXF — a ms/s unit mismatch and an
+// inverted comparison made the max_age freshness check accept sessions
+// of any age). The 72h session must be stale below 259200s and fresh at
+// it, which neither defect survives.
 func TestEndToEnd_MaxAgeIsMonotoneAtEveryAcceptedValue(t *testing.T) {
 	t.Parallel()
 
@@ -73,6 +78,9 @@ func TestEndToEnd_MaxAgeIsMonotoneAtEveryAcceptedValue(t *testing.T) {
 // TestEndToEnd_MaxAgeZeroAlwaysReauthenticates keeps the other end of
 // the range pinned: max_age=0 asks for an authentication performed just
 // now, which no existing session can satisfy.
+//
+// Tracks: CVE-2026-71575 — the max_age=0 end of the same freshness
+// check.
 func TestEndToEnd_MaxAgeZeroAlwaysReauthenticates(t *testing.T) {
 	t.Parallel()
 

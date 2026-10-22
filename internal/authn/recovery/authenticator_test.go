@@ -106,6 +106,9 @@ func TestAuthenticator_BeginWithoutCounterReportsNoCount(t *testing.T) {
 // claim above from the other side: the number moves with the shared
 // counter and stays put when a slot is consumed, which is what makes it
 // a failure budget rather than a slot count.
+//
+// Tracks: CVE-2026-111356 (MacCMS — the recovery code had no attempt
+// limit). Wrong recovery codes draw down the shared failure budget.
 func TestAuthenticator_AttemptBudgetTracksRecordedFailures(t *testing.T) {
 	t.Parallel()
 

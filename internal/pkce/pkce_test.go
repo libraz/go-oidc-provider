@@ -49,6 +49,11 @@ func TestVerify_RejectsMismatch(t *testing.T) {
 // Tracks: CVE-2026-26247 — a downgrade path let an S256 challenge be
 // bypassed via "plain" (or an absent-challenge fallback), defeating the
 // binding PKCE exists to provide.
+//
+// Also tracks: CVE-2026-49265 (oauthlib — the plain-method verifier was
+// compared with ordinary string equality, a timing side channel). With
+// plain refused, the raw verifier is never compared against a stored
+// value; the S256 digest comparison is constant-time.
 func TestVerify_RejectsPlainMethod(t *testing.T) {
 	t.Parallel()
 

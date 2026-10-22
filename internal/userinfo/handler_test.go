@@ -377,6 +377,12 @@ func TestHandler_POST_BodyToken(t *testing.T) {
 	}
 }
 
+// TestHandler_POST_BothChannelsRejected pins RFC 6750 §2: a request that
+// carries the access token in both the Authorization header and the form
+// body is refused with invalid_request, never served from either one.
+//
+// Tracks: GHSA-c62j-746x-gfcr (Doorkeeper — a token presented through
+// several methods at once was authorised by the first one found).
 func TestHandler_POST_BothChannelsRejected(t *testing.T) {
 	t.Parallel()
 

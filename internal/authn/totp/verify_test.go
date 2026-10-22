@@ -151,6 +151,10 @@ func TestVerify_WrongCodeIncrementsCounter(t *testing.T) {
 // Tracks: CVE-2026-20779 — a TOTP verifier accepted brute-force guessing
 // with no effective failure budget. The replay-window half of the same
 // row is pinned by TestVerify_ReplaysSameStepRejected.
+//
+// Also tracks: CVE-2026-105835 (PLANKA — incorrect TOTP codes were not
+// rate limited). This per-record floor holds even without a shared
+// lockout store.
 func TestVerify_LocksAtThirtyFailures(t *testing.T) {
 	t.Parallel()
 
@@ -325,6 +329,9 @@ func TestVerify_NilRecord(t *testing.T) {
 // between check and consume, same-step replay), plus brute-force
 // lockout; the lockout half of this row is pinned separately by
 // TestVerify_LocksAtThirtyFailures.
+//
+// Also tracks: CVE-2026-61630 (nginx-ignition — the same TOTP code was
+// accepted more than once within its validity window).
 func TestVerify_ReplaysSameStepRejected(t *testing.T) {
 	t.Parallel()
 

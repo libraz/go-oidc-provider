@@ -103,6 +103,12 @@ func TestParse_NoCredentials(t *testing.T) {
 	}
 }
 
+// TestParse_AmbiguousBasicAndForm pins RFC 6749 §2.3: credentials
+// presented through HTTP Basic and the form body at once are refused as
+// ambiguous rather than resolved by precedence.
+//
+// Tracks: GHSA-c8r6-23w7-5q9p (Doorkeeper — client authentication
+// silently accepted multiple simultaneous methods).
 func TestParse_AmbiguousBasicAndForm(t *testing.T) {
 	t.Parallel()
 

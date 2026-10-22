@@ -252,6 +252,10 @@ func TestFetchJARRequestURI_BodyCapEnforced(t *testing.T) {
 // TestFetchJARRequestURI_RejectsUnregisteredURI confirms the
 // preregistration gate fires before the SSRF gate so an unallowed URI
 // does not even reach the network leg.
+//
+// Tracks: GHSA-x4rv-c3wx-4cr8 (Authlib — a JAR request_uri was fetched
+// before client authentication and without checking the client's
+// registered request_uris, a pre-auth SSRF).
 func TestFetchJARRequestURI_RejectsUnregisteredURI(t *testing.T) {
 	t.Parallel()
 

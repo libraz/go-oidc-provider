@@ -331,6 +331,9 @@ func recoveryDefensiveCopies(t *testing.T, s store.RecoveryStore) {
 // Tracks: CVE-2026-48505 — a recovery code was consumable concurrently,
 // letting two redemptions of the same single-use code both succeed and
 // defeating the code's role as an MFA factor.
+//
+// Also tracks: CVE-2026-82761 — the same check-then-use race on a
+// single-use emailed sign-in link.
 func recoveryConcurrentConsume(t *testing.T, s store.RecoveryStore) {
 	t.Helper()
 	ctx := context.Background()

@@ -397,6 +397,9 @@ func AssertConcurrentJTIMark(t *testing.T, jtis store.ConsumedJTIStore, now time
 // the store's consume path read-then-wrote the single-use record
 // rather than deciding atomically. A backend that passes the
 // sequential replay case can still fail this one.
+//
+// Also tracks: CVE-2026-73179 (Apache CXF JPA provider — single use
+// enforced by a non-atomic find-then-delete under READ_COMMITTED).
 func concurrentAuthCodeConsume(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()

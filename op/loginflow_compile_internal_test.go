@@ -202,6 +202,14 @@ func TestTotpFallbackKeys_SplitsCurrentAndPrev(t *testing.T) {
 	}
 }
 
+// TestProjectBuiltinStep_AttachesLockoutCounter pins that every built-in
+// credential step compiled from a LoginFlow shares one per-subject
+// lockout counter, so no factor path gets a budget of its own.
+//
+// Tracks: CVE-2026-58271 (sync-in — TOTP brute force through an endpoint
+// that lacked the login path's attempt limit), CVE-2026-105835 (PLANKA —
+// wrong TOTP codes were not rate limited), CVE-2026-111356 (MacCMS — a
+// six-digit recovery code had no attempt limit).
 func TestProjectBuiltinStep_AttachesLockoutCounter(t *testing.T) {
 	t.Parallel()
 

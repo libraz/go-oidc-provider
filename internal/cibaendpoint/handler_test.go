@@ -260,6 +260,12 @@ func TestServe_RejectsUnknownClient(t *testing.T) {
 	}
 }
 
+// TestServe_RejectsClientWithoutCIBAGrant pins that a client whose
+// registration lacks the CIBA grant type is refused with
+// unauthorized_client at the backchannel endpoint.
+//
+// Tracks: CVE-2026-109082 (Keycloak — CIBA did not check that the client
+// was authorised for it, so public clients bypassed the requirement).
 func TestServe_RejectsClientWithoutCIBAGrant(t *testing.T) {
 	t.Parallel()
 	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}

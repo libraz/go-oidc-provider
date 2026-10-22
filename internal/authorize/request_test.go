@@ -258,6 +258,10 @@ func TestValidate_SentinelTable(t *testing.T) {
 // Also tracks: OIDC Core 1.0 §15.5.2 / OAuth 2.0 Security BCP
 // (RFC 9700) §2.1.2 which DEPRECATE the implicit and hybrid flows
 // for new deployments.
+//
+// Also tracks: CVE-2026-105119 (OpenAM — PKCE was enforced only for
+// response_type=code, so a hybrid-flow code redeemed with any verifier).
+// With hybrid refused, every issued code passes the PKCE check.
 func TestRequest_Validate_RejectsImplicitAndHybridResponseTypes(t *testing.T) {
 	t.Parallel()
 

@@ -6,6 +6,12 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jose"
 )
 
+// TestAlgorithm_IsAllowed pins the shared verification allow-list: only
+// the asymmetric algorithms are admitted, and every HMAC variant and
+// "none" is refused whatever key material a caller holds.
+//
+// Tracks: GHSA-8m4g-j4wp-wgcg (Authlib — an empty HMAC key forged
+// HS256/384/512 JWS/JWT).
 func TestAlgorithm_IsAllowed(t *testing.T) {
 	t.Parallel()
 

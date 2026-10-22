@@ -205,6 +205,10 @@ func TestNewEnrolment_URIHandlesUnicode(t *testing.T) {
 // subject B because the GCM tag rejects the AAD mismatch. The same
 // property holds at verify time; testing it here keeps the contract
 // pinned at the construction boundary too.
+//
+// Tracks: CVE-2026-91982 (Vikunja — the TOTP secret stayed readable
+// after enrolment). The seed is stored only as AES-GCM ciphertext bound
+// to its subject; the store record carries no plaintext field to read.
 func TestNewEnrolment_AADBindsSubject(t *testing.T) {
 	t.Parallel()
 

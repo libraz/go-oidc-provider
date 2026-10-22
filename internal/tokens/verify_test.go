@@ -378,6 +378,12 @@ func TestVerify_RetiredKidReturnsSignatureError(t *testing.T) {
 // collision-free, as [context.WithValue] requires.
 type correlationKeyType struct{}
 
+// TestVerify_UnknownKidReturnsSignatureError pins that a key-lookup miss
+// fails closed with a signature error instead of degrading to unsigned or
+// keyless verification.
+//
+// Tracks: CVE-2026-107720 (fast-jwt — an empty or null verification key
+// made createVerifier accept unsigned JWTs).
 func TestVerify_UnknownKidReturnsSignatureError(t *testing.T) {
 	t.Parallel()
 
@@ -460,6 +466,10 @@ func TestVerify_NotAJWTReturnsMalformed(t *testing.T) {
 // project's structural answer is broader: HS256 never reaches key-based
 // verification at all, since the allow-list rejects the algorithm
 // itself at parse time.
+//
+// Also tracks: CVE-2026-102266 (PyJWT — PyJWK accepted an empty HMAC
+// key) and GHSA-8m4g-j4wp-wgcg (Authlib — an empty HMAC key forged
+// HS256/384/512). Same class as CVE-2026-49852.
 func TestVerify_RejectsHS256AsMalformed(t *testing.T) {
 	t.Parallel()
 
@@ -518,6 +528,14 @@ func TestVerify_RejectsHS256AsMalformed(t *testing.T) {
 // before any key is touched, so the verifier never reaches the
 // signature stage. Failure surfaces as ErrAccessTokenMalformed (NOT
 // ErrAccessTokenSignature), which is the post-condition we pin.
+//
+// Also tracks the key-representation variants of the same attack:
+// CVE-2026-102268 / CVE-2026-102271 / CVE-2026-102273 (PyJWT — a PEM key
+// with mutated whitespace, a DER key, and a public JWK container were each
+// accepted as the HMAC secret), CVE-2026-107722 / CVE-2026-107724
+// (fast-jwt — a prefixed PEM key and raw public JWK JSON) and
+// GHSA-7vr2-2fgp-9w7p (Authlib — a leading byte defeated the PEM guard).
+// Rejection precedes key handling, so no key encoding reaches HMAC.
 func TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret(t *testing.T) {
 	t.Parallel()
 

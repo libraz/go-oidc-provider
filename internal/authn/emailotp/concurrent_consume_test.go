@@ -34,6 +34,9 @@ import (
 // read the token, decided it was unused, and deleted it in separate
 // statements, so a one-time token could authenticate multiple times
 // when the requests raced.
+//
+// Also tracks: CVE-2026-107276 (MISP — a race in the email-OTP login
+// flow let one code complete more than one login).
 func TestContinueVerify_ConcurrentSubmissionsOfOneCodeYieldOneSuccess(t *testing.T) {
 	t.Parallel()
 

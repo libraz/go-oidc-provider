@@ -438,6 +438,9 @@ func TestScenario_TX_008_ActChainDepthExceedsLimitRejected(t *testing.T) {
 // letting the requested scope exceed the subject token's own grant.
 // The mTLS cnf-binding half of the same class is pinned by
 // TestScenario_TX_020_MTLSBoundSubjectRequiresMatchingCert.
+//
+// Also tracks: CVE-2026-109374 — the subject token cannot be escalated
+// beyond its own scope by an exchange.
 func TestScenario_TX_009_ScopeInflationRejected(t *testing.T) {
 	t.Parallel()
 	p := newTXProvider(t, txAllowAllPolicy{})
@@ -474,6 +477,14 @@ func TestScenario_TX_010_AudienceOutsideAllowedResourcesRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_TX_011_PolicyErrorPreservedVerbatim pins that an exchange
+// the embedder's mandatory policy denies is refused with the policy's
+// error, so no impersonation-shaped exchange succeeds without explicit
+// per-client authorisation.
+//
+// Tracks: CVE-2026-109374 (ZITADEL — token exchange skipped its
+// impersonation-permission check, letting an end-user impersonator sign
+// in as an administrator).
 func TestScenario_TX_011_PolicyErrorPreservedVerbatim(t *testing.T) {
 	t.Parallel()
 	policy := txDenyPolicy{err: &op.Error{

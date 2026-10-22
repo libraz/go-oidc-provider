@@ -814,6 +814,11 @@ func emailOTPDefensiveCopies(t *testing.T, b EmailOTPBackend) {
 // cannot see is two callers that both read the unredeemed challenge
 // before either wrote: both are told the code was theirs to spend, and a
 // second factor that may be presented once has been accepted twice.
+//
+// Tracks: CVE-2026-82761 (AshAuthentication — magic-link single use was
+// a check-then-use race, so a leaked link was replayable concurrently).
+//
+// Also tracks: CVE-2026-107276 (MISP — email-OTP login race).
 func emailOTPConcurrentConsume(t *testing.T, b EmailOTPBackend) {
 	t.Helper()
 	ctx := context.Background()

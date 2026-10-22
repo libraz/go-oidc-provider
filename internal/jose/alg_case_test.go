@@ -73,6 +73,10 @@ func TestParseAlgorithm_CaseVariantsRejected(t *testing.T) {
 // policy that required a signed JWT auth method. The structural
 // property this test pins is upstream of the policy layer: "none" (in
 // any case) never parses as a usable signed JWS in the first place.
+//
+// Also tracks: CVE-2026-107720 (fast-jwt — an empty or null key with an
+// explicit algorithms list accepted unsigned JWTs). ParseSigned takes no
+// key, so no key state can turn "none" into an accepted token.
 func TestParseSigned_CaseVariantNoneRejected(t *testing.T) {
 	t.Parallel()
 

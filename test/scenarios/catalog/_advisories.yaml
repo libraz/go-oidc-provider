@@ -236,6 +236,15 @@ advisories:
       TestDCR_RejectsRedirectURIShapesThatBlurTheMatch covers the
       registration half — the shapes that would have no single
       unambiguous reading are refused at registration time.
+  - id: GHSA-fch4-3c6x-j4gc
+    severity: P1
+    source: https://github.com/authlib/authlib/security/advisories/GHSA-fch4-3c6x-j4gc
+    threat: T-04
+    status: covered
+    notes: |
+      Authlib's JWT bearer grant checked only that aud was present. This OP
+      has no jwt-bearer grant; the same binding governs client_assertion and
+      is pinned by TestPrivateKeyJWTVerifier_AudOtherAS_Rejected.
 
   # --- T-05 Algorithm downgrade -------------------------------------
   - id: CVE-2015-2951
@@ -376,6 +385,101 @@ advisories:
       out-of-allow-list ones to fail; TestParseSigned_RejectsMultiSignatureForm
       pins that the JSON multi-signature form never parses.
       Aliases: CVE-2026-63761.
+  - id: CVE-2026-102268
+    severity: P0
+    source: https://github.com/advisories/GHSA-ffc3-869f-jxw9
+    threat: T-05
+    status: covered
+    notes: |
+      Algorithm confusion via a key representation reinterpreted as an HMAC
+      secret (PyJWT, whitespace-mutated PEM). Pinned by TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret:
+      HS* is refused at parse time, before any key is handled, so no key
+      encoding can reach HMAC verification.
+      Aliases: GHSA-ffc3-869f-jxw9.
+  - id: CVE-2026-102271
+    severity: P0
+    source: https://github.com/advisories/GHSA-p4g4-x82p-q773
+    threat: T-05
+    status: covered
+    notes: |
+      Algorithm confusion via a key representation reinterpreted as an HMAC
+      secret (PyJWT, DER public key). Pinned by TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret:
+      HS* is refused at parse time, before any key is handled, so no key
+      encoding can reach HMAC verification.
+      Aliases: GHSA-p4g4-x82p-q773.
+  - id: CVE-2026-102273
+    severity: P0
+    source: https://github.com/advisories/GHSA-w2cx-738m-mc7w
+    threat: T-05
+    status: covered
+    notes: |
+      Algorithm confusion via a key representation reinterpreted as an HMAC
+      secret (PyJWT, public JWK container). Pinned by TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret:
+      HS* is refused at parse time, before any key is handled, so no key
+      encoding can reach HMAC verification.
+      Aliases: GHSA-w2cx-738m-mc7w.
+  - id: CVE-2026-107722
+    severity: P0
+    source: https://github.com/advisories/GHSA-ww5h-9m49-7xx4
+    threat: T-05
+    status: covered
+    notes: |
+      Algorithm confusion via a key representation reinterpreted as an HMAC
+      secret (fast-jwt, prefixed PEM; incomplete fix of CVE-2026-34950). Pinned by TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret:
+      HS* is refused at parse time, before any key is handled, so no key
+      encoding can reach HMAC verification.
+      Aliases: GHSA-ww5h-9m49-7xx4.
+  - id: CVE-2026-107724
+    severity: P0
+    source: https://github.com/advisories/GHSA-g3jj-5cmm-3hxx
+    threat: T-05
+    status: covered
+    notes: |
+      Algorithm confusion via a key representation reinterpreted as an HMAC
+      secret (fast-jwt, raw public JWK JSON). Pinned by TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret:
+      HS* is refused at parse time, before any key is handled, so no key
+      encoding can reach HMAC verification.
+      Aliases: GHSA-g3jj-5cmm-3hxx.
+  - id: GHSA-7vr2-2fgp-9w7p
+    severity: P0
+    source: https://github.com/authlib/authlib/security/advisories/GHSA-7vr2-2fgp-9w7p
+    threat: T-05
+    status: covered
+    notes: |
+      Algorithm confusion via a key representation reinterpreted as an HMAC
+      secret (Authlib, leading byte defeated the PEM guard; incomplete fix of CVE-2024-37568). Pinned by TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret:
+      HS* is refused at parse time, before any key is handled, so no key
+      encoding can reach HMAC verification.
+  - id: CVE-2026-102266
+    severity: P0
+    source: https://github.com/advisories/GHSA-9j54-fg26-wv3r
+    threat: T-05
+    status: covered
+    notes: |
+      PyJWK accepted an empty HMAC key. Pinned by
+      TestVerify_RejectsHS256AsMalformed: HS256 is refused regardless of key
+      material because no symmetric alg is on the allow-list.
+      Aliases: GHSA-9j54-fg26-wv3r.
+  - id: GHSA-8m4g-j4wp-wgcg
+    severity: P0
+    source: https://github.com/authlib/authlib/security/advisories/GHSA-8m4g-j4wp-wgcg
+    threat: T-05
+    status: covered
+    notes: |
+      Authlib accepted an empty HMAC key for HS256/384/512. Pinned by
+      TestVerify_RejectsHS256AsMalformed and TestAlgorithm_IsAllowed, which
+      refuses every HMAC variant at the shared allow-list.
+  - id: CVE-2026-107720
+    severity: P0
+    source: https://github.com/advisories/GHSA-8wpc-h4q6-8fxv
+    threat: T-05
+    status: covered
+    notes: |
+      fast-jwt accepted unsigned JWTs when the key was '' or null. Pinned by
+      TestParseSigned_CaseVariantNoneRejected (ParseSigned takes no key and
+      always refuses none) and TestVerify_UnknownKidReturnsSignatureError (a
+      key-lookup miss fails closed).
+      Aliases: GHSA-8wpc-h4q6-8fxv.
 
   # --- T-06 JOSE structural anomalies -------------------------------
   - id: CVE-2017-11424
@@ -630,6 +734,73 @@ advisories:
       it recognises is rejected at parse, pinned by
       TestVerify_RejectsJWEWrappedUnsignedJWT). There is no
       decompression path to bound.
+  - id: CVE-2026-96760
+    severity: P0
+    source: https://github.com/authlib/authlib/security/advisories/GHSA-6v38-4h7w-rj9h
+    threat: T-06
+    status: covered
+    notes: |
+      Authlib's deserialize_json() returned a signature-less JSON JWS as
+      verified. Pinned by TestParseSigned_RejectsJSONSerialisationShapes:
+      ParseSigned is compact-only, so flattened, signature-less and
+      empty-signatures JSON shapes are refused before verification.
+      Aliases: GHSA-6m87-8wg6-hh8w, GHSA-6v38-4h7w-rj9h.
+  - id: CVE-2026-107723
+    severity: P1
+    source: https://github.com/advisories/GHSA-5hjw-83fp-phq9
+    threat: T-06
+    status: covered
+    notes: |
+      fast-jwt skipped claim validation for a JSON-array payload. Pinned by
+      TestVerify_RejectsNonObjectPayloads (tokens, jar, dpop) and
+      TestPrivateKeyJWTVerifier_RejectsNonObjectPayloads: signed [] / null /
+      string / number payloads are refused by every inbound verifier.
+      Aliases: GHSA-5hjw-83fp-phq9.
+  - id: CVE-2026-107721
+    severity: P1
+    source: https://github.com/advisories/GHSA-687g-22h4-j4w4
+    threat: T-06
+    status: covered
+    notes: |
+      fast-jwt's clockTolerance: Infinity disabled exp / nbf. Skew is a
+      package constant with no public option. Pinned by
+      TestVerify_LeewayIsBoundedConstant and
+      TestPrivateKeyJWTVerifier_ExpLeewayIsBoundedConstant at the leeway
+      boundary.
+      Aliases: GHSA-687g-22h4-j4w4.
+  - id: CVE-2026-107719
+    severity: P1
+    source: https://github.com/advisories/GHSA-x937-hj6v-793p
+    threat: T-06
+    status: covered
+    notes: |
+      fast-jwt's verifier cache accepted expired JWTs. No verification-result
+      cache exists; TestVerify_ExpiryTracksClockAcrossCalls pins that the
+      same token turns expired once the clock passes exp plus leeway.
+      Aliases: GHSA-x937-hj6v-793p.
+  - id: CVE-2026-103001
+    severity: P2
+    source: https://github.com/advisories/GHSA-gvp8-978c-rx2q
+    threat: T-06
+    status: covered
+    notes: |
+      PyJWT mutated a caller-supplied options dict, disabling claim checks on
+      reuse. Pinned by TestNewVerifier_IsolatedFromCallerConfig: mutating the
+      config after NewVerifier (including in-place AllowedAlgs edits) leaves
+      the verifier's policy unchanged.
+      Aliases: GHSA-gvp8-978c-rx2q.
+  - id: CVE-2026-102269
+    severity: P2
+    source: https://github.com/advisories/GHSA-hxm8-2xgr-2p9m
+    threat: T-06
+    status: covered
+    notes: |
+      PyJWT accepted non-canonical signature segments, defeating a raw-token
+      revocation list. Replay keys derive from the parsed jti. Pinned by
+      TestPrivateKeyJWTVerifier_ReplayKeysOnJTINotRawAssertion and
+      TestVerify_ReplayKeysOnJTINotRawProof: a re-signed token with the same
+      jti is refused as a replay.
+      Aliases: GHSA-hxm8-2xgr-2p9m.
 
   # --- T-07 Replay --------------------------------------------------
   - id: CVE-2020-15222
@@ -762,6 +933,26 @@ advisories:
       intended lifetime. TestPrivateKeyJWTVerifier_RejectsExpired pins
       that an assertion whose exp has already passed is refused.
       Aliases: CVE-2026-55669, CVE-2026-56664, CVE-2026-56665.
+  - id: CVE-2026-73179
+    severity: P1
+    source: https://github.com/advisories/GHSA-4856-vwpx-pmq8
+    threat: T-07
+    status: covered
+    notes: |
+      Apache CXF enforced code single use with a non-atomic find-then-delete.
+      Pinned by the "AuthorizationCodeConsumeHasOneWinner" store contract
+      case (concurrentAuthCodeConsume).
+      Aliases: GHSA-4856-vwpx-pmq8.
+  - id: CVE-2026-82761
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-82761
+    threat: T-07
+    status: covered
+    notes: |
+      AshAuthentication's magic-link single use was a check-then-use race.
+      This OP has no magic link; its single-use credentials consume with one
+      winner, pinned by emailOTPConcurrentConsume and
+      recoveryConcurrentConsume.
 
   # --- T-08 Outbound fetch / SSRF ----------------------------------
   - id: CVE-2026-1180
@@ -792,6 +983,16 @@ advisories:
       covers both the ordinary and the forced-refresh entry points, with
       the private-network opt-in granted so the refusal is attributable
       to the scheme rather than the SSRF deny-list.
+  - id: GHSA-x4rv-c3wx-4cr8
+    severity: P1
+    source: https://github.com/authlib/authlib/security/advisories/GHSA-x4rv-c3wx-4cr8
+    threat: T-08
+    status: covered
+    notes: |
+      Authlib fetched a JAR request_uri without checking the client's
+      registered request_uris. Pinned by
+      TestFetchJARRequestURI_RejectsUnregisteredURI: the preregistration gate
+      fires before any network fetch, which then goes through securefetch.
 
   # --- T-09 Token / sensitive-info leak paths ----------------------
   - id: GHSA-7mqr-2v3q-v2wm
@@ -836,6 +1037,16 @@ advisories:
       contract: the slog emitter masks sensitive extras keys even
       against a bare handler that never wired the redaction wrapper.
       Aliases: none known at scan time.
+  - id: GHSA-c62j-746x-gfcr
+    severity: P2
+    source: https://github.com/doorkeeper-gem/doorkeeper/security/advisories/GHSA-c62j-746x-gfcr
+    threat: T-09
+    status: covered
+    notes: |
+      Doorkeeper authorised a token presented through several methods at once.
+      Pinned by TestHandler_POST_BothChannelsRejected: header plus body is
+      refused with invalid_request (RFC 6750 §2); the query string is never
+      read.
 
   # --- T-10 Timing ---------------------------------------------------
   - id: CVE-2026-22746
@@ -861,6 +1072,17 @@ advisories:
       TestVerifyClient_PrivateKeyJWT_UnknownClient_DummyVerifyShim pins
       both structural branches; TestPrivateKeyJWTVerifier_NoKeysRunsTimingShim
       pins the resolver-side equivalent.
+  - id: CVE-2026-49265
+    severity: P2
+    source: https://github.com/advisories/GHSA-xpv3-w29h-x7cv
+    threat: T-10
+    status: covered
+    notes: |
+      oauthlib compared the plain-method verifier with string equality.
+      Pinned by TestVerify_RejectsPlainMethod: plain is refused, so the raw
+      verifier is never compared against a stored value; the S256 digest
+      comparison is constant-time.
+      Aliases: GHSA-xpv3-w29h-x7cv.
 
   # --- T-11 Open redirect on error ---------------------------------
   - id: CVE-2023-6927
@@ -941,6 +1163,16 @@ advisories:
       input value and the form action to pass through html.EscapeString
       before reaching the wire.
       Aliases: none known at scan time.
+  - id: CVE-2026-105118
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-105118
+    threat: T-11
+    status: covered
+    notes: |
+      OpenAM's endSession accepted an unverified id_token_hint. Pinned by
+      TestHandler_BadIDTokenSignature: a tampered hint is refused with 400
+      before its aud can select the client whose post-logout URI would be
+      honoured.
 
   # --- T-12 Session fixation ---------------------------------------
   - id: GHSA-xhpr-465j-7p9q
@@ -1010,6 +1242,50 @@ advisories:
       later response served from that session reports the level it
       actually reached, never a stronger string an earlier request drew.
       Aliases: GHSA-hp74-gm6m-2qm5, CVE-2026-55377, CVE-2026-85056.
+  - id: CVE-2026-71575
+    severity: P1
+    source: https://github.com/advisories/GHSA-8ph5-3q2c-4cc7
+    threat: T-12
+    status: covered
+    notes: |
+      Apache CXF's max_age check had a unit mismatch and an inverted
+      comparison. Pinned by TestEndToEnd_MaxAgeIsMonotoneAtEveryAcceptedValue
+      and TestEndToEnd_MaxAgeZeroAlwaysReauthenticates.
+      Aliases: GHSA-8ph5-3q2c-4cc7.
+  - id: CVE-2026-92227
+    severity: P0
+    source: https://github.com/advisories/GHSA-jjjc-9622-c6gg
+    threat: T-12
+    status: covered
+    notes: |
+      Joomla issued remember-me before MFA completed. The session is
+      established only when the chain completes. Pinned by
+      TestEndToEnd_MFAWithholdsSessionUntilSecondFactorCompletes: no session
+      cookie or record exists between the password and TOTP steps.
+      Aliases: GHSA-jjjc-9622-c6gg.
+  - id: CVE-2026-100679
+    severity: P1
+    source: https://github.com/advisories/GHSA-2jwx-p7f6-684c
+    threat: T-12
+    status: covered
+    notes: |
+      stoatchat's MFA ticket was not bound to the first factor's user. A
+      factor result naming a subject other than the one an earlier factor or
+      the chooser bound now ends the chain with ErrSubjectMismatch. Pinned by
+      TestTick_LaterFactorCannotRebindSubject (control:
+      TestTick_FirstFactorMayReplaceInheritedSubject).
+      Aliases: GHSA-2jwx-p7f6-684c.
+  - id: CVE-2026-100709
+    severity: P2
+    source: https://github.com/advisories/GHSA-pj38-8h4x-w384
+    threat: T-12
+    status: out-of-scope
+    out_of_scope_reason: |
+      Froxlor's remembered-2FA token stored only a user ID. This OP exposes no such state: the OP keeps no
+      remembered-device or remembered-factor record; device trust is
+      supplied through the embedder's RiskAssessor.
+      Aliases: GHSA-pj38-8h4x-w384.
+      The mitigation belongs to the embedder. Reviewed and excluded.
 
   # --- T-13 Confused deputy ----------------------------------------
   - id: CVE-2026-1486
@@ -1110,6 +1386,86 @@ advisories:
       fault distinction from a genuine "gone" answer).
       Aliases: CVE-2026-88770, CVE-2026-43983, CVE-2026-9571,
       CVE-2026-93999, CVE-2026-1609.
+  - id: GHSA-mxv6-xwqj-ww2p
+    severity: P1
+    source: https://github.com/DuendeSoftware/products/security/advisories/GHSA-mxv6-xwqj-ww2p
+    threat: T-13
+    status: covered
+    notes: |
+      Duende did not bind a pushed request to its client. /par rejects a
+      mismatched client_id; /authorize rejects a request_uri presented by
+      another client, leaving the record unconsumed. Pinned by
+      TestHandler_ClientIDMismatch_Rejected and
+      TestEndToEnd_PAR_RequestURIBoundToPushingClient.
+  - id: CVE-2026-59358
+    severity: P0
+    source: https://github.com/advisories/GHSA-hqp7-g6vh-8mf8
+    threat: T-13
+    status: covered
+    notes: |
+      UAA accepted a Bearer access token as client authentication on
+      client_credentials. Pinned by
+      TestClientCredentials_BearerAccessTokenIsNotClientAuthentication: 401
+      invalid_client, no token.
+      Aliases: GHSA-hqp7-g6vh-8mf8.
+  - id: CVE-2026-101023
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-101023
+    threat: T-13
+    status: covered
+    notes: |
+      Gitea's refresh grant accepted an access token. The refresh grant looks
+      up only the refresh-token store. Pinned by
+      TestRefreshGrant_AccessTokenPresentedAsRefreshTokenRefused (JWT and
+      opaque access tokens).
+  - id: CVE-2025-7043
+    severity: P1
+    source: https://github.com/advisories/GHSA-vp4v-gjpc-c4x6
+    threat: T-13
+    status: covered
+    notes: |
+      ForgeRock accepted a refresh token as an access token. userinfo refuses
+      a refresh token as Bearer (TestHandler_RefreshTokenAsBearerRefused),
+      and introspection no longer tags a refresh token with the access-token
+      type "Bearer" (TestHandler_RefreshToken_CarriesNoAccessTokenType).
+      Aliases: GHSA-vp4v-gjpc-c4x6.
+  - id: CVE-2026-107162
+    severity: P0
+    source: https://github.com/advisories/GHSA-p6v9-9m69-qjxm
+    threat: T-13
+    status: covered
+    notes: |
+      Express Gateway's refresh grant bound the token to neither secret nor
+      client. Pinned by TestScenario_REF_004_RefreshClientMismatchRejected.
+      Aliases: GHSA-p6v9-9m69-qjxm.
+  - id: CVE-2026-109374
+    severity: P1
+    source: https://github.com/advisories/GHSA-7j9c-5h49-hq7h
+    threat: T-13
+    status: covered
+    notes: |
+      ZITADEL's token exchange skipped its impersonation check. The
+      embedder's exchange policy is mandatory and always consulted. Pinned by
+      TestScenario_TX_011_PolicyErrorPreservedVerbatim (denied exchange
+      refused) and TestScenario_TX_009_ScopeInflationRejected.
+      Aliases: GHSA-7j9c-5h49-hq7h.
+  - id: GHSA-q686-2qmg-hqc7
+    severity: P2
+    source: https://github.com/authlib/authlib/security/advisories/GHSA-q686-2qmg-hqc7
+    threat: T-13
+    status: covered
+    notes: |
+      Authlib decided ID token issuance on the raw requested scope. openid
+      gets no exemption from the client-registration clamp. Pinned by
+      TestValidate_OpenIDScopeIsClampedToClientRegistration.
+  - id: GHSA-c8r6-23w7-5q9p
+    severity: P2
+    source: https://github.com/doorkeeper-gem/doorkeeper/security/advisories/GHSA-c8r6-23w7-5q9p
+    threat: T-13
+    status: covered
+    notes: |
+      Doorkeeper accepted several client authentication methods at once.
+      Pinned by TestParse_AmbiguousBasicAndForm (ErrAmbiguousCredentials).
 
   # --- T-15 TOTP / RFC 6238 ----------------------------------------
   - id: GHSA-9r3w-4j8q-pw98
@@ -1205,6 +1561,47 @@ advisories:
       request from an untrusted peer never has its client identity taken
       from X-Forwarded-* headers.
       Aliases: CVE-2026-62669.
+  - id: CVE-2026-61630
+    severity: P1
+    source: https://github.com/advisories/GHSA-hf33-q6cf-c66f
+    threat: T-15
+    status: covered
+    notes: |
+      nginx-ignition accepted one TOTP code more than once within its window.
+      Pinned by TestVerify_ReplaysSameStepRejected (same step) and the
+      "AcceptRejectsEarlierStep" store contract case (totpAcceptEarlier).
+      Aliases: GHSA-hf33-q6cf-c66f.
+  - id: CVE-2026-58271
+    severity: P1
+    source: https://github.com/advisories/GHSA-274f-6w77-8qm9
+    threat: T-15
+    status: covered
+    notes: |
+      sync-in allowed TOTP brute force through a path lacking the login
+      limit. Pinned by TestProjectBuiltinStep_AttachesLockoutCounter: every
+      built-in credential step shares one per-subject lockout counter.
+      Aliases: GHSA-274f-6w77-8qm9.
+  - id: CVE-2026-105835
+    severity: P1
+    source: https://github.com/advisories/GHSA-vxgr-w3f5-4g4j
+    threat: T-15
+    status: covered
+    notes: |
+      PLANKA did not rate-limit wrong TOTP codes. Pinned by
+      TestVerify_LocksAtThirtyFailures (per-record floor) and
+      TestProjectBuiltinStep_AttachesLockoutCounter (shared counter).
+      Aliases: GHSA-vxgr-w3f5-4g4j.
+  - id: CVE-2026-91982
+    severity: P2
+    source: https://github.com/advisories/GHSA-88f6-4rjv-x774
+    threat: T-15
+    status: covered
+    notes: |
+      Vikunja exposed the TOTP secret after enrolment. The store record holds
+      only ciphertext and no endpoint returns the seed. Pinned by
+      TestNewEnrolment_AADBindsSubject: the sealed seed opens only for its
+      subject.
+      Aliases: GHSA-88f6-4rjv-x774.
 
   # --- T-16 passkey / WebAuthn -------------------------------------
   - id: CVE-2026-28787
@@ -1292,6 +1689,79 @@ advisories:
       an AAGUID/authenticator-data mismatch, an expired chain, self
       attestation, and no attestation at all.
       Aliases: none known at scan time.
+  - id: CVE-2026-111911
+    severity: P0
+    source: https://github.com/advisories/GHSA-768h-xwv2-fwp3
+    threat: T-16
+    status: covered
+    notes: |
+      phpMyFAQ's WebAuthn registration validated no challenge and bound no
+      subject. Pinned by TestFinish_RejectsForeignChallenge and
+      TestFinish_RejectsSubjectMismatch. Authenticating the user before
+      registration is the embedder's (passkeykit authenticates no one).
+      Aliases: GHSA-768h-xwv2-fwp3.
+  - id: CVE-2026-54460
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-54460
+    threat: T-16
+    status: out-of-scope
+    out_of_scope_reason: |
+      OpenReception enrolled a passkey for a userId taken from the request
+      body. This OP exposes no such endpoint: passkeykit takes the
+      subject as an argument from the embedder and refuses a ceremony
+      finished for another subject (TestFinish_RejectsSubjectMismatch).
+      The mitigation belongs to the embedder. Reviewed and excluded.
+  - id: CVE-2026-105212
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-105212
+    threat: T-16
+    status: out-of-scope
+    out_of_scope_reason: |
+      ZITADEL accepted authenticator enrolment before any primary factor. This OP exposes no such step: the login
+      chain has no enrolment prompt; enrolment happens only through
+      embedder-called passkeykit / totpkit.
+      The mitigation belongs to the embedder. Reviewed and excluded.
+  - id: CVE-2026-111949
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-111949
+    threat: T-16
+    status: out-of-scope
+    out_of_scope_reason: |
+      miniOrange let a pending passkey login register an extra passkey. This OP exposes no such step: no enrolment step exists
+      in the login chain, so a pending authentication cannot reach one.
+      The mitigation belongs to the embedder. Reviewed and excluded.
+  - id: CVE-2026-55167
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-55167
+    threat: T-16
+    status: covered
+    notes: |
+      LAM kept the WebAuthn challenge after processing. Pinned by
+      TestPasskeyChallengeIsSingleUseAfterSoftFailure and
+      TestPasskeyChallengeRetiredAfterHardFailure: the original challenge
+      and StateRef are dead after any verification attempt.
+  - id: CVE-2026-73278
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-73278
+    threat: T-16
+    status: covered
+    notes: |
+      Gitea skipped the WebAuthn challenge on alternative sign-in paths. Here
+      a LoginFlow rule was skipped when /authorize served a request from an
+      existing session; Rules / Decider are now evaluated before such a mint,
+      which becomes an interaction (interaction_required under prompt=none).
+      Pinned by TestEndToEnd_SessionReuseStillEvaluatesLoginFlowRules.
+  - id: CVE-2026-84313
+    severity: P2
+    source: https://github.com/advisories/GHSA-gfrc-g87h-7h5w
+    threat: T-16
+    status: out-of-scope
+    out_of_scope_reason: |
+      Nginx-UI allowed TOTP / passkey enrolment without re-authentication. This OP exposes no such account-management API: requiring a
+      recent sign-in before calling passkeykit / totpkit is the embedder's
+      account UI, as their package docs state.
+      Aliases: GHSA-gfrc-g87h-7h5w.
+      The mitigation belongs to the embedder. Reviewed and excluded.
 
   # --- T-17 email-OTP -----------------------------------------------
   - id: CVE-2026-22751
@@ -1315,6 +1785,26 @@ advisories:
       common start gate and requires exactly one to authenticate. The
       sequential half is pinned separately by
       TestContinueVerifyReplayRejected and TestVerify_RejectsConsumedCode.
+  - id: CVE-2026-107276
+    severity: P1
+    source: https://github.com/advisories/GHSA-fjjq-85mx-vg3v
+    threat: T-17
+    status: covered
+    notes: |
+      MISP's email-OTP login had a race letting one code finish two logins.
+      Pinned by TestContinueVerify_ConcurrentSubmissionsOfOneCodeYieldOneSuccess
+      and the emailOTPConcurrentConsume store contract case.
+      Aliases: GHSA-fjjq-85mx-vg3v.
+  - id: CVE-2026-110862
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-110862
+    threat: T-17
+    status: covered
+    notes: |
+      Better Auth accepted OAuth state as a magic-link token. Single-use
+      secrets live in separate stores keyed by subject. Pinned by
+      TestSingleUseSecretNamespacesAreDisjoint: recovery codes, email-OTP
+      codes and StateRefs never redeem as one another.
 
   # --- T-18 Recovery Codes -------------------------------------------
   - id: CVE-2026-48505
@@ -1330,6 +1820,17 @@ advisories:
       contract; TestRecoveryStore_ConsumeRaceSingleWinner pins the same
       property against the concrete in-memory adapter.
       Aliases: CVE-2026-77567.
+  - id: CVE-2026-111356
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-111356
+    threat: T-18
+    status: covered
+    notes: |
+      MacCMS had no attempt limit on its recovery code. Pinned by
+      TestAuthenticator_AttemptBudgetTracksRecordedFailures and
+      TestProjectBuiltinStep_AttachesLockoutCounter. The shared counter is
+      opt-in via WithAuthnLockoutStore; the codes carry 50 bits and are
+      argon2id-hashed.
 
   # --- T-19 DPoP (RFC 9449) ----------------------------------------
   - id: CVE-2026-54431
@@ -1381,6 +1882,17 @@ advisories:
       client secret.
       Aliases: CVE-2026-92289, CVE-2026-48717, CVE-2026-90474,
       GHSA-9h47-pqcx-hjr4.
+  - id: CVE-2026-105119
+    severity: P1
+    source: https://github.com/advisories/GHSA-mf8f-w84m-x4gc
+    threat: T-20
+    status: covered
+    notes: |
+      OpenAM enforced PKCE only for response_type=code. Only code is
+      accepted here, pinned by
+      TestRequest_Validate_RejectsImplicitAndHybridResponseTypes, so every
+      issued code passes the PKCE check.
+      Aliases: GHSA-mf8f-w84m-x4gc.
 
   # --- T-21 mTLS bound token / x5t#S256 ----------------------------
   - id: CVE-2026-22747
@@ -1451,6 +1963,49 @@ advisories:
       on the authentication device, so it adds no separate OP-side
       credential-verification path to bypass; CIBA's own abuse surface is
       polling, gated separately by ciba.poll_abuse.lockout.
+  - id: GHSA-qj3q-235g-qr6w
+    severity: P0
+    source: https://github.com/zitadel/zitadel/security/advisories/GHSA-qj3q-235g-qr6w
+    threat: T-22
+    status: out-of-scope
+    out_of_scope_reason: |
+      ZITADEL approved a device code from an existing session with no
+      user_code entry or consent. This OP exposes no such page: the /device
+      verification ceremony is embedder-owned; the OP only issues
+      verification_uri_complete and approves through an explicit
+      devicecodekit.ApproveUserCode call.
+      The mitigation belongs to the embedder. Reviewed and excluded.
+  - id: CVE-2026-105485
+    severity: P1
+    source: https://github.com/advisories/GHSA-h4fx-378p-mcpj
+    threat: T-22
+    status: out-of-scope
+    out_of_scope_reason: |
+      Devolutions replayed a captured device verification link. This OP exposes no such page: same boundary as
+      GHSA-qj3q-235g-qr6w; approval is an explicit embedder call.
+      Aliases: GHSA-h4fx-378p-mcpj.
+      The mitigation belongs to the embedder. Reviewed and excluded.
+  - id: CVE-2026-109082
+    severity: P2
+    source: https://github.com/advisories/GHSA-68jh-rrf2-v9vr
+    threat: T-22
+    status: covered
+    notes: |
+      Keycloak did not check that a client was allowed CIBA. Pinned by
+      TestServe_RejectsClientWithoutCIBAGrant: unauthorized_client.
+      Aliases: GHSA-68jh-rrf2-v9vr.
+  - id: CVE-2026-105305
+    severity: P2
+    source: https://github.com/advisories/GHSA-ggxp-hq23-v84f
+    threat: T-22
+    status: out-of-scope
+    out_of_scope_reason: |
+      Keycloak's device grant ignored the client's minimum authentication
+      level. This OP exposes no such interaction: device verification runs no OP
+      interaction; ApproveUserCode takes the subject and auth_time from the
+      embedder, which owns the authentication it performed.
+      Aliases: GHSA-ggxp-hq23-v84f.
+      The mitigation belongs to the embedder. Reviewed and excluded.
 
   # --- T-23 Dynamic Client Registration / RAT ----------------------
   - id: CVE-2026-22752
@@ -1512,6 +2067,37 @@ advisories:
       software_statement at all. Unbounded storage growth from
       registration is not separately pinned by these tests.
       Aliases: CVE-2026-86075, CVE-2026-59354.
+  - id: GHSA-c73q-w75p-j82v
+    severity: P0
+    source: https://github.com/authlib/authlib/security/advisories/GHSA-c73q-w75p-j82v
+    threat: T-23
+    status: covered
+    notes: |
+      Authlib's RFC 7592 reference never matched the RAT to the target
+      client. The RAT is looked up by the client_id in the path for GET, PUT
+      and DELETE. Pinned by TestManage_Read_4xx ("RAT for a different
+      client").
+  - id: CVE-2026-105306
+    severity: P1
+    source: https://github.com/advisories/GHSA-q5jp-7g4g-ch69
+    threat: T-23
+    status: covered
+    notes: |
+      Keycloak's DCR stored security-sensitive client attributes. Metadata is
+      an explicit allow-list. Pinned by
+      TestRegister_InternalClientAttributesNotWritable: injected internal
+      fields never reach the stored client.
+      Aliases: GHSA-q5jp-7g4g-ch69.
+  - id: CVE-2026-107623
+    severity: P2
+    source: https://github.com/advisories/GHSA-qxj8-968q-qm7w
+    threat: T-23
+    status: covered
+    notes: |
+      Keycloak's DCR response omitted a setting, so read-modify-write lost it.
+      Pinned by TestManage_ReadModifyWriteIsLossless: GET, PUT the body back,
+      GET again yields identical responses and an unchanged stored client.
+      Aliases: GHSA-qxj8-968q-qm7w.
 
   # --- Out-of-scope (not OP responsibility) ------------------------
   - id: GHSA-gr79-9v6v-gc9r
@@ -1608,3 +2194,142 @@ advisories:
       server layer, not OP logic; the library does not terminate TLS or
       route by SNI. CLAUDE.md "library posture" states TLS configuration
       is embedder-owned. Reviewed and excluded.
+  - id: CVE-2026-62367
+    severity: P2
+    source: https://github.com/advisories/GHSA-xv7q-fvmc-jx96
+    threat: T-13
+    status: out-of-scope
+    out_of_scope_reason: |
+      Vikunja linked an external OIDC / OAuth login to a pre-existing local
+      account by email while ignoring email_verified. Account linking on the relying party is the
+      RP's responsibility; the OP's part is to emit email_verified
+      truthfully from the embedder's claims source. Reviewed and excluded.
+  - id: CVE-2026-106460
+    severity: P2
+    source: https://github.com/advisories/GHSA-xm5q-p7w3-x6cp
+    threat: T-13
+    status: out-of-scope
+    out_of_scope_reason: |
+      Backstage linked an external OIDC / OAuth login to a pre-existing local
+      account by email even when email_verified was explicitly false. Account linking on the relying party is the
+      RP's responsibility; the OP's part is to emit email_verified
+      truthfully from the embedder's claims source. Reviewed and excluded.
+  - id: CVE-2026-63472
+    severity: P2
+    source: https://github.com/advisories/GHSA-6j36-r6pr-59x4
+    threat: T-13
+    status: out-of-scope
+    out_of_scope_reason: |
+      Vendure linked an external OIDC / OAuth login to a pre-existing local
+      account by email without any verification. Account linking on the relying party is the
+      RP's responsibility; the OP's part is to emit email_verified
+      truthfully from the embedder's claims source. Reviewed and excluded.
+  - id: CVE-2026-92161
+    severity: P2
+    source: https://github.com/advisories/GHSA-g7vj-c29h-3h5m
+    threat: T-13
+    status: out-of-scope
+    out_of_scope_reason: |
+      FriendsOfFlarum OAuth linked an external OIDC / OAuth login to a pre-existing local
+      account by email, trusting an unverified Discord email. Account linking on the relying party is the
+      RP's responsibility; the OP's part is to emit email_verified
+      truthfully from the embedder's claims source. Reviewed and excluded.
+  - id: CVE-2026-61687
+    severity: P2
+    source: https://github.com/advisories/GHSA-phg3-3g28-wq9v
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      Hatchet treated an empty OAuth state as matching an empty stored state, giving login CSRF on the relying party. State
+      generation and callback verification are the RP's responsibility; the
+      OP echoes state verbatim per RFC 6749. Reviewed and excluded.
+  - id: CVE-2026-62322
+    severity: P2
+    source: https://github.com/advisories/GHSA-526j-582w-7fm9
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      python-social-auth's LINE backend did not validate state, giving login CSRF on the relying party. State
+      generation and callback verification are the RP's responsibility; the
+      OP echoes state verbatim per RFC 6749. Reviewed and excluded.
+  - id: CVE-2026-84178
+    severity: P2
+    source: https://github.com/advisories/GHSA-v54j-mph4-jrf2
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      Apache Camel's OAuth component sent and verified no state, giving login CSRF on the relying party. State
+      generation and callback verification are the RP's responsibility; the
+      OP echoes state verbatim per RFC 6749. Reviewed and excluded.
+  - id: CVE-2026-84312
+    severity: P2
+    source: https://github.com/advisories/GHSA-44xr-mrhh-qm78
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      Nginx-UI's Casdoor SSO callback used a constant state, giving login CSRF on the relying party. State
+      generation and callback verification are the RP's responsibility; the
+      OP echoes state verbatim per RFC 6749. Reviewed and excluded.
+  - id: CVE-2026-108738
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-108738
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      Traccar's OIDC callback never validated state, giving login CSRF on the relying party. State
+      generation and callback verification are the RP's responsibility; the
+      OP echoes state verbatim per RFC 6749. Reviewed and excluded.
+  - id: CVE-2026-79650
+    severity: P2
+    source: https://github.com/advisories/GHSA-75qj-7h27-jm2v
+    threat: T-11
+    status: out-of-scope
+    out_of_scope_reason: |
+      Apache CXF's OIDC relying party used an attacker-controlled state as
+      the post-login redirect target without an origin check. Post-login
+      navigation on the RP is the RP's concern; the OP's own redirects go
+      only to registered redirect_uri / post_logout_redirect_uri values.
+      Reviewed and excluded.
+  - id: GHSA-c5mf-xmp2-59rc
+    severity: P2
+    source: https://github.com/authlib/authlib/security/advisories/GHSA-c5mf-xmp2-59rc
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      Authlib's RP-side parse_id_token() let a nonce_supported=false claim in
+      the ID token disable nonce validation, enabling replay. Nonce
+      validation on the callback is the RP's responsibility; the OP only
+      mints the nonce into the ID token. Reviewed and excluded.
+  - id: CVE-2026-94276
+    severity: P2
+    source: https://github.com/advisories/GHSA-9v5j-4cf2-q593
+    threat: T-04
+    status: out-of-scope
+    out_of_scope_reason: |
+      Apache APISIX's openid-connect plugin, introspecting against a
+      multi-issuer authorization server, accepted a token active for one
+      issuer on a route restricted to another. Issuer pinning on a resource
+      server's introspection result is the RS's responsibility; this OP
+      serves a single issuer and its introspection response names it.
+      Reviewed and excluded.
+  - id: CVE-2026-49264
+    severity: P2
+    source: https://github.com/advisories/GHSA-hj66-6f7g-4r5v
+    threat: T-09
+    status: out-of-scope
+    out_of_scope_reason: |
+      oauthlib's RevocationEndpoint reflected an unvalidated JSONP callback
+      into a JavaScript response. This OP has no JSONP mode on any endpoint;
+      revocation responds with JSON or an empty 200 only. Feature absent.
+      Reviewed and excluded.
+  - id: CVE-2026-102275
+    severity: P2
+    source: https://github.com/advisories/GHSA-x33g-cr3x-6449
+    threat: T-06
+    status: out-of-scope
+    out_of_scope_reason: |
+      PyJWT accepted an OKP JWK whose x and d disagreed, confusing public and
+      private key identity. This OP never imports private JWKs: signing and
+      decryption keys arrive from the embedder as Go key values (crypto.Signer,
+      *rsa / *ecdsa private keys), and inbound JWKs are public only. Feature
+      absent. Reviewed and excluded.
