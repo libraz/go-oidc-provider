@@ -10,8 +10,9 @@ import (
 
 // passkeyStore is the SQL-backed [store.PasskeyStore].
 //
-// UpdateAssertion is the only method with non-trivial semantics. The
-// read, the monotonicity comparison, and the write have to be one
+// Put and UpdateAssertion are the methods with non-trivial semantics;
+// Put's owner check is described on it. In UpdateAssertion the read,
+// the monotonicity comparison, and the write have to be one
 // atomic operation, so it runs inside a transaction that locks the
 // credential row first (SQLite has no row lock but serialises writers
 // once the transaction takes the write lock). Expressing the comparison
@@ -52,11 +53,19 @@ func (s *passkeyStore) ListBySubject(ctx context.Context, subject string) ([]*st
 	return out, nil
 }
 
-// Put upserts the credential record. The upsert is keyed on the
-// credential ID, so it runs under the same row lock UpdateAssertion
-// takes: the owner check and the write have to be one atomic operation
-// or a registration racing another subject's could still overwrite the
-// row the check just cleared.
+// passkeyPutAttempts bounds how often Put re-inserts after finding the
+// row it collided with already deleted.
+const passkeyPutAttempts = 3
+
+// Put writes the credential record, keyed on the credential ID.
+//
+// The owner check rides on the engine's own refusals rather than on a
+// row lock. A locking read of a credential ID nobody holds yet locks
+// nothing on PostgreSQL and only a gap on InnoDB, so two first
+// registrations from different subjects either both pass the check and
+// the later upsert moves the credential, or deadlock each other. The
+// insert claims the ID by its primary key; a duplicate falls through to
+// a rewrite conditioned on the subject that holds the row.
 func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 	if r == nil {
 		return errors.New("oidcsql: nil passkey record")
@@ -65,25 +74,7 @@ func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 		return errors.New("oidcsql: passkey record missing CredentialID")
 	}
 
-	tx, err := s.parent.beginInternalTx(ctx, "passkeys.Put.BeginTx")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	row := tx.QueryRowContext(ctx, s.parent.queries.passkeyGetForUpdate, nonNilBytes(r.CredentialID))
-	current, err := scanPasskey(row)
-	switch {
-	case err != nil && !errors.Is(err, store.ErrNotFound):
-		return err
-	case err == nil && current.Subject != r.Subject:
-		// The credential belongs to somebody else. Replacing it here
-		// would unlink their authenticator.
-		return store.ErrAlreadyExists
-	}
-
-	if _, err := tx.ExecContext(ctx, s.parent.queries.passkeyPut,
-		nonNilBytes(r.CredentialID),
+	values := []any{
 		r.Subject,
 		nonNilBytes(r.PublicKey),
 		nonNilBytes(r.AAGUID),
@@ -97,13 +88,46 @@ func (s *passkeyStore) Put(ctx context.Context, r *store.PasskeyRecord) error {
 		boolToInt64(r.BackupState),
 		boolToInt64(r.CloneWarning),
 		timeToInt64(r.CreatedAt),
-	); err != nil {
-		return wrapErr("passkeys.Put", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return wrapErr("passkeys.Put.Commit", err)
+	id := nonNilBytes(r.CredentialID)
+	for range passkeyPutAttempts {
+		_, err := s.parent.db.ExecContext(ctx, s.parent.queries.passkeyInsert, append([]any{id}, values...)...)
+		if err == nil {
+			return nil
+		}
+		if !isDuplicate(err) {
+			return wrapErr("passkeys.Put.insert", err)
+		}
+
+		res, err := s.parent.db.ExecContext(ctx, s.parent.queries.passkeyRewriteOwn, append(values[1:], id, r.Subject)...)
+		if err != nil {
+			return wrapErr("passkeys.Put.rewrite", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return wrapErr("passkeys.Put.RowsAffected", err)
+		}
+		if n > 0 {
+			return nil
+		}
+
+		// No row changed: another subject holds the ID, the rewrite
+		// matched an identical row on a connection that counts changed
+		// rather than matched rows, or the row was deleted in between.
+		current, err := s.Get(ctx, r.CredentialID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue
+		case err != nil:
+			return err
+		case current.Subject != r.Subject:
+			// Replacing it would unlink the holder's authenticator.
+			return store.ErrAlreadyExists
+		default:
+			return nil
+		}
 	}
-	return nil
+	return errors.New("oidcsql: passkeys.Put: the colliding row kept disappearing before the write landed")
 }
 
 func (s *passkeyStore) UpdateAssertion(

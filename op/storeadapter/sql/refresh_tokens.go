@@ -51,18 +51,9 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 	if s.tx != nil {
 		return s.saveRotation(ctx, s.runner(), t)
 	}
-	tx, err := s.parent.beginInternalTx(ctx, "refreshes.Save.begin")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := s.saveRotation(ctx, tx, t); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return wrapErr("refreshes.Save.commit", err)
-	}
-	return nil
+	return s.inInternalTx(ctx, "refreshes.Save", func(tx *internalTx) error {
+		return s.saveRotation(ctx, tx, t)
+	})
 }
 
 // SaveRotationWithRetry persists the successor and its already-encrypted
@@ -76,16 +67,49 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 	if s.tx != nil {
 		return s.saveRotationWithRetry(ctx, s.runner(), t, sealed)
 	}
-	tx, err := s.parent.beginInternalTx(ctx, "refreshes.SaveRotationWithRetry.begin")
+	return s.inInternalTx(ctx, "refreshes.SaveRotationWithRetry", func(tx *internalTx) error {
+		return s.saveRotationWithRetry(ctx, tx, t, sealed)
+	})
+}
+
+// lockConflictAttempts bounds how often [refreshStore.inInternalTx]
+// re-runs a transaction the engine aborted for a lock conflict.
+const lockConflictAttempts = 4
+
+// inInternalTx runs fn in a transaction of the adapter's own and commits
+// it, re-running the whole transaction when the engine aborted it for a
+// lock conflict ([isLockConflict]).
+//
+// A rotation locks the parent row and inserts beneath it while
+// RevokeChain marks rows and reads their children, so InnoDB picks one
+// of them as a deadlock victim. Neither caller can act on that error: the
+// replay cascade would leave the chain alive and the client would see a
+// failed refresh for a valid token. The aborted transaction left nothing
+// behind, so the re-run starts from what the winner committed — a
+// rotation then reads its parent revoked, and the walk reaches the
+// successor the rotation committed. A caller-owned transaction is the
+// caller's to retry. label prefixes the begin and commit errors.
+func (s *refreshStore) inInternalTx(ctx context.Context, label string, fn func(*internalTx) error) error {
+	var err error
+	for range lockConflictAttempts {
+		if err = s.internalTxOnce(ctx, label, fn); !isLockConflict(err) {
+			return err
+		}
+	}
+	return err
+}
+
+func (s *refreshStore) internalTxOnce(ctx context.Context, label string, fn func(*internalTx) error) error {
+	tx, err := s.parent.beginInternalTx(ctx, label+".begin")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.saveRotationWithRetry(ctx, tx, t, sealed); err != nil {
+	if err := fn(tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return wrapErr("refreshes.SaveRotationWithRetry.commit", err)
+		return wrapErr(label+".commit", err)
 	}
 	return nil
 }
@@ -443,23 +467,17 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 // transaction spans the whole retained history, so on a long-lived,
 // aggressively rotated grant it is a long transaction; wrap the call in a
 // caller-owned [store.Tx] to control that scope explicitly.
+//
+// A walk racing a rotation can be aborted as a deadlock victim; the
+// auto-wrapped walk is then re-run (see [refreshStore.inInternalTx]).
 func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
-	if s.tx == nil {
-		itx, err := s.parent.beginInternalTx(ctx, "refreshes.RevokeChain.begin")
-		if err != nil {
-			return err
-		}
-		defer func() { _ = itx.Rollback() }()
-		txStore := &refreshStore{parent: s.parent, tx: itx.tx}
-		if err := txStore.revokeChainBFS(ctx, rootID); err != nil {
-			return err
-		}
-		if err := itx.Commit(); err != nil {
-			return wrapErr("refreshes.RevokeChain.commit", err)
-		}
-		return nil
+	if s.tx != nil {
+		return s.revokeChainBFS(ctx, rootID)
 	}
-	return s.revokeChainBFS(ctx, rootID)
+	return s.inInternalTx(ctx, "refreshes.RevokeChain", func(tx *internalTx) error {
+		txStore := &refreshStore{parent: s.parent, tx: tx.tx}
+		return txStore.revokeChainBFS(ctx, rootID)
+	})
 }
 
 // revokeChainBFS performs the BFS walk under the substore's current

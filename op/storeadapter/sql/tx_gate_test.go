@@ -30,22 +30,13 @@ type gatedCall struct {
 
 func succeeds(err error) bool { return err == nil }
 
-func gatedCalls(now time.Time) []gatedCall {
-	credential := []byte{0x01, 0x02, 0x03}
+// gatedCalls lists the internal-transaction entry points. credential
+// must already be stored before the calls run: UpdateAssertion needs a
+// row to lock, and Put, which writes without a transaction of its own,
+// is not one of the gated calls.
+func gatedCalls(now time.Time, credential []byte) []gatedCall {
 	parent := "gate-parent"
 	return []gatedCall{
-		{
-			name: "passkeys.Put",
-			run: func(ctx context.Context, s *oidcsql.Store) error {
-				return s.Passkeys().Put(ctx, &store.PasskeyRecord{
-					Subject:      "gate-subject",
-					CredentialID: credential,
-					PublicKey:    []byte{0x0a},
-					CreatedAt:    now,
-				})
-			},
-			freeErr: succeeds,
-		},
 		{
 			name: "passkeys.UpdateAssertion",
 			run: func(ctx context.Context, s *oidcsql.Store) error {
@@ -55,9 +46,6 @@ func gatedCalls(now time.Time) []gatedCall {
 				})
 				return err
 			},
-			// The credential is only present once passkeys.Put above has
-			// run with the gate free, which is the phase this expectation
-			// belongs to.
 			freeErr: succeeds,
 		},
 		{
@@ -136,7 +124,16 @@ func TestSQLite_InternalTransactionsHonourTheTransactionGate(t *testing.T) {
 		t.Fatalf("factory produced %T, want *oidcsql.Store", b.Store)
 	}
 	ctx := context.Background()
-	calls := gatedCalls(b.Now())
+	credential := []byte{0x01, 0x02, 0x03}
+	if err := s.Passkeys().Put(ctx, &store.PasskeyRecord{
+		Subject:      "gate-subject",
+		CredentialID: credential,
+		PublicKey:    []byte{0x0a},
+		CreatedAt:    b.Now(),
+	}); err != nil {
+		t.Fatalf("seed passkey: %v", err)
+	}
+	calls := gatedCalls(b.Now(), credential)
 
 	held, err := s.BeginTx(ctx)
 	if err != nil {

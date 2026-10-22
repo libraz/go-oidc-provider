@@ -182,7 +182,8 @@ type queries struct {
 	passkeyGet           string
 	passkeyGetForUpdate  string
 	passkeyListBySubject string
-	passkeyPut           string
+	passkeyInsert        string
+	passkeyRewriteOwn    string
 	passkeyUpdate        string
 	passkeyDelete        string
 
@@ -240,6 +241,8 @@ var (
 		"last_send_attempt_at",
 	}
 
+	// passkeyValueColumns leads with subject; passkeyRewriteOwn assigns
+	// every column after it.
 	passkeyValueColumns = []string{
 		"subject",
 		"public_key",
@@ -927,11 +930,17 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT credential_id, " + joinColumns(passkeyValueColumns) +
 				" FROM " + n.passkeys + " WHERE subject = ? ORDER BY created_at, credential_id",
 		),
-		passkeyPut: d.rebind(
+		passkeyInsert: d.rebind(
 			"INSERT INTO " + n.passkeys +
 				" (credential_id, " + joinColumns(passkeyValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(1+len(passkeyValueColumns)) + ")" + d.upsertAlias() +
-				d.upsertOnConflict("credential_id", assignExcluded(d, passkeyValueColumns)),
+				" VALUES (" + bindPlaceholders(1+len(passkeyValueColumns)) + ")",
+		),
+		// The subject is the predicate, not an assignment: a rewrite
+		// lands only on a row its own subject already holds.
+		passkeyRewriteOwn: d.rebind(
+			"UPDATE " + n.passkeys +
+				" SET " + assignPlaceholders(passkeyValueColumns[1:]) +
+				" WHERE credential_id = ? AND subject = ?",
 		),
 		// Only the assertion-mutable fields are written; registration
 		// state (subject, public_key, aaguid, backup_eligible,
