@@ -1079,3 +1079,25 @@ func TestFetcher_SetAllowPrivateAppliesAfterConstruction(t *testing.T) {
 		t.Fatalf("Fetch after SetAllowPrivate: %v", err)
 	}
 }
+
+// TestIsKeySourceUnavailable pins the predicate every caller classifies a
+// key-resolution failure with: capacity refusals and transient failures,
+// bare or wrapped, are server-side; a plain fetch failure is not.
+func TestIsKeySourceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"bare overload":     {ErrOverloaded, true},
+		"transient":         {&TransientError{Cause: ErrOverloaded}, true},
+		"wrapped transient": {fmt.Errorf("jar: fetch: %w", &TransientError{Cause: errors.New("x")}), true},
+		"fetch failure":     {fmt.Errorf("%w: status 404", ErrFetch), false},
+		"nil":               {nil, false},
+	} {
+		if got := IsKeySourceUnavailable(tc.err); got != tc.want {
+			t.Errorf("%s: IsKeySourceUnavailable=%v want %v", name, got, tc.want)
+		}
+	}
+}

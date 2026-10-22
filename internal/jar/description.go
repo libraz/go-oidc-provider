@@ -31,6 +31,7 @@ var descriptions = []struct {
 	{ErrNotYetValid, "request object is not yet valid"},
 	{ErrNestedRequest, "request object must not contain nested request parameters"},
 	{ErrTypeInvalid, "request object typ header is not accepted"},
+	{ErrKeySourceUnavailable, "client keys are temporarily unavailable"},
 	{ErrJWKSFetch, "client jwks fetch failed"},
 	{ErrNoMatchingJWK, "no matching client jwk"},
 	{ErrJWKSConfigured, "client has no JWKs or JWKsURI"},

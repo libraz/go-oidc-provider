@@ -264,10 +264,14 @@ func refreshedKeysOnKIDMiss(
 		return nil, false, nil
 	}
 	fresh, err := refresher.RefreshJWKS(ctx, clientID)
-	if err != nil && keySourceUnavailable(err) {
-		return nil, false, classifyKeyResolution(err)
+	if err != nil {
+		if keySourceUnavailable(err) {
+			return nil, false, classifyKeyResolution(err)
+		}
+		// A client-side refetch failure cannot explain the miss.
+		return nil, false, nil
 	}
-	if err != nil || fresh == nil || len(fresh.Keys) == 0 {
+	if fresh == nil || len(fresh.Keys) == 0 {
 		return nil, false, nil
 	}
 	return fresh, true, nil
@@ -277,8 +281,7 @@ func refreshedKeysOnKIDMiss(
 // server-side fault (client-store outage, or URL-load capacity pressure on
 // the jwks_uri fetch) rather than evidence about the client's credentials.
 func keySourceUnavailable(err error) bool {
-	var transient *rpjwks.TransientError
-	return errors.Is(err, errClientLookup) || errors.Is(err, rpjwks.ErrOverloaded) || errors.As(err, &transient)
+	return errors.Is(err, errClientLookup) || rpjwks.IsKeySourceUnavailable(err)
 }
 
 // classifyKeyResolution maps a key-resolution failure onto the verifier's
@@ -499,6 +502,8 @@ func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAu
 
 // replayKeyEscaper percent-encodes the key separator in the client id so
 // each (client, jti) pair maps to exactly one replay key.
+//
+//nolint:gochecknoglobals // immutable, concurrency-safe replacer.
 var replayKeyEscaper = strings.NewReplacer("%", "%25", ":", "%3A")
 
 // assertionReplayKey builds the consumed-JTI key for an assertion,

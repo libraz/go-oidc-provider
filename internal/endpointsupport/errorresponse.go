@@ -6,6 +6,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 )
 
 // RFC 6749 §5.2 wire codes the helpers emit. The list is closed; ad-hoc
@@ -74,6 +75,12 @@ func WriteAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
 		errors.Is(err, clientauth.ErrAssertionMalformed),
 		errors.Is(err, clientauth.ErrAssertionReplayed):
 		WriteInvalidClient(w, usedBasic, "client authentication failed")
+	case rpjwks.IsKeySourceUnavailable(err):
+		// A JWKS fetch refused for capacity or failing transiently is
+		// the OP's fault and retryable; answered as /authorize answers
+		// its own fetch-capacity exhaustion.
+		WriteOAuthError(w, http.StatusServiceUnavailable, ErrServerError,
+			"client keys are temporarily unavailable")
 	default:
 		WriteOAuthError(w, http.StatusInternalServerError, ErrServerError, "")
 	}

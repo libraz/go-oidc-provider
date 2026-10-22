@@ -23,7 +23,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-const replayTestAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+const replayTestAud = "https://op.test/oidc/token"
 
 func replayTestKey(t *testing.T) (*ecdsa.PrivateKey, *josev4.JSONWebKeySet) {
 	t.Helper()
@@ -111,7 +111,8 @@ func (f overloadedFreshFetcher) FetchFresh(context.Context, string) (*josev4.JSO
 }
 
 // Key-resolution failures caused by the OP itself (store outage, URL-load
-// capacity) must reach the wire as server_error, never invalid_client.
+// capacity) must reach the wire as server_error, never invalid_client: a
+// capacity refusal as a retryable 503, a store outage as a 500.
 func TestPrivateKeyJWTVerifier_ServerSideKeyFaultIsNotInvalidClient(t *testing.T) {
 	t.Parallel()
 
@@ -127,13 +128,14 @@ func TestPrivateKeyJWTVerifier_ServerSideKeyFaultIsNotInvalidClient(t *testing.T
 	}
 
 	cases := []struct {
-		name    string
-		clients store.ClientStore
-		fetcher clientauth.URLFetcher
+		name       string
+		clients    store.ClientStore
+		fetcher    clientauth.URLFetcher
+		wantStatus int
 	}{
-		{name: "jwks_uri_overloaded", clients: fakeClientStore{seed: urlClient}, fetcher: fakeURLFetcher{err: overloaded}},
-		{name: "rotation_refetch_overloaded", clients: fakeClientStore{seed: urlClient}, fetcher: overloadedFreshFetcher{cached: &staleKeys}},
-		{name: "client_store_outage", clients: failingClientStore{err: errors.New("db: connection refused")}},
+		{name: "jwks_uri_overloaded", clients: fakeClientStore{seed: urlClient}, fetcher: fakeURLFetcher{err: overloaded}, wantStatus: http.StatusServiceUnavailable},
+		{name: "rotation_refetch_overloaded", clients: fakeClientStore{seed: urlClient}, fetcher: overloadedFreshFetcher{cached: &staleKeys}, wantStatus: http.StatusServiceUnavailable},
+		{name: "client_store_outage", clients: failingClientStore{err: errors.New("db: connection refused")}, wantStatus: http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,8 +159,8 @@ func TestPrivateKeyJWTVerifier_ServerSideKeyFaultIsNotInvalidClient(t *testing.T
 			}
 			rec := httptest.NewRecorder()
 			endpointsupport.WriteAuthnError(rec, err, false)
-			if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), `"server_error"`) {
-				t.Fatalf("wire=%d %s, want 500 server_error", rec.Code, rec.Body.String())
+			if rec.Code != tc.wantStatus || !strings.Contains(rec.Body.String(), `"server_error"`) {
+				t.Fatalf("wire=%d %s, want %d server_error", rec.Code, rec.Body.String(), tc.wantStatus)
 			}
 		})
 	}

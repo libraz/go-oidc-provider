@@ -106,6 +106,14 @@ func (e *TransientError) Unwrap() error {
 	return e.Cause
 }
 
+// IsKeySourceUnavailable reports whether err is a fetch-capacity refusal or a
+// transient fetch failure: a server-side fault the client cannot fix, which
+// callers answer as retryable rather than as bad client keys.
+func IsKeySourceUnavailable(err error) bool {
+	var transient *TransientError
+	return errors.Is(err, ErrOverloaded) || errors.As(err, &transient)
+}
+
 // Temporary allows legacy retry loops to recognise the error without
 // depending on the concrete type. It is deliberately not used by the cache;
 // [Config] installs the more precise errors.Is filter below.

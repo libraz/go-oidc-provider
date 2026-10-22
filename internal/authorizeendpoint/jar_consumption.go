@@ -110,27 +110,47 @@ func resolveJARRequestIfNeeded(
 		}
 		raw = fetched
 	}
-	// Verify consumes the request object's "jti", so the object is
-	// single-use from here. That is the same rule the pushed path
-	// applies — /par verifies (and consumes) the object once at push
-	// time — and the visible difference between the two is a property of
-	// the mechanisms rather than a policy split: a pushed request is
-	// thereafter referenced by a request_uri, which /authorize resolves
-	// with a lookup and spends only at code emission, whereas a direct
-	// request object IS the /authorize parameter and is therefore
-	// re-presented by a reload. Relaxing it here would make the object
-	// replayable at /authorize with no counterpart at /par.
-	obj, err := deps.JAR.Verify(ctx, raw, clientID, client)
+	merged, ok := verifyAndMergeJAR(w, r, deps, clientID, client, raw, values, state)
+	if !ok {
+		return nil, true, true
+	}
+	return merged, true, false
+}
+
+// verifyAndMergeJAR verifies raw as the request object of clientID and merges it
+// over values. On failure it writes the response and returns ok=false.
+//
+// Verify consumes the request object's "jti", so the object is
+// single-use from here. That is the same rule the pushed path
+// applies — /par verifies (and consumes) the object once at push
+// time — and the visible difference between the two is a property of
+// the mechanisms rather than a policy split: a pushed request is
+// thereafter referenced by a request_uri, which /authorize resolves
+// with a lookup and spends only at code emission, whereas a direct
+// request object IS the /authorize parameter and is therefore
+// re-presented by a reload. Relaxing it here would make the object
+// replayable at /authorize with no counterpart at /par.
+func verifyAndMergeJAR(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	clientID string,
+	client *store.Client,
+	raw string,
+	values url.Values,
+	state string,
+) (url.Values, bool) {
+	obj, err := deps.JAR.Verify(r.Context(), raw, clientID, client)
 	if err != nil {
 		writeJAREnvelopeError(w, r, deps, err, state)
-		return nil, true, true
+		return nil, false
 	}
 	merged, err := jar.Merge(values, obj, deps.JAR.AuthorizeMergeMode())
 	if err != nil {
 		writeJAREnvelopeError(w, r, deps, err, state)
-		return nil, true, true
+		return nil, false
 	}
-	return merged, true, false
+	return merged, true
 }
 
 // renderJARError renders a JAR-stage rejection. Every such rejection is
@@ -410,13 +430,18 @@ func isPreregisteredRequestURI(c *store.Client, uri string) bool {
 // alg / signature / claim failures map to invalid_request_object;
 // JWKS-resolution failures map to the same code (the OP cannot
 // distinguish a bad request from a misconfigured client without
-// helping an attacker enumerate clients).
+// helping an attacker enumerate clients). A key-source fault on the
+// OP's side (fetch capacity, transient upstream failure) is a 503
+// server_error, as the request_uri capacity refusal is.
 //
 // The description is [jar.Description]'s, shared with /par and the
 // back-channel authentication endpoint. Only the wire code is decided
 // here: the endpoints legitimately differ on that and on nothing else.
 func writeJAREnvelopeError(w http.ResponseWriter, r *http.Request, deps resolved, err error, state string) {
 	switch {
+	case errors.Is(err, jar.ErrKeySourceUnavailable):
+		renderBrowserError(w, r, deps.Driver, http.StatusServiceUnavailable, errServerError,
+			jar.Description(err), state)
 	case errors.Is(err, jar.ErrClientIDMismatch):
 		renderJARError(w, r, deps, errInvalidRequest, jar.Description(err), state)
 	default:

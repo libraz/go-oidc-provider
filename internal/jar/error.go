@@ -73,6 +73,12 @@ var (
 	// transport / parse error.
 	ErrJWKSFetch = errors.New("jar: jwks fetch failed")
 
+	// ErrKeySourceUnavailable signals a server-side fault resolving the
+	// client's keyset (fetch capacity exhausted, a transient upstream
+	// failure). The request object may be valid, so endpoints answer it
+	// as a retryable server error, not invalid_request_object.
+	ErrKeySourceUnavailable = errors.New("jar: client key source unavailable")
+
 	// ErrNoMatchingJWK signals that the verifier found no key in the
 	// client's keyset matching the JWS "kid" header (or could not
 	// pick a default key when the header was absent).

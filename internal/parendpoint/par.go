@@ -180,11 +180,16 @@ func consumeJARRequestObject(
 // writeJARError translates a [jar] sentinel into the OAuth wire
 // envelope. The taxonomy mirrors the authorize endpoint (alg /
 // signature / claim failures map to invalid_request_object;
-// client_id mismatches map to invalid_request) so embedders see a
-// uniform shape across the two surfaces. The description comes from
+// client_id mismatches map to invalid_request, a key-source fault on
+// the OP's side to 503 server_error) so embedders see a uniform shape
+// across the two surfaces. The description comes from
 // [jar.Description] so the two surfaces cannot disagree about the
 // wording either.
 func writeJARError(w http.ResponseWriter, err error) {
+	if errors.Is(err, jar.ErrKeySourceUnavailable) {
+		writeError(w, http.StatusServiceUnavailable, errServerError, jar.Description(err))
+		return
+	}
 	if errors.Is(err, jar.ErrClientIDMismatch) {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
 		return

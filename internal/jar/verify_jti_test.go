@@ -456,3 +456,40 @@ func TestVerify_IATlessObjectCannotOutliveItsReplayMarker(t *testing.T) {
 		t.Fatalf("replay one second before exp: err=%v want ErrJTIReplayed", err)
 	}
 }
+
+// TestVerify_JTIReplayKeyEscapesClientIDSeparator pins that a ':' in the
+// client id cannot shift the client/jti boundary of the replay key: client
+// "rp:a" with jti "b" and client "rp" with jti "a:b" are distinct objects.
+func TestVerify_JTIReplayKeyEscapesClientIDSeparator(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jtis := inmem.New(inmem.WithClock(fakeClock{now: now})).ConsumedJTIs()
+	priv, keys := jtiKey(t, testKID)
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:   testIssuer,
+		Resolver: &staticResolver{keys: keys},
+		Clock:    fakeClock{now: now},
+		JTIs:     jtis,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	for _, tc := range []struct{ clientID, jti string }{
+		{"rp:a", "b"},
+		{"rp", "a:b"},
+		{"rp%3Aa", "b"},
+	} {
+		c := happyClaims(now)
+		c["nbf"] = now.Unix()
+		c["iss"] = tc.clientID
+		c["client_id"] = tc.clientID
+		c["jti"] = tc.jti
+		raw := signClaims(t, priv, testKID, c, josev4.ES256)
+		client := newClient()
+		client.ID = tc.clientID
+		if _, err := v.Verify(context.Background(), raw, tc.clientID, client); err != nil {
+			t.Fatalf("client %q jti %q: %v", tc.clientID, tc.jti, err)
+		}
+	}
+}

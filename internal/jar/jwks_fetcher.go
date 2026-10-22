@@ -62,3 +62,13 @@ func parseJWKS(body []byte) (*josev4.JSONWebKeySet, error) {
 	}
 	return keys, nil
 }
+
+// classifyKeyResolution marks a server-side key-source fault with
+// [ErrKeySourceUnavailable], keeping the cause; any other failure is
+// returned unchanged.
+func classifyKeyResolution(err error) error {
+	if rpjwks.IsKeySourceUnavailable(err) {
+		return fmt.Errorf("%w: %w", ErrKeySourceUnavailable, err)
+	}
+	return err
+}

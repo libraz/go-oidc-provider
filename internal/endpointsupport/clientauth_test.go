@@ -3,6 +3,7 @@ package endpointsupport_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -147,6 +149,20 @@ func TestWriteAuthnError(t *testing.T) {
 		},
 		{
 			name: "unknown_error", err: errors.New("unexpected"),
+			wantStatus: http.StatusInternalServerError, wantCode: "server_error",
+		},
+		{
+			name: "client_keys_overloaded",
+			err: fmt.Errorf("authn: client key resolution: %w",
+				&rpjwks.TransientError{Cause: rpjwks.ErrOverloaded}),
+			wantStatus: http.StatusServiceUnavailable, wantCode: "server_error",
+		},
+		{
+			name: "client_keys_bare_overload", err: rpjwks.ErrOverloaded,
+			wantStatus: http.StatusServiceUnavailable, wantCode: "server_error",
+		},
+		{
+			name: "client_store_fault", err: fmt.Errorf("authn: client key resolution: %w", errors.New("store down")),
 			wantStatus: http.StatusInternalServerError, wantCode: "server_error",
 		},
 	}

@@ -13,6 +13,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -434,7 +435,7 @@ func (v *Verifier) verifyForUse(ctx context.Context, raw, expectedClientID strin
 func (v *Verifier) verifySignature(ctx context.Context, parsed *Object, client *store.Client) ([]byte, error) {
 	keys, err := v.resolver.Resolve(ctx, client)
 	if err != nil {
-		return nil, err
+		return nil, classifyKeyResolution(err)
 	}
 	if keys == nil || len(keys.Keys) == 0 {
 		return nil, ErrNoMatchingJWK
@@ -483,6 +484,9 @@ func (v *Verifier) pickFromRefreshedKeys(
 		return nil, miss
 	}
 	keys, err := fresh.ResolveFresh(ctx, client)
+	if err != nil && rpjwks.IsKeySourceUnavailable(err) {
+		return nil, classifyKeyResolution(err)
+	}
 	if err != nil || keys == nil || len(keys.Keys) == 0 {
 		return nil, miss
 	}
@@ -621,7 +625,7 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string,
 		// a malformed-object class.
 		return fmt.Errorf("%w: jti consume: missing exp", ErrParse)
 	}
-	key := "jar:" + string(use) + ":" + clientID + ":" + jti
+	key := "jar:" + string(use) + ":" + replayKeyEscaper.Replace(clientID) + ":" + jti
 	if err := v.jtis.Mark(ctx, key, expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return ErrJTIReplayed
@@ -630,6 +634,12 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string,
 	}
 	return nil
 }
+
+// replayKeyEscaper percent-encodes the key separator in the client id so
+// each (use, client, jti) triple maps to exactly one replay key.
+//
+//nolint:gochecknoglobals // immutable, concurrency-safe replacer.
+var replayKeyEscaper = strings.NewReplacer("%", "%25", ":", "%3A")
 
 // jtiExpiry reads the request object's "exp" claim and projects it onto the
 // wall clock the verifier is using. The consumed-jti row is retained at least

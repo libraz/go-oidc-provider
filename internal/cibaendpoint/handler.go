@@ -697,12 +697,18 @@ func consumeJARRequestObject(
 // writeJARError translates a [jar] sentinel into the CIBA wire
 // envelope. CIBA Core §13 enumerates a closed set of BCA error
 // codes that does NOT include "invalid_request_object" (unlike the
-// /authorize endpoint, which does). Every JAR failure therefore
-// surfaces as "invalid_request" so OFCS' CIBA-13 negative tests see
-// the spec-mandated code; the human-readable description carries
-// the precise sentinel detail, drawn from the [jar.Description]
-// catalogue the other JAR-consuming endpoints render from.
+// /authorize endpoint, which does). Every client-side JAR failure
+// therefore surfaces as "invalid_request" so OFCS' CIBA-13 negative
+// tests see the spec-mandated code; the human-readable description
+// carries the precise sentinel detail, drawn from the [jar.Description]
+// catalogue the other JAR-consuming endpoints render from. A key-source
+// fault on the OP's side is a 503 server_error, as on /authorize and
+// /par.
 func writeJARError(w http.ResponseWriter, err error) {
+	if errors.Is(err, jar.ErrKeySourceUnavailable) {
+		writeError(w, http.StatusServiceUnavailable, errServerError, jar.Description(err))
+		return
+	}
 	writeError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
 }
 
