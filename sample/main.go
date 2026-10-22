@@ -331,7 +331,9 @@ func listen(addr string, h http.Handler, provider *op.Provider) error {
 				err = drainErr
 			}
 		}
-		<-errCh
+		if serveErr := <-errCh; err == nil {
+			err = serveErr
+		}
 	case err = <-errCh:
 		if provider != nil {
 			_ = provider.Shutdown(context.Background())
