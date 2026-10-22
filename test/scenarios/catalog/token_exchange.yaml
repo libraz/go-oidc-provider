@@ -274,3 +274,13 @@ rows:
       channel so a quiet outage is distinguishable from an actual
       revocation.
     status: active
+  - id: TX-027
+    severity: P2
+    spec: RFC 8693 §2.2
+    behaviour: |
+      token_exchange.granted MUST be emitted exactly once for an exchange
+      whose tokens reach the wire, and never for one refused after the
+      policy ran (for example a scope the client may not hold, answered
+      invalid_scope); such a refusal MUST record exactly one
+      custom_grant.failed event instead.
+    status: active
