@@ -281,3 +281,22 @@ func TestClear_EmitsExpiringCookie(t *testing.T) {
 		t.Errorf("attrs=%+v want Secure+HttpOnly+Path=/", c)
 	}
 }
+
+func TestBuildAndClear_RejectHostPrefixWithInsecure(t *testing.T) {
+	t.Parallel()
+
+	for _, ss := range []http.SameSite{http.SameSiteLaxMode, http.SameSiteStrictMode} {
+		p := cookie.Profile{
+			Name:       "__Host-x",
+			HostPrefix: true,
+			SameSite:   ss,
+			Insecure:   true,
+		}
+		if c, err := cookie.Build(p, "v"); err == nil {
+			t.Errorf("Build accepted HostPrefix+Insecure (SameSite=%v): %+v", ss, c)
+		}
+		if c, err := cookie.Clear(p); err == nil {
+			t.Errorf("Clear accepted HostPrefix+Insecure (SameSite=%v): %+v", ss, c)
+		}
+	}
+}

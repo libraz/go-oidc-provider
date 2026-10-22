@@ -43,8 +43,9 @@ type Profile struct {
 	// 6265bis-compliant configuration for [SameSiteNoneMode] and the
 	// only safe configuration for any cookie carrying authentication
 	// material. Embedders MAY set Insecure=true for non-confidential
-	// cookies on plain-HTTP development origins; [validate] rejects the
-	// combination Insecure=true + SameSite=None (RFC 6265bis §4.1.2.7).
+	// cookies on plain-HTTP development origins; [validate] rejects
+	// Insecure=true combined with SameSite=None (RFC 6265bis §4.1.2.7) or
+	// with [HostPrefix].
 	Insecure bool
 }
 
@@ -67,6 +68,10 @@ var errSameSiteRequired = errors.New("cookie: SameSite mode must be Lax, Strict,
 // because the prefix changes the security guarantees.
 var errHostPrefixMismatch = errors.New("cookie: HostPrefix true requires __Host- name prefix")
 
+// errHostPrefixRequiresSecure is returned when [HostPrefix] is combined
+// with Insecure=true: browsers discard a __Host- cookie without Secure.
+var errHostPrefixRequiresSecure = errors.New("cookie: __Host- prefix requires Secure; set Insecure=false")
+
 // errNegativeMaxAge is returned when [Profile.MaxAge] is negative. Negative
 // max-age values are reserved for the [Clear] helper which builds an
 // expiring-cookie response from a profile.
@@ -87,7 +92,7 @@ var errEmptyName = errors.New("cookie: Name must not be empty")
 // it to network attackers. [Build] honours [Profile.Insecure] for
 // non-confidential dev cookies (e.g. plain-HTTP locale preference);
 // the validate() guard ensures Insecure cannot apply to SameSite=None
-// regardless of how the profile is composed.
+// or to a __Host- cookie regardless of how the profile is composed.
 func (p Profile) validate() error {
 	if p.Name == "" {
 		return errEmptyName
@@ -107,6 +112,9 @@ func (p Profile) validate() error {
 	hasPrefix := strings.HasPrefix(p.Name, "__Host-")
 	if p.HostPrefix != hasPrefix {
 		return errHostPrefixMismatch
+	}
+	if p.HostPrefix && p.Insecure {
+		return errHostPrefixRequiresSecure
 	}
 	return nil
 }
