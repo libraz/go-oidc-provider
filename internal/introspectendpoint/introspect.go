@@ -21,10 +21,11 @@ import (
 //
 // "username" is intentionally absent: v1.0 does not surface user-facing
 // names by default (privacy posture; embedders who want it wrap the
-// handler). "token_type" is set unconditionally on active responses to
+// handler). "token_type" is set on active access-token responses to
 // the constant [tokenTypeBearer] — DPoP / mTLS bindings surface through
 // "cnf" rather than the type tag (RFC 9449 §6 / RFC 8705 §3 do not
-// rename the type).
+// rename the type). Refresh-token responses omit it: RFC 7662 §2.2
+// defines the member as the RFC 6749 §5.1 access-token type.
 type response struct {
 	Active    bool              `json:"active"`
 	Scope     string            `json:"scope,omitempty"`
@@ -460,12 +461,11 @@ func projectOpaqueAccessToken(view *tokens.OpaqueAccessTokenView, issuer string)
 // same grounds as [projectOpaqueAccessToken].
 func projectRefreshToken(rec *store.RefreshToken, publicSubject, issuer string) response {
 	out := response{
-		Active:    true,
-		ClientID:  rec.ClientID,
-		TokenType: tokenTypeBearer,
-		Sub:       publicSubject,
-		Iss:       issuer,
-		Exp:       rec.ExpiresAt.Unix(),
+		Active:   true,
+		ClientID: rec.ClientID,
+		Sub:      publicSubject,
+		Iss:      issuer,
+		Exp:      rec.ExpiresAt.Unix(),
 	}
 	if !rec.CreatedAt.IsZero() {
 		out.Iat = rec.CreatedAt.Unix()
