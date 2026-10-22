@@ -135,7 +135,7 @@ func completeRefreshToken(
 	if !requireRegisteredScopes(w, client, exchanged.Scope) {
 		return rollback
 	}
-	if !enforceStrictOfflineAccess(w, deps, exchanged.Scope, exchanged.Origin) {
+	if !enforceStrictOfflineAccess(w, deps, exchanged.BoundScope, exchanged.Origin) {
 		return rollback
 	}
 	if !enforceDPoPRefreshBinding(w, deps, dpopOut, exchanged.DPoPJKT) {
@@ -402,7 +402,7 @@ func preflightRefreshBeforeConsume(
 	if !requireRegisteredScopes(w, client, scope) {
 		return false
 	}
-	if !enforceStrictOfflineAccess(w, deps, scope, rec.Origin) {
+	if !enforceStrictOfflineAccess(w, deps, rec.Scope, rec.Origin) {
 		return false
 	}
 	// Sender-constrained refresh tokens must reject a missing or mismatched
@@ -1091,7 +1091,9 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 // returning the original token would defeat the §2.2.2 replay defence
 // the exchanger already enforces. The binding is propagated onto the
 // rotated record so the sender constraint (RFC 9449 §6.1 for DPoP,
-// RFC 8705 §3.1 for mTLS) survives across the chain.
+// RFC 8705 §3.1 for mTLS) survives across the chain. The successor also
+// keeps the consumed token's bound scope and TTL bucket (RFC 6749 §6): a
+// narrowed request affects only the access token and id_token returned.
 //
 // DPoP rules per RFC 9449 §5.4: once the AS has bound a refresh token
 // to a DPoP key the binding MUST persist across rotations. The
@@ -1119,7 +1121,7 @@ func rotateRefreshToken(
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
 		Clock: deps.clockFunc(),
-		TTL:   pickRefreshTokenTTL(deps, exchanged.Scope),
+		TTL:   pickRefreshTokenTTL(deps, exchanged.BoundScope),
 	})
 	if err != nil {
 		return err
@@ -1138,7 +1140,7 @@ func rotateRefreshToken(
 		ClientID:             client.ID,
 		Subject:              exchanged.Subject,
 		GrantID:              exchanged.GrantID,
-		Scope:                append([]string(nil), exchanged.Scope...),
+		Scope:                append([]string(nil), exchanged.BoundScope...),
 		Resource:             exchanged.Resource,
 		ParentID:             &parent,
 		DPoPJKT:              rotatedJKT,
@@ -1184,8 +1186,8 @@ func rotateRefreshToken(
 		ClientID: client.ID,
 		Extras: map[string]any{
 			"grant_id":       exchanged.GrantID,
-			"offline_access": oidcscope.ContainsOfflineAccess(exchanged.Scope),
-			"ttl_bucket":     ttlBucketFor(deps, exchanged.Scope),
+			"offline_access": oidcscope.ContainsOfflineAccess(exchanged.BoundScope),
+			"ttl_bucket":     ttlBucketFor(deps, exchanged.BoundScope),
 		},
 	})
 	return nil

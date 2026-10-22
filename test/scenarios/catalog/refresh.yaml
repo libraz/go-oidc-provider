@@ -160,13 +160,15 @@ rows:
 
   - id: REF-015
     severity: P1
-    spec: OIDC Core §12 / RFC 6749 §6
+    spec: RFC 6749 §6 / OIDC Core §12
     behaviour: |
-      With rotateRefreshToken=true, a request that narrows scope still
-      mints a new refresh_token carrying the original scope while the
-      AccessToken returned reflects only the narrowed scope.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0's refresh exchanger narrows the rotated refresh_token to the requested scope (internal/grants/refresh/refresh.go resolveScope returns slices.Clone(requested) when RequestedScope is non-empty). The 'narrowed AT but rotated RT carries the original full scope' shape is the JS oidc-provider model — not v1.0's. RFC 6749 §6 / OIDC Core §12 forbid widening but do not require the OP to retain pre-narrow scope on the rotated RT. The wire-side narrowing-on-AT half is covered by REF-007/REF-008."
+      A refresh request that narrows scope returns an access token for
+      the narrowed scope only, while the rotated refresh_token keeps the
+      consumed token's full scope, offline TTL bucket and offline_access
+      eligibility (RFC 6749 §6: the new refresh token's scope MUST be
+      identical to the presented one's). A following default-scope
+      refresh therefore still yields an id_token and the full scope.
+    status: active
 
   - id: REF-016
     severity: P0

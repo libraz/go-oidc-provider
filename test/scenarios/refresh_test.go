@@ -937,10 +937,92 @@ func TestScenario_REF_014_RotationDefaultScopeInheritsOriginal(t *testing.T) {
 	}
 }
 
-// TestScenario_REF_015_RotationNarrowedScopeRetainsOriginal is OOS — see catalog out_of_scope_reason.
+// TestScenario_REF_015_RotationNarrowedScopeRetainsOriginal verifies that
+// narrowing scope on a refresh narrows only the access token: the rotated
+// refresh_token keeps the full scope and offline TTL, passes the strict
+// offline_access gate, and a following default-scope refresh still yields
+// an id_token.
+//
+// Spec: RFC 6749 §6 (the new refresh token's scope MUST be identical to
+// the presented one's) / OIDC Core §12.
 func TestScenario_REF_015_RotationNarrowedScopeRetainsOriginal(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: REF-015 (see catalog out_of_scope_reason)")
+
+	const (
+		clientID = "rp-ref-015"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ref-015-secret"
+	const originalScope = "openid email offline_access"
+	const offlineTTL = 90 * 24 * time.Hour
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithStrictOfflineAccess(),
+		op.WithRefreshTokenOfflineTTL(offlineTTL),
+		op.WithRefreshGracePeriod(0),
+	))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       originalScope,
+		PKCE:        pkce,
+	})
+	first := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if first.StatusCode != http.StatusOK || first.RefreshToken == "" {
+		t.Fatalf("first /token must return refresh_token: status=%d body=%v", first.StatusCode, first.Raw)
+	}
+
+	narrowed := postRefreshTokenForm(t, tk, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {first.RefreshToken},
+		"scope":         {"email"},
+	}, rp.ID, clientSecret)
+	if narrowed.StatusCode != http.StatusOK || narrowed.RefreshToken == "" {
+		t.Fatalf("narrowed refresh status=%d body=%v, want 200 with refresh_token", narrowed.StatusCode, narrowed.Raw)
+	}
+	if narrowed.Scope != "email" || narrowed.IDToken != "" {
+		t.Errorf("narrowed response scope=%q id_token=%q, want email and no id_token", narrowed.Scope, narrowed.IDToken)
+	}
+	rec, err := tk.Store.RefreshTokens().Find(context.Background(), narrowed.RefreshToken)
+	if err != nil {
+		t.Fatalf("Find rotated refresh token: %v", err)
+	}
+	if !sameScopeSet(strings.Join(rec.Scope, " "), originalScope) {
+		t.Errorf("rotated refresh token scope=%v, want %q", rec.Scope, originalScope)
+	}
+	if got := rec.ExpiresAt.Sub(rec.CreatedAt); got != offlineTTL {
+		t.Errorf("rotated refresh token lifetime=%v, want offline TTL %v", got, offlineTTL)
+	}
+
+	full := postRefreshToken(t, tk, narrowed.RefreshToken, rp.ID, clientSecret)
+	if full.StatusCode != http.StatusOK {
+		t.Fatalf("default-scope refresh status=%d body=%v, want 200", full.StatusCode, full.Raw)
+	}
+	if full.IDToken == "" || !sameScopeSet(full.Scope, originalScope) {
+		t.Errorf("default-scope refresh scope=%q id_token present=%v, want %q with id_token",
+			full.Scope, full.IDToken != "", originalScope)
+	}
 }
 
 // sameScopeSet compares two space-delimited scope strings as

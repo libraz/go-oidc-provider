@@ -60,10 +60,16 @@ func (c *advanceableClock) Advance(d time.Duration) {
 // move to scenariokit.
 func postRefreshToken(tb testing.TB, p *testkit.Provider, refreshToken, clientID, clientSecret string) scenariokit.TokenResponse {
 	tb.Helper()
-	form := url.Values{
+	return postRefreshTokenForm(tb, p, url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
-	}
+	}, clientID, clientSecret)
+}
+
+// postRefreshTokenForm is [postRefreshToken] for a caller-built form, such
+// as one carrying a narrowed scope.
+func postRefreshTokenForm(tb testing.TB, p *testkit.Provider, form url.Values, clientID, clientSecret string) scenariokit.TokenResponse {
+	tb.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 		p.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
 	if err != nil {

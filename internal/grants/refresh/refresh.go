@@ -404,8 +404,14 @@ type Exchanged struct {
 	GrantID string
 
 	// Scope is the resulting scope: the caller's requested scope when
-	// it narrowed the token, otherwise the token's bound scope.
+	// it narrowed the token, otherwise the token's bound scope. It
+	// governs only the access token and id_token of this response.
 	Scope []string
+
+	// BoundScope is the consumed token's scope. RFC 6749 §6 requires a
+	// rotated refresh token to carry it unchanged, so the successor, its
+	// TTL bucket and its offline eligibility derive from this, not Scope.
+	BoundScope []string
 
 	// Resource is the RFC 8707 resource indicator the chain is bound to.
 	// Empty means the originating grant omitted the parameter.
@@ -517,6 +523,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		SubjectPublic:        rec.SubjectPublic,
 		GrantID:              rec.GrantID,
 		Scope:                resolvedScope,
+		BoundScope:           slices.Clone(rec.Scope),
 		Resource:             rec.Resource,
 		Origin:               rec.Origin,
 		AuthTime:             rec.AuthTime,
@@ -721,6 +728,7 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 		SubjectPublic:        rec.SubjectPublic,
 		GrantID:              rec.GrantID,
 		Scope:                resolvedScope,
+		BoundScope:           slices.Clone(rec.Scope),
 		Resource:             rec.Resource,
 		Origin:               rec.Origin,
 		AuthTime:             rec.AuthTime,

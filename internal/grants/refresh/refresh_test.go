@@ -3,6 +3,7 @@ package refresh_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -323,6 +324,38 @@ func TestExchange_ScopeNarrowingAccepted(t *testing.T) {
 	}
 	if got := out.Scope; len(got) != 2 || got[0] != "openid" || got[1] != "profile" {
 		t.Errorf("narrowed scope=%v", got)
+	}
+}
+
+// TestExchange_ScopeNarrowingKeepsBoundScope pins RFC 6749 §6: a narrowed
+// request changes only Scope, while BoundScope still carries the consumed
+// token's scope on both the strict and the grace path.
+func TestExchange_ScopeNarrowingKeepsBoundScope(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	tok, err := f.issuer.Issue(ctx, goodIssue()) // scope: openid profile email
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	in := refresh.ExchangeInput{Token: tok, ClientID: "client-1", RequestedScope: []string{"profile"}}
+	want := []string{"openid", "profile", "email"}
+	out, err := f.exchanger.Exchange(ctx, in)
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if !slices.Equal(out.Scope, []string{"profile"}) || !slices.Equal(out.BoundScope, want) {
+		t.Errorf("strict Scope=%v BoundScope=%v want [profile] / %v", out.Scope, out.BoundScope, want)
+	}
+	again, err := f.exchanger.Exchange(ctx, in)
+	if err != nil {
+		t.Fatalf("grace Exchange: %v", err)
+	}
+	if !again.InGrace || !slices.Equal(again.BoundScope, want) {
+		t.Errorf("grace InGrace=%v BoundScope=%v want true / %v", again.InGrace, again.BoundScope, want)
 	}
 }
 
