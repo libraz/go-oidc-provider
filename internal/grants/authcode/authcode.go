@@ -260,6 +260,12 @@ type ExchangeInput struct {
 	// CodeVerifier is the PKCE verifier from RFC 7636. Required because
 	// the OP rejects code issuance without a challenge.
 	CodeVerifier string
+
+	// Admit, when non-nil, runs the caller's own gates on the code's
+	// projection after the bindings pass. It runs before Consume, so a
+	// refusal leaves the code redeemable, and again on the consumed
+	// record. A non-nil return refuses the exchange with that error.
+	Admit func(*Exchanged) error
 }
 
 // Exchanged is the projection of [store.AuthorizationCode] returned to the
@@ -326,17 +332,17 @@ type Exchanged struct {
 // needs to mint tokens; on failure the returned error matches one of the
 // sentinels declared in this package.
 //
-// The client, redirect_uri and PKCE bindings are checked against the
-// record from [store.AuthorizationCodeStore.Find] before Consume, so a
-// presentation that fails them neither spends the code nor locks its bound
-// client out of the redemption.
+// The client, redirect_uri and PKCE bindings and [ExchangeInput.Admit] are
+// checked against the record from [store.AuthorizationCodeStore.Find] before
+// Consume, so a presentation that fails them neither spends the code nor
+// locks its bound client out of the redemption.
 //
 // Replay detection: when the underlying store returns
 // [store.ErrAlreadyConsumed], Exchange returns [ErrCodeReplayed]. If the store
 // also returns the consumed record, the error carries its GrantID; the token
 // endpoint MUST revoke any refresh tokens that descend from this grant. A
-// replay whose presentation fails the bindings of the returned record reports
-// the binding error instead, so it does not arm that revocation.
+// replay whose presentation fails the bindings or Admit on the returned record
+// reports that error instead, so it does not arm that revocation.
 //
 //nolint:gocognit // Exchange enumerates the code-replay / binding / expiry gates in flat shape; refactor would obscure spec mapping.
 func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged, error) {
@@ -355,7 +361,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 			if rec == nil {
 				return nil, ErrCodeReplayed
 			}
-			if err := checkBindings(rec, in); err != nil {
+			if err := admit(rec, in); err != nil {
 				return nil, err
 			}
 			if rec.GrantID != "" {
@@ -374,26 +380,15 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 	if e.clock().UTC().After(rec.ExpiresAt) {
 		return nil, ErrCodeExpired
 	}
-	if err := checkBindings(rec, in); err != nil {
+	if err := admit(rec, in); err != nil {
 		return nil, err
 	}
-	return &Exchanged{
-		ClientID:         rec.ClientID,
-		Subject:          rec.Subject,
-		GrantID:          rec.GrantID,
-		Scope:            append([]string(nil), rec.Scope...),
-		Resource:         rec.Resource,
-		Nonce:            rec.Nonce,
-		DPoPJKT:          rec.DPoPJKT,
-		HadCodeChallenge: rec.CodeChallenge != "",
-		ConsumedAt:       *rec.ConsumedAt,
-		IssuedAt:         rec.CreatedAt,
-	}, nil
+	return project(rec), nil
 }
 
-// preflight runs [checkBindings] on the unconsumed record. A store that hides
-// the record from Find (unknown, expired or already consumed) defers the
-// decision to Consume, which reports those states authoritatively.
+// preflight runs [admit] on the unconsumed record. A store that hides the
+// record from Find (unknown, expired or already consumed) defers the decision
+// to Consume, which reports those states authoritatively.
 func (e *Exchanger) preflight(ctx context.Context, in ExchangeInput) error {
 	rec, err := e.store.Find(ctx, in.Code)
 	switch {
@@ -402,7 +397,38 @@ func (e *Exchanger) preflight(ctx context.Context, in ExchangeInput) error {
 	case err != nil:
 		return fmt.Errorf("authcode: find: %w", err)
 	}
-	return checkBindings(rec, in)
+	return admit(rec, in)
+}
+
+// admit runs [checkBindings] and then the caller's [ExchangeInput.Admit].
+func admit(rec *store.AuthorizationCode, in ExchangeInput) error {
+	if err := checkBindings(rec, in); err != nil {
+		return err
+	}
+	if in.Admit == nil {
+		return nil
+	}
+	return in.Admit(project(rec))
+}
+
+// project returns the [Exchanged] view of rec. ConsumedAt is zero for a
+// record that has not been consumed yet.
+func project(rec *store.AuthorizationCode) *Exchanged {
+	out := &Exchanged{
+		ClientID:         rec.ClientID,
+		Subject:          rec.Subject,
+		GrantID:          rec.GrantID,
+		Scope:            append([]string(nil), rec.Scope...),
+		Resource:         rec.Resource,
+		Nonce:            rec.Nonce,
+		DPoPJKT:          rec.DPoPJKT,
+		HadCodeChallenge: rec.CodeChallenge != "",
+		IssuedAt:         rec.CreatedAt,
+	}
+	if rec.ConsumedAt != nil {
+		out.ConsumedAt = *rec.ConsumedAt
+	}
+	return out
 }
 
 // checkBindings verifies the client, redirect_uri and PKCE bindings recorded

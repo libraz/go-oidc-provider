@@ -50,20 +50,19 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
+	// The gates read the code's record but run before it is consumed, so a
+	// request that fails them does not spend the owner's code.
+	in.Admit = func(x *authcode.Exchanged) error {
+		if checkTokenScopeAllowlist(w, deps, client.ID, x.Scope) &&
+			requireRegisteredScopes(w, client, x.Scope) &&
+			enforcePKCEDowngradeGuard(w, client, x) &&
+			enforceDPoPJKTBinding(w, x, binding) {
+			return nil
+		}
+		return errRedemptionRefused
+	}
 	exchanged, ok := exchangeAuthCode(ctx, w, deps, in)
 	if !ok {
-		return
-	}
-	if !checkTokenScopeAllowlist(w, deps, client.ID, exchanged.Scope) {
-		return
-	}
-	if !requireRegisteredScopes(w, client, exchanged.Scope) {
-		return
-	}
-	if !enforcePKCEDowngradeGuard(w, client, exchanged) {
-		return
-	}
-	if !enforceDPoPJKTBinding(w, exchanged, binding) {
 		return
 	}
 	user, err := lookupLiveSubject(ctx, deps, exchanged.Subject)
@@ -89,7 +88,15 @@ type authCodeInputs struct {
 	RedirectURI  string
 	CodeVerifier string
 	ClientID     string
+
+	// Admit carries the handler's record-dependent gates; it writes the
+	// refusal itself and returns [errRedemptionRefused].
+	Admit func(*authcode.Exchanged) error
 }
+
+// errRedemptionRefused reports that an [authCodeInputs.Admit] gate refused
+// the code and has already written the response.
+var errRedemptionRefused = errors.New("tokenendpoint: authorization code redemption refused")
 
 // parseAuthCodeRequest validates the required form fields and returns
 // them. On failure it writes the response and returns ok=false.
@@ -116,7 +123,7 @@ func parseAuthCodeRequest(w http.ResponseWriter, r *http.Request) (authCodeInput
 	// authorize policy that issued it; the gate cannot be lifted at
 	// /token because the token endpoint does not know the active
 	// profile. The complementary defence-in-depth check —
-	// [enforcePKCEDowngradeGuard] — runs after Exchange and rejects
+	// [enforcePKCEDowngradeGuard] — runs before the code is consumed and rejects
 	// public-client codes that lack a challenge (RFC 9700 §2.1.1)
 	// regardless of whether a verifier was supplied.
 	return in, true
@@ -144,6 +151,7 @@ func exchangeAuthCode(
 		ClientID:     in.ClientID,
 		RedirectURI:  in.RedirectURI,
 		CodeVerifier: in.CodeVerifier,
+		Admit:        in.Admit,
 	})
 	if err != nil {
 		writeAuthCodeExchangeError(ctx, w, deps, in.Code, err)
@@ -179,6 +187,8 @@ func writeAuthCodeExchangeError(
 	err error,
 ) {
 	switch {
+	case errors.Is(err, errRedemptionRefused):
+		// The gate has written the response.
 	case errors.Is(err, authcode.ErrCodeMissing),
 		errors.Is(err, authcode.ErrCodeExpired),
 		errors.Is(err, authcode.ErrClientMismatch),

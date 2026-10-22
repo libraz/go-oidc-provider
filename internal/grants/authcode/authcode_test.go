@@ -679,3 +679,59 @@ func TestExchange_ReplayByForeignClientIsNotReplay(t *testing.T) {
 		t.Fatalf("bound-client replay err=%v want ReplayError for grant-1", err)
 	}
 }
+
+// TestExchange_AdmitRefusalDoesNotSpendCode pins that a caller gate refusing
+// the code runs before Consume: the refusal leaves the code redeemable, and
+// once redeemed a replay that fails the gate reports the gate's error rather
+// than arming the replay teardown.
+func TestExchange_AdmitRefusalDoesNotSpendCode(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	backing := newReplayMetadataCodeStore()
+	clk := func() time.Time { return t0 }
+	issuer, err := authcode.NewIssuer(authcode.IssuerConfig{Store: backing, Clock: clk})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exchanger, err := authcode.NewExchanger(authcode.ExchangerConfig{Store: backing, Clock: clk})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+	code, err := issuer.Issue(ctx, goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	errGate := errors.New("gate refused")
+	var seen *authcode.Exchanged
+	refused := authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: verifier,
+		Admit: func(x *authcode.Exchanged) error {
+			seen = x
+			return errGate
+		},
+	}
+	if _, err := exchanger.Exchange(ctx, refused); !errors.Is(err, errGate) {
+		t.Fatalf("refused Exchange err=%v want gate error", err)
+	}
+	if seen == nil || seen.GrantID != "grant-1" || !seen.ConsumedAt.IsZero() {
+		t.Fatalf("gate saw %+v; want the unconsumed record's projection", seen)
+	}
+	admitted := refused
+	admitted.Admit = nil
+	if _, err := exchanger.Exchange(ctx, admitted); err != nil {
+		t.Fatalf("Exchange after a refused attempt: %v", err)
+	}
+	_, err = exchanger.Exchange(ctx, refused)
+	if !errors.Is(err, errGate) || errors.Is(err, authcode.ErrCodeReplayed) {
+		t.Fatalf("gate-failing replay err=%v want gate error only", err)
+	}
+	if _, err := exchanger.Exchange(ctx, admitted); authcode.ReplayGrantID(err) != "grant-1" {
+		t.Fatalf("admitted replay err=%v want ReplayError for grant-1", err)
+	}
+}
