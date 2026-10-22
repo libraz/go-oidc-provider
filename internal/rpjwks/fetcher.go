@@ -194,16 +194,23 @@ type entry struct {
 // Fetcher resolves a relying party's jwks_uri into parsed keys, with caching,
 // singleflight collapsing, the SSRF envelope, and the package limits applied.
 // It is safe for concurrent use; callers construct one at startup and share it
-// across every path that resolves the same population of clients.
+// across every path that resolves the same population of clients, each through
+// its own [Fetcher.WithFetchError] view.
 type Fetcher struct {
+	*shared
+	fetchErr error
+}
+
+// shared is the state every [Fetcher.WithFetchError] view of one fetcher
+// reads: the cache, the forced-refresh throttle and the HTTP client.
+type shared struct {
 	cache  *remotecache.Cache[*entry]
 	forced *remotecache.Cache[struct{}]
 	// forcedMu makes the throttle's check-and-record atomic, so a burst of
 	// concurrent forced refreshes cannot each observe an empty slot.
 	forcedMu sync.Mutex
 
-	fetchErr error
-	timeout  time.Duration
+	timeout time.Duration
 	// ttl is the effective [Config.TTL]. It is both the lifetime of an entry
 	// whose response advertised nothing and the ceiling every advertised
 	// max-age is clamped to, so no RP can hold a keyset in the cache longer
@@ -251,7 +258,7 @@ func New(cfg Config) *Fetcher {
 		// attacker-sized channel during construction.
 		cfg.MaxInflight = DefaultMaxInflight
 	}
-	return &Fetcher{
+	return &Fetcher{fetchErr: cfg.FetchError, shared: &shared{
 		cache: remotecache.New[*entry](remotecache.Config{
 			Clock:       cfg.Clock,
 			TTL:         cfg.TTL,
@@ -269,14 +276,23 @@ func New(cfg Config) *Fetcher {
 			TTL:        ForcedRefreshInterval,
 			MaxEntries: cfg.MaxEntries,
 		}),
-		fetchErr:      cfg.FetchError,
 		timeout:       cfg.Timeout,
 		ttl:           cfg.TTL,
 		maxBody:       cfg.MaxBodyBytes,
 		loads:         remotecache.SharedLoadGate(cfg.MaxInflight),
 		allowPrivate:  cfg.AllowPrivateNetwork,
 		baseTransport: cfg.BaseTransport,
+	}}
+}
+
+// WithFetchError returns a view of f that shares its cache, forced-refresh
+// throttle and HTTP client but wraps failures in sentinel, so each surface
+// keeps its own errors.Is contract over one cache entry per jwks_uri.
+func (f *Fetcher) WithFetchError(sentinel error) *Fetcher {
+	if sentinel == nil {
+		sentinel = ErrFetch
 	}
+	return &Fetcher{shared: f.shared, fetchErr: sentinel}
 }
 
 // SetAllowPrivate toggles the SSRF deny-list after construction. Pass true to
@@ -338,6 +354,55 @@ func (f *Fetcher) FetchFresh(ctx context.Context, jwksURI string) (*josev4.JSONW
 		f.clearForced(jwksURI)
 	}
 	return f.result(keys, err)
+}
+
+// ErrKeySource reports a client that registered no key source, or both jwks
+// and jwks_uri. Every surface refuses the pair rather than preferring one, so
+// a client verifies, authenticates and receives encrypted responses from the
+// same keys or from none.
+var ErrKeySource = errors.New("rpjwks: client must register exactly one of jwks and jwks_uri")
+
+// Resolve returns the keyset a client registered: the inline jwks, or the
+// document at jwksURI through the cache. Anything but exactly one source
+// surfaces [ErrKeySource], unwrapped by the fetch sentinel so a caller can map
+// it onto its own "not configured" error.
+func (f *Fetcher) Resolve(ctx context.Context, jwks []byte, jwksURI string) (*josev4.JSONWebKeySet, error) {
+	return f.resolve(ctx, jwks, jwksURI, f.Fetch)
+}
+
+// ResolveFresh is [Fetcher.Resolve] with [Fetcher.FetchFresh] for a jwks_uri.
+// An inline keyset cannot rotate out of band and is returned as parsed.
+func (f *Fetcher) ResolveFresh(ctx context.Context, jwks []byte, jwksURI string) (*josev4.JSONWebKeySet, error) {
+	return f.resolve(ctx, jwks, jwksURI, f.FetchFresh)
+}
+
+// CheckKeySource is the one jwks-vs-jwks_uri rule: it returns [ErrKeySource]
+// unless exactly one of the two is set. A resolver that does not hold a
+// [Fetcher] calls it before choosing a source itself.
+func CheckKeySource(jwks []byte, jwksURI string) error {
+	switch {
+	case len(jwks) > 0 && jwksURI != "":
+		return fmt.Errorf("%w: both are registered", ErrKeySource)
+	case len(jwks) == 0 && jwksURI == "":
+		return fmt.Errorf("%w: neither is registered", ErrKeySource)
+	default:
+		return nil
+	}
+}
+
+func (f *Fetcher) resolve(
+	ctx context.Context,
+	jwks []byte,
+	jwksURI string,
+	fetch func(context.Context, string) (*josev4.JSONWebKeySet, error),
+) (*josev4.JSONWebKeySet, error) {
+	if err := CheckKeySource(jwks, jwksURI); err != nil {
+		return nil, err
+	}
+	if len(jwks) > 0 {
+		return f.ParseKeySet(jwks)
+	}
+	return fetch(ctx, jwksURI)
 }
 
 // ParseKeySet decodes an inline keyset under this fetcher's error taxonomy, so

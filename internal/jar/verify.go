@@ -949,9 +949,9 @@ func claimSeconds(claims map[string]any, key string) (int64, bool) {
 	return 0, false
 }
 
-// defaultResolver is the production [JWKSResolver]: pull inline JWKs
-// from the client when present, fall back to JWKsURI, surface
-// [ErrJWKSConfigured] when neither is set.
+// defaultResolver is the production [JWKSResolver]: the client's inline
+// JWKs or its JWKsURI, whichever is the one registered; neither or both
+// surfaces [ErrJWKSConfigured].
 type defaultResolver struct {
 	fetcher *Fetcher
 }
@@ -1015,34 +1015,24 @@ func (r *DefaultResolver) ResolveFresh(ctx context.Context, c *store.Client) (*j
 	return r.inner.ResolveFresh(ctx, c)
 }
 
-// Resolve implements [JWKSResolver].
+// Resolve implements [JWKSResolver] under the exactly-one-source rule of
+// [rpjwks.Fetcher.Resolve]: inline JWKs or JWKsURI, never both.
 func (r *defaultResolver) Resolve(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
-	if len(c.JWKs) > 0 {
-		keys, err := parseJWKS(c.JWKs)
-		if err != nil {
-			return nil, err
-		}
-		return keys, nil
-	}
-	if c.JWKsURI != "" {
-		return r.fetcher.Fetch(ctx, c.JWKsURI)
-	}
-	return nil, ErrJWKSConfigured
+	return keySourceResult(r.fetcher.Resolve(ctx, c.JWKs, c.JWKsURI))
 }
 
 // ResolveFresh mirrors [defaultResolver.Resolve] but forces a
 // cache-bypassing refetch for a jwks_uri client. Inline-JWKs clients
 // cannot rotate out-of-band, so their keyset is returned unchanged.
 func (r *defaultResolver) ResolveFresh(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
-	if len(c.JWKs) > 0 {
-		keys, err := parseJWKS(c.JWKs)
-		if err != nil {
-			return nil, err
-		}
-		return keys, nil
+	return keySourceResult(r.fetcher.ResolveFresh(ctx, c.JWKs, c.JWKsURI))
+}
+
+// keySourceResult maps a client with no key source, or both, onto
+// [ErrJWKSConfigured].
+func keySourceResult(keys *josev4.JSONWebKeySet, err error) (*josev4.JSONWebKeySet, error) {
+	if errors.Is(err, rpjwks.ErrKeySource) {
+		return nil, fmt.Errorf("%w: %w", ErrJWKSConfigured, err)
 	}
-	if c.JWKsURI != "" {
-		return r.fetcher.FetchFresh(ctx, c.JWKsURI)
-	}
-	return nil, ErrJWKSConfigured
+	return keys, err
 }

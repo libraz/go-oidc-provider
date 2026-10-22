@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"net"
 
-	josev4 "github.com/go-jose/go-jose/v4"
-
 	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -49,18 +47,6 @@ func IsLocalHostname(host string) bool {
 // [IsLocalHostname].
 func IsPrivateIP(ip net.IP) bool {
 	return netsec.IsPrivateIP(ip)
-}
-
-// parseJWKS decodes an inline keyset under this package's sentinel. It shares
-// [rpjwks.ParseKeySet] with the fetched path, so an inline document is bounded
-// by the same member cap and tolerates the same unrepresentable members
-// (RFC 7517 §5) as one retrieved from a jwks_uri.
-func parseJWKS(body []byte) (*josev4.JSONWebKeySet, error) {
-	keys, err := rpjwks.ParseKeySet(body)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrJWKSFetch, err)
-	}
-	return keys, nil
 }
 
 // classifyKeyResolution marks a server-side key-source fault with

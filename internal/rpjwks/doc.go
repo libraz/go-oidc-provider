@@ -41,7 +41,14 @@
 // # Error taxonomy
 //
 // The calling package keeps its own sentinel: [Config.FetchError] is the error
-// every failure wraps, so `errors.Is(err, jar.ErrJWKSFetch)` and
-// `errors.Is(err, clientencjwks.ErrJWKSFetch)` stay distinct over one shared
-// implementation. A zero [Config.FetchError] falls back to [ErrFetch].
+// every failure wraps, and [Fetcher.WithFetchError] gives each surface a view
+// with its own sentinel over the one shared cache, so
+// `errors.Is(err, jar.ErrJWKSFetch)` and
+// `errors.Is(err, clientencjwks.ErrJWKSFetch)` stay distinct while a jwks_uri
+// is fetched once for all of them. A zero [Config.FetchError] falls back to
+// [ErrFetch].
+//
+// Which source a client's keys come from is decided here too:
+// [Fetcher.Resolve] accepts exactly one of jwks and jwks_uri and refuses the
+// pair with [ErrKeySource].
 package rpjwks

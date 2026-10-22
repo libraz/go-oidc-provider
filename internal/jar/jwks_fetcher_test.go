@@ -147,12 +147,12 @@ func TestParseJWKS_KeepsSupportedKeyBesideUnsupportedOne(t *testing.T) {
 	t.Parallel()
 
 	body := `{"keys":[` + unsupportedMemberJWK + `,{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","kid":"k1"}]}`
-	keys, err := parseJWKS([]byte(body))
+	keys, err := NewFetcher(nil).ParseKeySet([]byte(body))
 	if err != nil {
-		t.Fatalf("parseJWKS: %v", err)
+		t.Fatalf("ParseKeySet: %v", err)
 	}
 	if len(keys.Keys) != 1 || keys.Keys[0].KeyID != "k1" {
-		t.Fatalf("parseJWKS returned kids %v, want [k1]", keyIDs(keys))
+		t.Fatalf("ParseKeySet returned kids %v, want [k1]", keyIDs(keys))
 	}
 }
 
@@ -162,7 +162,7 @@ func TestParseJWKS_KeepsSupportedKeyBesideUnsupportedOne(t *testing.T) {
 func TestParseJWKS_RejectsKeysetWithoutAnySupportedKey(t *testing.T) {
 	t.Parallel()
 
-	if _, err := parseJWKS([]byte(`{"keys":[` + unsupportedMemberJWK + `]}`)); !errors.Is(err, ErrJWKSFetch) {
+	if _, err := NewFetcher(nil).ParseKeySet([]byte(`{"keys":[` + unsupportedMemberJWK + `]}`)); !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}
 }
@@ -171,8 +171,8 @@ func TestParseJWKS_RejectsExcessiveKeyCount(t *testing.T) {
 	t.Parallel()
 
 	body := `{"keys":[` + strings.Repeat(`{"kty":"EC"},`, rpjwks.MaxKeys) + `{"kty":"EC"}]}`
-	if _, err := parseJWKS([]byte(body)); err == nil {
-		t.Fatal("parseJWKS accepted an excessive key count")
+	if _, err := NewFetcher(nil).ParseKeySet([]byte(body)); err == nil {
+		t.Fatal("ParseKeySet accepted an excessive key count")
 	}
 }
 
@@ -363,22 +363,22 @@ func TestJWKSCache_RejectsRFC1918ByDefault(t *testing.T) {
 	}
 }
 
-// TestParseJWKS_EmptyBody confirms parseJWKS rejects an empty body
+// TestParseJWKS_EmptyBody confirms ParseKeySet rejects an empty body
 // rather than silently returning a zero-key set.
 func TestParseJWKS_EmptyBody(t *testing.T) {
 	t.Parallel()
-	if _, err := parseJWKS(nil); !errors.Is(err, ErrJWKSFetch) {
+	if _, err := NewFetcher(nil).ParseKeySet(nil); !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}
 }
 
-// TestParseJWKS_HappyPath confirms parseJWKS accepts a valid body and
+// TestParseJWKS_HappyPath confirms ParseKeySet accepts a valid body and
 // surfaces the parsed key.
 func TestParseJWKS_HappyPath(t *testing.T) {
 	t.Parallel()
-	keys, err := parseJWKS([]byte(jwksJSON))
+	keys, err := NewFetcher(nil).ParseKeySet([]byte(jwksJSON))
 	if err != nil {
-		t.Fatalf("parseJWKS: %v", err)
+		t.Fatalf("ParseKeySet: %v", err)
 	}
 	if len(keys.Keys) != 1 {
 		t.Fatalf("Keys=%d want 1", len(keys.Keys))

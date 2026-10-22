@@ -106,6 +106,14 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   token. RFC 7662 defines the member as the access-token type, and the tag
   told a resource server it could treat the value as an access token.
 
+- A client record carrying both `jwks` and `jwks_uri` is now refused on
+  every surface — request-object verification, `private_key_jwt` and
+  response encryption — instead of verifying inbound requests from the
+  inline set while encryption refused it. RFC 7591 §2 forbids the pair and
+  dynamic registration already rejects it; the change matters only to a
+  bring-your-own store that holds such a record. A `jwks_uri` used by
+  several of those surfaces is now fetched and cached once.
+
 ## [v1.3.0] — 2026-09-28
 
 A conformance and consistency pass in the same spirit as the previous

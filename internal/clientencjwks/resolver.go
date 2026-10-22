@@ -2,6 +2,7 @@ package clientencjwks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -68,6 +69,13 @@ type Config struct {
 	// gate only. See [netsec.Options.BaseTransport].
 	BaseTransport http.RoundTripper
 
+	// Fetcher, when set, is the OP-wide relying-party JWKS fetcher this
+	// resolver reads through, so a jwks_uri shared with request-object and
+	// client-assertion verification is cached and throttled once. Every
+	// other fetch field above is then ignored: the shared fetcher carries
+	// its own posture.
+	Fetcher *rpjwks.Fetcher
+
 	// Policy narrows the (alg, enc) pairs this resolver will build a
 	// recipient for, below the internal/jose allow-list. The zero
 	// value leaves the full allow-list in force. A pair the policy
@@ -90,6 +98,9 @@ type Resolver struct {
 // function applies [Config] defaults for every zero-valued field; a
 // zero-valued [Config] is a valid hardened production posture.
 func New(cfg Config) *Resolver {
+	if cfg.Fetcher != nil {
+		return &Resolver{policy: cfg.Policy, fetcher: cfg.Fetcher.WithFetchError(ErrJWKSFetch)}
+	}
 	return &Resolver{
 		policy: cfg.Policy,
 		fetcher: rpjwks.New(rpjwks.Config{
@@ -122,9 +133,9 @@ func New(cfg Config) *Resolver {
 //     [jose.JWEEnc.IsAllowed]) and must survive
 //     [Config.Policy]; a non-empty value outside either surfaces
 //     [ErrAlgNotAllowed].
-//  3. The JWKS comes from inline JWKs (preferred) or from
-//     JWKsURI through the cache. A client carrying neither shape
-//     surfaces [ErrJWKSConfigured].
+//  3. The JWKS comes from inline JWKs or from JWKsURI through the
+//     cache. A client carrying neither or both surfaces
+//     [ErrJWKSConfigured].
 //  4. The first key with `use=enc` (or empty `use`, per RFC 7517
 //     §4.2 — `use` is OPTIONAL) whose `alg` matches or is
 //     unspecified wins. No matching key surfaces
@@ -163,11 +174,11 @@ func (r *Resolver) ResolveRecipient(
 	}, nil
 }
 
-// resolveJWKS returns the parsed JWKS for client. Inline JWKs win
-// over JWKsURI; both empty surfaces [ErrJWKSConfigured]. Remote
-// fetches go through the package's TTL cache so a busy outbound
-// path collapses repeated lookups to one network round-trip per
-// cache window.
+// resolveJWKS returns the parsed JWKS for client under the
+// exactly-one-source rule of [rpjwks.Fetcher.Resolve]; neither or both
+// surfaces [ErrJWKSConfigured]. Remote fetches go through the TTL cache
+// so a busy outbound path collapses repeated lookups to one network
+// round-trip per cache window.
 //
 // Unlike the inbound verification paths, this one has no
 // forced-refresh trigger: encrypting to a superseded key produces no
@@ -179,19 +190,11 @@ func (r *Resolver) resolveJWKS(
 	ctx context.Context,
 	client *store.Client,
 ) (*josev4.JSONWebKeySet, error) {
-	if len(client.JWKs) > 0 && client.JWKsURI != "" {
-		// DCR rejects the ambiguous pair, but static and legacy stores can
-		// still contain it. Do not silently prefer one source: outbound
-		// encryption requires exactly one key source and must fail closed.
-		return nil, fmt.Errorf("%w: both jwks and jwks_uri are configured", ErrJWKSConfigured)
+	keys, err := r.fetcher.Resolve(ctx, client.JWKs, client.JWKsURI)
+	if errors.Is(err, rpjwks.ErrKeySource) {
+		return nil, fmt.Errorf("%w: %w", ErrJWKSConfigured, err)
 	}
-	if len(client.JWKs) > 0 {
-		return r.fetcher.ParseKeySet(client.JWKs)
-	}
-	if client.JWKsURI != "" {
-		return r.fetcher.Fetch(ctx, client.JWKsURI)
-	}
-	return nil, ErrJWKSConfigured
+	return keys, err
 }
 
 // validateAlgEnc parses raw alg / enc strings against the OP-wide

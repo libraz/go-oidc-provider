@@ -12,7 +12,8 @@ import (
 )
 
 // ErrJWKSNotConfigured is returned by [StoreJWKSResolver] when the
-// looked-up client has neither inline JWKs nor a JWKsURI configured.
+// looked-up client has neither inline JWKs nor a JWKsURI configured, or
+// has both.
 // The verifier maps it to [ErrCredentialsInvalid] so the wire response
 // stays uniform — an attacker cannot tell "client missing JWKs" apart
 // from "wrong signature" by inspecting the response code.
@@ -49,10 +50,10 @@ type freshURLFetcher interface {
 
 // StoreJWKSResolver is a [JWKSResolver] backed by an
 // [store.ClientStore]. It resolves a clientID to the client's
-// inline-registered JWKs ([store.Client.JWKs]). When the client has
-// no inline JWKs but registered a [store.Client.JWKsURI] AND the
-// resolver was constructed with a [URLFetcher], the resolver
-// transparently fetches the keyset from the URL.
+// inline-registered JWKs ([store.Client.JWKs]) or, when the client
+// registered a [store.Client.JWKsURI] instead AND the resolver was
+// constructed with a [URLFetcher], to the keyset fetched from the URL.
+// A client carrying both is refused.
 //
 // It is the resolver the OP wiring layer installs by default so
 // private_key_jwt works out-of-the-box for clients that publish their
@@ -115,10 +116,10 @@ func (r *StoreJWKSResolver) JWKS(ctx context.Context, clientID string) (*josev4.
 		}
 		return nil, fmt.Errorf("%w: %w", errClientLookup, err)
 	}
+	if err := checkKeySource(client); err != nil {
+		return nil, err
+	}
 	if len(client.JWKs) == 0 {
-		if client.JWKsURI == "" {
-			return nil, ErrJWKSNotConfigured
-		}
 		if r.urlFetcher == nil {
 			return nil, ErrJWKSURIUnsupported
 		}
@@ -165,11 +166,11 @@ func (r *StoreJWKSResolver) RefreshJWKS(ctx context.Context, clientID string) (*
 		}
 		return nil, fmt.Errorf("%w: %w", errClientLookup, err)
 	}
+	if err := checkKeySource(client); err != nil {
+		return nil, err
+	}
 	if len(client.JWKs) != 0 {
 		return r.JWKS(ctx, clientID)
-	}
-	if client.JWKsURI == "" {
-		return nil, ErrJWKSNotConfigured
 	}
 	fresh, ok := r.urlFetcher.(freshURLFetcher)
 	if r.urlFetcher == nil || !ok {
@@ -183,4 +184,14 @@ func (r *StoreJWKSResolver) RefreshJWKS(ctx context.Context, clientID string) (*
 		return nil, ErrJWKSNotConfigured
 	}
 	return keys, nil
+}
+
+// checkKeySource applies the OP-wide jwks-vs-jwks_uri rule
+// ([rpjwks.CheckKeySource]): a client with neither, or both, has no key
+// source to verify against.
+func checkKeySource(client *store.Client) error {
+	if err := rpjwks.CheckKeySource(client.JWKs, client.JWKsURI); err != nil {
+		return fmt.Errorf("%w: %w", ErrJWKSNotConfigured, err)
+	}
+	return nil
 }

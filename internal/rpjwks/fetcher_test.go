@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	josev4 "github.com/go-jose/go-jose/v4"
+
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -1099,5 +1101,75 @@ func TestIsKeySourceUnavailable(t *testing.T) {
 		if got := IsKeySourceUnavailable(tc.err); got != tc.want {
 			t.Errorf("%s: IsKeySourceUnavailable=%v want %v", name, got, tc.want)
 		}
+	}
+}
+
+// TestWithFetchError_ViewsShareOneCacheAndThrottle pins that the per-surface
+// views of one fetcher fetch a jwks_uri once per TTL and share one
+// forced-refresh throttle, while each wraps failures in its own sentinel.
+func TestWithFetchError_ViewsShareOneCacheAndThrottle(t *testing.T) {
+	t.Parallel()
+
+	hits := &atomic.Int32{}
+	srv := httptest.NewServer(jwksHandler("", "", hits))
+	defer srv.Close()
+
+	f := newTestFetcher(t, Config{Clock: testClock()})
+	errOther := errors.New("test: other surface")
+	other := f.WithFetchError(errOther)
+	ctx := context.Background()
+	for _, view := range []*Fetcher{f, other} {
+		if _, err := view.Fetch(ctx, srv.URL); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("hits after one Fetch per view = %d, want 1", got)
+	}
+	for _, view := range []*Fetcher{f, other} {
+		if _, err := view.FetchFresh(ctx, srv.URL); err != nil {
+			t.Fatalf("FetchFresh: %v", err)
+		}
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("hits after one FetchFresh per view = %d, want 2 (one throttle)", got)
+	}
+
+	if _, err := other.Fetch(ctx, "http://127.0.0.1:1/unreachable"); !errors.Is(err, errOther) || errors.Is(err, errSentinel) {
+		t.Fatalf("err = %v, want only the view's own sentinel", err)
+	}
+}
+
+// TestResolve_RequiresExactlyOneSource pins the single jwks-vs-jwks_uri rule
+// every surface resolves through: one source resolves, neither or both is
+// refused with ErrKeySource instead of silently preferring one.
+func TestResolve_RequiresExactlyOneSource(t *testing.T) {
+	t.Parallel()
+
+	hits := &atomic.Int32{}
+	srv := httptest.NewServer(jwksHandler("", "", hits))
+	defer srv.Close()
+
+	f := newTestFetcher(t, Config{Clock: testClock()})
+	ctx := context.Background()
+	if _, err := f.Resolve(ctx, []byte(jwksJSON), ""); err != nil {
+		t.Errorf("inline only: %v", err)
+	}
+	if _, err := f.Resolve(ctx, nil, srv.URL); err != nil {
+		t.Errorf("jwks_uri only: %v", err)
+	}
+	for name, resolve := range map[string]func(context.Context, []byte, string) (*josev4.JSONWebKeySet, error){
+		"Resolve":      f.Resolve,
+		"ResolveFresh": f.ResolveFresh,
+	} {
+		if _, err := resolve(ctx, []byte(jwksJSON), srv.URL); !errors.Is(err, ErrKeySource) {
+			t.Errorf("%s both: err = %v, want ErrKeySource", name, err)
+		}
+		if _, err := resolve(ctx, nil, ""); !errors.Is(err, ErrKeySource) {
+			t.Errorf("%s neither: err = %v, want ErrKeySource", name, err)
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("hits = %d, want 1: a refused pair must not reach the network", got)
 	}
 }

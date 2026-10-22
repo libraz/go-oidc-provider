@@ -31,13 +31,14 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// fapiCIBAMaxRequestedExpiry caps the auth_req_id lifetime a client may
-// request under the FAPI-CIBA profile. FAPI-CIBA-ID1 §5 inherits the
-// FAPI 2.0 §3.1.9 ten-minute access-token lifetime cap and applies it
-// to the backchannel-authentication TTL: any requested_expiry above
-// 600s MUST be rejected (not silently clamped) so the wire response
-// reflects the operator-mandated ceiling.
-const fapiCIBAMaxRequestedExpiry = 10 * time.Minute
+// FAPICIBAMaxExpiry caps the auth_req_id lifetime under the FAPI-CIBA
+// profile. FAPI-CIBA-ID1 §5 inherits the FAPI 2.0 §3.1.9 ten-minute
+// access-token lifetime cap and applies it to the backchannel-
+// authentication TTL: any requested_expiry above 600s MUST be rejected
+// (not silently clamped) so the wire response reflects the
+// operator-mandated ceiling. op.New refuses a configured default or
+// maximum above it, so the default path stays under the cap too.
+const FAPICIBAMaxExpiry = 10 * time.Minute
 
 // auditClientAuthnFailure aliases the canonical event constant so
 // the boundary helper and the local emission sites cannot drift.
@@ -1062,7 +1063,7 @@ func parseBindingMessage(w http.ResponseWriter, raw string) (string, bool) {
 //
 // Under FAPI-CIBA the helper additionally enforces the FAPI-CIBA-ID1
 // §5 / FAPI 2.0 §3.1.9 ten-minute lifetime cap as a hard reject:
-// requested_expiry above [fapiCIBAMaxRequestedExpiry] surfaces as
+// requested_expiry above [FAPICIBAMaxExpiry] surfaces as
 // invalid_request rather than being clamped silently. The
 // non-FAPI-CIBA path keeps the legacy clamp posture so vanilla
 // deployments still tolerate over-spec asks against
@@ -1076,7 +1077,7 @@ func parseRequestedExpiry(
 		trimmed := strings.TrimSpace(raw)
 		if trimmed != "" {
 			n, err := strconv.ParseInt(trimmed, 10, 64)
-			if err == nil && n > int64(fapiCIBAMaxRequestedExpiry.Seconds()) {
+			if err == nil && n > int64(FAPICIBAMaxExpiry.Seconds()) {
 				writeError(w, http.StatusBadRequest, errInvalidRequest,
 					"requested_expiry exceeds FAPI-CIBA 10-minute cap")
 				return 0, false
