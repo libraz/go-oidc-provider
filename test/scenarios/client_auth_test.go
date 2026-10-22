@@ -1637,11 +1637,10 @@ func TestScenario_CA_PKJWT_01_AsymmetricAlgsAcceptedHSRejected(t *testing.T) {
 	registerPKJWTClient(t, tk, clientID, kp)
 
 	tokenURL, _ := pkjwtAudiences(tk)
-	now := time.Now().UTC()
 
 	t.Run("ES256_accepted", func(t *testing.T) {
 		t.Parallel()
-		assertion := signedClientAssertion(t, kp, pkjwtClaims(clientID, tokenURL, now))
+		assertion := signedClientAssertion(t, kp, pkjwtClaims(clientID, tokenURL, time.Now().UTC()))
 		resp := postPKJWTAssertion(t, tk, assertion, nil)
 		requireAuthPassedFakeCode(t, resp)
 	})
@@ -1657,7 +1656,7 @@ func TestScenario_CA_PKJWT_01_AsymmetricAlgsAcceptedHSRejected(t *testing.T) {
 		// gate, not go-jose's key-size precondition.
 		secret := []byte(strings.Repeat("a", 64))
 		assertion := signedHS256Assertion(t, secret, kp.kid,
-			pkjwtClaims(clientID, tokenURL, now))
+			pkjwtClaims(clientID, tokenURL, time.Now().UTC()))
 		resp := postPKJWTAssertion(t, tk, assertion, nil)
 		requireInvalidClient(t, resp, "hs256", "alg", "algorithm")
 	})
@@ -1681,12 +1680,11 @@ func TestScenario_CA_PKJWT_02_RequiredClaimsEnforced(t *testing.T) {
 	registerPKJWTClient(t, tk, clientID, kp)
 
 	tokenURL, _ := pkjwtAudiences(tk)
-	now := time.Now().UTC()
 
 	for _, drop := range []string{"iss", "sub", "aud", "jti", "exp"} {
 		t.Run("drop_"+drop, func(t *testing.T) {
 			t.Parallel()
-			claims := pkjwtClaims(clientID, tokenURL, now)
+			claims := pkjwtClaims(clientID, tokenURL, time.Now().UTC())
 			delete(claims, drop)
 			assertion := signedClientAssertion(t, kp, claims)
 			resp := postPKJWTAssertion(t, tk, assertion, nil)
@@ -1712,11 +1710,10 @@ func TestScenario_CA_PKJWT_03_IssEqualsSubEqualsClientID(t *testing.T) {
 	registerPKJWTClient(t, tk, clientID, kp)
 
 	tokenURL, _ := pkjwtAudiences(tk)
-	now := time.Now().UTC()
 
 	t.Run("iss_mismatch", func(t *testing.T) {
 		t.Parallel()
-		claims := pkjwtClaims(clientID, tokenURL, now)
+		claims := pkjwtClaims(clientID, tokenURL, time.Now().UTC())
 		claims["iss"] = "ca-pkjwt-03-other"
 		// client_id is still resolved from the (now mismatching) iss
 		// claim by the parser's unverified-extraction path; the
@@ -1731,7 +1728,7 @@ func TestScenario_CA_PKJWT_03_IssEqualsSubEqualsClientID(t *testing.T) {
 
 	t.Run("sub_mismatch", func(t *testing.T) {
 		t.Parallel()
-		claims := pkjwtClaims(clientID, tokenURL, now)
+		claims := pkjwtClaims(clientID, tokenURL, time.Now().UTC())
 		claims["sub"] = "ca-pkjwt-03-other"
 		assertion := signedClientAssertion(t, kp, claims)
 		resp := postPKJWTAssertion(t, tk, assertion, nil)
@@ -1757,7 +1754,6 @@ func TestScenario_CA_PKJWT_04_AudAcceptanceForms(t *testing.T) {
 	registerPKJWTClient(t, tk, clientID, kp)
 
 	tokenURL, issuer := pkjwtAudiences(tk)
-	now := time.Now().UTC()
 
 	cases := []struct {
 		name string
@@ -1771,7 +1767,7 @@ func TestScenario_CA_PKJWT_04_AudAcceptanceForms(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			claims := pkjwtClaims(clientID, tokenURL, now)
+			claims := pkjwtClaims(clientID, tokenURL, time.Now().UTC())
 			claims["aud"] = tc.aud
 			// jti must be unique across subtests so the JTI store does
 			// not record one and reject the next as a replay.
@@ -1801,11 +1797,10 @@ func TestScenario_CA_PKJWT_05_KeyResolvedFromJWKSWithRefetch(t *testing.T) {
 	registerPKJWTClient(t, tk, clientID, kpA)
 
 	tokenURL, _ := pkjwtAudiences(tk)
-	now := time.Now().UTC()
 
 	t.Run("registered_key_accepted", func(t *testing.T) {
 		t.Parallel()
-		assertion := signedClientAssertion(t, kpA, pkjwtClaims(clientID, tokenURL, now))
+		assertion := signedClientAssertion(t, kpA, pkjwtClaims(clientID, tokenURL, time.Now().UTC()))
 		resp := postPKJWTAssertion(t, tk, assertion, nil)
 		requireAuthPassedFakeCode(t, resp)
 	})
@@ -1816,7 +1811,7 @@ func TestScenario_CA_PKJWT_05_KeyResolvedFromJWKSWithRefetch(t *testing.T) {
 		// Sign with B's private key but never register B; the
 		// resolver returns A's JWKS, the signature verify fails for
 		// every key, and the OP returns generic 401 invalid_client.
-		claims := pkjwtClaims(clientID, tokenURL, now)
+		claims := pkjwtClaims(clientID, tokenURL, time.Now().UTC())
 		claims["jti"] = "ca-pkjwt-05-foreign"
 		assertion := signedClientAssertion(t, kpB, claims)
 		resp := postPKJWTAssertion(t, tk, assertion, nil)
@@ -1963,11 +1958,10 @@ func TestScenario_CA_PKJWT_09_RegisteredAlgPinning(t *testing.T) {
 	registerPKJWTClient(t, tk, clientID, kp)
 
 	tokenURL, _ := pkjwtAudiences(tk)
-	now := time.Now().UTC()
 
 	t.Run("registered_alg_accepted", func(t *testing.T) {
 		t.Parallel()
-		assertion := signedClientAssertion(t, kp, pkjwtClaims(clientID, tokenURL, now))
+		assertion := signedClientAssertion(t, kp, pkjwtClaims(clientID, tokenURL, time.Now().UTC()))
 		resp := postPKJWTAssertion(t, tk, assertion, nil)
 		requireAuthPassedFakeCode(t, resp)
 	})
@@ -1978,7 +1972,7 @@ func TestScenario_CA_PKJWT_09_RegisteredAlgPinning(t *testing.T) {
 		// matches the registered JWK's alg, but no registered key
 		// verifies the signature.
 		other := newPKJWTKeypair(t, "ca-pkjwt-09-other")
-		claims := pkjwtClaims(clientID, tokenURL, now)
+		claims := pkjwtClaims(clientID, tokenURL, time.Now().UTC())
 		claims["jti"] = "ca-pkjwt-09-foreign"
 		assertion := signedClientAssertion(t, other, claims)
 		resp := postPKJWTAssertion(t, tk, assertion, nil)
