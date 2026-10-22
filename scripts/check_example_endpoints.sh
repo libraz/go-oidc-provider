@@ -12,23 +12,20 @@ source "$SCRIPT_DIR/lib.sh"
 cd "$REPO_ROOT"
 
 # The closed set of /oidc/<path> values the OP serves with default
-# endpoint settings. Update this list when op/endpoints.go grows a
-# new default.
-allowed=(
-  "/oidc/auth"
-  "/oidc/token"
-  "/oidc/jwks"
-  "/oidc/userinfo"
-  "/oidc/par"
-  "/oidc/revoke"
-  "/oidc/introspect"
-  "/oidc/end_session"
-  "/oidc/register"
-  "/oidc/backchannel-logout"
-  "/oidc/bc-authorize"
-  "/oidc/device_authorization"
-  "/oidc/interaction"
-)
+# endpoint settings, read from defaultEndpoints() so it cannot drift from
+# op/endpoints.go. The discovery document lives under the issuer path,
+# not the mount prefix, so it is not part of the set.
+allowed=()
+while IFS= read -r p; do
+  allowed+=("/oidc$p")
+done < <(awk '/^func defaultEndpoints\(\)/{in_fn=1; next} in_fn && /^}/{exit}
+  in_fn && match($0, /"\/[^"]*"/) {
+    v = substr($0, RSTART + 1, RLENGTH - 2)
+    if (v !~ /^\/\.well-known\//) print v
+  }' op/endpoints.go)
+if [ "${#allowed[@]}" -eq 0 ]; then
+  die "could not read the default endpoint paths from op/endpoints.go"
+fi
 
 # Build a regex that matches any /oidc/ path reference in the
 # examples. We grep .go files (godoc + log strings) and filter out

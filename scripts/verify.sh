@@ -88,7 +88,12 @@ log "scenariotool shape --check"
 "$SCRIPT_DIR/scenario.sh" shape --check
 
 log "scenariotool advisories --check"
-"$SCRIPT_DIR/scenario.sh" advisories --check >/dev/null
+# The dashboard is only worth printing when the gate fails: it names the
+# drifted and orphaned advisories the one-line failure summary leaves out.
+if ! advisories_out="$("$SCRIPT_DIR/scenario.sh" advisories --check 2>&1)"; then
+  printf '%s\n' "$advisories_out" >&2
+  die "scenariotool advisories --check failed"
+fi
 
 log "stabilitytool --check"
 "$SCRIPT_DIR/stability.sh" --check
