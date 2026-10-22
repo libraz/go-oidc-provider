@@ -110,6 +110,7 @@ A green result from the gate on the left says nothing about the classes on the r
 **`scenario-advisories`**
 
 - A vulnerability class with no advisory. Most defects this project finds are not published advisories.
+- Whether an annotated test fails when the advisory's mitigation is reverted. The gate reads the marker and the enclosing test signature, not the assertion.
 
 **`stability`**
 

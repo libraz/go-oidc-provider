@@ -558,6 +558,7 @@ gates:
     answers: Whether every catalogued CVE/GHSA has a `// Tracks:` annotation and every annotation names a catalogued advisory.
     blind_to:
       - A vulnerability class with no advisory. Most defects this project finds are not published advisories.
+      - Whether an annotated test fails when the advisory's mitigation is reverted. The gate reads the marker and the enclosing test signature, not the assertion.
     drives: [public-api, jar-jarm, dpop, client-auth, store-sql]
 
   - id: stability
