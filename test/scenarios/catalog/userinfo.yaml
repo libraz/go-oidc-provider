@@ -72,8 +72,10 @@ rows:
     spec: RFC 6750 §3.1
     behaviour: |
       A GET /me without an Authorization header and without any
-      other token carrier returns 401 with error=invalid_token and
-      the description "no access token provided".
+      other token carrier returns 401 with a bare
+      WWW-Authenticate: Bearer realm="userinfo" challenge; per RFC 6750
+      §3.1 no error code is sent when the request carried no
+      authentication information.
     status: active
 
   - id: UI-007
@@ -104,7 +106,8 @@ rows:
       When the access_token is otherwise valid but the bound account
       no longer resolves (UserStore returns ErrNotFound), the endpoint
       returns 401 with WWW-Authenticate carrying error=invalid_token
-      and the description "subject unknown".
+      and the generic description "The access token is invalid"; the
+      response does not reveal that the account is gone.
     status: active
 
   - id: UI-010

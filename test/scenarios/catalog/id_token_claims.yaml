@@ -312,7 +312,10 @@ rows:
       When id_token_encrypted_response_alg is configured, the OP
       signs first and then encrypts (nested JWE).
     status: out-of-scope
-    out_of_scope_reason: id_token encryption (id_token_encrypted_response_alg / nested JWE) is intentionally not supported in v1.0. No public option installs an id_token JWE encrypter; the OP only signs with ES256 and never encrypts the resulting JWS.
+    out_of_scope_reason: id_token encryption ships (op.ClientMetadata.IDTokenEncryptedResponseAlg / IDTokenEncryptedResponseEnc, nested JWE with cty=JWT) and is asserted by encryption#ENC-100 / ENC-101; this row duplicates that coverage and is not bound separately.
+    cross_refs:
+      - encryption#ENC-100
+      - encryption#ENC-101
 
   - id: IDT-43
     severity: P0
@@ -365,7 +368,10 @@ rows:
       When userinfo_encrypted_response_alg is configured, the signed
       JWT is encrypted before delivery.
     status: out-of-scope
-    out_of_scope_reason: "userinfo_encrypted_response_alg is not supported. v1.0's /userinfo response writer ships JSON only and there is no JWE encrypter for the userinfo channel, mirroring the same gap as IDT-52."
+    out_of_scope_reason: "Encrypted UserInfo ships (op.ClientMetadata.UserInfoEncryptedResponseAlg) and is asserted by encryption#ENC-110 / ENC-111. This row stays out of scope because, like IDT-52, it describes the response as selected by the metadata field alone, while the OP selects the JWT shape from the request's Accept header."
+    cross_refs:
+      - encryption#ENC-110
+      - encryption#ENC-111
 
   - id: IDT-54
     severity: P0

@@ -230,9 +230,8 @@ func TestScenario_UI_005_UnknownTokenReturnsInvalidToken(t *testing.T) {
 
 // TestScenario_UI_006_NoTokenReturnsInvalidToken sends a /userinfo
 // request with no Authorization header and no other token carrier.
-// RFC 6750 §3.1 requires 401 with error=invalid_token and a
-// description naming the missing token, mediated through the
-// WWW-Authenticate response header.
+// RFC 6750 §3.1 requires 401 with a bare Bearer challenge: no error
+// code is sent when the request carried no authentication information.
 //
 // Spec: RFC 6750 §3.1.
 func TestScenario_UI_006_NoTokenReturnsInvalidToken(t *testing.T) {
@@ -358,8 +357,8 @@ func (u uiMissingSubjectUsers) FindBySubject(ctx context.Context, sub string) (*
 // TestScenario_UI_009_AccountGoneReturnsInvalidToken asserts that when
 // the access token is otherwise valid but the bound account no longer
 // resolves (UserStore returns ErrNotFound), /userinfo returns 401 with
-// WWW-Authenticate carrying error=invalid_token and the description
-// "subject unknown".
+// WWW-Authenticate carrying error=invalid_token and the generic
+// description, without revealing that the account is gone.
 //
 // Spec: OIDC Core §5.3.2 / RFC 6750 §3.1.
 func TestScenario_UI_009_AccountGoneReturnsInvalidToken(t *testing.T) {

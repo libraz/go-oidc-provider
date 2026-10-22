@@ -349,7 +349,7 @@ rows:
       resource (e.g. via a resource-scoped policy decision); both
       paths MUST accept a single resource parameter.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose a per-resource access-token format policy hook. The token format choice (opaque vs JWT) is global (op.WithAccessTokenFormat); there is no resource-scoped 'this resource gets opaque, that one gets JWT' policy decision at the /token boundary. Adding such a hook would need a new public option and a per-resource policy callback shape the library does not define. Embedders that need resource-scoped formats run a downstream gateway that re-projects opaque tokens to JWT (or vice versa) per the resource server's expectation."
+    out_of_scope_reason: "The per-resource format choice is a static map, op.WithAccessTokenFormatPerAudience, keyed by canonical RFC 8707 resource indicator, with op.WithAccessTokenFormat as the fallback for unmapped resources. The row's 'resource-scoped policy decision' wording describes a per-request callback, which the library does not define; the map covers the configured-per-resource case without one."
 
   - id: RI-070
     severity: P1

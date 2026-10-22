@@ -868,15 +868,17 @@ rows:
     severity: P0
     spec: RFC 8705 §2.1.2 / RFC 4514 / RFC 5280 §4.1.2.4
     behaviour: |
-      tls_client_auth_subject_dn comparison normalises both values to
-      RFC 4514 LDAP DN canonical form before comparing; OpenSSL-style
-      ("/CN=...") and RFC 4514 forms ("CN=...,O=..."), attribute
-      order, quoting, escaping, and case-insensitive OID aliases
-      (e.g. E vs EmailAddress) MUST resolve to equal canonical forms.
-      Implementations decode ASN.1 DER and re-encode canonically
-      before byte comparison.
+      tls_client_auth_subject_dn is parsed as an RFC 4514 string over
+      the CN / O / OU / L / ST / C / STREET / POSTALCODE /
+      SERIALNUMBER / DC / UID attribute set and re-encoded to DER, so
+      the registered value may list the attributes in any order. A
+      value outside that form (OpenSSL "/CN=..." style, escapes,
+      multi-valued RDNs, OID aliases such as emailAddress) falls back
+      to a verbatim comparison against the certificate subject's
+      string form.
     notes: |
-      Naive byte comparison is unsafe; canonicalisation is mandatory.
+      A registration in a form the parser does not handle is a
+      permanent mismatch unless it equals the subject string verbatim.
     status: active
     covered_by: internal/mtls.TestVerifyTLSClientAuth_SubjectDN_RFC4514Reorder
 
@@ -912,8 +914,10 @@ rows:
     severity: P1
     spec: RFC 5280 §4.2.1.6 / RFC 5321 §2.4
     behaviour: |
-      tls_client_auth_san_email follows rfc822Name case rules:
-      local-part is case-sensitive, domain is case-insensitive.
+      tls_client_auth_san_email compares the whole address
+      case-insensitively, local-part included (a deliberate superset of
+      RFC 5280 §4.2.1.6, which folds only the domain). A different
+      local-part or a different domain is refused.
     status: active
     covered_by: internal/mtls.TestVerifyTLSClientAuth_SANEmailCaseFold
 

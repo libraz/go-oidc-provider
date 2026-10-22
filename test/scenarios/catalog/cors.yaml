@@ -111,8 +111,7 @@ rows:
       /device/auth behaves identically to /token (gated actual,
       always-open preflight).
     status: out-of-scope
-    out_of_scope_reason: Device authorization flow (RFC 8628) is not implemented; the catalog feature device_code is fully pending and does not have a near-term implementation plan. Revisit when /device/auth lands.
-    notes: device flow not implemented yet.
+    out_of_scope_reason: The device authorization endpoint ships (op.WithDeviceCodeGrant) behind the static Strict-CORS allowlist (op.WithCORSOrigins), not a per-client clientBasedCORS hook; see COR-010. The gated-actual / always-open-preflight split this row asserts needs that hook.
 
   - id: COR-020
     severity: P0

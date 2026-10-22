@@ -477,7 +477,7 @@ rows:
       id_token_encrypted_response_alg) MUST be members of the OP's
       enabledJWA set.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not expose id_token_encrypted_response_alg / userinfo_encrypted_response_alg / request_object_encryption_alg metadata fields — op.ClientMetadata and registrationendpoint.ClientMetadata carry no encryption alg fields, and the JOSE pipeline (internal/jose) does not implement encrypted-response shaping. The 'encryption-related alg fields bounded by enabledJWA' rule has no v1.0 wire path; encryption negotiation itself is OOS pending the JWE encrypter surface."
+    out_of_scope_reason: "The encryption alg / enc metadata fields (id_token_encrypted_response_alg, userinfo_encrypted_response_alg, request_object_encryption_alg and their enc counterparts) are accepted and validated against the closed JWE allow-list, not the enabledJWA signing set; the narrowing is exercised by the registrationendpoint policy tests. This row's enabledJWA wording does not apply to them."
 
   - id: DCR-VAL-10
     severity: P1

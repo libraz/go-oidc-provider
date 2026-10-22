@@ -107,8 +107,7 @@ rows:
       encryption keys alongside signing keys. Keys with use=enc carry
       alg matching their JWE algorithm (e.g. RSA-OAEP, ECDH-ES).
     status: out-of-scope
-    out_of_scope_reason: Token / response / request-object encryption (JWE) is intentionally not implemented in v1.0. The encryption.yaml feature is OOS in its entirety (see encryption.yaml row reasons). With no JWE support, the OP never publishes use=enc keys, so the alg-on-encryption-key negotiation this row asserts cannot be exercised.
-    notes: encryption feature not implemented yet.
+    out_of_scope_reason: The OP publishes use=enc keys when op.WithEncryptionKeyset is configured; there is no encryption feature flag to switch on, so the row's trigger does not exist. No test asserts the published alg of an enc key (ENC-140 covers kid disjointness between the signing and encryption keysets).
 
   - id: JWKS-021
     severity: P1
