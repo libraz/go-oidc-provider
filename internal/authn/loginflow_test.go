@@ -292,7 +292,9 @@ func TestLoginFlowRuleMatch(t *testing.T) {
 	}
 }
 
-// 7. Rule.When panic is recovered and treated as no-match.
+// 7. Rule.When panic is recovered and treated as a match, so the rule's
+// step is still demanded — inside the chain and by the session-reuse
+// check alike.
 func TestLoginFlowRulePanicRecovery(t *testing.T) {
 	t.Parallel()
 
@@ -322,16 +324,22 @@ func TestLoginFlowRulePanicRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("primary continue: %v", err)
 	}
-	// Predicate panicked → no rule matched → grant.
-	if step.Result == nil {
-		t.Fatalf("expected terminal Result after panic recovery, got %+v", step)
+	// Predicate panicked → rule treated as matching → its step runs.
+	if step.Prompt == nil || step.Prompt.Type != "auth.totp" {
+		t.Fatalf("expected the rule's auth.totp prompt after panic recovery, got %+v", step)
 	}
 	if !strings.Contains(logBuf.String(), "rule predicate panicked") {
 		t.Errorf("expected predicate-panic log, got %q", logBuf.String())
 	}
+	reuse := initialState()
+	reuse.Subject = "user-1"
+	if !o.LoginFlowRequiresStep(context.Background(), reuse) {
+		t.Error("LoginFlowRequiresStep = false after a predicate panic, want true")
+	}
 }
 
-// 8. Decider panic falls through to Pass (rules drive the chain).
+// 8. Decider panic is recovered and treated as Deny, in the chain and
+// in the session-reuse check.
 func TestLoginFlowDeciderPanicRecovery(t *testing.T) {
 	t.Parallel()
 
@@ -353,19 +361,21 @@ func TestLoginFlowDeciderPanicRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("primary begin: %v", err)
 	}
-	_, step, err = o.Tick(context.Background(), st, authn.Input{
+	_, _, err = o.Tick(context.Background(), st, authn.Input{
 		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "x"}},
 		Now:        fakeNow(),
 	})
-	if err != nil {
-		t.Fatalf("primary continue: %v", err)
-	}
-	// Decider panicked → Pass → no rules → grant.
-	if step.Result == nil {
-		t.Fatalf("expected terminal Result after decider panic, got %+v", step)
+	// Decider panicked → Deny → the login fails.
+	if !errors.Is(err, authn.ErrRiskDenied) {
+		t.Fatalf("primary continue err = %v, want ErrRiskDenied after a decider panic", err)
 	}
 	if !strings.Contains(logBuf.String(), "decider panicked") {
 		t.Errorf("expected decider-panic log, got %q", logBuf.String())
+	}
+	reuse := initialState()
+	reuse.Subject = "user-1"
+	if !o.LoginFlowRequiresStep(context.Background(), reuse) {
+		t.Error("LoginFlowRequiresStep = false after a decider panic, want true")
 	}
 }
 

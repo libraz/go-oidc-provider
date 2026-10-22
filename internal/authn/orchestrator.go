@@ -224,6 +224,22 @@ func validateAuthenticators(auths []Authenticator) error {
 	return nil
 }
 
+// RequireReauth returns st re-entered at [PhaseAuthn] with
+// [State.ReauthRequired] set, for a chain whose account chooser bound a
+// session that may not serve the request. The factor chain then runs
+// for the subject the chooser bound, exactly as when the flag was set at
+// chain start. Any prompt st had outstanding is withdrawn; the next
+// [Tick] without a submission emits the first factor.
+func RequireReauth(st State) State {
+	st.ReauthRequired = true
+	st.EntryAuthn = nil
+	st.Phase = PhaseAuthn
+	st.ActiveInteractionName = ""
+	st.ActiveInputs = nil
+	st.FactorScratch = nil
+	return st
+}
+
 // Tick advances st by one orchestrator step. The method is pure: no
 // goroutines, no [time.Now()], no network. Tick returns the updated
 // [State] (always — even on error, so the HTTP layer can persist

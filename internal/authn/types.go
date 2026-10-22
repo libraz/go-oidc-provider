@@ -340,6 +340,12 @@ type State struct {
 	// which the orchestrator never sees.
 	ReauthRequired bool `json:"reauth_required,omitempty"`
 
+	// EntryAuthn is the authentication of the session the chain took
+	// its [State.Subject] from. The HTTP layer records it only when that
+	// session may serve the request; [Orchestrator.AuthContext] folds it
+	// into every view of the attempt's authentication while it stands.
+	EntryAuthn *EntryAuthn `json:"entry_authn,omitempty"`
+
 	// ACRValues is the OIDC Core 1.0 §3.1.2.1 acr_values request
 	// parameter forwarded from the authorize request, in arrival order.
 	// The HTTP layer populates it when initialising the chain so a
@@ -519,4 +525,13 @@ var (
 	// [LoginAttemptObserver] feed. Wrapping it keeps the HTTP rendering
 	// unchanged: dispatch on [ErrFactorAbort] still matches.
 	ErrFactorLocked = fmt.Errorf("authn: factor locked: %w", ErrFactorAbort)
+
+	// ErrCredentialRejected marks a terminal factor error that follows an
+	// evaluated, rejected submission: the wrong guess that engaged the
+	// brute-force lock, or the one that made a factor reset required. A
+	// factor wraps it alongside its terminal sentinel so the orchestrator
+	// files that guess as a credential failure, exactly as it files an
+	// [ErrFactorRetry] guess, while a refusal issued before anything was
+	// evaluated stays a plain [ErrFactorLocked].
+	ErrCredentialRejected = errors.New("authn: credential rejected")
 )

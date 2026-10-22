@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -170,17 +173,6 @@ func (f *chooserFreshnessFixture) pickSibling(t *testing.T, extra url.Values) (*
 	return postResp, interactionURL, csrfCookie, interactionCookie
 }
 
-// pickSiblingAndFinish runs pickSibling and then walks the consent
-// ceremony the picked (grant-less) subject triggers, so the assertion
-// lands on the request's terminal outcome.
-func (f *chooserFreshnessFixture) pickSiblingAndFinish(t *testing.T, extra url.Values) *http.Response {
-	t.Helper()
-	postResp, interactionURL, csrfCookie, interactionCookie := f.pickSibling(t, extra)
-	defer postResp.Body.Close()
-	return postConsentWithSessionCookie(t, f.cl, context.Background(), interactionURL, f.tk.Issuer,
-		csrfCookie, interactionCookie, f.entry.Cookie, postResp)
-}
-
 // requireRedirectError asserts the response is a redirect back to the RP
 // carrying the expected OAuth error and no authorization code.
 func requireRedirectError(t *testing.T, resp *http.Response, wantError string) {
@@ -201,10 +193,28 @@ func requireRedirectError(t *testing.T, resp *http.Response, wantError string) {
 	}
 }
 
+// requireCredentialPrompt asserts the chooser submission continued into
+// the credential factor rather than ending the request, and returns the
+// prompt's state_ref.
+func requireCredentialPrompt(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	if resp.StatusCode == http.StatusFound {
+		loc, _ := resp.Location()
+		t.Fatalf("the request ended straight after the chooser (%v); the picked session must be re-authenticated", loc)
+	}
+	env := decodeMap(t, resp)
+	if got, _ := env["type"].(string); got != testkit.SubjectPromptType {
+		t.Fatalf("after the chooser the next prompt was %q; want the credential prompt %q", got, testkit.SubjectPromptType)
+	}
+	stateRef, _ := env["state_ref"].(string)
+	return stateRef
+}
+
 // TestEndToEnd_ChooserPickStaleSession_MaxAgeNotBypassed asserts that
-// picking an account whose authentication predates max_age terminates
-// the request instead of minting a code against the stale session. The
-// entry session satisfies max_age, so nothing at the door catches this.
+// picking an account whose authentication predates max_age re-runs the
+// credential factor for that account instead of minting a code against
+// the stale session. The entry session satisfies max_age, so nothing at
+// the door catches this.
 func TestEndToEnd_ChooserPickStaleSession_MaxAgeNotBypassed(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
@@ -214,18 +224,61 @@ func TestEndToEnd_ChooserPickStaleSession_MaxAgeNotBypassed(t *testing.T) {
 		ACR:      chooserStrongACR,
 		AMR:      []string{"pwd"},
 	})
-	resp := f.pickSiblingAndFinish(t, url.Values{
+	resp, interactionURL, _, interactionCookie := f.pickSibling(t, url.Values{
 		"prompt":  {"select_account"},
 		"max_age": {"60"},
 	})
 	defer resp.Body.Close()
-	requireRedirectError(t, resp, "login_required")
+	stateRef := requireCredentialPrompt(t, resp)
+
+	// Re-authenticating the picked account completes the request.
+	csrfCookie := findCookie(resp.Cookies(), cookie.CSRFProfile.Name)
+	if csrfCookie == nil {
+		t.Fatal("csrf cookie missing on the credential prompt")
+	}
+	raw, err := json.Marshal(map[string]any{
+		"state_ref": stateRef,
+		"values":    map[string]string{testkit.SubjectFieldName: "user-stale"},
+	})
+	if err != nil {
+		t.Fatalf("marshal credential: %v", err)
+	}
+	ctx := context.Background()
+	credReq, err := http.NewRequestWithContext(ctx, http.MethodPost, interactionURL, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("NewRequest credential POST: %v", err)
+	}
+	credReq.Header.Set("Content-Type", "application/json")
+	credReq.Header.Set("Origin", f.tk.Issuer)
+	credReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	credReq.AddCookie(csrfCookie)
+	credReq.AddCookie(interactionCookie)
+	credReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: f.entry.Cookie})
+	credResp, err := f.cl.Do(credReq)
+	if err != nil {
+		t.Fatalf("POST credential: %v", err)
+	}
+	defer credResp.Body.Close()
+	final := postConsentWithSessionCookie(t, f.cl, ctx, interactionURL, f.tk.Issuer,
+		csrfCookie, interactionCookie, f.entry.Cookie, credResp)
+	defer final.Body.Close()
+	if final.StatusCode != http.StatusFound {
+		dump, _ := io.ReadAll(final.Body)
+		t.Fatalf("after re-authentication: status=%d body=%s", final.StatusCode, dump)
+	}
+	loc, err := final.Location()
+	if err != nil {
+		t.Fatalf("Location: %v", err)
+	}
+	if loc.Query().Get("code") == "" {
+		t.Fatalf("re-authenticated pick did not mint a code: %s", loc)
+	}
 }
 
 // TestEndToEnd_ChooserPickWeakSession_ACRNotBypassed is the RFC 9470
 // counterpart: the picked session's recorded acr is outside the
-// requested set, so no code may be issued for it even though the entry
-// session's acr satisfied the request.
+// requested set, so the account is re-authenticated rather than served
+// even though the entry session's acr satisfied the request.
 func TestEndToEnd_ChooserPickWeakSession_ACRNotBypassed(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
@@ -235,12 +288,12 @@ func TestEndToEnd_ChooserPickWeakSession_ACRNotBypassed(t *testing.T) {
 		ACR:      chooserWeakACR,
 		AMR:      []string{"pwd"},
 	})
-	resp := f.pickSiblingAndFinish(t, url.Values{
+	resp, _, _, _ := f.pickSibling(t, url.Values{
 		"prompt":     {"select_account"},
 		"acr_values": {chooserStrongACR},
 	})
 	defer resp.Body.Close()
-	requireRedirectError(t, resp, "unmet_authentication_requirements")
+	requireCredentialPrompt(t, resp)
 }
 
 // TestEndToEnd_ChooserWithPromptLogin_RunsFactorChain asserts that
@@ -269,5 +322,36 @@ func TestEndToEnd_ChooserWithPromptLogin_RunsFactorChain(t *testing.T) {
 	if promptType != testkit.SubjectPromptType {
 		t.Fatalf("after the chooser the next prompt was %q; want the credential prompt %q",
 			promptType, testkit.SubjectPromptType)
+	}
+}
+
+// TestEndToEnd_ChooserPickSignedOutBeforeCompletion pins that a picked
+// session which is gone by the time the ceremony completes is answered
+// the way the entry-session route answers it: a permanent
+// login_required that retires the interaction record, not a retryable
+// server_error.
+func TestEndToEnd_ChooserPickSignedOutBeforeCompletion(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	f := newChooserFreshnessFixture(t, sessions.Login{
+		Subject:  "user-gone",
+		AuthTime: start,
+		ACR:      chooserStrongACR,
+		AMR:      []string{"pwd"},
+	})
+	ctx := context.Background()
+	postResp, interactionURL, csrfCookie, interactionCookie := f.pickSibling(t, url.Values{"prompt": {"select_account"}})
+	defer postResp.Body.Close()
+	if err := f.tk.Store.Sessions().Delete(ctx, f.sibling.SessionID); err != nil {
+		t.Fatalf("Delete sibling session: %v", err)
+	}
+	resp := postConsentWithSessionCookie(t, f.cl, ctx, interactionURL, f.tk.Issuer,
+		csrfCookie, interactionCookie, f.entry.Cookie, postResp)
+	defer resp.Body.Close()
+	requireRedirectError(t, resp, "login_required")
+
+	uid := interactionURL[strings.LastIndex(interactionURL, "/")+1:]
+	if _, err := f.tk.Store.Interactions().Find(ctx, uid); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("interaction record after the refusal: err=%v, want it retired", err)
 	}
 }

@@ -372,29 +372,6 @@ func (o *Orchestrator) findInteractionIndex(name string) int {
 	return -1
 }
 
-// collectAMR returns the registered AMR values across the supplied
-// factor slice. The orchestrator hands the result to the
-// [RiskAssessor] so the assessor sees only the post-filter view.
-func collectAMR(factors []Factor) []string {
-	if len(factors) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(factors))
-	out := make([]string, 0, len(factors))
-	for _, f := range factors {
-		v := f.AMRValue()
-		if v == "" {
-			continue
-		}
-		if _, dup := seen[v]; dup {
-			continue
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
-	}
-	return out
-}
-
 // containsFactor reports whether t is in the supplied slice.
 func containsFactor(slice []FactorType, t FactorType) bool {
 	for _, v := range slice {

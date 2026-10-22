@@ -41,11 +41,11 @@ func resolveGrantACRAMR(
 	if !authCtx.AuthTime.IsZero() {
 		authTime = authCtx.AuthTime
 	}
-	st := authnState
-	if exit.spec().ServesEstablishedSession {
-		st.CompletedStepKinds = nil
+	var completed []string
+	if !exit.spec().ServesEstablishedSession {
+		completed = deps.Authn.AuthContext(authnState).CompletedKinds
 	}
-	reported, err := reportAuthContext(r.Context(), r, deps, req, subject, st, authCtx)
+	reported, err := reportAuthContext(r.Context(), r, deps, req, subject, authnState, completed, authCtx)
 	if err != nil {
 		return "", nil, time.Time{}, err
 	}

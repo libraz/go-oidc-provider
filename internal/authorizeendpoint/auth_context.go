@@ -75,11 +75,12 @@ func sessionAuthContext(active *sessions.Active) grantAuthContext {
 // is never passed through, so an acr one client's request drew from a
 // lax policy cannot reach another client through a session they share.
 //
-// st supplies the steps completed during this attempt and the remote
-// hints; a response served from an established session passes a state
-// with no completed steps, because none of them produced its level. A
-// voluntary request the policy cannot satisfy is reported with no acr;
-// an essential one fails with [errACRUnmet].
+// completed is the step kinds behind recorded's level — the chain's
+// [authn.AuthContext.CompletedKinds] — and nil for a response served
+// from an established session, because no step of this attempt produced
+// that level. st supplies the remote hints. A voluntary request the
+// policy cannot satisfy is reported with no acr; an essential one fails
+// with [errACRUnmet].
 func reportAuthContext(
 	ctx context.Context,
 	r *http.Request,
@@ -87,6 +88,7 @@ func reportAuthContext(
 	req *authorize.Request,
 	subject string,
 	st authn.State,
+	completed []string,
 	recorded grantAuthContext,
 ) (grantAuthContext, error) {
 	reported := grantAuthContext{
@@ -99,7 +101,7 @@ func reportAuthContext(
 	}
 	out := deps.ACRResolver(ctx, ACRResolveInput{
 		RequestedACRValues: requestedACRValues(req),
-		CompletedKinds:     append([]string(nil), st.CompletedStepKinds...),
+		CompletedKinds:     append([]string(nil), completed...),
 		InternalAAL:        authn.AALFromACRURI(recorded.ACR),
 		Subject:            subject,
 		ClientID:           req.ClientID,

@@ -19,8 +19,8 @@ import (
 // Captcha events deliberately bypass these helpers — captcha is
 // out-of-band from the brute-force / amr-history feed. Hard
 // authenticator errors (store outage, codec misconfiguration) also
-// bypass them; observers see only the two paths on which a factor
-// reached a judgement, observeFailure and observeLocked.
+// bypass them; observers see only the paths on which a factor reached
+// a judgement, observeFailure and observeLocked.
 // [classifyFactorError] is what keeps that second exclusion true at
 // every call site.
 
@@ -57,22 +57,32 @@ const (
 	// lock as one more wrong guess cannot tell an ongoing attack from
 	// one the OP has already stopped.
 	credentialLocked
+
+	// credentialRejectedFinal means the factor evaluated the submission,
+	// refused it, and the refusal ended the attempt: the wrong guess
+	// that engaged the lock, or the one that made a reset required. It
+	// is recorded exactly like credentialRejected, but the chain does
+	// not offer a retry.
+	credentialRejectedFinal
 )
 
 // classifyFactorError reads what an [Authenticator.Continue] error says
-// about the credential. Two wrappers mark a judgement: [ErrFactorRetry]
+// about the credential. Three wrappers mark a judgement: [ErrFactorRetry]
 // is the contract an authenticator uses to report "the submission was
-// wrong, let the user try again", and [ErrFactorLocked] is the one it
-// uses to report that the brute-force gate ended the attempt. Everything
-// else (a store outage, a codec misconfiguration, a context deadline) is
-// a chain-fatal error the HTTP layer surfaces unchanged, and it says
+// wrong, let the user try again", [ErrCredentialRejected] marks a
+// terminal error that still followed a wrong guess, and
+// [ErrFactorLocked] alone reports that the brute-force gate refused the
+// attempt before anything was evaluated. Everything else (a store
+// outage, a codec misconfiguration, a context deadline) is a
+// chain-fatal error the HTTP layer surfaces unchanged, and it says
 // nothing about what the user typed.
 //
-// The lock check runs first: [ErrFactorLocked] wraps [ErrFactorAbort],
-// so the two sentinels are disjoint today, but ordering the check this
-// way means a factor that later wraps both still reports the terminal
-// state rather than the retryable one.
+// The terminal checks run first, so a factor that wraps a retry
+// sentinel alongside a terminal one still reports the terminal state.
 func classifyFactorError(err error) credentialVerdict {
+	if errors.Is(err, ErrCredentialRejected) {
+		return credentialRejectedFinal
+	}
 	if errors.Is(err, ErrFactorLocked) {
 		return credentialLocked
 	}
@@ -101,7 +111,7 @@ func (o *Orchestrator) recordFactorFailure(
 	err error,
 ) {
 	switch verdict {
-	case credentialRejected:
+	case credentialRejected, credentialRejectedFinal:
 		o.observeFailure(ctx, st, now, factor)
 	case credentialLocked:
 		o.observeLocked(ctx, st, now, factor)
@@ -152,11 +162,12 @@ func (o *Orchestrator) observeFailure(ctx context.Context, st State, now time.Ti
 // enumeration oracle.
 //
 // Unlike the other two helpers this one does NOT reach [emitAttempt].
-// The login.* / mfa.* pair counts resolved credential submissions, and a
-// locked subject retrying produces refusals that never reached a factor;
-// filing them there would inflate the failed-login metric with events
-// that are not guesses. The lock already has its own operator-facing
-// signal in the lockout counter's own audit event, so nothing is lost.
+// The login.* / mfa.* pair counts evaluated credential submissions, and
+// a locked subject retrying produces refusals that never reached a
+// factor; filing them there would inflate the failed-login metric with
+// events that are not guesses. The guess that engaged the lock is not
+// one of these: it was evaluated, so it arrives as
+// [credentialRejectedFinal] and is reported through observeFailure.
 func (o *Orchestrator) observeLocked(ctx context.Context, st State, now time.Time, factor FactorType) {
 	audit.FanOut(ctx, o.logger, o.auditObservers, audit.Event{
 		ClientID:  st.ClientID,
@@ -181,14 +192,16 @@ func (o *Orchestrator) observeLocked(ctx context.Context, st State, now time.Tim
 // # Which name a factor gets
 //
 // The distinction between a primary factor and an additional one is
-// read off [State.Factors] rather than from a configured position,
-// because the LoginFlow path chooses factors at runtime and has no
-// fixed ordering to consult. The count is authoritative at both call
-// sites, but for opposite reasons: observeSuccess runs after the
-// factor has been appended, so the first success sees exactly one
-// entry, while observeFailure runs before any append, so a primary
-// failure sees none. Nothing else in the orchestrator may reorder
-// those two operations without changing what these events mean.
+// read off [AuthContext.Methods] rather than from a configured
+// position, because the LoginFlow path chooses factors at runtime and
+// has no fixed ordering to consult. An entry session standing in for
+// Primary counts as one method, so a step-up on a reused session is an
+// additional factor. The count is authoritative at both call sites, but
+// for opposite reasons: observeSuccess runs after the factor has been
+// appended, so the first success sees exactly one method, while
+// observeFailure runs before any append, so a primary failure sees
+// none. Nothing else in the orchestrator may reorder those two
+// operations without changing what these events mean.
 //
 // # Subject on the failure path
 //
@@ -201,11 +214,12 @@ func (o *Orchestrator) observeLocked(ctx context.Context, st State, now time.Tim
 // answer the one question a failed-login audit exists for — which
 // account was being guessed at.
 func (o *Orchestrator) emitAttempt(ctx context.Context, st State, factor FactorType, success bool) {
+	methods := o.AuthContext(st).Methods
 	name, level, message := auditevent.AuditLoginSuccess, opaudit.LevelInfo, "primary authentication factor succeeded"
 	switch {
-	case success && len(st.Factors) > 1:
+	case success && methods > 1:
 		name, message = auditevent.AuditMFASuccess, "additional authentication factor succeeded"
-	case !success && len(st.Factors) > 0:
+	case !success && methods > 0:
 		name, level, message = auditevent.AuditMFAFailed, opaudit.LevelWarn, "additional authentication factor failed"
 	case !success:
 		name, level, message = auditevent.AuditLoginFailed, opaudit.LevelWarn, "primary authentication factor failed"

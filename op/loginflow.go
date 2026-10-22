@@ -147,7 +147,10 @@ type LoginContext struct {
 	NewDevice bool
 
 	// CompletedSteps is the [StepKind] history of this attempt in
-	// completion order.
+	// completion order. When the request is served from an existing
+	// session that stands in for [LoginFlow.Primary], Primary's kind
+	// leads the list, so a predicate sees the same history as after a
+	// fresh login with the same steps.
 	CompletedSteps []StepKind
 
 	// ACRValues is the OIDC Core 1.0 §3.1.2.1 acr_values request

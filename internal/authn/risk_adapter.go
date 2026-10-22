@@ -170,14 +170,16 @@ func factorTypesFromStrings(in []string) []FactorType {
 // buildRiskInput composes the risk.Input for a per-tick consult. The
 // orchestrator hands st + the per-call fields through; this helper
 // keeps the snapshot/copy semantics centralised so a future change
-// to the input shape lands in one place.
-func buildRiskInput(st State, lastFactor FactorType) risk.Input {
+// to the input shape lands in one place. AMRSoFar is the attempt's
+// [AuthContext], so a chain standing on the entry session reports that
+// session's methods too.
+func (o *Orchestrator) buildRiskInput(st State, lastFactor FactorType) risk.Input {
 	return risk.Input{
 		Subject:    st.Subject,
 		ClientID:   st.ClientID,
 		RemoteIP:   st.RemoteIP,
 		UserAgent:  st.UserAgent,
-		AMRSoFar:   collectAMR(st.Factors),
+		AMRSoFar:   o.AuthContext(st).AMR,
 		ACRValues:  append([]string(nil), st.ACRValues...),
 		LastFactor: string(lastFactor),
 	}

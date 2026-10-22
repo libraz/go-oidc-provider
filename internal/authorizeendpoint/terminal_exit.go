@@ -167,15 +167,40 @@ type chooserSessionAuthn struct {
 
 func (c chooserSessionAuthn) authContext(ctx context.Context) (grantAuthContext, error) {
 	authCtx, err := c.deps.Sessions.AuthContext(ctx, c.groupID, c.sessionID)
-	if err != nil {
+	return backingSessionAuthContext(
+		authCtx.Subject,
+		grantAuthContext{AuthTime: authCtx.AuthTime, ACR: authCtx.ACR, AMR: authCtx.AMR},
+		err, c.subject, errChooserSubjectMismatch,
+	)
+}
+
+// backingSessionAuthContext maps the read of the session an
+// established-session route is served from onto the route's answer, so
+// the entry-session and chooser routes classify a session the same way.
+// A session that is gone (expired, signed out, or no longer in the
+// cookie) is the permanent [errSessionAuthnUnavailable]; only a store
+// that could not answer is a wrapped fault the caller may retry. A
+// session owned by another subject yields mismatch.
+func backingSessionAuthContext(
+	sessionSubject string,
+	authCtx grantAuthContext,
+	err error,
+	subject string,
+	mismatch error,
+) (grantAuthContext, error) {
+	switch {
+	case errors.Is(err, sessions.ErrCurrentSessionExpired), errors.Is(err, sessions.ErrCookieInvalid):
+		return grantAuthContext{}, errSessionAuthnUnavailable
+	case err != nil:
 		return grantAuthContext{}, fmt.Errorf(
-			"authorizeendpoint: resolve chooser authentication context: %w", err,
+			"authorizeendpoint: resolve session authentication context: %w", err,
 		)
+	case sessionSubject == "":
+		return grantAuthContext{}, errSessionAuthnUnavailable
+	case sessionSubject != subject:
+		return grantAuthContext{}, mismatch
 	}
-	if authCtx.Subject != c.subject {
-		return grantAuthContext{}, errChooserSubjectMismatch
-	}
-	return grantAuthContext{AuthTime: authCtx.AuthTime, ACR: authCtx.ACR, AMR: authCtx.AMR}, nil
+	return authCtx, nil
 }
 
 // errChooserSubjectMismatch signals that the session an account chooser
@@ -199,20 +224,23 @@ func (e entrySessionAuthn) authContext(context.Context) (grantAuthContext, error
 	return currentSessionAuthContext(e.r, e.deps, e.subject)
 }
 
-// chainAuthn reads the authentication a ceremony produced during this
-// attempt: [authn.Aggregate] over the factors that ran. The ACR policy's
-// verdict for the request is applied afterwards, by [reportAuthContext],
-// so the session records the level reached rather than that verdict.
+// chainAuthn reads the authentication a ceremony stands on: the factors
+// that ran during this attempt, together with the entry session's
+// authentication when that session stood in for Primary
+// ([authn.Orchestrator.AuthContext]). The ACR policy's verdict for the
+// request is applied afterwards, by [reportAuthContext], so the session
+// records the level reached rather than that verdict.
 //
 // authTime is the ceremony's own reading.
 type chainAuthn struct {
+	authn    *authn.Orchestrator
 	state    authn.State
 	authTime time.Time
 }
 
 func (c chainAuthn) authContext(context.Context) (grantAuthContext, error) {
-	acr, amr, _ := authn.Aggregate(c.state.Factors)
-	return grantAuthContext{AuthTime: c.authTime, ACR: acr, AMR: amr}, nil
+	ac := c.authn.AuthContext(c.state)
+	return grantAuthContext{AuthTime: c.authTime, ACR: ac.ACR, AMR: ac.AMR}, nil
 }
 
 // interactionExit names the route a completed ceremony took and the
@@ -237,7 +265,7 @@ func interactionExit(
 ) (exitKind, terminalAuthn) {
 	switch {
 	case !noCredentialChainRan(st):
-		return exitInteractiveChain, chainAuthn{state: st, authTime: authTime}
+		return exitInteractiveChain, chainAuthn{authn: deps.Authn, state: st, authTime: authTime}
 	case chooserReentryBound(st):
 		return exitInteractiveChooserSession, chooserSessionAuthn{
 			deps:      deps,

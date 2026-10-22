@@ -248,16 +248,28 @@ func resolveTerminalAuthentication(
 	if !in.Exit.spec().ServesEstablishedSession {
 		return authCtx, nil
 	}
-	if containsString(req.Prompt, interaction.PromptLogin) {
-		return grantAuthContext{}, errStaleAuthentication
-	}
-	if req.MaxAge != nil && authorize.AuthenticationIsStale(authCtx.AuthTime, now, *req.MaxAge) {
-		return grantAuthContext{}, errStaleAuthentication
-	}
-	if acrUnsatisfiedByRequest(authCtx.ACR, req) {
-		return grantAuthContext{}, errACRUnmet
+	if err := sessionMayServe(req, authCtx, now); err != nil {
+		return grantAuthContext{}, err
 	}
 	return authCtx, nil
+}
+
+// sessionMayServe applies the request's prompt=login, max_age and
+// acr_values constraints to an established session's authentication.
+// The door, the chooser pick and the terminal gate all ask it, so the
+// three readings cannot drift. It returns [errStaleAuthentication] or
+// [errACRUnmet], staleness first.
+func sessionMayServe(req *authorize.Request, authCtx grantAuthContext, now time.Time) error {
+	if containsString(req.Prompt, interaction.PromptLogin) {
+		return errStaleAuthentication
+	}
+	if req.MaxAge != nil && authorize.AuthenticationIsStale(authCtx.AuthTime, now, *req.MaxAge) {
+		return errStaleAuthentication
+	}
+	if acrUnsatisfiedByRequest(authCtx.ACR, req) {
+		return errACRUnmet
+	}
+	return nil
 }
 
 // validateTerminalConsent re-evaluates the consent decision against the

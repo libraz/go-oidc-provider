@@ -24,7 +24,7 @@ import (
 // factor-type filter the orchestrator should apply (empty = no filter),
 // the minimum-assurance floor (AAL0 = no floor), plus a denied flag.
 func (o *Orchestrator) runRiskPreFactor(ctx context.Context, st State, now time.Time) ([]FactorType, AAL, bool, error) {
-	in := buildRiskInput(st, "")
+	in := o.buildRiskInput(st, "")
 	in.AuthTime = now
 	res, err := risk.RunPreFactor(ctx, o.riskAssessor, in)
 	if err != nil {
@@ -41,7 +41,7 @@ func (o *Orchestrator) runRiskPreFactor(ctx context.Context, st State, now time.
 // [RiskRequire] at PostFactor is queued by the next PreFactor pass
 // (the orchestrator does not preempt the current factor).
 func (o *Orchestrator) runRiskPostFactor(ctx context.Context, st State, now time.Time, last FactorType) (bool, error) {
-	in := buildRiskInput(st, last)
+	in := o.buildRiskInput(st, last)
 	in.AuthTime = now
 	return risk.RunPostFactor(ctx, o.riskAssessor, in)
 }

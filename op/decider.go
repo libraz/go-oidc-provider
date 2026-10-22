@@ -22,7 +22,9 @@ const AuditDenyReasonKey = "audit.deny.reason"
 // Implementations MUST be safe for concurrent use by multiple
 // goroutines and SHOULD bound the work the Decide method performs:
 // the orchestrator invokes the method on every evaluation pass, so a
-// slow Decider is paid for on every step transition.
+// slow Decider is paid for on every step transition. A Decide call
+// that panics is recovered, logged, and treated as [Deny]: the login
+// fails closed rather than falling through to the rule list.
 type Decider interface {
 	// Decide returns the [Decision] for the supplied [LoginContext].
 	// The orchestrator threads ctx through from the request handler so

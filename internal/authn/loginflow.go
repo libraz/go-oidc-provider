@@ -276,8 +276,9 @@ func containsString(haystack []string, v string) bool {
 // recoverPredicate runs pred(lc) under a recover() so a panicking
 // embedder predicate cannot crash the OP. A panic is logged at error
 // with idx (the rule's position in the LoginFlow) and the predicate is
-// treated as no-match. This mirrors the panic-recovery posture used
-// for [LoginAttemptObserver] fan-out.
+// treated as a match: a rule that could not be evaluated still demands
+// its step, so a faulty predicate never authenticates with fewer
+// factors than the declared policy.
 func recoverPredicate(logger *slog.Logger, idx int, pred func(LoginFlowContext) bool, lc LoginFlowContext) (matched bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -285,7 +286,7 @@ func recoverPredicate(logger *slog.Logger, idx int, pred func(LoginFlowContext) 
 				slog.Int("rule_index", idx),
 				slog.Any("recovered", r),
 			)
-			matched = false
+			matched = true
 		}
 	}()
 	return pred(lc)
@@ -293,17 +294,16 @@ func recoverPredicate(logger *slog.Logger, idx int, pred func(LoginFlowContext) 
 
 // recoverDecider runs decider.Decide(ctx, lc) under a recover() so a
 // panicking embedder decider cannot crash the OP. A panic is logged at
-// error and the call is treated as [LoginFlowPass] so the rule list
-// drives the chain. Returning Pass on panic (rather than Deny) is the
-// minimum-surprise default: a failed adaptive-auth lookup should fall
-// through to declarative rules instead of denying every login.
+// error and the call is treated as [LoginFlowDeny]: a Decider that could
+// not reach a verdict may have been about to deny, so the login fails
+// closed rather than falling through to the rule list.
 func recoverDecider(ctx context.Context, logger *slog.Logger, decider LoginFlowDecider, lc LoginFlowContext) (decision LoginFlowDecision) { //nolint:ireturn,nolintlint // sealed-sum LoginFlowDecision is the contract; concrete dispatch happens at the call site.
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("authn: decider panicked",
 				slog.Any("recovered", r),
 			)
-			decision = LoginFlowPass{}
+			decision = LoginFlowDeny{Reason: "decider panicked"}
 		}
 	}()
 	return decider.Decide(ctx, lc)
@@ -322,7 +322,7 @@ func recoverDecider(ctx context.Context, logger *slog.Logger, decider LoginFlowD
 // predicate that silently behaves differently depending on where in the
 // chain it runs.
 func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
-	completed := append([]string(nil), st.CompletedStepKinds...)
+	completed := o.AuthContext(st).CompletedKinds
 	scopes := append([]string(nil), st.RequestedScopes...)
 	acrValues := append([]string(nil), st.ACRValues...)
 	return LoginFlowContext{
@@ -373,7 +373,7 @@ func (o *Orchestrator) runRiskOnceForLoginFlow(ctx context.Context, st State, fl
 	if st.RiskScoreCached != RiskScoreNone {
 		return st, false, nil
 	}
-	in := buildRiskInput(st, "")
+	in := o.buildRiskInput(st, "")
 	in.AuthTime = st.AuthTime
 	res, err := risk.RunOnceForLoginFlow(ctx, wrapRiskAssessor(flow.risk), in)
 	if err != nil {
@@ -598,9 +598,9 @@ func (o *Orchestrator) loginFlowCaptchaPending(st State, flow *CompiledLoginFlow
 // a factor-shaped rule matches. The HTTP layer calls it before serving
 // an authorization from an existing session, so a rule guarding a
 // client or scope is not skipped just because no credential ceremony
-// was due. A session's earlier factors never count as completing a
-// step, matching a chain started from the session. Risk is not
-// consulted here; risk-driven rules fire only inside the chain.
+// was due. Primary counts as completed through [State.EntryAuthn] and
+// no other step does, matching a chain started from the session. Risk
+// is not consulted here; risk-driven rules fire only inside the chain.
 func (o *Orchestrator) LoginFlowRequiresStep(ctx context.Context, st State) bool {
 	flow := o.cfg.LoginFlow
 	if flow == nil {
@@ -633,7 +633,7 @@ func (o *Orchestrator) LoginFlowRequiresStep(ctx context.Context, st State) bool
 // evalLoginFlowRules walks the compiled rule list in declaration
 // order and dispatches the first matching, not-yet-completed step.
 // A panic in an embedder-supplied predicate is recovered and treated
-// as "does not match" so one bad rule cannot take down the flow.
+// as a match (see [recoverPredicate]).
 func (o *Orchestrator) evalLoginFlowRules(ctx context.Context, st State, flow *CompiledLoginFlow, lc LoginFlowContext, now time.Time) (bool, State, interaction.Step, error) {
 	for i, r := range flow.rules {
 		if containsString(st.CompletedStepKinds, r.then.kind) {

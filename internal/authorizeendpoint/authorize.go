@@ -81,11 +81,7 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		err = store.ErrNotFound
 	}
 	if err != nil {
-		// Treat a missing or unknown client as an unrecoverable
-		// invalid_request: redirect_uri is not yet trusted, so the
-		// response MUST stay pre-redirect (HTML for a browser, JSON
-		// for an API caller).
-		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "client_id is not registered", req.State)
+		renderClientLookupError(w, r, deps, err, req.State)
 		return
 	}
 	if err := req.ValidateEffectiveRequest(client, deps.Scopes, deps.RequestPolicy, deps.ACRValuesSupported); err != nil {
@@ -331,6 +327,19 @@ func dispatchAuthorize(
 	case decisionMint:
 		mintAndRedirect(w, r, deps, req, client, active, hint)
 	}
+}
+
+// renderClientLookupError answers a failed client lookup. redirect_uri
+// is not yet trusted, so the response stays pre-redirect (HTML for a
+// browser, JSON for an API caller). Only an unknown client is
+// invalid_request; a backend that could not answer is server_error, so
+// an outage is not reported as an unregistered client_id.
+func renderClientLookupError(w http.ResponseWriter, r *http.Request, deps resolved, err error, state string) {
+	if errors.Is(err, store.ErrNotFound) {
+		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "client_id is not registered", state)
+		return
+	}
+	renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "client backend unavailable", "")
 }
 
 // applyExitOverrides adjusts the decision-matrix outcome for the
@@ -682,18 +691,12 @@ func buildHintState(
 		promptNone: containsString(req.Prompt, "none"),
 		selectAcct: containsString(req.Prompt, interaction.PromptSelectAccount),
 	}
-	if !out.forceLogin && out.hasSession && req.MaxAge != nil &&
-		authorize.AuthenticationIsStale(active.Session.AuthTime, now, *req.MaxAge) {
-		// The entry gate and the terminal validator share
-		// [authorize.AuthenticationIsStale] so the two readings of
-		// max_age cannot drift — and so neither of them wraps a large
-		// value into a duration and reverses the comparison.
-		out.forceLogin = true
-	}
 	if out.hasSession {
-		out.acrUnsatisfied = acrUnsatisfiedByRequest(active.Session.ACR, req)
-	}
-	if out.hasSession {
+		// The door, the chooser pick and the terminal gate share
+		// [sessionMayServe] so their readings of the request cannot drift.
+		serveErr := sessionMayServe(req, sessionAuthContext(active), now)
+		out.forceLogin = out.forceLogin || errors.Is(serveErr, errStaleAuthentication)
+		out.acrUnsatisfied = errors.Is(serveErr, errACRUnmet)
 		g, err := findGrantForConsentDecision(
 			ctx,
 			deps.Grants,
@@ -1022,6 +1025,7 @@ func initialAuthnState(
 	}
 	return authn.State{
 		ReauthRequired:           hint.reauth,
+		EntryAuthn:               entryAuthn(active, hint.reauth || willRunChooser || addAccount),
 		InteractionUID:           uid,
 		ClientID:                 client.ID,
 		Client:                   projectClientView(client),
@@ -1140,6 +1144,20 @@ func clientIPFromRequest(r *http.Request, deps resolved) netip.Addr {
 // currentSubject returns the active session's subject or empty when there
 // is no session. The helper exists so the call sites stay free of nil
 // handling boilerplate.
+// entryAuthn records the authentication of the session a chain takes
+// its subject from. A chain that must re-authenticate, or that may bind
+// another account (the chooser, add-account), records none.
+func entryAuthn(active *sessions.Active, mayNotServe bool) *authn.EntryAuthn {
+	if mayNotServe || active == nil || active.Session == nil || active.Session.Subject == "" {
+		return nil
+	}
+	return &authn.EntryAuthn{
+		Subject: active.Session.Subject,
+		ACR:     active.Session.ACR,
+		AMR:     slices.Clone(active.Session.AMR),
+	}
+}
+
 func currentSubject(active *sessions.Active) string {
 	if active == nil || active.Session == nil {
 		return ""
@@ -1185,7 +1203,7 @@ func mintAndRedirect(
 		return
 	}
 	reported, err := reportAuthContext(r.Context(), r, deps, req, active.Session.Subject,
-		authn.State{}, sessionAuthContext(active))
+		authn.State{}, nil, sessionAuthContext(active))
 	if err != nil {
 		code, description, _ := terminalRefusal(err)
 		emitAuthorizeError(w, r, deps, req, code, description)

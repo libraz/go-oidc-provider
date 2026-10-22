@@ -208,6 +208,9 @@ func dispatchTick(
 		Submission: submission,
 		Now:        now,
 	})
+	if err == nil && chooserJustBound(authnState, next) {
+		next, step, err = reauthenticateChooserPick(r, deps, state, next, step, now)
+	}
 	if err != nil {
 		failTick(w, r, deps, rec, state, next, now, err)
 		return
@@ -645,6 +648,40 @@ func chooserReentryBound(st authn.State) bool {
 		st.ChooserGroupID != "" && st.ChooserSelectedSessionID != ""
 }
 
+// chooserJustBound reports that the tick from before to after is the one
+// in which the account chooser bound a session to stand in for the
+// factor chain.
+func chooserJustBound(before, after authn.State) bool {
+	return !before.ChooserBoundSubject && !after.ReauthRequired && chooserReentryBound(after)
+}
+
+// reauthenticateChooserPick holds the session the account chooser just
+// bound to the constraints the door applied to the entry session. A
+// picked session that may not serve the request sends the chain through
+// the factors for its subject instead of letting the terminal gate
+// refuse the request. A session that cannot be read is left to the
+// terminal gate, which classifies it.
+func reauthenticateChooserPick(
+	r *http.Request,
+	deps resolved,
+	state authorize.RequestState,
+	st authn.State,
+	step interaction.Step,
+	now time.Time,
+) (authn.State, interaction.Step, error) {
+	picked := chooserSessionAuthn{
+		deps:      deps,
+		groupID:   st.ChooserGroupID,
+		sessionID: st.ChooserSelectedSessionID,
+		subject:   st.Subject,
+	}
+	authCtx, err := picked.authContext(r.Context())
+	if err != nil || sessionMayServe(state.Library.ToRequest(), authCtx, now) == nil {
+		return st, step, nil
+	}
+	return deps.Authn.Tick(r.Context(), authn.RequireReauth(st), authn.Input{Now: now})
+}
+
 // currentSessionAuthContext reads the authentication context off the
 // browser session the completing request carries, for a chain that
 // authenticated nobody itself and is therefore served from that
@@ -660,18 +697,10 @@ func chooserReentryBound(st authn.State) bool {
 // the transient case apart and leave the record in place for a retry.
 func currentSessionAuthContext(r *http.Request, deps resolved, subject string) (grantAuthContext, error) {
 	active, err := resolveSessionWithoutTouch(r, deps)
-	if err != nil {
-		if !errors.Is(err, sessions.ErrCurrentSessionExpired) && !errors.Is(err, sessions.ErrCookieInvalid) {
-			return grantAuthContext{}, fmt.Errorf(
-				"authorizeendpoint: resolve session authentication context: %w", err,
-			)
-		}
-		active = nil
-	}
-	if active == nil || active.Session == nil || active.Session.Subject != subject {
-		return grantAuthContext{}, errSessionAuthnUnavailable
-	}
-	return sessionAuthContext(active), nil
+	return backingSessionAuthContext(
+		currentSubject(active), sessionAuthContext(active),
+		err, subject, errSessionAuthnUnavailable,
+	)
 }
 
 // errSessionAuthnUnavailable signals that a chain which ran no
@@ -750,12 +779,12 @@ func terminateInteraction(
 		failTerminalAuthorization(w, r, deps, rec, req, err)
 		return
 	}
-	reportState := authnState
-	if exit.spec().ServesEstablishedSession {
-		// Steps run this attempt did not produce the session's level.
-		reportState.CompletedStepKinds = nil
+	var completed []string
+	if !exit.spec().ServesEstablishedSession {
+		// Steps run this attempt did not produce an established session's level.
+		completed = deps.Authn.AuthContext(authnState).CompletedKinds
 	}
-	reported, err := reportAuthContext(r.Context(), r, deps, req, result.Subject, reportState, authCtx)
+	reported, err := reportAuthContext(r.Context(), r, deps, req, result.Subject, authnState, completed, authCtx)
 	if err != nil {
 		failTerminalAuthorization(w, r, deps, rec, req, err)
 		return

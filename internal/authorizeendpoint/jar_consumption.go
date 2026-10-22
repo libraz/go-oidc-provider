@@ -93,10 +93,13 @@ func resolveJARRequestIfNeeded(
 		return nil, true, true
 	}
 	client, err := deps.Clients.GetClient(ctx, clientID)
-	if err != nil || client == nil {
+	if err == nil && client == nil {
 		// A nil client alongside a nil error violates the store contract;
 		// a client the backend cannot produce is not a registered one.
-		renderJARError(w, r, deps, errInvalidRequest, "client_id is not registered", state)
+		err = store.ErrNotFound
+	}
+	if err != nil {
+		renderClientLookupError(w, r, deps, err, state)
 		return nil, true, true
 	}
 	raw := requestObject
