@@ -983,6 +983,8 @@ func TestRegister_TrailingJSONDocument_Rejected(t *testing.T) {
 		{name: "double-object", body: `{"redirect_uris":["https://rp.test.invalid/cb"]} {"client_name":"ignored"}`},
 		{name: "object-then-array", body: `{"redirect_uris":["https://rp.test.invalid/cb"]}[]`},
 		{name: "object-then-newline-object", body: "{\"redirect_uris\":[\"https://rp.test.invalid/cb\"]}\n{\"x\":1}"},
+		{name: "stray-close-brace", body: `{"redirect_uris":["https://rp.test.invalid/cb"]}}`},
+		{name: "stray-close-bracket", body: `{"redirect_uris":["https://rp.test.invalid/cb"]}]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

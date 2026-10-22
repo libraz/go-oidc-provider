@@ -229,10 +229,23 @@ func TestResolve_RejectsTrailingDataAfterJSONArray(t *testing.T) {
 	}
 }
 
+// TestResolve_RejectsStrayClosingBracketAfterArray pins the shape a
+// More()-based check misses: a lone `]` after the array.
+func TestResolve_RejectsStrayClosingBracketAfterArray(t *testing.T) {
+	t.Parallel()
+	body := []byte(`["https://rp.example/cb"]]`)
+	srv := newJSONServer(t, body, "application/json")
+	r := resolverWithServer(t, srv)
+	_, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"})
+	if !errors.Is(err, ErrSectorMalformed) {
+		t.Fatalf("err = %v, want wrap of ErrSectorMalformed", err)
+	}
+}
+
 func TestResolve_RejectsSecondJSONValueAfterArray(t *testing.T) {
 	t.Parallel()
 	// Two concatenated JSON values: the decoder accepts the first
-	// (the array) and dec.More() must catch the second rather than
+	// (the array) and the trailing-data check must catch the second rather than
 	// silently discarding it.
 	body := []byte(`["https://rp.example/cb"]` + `["https://evil.example/cb"]`)
 	srv := newJSONServer(t, body, "application/json")

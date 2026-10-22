@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // maxSubmissionBytes caps the body size [JSONDriver.ParseSubmission]
@@ -115,9 +117,9 @@ func (JSONDriver) ParseSubmission(r *http.Request) (FormSubmission, error) {
 	// Reject any trailing JSON document. Multiple objects in one
 	// body is a parser-confusion vector — a reverse proxy / WAF /
 	// audit sink that scans the full body sees a different shape
-	// than the OP consumed. Mirrors the guard applied in
-	// [httpx.DecodeJSON] and the DCR metadata parser.
-	if dec.More() {
+	// than the OP consumed. Shares [httpx.AtEOF] with httpx.DecodeJSON
+	// and the DCR metadata parser.
+	if !httpx.AtEOF(dec) {
 		return FormSubmission{}, ErrSubmissionMalformed
 	}
 	return body, nil

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -104,7 +105,7 @@ func decodeArray(raw string) ([]map[string]any, error) {
 	if err := dec.Decode(&elems); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotArray, err.Error())
 	}
-	if dec.More() {
+	if !httpx.AtEOF(dec) {
 		return nil, ErrNotArray
 	}
 	if elems == nil {

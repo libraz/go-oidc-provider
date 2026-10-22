@@ -82,10 +82,18 @@ func DecodeJSON(r *http.Request, dst any) error {
 	}
 	// Reject any trailing data — multiple JSON documents in one body is a
 	// parser-confusion vector.
-	if dec.More() {
+	if !AtEOF(dec) {
 		return ErrInvalidBody
 	}
 	return nil
+}
+
+// AtEOF reports whether only whitespace follows the value dec last decoded.
+// [json.Decoder.More] is not a substitute: it reports false before a stray
+// `}` or `]`, so `{"a":1}}` would pass as a single document.
+func AtEOF(dec *json.Decoder) bool {
+	var trailing json.RawMessage
+	return errors.Is(dec.Decode(&trailing), io.EOF)
 }
 
 // readBounded reads up to limit bytes from body and reports

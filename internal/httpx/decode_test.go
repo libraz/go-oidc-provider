@@ -3,6 +3,7 @@ package httpx_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -135,6 +136,50 @@ func TestDecodeJSON_RejectsTrailingDocs(t *testing.T) {
 	var p loginPayload
 	if err := httpx.DecodeJSON(r, &p); !errors.Is(err, httpx.ErrInvalidBody) {
 		t.Errorf("err=%v want ErrInvalidBody (trailing doc)", err)
+	}
+}
+
+// TestDecodeJSON_RejectsStrayClosingDelimiter pins the trailing-data
+// shapes json.Decoder.More misses: a lone `}` or `]` after the value.
+func TestDecodeJSON_RejectsStrayClosingDelimiter(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{`{"type":"x"}}`, `{"type":"x"}]`, `{"type":"x"} x`} {
+		r := newRequestForm(t, "application/json", body)
+		var p loginPayload
+		if err := httpx.DecodeJSON(r, &p); !errors.Is(err, httpx.ErrInvalidBody) {
+			t.Errorf("body %q: err=%v want ErrInvalidBody", body, err)
+		}
+	}
+	r := newRequestForm(t, "application/json", "{\"type\":\"x\"} \n\t")
+	var p loginPayload
+	if err := httpx.DecodeJSON(r, &p); err != nil {
+		t.Errorf("trailing whitespace: err=%v want nil", err)
+	}
+}
+
+// TestAtEOF_ClassifiesTrailingBytes pins the helper every trailing-data
+// guard shares: whitespace alone is the end of the document, anything
+// else, including a stray closing delimiter, is not.
+func TestAtEOF_ClassifiesTrailingBytes(t *testing.T) {
+	t.Parallel()
+
+	for body, want := range map[string]bool{
+		`["x"]`:      true,
+		"[\"x\"] \n": true,
+		`["x"]]`:     false,
+		`{"a":1}}`:   false,
+		`{"a":1}]`:   false,
+		`{"a":1}{}`:  false,
+	} {
+		dec := json.NewDecoder(strings.NewReader(body))
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			t.Fatalf("%q: first Decode: %v", body, err)
+		}
+		if got := httpx.AtEOF(dec); got != want {
+			t.Errorf("%q: AtEOF=%v want %v", body, got, want)
+		}
 	}
 }
 

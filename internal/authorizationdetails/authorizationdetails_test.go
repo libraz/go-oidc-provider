@@ -49,6 +49,8 @@ func TestCheck_StructuralRejections(t *testing.T) {
 		"not array (object)": {`{"type":"payment_initiation"}`, authorizationdetails.ErrNotArray},
 		"not array (string)": {`"x"`, authorizationdetails.ErrNotArray},
 		"trailing garbage":   {`[{"type":"payment_initiation"}] junk`, authorizationdetails.ErrNotArray},
+		"stray ]":            {`[{"type":"payment_initiation"}]]`, authorizationdetails.ErrNotArray},
+		"stray }":            {`[{"type":"payment_initiation"}]}`, authorizationdetails.ErrNotArray},
 		"json null":          {`null`, authorizationdetails.ErrNotArray},
 		"empty array":        {`[]`, authorizationdetails.ErrEmpty},
 		"null element":       {`[null]`, authorizationdetails.ErrElementNotObject},

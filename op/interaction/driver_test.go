@@ -97,6 +97,8 @@ func TestJSONDriver_ParseSubmissionRejectsTrailingJSON(t *testing.T) {
 		{name: "double-object", body: `{"state_ref":"ref-1","values":{}} {"state_ref":"ref-2","values":{}}`},
 		{name: "object-then-array", body: `{"state_ref":"ref-1","values":{}}[]`},
 		{name: "object-then-newline-object", body: "{\"state_ref\":\"ref-1\",\"values\":{}}\n{\"x\":1}"},
+		{name: "stray-close-brace", body: `{"state_ref":"ref-1","values":{}}}`},
+		{name: "stray-close-bracket", body: `{"state_ref":"ref-1","values":{}}]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

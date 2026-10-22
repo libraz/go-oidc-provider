@@ -125,6 +125,8 @@ func TestParseClaimsRequest_Malformed(t *testing.T) {
 	}{
 		{"truncated", `{"userinfo":{`},
 		{"trailing_garbage", `{"userinfo":{}}{}`},
+		{"stray_close_brace", `{"userinfo":{}}}`},
+		{"stray_close_bracket", `{"userinfo":{}}]`},
 		{"top_level_array", `[]`},
 		{"top_level_string", `"oops"`},
 		{"location_array", `{"userinfo":[]}`},

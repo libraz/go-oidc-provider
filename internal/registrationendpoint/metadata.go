@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/clone"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // ClientMetadata is the internal-package mirror of op.ClientMetadata.
@@ -194,11 +195,8 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 	// Reject any trailing JSON document. Multiple objects in one
 	// body is a parser-confusion vector — a reverse proxy / WAF /
 	// audit sink that scans the full body sees a different shape
-	// than the OP consumed. Mirrors [httpx.DecodeJSON]'s `dec.More()`
-	// policy; DCR predates the shared helper so the check is
-	// duplicated rather than imported.
-	var trailing json.RawMessage
-	if err := dec.Decode(&trailing); err != io.EOF {
+	// than the OP consumed. Shares [httpx.AtEOF] with httpx.DecodeJSON.
+	if !httpx.AtEOF(dec) {
 		return ClientMetadata{}, metadataExtras{}, errors.New("registrationendpoint: decode metadata: trailing JSON document")
 	}
 	m := ClientMetadata{

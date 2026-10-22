@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
@@ -408,13 +409,11 @@ func parseSectorDocument(body []byte) ([]string, error) {
 	if err := dec.Decode(&uris); err != nil {
 		return nil, fmt.Errorf("%w: %w (%w)", ErrSectorFetch, ErrSectorMalformed, err)
 	}
-	// A pure JSON array document has nothing left in the stream after
-	// the top-level array closes. dec.More reports true when trailing
-	// bytes follow (e.g. a second JSON value, or non-JSON garbage
-	// appended after the array); OIDC Core 1.0 §5 defines the sector
-	// document as exactly one JSON array, so trailing data makes the
-	// document malformed even though the array itself decoded cleanly.
-	if dec.More() {
+	// OIDC Core 1.0 §5 defines the sector document as exactly one JSON
+	// array, so anything but whitespace after it (a second value, a stray
+	// `]`, non-JSON garbage) makes the document malformed even though the
+	// array itself decoded cleanly.
+	if !httpx.AtEOF(dec) {
 		return nil, fmt.Errorf("%w: %w (trailing data after JSON array)", ErrSectorFetch, ErrSectorMalformed)
 	}
 	return uris, nil

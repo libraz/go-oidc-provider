@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"math"
 	"slices"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 const maxClaimsRequestBytes = 16 * 1024
@@ -151,7 +153,7 @@ func ParseClaimsRequest(raw string) (*ClaimsRequest, error) {
 	if err := dec.Decode(&top); err != nil {
 		return nil, ErrClaimsRequestInvalid
 	}
-	if dec.More() {
+	if !httpx.AtEOF(dec) {
 		// trailing garbage after the object — reject.
 		return nil, ErrClaimsRequestInvalid
 	}
