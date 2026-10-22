@@ -148,10 +148,13 @@ func issueRefreshToken(ctx context.Context, deps Deps, in refreshIssuance) (stri
 		ACR:                  in.AuthCtx.ACR,
 		AMR:                  append([]string(nil), in.AuthCtx.AMR...),
 		AuthorizationDetails: cloneAuthorizationDetails(in.AuthCtx.AuthorizationDetails),
+		Claims:               cloneClaimsMap(in.AuthCtx.EncodedClaims),
 		AccessTokenExtra:     in.AccessTokenExtra,
-		Nonce:                in.Nonce,
-		DPoPJKT:              refreshDPoPJKT(in.Client, in.Binding.DPoPJKT),
-		MTLSCertThumbprint:   in.Binding.MTLSThumbprint,
+
+		AuthorizationRecorded: true,
+		Nonce:                 in.Nonce,
+		DPoPJKT:               refreshDPoPJKT(in.Client, in.Binding.DPoPJKT),
+		MTLSCertThumbprint:    in.Binding.MTLSThumbprint,
 	})
 	if err != nil {
 		return "", err

@@ -180,11 +180,11 @@ func validateTerminalGrant(deps resolved, req *authorize.Request, in terminalAut
 // terminalClaimsCurrent reports whether the grant records *this*
 // request's OIDC Core 1.0 §5.5 claims payload.
 //
-// The token and userinfo endpoints read the projection off the grant, so
-// a code that hangs off a grant carrying an older request's payload
-// answers with the older projection and reports nothing about it. A nil
-// payload is not a mismatch: "absent" leaves whatever the subject
-// previously agreed to in place, matching the upsert path's rule that a
+// The code carries its own request's payload, which is what the token and
+// userinfo endpoints project; the grant's copy is what they fall back to
+// for a code or token written without one, so it is kept current with
+// the latest request. A nil payload is not a mismatch: "absent" leaves
+// the grant's payload in place, matching the upsert path's rule that a
 // nil payload does not erase the grant's claims.
 func terminalClaimsCurrent(deps resolved, req *authorize.Request, g *store.Grant) bool {
 	if !deps.ClaimsParameterEnabled {

@@ -317,6 +317,17 @@ type Exchanged struct {
 	// layer's view of "when".
 	ConsumedAt time.Time
 
+	// AuthTime, ACR, AMR, AuthorizationDetails and Claims are the
+	// per-authorization state recorded on the code; AuthorizationRecorded
+	// reports whether they were written (see
+	// [store.AuthorizationCode.AuthorizationRecorded]).
+	AuthTime              time.Time
+	ACR                   string
+	AMR                   []string
+	AuthorizationDetails  []map[string]any
+	Claims                map[string]any
+	AuthorizationRecorded bool
+
 	// IssuedAt is the wall-clock time at which the authorization code was
 	// first persisted (its [store.AuthorizationCode.CreatedAt]). The token
 	// endpoint uses it as the iat for the grant-tombstone mint-refusal
@@ -424,6 +435,13 @@ func project(rec *store.AuthorizationCode) *Exchanged {
 		DPoPJKT:          rec.DPoPJKT,
 		HadCodeChallenge: rec.CodeChallenge != "",
 		IssuedAt:         rec.CreatedAt,
+
+		AuthTime:              rec.AuthTime,
+		ACR:                   rec.ACR,
+		AMR:                   append([]string(nil), rec.AMR...),
+		AuthorizationDetails:  rec.AuthorizationDetails,
+		Claims:                rec.Claims,
+		AuthorizationRecorded: rec.AuthorizationRecorded,
 	}
 	if rec.ConsumedAt != nil {
 		out.ConsumedAt = *rec.ConsumedAt

@@ -172,5 +172,7 @@ func cloneOpaqueAccessToken(rec *store.OpaqueAccessToken) *store.OpaqueAccessTok
 	out := *rec
 	out.Scope = slices.Clone(rec.Scope)
 	out.AMR = slices.Clone(rec.AMR)
+	out.AuthorizationDetails = cloneObjectArray(rec.AuthorizationDetails)
+	out.Claims = cloneMap(rec.Claims)
 	return &out
 }

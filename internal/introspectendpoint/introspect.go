@@ -313,7 +313,14 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 		return response{}, false
 	}
 	out := projectRefreshToken(rec, publicSubject, deps.Issuer)
-	out.AuthorizationDetails = grantAuthorizationDetails(ctx, deps, rec.GrantID)
+	var g *store.Grant
+	if rec.Origin != store.RefreshOriginCustomGrant {
+		g = findGrant(ctx, deps, rec.GrantID)
+	}
+	out.AuthorizationDetails = tokens.ResolveAuthorization(
+		tokens.Authorization{AuthorizationDetails: rec.AuthorizationDetails},
+		rec.AuthorizationRecorded, g, rec.ClientID,
+	).AuthorizationDetails
 	return out, true
 }
 
@@ -357,23 +364,25 @@ func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClien
 		return response{}, false
 	}
 	out := projectOpaqueAccessToken(view, deps.Issuer)
-	out.AuthorizationDetails = grantAuthorizationDetails(ctx, deps, rec.GrantID)
+	out.AuthorizationDetails = tokens.ResolveAuthorization(
+		tokens.Authorization{AuthorizationDetails: rec.AuthorizationDetails},
+		rec.AuthorizationRecorded, findGrant(ctx, deps, rec.GrantID), rec.ClientID,
+	).AuthorizationDetails
 	return out, true
 }
 
-// grantAuthorizationDetails reads the RFC 9396 authorization_details the
-// grant was issued with, for the introspection echo (RFC 9396 §9). A nil
-// store, an empty grantID, or any lookup failure yields nil so the field
-// is simply omitted — introspection never fails on the details echo.
-func grantAuthorizationDetails(ctx context.Context, deps Deps, grantID string) []map[string]any {
+// findGrant reads the grant a token descends from, for the RFC 9396 §9
+// authorization_details echo. A nil store, an empty grantID, or any
+// lookup failure yields nil — introspection never fails on the echo.
+func findGrant(ctx context.Context, deps Deps, grantID string) *store.Grant {
 	if deps.Grants == nil || grantID == "" {
 		return nil
 	}
 	g, err := deps.Grants.Find(ctx, grantID)
-	if err != nil || g == nil {
+	if err != nil {
 		return nil
 	}
-	return g.AuthorizationDetails
+	return g
 }
 
 // projectIntrospectionSubject converts the OP-internal raw subject on

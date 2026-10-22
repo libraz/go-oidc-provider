@@ -324,6 +324,7 @@ type accessTokenWire struct {
 	Confirmation         map[string]string `json:"cnf"`
 	Gid                  string            `json:"gid,omitempty"`
 	AuthorizationDetails []map[string]any  `json:"authorization_details,omitempty"`
+	UserInfoClaims       map[string]any    `json:"userinfo_claims,omitempty"`
 }
 
 // decodeAccessTokenClaims parses payload into an [AccessTokenClaims].
@@ -362,6 +363,7 @@ func decodeAccessTokenClaims(payload []byte) (*AccessTokenClaims, error) {
 		Confirmation:         w.Confirmation,
 		GrantID:              w.Gid,
 		AuthorizationDetails: w.AuthorizationDetails,
+		UserInfoClaims:       w.UserInfoClaims,
 	}
 	return out, nil
 }

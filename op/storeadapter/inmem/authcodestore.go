@@ -132,6 +132,9 @@ func cloneAuthCode(c *store.AuthorizationCode) *store.AuthorizationCode {
 	out := *c
 	out.Scope = slices.Clone(c.Scope)
 	out.Resource = c.Resource
+	out.AMR = slices.Clone(c.AMR)
+	out.AuthorizationDetails = cloneObjectArray(c.AuthorizationDetails)
+	out.Claims = cloneMap(c.Claims)
 	if c.ConsumedAt != nil {
 		t := *c.ConsumedAt
 		out.ConsumedAt = &t

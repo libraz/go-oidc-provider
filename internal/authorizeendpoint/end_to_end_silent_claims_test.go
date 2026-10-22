@@ -58,11 +58,11 @@ func TestEndToEnd_SilentMintHonoursTheRequestsClaimsParameter(t *testing.T) {
 	}
 }
 
-// TestEndToEnd_SilentMintDoesNotEraseAPreviouslyRecordedProjection is
-// the complement: a request that names no claims leaves the payload the
-// subject already agreed to in place, matching the rule the interactive
-// upsert follows.
-func TestEndToEnd_SilentMintDoesNotEraseAPreviouslyRecordedProjection(t *testing.T) {
+// TestEndToEnd_SilentMintProjectsOnlyItsOwnClaimsRequest is the
+// complement: a code carries the claims request of the authorization that
+// issued it, so a silent pass that names no claims does not release what
+// an earlier request on the same grant asked for.
+func TestEndToEnd_SilentMintProjectsOnlyItsOwnClaimsRequest(t *testing.T) {
 	t.Parallel()
 
 	f := newE2EFlow(t, "rp-silent-claims-keep")
@@ -82,7 +82,7 @@ func TestEndToEnd_SilentMintDoesNotEraseAPreviouslyRecordedProjection(t *testing
 	if code == "" {
 		t.Fatalf("prompt=none was not served from the existing grant: %s", loc)
 	}
-	if got := f.exchange(t, code)["email"]; got != "silent@example.com" {
-		t.Errorf("id_token email=%v want silent@example.com; an absent claims parameter erased the projection", got)
+	if got, ok := f.exchange(t, code)["email"]; ok {
+		t.Errorf("id_token email=%v; a code without a claims parameter released an earlier request's claims", got)
 	}
 }

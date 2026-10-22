@@ -864,6 +864,7 @@ func cloneRefresh(t *store.RefreshToken) *store.RefreshToken {
 	out.Resource = t.Resource
 	out.AMR = slices.Clone(t.AMR)
 	out.AuthorizationDetails = cloneObjectArray(t.AuthorizationDetails)
+	out.Claims = cloneMap(t.Claims)
 	out.AccessTokenExtra = cloneMap(t.AccessTokenExtra)
 	if t.ParentID != nil {
 		p := *t.ParentID

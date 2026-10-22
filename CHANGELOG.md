@@ -114,6 +114,43 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   bring-your-own store that holds such a record. A `jwks_uri` used by
   several of those surfaces is now fetched and cached once.
 
+- Authorization codes, refresh chains and access tokens now carry the
+  `auth_time`, `acr`, `amr`, `authorization_details` and OIDC claims request
+  of the authorization that issued them, instead of reading the one
+  per-(subject, client) grant every later authorization rewrites. A code
+  redeemed after a second authorization by the same user and client used to
+  report that later authentication in its id_token, release the claims the
+  later request asked for, and pick up `authorization_details` it never
+  granted — on the token response, the access token, every refresh and
+  introspection. A Grant Management `replace` still withdraws details from
+  live tokens; nothing a later authorization adds reaches them. A token
+  exchange's tokens no longer report the `authorization_details` of the
+  subject_token client's grant at introspection, and opaque access tokens
+  now report `acr` and `amr` at introspection. An authorization served
+  silently without a `claims` parameter no longer releases the claims an
+  earlier request on the same grant asked for.
+
+### Changed
+
+- `store.AuthorizationCode`, `store.RefreshToken` and
+  `store.OpaqueAccessToken` gain fields for the per-authorization state
+  above, marked by `AuthorizationRecorded`. A row written without them, or by
+  a bring-your-own store that does not persist them, falls back to the grant
+  as before, so such a store keeps working with the earlier behaviour.
+
+- SQL adapter: `oidc_authorization_codes`, `oidc_refresh_tokens` and
+  `oidc_opaque_access_tokens` gain columns, and `Store.Migrate` refuses to
+  start without them. Apply the `ALTER TABLE` statements for your engine in
+  [`op/storeadapter/sql/schema/MIGRATIONS.md`](op/storeadapter/sql/schema/MIGRATIONS.md)
+  before upgrading. Older binaries may keep writing these tables alongside
+  the new one; their rows read as predating the columns.
+
+- JWT access tokens issued from an authorization code or its refresh chain
+  carry a `userinfo_claims` private claim: the userinfo member of the OIDC
+  claims request, or `{}` when it requested none. `/userinfo` releases claims
+  from it; resource servers should ignore it. The name is reserved, so a
+  custom grant can no longer set it through its extra claims.
+
 ## [v1.3.0] — 2026-09-28
 
 A conformance and consistency pass in the same spirit as the previous

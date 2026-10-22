@@ -1129,6 +1129,20 @@ func upsertGrant(
 	}
 }
 
+// codeAuthorizationDetails is the authorization_details a code records:
+// what this request granted, or the grant's resulting set after a Grant
+// Management replace / merge, which address the grant as a unit. The
+// shared grant's union is never copied onto an ordinary code, so details
+// granted by one authorization do not reach another's tokens.
+func codeAuthorizationDetails(req *authorize.Request, g *store.Grant) []map[string]any {
+	switch req.GrantManagementAction {
+	case gmActionReplace, gmActionMerge:
+		return cloneGrantAuthorizationDetails(g.AuthorizationDetails)
+	default:
+		return cloneGrantAuthorizationDetails(req.AuthorizationDetails)
+	}
+}
+
 // reuseOrCreateGrant is the ordinary (non-Grant-Management) path: it
 // amends the existing (subject, client) grant, and mints one only when
 // the subject has none for this client.

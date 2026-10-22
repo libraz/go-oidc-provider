@@ -374,7 +374,7 @@ func attemptDurableCompletion(
 		return recoverCompletionAfterTxError(ctx, tx, deps, req, intent, err)
 	}
 	now := deps.now().UTC()
-	code := completionAuthorizationCode(req, intent, grant.ID, now, deps.AuthCodeTTL)
+	code := completionAuthorizationCode(req, intent, grant, now, deps.AuthCodeTTL)
 	if err := txDeps.Codes.Save(ctx, code); err != nil {
 		return recoverCompletionAfterTxError(
 			ctx,
@@ -432,7 +432,7 @@ func recoverCompletionAfterTxError(
 func completionAuthorizationCode(
 	req *authorize.Request,
 	intent *authorize.CompletionIntent,
-	grantID string,
+	grant *store.Grant,
 	now time.Time,
 	ttl time.Duration,
 ) *store.AuthorizationCode {
@@ -440,7 +440,7 @@ func completionAuthorizationCode(
 		ID:                  intent.CodeID,
 		ClientID:            req.ClientID,
 		Subject:             intent.Subject,
-		GrantID:             grantID,
+		GrantID:             grant.ID,
 		RedirectURI:         req.RedirectURI,
 		Scope:               slices.Clone(intent.GrantScope),
 		Resource:            req.Resource,
@@ -449,8 +449,16 @@ func completionAuthorizationCode(
 		Nonce:               req.Nonce,
 		State:               req.State,
 		DPoPJKT:             req.DPoPJKT,
-		ExpiresAt:           now.Add(ttl),
-		CreatedAt:           now,
+
+		AuthTime:              intent.AuthTime,
+		ACR:                   intent.ACR,
+		AMR:                   slices.Clone(intent.AMR),
+		AuthorizationDetails:  codeAuthorizationDetails(req, grant),
+		Claims:                authorize.EncodeClaimsToGrant(req.Claims),
+		AuthorizationRecorded: true,
+
+		ExpiresAt: now.Add(ttl),
+		CreatedAt: now,
 	}
 }
 

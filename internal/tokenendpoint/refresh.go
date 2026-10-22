@@ -470,9 +470,10 @@ func preflightRefreshScope(w http.ResponseWriter, granted, requested []string) (
 
 // preflightRefreshAuthorizationDetails resolves and narrows the RFC 9396
 // authorization_details before Exchange consumes the predecessor refresh
-// token. The live Grant is authoritative while it carries details; the
-// refresh-token snapshot remains the fallback for missing or deliberately
-// sparse grants. The caller performs this read before opening any write
+// token. The chain's own snapshot is authoritative and its live own-consent
+// grant only narrows it, so a Grant Management replace withdraws details
+// while a later authorization on the same grant never adds any (see
+// [chainAuthorizationDetails]). The caller performs this read before opening any write
 // transaction and passes the resulting immutable selection through to
 // issuance.
 //
@@ -510,23 +511,23 @@ func preflightRefreshAuthorizationDetails(
 		return nil, true
 	}
 
-	granted := cloneAuthorizationDetails(rec.AuthorizationDetails)
+	var grant *store.Grant
 	if rec.GrantID != "" && deps.Grants != nil && grantIsOwnConsent(rec.Origin) {
-		grant, findErr := deps.Grants.Find(ctx, rec.GrantID)
+		var findErr error
+		grant, findErr = deps.Grants.Find(ctx, rec.GrantID)
 		switch {
 		case findErr == nil && grant == nil:
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return nil, false
-		case findErr == nil && len(grant.AuthorizationDetails) > 0:
-			granted = cloneAuthorizationDetails(grant.AuthorizationDetails)
-		case findErr == nil, errors.Is(findErr, store.ErrNotFound):
-			// A sparse or missing grant uses the refresh-token snapshot.
+		case findErr == nil:
+		case errors.Is(findErr, store.ErrNotFound):
+			grant = nil
 		default:
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return nil, false
 		}
 	}
-
+	granted := chainAuthorizationDetails(grant, rec.ClientID, rec.AuthorizationDetails, rec.AuthorizationRecorded)
 	return reduceAuthorizationDetails(w, requested, granted)
 }
 
@@ -538,11 +539,10 @@ func preflightRefreshAuthorizationDetails(
 // effective details selected before BeginTx are still valid at the write's
 // serialization point.
 //
-// A Grant with no authorization_details (or a grant that disappeared) keeps
-// the refresh-token snapshot fallback used by the preflight. A populated live
-// Grant is authoritative: for an explicit request, the requested subset must
-// still be present; for an omitted request, the complete live set must match
-// the effective set selected before Consume. A mismatch is a 400 rejection,
+// The selection is recomputed with the preflight's rule against the grant
+// as it stands now: for an explicit request, the requested subset must
+// still be present; for an omitted request, the complete narrowed set must
+// match the effective set selected before Consume. A mismatch is a 400 rejection,
 // and the caller rolls the transaction back so the predecessor remains
 // redeemable for a retry against the current Grant.
 func revalidateRefreshAuthorizationDetails(
@@ -570,10 +570,7 @@ func revalidateRefreshAuthorizationDetails(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
-	granted := exchanged.AuthorizationDetails
-	if grant != nil && len(grant.AuthorizationDetails) > 0 {
-		granted = grant.AuthorizationDetails
-	}
+	granted := chainAuthorizationDetails(grant, exchanged.ClientID, exchanged.AuthorizationDetails, exchanged.AuthorizationRecorded)
 	want, ok := reduceAuthorizationDetails(w, requested, granted)
 	if !ok {
 		return false
@@ -914,7 +911,7 @@ func issueRefreshResponse(
 		authCtx.AuthTime,
 		binding,
 		authorizationDetails,
-		accessTokenOverrides{Extra: exchanged.AccessTokenExtra, ForceJWT: refreshMintPinnedJWT(exchanged)},
+		accessTokenOverrides{Extra: exchanged.AccessTokenExtra, ForceJWT: refreshMintPinnedJWT(exchanged), Authorization: &authCtx},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -953,7 +950,7 @@ func issueRefreshResponse(
 		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
 		GrantID:              chainGrantIDForResponse(deps, exchanged),
 	}
-	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedWithAuthorizationDetails(exchanged, authorizationDetails), binding, &response); err != nil {
+	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedForRotation(exchanged, authCtx, authorizationDetails), binding, &response); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
@@ -1024,7 +1021,7 @@ func reissueGraceAccessToken(
 		authCtx.AuthTime,
 		binding,
 		response.AuthorizationDetails,
-		accessTokenOverrides{Extra: exchanged.AccessTokenExtra, ForceJWT: refreshMintPinnedJWT(exchanged)},
+		accessTokenOverrides{Extra: exchanged.AccessTokenExtra, ForceJWT: refreshMintPinnedJWT(exchanged), Authorization: &authCtx},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -1036,37 +1033,54 @@ func reissueGraceAccessToken(
 	writeSuccess(w, *response)
 }
 
-func refreshExchangedWithAuthorizationDetails(exchanged *refresh.Exchanged, details []map[string]any) *refresh.Exchanged {
+// refreshExchangedForRotation stamps the successor with the
+// per-authorization state this rotation resolved, so a chain written before
+// the state was recorded stops consulting its grant from here on.
+func refreshExchangedForRotation(exchanged *refresh.Exchanged, authCtx authContext, details []map[string]any) *refresh.Exchanged {
 	if exchanged == nil {
 		return nil
 	}
 	out := *exchanged
+	out.AuthTime = timeFromUnix(authCtx.AuthTime)
+	out.ACR = authCtx.ACR
+	out.AMR = append([]string(nil), authCtx.AMR...)
 	out.AuthorizationDetails = cloneAuthorizationDetails(details)
+	out.Claims = cloneClaimsMap(authCtx.EncodedClaims)
+	out.AuthorizationRecorded = true
 	return &out
 }
 
+// refreshAuthContext resolves the per-authorization state of the chain the
+// consumed token belongs to: what the chain recorded at its root, with
+// its own-consent grant only narrowing authorization_details or standing
+// in for a row written without the state.
 func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Exchanged) authContext {
-	var out authContext
-	if grantIsOwnConsent(exchanged.Origin) {
-		out = lookupAuthContext(ctx, deps, exchanged.GrantID)
+	own := tokens.Authorization{
+		AuthTime:             exchanged.AuthTime,
+		ACR:                  exchanged.ACR,
+		AMR:                  exchanged.AMR,
+		AuthorizationDetails: exchanged.AuthorizationDetails,
+		Claims:               exchanged.Claims,
 	}
-	if !exchanged.AuthTime.IsZero() {
-		out.AuthTime = exchanged.AuthTime.Unix()
+	g := chainGrant(ctx, deps, exchanged.Origin, exchanged.GrantID)
+	return authContextOf(deps, tokens.ResolveAuthorization(own, exchanged.AuthorizationRecorded, g, exchanged.ClientID))
+}
+
+// chainAuthorizationDetails is the authorization_details a chain may still
+// issue: its own snapshot narrowed by its live grant, per
+// [tokens.ResolveAuthorization].
+func chainAuthorizationDetails(g *store.Grant, clientID string, snapshot []map[string]any, recorded bool) []map[string]any {
+	own := tokens.Authorization{AuthorizationDetails: cloneAuthorizationDetails(snapshot)}
+	return tokens.ResolveAuthorization(own, recorded, g, clientID).AuthorizationDetails
+}
+
+// chainGrant returns the grant a chain may consult: its own consent, never
+// the grant a custom-grant chain descends from.
+func chainGrant(ctx context.Context, deps Deps, origin store.RefreshTokenOrigin, grantID string) *store.Grant {
+	if !grantIsOwnConsent(origin) {
+		return nil
 	}
-	if exchanged.ACR != "" {
-		out.ACR = exchanged.ACR
-	}
-	if len(exchanged.AMR) > 0 {
-		out.AMR = append([]string(nil), exchanged.AMR...)
-	}
-	// Grant Management replace/merge mutates the grant, not historical
-	// refresh-token records. While the grant exists it is the source of
-	// truth for RFC 9396 authorization_details; the record snapshot is
-	// only a fallback for custom grants or legacy/missing-grant chains.
-	if len(out.AuthorizationDetails) == 0 && len(exchanged.AuthorizationDetails) > 0 {
-		out.AuthorizationDetails = cloneAuthorizationDetails(exchanged.AuthorizationDetails)
-	}
-	return out
+	return findGrant(ctx, deps, grantID)
 }
 
 // refreshIDTokenInput collects the parameters
@@ -1189,6 +1203,9 @@ func rotateRefreshToken(
 		AMR:                  append([]string(nil), exchanged.AMR...),
 		AuthorizationDetails: cloneAuthorizationDetails(exchanged.AuthorizationDetails),
 		AccessTokenExtra:     cloneClaimsMap(exchanged.AccessTokenExtra),
+		Claims:               cloneClaimsMap(exchanged.Claims),
+
+		AuthorizationRecorded: exchanged.AuthorizationRecorded,
 	}
 	if len(deps.RefreshRetryEncryptionKeys) == 0 {
 		token, err := issuer.Issue(ctx, issue)

@@ -23,6 +23,16 @@ func newAuthCode(now time.Time, id string) *store.AuthorizationCode {
 	}
 }
 
+// recordedClaimsRequest is a claims request in the [store.Grant.Claims]
+// encoding, with the JSON shapes a backend must round-trip: nested
+// objects, a null member and a string value.
+func recordedClaimsRequest() map[string]any {
+	return map[string]any{"request": map[string]any{
+		"id_token": map[string]any{"email": map[string]any{"essential": true}},
+		"userinfo": map[string]any{"phone_number": nil, "locale": map[string]any{"value": "ja"}},
+	}}
+}
+
 func newRefresh(now time.Time, id string, parent *string) *store.RefreshToken {
 	return &store.RefreshToken{
 		ID:                   id,

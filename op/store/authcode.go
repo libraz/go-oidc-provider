@@ -74,6 +74,30 @@ type AuthorizationCode struct {
 	// itself binds the access token).
 	DPoPJKT string
 
+	// AuthTime, ACR and AMR describe the authentication the
+	// authorization was served from, as reported to this client. The
+	// token endpoint copies them onto the id_token and the refresh
+	// chain.
+	AuthTime time.Time
+	ACR      string
+	AMR      []string
+
+	// AuthorizationDetails is the RFC 9396 authorization_details this
+	// authorization granted. Nil when it granted none.
+	AuthorizationDetails []map[string]any
+
+	// Claims is the OIDC Core 1.0 §5.5 claims request of this
+	// authorization, in the encoding of [Grant.Claims]. Nil when the
+	// request carried no claims parameter.
+	Claims map[string]any
+
+	// AuthorizationRecorded is true when AuthTime, ACR, AMR,
+	// AuthorizationDetails and Claims were written at issuance. False
+	// on a row persisted before these fields existed or by a backend
+	// that does not store them; the token endpoint then takes them from
+	// the code's grant instead.
+	AuthorizationRecorded bool
+
 	// ExpiresAt is the wall-clock time at which the code becomes invalid
 	// regardless of consumption status. Backends MAY garbage-collect rows
 	// where ExpiresAt is in the past.

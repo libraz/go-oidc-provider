@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -68,6 +69,9 @@ func opaqueATSaveFind(t *testing.T, f Factory) {
 	at := requireOpaqueAccessTokens(t, b.Store)
 	ctx := context.Background()
 	tok := newOpaqueAT(b.Now(), "oat-1", "grant-1")
+	tok.AuthorizationDetails = []map[string]any{{"type": "payment", "amount": "100"}}
+	tok.Claims = recordedClaimsRequest()
+	tok.AuthorizationRecorded = true
 	if err := at.Save(ctx, tok); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -86,6 +90,11 @@ func opaqueATSaveFind(t *testing.T, f Factory) {
 	}
 	if got.Revoked {
 		t.Fatal("Revoked = true on fresh record")
+	}
+	if !got.AuthorizationRecorded || !reflect.DeepEqual(got.AuthorizationDetails, tok.AuthorizationDetails) ||
+		!reflect.DeepEqual(got.Claims, tok.Claims) {
+		t.Fatalf("authorization state mismatch: recorded=%v details=%v claims=%v",
+			got.AuthorizationRecorded, got.AuthorizationDetails, got.Claims)
 	}
 }
 

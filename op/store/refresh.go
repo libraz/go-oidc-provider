@@ -70,6 +70,18 @@ type RefreshToken struct {
 	// responses and copies it onto JWT access tokens.
 	AuthorizationDetails []map[string]any
 
+	// Claims is the OIDC Core 1.0 §5.5 claims request of the
+	// authorization that rooted this chain, in the encoding of
+	// [Grant.Claims]. Refresh-derived id_tokens and access tokens
+	// project it. Nil when the request carried no claims parameter.
+	Claims map[string]any
+
+	// AuthorizationRecorded is true when Claims was written with the
+	// chain. False on a row persisted before the field existed or by a
+	// backend that does not store it; readers then take the claims
+	// request from the chain's grant instead.
+	AuthorizationRecorded bool
+
 	// AccessTokenExtra carries non-standard JWT access-token claims that
 	// must survive refresh rotation. It is primarily used by custom grants
 	// such as token exchange to preserve delegation metadata ("act").

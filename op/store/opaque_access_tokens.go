@@ -62,6 +62,23 @@ type OpaqueAccessToken struct {
 	// introspection can project it.
 	AuthTime time.Time
 
+	// AuthorizationDetails is the RFC 9396 authorization_details the
+	// token was issued with, echoed by introspection. Nil when the
+	// token carries none.
+	AuthorizationDetails []map[string]any
+
+	// Claims is the OIDC Core 1.0 §5.5 claims request of the
+	// authorization the token descends from, in the encoding of
+	// [Grant.Claims]. /userinfo projects it. Nil when the request
+	// carried no claims parameter.
+	Claims map[string]any
+
+	// AuthorizationRecorded is true when AuthorizationDetails and Claims
+	// were written at issuance. False on a row persisted before these
+	// fields existed or by a backend that does not store them; readers
+	// then take both from the token's grant instead.
+	AuthorizationRecorded bool
+
 	// DPoPJKT is the RFC 7638 SHA-256 thumbprint of the DPoP key the
 	// access token is bound to (RFC 9449 §6.1). The encoding mirrors
 	// [RefreshToken.DPoPJKT]: base64url, no padding. Empty means the

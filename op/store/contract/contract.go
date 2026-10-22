@@ -490,6 +490,12 @@ func authCodeSaveFind(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
 	code := newAuthCode(b.Now(), "ac-1")
+	code.AuthTime = b.Now().Add(-time.Minute)
+	code.ACR = "urn:acr:pwd"
+	code.AMR = []string{"pwd", "otp"}
+	code.AuthorizationDetails = []map[string]any{{"type": "payment", "amount": "100"}}
+	code.Claims = recordedClaimsRequest()
+	code.AuthorizationRecorded = true
 	if err := b.Store.AuthorizationCodes().Save(ctx, code); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -499,6 +505,15 @@ func authCodeSaveFind(t *testing.T, f Factory) {
 	}
 	if got.ID != "ac-1" || got.ConsumedAt != nil {
 		t.Fatalf("unexpected code: %+v", got)
+	}
+	// The per-authorization state round-trips; a backend that drops it
+	// makes the token endpoint fall back to the shared grant.
+	if !got.AuthorizationRecorded || !got.AuthTime.Equal(code.AuthTime) || got.ACR != code.ACR ||
+		!reflect.DeepEqual(got.AMR, code.AMR) ||
+		!reflect.DeepEqual(got.AuthorizationDetails, code.AuthorizationDetails) ||
+		!reflect.DeepEqual(got.Claims, code.Claims) {
+		t.Fatalf("authorization state mismatch: got recorded=%v auth_time=%v acr=%q amr=%v details=%v claims=%v",
+			got.AuthorizationRecorded, got.AuthTime, got.ACR, got.AMR, got.AuthorizationDetails, got.Claims)
 	}
 }
 
@@ -619,6 +634,8 @@ func refreshSaveFindConsume(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
 	rt := newRefresh(b.Now(), "rt-1", nil)
+	rt.Claims = recordedClaimsRequest()
+	rt.AuthorizationRecorded = true
 	if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -670,6 +687,10 @@ func assertRefreshContext(t *testing.T, got, want *store.RefreshToken) {
 	}
 	if !reflect.DeepEqual(got.AccessTokenExtra, want.AccessTokenExtra) {
 		t.Fatalf("AccessTokenExtra=%v want %v", got.AccessTokenExtra, want.AccessTokenExtra)
+	}
+	if got.AuthorizationRecorded != want.AuthorizationRecorded || !reflect.DeepEqual(got.Claims, want.Claims) {
+		t.Fatalf("AuthorizationRecorded=%v Claims=%v want %v %v",
+			got.AuthorizationRecorded, got.Claims, want.AuthorizationRecorded, want.Claims)
 	}
 }
 

@@ -184,6 +184,12 @@ type IssueInput struct {
 	AuthorizationDetails []map[string]any
 	AccessTokenExtra     map[string]any
 
+	// Claims is the claims request of the authorization that rooted
+	// the chain; AuthorizationRecorded marks it as written (see
+	// [store.RefreshToken.AuthorizationRecorded]).
+	Claims                map[string]any
+	AuthorizationRecorded bool
+
 	// DPoPJKT is the RFC 7638 thumbprint of the DPoP key the
 	// associated access token is bound to (RFC 9449 §6.1). Non-empty
 	// values are persisted on the [store.RefreshToken] record; the
@@ -238,25 +244,27 @@ func (i *Issuer) Prepare(in IssueInput) (string, *store.RefreshToken, error) {
 	}
 	now := i.clock().UTC()
 	rec := &store.RefreshToken{
-		ID:                   id,
-		ClientID:             in.ClientID,
-		Subject:              in.Subject,
-		SubjectPublic:        in.SubjectPublic,
-		GrantID:              in.GrantID,
-		Scope:                slices.Clone(in.Scope),
-		Resource:             in.Resource,
-		Origin:               in.Origin,
-		AuthTime:             in.AuthTime,
-		ACR:                  in.ACR,
-		AMR:                  slices.Clone(in.AMR),
-		AuthorizationDetails: cloneObjectArray(in.AuthorizationDetails),
-		AccessTokenExtra:     cloneClaims(in.AccessTokenExtra),
-		ParentID:             cloneStringPtr(in.ParentID),
-		ExpiresAt:            now.Add(i.ttl),
-		CreatedAt:            now,
-		DPoPJKT:              in.DPoPJKT,
-		MTLSCertThumbprint:   in.MTLSCertThumbprint,
-		Nonce:                in.Nonce,
+		ID:                    id,
+		ClientID:              in.ClientID,
+		Subject:               in.Subject,
+		SubjectPublic:         in.SubjectPublic,
+		GrantID:               in.GrantID,
+		Scope:                 slices.Clone(in.Scope),
+		Resource:              in.Resource,
+		Origin:                in.Origin,
+		AuthTime:              in.AuthTime,
+		ACR:                   in.ACR,
+		AMR:                   slices.Clone(in.AMR),
+		AuthorizationDetails:  cloneObjectArray(in.AuthorizationDetails),
+		AccessTokenExtra:      cloneClaims(in.AccessTokenExtra),
+		Claims:                cloneClaims(in.Claims),
+		AuthorizationRecorded: in.AuthorizationRecorded,
+		ParentID:              cloneStringPtr(in.ParentID),
+		ExpiresAt:             now.Add(i.ttl),
+		CreatedAt:             now,
+		DPoPJKT:               in.DPoPJKT,
+		MTLSCertThumbprint:    in.MTLSCertThumbprint,
+		Nonce:                 in.Nonce,
 	}
 	return id, rec, nil
 }
@@ -424,6 +432,11 @@ type Exchanged struct {
 	AuthorizationDetails []map[string]any
 	AccessTokenExtra     map[string]any
 
+	// Claims and AuthorizationRecorded are copied from the consumed
+	// record so the rotation carries them forward.
+	Claims                map[string]any
+	AuthorizationRecorded bool
+
 	// ConsumedAt is the wall-clock time at which the store committed
 	// the consumption. It is populated by the store, not the exchanger's
 	// clock, so the audit trail reflects the persistence layer.
@@ -517,25 +530,27 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		return nil, err
 	}
 	return &Exchanged{
-		ConsumedID:           rec.ID,
-		ClientID:             rec.ClientID,
-		Subject:              rec.Subject,
-		SubjectPublic:        rec.SubjectPublic,
-		GrantID:              rec.GrantID,
-		Scope:                resolvedScope,
-		BoundScope:           slices.Clone(rec.Scope),
-		Resource:             rec.Resource,
-		Origin:               rec.Origin,
-		AuthTime:             rec.AuthTime,
-		ACR:                  rec.ACR,
-		AMR:                  slices.Clone(rec.AMR),
-		AuthorizationDetails: cloneObjectArray(rec.AuthorizationDetails),
-		AccessTokenExtra:     cloneClaims(rec.AccessTokenExtra),
-		ConsumedAt:           *rec.ConsumedAt,
-		IssuedAt:             rec.CreatedAt,
-		DPoPJKT:              rec.DPoPJKT,
-		MTLSCertThumbprint:   rec.MTLSCertThumbprint,
-		Nonce:                rec.Nonce,
+		ConsumedID:            rec.ID,
+		ClientID:              rec.ClientID,
+		Subject:               rec.Subject,
+		SubjectPublic:         rec.SubjectPublic,
+		GrantID:               rec.GrantID,
+		Scope:                 resolvedScope,
+		BoundScope:            slices.Clone(rec.Scope),
+		Resource:              rec.Resource,
+		Origin:                rec.Origin,
+		AuthTime:              rec.AuthTime,
+		ACR:                   rec.ACR,
+		AMR:                   slices.Clone(rec.AMR),
+		AuthorizationDetails:  cloneObjectArray(rec.AuthorizationDetails),
+		AccessTokenExtra:      cloneClaims(rec.AccessTokenExtra),
+		Claims:                cloneClaims(rec.Claims),
+		AuthorizationRecorded: rec.AuthorizationRecorded,
+		ConsumedAt:            *rec.ConsumedAt,
+		IssuedAt:              rec.CreatedAt,
+		DPoPJKT:               rec.DPoPJKT,
+		MTLSCertThumbprint:    rec.MTLSCertThumbprint,
+		Nonce:                 rec.Nonce,
 	}, nil
 }
 
@@ -722,26 +737,28 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 		return nil, err
 	}
 	return &Exchanged{
-		ConsumedID:           rec.ID,
-		ClientID:             rec.ClientID,
-		Subject:              rec.Subject,
-		SubjectPublic:        rec.SubjectPublic,
-		GrantID:              rec.GrantID,
-		Scope:                resolvedScope,
-		BoundScope:           slices.Clone(rec.Scope),
-		Resource:             rec.Resource,
-		Origin:               rec.Origin,
-		AuthTime:             rec.AuthTime,
-		ACR:                  rec.ACR,
-		AMR:                  slices.Clone(rec.AMR),
-		AuthorizationDetails: cloneObjectArray(rec.AuthorizationDetails),
-		AccessTokenExtra:     cloneClaims(rec.AccessTokenExtra),
-		ConsumedAt:           *rec.ConsumedAt,
-		IssuedAt:             rec.CreatedAt,
-		DPoPJKT:              rec.DPoPJKT,
-		MTLSCertThumbprint:   rec.MTLSCertThumbprint,
-		Nonce:                rec.Nonce,
-		InGrace:              true,
+		ConsumedID:            rec.ID,
+		ClientID:              rec.ClientID,
+		Subject:               rec.Subject,
+		SubjectPublic:         rec.SubjectPublic,
+		GrantID:               rec.GrantID,
+		Scope:                 resolvedScope,
+		BoundScope:            slices.Clone(rec.Scope),
+		Resource:              rec.Resource,
+		Origin:                rec.Origin,
+		AuthTime:              rec.AuthTime,
+		ACR:                   rec.ACR,
+		AMR:                   slices.Clone(rec.AMR),
+		AuthorizationDetails:  cloneObjectArray(rec.AuthorizationDetails),
+		AccessTokenExtra:      cloneClaims(rec.AccessTokenExtra),
+		Claims:                cloneClaims(rec.Claims),
+		AuthorizationRecorded: rec.AuthorizationRecorded,
+		ConsumedAt:            *rec.ConsumedAt,
+		IssuedAt:              rec.CreatedAt,
+		DPoPJKT:               rec.DPoPJKT,
+		MTLSCertThumbprint:    rec.MTLSCertThumbprint,
+		Nonce:                 rec.Nonce,
+		InGrace:               true,
 	}, nil
 }
 

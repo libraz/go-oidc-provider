@@ -18,11 +18,11 @@ import (
 // hands the projected claims to [assembleClaims] verbatim so the JWT
 // and opaque paths share their tail half.
 func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDeps, raw string) {
-	claims, ok := resolveOpaqueAccessTokenAt(r.Context(), w, r, deps, raw)
+	claims, recorded, ok := resolveOpaqueAccessTokenAt(r.Context(), w, r, deps, raw)
 	if !ok {
 		return
 	}
-	out, client, ok := assembleClaims(r.Context(), w, deps, claims)
+	out, client, ok := assembleClaims(r.Context(), w, deps, claims, recorded)
 	if !ok {
 		return
 	}
@@ -40,6 +40,9 @@ func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDep
 // OP-internal subject through that lineage before looking the user
 // up.
 //
+// recorded reports whether the record carries its own claims request
+// ([store.OpaqueAccessToken.AuthorizationRecorded]).
+//
 // Every failure path emits the appropriate WWW-Authenticate challenge
 // and returns ok=false so the caller stops without writing an
 // additional response. The function never returns a nil claims with
@@ -50,7 +53,7 @@ func resolveOpaqueAccessTokenAt(
 	r *http.Request,
 	deps HandlerDeps,
 	raw string,
-) (*tokens.AccessTokenClaims, bool) {
+) (claims *tokens.AccessTokenClaims, recorded, ok bool) {
 	view, err := tokens.ResolveOpaqueAccessToken(ctx, tokens.OpaqueAccessTokenLookup{
 		Store:            deps.OpaqueAccessTokens,
 		Clients:          deps.Clients,
@@ -64,25 +67,25 @@ func resolveOpaqueAccessTokenAt(
 		// A deleted client retires its tokens; the JWT path words that
 		// outcome the same way.
 		respondOpaqueInvalid(w, "The access token has been revoked")
-		return nil, false
+		return nil, false, false
 	case errors.Is(err, tokens.ErrOpaqueAccessTokenExpired):
 		respondOpaqueInvalid(w, "The access token has expired")
-		return nil, false
+		return nil, false, false
 	default:
 		// Unknown, projection failure and store faults all surface as
 		// invalid_token. RFC 6750 §3.1 forbids leaking
 		// which sub-class produced the rejection.
 		respondOpaqueInvalid(w, "The access token is invalid")
-		return nil, false
+		return nil, false, false
 	}
 	rec := view.Record
 	if !enforceAudience(w, deps.Issuer, opaqueAudience(rec)) {
-		return nil, false
+		return nil, false, false
 	}
 	if !enforceOpaqueCnf(w, r, deps, view.Confirmation(), raw) {
-		return nil, false
+		return nil, false, false
 	}
-	return projectOpaqueAccessTokenClaims(view), true
+	return projectOpaqueAccessTokenClaims(view), view.Record.AuthorizationRecorded, true
 }
 
 // opaqueAudience normalises the opaque-access-token record's audience
@@ -152,6 +155,9 @@ func projectOpaqueAccessTokenClaims(view *tokens.OpaqueAccessTokenView) *tokens.
 		ClientID: rec.ClientID,
 		GrantID:  rec.GrantID,
 		Scope:    append([]string(nil), rec.Scope...),
+		// The record keeps the whole claims request; only its userinfo
+		// member is read here.
+		UserInfoClaims: rec.Claims,
 	}
 }
 

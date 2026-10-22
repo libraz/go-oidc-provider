@@ -1365,8 +1365,16 @@ func attemptSilentAuthorization(
 		Nonce:               req.Nonce,
 		State:               req.State,
 		DPoPJKT:             req.DPoPJKT,
-		ExpiresAt:           now.Add(deps.AuthCodeTTL),
-		CreatedAt:           now,
+
+		AuthTime:              reported.AuthTime,
+		ACR:                   reported.ACR,
+		AMR:                   slices.Clone(reported.AMR),
+		AuthorizationDetails:  codeAuthorizationDetails(req, durableGrant),
+		Claims:                authorize.EncodeClaimsToGrant(req.Claims),
+		AuthorizationRecorded: true,
+
+		ExpiresAt: now.Add(deps.AuthCodeTTL),
+		CreatedAt: now,
 	}
 	if err := consumePARIfNeeded(ctx, txDeps, req); err != nil {
 		return nil, true, err

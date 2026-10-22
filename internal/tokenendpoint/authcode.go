@@ -292,7 +292,7 @@ func issueAuthCodeResponse(
 	requestedAuthorizationDetails []map[string]any,
 ) {
 	now := deps.now().UTC()
-	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
+	authCtx := codeAuthContext(ctx, deps, exchanged)
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
@@ -319,6 +319,7 @@ func issueAuthCodeResponse(
 		authCtx.AuthTime,
 		binding,
 		authorizationDetails,
+		accessTokenOverrides{Authorization: &authCtx},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -555,10 +556,7 @@ func mintAccessToken(
 	}
 	switch format {
 	case store.AccessTokenFormatOpaque:
-		// The opaque path carries no claims; introspection / userinfo
-		// echo authorization_details by reading the grant via the shadow
-		// row's GrantID, so the details are not threaded onto the token.
-		return mintOpaqueAccessToken(ctx, deps, rawSubject, clientID, grantID, scope, resource, now, authTime, binding, over)
+		return mintOpaqueAccessToken(ctx, deps, rawSubject, clientID, grantID, scope, resource, now, authTime, binding, authorizationDetails, over)
 	case store.AccessTokenFormatJWT:
 		fallthrough
 	default:
@@ -604,6 +602,13 @@ type accessTokenOverrides struct {
 	// a token stripped of the delegation record. The exclusion is
 	// documented on op.WithAccessTokenFormat and op.BoundAccessToken.
 	ForceJWT bool
+
+	// Authorization is the per-authorization state of an
+	// authorization_code lineage (code exchange and refresh). The opaque
+	// shape records its acr, amr and claims request; the JWT shape
+	// carries the userinfo member of the claims request, as {} when
+	// there is none. Nil for grants with no such authorization.
+	Authorization *authContext
 }
 
 // mintJWTAccessToken signs the JWT-shaped access token (RFC 9068) and,
@@ -671,6 +676,7 @@ func mintJWTAccessToken(
 		Confirmation:         binding.confirmation(),
 		GrantID:              grantID,
 		AuthorizationDetails: authorizationDetails,
+		UserInfoClaims:       userInfoClaimsRequest(over),
 		Extra:                cloneClaimsMap(over.Extra),
 	}
 	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
@@ -713,6 +719,7 @@ func mintOpaqueAccessToken(
 	now time.Time,
 	authTime int64,
 	binding tokenBinding,
+	authorizationDetails []map[string]any,
 	over accessTokenOverrides,
 ) (string, error) {
 	if deps.OpaqueAccessTokens == nil {
@@ -732,17 +739,24 @@ func mintOpaqueAccessToken(
 		audience = resource
 	}
 	rec := &store.OpaqueAccessToken{
-		ID:                 raw,
-		GrantID:            grantID,
-		Subject:            subject,
-		ClientID:           clientID,
-		Scope:              append([]string(nil), scope...),
-		Audience:           audience,
-		AuthTime:           opaqueAuthTime(authTime),
-		DPoPJKT:            binding.DPoPJKT,
-		MTLSCertThumbprint: binding.MTLSThumbprint,
-		IssuedAt:           now,
-		ExpiresAt:          time.Unix(expiresAt, 0).UTC(),
+		ID:                    raw,
+		GrantID:               grantID,
+		Subject:               subject,
+		ClientID:              clientID,
+		Scope:                 append([]string(nil), scope...),
+		Audience:              audience,
+		AuthTime:              opaqueAuthTime(authTime),
+		AuthorizationDetails:  cloneAuthorizationDetails(authorizationDetails),
+		AuthorizationRecorded: true,
+		DPoPJKT:               binding.DPoPJKT,
+		MTLSCertThumbprint:    binding.MTLSThumbprint,
+		IssuedAt:              now,
+		ExpiresAt:             time.Unix(expiresAt, 0).UTC(),
+	}
+	if a := over.Authorization; a != nil {
+		rec.ACR = a.ACR
+		rec.AMR = append([]string(nil), a.AMR...)
+		rec.Claims = cloneClaimsMap(a.EncodedClaims)
 	}
 	if err := deps.OpaqueAccessTokens.Save(ctx, rec); err != nil {
 		return "", err
@@ -761,6 +775,20 @@ func opaqueAuthTime(authTime int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(authTime, 0).UTC()
+}
+
+// userInfoClaimsRequest keeps the userinfo member of the claims request,
+// the only part /userinfo reads off a JWT access token. A lineage that
+// carries claims gets an empty map when there is nothing to keep.
+func userInfoClaimsRequest(over accessTokenOverrides) map[string]any {
+	if over.Authorization == nil {
+		return nil
+	}
+	c := authorize.DecodeClaimsFromGrant(over.Authorization.EncodedClaims)
+	if c == nil || len(c.UserInfo) == 0 {
+		return map[string]any{}
+	}
+	return authorize.EncodeClaimsToGrant(&authorize.ClaimsRequest{UserInfo: c.UserInfo})
 }
 
 func timeFromUnix(v int64) time.Time {
@@ -868,25 +896,28 @@ func requireAuthTimeForIDToken(client *store.Client, scope []string, authTime in
 	return errors.New("tokenendpoint: require_auth_time cannot be satisfied")
 }
 
-// authContext captures the fields the id_token issuance path reads
-// from the originating grant. Empty values are valid: the encoder
-// omits omitempty claims when the relevant field is zero.
+// authContext captures the per-authorization state the issuance paths
+// read: what the id_token reports about the authentication, the
+// authorization_details the response echoes and the OIDC Core 1.0 §5.5
+// claims request. Empty values are valid: the encoder omits omitempty
+// claims when the relevant field is zero.
 type authContext struct {
 	AuthTime int64
 	ACR      string
 	AMR      []string
 
-	// Claims is the OIDC Core 1.0 §5.5 "claims" request payload that
-	// was persisted on the grant at the originating /authorize
-	// request. Nil when the request did not carry the parameter.
-	// The id_token issuer reads it (along with the user store) to
-	// project the requested id_token claims.
+	// Claims is the decoded OIDC Core 1.0 §5.5 claims request the
+	// id_token issuer projects. Nil when the authorization carried none
+	// or [Deps.ClaimsParameterEnabled] is off.
 	Claims *authorize.ClaimsRequest
 
+	// EncodedClaims is the same request in the [store.Grant.Claims]
+	// encoding, carried onto the refresh chain and access tokens.
+	EncodedClaims map[string]any
+
 	// AuthorizationDetails is the RFC 9396 authorization_details the
-	// grant was issued with. The token endpoint echoes it on the
-	// response (RFC 9396 §6); a refresh reproduces it from the same
-	// grant. Nil when the grant carried none.
+	// authorization granted. The token endpoint echoes it on the
+	// response (RFC 9396 §6). Nil when it granted none.
 	AuthorizationDetails []map[string]any
 }
 
@@ -895,41 +926,51 @@ func (c authContext) withAuthorizationDetails(details []map[string]any) authCont
 	return c
 }
 
-// lookupAuthContext resolves the auth_time / acr / amr claims from
-// the originating grant. The grant carries the values stamped at the
-// last interactive authentication; OIDC Core 1.0 §12 requires the
-// refresh-token-derived id_token to carry the same acr/amr as the
-// original, and the authorization_code-derived id_token uses the same
-// source so both grant paths agree. AuthTime falls back to the grant's
-// UpdatedAt when the explicit field was not populated (records
-// persisted before the field was added still produce a useful claim).
-//
-// This is also the only place the token endpoint reads the grant's
-// OIDC Core 1.0 §5.5 payload, so [Deps.ClaimsParameterEnabled] gates
-// every id_token the endpoint issues from a grant — the first code
-// exchange and every subsequent refresh alike.
-func lookupAuthContext(ctx context.Context, deps Deps, grantID string) authContext {
-	if grantID == "" {
-		return authContext{}
+// authContextOf adapts the state [tokens.ResolveAuthorization] resolved.
+// This is the only place the token endpoint decodes a claims request, so
+// [Deps.ClaimsParameterEnabled] gates every id_token it issues.
+func authContextOf(deps Deps, a tokens.Authorization) authContext {
+	out := authContext{
+		ACR:                  a.ACR,
+		AMR:                  a.AMR,
+		AuthorizationDetails: a.AuthorizationDetails,
+		EncodedClaims:        a.Claims,
 	}
-	g, err := deps.Grants.Find(ctx, grantID)
-	if err != nil || g == nil {
-		return authContext{}
-	}
-	out := authContext{ACR: g.ACR}
-	if !g.AuthTime.IsZero() {
-		out.AuthTime = g.AuthTime.Unix()
-	} else if !g.UpdatedAt.IsZero() {
-		out.AuthTime = g.UpdatedAt.Unix()
-	}
-	if len(g.AMR) > 0 {
-		out.AMR = append([]string(nil), g.AMR...)
+	if !a.AuthTime.IsZero() {
+		out.AuthTime = a.AuthTime.Unix()
 	}
 	if deps.ClaimsParameterEnabled {
-		out.Claims = authorize.DecodeClaimsFromGrant(g.Claims)
+		out.Claims = authorize.DecodeClaimsFromGrant(a.Claims)
 	}
-	out.AuthorizationDetails = g.AuthorizationDetails
 	return out
+}
+
+// codeAuthContext resolves the per-authorization state of a redeemed
+// code: what the code recorded at issuance, with the grant consulted only
+// for a code written without it.
+func codeAuthContext(ctx context.Context, deps Deps, exchanged *authcode.Exchanged) authContext {
+	own := tokens.Authorization{
+		AuthTime:             exchanged.AuthTime,
+		ACR:                  exchanged.ACR,
+		AMR:                  exchanged.AMR,
+		AuthorizationDetails: exchanged.AuthorizationDetails,
+		Claims:               exchanged.Claims,
+	}
+	g := findGrant(ctx, deps, exchanged.GrantID)
+	return authContextOf(deps, tokens.ResolveAuthorization(own, exchanged.AuthorizationRecorded, g, exchanged.ClientID))
+}
+
+// findGrant returns the grant grantID names, or nil when there is none or
+// it cannot be read.
+func findGrant(ctx context.Context, deps Deps, grantID string) *store.Grant {
+	if grantID == "" || deps.Grants == nil {
+		return nil
+	}
+	g, err := deps.Grants.Find(ctx, grantID)
+	if err != nil {
+		return nil
+	}
+	return g
 }
 
 // projectIDTokenClaims walks the grant's id_token "claims" payload

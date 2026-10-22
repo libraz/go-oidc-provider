@@ -132,6 +132,16 @@ type AccessTokenClaims struct {
 	// Indirected through [mergeAccessTokenClaims] like Scope / GrantID.
 	AuthorizationDetails []map[string]any `json:"-"`
 
+	// UserInfoClaims is the "userinfo_claims" private claim: the
+	// userinfo member of the OIDC Core 1.0 §5.5 claims request the
+	// token was issued under, in the [store.Grant.Claims] encoding.
+	// /userinfo projects it, so the token rather than the grant several
+	// authorizations share decides which requested claims are released.
+	// Nil omits the claim, which /userinfo reads as a token minted before
+	// it existed; an empty map is emitted as {} and records that the
+	// authorization requested no userinfo claims.
+	UserInfoClaims map[string]any `json:"-"`
+
 	// Extra carries non-standard claims the caller wants stamped on
 	// the JWT alongside the standard set. The encoder flattens this
 	// map after the typed fields; collisions with standard claim
@@ -296,6 +306,7 @@ var accessTokenStandardKeys = map[string]struct{}{
 	"cnf":                   {},
 	"gid":                   {},
 	"authorization_details": {},
+	"userinfo_claims":       {},
 }
 
 // validateNoStandardCollisions returns an error when extra contains a
@@ -385,6 +396,9 @@ func mergeAccessTokenClaims(c AccessTokenClaims) map[string]any {
 	}
 	if len(c.AuthorizationDetails) > 0 {
 		out["authorization_details"] = c.AuthorizationDetails
+	}
+	if c.UserInfoClaims != nil {
+		out["userinfo_claims"] = c.UserInfoClaims
 	}
 	for k, v := range c.Extra {
 		out[k] = v

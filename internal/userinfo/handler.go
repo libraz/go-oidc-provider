@@ -242,7 +242,7 @@ func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, 
 	if !enforceRevocationStatus(r.Context(), w, deps, claims) {
 		return
 	}
-	out, client, ok := assembleClaims(r.Context(), w, deps, claims)
+	out, client, ok := assembleClaims(r.Context(), w, deps, claims, claims.UserInfoClaims != nil)
 	if !ok {
 		return
 	}
@@ -713,10 +713,10 @@ func respondGenericInvalidToken(w http.ResponseWriter) {
 // written the response and the caller MUST return.
 //
 // The grant the token descends from is resolved once, from the token's
-// own lineage ([resolveGrant]), and serves both consumers that need it:
-// the raw-subject recovery and the OIDC Core §5.5 claims-request
-// projection. Keeping it to a single lookup is what guarantees the two
-// cannot disagree about which grant the response is assembled from.
+// own lineage ([resolveGrant]): the raw-subject recovery reads it, and
+// the OIDC Core §5.5 claims-request projection falls back to it only for
+// a record that predates carrying its own request ([tokenClaimsRequest];
+// claimsRecorded reports which).
 //
 // When the access token's "sub" carries the per-client pairwise value
 // (RFC 9068 §3 / OIDC Core §8.1 — minted that way so RS-visible and
@@ -736,6 +736,7 @@ func assembleClaims(
 	w http.ResponseWriter,
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
+	claimsRecorded bool,
 ) (map[string]any, *store.Client, bool) {
 	if claims.GrantID == "" {
 		// A token with no grant lineage (client_credentials) names no
@@ -781,7 +782,7 @@ func assembleClaims(
 		Scopes:            claims.Scope,
 		Source:            source,
 		CustomScopeClaims: deps.CustomScopeClaims,
-		Claims:            claimsRequestFromGrant(deps, grant, claims.ClientID),
+		Claims:            tokenClaimsRequest(deps, claims, claimsRecorded, grant),
 	})
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -901,28 +902,25 @@ func projectResponseSubject(
 	return projected, client, true
 }
 
-// claimsRequestFromGrant returns the OIDC Core 1.0 §5.5 "claims"
-// payload persisted on the grant the presented access token descends
-// from. Only that grant is read: a sibling grant of the same
-// (subject, client_id) pair may carry a different §5.5 payload, and
-// projecting it here would release claims the presented token was
-// never authorised for.
+// tokenClaimsRequest returns the OIDC Core 1.0 §5.5 "claims" request of
+// the authorization the presented access token was issued under: the
+// "userinfo_claims" claim of a JWT, the claims request of an opaque
+// record. The grant the token descends from is shared by every
+// authorization of the (subject, client_id) pair, so it is read only for
+// a token minted before it carried the request (see
+// [tokens.ResolveAuthorization]).
 //
 // Returns nil — which leaves the response scope-derived — when
-// [HandlerDeps.ClaimsParameterEnabled] is false, when the grant lineage
-// could not be resolved (see [resolveGrant]), when the grant is another
-// client's consent the token only descends from (a token exchange's
-// subject_token grant), or when the grant carries no §5.5 payload because
-// every claim was scope-driven.
-//
-// This is the only place the handler reads the persisted payload, so
-// the toggle covers every /userinfo response shape (JSON and signed
-// JWT alike) regardless of when the payload was written.
-func claimsRequestFromGrant(deps HandlerDeps, g *store.Grant, clientID string) *authorize.ClaimsRequest {
-	if !deps.ClaimsParameterEnabled || g == nil || g.ClientID != clientID {
+// [HandlerDeps.ClaimsParameterEnabled] is false or the authorization
+// carried no §5.5 payload. This is the only place the handler reads the
+// payload, so the toggle covers every /userinfo response shape (JSON and
+// signed JWT alike).
+func tokenClaimsRequest(deps HandlerDeps, claims *tokens.AccessTokenClaims, recorded bool, g *store.Grant) *authorize.ClaimsRequest {
+	if !deps.ClaimsParameterEnabled {
 		return nil
 	}
-	return authorize.DecodeClaimsFromGrant(g.Claims)
+	own := tokens.Authorization{Claims: claims.UserInfoClaims}
+	return authorize.DecodeClaimsFromGrant(tokens.ResolveAuthorization(own, recorded, g, claims.ClientID).Claims)
 }
 
 // writeJSON encodes body with json.Marshal, stamps the cache and
