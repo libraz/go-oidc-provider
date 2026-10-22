@@ -196,7 +196,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   refresh token; the successor keeps the scope of the token it replaces.
 
 - Token-exchange delegation preserves the subject_token's `act` chain under
-  the new actor entry (RFC 8693 §4.1) and enforces `MaxActChainDepth` before
+  the new actor entry (RFC 8693 §4.1) and enforces the five-level act-chain depth limit before
   the policy runs.
 
 - A custom-grant handler receives a copy of the client, so it can no longer
@@ -204,8 +204,10 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 - A `private_key_jwt` assertion with an empty or over-long `jti` is rejected
   as malformed, and the replay key escapes the client id so two clients
-  cannot collide. Under a client-store outage or JWKS fetch overload, client
-  authentication answers 503 or `server_error` instead of `invalid_client`.
+  cannot collide. Client authentication answers 503 when the client's JWKS
+  fetch is overloaded or temporarily failing, and 500 `server_error` under a
+  client-store outage, instead of `invalid_client`; request objects at
+  `/authorize`, `/par` and `/bc-authorize` answer the same JWKS fault with 503.
 
 - An `id_token_hint` that is a logout token or an access token (any `typ`
   other than absent or `JWT`) is rejected at `/end_session` and for CIBA.
