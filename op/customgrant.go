@@ -16,9 +16,9 @@ import (
 // those are reserved, and registering a handler under one of them
 // fails with [ErrCustomGrantBuiltinCollision], which documents the
 // reserved set. Embedders register handlers via [WithCustomGrant]; the
-// OP runs client authentication, rate limiting, and DPoP / mTLS
-// verification before invoking [Handle], so handlers receive a request
-// that has already cleared the surface every grant shares.
+// OP runs client authentication and DPoP / mTLS verification before
+// invoking [Handle], so handlers receive a request that has already
+// cleared the surface every grant shares.
 //
 // The interface is small on purpose. The OP keeps ownership of:
 //
@@ -54,9 +54,9 @@ type CustomGrantHandler interface {
 
 	// Handle executes the grant. The OP guarantees:
 	//
-	//   - req.Client is non-nil and matches the authenticated
-	//     client; mutating it has no persistence effect (the OP
-	//     reads from a defensive copy after the call).
+	//   - req.Client is non-nil and is a copy of the authenticated
+	//     client; mutating it changes neither the record the OP
+	//     checks the response against nor the stored client.
 	//   - req.Form contains every parameter the policy [Allowed]
 	//     list named, and only those; values are guaranteed to be
 	//     non-secret (RFC 6749 §3.2 secret-like names cannot be
@@ -189,8 +189,7 @@ type CustomGrantRequest struct {
 // the wire response:
 //
 //   - [AccessTokenTTL] is truncated to the OP's global access-token
-//     cap (default 1 hour); a longer value yields an audit warning
-//     but never overrides the cap.
+//     cap (default 1 hour); a longer value never overrides the cap.
 //   - [Scope] is intersected with the client's allowed scopes;
 //     handler-introduced scopes outside that set yield invalid_scope.
 //   - [Audience] entries are intersected with the resource servers
@@ -373,9 +372,9 @@ type BoundAccessToken struct {
 	Audience []string
 
 	// TTL is the access-token lifetime. Zero falls back to the OP's
-	// global access-token cap; values exceeding the cap are
-	// truncated with an audit warning (same policy as the
-	// [CustomGrantResponse.AccessTokenTTL] field).
+	// global access-token cap, a negative value yields server_error,
+	// and a value exceeding the cap is truncated to it (same policy as
+	// the [CustomGrantResponse.AccessTokenTTL] field).
 	TTL time.Duration
 
 	// ExtraClaims are merged onto the standard JWT set the OP writes

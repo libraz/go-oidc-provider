@@ -91,8 +91,9 @@ type TokenExchangeRequest struct {
 	Actor *Subject
 
 	// ActorToken is the read-only view of the verified actor_token,
-	// nil when [Actor] is nil. The view's act-chain depth has
-	// already been counted against the provider's nesting limit.
+	// nil when [Actor] is nil. The act chain the issued token will
+	// carry — the actor nesting the subject_token's prior actors —
+	// has already been checked against the provider's nesting limit.
 	ActorToken *SubjectTokenView
 
 	// RequestedAudience is the audience list after RFC 8707 §2
@@ -147,10 +148,11 @@ type TokenExchangeDecision struct {
 	// the wire.
 	GrantedAudience []string
 
-	// GrantedTTL, when non-zero, narrows the issued access-token
-	// lifetime below the provider-computed cap. A value greater
-	// than the cap is silently truncated to the cap with an audit
-	// warning; a negative value is rejected.
+	// GrantedTTL, when positive, narrows the issued access-token
+	// lifetime below the provider-computed cap. A value greater than
+	// the cap is truncated to it and recorded with an
+	// [AuditTokenExchangeTTLCapped] event; a zero or negative value
+	// leaves the provider-computed lifetime unchanged.
 	GrantedTTL time.Duration
 
 	// IssueIDToken, when non-nil, overrides the provider's
@@ -177,9 +179,10 @@ type TokenExchangeDecision struct {
 	//	    IssueRefreshToken: op.PtrBool(true),
 	//	}
 	//
-	// Issuance audits every decision via the
-	// [AuditTokenExchangeRefreshIssued] event. The opt-in contract
-	// is pinned by catalog row TX-021.
+	// A refresh token actually issued is audited via the
+	// [AuditTokenExchangeRefreshIssued] event; one an issuance gate
+	// withholds emits [AuditCustomGrantRefreshDropped] instead. The
+	// opt-in contract is pinned by catalog row TX-021.
 	IssueRefreshToken *bool
 
 	// ExtraClaims are merged into the id_token the provider signs
