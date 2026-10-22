@@ -627,7 +627,7 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 				// here and none can disagree with the one the transition
 				// was evaluated against.
 				if !out.LockedUntil.IsZero() {
-					return interaction.Step{}, ErrLocked
+					return interaction.Step{}, errLockEngaged
 				}
 			}
 			// Recoverable wrong guess: surface ErrRetry so the orchestrator

@@ -101,6 +101,11 @@ var (
 	// lockout rather than as an unclassified abort.
 	ErrLocked = fmt.Errorf("emailotp: factor is locked: %w", authn.ErrFactorLocked)
 
+	// errLockEngaged is [ErrLocked] for the wrong guess that engaged the
+	// lock: the code was evaluated and refused, so it also wraps
+	// [authn.ErrCredentialRejected].
+	errLockEngaged = fmt.Errorf("%w: %w", ErrLocked, authn.ErrCredentialRejected)
+
 	// ErrWrongCode is returned when the supplied code does not
 	// match the persisted hash. This is the only recoverable verify
 	// error — the adapter re-emits the verify prompt and the
@@ -111,7 +116,9 @@ var (
 	// lockThresholdLong. The orchestrator MUST treat this as a
 	// terminal state and route the user to the recovery / step-up
 	// reset flow.
-	ErrResetRequired = fmt.Errorf("emailotp: factor reset required: %w", authn.ErrFactorAbort)
+	// It always follows a counted wrong guess, so it also wraps
+	// [authn.ErrCredentialRejected].
+	ErrResetRequired = fmt.Errorf("emailotp: factor reset required: %w: %w", authn.ErrFactorAbort, authn.ErrCredentialRejected)
 
 	// ErrConsumed is returned when the persisted record's ConsumedAt
 	// is non-zero. The caller MUST NOT advance the chain on this

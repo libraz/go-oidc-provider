@@ -238,9 +238,10 @@ const (
 	// that responsibility lives with
 	// the embedder per the project charter. The OP only owns the
 	// authentication-flow brute-force gate wired through
-	// [WithAuthnLockoutStore] (and the device-code user-code gate
-	// surfaced via [AuditDeviceCodeUserCodeBruteForce]); those paths
-	// emit their own dedicated events. These two constants exist so
+	// [WithAuthnLockoutStore], whose counted guesses — the one that
+	// engages the lock included — are reported under the login.* /
+	// mfa.* failure events, and the device-code user-code gate, which
+	// emits [AuditDeviceCodeUserCodeBruteForce]. These two constants exist so
 	// audit pipelines can ingest embedder-side throttle decisions
 	// under a vocabulary consistent with the rest of the OIDC
 	// audit catalog.

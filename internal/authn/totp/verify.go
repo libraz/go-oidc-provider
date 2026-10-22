@@ -91,6 +91,11 @@ var (
 	// abort.
 	ErrLocked = fmt.Errorf("totp: factor is locked: %w", authn.ErrFactorLocked)
 
+	// errLockEngaged is [ErrLocked] for the wrong guess that engaged the
+	// lock: the code was evaluated and refused, so it also wraps
+	// [authn.ErrCredentialRejected].
+	errLockEngaged = fmt.Errorf("%w: %w", ErrLocked, authn.ErrCredentialRejected)
+
 	// ErrWrongCode is returned when the supplied code does not match
 	// any step in the skew window. The Result.Outcome equals
 	// OutcomeWrongCode and the Record carries the bumped counters.
@@ -110,7 +115,9 @@ var (
 	// terminal state and route the user to the recovery / step-up
 	// reset flow; the verifier intentionally never disables the
 	// factor on its own.
-	ErrResetRequired = fmt.Errorf("totp: factor reset required: %w", authn.ErrFactorAbort)
+	// It always follows a counted wrong guess, so it also wraps
+	// [authn.ErrCredentialRejected].
+	ErrResetRequired = fmt.Errorf("totp: factor reset required: %w: %w", authn.ErrFactorAbort, authn.ErrCredentialRejected)
 
 	// ErrNotConfirmed is returned when the supplied record has a zero
 	// ConfirmedAt timestamp. The library refuses to verify against an

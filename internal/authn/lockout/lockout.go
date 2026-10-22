@@ -175,8 +175,10 @@ func New(lockoutStore store.AuthnLockoutStore, clock timex.Clock) (*Counter, err
 // The counter emits exactly one event, [auditevent.AuditLockoutStalled],
 // and only from [Counter.RecordFailure]'s contention path. Everything
 // else it decides — a lock taking effect, a reset becoming required —
-// is returned to the caller in the [Outcome], so the authenticator that
-// owns the factor decides how to report it. The contention path is
+// is returned to the caller in the [Outcome]; the authenticator turns it
+// into a terminal error marked authn.ErrCredentialRejected, and the
+// orchestrator files that guess under login.* / mfa.* like any other
+// rejected credential. The contention path is
 // different because it has no caller-visible verdict to carry the
 // signal: the attempt is rejected without being counted, so the
 // subject's failure budget silently stops advancing and nothing

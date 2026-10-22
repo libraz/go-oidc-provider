@@ -49,9 +49,16 @@ var ErrCodeMissing = errors.New("recovery: code field is missing")
 // observer feed as a lockout rather than as an unclassified abort.
 var ErrLocked = fmt.Errorf("recovery: factor is locked: %w", authn.ErrFactorLocked)
 
+// errLockEngaged is [ErrLocked] for the wrong guess that engaged the
+// lock: the code was evaluated and refused, so it also wraps
+// [authn.ErrCredentialRejected].
+var errLockEngaged = fmt.Errorf("%w: %w", ErrLocked, authn.ErrCredentialRejected)
+
 // ErrResetRequired is returned when the shared cross-factor counter
 // crosses the long threshold and the user must reset/recover factors.
-var ErrResetRequired = fmt.Errorf("recovery: factor reset required: %w", authn.ErrFactorAbort)
+// It always follows a counted wrong guess, so it also wraps
+// [authn.ErrCredentialRejected].
+var ErrResetRequired = fmt.Errorf("recovery: factor reset required: %w: %w", authn.ErrFactorAbort, authn.ErrCredentialRejected)
 
 // ErrRetry is returned by [Authenticator.Continue] on a recoverable
 // wrong-code submission. It wraps [authn.ErrFactorRetry] so the
@@ -230,7 +237,7 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 			// none can disagree with the one the transition was evaluated
 			// against.
 			if !out.LockedUntil.IsZero() {
-				return interaction.Step{}, ErrLocked
+				return interaction.Step{}, errLockEngaged
 			}
 		}
 		// Recoverable wrong guess: surface ErrRetry so the orchestrator
