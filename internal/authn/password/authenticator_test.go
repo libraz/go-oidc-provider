@@ -236,3 +236,48 @@ func (f faultyStore) FindByUsername(_ context.Context, _ string) (*store.User, e
 func (f faultyStore) ReadPasswordHash(_ context.Context, _ string) ([]byte, error) {
 	return nil, f.err
 }
+
+// TestAuthenticator_Continue_UnusableStoredHashPaysOneDerivation pins
+// that an account whose stored hash cannot be verified — out of policy
+// or not an Argon2id encoding at all — is refused in the time an unknown
+// username takes. Verify rejects such a hash before deriving anything,
+// so without the equalising derivation the response time would reveal
+// that the account exists. The two costs differ by orders of magnitude,
+// so comparing the fastest of a few runs against a quarter of the
+// reference is not timing-sensitive.
+func TestAuthenticator_Continue_UnusableStoredHashPaysOneDerivation(t *testing.T) {
+	t.Parallel()
+	st := newPasswordStore(t)
+	weak := hashWith(t, testPassword, 1024, 1, 1, []byte("0123456789abcdef"))
+	st.PutUserWithPassword(context.Background(), &store.User{Subject: "sub-weak"}, "weak@example.com", weak)
+	st.PutUserWithPassword(context.Background(), &store.User{Subject: "sub-foreign"}, "foreign@example.com",
+		[]byte("$2y$10$abcdefghijklmnopqrstuuJ1lJ6rbZ5sY1dQyQ6yZxV0R3xq8mY2K"))
+	a, err := password.NewAuthenticator(st.UserPasswords())
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+	fastest := func(username string) time.Duration {
+		best := time.Duration(1<<63 - 1)
+		for range 3 {
+			start := time.Now()
+			_, err := a.Continue(context.Background(), authn.ContinueInput{
+				Submission: interaction.FormSubmission{Values: map[string]string{
+					password.UsernameFieldName: username,
+					password.PasswordFieldName: testPassword,
+				}},
+			})
+			elapsed := time.Since(start)
+			if !errors.Is(err, password.ErrInvalidCredentials) {
+				t.Fatalf("%s: err = %v, want ErrInvalidCredentials", username, err)
+			}
+			best = min(best, elapsed)
+		}
+		return best
+	}
+	reference := fastest("ghost@example.com")
+	for _, username := range []string{"weak@example.com", "foreign@example.com"} {
+		if got := fastest(username); got < reference/4 {
+			t.Errorf("%s refused in %v, unknown user in %v: no derivation ran", username, got, reference)
+		}
+	}
+}

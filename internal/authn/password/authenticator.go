@@ -50,7 +50,7 @@ var ErrInvalidCredentials = fmt.Errorf("password: invalid credentials: %w", auth
 // submission omits the username or password field. The orchestrator's
 // [interaction.FieldSpec] validation should already have caught this;
 // the adapter re-checks at the trust boundary.
-var ErrFieldMissing = errors.New("password: required field is missing")
+var ErrFieldMissing = fmt.Errorf("password: required field is missing: %w", authn.ErrFactorAbort)
 
 // Authenticator is the [authn.Authenticator] adapter for the built-in
 // PrimaryPassword Step. It wraps a [store.UserPasswordStore] and
@@ -180,6 +180,11 @@ func (a *Authenticator) resolveAndVerify(ctx context.Context, username, candidat
 		verifyAgainst = dummyHash()
 	}
 	verifyErr := Verify(verifyAgainst, candidate)
+	if errors.Is(verifyErr, ErrInvalidHash) {
+		// An unparsable or out-of-policy stored hash is refused before any
+		// derivation runs; pay the dummy one so the refusal costs the same.
+		_ = Verify(dummyHash(), candidate)
+	}
 
 	if !userExists || len(hash) == 0 || verifyErr != nil {
 		return "", ErrInvalidCredentials
