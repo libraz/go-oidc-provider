@@ -326,15 +326,25 @@ type Exchanged struct {
 // needs to mint tokens; on failure the returned error matches one of the
 // sentinels declared in this package.
 //
+// The client, redirect_uri and PKCE bindings are checked against the
+// record from [store.AuthorizationCodeStore.Find] before Consume, so a
+// presentation that fails them neither spends the code nor locks its bound
+// client out of the redemption.
+//
 // Replay detection: when the underlying store returns
 // [store.ErrAlreadyConsumed], Exchange returns [ErrCodeReplayed]. If the store
 // also returns the consumed record, the error carries its GrantID; the token
-// endpoint MUST revoke any refresh tokens that descend from this grant.
+// endpoint MUST revoke any refresh tokens that descend from this grant. A
+// replay whose presentation fails the bindings of the returned record reports
+// the binding error instead, so it does not arm that revocation.
 //
 //nolint:gocognit // Exchange enumerates the code-replay / binding / expiry gates in flat shape; refactor would obscure spec mapping.
 func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged, error) {
 	if in.Code == "" {
 		return nil, ErrCodeMissing
+	}
+	if err := e.preflight(ctx, in); err != nil {
+		return nil, err
 	}
 	rec, err := e.consume(ctx, in.Code)
 	if err != nil {
@@ -342,7 +352,13 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		case errors.Is(err, store.ErrNotFound):
 			return nil, ErrCodeMissing
 		case errors.Is(err, store.ErrAlreadyConsumed):
-			if rec != nil && rec.GrantID != "" {
+			if rec == nil {
+				return nil, ErrCodeReplayed
+			}
+			if err := checkBindings(rec, in); err != nil {
+				return nil, err
+			}
+			if rec.GrantID != "" {
 				return nil, &ReplayError{GrantID: rec.GrantID}
 			}
 			return nil, ErrCodeReplayed
@@ -358,24 +374,8 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 	if e.clock().UTC().After(rec.ExpiresAt) {
 		return nil, ErrCodeExpired
 	}
-	if rec.ClientID != in.ClientID {
-		return nil, ErrClientMismatch
-	}
-	if rec.RedirectURI != in.RedirectURI {
-		return nil, ErrRedirectURIMismatch
-	}
-	// PKCE is opt-in. When the issued record carries a challenge the
-	// exchange MUST verify against it; when it does not the exchange
-	// MUST forbid a code_verifier so a client cannot smuggle one onto
-	// a code that was never bound to PKCE.
-	if rec.CodeChallenge == "" {
-		if in.CodeVerifier != "" {
-			return nil, pkce.ErrVerifierMismatch
-		}
-	} else {
-		if err := pkce.Verify(rec.CodeChallenge, rec.CodeChallengeMethod, in.CodeVerifier); err != nil {
-			return nil, err
-		}
+	if err := checkBindings(rec, in); err != nil {
+		return nil, err
 	}
 	return &Exchanged{
 		ClientID:         rec.ClientID,
@@ -389,6 +389,42 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		ConsumedAt:       *rec.ConsumedAt,
 		IssuedAt:         rec.CreatedAt,
 	}, nil
+}
+
+// preflight runs [checkBindings] on the unconsumed record. A store that hides
+// the record from Find (unknown, expired or already consumed) defers the
+// decision to Consume, which reports those states authoritatively.
+func (e *Exchanger) preflight(ctx context.Context, in ExchangeInput) error {
+	rec, err := e.store.Find(ctx, in.Code)
+	switch {
+	case errors.Is(err, store.ErrNotFound), err == nil && rec == nil:
+		return nil
+	case err != nil:
+		return fmt.Errorf("authcode: find: %w", err)
+	}
+	return checkBindings(rec, in)
+}
+
+// checkBindings verifies the client, redirect_uri and PKCE bindings recorded
+// at issuance (RFC 6749 §4.1.3, RFC 7636 §4.6).
+func checkBindings(rec *store.AuthorizationCode, in ExchangeInput) error {
+	if rec.ClientID != in.ClientID {
+		return ErrClientMismatch
+	}
+	if rec.RedirectURI != in.RedirectURI {
+		return ErrRedirectURIMismatch
+	}
+	// PKCE is opt-in. When the issued record carries a challenge the
+	// exchange MUST verify against it; when it does not the exchange
+	// MUST forbid a code_verifier so a client cannot smuggle one onto
+	// a code that was never bound to PKCE.
+	if rec.CodeChallenge == "" {
+		if in.CodeVerifier != "" {
+			return pkce.ErrVerifierMismatch
+		}
+		return nil
+	}
+	return pkce.Verify(rec.CodeChallenge, rec.CodeChallengeMethod, in.CodeVerifier)
 }
 
 // consume redeems the code and normalises the store-contract violation of a

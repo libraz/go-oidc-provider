@@ -588,3 +588,94 @@ func (s *replayMetadataCodeStore) Consume(_ context.Context, id string) (*store.
 	clone.ConsumedAt = &now
 	return &clone, nil
 }
+
+// TestExchange_FailedPresentationDoesNotSpendCode pins that a presentation
+// failing the client, redirect_uri or PKCE binding leaves the code redeemable
+// by its bound client, so a leaked code cannot be burnt into a replay.
+func TestExchange_FailedPresentationDoesNotSpendCode(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	code, err := f.issuer.Issue(ctx, goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	good := authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: verifier,
+	}
+	foreign := good
+	foreign.ClientID = "other-client"
+	foreign.CodeVerifier = strings.Repeat("b", 64)
+	badRedirect := good
+	badRedirect.RedirectURI = "https://rp.example.com/elsewhere"
+	badVerifier := good
+	badVerifier.CodeVerifier = strings.Repeat("b", 64)
+
+	for _, tc := range []struct {
+		name string
+		in   authcode.ExchangeInput
+		want error
+	}{
+		{"foreign client", foreign, authcode.ErrClientMismatch},
+		{"redirect_uri", badRedirect, authcode.ErrRedirectURIMismatch},
+		{"verifier", badVerifier, pkce.ErrVerifierMismatch},
+	} {
+		if _, err := f.exchanger.Exchange(ctx, tc.in); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: err=%v want %v", tc.name, err, tc.want)
+		}
+	}
+	if _, err := f.exchanger.Exchange(ctx, good); err != nil {
+		t.Fatalf("bound client Exchange after failed presentations: %v", err)
+	}
+}
+
+// TestExchange_ReplayByForeignClientIsNotReplay pins that presenting an
+// already redeemed code under another client reports the binding failure
+// rather than a replay, so it cannot arm the grant teardown; the bound
+// client's own second presentation still reads as a replay.
+func TestExchange_ReplayByForeignClientIsNotReplay(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	backing := newReplayMetadataCodeStore()
+	clk := func() time.Time { return t0 }
+	issuer, err := authcode.NewIssuer(authcode.IssuerConfig{Store: backing, Clock: clk})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exchanger, err := authcode.NewExchanger(authcode.ExchangerConfig{Store: backing, Clock: clk})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+	code, err := issuer.Issue(ctx, goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	in := authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: verifier,
+	}
+	if _, err := exchanger.Exchange(ctx, in); err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+	foreign := in
+	foreign.ClientID = "other-client"
+	_, err = exchanger.Exchange(ctx, foreign)
+	if !errors.Is(err, authcode.ErrClientMismatch) || errors.Is(err, authcode.ErrCodeReplayed) {
+		t.Fatalf("foreign replay err=%v want ErrClientMismatch only", err)
+	}
+	if _, err := exchanger.Exchange(ctx, in); authcode.ReplayGrantID(err) != "grant-1" {
+		t.Fatalf("bound-client replay err=%v want ReplayError for grant-1", err)
+	}
+}
