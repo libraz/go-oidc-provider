@@ -9,6 +9,7 @@ import (
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/idtokenhint"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -91,6 +92,17 @@ func signHintWithKID(t *testing.T, entry keys.Entry, kid string, claims tokens.I
 // payload edges have to be produced at the JOSE layer.
 func signRawPayload(t *testing.T, entry keys.Entry, kid string, payload []byte) string {
 	t.Helper()
+	return signRawPayloadTyped(t, entry, kid, "JWT", payload)
+}
+
+// signRawPayloadTyped is [signRawPayload] with the typ header set to typ,
+// or omitted when typ is empty.
+func signRawPayloadTyped(t *testing.T, entry keys.Entry, kid, typ string, payload []byte) string {
+	t.Helper()
+	opts := &josev4.SignerOptions{}
+	if typ != "" {
+		opts = opts.WithType(josev4.ContentType(typ))
+	}
 	signer, err := josev4.NewSigner(
 		josev4.SigningKey{
 			Algorithm: josev4.ES256,
@@ -101,7 +113,7 @@ func signRawPayload(t *testing.T, entry keys.Entry, kid string, payload []byte) 
 				Use:       "sig",
 			},
 		},
-		(&josev4.SignerOptions{}).WithType("JWT"),
+		opts,
 	)
 	if err != nil {
 		t.Fatalf("josev4.NewSigner: %v", err)
@@ -451,5 +463,68 @@ func TestFirst_RejectsAudienceNamingNobody(t *testing.T) {
 				t.Errorf("aud=%q want empty on rejection", got)
 			}
 		})
+	}
+}
+
+// TestVerify_RejectsOtherOPTypedTokens pins that an OP-signed JWS of
+// another kind is not an id_token_hint even though it carries iss, aud
+// and sub: a back-channel logout token and a JWT access token are refused
+// on their typ header.
+func TestVerify_RejectsOtherOPTypedTokens(t *testing.T) {
+	t.Parallel()
+	set, entry := hintKeys(t)
+	now := hintNow()
+
+	logout, err := backchannel.SignLogoutToken(
+		backchannel.SigningKey{KeyID: hintKID, Signer: entry.Signer},
+		backchannel.LogoutClaims{
+			Issuer:    hintIssuer,
+			Audience:  hintClientID,
+			IssuedAt:  now.Unix(),
+			ExpiresAt: now.Add(2 * time.Minute).Unix(),
+			Subject:   hintSubject,
+		},
+	)
+	if err != nil {
+		t.Fatalf("SignLogoutToken: %v", err)
+	}
+	access, err := tokens.SignAccessToken(tokens.FromInternalEntry(entry), tokens.AccessTokenClaims{
+		Issuer:    hintIssuer,
+		Subject:   hintSubject,
+		Audience:  []string{hintClientID},
+		ClientID:  hintClientID,
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(5 * time.Minute).Unix(),
+		JTI:       "at-jti",
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+	for name, raw := range map[string]string{"logout+jwt": logout, "at+jwt": access} {
+		if _, err := idtokenhint.Verify(context.Background(), set, hintIssuer, raw); !errors.Is(
+			err, idtokenhint.ErrMalformed,
+		) {
+			t.Errorf("%s: err=%v want %v", name, err, idtokenhint.ErrMalformed)
+		}
+	}
+}
+
+// TestVerify_AcceptsAbsentTypHeader pins that typ is optional on an ID
+// Token (RFC 7515 §4.1.9), so a hint without one still verifies.
+func TestVerify_AcceptsAbsentTypHeader(t *testing.T) {
+	t.Parallel()
+	set, entry := hintKeys(t)
+	payload, err := json.Marshal(baseHintClaims())
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	raw := signRawPayloadTyped(t, entry, hintKID, "", payload)
+
+	claims, err := idtokenhint.Verify(context.Background(), set, hintIssuer, raw)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if claims.Subject != hintSubject {
+		t.Fatalf("sub=%q want %q", claims.Subject, hintSubject)
 	}
 }

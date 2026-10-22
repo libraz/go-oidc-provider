@@ -9,6 +9,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -240,5 +241,38 @@ func TestVerifyIDTokenHint_RejectsSignatureFromAnotherKey(t *testing.T) {
 		err, ciba.ErrIDTokenHintSignature,
 	) {
 		t.Fatalf("err=%v want %v", err, ciba.ErrIDTokenHintSignature)
+	}
+}
+
+// TestVerifyIDTokenHint_RejectsOtherOPTypedTokens pins that a logout token
+// or a JWT access token the OP signed for the same client and subject is
+// refused as malformed rather than read for its sub.
+func TestVerifyIDTokenHint_RejectsOtherOPTypedTokens(t *testing.T) {
+	t.Parallel()
+	set, key := hintKeys(t)
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+
+	logout, err := backchannel.SignLogoutToken(
+		backchannel.SigningKey{KeyID: key.KeyID, Signer: key.Signer},
+		backchannel.LogoutClaims{
+			Issuer: hintIssuer, Audience: hintClientID, Subject: hintSubject,
+			IssuedAt: now.Unix(), ExpiresAt: now.Add(2 * time.Minute).Unix(),
+		},
+	)
+	if err != nil {
+		t.Fatalf("SignLogoutToken: %v", err)
+	}
+	access, err := tokens.SignAccessToken(key, tokens.AccessTokenClaims{
+		Issuer: hintIssuer, Subject: hintSubject, Audience: []string{hintClientID}, ClientID: hintClientID,
+		IssuedAt: now.Unix(), ExpiresAt: now.Add(5 * time.Minute).Unix(), JTI: "at-jti",
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+	for name, raw := range map[string]string{"logout+jwt": logout, "at+jwt": access} {
+		got, err := ciba.VerifyIDTokenHint(context.Background(), set, hintIssuer, hintClientID, raw)
+		if !errors.Is(err, ciba.ErrIDTokenHintMalformed) || got != "" {
+			t.Errorf("%s: sub=%q err=%v want %v", name, got, err, ciba.ErrIDTokenHintMalformed)
+		}
 	}
 }

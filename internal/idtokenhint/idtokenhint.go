@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -42,7 +43,8 @@ var (
 
 	// ErrMalformed signals that the input is not a syntactically valid
 	// compact-serialised JWS, that its alg is outside the project
-	// allow-list, or that its payload is not a JSON object.
+	// allow-list, that its typ header names a token kind other than an
+	// ID Token, or that its payload is not a JSON object.
 	ErrMalformed = errors.New("idtokenhint: malformed")
 
 	// ErrSignature signals that signature verification failed, that the
@@ -71,7 +73,9 @@ type Claims struct {
 
 // Verify parses raw, verifies its signature against set, and asserts
 // that the payload's iss claim equals issuer. An empty issuer skips the
-// issuer check; every other check is unconditional.
+// issuer check; every other check is unconditional. A typ header other
+// than the ID Token's "JWT" is refused, so another OP-signed artefact
+// (a logout token, a JWT access token) cannot pass as a hint.
 //
 // Verify enforces nothing about the audience, the subject, or freshness.
 // Those are the caller's to decide and the two endpoints decide them
@@ -87,6 +91,9 @@ func Verify(ctx context.Context, set *keys.Set, issuer, raw string) (Claims, err
 	jws, _, err := jose.ParseSigned(raw)
 	if err != nil {
 		return Claims{}, fmt.Errorf("%w: %w", ErrMalformed, err)
+	}
+	if !idTokenType(jws.Signatures[0].Protected.ExtraHeaders["typ"]) {
+		return Claims{}, fmt.Errorf("%w: typ is not an ID Token type", ErrMalformed)
 	}
 	kid := jws.Signatures[0].Header.KeyID
 	if kid == "" {
@@ -108,6 +115,16 @@ func Verify(ctx context.Context, set *keys.Set, issuer, raw string) (Claims, err
 		return Claims{}, ErrIssuer
 	}
 	return claims, nil
+}
+
+// idTokenType reports whether a typ header value is one an ID Token may
+// carry: absent, or "JWT" compared case-insensitively (RFC 7515 §4.1.9).
+func idTokenType(typ any) bool {
+	if typ == nil {
+		return true
+	}
+	s, ok := typ.(string)
+	return ok && strings.EqualFold(s, "JWT")
 }
 
 // Contains reports whether the aud claim includes want. An empty want,
