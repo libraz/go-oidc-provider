@@ -217,6 +217,20 @@ func TestNewEnrolment_AADBindsSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEnrolment: %v", err)
 	}
+	raw, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(pending.SecretBase32)
+	if err != nil {
+		t.Fatalf("decode SecretBase32: %v", err)
+	}
+	if bytes.Contains(pending.Record.SecretCiphertext, raw) {
+		t.Error("SecretCiphertext carries the plaintext seed")
+	}
+	opened, err := codec.Open(pending.Record.SecretCiphertext, []byte("user-alice"))
+	if err != nil {
+		t.Fatalf("Open with the enrolled subject: %v", err)
+	}
+	if !bytes.Equal(opened, raw) {
+		t.Error("ciphertext opened under the enrolled subject does not yield the seed")
+	}
 	if _, err := codec.Open(pending.Record.SecretCiphertext, []byte("user-bob")); !errors.Is(err, totpkit.ErrDecrypt) {
 		t.Errorf("Open with mismatched aad: err=%v want ErrDecrypt", err)
 	}

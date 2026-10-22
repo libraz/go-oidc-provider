@@ -528,31 +528,44 @@ func TestScenario_TX_012_PolicyGenericErrorCollapsesToInvalidGrant(t *testing.T)
 
 func TestScenario_TX_013_TTLCappedToMinimumOfThree(t *testing.T) {
 	t.Parallel()
-	// Policy requests a TTL larger than the global cap; subject_token
-	// remaining is also large. The granted TTL is the minimum (the
-	// global cap, default 1h).
-	bigTTL := 24 * time.Hour
-	policy := txDecisionPolicy{decision: &op.TokenExchangeDecision{GrantedTTL: bigTTL}}
-	p := newTXProvider(t, policy)
-	subjectJWS := p.mintSubjectToken(t, p.defaultSubjectClaims("tx-013-jti"))
-	form := url.Values{
-		"subject_token":      []string{subjectJWS},
-		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
+	// The provider's global access-token cap is pinned to 1h. Each
+	// case makes a different one of the three bounds the smallest, so
+	// dropping any one clamp changes the issued lifetime.
+	cases := []struct {
+		name         string
+		requestedTTL time.Duration
+		subjectLife  time.Duration
+		wantMin      int64
+		wantMax      int64
+	}{
+		{"global cap", 24 * time.Hour, 24 * time.Hour, 3600, 3600},
+		{"subject remaining", 24 * time.Hour, 10 * time.Minute, 590, 600},
+		{"handler request", 2 * time.Minute, 24 * time.Hour, 120, 120},
 	}
-	status, body := p.postTokenExchange(t, form)
-	if status != http.StatusOK {
-		t.Fatalf("status=%d want 200, body=%v", status, body)
-	}
-	expiresIn, _ := body["expires_in"].(float64)
-	// The default access-token TTL is 1h; the cap should yield 3600.
-	if int64(expiresIn) > int64(bigTTL.Seconds()) {
-		t.Errorf("expires_in=%d exceeds the policy-requested TTL", int64(expiresIn))
-	}
-	if expiresIn <= 0 {
-		t.Errorf("expires_in=%d non-positive", int64(expiresIn))
-	}
-	if got := body["issued_token_type"]; got != txTokenTypeAT {
-		t.Errorf("issued_token_type=%v want %s", got, txTokenTypeAT)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			policy := txDecisionPolicy{decision: &op.TokenExchangeDecision{GrantedTTL: tc.requestedTTL}}
+			p := newTXProviderOpts(t, policy, op.WithAccessTokenTTL(time.Hour))
+			claims := p.defaultSubjectClaims("tx-013-jti")
+			claims.ExpiresAt = time.Unix(claims.IssuedAt, 0).Add(tc.subjectLife).Unix()
+			subjectJWS := p.mintSubjectToken(t, claims)
+			form := url.Values{
+				"subject_token":      []string{subjectJWS},
+				"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
+			}
+			status, body := p.postTokenExchange(t, form)
+			if status != http.StatusOK {
+				t.Fatalf("status=%d want 200, body=%v", status, body)
+			}
+			expiresIn, _ := body["expires_in"].(float64)
+			if got := int64(expiresIn); got < tc.wantMin || got > tc.wantMax {
+				t.Errorf("expires_in=%d want in [%d, %d]", got, tc.wantMin, tc.wantMax)
+			}
+			if got := body["issued_token_type"]; got != txTokenTypeAT {
+				t.Errorf("issued_token_type=%v want %s", got, txTokenTypeAT)
+			}
+		})
 	}
 }
 

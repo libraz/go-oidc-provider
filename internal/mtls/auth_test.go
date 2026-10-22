@@ -100,6 +100,28 @@ func TestVerifyTLSClientAuth_SANDNS(t *testing.T) {
 	}
 }
 
+// TestVerifyTLSClientAuth_SANDNS_ULabelIsNotAnALabel pins that an IDN
+// U-label registration is not equated with the A-label the certificate
+// carries: the comparison folds ASCII case only.
+func TestVerifyTLSClientAuth_SANDNS_ULabelIsNotAnALabel(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeafWith(t, func(c *x509.Certificate) {
+		c.DNSNames = []string{"xn--bcher-kva.example"}
+	})
+	if err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{
+		SANDNS: "XN--BCHER-KVA.EXAMPLE",
+	}); err != nil {
+		t.Errorf("A-label, folded case: %v", err)
+	}
+	err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{
+		SANDNS: "b\u00fccher.example",
+	})
+	if !errors.Is(err, mtls.ErrSANMismatch) {
+		t.Errorf("U-label vs A-label: err=%v want ErrSANMismatch", err)
+	}
+}
+
 // TestVerifyTLSClientAuth_SANURI matches a registered URI SAN.
 func TestVerifyTLSClientAuth_SANURI(t *testing.T) {
 	t.Parallel()
@@ -119,6 +141,35 @@ func TestVerifyTLSClientAuth_SANURI(t *testing.T) {
 	}
 }
 
+// TestVerifyTLSClientAuth_SANURI_ExactMatch pins that a URI differing
+// in path, query or fragment is refused: nothing is normalised away.
+func TestVerifyTLSClientAuth_SANURI_ExactMatch(t *testing.T) {
+	t.Parallel()
+
+	const certURI = "https://rp.example/client?a=1#frag"
+	parsed, err := url.Parse(certURI)
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	cert := generateLeafWith(t, func(c *x509.Certificate) {
+		c.URIs = []*url.URL{parsed}
+	})
+	if err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{SANURI: certURI}); err != nil {
+		t.Fatalf("identical URI: %v", err)
+	}
+	for _, registered := range []string{
+		"https://rp.example/client?a=2#frag",
+		"https://rp.example/client?a=1",
+		"https://rp.example/client#frag",
+		"https://rp.example/other?a=1#frag",
+	} {
+		err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{SANURI: registered})
+		if !errors.Is(err, mtls.ErrSANMismatch) {
+			t.Errorf("SANURI %q: err=%v want ErrSANMismatch", registered, err)
+		}
+	}
+}
+
 // TestVerifyTLSClientAuth_SANIP matches a registered IP SAN.
 func TestVerifyTLSClientAuth_SANIP(t *testing.T) {
 	t.Parallel()
@@ -130,6 +181,30 @@ func TestVerifyTLSClientAuth_SANIP(t *testing.T) {
 		SANIP: "203.0.113.5",
 	}); err != nil {
 		t.Errorf("VerifyTLSClientAuth: %v", err)
+	}
+}
+
+// TestVerifyTLSClientAuth_SANIP_IPv6TextualForms pins that every
+// textual spelling of one IPv6 address matches, and a different
+// address does not.
+func TestVerifyTLSClientAuth_SANIP_IPv6TextualForms(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeafWith(t, func(c *x509.Certificate) {
+		c.IPAddresses = []net.IP{net.ParseIP("2001:db8::1")}
+	})
+	for _, registered := range []string{
+		"2001:db8::1",
+		"2001:0db8:0:0:0:0:0:1",
+		"2001:DB8:0:0::1",
+	} {
+		if err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{SANIP: registered}); err != nil {
+			t.Errorf("SANIP %q: %v", registered, err)
+		}
+	}
+	err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{SANIP: "2001:db8::2"})
+	if !errors.Is(err, mtls.ErrSANMismatch) {
+		t.Errorf("different address: err=%v want ErrSANMismatch", err)
 	}
 }
 
@@ -181,6 +256,27 @@ func TestVerifyTLSClientAuth_SANEmailCaseFold(t *testing.T) {
 				SANEmail: tc.matcher,
 			}); err != nil {
 				t.Errorf("VerifyTLSClientAuth(%q vs %q): %v", tc.certEmail, tc.matcher, err)
+			}
+		})
+	}
+
+	refused := []struct {
+		name      string
+		certEmail string
+		matcher   string
+	}{
+		{"other_local_part", "other@example.org", "client@example.org"},
+		{"other_domain", "client@example.net", "client@example.org"},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cert := generateLeafWith(t, func(c *x509.Certificate) {
+				c.EmailAddresses = []string{tc.certEmail}
+			})
+			err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{SANEmail: tc.matcher})
+			if !errors.Is(err, mtls.ErrSANMismatch) {
+				t.Errorf("VerifyTLSClientAuth(%q vs %q): err=%v want ErrSANMismatch", tc.certEmail, tc.matcher, err)
 			}
 		})
 	}
@@ -483,6 +579,30 @@ func TestVerifyTLSClientAuth_SubjectDN_RFC4514Reorder(t *testing.T) {
 	}
 	if err := mtls.VerifyTLSClientAuth(cert, matcher); err != nil {
 		t.Errorf("VerifyTLSClientAuth (reordered DN): %v", err)
+	}
+}
+
+// TestVerifyTLSClientAuth_SubjectDN_UnparsedFormsMismatch pins the
+// verbatim-compare fallback: OpenSSL-style and OID-alias spellings of
+// a name the certificate carries are not canonicalised, so they never
+// match.
+func TestVerifyTLSClientAuth_SubjectDN_UnparsedFormsMismatch(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeafWith(t, func(c *x509.Certificate) {
+		c.Subject = pkix.Name{
+			CommonName:   "rp.example",
+			Organization: []string{"Example Org"},
+		}
+	})
+	for _, dn := range []string{
+		"/CN=rp.example/O=Example Org",
+		"CN=rp.example,O=Example Org,emailAddress=ops@example.org",
+	} {
+		err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{SubjectDN: dn})
+		if !errors.Is(err, mtls.ErrSubjectMismatch) {
+			t.Errorf("SubjectDN %q: err=%v want ErrSubjectMismatch", dn, err)
+		}
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -24,20 +25,40 @@ import (
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
+// TestScenario_NA_001_MalformedRedirectURIRejected pins that an
+// unparseable requested URI is never approved for a client that
+// allows the loopback any-port wildcard. The malformed variants keep
+// the registered host and path, so only the parse-error branch of the
+// wildcard match stands between them and approval. LoopbackURIMatches
+// is the predicate /authorize and end_session share, so the check
+// covers redirect_uri and post_logout_redirect_uri alike.
 func TestScenario_NA_001_MalformedRedirectURIRejected(t *testing.T) {
 	t.Parallel()
+	const registered = "http://127.0.0.1/op/callback"
 	client := &store.Client{
-		ID:           "native-na-001",
-		RedirectURIs: []string{"http://127.0.0.1/op/callback"},
-		Scopes:       []string{"openid"},
-		ResponseTypes: []string{
-			"code",
-		},
-		GrantTypes: []string{"authorization_code"},
+		ID:              "native-na-001",
+		RedirectURIs:    []string{registered},
+		Scopes:          []string{"openid"},
+		ResponseTypes:   []string{"code"},
+		GrantTypes:      []string{"authorization_code"},
+		PublicClient:    true,
+		ApplicationType: "native",
 	}
-	for _, raw := range []string{"http:", "http://127.0.0.", "http://127.0.0.1::"} {
+	if !authorize.LoopbackURIMatches(client, registered, "http://127.0.0.1:8080/op/callback") {
+		t.Fatal("control: a well-formed ephemeral-port callback must match the loopback wildcard")
+	}
+	for _, raw := range []string{
+		"http:",
+		"http://127.0.0.",
+		"http://127.0.0.1::",
+		"http://127.0.0.1::/op/callback",
+		"http://[::1/op/callback",
+	} {
 		t.Run(raw, func(t *testing.T) {
 			t.Parallel()
+			if authorize.LoopbackURIMatches(client, registered, raw) {
+				t.Errorf("LoopbackURIMatches approved malformed URI %q", raw)
+			}
 			values := scenariokit.AuthorizeParams{
 				ClientID:    client.ID,
 				RedirectURI: raw,
@@ -46,12 +67,13 @@ func TestScenario_NA_001_MalformedRedirectURIRejected(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseValues(%q): %v", raw, err)
 			}
-			if err := req.Validate(client, nil, authorize.Policy{
+			err = req.Validate(client, nil, authorize.Policy{
 				PKCERequired:         true,
 				NonceRequired:        true,
 				StateOrNonceRequired: true,
-			}); err == nil {
-				t.Fatalf("Validate(%q) succeeded, want reject", raw)
+			})
+			if !errors.Is(err, authorize.ErrRedirectURIInvalid) {
+				t.Errorf("Validate(%q) err=%v, want ErrRedirectURIInvalid", raw, err)
 			}
 		})
 	}

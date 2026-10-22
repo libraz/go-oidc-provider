@@ -2,6 +2,7 @@ package scenarios_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -45,11 +46,15 @@ func TestEndpoints_OversizedJWSIsRefusedBeforeItIsDecoded(t *testing.T) {
 	// before the size gate has had its say.
 	oversizedSegment := strings.Repeat("A", httpx.MaxFormBytes+1)
 	oversizedJWS := "eyJhbGciOiJFUzI1NiJ9." + oversizedSegment + ".c2ln"
+	// The same outline well under the ceiling: it gets past the size
+	// gate and is refused for what it is, which tells the two refusals
+	// apart.
+	smallJWS := "eyJhbGciOiJFUzI1NiJ9.e30.c2ln"
 
 	cases := []struct {
 		name string
 		path string
-		form url.Values
+		form func(jws string) url.Values
 	}{
 		{
 			// The client assertion is a JWS the OP accepts from an
@@ -57,11 +62,13 @@ func TestEndpoints_OversizedJWSIsRefusedBeforeItIsDecoded(t *testing.T) {
 			// caller proposes to authenticate.
 			name: "token endpoint, client_assertion",
 			path: "/oidc/token",
-			form: url.Values{
-				"grant_type":            {"client_credentials"},
-				"client_id":             {"client-oversized"},
-				"client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"},
-				"client_assertion":      {oversizedJWS},
+			form: func(jws string) url.Values {
+				return url.Values{
+					"grant_type":            {"client_credentials"},
+					"client_id":             {oversizedClientID},
+					"client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"},
+					"client_assertion":      {jws},
+				}
 			},
 		},
 		{
@@ -69,9 +76,11 @@ func TestEndpoints_OversizedJWSIsRefusedBeforeItIsDecoded(t *testing.T) {
 			// object, the other unauthenticated JWS surface.
 			name: "pushed authorization request, request object",
 			path: "/oidc/par",
-			form: url.Values{
-				"client_id": {"client-oversized"},
-				"request":   {oversizedJWS},
+			form: func(jws string) url.Values {
+				return url.Values{
+					"client_id": {oversizedClientID},
+					"request":   {jws},
+				}
 			},
 		},
 	}
@@ -83,30 +92,64 @@ func TestEndpoints_OversizedJWSIsRefusedBeforeItIsDecoded(t *testing.T) {
 			tk := testkit.NewProvider(t, testkit.WithOptions(
 				op.WithFeature(feature.PAR),
 			))
-			body := tc.form.Encode()
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
-				tk.Server.URL+tc.path, strings.NewReader(body))
-			if err != nil {
-				t.Fatalf("NewRequest: %v", err)
-			}
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			// The client exists, so an unknown-client refusal cannot
+			// stand in for the size gate.
+			tk.RegisterClient(t, testkit.ClientFixture{
+				ID:         oversizedClientID,
+				GrantTypes: []string{"authorization_code", "client_credentials"},
+			})
 
-			resp, err := tk.HTTPClient(nil).Do(req)
-			if err != nil {
-				t.Fatalf("POST %s: %v", tc.path, err)
-			}
-			defer resp.Body.Close()
-			if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-				t.Fatalf("drain body: %v", err)
+			post := func(jws string) (int, oversizedErrorBody) {
+				t.Helper()
+				req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+					tk.Server.URL+tc.path, strings.NewReader(tc.form(jws).Encode()))
+				if err != nil {
+					t.Fatalf("NewRequest: %v", err)
+				}
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				resp, err := tk.HTTPClient(nil).Do(req)
+				if err != nil {
+					t.Fatalf("POST %s: %v", tc.path, err)
+				}
+				defer resp.Body.Close()
+				raw, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatalf("read body: %v", err)
+				}
+				var eb oversizedErrorBody
+				_ = json.Unmarshal(raw, &eb)
+				return resp.StatusCode, eb
 			}
 
-			// The request must be refused as the client's fault. A 5xx
-			// would mean the OP tried and fell over, which is the
-			// outcome the bound exists to prevent.
-			if resp.StatusCode < 400 || resp.StatusCode >= 500 {
-				t.Fatalf("status=%d; an over-cap body must be refused as a client error, not accepted or crashed",
-					resp.StatusCode)
+			// The request must be refused as the client's fault, by the
+			// size gate. A 5xx would mean the OP tried and fell over,
+			// which is the outcome the bound exists to prevent.
+			status, eb := post(oversizedJWS)
+			if status != http.StatusBadRequest || eb.Error != "invalid_request" ||
+				!strings.Contains(eb.Description, oversizedGateDescription) {
+				t.Fatalf("over-cap: status=%d error=%q description=%q; want 400 invalid_request %q",
+					status, eb.Error, eb.Description, oversizedGateDescription)
+			}
+
+			// Control: under the cap the same request passes the gate,
+			// so the refusal above is the length and nothing else.
+			status, eb = post(smallJWS)
+			if strings.Contains(eb.Description, oversizedGateDescription) {
+				t.Fatalf("under-cap: status=%d description=%q; the size gate refused a body under the cap",
+					status, eb.Description)
 			}
 		})
 	}
+}
+
+const (
+	oversizedClientID = "client-oversized"
+	// oversizedGateDescription is what /token and /par answer when the
+	// bounded body read fails.
+	oversizedGateDescription = "malformed form body"
+)
+
+type oversizedErrorBody struct {
+	Error       string `json:"error"`
+	Description string `json:"error_description"`
 }

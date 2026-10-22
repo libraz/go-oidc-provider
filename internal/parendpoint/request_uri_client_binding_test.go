@@ -102,4 +102,9 @@ func TestEndToEnd_PAR_RequestURIBoundToPushingClient(t *testing.T) {
 	if own.StatusCode != http.StatusFound {
 		t.Fatalf("owner /authorize status=%d want 302", own.StatusCode)
 	}
+	// An error redirect to the RP is also a 302; only the interaction
+	// hop shows the request was accepted.
+	if loc := own.Header.Get("Location"); !strings.HasPrefix(loc, "/oidc/interaction/") {
+		t.Errorf("owner /authorize Location=%q, want the interaction hop", loc)
+	}
 }
