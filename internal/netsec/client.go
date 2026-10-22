@@ -118,11 +118,11 @@ type Options struct {
 	// public so tests outside the package can wire it.
 	LookupHook func(ctx context.Context, host string) ([]net.IPAddr, error)
 
-	// DialControlHook lets a test observe / replace the
-	// [Dialer.Control] body. Production code leaves this nil and the
-	// package installs its own deny-list check; tests wrap the result
-	// to assert the hook fired or to simulate a specific kernel-level
-	// failure shape.
+	// DialControlHook lets a test observe the dial or add a denial.
+	// It runs after the package's own deny-list check has allowed the
+	// address, so it cannot replace the gate. Production code leaves
+	// this nil; tests use it to assert the hook fired or to simulate a
+	// specific kernel-level failure shape.
 	DialControlHook func(network, address string, c syscall.RawConn) error
 
 	// BaseTransport overrides the [http.RoundTripper] base. The

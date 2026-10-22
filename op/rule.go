@@ -16,9 +16,9 @@ package op
 type Rule struct {
 	// When is the predicate the orchestrator evaluates on every pass.
 	// MUST be a pure function of [LoginContext]; the orchestrator
-	// recovers from a panic in When and treats the rule as not
-	// matching, but a programming error in the predicate still costs
-	// a log entry and a wasted evaluation pass.
+	// recovers from a panic in When, logs it, and treats the rule as
+	// matching, so a faulty predicate demands its step rather than
+	// letting the login through with fewer factors.
 	//
 	// A nil predicate matches every pass. The alternative — treating an
 	// unset field as "never fires" — would let a struct literal that
@@ -61,10 +61,11 @@ func RuleAfterFailedAttempts(n int, then Step) Rule {
 // Embedders typically pair the rule with a stronger second factor:
 // `RuleRisk(RiskScoreHigh, StepTOTP{...})` requests TOTP only when
 // the configured [RiskAssessor] reports the highest level.
-// When [LoginFlow.Risk] is nil the orchestrator does not invoke an
-// assessor and [LoginContext.RiskScore] stays at [RiskScoreNone]; in
-// that case a [RuleRisk] with a non-zero threshold silently never
-// fires.
+// The assessor is [LoginFlow.Risk] or, when that is nil, the one
+// installed by [WithRiskAssessor]. When neither is configured the
+// orchestrator does not invoke an assessor and [LoginContext.RiskScore]
+// stays at [RiskScoreNone]; in that case a [RuleRisk] with a non-zero
+// threshold silently never fires.
 func RuleRisk(threshold RiskScore, then Step) Rule {
 	return Rule{
 		When: func(lc LoginContext) bool { return lc.RiskScore >= threshold },

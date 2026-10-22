@@ -5,7 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/libraz/go-oidc-provider/op.svg)](https://pkg.go.dev/github.com/libraz/go-oidc-provider/op)
 [![codecov](https://codecov.io/gh/libraz/go-oidc-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/go-oidc-provider)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-go--oidc--provider.libraz.net-2563eb)](https://go-oidc-provider.libraz.net/ja/)
 [![Go Report Card](https://goreportcard.com/badge/github.com/libraz/go-oidc-provider)](https://goreportcard.com/report/github.com/libraz/go-oidc-provider)
 
@@ -66,7 +66,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 
 - **`http.Handler` として埋め込みます**。フレームワークに依存せず、任意のプレフィックスにマウントできます。
 - **ユーザモデルとストレージは持ち込みです**。小さな `store.*` サブストアのインターフェースを介すだけで、利用者の `users` テーブルをライブラリが直接触ることはありません。
-- **対話ドライバはヘッドレスです**。`op.WithSPAUI` でログイン・同意・ログアウトを SPA に委譲でき、`op.WithConsentUI` で独自テンプレートに差し替えることもできます。
+- **対話ドライバはヘッドレスです**。`op.WithSPAUI` でログインと同意を SPA に委譲でき、`op.WithConsentUI` で独自テンプレートに差し替えることもできます。ログアウト確認画面は常に OP 組み込みの（ロケール対応済みの）ページです。
 - **観測性は監査を起点にします**。業務イベントは `audit.Emitter` を通じて集約され、`op.WithPrometheus(reg)` は厳選したカウンタ群を利用者のレジストリに登録します。`/metrics` の公開、リクエスト所要時間を測るミドルウェアの導入、ルータのラップはライブラリ側では**行いません**。これらは組み込み側の責務です。
 
 次のものは意図的にスコープ外です。IdP ではありません（ユーザテーブル・パスワードハッシュ・メール送信を持ちません）。汎用の OAuth2 フレームワークでも、UI フレームワークでもありません。詳しくは [Why this library](https://go-oidc-provider.libraz.net/ja/why) を参照してください。
@@ -112,7 +112,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 (cd examples/01-minimal && GOWORK=off go run -tags example .)
 ```
 
-ライブラリ本体を超える依存（ストアアダプタ、メトリクスクライアントなど）を引き込むサンプルは、開発用の `replace` でチェックアウトを参照する独立モジュールで、`01-minimal` と同様にリポジトリのワークスペースを無効にして実行します。それ以外は `go.mod` を持たず、チェックアウトからそのまま実行できます。内訳は [`examples/README.md`](examples/README.md) を参照してください。`make example-01` も同じことをします。
+ライブラリ本体を超える依存（ストアアダプタ、メトリクスクライアントなど）を引き込むサンプルは、開発用の `replace` でチェックアウトを参照する独立モジュールで、`01-minimal` と同様にリポジトリのワークスペースを無効にして実行します。それ以外は `go.mod` を持たず、チェックアウトからそのまま実行できます。内訳は [`examples/README.md`](examples/README.md) を参照してください。動作確認の対象サンプルにはそれぞれ `make example-NN` ターゲットがあり、`make example-01` は `01-minimal` を同じ方法で実行します。
 
 [`sample/`](sample/README.md) は、オプションを 1 つずつ見せるのではなく、ひとつのアプリケーションとして組み上げたものです。アカウントを自前で持ち、同一プロセスに OP を組み込み、リライングパーティとの往復まで完結させます。ストレージは永続サブストアが MySQL、揮発性サブストアが Redis で、`op/storeadapter/composite` で束ねています。起動は `docker compose -f sample/compose.yaml up -d --build` です。デモンストレーション用であり、公開ホスティングを想定したものではありません。
 

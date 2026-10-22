@@ -1,7 +1,7 @@
 // Package testkit provides drop-in test helpers for code that integrates the
 // go-oidc-provider library. It boots a fully wired [op.Provider] over an
-// in-memory store, generates a deterministic ECDSA P-256 signing key per
-// test, and exposes utilities for fabricating [store.Client] fixtures and
+// in-memory store, generates a fresh ECDSA P-256 signing key per
+// provider, and exposes utilities for fabricating [store.Client] fixtures and
 // signing JWTs with the OP's own active key.
 //
 // The package supplies no signer other than the OP's. Tests that need a

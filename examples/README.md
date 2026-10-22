@@ -86,7 +86,7 @@ it boots with
 | split hot volatile state from durable state | [`08-composite-hot-cold`](08-composite-hot-cold/main.go), [`09-redis-volatile`](09-redis-volatile/main.go) |
 | run the login / consent / chooser screens with no UI configured at all | [`19-default-ui`](19-default-ui/main.go) |
 | swap the default HTML driver for JSON | [`16-custom-interaction`](16-custom-interaction/main.go) |
-| drive login / consent / logout from a SPA | [`10-react-login`](10-react-login/main.go) — bundle is dependency-free vanilla JS, so it runs with no build step; the JSON contract is the same one a React / Vue / Svelte build output consumes |
+| drive login / consent from a SPA | [`10-react-login`](10-react-login/main.go) — bundle is dependency-free vanilla JS, so it runs with no build step; the JSON contract is the same one a React / Vue / Svelte build output consumes |
 | run a SPA against MySQL + Redis (the usual deployment shape) | [`17-spa-composite-store`](17-spa-composite-store/main.go) |
 | customise the consent screen | [`11-custom-consent-ui`](11-custom-consent-ui/main.go) |
 | support `prompt=select_account` (multi-account) | [`13-multi-account`](13-multi-account/main.go) |

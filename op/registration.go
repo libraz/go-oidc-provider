@@ -578,9 +578,8 @@ func defaultRegistrationResponseTypes() []string {
 //
 // Treat Value with the care due any single-use credential:
 //
-//   - Do NOT log it. The library deliberately omits Value from audit
-//     events (only ID and ExpiresAt are surfaced) so that a wired
-//     audit emitter cannot inadvertently leak it; calling code MUST
+//   - Do NOT log it. Issuing and revoking an IAT emit no audit event,
+//     and the library never writes Value to one; calling code MUST
 //     uphold the same invariant.
 //   - Pass it directly to the operator's secret manager or to the
 //     out-of-band channel that delivers it to the operator (invitation

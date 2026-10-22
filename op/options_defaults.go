@@ -39,12 +39,12 @@ func (c *config) applyDefaults() {
 	if c.logger == nil {
 		c.logger = slog.New(internallog.DiscardHandler{})
 	}
-	// auditLogger has no fall-back default: when neither
-	// [WithAuditLogger] nor [WithLogger] is set, [effectiveAuditLogger]
-	// returns nil and the audit emitter collapses to a no-op. Setting
-	// a default here would silently route audit lines into the
-	// operational stream — which is the design rationale for keeping
-	// the two loggers structurally separate.
+	// auditLogger has no fall-back default of its own: when
+	// [WithAuditLogger] is unset, [effectiveAuditLogger] returns the
+	// operational logger installed above, whose discard handler drops
+	// every record. Defaulting auditLogger here would pin it and stop
+	// audit lines following a later-supplied [WithLogger] — the two
+	// loggers stay structurally separate.
 	if c.mountPrefix == "" {
 		c.mountPrefix = "/oidc"
 	}

@@ -59,9 +59,10 @@ type Document struct {
 	// authentication methods accepted at the introspection endpoint.
 	// RFC 8414 §2 advertises the field separately from the token
 	// endpoint's so deployments may, in principle, accept different
-	// methods at each. v1.0 mirrors the token endpoint's list (the
-	// introspection handler reuses the same authentication machinery)
-	// and only emits the field when the Introspect feature is enabled.
+	// methods at each. v1.0 advertises the token endpoint's list minus
+	// "none" (public clients cannot introspect; the introspection
+	// handler reuses the same authentication machinery) and only emits
+	// the field when the Introspect feature is enabled.
 	IntrospectionEndpointAuthMethodsSupported []string `json:"introspection_endpoint_auth_methods_supported,omitempty"`
 
 	// RevocationEndpoint is the absolute URL of the RFC 7009 token

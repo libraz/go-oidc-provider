@@ -5,7 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/libraz/go-oidc-provider/op.svg)](https://pkg.go.dev/github.com/libraz/go-oidc-provider/op)
 [![codecov](https://codecov.io/gh/libraz/go-oidc-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/go-oidc-provider)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-go--oidc--provider.libraz.net-2563eb)](https://go-oidc-provider.libraz.net)
 [![Go Report Card](https://goreportcard.com/badge/github.com/libraz/go-oidc-provider)](https://goreportcard.com/report/github.com/libraz/go-oidc-provider)
 
@@ -103,9 +103,10 @@ their own opt-in. Documented under
 - **Embeds as `http.Handler`.** Framework-agnostic, mountable at any prefix.
 - **Bring your own user model and storage.** Small `store.*` substore
   interfaces; the library never touches your `users` table directly.
-- **Headless interaction driver.** Login, consent and logout can be driven from
-  a SPA via `op.WithSPAUI`, or rendered from your own templates with
-  `op.WithConsentUI`.
+- **Headless interaction driver.** Login and consent can be driven from a SPA
+  via `op.WithSPAUI`, or rendered from your own templates with
+  `op.WithConsentUI`. The logout confirmation is always the OP's built-in,
+  localised page.
 - **Audit-first observability.** Business events go through `audit.Emitter`,
   and `op.WithPrometheus(reg)` registers a curated counter set on your
   registry. The library does not mount `/metrics`, install request-duration
@@ -193,8 +194,9 @@ An example that pulls a dependency beyond the library — a store adapter, a
 metrics client — is its own module resolved through a development `replace`
 and runs with the repository workspace disabled, like `01-minimal` above. The
 rest carry no `go.mod` and run from the checkout as-is; see
-[`examples/README.md`](examples/README.md) for the split. `make example-01`
-runs the smoke-tested subset the same way.
+[`examples/README.md`](examples/README.md) for the split. Each smoke-tested
+example has its own `make example-NN` target; `make example-01` runs
+`01-minimal` the same way.
 
 [`sample/`](sample/README.md) is one worked application rather than one option
 apiece. It owns its accounts, embeds the OP in the same process, and completes

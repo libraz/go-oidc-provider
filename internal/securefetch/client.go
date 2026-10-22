@@ -91,8 +91,7 @@ type Policy struct {
 	AllowedSchemes []string
 
 	// MaxBodyBytes caps the response body the envelope reads. Zero
-	// falls back to [DefaultMaxBody]; a negative value is invalid
-	// (the constructor rejects it).
+	// falls back to [DefaultMaxBody], as does a negative value.
 	MaxBodyBytes int64
 
 	// AcceptContentTypes is the response Content-Type allow-list.
@@ -135,11 +134,12 @@ type Policy struct {
 	// package can wire it.
 	LookupHook func(ctx context.Context, host string) ([]net.IPAddr, error)
 
-	// DialControlHook lets a test observe / replace the
-	// [Dialer.Control] body installed by [netsec.NewHTTPClient].
-	// Production code leaves this nil; tests wrap the result to assert
-	// the hook fired or to simulate a specific kernel-level failure
-	// shape.
+	// DialControlHook lets a test observe the dial or add a denial.
+	// It runs after the deny-list check installed by
+	// [netsec.NewHTTPClient] has allowed the address, so it cannot
+	// replace the gate. Production code leaves this nil; tests use it
+	// to assert the hook fired or to simulate a specific kernel-level
+	// failure shape.
 	DialControlHook func(network, address string, c syscall.RawConn) error
 
 	// DialTimeout caps the TCP / TLS dial phase. Zero falls back to

@@ -348,13 +348,14 @@ func WithInteractions(i ...Interaction) Option {
 
 // SPAUI declares the SPA-shell mount point and optional asset root
 // the [Provider] should expose so the embedder's React (or framework-
-// neutral SPA) frontend can drive the login / consent / RP-Initiated
-// Logout flows. The struct is supplied to [WithSPAUI]; the option
-// stores it on config and the orchestrator wiring translates
-// LoginMount into the shell, JSON state, and asset routes. The scope
-// is deliberately limited to login / consent / RP-Initiated Logout:
-// front-channel logout and session management iframes are out of
-// scope, so [SPAUI] does not carry mounts for those surfaces.
+// neutral SPA) frontend can drive the login / consent flows. The
+// struct is supplied to [WithSPAUI]; the option stores it on config
+// and the orchestrator wiring translates LoginMount into the shell,
+// JSON state, and asset routes. The scope is deliberately limited to
+// login / consent: the RP-Initiated Logout confirmation is always the
+// OP's built-in page, and front-channel logout and session management
+// iframes are out of scope, so [SPAUI] does not carry mounts for
+// those surfaces.
 // LoginMount is the only field that affects routing; see the
 // deprecation notes on ConsentMount and LogoutMount.
 // Experimental: the field set MAY gain optional members in a minor

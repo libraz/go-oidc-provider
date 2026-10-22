@@ -84,29 +84,29 @@ type Scope struct {
 	// configured set; duplicates fail [New] at construction.
 	Name string
 
-	// Title is the short, user-facing label rendered on the consent
-	// prompt. It is the default ("en") string; per-language overrides
-	// live in [Scope.I18n].
+	// Title is the short, user-facing label for the scope. It is the
+	// default ("en") string. The OP stores it but does not forward it
+	// to the consent prompt, which receives only Name, Description and
+	// Required.
 	Title string
 
-	// Description is the longer user-facing explanation rendered next
-	// to the title on the consent prompt. It is the default ("en")
-	// string; per-language overrides live in [Scope.I18n].
+	// Description is the longer user-facing explanation rendered on
+	// the consent prompt. It is the default ("en") string.
 	Description string
 
-	// Icon is the optional UI hint the SPA can use to pick an icon
-	// glyph. The library does not interpret the value; it is passed
-	// through to the consent prompt verbatim.
+	// Icon is the optional UI hint an embedder UI can use to pick an
+	// icon glyph. The library neither interprets nor forwards the
+	// value.
 	Icon string
 
-	// Category groups related scopes on the consent prompt (for
-	// example "identity", "data:read", "data:write"). The library
-	// does not interpret the value beyond echoing it to the SPA.
+	// Category groups related scopes (for example "identity",
+	// "data:read", "data:write"). The library neither interprets nor
+	// forwards the value.
 	Category string
 
 	// Claims lists the userinfo claim names this scope releases. The
 	// library releases these claim names from /userinfo when the scope
-	// is granted, in addition to surfacing them on the consent prompt.
+	// is granted; they are not forwarded to the consent prompt.
 	// Standard OIDC scopes keep their RFC-defined mappings; this field
 	// is the custom-scope hook.
 	Claims []string
@@ -117,14 +117,15 @@ type Scope struct {
 	Required bool
 
 	// I18n carries per-locale overrides of [Scope.Title] and
-	// [Scope.Description]. The map key is a BCP 47 language tag (for
-	// example "ja", "en-GB"). Locales not listed fall back to the
-	// default Title / Description.
+	// [Scope.Description], keyed by BCP 47 language tag (for example
+	// "ja", "en-GB"). The OP stores the map but does not read it; the
+	// consent prompt receives only the default Description.
 	I18n map[string]ScopeI18n
 
-	// Public, when false, omits the scope from the discovery
-	// scopes_supported list. Acceptance is governed by
-	// [Scope.AllowedClients]. Defaults to true.
+	// Public, when true, lists the scope in the discovery
+	// scopes_supported list; the zero value (false) omits it, so a
+	// custom scope must set Public: true to be advertised. Acceptance
+	// is governed by [Scope.AllowedClients].
 	//
 	// The OIDC standard scopes (openid, profile, email, address,
 	// phone, offline_access) are forced Public: true; registering any
