@@ -11,6 +11,8 @@ import "github.com/libraz/go-oidc-provider/internal/authn"
 type RiskStage = authn.RiskStage
 
 // RiskStage values re-exported from the authn package.
+// RiskTokenExchange is reserved and never raised: the /token endpoint
+// does not consult the [RiskAssessor].
 const (
 	RiskAuthorizeEntry = authn.RiskAuthorizeEntry
 	RiskPreFactor      = authn.RiskPreFactor

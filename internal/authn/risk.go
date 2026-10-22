@@ -31,8 +31,9 @@ const (
 	// is insufficient at this risk level — append passkey").
 	RiskPostFactor
 
-	// RiskTokenExchange fires on /token receipt. Suitable for
-	// unusual-location refresh detection.
+	// RiskTokenExchange is reserved and never raised: the /token
+	// endpoint does not consult the [RiskAssessor]. The value keeps the
+	// stage set stable for assessors that switch on it.
 	RiskTokenExchange
 )
 
