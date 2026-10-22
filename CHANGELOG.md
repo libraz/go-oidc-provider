@@ -78,6 +78,34 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
+## [Unreleased]
+
+### Security
+
+- `LoginFlow` rules and the `Decider` now apply to authorizations served
+  from an existing session. Before minting from a session — a cached grant
+  that covers the request, or the first-party consent skip — `/authorize`
+  evaluates them as if the chain had just completed `Primary`; when one
+  demands a step, the request runs the chain from the session's subject
+  instead of minting, and `prompt=none` answers `interaction_required`. A
+  `RuleClient` or `RuleScope` step-up was previously enforced only on a
+  fresh login, so a session established with the primary factor alone
+  reached the guarded client or scope without it. A session's earlier
+  factors do not count toward a rule, matching the consent-screen path;
+  risk-driven rules still fire only inside the chain.
+
+- A factor whose `interaction.Result` names a subject other than the one an
+  earlier factor or the account chooser bound now ends the chain with a
+  server error. A custom `op.Authenticator` returning a different subject
+  as a second factor used to switch the session to that subject while it
+  kept the first factor's assurance. The same check, and the AAL3
+  user-verification check, now also cover a factor that completes in
+  `Begin` without a prompt, which previously bypassed both.
+
+- Introspection no longer reports `token_type: "Bearer"` for a refresh
+  token. RFC 7662 defines the member as the access-token type, and the tag
+  told a resource server it could treat the value as an access token.
+
 ## [v1.3.0] — 2026-09-28
 
 A conformance and consistency pass in the same spirit as the previous

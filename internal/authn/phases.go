@@ -199,6 +199,9 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 	if step.Result == nil {
 		return st, interaction.Step{}, ErrInvalidStep
 	}
+	if rerr := guardFactorResult(st, auth, *step.Result); rerr != nil {
+		return st, interaction.Step{}, rerr
+	}
 	st.ActiveFactorIdx = idx
 	st.FactorScratch = nil
 	st = o.appendFactor(st, auth, *step.Result)

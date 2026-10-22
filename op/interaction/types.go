@@ -171,6 +171,11 @@ type Result struct {
 	// authoritatively bound. User-extension Interactions MUST leave
 	// Subject empty; the orchestrator gates the "propagate Subject
 	// from Interaction" branch on the chooser's reserved name.
+	//
+	// Once an earlier factor or the chooser has bound the subject, a
+	// factor that returns a different non-empty Subject ends the
+	// chain with an error; it may return the bound subject or leave
+	// the field empty.
 	Subject string
 
 	// AuthTime is the wall-clock time at which the factor confirmed

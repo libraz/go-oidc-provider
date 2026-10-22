@@ -592,6 +592,44 @@ func (o *Orchestrator) loginFlowCaptchaPending(st State, flow *CompiledLoginFlow
 	return false
 }
 
+// LoginFlowRequiresStep reports whether the LoginFlow would demand a
+// factor step for st if the chain ran with Primary already satisfied by
+// the session: the Decider asks for one (Require) or refuses (Deny), or
+// a factor-shaped rule matches. The HTTP layer calls it before serving
+// an authorization from an existing session, so a rule guarding a
+// client or scope is not skipped just because no credential ceremony
+// was due. A session's earlier factors never count as completing a
+// step, matching a chain started from the session. Risk is not
+// consulted here; risk-driven rules fire only inside the chain.
+func (o *Orchestrator) LoginFlowRequiresStep(ctx context.Context, st State) bool {
+	flow := o.cfg.LoginFlow
+	if flow == nil {
+		return false
+	}
+	lc := o.loginFlowContext(st)
+	if flow.decider != nil {
+		switch d := recoverDecider(ctx, o.logger, flow.decider, lc).(type) {
+		case LoginFlowAllow:
+			return false
+		case LoginFlowDeny:
+			return true
+		case LoginFlowRequire:
+			if step, ok := flow.byKind[d.Step.Kind]; !ok || !step.isCaptcha {
+				return true
+			}
+		}
+	}
+	for i, r := range flow.rules {
+		if r.then.isCaptcha {
+			continue
+		}
+		if recoverPredicate(o.logger, i, r.when, lc) {
+			return true
+		}
+	}
+	return false
+}
+
 // evalLoginFlowRules walks the compiled rule list in declaration
 // order and dispatches the first matching, not-yet-completed step.
 // A panic in an embedder-supplied predicate is recovered and treated
@@ -717,7 +755,7 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 		return st, interaction.Step{}, ErrInvalidStep
 	}
 	if !step.isCaptcha {
-		if rerr := guardAAL3RequiresUV(step.auth, *begin.Result); rerr != nil {
+		if rerr := guardFactorResult(st, step.auth, *begin.Result); rerr != nil {
 			return st, interaction.Step{}, rerr
 		}
 	}
@@ -855,7 +893,7 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 		return st, interaction.Step{}, ErrInvalidStep
 	}
 	if !step.isCaptcha {
-		if rerr := guardAAL3RequiresUV(step.auth, *cont.Result); rerr != nil {
+		if rerr := guardFactorResult(st, step.auth, *cont.Result); rerr != nil {
 			return st, interaction.Step{}, rerr
 		}
 	}

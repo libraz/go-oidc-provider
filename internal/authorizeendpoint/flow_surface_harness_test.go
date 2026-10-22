@@ -159,6 +159,25 @@ func (f *flowFixture) httpClient(t *testing.T) *http.Client {
 // between them is a difference in the dispatch rules and nothing else.
 func newFlowFixture(t *testing.T, surface authnSurface, clock *movableClock, extra ...op.Option) *flowFixture {
 	t.Helper()
+	var authnOpt op.Option
+	switch surface {
+	case surfaceLoginFlow:
+		authnOpt = op.WithLoginFlow(op.LoginFlow{
+			Primary: op.ExternalStep{
+				Authenticator: passwordEchoAuthenticator{clock: clock},
+				KindLabel:     op.StepKind("test.primary"),
+			},
+		})
+	case surfaceAuthenticators:
+		authnOpt = op.WithAuthenticators(passwordEchoAuthenticator{clock: clock})
+	}
+	return buildFlowFixture(t, surface.String(), clock, authnOpt, extra...)
+}
+
+// buildFlowFixture assembles the Provider around authnOpt, the option
+// that installs the factor configuration; label names it in failures.
+func buildFlowFixture(t *testing.T, label string, clock *movableClock, authnOpt op.Option, extra ...op.Option) *flowFixture {
+	t.Helper()
 	st := inmem.New(inmem.WithClock(clock))
 
 	const secret = "rp-flow-secret" // test fixture, not a real credential.
@@ -179,30 +198,21 @@ func newFlowFixture(t *testing.T, surface authnSurface, clock *movableClock, ext
 		t.Fatalf("RegisterClient: %v", err)
 	}
 
-	opts := []op.Option{
+	opts := make([]op.Option, 0, 7+len(extra))
+	opts = append(opts,
 		op.WithIssuer(testkit.DefaultIssuer),
 		op.WithStore(st),
 		op.WithKeyset(op.Keyset{newFlowSigningKey(t)}),
 		op.WithCookieKeys(newFlowCookieKey(t)),
 		op.WithInteractionDriver(testkit.AutoConsentDriver{}),
 		op.WithClock(clock),
-	}
-	switch surface {
-	case surfaceLoginFlow:
-		opts = append(opts, op.WithLoginFlow(op.LoginFlow{
-			Primary: op.ExternalStep{
-				Authenticator: passwordEchoAuthenticator{clock: clock},
-				KindLabel:     op.StepKind("test.primary"),
-			},
-		}))
-	case surfaceAuthenticators:
-		opts = append(opts, op.WithAuthenticators(passwordEchoAuthenticator{clock: clock}))
-	}
+		authnOpt,
+	)
 	opts = append(opts, extra...)
 
 	provider, err := op.New(opts...)
 	if err != nil {
-		t.Fatalf("op.New (%s): %v", surface, err)
+		t.Fatalf("op.New (%s): %v", label, err)
 	}
 	srv := httptest.NewTLSServer(provider)
 	t.Cleanup(srv.Close)

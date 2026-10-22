@@ -395,7 +395,7 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 	if step.Result == nil {
 		return st, interaction.Step{}, ErrInvalidStep
 	}
-	if rerr := guardAAL3RequiresUV(auth, *step.Result); rerr != nil {
+	if rerr := guardFactorResult(st, auth, *step.Result); rerr != nil {
 		return st, interaction.Step{}, rerr
 	}
 	st.FactorScratch = nil
@@ -613,6 +613,29 @@ func guardAAL3RequiresUV(auth Authenticator, result interaction.Result) error {
 		return nil
 	}
 	return ErrAAL3RequiresUV
+}
+
+// guardSubjectBinding refuses a factor result that names a subject
+// other than the one this chain already bound, through an earlier
+// factor or the account chooser. A subject inherited from the entry
+// session is not chain-bound: the first factor may authenticate a
+// different account.
+func guardSubjectBinding(st State, result interaction.Result) error {
+	bound := len(st.Factors) > 0 || st.ChooserBoundSubject
+	if bound && result.Subject != "" && result.Subject != st.Subject {
+		return ErrSubjectMismatch
+	}
+	return nil
+}
+
+// guardFactorResult runs every check a factor result must pass before
+// [appendFactor] records it, so each completion path applies the same
+// set.
+func guardFactorResult(st State, auth Authenticator, result interaction.Result) error {
+	if err := guardAAL3RequiresUV(auth, result); err != nil {
+		return err
+	}
+	return guardSubjectBinding(st, result)
 }
 
 // appendFactor is the single point where the orchestrator records a

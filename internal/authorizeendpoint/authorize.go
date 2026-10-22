@@ -335,8 +335,9 @@ func dispatchAuthorize(
 
 // applyExitOverrides adjusts the decision-matrix outcome for the
 // deployment's configuration: the first-party skip may turn a consent
-// prompt into a mint, and a registered [authn.TriggerBeforeToken]
-// interaction turns any mint back into an interaction.
+// prompt into a mint, a LoginFlow rule that demands a factor for this
+// request turns a mint served from the session into an interaction,
+// and so does a registered [authn.TriggerBeforeToken] interaction.
 func applyExitOverrides(
 	r *http.Request,
 	deps resolved,
@@ -348,10 +349,33 @@ func applyExitOverrides(
 	if firstPartyShouldSkipConsent(r, hint, req, client, active, deps) {
 		hint = applyFirstPartySkip(deps, req, client, active)
 	}
+	if hint.decision == decisionMint && deps.Authn != nil && active != nil {
+		st := initialAuthnState(r, deps, req, client, active, hint, "", deps.now().UTC())
+		if deps.Authn.LoginFlowRequiresStep(r.Context(), st) {
+			hint = routeThroughLoginFlow(hint, containsString(req.Prompt, "none"))
+		}
+	}
 	if hint.decision == decisionMint && deps.Authn != nil && deps.Authn.HasInteractions(authn.TriggerBeforeToken) {
 		hint = routeThroughBeforeToken(hint, containsString(req.Prompt, "none"))
 	}
 	return hint
+}
+
+// routeThroughLoginFlow replaces a silent mint with an interaction when
+// the LoginFlow demands a factor step for the request. The chain starts
+// with the session's subject, so Primary is not repeated, and the
+// cached grant or first-party auto-grant still stands in for consent.
+// prompt=none forbids the step and yields interaction_required, as an
+// unsatisfied acr_values does.
+func routeThroughLoginFlow(mint authorizeHint, promptNone bool) authorizeHint {
+	if promptNone {
+		return authorizeHint{decision: decisionInteractionRequired}
+	}
+	return authorizeHint{
+		decision:  decisionInteract,
+		grant:     mint.grant,
+		autoGrant: mint.autoGrant,
+	}
 }
 
 // firstPartyShouldSkipConsent reports whether the dispatcher's pending

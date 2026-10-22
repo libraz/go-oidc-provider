@@ -30,6 +30,14 @@ type LoginFlow struct {
 	// [Rule.When] returns true and whose [Rule.Then.Kind] is not
 	// already in [LoginContext.CompletedSteps] fire in declaration
 	// order. The list MAY be empty for single-factor flows.
+	//
+	// Rules and [Decider] are evaluated per authorization request. A
+	// request /authorize could serve from an existing session is first
+	// checked against them with Primary taken as complete and no other
+	// step done; if one demands a step, the chain runs from the
+	// session's subject (prompt=none yields interaction_required).
+	// Risk is not consulted for that check, so risk-driven rules fire
+	// only inside the chain.
 	Rules []Rule
 
 	// Decider, when non-nil, is consulted before [Rules] on every

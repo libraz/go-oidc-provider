@@ -432,6 +432,13 @@ var (
 	// a misbehaving authenticator cannot stall the chain.
 	ErrInvalidStep = errors.New("authn: invalid step")
 
+	// ErrSubjectMismatch is returned when a factor's
+	// [interaction.Result] names a subject other than the one an
+	// earlier factor or the account chooser already bound in this
+	// chain. Switching accounts mid-chain would let the session carry
+	// one user's factors under another user's subject.
+	ErrSubjectMismatch = errors.New("authn: factor result names a different subject")
+
 	// ErrReauthNotPerformed is returned by the terminal tick when
 	// [State.ReauthRequired] was set but the chain reached its end
 	// without a single factor having run. The request asked for a
