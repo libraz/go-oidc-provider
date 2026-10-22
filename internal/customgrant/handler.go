@@ -191,6 +191,26 @@ type Response struct {
 	// when IDToken is empty. Standard JWT claim names are reserved
 	// and rejected by [tokens.SignIDToken].
 	ExtraClaims map[string]any
+
+	// GrantID, when set, names the persisted grant the handler's
+	// credentials descend from — the one a token-exchange subject_token
+	// was issued under. The wire layer issues under it instead of a
+	// fresh grant identity, so revoking that grant, or every grant of
+	// its subject, reaches these credentials too. The op-side adapter
+	// never sets it: an embedder handler's identity is its own.
+	GrantID string
+
+	// GrantSubject is the OP-internal subject of the [GrantID] record.
+	// The wire layer refuses the response once the user store no longer
+	// holds it, as it does every built-in redemption.
+	GrantSubject string
+
+	// OnIssued, when non-nil, is called by the wire layer once the
+	// response has been issued and is about to be written, never on a
+	// path that answers with an error. refreshIssued reports whether a
+	// refresh token went out with it. Handlers emit their success-class
+	// audit events here so those events agree with the wire outcome.
+	OnIssued func(ctx context.Context, refreshIssued bool)
 }
 
 // DupCap is the hard cap on the number of values the dispatcher
@@ -215,9 +235,10 @@ type BoundAccessToken struct {
 	// slice containing the authenticated client's ID.
 	Audience []string
 
-	// TTL is the access-token lifetime. Zero or negative falls back
-	// to the dispatcher's [WithMaxAccessTTL] cap (or, when no cap is
-	// configured, the wire layer's default).
+	// TTL is the access-token lifetime. Zero selects the global
+	// access-token TTL, a negative value is rejected with
+	// [ErrNegativeTTL], and a value above the [WithMaxAccessTTL] cap is
+	// truncated to it.
 	TTL time.Duration
 
 	// ExtraClaims are merged onto the standard JWT set the wire

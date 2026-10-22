@@ -36,7 +36,9 @@ func TestTokenExchange_OpaqueSubjectTokenCarriesPairwiseSubject(t *testing.T) {
 		SubjectType:  "pairwise",
 	})
 	// A user token descends from a Grant record; that is what marks its
-	// recorded subject as OP-internal.
+	// recorded subject as OP-internal, and the exchange refuses it unless
+	// the user store still holds that subject.
+	p.tk.Store.PutUser(context.Background(), &store.User{Subject: rawSubject})
 	if err := p.tk.Store.Grants().Save(context.Background(), &store.Grant{
 		ID: "grant-tx-pairwise", Subject: rawSubject, ClientID: subjectClient.ID, Scope: []string{"read"},
 	}); err != nil {

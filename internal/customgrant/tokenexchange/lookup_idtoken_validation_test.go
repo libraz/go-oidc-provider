@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -283,17 +282,24 @@ func TestLookupIDToken_GrantGatesTheExchange(t *testing.T) {
 	}
 }
 
-func TestBuildResponse_RejectsSourceWithoutPositiveRemainingTTL(t *testing.T) {
+// TestRequireRemainingLifetime_HonoursLeeway pins the exchange's
+// validity window to the leeway-tolerant one the other token readers
+// apply, and the derived lifetime to what is left of that window.
+func TestRequireRemainingLifetime_HonoursLeeway(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_700_000_000, 0).UTC()
+	const leeway = 30 * time.Second
 	tests := []struct {
 		name      string
 		expiresAt time.Time
+		wantTTL   time.Duration
 	}{
 		{name: "unknown expiry"},
-		{name: "expired", expiresAt: now.Add(-time.Second)},
-		{name: "expires now", expiresAt: now},
+		{name: "past the leeway", expiresAt: now.Add(-leeway)},
+		{name: "within the leeway", expiresAt: now.Add(-10 * time.Second), wantTTL: minDerivedTTL},
+		{name: "expires now", expiresAt: now, wantTTL: minDerivedTTL},
+		{name: "before exp", expiresAt: now.Add(time.Minute), wantTTL: time.Minute},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -302,21 +308,77 @@ func TestBuildResponse_RejectsSourceWithoutPositiveRemainingTTL(t *testing.T) {
 			h := &Handler{
 				clock:        fixedClock{now: now},
 				maxAccessTTL: time.Hour,
+				leeway:       leeway,
 			}
-			_, buildErr := h.buildResponse(
-				t.Context(),
-				customgrant.Request{Client: &store.Client{ID: "caller-client"}},
-				TokenView{
-					Subject:   "user-123",
-					ExpiresAt: tc.expiresAt,
-				},
-				nil,
-				[]string{"read"},
-				[]string{"https://api.example"},
-				nil,
-			)
-			if code := oauthCodeOf(t, buildErr); code != "invalid_grant" {
-				t.Errorf("error code=%q want invalid_grant", code)
+			view := TokenView{Subject: "user-123", ExpiresAt: tc.expiresAt}
+			err := h.requireRemainingLifetime(t.Context(), &store.Client{ID: "caller-client"}, view)
+			if tc.wantTTL == 0 {
+				if code := oauthCodeOf(t, err); code != "invalid_grant" {
+					t.Errorf("error code=%q want invalid_grant", code)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("requireRemainingLifetime: %v", err)
+			}
+			if ttl, _ := h.computeTTL(0, tc.expiresAt); ttl != tc.wantTTL {
+				t.Errorf("computeTTL=%v want %v", ttl, tc.wantTTL)
+			}
+		})
+	}
+}
+
+// TestLookupIDToken_HonoursLeeway pins the id_token path to the same
+// exp / iat tolerance the access-token verifier applies.
+func TestLookupIDToken_HonoursLeeway(t *testing.T) {
+	t.Parallel()
+
+	entry, err := keys.GenerateES256("tx-id-token-leeway-kid")
+	if err != nil {
+		t.Fatalf("GenerateES256: %v", err)
+	}
+	keySet, err := keys.NewSet([]keys.Entry{entry})
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	h := &Handler{
+		issuer: "https://op.example",
+		keys:   keySet,
+		clock:  fixedClock{now: now},
+		leeway: 30 * time.Second,
+		grants: staticGrantStore{grant: &store.Grant{
+			ID: "grant-leeway", Subject: "user-123", ClientID: "caller-client", Scope: []string{"openid"},
+		}},
+	}
+	tests := []struct {
+		name    string
+		iat     time.Time
+		exp     time.Time
+		wantErr bool
+	}{
+		{name: "exp within leeway", iat: now.Add(-time.Hour), exp: now.Add(-10 * time.Second)},
+		{name: "iat within leeway", iat: now.Add(10 * time.Second), exp: now.Add(time.Hour)},
+		{name: "exp past leeway", iat: now.Add(-time.Hour), exp: now.Add(-31 * time.Second), wantErr: true},
+		{name: "iat past leeway", iat: now.Add(31 * time.Second), exp: now.Add(time.Hour), wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw, signErr := tokens.SignIDToken(tokens.FromInternalEntry(entry), tokens.IDTokenClaims{
+				Issuer:    "https://op.example",
+				Subject:   "user-123",
+				Audience:  []string{"caller-client"},
+				IssuedAt:  tc.iat.Unix(),
+				ExpiresAt: tc.exp.Unix(),
+			})
+			if signErr != nil {
+				t.Fatalf("SignIDToken: %v", signErr)
+			}
+			_, lookupErr := h.lookupIDToken(t.Context(), raw)
+			if gotErr := lookupErr != nil; gotErr != tc.wantErr {
+				t.Errorf("lookupIDToken err=%v wantErr=%v", lookupErr, tc.wantErr)
 			}
 		})
 	}

@@ -2,6 +2,7 @@ package tokenendpoint_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -266,6 +267,40 @@ func TestCustomGrant_HandlerPanicReturns500(t *testing.T) {
 	}
 	if desc, _ := body["error_description"].(string); desc != "" {
 		t.Errorf("error_description=%q want empty (panic must not leak)", desc)
+	}
+}
+
+// TestCustomGrant_WrappedOpErrorKeepsItsCode confirms a handler that
+// wraps its *op.Error still gets that error's code and description on
+// the wire rather than the generic invalid_grant.
+func TestCustomGrant_WrappedOpErrorKeepsItsCode(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:wrapped-op-error"
+	handler := &recordingGrant{
+		name: grantURN,
+		err: fmt.Errorf("lookup service token: %w", &op.Error{
+			Code:        "invalid_scope",
+			Description: "service token lacks the requested scope",
+		}),
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	resp := f.post(t, url.Values{"grant_type": []string{grantURN}}, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "invalid_scope" {
+		t.Errorf("error=%v want invalid_scope", got)
+	}
+	if got := body["error_description"]; got != "service token lacks the requested scope" {
+		t.Errorf("error_description=%v want the handler's description", got)
 	}
 }
 

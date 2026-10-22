@@ -4,8 +4,9 @@ package tokenexchange
 // carry. Three modes per RFC 8693 §1.3 / §4.1:
 //
 //   - delegation: subject + actor distinct identities. The new act
-//     entry names the actor; any prior chain on the actor's token is
-//     preserved as nested act under the new entry.
+//     entry names the actor; the subject_token's prior chain is
+//     preserved as nested act under the new entry, since its members
+//     are the earlier actors on the subject's behalf (RFC 8693 §4.1).
 //   - impersonation: actor absent but the calling client is acting
 //     on behalf of the subject. The new act entry names the calling
 //     client; any prior chain on the subject_token is preserved as
@@ -22,11 +23,9 @@ package tokenexchange
 //     anything above is rejected by the caller.
 func buildActChain(subjectToken TokenView, actorToken *TokenView, callingClientID string) (map[string]any, int) {
 	if actorToken != nil {
-		// Delegation. Outer act names the actor; nested act preserves
-		// the actor token's prior chain.
 		entry := map[string]any{"sub": actorToken.Subject}
-		if actorToken.Act != nil {
-			entry["act"] = actorToken.Act
+		if subjectToken.Act != nil {
+			entry["act"] = subjectToken.Act
 		}
 		return entry, depthOfAct(entry)
 	}

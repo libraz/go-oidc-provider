@@ -64,6 +64,11 @@ type TokenView struct {
 	// or nil when the token had no act. Used by the chain builder to
 	// preserve prior delegation history when nesting a new entry.
 	Act map[string]any
+
+	// GrantID is the grant the original token was issued under: the
+	// "gid" claim, the opaque row's GrantID, or the consent record an
+	// id_token was matched to. Empty when the token names none.
+	GrantID string
 }
 
 // Confirmation mirrors op.ConfirmationProof for the internal layer. A

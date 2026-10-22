@@ -85,7 +85,7 @@ func TestBuildResponse_DownscopeInvariant(t *testing.T) {
 			}
 
 			resp, err := h.buildResponse(
-				context.Background(), req, subjectView, nil,
+				context.Background(), req, subjectView, nil, nil,
 				tc.requestedScope, tc.requestedAudience, tc.decision,
 			)
 

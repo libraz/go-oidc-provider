@@ -87,7 +87,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeSubjectLookupError(w, err)
 		return
 	}
-	issued, err := prepareDeviceCodeResponse(ctx, deps, client, authorized, binding)
+	issued, err := prepareDeviceCodeResponse(ctx, deps, client, authorized, devicecode.GrantID(in.DeviceCode), binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -419,20 +419,27 @@ func (p preparedDeviceCodeResponse) cleanup(ctx context.Context, deps Deps) {
 //
 // The device-authorization record is deliberately not a parameter: its ID
 // is the raw device_code, which is a bearer secret the substore contract
-// requires backends to keep hashed at rest. Reusing it as the grant
-// identifier would republish it in the access token's "gid" claim, on the
-// access-token / refresh-token rows, and in the audit stream. Redemption
-// therefore allocates its own grant identifier, which is safe to disclose
-// because it authorises nothing on its own.
+// requires backends to keep hashed at rest. The grant identifier is
+// [devicecode.GrantID] of it instead, a one-way derivation devicecodekit's
+// Revoke recomputes to reach every credential issued here. The grant record
+// is written first and kept on every failure: a concurrent poll of the same
+// authorization shares it, and the consent it records was given either way.
 func prepareDeviceCodeResponse(
 	ctx context.Context,
 	deps Deps,
 	client *store.Client,
 	authorized *dcgrant.Authorized,
+	grantID string,
 	binding tokenBinding,
 ) (out preparedDeviceCodeResponse, err error) {
 	now := deps.now().UTC()
-	grantID, err := newJTI()
+	grantID, err = newGrantID(ctx, deps, grantIssuance{Lineage: grantLineageConsent, Grant: store.Grant{
+		ID:       grantID,
+		Subject:  authorized.Subject,
+		ClientID: client.ID,
+		Scope:    append([]string(nil), authorized.Scope...),
+		AuthTime: authorized.AuthTime,
+	}})
 	if err != nil {
 		return preparedDeviceCodeResponse{}, err
 	}
@@ -519,6 +526,7 @@ func prepareDeviceCodeResponse(
 		RefreshToken: refreshToken,
 		IDToken:      idToken,
 		Scope:        joinScope(authorized.Scope),
+		GrantID:      grantIDForResponse(deps, grantID),
 	}, audit: deviceCodeIssuedExtras{
 		ClientID:         client.ID,
 		Subject:          authorized.Subject,

@@ -67,6 +67,11 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		return
 	}
 	if !checkTokenScopeAllowlist(w, deps, client.ID, resp.Scope) {
+		deps.CustomGrants.ReportFailure(ctx, dispatchIn, "scope_restricted")
+		return
+	}
+	if !requireLiveCustomGrantSubject(ctx, w, deps, client.ID, grantType, resp) {
+		deps.CustomGrants.ReportFailure(ctx, dispatchIn, "subject_unavailable")
 		return
 	}
 	issued, err := issueCustomGrantTokens(ctx, deps, client, dispatchIn, resp, binding)
@@ -78,8 +83,12 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		// an RFC 6749 §5.2 4xx code: the wire shape must send the
 		// embedder to the handler and to the OP's audit record rather
 		// than to the client's credentials.
+		deps.CustomGrants.ReportFailure(ctx, dispatchIn, "issuance_failed")
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
+	}
+	if resp.OnIssued != nil {
+		resp.OnIssued(ctx, issued.RefreshToken != "")
 	}
 	issuedTokenType := ""
 	if grantType == tokenexchangegrant.GrantType {
@@ -94,6 +103,36 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		Scope:           joinScope(resp.Scope),
 		IssuedTokenType: issuedTokenType,
 	})
+}
+
+// requireLiveCustomGrantSubject refuses a response that descends from a
+// grant whose subject the user store no longer holds, exactly as every
+// built-in redemption is refused, and tears that grant down. A response
+// with no grant lineage carries a subject the handler vouches for and is
+// not looked up. Returns false when a response has been written.
+func requireLiveCustomGrantSubject(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	clientID, grantType string,
+	resp customgrant.Response,
+) bool {
+	if resp.GrantID == "" {
+		return true
+	}
+	if _, err := lookupLiveSubject(ctx, deps, resp.GrantSubject); err != nil {
+		if errors.Is(err, errSubjectDeprovisioned) {
+			retireDeprovisionedGrant(ctx, deps, deprovisionedRedemption{
+				ClientID:  clientID,
+				Subject:   resp.GrantSubject,
+				GrantType: grantType,
+				GrantID:   resp.GrantID,
+			})
+		}
+		writeSubjectLookupError(w, err)
+		return false
+	}
+	return true
 }
 
 // customGrantIssued bundles the credentials [issueCustomGrantTokens]
@@ -124,11 +163,17 @@ func issueCustomGrantTokens(
 	resp customgrant.Response,
 	binding tokenBinding,
 ) (customGrantIssued, error) {
-	// The OP owns the grant identity: one GrantID is stamped on the
-	// access token and shared with any refresh token minted for this
-	// response, so the refresh credential rides the same per-grant
-	// revocation cascade and rotation chain as the access token.
-	grantID, err := newJTI()
+	// One GrantID is stamped on the access token and shared with any
+	// refresh token minted for this response, so the refresh credential
+	// rides the same per-grant revocation cascade and rotation chain as
+	// the access token. A response descending from a persisted grant
+	// issues under that grant; otherwise the handler, not an end user's
+	// consent, vouched for the subject and no Grant backs the identity.
+	issuance := grantIssuance{Lineage: grantLineageUnbacked}
+	if resp.GrantID != "" {
+		issuance = grantIssuance{Lineage: grantLineageInherit, InheritedID: resp.GrantID}
+	}
+	grantID, err := newGrantID(ctx, deps, issuance)
 	if err != nil {
 		return customGrantIssued{}, err
 	}
@@ -431,12 +476,13 @@ func resolveCustomGrantIDToken(ctx context.Context, deps Deps, client *store.Cli
 
 // writeCustomGrantError translates the dispatcher's typed sentinels
 // into the RFC 6749 §5.2 wire envelope. Sentinels the dispatcher
-// owns map onto deterministic codes; an upstream *Error returned by
-// the handler is propagated verbatim through the [opErrorWriter]
-// interface check so a handler that synthesises its own wire shape
-// keeps it.
+// owns map onto deterministic codes; an upstream *Error anywhere in the
+// chain the handler returned is propagated verbatim through the
+// [opErrorWriter] interface check so a handler that synthesises its own
+// wire shape keeps it, wrapped or not.
 func writeCustomGrantError(w http.ResponseWriter, err error) {
-	if hookErr, ok := err.(opErrorWriter); ok {
+	var hookErr opErrorWriter
+	if errors.As(err, &hookErr) {
 		hookErr.WriteOAuthError(w)
 		return
 	}

@@ -163,9 +163,11 @@ func completeRefreshToken(
 // is minted, grace retries included. A subject the user store no longer
 // holds arms cascade to tear the grant down at the settle point and
 // answers invalid_grant; a store fault answers server_error. A chain a
-// custom grant rooted carries a subject the handler, not the user store,
-// vouches for, so it is not looked up. Returns false when a response
-// has already been written.
+// custom grant rooted records a public subject, so its user-store
+// subject comes from the grant it descends from (a token exchange's
+// subject_token grant); with no such grant the handler, not the user
+// store, vouched for the subject and it is not looked up. Returns false
+// when a response has already been written.
 func requireLiveRefreshSubject(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -174,15 +176,24 @@ func requireLiveRefreshSubject(
 	exchanged *refresh.Exchanged,
 	cascade *replayCascade,
 ) (*store.User, bool) {
-	if exchanged.Origin == store.RefreshOriginCustomGrant {
-		return nil, true
+	subject := exchanged.Subject
+	if !grantIsOwnConsent(exchanged.Origin) {
+		lineage, err := customChainLineage(ctx, deps, exchanged.GrantID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return nil, false
+		}
+		if lineage == nil {
+			return nil, true
+		}
+		subject = lineage.Subject
 	}
-	user, err := lookupLiveSubject(ctx, deps, exchanged.Subject)
+	user, err := lookupLiveSubject(ctx, deps, subject)
 	if err != nil {
 		if errors.Is(err, errSubjectDeprovisioned) {
 			cascade.armDeprovisioned(deprovisionedRedemption{
 				ClientID:  clientID,
-				Subject:   exchanged.Subject,
+				Subject:   subject,
 				GrantType: grantTypeRefreshToken,
 				GrantID:   exchanged.GrantID,
 			})
@@ -191,6 +202,28 @@ func requireLiveRefreshSubject(
 		return nil, false
 	}
 	return user, true
+}
+
+// grantIsOwnConsent reports whether a chain's GrantID names the requesting
+// client's own consent record. A custom-grant chain's GrantID is backed by
+// no record, or — for token exchange — by the subject_token's grant: another
+// client's consent, which the chain joins for revocation and subject
+// liveness only, never as a source of per-authorization state.
+func grantIsOwnConsent(origin store.RefreshTokenOrigin) bool {
+	return origin != store.RefreshOriginCustomGrant
+}
+
+// customChainLineage returns the grant a custom-grant chain descends
+// from, or nil when its GrantID is backed by no record.
+func customChainLineage(ctx context.Context, deps Deps, grantID string) (*store.Grant, error) {
+	if grantID == "" || deps.Grants == nil {
+		return nil, nil //nolint:nilnil // no lineage
+	}
+	g, err := deps.Grants.Find(ctx, grantID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil //nolint:nilnil // no lineage
+	}
+	return g, err
 }
 
 // handleRefreshTokenTransaction stages every post-preflight refresh mutation
@@ -478,7 +511,7 @@ func preflightRefreshAuthorizationDetails(
 	}
 
 	granted := cloneAuthorizationDetails(rec.AuthorizationDetails)
-	if rec.GrantID != "" && deps.Grants != nil {
+	if rec.GrantID != "" && deps.Grants != nil && grantIsOwnConsent(rec.Origin) {
 		grant, findErr := deps.Grants.Find(ctx, rec.GrantID)
 		switch {
 		case findErr == nil && grant == nil:
@@ -520,7 +553,8 @@ func revalidateRefreshAuthorizationDetails(
 	requested []map[string]any,
 	effective []map[string]any,
 ) bool {
-	if exchanged == nil || exchanged.InGrace || deps.Grants == nil || exchanged.GrantID == "" {
+	if exchanged == nil || exchanged.InGrace || deps.Grants == nil || exchanged.GrantID == "" ||
+		!grantIsOwnConsent(exchanged.Origin) {
 		return true
 	}
 	grant, err := deps.Grants.Find(ctx, exchanged.GrantID)
@@ -880,7 +914,7 @@ func issueRefreshResponse(
 		authCtx.AuthTime,
 		binding,
 		authorizationDetails,
-		accessTokenOverrides{Extra: exchanged.AccessTokenExtra},
+		accessTokenOverrides{Extra: exchanged.AccessTokenExtra, ForceJWT: refreshMintPinnedJWT(exchanged)},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -917,7 +951,7 @@ func issueRefreshResponse(
 		IDToken:              idToken,
 		Scope:                joinScope(exchanged.Scope),
 		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
-		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
+		GrantID:              chainGrantIDForResponse(deps, exchanged),
 	}
 	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedWithAuthorizationDetails(exchanged, authorizationDetails), binding, &response); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -990,7 +1024,7 @@ func reissueGraceAccessToken(
 		authCtx.AuthTime,
 		binding,
 		response.AuthorizationDetails,
-		accessTokenOverrides{Extra: exchanged.AccessTokenExtra},
+		accessTokenOverrides{Extra: exchanged.AccessTokenExtra, ForceJWT: refreshMintPinnedJWT(exchanged)},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -1012,8 +1046,10 @@ func refreshExchangedWithAuthorizationDetails(exchanged *refresh.Exchanged, deta
 }
 
 func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Exchanged) authContext {
-	fallback := lookupAuthContext(ctx, deps, exchanged.GrantID)
-	out := fallback
+	var out authContext
+	if grantIsOwnConsent(exchanged.Origin) {
+		out = lookupAuthContext(ctx, deps, exchanged.GrantID)
+	}
 	if !exchanged.AuthTime.IsZero() {
 		out.AuthTime = exchanged.AuthTime.Unix()
 	}
@@ -1340,7 +1376,7 @@ func retirePriorOpaqueAccessTokens(
 	exchanged *refresh.Exchanged,
 	transactional bool,
 ) bool {
-	if err := revokePriorOpaqueAT(ctx, deps, exchanged.Resource, exchanged.GrantID); err != nil {
+	if err := revokePriorOpaqueAT(ctx, deps, exchanged); err != nil {
 		deps.audit().Emit(ctx, audit.Event{
 			Name:     auditRefreshPriorAccessTokenRevokeFailed,
 			Level:    audit.LevelError,
@@ -1358,17 +1394,38 @@ func retirePriorOpaqueAccessTokens(
 	return true
 }
 
-func revokePriorOpaqueAT(ctx context.Context, deps Deps, resource, grantID string) error {
-	if deps.OpaqueAccessTokens == nil || grantID == "" {
+func revokePriorOpaqueAT(ctx context.Context, deps Deps, exchanged *refresh.Exchanged) error {
+	if deps.OpaqueAccessTokens == nil || exchanged.GrantID == "" || refreshMintPinnedJWT(exchanged) {
 		return nil
 	}
 	format := store.AccessTokenFormatJWT
 	if deps.AccessTokenFormatFor != nil {
-		format = deps.AccessTokenFormatFor(resource)
+		format = deps.AccessTokenFormatFor(exchanged.Resource)
 	}
 	if format != store.AccessTokenFormatOpaque {
 		return nil
 	}
-	_, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+	_, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, exchanged.GrantID)
 	return err
+}
+
+// refreshMintPinnedJWT reports whether a chain's access tokens are minted
+// as JWTs whatever format the policy selects. A chain recording a public
+// subject is pinned: an opaque row's subject is read as the OP-internal
+// one and projected again, and the row would drop the handler-stated
+// claims the chain replays. Such a chain therefore holds no opaque access
+// token for a rotation to retire, and a grant it shares with another
+// client's tokens must not be swept for one.
+func refreshMintPinnedJWT(exchanged *refresh.Exchanged) bool {
+	return exchanged.SubjectPublic
+}
+
+// chainGrantIDForResponse is [grantIDForResponse] for a rotation: only a
+// chain rooted on the client's own consent names a grant that client can
+// address at the grant management endpoint.
+func chainGrantIDForResponse(deps Deps, exchanged *refresh.Exchanged) string {
+	if !grantIsOwnConsent(exchanged.Origin) {
+		return ""
+	}
+	return grantIDForResponse(deps, exchanged.GrantID)
 }

@@ -379,6 +379,31 @@ func TestDispatch_ScopeInflationRejected(t *testing.T) {
 	}
 }
 
+// TestDispatch_HandlerCannotWidenClientAllowlist pins that the client a
+// handler receives is a copy: widening its Scopes or Resources leaves the
+// allowlist the response gates check, and the caller's record, untouched.
+func TestDispatch_HandlerCannotWidenClientAllowlist(t *testing.T) {
+	t.Parallel()
+
+	const grant = "urn:example:grant-type:widen"
+	disp, _ := newDispatcher(t, stubHandler{
+		name: grant,
+		handle: func(_ context.Context, req Request) (Response, error) {
+			req.Client.Scopes = append(req.Client.Scopes, "admin")
+			req.Client.Resources = append(req.Client.Resources, "https://evil.example.com")
+			return Response{AccessToken: "at", Scope: []string{"admin"}}, nil
+		},
+	})
+	client := newClient(grant)
+	_, err := disp.Dispatch(context.Background(), DispatchInput{GrantType: grant, Client: client})
+	if !errors.Is(err, ErrScopeNotAllowed) {
+		t.Fatalf("err = %v, want ErrScopeNotAllowed", err)
+	}
+	if len(client.Scopes) != 2 || len(client.Resources) != 1 {
+		t.Fatalf("caller's client mutated: scopes=%v resources=%v", client.Scopes, client.Resources)
+	}
+}
+
 func TestDispatch_AudienceInflationRejected(t *testing.T) {
 	t.Parallel()
 

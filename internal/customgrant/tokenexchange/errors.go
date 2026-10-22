@@ -95,6 +95,12 @@ func invalidScope(description string) error {
 	return &wireError{code: "invalid_scope", description: description}
 }
 
+// serverError builds a server_error wireError for a store the exchange
+// could not read.
+func serverError() error {
+	return &wireError{code: "server_error"}
+}
+
 // invalidTarget builds an invalid_target wireError. RFC 8707 §4 named
 // the code; the dispatcher's wire writer recognises it without further
 // translation.

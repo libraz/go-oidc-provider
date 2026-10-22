@@ -215,6 +215,17 @@ func (h *Handler) Handle(ctx context.Context, req customgrant.Request) (customgr
 	if err != nil {
 		return customgrant.Response{}, err
 	}
+	if err := h.requireRemainingLifetime(ctx, req.Client, subjectView); err != nil {
+		return customgrant.Response{}, err
+	}
+	actChain, err := h.boundedActChain(ctx, req.Client, subjectView, actorView)
+	if err != nil {
+		return customgrant.Response{}, err
+	}
+	lineage, err := h.grantLineage(ctx, req.Client, subjectView)
+	if err != nil {
+		return customgrant.Response{}, err
+	}
 	requestedAudience := computeRequestedAudience(req.Form, subjectView)
 	requestedScope := h.resolveRequestedScope(req, subjectView)
 	if err := h.enforceScopeAudience(ctx, req.Client, subjectView, requestedScope, requestedAudience); err != nil {
@@ -235,7 +246,67 @@ func (h *Handler) Handle(ctx context.Context, req customgrant.Request) (customgr
 	if err != nil {
 		return customgrant.Response{}, h.translatePolicyErr(ctx, req.Client, subjectView.Subject, err)
 	}
-	return h.buildResponse(ctx, req, subjectView, actorView, requestedScope, requestedAudience, decision)
+	resp, err := h.buildResponse(ctx, req, subjectView, actorView, actChain, requestedScope, requestedAudience, decision)
+	if err != nil {
+		return customgrant.Response{}, err
+	}
+	if lineage != nil {
+		resp.GrantID, resp.GrantSubject = lineage.ID, lineage.Subject
+	}
+	return resp, nil
+}
+
+// grantLineage returns the persisted grant the subject_token was issued
+// under, so the exchanged credentials join its revocation lineage and
+// its subject's liveness check. A token that names no grant record — a
+// client_credentials token, or one minted by an embedder custom grant —
+// has no end user behind it and yields nil. A grant store that cannot
+// answer refuses the exchange rather than issue outside the lineage.
+func (h *Handler) grantLineage(ctx context.Context, client *store.Client, subjectView TokenView) (*store.Grant, error) {
+	if subjectView.GrantID == "" || h.grants == nil {
+		return nil, nil //nolint:nilnil // no lineage to join
+	}
+	grant, err := h.grants.Find(ctx, subjectView.GrantID)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && grant == nil) {
+		return nil, nil //nolint:nilnil // no lineage to join
+	}
+	if err != nil {
+		h.emit(ctx, auditSubjectTokenRegistryError, audit.LevelWarn,
+			"token-exchange rejected: subject_token grant lookup failed",
+			clientIDOf(client), "",
+			map[string]any{"reason": "store_error", "is_subject": true})
+		return nil, serverError()
+	}
+	return grant, nil
+}
+
+// requireRemainingLifetime refuses a subject_token that is past its
+// expiry by more than the leeway every other reader of the same token
+// tolerates. It runs before the policy so the policy never sees a token
+// the exchange will not honour.
+func (h *Handler) requireRemainingLifetime(ctx context.Context, client *store.Client, subjectView TokenView) error {
+	if !subjectView.ExpiresAt.IsZero() && h.now().Before(subjectView.ExpiresAt.Add(h.leeway)) {
+		return nil
+	}
+	h.emit(ctx, auditSubjectTokenInvalid, audit.LevelInfo,
+		"token-exchange rejected: subject_token failed verification",
+		clientIDOf(client), "",
+		map[string]any{"reason": "expired", "is_subject": true})
+	return invalidGrant("subject_token has no positive remaining lifetime")
+}
+
+// boundedActChain builds the act chain the issued token will carry and
+// enforces [MaxActChainDepth] on it before the policy runs.
+func (h *Handler) boundedActChain(ctx context.Context, client *store.Client, subjectView TokenView, actorView *TokenView) (map[string]any, error) {
+	actChain, depth := buildActChain(subjectView, actorView, clientIDOf(client))
+	if depth > MaxActChainDepth {
+		h.emit(ctx, auditActChainTooDeep, audit.LevelWarn,
+			"token-exchange rejected: act chain exceeds maximum depth",
+			clientIDOf(client), subjectView.Subject,
+			map[string]any{"depth": depth, "max": MaxActChainDepth})
+		return nil, invalidGrant("act chain depth exceeds the maximum permitted")
+	}
+	return actChain, nil
 }
 
 // parseAndVerify executes the structural validation and token lookup
@@ -363,10 +434,10 @@ func (h *Handler) enforceScopeAudience(ctx context.Context, client *store.Client
 }
 
 // buildResponse executes the post-policy phase: decision merge, scope
-// gate, TTL cap, act chain construction, response shape. Errors from
-// the act-chain gate (depth > 5) and the empty-scope gate ride through
-// here so the orchestrator can return them as wire errors.
-func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, subjectView TokenView, actorView *TokenView, requestedScope, requestedAudience []string, decision *Decision) (customgrant.Response, error) {
+// gate, TTL cap, response shape. Errors from the empty-scope and
+// subset gates ride through here so the orchestrator can return them
+// as wire errors.
+func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, subjectView TokenView, actorView *TokenView, actChain map[string]any, requestedScope, requestedAudience []string, decision *Decision) (customgrant.Response, error) {
 	grantedScope, grantedAudience, grantedTTL, issueIDToken, issueRefresh, extraClaims := applyDecision(
 		decision, requestedScope, requestedAudience, subjectView.Type == TokenTypeIDToken,
 	)
@@ -401,9 +472,6 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 			})
 		return customgrant.Response{}, invalidTarget("granted audience exceeds the requested audience")
 	}
-	if subjectView.ExpiresAt.IsZero() || !h.now().Before(subjectView.ExpiresAt) {
-		return customgrant.Response{}, invalidGrant("subject_token has no positive remaining lifetime")
-	}
 	ttl, ttlReason := h.computeTTL(grantedTTL, subjectView.ExpiresAt)
 	if ttlReason != "" {
 		h.emit(ctx, auditTTLCapped, audit.LevelInfo,
@@ -415,14 +483,6 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 				"reason":    ttlReason,
 			})
 	}
-	actChain, depth := buildActChain(subjectView, actorView, req.Client.ID)
-	if depth > MaxActChainDepth {
-		h.emit(ctx, auditActChainTooDeep, audit.LevelWarn,
-			"token-exchange rejected: act chain exceeds maximum depth",
-			clientIDOf(req.Client), subjectView.Subject,
-			map[string]any{"depth": depth, "max": MaxActChainDepth})
-		return customgrant.Response{}, invalidGrant("act chain depth exceeds the maximum permitted")
-	}
 	if actorView == nil && req.Client.ID == subjectView.ClientID {
 		h.emit(ctx, auditSelfExchange, audit.LevelInfo,
 			"token-exchange self-exchange detected",
@@ -430,29 +490,35 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 			map[string]any{"audience": grantedAudience})
 	}
 	resp := h.assembleResponse(req, subjectView, grantedScope, grantedAudience, ttl, actChain, extraClaims, issueIDToken)
-	if issueRefresh {
-		// The handler signals intent only; the OP mints and persists
-		// the refresh token on the shared custom-grant path so it
-		// rides the rotation / replay-cascade / cnf-binding lineage.
-		resp.IssueRefreshToken = true
-		h.emit(ctx, auditRefreshIssued, audit.LevelInfo,
-			"token-exchange refresh token issuance requested",
-			clientIDOf(req.Client), subjectView.Subject,
+	// The handler signals refresh intent only; the OP mints and persists
+	// the refresh token on the shared custom-grant path so it rides the
+	// rotation / replay-cascade / cnf-binding lineage.
+	resp.IssueRefreshToken = issueRefresh
+	// The outcome events wait for the wire layer: the dispatcher and the
+	// issuance step can still refuse the response this handler built.
+	clientID, subject, actor := clientIDOf(req.Client), subjectView.Subject, actorSubOf(actorView)
+	depth := depthOfAct(actChain)
+	resp.OnIssued = func(ctx context.Context, refreshIssued bool) {
+		if refreshIssued {
+			h.emit(ctx, auditRefreshIssued, audit.LevelInfo,
+				"token-exchange refresh token issued",
+				clientID, subject,
+				map[string]any{
+					"actor":    actor,
+					"audience": grantedAudience,
+				})
+		}
+		h.emit(ctx, auditGranted, audit.LevelInfo,
+			"token-exchange granted",
+			clientID, subject,
 			map[string]any{
-				"actor":    actorSubOf(actorView),
-				"audience": grantedAudience,
+				"actor":            actor,
+				"granted_audience": grantedAudience,
+				"granted_scope":    grantedScope,
+				"ttl_seconds":      int64(ttl.Seconds()),
+				"act_chain_depth":  depth,
 			})
 	}
-	h.emit(ctx, auditGranted, audit.LevelInfo,
-		"token-exchange granted",
-		clientIDOf(req.Client), subjectView.Subject,
-		map[string]any{
-			"actor":            actorSubOf(actorView),
-			"granted_audience": grantedAudience,
-			"granted_scope":    grantedScope,
-			"ttl_seconds":      int64(ttl.Seconds()),
-			"act_chain_depth":  depth,
-		})
 	return resp, nil
 }
 
@@ -586,8 +652,15 @@ func (h *Handler) translatePolicyErr(ctx context.Context, client *store.Client, 
 	return invalidGrant("token-exchange policy denied the request")
 }
 
+// minDerivedTTL is the lifetime issued from a subject_token accepted
+// inside the leeway after its exp: the smallest value the whole-second
+// expires_in can carry, so the derived token ends with its source's
+// tolerated window rather than starting a fresh one.
+const minDerivedTTL = time.Second
+
 // computeTTL returns the bounded TTL alongside the cap reason (empty
-// when no cap applied).
+// when no cap applied). The result is positive: a subject_token past
+// its exp but inside the leeway yields [minDerivedTTL].
 func (h *Handler) computeTTL(requested time.Duration, subjectExpiresAt time.Time) (time.Duration, string) {
 	now := h.now()
 	if requested <= 0 {
@@ -595,8 +668,8 @@ func (h *Handler) computeTTL(requested time.Duration, subjectExpiresAt time.Time
 	}
 	out := requested
 	reason := ""
-	subjRemaining := subjectExpiresAt.Sub(now)
-	if subjRemaining > 0 && subjRemaining < out {
+	subjRemaining := max(subjectExpiresAt.Sub(now), minDerivedTTL)
+	if out <= 0 || subjRemaining < out {
 		out = subjRemaining
 		reason = "subject_token_remaining"
 	}

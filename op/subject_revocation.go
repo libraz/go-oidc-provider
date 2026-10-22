@@ -22,13 +22,12 @@ import (
 // one unreachable grant does not leave the others live, and the call
 // can be retried.
 //
-// Tokens issued through the device_code and CIBA grants are NOT
-// reached: those grants keep no grant record, so ListBySubject cannot
-// return them. They stop only at the token endpoint's subject check,
-// which refuses a redemption once the subject is gone from the user
-// store. An embedder that merely disables a user, keeping the record,
-// must therefore also delete it from the user store, or accept that
-// device_code and CIBA refresh chains live until they expire.
+// The device_code and CIBA grants record a grant at redemption, and a
+// token exchange issues under the grant of its subject_token, so their
+// credentials are retired here too. Credentials a [CustomGrantHandler]
+// issues are NOT reached: the handler, not a grant record, vouches for
+// their subject, and they stop only when they expire or are revoked
+// individually.
 //
 // Browser sessions are not touched: the session store has no subject
 // index. A session left behind cannot mint tokens once its grants are

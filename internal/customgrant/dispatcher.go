@@ -250,11 +250,13 @@ type DispatchInput struct {
 //     ratio an operator can calibrate an alert on; emitting it only on
 //     success would make the denominator the success count and let the
 //     ratio exceed 1.
-//   - [AuditEventFailed] fires at most once, from the single exit
-//     below, whichever gate produced the rejection. A second emission
-//     from inside a gate would double-count that gate's failure class
-//     in oidc_custom_grant_events_total and break de-duplication keyed
-//     on (request_id, event).
+//   - [AuditEventFailed] fires at most once per request, whichever gate
+//     produced the rejection: from the single exit below for a gate the
+//     dispatcher runs, or through [Dispatcher.ReportFailure] for one the
+//     token endpoint runs on a response Dispatch already accepted. A
+//     second emission from inside a gate would double-count that gate's
+//     failure class in oidc_custom_grant_events_total and break
+//     de-duplication keyed on (request_id, event).
 func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Response, error) {
 	if d == nil || len(d.handlers) == 0 {
 		return Response{}, ErrUnknownGrant
@@ -285,8 +287,11 @@ func (d *Dispatcher) attempt(ctx context.Context, handler Handler, in DispatchIn
 	if err != nil {
 		return Response{}, failure{reason: "form_policy_violation"}, err
 	}
+	// The handler gets its own copy of the client: the gates below and
+	// the token endpoint after them read in.Client, which a handler that
+	// edits its view must not be able to widen.
 	req := Request{
-		Client:         in.Client,
+		Client:         cloneClient(in.Client),
 		SubjectID:      in.SubjectID,
 		AuthTime:       in.AuthTime,
 		Form:           form,
@@ -305,6 +310,30 @@ func (d *Dispatcher) attempt(ctx context.Context, handler Handler, in DispatchIn
 		return Response{}, failure{reason: "response_invalid"}, err
 	}
 	return resp, failure{}, nil
+}
+
+// cloneClient returns a copy of c that shares no slice, map or pointer
+// with it.
+func cloneClient(c *store.Client) *store.Client {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.RedirectURIs = slices.Clone(c.RedirectURIs)
+	out.PostLogoutRedirectURIs = slices.Clone(c.PostLogoutRedirectURIs)
+	out.GrantTypes = slices.Clone(c.GrantTypes)
+	out.ResponseTypes = slices.Clone(c.ResponseTypes)
+	out.Scopes = slices.Clone(c.Scopes)
+	out.Resources = slices.Clone(c.Resources)
+	out.Contacts = slices.Clone(c.Contacts)
+	out.DefaultACRValues = slices.Clone(c.DefaultACRValues)
+	out.RequestURIs = slices.Clone(c.RequestURIs)
+	out.JWKs = slices.Clone(c.JWKs)
+	if c.DefaultMaxAge != nil {
+		v := *c.DefaultMaxAge
+		out.DefaultMaxAge = &v
+	}
+	return &out
 }
 
 // failure describes a rejected dispatch for the single audit emission
@@ -557,6 +586,16 @@ func (d *Dispatcher) emitRequested(ctx context.Context, in DispatchInput) {
 			"grant_type": in.GrantType,
 		},
 	})
+}
+
+// ReportFailure records the rejection of a response Dispatch returned
+// without error, for the gates the token endpoint runs after it. reason
+// joins the dispatcher's own stable enum.
+func (d *Dispatcher) ReportFailure(ctx context.Context, in DispatchInput, reason string) {
+	if d == nil {
+		return
+	}
+	d.emitFailed(ctx, in, failure{reason: reason})
 }
 
 // emitFailed records a dispatch rejection on the audit sink. A panic is

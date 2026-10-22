@@ -20,7 +20,7 @@
 // Every gate the package documents is a *pre-issuance* gate the OP
 // applies before any state is mutated. A handler that returns a
 // 1-day access-token TTL when the global cap is 1 hour sees the TTL
-// truncated and an audit warning emitted; a handler that returns a
+// truncated to the cap; a handler that returns a
 // scope outside the client's registered set sees the request rejected
 // with invalid_scope. The OP never mints tokens "the handler asked
 // for" — it mints tokens the response shape *and* policy both admit.

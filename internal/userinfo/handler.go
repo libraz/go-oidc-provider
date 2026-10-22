@@ -781,7 +781,7 @@ func assembleClaims(
 		Scopes:            claims.Scope,
 		Source:            source,
 		CustomScopeClaims: deps.CustomScopeClaims,
-		Claims:            claimsRequestFromGrant(deps, grant),
+		Claims:            claimsRequestFromGrant(deps, grant, claims.ClientID),
 	})
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -910,14 +910,16 @@ func projectResponseSubject(
 //
 // Returns nil — which leaves the response scope-derived — when
 // [HandlerDeps.ClaimsParameterEnabled] is false, when the grant lineage
-// could not be resolved (see [resolveGrant]), or when the grant carries
-// no §5.5 payload because every claim was scope-driven.
+// could not be resolved (see [resolveGrant]), when the grant is another
+// client's consent the token only descends from (a token exchange's
+// subject_token grant), or when the grant carries no §5.5 payload because
+// every claim was scope-driven.
 //
 // This is the only place the handler reads the persisted payload, so
 // the toggle covers every /userinfo response shape (JSON and signed
 // JWT alike) regardless of when the payload was written.
-func claimsRequestFromGrant(deps HandlerDeps, g *store.Grant) *authorize.ClaimsRequest {
-	if !deps.ClaimsParameterEnabled || g == nil {
+func claimsRequestFromGrant(deps HandlerDeps, g *store.Grant, clientID string) *authorize.ClaimsRequest {
+	if !deps.ClaimsParameterEnabled || g == nil || g.ClientID != clientID {
 		return nil
 	}
 	return authorize.DecodeClaimsFromGrant(g.Claims)

@@ -436,10 +436,12 @@ type preparedCIBAResponse struct {
 	response successResponse
 	audit    cibaIssuedExtras
 	opaque   bool
+	grantID  string
 }
 
 func (p preparedCIBAResponse) cleanup(ctx context.Context, deps Deps) {
 	cleanupPreparedCredentials(ctx, deps, p.response.AccessToken, p.response.RefreshToken, p.opaque)
+	discardGrant(ctx, deps, p.grantID)
 }
 
 // prepareCIBAResponse completes every fallible token-assembly step before
@@ -450,9 +452,10 @@ func (p preparedCIBAResponse) cleanup(ctx context.Context, deps Deps) {
 // auth_req_id, which is a bearer secret the substore contract requires
 // backends to keep hashed at rest. Reusing it as the grant identifier would
 // republish it in the access token's "gid" claim, on the access-token /
-// refresh-token rows, and in the audit stream. Redemption therefore allocates
-// its own grant identifier, which is safe to disclose because it authorises
-// nothing on its own.
+// refresh-token rows, and in the audit stream. Redemption therefore records
+// a grant of its own through [newGrantID], whose identifier is safe to
+// disclose because it authorises nothing on its own; a redemption that issues
+// nothing discards it again.
 func prepareCIBAResponse(
 	ctx context.Context,
 	deps Deps,
@@ -461,7 +464,13 @@ func prepareCIBAResponse(
 	binding tokenBinding,
 ) (out preparedCIBAResponse, err error) {
 	now := deps.now().UTC()
-	grantID, err := newJTI()
+	grantID, err := newGrantID(ctx, deps, grantIssuance{Lineage: grantLineageConsent, Grant: store.Grant{
+		Subject:  authorized.Subject,
+		ClientID: client.ID,
+		Scope:    append([]string(nil), authorized.Scope...),
+		AuthTime: authorized.AuthTime,
+		ACR:      authorized.ACR,
+	}})
 	if err != nil {
 		return preparedCIBAResponse{}, err
 	}
@@ -477,6 +486,7 @@ func prepareCIBAResponse(
 	defer func() {
 		if err != nil {
 			cleanupPreparedCredentials(ctx, deps, accessToken, refreshToken, format == store.AccessTokenFormatOpaque)
+			discardGrant(ctx, deps, grantID)
 		}
 	}()
 	// auth_time is the wall-clock at which the end user completed the
@@ -552,13 +562,14 @@ func prepareCIBAResponse(
 		RefreshToken: refreshToken,
 		IDToken:      idToken,
 		Scope:        joinScope(authorized.Scope),
+		GrantID:      grantIDForResponse(deps, grantID),
 	}, audit: cibaIssuedExtras{
 		ClientID:         client.ID,
 		Subject:          authorized.Subject,
 		Scope:            authorized.Scope,
 		Audience:         authorized.Audience,
 		SenderConstraint: authorized.SenderConstraint,
-	}, opaque: format == store.AccessTokenFormatOpaque}, nil
+	}, opaque: format == store.AccessTokenFormatOpaque, grantID: grantID}, nil
 }
 
 // cibaIDTokenInput collects the parameters [mintCIBAIDToken]

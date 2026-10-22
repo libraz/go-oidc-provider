@@ -745,11 +745,14 @@ rows:
       transitions Pending and Approved device authorizations to Denied.
       Denied and Consumed records are idempotent successes; Consumed
       remains unchanged while the helper retries the credential cascade.
-      The device_code's ID is the GrantID stamped on every derived
-      credential, so the helper revokes JWT access tokens through the
-      selected JTI-registry or grant-tombstone strategy and independently
+      Every derived credential carries a GrantID derived one-way from the
+      device_code, so the helper revokes JWT access tokens through the
+      selected JTI-registry or grant-tombstone strategy, independently
       revokes opaque access tokens and refresh-token chains when their
-      stores are configured. A device_code.revoked event carries only a
+      stores are configured, and then deletes the grant record the token
+      endpoint wrote for the redemption. After it returns, an access token
+      redeemed from the device authorization introspects inactive and its
+      refresh token is refused. A device_code.revoked event carries only a
       hash of the device_code plus cascade completion metadata. Missing or
       expired records return ErrUnknownDeviceCode without an audit event.
     status: active

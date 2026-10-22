@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/op/devicecodekit"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -679,7 +680,7 @@ func TestRevoke_CascadesJTIRegistryAccessTokens(t *testing.T) {
 	for _, jti := range []string{"at-casc-a", "at-casc-b"} {
 		if err := reg.Register(ctx, store.AccessTokenRecord{
 			JTI:       jti,
-			GrantID:   "dev-casc-1",
+			GrantID:   devicecode.GrantID("dev-casc-1"),
 			ClientID:  "client-1",
 			IssuedAt:  now,
 			ExpiresAt: now.Add(time.Hour),
@@ -742,9 +743,10 @@ func TestRevoke_CascadesTombstoneOpaqueAndRefreshCredentials(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	s := inmem.New(inmem.WithClock(fixedClock{now: now}))
 	ds := s.DeviceCodes()
-	grantID := "dev-cascade-all"
+	deviceCode := "dev-cascade-all"
+	grantID := devicecode.GrantID(deviceCode)
 	if err := ds.Save(ctx, &store.DeviceCode{
-		ID:        grantID,
+		ID:        deviceCode,
 		UserCode:  "ABCDEFGH",
 		ClientID:  "client-1",
 		Status:    store.DeviceCodeStatusPending,
@@ -753,10 +755,10 @@ func TestRevoke_CascadesTombstoneOpaqueAndRefreshCredentials(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Save device code: %v", err)
 	}
-	if err := ds.Approve(ctx, grantID, "user-1", now); err != nil {
+	if err := ds.Approve(ctx, deviceCode, "user-1", now); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
-	if _, err := ds.Consume(ctx, grantID); err != nil {
+	if _, err := ds.Consume(ctx, deviceCode); err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
 
@@ -801,12 +803,12 @@ func TestRevoke_CascadesTombstoneOpaqueAndRefreshCredentials(t *testing.T) {
 		Clock:              fixedClock{now: now},
 	}
 	for attempt := 1; attempt <= 2; attempt++ {
-		if err := devicecodekit.Revoke(ctx, deps, grantID, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+		if err := devicecodekit.Revoke(ctx, deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
 			t.Fatalf("Revoke attempt %d: %v", attempt, err)
 		}
 	}
 
-	device, err := ds.FindByDeviceCode(ctx, grantID)
+	device, err := ds.FindByDeviceCode(ctx, deviceCode)
 	if err != nil {
 		t.Fatalf("FindByDeviceCode: %v", err)
 	}
@@ -874,7 +876,7 @@ func TestRevoke_MissingJWTBackendFailsClosed(t *testing.T) {
 			opaqueID := "opaque-" + tt.name
 			if err := s.OpaqueAccessTokens().Save(ctx, &store.OpaqueAccessToken{
 				ID:        opaqueID,
-				GrantID:   id,
+				GrantID:   devicecode.GrantID(id),
 				ClientID:  "client-1",
 				IssuedAt:  now,
 				ExpiresAt: now.Add(time.Hour),
@@ -884,7 +886,7 @@ func TestRevoke_MissingJWTBackendFailsClosed(t *testing.T) {
 			refreshID := "refresh-" + tt.name
 			if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
 				ID:        refreshID,
-				GrantID:   id,
+				GrantID:   devicecode.GrantID(id),
 				ClientID:  "client-1",
 				Subject:   "user-1",
 				Origin:    store.RefreshOriginDeviceCode,

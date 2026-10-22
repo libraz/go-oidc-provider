@@ -107,6 +107,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 			Confirmation:  confirmationFromCnf(claims.Confirmation),
 			Act:           act,
 			ActChainDepth: depthOfAct(act),
+			GrantID:       claims.GrantID,
 		},
 	}, nil
 }
@@ -139,7 +140,7 @@ func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, 
 	if err != nil {
 		return lookupResult{reason: "signature"}, fmt.Errorf("%w: verify: %w", errTokenInvalid, err)
 	}
-	idClaims, aud, reason, err := decodeAndValidateIDTokenClaims(payload, h.now())
+	idClaims, aud, reason, err := decodeAndValidateIDTokenClaims(payload, h.now(), h.leeway)
 	if err != nil {
 		return lookupResult{reason: reason}, fmt.Errorf("%w: %w", errTokenInvalid, err)
 	}
@@ -151,7 +152,7 @@ func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, 
 	if clientID == "" {
 		return lookupResult{reason: "missing_claim"}, fmt.Errorf("%w: id_token names no client", errTokenInvalid)
 	}
-	scope, reason, err := h.idTokenScope(ctx, idClaims.Subject, clientID)
+	grant, reason, err := h.idTokenGrant(ctx, idClaims.Subject, clientID)
 	if err != nil {
 		return lookupResult{reason: reason}, err
 	}
@@ -161,12 +162,13 @@ func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, 
 			Type:          TokenTypeIDToken,
 			ClientID:      clientID,
 			Subject:       idClaims.Subject,
-			Scope:         scope,
+			Scope:         append([]string(nil), grant.Scope...),
 			Audience:      aud,
 			ExpiresAt:     time.Unix(idClaims.ExpiresAt, 0).UTC(),
 			Confirmation:  confirmationFromCnf(idClaims.Confirmation),
 			Act:           act,
 			ActChainDepth: depthOfAct(act),
+			GrantID:       grant.ID,
 		},
 	}, nil
 }
@@ -189,9 +191,10 @@ func idTokenClientID(claims idTokenClaims, aud []string) string {
 	return ""
 }
 
-// idTokenScope resolves the scope set an id_token subject_token is
+// idTokenGrant resolves the consent record an id_token subject_token is
 // bounded by, returning the audit reason alongside the error on the
-// failure paths.
+// failure paths. Its scope bounds the exchange and its ID is the
+// token's grant lineage.
 //
 // An id_token carries no scope claim: OIDC Core 1.0 §2 defines none and
 // this OP emits none, so there is nothing on the token itself to bound
@@ -215,7 +218,7 @@ func idTokenClientID(claims idTokenClaims, aud []string) string {
 // exchange is refused. That is the fail-closed direction: the
 // alternative would be exchanging a token whose rights the OP cannot
 // establish.
-func (h *Handler) idTokenScope(ctx context.Context, subject, clientID string) ([]string, string, error) {
+func (h *Handler) idTokenGrant(ctx context.Context, subject, clientID string) (*store.Grant, string, error) {
 	if h.grants == nil {
 		return nil, "no_grant_store", fmt.Errorf("%w: grant store unavailable", errTokenInvalid)
 	}
@@ -229,7 +232,7 @@ func (h *Handler) idTokenScope(ctx context.Context, subject, clientID string) ([
 	if grant == nil {
 		return nil, "grant_not_found", errTokenInvalid
 	}
-	return append([]string(nil), grant.Scope...), "", nil
+	return grant, "", nil
 }
 
 // lookupOpaqueAccessToken resolves an opaque AT against the configured
@@ -266,6 +269,7 @@ func (h *Handler) lookupOpaqueAccessToken(ctx context.Context, raw string) (look
 			Audience:     aud,
 			ExpiresAt:    rec.ExpiresAt,
 			Confirmation: confirmationFromCnf(view.Confirmation()),
+			GrantID:      rec.GrantID,
 		},
 	}, nil
 }
@@ -419,7 +423,7 @@ func decodeRequiredAudience(raw json.RawMessage) ([]string, error) {
 	return multi, nil
 }
 
-func decodeAndValidateIDTokenClaims(payload []byte, now time.Time) (idTokenClaims, []string, string, error) {
+func decodeAndValidateIDTokenClaims(payload []byte, now time.Time, leeway time.Duration) (idTokenClaims, []string, string, error) {
 	var claims idTokenClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return idTokenClaims{}, nil, "malformed", fmt.Errorf("decode id_token claims: %w", err)
@@ -428,16 +432,17 @@ func decodeAndValidateIDTokenClaims(payload []byte, now time.Time) (idTokenClaim
 	if err != nil {
 		return idTokenClaims{}, nil, "missing_claim", err
 	}
-	if err := validateIDTokenClaims(claims, audience, now); err != nil {
+	if err := validateIDTokenClaims(claims, audience, now, leeway); err != nil {
 		return idTokenClaims{}, nil, classifyIDTokenClaimsErr(err), err
 	}
 	return claims, audience, "", nil
 }
 
 // validateIDTokenClaims enforces the OIDC Core 1.0 §2 required claim
-// set and its time bounds. Token exchange cannot apply its mandatory
-// source-token TTL cap unless exp is present and still in the future.
-func validateIDTokenClaims(claims idTokenClaims, audience []string, now time.Time) error {
+// set and its time bounds, with the same leeway the access-token
+// verifier applies to exp and iat. Token exchange cannot apply its
+// mandatory source-token TTL cap unless exp is present.
+func validateIDTokenClaims(claims idTokenClaims, audience []string, now time.Time, leeway time.Duration) error {
 	switch {
 	case claims.Issuer == "":
 		return errors.New("iss claim missing")
@@ -453,11 +458,11 @@ func validateIDTokenClaims(claims idTokenClaims, audience []string, now time.Tim
 		return errors.New("azp claim missing for multiple audiences")
 	}
 	expiresAt := time.Unix(claims.ExpiresAt, 0).UTC()
-	if !now.Before(expiresAt) {
+	if !now.Before(expiresAt.Add(leeway)) {
 		return errIDTokenExpired
 	}
 	issuedAt := time.Unix(claims.IssuedAt, 0).UTC()
-	if issuedAt.After(now) {
+	if issuedAt.After(now.Add(leeway)) {
 		return errors.New("iat claim is in the future")
 	}
 	if !issuedAt.Before(expiresAt) {

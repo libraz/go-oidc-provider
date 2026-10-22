@@ -97,9 +97,8 @@ func (v *OpaqueAccessTokenView) Confirmation() map[string]string {
 // be revoked, not be expired at now, and name a client the registry
 // still holds — the same client-deletion rule the JWT readers apply.
 // The returned view carries the public subject: a recorded subject is
-// projected only when its GrantID names a Grant record; no GrantID, or
-// a GrantID with no Grant record (a custom-grant chain), means the
-// subject is already public.
+// projected only when its GrantID names a Grant record; no GrantID
+// (client_credentials) means the subject is already public.
 //
 // Audience and sender-constraint proof checks stay with the caller,
 // since each endpoint answers them against its own request.
@@ -154,9 +153,11 @@ func publicOpaqueSubject(ctx context.Context, opts OpaqueAccessTokenLookup, rec 
 
 // opaqueSubjectIsInternal reports whether an opaque token's recorded
 // subject is the OP-internal identifier, which only a token descending
-// from a Grant record carries. client_credentials mints with no GrantID
-// and a custom-grant chain's GrantID has no Grant record; both record
-// the wire subject. A grant store that cannot answer fails closed.
+// from a Grant record carries: every end-user grant records one before it
+// mints. client_credentials mints with no GrantID and records the wire
+// subject; a custom-grant chain, whose subject is the handler's wire
+// value, mints JWT access tokens only. A grant store that cannot answer
+// fails closed.
 func opaqueSubjectIsInternal(ctx context.Context, grants store.GrantStore, grantID string) (bool, error) {
 	if grantID == "" {
 		return false, nil

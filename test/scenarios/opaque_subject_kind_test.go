@@ -23,7 +23,8 @@ import (
 // OP-internal identifier or already the wire value; readers tell them
 // apart by whether the row's GrantID names a Grant record. These tests
 // pin that premise across the mint paths and the "sub" the readers
-// report under pairwise subjects.
+// report under pairwise subjects. A custom-grant chain, whose subject is
+// the handler's wire value, never mints an opaque row at all.
 
 const (
 	osCustomGrantURN = "urn:example:grant-type:opaque-subject-kind"
@@ -40,6 +41,13 @@ var osSalt = []byte("opaque-subject-kind-salt-32bytes")
 // token exchange, and one pairwise client registered for all of them.
 func newOpaqueSubjectProvider(t *testing.T) (*testkit.Provider, *store.Client) {
 	t.Helper()
+	return newSubjectKindProvider(t, op.AccessTokenFormatOpaque)
+}
+
+// newSubjectKindProvider is [newOpaqueSubjectProvider] with the access
+// token format chosen by the caller.
+func newSubjectKindProvider(t *testing.T, format op.AccessTokenFormat) (*testkit.Provider, *store.Client) {
+	t.Helper()
 	handler := &recordingCustomGrant{
 		name: osCustomGrantURN,
 		response: op.CustomGrantResponse{
@@ -51,11 +59,13 @@ func newOpaqueSubjectProvider(t *testing.T) (*testkit.Provider, *store.Client) {
 	}
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithPairwiseSubject(osSalt),
-		op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
+		op.WithAccessTokenFormat(format),
 		op.WithFeature(feature.Introspect),
 		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken, grant.ClientCredentials),
 		op.WithCustomGrant(handler),
 		op.RegisterTokenExchange(txAllowAllPolicy{}),
+		op.WithDeviceCodeGrant(),
+		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
 	))
 	hash, err := op.HashClientSecret(osClientSecret)
 	if err != nil {
@@ -68,7 +78,7 @@ func newOpaqueSubjectProvider(t *testing.T) (*testkit.Provider, *store.Client) {
 		TokenEndpointAuthMethod: "client_secret_basic",
 		GrantTypes: []string{
 			"authorization_code", "refresh_token", "client_credentials",
-			osCustomGrantURN, txGrantType,
+			osCustomGrantURN, txGrantType, devURNDeviceCode, cibaURNGrant,
 		},
 		Scopes:      []string{"openid", "read"},
 		Resources:   []string{txTargetAud},
@@ -104,7 +114,8 @@ func osPost(t *testing.T, tk *testkit.Provider, path string, form url.Values) ma
 }
 
 // osCustomGrantChain runs the custom grant, rotates its refresh token
-// once, and returns the root response and the rotated access token.
+// once, and returns the root response and the rotated access token,
+// which stays a JWS under the opaque format.
 func osCustomGrantChain(t *testing.T, tk *testkit.Provider) (root map[string]any, rotatedAT string) {
 	t.Helper()
 	root = osPost(t, tk, "/oidc/token", url.Values{"grant_type": {osCustomGrantURN}})
@@ -114,10 +125,36 @@ func osCustomGrantChain(t *testing.T, tk *testkit.Provider) (root map[string]any
 	}
 	rotated := osPost(t, tk, "/oidc/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {rt}})
 	rotatedAT, _ = rotated["access_token"].(string)
-	if strings.Count(rotatedAT, ".") == 2 {
-		t.Fatalf("rotated access token is a JWS; the opaque format did not apply")
+	if strings.Count(rotatedAT, ".") != 2 {
+		t.Fatalf("rotated custom-grant access token is opaque; its wire subject would be read as internal")
 	}
 	return root, rotatedAT
+}
+
+// osDeviceTokens redeems an approved device authorization and returns
+// the token response.
+func osDeviceTokens(t *testing.T, tk *testkit.Provider) map[string]any {
+	t.Helper()
+	dev := osPost(t, tk, "/oidc/device_authorization", url.Values{"scope": {"openid read"}})
+	dc := osString(dev["device_code"])
+	scenariokit.SeedSubject(t, tk, scenariokit.DefaultSubject)
+	if err := tk.Store.DeviceCodes().Approve(context.Background(), dc, scenariokit.DefaultSubject, txClockNow()); err != nil {
+		t.Fatalf("DeviceCodes.Approve: %v", err)
+	}
+	return osPost(t, tk, "/oidc/token", url.Values{"grant_type": {devURNDeviceCode}, "device_code": {dc}})
+}
+
+// osCIBATokens redeems an approved CIBA request and returns the token
+// response.
+func osCIBATokens(t *testing.T, tk *testkit.Provider) map[string]any {
+	t.Helper()
+	bc := osPost(t, tk, "/oidc/bc-authorize", url.Values{"login_hint": {cibaKnownLoginHint}, "scope": {"openid read"}})
+	id := osString(bc["auth_req_id"])
+	scenariokit.SeedSubject(t, tk, cibaDefaultSubject)
+	if err := tk.Store.CIBARequests().Approve(context.Background(), id, cibaDefaultSubject, "", txClockNow()); err != nil {
+		t.Fatalf("CIBARequests.Approve: %v", err)
+	}
+	return osPost(t, tk, "/oidc/token", url.Values{"grant_type": {cibaURNGrant}, "auth_req_id": {id}})
 }
 
 // TestOpaqueAccessToken_MintPathsRecordSubjectKind pins the premise the
@@ -143,7 +180,8 @@ func TestOpaqueAccessToken_MintPathsRecordSubjectKind(t *testing.T) {
 	}
 	refreshed := osPost(t, tk, "/oidc/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {code.RefreshToken}})
 	cc := osPost(t, tk, "/oidc/token", url.Values{"grant_type": {"client_credentials"}, "scope": {"read"}})
-	_, customRotated := osCustomGrantChain(t, tk)
+	device := osDeviceTokens(t, tk)
+	ciba := osCIBATokens(t, tk)
 
 	cases := []struct {
 		name        string
@@ -154,7 +192,8 @@ func TestOpaqueAccessToken_MintPathsRecordSubjectKind(t *testing.T) {
 		{name: "authorization_code", token: code.AccessToken, wantSubject: scenariokit.DefaultSubject, internal: true},
 		{name: "refresh of an OP-rooted chain", token: osString(refreshed["access_token"]), wantSubject: scenariokit.DefaultSubject, internal: true},
 		{name: "client_credentials", token: osString(cc["access_token"]), wantSubject: osClientID},
-		{name: "refresh of a custom-grant chain", token: customRotated, wantSubject: osWireSubject},
+		{name: "device_code", token: osString(device["access_token"]), wantSubject: scenariokit.DefaultSubject, internal: true},
+		{name: "ciba", token: osString(ciba["access_token"]), wantSubject: cibaDefaultSubject, internal: true},
 	}
 	for _, tc := range cases {
 		rec, err := tk.Store.OpaqueAccessTokens().Find(ctx, tc.token)
@@ -181,9 +220,10 @@ func TestOpaqueAccessToken_MintPathsRecordSubjectKind(t *testing.T) {
 }
 
 // TestOpaqueAccessToken_CustomGrantChainKeepsItsSubject asserts that an
-// opaque access token minted by rotating a custom-grant chain reports,
-// at /introspect and through token exchange, the same "sub" the chain's
-// JWT access token and id_token carry.
+// access token minted by rotating a custom-grant chain on an opaque-format
+// provider is still a JWT and reports, at /introspect and through token
+// exchange, the same "sub" the chain's root access token and id_token
+// carry.
 func TestOpaqueAccessToken_CustomGrantChainKeepsItsSubject(t *testing.T) {
 	t.Parallel()
 
@@ -197,9 +237,12 @@ func TestOpaqueAccessToken_CustomGrantChainKeepsItsSubject(t *testing.T) {
 		t.Fatalf("root id_token sub=%v want %q", got, osWireSubject)
 	}
 
+	if got := decodeTXJWTClaims(t, rotated)["sub"]; got != osWireSubject {
+		t.Fatalf("rotated JWT access token sub=%v want %q", got, osWireSubject)
+	}
 	intro := osPost(t, tk, "/oidc/introspect", url.Values{"token": {rotated}})
 	if active, _ := intro["active"].(bool); !active {
-		t.Fatalf("rotated opaque token introspected inactive: %v", intro)
+		t.Fatalf("rotated token introspected inactive: %v", intro)
 	}
 	if intro["sub"] != osWireSubject {
 		t.Errorf("/introspect sub=%v want the chain's %q", intro["sub"], osWireSubject)
@@ -255,6 +298,37 @@ func TestOpaqueAccessToken_SubjectsMatchUnderPairwise(t *testing.T) {
 	intro = osPost(t, tk, "/oidc/introspect", url.Values{"token": {code.AccessToken}})
 	if intro["sub"] != string(want) {
 		t.Errorf("authorization_code /introspect sub=%v want the id_token's %q", intro["sub"], want)
+	}
+}
+
+// TestOpaqueAccessToken_DeviceAndCIBASubjectsMatchIDToken pins, for both
+// access-token formats under pairwise subjects, that the device_code and
+// CIBA grants report through /introspect and /userinfo the same "sub"
+// their id_token carries.
+func TestOpaqueAccessToken_DeviceAndCIBASubjectsMatchIDToken(t *testing.T) {
+	t.Parallel()
+	for _, format := range []op.AccessTokenFormat{op.AccessTokenFormatOpaque, op.AccessTokenFormatJWT} {
+		tk, _ := newSubjectKindProvider(t, format)
+		for name, issue := range map[string]func(*testing.T, *testkit.Provider) map[string]any{
+			"device_code": osDeviceTokens,
+			"ciba":        osCIBATokens,
+		} {
+			tokens := issue(t, tk)
+			want := decodeTXJWTClaims(t, osString(tokens["id_token"]))["sub"]
+			at := osString(tokens["access_token"])
+			intro := osPost(t, tk, "/oidc/introspect", url.Values{"token": {at}})
+			if intro["sub"] != want {
+				t.Errorf("%s/%s: /introspect sub=%v want the id_token's %v", format, name, intro["sub"], want)
+			}
+			status, body, challenge := getUserInfo(t, tk, at)
+			if status != http.StatusOK {
+				t.Errorf("%s/%s: /userinfo status=%d challenge=%q, want 200", format, name, status, challenge)
+				continue
+			}
+			if body["sub"] != want {
+				t.Errorf("%s/%s: /userinfo sub=%v want the id_token's %v", format, name, body["sub"], want)
+			}
+		}
 	}
 }
 

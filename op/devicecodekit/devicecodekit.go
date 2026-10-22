@@ -201,15 +201,23 @@ type Deps struct {
 	AccessTokens store.AccessTokenRegistry
 
 	// OpaqueAccessTokens stores opaque access-token records. When set,
-	// Revoke retires every row whose GrantID matches the device_code.
+	// Revoke retires every row issued from the device authorization.
 	// Optional for JWT-only deployments.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
 
 	// RefreshTokens stores refresh-token rotation chains. When set,
-	// Revoke retires every chain whose GrantID matches the device_code.
+	// Revoke retires every chain issued from the device authorization.
 	// Optional for deployments that never issue refresh tokens from the
 	// device grant.
 	RefreshTokens store.RefreshTokenStore
+
+	// Grants stores the consent record the token endpoint writes when it
+	// redeems the device authorization. When set, Revoke deletes it once
+	// the credential cascade has completed, so the consent no longer
+	// shows in [store.GrantStore.ListBySubject] or satisfies a later
+	// authorization request. Optional; without it the record stays until
+	// the embedder removes it.
+	Grants store.GrantStore
 
 	// GrantRevocations stores JWT grant tombstones. Revoke writes a
 	// tombstone here under the default
@@ -836,10 +844,12 @@ func recordStrikeByUserCode(ctx context.Context, deps *Deps, userCode, clientID 
 // every credential issued from it, and emits an
 // [op.AuditDeviceCodeRevoked] audit event.
 //
-// [store.DeviceCode.ID] is also the GrantID stamped on JWT access
-// tokens, opaque access tokens, and refresh tokens issued by the device
-// grant. Revoke uses that shared lineage to retire every configured
-// credential surface:
+// Every JWT access token, opaque access token and refresh token the
+// device grant issues carries a GrantID derived one-way from
+// [store.DeviceCode.ID], so the device_code itself is never republished.
+// Revoke recomputes that GrantID and retires every configured credential
+// surface under it, then deletes the grant record when [Deps.Grants] is
+// set:
 //
 //   - Pending and Approved records atomically transition to Denied, so a
 //     later /token poll cannot issue credentials.
@@ -896,25 +906,11 @@ func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error 
 		return err
 	}
 
-	result, cascadeErr := revokeGrantCredentials(ctx, deps, deviceCodeID, reason)
-	extras := map[string]any{
-		"cascade_complete": result.complete,
-		"device_code_hash": fingerprintDeviceCode(deviceCodeID),
-		"previous_status":  rec.Status.String(),
-		"reason":           reason,
-	}
-	if result.jwtRegistryAttempted {
-		extras["revoked_access_tokens"] = result.jwtRegistryCount
-	}
-	if result.grantTombstoneAttempted {
-		extras["grant_tombstone_written"] = result.grantTombstoneWritten
-	}
-	if result.opaqueAttempted {
-		extras["revoked_opaque_access_tokens"] = result.opaqueCount
-	}
-	if result.refreshAttempted {
-		extras["refresh_token_cascade_complete"] = result.refreshComplete
-	}
+	result, cascadeErr := revokeGrantCredentials(ctx, deps, devicecode.GrantID(deviceCodeID), reason)
+	extras := result.auditExtras()
+	extras["device_code_hash"] = fingerprintDeviceCode(deviceCodeID)
+	extras["previous_status"] = rec.Status.String()
+	extras["reason"] = reason
 	level := audit.LevelInfo
 	if cascadeErr != nil {
 		level = audit.LevelWarn
@@ -942,6 +938,30 @@ type revokeResult struct {
 	opaqueCount             int
 	refreshAttempted        bool
 	refreshComplete         bool
+	grantRecordAttempted    bool
+	grantRecordDeleted      bool
+}
+
+// auditExtras renders the cascade outcome onto the device_code.revoked
+// event: one key per surface the cascade attempted.
+func (r revokeResult) auditExtras() map[string]any {
+	extras := map[string]any{"cascade_complete": r.complete}
+	if r.jwtRegistryAttempted {
+		extras["revoked_access_tokens"] = r.jwtRegistryCount
+	}
+	if r.grantTombstoneAttempted {
+		extras["grant_tombstone_written"] = r.grantTombstoneWritten
+	}
+	if r.opaqueAttempted {
+		extras["revoked_opaque_access_tokens"] = r.opaqueCount
+	}
+	if r.refreshAttempted {
+		extras["refresh_token_cascade_complete"] = r.refreshComplete
+	}
+	if r.grantRecordAttempted {
+		extras["grant_record_deleted"] = r.grantRecordDeleted
+	}
+	return extras
 }
 
 func revokeGrantCredentials(
@@ -955,8 +975,24 @@ func revokeGrantCredentials(
 		revokeOpaqueGrantCredentials(ctx, deps, grantID, &result),
 		revokeRefreshGrantCredentials(ctx, deps, grantID, &result),
 	)
+	// The record goes last, so a partial cascade is retried against it.
+	if err == nil {
+		err = deleteGrantRecord(ctx, deps, grantID, &result)
+	}
 	result.complete = err == nil
 	return result, err
+}
+
+func deleteGrantRecord(ctx context.Context, deps *Deps, grantID string, result *revokeResult) error {
+	if deps.Grants == nil {
+		return nil
+	}
+	result.grantRecordAttempted = true
+	if err := deps.Grants.Delete(ctx, grantID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("delete grant record: %w", err)
+	}
+	result.grantRecordDeleted = true
+	return nil
 }
 
 func revokeJWTGrantCredentials(

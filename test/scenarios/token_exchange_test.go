@@ -20,10 +20,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +34,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 const (
@@ -403,19 +406,28 @@ func TestScenario_TX_007_ActorEqualsSubjectRejected(t *testing.T) {
 	}
 }
 
+// txCountingPolicy allows every exchange and counts its invocations, so
+// a row can pin that a gate refused the request before the policy ran.
+type txCountingPolicy struct{ calls *atomic.Int32 }
+
+func (p txCountingPolicy) Allow(_ context.Context, _ op.TokenExchangeRequest) (*op.TokenExchangeDecision, error) {
+	p.calls.Add(1)
+	return nil, nil //nolint:nilnil // contract: (nil, nil) means "use OP defaults".
+}
+
 func TestScenario_TX_008_ActChainDepthExceedsLimitRejected(t *testing.T) {
 	t.Parallel()
-	p := newTXProvider(t, txAllowAllPolicy{})
-	// Build an actor token that already carries an act chain at the
-	// max depth. Adding one more level (the calling client) takes the
-	// chain to depth 6, which the handler rejects.
-	deepAct := buildDeepAct(5)
+	var calls atomic.Int32
+	p := newTXProvider(t, txCountingPolicy{calls: &calls})
+	// The subject_token already carries an act chain at the max depth.
+	// Delegating it to one more actor takes the chain to depth 6, which
+	// the handler rejects before consulting the policy.
+	subjectClaims := p.defaultSubjectClaims("tx-008-subj")
+	subjectClaims.Extra = map[string]any{"act": buildDeepAct(5)}
+	subjectJWS := p.mintSubjectToken(t, subjectClaims)
 	actorClaims := p.defaultSubjectClaims("tx-008-act")
 	actorClaims.Subject = "actor-tx-008"
-	actorClaims.JTI = "tx-008-act-jti"
-	actorClaims.Extra = map[string]any{"act": deepAct}
 	actorJWS := p.mintSubjectToken(t, actorClaims)
-	subjectJWS := p.mintSubjectToken(t, p.defaultSubjectClaims("tx-008-subj"))
 	form := url.Values{
 		"subject_token":      []string{subjectJWS},
 		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
@@ -428,6 +440,9 @@ func TestScenario_TX_008_ActChainDepthExceedsLimitRejected(t *testing.T) {
 	}
 	if got := body["error"]; got != "invalid_grant" {
 		t.Errorf("error=%v want invalid_grant", got)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("policy ran %d time(s) for a chain past the depth cap; want 0", n)
 	}
 }
 
@@ -509,6 +524,86 @@ func TestScenario_TX_011_PolicyErrorPreservedVerbatim(t *testing.T) {
 	}
 }
 
+// txWrappedDenyPolicy returns an *op.Error behind a wrapper, so the
+// verbatim-preservation contract is pinned for the error chain rather
+// than only for a bare *op.Error.
+type txWrappedDenyPolicy struct{ err error }
+
+func (p txWrappedDenyPolicy) Allow(_ context.Context, _ op.TokenExchangeRequest) (*op.TokenExchangeDecision, error) {
+	return nil, p.err
+}
+
+func TestScenario_TX_011_WrappedPolicyErrorPreservedVerbatim(t *testing.T) {
+	t.Parallel()
+	policy := txWrappedDenyPolicy{err: fmt.Errorf("tenant lookup: %w", &op.Error{
+		Code:        "access_denied",
+		Description: "tenant policy refused the exchange",
+	})}
+	p := newTXProvider(t, policy)
+	subjectJWS := p.mintSubjectToken(t, p.defaultSubjectClaims("tx-011w-jti"))
+	form := url.Values{
+		"subject_token":      []string{subjectJWS},
+		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
+	}
+	status, body := p.postTokenExchange(t, form)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400, body=%v", status, body)
+	}
+	if got := body["error"]; got != "access_denied" {
+		t.Errorf("error=%v want access_denied (verbatim through the wrapper)", got)
+	}
+	if got, _ := body["error_description"].(string); got != "tenant policy refused the exchange" {
+		t.Errorf("error_description=%v want verbatim policy description", got)
+	}
+}
+
+// TestScenario_TX_027_AuditOutcomeMatchesWire pins that the granted
+// event is raised only for an exchange that reaches the wire, and that
+// a response refused after dispatch records exactly one failure.
+func TestScenario_TX_027_AuditOutcomeMatchesWire(t *testing.T) {
+	t.Parallel()
+	t.Run("refused after dispatch", func(t *testing.T) {
+		t.Parallel()
+		capture := scenariokit.NewAuditCapture()
+		p := newTXProviderOpts(t, txAllowAllPolicy{},
+			op.WithAuditLogger(capture.Logger()),
+			op.WithScope(op.Scope{Name: "read", Public: true, AllowedClients: []string{txSubjectClient}}),
+		)
+		form := url.Values{
+			"subject_token":      []string{p.mintSubjectToken(t, p.defaultSubjectClaims("tx-027-refused"))},
+			"subject_token_type": []string{txTokenTypeAT},
+		}
+		status, body := p.postTokenExchange(t, form)
+		if status != http.StatusBadRequest || body["error"] != "invalid_scope" {
+			t.Fatalf("status=%d body=%v want 400 invalid_scope", status, body)
+		}
+		if n := len(capture.EventsByName(string(op.AuditTokenExchangeGranted))); n != 0 {
+			t.Errorf("%s emitted %d time(s) for a refused exchange; want 0", op.AuditTokenExchangeGranted, n)
+		}
+		if n := len(capture.EventsByName(string(op.AuditCustomGrantFailed))); n != 1 {
+			t.Errorf("%s emitted %d time(s); want exactly 1", op.AuditCustomGrantFailed, n)
+		}
+	})
+	t.Run("issued", func(t *testing.T) {
+		t.Parallel()
+		capture := scenariokit.NewAuditCapture()
+		p := newTXProviderOpts(t, txAllowAllPolicy{}, op.WithAuditLogger(capture.Logger()))
+		form := url.Values{
+			"subject_token":      []string{p.mintSubjectToken(t, p.defaultSubjectClaims("tx-027-issued"))},
+			"subject_token_type": []string{txTokenTypeAT},
+		}
+		if status, body := p.postTokenExchange(t, form); status != http.StatusOK {
+			t.Fatalf("status=%d body=%v want 200", status, body)
+		}
+		if n := len(capture.EventsByName(string(op.AuditTokenExchangeGranted))); n != 1 {
+			t.Errorf("%s emitted %d time(s); want exactly 1", op.AuditTokenExchangeGranted, n)
+		}
+		if n := len(capture.EventsByName(string(op.AuditCustomGrantFailed))); n != 0 {
+			t.Errorf("%s emitted %d time(s) for an issued exchange; want 0", op.AuditCustomGrantFailed, n)
+		}
+	})
+}
+
 func TestScenario_TX_012_PolicyGenericErrorCollapsesToInvalidGrant(t *testing.T) {
 	t.Parallel()
 	p := newTXProvider(t, txGenericDenyPolicy{})
@@ -541,6 +636,7 @@ func TestScenario_TX_013_TTLCappedToMinimumOfThree(t *testing.T) {
 		{"global cap", 24 * time.Hour, 24 * time.Hour, 3600, 3600},
 		{"subject remaining", 24 * time.Hour, 10 * time.Minute, 590, 600},
 		{"handler request", 2 * time.Minute, 24 * time.Hour, 120, 120},
+		{"negative leaves the default", -time.Minute, 24 * time.Hour, 3600, 3600},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -657,6 +753,64 @@ func TestScenario_TX_016_DelegationBuildsActChain(t *testing.T) {
 	}
 	if act["sub"] != "actor-tx-016" {
 		t.Errorf("act.sub=%v want actor-tx-016", act["sub"])
+	}
+}
+
+// TestScenario_TX_016_DelegationKeepsSubjectTokenActors pins RFC 8693
+// §4.1: delegating an already-delegated subject_token nests its prior
+// actors under the new one rather than dropping them.
+func TestScenario_TX_016_DelegationKeepsSubjectTokenActors(t *testing.T) {
+	t.Parallel()
+	p := newTXProvider(t, txAllowAllPolicy{})
+	subjectClaims := p.defaultSubjectClaims("tx-016p-subj")
+	subjectClaims.Extra = map[string]any{"act": map[string]any{"sub": "svc-prior"}}
+	subjectJWS := p.mintSubjectToken(t, subjectClaims)
+	actorClaims := p.defaultSubjectClaims("tx-016p-act")
+	actorClaims.Subject = "actor-tx-016p"
+	actorJWS := p.mintSubjectToken(t, actorClaims)
+	form := url.Values{
+		"subject_token":      []string{subjectJWS},
+		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
+		"actor_token":        []string{actorJWS},
+		"actor_token_type":   []string{"urn:ietf:params:oauth:token-type:access_token"},
+	}
+	status, body := p.postTokenExchange(t, form)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", status, body)
+	}
+	at, _ := body["access_token"].(string)
+	act, _ := decodeTXJWTClaims(t, at)["act"].(map[string]any)
+	if act == nil || act["sub"] != "actor-tx-016p" {
+		t.Fatalf("act=%v want outer sub actor-tx-016p", act)
+	}
+	prior, _ := act["act"].(map[string]any)
+	if prior == nil || prior["sub"] != "svc-prior" {
+		t.Errorf("nested act=%v want the subject_token's prior actor svc-prior", act["act"])
+	}
+}
+
+// TestScenario_TX_004_SubjectTokenWithinLeewayExchanged pins that a
+// subject_token a few seconds past exp, which /userinfo and /introspect
+// still honour under the default leeway, is honoured by exchange too,
+// and that the derived token gets the minimal lifetime rather than a
+// fresh one.
+func TestScenario_TX_004_SubjectTokenWithinLeewayExchanged(t *testing.T) {
+	t.Parallel()
+	p := newTXProvider(t, txAllowAllPolicy{})
+	claims := p.defaultSubjectClaims("tx-004l-jti")
+	now := txClockNow()
+	claims.IssuedAt = now.Add(-time.Hour).Unix()
+	claims.ExpiresAt = now.Add(-10 * time.Second).Unix()
+	form := url.Values{
+		"subject_token":      []string{p.mintSubjectToken(t, claims)},
+		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
+	}
+	status, body := p.postTokenExchange(t, form)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", status, body)
+	}
+	if got, _ := body["expires_in"].(float64); got != 1 {
+		t.Errorf("expires_in=%v want 1 for a source already past its exp", body["expires_in"])
 	}
 }
 

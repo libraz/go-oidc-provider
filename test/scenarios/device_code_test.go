@@ -26,6 +26,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/devicecodekit"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
@@ -1673,49 +1674,54 @@ func TestScenario_DEV_100_UserCodeBruteForceLockout(t *testing.T) {
 }
 
 // TestScenario_DEV_101_RevokeEmitsAuditAndTransitions pins the public
-// revoke helper (op/devicecodekit.Revoke). The helper transitions a
-// Pending record to Denied with the supplied reason, cascade-revokes
-// every access token issued from that device_code (its ID is the
-// GrantID on each token), the next /token poll returns access_denied,
-// and a second revoke call safely retries the idempotent cascade.
+// revoke helper (op/devicecodekit.Revoke). Revoking a redeemed device
+// authorization retires the access and refresh tokens actually issued
+// from it and deletes its grant record; revoking a pending one
+// transitions it to Denied so the next /token poll returns
+// access_denied; and a second revoke call safely retries the idempotent
+// cascade.
 //
 // Spec: RFC 8628 §3.5, OAuth 2.0 user-trust posture.
 func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
 	t.Parallel()
-	p := newDevProvider(t, []string{"openid"})
-
-	deviceCode := p.issueDeviceCode(t, "openid")
-	reg := p.tk.Store.AccessTokens()
+	ctx := context.Background()
+	p := newDevProviderWithResources(t, []string{"openid", "offline_access"}, nil,
+		testkit.WithOptions(op.WithFeature(feature.Introspect)))
 	deps := &devicecodekit.Deps{
 		DeviceCodes:        p.tk.Store.DeviceCodes(),
-		AccessTokens:       reg,
-		RevocationStrategy: store.RevocationStrategyJTIRegistry,
+		AccessTokens:       p.tk.Store.AccessTokens(),
+		OpaqueAccessTokens: p.tk.Store.OpaqueAccessTokens(),
+		RefreshTokens:      p.tk.Store.RefreshTokens(),
+		GrantRevocations:   p.tk.Store.GrantRevocations(),
+		Grants:             p.tk.Store.Grants(),
 	}
 
-	// An access token whose GrantID is the device_code's ID stands in
-	// for one issued from this device authorization; the cascade must
-	// retire it when the authorization is revoked.
-	now := time.Now()
-	if err := reg.Register(context.Background(), store.AccessTokenRecord{
-		JTI:       "dev-101-at",
-		GrantID:   deviceCode,
-		ClientID:  "client-1",
-		IssuedAt:  now,
-		ExpiresAt: now.Add(time.Hour),
-	}); err != nil {
-		t.Fatalf("Register access token: %v", err)
+	redeemed := p.issueDeviceCode(t, "openid offline_access")
+	p.approveDeviceCode(t, redeemed, devDefaultSubject)
+	status, issued := p.tokenForm(t, url.Values{"grant_type": {devURNDeviceCode}, "device_code": {redeemed}})
+	if status != http.StatusOK {
+		t.Fatalf("device_code redemption status=%d body=%v", status, issued)
+	}
+	at, _ := issued["access_token"].(string)
+	rt, _ := issued["refresh_token"].(string)
+	if at == "" || rt == "" {
+		t.Fatalf("device_code response lacks access or refresh token: %v", issued)
+	}
+	if err := devicecodekit.Revoke(ctx, deps, redeemed, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+		t.Fatalf("Revoke redeemed: %v", err)
+	}
+	sdExpectInactive(t, p.tk, at, p.client.ID, devClientSecret)
+	status, body := sdRefresh(t, p.tk, rt, p.client.ID, devClientSecret)
+	sdExpectInvalidGrant(t, "device-issued refresh token after Revoke", status, body)
+	if _, err := p.tk.Store.Grants().Find(ctx, devicecode.GrantID(redeemed)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("grant record after Revoke: err=%v, want ErrNotFound", err)
 	}
 
-	if err := devicecodekit.Revoke(context.Background(), deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
-		t.Fatalf("Revoke: %v", err)
+	pending := p.issueDeviceCode(t, "openid")
+	if err := devicecodekit.Revoke(ctx, deps, pending, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+		t.Fatalf("Revoke pending: %v", err)
 	}
-
-	if at, err := reg.Find(context.Background(), "dev-101-at"); err != nil {
-		t.Fatalf("Find access token after revoke: %v", err)
-	} else if at == nil || !at.Revoked {
-		t.Errorf("device_code access token not cascade-revoked: %+v", at)
-	}
-	rec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	rec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(ctx, pending)
 	if err != nil {
 		t.Fatalf("FindByDeviceCode after revoke: %v", err)
 	}
@@ -1729,9 +1735,9 @@ func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
 
 	// Wire posture: /token poll returns access_denied because the
 	// substore now reports the record as Denied.
-	status, body := p.tokenForm(t, url.Values{
+	status, body = p.tokenForm(t, url.Values{
 		"grant_type":  {devURNDeviceCode},
-		"device_code": {deviceCode},
+		"device_code": {pending},
 	})
 	if status != http.StatusBadRequest {
 		t.Fatalf("post-revoke /token: status=%d want 400 body=%v", status, body)
@@ -1739,7 +1745,9 @@ func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
 	expectError(t, body, "access_denied")
 
 	// Idempotency: a second revoke retries the cascade and succeeds.
-	if err := devicecodekit.Revoke(context.Background(), deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
-		t.Errorf("second Revoke: %v", err)
+	for _, code := range []string{redeemed, pending} {
+		if err := devicecodekit.Revoke(ctx, deps, code, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+			t.Errorf("second Revoke: %v", err)
+		}
 	}
 }

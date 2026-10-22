@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/op/devicecodekit"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -30,9 +31,10 @@ func TestRevoke_CascadeTalliesSurviveToSlogSink(t *testing.T) {
 
 	s := inmem.New(inmem.WithClock(fixedClock{now: now}))
 	ds := s.DeviceCodes()
-	const grantID = "dev-audit-sink"
+	const deviceCode = "dev-audit-sink"
+	grantID := devicecode.GrantID(deviceCode)
 	if err := ds.Save(ctx, &store.DeviceCode{
-		ID:        grantID,
+		ID:        deviceCode,
 		UserCode:  "SINKCODE",
 		ClientID:  "client-1",
 		Status:    store.DeviceCodeStatusPending,
@@ -41,10 +43,10 @@ func TestRevoke_CascadeTalliesSurviveToSlogSink(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Save device code: %v", err)
 	}
-	if err := ds.Approve(ctx, grantID, "user-1", now); err != nil {
+	if err := ds.Approve(ctx, deviceCode, "user-1", now); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
-	if _, err := ds.Consume(ctx, grantID); err != nil {
+	if _, err := ds.Consume(ctx, deviceCode); err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
 	if err := s.AccessTokens().Register(ctx, store.AccessTokenRecord{
@@ -88,7 +90,7 @@ func TestRevoke_CascadeTalliesSurviveToSlogSink(t *testing.T) {
 		Clock:              fixedClock{now: now},
 		Audit:              audit.Slog(logger),
 	}
-	if err := devicecodekit.Revoke(ctx, deps, grantID, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+	if err := devicecodekit.Revoke(ctx, deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 
