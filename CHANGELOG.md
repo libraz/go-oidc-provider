@@ -192,6 +192,10 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   `token.revoked` for a JWT access token when nothing was persisted (the
   `None` strategy, or no substore behind the active one).
 
+- `token.refreshed` is recorded once the rotation is durable. A refresh that
+  lost a concurrent presentation at commit, or rolled back, used to record a
+  rotation that never happened.
+
 ### Fixed
 
 - The registration endpoint's `WWW-Authenticate` header now sanitises the

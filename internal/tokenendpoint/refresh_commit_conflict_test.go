@@ -2,6 +2,8 @@ package tokenendpoint_test
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,7 +56,8 @@ func (t commitRaceTx) Commit() error {
 // TestRefresh_CommitConflictEndsAsReplay pins that a refresh presentation
 // losing a concurrent race at Commit ends as a serialising backend would end
 // it: invalid_grant with the RFC 9700 §2.2.2 cascade retiring the chain, never
-// a server_error that skips the cascade.
+// a server_error that skips the cascade. The losing attempt rotated nothing,
+// so it must not record a token.refreshed event either.
 func TestRefresh_CommitConflictEndsAsReplay(t *testing.T) {
 	t.Parallel()
 
@@ -71,9 +74,10 @@ func TestRefresh_CommitConflictEndsAsReplay(t *testing.T) {
 		// consumption as a replay rather than a lost-response retry.
 		advance: func() { cur = cur.Add(2 * time.Minute) },
 	}
+	capture := newAuditCapture()
 	prov := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithStore(decorated)),
+		testkit.WithOptions(op.WithStore(decorated), op.WithAuditLogger(capture.logger())),
 	)
 	prov.Store = backing
 	f := &fixture{
@@ -85,6 +89,10 @@ func TestRefresh_CommitConflictEndsAsReplay(t *testing.T) {
 	const grantID = "grant-commit-race"
 
 	tip := seedReplayChain(t, f, client.ID, secret, "rt-commit-race", grantID)
+	rotations := countAuditEvents(t, capture, "token.refreshed")
+	if rotations != 2 {
+		t.Fatalf("token.refreshed recorded %d times for two committed rotations, want 2", rotations)
+	}
 
 	loseTo.Store(&tip)
 	assertRefreshRefused(t, f, client.ID, secret, tip, "presentation that lost the commit race")
@@ -93,4 +101,24 @@ func TestRefresh_CommitConflictEndsAsReplay(t *testing.T) {
 	}
 	assertChainNodeRevoked(t, f, tip, "chain tip")
 	assertGrantTombstoned(t, f, grantID, issuedAt)
+	if got := countAuditEvents(t, capture, "token.refreshed"); got != rotations {
+		t.Fatalf("token.refreshed recorded %d times, want %d: the attempt that lost the commit logged a rotation", got, rotations)
+	}
+}
+
+// countAuditEvents counts the audit records named name.
+func countAuditEvents(t *testing.T, c *auditCapture, name string) int {
+	t.Helper()
+	n := 0
+	dec := json.NewDecoder(strings.NewReader(c.buf.String()))
+	for dec.More() {
+		var rec map[string]any
+		if err := dec.Decode(&rec); err != nil {
+			t.Fatalf("decode audit line: %v", err)
+		}
+		if rec["audit"] == "true" && rec["event"] == name {
+			n++
+		}
+	}
+	return n
 }

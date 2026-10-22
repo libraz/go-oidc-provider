@@ -91,10 +91,35 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	// replayed chain is retired before the client is told its token was
 	// refused — the same ordering the transactional path gives.
 	var cascade replayCascade
+	var rotation rotationOutcome
 	staged := newStagedResponseWriter()
-	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, nil, effectiveAuthorizationDetails, false, false, &cascade)
+	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, nil, effectiveAuthorizationDetails, false, false, &cascade, &rotation)
+	// Each write above landed as it ran, so a recorded rotation is durable.
+	rotation.emit(ctx, deps)
 	cascade.run(ctx, deps)
 	staged.copyTo(w)
+}
+
+// rotationOutcome carries the token.refreshed record of a rotation out of
+// the exchange, so it is emitted only once the rotation is durable: after
+// Commit on the transactional path, where an attempt that loses a commit
+// race or rolls back rotated nothing.
+type rotationOutcome struct {
+	event *audit.Event
+}
+
+// record keeps ev for [rotationOutcome.emit].
+func (o *rotationOutcome) record(ev audit.Event) {
+	if o != nil {
+		o.event = &ev
+	}
+}
+
+// emit raises the recorded event, if a rotation recorded one.
+func (o *rotationOutcome) emit(ctx context.Context, deps Deps) {
+	if o != nil && o.event != nil {
+		deps.audit().Emit(ctx, *o.event)
+	}
 }
 
 func completeRefreshToken(
@@ -110,6 +135,7 @@ func completeRefreshToken(
 	revalidateAuthorizationDetails bool,
 	transactional bool,
 	cascade *replayCascade,
+	rotation *rotationOutcome,
 ) (rollback bool) {
 	exchanged, ok := exchangeRefresh(ctx, w, deps, client.ID, in, cascade)
 	if !ok {
@@ -155,7 +181,7 @@ func completeRefreshToken(
 	if !ok {
 		return rollback
 	}
-	issueRefreshResponse(ctx, w, deps, client, exchanged, user, binding, authorizationDetails, transactional)
+	issueRefreshResponse(ctx, w, deps, client, exchanged, user, binding, authorizationDetails, transactional, rotation)
 	return false
 }
 
@@ -315,6 +341,7 @@ func runRefreshTokenTransaction(
 	txDeps.OpaqueAccessTokens = tx.OpaqueAccessTokens()
 	txDeps.GrantRevocations = tx.GrantRevocations()
 	staged := newStagedResponseWriter()
+	var rotation rotationOutcome
 	rollback := completeRefreshToken(
 		ctx,
 		staged,
@@ -328,6 +355,7 @@ func runRefreshTokenTransaction(
 		true,
 		true,
 		cascade,
+		&rotation,
 	)
 	// Preserve OAuth rejection semantics that intentionally finalize token
 	// state (notably tombstoned-grant mint refusal, which rejects only after
@@ -348,6 +376,7 @@ func runRefreshTokenTransaction(
 		}
 		return nil, err
 	}
+	rotation.emit(ctx, deps)
 	return staged, nil
 }
 
@@ -876,6 +905,7 @@ func issueRefreshResponse(
 	binding tokenBinding,
 	authorizationDetails []map[string]any,
 	transactional bool,
+	rotation *rotationOutcome,
 ) {
 	if exchanged.InGrace {
 		serveGraceRetry(ctx, w, deps, client, exchanged, binding, transactional)
@@ -972,7 +1002,7 @@ func issueRefreshResponse(
 		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
 		GrantID:              chainGrantIDForResponse(deps, exchanged),
 	}
-	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedForRotation(exchanged, authCtx, authorizationDetails), binding, &response); err != nil {
+	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedForRotation(exchanged, authCtx, authorizationDetails), binding, &response, rotation); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
@@ -1203,6 +1233,7 @@ func rotateRefreshToken(
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
 	response *successResponse,
+	rotation *rotationOutcome,
 ) error {
 	// Re-check eligibility at rotation, not only at chain start: a
 	// client whose registration loses refresh_token (or a Provider
@@ -1276,7 +1307,7 @@ func rotateRefreshToken(
 			return err
 		}
 	}
-	deps.audit().Emit(ctx, audit.Event{
+	rotation.record(audit.Event{
 		Name:     auditTokenRefreshed,
 		Level:    audit.LevelInfo,
 		Message:  "refresh token rotated",
