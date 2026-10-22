@@ -506,14 +506,21 @@ func authCodeSaveFind(t *testing.T, f Factory) {
 	if got.ID != "ac-1" || got.ConsumedAt != nil {
 		t.Fatalf("unexpected code: %+v", got)
 	}
-	// The per-authorization state round-trips; a backend that drops it
-	// makes the token endpoint fall back to the shared grant.
-	if !got.AuthorizationRecorded || !got.AuthTime.Equal(code.AuthTime) || got.ACR != code.ACR ||
-		!reflect.DeepEqual(got.AMR, code.AMR) ||
-		!reflect.DeepEqual(got.AuthorizationDetails, code.AuthorizationDetails) ||
-		!reflect.DeepEqual(got.Claims, code.Claims) {
-		t.Fatalf("authorization state mismatch: got recorded=%v auth_time=%v acr=%q amr=%v details=%v claims=%v",
-			got.AuthorizationRecorded, got.AuthTime, got.ACR, got.AMR, got.AuthorizationDetails, got.Claims)
+	// The per-authorization state round-trips, or a backend drops all of
+	// it and the row reads back unrecorded, which makes the token endpoint
+	// fall back to the shared grant. A partial round-trip is a defect.
+	if got.AuthorizationRecorded {
+		if !got.AuthTime.Equal(code.AuthTime) || got.ACR != code.ACR ||
+			!reflect.DeepEqual(got.AMR, code.AMR) ||
+			!reflect.DeepEqual(got.AuthorizationDetails, code.AuthorizationDetails) ||
+			!reflect.DeepEqual(got.Claims, code.Claims) {
+			t.Fatalf("authorization state mismatch: got auth_time=%v acr=%q amr=%v details=%v claims=%v",
+				got.AuthTime, got.ACR, got.AMR, got.AuthorizationDetails, got.Claims)
+		}
+	} else if !got.AuthTime.IsZero() || got.ACR != "" || len(got.AMR) != 0 ||
+		len(got.AuthorizationDetails) != 0 || len(got.Claims) != 0 {
+		t.Fatalf("unrecorded row carries authorization state: auth_time=%v acr=%q amr=%v details=%v claims=%v",
+			got.AuthTime, got.ACR, got.AMR, got.AuthorizationDetails, got.Claims)
 	}
 }
 
@@ -695,9 +702,15 @@ func assertRefreshContext(t *testing.T, got, want *store.RefreshToken) {
 	if !reflect.DeepEqual(got.AccessTokenExtra, want.AccessTokenExtra) {
 		t.Fatalf("AccessTokenExtra=%v want %v", got.AccessTokenExtra, want.AccessTokenExtra)
 	}
-	if got.AuthorizationRecorded != want.AuthorizationRecorded || !reflect.DeepEqual(got.Claims, want.Claims) {
-		t.Fatalf("AuthorizationRecorded=%v Claims=%v want %v %v",
-			got.AuthorizationRecorded, got.Claims, want.AuthorizationRecorded, want.Claims)
+	// A backend may drop the claims request together with its marker
+	// (the token endpoint then falls back to the grant), but not one
+	// without the other.
+	if got.AuthorizationRecorded {
+		if !reflect.DeepEqual(got.Claims, want.Claims) {
+			t.Fatalf("Claims=%v want %v", got.Claims, want.Claims)
+		}
+	} else if len(got.Claims) != 0 {
+		t.Fatalf("unrecorded row carries Claims=%v", got.Claims)
 	}
 }
 

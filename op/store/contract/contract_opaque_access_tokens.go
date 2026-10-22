@@ -95,10 +95,15 @@ func opaqueATSaveFind(t *testing.T, f Factory) {
 	if got.Revoked {
 		t.Fatal("Revoked = true on fresh record")
 	}
-	if !got.AuthorizationRecorded || !reflect.DeepEqual(got.AuthorizationDetails, tok.AuthorizationDetails) ||
-		!reflect.DeepEqual(got.Claims, tok.Claims) {
-		t.Fatalf("authorization state mismatch: recorded=%v details=%v claims=%v",
-			got.AuthorizationRecorded, got.AuthorizationDetails, got.Claims)
+	// The per-authorization state round-trips, or a backend drops all of
+	// it with its marker; a partial round-trip is a defect.
+	if got.AuthorizationRecorded {
+		if !reflect.DeepEqual(got.AuthorizationDetails, tok.AuthorizationDetails) ||
+			!reflect.DeepEqual(got.Claims, tok.Claims) {
+			t.Fatalf("authorization state mismatch: details=%v claims=%v", got.AuthorizationDetails, got.Claims)
+		}
+	} else if len(got.AuthorizationDetails) != 0 || len(got.Claims) != 0 {
+		t.Fatalf("unrecorded row carries details=%v claims=%v", got.AuthorizationDetails, got.Claims)
 	}
 }
 
