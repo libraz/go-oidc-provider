@@ -60,6 +60,7 @@ func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, deps Deps,
 		clientID:         confirmationClientID(f),
 		postLogout:       f.req.postLogout,
 		state:            f.req.state,
+		uiLocales:        f.req.uiLocales,
 		logoutScope:      f.req.logoutScope,
 		scopeFingerprint: f.req.logoutScope,
 		chooserGroupID:   f.session.fingerprint.chooserGroupID,
@@ -144,6 +145,7 @@ type confirmationForm struct {
 	clientID         string
 	postLogout       string
 	state            string
+	uiLocales        string
 	logoutScope      string
 	scopeFingerprint string
 	chooserGroupID   string
@@ -240,13 +242,15 @@ func clearConfirmCookie(w http.ResponseWriter) {
 // confirmationBodyTemplate is the static HTML the interstitial
 // confirmation page renders. The page is self-contained: no scripts,
 // no external resources, and the only caller-controlled values
-// (client_id, state, post_logout_redirect_uri) are flowed through
-// htmlEscapeASCII before substitution. A submit button labelled "Sign
+// (client_id, state, post_logout_redirect_uri, ui_locales) are flowed
+// through htmlEscapeASCII before substitution. A submit button labelled "Sign
 // out" doubles as the explicit user gesture the CSRF gate requires.
 //
 // {TOKEN} carries the opaque CSRF token; {CLIENT_ID}, {STATE} and
 // {POST_LOGOUT} carry the request parameters the POST round-trip has
-// to preserve so the eventual redirect still validates. {LOGOUT_SCOPE_FIELD}
+// to preserve so the eventual redirect still validates. {UI_LOCALES}
+// carries ui_locales so the logged-out page resolves the same language
+// as this one. {LOGOUT_SCOPE_FIELD}
 // carries the destructive-scope decision so a confirmation POST cannot
 // silently widen/narrow the GET operation. {LOGOUT_SCOPE_FINGERPRINT} binds
 // the default all-scope decision even when the optional logout_scope field
@@ -272,6 +276,7 @@ const confirmationBodyTemplate = `<!DOCTYPE html>
 <input type="hidden" name="client_id" value="{CLIENT_ID}">
 <input type="hidden" name="state" value="{STATE}">
 <input type="hidden" name="post_logout_redirect_uri" value="{POST_LOGOUT}">
+<input type="hidden" name="ui_locales" value="{UI_LOCALES}">
 {LOGOUT_SCOPE_FIELD}
 <input type="hidden" name="logout_scope_fingerprint" value="{LOGOUT_SCOPE_FINGERPRINT}">
 <input type="hidden" name="chooser_group_id" value="{CHOOSER_GROUP_ID}">
@@ -303,6 +308,7 @@ func buildConfirmationBody(token string, form confirmationForm) string {
 	body = replaceFirst(body, "{CLIENT_ID}", htmlEscapeASCII(form.clientID))
 	body = replaceFirst(body, "{STATE}", htmlEscapeASCII(form.state))
 	body = replaceFirst(body, "{POST_LOGOUT}", htmlEscapeASCII(form.postLogout))
+	body = replaceFirst(body, "{UI_LOCALES}", htmlEscapeASCII(form.uiLocales))
 	body = replaceFirst(body, "{SCOPE_MESSAGE}", htmlEscapeASCII(form.page.body))
 	scopeField := ""
 	if form.logoutScope == logoutScopeCurrent {
