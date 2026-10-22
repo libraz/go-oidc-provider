@@ -6,7 +6,6 @@ import (
 	"errors"
 	"math"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -43,6 +42,37 @@ type EmailOTPBackend struct {
 // single contract sub-test.
 type EmailOTPFactory func(t *testing.T) EmailOTPBackend
 
+//nolint:gochecknoglobals // sub-test table; declared once so the Run* entry point and the coverage check can iterate.
+var emailOTPCases = []factorCase[EmailOTPBackend]{
+	{"Missing", emailOTPMissing},
+	{"PutGetRoundTrip", emailOTPRoundTrip},
+	{"GetSurvivesCodeExpiryWhileRetained", emailOTPRetainedPastCodeExpiry},
+	{"GetDropsRecordPastRetention", emailOTPPastRetention},
+	{"RetentionFallsBackToExpiresAt", emailOTPRetentionFallback},
+	{"CompareAndSwapAppliesNext", emailOTPCASApplies},
+	{"CompareAndSwapStaleSnapshotRejected", emailOTPCASStale},
+	{"CompareAndSwapRejectsVersionEqualDivergedRecord", emailOTPCASDiverged},
+	{"CompareAndSwapRejectsInvalidVersion", emailOTPCASInvalidVersion},
+	{"CompareAndSwapIdenticalHasOneWinner", emailOTPCASIdentical},
+	{"NilPreviousReservesFirstSend", emailOTPCASReserves},
+	{"NilPreviousRejectsLiveRecord", emailOTPCASReserveOccupied},
+	{"NilPreviousReclaimsRecordPastRetention", emailOTPCASReserveReclaims},
+	{"ConcurrentFirstSendHasOneWinner", emailOTPConcurrentReserve},
+	{"ConsumeStampsConsumedAt", emailOTPConsume},
+	{"ConsumeStampsAnUnstampedChallenge", emailOTPConsumeStampsUnstamped},
+	{"ConsumeClearsVerifierFailureState", emailOTPConsumeClearsVerifierFailureState},
+	{"ConsumeTwiceRejected", emailOTPConsumeTwice},
+	{"ConsumeExpiredCodeRejected", emailOTPConsumeExpired},
+	{"ConsumeSupersededCodeRejected", emailOTPConsumeSuperseded},
+	{"ConsumeRejectsInvalidVersion", emailOTPConsumeInvalidVersion},
+	{"DeleteRemovesChallenge", emailOTPDelete},
+	{"DeleteRecreateRejectsStaleSnapshot", emailOTPDeleteRecreateRejectsStaleSnapshot},
+	{"DeleteMissing", emailOTPDeleteMissing},
+	{"DefensiveCopies", emailOTPDefensiveCopies},
+	{"ConcurrentCompareAndSwapHasOneWinner", emailOTPConcurrentCAS},
+	{"ConcurrentConsumeHasOneWinner", emailOTPConcurrentConsume},
+}
+
 // RunEmailOTPs exercises the retention, compare-and-swap, and single-use
 // redemption guarantees of [store.EmailOTPStore]. The retention cases are
 // the ones worth porting carefully: a backend that drops the record when
@@ -50,40 +80,7 @@ type EmailOTPFactory func(t *testing.T) EmailOTPBackend
 // counter, which is a rate-limit bypass rather than a cosmetic deviation.
 func RunEmailOTPs(t *testing.T, f EmailOTPFactory) {
 	t.Helper()
-
-	cases := []struct {
-		name string
-		run  func(*testing.T, EmailOTPBackend)
-	}{
-		{"Missing", emailOTPMissing},
-		{"PutGetRoundTrip", emailOTPRoundTrip},
-		{"GetSurvivesCodeExpiryWhileRetained", emailOTPRetainedPastCodeExpiry},
-		{"GetDropsRecordPastRetention", emailOTPPastRetention},
-		{"RetentionFallsBackToExpiresAt", emailOTPRetentionFallback},
-		{"CompareAndSwapAppliesNext", emailOTPCASApplies},
-		{"CompareAndSwapStaleSnapshotRejected", emailOTPCASStale},
-		{"CompareAndSwapRejectsVersionEqualDivergedRecord", emailOTPCASDiverged},
-		{"CompareAndSwapRejectsInvalidVersion", emailOTPCASInvalidVersion},
-		{"CompareAndSwapIdenticalHasOneWinner", emailOTPCASIdentical},
-		{"NilPreviousReservesFirstSend", emailOTPCASReserves},
-		{"NilPreviousRejectsLiveRecord", emailOTPCASReserveOccupied},
-		{"NilPreviousReclaimsRecordPastRetention", emailOTPCASReserveReclaims},
-		{"ConcurrentFirstSendHasOneWinner", emailOTPConcurrentReserve},
-		{"ConsumeStampsConsumedAt", emailOTPConsume},
-		{"ConsumeStampsAnUnstampedChallenge", emailOTPConsumeStampsUnstamped},
-		{"ConsumeClearsVerifierFailureState", emailOTPConsumeClearsVerifierFailureState},
-		{"ConsumeTwiceRejected", emailOTPConsumeTwice},
-		{"ConsumeExpiredCodeRejected", emailOTPConsumeExpired},
-		{"ConsumeSupersededCodeRejected", emailOTPConsumeSuperseded},
-		{"ConsumeRejectsInvalidVersion", emailOTPConsumeInvalidVersion},
-		{"DeleteRemovesChallenge", emailOTPDelete},
-		{"DeleteRecreateRejectsStaleSnapshot", emailOTPDeleteRecreateRejectsStaleSnapshot},
-		{"DeleteMissing", emailOTPDeleteMissing},
-		{"DefensiveCopies", emailOTPDefensiveCopies},
-		{"ConcurrentCompareAndSwapHasOneWinner", emailOTPConcurrentCAS},
-		{"ConcurrentConsumeHasOneWinner", emailOTPConcurrentConsume},
-	}
-	for _, tc := range cases {
+	for _, tc := range emailOTPCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, f(t))
@@ -351,30 +348,18 @@ func emailOTPCASIdentical(t *testing.T, b EmailOTPBackend) {
 		t.Fatalf("Get seed: %v", err)
 	}
 
-	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
+	attempts := make([]func() error, 0, 2)
 	for range 2 {
 		next := *previous
 		next.CodeSalt = bytes.Clone(previous.CodeSalt)
 		next.CodeHash = bytes.Clone(previous.CodeHash)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready <- struct{}{}
-			<-release
-			errs <- b.Store.CompareAndSwap(ctx, previous, &next)
-		}()
+		attempts = append(attempts, func() error { return b.Store.CompareAndSwap(ctx, previous, &next) })
 	}
-	<-ready
-	<-ready
-	close(release)
-	wg.Wait()
+	errs := race(func() { _, _ = b.Store.Get(ctx, "otp-race-warmup") }, attempts...)
 
 	winners := 0
-	for range 2 {
-		switch err := <-errs; {
+	for _, err := range errs {
+		switch {
 		case err == nil:
 			winners++
 		case errors.Is(err, store.ErrAlreadyConsumed):
@@ -832,11 +817,14 @@ func emailOTPConcurrentConsume(t *testing.T, b EmailOTPBackend) {
 		t.Fatalf("Get seed: %v", err)
 	}
 
-	errs := race(func(int) error {
-		attempt := *presented
-		attempt.ConsumedAt = now
-		return b.Store.Consume(ctx, &attempt)
-	})
+	errs := race(
+		func() { _, _ = b.Store.Get(ctx, "otp-race-warmup") },
+		everyRacer(func(int) error {
+			attempt := *presented
+			attempt.ConsumedAt = now
+			return b.Store.Consume(ctx, &attempt)
+		})...,
+	)
 	assertOneWinner(t, "EmailOTPs().Consume", errs)
 	for i, err := range errs {
 		if err != nil && !errors.Is(err, store.ErrAlreadyConsumed) {
@@ -865,29 +853,17 @@ func emailOTPConcurrentCAS(t *testing.T, b EmailOTPBackend) {
 		t.Fatalf("Get seed: %v", err)
 	}
 
-	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
+	attempts := make([]func() error, 0, 2)
 	for count := 8; count <= 9; count++ {
 		next := *current
 		next.FailedCount = count
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready <- struct{}{}
-			<-release
-			errs <- b.Store.CompareAndSwap(ctx, current, &next)
-		}()
+		attempts = append(attempts, func() error { return b.Store.CompareAndSwap(ctx, current, &next) })
 	}
-	<-ready
-	<-ready
-	close(release)
-	wg.Wait()
+	errs := race(func() { _, _ = b.Store.Get(ctx, "otp-race-warmup") }, attempts...)
 
 	winners := 0
-	for range 2 {
-		switch err := <-errs; {
+	for _, err := range errs {
+		switch {
 		case err == nil:
 			winners++
 		case errors.Is(err, store.ErrAlreadyConsumed):
@@ -1005,29 +981,17 @@ func emailOTPConcurrentReserve(t *testing.T, b EmailOTPBackend) {
 	t.Helper()
 	ctx := context.Background()
 
-	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
+	attempts := make([]func() error, 0, 2)
 	for count := 1; count <= 2; count++ {
 		next := emailOTPContractRecord(b.Now())
 		next.SendCount = count
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready <- struct{}{}
-			<-release
-			errs <- b.Store.CompareAndSwap(ctx, nil, next)
-		}()
+		attempts = append(attempts, func() error { return b.Store.CompareAndSwap(ctx, nil, next) })
 	}
-	<-ready
-	<-ready
-	close(release)
-	wg.Wait()
+	errs := race(func() { _, _ = b.Store.Get(ctx, "otp-race-warmup") }, attempts...)
 
 	winners := 0
-	for range 2 {
-		switch err := <-errs; {
+	for _, err := range errs {
+		switch {
 		case err == nil:
 			winners++
 		case errors.Is(err, store.ErrAlreadyConsumed):

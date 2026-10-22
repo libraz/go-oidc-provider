@@ -1540,8 +1540,10 @@ advisories:
       under CVE-2026-33473 and its cluster, plus a brute-force budget
       gap. TestVerify_ReplaysSameStepRejected pins the replay-window
       half (same code, same test as the sibling rows); the store-level
-      TOCTOU is pinned separately by the "AcceptRejectsReplayedStep"
-      contract case (totpAcceptReplay); the brute-force half is pinned
+      TOCTOU is pinned separately by the RunTOTPs
+      "ConcurrentAcceptHasOneWinner" contract case (totpConcurrentAccept),
+      which races one step from several callers, alongside the sequential
+      "AcceptRejectsReplayedStep" case; the brute-force half is pinned
       by TestVerify_LocksAtThirtyFailures.
       Aliases: CVE-2026-61630, CVE-2026-49870, CVE-2026-58271.
   - id: CVE-2026-96445

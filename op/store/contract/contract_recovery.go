@@ -3,7 +3,6 @@ package contract
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -16,31 +15,29 @@ import (
 // step rather than through the aggregate [store.Store].
 type RecoveryFactory func(t *testing.T) store.RecoveryStore
 
+//nolint:gochecknoglobals // sub-test table; declared once so the Run* entry point and the coverage check can iterate.
+var recoveryCases = []factorCase[store.RecoveryStore]{
+	{"Missing", recoveryMissing},
+	{"PutGetRoundTrip", recoveryRoundTrip},
+	{"PutReplacesBatchWholesale", recoveryPutReplaces},
+	{"ConsumeMarksOneSlot", recoveryConsumeMarksSlot},
+	{"ConsumeStampsAnUnstampedSlot", recoveryConsumeStampsUnstamped},
+	{"ConsumeTwiceRejected", recoveryConsumeTwice},
+	{"ConsumeSupersededHashRejected", recoveryConsumeSupersededHash},
+	{"ConsumeMissingBatch", recoveryConsumeMissing},
+	{"DeleteRemovesBatch", recoveryDelete},
+	{"DeleteMissing", recoveryDeleteMissing},
+	{"DefensiveCopies", recoveryDefensiveCopies},
+	{"ConcurrentConsumeHasOneWinner", recoveryConcurrentConsume},
+}
+
 // RunRecoveryCodes exercises the single-use slot guarantees of
 // [store.RecoveryStore], including the hash-match precondition that makes
 // regenerating a batch revoke the codes it replaced. Adapter authors
 // should call it from their black-box test suite.
 func RunRecoveryCodes(t *testing.T, f RecoveryFactory) {
 	t.Helper()
-
-	cases := []struct {
-		name string
-		run  func(*testing.T, store.RecoveryStore)
-	}{
-		{"Missing", recoveryMissing},
-		{"PutGetRoundTrip", recoveryRoundTrip},
-		{"PutReplacesBatchWholesale", recoveryPutReplaces},
-		{"ConsumeMarksOneSlot", recoveryConsumeMarksSlot},
-		{"ConsumeStampsAnUnstampedSlot", recoveryConsumeStampsUnstamped},
-		{"ConsumeTwiceRejected", recoveryConsumeTwice},
-		{"ConsumeSupersededHashRejected", recoveryConsumeSupersededHash},
-		{"ConsumeMissingBatch", recoveryConsumeMissing},
-		{"DeleteRemovesBatch", recoveryDelete},
-		{"DeleteMissing", recoveryDeleteMissing},
-		{"DefensiveCopies", recoveryDefensiveCopies},
-		{"ConcurrentConsumeHasOneWinner", recoveryConcurrentConsume},
-	}
-	for _, tc := range cases {
+	for _, tc := range recoveryCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, f(t))
@@ -346,29 +343,17 @@ func recoveryConcurrentConsume(t *testing.T, s store.RecoveryStore) {
 		t.Fatalf("Get seed: %v", err)
 	}
 
-	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
+	attempts := make([]func() error, 0, 2)
 	for i := range 2 {
 		presented := cloneContractBatch(current)
 		presented.Codes[0].ConsumedAt = Reference.Add(time.Duration(i) * time.Minute)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready <- struct{}{}
-			<-release
-			errs <- s.Consume(ctx, presented, 0)
-		}()
+		attempts = append(attempts, func() error { return s.Consume(ctx, presented, 0) })
 	}
-	<-ready
-	<-ready
-	close(release)
-	wg.Wait()
+	errs := race(func() { _, _ = s.Get(ctx, "recovery-race-warmup") }, attempts...)
 
 	winners := 0
-	for range 2 {
-		switch err := <-errs; {
+	for _, err := range errs {
+		switch {
 		case err == nil:
 			winners++
 		case errors.Is(err, store.ErrAlreadyConsumed):

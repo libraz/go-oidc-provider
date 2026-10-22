@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -15,26 +16,26 @@ import (
 // authenticator rather than through the aggregate [store.Store].
 type PasskeyFactory func(t *testing.T) store.PasskeyStore
 
+//nolint:gochecknoglobals // sub-test table; declared once so the Run* entry point and the coverage check can iterate.
+var passkeyCases = []factorCase[store.PasskeyStore]{
+	{"UpdateAssertionReverseOrderIsMonotonic", passkeyReverseOrder},
+	{"StaleCloneWarningRemainsSticky", passkeyStaleCloneWarning},
+	{"CounterlessAssertionUpdatesFlags", passkeyCounterless},
+	{"UpdateAssertionPreservesRegistrationFields", passkeyPreservesRegistration},
+	{"UpdateAssertionReturnsClone", passkeyReturnsClone},
+	{"UpdateAssertionNotFound", passkeyUpdateNotFound},
+	{"PutRefusesCrossSubjectCredential", passkeyCrossSubjectPut},
+	{"PutRewritesOwnCredential", passkeyOwnCredentialPut},
+	{"ConcurrentCrossSubjectPutHasOneOwner", passkeyConcurrentCrossSubjectPut},
+	{"ConcurrentUpdateAssertionKeepsHighestSignCount", passkeyConcurrentUpdateAssertion},
+}
+
 // RunPasskeys exercises the atomic assertion-update guarantees of
 // [store.PasskeyStore]. Adapter authors should call it from their
 // black-box test suite in addition to any backend-specific tests.
 func RunPasskeys(t *testing.T, f PasskeyFactory) {
 	t.Helper()
-
-	cases := []struct {
-		name string
-		run  func(*testing.T, store.PasskeyStore)
-	}{
-		{"UpdateAssertionReverseOrderIsMonotonic", passkeyReverseOrder},
-		{"StaleCloneWarningRemainsSticky", passkeyStaleCloneWarning},
-		{"CounterlessAssertionUpdatesFlags", passkeyCounterless},
-		{"UpdateAssertionPreservesRegistrationFields", passkeyPreservesRegistration},
-		{"UpdateAssertionReturnsClone", passkeyReturnsClone},
-		{"UpdateAssertionNotFound", passkeyUpdateNotFound},
-		{"PutRefusesCrossSubjectCredential", passkeyCrossSubjectPut},
-		{"PutRewritesOwnCredential", passkeyOwnCredentialPut},
-	}
-	for _, tc := range cases {
+	for _, tc := range passkeyCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, f(t))
@@ -60,28 +61,15 @@ func passkeyReverseOrder(t *testing.T, s store.PasskeyStore) {
 		SignCount:         8,
 	}
 
-	// Model two assertions that both verified against counter 7, then
-	// force the newer counter to persist before the older request.
-	highDone := make(chan struct{})
-	errs := make(chan error, 2)
-	results := make(chan *store.PasskeyRecord, 1)
-	go func() {
-		_, err := s.UpdateAssertion(ctx, []byte("credential"), high)
-		errs <- err
-		close(highDone)
-	}()
-	go func() {
-		<-highDone
-		got, err := s.UpdateAssertion(ctx, []byte("credential"), low)
-		errs <- err
-		results <- got
-	}()
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatalf("UpdateAssertion: %v", err)
-		}
+	// Model two assertions that both verified against counter 7 and
+	// reach the store newest first.
+	if _, err := s.UpdateAssertion(ctx, []byte("credential"), high); err != nil {
+		t.Fatalf("UpdateAssertion high: %v", err)
 	}
-	got := <-results
+	got, err := s.UpdateAssertion(ctx, []byte("credential"), low)
+	if err != nil {
+		t.Fatalf("UpdateAssertion low: %v", err)
+	}
 	if got == nil {
 		t.Fatal("UpdateAssertion returned nil record")
 	}
@@ -292,6 +280,123 @@ func passkeyOwnCredentialPut(t *testing.T, s store.PasskeyStore) {
 	}
 	if got.Attachment != updated.Attachment {
 		t.Errorf("Attachment=%q want %q", got.Attachment, updated.Attachment)
+	}
+}
+
+// passkeyConcurrentCrossSubjectPut is [passkeyCrossSubjectPut] under
+// the traffic the atomicity rule on [store.PasskeyStore.Put] exists for:
+// several subjects registering one credential ID at once. Exactly one
+// may own it and the rest MUST get [store.ErrAlreadyExists]. A backend
+// that checks the owner and then writes lets every racer find the ID
+// free, tells each of them it succeeded, and leaves the credential with
+// whichever subject wrote last.
+func passkeyConcurrentCrossSubjectPut(t *testing.T, s store.PasskeyStore) {
+	t.Helper()
+	ctx := context.Background()
+	id := []byte("credential-put-race")
+	subject := func(i int) string { return "subject-put-race-" + strconv.Itoa(i) }
+
+	errs := race(
+		func() { _, _ = s.Get(ctx, []byte("credential-race-warmup")) },
+		everyRacer(func(i int) error {
+			rec := passkeyContractRecord()
+			rec.CredentialID = id
+			rec.Subject = subject(i)
+			return s.Put(ctx, rec)
+		})...,
+	)
+	winner := assertOneWinner(t, "Passkeys().Put", errs)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("losing Put %d: want ErrAlreadyExists, got %v", i, err)
+		}
+	}
+
+	got, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get after the race: %v", err)
+	}
+	if got.Subject != subject(winner) {
+		t.Fatalf("Subject=%q want %q — the credential belongs to a subject whose Put was refused",
+			got.Subject, subject(winner))
+	}
+	for i := range concurrentRacers {
+		held, err := s.ListBySubject(ctx, subject(i))
+		if err != nil {
+			t.Fatalf("ListBySubject %d: %v", i, err)
+		}
+		want := 0
+		if i == winner {
+			want = 1
+		}
+		if len(held) != want {
+			t.Fatalf("subject %q holds %d credentials after the race, want %d", subject(i), len(held), want)
+		}
+	}
+}
+
+// passkeyUpdateRaceRounds is how many fresh credentials
+// [passkeyConcurrentUpdateAssertion] races. Which racer writes last is
+// down to scheduling, so a read-modify-write backend keeps the highest
+// counter by luck once in [concurrentRacers] rounds; repeating makes the
+// rewind certain rather than likely.
+const passkeyUpdateRaceRounds = 4
+
+// passkeyConcurrentUpdateAssertion drives the monotonicity
+// [store.PasskeyStore.UpdateAssertion] declares under concurrent
+// assertions that all verified against the same counter. Whatever order
+// they land in, SignCount MUST end at the highest value presented and a
+// CloneWarning any of them carried MUST stick. A backend that reads the
+// record, applies the rules in application code and writes it back
+// keeps whichever write landed last, rewinding the counter clone
+// detection compares the next assertion against.
+func passkeyConcurrentUpdateAssertion(t *testing.T, s store.PasskeyStore) {
+	t.Helper()
+	ctx := context.Background()
+	expected := passkeyContractRecord().SignCount
+	counts := make([]uint32, concurrentRacers)
+	highest := expected
+	for i := range counts {
+		highest++
+		counts[i] = highest
+	}
+
+	for round := range passkeyUpdateRaceRounds {
+		rec := passkeyContractRecord()
+		rec.CredentialID = []byte("credential-update-race-" + strconv.Itoa(round))
+		if err := s.Put(ctx, rec); err != nil {
+			t.Fatalf("Put round %d: %v", round, err)
+		}
+
+		errs := race(
+			func() { _, _ = s.Get(ctx, []byte("credential-race-warmup")) },
+			everyRacer(func(i int) error {
+				_, err := s.UpdateAssertion(ctx, rec.CredentialID, store.PasskeyAssertionUpdate{
+					ExpectedSignCount: expected,
+					SignCount:         counts[i],
+					UserPresent:       true,
+					CloneWarning:      i == 0,
+				})
+				return err
+			})...,
+		)
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: concurrent UpdateAssertion %d: %v", round, i, err)
+			}
+		}
+
+		got, err := s.Get(ctx, rec.CredentialID)
+		if err != nil {
+			t.Fatalf("Get round %d: %v", round, err)
+		}
+		if got.SignCount != highest {
+			t.Fatalf("round %d: SignCount = %d after the race, want the highest presented %d — "+
+				"a later write rewound the counter", round, got.SignCount, highest)
+		}
+		if !got.CloneWarning {
+			t.Fatalf("round %d: CloneWarning = false after the race — a later write cleared it", round)
+		}
 	}
 }
 

@@ -71,43 +71,45 @@ type Backend struct {
 	SeedUser func(t *testing.T, u *store.User, username string, passwordHash []byte)
 }
 
+// runGroups is every group [Run] drives, in order.
+//
+//nolint:gochecknoglobals // group table; declared once so [Run] and the coverage check can iterate.
+var runGroups = []struct {
+	name  string
+	cases []subtest
+}{
+	{"ClientStore", clientStoreCases},
+	{"ClientRegistry", clientRegistryCases},
+	{"StaticClientReconciler", staticClientReconcilerCases},
+	{"AuthorizationCodeStore", authCodeCases},
+	{"RefreshTokenStore", refreshCases},
+	{"GrantStore", grantCases},
+	{"SessionStore", sessionCases},
+	{"PushedAuthRequestStore", parCases},
+	{"InteractionStore", interactionCases},
+	{"ConsumedJTIStore", jtiCases},
+	{"InitialAccessTokenStore", iatCases},
+	{"RegistrationAccessTokenStore", ratCases},
+	{"AccessTokenRegistry", accessTokenRegistryCases},
+	{"OpaqueAccessTokenStore", opaqueAccessTokenCases},
+	{"GrantRevocationStore", grantRevocationCases},
+	{"ClientDeletionCascade", clientCascadeCases},
+	{"DeviceCodeStore", deviceCodeCases},
+	{"CIBARequestStore", cibaRequestCases},
+	{"MetadataStore", metadataStoreCases},
+	{"UserStore", userStoreCases},
+	{"ConsumeStates", consumeCases},
+	{"Transactional", transactionalCases},
+	{"Concurrency", concurrencyCases},
+	{"SubstoreNamespace", namespaceCases},
+}
+
 // Run drives every contract sub-test against the backend produced by f. Each
 // sub-test invokes f independently so backends remain isolated, and every
 // sub-test calls [testing.T.Parallel] for fast aggregate runs.
 func Run(t *testing.T, f Factory) {
 	t.Helper()
-
-	groups := []struct {
-		name  string
-		cases []subtest
-	}{
-		{"ClientStore", clientStoreCases},
-		{"ClientRegistry", clientRegistryCases},
-		{"StaticClientReconciler", staticClientReconcilerCases},
-		{"AuthorizationCodeStore", authCodeCases},
-		{"RefreshTokenStore", refreshCases},
-		{"GrantStore", grantCases},
-		{"SessionStore", sessionCases},
-		{"PushedAuthRequestStore", parCases},
-		{"InteractionStore", interactionCases},
-		{"ConsumedJTIStore", jtiCases},
-		{"InitialAccessTokenStore", iatCases},
-		{"RegistrationAccessTokenStore", ratCases},
-		{"AccessTokenRegistry", accessTokenRegistryCases},
-		{"OpaqueAccessTokenStore", opaqueAccessTokenCases},
-		{"GrantRevocationStore", grantRevocationCases},
-		{"ClientDeletionCascade", clientCascadeCases},
-		{"DeviceCodeStore", deviceCodeCases},
-		{"CIBARequestStore", cibaRequestCases},
-		{"MetadataStore", metadataStoreCases},
-		{"UserStore", userStoreCases},
-		{"ConsumeStates", consumeCases},
-		{"Transactional", transactionalCases},
-		{"Concurrency", concurrencyCases},
-		{"SubstoreNamespace", namespaceCases},
-	}
-
-	for _, g := range groups {
+	for _, g := range runGroups {
 		t.Run(g.name, func(t *testing.T) {
 			t.Parallel()
 			runGroup(t, f, g.cases)
@@ -166,10 +168,28 @@ func RunSubstoreNamespace(t *testing.T, f Factory) {
 	})
 }
 
+// RunMetadata runs only the MetadataStore contract subgroup against the
+// supplied factory. See [RunInteractions] for the partial-coverage
+// rationale.
+func RunMetadata(t *testing.T, f Factory) {
+	t.Helper()
+	t.Run("MetadataStore", func(t *testing.T) {
+		t.Parallel()
+		runGroup(t, f, metadataStoreCases)
+	})
+}
+
 // subtest captures one named sub-test in the contract suite.
 type subtest struct {
 	name string
 	fn   func(*testing.T, Factory)
+}
+
+// factorCase is [subtest] for the standalone substores whose Run* entry
+// point takes its own backend type B instead of a [Factory].
+type factorCase[B any] struct {
+	name string
+	run  func(*testing.T, B)
 }
 
 func runGroup(t *testing.T, f Factory, cases []subtest) {

@@ -133,6 +133,13 @@ func TestRedis_Sessions(t *testing.T) {
 	contract.RunSessions(t, newRedisFactory(t))
 }
 
+// TestRedis_Metadata runs the MetadataStore contract subgroup against a
+// real Redis 7 instance.
+func TestRedis_Metadata(t *testing.T) {
+	t.Parallel()
+	contract.RunMetadata(t, newRedisFactory(t))
+}
+
 // TestRedis_SubstoreNamespace runs the substore-namespace contract
 // subgroup against a real Redis 7 instance. Redis is the backend where
 // a shared keyspace is easiest to introduce by accident — every substore

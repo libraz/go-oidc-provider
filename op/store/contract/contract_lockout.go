@@ -3,7 +3,6 @@ package contract
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,24 +14,22 @@ import (
 // through op.WithAuthnLockoutStore rather than the aggregate [store.Store].
 type AuthnLockoutFactory func(t *testing.T) store.AuthnLockoutStore
 
+//nolint:gochecknoglobals // sub-test table; declared once so the Run* entry point and the coverage check can iterate.
+var authnLockoutCases = []factorCase[AuthnLockoutFactory]{
+	{"Missing", authnLockoutMissing},
+	{"CreateAndUpdateVersions", authnLockoutCreateAndUpdate},
+	{"StaleTransitionLeavesStateUnchanged", authnLockoutStale},
+	{"UpdateMissingDoesNotInsert", authnLockoutUpdateMissing},
+	{"DefensiveCopies", authnLockoutDefensiveCopies},
+	{"ConcurrentSameVersionHasOneWinner", authnLockoutConcurrentCAS},
+}
+
 // RunAuthnLockouts exercises the versioned transition guarantees of
 // [store.AuthnLockoutStore]. Adapter authors should call it from their
 // black-box test suite.
 func RunAuthnLockouts(t *testing.T, f AuthnLockoutFactory) {
 	t.Helper()
-
-	cases := []struct {
-		name string
-		run  func(*testing.T, AuthnLockoutFactory)
-	}{
-		{"Missing", authnLockoutMissing},
-		{"CreateAndUpdateVersions", authnLockoutCreateAndUpdate},
-		{"StaleTransitionLeavesStateUnchanged", authnLockoutStale},
-		{"UpdateMissingDoesNotInsert", authnLockoutUpdateMissing},
-		{"DefensiveCopies", authnLockoutDefensiveCopies},
-		{"ConcurrentSameVersionHasOneWinner", authnLockoutConcurrentCAS},
-	}
-	for _, tc := range cases {
+	for _, tc := range authnLockoutCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, f)
@@ -180,35 +177,25 @@ func authnLockoutConcurrentCAS(t *testing.T, f AuthnLockoutFactory) {
 		t.Fatalf("Get seed: %v", err)
 	}
 
-	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
-	results := make(chan bool, 2)
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
-	for count := 8; count <= 9; count++ {
+	swaps := make([]bool, 2)
+	attempts := make([]func() error, 0, 2)
+	for i, count := range []int{8, 9} {
 		next := *current
 		next.FailedCount = count
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready <- struct{}{}
-			<-release
-			ok, err := s.CompareAndSwap(ctx, current.Version, &next)
-			results <- ok
-			errs <- err
-		}()
+		attempts = append(attempts, func() error {
+			var err error
+			swaps[i], err = s.CompareAndSwap(ctx, current.Version, &next)
+			return err
+		})
 	}
-	<-ready
-	<-ready
-	close(release)
-	wg.Wait()
+	errs := race(func() { _, _ = s.Get(ctx, "lockout-race-warmup") }, attempts...)
 
 	winners := 0
-	for range 2 {
-		if err := <-errs; err != nil {
+	for i, err := range errs {
+		if err != nil {
 			t.Fatalf("CompareAndSwap concurrent: %v", err)
 		}
-		if <-results {
+		if swaps[i] {
 			winners++
 		}
 	}

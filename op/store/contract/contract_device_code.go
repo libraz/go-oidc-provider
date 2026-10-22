@@ -3,7 +3,6 @@ package contract
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -55,6 +54,7 @@ var deviceCodeCases = []subtest{
 	{"StrikesIncrement", deviceCodeStrikesIncrement},
 	{"PollViolationsIncrement", deviceCodePollViolationsIncrement},
 	{"ConcurrentCountersRecordEveryIncrement", deviceCodeConcurrentCounters},
+	{"ConcurrentUserCodeStrikesByUserCodeRecordEveryIncrement", deviceCodeConcurrentStrikesByUserCode},
 	{"Expired", deviceCodeExpired},
 	{"ExpiredSaveReleasesUserCode", deviceCodeExpiredSaveReleasesUserCode},
 	{"DuplicateUserCode", deviceCodeDuplicateUserCode},
@@ -377,28 +377,28 @@ func deviceCodeConcurrentCounters(t *testing.T, f Factory) {
 	const (
 		id       = "dc-concurrent"
 		userCode = "AAAA-0301"
-		racers   = 8
 	)
 	if err := dc.Save(ctx, newDeviceCode(b.Now(), id, userCode)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	strikes := make([]uint8, racers)
-	violations := make([]uint8, racers)
-	errs := make([]error, 2*racers)
-	var wg sync.WaitGroup
-	wg.Add(2 * racers)
-	for i := range racers {
-		go func() {
-			defer wg.Done()
-			strikes[i], errs[i] = dc.IncrementUserCodeStrike(ctx, id)
-		}()
-		go func() {
-			defer wg.Done()
-			violations[i], errs[racers+i] = dc.IncrementPollViolation(ctx, id)
-		}()
-	}
-	wg.Wait()
+	strikes := make([]uint8, concurrentRacers)
+	violations := make([]uint8, concurrentRacers)
+	errs := race(
+		func() { _, _ = dc.FindByDeviceCode(ctx, id+"-warmup") },
+		append(
+			everyRacer(func(i int) error {
+				var err error
+				strikes[i], err = dc.IncrementUserCodeStrike(ctx, id)
+				return err
+			}),
+			everyRacer(func(i int) error {
+				var err error
+				violations[i], err = dc.IncrementPollViolation(ctx, id)
+				return err
+			})...,
+		)...,
+	)
 
 	for i, err := range errs {
 		if err != nil {
@@ -408,30 +408,73 @@ func deviceCodeConcurrentCounters(t *testing.T, f Factory) {
 	// Every increment observes a value in range; the exact value a racer
 	// sees is not pinned, since a backend that increments and re-reads
 	// may legitimately report a later racer's total.
-	assertCounterRange(t, "IncrementUserCodeStrike", strikes, racers)
-	assertCounterRange(t, "IncrementPollViolation", violations, racers)
+	assertCounterRange(t, "IncrementUserCodeStrike", strikes, concurrentRacers)
+	assertCounterRange(t, "IncrementPollViolation", violations, concurrentRacers)
 
 	got, err := dc.FindByDeviceCode(ctx, id)
 	if err != nil {
 		t.Fatalf("FindByDeviceCode: %v", err)
 	}
-	if got.UserCodeStrikes != racers {
+	if got.UserCodeStrikes != concurrentRacers {
 		t.Errorf("UserCodeStrikes = %d after %d concurrent strikes, want %d",
-			got.UserCodeStrikes, racers, racers)
+			got.UserCodeStrikes, concurrentRacers, concurrentRacers)
 	}
-	if got.PollViolations != racers {
+	if got.PollViolations != concurrentRacers {
 		t.Errorf("PollViolations = %d after %d concurrent violations, want %d",
-			got.PollViolations, racers, racers)
+			got.PollViolations, concurrentRacers, concurrentRacers)
+	}
+}
+
+// deviceCodeConcurrentStrikesByUserCode is the user_code-keyed half of
+// [deviceCodeConcurrentCounters]: a verification page that never sees
+// the device_code strikes through
+// [store.DeviceCodeStore.IncrementUserCodeStrikeByUserCode], and a burst
+// of guesses against it MUST record every strike just the same.
+func deviceCodeConcurrentStrikesByUserCode(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	const (
+		id       = "dc-concurrent-usercode"
+		userCode = "AAAA-0302"
+	)
+	if err := dc.Save(ctx, newDeviceCode(b.Now(), id, userCode)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	strikes := make([]uint8, concurrentRacers)
+	errs := race(
+		func() { _, _ = dc.FindByUserCode(ctx, "AAAA-0303") },
+		everyRacer(func(i int) error {
+			var err error
+			strikes[i], err = dc.IncrementUserCodeStrikeByUserCode(ctx, userCode)
+			return err
+		})...,
+	)
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent IncrementUserCodeStrikeByUserCode %d: %v", i, err)
+		}
+	}
+	assertCounterRange(t, "IncrementUserCodeStrikeByUserCode", strikes, concurrentRacers)
+
+	got, err := dc.FindByDeviceCode(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode: %v", err)
+	}
+	if got.UserCodeStrikes != concurrentRacers {
+		t.Errorf("UserCodeStrikes = %d after %d concurrent strikes, want %d",
+			got.UserCodeStrikes, concurrentRacers, concurrentRacers)
 	}
 }
 
 // assertCounterRange checks that every value a concurrent increment
 // reported names a real intermediate state of the counter.
-func assertCounterRange(t *testing.T, op string, got []uint8, racers uint8) {
+func assertCounterRange(t *testing.T, op string, got []uint8, ceiling uint8) {
 	t.Helper()
 	for i, v := range got {
-		if v < 1 || v > racers {
-			t.Errorf("%s racer %d returned %d, want 1..%d", op, i, v, racers)
+		if v < 1 || v > ceiling {
+			t.Errorf("%s racer %d returned %d, want 1..%d", op, i, v, ceiling)
 		}
 	}
 }

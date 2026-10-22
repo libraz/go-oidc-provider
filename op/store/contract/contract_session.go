@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
@@ -178,7 +177,7 @@ func sessionTouchLeavesOtherFields(t *testing.T, f Factory) {
 
 		exp := b.Now().Add(2 * time.Hour)
 		upd := b.Now().Add(time.Minute)
-		saveErr, touchErr := raceSaveAndTouch(sessions, stepped, exp, upd)
+		saveErr, touchErr := saveRacingTouch(sessions, stepped, exp, upd)
 		if saveErr != nil {
 			t.Fatalf("concurrent Save round %d: %v", round, saveErr)
 		}
@@ -203,35 +202,20 @@ func sessionTouchLeavesOtherFields(t *testing.T, f Factory) {
 	}
 }
 
-// raceSaveAndTouch runs one record-level Save and one idle-timer
-// extension at the same session, holding both goroutines at a barrier so
-// they enter the store together.
-func raceSaveAndTouch(
+// saveRacingTouch runs one record-level Save and one idle-timer
+// extension at the same session, released together through [race].
+func saveRacingTouch(
 	sessions store.SessionStore,
 	sess *store.Session,
 	expiresAt, updatedAt time.Time,
 ) (saveErr, touchErr error) {
 	ctx := context.Background()
-	var ready, done sync.WaitGroup
-	start := make(chan struct{})
-	ready.Add(2)
-	done.Add(2)
-	go func() {
-		defer done.Done()
-		ready.Done()
-		<-start
-		saveErr = sessions.Save(ctx, sess)
-	}()
-	go func() {
-		defer done.Done()
-		ready.Done()
-		<-start
-		touchErr = sessions.Touch(ctx, sess.ID, expiresAt, updatedAt)
-	}()
-	ready.Wait()
-	close(start)
-	done.Wait()
-	return saveErr, touchErr
+	errs := race(
+		func() { _, _ = sessions.Find(ctx, sess.ID+"-warmup") },
+		func() error { return sessions.Save(ctx, sess) },
+		func() error { return sessions.Touch(ctx, sess.ID, expiresAt, updatedAt) },
+	)
+	return errs[0], errs[1]
 }
 
 // assertChooserGroupHolds asserts that the chooser-group index lists id.
@@ -792,16 +776,11 @@ func interactionCompareAndSwap(t *testing.T, f Factory) { //nolint:gocognit,cycl
 	contenders := []store.Interaction{*got, *got}
 	contenders[0].RawState = []byte("v3-a")
 	contenders[1].RawState = []byte("v3-b")
-	errs := make([]error, len(contenders))
-	var wg sync.WaitGroup
-	wg.Add(len(contenders))
-	for i := range contenders {
-		go func(index int) {
-			defer wg.Done()
-			errs[index] = cas.CompareAndSwap(ctx, got, &contenders[index])
-		}(i)
-	}
-	wg.Wait()
+	errs := race(
+		func() { _, _ = cas.Find(ctx, "i-cas-warmup") },
+		func() error { return cas.CompareAndSwap(ctx, got, &contenders[0]) },
+		func() error { return cas.CompareAndSwap(ctx, got, &contenders[1]) },
+	)
 	var successes, conflicts int
 	for _, err := range errs {
 		switch {

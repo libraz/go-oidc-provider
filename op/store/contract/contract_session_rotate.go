@@ -46,7 +46,6 @@ func AssertConcurrentRotate(t *testing.T, sessions store.SessionStore, now time.
 	const oldID = "rotate-old"
 	const chooserGroupID = "cg-rotate"
 	const subject = "sub-rotate"
-	const racers = 8
 
 	prior := &store.Session{
 		ID:             oldID,
@@ -68,11 +67,9 @@ func AssertConcurrentRotate(t *testing.T, sessions store.SessionStore, now time.
 		newIDs  sync.Map // string -> struct{}
 	)
 
-	var wg sync.WaitGroup
-	for i := range racers {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
+	race(
+		func() { _, _ = sessions.Find(ctx, "rotate-warmup") },
+		everyRacer(func(idx int) error {
 			// Each racer reads the prior record and stages a fresh ID.
 			// Reads MAY return ErrNotFound for late racers if a faster
 			// racer's Delete has already landed; that is the legitimate
@@ -82,7 +79,7 @@ func AssertConcurrentRotate(t *testing.T, sessions store.SessionStore, now time.
 				if !errors.Is(err, store.ErrNotFound) {
 					t.Errorf("racer %d Find: unexpected error %v", idx, err)
 				}
-				return
+				return nil
 			}
 
 			rotated := &store.Session{
@@ -97,7 +94,7 @@ func AssertConcurrentRotate(t *testing.T, sessions store.SessionStore, now time.
 			}
 			if err := sessions.Save(ctx, rotated); err != nil {
 				saveErr.Add(1)
-				return
+				return err
 			}
 			saveOK.Add(1)
 			if _, dup := newIDs.LoadOrStore(rotated.ID, struct{}{}); dup {
@@ -113,9 +110,9 @@ func AssertConcurrentRotate(t *testing.T, sessions store.SessionStore, now time.
 			default:
 				t.Errorf("racer %d Delete: unexpected error %v", idx, err)
 			}
-		}(i)
-	}
-	wg.Wait()
+			return nil
+		})...,
+	)
 
 	if saveOK.Load()+saveErr.Load() == 0 {
 		t.Fatal("AssertConcurrentRotate: no racer attempted Save")

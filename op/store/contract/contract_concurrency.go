@@ -38,13 +38,13 @@ const concurrentRacers = 8
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var concurrencyCases = []subtest{
-	{"SingleWinnerCoverage", singleWinnerCoverage},
 	{"AuthorizationCodeConsumeHasOneWinner", concurrentAuthCodeConsume},
 	{"RefreshConsumeHasOneWinner", concurrentRefreshConsume},
 	{"PushedAuthRequestConsumeHasOneWinner", concurrentPARConsume},
 	{"DeviceCodeConsumeHasOneWinner", concurrentDeviceCodeConsume},
 	{"CIBAConsumeHasOneWinner", concurrentCIBAConsume},
 	{"RefreshRotationHasOneWinner", concurrentRefreshRotation},
+	{"RefreshRotationRacingRevokeChainLeavesNoLiveDescendant", concurrentRefreshRotationRevokeChain},
 	{"RevokeGrantKeepsTheWidestWindow", concurrentRevokeGrant},
 	{"IATIncrementUsesHasOneWinner", concurrentIATSingleUse},
 	{"IATIncrementUsesStopsAtTheCeiling", concurrentIATMultiUse},
@@ -52,53 +52,44 @@ var concurrencyCases = []subtest{
 	{"DeviceCodeApproveDenyHasOneWinner", concurrentDeviceCodeApproveDeny},
 	{"DeviceCodeApproveDenyByUserCodeHasOneWinner", concurrentDeviceCodeApproveDenyByUserCode},
 	{"DeviceCodeRevokeConsumeSettleOnOneTransition", concurrentDeviceCodeRevokeConsume},
+	{"DeviceCodeSameUserCodeSaveHasOneWinner", concurrentDeviceCodeSameUserCodeSave},
 	{"CIBAApproveDenyHasOneWinner", concurrentCIBAApproveDeny},
 }
 
-// race runs attempt from [concurrentRacers] goroutines and returns their
-// errors in launch order.
+// race runs every attempt from its own goroutine and returns their
+// errors in argument order. It is the only place the harness starts a
+// goroutine, so every concurrent case shares one barrier discipline.
 //
-// The goroutines are held at a barrier until every one of them is
-// running, so they enter the operation together. Launching them and
-// letting them start where they may staggers the callers by however
-// long the runtime took to schedule each one, which on a backend whose
-// lost-update window is a single round trip is long enough for the
-// window to have closed before the second caller arrives — and the
-// contract case then reports a non-atomic backend as correct.
-func race(attempt func(i int) error) []error {
-	return raceAfter(nil, attempt)
-}
-
-// raceAfter is [race] with a per-goroutine warm-up run before the
-// barrier.
+// Each goroutine runs warm and then waits at a barrier until every one
+// of them has, so the attempts enter the store together. Letting them
+// start where they may staggers the callers by however long the runtime
+// took to schedule each one, which on a backend whose lost-update window
+// is a single round trip closes the window before the second caller
+// arrives — and the case then reports a non-atomic backend as correct.
 //
-// The warm-up is not decoration. A backend that dials lazily hands the
-// first racer a pooled connection and makes the other seven wait on a
-// TCP handshake, and a handshake costs more than the whole operation
-// under test: measured against a container-hosted Redis, the first
-// racer's read and write both completed before any other racer's read
-// reached the server. Every caller then observes the state the winner
-// left, a deliberately non-atomic read-decide-write answers correctly,
-// and the case reports a backend it cannot actually see through.
+// The warm-up matters as much as the barrier. A backend that dials
+// lazily hands the first racer a pooled connection and makes the others
+// wait on a handshake that costs more than the operation under test:
+// measured against a container-hosted Redis, the first racer's read and
+// write both completed before any other racer's read reached the server,
+// so a deliberately non-atomic read-decide-write answered correctly.
 //
 // warm should issue one cheap read against the substore under test —
 // enough to leave each goroutine's connection established and returned
 // to the pool — and must not touch the record the attempts race for.
-func raceAfter(warm func(i int), attempt func(i int) error) []error {
-	errs := make([]error, concurrentRacers)
+func race(warm func(), attempts ...func() error) []error {
+	errs := make([]error, len(attempts))
 	var ready, done sync.WaitGroup
 	start := make(chan struct{})
-	ready.Add(concurrentRacers)
-	done.Add(concurrentRacers)
-	for i := range concurrentRacers {
+	ready.Add(len(attempts))
+	done.Add(len(attempts))
+	for i, attempt := range attempts {
 		go func() {
 			defer done.Done()
-			if warm != nil {
-				warm(i)
-			}
+			warm()
 			ready.Done()
 			<-start
-			errs[i] = attempt(i)
+			errs[i] = attempt()
 		}()
 	}
 	ready.Wait()
@@ -107,32 +98,14 @@ func raceAfter(warm func(i int), attempt func(i int) error) []error {
 	return errs
 }
 
-// raceTwo is [raceAfter] for exactly two distinct operations racing each
-// other — a device-code Approve against a Deny, a Revoke against a
-// Consume — rather than [concurrentRacers] copies of one. The barrier
-// discipline is the same: both goroutines are released together so
-// neither wins by having started first.
-func raceTwo(a, b func() error) (errA, errB error) {
-	var ready, done sync.WaitGroup
-	start := make(chan struct{})
-	ready.Add(2)
-	done.Add(2)
-	go func() {
-		defer done.Done()
-		ready.Done()
-		<-start
-		errA = a()
-	}()
-	go func() {
-		defer done.Done()
-		ready.Done()
-		<-start
-		errB = b()
-	}()
-	ready.Wait()
-	close(start)
-	done.Wait()
-	return errA, errB
+// everyRacer is [concurrentRacers] copies of attempt, each told its index,
+// for the cases that drive one operation from every racer.
+func everyRacer(attempt func(i int) error) []func() error {
+	out := make([]func() error, concurrentRacers)
+	for i := range out {
+		out[i] = func() error { return attempt(i) }
+	}
+	return out
 }
 
 // assertExactlyOneWinsFromPending pins the closed-state-machine
@@ -184,53 +157,50 @@ func assertOneWinner(t *testing.T, op string, errs []error) int {
 	return assertWinners(t, op, errs, 1)[0]
 }
 
-// singleWinnerCases records which sub-test drives each method of the
-// single-winner surface. The map is keyed by the (interface, method)
-// pair the scan in contract_coverage.go produces, and the value names
-// the case a reader should go to.
-//
-// Several of the entries sit outside [Run] because their substore does
-// too: the authentication factors are reached through their own
-// Run* entry points, which is why the value names the case rather than
-// pointing at a table [Run] iterates.
+// singleWinnerCases records which sub-test races each method of the
+// concurrency surface. The map is keyed by the (interface, method) pair
+// [singleWinnerSurface] produces, and the value is the path of the case
+// under the table that runs it: a [Run] group name, or the Run* entry
+// point of a substore [Run] does not reach. TestSingleWinnerCoverage
+// fails on a surface method with no entry and on an entry naming a case
+// no table holds.
 //
 //nolint:gochecknoglobals // coverage map checked against the interfaces; read-only.
 var singleWinnerCases = map[methodRef]string{
-	{iface: "AuthorizationCodeStore", method: "Consume"}:        "Concurrency/AuthorizationCodeConsumeHasOneWinner",
-	{iface: "RefreshTokenStore", method: "Consume"}:             "Concurrency/RefreshConsumeHasOneWinner",
-	{iface: "PushedAuthRequestStore", method: "Consume"}:        "Concurrency/PushedAuthRequestConsumeHasOneWinner",
-	{iface: "DeviceCodeStore", method: "Consume"}:               "Concurrency/DeviceCodeConsumeHasOneWinner",
-	{iface: "CIBARequestStore", method: "Consume"}:              "Concurrency/CIBAConsumeHasOneWinner",
-	{iface: "InitialAccessTokenStore", method: "IncrementUses"}: "Concurrency/IATIncrementUsesHasOneWinner",
-	{iface: "ConsumedJTIStore", method: "Mark"}:                 "ConsumedJTIStore/ConcurrentMarkHasOneWinner",
-	{iface: "InteractionStoreCAS", method: "CompareAndSwap"}:    "InteractionStore/ConcurrentCompareAndSwapHasOneWinner",
-	{iface: "InteractionStoreCAS", method: "DeleteIfUnchanged"}: "InteractionStore/ConcurrentDeleteIfUnchangedHasOneWinner",
-	{iface: "EmailOTPStore", method: "CompareAndSwap"}:          "RunEmailOTPs/ConcurrentCompareAndSwapHasOneWinner",
-	{iface: "EmailOTPStore", method: "Consume"}:                 "RunEmailOTPs/ConcurrentConsumeHasOneWinner",
-	{iface: "TOTPStore", method: "CompareAndSwap"}:              "RunTOTPs/ConcurrentCompareAndSwapHasOneWinner",
-	{iface: "AuthnLockoutStore", method: "CompareAndSwap"}:      "RunAuthnLockouts/ConcurrentSameVersionHasOneWinner",
-	{iface: "RecoveryStore", method: "Consume"}:                 "RunRecoveryCodes/ConcurrentConsumeHasOneWinner",
-	{iface: "DeviceCodeStore", method: "Approve"}:               "Concurrency/DeviceCodeApproveDenyHasOneWinner",
-	{iface: "DeviceCodeStore", method: "Deny"}:                  "Concurrency/DeviceCodeApproveDenyHasOneWinner",
-	{iface: "DeviceCodeStore", method: "ApproveByUserCode"}:     "Concurrency/DeviceCodeApproveDenyByUserCodeHasOneWinner",
-	{iface: "DeviceCodeStore", method: "DenyByUserCode"}:        "Concurrency/DeviceCodeApproveDenyByUserCodeHasOneWinner",
-	{iface: "DeviceCodeStore", method: "Revoke"}:                "Concurrency/DeviceCodeRevokeConsumeSettleOnOneTransition",
-	{iface: "CIBARequestStore", method: "Approve"}:              "Concurrency/CIBAApproveDenyHasOneWinner",
-	{iface: "CIBARequestStore", method: "Deny"}:                 "Concurrency/CIBAApproveDenyHasOneWinner",
-}
-
-// singleWinnerCoverage checks that every conditional write the store
-// package declares has a case that races it.
-//
-// The sequential cases pin these rules as one caller sees them, and
-// every read-decide-write implementation passes them. What decides
-// whether the rule holds is the parallel traffic it exists for, so a
-// method that reaches the interface without a racing case is a rule the
-// suite states and never tests: two concurrent Marks both returning nil
-// accept a replayed proof, and two concurrent swaps both returning nil
-// let two browser tabs drive one interaction to two authorization codes.
-func singleWinnerCoverage(t *testing.T, _ Factory) {
-	assertCovers(t, "single-winner surface", singleWinnerSurface(), singleWinnerCases)
+	{iface: "AuthorizationCodeStore", method: "Consume"}:                    "Concurrency/AuthorizationCodeConsumeHasOneWinner",
+	{iface: "RefreshTokenStore", method: "Consume"}:                         "Concurrency/RefreshConsumeHasOneWinner",
+	{iface: "RefreshTokenStore", method: "Save"}:                            "Concurrency/RefreshRotationRacingRevokeChainLeavesNoLiveDescendant",
+	{iface: "RefreshRetryResponseStore", method: "SaveRotationWithRetry"}:   "Concurrency/RefreshRotationHasOneWinner",
+	{iface: "PushedAuthRequestStore", method: "Consume"}:                    "Concurrency/PushedAuthRequestConsumeHasOneWinner",
+	{iface: "DeviceCodeStore", method: "Consume"}:                           "Concurrency/DeviceCodeConsumeHasOneWinner",
+	{iface: "DeviceCodeStore", method: "Save"}:                              "Concurrency/DeviceCodeSameUserCodeSaveHasOneWinner",
+	{iface: "CIBARequestStore", method: "Consume"}:                          "Concurrency/CIBAConsumeHasOneWinner",
+	{iface: "InitialAccessTokenStore", method: "IncrementUses"}:             "Concurrency/IATIncrementUsesHasOneWinner",
+	{iface: "GrantStore", method: "Save"}:                                   "Concurrency/GrantAmendKeepsEveryWriterScope",
+	{iface: "GrantRevocationStore", method: "RevokeGrant"}:                  "Concurrency/RevokeGrantKeepsTheWidestWindow",
+	{iface: "SessionStore", method: "Touch"}:                                "SessionStore/TouchLeavesEveryOtherField",
+	{iface: "ConsumedJTIStore", method: "Mark"}:                             "ConsumedJTIStore/ConcurrentMarkHasOneWinner",
+	{iface: "InteractionStoreCAS", method: "CompareAndSwap"}:                "InteractionStore/ConcurrentCompareAndSwapHasOneWinner",
+	{iface: "InteractionStoreCAS", method: "DeleteIfUnchanged"}:             "InteractionStore/ConcurrentDeleteIfUnchangedHasOneWinner",
+	{iface: "EmailOTPStore", method: "CompareAndSwap"}:                      "RunEmailOTPs/ConcurrentCompareAndSwapHasOneWinner",
+	{iface: "EmailOTPStore", method: "Consume"}:                             "RunEmailOTPs/ConcurrentConsumeHasOneWinner",
+	{iface: "TOTPStore", method: "CompareAndSwap"}:                          "RunTOTPs/ConcurrentCompareAndSwapHasOneWinner",
+	{iface: "TOTPStore", method: "Accept"}:                                  "RunTOTPs/ConcurrentAcceptHasOneWinner",
+	{iface: "AuthnLockoutStore", method: "CompareAndSwap"}:                  "RunAuthnLockouts/ConcurrentSameVersionHasOneWinner",
+	{iface: "RecoveryStore", method: "Consume"}:                             "RunRecoveryCodes/ConcurrentConsumeHasOneWinner",
+	{iface: "PasskeyStore", method: "Put"}:                                  "RunPasskeys/ConcurrentCrossSubjectPutHasOneOwner",
+	{iface: "PasskeyStore", method: "UpdateAssertion"}:                      "RunPasskeys/ConcurrentUpdateAssertionKeepsHighestSignCount",
+	{iface: "DeviceCodeStore", method: "Approve"}:                           "Concurrency/DeviceCodeApproveDenyHasOneWinner",
+	{iface: "DeviceCodeStore", method: "Deny"}:                              "Concurrency/DeviceCodeApproveDenyHasOneWinner",
+	{iface: "DeviceCodeStore", method: "ApproveByUserCode"}:                 "Concurrency/DeviceCodeApproveDenyByUserCodeHasOneWinner",
+	{iface: "DeviceCodeStore", method: "DenyByUserCode"}:                    "Concurrency/DeviceCodeApproveDenyByUserCodeHasOneWinner",
+	{iface: "DeviceCodeStore", method: "Revoke"}:                            "Concurrency/DeviceCodeRevokeConsumeSettleOnOneTransition",
+	{iface: "DeviceCodeStore", method: "IncrementUserCodeStrike"}:           "DeviceCodeStore/ConcurrentCountersRecordEveryIncrement",
+	{iface: "DeviceCodeStore", method: "IncrementPollViolation"}:            "DeviceCodeStore/ConcurrentCountersRecordEveryIncrement",
+	{iface: "DeviceCodeStore", method: "IncrementUserCodeStrikeByUserCode"}: "DeviceCodeStore/ConcurrentUserCodeStrikesByUserCodeRecordEveryIncrement",
+	{iface: "CIBARequestStore", method: "Approve"}:                          "Concurrency/CIBAApproveDenyHasOneWinner",
+	{iface: "CIBARequestStore", method: "Deny"}:                             "Concurrency/CIBAApproveDenyHasOneWinner",
+	{iface: "CIBARequestStore", method: "IncrementPollViolation"}:           "CIBARequestStore/ConcurrentPollViolationsRecordEveryIncrement",
 }
 
 // AssertConcurrentInteractionCAS pins the atomicity
@@ -255,13 +225,13 @@ func AssertConcurrentInteractionCAS(t *testing.T, interactions store.Interaction
 	cas, stored := seedRacedInteraction(t, interactions, now, "i-cas-race")
 	ctx := context.Background()
 
-	errs := raceAfter(
-		func(int) { _, _ = cas.Find(ctx, "i-cas-race-warmup") },
-		func(i int) error {
+	errs := race(
+		func() { _, _ = cas.Find(ctx, "i-cas-race-warmup") },
+		everyRacer(func(i int) error {
 			next := *stored
 			next.RawState = []byte("racer-" + strconv.Itoa(i))
 			return cas.CompareAndSwap(ctx, stored, &next)
-		},
+		})...,
 	)
 	winner := assertOneWinner(t, "Interactions().CompareAndSwap", errs)
 	for i, err := range errs {
@@ -298,9 +268,9 @@ func AssertConcurrentInteractionDelete(t *testing.T, interactions store.Interact
 	cas, stored := seedRacedInteraction(t, interactions, now, "i-delete-race")
 	ctx := context.Background()
 
-	errs := raceAfter(
-		func(int) { _, _ = cas.Find(ctx, "i-delete-race-warmup") },
-		func(int) error { return cas.DeleteIfUnchanged(ctx, stored) },
+	errs := race(
+		func() { _, _ = cas.Find(ctx, "i-delete-race-warmup") },
+		everyRacer(func(int) error { return cas.DeleteIfUnchanged(ctx, stored) })...,
 	)
 	assertOneWinner(t, "Interactions().DeleteIfUnchanged", errs)
 	for i, err := range errs {
@@ -365,9 +335,9 @@ func AssertConcurrentJTIMark(t *testing.T, jtis store.ConsumedJTIStore, now time
 	ctx := context.Background()
 	const jti = "jti-mark-race"
 
-	errs := raceAfter(
-		func(int) { _, _ = jtis.Has(ctx, "jti-mark-race-warmup") },
-		func(int) error { return jtis.Mark(ctx, jti, now.Add(time.Hour)) },
+	errs := race(
+		func() { _, _ = jtis.Has(ctx, "jti-mark-race-warmup") },
+		everyRacer(func(int) error { return jtis.Mark(ctx, jti, now.Add(time.Hour)) })...,
 	)
 	assertOneWinner(t, "ConsumedJTIs().Mark", errs)
 	for i, err := range errs {
@@ -408,10 +378,13 @@ func concurrentAuthCodeConsume(t *testing.T, f Factory) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	errs := race(func(int) error {
-		_, err := codes.Consume(ctx, "ac-race")
-		return err
-	})
+	errs := race(
+		func() { _, _ = codes.Find(ctx, "ac-race-warmup") },
+		everyRacer(func(int) error {
+			_, err := codes.Consume(ctx, "ac-race")
+			return err
+		})...,
+	)
 	assertOneWinner(t, "AuthorizationCodes().Consume", errs)
 
 	// The losers converge on the same answer a sequential replay gets, so
@@ -437,10 +410,13 @@ func concurrentRefreshConsume(t *testing.T, f Factory) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	errs := race(func(int) error {
-		_, err := refreshes.Consume(ctx, "rt-race")
-		return err
-	})
+	errs := race(
+		func() { _, _ = refreshes.Find(ctx, "rt-race-warmup") },
+		everyRacer(func(int) error {
+			_, err := refreshes.Consume(ctx, "rt-race")
+			return err
+		})...,
+	)
 	assertOneWinner(t, "RefreshTokens().Consume", errs)
 
 	if _, err := refreshes.Consume(ctx, "rt-race"); !errors.Is(err, store.ErrAlreadyConsumed) {
@@ -465,10 +441,13 @@ func concurrentPARConsume(t *testing.T, f Factory) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	errs := race(func(int) error {
-		_, err := pars.Consume(ctx, "urn:par:race")
-		return err
-	})
+	errs := race(
+		func() { _, _ = pars.Find(ctx, "urn:par:race-warmup") },
+		everyRacer(func(int) error {
+			_, err := pars.Consume(ctx, "urn:par:race")
+			return err
+		})...,
+	)
 	assertOneWinner(t, "PushedAuthRequests().Consume", errs)
 
 	if _, err := pars.Consume(ctx, "urn:par:race"); !errors.Is(err, store.ErrAlreadyConsumed) {
@@ -489,10 +468,13 @@ func concurrentDeviceCodeConsume(t *testing.T, f Factory) {
 
 	// A device that polls faster than its interval has several polls in
 	// flight the moment the user approves; only one may collect tokens.
-	errs := race(func(int) error {
-		_, err := dc.Consume(ctx, "dc-race")
-		return err
-	})
+	errs := race(
+		func() { _, _ = dc.FindByDeviceCode(ctx, "dc-race-warmup") },
+		everyRacer(func(int) error {
+			_, err := dc.Consume(ctx, "dc-race")
+			return err
+		})...,
+	)
 	assertOneWinner(t, "DeviceCodes().Consume", errs)
 
 	if _, err := dc.Consume(ctx, "dc-race"); !errors.Is(err, store.ErrAlreadyConsumed) {
@@ -511,10 +493,13 @@ func concurrentCIBAConsume(t *testing.T, f Factory) {
 		t.Fatalf("Approve: %v", err)
 	}
 
-	errs := race(func(int) error {
-		_, err := cr.Consume(ctx, "ar-race")
-		return err
-	})
+	errs := race(
+		func() { _, _ = cr.FindByAuthReqID(ctx, "ar-race-warmup") },
+		everyRacer(func(int) error {
+			_, err := cr.Consume(ctx, "ar-race")
+			return err
+		})...,
+	)
 	assertOneWinner(t, "CIBARequests().Consume", errs)
 
 	if _, err := cr.Consume(ctx, "ar-race"); !errors.Is(err, store.ErrAlreadyConsumed) {
@@ -537,10 +522,12 @@ func concurrentDeviceCodeApproveDeny(t *testing.T, f Factory) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	approveErr, denyErr := raceTwo(
+	errs := race(
+		func() { _, _ = dc.FindByDeviceCode(ctx, id+"-warmup") },
 		func() error { return dc.Approve(ctx, id, "sub-race", b.Now()) },
 		func() error { return dc.Deny(ctx, id, "user_denied") },
 	)
+	approveErr, denyErr := errs[0], errs[1]
 	assertExactlyOneWinsFromPending(t, "DeviceCodes().Approve/Deny", approveErr, denyErr)
 
 	got, err := dc.FindByDeviceCode(ctx, id)
@@ -568,10 +555,12 @@ func concurrentDeviceCodeApproveDenyByUserCode(t *testing.T, f Factory) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	approveErr, denyErr := raceTwo(
+	errs := race(
+		func() { _, _ = dc.FindByDeviceCode(ctx, id+"-warmup") },
 		func() error { return dc.ApproveByUserCode(ctx, userCode, "sub-race", b.Now()) },
 		func() error { return dc.DenyByUserCode(ctx, userCode, "user_denied") },
 	)
+	approveErr, denyErr := errs[0], errs[1]
 	assertExactlyOneWinsFromPending(t, "DeviceCodes().ApproveByUserCode/DenyByUserCode", approveErr, denyErr)
 
 	got, err := dc.FindByDeviceCode(ctx, id)
@@ -605,10 +594,12 @@ func concurrentDeviceCodeRevokeConsume(t *testing.T, f Factory) {
 		t.Fatalf("Approve: %v", err)
 	}
 
-	revokeErr, consumeErr := raceTwo(
+	errs := race(
+		func() { _, _ = dc.FindByDeviceCode(ctx, id+"-warmup") },
 		func() error { return dc.Revoke(ctx, id, "device_revoked") },
 		func() error { _, err := dc.Consume(ctx, id); return err },
 	)
+	revokeErr, consumeErr := errs[0], errs[1]
 	if revokeErr != nil {
 		t.Fatalf("Revoke: %v — Revoke MUST report nil whichever transition wins", revokeErr)
 	}
@@ -631,6 +622,46 @@ func concurrentDeviceCodeRevokeConsume(t *testing.T, f Factory) {
 	}
 }
 
+// concurrentDeviceCodeSameUserCodeSave pins the collision check
+// [store.DeviceCodeStore.Save] requires to be atomic with the write: of
+// several device authorization requests drawing the same user_code at
+// once, exactly one may land and the rest get [store.ErrAlreadyExists],
+// the answer the library retries with a fresh code on. A lookup-then-insert
+// backend lets every one of them in, and the verification page then
+// approves whichever record its lookup returns while the other devices
+// poll records nobody can approve.
+func concurrentDeviceCodeSameUserCodeSave(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	const userCode = "AAAA-0604"
+
+	errs := race(
+		func() { _, _ = dc.FindByUserCode(ctx, "AAAA-0605") },
+		everyRacer(func(i int) error {
+			return dc.Save(ctx, newDeviceCode(b.Now(), "dc-usercode-race-"+strconv.Itoa(i), userCode))
+		})...,
+	)
+	winner := assertOneWinner(t, "DeviceCodes().Save", errs)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("losing Save %d: want ErrAlreadyExists, got %v — the library retries only on "+
+				"that answer, so the device authorization request fails instead", i, err)
+		}
+	}
+
+	for i := range concurrentRacers {
+		_, err := dc.FindByDeviceCode(ctx, "dc-usercode-race-"+strconv.Itoa(i))
+		switch {
+		case i == winner && err != nil:
+			t.Fatalf("FindByDeviceCode for the winning Save: %v", err)
+		case i != winner && !errors.Is(err, store.ErrNotFound):
+			t.Fatalf("FindByDeviceCode for refused Save %d: want ErrNotFound, got %v — "+
+				"the record landed although Save reported a collision", i, err)
+		}
+	}
+}
+
 // concurrentCIBAApproveDeny is [concurrentDeviceCodeApproveDeny] for the
 // CIBA backchannel-authentication record, which closes the same
 // Pending-to-{Approved,Denied} state machine.
@@ -648,12 +679,14 @@ func concurrentCIBAApproveDeny(t *testing.T, f Factory) {
 	// Approve must be given that same subject: a mismatch trips
 	// [store.CIBARequestStore.Approve]'s own ErrConflict independently of
 	// which racer reaches Pending first, which would test the wrong rule.
-	approveErr, denyErr := raceTwo(
+	errs := race(
+		func() { _, _ = cr.FindByAuthReqID(ctx, id+"-warmup") },
 		func() error {
 			return cr.Approve(ctx, id, req.Subject, "urn:mace:incommon:iap:bronze", b.Now())
 		},
 		func() error { return cr.Deny(ctx, id, "user_denied") },
 	)
+	approveErr, denyErr := errs[0], errs[1]
 	assertExactlyOneWinsFromPending(t, "CIBARequests().Approve/Deny", approveErr, denyErr)
 
 	got, err := cr.FindByAuthReqID(ctx, id)
@@ -700,10 +733,13 @@ func concurrentRefreshRotation(t *testing.T, f Factory) {
 	}
 
 	sealed := func(i int) []byte { return []byte("sealed-response-" + strconv.Itoa(i)) }
-	errs := race(func(i int) error {
-		successor := newRefresh(b.Now(), "rt-rotate-race-child", &predecessor.ID)
-		return retry.SaveRotationWithRetry(ctx, successor, sealed(i))
-	})
+	errs := race(
+		func() { _, _ = refreshes.Find(ctx, "rt-rotate-race-warmup") },
+		everyRacer(func(i int) error {
+			successor := newRefresh(b.Now(), "rt-rotate-race-child", &predecessor.ID)
+			return retry.SaveRotationWithRetry(ctx, successor, sealed(i))
+		})...,
+	)
 	winner := assertOneWinner(t, "RefreshTokens().SaveRotationWithRetry", errs)
 
 	if _, err := refreshes.Find(ctx, "rt-rotate-race-child"); err != nil {
@@ -716,6 +752,52 @@ func concurrentRefreshRotation(t *testing.T, f Factory) {
 	if !bytes.Equal(got, sealed(winner)) {
 		t.Errorf("LoadRetryResponse = %q, want %q — the cached response is not the one the successful rotation sealed",
 			got, sealed(winner))
+	}
+}
+
+// concurrentRefreshRotationRevokeChain pins the rule
+// [store.RefreshTokenStore.Save] declares for a rotation: the
+// parent-still-live check and the insert are one atomic operation. A
+// replay cascade revoking the chain races the legitimate client's
+// rotation, and whichever lands first, the successor MUST NOT be
+// redeemable afterwards — either Save refused it with
+// [store.ErrAlreadyConsumed], or it landed before the cascade and the
+// cascade revoked it. A backend that checks the parent and then inserts
+// lets the successor land after the cascade scanned, keeping the chain
+// RFC 9700 §2.2.2 requires dead alive until natural expiry.
+//
+// Each racer pair works on its own chain, so one race exercises
+// [concurrentRacers] interleavings.
+func concurrentRefreshRotationRevokeChain(t *testing.T, f Factory) {
+	b := f(t)
+	refreshes := b.Store.RefreshTokens()
+	ctx := context.Background()
+
+	roots := make([]*store.RefreshToken, concurrentRacers)
+	children := make([]*store.RefreshToken, concurrentRacers)
+	attempts := make([]func() error, 0, 2*concurrentRacers)
+	for i := range concurrentRacers {
+		roots[i] = newRefresh(b.Now(), "rt-revoke-race-root-"+strconv.Itoa(i), nil)
+		if err := refreshes.Save(ctx, roots[i]); err != nil {
+			t.Fatalf("Save root %d: %v", i, err)
+		}
+		children[i] = newRefresh(b.Now(), "rt-revoke-race-child-"+strconv.Itoa(i), &roots[i].ID)
+		attempts = append(attempts,
+			func() error { return refreshes.Save(ctx, children[i]) },
+			func() error { return refreshes.RevokeChain(ctx, roots[i].ID) },
+		)
+	}
+
+	errs := race(func() { _, _ = refreshes.Find(ctx, "rt-revoke-race-warmup") }, attempts...)
+	for i := range concurrentRacers {
+		saveErr, revokeErr := errs[2*i], errs[2*i+1]
+		if revokeErr != nil {
+			t.Fatalf("RevokeChain %d: %v", i, revokeErr)
+		}
+		if saveErr != nil && !errors.Is(saveErr, store.ErrAlreadyConsumed) {
+			t.Fatalf("rotation Save %d racing RevokeChain: want nil or ErrAlreadyConsumed, got %v", i, saveErr)
+		}
+		assertRevoked(t, b.Store, children[i].ID)
 	}
 }
 
@@ -735,14 +817,17 @@ func concurrentRevokeGrant(t *testing.T, f Factory) {
 	ctx := context.Background()
 	now := b.Now()
 
-	errs := race(func(i int) error {
-		return gr.RevokeGrant(ctx, store.GrantTombstone{
-			GrantID:   "grant-race",
-			RevokedAt: now.Add(time.Duration(i) * time.Second),
-			ExpiresAt: now.Add(time.Duration(i+1) * time.Hour),
-			Reason:    "code_replay",
-		})
-	})
+	errs := race(
+		func() { _, _ = gr.IsRevoked(ctx, "grant-race-warmup", "", now) },
+		everyRacer(func(i int) error {
+			return gr.RevokeGrant(ctx, store.GrantTombstone{
+				GrantID:   "grant-race",
+				RevokedAt: now.Add(time.Duration(i) * time.Second),
+				ExpiresAt: now.Add(time.Duration(i+1) * time.Hour),
+				Reason:    "code_replay",
+			})
+		})...,
+	)
 	for i, err := range errs {
 		if err != nil {
 			t.Fatalf("concurrent RevokeGrant %d: %v", i, err)
@@ -805,10 +890,13 @@ func concurrentIATIncrementUses(t *testing.T, f Factory, maxUses, ceiling int) {
 		t.Fatalf("Put: %v", err)
 	}
 
-	errs := race(func(int) error {
-		_, err := s.IncrementUses(ctx, tok.ID)
-		return err
-	})
+	errs := race(
+		func() { _, _ = s.GetByHash(ctx, "hash-race-warmup") },
+		everyRacer(func(int) error {
+			_, err := s.IncrementUses(ctx, tok.ID)
+			return err
+		})...,
+	)
 	assertWinners(t, "InitialAccessTokens().IncrementUses", errs, ceiling)
 	for i, err := range errs {
 		if err != nil && !errors.Is(err, store.ErrConflict) {
@@ -871,9 +959,12 @@ func concurrentGrantAmend(t *testing.T, f Factory) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	errs := race(func(i int) error {
-		return amendGrantScope(ctx, txr, base.ID, amendedScope(i))
-	})
+	errs := race(
+		func() { _, _ = b.Store.Grants().Find(ctx, base.ID+"-warmup") },
+		everyRacer(func(i int) error {
+			return amendGrantScope(ctx, txr, base.ID, amendedScope(i))
+		})...,
+	)
 	for i, err := range errs {
 		if err != nil {
 			t.Fatalf("concurrent amend %d: %v — every amendment is one a re-read reproduces, "+

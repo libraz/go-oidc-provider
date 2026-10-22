@@ -28,9 +28,9 @@ import (
 //     assertion has to cover (see contract_tx.go);
 //   - the id-keyed Consume of every substore [store.Store] exposes,
 //     which the redemption-state matrix has to cover (contract_consume.go);
-//   - the single-winner surface, the methods whose contract is "at most
-//     one of several concurrent callers succeeds", which the concurrency
-//     group has to cover (contract_concurrency.go).
+//   - the single-winner surface, the methods whose contract constrains
+//     what several concurrent callers leave behind, each of which needs
+//     a racing case (contract_concurrency.go).
 
 // allStoreInterfaces is every exported interface the store package
 // declares. The single-winner scan walks it, so an interface missing
@@ -79,22 +79,26 @@ var allStoreInterfaces = []reflect.Type{
 }
 
 // singleWinnerNames are the spellings the store package uses for a
-// write whose effect is conditional on the state the caller read:
+// write whose contract constrains what concurrent callers leave behind:
 // redemption (Consume), replacement (CompareAndSwap), conditional
 // removal (DeleteIfUnchanged), first-writer-wins marking (Mark), a
-// counter with a ceiling (IncrementUses), and the closed-state-machine
-// transitions out of Pending (Approve, ApproveByUserCode, Deny,
-// DenyByUserCode, Revoke).
+// single-use success (Accept), counters that must record every
+// increment (IncrementUses, IncrementPollViolation,
+// IncrementUserCodeStrike, IncrementUserCodeStrikeByUserCode),
+// monotonic or widening updates (UpdateAssertion, RevokeGrant, Touch),
+// a rotation with one winner (SaveRotationWithRetry), and the
+// closed-state-machine transitions out of Pending (Approve,
+// ApproveByUserCode, Deny, DenyByUserCode, Revoke).
 //
-// Every one of them declares, in its own godoc, that concurrent callers
-// resolve to a bounded number of winners, and every one of them is
-// satisfiable by a read-decide-write implementation that passes the
-// sequential cases. Matching by name rather than by an enumerated list
-// of methods is what makes a new one arrive with its coverage gap
-// visible: the method is in the surface the moment it is declared.
+// Every one of them is satisfiable by a read-decide-write implementation
+// that passes the sequential cases. Matching by name rather than by an
+// enumerated list of methods is what makes a new one arrive with its
+// coverage gap visible: the method is in the surface the moment it is
+// declared.
 //
 //nolint:gochecknoglobals // derived surface vocabulary; declared once and read-only.
 var singleWinnerNames = []string{
+	"Accept",
 	"Approve",
 	"ApproveByUserCode",
 	"CompareAndSwap",
@@ -102,9 +106,29 @@ var singleWinnerNames = []string{
 	"DeleteIfUnchanged",
 	"Deny",
 	"DenyByUserCode",
+	"IncrementPollViolation",
+	"IncrementUserCodeStrike",
+	"IncrementUserCodeStrikeByUserCode",
 	"IncrementUses",
 	"Mark",
 	"Revoke",
+	"RevokeGrant",
+	"SaveRotationWithRetry",
+	"Touch",
+	"UpdateAssertion",
+}
+
+// atomicWrites are the writes whose godoc requires a check and the write
+// to be one atomic operation but whose name the package also uses for
+// plain writes, so the name scan cannot pick them out. Each entry must
+// name a method its interface declares.
+//
+//nolint:gochecknoglobals // derived surface addendum; declared once and read-only.
+var atomicWrites = []methodRef{
+	{iface: "DeviceCodeStore", method: "Save"},
+	{iface: "GrantStore", method: "Save"},
+	{iface: "PasskeyStore", method: "Put"},
+	{iface: "RefreshTokenStore", method: "Save"},
 }
 
 // methodRef names one method of one interface.
@@ -211,7 +235,8 @@ func txIDKeyedConsumeAccessors() []string {
 }
 
 // singleWinnerSurface reports every (interface, method) pair in the
-// store package whose name is one of [singleWinnerNames].
+// store package whose name is one of [singleWinnerNames], followed by
+// [atomicWrites].
 func singleWinnerSurface() []methodRef {
 	var out []methodRef
 	for _, iface := range allStoreInterfaces {
@@ -222,7 +247,7 @@ func singleWinnerSurface() []methodRef {
 			}
 		}
 	}
-	return out
+	return append(out, atomicWrites...)
 }
 
 // assertCovers fails when the harness drives no case for something the

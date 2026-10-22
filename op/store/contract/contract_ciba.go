@@ -3,7 +3,6 @@ package contract
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -304,40 +303,35 @@ func cibaConcurrentPollViolations(t *testing.T, f Factory) {
 	b := f(t)
 	cr := requireCIBA(t, b.Store)
 	ctx := context.Background()
-	const (
-		id     = "ar-concurrent"
-		racers = 8
-	)
+	const id = "ar-concurrent"
 	if err := cr.Save(ctx, newCIBARequest(b.Now(), id)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	seen := make([]uint8, racers)
-	errs := make([]error, racers)
-	var wg sync.WaitGroup
-	wg.Add(racers)
-	for i := range racers {
-		go func() {
-			defer wg.Done()
-			seen[i], errs[i] = cr.IncrementPollViolation(ctx, id)
-		}()
-	}
-	wg.Wait()
+	seen := make([]uint8, concurrentRacers)
+	errs := race(
+		func() { _, _ = cr.FindByAuthReqID(ctx, id+"-warmup") },
+		everyRacer(func(i int) error {
+			var err error
+			seen[i], err = cr.IncrementPollViolation(ctx, id)
+			return err
+		})...,
+	)
 
 	for i, err := range errs {
 		if err != nil {
 			t.Fatalf("concurrent IncrementPollViolation %d: %v", i, err)
 		}
 	}
-	assertCounterRange(t, "IncrementPollViolation", seen, racers)
+	assertCounterRange(t, "IncrementPollViolation", seen, concurrentRacers)
 
 	got, err := cr.FindByAuthReqID(ctx, id)
 	if err != nil {
 		t.Fatalf("FindByAuthReqID: %v", err)
 	}
-	if got.PollViolations != racers {
+	if got.PollViolations != concurrentRacers {
 		t.Errorf("PollViolations = %d after %d concurrent violations, want %d",
-			got.PollViolations, racers, racers)
+			got.PollViolations, concurrentRacers, concurrentRacers)
 	}
 }
 

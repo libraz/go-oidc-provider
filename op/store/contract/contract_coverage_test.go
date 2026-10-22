@@ -52,6 +52,81 @@ func TestStoreInterfaceRegistryIsComplete(t *testing.T) {
 	}
 }
 
+// TestSingleWinnerCoverage checks that every method of the concurrency
+// surface has a case that races it, and that every case the coverage map
+// names is one a shipped entry point actually runs.
+//
+// The sequential cases pin these rules as one caller sees them, and every
+// read-decide-write implementation passes them, so a method without a
+// racing case is a rule the suite states and never tests. A map entry
+// naming a case that was renamed or dropped is the same gap with a label
+// on it.
+func TestSingleWinnerCoverage(t *testing.T) {
+	t.Parallel()
+
+	for _, ref := range atomicWrites {
+		if !declaresMethod(ref) {
+			t.Errorf("atomicWrites names %s, which no registered interface declares", ref)
+		}
+	}
+	surface := singleWinnerSurface()
+	assertCovers(t, "single-winner surface", surface, singleWinnerCases)
+
+	tables := harnessCaseTables()
+	for ref, path := range singleWinnerCases {
+		if !slices.Contains(surface, ref) {
+			t.Errorf("singleWinnerCases maps %s, which is not on the single-winner surface", ref)
+		}
+		group, name, ok := strings.Cut(path, "/")
+		if !ok || !slices.Contains(tables[group], name) {
+			t.Errorf("singleWinnerCases maps %s to %q, which no case table runs: the method "+
+				"reads as covered while nothing races it", ref, path)
+		}
+	}
+}
+
+// harnessCaseTables reports the case names each shipped entry point
+// runs, keyed by the path segment a [singleWinnerCases] value starts
+// with: a [Run] group name, or the Run* function of a standalone
+// substore.
+func harnessCaseTables() map[string][]string {
+	tables := map[string][]string{
+		"RunAuthnLockouts": factorCaseNames(authnLockoutCases),
+		"RunEmailOTPs":     factorCaseNames(emailOTPCases),
+		"RunPasskeys":      factorCaseNames(passkeyCases),
+		"RunRecoveryCodes": factorCaseNames(recoveryCases),
+		"RunTOTPs":         factorCaseNames(totpCases),
+	}
+	for _, g := range runGroups {
+		names := make([]string, 0, len(g.cases))
+		for _, c := range g.cases {
+			names = append(names, c.name)
+		}
+		tables[g.name] = names
+	}
+	return tables
+}
+
+func factorCaseNames[B any](cases []factorCase[B]) []string {
+	names := make([]string, 0, len(cases))
+	for _, c := range cases {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// declaresMethod reports whether the registered interface ref names
+// declares ref's method.
+func declaresMethod(ref methodRef) bool {
+	for _, iface := range allStoreInterfaces {
+		if iface.Name() == ref.iface {
+			_, ok := iface.MethodByName(ref.method)
+			return ok
+		}
+	}
+	return false
+}
+
 // declaredStoreInterfaces reports every exported interface type the
 // store package declares, read from its source.
 func declaredStoreInterfaces(t *testing.T) []string {

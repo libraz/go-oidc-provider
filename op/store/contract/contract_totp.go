@@ -6,7 +6,6 @@ import (
 	"errors"
 	"math"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -38,37 +37,36 @@ type TOTPBackend struct {
 // contract sub-test.
 type TOTPFactory func(t *testing.T) TOTPBackend
 
+//nolint:gochecknoglobals // sub-test table; declared once so the Run* entry point and the coverage check can iterate.
+var totpCases = []factorCase[TOTPBackend]{
+	{"Missing", totpMissing},
+	{"PutGetRoundTrip", totpRoundTrip},
+	{"PutReplacesEnrolment", totpPutReplaces},
+	{"CompareAndSwapAppliesNext", totpCASApplies},
+	{"CompareAndSwapStaleSnapshotRejected", totpCASStale},
+	{"CompareAndSwapRejectsVersionEqualDivergedRecord", totpCASDiverged},
+	{"CompareAndSwapRejectsInvalidVersion", totpCASInvalidVersion},
+	{"CompareAndSwapIdenticalHasOneWinner", totpCASIdentical},
+	{"AcceptAdvancesStep", totpAcceptAdvances},
+	{"AcceptRejectsReplayedStep", totpAcceptReplay},
+	{"AcceptRejectsEarlierStep", totpAcceptEarlier},
+	{"AcceptRejectsStaleEnrollment", totpAcceptStaleEnrollment},
+	{"AcceptRejectsInvalidVersion", totpAcceptInvalidVersion},
+	{"DeleteRemovesEnrolment", totpDelete},
+	{"DeleteRecreateRejectsStaleSnapshot", totpDeleteRecreateRejectsStaleSnapshot},
+	{"DeleteMissing", totpDeleteMissing},
+	{"DefensiveCopies", totpDefensiveCopies},
+	{"ConcurrentCompareAndSwapHasOneWinner", totpConcurrentCAS},
+	{"ConcurrentAcceptHasOneWinner", totpConcurrentAccept},
+}
+
 // RunTOTPs exercises the round-trip, compare-and-swap, and single-use
 // acceptance guarantees of [store.TOTPStore]. Adapter authors should call
 // it from their black-box test suite in addition to any backend-specific
 // tests.
 func RunTOTPs(t *testing.T, f TOTPFactory) {
 	t.Helper()
-
-	cases := []struct {
-		name string
-		run  func(*testing.T, TOTPBackend)
-	}{
-		{"Missing", totpMissing},
-		{"PutGetRoundTrip", totpRoundTrip},
-		{"PutReplacesEnrolment", totpPutReplaces},
-		{"CompareAndSwapAppliesNext", totpCASApplies},
-		{"CompareAndSwapStaleSnapshotRejected", totpCASStale},
-		{"CompareAndSwapRejectsVersionEqualDivergedRecord", totpCASDiverged},
-		{"CompareAndSwapRejectsInvalidVersion", totpCASInvalidVersion},
-		{"CompareAndSwapIdenticalHasOneWinner", totpCASIdentical},
-		{"AcceptAdvancesStep", totpAcceptAdvances},
-		{"AcceptRejectsReplayedStep", totpAcceptReplay},
-		{"AcceptRejectsEarlierStep", totpAcceptEarlier},
-		{"AcceptRejectsStaleEnrollment", totpAcceptStaleEnrollment},
-		{"AcceptRejectsInvalidVersion", totpAcceptInvalidVersion},
-		{"DeleteRemovesEnrolment", totpDelete},
-		{"DeleteRecreateRejectsStaleSnapshot", totpDeleteRecreateRejectsStaleSnapshot},
-		{"DeleteMissing", totpDeleteMissing},
-		{"DefensiveCopies", totpDefensiveCopies},
-		{"ConcurrentCompareAndSwapHasOneWinner", totpConcurrentCAS},
-	}
-	for _, tc := range cases {
+	for _, tc := range totpCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t, f(t))
@@ -310,29 +308,17 @@ func totpCASIdentical(t *testing.T, b TOTPBackend) {
 		t.Fatalf("Get seed: %v", err)
 	}
 
-	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
+	attempts := make([]func() error, 0, 2)
 	for range 2 {
 		next := *previous
 		next.SecretCiphertext = bytes.Clone(previous.SecretCiphertext)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready <- struct{}{}
-			<-release
-			errs <- s.CompareAndSwap(ctx, previous, &next)
-		}()
+		attempts = append(attempts, func() error { return s.CompareAndSwap(ctx, previous, &next) })
 	}
-	<-ready
-	<-ready
-	close(release)
-	wg.Wait()
+	errs := race(func() { _, _ = s.Get(ctx, "totp-race-warmup") }, attempts...)
 
 	winners := 0
-	for range 2 {
-		switch err := <-errs; {
+	for _, err := range errs {
+		switch {
 		case err == nil:
 			winners++
 		case errors.Is(err, store.ErrAlreadyConsumed):
@@ -609,29 +595,17 @@ func totpConcurrentCAS(t *testing.T, b TOTPBackend) {
 		t.Fatalf("Get seed: %v", err)
 	}
 
-	ready := make(chan struct{}, 2)
-	release := make(chan struct{})
-	errs := make(chan error, 2)
-	var wg sync.WaitGroup
+	attempts := make([]func() error, 0, 2)
 	for count := 8; count <= 9; count++ {
 		next := *current
 		next.FailedCount = count
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready <- struct{}{}
-			<-release
-			errs <- s.CompareAndSwap(ctx, current, &next)
-		}()
+		attempts = append(attempts, func() error { return s.CompareAndSwap(ctx, current, &next) })
 	}
-	<-ready
-	<-ready
-	close(release)
-	wg.Wait()
+	errs := race(func() { _, _ = s.Get(ctx, "totp-race-warmup") }, attempts...)
 
 	winners := 0
-	for range 2 {
-		switch err := <-errs; {
+	for _, err := range errs {
+		switch {
 		case err == nil:
 			winners++
 		case errors.Is(err, store.ErrAlreadyConsumed):
@@ -649,6 +623,58 @@ func totpConcurrentCAS(t *testing.T, b TOTPBackend) {
 	}
 	if got.FailedCount != 8 && got.FailedCount != 9 {
 		t.Fatalf("final record = %+v, want one candidate count", got)
+	}
+	assertTOTPVersionChanged(t, current.Version, got.Version)
+}
+
+// totpConcurrentAccept pins the single-use rule [store.TOTPStore.Accept]
+// declares under the traffic it exists for: one code submitted from
+// several requests at once. Every racer presents the same step from one
+// snapshot, so exactly one may record it and the rest MUST get
+// [store.ErrAlreadyConsumed]. A backend that reads the stored step,
+// compares it in application code and writes the record back passes
+// the sequential replay case and accepts the code once per racer.
+//
+// Tracks: CVE-2026-20779 — a store-level TOCTOU between checking and
+// recording a TOTP step let a same-step replay through at the storage
+// layer.
+func totpConcurrentAccept(t *testing.T, b TOTPBackend) {
+	t.Helper()
+	s := b.Store
+	ctx := context.Background()
+	seed := totpContractRecord()
+	if err := s.Put(ctx, seed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	current, err := s.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get seed: %v", err)
+	}
+
+	step := current.LastAcceptedStep + 1
+	errs := race(
+		func() { _, _ = s.Get(ctx, "totp-race-warmup") },
+		everyRacer(func(int) error {
+			next := *current
+			next.LastAcceptedStep = step
+			next.FailedCount = 0
+			next.FirstFailureAt = time.Time{}
+			return s.Accept(ctx, &next)
+		})...,
+	)
+	assertOneWinner(t, "TOTPs().Accept", errs)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrAlreadyConsumed) {
+			t.Fatalf("losing Accept %d: want ErrAlreadyConsumed, got %v", i, err)
+		}
+	}
+
+	got, err := s.Get(ctx, seed.Subject)
+	if err != nil {
+		t.Fatalf("Get after the race: %v", err)
+	}
+	if got.LastAcceptedStep != step {
+		t.Fatalf("LastAcceptedStep = %d after the race, want %d", got.LastAcceptedStep, step)
 	}
 	assertTOTPVersionChanged(t, current.Version, got.Version)
 }
