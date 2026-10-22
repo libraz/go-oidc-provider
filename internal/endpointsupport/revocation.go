@@ -267,9 +267,8 @@ func RevokeJWTAccessTokensByGrant(
 // denylist row (not a grant tombstone); when GrantRevocations is nil it
 // falls back to AccessTokens.RevokeByJTI for the migration window.
 //
-// The helper intentionally swallows store errors; callers keep their
-// wire-level success posture and rely on audit / retries for
-// observability.
+// Store errors are returned; callers keep their wire-level success
+// posture and report the error through audit.
 func RevokeJWTAccessTokenByJTI(
 	ctx context.Context,
 	opts JWTGrantCascadeOpts,

@@ -23,15 +23,15 @@
 //     audience is intentionally NOT validated, mirroring the same choice
 //     made by internal/userinfo (the resource server owns the audience
 //     policy).
-//   - Otherwise: opaque. Looked up in [op/store.RefreshTokenStore.Find].
-//     A record that is unconsumed and unexpired projects onto the
-//     response; anything else collapses onto inactive.
+//   - Otherwise: opaque. Looked up first in [Deps.OpaqueAccessTokens],
+//     which holds the access tokens an OP configured for
+//     [op.AccessTokenFormatOpaque] mints, then in
+//     [op/store.RefreshTokenStore.Find]. A record that is live and
+//     unexpired projects onto the response; anything else collapses
+//     onto inactive.
 //
-// Opaque access tokens (RFC 7662 §2.1 anticipates them) are NOT a v1.0
-// feature: the library only mints JWT-shaped access tokens, so the JWT
-// branch handles every access-token introspection request. An embedder
-// that issues opaque access tokens out-of-band would need to wrap this
-// handler.
+// An embedder that issues access tokens out-of-band, outside either
+// store, would need to wrap this handler.
 //
 // # token_type_hint
 //
@@ -85,7 +85,8 @@
 //
 //   - internal/clientauth for client authentication;
 //   - internal/tokens.AccessTokenVerifier for JWT introspection;
-//   - [op/store.RefreshTokenStore] for opaque introspection;
+//   - the opaque access-token and refresh-token substores for opaque
+//     introspection;
 //   - internal/timex (via the package-local Clock) for wall-clock reads.
 //
 // A nil [Deps.RefreshTokens] disables refresh-token introspection only:

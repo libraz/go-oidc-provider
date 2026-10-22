@@ -16,13 +16,16 @@
 //     internal/tokens.AccessTokenVerifier (issuer + signature + exp +
 //     iat). On a successful verify the handler matches the token's
 //     "client_id" against the authenticated client; on a match the
-//     revocation is recorded in the shape
-//     [store.AccessTokenRevocationStrategy] selects — a grant tombstone
-//     by default, or a per-JTI record — so a resource server that
-//     consults the OP stops honouring the token.
-//   - Otherwise: opaque. Looked up in [op/store.RefreshTokenStore.Find].
-//     A record whose ClientID matches the authenticated client triggers
-//     a parent-walk to the chain root followed by a call to
+//     revocation is recorded for that token alone, in the shape
+//     [store.AccessTokenRevocationStrategy] selects: a per-JTI denylist
+//     row under the default grant-tombstone strategy, a registry row
+//     under the JTI-registry strategy, nothing under None. The grant
+//     itself is left intact, and a resource server that consults the
+//     OP stops honouring the token.
+//   - Otherwise: opaque. Looked up first in [Deps.OpaqueAccessTokens],
+//     then in [op/store.RefreshTokenStore.Find]. A refresh token whose
+//     ClientID matches the authenticated client triggers a parent-walk
+//     to the chain root followed by a call to
 //     [op/store.RefreshTokenStore.RevokeChain]; the entire rotation
 //     chain is invalidated in a single best-effort store transaction.
 //
@@ -56,11 +59,11 @@
 // attacker from probing token ownership through the revocation
 // endpoint.
 //
-// # JWT access-token revocation is a no-op
+// # JWT access-token revocation and offline verifiers
 //
 // A JWT access token stays cryptographically valid until its "exp"
 // claim is reached: revocation is recorded on the OP, not stamped into
-// the token. A resource server that validates the signature offline and
+// the token, and under the None strategy it is not recorded at all. A resource server that validates the signature offline and
 // never introspects therefore keeps honouring the token for the
 // remainder of its lifetime, so access-token TTL still bounds the
 // worst-case revocation lag for that deployment shape. The library's
@@ -94,12 +97,12 @@
 // The package is a thin orchestration over three collaborators:
 //
 //   - internal/clientauth for client authentication;
-//   - internal/tokens.AccessTokenVerifier for JWT revocation
-//     acknowledgement;
+//   - internal/tokens.AccessTokenVerifier, with [Deps.GrantRevocations]
+//     or [Deps.AccessTokens] recording the result, for JWT revocation;
 //   - [op/store.RefreshTokenStore] for refresh-token chain revocation.
 //
 // A nil [Deps.RefreshTokens] disables refresh-token revocation only:
 // such a request silently 200s, as RFC 7009 §2.2 requires. The opaque
 // access-token path runs off [Deps.OpaqueAccessTokens] independently,
-// and JWT acknowledgement consults neither store.
+// and the JWT path consults neither of those two stores.
 package revokeendpoint
