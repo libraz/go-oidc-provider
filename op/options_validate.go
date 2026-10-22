@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/cibaendpoint"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
@@ -509,7 +511,7 @@ func (c *config) validateAccessTokenFormat() error {
 	if !needsOpaque {
 		return nil
 	}
-	if c.store.OpaqueAccessTokens() == nil {
+	if isNilLike(c.store.OpaqueAccessTokens()) {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "op.WithAccessTokenFormat(AccessTokenFormatOpaque) " +
@@ -544,7 +546,7 @@ func (c *config) validateAccessTokenRevocation() error {
 	}
 	if c.atRevocation != store.RevocationStrategyNone {
 		if c.atRevocation == store.RevocationStrategyGrantTombstone &&
-			c.store.GrantRevocations() == nil {
+			isNilLike(c.store.GrantRevocations()) {
 			return &Error{
 				Code: codeConfiguration,
 				Description: "RevocationStrategyGrantTombstone requires " +
@@ -552,7 +554,7 @@ func (c *config) validateAccessTokenRevocation() error {
 			}
 		}
 		if c.atRevocation == store.RevocationStrategyJTIRegistry &&
-			c.store.AccessTokens() == nil {
+			isNilLike(c.store.AccessTokens()) {
 			return &Error{
 				Code: codeConfiguration,
 				Description: "RevocationStrategyJTIRegistry requires " +
@@ -793,6 +795,11 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 				"; got " + c.parLifetime.String(),
 		}
 	}
+	if p == profile.FAPICIBA {
+		if err := c.validateFAPICIBAExpiry(); err != nil {
+			return err
+		}
+	}
 	if profileForcesDPoPNonce(p) && hasDPoPFeature(enabled) && c.dpopNonces == nil {
 		return &Error{
 			Code: codeConfiguration,
@@ -817,6 +824,31 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 				" caps WithRefreshGracePeriod at " +
 				refresh.GraceTTLDefault.String() + "; got " +
 				c.refreshGracePeriod.String(),
+		}
+	}
+	return nil
+}
+
+// validateFAPICIBAExpiry rejects a configured CIBA default or maximum
+// above the FAPI-CIBA cap. /bc-authorize enforces the cap only on a
+// client-supplied requested_expiry; the default path issues whatever
+// the configuration resolves to.
+func (c *config) validateFAPICIBAExpiry() error {
+	limit := cibaendpoint.FAPICIBAMaxExpiry
+	for _, v := range []struct {
+		option string
+		value  time.Duration
+	}{
+		{"WithCIBADefaultExpiresIn", c.cibaDefaultExpiresIn},
+		{"WithCIBAMaxExpiresIn", c.cibaMaxExpiresIn},
+	} {
+		if v.value > limit {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "WithProfile " + profile.FAPICIBA.String() +
+					" caps " + v.option + " at " + limit.String() +
+					"; got " + v.value.String(),
+			}
 		}
 	}
 	return nil
@@ -1002,6 +1034,14 @@ func (c *config) validateInteractions() error {
 				Description: "WithInteractions: Interaction.Name must not be empty",
 			}
 		}
+		// The built-ins register first and de-duplication keeps the
+		// first entry, so a reused built-in name would never run.
+		if name == authn.BuiltinConsentName || name == authn.BuiltinChooserName {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithInteractions: Interaction.Name " + name + " is reserved for the built-in interaction",
+			}
+		}
 		if _, dup := seen[name]; dup {
 			return &Error{
 				Code:        codeConfiguration,
@@ -1042,13 +1082,13 @@ func (c *config) validateRegistration() error {
 			Description: "feature.DynamicRegistration was enabled more than once",
 		}
 	}
-	if c.store.InitialAccessTokens() == nil {
+	if isNilLike(c.store.InitialAccessTokens()) {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "InitialAccessTokens not implemented by store backend",
 		}
 	}
-	if c.store.RegistrationAccessTokens() == nil {
+	if isNilLike(c.store.RegistrationAccessTokens()) {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "RegistrationAccessTokens not implemented by store backend",

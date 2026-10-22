@@ -139,7 +139,9 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 // An empty (non-nil) slice means "no algs / encs at all", which
 // disables JWE negotiation outright while still publishing the
 // encryption keyset (a deliberate "advertise keys but negotiate
-// nothing" posture is unusual but not forbidden).
+// nothing" posture is unusual but not forbidden). Each half may be
+// narrowed by at most one call; a second non-nil value for the same
+// half fails [New] rather than replacing the first.
 //
 // Stable since v1.0.
 func WithSupportedEncryptionAlgs(algs, encs []string) Option {
@@ -158,6 +160,12 @@ func WithSupportedEncryptionAlgs(algs, encs []string) Option {
 func applyAlgNarrowing(c *config, algs []string) error {
 	if algs == nil {
 		return nil
+	}
+	if c.encryptionAlgsAllowedSet {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithSupportedEncryptionAlgs may narrow the algs at most once",
+		}
 	}
 	for _, a := range algs {
 		if _, ok := jose.ParseJWEAlg(a); !ok {
@@ -178,6 +186,12 @@ func applyAlgNarrowing(c *config, algs []string) error {
 func applyEncNarrowing(c *config, encs []string) error {
 	if encs == nil {
 		return nil
+	}
+	if c.encryptionEncsAllowedSet {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithSupportedEncryptionAlgs may narrow the encs at most once",
+		}
 	}
 	for _, e := range encs {
 		if _, ok := jose.ParseJWEEnc(e); !ok {

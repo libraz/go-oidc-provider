@@ -15,6 +15,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -303,6 +304,10 @@ type config struct {
 	// survives either way, because the fetch layer re-wires DialContext
 	// on whichever transport it ends up with.
 	jwksHTTPTransport http.RoundTripper
+
+	// rpJWKS is the one relying-party JWKS fetcher the JAR, client-assertion
+	// and outbound-encryption paths share; see [config.relyingPartyJWKS].
+	rpJWKS *rpjwks.Fetcher
 
 	// Login flow / UI / static-clients.
 	// loginFlow stores the [LoginFlow] supplied through

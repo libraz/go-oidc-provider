@@ -185,7 +185,7 @@ func (c *config) validateDeviceCodeGrant() error {
 		// substore-nil branch does not panic on the nil store.
 		return nil
 	}
-	if c.store.DeviceCodes() == nil {
+	if isNilLike(c.store.DeviceCodes()) {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "the device_code grant requires the configured Store to provide " +

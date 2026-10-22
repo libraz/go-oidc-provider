@@ -158,17 +158,9 @@ func (c *config) resolvedRefreshGrace() time.Duration {
 
 // startupDPoPNonceRequired reports whether the deployment will
 // challenge clients for an RFC 9449 §8 server-supplied nonce. The
-// mandate is profile-driven but only bites when DPoP is the active
-// binding mechanism, which mirrors the condition the construction-time
-// validator applies.
+// endpoints challenge whenever DPoP is active and a nonce source is
+// wired, with or without a profile; a profile that mandates nonces
+// fails construction without a source, so it needs no separate arm.
 func (c *config) startupDPoPNonceRequired() bool {
-	if !featureEnabled(c.features, feature.DPoP) {
-		return false
-	}
-	for _, p := range c.profiles {
-		if profileForcesDPoPNonce(p) {
-			return true
-		}
-	}
-	return false
+	return featureEnabled(c.features, feature.DPoP) && c.dpopNonces != nil
 }

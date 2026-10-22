@@ -259,7 +259,7 @@ type ConfidentialClient struct {
 // two fields disagree about which secret authenticates the client, and
 // silently honouring one would leave the operator holding a plaintext
 // they believe works and a client that cannot authenticate with it.
-func (c ConfidentialClient) secretHash() (string, error) {
+func (c ConfidentialClient) secretHash(method AuthMethod) (string, error) {
 	switch {
 	case c.Secret != "" && c.SecretHash != "":
 		return "", &Error{
@@ -268,6 +268,15 @@ func (c ConfidentialClient) secretHash() (string, error) {
 		}
 	case c.SecretHash != "":
 		return c.SecretHash, nil
+	case c.Secret == "":
+		// Hashing "" would store a credential that authenticates an empty client_secret.
+		if method == AuthClientSecretBasic || method == AuthClientSecretPost {
+			return "", &Error{
+				Code:        codeConfiguration,
+				Description: "ConfidentialClient " + c.ID + ": Secret or SecretHash is required",
+			}
+		}
+		return "", nil
 	}
 	hash, err := HashClientSecret(c.Secret)
 	if err != nil {
@@ -285,7 +294,7 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 	if method == "" {
 		method = AuthClientSecretBasic
 	}
-	hash, err := c.secretHash()
+	hash, err := c.secretHash(method)
 	if err != nil {
 		return store.Client{}, err
 	}

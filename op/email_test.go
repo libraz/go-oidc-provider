@@ -96,6 +96,11 @@ func TestNewEmailOTPAuthenticator_RejectsMissingDeps(t *testing.T) {
 		{"missing mailer", op.EmailOTPConfig{Store: st, Users: users}},
 		{"missing store", op.EmailOTPConfig{Mailer: mailer, Users: users}},
 		{"missing users", op.EmailOTPConfig{Mailer: mailer, Store: st}},
+		// A typed nil is non-nil as an interface and panics on first use.
+		{"typed-nil mailer", op.EmailOTPConfig{Mailer: op.MailerFunc(nil), Store: st, Users: users}},
+		{"typed-nil store", op.EmailOTPConfig{Mailer: mailer, Store: typedNilFrom[store.EmailOTPStore](t, st), Users: users}},
+		{"typed-nil users", op.EmailOTPConfig{Mailer: mailer, Store: st, Users: (*stubUsers)(nil)}},
+		{"typed-nil clock", op.EmailOTPConfig{Mailer: mailer, Store: st, Users: users, Clock: (*typedNilClock)(nil)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

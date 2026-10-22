@@ -63,12 +63,21 @@ func (a GrantManagementAction) valid() bool {
 // grant_management_action_required: when true an authorization request that
 // omits grant_management_action is rejected.
 //
-// Enabling this implicitly turns on [feature.GrantManagement].
+// Enabling this implicitly turns on [feature.GrantManagement]. The
+// option may be supplied at most once; a repeat fails [New].
 //
 // Experimental: tracks an IETF draft, so the surface MAY change in a
 // minor release on a wire-incompatible draft bump.
 func WithGrantManagement(actions []GrantManagementAction, actionRequired bool) Option {
 	return optionFunc(func(c *config) error {
+		// A second call would silently replace the first action set;
+		// mirrors WithGrants / WithProfile, whose repeats also error.
+		if c.grantManagementEnabled {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithGrantManagement may be called at most once",
+			}
+		}
 		if len(actions) == 0 {
 			return &Error{
 				Code:        codeConfiguration,

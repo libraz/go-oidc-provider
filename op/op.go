@@ -1188,10 +1188,9 @@ func toPublicLoginContext(lc authn.LoginFlowContext) LoginContext {
 // internal [authn.LoginFlowDecider]. The adapter translates each
 // public [Decision] case into its internal counterpart so the
 // orchestrator's switch stays closed (LoginFlowDecision is a sealed
-// sum). An unrecognised public Decision projects to LoginFlowPass
-// (the safe default) — Decision is itself a sealed sum so the path is
-// only reachable if the op package adds a new Decision case without
-// updating this adapter.
+// sum). Pointer forms project like their values; nil or an
+// unrecognised Decision projects to LoginFlowDeny so the login fails
+// closed.
 type deciderAdapter struct {
 	inner Decider
 }
@@ -1205,7 +1204,7 @@ type deciderAdapter struct {
 // not possible — the factors a login can demand stay readable off the
 // LoginFlow, which a Decider that could conjure one would undo.
 func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) authn.LoginFlowDecision { //nolint:ireturn,nolintlint // sealed-sum LoginFlowDecision is the contract.
-	d := a.inner.Decide(ctx, toPublicLoginContext(lc))
+	d := derefDecision(a.inner.Decide(ctx, toPublicLoginContext(lc)))
 	switch v := d.(type) {
 	case Allow:
 		return authn.LoginFlowAllow{}
@@ -1224,7 +1223,29 @@ func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) 
 			Step: authn.LoginFlowStep{Kind: string(v.Kind)},
 		}
 	default:
-		return authn.LoginFlowPass{}
+		// nil, a nil pointer, or a shape this switch does not know: no verdict, so fail closed.
+		return authn.LoginFlowDeny{Reason: "decider returned no decision"}
+	}
+}
+
+// derefDecision maps the pointer forms of the four Decision shapes onto
+// their value forms, so *Deny means Deny rather than an unknown shape.
+// A nil pointer comes back as nil.
+func derefDecision(d Decision) Decision { //nolint:ireturn // Decision is a sealed sum type.
+	if isNilLike(d) {
+		return nil
+	}
+	switch v := d.(type) {
+	case *Allow:
+		return *v
+	case *Pass:
+		return *v
+	case *Deny:
+		return *v
+	case *Require:
+		return *v
+	default:
+		return d
 	}
 }
 

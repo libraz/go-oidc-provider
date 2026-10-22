@@ -23,10 +23,9 @@ func (s stubDecider) Decide(context.Context, LoginContext) Decision { //nolint:i
 // public [Decision] sum onto the orchestrator's internal one. The two
 // sums are separate types on purpose — internal/authn cannot import op —
 // so nothing but this table stops the adapter from quietly collapsing a
-// case onto the wrong one. Pass is the safe default the adapter falls
-// back to, which is exactly why a mistranslation is not loud: a Deny
-// that arrived as a Pass would let a login the embedder refused proceed
-// to the rules.
+// case onto the wrong one. A Deny that arrived as a Pass would let a
+// login the embedder refused proceed to the rules, so anything without
+// a verdict must project to Deny.
 func TestDeciderAdapter_ProjectsEveryDecision(t *testing.T) {
 	t.Parallel()
 
@@ -48,6 +47,20 @@ func TestDeciderAdapter_ProjectsEveryDecision(t *testing.T) {
 		// configuration slip. Deferring to the rules is the reading that
 		// neither invents a factor nor drops one.
 		{"require-empty-kind", Require{}, authn.LoginFlowPass{}},
+		// Value receivers let the pointer forms satisfy Decision too;
+		// each must project like its value, not as an unknown shape.
+		{"allow-pointer", &Allow{}, authn.LoginFlowAllow{}},
+		{"pass-pointer", &Pass{}, authn.LoginFlowPass{}},
+		{"deny-pointer", &Deny{Reason: "policy"}, authn.LoginFlowDeny{Reason: "policy"}},
+		{
+			"require-pointer",
+			&Require{Kind: StepKindRecoveryCode},
+			authn.LoginFlowRequire{Step: authn.LoginFlowStep{Kind: string(StepKindRecoveryCode)}},
+		},
+		// No verdict fails closed rather than deferring to the rules.
+		{"nil", nil, authn.LoginFlowDeny{Reason: "decider returned no decision"}},
+		{"nil-deny-pointer", (*Deny)(nil), authn.LoginFlowDeny{Reason: "decider returned no decision"}},
+		{"nil-allow-pointer", (*Allow)(nil), authn.LoginFlowDeny{Reason: "decider returned no decision"}},
 	}
 
 	for _, tc := range cases {

@@ -37,6 +37,8 @@ type Decider interface {
 // set the orchestrator's evaluation loop recognises; the unexported
 // [Decision.isDecision] method prevents foreign packages from adding
 // new cases, so the orchestrator's switch is total by construction.
+// A pointer to one of the four is read as its value; a nil Decision,
+// or a nil pointer, denies the login.
 type Decision interface {
 	isDecision()
 }

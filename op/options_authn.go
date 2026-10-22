@@ -320,9 +320,11 @@ func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 // [InteractionTrigger] bucket; cross-trigger ordering is orchestrator-
 // defined. Calling WithInteractions multiple times appends; duplicates
 // by [Interaction.Name] are rejected at [New] construction time.
-// The library-built-in consent screen is registered automatically by
-// the orchestrator; user extensions ship with a unique dotted
-// [Interaction.Name] (e.g., "myorg.tos.accept").
+// The library-built-in consent screen and account chooser are
+// registered automatically by the orchestrator, and their names
+// "consent" and "chooser" are reserved: an extension using either fails
+// [New]. User extensions ship with a unique dotted [Interaction.Name]
+// (e.g., "myorg.tos.accept").
 // Experimental: the contract is settled; per-interaction semantics MAY
 // change in a minor release.
 func WithInteractions(i ...Interaction) Option {

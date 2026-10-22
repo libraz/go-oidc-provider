@@ -108,6 +108,32 @@ func TestConfidentialClient_RejectsBothSecretForms(t *testing.T) {
 	}
 }
 
+// TestConfidentialClient_RejectsMissingSecret pins that a seed with
+// neither form fails op.New instead of storing a hash of the empty
+// string, which would authenticate an empty client_secret.
+func TestConfidentialClient_RejectsMissingSecret(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []op.AuthMethod{"", op.AuthClientSecretBasic, op.AuthClientSecretPost} {
+		t.Run("method="+string(method), func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(staticClientBaseOpts(t),
+				op.WithStaticClients(op.ConfidentialClient{
+					ID:           "secretless",
+					AuthMethod:   method,
+					RedirectURIs: []string{"https://app.example.com/callback"},
+				}),
+			)...)
+			if err == nil {
+				t.Fatal("expected a configuration error when neither Secret nor SecretHash is set")
+			}
+			if !strings.Contains(err.Error(), "Secret or SecretHash is required") {
+				t.Errorf("err = %v, want it to name the missing secret", err)
+			}
+		})
+	}
+}
+
 // TestStaticClientsWithoutTheOption_StillAcceptPlaintextSecrets pins
 // that none of the above changed the default. The option is opt-in
 // precisely because turning it on for an existing store would make

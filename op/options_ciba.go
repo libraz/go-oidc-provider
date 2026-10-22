@@ -140,12 +140,14 @@ func WithCIBAHintResolver(r HintResolver) CIBAOption {
 
 // WithCIBADefaultExpiresIn overrides the auth_req_id lifetime the
 // OP advertises in the /bc-authorize response when the client did
-// not supply requested_expiry. Zero or negative falls back to the
-// library default (600 seconds, matching CIBA Core 1.0 §7.3).
+// not supply requested_expiry. Zero falls back to the library default
+// (600 seconds, matching CIBA Core 1.0 §7.3); a negative value is
+// rejected at the option site.
 //
 // The value must not exceed [WithCIBAMaxExpiresIn] when both are
 // configured; the combination fails [New]. When only the cap is
-// configured, the library default is clamped down to it.
+// configured, the library default is clamped down to it. Under
+// the FAPI-CIBA profile a value above ten minutes fails [New].
 func WithCIBADefaultExpiresIn(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
 		if d < 0 {
@@ -168,6 +170,7 @@ func WithCIBADefaultExpiresIn(d time.Duration) CIBAOption {
 // The cap also bounds the lifetime applied when the client omits
 // requested_expiry: a lower cap clamps the library default, and an
 // explicitly configured [WithCIBADefaultExpiresIn] above the cap
+// fails [New]. Under the FAPI-CIBA profile a value above ten minutes
 // fails [New].
 func WithCIBAMaxExpiresIn(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
@@ -183,8 +186,9 @@ func WithCIBAMaxExpiresIn(d time.Duration) CIBAOption {
 }
 
 // WithCIBAPollInterval overrides the `interval` value advertised on
-// the /bc-authorize response (CIBA Core 1.0 §7.3). Zero or negative
-// falls back to the library default (5 seconds).
+// the /bc-authorize response (CIBA Core 1.0 §7.3). Zero falls back to
+// the library default (5 seconds); a negative value is rejected at the
+// option site.
 func WithCIBAPollInterval(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
 		if d < 0 {

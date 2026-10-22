@@ -26,6 +26,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -176,12 +177,10 @@ func validateAdvertisedLocales(cfg *config, locales *i18n.Resolver) error {
 //   - explicit entries from [WithTrustedProxyHosts] (multi-hostname
 //     deployments).
 //
-// When [WithTrustedProxies] is configured but the issuer is empty AND
-// no explicit hosts were supplied, the function emits a startup WARN
-// through the operational logger so the operator notices the gap. The
-// returned trust still rejects every XFH in that case (the empty
-// allowlist behaviour is preserved on the runtime side: [proxy.Trust]
-// honours XFH only when the supplied host appears in the allowlist).
+// An empty allowlist makes [proxy.Trust] honour any XFH a trusted
+// proxy sends. op.New requires a valid issuer, so the issuer host is
+// always present and that case is unreachable through it; the startup
+// WARN below names it should a caller ever get there.
 //
 // A nil return is the documented "no proxy trusted" signal — the
 // authorize endpoint passes a nil trust to [proxy.Resolve] which falls
@@ -197,7 +196,7 @@ func buildProxyTrust(cfg *config) (*proxy.Trust, error) {
 	}
 	if len(hosts) == 0 && cfg.logger != nil {
 		cfg.logger.Warn(
-			"proxy: WithTrustedProxies configured without a host allowlist; X-Forwarded-Host will be ignored",
+			"proxy: WithTrustedProxies configured without a host allowlist; X-Forwarded-Host from any trusted proxy will be honoured",
 		)
 	}
 	t, err := proxy.NewTrustWithHosts(cfg.trustedProxies, hosts)
@@ -443,10 +442,9 @@ type jarVerifiers struct {
 // [buildMTLSVerifier]: nil verifiers mean "feature off" everywhere
 // downstream.
 //
-// The verifiers use the default in-process JWKS resolver, which pulls
-// inline JWKs from [op/store.Client.JWKs] first and falls back to
-// [op/store.Client.JWKsURI] (with hardened HTTP fetch + caching) when
-// the inline value is absent.
+// The verifiers use the default JWKS resolver over
+// [config.relyingPartyJWKS]: the client's inline [op/store.Client.JWKs]
+// or its [op/store.Client.JWKsURI], whichever is the one registered.
 func buildJARVerifiers(cfg *config, encSet *keys.EncryptionSet) (jarVerifiers, error) {
 	if !featureEnabled(cfg.features, feature.JAR) {
 		return jarVerifiers{}, nil
@@ -491,13 +489,10 @@ func buildJARVerifiers(cfg *config, encSet *keys.EncryptionSet) (jarVerifiers, e
 			fapiCIBA = true
 		}
 	}
-	resolverOpts := []jar.ResolverOption{}
-	if cfg.allowPrivateNetworkJWKS {
-		resolverOpts = append(resolverOpts, jar.AllowPrivateNetwork())
-	}
-	if cfg.jwksHTTPTransport != nil {
-		resolverOpts = append(resolverOpts, jar.WithBaseTransport(cfg.jwksHTTPTransport))
-	}
+	shared := cfg.relyingPartyJWKS()
+	useShared := jar.ResolverOption(func(f *jar.Fetcher) {
+		f.Fetcher = shared.WithFetchError(jar.ErrJWKSFetch)
+	})
 	// AllowMissingJTI stays true for /authorize and /par: RFC 9101 §6.1
 	// marks "jti" as OPTIONAL on the wire, RFC 9101 §10.8 uses SHOULD
 	// (not MUST) for AS-side jti tracking, and the FAPI 2.0 Security
@@ -508,7 +503,7 @@ func buildJARVerifiers(cfg *config, encSet *keys.EncryptionSet) (jarVerifiers, e
 	// it does see.
 	authorizeCfg := jar.VerifierConfig{
 		Issuer:             cfg.issuer,
-		Resolver:           jar.NewDefaultResolver(cfg.clock, resolverOpts...),
+		Resolver:           jar.NewDefaultResolver(cfg.clock, useShared),
 		Clock:              cfg.clock,
 		RequireNbf:         requireNbf,
 		JTIs:               cfg.store.ConsumedJTIs(),
@@ -570,16 +565,28 @@ func jarEncryptionResolver(encSet *keys.EncryptionSet) jar.EncryptionResolver {
 	return encSet
 }
 
+// relyingPartyJWKS returns the one RP JWKS fetcher per Provider, built on
+// first use. The JAR, private_key_jwt and outbound-encryption paths each
+// read it through their own sentinel view, so a jwks_uri is cached and
+// forced-refreshed once across all of them, under one SSRF posture:
+// [WithAllowPrivateNetworkJWKS] lifts the deny-list and
+// [WithJWKSHTTPTransport] supplies the transport.
+func (c *config) relyingPartyJWKS() *rpjwks.Fetcher {
+	if c.rpJWKS == nil {
+		c.rpJWKS = rpjwks.New(rpjwks.Config{
+			Clock:               c.clock,
+			AllowPrivateNetwork: c.allowPrivateNetworkJWKS,
+			BaseTransport:       c.jwksHTTPTransport,
+		})
+	}
+	return c.rpJWKS
+}
+
 // buildClientEncryptionResolver constructs the [clientencjwks.Resolver]
 // that the four outbound-encryption response paths (id_token /
 // userinfo / JARM / introspection) consult to translate a client's
 // registered (alg, enc) pair into a [jose.EncryptionRecipient]. The
-// resolver shares its SSRF posture with the JAR JWKS fetcher: the
-// [WithAllowPrivateNetworkJWKS] opt-in suppresses the deny-list for
-// embedders fronting their RPs with private DNS, and
-// [WithJWKSHTTPTransport] replaces the transport underneath it so a
-// deployment behind an internal CA presents the same trust store on
-// this fetch as on the JAR and private_key_jwt fetches. Construction is
+// resolver reads through [config.relyingPartyJWKS]. Construction is
 // unconditional — a client that did not register encryption metadata
 // surfaces [clientencjwks.ErrNoEncryptionConfigured] at request time
 // and the consumer skips the JWE wrap, so the resolver only adds a
@@ -591,10 +598,8 @@ func jarEncryptionResolver(encSet *keys.EncryptionSet) jar.EncryptionResolver {
 // operator ruled out.
 func buildClientEncryptionResolver(cfg *config) *clientencjwks.Resolver {
 	return clientencjwks.New(clientencjwks.Config{
-		Clock:               cfg.clock,
-		AllowPrivateNetwork: cfg.allowPrivateNetworkJWKS,
-		BaseTransport:       cfg.jwksHTTPTransport,
-		Policy:              cfg.jwePolicy(),
+		Fetcher: cfg.relyingPartyJWKS(),
+		Policy:  cfg.jwePolicy(),
 	})
 }
 
@@ -610,9 +615,11 @@ type assertionVerifiers struct {
 // buildAssertionVerifiers constructs endpoint-scoped
 // [clientauth.PrivateKeyJWTVerifier] instances for every endpoint that
 // authenticates clients. All instances share the same JWKS resolver and
-// consumed-JTI store, but each endpoint gets its own expected audience
-// set so an assertion minted for PAR cannot be replayed at revoke,
-// introspection, device authorization, or token.
+// consumed-JTI store. Token, introspection, revocation (shared with
+// grant management) and device authorization accept {token endpoint
+// URL, issuer}, the RFC 7523 §3 audience; only PAR and CIBA also accept
+// their own endpoint URL, and an assertion addressed to either URL is
+// refused everywhere else.
 //
 // The AS issuer remains accepted as an alias on every endpoint for FAPI
 // 2.0 / RFC 7523bis compatibility. PAR additionally accepts the token
@@ -634,14 +641,7 @@ func buildAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
 			Cause:       err,
 		}
 	}
-	jwksFetcher := jar.NewFetcher(cfg.clock)
-	if cfg.allowPrivateNetworkJWKS {
-		jwksFetcher.SetAllowPrivate(true)
-	}
-	if cfg.jwksHTTPTransport != nil {
-		jwksFetcher.SetBaseTransport(cfg.jwksHTTPTransport)
-	}
-	resolver.SetURLFetcher(jwksFetcher)
+	resolver.SetURLFetcher(&jar.Fetcher{Fetcher: cfg.relyingPartyJWKS().WithFetchError(jar.ErrJWKSFetch)})
 	tokenAud := absoluteEndpointURL(cfg, cfg.endpoints.Token)
 	parAud := absoluteEndpointURL(cfg, cfg.endpoints.PAR)
 	backchannelAud := absoluteEndpointURL(cfg, cfg.endpoints.Backchannel)
@@ -936,11 +936,9 @@ func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestra
 // buildBuiltInInteractions prepends the library-built-in interactions
 // to the user-supplied [WithInteractions] slice. Today the built-ins
 // are the consent screen and (when sessMgr is non-nil) the account
-// chooser. Names already taken by user extensions win —
-// [authn.New] de-duplicates by [Interaction.Name] and keeps the first
-// occurrence — so an embedder who registers a custom "consent" or
-// "chooser" interaction (rare but supported) silently overrides the
-// built-in.
+// chooser. [authn.New] de-duplicates by [Interaction.Name] and keeps
+// the first occurrence, so the built-ins win; [config.validateInteractions]
+// therefore rejects a user extension named "consent" or "chooser".
 func buildBuiltInInteractions(cfg *config, sessMgr *sessions.Manager) []Interaction {
 	out := make([]Interaction, 0, len(cfg.interactions)+2)
 	out = append(out, consent.New(consentCatalog(cfg.scopes)))

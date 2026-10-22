@@ -257,6 +257,30 @@ func TestAuditStartupProfile_MTLSSuppressesDPoPDefault(t *testing.T) {
 	assertBool(t, rec, "dpop_nonce_required", false)
 }
 
+// TestAuditStartupProfile_DPoPNonceWithoutMandate pins that the record
+// reports the nonce challenge the endpoints run whenever a source is
+// wired, not only when a profile mandates one.
+func TestAuditStartupProfile_DPoPNonceWithoutMandate(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		opts []op.Option
+	}{
+		{"no-profile", nil},
+		{"fapi2-baseline", []op.Option{op.WithProfile(profile.FAPI2Baseline)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := captureStartupProfile(t, append(tc.opts,
+				op.WithFeature(feature.DPoP),
+				op.WithDPoPNonceSource(stubDPoPNonceSource{}),
+			)...)
+			assertBool(t, rec, "dpop_nonce_required", true)
+		})
+	}
+}
+
 // TestAuditStartupProfile_CIBADeployment checks that the grant axis
 // reaches the record, so an operator can see that the declared
 // FAPI-CIBA posture is backed by a mounted backchannel endpoint.

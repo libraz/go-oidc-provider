@@ -159,14 +159,22 @@ const DefaultEmailOTPCodeTTL = emailotp.DefaultCodeTTL
 //     second factor consults, so guesses cannot be reset by pivoting
 //     between factors.
 func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nolint:ireturn,nolintlint // returns the public Authenticator interface so embedders can pass the result to WithAuthenticators without a concrete-type leak.
-	// The internal NewAuthenticator nil-checks its own Mailer, but
-	// the public Mailer is wrapped through emailMailerAdapter — a
-	// non-nil struct value with a nil internal field — so the
-	// internal nil-check would not fire. Surface the error here so
-	// the caller sees the same emailotp.ErrMailerRequired sentinel
-	// that an internal-side miss would produce.
-	if cfg.Mailer == nil {
+	// The internal constructor compares with == nil, which a typed nil
+	// passes, and it never sees the Mailer bare: emailMailerAdapter
+	// wraps it. Check every dependency here, returning the sentinel an
+	// internal-side miss would produce.
+	switch {
+	case isNilLike(cfg.Mailer):
 		return nil, emailotp.ErrMailerRequired
+	case isNilLike(cfg.Store):
+		return nil, emailotp.ErrStoreRequired
+	case isNilLike(cfg.Users):
+		return nil, emailotp.ErrUsersRequired
+	case cfg.Clock != nil && isNilLike(cfg.Clock):
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "EmailOTPConfig.Clock holds a typed-nil Clock",
+		}
 	}
 	clk := emailOTPClock(cfg.Clock)
 	counter, err := emailOTPLockout(cfg.LockoutStore, clk)

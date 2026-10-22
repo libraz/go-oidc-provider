@@ -81,3 +81,21 @@ func TestFeatureFlag_AcceptedWithItsConfiguringOption(t *testing.T) {
 		}
 	})
 }
+
+// TestWithGrantManagement_RejectsDouble pins the once-only contract the
+// sibling WithGrants / WithProfile options share: a second call must not
+// silently replace the first action set and actionRequired flag.
+func TestWithGrantManagement_RejectsDouble(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithGrantManagement([]op.GrantManagementAction{op.GrantActionQuery}, true),
+		op.WithGrantManagement([]op.GrantManagementAction{op.GrantActionRevoke}, false),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for two WithGrantManagement calls, got nil")
+	}
+	if !strings.Contains(err.Error(), "at most once") {
+		t.Errorf("err = %v, want at-most-once diagnostic", err)
+	}
+}

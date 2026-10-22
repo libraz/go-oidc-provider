@@ -271,6 +271,37 @@ func TestWithSupportedEncryptionAlgs_RejectsUnknownEnc(t *testing.T) {
 	}
 }
 
+// TestWithSupportedEncryptionAlgs_RejectsRepeatedNarrowing pins that a
+// later call cannot silently replace, and so widen, an earlier
+// narrowing of the same half; narrowing algs and encs in separate calls
+// stays legal.
+func TestWithSupportedEncryptionAlgs_RejectsRepeatedNarrowing(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name          string
+		first, second op.Option
+	}{
+		{"algs", op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, nil), op.WithSupportedEncryptionAlgs([]string{"ECDH-ES", "RSA-OAEP-256"}, nil)},
+		{"encs", op.WithSupportedEncryptionAlgs(nil, []string{"A256GCM"}), op.WithSupportedEncryptionAlgs(nil, []string{"A128GCM", "A256GCM"})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(validBaseOpts(t), tc.first, tc.second)...)
+			if err == nil || !strings.Contains(err.Error(), "at most once") {
+				t.Fatalf("err = %v, want an at-most-once configuration error", err)
+			}
+		})
+	}
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithSupportedEncryptionAlgs([]string{"ECDH-ES"}, nil),
+		op.WithSupportedEncryptionAlgs(nil, []string{"A256GCM"}),
+	)...); err != nil {
+		t.Fatalf("narrowing algs and encs in separate calls: %v", err)
+	}
+}
+
 // TestDiscovery_AdvertisesEncryptionFields asserts that the
 // id_token / userinfo encryption arrays land in the discovery
 // document. The request_object / authorization / introspection arrays

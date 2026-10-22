@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
+	"github.com/libraz/go-oidc-provider/op/profile"
 )
 
 // stubHintResolver is a deterministic [op.HintResolver] used by the
@@ -325,6 +327,45 @@ func TestWithCIBAExpiresIn_RejectsDefaultAboveMax(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "WithCIBADefaultExpiresIn") {
 		t.Errorf("err = %v, want it to name the option", err)
+	}
+}
+
+// TestWithCIBAExpiresIn_FAPICIBACap pins the FAPI-CIBA ten-minute
+// auth_req_id cap on the configured values. /bc-authorize enforces it
+// only on a client-supplied requested_expiry, so a longer default would
+// reach every client that omits the parameter.
+func TestWithCIBAExpiresIn_FAPICIBACap(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		opt     op.CIBAOption
+		wantErr string
+	}{
+		{"default-above-cap", op.WithCIBADefaultExpiresIn(11 * time.Minute), "WithCIBADefaultExpiresIn"},
+		{"max-above-cap", op.WithCIBAMaxExpiresIn(time.Hour), "WithCIBAMaxExpiresIn"},
+		{"default-at-cap", op.WithCIBADefaultExpiresIn(10 * time.Minute), ""},
+		{"max-at-cap", op.WithCIBAMaxExpiresIn(10 * time.Minute), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(validBaseOptsWithInmem(t),
+				op.WithCIBA(op.WithCIBAHintResolver(stubHintResolver{}), tc.opt),
+				op.WithProfile(profile.FAPICIBA),
+				op.WithFeature(feature.DPoP),
+				op.WithDPoPNonceSource(stubDPoPNonceSource{}),
+			)...)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("op.New: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want a configuration error naming %s", err, tc.wantErr)
+			}
+		})
 	}
 }
 

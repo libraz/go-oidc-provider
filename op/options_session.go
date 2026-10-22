@@ -133,10 +133,13 @@ func WithCORSOrigins(origins ...string) Option {
 // or an [*http.Transport] also gets the dial-time check: the transport is
 // cloned and its DialContext, DialTLSContext and DialTLS are replaced by
 // the OP's gated dialer, so the proxy, TLS and pool settings carry over
-// but a custom dial function does not. Any other [http.RoundTripper]
-// (an otelhttp wrap, for instance) is gated on the request URL only,
-// which does not stop a DNS-rebinding peer that resolves public when the
-// URL is checked and private when it is dialled.
+// but a custom dial function does not. Through a proxy the dial-time
+// check covers the proxy's address; the target URL is checked once
+// before the hand-off and the proxy resolves it independently. Any
+// other [http.RoundTripper] (an otelhttp wrap, for instance) is gated
+// on the request URL only, which does not stop a DNS-rebinding peer
+// that resolves public when the URL is checked and private when it is
+// dialled.
 // Stable since v1.0.
 func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 	return optionFunc(func(c *config) error {
@@ -480,7 +483,10 @@ func WithAllowInsecureBackchannelLogoutForDev() Option {
 // and DialTLS replaced by the OP's gated dialer, so the dial-time SSRF
 // gate fires on every connection and the transport widens trust (its
 // TLSClientConfig, proxy and pool settings carry over), not the SSRF
-// surface; a custom dial function on it is not called. Any other
+// surface; a custom dial function on it is not called. Through a proxy
+// the dial-time gate covers the proxy's address; the target URL is
+// checked once before the hand-off and the proxy resolves it
+// independently. Any other
 // [http.RoundTripper] is gated on the request URL of every request and
 // redirect hop only, which does not stop a DNS-rebinding peer that
 // resolves public when the URL is checked and private when it is

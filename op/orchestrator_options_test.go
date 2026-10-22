@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
@@ -283,6 +284,25 @@ func TestWithInteractions_RejectsDuplicateName(t *testing.T) {
 	)...)
 	if err == nil {
 		t.Fatal("op.New must reject duplicate Interaction.Name across registrations")
+	}
+}
+
+// TestWithInteractions_RejectsReservedName pins that an extension named
+// after a built-in fails New: the built-ins register first and the
+// orchestrator keeps the first entry per name, so it would never run.
+func TestWithInteractions_RejectsReservedName(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"consent", "chooser"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(validBaseOpts(t),
+				op.WithInteractions(stubInteraction{name: name, trigger: op.TriggerAfterAuthn}),
+			)...)
+			if err == nil || !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("err = %v, want a configuration error naming the reserved name", err)
+			}
+		})
 	}
 }
 

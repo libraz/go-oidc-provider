@@ -357,3 +357,116 @@ func flowWithRule(step op.Step) op.LoginFlow {
 		}},
 	}
 }
+
+// Each typedNil* type satisfies its substore interface through the
+// embedded field, so a nil pointer to it is a typed nil: non-nil as an
+// interface value, panicking on the first method call.
+type (
+	typedNilOpaque           struct{ store.OpaqueAccessTokenStore }
+	typedNilGrantRevocations struct{ store.GrantRevocationStore }
+	typedNilAccessTokens     struct{ store.AccessTokenRegistry }
+	typedNilIATs             struct{ store.InitialAccessTokenStore }
+	typedNilRATs             struct {
+		store.RegistrationAccessTokenStore
+	}
+	typedNilDeviceCodes struct{ store.DeviceCodeStore }
+)
+
+type (
+	typedNilOpaqueStore           struct{ *inmem.Store }
+	typedNilGrantRevocationsStore struct{ *inmem.Store }
+	typedNilAccessTokensStore     struct{ *inmem.Store }
+	typedNilIATStore              struct{ *inmem.Store }
+	typedNilRATStore              struct{ *inmem.Store }
+	typedNilDeviceCodesStore      struct{ *inmem.Store }
+)
+
+func (typedNilOpaqueStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return (*typedNilOpaque)(nil)
+}
+
+func (typedNilGrantRevocationsStore) GrantRevocations() store.GrantRevocationStore {
+	return (*typedNilGrantRevocations)(nil)
+}
+
+func (typedNilAccessTokensStore) AccessTokens() store.AccessTokenRegistry {
+	return (*typedNilAccessTokens)(nil)
+}
+
+func (typedNilIATStore) InitialAccessTokens() store.InitialAccessTokenStore {
+	return (*typedNilIATs)(nil)
+}
+
+func (typedNilRATStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
+	return (*typedNilRATs)(nil)
+}
+
+func (typedNilDeviceCodesStore) DeviceCodes() store.DeviceCodeStore {
+	return (*typedNilDeviceCodes)(nil)
+}
+
+// TestNew_RejectsTypedNilSubstores pins that every substore op.New
+// requires is refused when the store hands back a typed nil, not only
+// an untyped one; otherwise the mistake surfaces as a panic on the
+// first request that reaches the substore.
+func TestNew_RejectsTypedNilSubstores(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		store func(*inmem.Store) store.Store
+		opts  []op.Option
+		want  string
+	}{
+		{
+			"opaque-access-tokens",
+			func(s *inmem.Store) store.Store { return typedNilOpaqueStore{s} },
+			[]op.Option{op.WithAccessTokenFormat(op.AccessTokenFormatOpaque)},
+			"OpaqueAccessTokens",
+		},
+		{
+			"grant-revocations",
+			func(s *inmem.Store) store.Store { return typedNilGrantRevocationsStore{s} },
+			nil,
+			"GrantRevocations",
+		},
+		{
+			"access-tokens",
+			func(s *inmem.Store) store.Store { return typedNilAccessTokensStore{s} },
+			[]op.Option{op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry)},
+			"AccessTokens",
+		},
+		{
+			"initial-access-tokens",
+			func(s *inmem.Store) store.Store { return typedNilIATStore{s} },
+			[]op.Option{op.WithDynamicRegistration(op.RegistrationOption{})},
+			"InitialAccessTokens",
+		},
+		{
+			"registration-access-tokens",
+			func(s *inmem.Store) store.Store { return typedNilRATStore{s} },
+			[]op.Option{op.WithDynamicRegistration(op.RegistrationOption{})},
+			"RegistrationAccessTokens",
+		},
+		{
+			"device-codes",
+			func(s *inmem.Store) store.Store { return typedNilDeviceCodesStore{s} },
+			[]op.Option{op.WithDeviceCodeGrant()},
+			"DeviceCodes",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			clock := dcrFixedClock()
+			s := tc.store(inmem.New(inmem.WithClock(clock)))
+			_, err := op.New(append(dcrBaseOpts(t, s, clock), tc.opts...)...)
+			if err == nil {
+				t.Fatalf("expected a configuration error for a typed-nil %s substore", tc.want)
+			}
+			if !op.IsServerError(err) || !strings.Contains(configurationDescription(t, err), tc.want) {
+				t.Errorf("err = %v, want a configuration error naming %s", err, tc.want)
+			}
+		})
+	}
+}
