@@ -59,12 +59,14 @@ const (
 //nolint:gochecknoglobals // sentinel marker; declared once to avoid per-call allocations.
 var scratchVerify = []byte{0x01}
 
-// Sentinel construction errors.
+// Sentinel errors. The field and account-state errors wrap
+// [authn.ErrFactorAbort] so the HTTP layer answers them with a 4xx; the
+// rest are construction or wiring faults.
 var (
 	ErrSubjectRequired = errors.New("emailotp: subject is required")
-	ErrEmailMissing    = errors.New("emailotp: email field is missing")
-	ErrCodeMissing     = errors.New("emailotp: code field is missing")
-	ErrEmailNotBound   = errors.New("emailotp: subject has no bound email claim")
+	ErrEmailMissing    = fmt.Errorf("emailotp: email field is missing: %w", authn.ErrFactorAbort)
+	ErrCodeMissing     = fmt.Errorf("emailotp: code field is missing: %w", authn.ErrFactorAbort)
+	ErrEmailNotBound   = fmt.Errorf("emailotp: subject has no bound email claim: %w", authn.ErrFactorAbort)
 	ErrMailerRequired  = errors.New("emailotp: mailer is required")
 	ErrStoreRequired   = errors.New("emailotp: store is required")
 	ErrUsersRequired   = errors.New("emailotp: user store is required")
@@ -598,12 +600,14 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 		switch {
 		case verr == nil:
 			// Single-use semantics: the verifier has stamped ConsumedAt
-			// on the record and Consume persists it atomically. A replay
-			// racing this request loses the Consume CAS and is rejected
-			// rather than receiving a second successful Result.
+			// on the record and Consume persists it atomically. A lost
+			// Consume re-verifies against the winning write: a concurrent
+			// wrong guess leaves the code valid, while a concurrent
+			// redemption leaves the record consumed and the next pass
+			// rejects this request rather than issuing a second Result.
 			if perr := a.store.Consume(ctx, res.Record); perr != nil {
 				if errors.Is(perr, store.ErrAlreadyConsumed) {
-					return interaction.Step{}, ErrConsumed
+					continue
 				}
 				return interaction.Step{}, fmt.Errorf("emailotp: consume record: %w", perr)
 			}

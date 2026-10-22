@@ -635,9 +635,9 @@ func TestVerifyConsumedRecordRejectedDirect(t *testing.T) {
 }
 
 // consumeBlockedStore wraps a real [store.EmailOTPStore] and delegates all
-// methods except Consume. When blockConsume is true, Consume returns
-// [store.ErrAlreadyConsumed] unconditionally, simulating a concurrent
-// redemption winning the CAS race against the current request.
+// methods except Consume. When blockConsume is true, Consume lets a
+// concurrent redemption win first — the record is consumed in the inner
+// store — and returns [store.ErrAlreadyConsumed] to the current request.
 type consumeBlockedStore struct {
 	inner        store.EmailOTPStore
 	blockConsume bool
@@ -655,8 +655,11 @@ func (s *consumeBlockedStore) CompareAndSwap(ctx context.Context, previous, next
 	return s.inner.CompareAndSwap(ctx, previous, next)
 }
 
-func (s *consumeBlockedStore) Consume(_ context.Context, _ *store.EmailOTPRecord) error {
+func (s *consumeBlockedStore) Consume(ctx context.Context, r *store.EmailOTPRecord) error {
 	if s.blockConsume {
+		if err := s.inner.Consume(ctx, r); err != nil {
+			return err
+		}
 		return store.ErrAlreadyConsumed
 	}
 	return nil
@@ -666,14 +669,13 @@ func (s *consumeBlockedStore) Delete(ctx context.Context, subject string) error 
 	return s.inner.Delete(ctx, subject)
 }
 
-// TestContinueVerifyConsumeErrAlreadyConsumedReturnsSentinel pins the
-// security invariant for the CAS-loss path in handleVerify: when the store's
-// Consume loses the compare-and-set race (another concurrent request already
-// consumed the same OTP record), the authenticator MUST return ErrConsumed
-// and MUST NOT produce an interaction.Result, ensuring no subject is
-// authenticated. The test targets the verr==nil branch inside handleVerify
-// that calls store.Consume and handles ErrAlreadyConsumed.
-func TestContinueVerifyConsumeErrAlreadyConsumedReturnsSentinel(t *testing.T) {
+// TestContinueVerifyConsumeLostToRedemptionIsRefused pins the security
+// invariant for the CAS-loss path in handleVerify: when the store's
+// Consume loses the compare-and-set race to a concurrent redemption of the
+// same code, the authenticator re-verifies against the consumed record,
+// refuses the attempt as a terminal abort, and MUST NOT produce an
+// interaction.Result, ensuring no subject is authenticated twice.
+func TestContinueVerifyConsumeLostToRedemptionIsRefused(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
 	clock := &emailotp.FakeClock{T: now}
@@ -697,8 +699,7 @@ func TestContinueVerifyConsumeErrAlreadyConsumedReturnsSentinel(t *testing.T) {
 	// Drive the send step; blockConsume is still false so Put works normally.
 	code := driveSendStep(t, a, mailer, "sub-1")
 
-	// Flip the toggle: Consume will now return ErrAlreadyConsumed,
-	// simulating a concurrent request that won the CAS race.
+	// Flip the toggle: a concurrent request now wins the Consume race.
 	blocked.blockConsume = true
 
 	step, err := a.Continue(context.Background(), authn.ContinueInput{
@@ -712,10 +713,10 @@ func TestContinueVerifyConsumeErrAlreadyConsumedReturnsSentinel(t *testing.T) {
 	if step.Result != nil {
 		t.Errorf("CAS-loss path produced an authentication Result; no Result must be emitted: %+v", step.Result)
 	}
-	// The branch must return exactly ErrConsumed (not ErrExpired) so
-	// callers can distinguish the CAS-loss path from a pre-expired record.
-	if !errors.Is(err, emailotp.ErrConsumed) {
-		t.Errorf("err = %v, want ErrConsumed", err)
+	// A redeemed code reads as an expired one, the same answer a replay
+	// gets, and ends the chain rather than counting as a wrong guess.
+	if !errors.Is(err, emailotp.ErrExpired) {
+		t.Errorf("err = %v, want ErrExpired", err)
 	}
 }
 
@@ -809,5 +810,67 @@ func TestHandleVerify_ConcurrentWrongCodesRetainEveryFailure(t *testing.T) {
 	}
 	if rec.FailedCount != contenders {
 		t.Fatalf("FailedCount=%d, want %d", rec.FailedCount, contenders)
+	}
+}
+
+// interposingEmailOTPStore commits an unrelated wrong-guess update — the
+// write a concurrent request makes — just before the first Consume, so
+// the Consume it then forwards carries a stale version.
+type interposingEmailOTPStore struct {
+	store.EmailOTPStore
+	once sync.Once
+}
+
+func (s *interposingEmailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) error {
+	s.once.Do(func() {
+		current, err := s.Get(ctx, r.Subject)
+		if err != nil {
+			panic(err)
+		}
+		next := *current
+		next.FailedCount++
+		if err := s.CompareAndSwap(ctx, current, &next); err != nil {
+			panic(err)
+		}
+	})
+	return s.EmailOTPStore.Consume(ctx, r)
+}
+
+// TestContinueVerify_CorrectCodeSurvivesUnrelatedConflict pins that a
+// valid code is redeemed when an unrelated update to the record commits
+// between the read and the Consume: the conflict is re-verified against
+// the latest record rather than ending the chain as an already-consumed
+// code, while the same code submitted again is still refused.
+func TestContinueVerify_CorrectCodeSurvivesUnrelatedConflict(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	clock := &emailotp.FakeClock{T: now}
+	st := inmem.New(inmem.WithClock(clock))
+	mailer := &recordingMailer{}
+	a, err := emailotp.NewAuthenticator(emailotp.Config{
+		Mailer: mailer,
+		Store:  &interposingEmailOTPStore{EmailOTPStore: st.EmailOTPs()},
+		Users: &fakeUsers{users: map[string]*store.User{
+			"sub-1": {Subject: "sub-1", Claims: map[string]any{"email": "alice@example.com"}},
+		}},
+		Clock:          clock,
+		SendLatencyPad: -1,
+	})
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+	code := driveSendStep(t, a, mailer, "sub-1")
+	in := authn.ContinueInput{
+		Subject:    "sub-1",
+		AuthTime:   now.Add(time.Second),
+		Scratch:    emailotp.ScratchVerify,
+		Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: code}},
+	}
+	step, err := a.Continue(context.Background(), in)
+	if err != nil || step.Result == nil {
+		t.Fatalf("Continue with a valid code after an unrelated conflict: step=%+v err=%v, want a Result", step, err)
+	}
+	if step, err := a.Continue(context.Background(), in); step.Result != nil || !errors.Is(err, authn.ErrFactorAbort) {
+		t.Errorf("replayed code: step=%+v err=%v, want an ErrFactorAbort refusal and no Result", step, err)
 	}
 }

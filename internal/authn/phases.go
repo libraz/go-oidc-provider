@@ -200,7 +200,7 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 		return st, interaction.Step{}, ErrInvalidStep
 	}
 	if rerr := guardFactorResult(st, auth, *step.Result); rerr != nil {
-		return st, interaction.Step{}, rerr
+		return retireActiveFactorToken(st), interaction.Step{}, rerr
 	}
 	st.ActiveFactorIdx = idx
 	st.FactorScratch = nil
@@ -233,6 +233,11 @@ type candidateAuthenticator struct {
 // configuration order so the orchestrator's "first candidate wins"
 // rule stays deterministic.
 //
+// Under [State.ReauthRequired] a subject no factor of this attempt has
+// authenticated does not count as bound: it identifies the user but is
+// not a credential, so a possession factor keyed off it cannot stand in
+// for the fresh authentication the request demanded.
+//
 // The two risk filters compose per the RiskOutcome contract: a
 // non-empty required set narrows the chain to those factor types, and
 // minAAL further excludes any candidate whose [Authenticator.AAL] is
@@ -240,6 +245,7 @@ type candidateAuthenticator struct {
 // directive is "any registered factor that meets minAAL", so the AAL
 // filter alone applies — the whole chain is never returned unfiltered.
 func (o *Orchestrator) eligibleAuthenticators(st State, required []FactorType, minAAL AAL) []candidateAuthenticator {
+	subjectBound := st.Subject != "" && (!st.ReauthRequired || len(st.Factors) > 0)
 	out := make([]candidateAuthenticator, 0, len(o.cfg.Authenticators))
 	for i, a := range o.cfg.Authenticators {
 		if len(required) > 0 && !containsFactor(required, a.Type()) {
@@ -248,7 +254,7 @@ func (o *Orchestrator) eligibleAuthenticators(st State, required []FactorType, m
 		if minAAL > AAL0 && a.AAL() < minAAL {
 			continue
 		}
-		if requiresSubject(a.Type()) && st.Subject == "" {
+		if requiresSubject(a.Type()) && !subjectBound {
 			continue
 		}
 		out = append(out, candidateAuthenticator{idx: i, auth: a})

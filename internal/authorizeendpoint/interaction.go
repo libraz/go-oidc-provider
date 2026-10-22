@@ -190,6 +190,29 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 	emitAuthorizeError(w, r, deps, state.Library.ToRequest(), errAccessDenied, "user aborted the interaction")
 }
 
+// renderPersistFailure answers a dispatchTick whose interaction save
+// failed: a concurrent completion is resumed, any other conflict asks
+// for a reload, and a retired record is a 404.
+func renderPersistFailure(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	savedRec *store.Interaction,
+	savedState authorize.RequestState,
+	err error,
+) {
+	switch {
+	case errors.Is(err, store.ErrConflict) && savedState.Completion != nil:
+		resumeInteractionCompletion(w, r, deps, savedRec, savedState)
+	case errors.Is(err, store.ErrConflict):
+		renderBrowserError(w, r, deps.Driver, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing", "")
+	case errors.Is(err, store.ErrNotFound):
+		http.NotFound(w, r)
+	default:
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not persist interaction", "")
+	}
+}
+
 // dispatchTick runs a single orchestrator tick and routes the
 // resulting Step. The function consolidates the GET / POST branches
 // so the SPA-visible behaviour stays identical regardless of whether
@@ -233,19 +256,7 @@ func dispatchTick(
 		now,
 	)
 	if err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			if savedState.Completion != nil {
-				resumeInteractionCompletion(w, r, deps, savedRec, savedState)
-				return
-			}
-			renderBrowserError(w, r, deps.Driver, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing", "")
-			return
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not persist interaction", "")
+		renderPersistFailure(w, r, deps, savedRec, savedState, err)
 		return
 	}
 	rec = savedRec
@@ -441,9 +452,12 @@ func persistFailedTick(
 }
 
 // writeAuthnError translates an orchestrator [authn] error into the
-// matching HTTP response. Most failures are server-side (state
-// corruption, store outage) but a few — invalid StateRef, risk denial
-// — surface as 4xx.
+// matching HTTP response. It is the one table from authn error class to
+// wire response: every authn sentinel is either one of the cases below,
+// or wraps [authn.ErrFactorAbort], or is a server fault (store outage,
+// state corruption, mis-wiring) and takes the 500 fallback. The
+// classification of each sentinel is pinned by
+// TestAuthnSentinels_Classified.
 func writeAuthnError(w http.ResponseWriter, r *http.Request, deps resolved, state authorize.RequestState, err error) {
 	switch {
 	case errors.Is(err, authn.ErrInvalidStateRef):
@@ -453,10 +467,9 @@ func writeAuthnError(w http.ResponseWriter, r *http.Request, deps resolved, stat
 	case errors.Is(err, authn.ErrRiskDenied):
 		emitAuthorizeError(w, r, deps, state.Library.ToRequest(), errAccessDenied, "risk policy denied the request")
 	case errors.Is(err, authn.ErrFactorAbort):
-		// A terminal, user-input-driven factor failure (expired or
-		// already-consumed one-time code, active lockout, required
-		// reset). Render as a 4xx so the SPA / driver can distinguish it
-		// from a real server fault instead of surfacing a 500.
+		// A terminal, user-input-driven failure: a factor that cannot
+		// continue, or a submission the chain refused. Render as a 4xx so
+		// the SPA / driver can tell it from a real server fault.
 		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "authentication factor cannot continue", "")
 	default:
 		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "orchestrator failed", "")
@@ -676,7 +689,10 @@ func reauthenticateChooserPick(
 		subject:   st.Subject,
 	}
 	authCtx, err := picked.authContext(r.Context())
-	if err != nil || sessionMayServe(state.Library.ToRequest(), authCtx, now) == nil {
+	if err != nil {
+		return st, step, nil //nolint:nilerr // the terminal exit reads the same session and maps the failure
+	}
+	if sessionMayServe(state.Library.ToRequest(), authCtx, now) == nil {
 		return st, step, nil
 	}
 	return deps.Authn.Tick(r.Context(), authn.RequireReauth(st), authn.Input{Now: now})

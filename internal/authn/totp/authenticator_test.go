@@ -357,9 +357,10 @@ func TestNewAuthenticator_RejectsNilArgs(t *testing.T) {
 }
 
 // acceptBlockedTOTPStore wraps a real [store.TOTPStore] and delegates all
-// methods except Accept. When blockAccept is true, Accept returns
-// [store.ErrAlreadyConsumed] unconditionally, simulating a concurrent
-// verification winning the CAS race against the current request.
+// methods except Accept. When blockAccept is true, Accept lets a
+// concurrent verification of the same code win first — the inner store
+// accepts it — and returns [store.ErrAlreadyConsumed] to the current
+// request.
 type acceptBlockedTOTPStore struct {
 	inner       store.TOTPStore
 	blockAccept bool
@@ -379,6 +380,9 @@ func (s *acceptBlockedTOTPStore) CompareAndSwap(ctx context.Context, previous, n
 
 func (s *acceptBlockedTOTPStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 	if s.blockAccept {
+		if err := s.inner.Accept(ctx, r); err != nil {
+			return err
+		}
 		return store.ErrAlreadyConsumed
 	}
 	return s.inner.Accept(ctx, r)
@@ -391,7 +395,8 @@ func (s *acceptBlockedTOTPStore) Delete(ctx context.Context, subject string) err
 // TestAuthenticator_ContinueAcceptCASLossRetries pins the behaviour of
 // the CAS-loss branch in Continue: when the store's Accept loses the
 // compare-and-set race (another concurrent request already advanced the
-// LastAcceptedStep counter), the authenticator MUST surface a soft
+// LastAcceptedStep counter), the re-verify sees a replay and the
+// authenticator MUST surface a soft
 // [authn.ErrFactorRetry] (via totp.ErrRetry) — not a silent nil re-prompt
 // — so the orchestrator emits the LoginAttempt observer event and advances
 // the brute-force counter, and MUST NOT produce an interaction.Result so
@@ -484,5 +489,63 @@ func TestAuthenticator_ConcurrentWrongCodesRetainEveryFailure(t *testing.T) {
 	}
 	if rec.FailedCount != contenders {
 		t.Fatalf("FailedCount=%d, want %d", rec.FailedCount, contenders)
+	}
+}
+
+// interposingTOTPStore commits an unrelated wrong-guess update — the
+// write a concurrent request makes — just before the first Accept, so
+// the Accept it then forwards carries a stale version.
+type interposingTOTPStore struct {
+	store.TOTPStore
+	once sync.Once
+}
+
+func (s *interposingTOTPStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
+	s.once.Do(func() {
+		current, err := s.Get(ctx, r.Subject)
+		if err != nil {
+			panic(err)
+		}
+		next := *current
+		next.FailedCount++
+		if err := s.CompareAndSwap(ctx, current, &next); err != nil {
+			panic(err)
+		}
+	})
+	return s.TOTPStore.Accept(ctx, r)
+}
+
+// TestAuthenticator_CorrectCodeSurvivesUnrelatedConflict pins that a
+// valid code is accepted when an unrelated update to the record commits
+// between the read and the Accept: the conflict is re-verified against
+// the latest record rather than reported as a wrong guess, while the
+// same code submitted again is still refused.
+func TestAuthenticator_CorrectCodeSurvivesUnrelatedConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newAdapterFixture(t)
+	interposed := &interposingTOTPStore{TOTPStore: f.store}
+	adapter, err := totp.NewAuthenticator(f.verifier, interposed)
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+	in := op.ContinueInput{
+		Subject:    f.subject,
+		AuthTime:   f.authTime,
+		Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: totp.Code(f.secret, f.clock.t)}},
+	}
+	step, err := adapter.Continue(context.Background(), in)
+	if err != nil || step.Result == nil {
+		t.Fatalf("Continue with a valid code after an unrelated conflict: step=%+v err=%v, want a Result", step, err)
+	}
+	rec, err := f.store.Get(context.Background(), f.subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.FailedCount != 0 {
+		t.Errorf("FailedCount = %d after a successful verify, want 0", rec.FailedCount)
+	}
+	if step, err := adapter.Continue(context.Background(), in); step.Result != nil || !errors.Is(err, totp.ErrRetry) {
+		t.Errorf("replayed code: step=%+v err=%v, want ErrRetry and no Result", step, err)
 	}
 }

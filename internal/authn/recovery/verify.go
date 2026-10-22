@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/internal/argon2id"
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -50,12 +52,12 @@ var (
 	// ErrNoCodes is returned when [Verifier.Verify] is called against
 	// a batch whose Codes slice is empty (or against a nil batch).
 	// The Outcome equals [OutcomeNoCodes].
-	ErrNoCodes = errors.New("recovery: batch has no codes")
+	ErrNoCodes = fmt.Errorf("recovery: batch has no codes: %w", authn.ErrFactorAbort)
 
 	// ErrAllConsumed is returned when every slot in the batch is
 	// already stamped ConsumedAt. The Outcome equals
 	// [OutcomeAllConsumed].
-	ErrAllConsumed = errors.New("recovery: every code already consumed")
+	ErrAllConsumed = fmt.Errorf("recovery: every code already consumed: %w", authn.ErrFactorAbort)
 
 	// ErrCodeInvalid is returned when the supplied code does not match
 	// any unconsumed slot. The Outcome equals [OutcomeInvalid]. The

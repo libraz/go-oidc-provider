@@ -89,7 +89,7 @@ var (
 	// nil record. The Authenticator routes a missing record into
 	// [ErrExpired] before reaching the verifier, but library code
 	// outside the adapter may still observe this error.
-	ErrNoChallenge = errors.New("emailotp: no pending challenge")
+	ErrNoChallenge = fmt.Errorf("emailotp: no pending challenge: %w", authn.ErrFactorAbort)
 
 	// ErrExpired is returned when the persisted record's ExpiresAt
 	// is before the verifier's clock.

@@ -38,7 +38,9 @@ import (
 )
 
 // Sentinel errors. The orchestrator surfaces every non-nil error
-// verbatim, so the wording shows up in audit logs without wrapping.
+// verbatim, so the wording shows up in audit logs without wrapping. The
+// rejections of a submission wrap [authn.ErrFactorAbort] so the HTTP
+// layer answers them with a 4xx.
 var (
 	// ErrChooserGroupRequired is returned when the orchestrator
 	// dispatches to the chooser without an active chooser group ID
@@ -52,14 +54,13 @@ var (
 	// the session_id field. The orchestrator's [interaction.FieldSpec]
 	// validation should already have caught this; the interaction
 	// re-checks at the trust boundary.
-	ErrSessionIDMissing = errors.New("chooser: session_id field is missing")
+	ErrSessionIDMissing = fmt.Errorf("chooser: session_id field is missing: %w", authn.ErrFactorAbort)
 
 	// ErrSessionNotInGroup is returned when the SPA submits a
 	// session_id that does not belong to the active chooser group.
-	// The orchestrator surfaces this as a user-decline /
-	// invalid-request; the HTTP layer can decide whether to retry
-	// the chooser or fail the authorize request.
-	ErrSessionNotInGroup = errors.New("chooser: session does not belong to chooser group")
+	// A stale or foreign pick is the submission's fault, not the
+	// server's, so the HTTP layer answers it as an invalid request.
+	ErrSessionNotInGroup = fmt.Errorf("chooser: session does not belong to chooser group: %w", authn.ErrFactorAbort)
 )
 
 // Interaction is the built-in account chooser. Construct with [New];

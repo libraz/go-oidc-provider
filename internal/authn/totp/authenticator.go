@@ -39,7 +39,7 @@ var ErrSubjectRequired = errors.New("totp: subject is required")
 // submission omits the code field. The orchestrator's [interaction.FieldSpec]
 // validation should already have caught this; the adapter re-checks
 // to keep the error path explicit at the trust boundary.
-var ErrCodeMissing = errors.New("totp: code field is missing")
+var ErrCodeMissing = fmt.Errorf("totp: code field is missing: %w", authn.ErrFactorAbort)
 
 // ErrRetry is returned by [Authenticator.Continue] on a recoverable
 // wrong-code submission. It wraps [authn.ErrFactorRetry] so the
@@ -242,13 +242,11 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 		case verr == nil:
 			if perr := a.store.Accept(ctx, res.Record); perr != nil {
 				if errors.Is(perr, store.ErrAlreadyConsumed) {
-					// A concurrent request already consumed this code (a
-					// replay lost the CAS). Surface ErrRetry rather than a
-					// silent nil re-prompt so the orchestrator emits the
-					// LoginAttempt observer event and advances the counter —
-					// the sibling email-OTP factor is non-silent in the same
-					// case, and a swallowed replay is an audit blind spot.
-					return interaction.Step{}, ErrRetry
+					// Another write landed since the read. Re-verify against
+					// it: a concurrent wrong guess leaves this code valid,
+					// while a concurrent acceptance of the same code turns
+					// it into a replay, which the next pass reports.
+					continue
 				}
 				return interaction.Step{}, fmt.Errorf("totp: accept record: %w", perr)
 			}

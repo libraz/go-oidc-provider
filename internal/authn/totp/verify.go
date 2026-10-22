@@ -122,7 +122,7 @@ var (
 	// ErrNotConfirmed is returned when the supplied record has a zero
 	// ConfirmedAt timestamp. The library refuses to verify against an
 	// enrolment that has never been confirmed.
-	ErrNotConfirmed = errors.New("totp: enrolment not confirmed")
+	ErrNotConfirmed = fmt.Errorf("totp: enrolment not confirmed: %w", authn.ErrFactorAbort)
 )
 
 // Result is the verdict bundle [Verifier.Verify] returns. The Record

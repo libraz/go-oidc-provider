@@ -34,7 +34,8 @@ const approvedScopesMaxLen = 8 * 1024
 
 // Sentinel errors. Callers dispatch via [errors.Is]; the orchestrator
 // surfaces every non-nil error verbatim, so the wording shows up in
-// audit logs without re-wrapping.
+// audit logs without re-wrapping. The rejections of a submission wrap
+// [authn.ErrFactorAbort] so the HTTP layer answers them with a 4xx.
 var (
 	// ErrSubjectRequired is returned when the orchestrator dispatches
 	// to the consent interaction without a bound subject. The chain
@@ -49,20 +50,20 @@ var (
 	// prompt cannot declare the field required, because an empty value
 	// is the user approving nothing, and the orchestrator's required
 	// rule rejects empty values.
-	ErrApprovedScopesMissing = errors.New("consent: approved_scopes field is missing")
+	ErrApprovedScopesMissing = fmt.Errorf("consent: approved_scopes field is missing: %w", authn.ErrFactorAbort)
 
 	// ErrApprovedScopeNotRequested is returned when the SPA submits a
 	// scope identifier that was not in the request. Surfacing this as
 	// an error rather than silently dropping prevents a malicious SPA
 	// from minting an authorization code with a scope the RP never
 	// asked for.
-	ErrApprovedScopeNotRequested = errors.New("consent: approved scope was not requested")
+	ErrApprovedScopeNotRequested = fmt.Errorf("consent: approved scope was not requested: %w", authn.ErrFactorAbort)
 
 	// ErrRequiredScopeDeclined is returned when the SPA omits a scope
 	// the catalogue marks Required. Required scopes (typically
 	// "openid" and any client-mandated scopes) cannot be declined;
 	// declining them aborts the chain.
-	ErrRequiredScopeDeclined = errors.New("consent: required scope was declined")
+	ErrRequiredScopeDeclined = fmt.Errorf("consent: required scope was declined: %w", authn.ErrFactorAbort)
 )
 
 // Interaction is the built-in consent screen. It is constructed by

@@ -59,7 +59,7 @@ func lockoutFactors() []lockoutFactor {
 	}
 }
 
-func buildLockoutTOTP(t *testing.T, st *inmem.Store, clock *lockoutClock, counter *lockout.Counter) (op.Authenticator, map[string]string, map[string]string) {
+func buildLockoutTOTP(t *testing.T, st *inmem.Store, clock *lockoutClock, counter *lockout.Counter) (op.Authenticator, map[string]string, map[string]string) { //nolint:ireturn // the table holds builders of different authenticator types.
 	t.Helper()
 	codec, err := totp.NewCodec(make([]byte, 32))
 	if err != nil {
@@ -99,7 +99,7 @@ func buildLockoutTOTP(t *testing.T, st *inmem.Store, clock *lockoutClock, counte
 	return auth.WithLockout(counter), nil, map[string]string{totp.CodeFieldName: wrong}
 }
 
-func buildLockoutRecovery(t *testing.T, st *inmem.Store, clock *lockoutClock, counter *lockout.Counter) (op.Authenticator, map[string]string, map[string]string) {
+func buildLockoutRecovery(t *testing.T, st *inmem.Store, clock *lockoutClock, counter *lockout.Counter) (op.Authenticator, map[string]string, map[string]string) { //nolint:ireturn // the table holds builders of different authenticator types.
 	t.Helper()
 	verifier := &recovery.Verifier{Clock: clock}
 	res, err := verifier.Generate(context.Background(), lockoutSubject)
@@ -116,7 +116,7 @@ func buildLockoutRecovery(t *testing.T, st *inmem.Store, clock *lockoutClock, co
 	return auth.WithLockout(counter), nil, map[string]string{recovery.CodeFieldName: "00000-00000"}
 }
 
-func buildLockoutEmailOTP(t *testing.T, st *inmem.Store, clock *lockoutClock, counter *lockout.Counter) (op.Authenticator, map[string]string, map[string]string) {
+func buildLockoutEmailOTP(t *testing.T, st *inmem.Store, clock *lockoutClock, counter *lockout.Counter) (op.Authenticator, map[string]string, map[string]string) { //nolint:ireturn // the table holds builders of different authenticator types.
 	t.Helper()
 	const addr = "user-1@example.com"
 	st.PutUser(context.Background(), &store.User{Subject: lockoutSubject, Claims: map[string]any{"email": addr}})
@@ -244,8 +244,9 @@ func TestAuditLockoutOutcomes(t *testing.T) {
 					t.Fatalf("submit err = %v, want %v", err, tc.wantErr)
 				}
 
-				var names []auditevent.Name
-				for _, ev := range emitter.snapshot() {
+				evs := emitter.snapshot()
+				names := make([]auditevent.Name, 0, len(evs))
+				for _, ev := range evs {
 					names = append(names, auditevent.Name(ev.Name))
 				}
 				if !slices.Equal(names, tc.wantAudit) {

@@ -41,7 +41,7 @@ var ErrSubjectRequired = errors.New("recovery: subject is required")
 // submission omits the code field. The orchestrator's [interaction.FieldSpec]
 // validation should already have caught this; the adapter re-checks
 // at the trust boundary.
-var ErrCodeMissing = errors.New("recovery: code field is missing")
+var ErrCodeMissing = fmt.Errorf("recovery: code field is missing: %w", authn.ErrFactorAbort)
 
 // ErrLocked is returned when the shared cross-factor brute-force gate
 // is locked for the subject. It wraps [authn.ErrFactorLocked] (itself an

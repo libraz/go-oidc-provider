@@ -756,7 +756,7 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 	}
 	if !step.isCaptcha {
 		if rerr := guardFactorResult(st, step.auth, *begin.Result); rerr != nil {
-			return st, interaction.Step{}, rerr
+			return retireActiveFactorToken(st), interaction.Step{}, rerr
 		}
 	}
 	// Begin completed immediately — record and re-enter the
@@ -795,6 +795,7 @@ func (o *Orchestrator) emitLoginFlowPrompt(st State, kind string, prompt interac
 func (o *Orchestrator) recordLoginFlowResult(ctx context.Context, st State, step compiledStep, res interaction.Result, now time.Time) State {
 	if step.isCaptcha {
 		st.CaptchaPassed = true
+		st.CaptchaFailures = 0
 		st.LastFailures = 0
 	} else {
 		st = o.appendFactor(st, step.auth, res)
@@ -847,7 +848,15 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 		// codec misconfiguration) skip this branch and surface to
 		// the HTTP layer as 5xx / 4xx unchanged.
 		if verdict == credentialRejected {
-			if !step.isCaptcha {
+			// A rejected captcha token spends the same per-attempt budget
+			// the threshold captcha does, so a rule that keeps re-firing
+			// the challenge cannot hold the user in it forever.
+			if step.isCaptcha {
+				st.CaptchaFailures++
+				if st.CaptchaFailures >= captchaMaxFailures {
+					return retireActiveFactorToken(st), interaction.Step{}, ErrCaptchaExhausted
+				}
+			} else {
 				st.LastFailures++
 			}
 			// A multi-step factor (e.g. email-OTP on its verify screen)
@@ -894,7 +903,7 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 	}
 	if !step.isCaptcha {
 		if rerr := guardFactorResult(st, step.auth, *cont.Result); rerr != nil {
-			return st, interaction.Step{}, rerr
+			return retireActiveFactorToken(st), interaction.Step{}, rerr
 		}
 	}
 	st = o.recordLoginFlowResult(ctx, st, step, *cont.Result, in.Now)

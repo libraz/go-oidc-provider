@@ -442,8 +442,9 @@ var (
 	// [interaction.Result] names a subject other than the one an
 	// earlier factor or the account chooser already bound in this
 	// chain. Switching accounts mid-chain would let the session carry
-	// one user's factors under another user's subject.
-	ErrSubjectMismatch = errors.New("authn: factor result names a different subject")
+	// one user's factors under another user's subject. It wraps
+	// [ErrFactorAbort]: the submission ends the attempt, not the server.
+	ErrSubjectMismatch = fmt.Errorf("authn: factor result names a different subject: %w", ErrFactorAbort)
 
 	// ErrReauthNotPerformed is returned by the terminal tick when
 	// [State.ReauthRequired] was set but the chain reached its end
@@ -477,18 +478,20 @@ var (
 	// cannot satisfy AAL3. The orchestrator surfaces this as a
 	// chain-fatal error so the HTTP layer rejects the attempt rather
 	// than minting a session at a higher AAL than the factor actually
-	// achieved.
-	ErrAAL3RequiresUV = errors.New("authn: AAL3 factor requires user verification")
+	// achieved. It wraps [ErrFactorAbort] so the rejection renders as a
+	// 4xx.
+	ErrAAL3RequiresUV = fmt.Errorf("authn: AAL3 factor requires user verification: %w", ErrFactorAbort)
 
 	// ErrFactorAbort marks a terminal, user-input-driven factor failure
 	// that the HTTP layer renders as a 4xx (not a 500). Unlike
 	// [ErrFactorRetry] — a soft failure the orchestrator re-prompts — an
 	// abort means the factor cannot continue in this interaction: an
 	// expired or already-consumed one-time code, an active brute-force
-	// lockout, or a required factor reset. Per-factor adapters wrap their
-	// terminal sentinels with it so internal/authorizeendpoint can
-	// dispatch on the authn-level class without importing each factor's
-	// sentinels.
+	// lockout, a required factor reset, a rejected consent or chooser
+	// submission, or a factor result the chain refuses to record.
+	// Per-factor adapters and built-in interactions wrap their terminal
+	// sentinels with it so internal/authorizeendpoint can dispatch on the
+	// authn-level class without importing each factor's sentinels.
 	ErrFactorAbort = errors.New("authn: factor aborted")
 
 	// ErrSubmissionRejected is returned when a

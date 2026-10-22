@@ -176,8 +176,8 @@ func (*Authenticator) Prompts() []string { return []string{PromptType} }
 // Subject is required; v1.0 does not support discoverable-credential
 // flows where the subject is unknown until after the assertion. A
 // subject with no registered credentials returns
-// [ErrCredentialNotRegistered] — the orchestrator surfaces that as a
-// chain failure rather than treating "no passkey" as "skip this
+// [ErrCredentialNotRegistered] wrapped in [authn.ErrFactorAbort] — the
+// chain ends with a 4xx rather than treating "no passkey" as "skip this
 // factor".
 func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
@@ -188,7 +188,7 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 		return interaction.Step{}, err
 	}
 	if len(creds) == 0 {
-		return interaction.Step{}, ErrCredentialNotRegistered
+		return interaction.Step{}, fmt.Errorf("%w: %w", ErrCredentialNotRegistered, authn.ErrFactorAbort)
 	}
 	_, session, err := a.verifier.BeginLogin(ctx, in.Subject, in.Subject, creds)
 	if err != nil {

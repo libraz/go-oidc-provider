@@ -412,7 +412,7 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 		return st, interaction.Step{}, ErrInvalidStep
 	}
 	if rerr := guardFactorResult(st, auth, *step.Result); rerr != nil {
-		return st, interaction.Step{}, rerr
+		return retireActiveFactorToken(st), interaction.Step{}, rerr
 	}
 	st.FactorScratch = nil
 	st = o.appendFactor(st, auth, *step.Result)
@@ -646,7 +646,8 @@ func guardSubjectBinding(st State, result interaction.Result) error {
 
 // guardFactorResult runs every check a factor result must pass before
 // [appendFactor] records it, so each completion path applies the same
-// set.
+// set. Every caller retires the factor's token on a rejection, so the
+// refused ceremony cannot be resubmitted.
 func guardFactorResult(st State, auth Authenticator, result interaction.Result) error {
 	if err := guardAAL3RequiresUV(auth, result); err != nil {
 		return err
