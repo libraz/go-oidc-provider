@@ -67,6 +67,7 @@ type queries struct {
 	opaqueAccessTokenFind           string
 	opaqueAccessTokenRevokeByID     string
 	opaqueAccessTokenRevokeByGrant  string
+	opaqueAccessTokenRevokeByChain  string
 	opaqueAccessTokenRevokeByClient string
 	opaqueAccessTokenGC             string
 
@@ -381,15 +382,15 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// refresh tokens
 		refreshSave: d.rebind(
 			"INSERT INTO " + n.refreshes +
-				" (id, client_id, grant_id, parent_id, subject, subject_public, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				" (id, client_id, grant_id, parent_id, subject, subject_public, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		),
 		refreshFind: d.rebind(
-			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
+			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
 				" FROM " + n.refreshes + " WHERE id IN (?, ?)",
 		),
 		refreshFindForUpdate: d.rebind(
-			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
+			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
 				" FROM " + n.refreshes + " WHERE id IN (?, ?)" + d.forUpdate(),
 		),
 		// refreshParentRevoked re-reads a rotation parent's revoked flag
@@ -501,11 +502,11 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// touches the wire to the database.
 		opaqueAccessTokenSave: d.rebind(
 			"INSERT INTO " + n.opaqueAccessTokens +
-				" (token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				" (token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		),
 		opaqueAccessTokenFind: d.rebind(
-			"SELECT token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked" +
+			"SELECT token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked" +
 				" FROM " + n.opaqueAccessTokens + " WHERE token_hash = ?",
 		),
 		opaqueAccessTokenRevokeByID: d.rebind(
@@ -513,6 +514,9 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		),
 		opaqueAccessTokenRevokeByGrant: d.rebind(
 			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0",
+		),
+		opaqueAccessTokenRevokeByChain: d.rebind(
+			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE grant_id = ? AND chain_id = ? AND revoked = 0",
 		),
 		opaqueAccessTokenRevokeByClient: d.rebind(
 			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0",
@@ -530,17 +534,21 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// was reused across repeat /authorize flows still covers the tokens
 		// minted since the previous one under the verifier's iat <=
 		// revoked_at rule. RevokeJTI is idempotent in the simpler shape (a
-		// second insert is a no-op).
+		// second insert is a no-op). revoked_at is the whole-grant cutoff
+		// and access_revoked_at the access-token-only one; a write sets
+		// the column its scope names and leaves the other at 0, which the
+		// GREATEST merge keeps from rewinding the stored value.
 		grantTombstoneUpsert: d.rebind(
 			"INSERT INTO " + n.grantTombstones +
-				" (grant_id, revoked_at, expires_at, reason)" +
-				" VALUES (?, ?, ?, ?)" + d.upsertAlias() +
+				" (grant_id, revoked_at, access_revoked_at, expires_at, reason)" +
+				" VALUES (?, ?, ?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("grant_id",
 					"revoked_at="+d.greatestExpr(d.excludedRef("revoked_at"), d.existingRef(n.grantTombstones, "revoked_at"))+
+						", access_revoked_at="+d.greatestExpr(d.excludedRef("access_revoked_at"), d.existingRef(n.grantTombstones, "access_revoked_at"))+
 						", expires_at="+d.greatestExpr(d.excludedRef("expires_at"), d.existingRef(n.grantTombstones, "expires_at"))),
 		),
 		grantTombstoneFind: d.rebind(
-			"SELECT revoked_at FROM " + n.grantTombstones + " WHERE grant_id = ?",
+			"SELECT revoked_at, access_revoked_at FROM " + n.grantTombstones + " WHERE grant_id = ?",
 		),
 		grantTombstoneGC: d.rebind(
 			"DELETE FROM " + n.grantTombstones + " WHERE expires_at > 0 AND expires_at < ?",

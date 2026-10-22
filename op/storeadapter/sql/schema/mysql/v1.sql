@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     authorization_details JSON NOT NULL,
     access_token_extra JSON NOT NULL,
     claims JSON NULL,
+    chain_id VARCHAR(64) NOT NULL DEFAULT '',
     authorization_recorded TINYINT(1) NOT NULL DEFAULT 0,
     dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
     mtls_cert_thumbprint VARCHAR(64) NOT NULL DEFAULT '',
@@ -166,6 +167,7 @@ CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
     auth_time BIGINT NOT NULL DEFAULT 0,
     authorization_details JSON NULL,
     claims JSON NULL,
+    chain_id VARCHAR(64) NOT NULL DEFAULT '',
     authorization_recorded TINYINT(1) NOT NULL DEFAULT 0,
     dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
     mtls_cert_thumb VARCHAR(64) NOT NULL DEFAULT '',
@@ -179,6 +181,7 @@ CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
 
 CREATE TABLE IF NOT EXISTS oidc_grant_revocations (
     grant_id VARCHAR(255) NOT NULL PRIMARY KEY,
+    access_revoked_at BIGINT NOT NULL DEFAULT 0,
     revoked_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
     reason VARCHAR(64) NOT NULL DEFAULT '',

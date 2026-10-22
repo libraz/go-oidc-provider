@@ -50,8 +50,12 @@ func (s *grantRevocationStore) RevokeGrant(ctx context.Context, t store.GrantTom
 	if t.GrantID == "" {
 		return nil
 	}
+	revokedAt, accessRevokedAt := timeToInt64(t.RevokedAt), int64(0)
+	if t.AccessTokensOnly {
+		revokedAt, accessRevokedAt = 0, timeToInt64(t.RevokedAt)
+	}
 	if _, err := s.runner().ExecContext(ctx, s.parent.queries.grantTombstoneUpsert,
-		t.GrantID, timeToInt64(t.RevokedAt), timeToInt64(t.ExpiresAt), t.Reason); err != nil {
+		t.GrantID, revokedAt, accessRevokedAt, timeToInt64(t.ExpiresAt), t.Reason); err != nil {
 		return wrapErr("grantRevocations.RevokeGrant", err)
 	}
 	return nil
@@ -105,22 +109,41 @@ func (s *grantRevocationStore) IsRevoked(ctx context.Context, grantID, jti strin
 	if grantID == "" {
 		return false, nil
 	}
-	var revokedAt int64
-	err := s.runner().QueryRowContext(ctx, s.parent.queries.grantTombstoneFind, grantID).Scan(&revokedAt)
-	if errors.Is(err, databasesql.ErrNoRows) {
-		return false, nil
-	}
+	revokedAt, accessRevokedAt, err := s.findTombstone(ctx, grantID)
 	if err != nil {
 		return false, wrapErr("grantRevocations.IsRevoked.grant", err)
 	}
-	// "revoked iff iat <= revoked_at": equivalently, NOT iat.After.
-	// timeToInt64 maps the zero time to 0, which any real iat will
-	// trivially exceed; embedders that legitimately revoke at the unix
-	// epoch are not in scope.
-	if !iat.After(int64ToTime(revokedAt)) {
-		return true, nil
+	return tombstoneCovers(revokedAt, iat) || tombstoneCovers(accessRevokedAt, iat), nil
+}
+
+// IsIssuanceRevoked implements [store.IssuanceRevocationChecker]: only
+// the whole-grant cutoff refuses issuance.
+func (s *grantRevocationStore) IsIssuanceRevoked(ctx context.Context, grantID string, issuedAt time.Time) (bool, error) {
+	if grantID == "" {
+		return false, nil
 	}
-	return false, nil
+	revokedAt, _, err := s.findTombstone(ctx, grantID)
+	if err != nil {
+		return false, wrapErr("grantRevocations.IsIssuanceRevoked", err)
+	}
+	return tombstoneCovers(revokedAt, issuedAt), nil
+}
+
+// findTombstone returns the grant's whole-grant and access-token-only
+// cutoffs, both 0 when the grant has no tombstone.
+func (s *grantRevocationStore) findTombstone(ctx context.Context, grantID string) (revokedAt, accessRevokedAt int64, err error) {
+	err = s.runner().QueryRowContext(ctx, s.parent.queries.grantTombstoneFind, grantID).Scan(&revokedAt, &accessRevokedAt)
+	if errors.Is(err, databasesql.ErrNoRows) {
+		return 0, 0, nil
+	}
+	return revokedAt, accessRevokedAt, err
+}
+
+// tombstoneCovers applies "revoked iff iat <= cutoff". A cutoff of 0 is
+// the persisted form of "no tombstone of this scope"; embedders that
+// legitimately revoke at the unix epoch are not in scope.
+func tombstoneCovers(cutoff int64, iat time.Time) bool {
+	return cutoff != 0 && !iat.After(int64ToTime(cutoff))
 }
 
 // GC implements [store.GrantRevocationStore]. Drops every tombstone

@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     authorization_details JSONB NOT NULL DEFAULT 'null'::jsonb,
     access_token_extra JSONB NOT NULL DEFAULT 'null'::jsonb,
     claims JSONB NOT NULL DEFAULT 'null'::jsonb,
+    chain_id TEXT NOT NULL DEFAULT '',
     authorization_recorded SMALLINT NOT NULL DEFAULT 0,
     dpop_jkt TEXT NOT NULL DEFAULT '',
     mtls_cert_thumbprint TEXT NOT NULL DEFAULT '',
@@ -162,6 +163,7 @@ CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
     auth_time BIGINT NOT NULL DEFAULT 0,
     authorization_details JSONB NOT NULL DEFAULT 'null'::jsonb,
     claims JSONB NOT NULL DEFAULT 'null'::jsonb,
+    chain_id TEXT NOT NULL DEFAULT '',
     authorization_recorded SMALLINT NOT NULL DEFAULT 0,
     dpop_jkt TEXT NOT NULL DEFAULT '',
     mtls_cert_thumb TEXT NOT NULL DEFAULT '',
@@ -175,6 +177,7 @@ CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_client ON oidc_opaque_a
 
 CREATE TABLE IF NOT EXISTS oidc_grant_revocations (
     grant_id TEXT PRIMARY KEY,
+    access_revoked_at BIGINT NOT NULL DEFAULT 0,
     revoked_at BIGINT NOT NULL,
     expires_at BIGINT NOT NULL,
     reason TEXT NOT NULL DEFAULT ''

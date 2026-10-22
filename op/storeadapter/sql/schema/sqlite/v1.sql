@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     authorization_details TEXT NOT NULL DEFAULT 'null',
     access_token_extra TEXT NOT NULL DEFAULT 'null',
     claims TEXT NOT NULL DEFAULT 'null',
+    chain_id TEXT NOT NULL DEFAULT '',
     authorization_recorded INTEGER NOT NULL DEFAULT 0,
     dpop_jkt TEXT NOT NULL DEFAULT '',
     mtls_cert_thumbprint TEXT NOT NULL DEFAULT '',
@@ -163,6 +164,7 @@ CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
     auth_time INTEGER NOT NULL DEFAULT 0,
     authorization_details TEXT NOT NULL DEFAULT 'null',
     claims TEXT NOT NULL DEFAULT 'null',
+    chain_id TEXT NOT NULL DEFAULT '',
     authorization_recorded INTEGER NOT NULL DEFAULT 0,
     dpop_jkt TEXT NOT NULL DEFAULT '',
     mtls_cert_thumb TEXT NOT NULL DEFAULT '',
@@ -176,6 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_client ON oidc_opaque_a
 
 CREATE TABLE IF NOT EXISTS oidc_grant_revocations (
     grant_id TEXT PRIMARY KEY,
+    access_revoked_at INTEGER NOT NULL DEFAULT 0,
     revoked_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
     reason TEXT NOT NULL DEFAULT ''

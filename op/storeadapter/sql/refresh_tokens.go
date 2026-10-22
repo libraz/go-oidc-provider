@@ -177,7 +177,7 @@ func (s *refreshStore) insert(ctx context.Context, run runner, t *store.RefreshT
 		idDigest, t.ClientID, t.GrantID, parentDigest, t.Subject,
 		boolToInt64(t.SubjectPublic), encodeStrings(t.Scope), t.Resource,
 		string(t.Origin), timeToInt64(t.AuthTime), t.ACR, encodeStrings(t.AMR),
-		details, extra, claims, boolToInt64(t.AuthorizationRecorded),
+		details, extra, claims, boolToInt64(t.AuthorizationRecorded), t.ChainID,
 		t.DPoPJKT, t.MTLSCertThumbprint, t.Nonce, boolToInt64(t.Revoked),
 		timeToInt64(t.ExpiresAt), timePtrToInt64Ptr(t.ConsumedAt), timeToInt64(t.CreatedAt))
 	if err != nil {
@@ -311,7 +311,7 @@ func (s *refreshStore) lookupWithQuery(
 	err := s.runner().QueryRowContext(ctx, query, keys[0], keys[1]).Scan(
 		&stored, &t.ClientID, &t.Subject, &subPub, &t.GrantID,
 		&scope, &t.Resource, &origin, &authTime, &t.ACR, &amr, &details, &extra,
-		&claims, &recorded, &parent, &consumed, &expires, &created,
+		&claims, &recorded, &t.ChainID, &parent, &consumed, &expires, &created,
 		&t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce, &revoked,
 	)
 	if errors.Is(err, databasesql.ErrNoRows) {

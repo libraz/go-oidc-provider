@@ -269,6 +269,7 @@ var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema 
 	"access_token_extra",
 	"claims",
 	"authorization_recorded",
+	"chain_id",
 	"dpop_jkt",
 	"mtls_cert_thumbprint",
 	"nonce",
@@ -297,7 +298,8 @@ func (s *Store) validateSchema(ctx context.Context) error {
 	}{
 		{s.names.refreshes, requiredRefreshTokenColumns},
 		{s.names.authCodes, requiredAuthorizationStateColumns},
-		{s.names.opaqueAccessTokens, []string{"authorization_details", "claims", "authorization_recorded"}},
+		{s.names.opaqueAccessTokens, []string{"authorization_details", "claims", "authorization_recorded", "chain_id"}},
+		{s.names.grantTombstones, []string{"access_revoked_at"}},
 		{s.names.rats, []string{"allowed_scopes"}},
 		{s.names.totpSecrets, []string{"row_version"}},
 		{s.names.emailOTPs, []string{"row_version"}},

@@ -42,6 +42,9 @@ ALTER TABLE oidc_refresh_tokens ADD COLUMN authorization_recorded INTEGER NOT NU
 ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_details TEXT NOT NULL DEFAULT 'null';
 ALTER TABLE oidc_opaque_access_tokens ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
 ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_refresh_tokens ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_opaque_access_tokens ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_grant_revocations ADD COLUMN access_revoked_at INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
     ON oidc_grants(client_id, subject, updated_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
@@ -91,6 +94,12 @@ ALTER TABLE oidc_opaque_access_tokens
     ADD COLUMN authorization_details JSON NULL,
     ADD COLUMN claims JSON NULL,
     ADD COLUMN authorization_recorded TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE oidc_refresh_tokens
+    ADD COLUMN chain_id VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE oidc_opaque_access_tokens
+    ADD COLUMN chain_id VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE oidc_grant_revocations
+    ADD COLUMN access_revoked_at BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE oidc_grants
     ADD INDEX idx_oidc_grants_client_subject (client_id, subject, updated_at);
 ALTER TABLE oidc_grants
@@ -192,6 +201,12 @@ ALTER TABLE oidc_opaque_access_tokens
     ADD COLUMN authorization_details JSONB NOT NULL DEFAULT 'null'::jsonb,
     ADD COLUMN claims JSONB NOT NULL DEFAULT 'null'::jsonb,
     ADD COLUMN authorization_recorded SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE oidc_refresh_tokens
+    ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_opaque_access_tokens
+    ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_grant_revocations
+    ADD COLUMN access_revoked_at BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
     ON oidc_grants(client_id, subject, updated_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
@@ -263,6 +278,15 @@ releases. `authorization_recorded` marks a row written with them; a row left at
 the default of zero is read the way earlier releases read every row, from its
 grant. `Store.Migrate` refuses to start against tables that lack these columns.
 
+`chain_id` on refresh tokens and opaque access tokens names the rotation chain
+a row belongs to, so a refresh rotation retires only its own chain's opaque
+access tokens; a row left at the empty default falls back to retiring every
+opaque access token of its grant. `access_revoked_at` on grant revocations is
+the cutoff of a tombstone that covers the grant's access tokens only (the
+cascade of a single refresh-token revocation), kept apart from `revoked_at` so
+the grant's other refresh chains and codes still redeem. `Store.Migrate`
+refuses to start against tables that lack these columns.
+
 ## Deployment order and writer compatibility
 
 Run the `ALTER TABLE` statements (including the `NOT NULL DEFAULT 1`
@@ -285,6 +309,10 @@ The authorization-state columns are not part of that boundary. An older binary
 that writes these tables leaves `authorization_recorded` at zero, which the
 current binary reads as a row predating the columns and resolves from the
 grant, so old and new writers may run side by side once the columns exist.
+The chain and access-token-only revocation columns follow the same rule for
+writers. An older binary does not read `access_revoked_at`, so until every node
+runs the current binary, a JWT access token whose grant was revoked through a
+single refresh-token revocation still verifies on the older nodes.
 
 Do not rely on a fresh `v1.sql` run to upgrade an existing database, and do not
 silently drop/recreate these tables to make the new shape appear. Apply the

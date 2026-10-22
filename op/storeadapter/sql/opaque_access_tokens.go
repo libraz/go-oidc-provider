@@ -57,7 +57,7 @@ func (s *opaqueAccessTokenStore) Save(ctx context.Context, tok *store.OpaqueAcce
 		hash, tok.GrantID, tok.Subject, tok.ClientID, tok.Audience,
 		encodeStrings(tok.Scope), tok.ACR, encodeStrings(tok.AMR),
 		timeToInt64(tok.AuthTime), details, claims, boolToInt64(tok.AuthorizationRecorded),
-		tok.DPoPJKT, tok.MTLSCertThumbprint,
+		tok.ChainID, tok.DPoPJKT, tok.MTLSCertThumbprint,
 		timeToInt64(tok.IssuedAt), timeToInt64(tok.ExpiresAt),
 		boolToInt64(tok.Revoked))
 	if err != nil {
@@ -99,7 +99,7 @@ func (s *opaqueAccessTokenStore) Find(ctx context.Context, id string) (*store.Op
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.opaqueAccessTokenFind, hash).Scan(
 		&hashOut, &tok.GrantID, &tok.Subject, &tok.ClientID, &tok.Audience,
 		&scope, &tok.ACR, &amr,
-		&authTime, &details, &claims, &recorded, &tok.DPoPJKT, &tok.MTLSCertThumbprint,
+		&authTime, &details, &claims, &recorded, &tok.ChainID, &tok.DPoPJKT, &tok.MTLSCertThumbprint,
 		&issued, &expires, &revoked,
 	)
 	if errors.Is(err, databasesql.ErrNoRows) {
@@ -166,6 +166,23 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID stri
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, wrapErr("opaqueAccessTokens.RevokeByGrant.RowsAffected", err)
+	}
+	return int(n), nil
+}
+
+// RevokeByChain implements [store.OpaqueAccessTokenChainRevoker].
+func (s *opaqueAccessTokenStore) RevokeByChain(ctx context.Context, grantID, chainID string) (int, error) {
+	if grantID == "" || chainID == "" {
+		return 0, nil
+	}
+	res, err := s.runner().ExecContext(ctx,
+		s.parent.queries.opaqueAccessTokenRevokeByChain, grantID, chainID)
+	if err != nil {
+		return 0, wrapErr("opaqueAccessTokens.RevokeByChain", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, wrapErr("opaqueAccessTokens.RevokeByChain.RowsAffected", err)
 	}
 	return int(n), nil
 }
