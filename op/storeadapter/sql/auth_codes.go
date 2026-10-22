@@ -4,6 +4,7 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
@@ -28,10 +29,20 @@ func (s *authCodeStore) runner() runner { return pickRunner(s.parent, s.tx) }
 // backup leak yields one-way digests that cannot be redeemed.
 func (s *authCodeStore) Save(ctx context.Context, code *store.AuthorizationCode) error {
 	idDigest := patterns.Digest(code.ID)
-	_, err := s.runner().ExecContext(ctx, s.parent.queries.authCodeSave,
+	details, err := encodeObjectArray(code.AuthorizationDetails)
+	if err != nil {
+		return fmt.Errorf("oidcsql: authCodes.Save authorization details: %w", err)
+	}
+	claims, err := encodeMap(code.Claims)
+	if err != nil {
+		return fmt.Errorf("oidcsql: authCodes.Save claims: %w", err)
+	}
+	_, err = s.runner().ExecContext(ctx, s.parent.queries.authCodeSave,
 		idDigest, code.ClientID, code.GrantID, code.Subject, code.RedirectURI,
 		encodeStrings(code.Scope), code.Resource, code.CodeChallenge, code.CodeChallengeMethod,
 		code.Nonce, code.State, code.DPoPJKT,
+		timeToInt64(code.AuthTime), code.ACR, encodeStrings(code.AMR), details, claims,
+		boolToInt64(code.AuthorizationRecorded),
 		timeToInt64(code.ExpiresAt), timePtrToInt64Ptr(code.ConsumedAt), timeToInt64(code.CreatedAt))
 	if err != nil {
 		if isDuplicate(err) {
@@ -72,11 +83,17 @@ func (s *authCodeStore) find(ctx context.Context, id string) (*store.Authorizati
 		expires  int64
 		consumed *int64
 		created  int64
+		authTime int64
+		amr      []byte
+		details  []byte
+		claims   []byte
+		recorded int64
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.authCodeFind, idDigest).Scan(
 		&stored, &c.ClientID, &c.GrantID, &c.Subject, &c.RedirectURI,
 		&scope, &c.Resource, &c.CodeChallenge, &c.CodeChallengeMethod,
 		&c.Nonce, &c.State, &c.DPoPJKT,
+		&authTime, &c.ACR, &amr, &details, &claims, &recorded,
 		&expires, &consumed, &created,
 	)
 	if errors.Is(err, databasesql.ErrNoRows) {
@@ -95,8 +112,19 @@ func (s *authCodeStore) find(ctx context.Context, id string) (*store.Authorizati
 	if err != nil {
 		return nil, err
 	}
+	if c.AMR, err = decodeStrings(amr); err != nil {
+		return nil, err
+	}
+	if c.AuthorizationDetails, err = decodeObjectArray(details); err != nil {
+		return nil, err
+	}
+	if c.Claims, err = decodeMap(claims); err != nil {
+		return nil, err
+	}
 	c.ID = id
 	c.Scope = dec
+	c.AuthTime = int64ToTime(authTime)
+	c.AuthorizationRecorded = int64ToBool(recorded)
 	c.ExpiresAt = int64ToTime(expires)
 	c.ConsumedAt = int64PtrToTimePtr(consumed)
 	c.CreatedAt = int64ToTime(created)

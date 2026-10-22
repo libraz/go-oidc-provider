@@ -31,6 +31,17 @@ ALTER TABLE oidc_totp_secrets
     ADD COLUMN row_version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE oidc_email_otps
     ADD COLUMN row_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE oidc_authorization_codes ADD COLUMN auth_time INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_authorization_codes ADD COLUMN acr TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_authorization_codes ADD COLUMN amr TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE oidc_authorization_codes ADD COLUMN authorization_details TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_authorization_codes ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_authorization_codes ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_refresh_tokens ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_refresh_tokens ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_details TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_opaque_access_tokens ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
     ON oidc_grants(client_id, subject, updated_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
@@ -66,6 +77,20 @@ ALTER TABLE oidc_totp_secrets
     ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE oidc_email_otps
     ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE oidc_authorization_codes
+    ADD COLUMN auth_time BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN acr VARCHAR(255) NOT NULL DEFAULT '',
+    ADD COLUMN amr JSON NULL,
+    ADD COLUMN authorization_details JSON NULL,
+    ADD COLUMN claims JSON NULL,
+    ADD COLUMN authorization_recorded TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE oidc_refresh_tokens
+    ADD COLUMN claims JSON NULL,
+    ADD COLUMN authorization_recorded TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE oidc_opaque_access_tokens
+    ADD COLUMN authorization_details JSON NULL,
+    ADD COLUMN claims JSON NULL,
+    ADD COLUMN authorization_recorded TINYINT(1) NOT NULL DEFAULT 0;
 ALTER TABLE oidc_grants
     ADD INDEX idx_oidc_grants_client_subject (client_id, subject, updated_at);
 ALTER TABLE oidc_grants
@@ -153,6 +178,20 @@ ALTER TABLE oidc_totp_secrets
     ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE oidc_email_otps
     ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE oidc_authorization_codes
+    ADD COLUMN auth_time BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN acr TEXT NOT NULL DEFAULT '',
+    ADD COLUMN amr JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN authorization_details JSONB NOT NULL DEFAULT 'null'::jsonb,
+    ADD COLUMN claims JSONB NOT NULL DEFAULT 'null'::jsonb,
+    ADD COLUMN authorization_recorded SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE oidc_refresh_tokens
+    ADD COLUMN claims JSONB NOT NULL DEFAULT 'null'::jsonb,
+    ADD COLUMN authorization_recorded SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE oidc_opaque_access_tokens
+    ADD COLUMN authorization_details JSONB NOT NULL DEFAULT 'null'::jsonb,
+    ADD COLUMN claims JSONB NOT NULL DEFAULT 'null'::jsonb,
+    ADD COLUMN authorization_recorded SMALLINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
     ON oidc_grants(client_id, subject, updated_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
@@ -216,6 +255,14 @@ plans identically: filtered on an unindexed column it scans, and on MySQL the
 per-examined-row lock then covers the whole table, blocking every concurrent
 refresh and introspection until the client deletion commits.
 
+The authorization-code, refresh-token and opaque-access-token columns carry
+the auth_time, acr, amr, authorization_details and claims request of the
+authorization each row was issued under, so a later authorization that
+rewrites the shared grant does not change what an earlier code, chain or token
+releases. `authorization_recorded` marks a row written with them; a row left at
+the default of zero is read the way earlier releases read every row, from its
+grant. `Store.Migrate` refuses to start against tables that lack these columns.
+
 ## Deployment order and writer compatibility
 
 Run the `ALTER TABLE` statements (including the `NOT NULL DEFAULT 1`
@@ -233,6 +280,11 @@ compatibility boundary: drain old writers, apply the columns, validate the
 schema, then start only new writers. A mixed old/new deployment is unsupported
 and must fail the rollout rather than relying on `CREATE TABLE IF NOT EXISTS` or
 driver-specific affected-row behavior to provide compatibility.
+
+The authorization-state columns are not part of that boundary. An older binary
+that writes these tables leaves `authorization_recorded` at zero, which the
+current binary reads as a row predating the columns and resolves from the
+grant, so old and new writers may run side by side once the columns exist.
 
 Do not rely on a fresh `v1.sql` run to upgrade an existing database, and do not
 silently drop/recreate these tables to make the new shape appear. Apply the

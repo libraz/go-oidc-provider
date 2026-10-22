@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	databasesql "database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -44,10 +45,19 @@ func (s *opaqueAccessTokenStore) Save(ctx context.Context, tok *store.OpaqueAcce
 		return errors.New("oidcsql: OpaqueAccessToken requires a non-empty ID")
 	}
 	hash := s.digest(tok.ID)
-	_, err := s.runner().ExecContext(ctx, s.parent.queries.opaqueAccessTokenSave,
+	details, err := encodeObjectArray(tok.AuthorizationDetails)
+	if err != nil {
+		return fmt.Errorf("oidcsql: opaqueAccessTokens.Save authorization details: %w", err)
+	}
+	claims, err := encodeMap(tok.Claims)
+	if err != nil {
+		return fmt.Errorf("oidcsql: opaqueAccessTokens.Save claims: %w", err)
+	}
+	_, err = s.runner().ExecContext(ctx, s.parent.queries.opaqueAccessTokenSave,
 		hash, tok.GrantID, tok.Subject, tok.ClientID, tok.Audience,
 		encodeStrings(tok.Scope), tok.ACR, encodeStrings(tok.AMR),
-		timeToInt64(tok.AuthTime), tok.DPoPJKT, tok.MTLSCertThumbprint,
+		timeToInt64(tok.AuthTime), details, claims, boolToInt64(tok.AuthorizationRecorded),
+		tok.DPoPJKT, tok.MTLSCertThumbprint,
 		timeToInt64(tok.IssuedAt), timeToInt64(tok.ExpiresAt),
 		boolToInt64(tok.Revoked))
 	if err != nil {
@@ -73,6 +83,9 @@ func (s *opaqueAccessTokenStore) Find(ctx context.Context, id string) (*store.Op
 		scope    []byte
 		amr      []byte
 		authTime int64
+		details  []byte
+		claims   []byte
+		recorded int64
 		issued   int64
 		expires  int64
 		revoked  int64
@@ -86,7 +99,7 @@ func (s *opaqueAccessTokenStore) Find(ctx context.Context, id string) (*store.Op
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.opaqueAccessTokenFind, hash).Scan(
 		&hashOut, &tok.GrantID, &tok.Subject, &tok.ClientID, &tok.Audience,
 		&scope, &tok.ACR, &amr,
-		&authTime, &tok.DPoPJKT, &tok.MTLSCertThumbprint,
+		&authTime, &details, &claims, &recorded, &tok.DPoPJKT, &tok.MTLSCertThumbprint,
 		&issued, &expires, &revoked,
 	)
 	if errors.Is(err, databasesql.ErrNoRows) {
@@ -103,8 +116,15 @@ func (s *opaqueAccessTokenStore) Find(ctx context.Context, id string) (*store.Op
 	if err != nil {
 		return nil, err
 	}
+	if tok.AuthorizationDetails, err = decodeObjectArray(details); err != nil {
+		return nil, err
+	}
+	if tok.Claims, err = decodeMap(claims); err != nil {
+		return nil, err
+	}
 	tok.Scope = scopeDec
 	tok.AMR = amrDec
+	tok.AuthorizationRecorded = int64ToBool(recorded)
 	tok.AuthTime = int64ToTime(authTime)
 	tok.IssuedAt = int64ToTime(issued)
 	tok.ExpiresAt = int64ToTime(expires)

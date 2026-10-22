@@ -267,6 +267,8 @@ var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema 
 	"amr",
 	"authorization_details",
 	"access_token_extra",
+	"claims",
+	"authorization_recorded",
 	"dpop_jkt",
 	"mtls_cert_thumbprint",
 	"nonce",
@@ -277,12 +279,25 @@ var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema 
 	"retry_response",
 }
 
+// requiredAuthorizationStateColumns are the authorization-code columns
+// that carry the per-authorization state; see schema/MIGRATIONS.md.
+var requiredAuthorizationStateColumns = []string{ //nolint:gochecknoglobals // schema invariant table; read-only.
+	"auth_time",
+	"acr",
+	"amr",
+	"authorization_details",
+	"claims",
+	"authorization_recorded",
+}
+
 func (s *Store) validateSchema(ctx context.Context) error {
 	checks := []struct {
 		table   string
 		columns []string
 	}{
 		{s.names.refreshes, requiredRefreshTokenColumns},
+		{s.names.authCodes, requiredAuthorizationStateColumns},
+		{s.names.opaqueAccessTokens, []string{"authorization_details", "claims", "authorization_recorded"}},
 		{s.names.rats, []string{"allowed_scopes"}},
 		{s.names.totpSecrets, []string{"row_version"}},
 		{s.names.emailOTPs, []string{"row_version"}},

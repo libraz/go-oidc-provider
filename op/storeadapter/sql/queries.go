@@ -364,11 +364,11 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// authorization codes
 		authCodeSave: d.rebind(
 			"INSERT INTO " + n.authCodes +
-				" (id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				" (id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, auth_time, acr, amr, authorization_details, claims, authorization_recorded, expires_at, consumed_at, created_at)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		),
 		authCodeFind: d.rebind(
-			"SELECT id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, expires_at, consumed_at, created_at" +
+			"SELECT id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, auth_time, acr, amr, authorization_details, claims, authorization_recorded, expires_at, consumed_at, created_at" +
 				" FROM " + n.authCodes + " WHERE id = ?",
 		),
 		authCodeConsume: d.rebind(
@@ -381,15 +381,15 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// refresh tokens
 		refreshSave: d.rebind(
 			"INSERT INTO " + n.refreshes +
-				" (id, client_id, grant_id, parent_id, subject, subject_public, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				" (id, client_id, grant_id, parent_id, subject, subject_public, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		),
 		refreshFind: d.rebind(
-			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
+			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
 				" FROM " + n.refreshes + " WHERE id IN (?, ?)",
 		),
 		refreshFindForUpdate: d.rebind(
-			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
+			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
 				" FROM " + n.refreshes + " WHERE id IN (?, ?)" + d.forUpdate(),
 		),
 		// refreshParentRevoked re-reads a rotation parent's revoked flag
@@ -501,11 +501,11 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// touches the wire to the database.
 		opaqueAccessTokenSave: d.rebind(
 			"INSERT INTO " + n.opaqueAccessTokens +
-				" (token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				" (token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		),
 		opaqueAccessTokenFind: d.rebind(
-			"SELECT token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked" +
+			"SELECT token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked" +
 				" FROM " + n.opaqueAccessTokens + " WHERE token_hash = ?",
 		),
 		opaqueAccessTokenRevokeByID: d.rebind(
