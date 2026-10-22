@@ -145,6 +145,21 @@ func flipStatusInYAML(raw []byte, id, newStatus, reason string) ([]byte, error) 
 	reasonLine := indent + reasonKey + ": " + yamlInlineString(reason)
 	toOOS := newStatus == "out-of-scope"
 
+	lines = applyFlipEdits(lines, planFlipEdits(status, oldReason, rowLast, statusLine, reasonLine, toOOS))
+
+	out := strings.Join(lines, "\n")
+	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+		out += "\n"
+	}
+	if err := checkFlipResult([]byte(out), id, newStatus, reason, reasonKey); err != nil {
+		return nil, err
+	}
+	return []byte(out), nil
+}
+
+// planFlipEdits lists the line splices that set the status and add,
+// replace or drop the out-of-scope reason.
+func planFlipEdits(status, oldReason flipField, rowLast int, statusLine, reasonLine string, toOOS bool) []flipEdit {
 	var edits []flipEdit
 	if status.found {
 		edits = append(edits, flipEdit{status.start, status.end, []string{statusLine}})
@@ -165,19 +180,17 @@ func flipStatusInYAML(raw []byte, id, newStatus, reason string) ([]byte, error) 
 		}
 		edits = append(edits, flipEdit{oldReason.start, oldReason.end, replacement})
 	}
+	return edits
+}
+
+// applyFlipEdits splices edits into lines from the bottom up, so earlier
+// spans keep their indices.
+func applyFlipEdits(lines []string, edits []flipEdit) []string {
 	sort.SliceStable(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
 	for _, e := range edits {
 		lines = append(lines[:e.start], append(slices.Clone(e.lines), lines[e.end:]...)...)
 	}
-
-	out := strings.Join(lines, "\n")
-	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
-		out += "\n"
-	}
-	if err := checkFlipResult([]byte(out), id, newStatus, reason, reasonKey); err != nil {
-		return nil, err
-	}
-	return []byte(out), nil
+	return lines
 }
 
 // flipEdit replaces lines[start:end) with lines.
@@ -209,28 +222,41 @@ func findFlipRow(doc *yaml.Node, id string, nLines int) (*yaml.Node, int, bool) 
 		if k+2 < len(top.Content) {
 			end = top.Content[k+2].Line - 1
 		}
-		items := top.Content[k+1].Content
-		for i, item := range items {
-			if item.Kind != yaml.MappingNode || len(item.Content) == 0 {
-				continue
-			}
-			rowEnd := end
-			if i+1 < len(items) {
-				rowEnd = items[i+1].Line - 1
-			}
-			for j := 0; j+1 < len(item.Content); j += 2 {
-				if item.Content[j].Value == "id" && item.Content[j+1].Value == id {
-					return item, rowEnd, true
-				}
-			}
+		if row, rowEnd, ok := findRowInSequence(top.Content[k+1].Content, id, end); ok {
+			return row, rowEnd, true
 		}
 	}
 	return nil, 0, false
 }
 
+// findRowInSequence returns the mapping item whose id matches and the
+// line index where it ends (the next item, or end).
+func findRowInSequence(items []*yaml.Node, id string, end int) (*yaml.Node, int, bool) {
+	for i, item := range items {
+		if item.Kind != yaml.MappingNode || !rowHasID(item, id) {
+			continue
+		}
+		if i+1 < len(items) {
+			return item, items[i+1].Line - 1, true
+		}
+		return item, end, true
+	}
+	return nil, 0, false
+}
+
+// rowHasID reports whether the mapping item carries id under the "id" key.
+func rowHasID(item *yaml.Node, id string) bool {
+	for j := 0; j+1 < len(item.Content); j += 2 {
+		if item.Content[j].Value == "id" && item.Content[j+1].Value == id {
+			return true
+		}
+	}
+	return false
+}
+
 // findFlipField returns the line span of the named key in row.
 func findFlipField(row *yaml.Node, lines []string, rowEnd int, key string) flipField {
-	for p := 0; p < len(row.Content)/2; p++ {
+	for p := range len(row.Content) / 2 {
 		if row.Content[2*p].Value == key {
 			return flipField{start: row.Content[2*p].Line - 1, end: flipFieldEnd(row, lines, rowEnd, p), found: true}
 		}
@@ -251,7 +277,8 @@ func flipFieldEnd(row *yaml.Node, lines []string, rowEnd, p int) int {
 	for end > start+1 {
 		l := lines[end-1]
 		trimmed := strings.TrimSpace(l)
-		if trimmed != "" && !(strings.HasPrefix(trimmed, "#") && len(l)-len(strings.TrimLeft(l, " ")) <= keyIndent) {
+		gapComment := strings.HasPrefix(trimmed, "#") && len(l)-len(strings.TrimLeft(l, " ")) <= keyIndent
+		if trimmed != "" && !gapComment {
 			break
 		}
 		end--
