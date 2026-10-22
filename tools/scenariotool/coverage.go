@@ -88,7 +88,7 @@ func runCoverage(ctx context.Context, dir, testsPattern, cwd, testRoot string, s
 		return nil
 	}
 
-	testIDs, err := discoverTestIDs(ctx, testsPattern, cwd)
+	testIDs, err := listScenarioIDs(ctx, testsPattern, cwd)
 	if err != nil {
 		return err
 	}
@@ -99,12 +99,12 @@ func runCoverage(ctx context.Context, dir, testsPattern, cwd, testRoot string, s
 	if err := checkStubScanReachedTests(testRoot, len(testIDs), classified); err != nil {
 		return err
 	}
-	brokenDelegations, err := verifyDelegations(ctx, rows, cwd)
+	delegations, err := verifyDelegations(ctx, rows, cwd)
 	if err != nil {
 		return err
 	}
 
-	res := classifyCoverage(rows, testIDs, stubs, brokenDelegations)
+	res := classifyCoverage(rows, testIDs, stubs, delegations)
 	res.report()
 
 	if strict && res.failing(true) {
@@ -187,9 +187,9 @@ func (r *coverageResult) failing(includeSkipOnly bool) bool {
 }
 
 // classifyCoverage sorts every row and every discovered test into the
-// buckets the report and the gates read. brokenDelegations maps a row ID
-// to the reason its covered_by could not be resolved.
-func classifyCoverage(rows map[string]rowBinding, testIDs, stubs map[string]struct{}, brokenDelegations map[string]string) *coverageResult {
+// buckets the report and the gates read. delegations carries what the
+// covered_by references resolved to.
+func classifyCoverage(rows map[string]rowBinding, testIDs, stubs map[string]struct{}, delegations delegationOutcome) *coverageResult {
 	res := &coverageResult{}
 	for id, row := range rows {
 		_, hasTest := testIDs[id]
@@ -204,7 +204,7 @@ func classifyCoverage(rows map[string]rowBinding, testIDs, stubs map[string]stru
 			continue
 		}
 		res.inScope++
-		res.classifyInScopeRow(id, row, hasTest, stub, brokenDelegations)
+		res.classifyInScopeRow(id, row, hasTest, stub, delegations)
 	}
 	for id := range testIDs {
 		if _, ok := rows[id]; !ok {
@@ -224,14 +224,20 @@ func classifyCoverage(rows map[string]rowBinding, testIDs, stubs map[string]stru
 // delegates is answered by its delegation whatever the suite holds,
 // because the assertion deliberately lives elsewhere and the local
 // skip stub is only a marker.
-func (r *coverageResult) classifyInScopeRow(id string, row rowBinding, hasTest, stub bool, brokenDelegations map[string]string) {
+func (r *coverageResult) classifyInScopeRow(id string, row rowBinding, hasTest, stub bool, delegations delegationOutcome) {
 	switch {
 	case row.coveredBy != "":
 		// A delegation that resolved is coverage; one that did not
 		// is a claim about a test that no longer exists, which is
 		// the failure this field was added to make visible.
-		if reason, broken := brokenDelegations[id]; broken {
+		if reason, broken := delegations.broken[id]; broken {
 			r.brokenDelegations = append(r.brokenDelegations, fmt.Sprintf("%s: %s", id, reason))
+			return
+		}
+		// A delegate that exists but cannot fail is no more coverage
+		// than a local skip stub.
+		if _, skipOnly := delegations.skipOnly[id]; skipOnly {
+			r.skippedBindings = append(r.skippedBindings, id)
 			return
 		}
 		r.bound++
@@ -273,11 +279,11 @@ func printIDs(title string, ids []string) {
 	}
 }
 
-// discoverTestIDs runs `go test -list 'Test.*' <pattern>` and parses
+// listScenarioIDs runs `go test -list 'Test.*' <pattern>` and parses
 // scenario IDs out of the matching function names. When cwd is
 // non-empty the command runs from that directory (typically the main
 // module's root, since scenariotool itself lives in a sibling module).
-func discoverTestIDs(ctx context.Context, pattern, cwd string) (map[string]struct{}, error) {
+func listScenarioIDs(ctx context.Context, pattern, cwd string) (map[string]struct{}, error) {
 	cmd := exec.CommandContext(ctx, "go", "test", "-list", "Test.*", pattern) //nolint:gosec // operator-supplied pattern.
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -308,12 +314,24 @@ func discoverTestIDs(ctx context.Context, pattern, cwd string) (map[string]struc
 // This is the whole value of the field over the prose it replaces: a
 // sentence saying "covered by X" stays readable forever after X is
 // renamed, and nothing notices. `go test -list` notices.
-func verifyDelegations(ctx context.Context, rows map[string]rowBinding, cwd string) (map[string]string, error) {
+//
+// A reference that resolves is also read from source: a delegate whose
+// body never gets as far as an assertion is reported in skipOnly.
+func verifyDelegations(ctx context.Context, rows map[string]rowBinding, cwd string) (delegationOutcome, error) {
 	byPackage, broken := groupDelegations(rows)
+	out := delegationOutcome{broken: broken, skipOnly: map[string]struct{}{}}
 	for pkg, refs := range byPackage {
-		resolvePackageDelegations(ctx, pkg, refs, cwd, broken)
+		resolvePackageDelegations(ctx, pkg, refs, cwd, out)
 	}
-	return broken, nil
+	return out, nil
+}
+
+// delegationOutcome is what the covered_by references resolved to.
+type delegationOutcome struct {
+	// broken maps a row ID to why its reference could not be resolved.
+	broken map[string]string
+	// skipOnly holds rows whose delegate exists but cannot fail.
+	skipOnly map[string]struct{}
 }
 
 // delegationRef is one row's claim that its assertion lives in another
@@ -344,22 +362,56 @@ func groupDelegations(rows map[string]rowBinding) (map[string][]delegationRef, m
 
 // resolvePackageDelegations lists one package's tests and records a
 // reason for every reference it does not answer for.
-func resolvePackageDelegations(ctx context.Context, pkg string, refs []delegationRef, cwd string, broken map[string]string) {
+func resolvePackageDelegations(ctx context.Context, pkg string, refs []delegationRef, cwd string, out delegationOutcome) {
 	found, err := listTests(ctx, delegationListPattern(refs), "./"+pkg, cwd)
 	if err != nil {
 		// A package that will not build cannot answer the question.
 		// Say which rows are unverifiable rather than reporting them
 		// as absent.
 		for _, r := range refs {
-			broken[r.rowID] = fmt.Sprintf("covered_by %s.%s: package would not build (%v)", pkg, r.testName, err)
+			out.broken[r.rowID] = fmt.Sprintf("covered_by %s.%s: package would not build (%v)", pkg, r.testName, err)
+		}
+		return
+	}
+	bodies, err := declaredTestBodies(filepath.Join(cwd, pkg))
+	if err != nil {
+		for _, r := range refs {
+			out.broken[r.rowID] = fmt.Sprintf("covered_by %s.%s: %v", pkg, r.testName, err)
 		}
 		return
 	}
 	for _, r := range refs {
 		if _, ok := found[r.testName]; !ok {
-			broken[r.rowID] = fmt.Sprintf("covered_by names %s.%s, which %s does not declare", pkg, r.testName, pkg)
+			out.broken[r.rowID] = fmt.Sprintf("covered_by names %s.%s, which %s does not declare", pkg, r.testName, pkg)
+			continue
+		}
+		if body, ok := bodies[r.testName]; ok && neverAsserts(body) {
+			out.skipOnly[r.rowID] = struct{}{}
 		}
 	}
+}
+
+// declaredTestBodies parses the _test.go files directly under dir and
+// returns the body of every top-level function by name.
+func declaredTestBodies(dir string) (map[string]*ast.BlockStmt, error) {
+	files, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
+	if err != nil {
+		return nil, err
+	}
+	bodies := map[string]*ast.BlockStmt{}
+	fset := token.NewFileSet()
+	for _, path := range files {
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		for _, decl := range file.Decls {
+			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Body != nil {
+				bodies[fd.Name.Name] = fd.Body
+			}
+		}
+	}
+	return bodies, nil
 }
 
 // delegationListPattern builds the anchored alternation `go test -list`

@@ -425,9 +425,12 @@ func runAdvisories(out io.Writer, catalogDir, cwd string, sourceRoots []string, 
 	sort.Strings(problems)
 
 	if asJSON {
-		return emitAdvisoriesJSON(out, inv, hitsByID, problems)
+		if err := emitAdvisoriesJSON(out, inv, hitsByID, problems); err != nil {
+			return err
+		}
+	} else {
+		emitAdvisoriesText(out, inv, hitsByID, problems)
 	}
-	emitAdvisoriesText(out, inv, hitsByID, problems)
 	if check && len(problems) > 0 {
 		return &exitError{code: 1, message: fmt.Sprintf(
 			"scenariotool: advisories gate failed (%d issue(s))", len(problems),

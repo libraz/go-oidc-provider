@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 )
 
 // TestLocation describes where a row's TestScenario_<ID>_* function
@@ -34,16 +35,20 @@ func locateTest(r *Row, testRoot string) (TestLocation, error) {
 		}
 		return TestLocation{File: file}, fmt.Errorf("read %s: %w", file, err)
 	}
-	underscored := strings.ReplaceAll(r.ID, "-", "_")
-	// Match `func TestScenario_<UNDERSCORED>_<Slug>(` and the bare
-	// `func Test<UNDERSCORED>_<Slug>(` form. The optional `_<Slug>` is
-	// what carries the human-readable suffix.
-	needle := regexp.MustCompile(
-		`^func Test(?:Scenario_)?` + regexp.QuoteMeta(underscored) + `(?:_[A-Za-z0-9]+)?\(`,
-	)
-	for i, line := range strings.Split(string(raw), "\n") {
-		if needle.MatchString(line) {
-			return TestLocation{File: file, Line: i + 1, Found: true}, nil
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, file, raw, parser.SkipObjectResolution)
+	if err != nil {
+		return TestLocation{File: file}, fmt.Errorf("parse %s: %w", file, err)
+	}
+	// The same name-to-ID mapping the coverage gate binds with, so a
+	// test is found here exactly when coverage counts it.
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Recv != nil {
+			continue
+		}
+		if id, ok := scenarioIDFromTestName(fd.Name.Name); ok && id == r.ID {
+			return TestLocation{File: file, Line: fset.Position(fd.Pos()).Line, Found: true}, nil
 		}
 	}
 	return TestLocation{File: file}, nil

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -103,6 +105,35 @@ rows:
 		}
 	})
 
+	t.Run("block scalar reason is replaced as a whole span", func(t *testing.T) {
+		t.Parallel()
+		blockFile := strings.Replace(base,
+			"    status: pending\n",
+			"    status: out-of-scope\n    out_of_scope_reason: |\n      first line\n      second line\n",
+			1)
+		got, err := flipStatusInYAML([]byte(blockFile), "DIS-003", "out-of-scope", "new reason")
+		if err != nil {
+			t.Fatalf("flipStatusInYAML: %v", err)
+		}
+		want := strings.Replace(blockFile,
+			"    out_of_scope_reason: |\n      first line\n      second line\n",
+			"    out_of_scope_reason: new reason\n", 1)
+		if string(got) != want {
+			t.Errorf("block scalar span not replaced cleanly:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+
+		back, err := flipStatusInYAML([]byte(blockFile), "DIS-003", "active", "")
+		if err != nil {
+			t.Fatalf("flipStatusInYAML to active: %v", err)
+		}
+		if strings.Contains(string(back), "first line") || strings.Contains(string(back), "second line") {
+			t.Errorf("continuation lines of the dropped reason survived:\n%s", back)
+		}
+		if !strings.Contains(string(back), "    status: active\n") {
+			t.Errorf("status should be active:\n%s", back)
+		}
+	})
+
 	t.Run("unknown ID returns error", func(t *testing.T) {
 		t.Parallel()
 		if _, err := flipStatusInYAML([]byte(base), "DIS-999", "active", ""); err == nil {
@@ -160,5 +191,51 @@ func TestResolveTestRoot(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("resolveTestRoot(%q, %q) = %q, want %q", tc.cwd, tc.root, got, tc.want)
 		}
+	}
+}
+
+func TestFlipCmd_AcceptsFlagsAfterPositionals(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cat := `feature: discovery
+prefix: DIS
+title: Discovery endpoints
+specs:
+  - OIDC Discovery 1.0
+rows:
+  - id: DIS-001
+    severity: P0
+    spec: OIDC Discovery §4
+    behaviour: |
+      GET /.well-known/openid-configuration
+      returns 200 application/json.
+    status: active
+`
+	path := filepath.Join(dir, "discovery.yaml")
+	if err := os.WriteFile(path, []byte(cat), 0o600); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	if err := flipCmd([]string{"-dir", dir, "DIS-001", "out-of-scope", "-reason", "embedder concern"}); err != nil {
+		t.Fatalf("documented trailing -reason form: %v", err)
+	}
+	got, err := os.ReadFile(path) //nolint:gosec // test temp dir.
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(got), "    status: out-of-scope\n    out_of_scope_reason: embedder concern\n") {
+		t.Errorf("flip did not apply the trailing -reason:\n%s", got)
+	}
+
+	before := string(got)
+	if err := flipCmd([]string{"-dir", dir, "DIS-001"}); err == nil {
+		t.Error("missing <status> must be rejected")
+	}
+	if err := flipCmd([]string{"-dir", dir, "DIS-001", "active", "extra"}); err == nil {
+		t.Error("extra positional must be rejected")
+	}
+	after, _ := os.ReadFile(path) //nolint:gosec // test temp dir.
+	if string(after) != before {
+		t.Errorf("a bad arity must not touch the catalog:\n%s", after)
 	}
 }

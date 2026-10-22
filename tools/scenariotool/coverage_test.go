@@ -264,7 +264,7 @@ func TestClassifyCoverage(t *testing.T) {
 	}
 	stubs := map[string]struct{}{"AAA-002": {}, "AAA-004": {}}
 
-	res := classifyCoverage(catalog, tests, stubs, nil)
+	res := classifyCoverage(catalog, tests, stubs, delegationOutcome{})
 
 	if res.bound != 1 || res.inScope != 3 {
 		t.Errorf("bound=%d inScope=%d, want 1 and 3", res.bound, res.inScope)
@@ -289,7 +289,7 @@ func TestClassifyCoverage_Delegation(t *testing.T) {
 	stubs := map[string]struct{}{"AAA-001": {}, "AAA-002": {}}
 	broken := map[string]string{"AAA-002": "covered_by names a test that does not exist"}
 
-	res := classifyCoverage(catalog, tests, stubs, broken)
+	res := classifyCoverage(catalog, tests, stubs, delegationOutcome{broken: broken})
 
 	if res.bound != 1 || res.delegated != 1 {
 		t.Errorf("bound=%d delegated=%d, want 1 and 1", res.bound, res.delegated)
@@ -317,10 +317,11 @@ func TestVerifyDelegations_UnresolvableReferences(t *testing.T) {
 		"AAA-002": {status: "active", coveredBy: "no/such/package.TestNothing"},
 		"AAA-003": {status: "active"}, // no delegation, nothing to resolve
 	}
-	broken, err := verifyDelegations(t.Context(), rows, "")
+	out, err := verifyDelegations(t.Context(), rows, "")
 	if err != nil {
 		t.Fatalf("verifyDelegations returned an error; unresolvable rows are findings, not failures: %v", err)
 	}
+	broken := out.broken
 	if _, ok := broken["AAA-001"]; !ok {
 		t.Error("a covered_by with no package/function separator must be reported")
 	}
@@ -345,5 +346,61 @@ func assertIDs(tb testing.TB, label string, got, want []string) {
 			tb.Errorf("%s = %v, want %v", label, got, want)
 			return
 		}
+	}
+}
+
+func TestVerifyDelegations_SkipOnlyDelegateIsNotCoverage(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	pkgDir := filepath.Join(tmp, "thing")
+	if err := os.MkdirAll(pkgDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	files := map[string]string{
+		filepath.Join(tmp, "go.mod"): "module example.test/deleg\n\ngo 1.22\n",
+		filepath.Join(pkgDir, "thing_test.go"): `package thing
+
+import "testing"
+
+func TestStub(t *testing.T) {
+	t.Skip("later")
+}
+
+func TestAsserts(t *testing.T) {
+	if 1+1 != 2 {
+		t.Fatal("math")
+	}
+}
+`,
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	rows := map[string]rowBinding{
+		"AAA-001": {status: "active", coveredBy: "thing.TestStub"},
+		"AAA-002": {status: "active", coveredBy: "thing.TestAsserts"},
+	}
+
+	out, err := verifyDelegations(t.Context(), rows, tmp)
+	if err != nil {
+		t.Fatalf("verifyDelegations: %v", err)
+	}
+	if len(out.broken) != 0 {
+		t.Fatalf("broken=%v, want none", out.broken)
+	}
+
+	tests := map[string]struct{}{"AAA-001": {}, "AAA-002": {}}
+	res := classifyCoverage(rows, tests, nil, out)
+	assertIDs(t, "skippedBindings", res.skippedBindings, []string{"AAA-001"})
+	if res.bound != 1 || res.delegated != 1 {
+		t.Errorf("bound=%d delegated=%d, want 1 and 1: only the asserting delegate counts", res.bound, res.delegated)
+	}
+	if !res.failing(true) {
+		t.Error("a skip-only delegate must fail --strict")
+	}
+	if res.failing(false) {
+		t.Error("a skip-only delegate is progress, not drift: the binding gate tolerates it")
 	}
 }

@@ -78,3 +78,30 @@ func TestScenario_DIS_002(t *testing.T) {
 		t.Errorf("ZZZ-001 expected unfound but with path set, got %#v", loc5)
 	}
 }
+
+func TestLocateTest_SameMappingAsCoverage(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	body := `package scenarios_test
+
+import "testing"
+
+func TestScenario_DIS_010_Multi_Word_Slug(t *testing.T) {}
+
+func TestScenario_DIS_011B_VariantLetter(t *testing.T) {}
+
+func TestDIS_012_NoScenarioMarker(t *testing.T) {}
+`
+	if err := os.WriteFile(filepath.Join(dir, "discovery_test.go"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	for id, line := range map[string]int{"DIS-010": 5, "DIS-011": 7, "DIS-012": 9} {
+		loc, err := locateTest(&Row{ID: id, File: &FeatureFile{Feature: "discovery"}}, dir)
+		if err != nil {
+			t.Fatalf("locateTest %s: %v", id, err)
+		}
+		if !loc.Found || loc.Line != line {
+			t.Errorf("%s: want line %d found (coverage binds this name), got %#v", id, line, loc)
+		}
+	}
+}

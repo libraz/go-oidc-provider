@@ -193,14 +193,23 @@ func nextCmd(args []string) error {
 func flipCmd(args []string) error {
 	fs := flag.NewFlagSet("flip", flag.ContinueOnError)
 	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
-	reason := fs.String("reason", "", "out_of_scope_reason (required when flipping to out-of-scope)")
+	reason := fs.String("reason", "", "why the row is out of scope (required when flipping to out-of-scope)")
+	// The documented form is `flip <id> <status> -reason ...`, with the
+	// flag after the positionals, which flag.Parse alone stops short of.
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 2 {
+	positional := fs.Args()
+	if len(positional) >= 2 {
+		if err := fs.Parse(positional[2:]); err != nil {
+			return err
+		}
+		positional = append(positional[:2:2], fs.Args()...)
+	}
+	if len(positional) != 2 {
 		return errors.New("flip: expected <id> <status> (status is active|pending|out-of-scope)")
 	}
-	return runFlip(*dir, fs.Arg(0), fs.Arg(1), *reason)
+	return runFlip(*dir, positional[0], positional[1], *reason)
 }
 
 func coverageCmd(ctx context.Context, args []string) error {

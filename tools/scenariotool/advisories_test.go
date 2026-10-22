@@ -296,3 +296,35 @@ func TestA(t *testing.T) {}
 		t.Errorf("message=%q, expected 3 issues", ev.message)
 	}
 }
+
+func TestRunAdvisories_CheckFailsInJSONMode(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	catalogDir := filepath.Join(tmp, "catalog")
+	srcDir := filepath.Join(tmp, "src")
+	for _, d := range []string{catalogDir, srcDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	inv := `schema_version: 1
+advisories:
+  - {id: CVE-2099-20002, severity: P0, source: https://example, threat: T-01, status: covered}
+`
+	if err := os.WriteFile(filepath.Join(catalogDir, advisoryFileName), []byte(inv), 0o600); err != nil {
+		t.Fatalf("write inv: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "a.go"), []byte("package x\n"), 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	var out bytes.Buffer
+	err := runAdvisories(&out, catalogDir, tmp, []string{"src"}, true /*check*/, true /*json*/)
+	var ev *exitError
+	if !errors.As(err, &ev) || ev.code != 1 {
+		t.Fatalf("err=%v, want exit code 1 for a covered advisory with no assertion", err)
+	}
+	if !strings.Contains(out.String(), `"problems"`) || !strings.Contains(out.String(), "CVE-2099-20002") {
+		t.Errorf("JSON must be fully emitted before the failure, got:\n%s", out.String())
+	}
+}
