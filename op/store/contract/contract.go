@@ -506,18 +506,26 @@ func authCodeSaveFind(t *testing.T, f Factory) {
 	if got.ID != "ac-1" || got.ConsumedAt != nil {
 		t.Fatalf("unexpected code: %+v", got)
 	}
-	// The per-authorization state round-trips, or a backend drops all of
-	// it and the row reads back unrecorded, which makes the token endpoint
-	// fall back to the shared grant. A partial round-trip is a defect.
+	assertAuthCodeAuthorization(t, got, code)
+}
+
+// assertAuthCodeAuthorization requires the per-authorization state to
+// round-trip, or a backend to drop all of it so the row reads back
+// unrecorded and the token endpoint falls back to the shared grant. A
+// partial round-trip is a defect.
+func assertAuthCodeAuthorization(t *testing.T, got, want *store.AuthorizationCode) {
+	t.Helper()
 	if got.AuthorizationRecorded {
-		if !got.AuthTime.Equal(code.AuthTime) || got.ACR != code.ACR ||
-			!reflect.DeepEqual(got.AMR, code.AMR) ||
-			!reflect.DeepEqual(got.AuthorizationDetails, code.AuthorizationDetails) ||
-			!reflect.DeepEqual(got.Claims, code.Claims) {
+		if !got.AuthTime.Equal(want.AuthTime) || got.ACR != want.ACR ||
+			!reflect.DeepEqual(got.AMR, want.AMR) ||
+			!reflect.DeepEqual(got.AuthorizationDetails, want.AuthorizationDetails) ||
+			!reflect.DeepEqual(got.Claims, want.Claims) {
 			t.Fatalf("authorization state mismatch: got auth_time=%v acr=%q amr=%v details=%v claims=%v",
 				got.AuthTime, got.ACR, got.AMR, got.AuthorizationDetails, got.Claims)
 		}
-	} else if !got.AuthTime.IsZero() || got.ACR != "" || len(got.AMR) != 0 ||
+		return
+	}
+	if !got.AuthTime.IsZero() || got.ACR != "" || len(got.AMR) != 0 ||
 		len(got.AuthorizationDetails) != 0 || len(got.Claims) != 0 {
 		t.Fatalf("unrecorded row carries authorization state: auth_time=%v acr=%q amr=%v details=%v claims=%v",
 			got.AuthTime, got.ACR, got.AMR, got.AuthorizationDetails, got.Claims)
