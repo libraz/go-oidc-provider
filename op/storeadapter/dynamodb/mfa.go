@@ -935,6 +935,13 @@ func (s *passkeyStore) tryAssertionSwap(
 	if err != nil {
 		return nil, err
 	}
+	// An assertion the stored record already subsumes writes nothing, so
+	// it cannot lose a race to the writer that subsumed it.
+	nextDoc, _ := entry[attrDoc].(*types.AttributeValueMemberB)
+	priorDoc, _ := expected.(*types.AttributeValueMemberB)
+	if nextDoc != nil && priorDoc != nil && bytes.Equal(nextDoc.Value, priorDoc.Value) {
+		return &next, nil
+	}
 	if err := s.parent.putIfDocMatches(ctx, s.parent.names.passkeys, entry, expected); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			return nil, store.ErrConflict
@@ -944,10 +951,10 @@ func (s *passkeyStore) tryAssertionSwap(
 	return &next, nil
 }
 
-// passkeyUpdateAttempts bounds the compare-and-swap retry. Contention
-// on one credential is a user tapping twice, not a hot key, so a small
-// bound is enough and an unbounded loop would only hide a real problem.
-const passkeyUpdateAttempts = 5
+// passkeyUpdateAttempts bounds the compare-and-swap retry. Each lost swap
+// means a competing assertion landed, so the bound is sized to outlast a
+// burst of concurrent assertions on one credential, not to cap a hot key.
+const passkeyUpdateAttempts = 16
 
 // applyAssertion implements the monotonicity rules [store.PasskeyStore]
 // declares: the sign counter never moves backwards, the clone warning

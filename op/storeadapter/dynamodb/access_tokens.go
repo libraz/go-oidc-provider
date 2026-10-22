@@ -218,8 +218,14 @@ func (s *Store) setRevoked(ctx context.Context, table, pk string) error {
 // so removing it would retire a token the OP would still have honoured.
 //
 // It scans, which is acceptable because the operation is a maintenance
-// sweep and never a request path, and a TTL-carrying table is expected
-// to be mostly reclaimed by DynamoDB already.
+// sweep and never a request path. The scan returns only the keys of
+// expired items, and each page is deleted before the next is fetched,
+// so working memory is one page however large the table is.
+//
+// The scan only nominates: each delete re-asserts the expiry, so an
+// item extended or cleared to never-expire after the page was read —
+// a tombstone a concurrent cascade just widened — survives and is not
+// counted.
 //
 // The sweep runs on the table directly even when it is reached through
 // a substore handle bound to a transaction: it removes records that are
@@ -227,30 +233,50 @@ func (s *Store) setRevoked(ctx context.Context, table, pk string) error {
 // buffering an unbounded number of deletes would push the transaction
 // past its action ceiling for no gain.
 func (s *Store) gcExpired(ctx context.Context, table string, cutoff time.Time, op string) (int, error) {
-	found, err := s.scanAll(ctx, table, 0)
-	if err != nil {
-		return 0, wrapErr(op, err)
-	}
-	deleted := 0
-	for _, entry := range found {
-		expiresAt := readTime(entry, attrExpiresAt)
-		if expiresAt.IsZero() || !expiresAt.Before(cutoff) {
-			continue
-		}
-		pk := readS(entry, attrPK)
-		if pk == "" {
-			continue
-		}
-		existed, err := s.deleteKey(ctx, table, pk)
+	names := map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
+	values := map[string]types.AttributeValue{":never": avN(0), ":cutoff": avTime(cutoff)}
+	var (
+		deleted int
+		start   map[string]types.AttributeValue
+	)
+	for {
+		page, err := s.api.Scan(ctx, &dynamodb.ScanInput{
+			TableName:                 aws.String(table),
+			FilterExpression:          aws.String(expiredBeforeCondition),
+			ProjectionExpression:      aws.String("#pk"),
+			ExpressionAttributeNames:  names,
+			ExpressionAttributeValues: values,
+			ExclusiveStartKey:         start,
+		})
 		if err != nil {
 			return deleted, wrapErr(op, err)
 		}
-		if existed {
+		for _, entry := range page.Items {
+			_, err := s.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+				TableName:                 aws.String(table),
+				Key:                       key(readS(entry, attrPK)),
+				ConditionExpression:       aws.String("attribute_exists(#pk) AND " + expiredBeforeCondition),
+				ExpressionAttributeNames:  names,
+				ExpressionAttributeValues: values,
+			})
+			if isConditionalCheckFailed(err) {
+				continue
+			}
+			if err != nil {
+				return deleted, wrapErr(op, err)
+			}
 			deleted++
 		}
+		if len(page.LastEvaluatedKey) == 0 {
+			return deleted, nil
+		}
+		start = page.LastEvaluatedKey
 	}
-	return deleted, nil
 }
+
+// expiredBeforeCondition holds for an item whose expiry is set and
+// strictly before :cutoff (see [Store.gcExpired]).
+const expiredBeforeCondition = "#expires <> :never AND #expires < :cutoff"
 
 var (
 	_ store.AccessTokenRegistry = (*accessTokenStore)(nil)

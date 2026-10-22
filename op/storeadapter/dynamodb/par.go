@@ -121,10 +121,11 @@ func (s *parStore) Consume(ctx context.Context, uri string) (*store.PushedAuthRe
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
-			// The condition can only fail because the row is gone or
-			// already consumed, and both are a replay from the caller's
-			// side. Either way the record is withheld.
-			return nil, store.ErrAlreadyConsumed
+			// The record is withheld on replay, as on entry.
+			_, err := rejectedConsume(ctx, func(ctx context.Context) (*store.PushedAuthRequest, error) {
+				return s.find(ctx, uri)
+			})
+			return nil, err
 		}
 		return nil, wrapErr("pars.Consume", err)
 	}

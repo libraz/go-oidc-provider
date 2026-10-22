@@ -66,6 +66,10 @@ const (
 	attrReservedFor     = "reserved_for"
 	attrTOTPSecret      = "totp_secret"
 	attrTOTPConfirmedAt = "totp_confirmed_at"
+	// attrAccessRevokedAt is a grant tombstone's access-token-only cutoff,
+	// kept apart from attrRevokedAt, which also refuses issuance.
+	attrAccessRevokedAt = "access_revoked_at"
+	attrChainID         = "chain_id"
 )
 
 // TableDefinition describes one table the adapter expects. Embedders

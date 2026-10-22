@@ -5,6 +5,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -123,6 +127,79 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID stri
 	return count, nil
 }
 
+// RevokeByChain implements [store.OpaqueAccessTokenChainRevoker]. It
+// enumerates the grant's tokens as RevokeByGrant does and retires those
+// of chainID still live, each under a guard that re-asserts the chain
+// and the unrevoked state, so the count is of rows this call flipped.
+func (s *opaqueAccessTokenStore) RevokeByChain(ctx context.Context, grantID, chainID string) (int, error) {
+	if err := s.tx.assertOpen(); err != nil {
+		return 0, err
+	}
+	if grantID == "" || chainID == "" {
+		return 0, nil
+	}
+	matches, err := s.parent.queryIndex(
+		ctx, s.parent.names.opaqueAccessTokens, indexByGrant, attrGrantID, grantID,
+	)
+	if err != nil {
+		return 0, wrapErr("opaqueAccessTokens.RevokeByChain", err)
+	}
+	count := 0
+	for _, match := range matches {
+		pk := readS(match, attrPK)
+		if pk == "" || readS(match, attrChainID) != chainID || readBool(match, attrRevoked) {
+			continue
+		}
+		flipped, err := s.retireInChain(ctx, pk, chainID)
+		if err != nil {
+			return count, wrapErr("opaqueAccessTokens.RevokeByChain", err)
+		}
+		if flipped {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// retireInChain marks one token of chainID revoked, reporting false when
+// the stored row is gone, already revoked, or of another chain.
+func (s *opaqueAccessTokenStore) retireInChain(ctx context.Context, pk, chainID string) (bool, error) {
+	table := s.parent.names.opaqueAccessTokens
+	if s.tx != nil {
+		found, err := s.tx.get(ctx, table, pk)
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if readS(found, attrChainID) != chainID || readBool(found, attrRevoked) {
+			return false, nil
+		}
+		return true, s.tx.attachGuarded(ctx, table, pk, attrRevoked, avBool(true), attrRevoked)
+	}
+	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(table),
+		Key:                 key(pk),
+		UpdateExpression:    aws.String("SET #revoked = :true"),
+		ConditionExpression: aws.String("attribute_exists(#pk) AND #chain = :chain AND #revoked = :false"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":      attrPK,
+			"#chain":   attrChainID,
+			"#revoked": attrRevoked,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":chain": avS(chainID),
+			":true":  avBool(true),
+			":false": avBool(false),
+		},
+	})
+	if isConditionalCheckFailed(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // RevokeByClient implements [store.RevokeByClient] for the dynamic
 // registration cascade.
 //
@@ -170,11 +247,13 @@ func opaqueItem(tok *store.OpaqueAccessToken) (item, error) {
 	entry.expires(tok.ExpiresAt)
 	entry.set(attrGrantID, tok.GrantID)
 	entry.set(attrClientID, tok.ClientID)
+	entry.set(attrChainID, tok.ChainID)
 	entry.setBool(attrRevoked, tok.Revoked)
 	return entry, nil
 }
 
 var (
-	_ store.OpaqueAccessTokenStore = (*opaqueAccessTokenStore)(nil)
-	_ store.RevokeByClient         = (*opaqueAccessTokenStore)(nil)
+	_ store.OpaqueAccessTokenStore        = (*opaqueAccessTokenStore)(nil)
+	_ store.OpaqueAccessTokenChainRevoker = (*opaqueAccessTokenStore)(nil)
+	_ store.RevokeByClient                = (*opaqueAccessTokenStore)(nil)
 )

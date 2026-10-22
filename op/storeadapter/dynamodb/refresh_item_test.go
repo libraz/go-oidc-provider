@@ -82,8 +82,9 @@ func TestRefreshTokens_ItemsCarryOnlyQueriedAttributes(t *testing.T) {
 		t.Fatalf("scan refresh tokens: %v", err)
 	}
 	// The grant's root list shares the table; it is read by
-	// RevokeByGrant and carries its own, smaller attribute set.
-	rootList := map[string]bool{"pk": true, "roots": true, "record_version": true}
+	// RevokeByGrant and carries its own, smaller attribute set, with a
+	// TTL so DynamoDB reclaims it once its roots have expired.
+	rootList := map[string]bool{"pk": true, "roots": true, "record_version": true, "ttl": true}
 	tokens := 0
 	for _, item := range out.Items {
 		pk, _ := item["pk"].(*types.AttributeValueMemberS)

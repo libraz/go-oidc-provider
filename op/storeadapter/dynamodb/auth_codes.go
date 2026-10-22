@@ -124,11 +124,9 @@ func (s *authCodeStore) Consume(ctx context.Context, id string) (*store.Authoriz
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
-			// Lost the race to a concurrent redemption.
-			if replay, findErr := s.find(ctx, id); findErr == nil && replay.ConsumedAt != nil {
-				return replay, store.ErrAlreadyConsumed
-			}
-			return nil, store.ErrAlreadyConsumed
+			return rejectedConsume(ctx, func(ctx context.Context) (*store.AuthorizationCode, error) {
+				return s.find(ctx, id)
+			})
 		}
 		return nil, wrapErr("authCodes.Consume", err)
 	}

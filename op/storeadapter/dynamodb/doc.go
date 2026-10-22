@@ -53,6 +53,15 @@
 // refreshing has no bound, so the only retention that would always
 // suffice is no retention limit at all.
 //
+// Pushed authorization requests likewise carry a TTL at the
+// request_uri's own expiry, although Consume still redeems one whose
+// lifetime elapsed during a login Find already admitted. Reclamation
+// normally lags expiry by far longer than a login takes, but nothing
+// guarantees it: once DynamoDB has removed the item, Consume reports
+// ErrNotFound and that login cannot complete. A deployment whose logins
+// routinely outlive the request_uri lifetime should lengthen that
+// lifetime rather than rely on the lag.
+//
 // # Consistency
 //
 // Every read that feeds a security decision is a strongly consistent
@@ -95,7 +104,9 @@
 // so parallel revocation cascades against one grant converge on the
 // latest revocation instant and the longest retention rather than on
 // whichever cascade happened to write last. A narrowed window would
-// restore access tokens the other cascade had just killed.
+// restore access tokens the other cascade had just killed. An
+// access-token-only tombstone widens its own cutoff attribute, so it
+// never moves the whole-grant cutoff that refuses issuance.
 //
 // A grant record carries a version. Grants are amended rather than
 // replaced — a repeat authorization adds to what the grant already

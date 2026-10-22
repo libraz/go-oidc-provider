@@ -164,88 +164,89 @@ func (s *refreshStore) saveRoot(ctx context.Context, t *store.RefreshToken, entr
 		}
 		return nil
 	}
-	if err := s.pruneGrantRoots(ctx, t.GrantID); err != nil {
-		return err
+	for attempt := 1; ; attempt++ {
+		err := s.putRootAndList(ctx, t, entry)
+		if !errors.Is(err, store.ErrConflict) || attempt >= grantRootsAttempts {
+			return err
+		}
 	}
-	_, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+}
+
+// grantRootsAttempts bounds how often a root insert re-reads a root list
+// a concurrent insert for the same grant changed underneath it.
+const grantRootsAttempts = 5
+
+// putRootAndList writes a chain root beside its grant's root list,
+// rewritten whole: expired roots pruned, the new root added, the TTL
+// recomputed. The list write asserts the version it was read at, so a
+// concurrent insert fails this one with [store.ErrConflict] instead of
+// being overwritten.
+func (s *refreshStore) putRootAndList(ctx context.Context, t *store.RefreshToken, entry item) error {
+	table := s.parent.names.refreshes
+	pk := grantRootsKey(t.GrantID)
+	found, err := s.parent.get(ctx, table, pk)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return wrapErr("refreshes.Save.roots", err)
+	}
+	list := s.grantRootsItem(pk, found, t)
+	list[attrRecordVersion] = avN(readN(found, attrRecordVersion) + 1)
+	listOp := &txOp{kind: txPutIfAbsent, table: table, pk: pk, item: list}
+	if found != nil {
+		listOp.kind = txPutIfMatch
+		listOp.match = map[string]types.AttributeValue{attrRecordVersion: found[attrRecordVersion]}
+	}
+	_, err = s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
-			{Put: &types.Put{
-				TableName:           aws.String(s.parent.names.refreshes),
-				Item:                entry,
-				ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
-			}},
-			{Update: &types.Update{
-				TableName:        aws.String(s.parent.names.refreshes),
-				Key:              key(grantRootsKey(t.GrantID)),
-				UpdateExpression: aws.String("ADD #roots :root, #version :one"),
-				ExpressionAttributeNames: map[string]string{
-					"#roots":   attrRoots,
-					"#version": attrRecordVersion,
-				},
-				ExpressionAttributeValues: map[string]types.AttributeValue{
-					":root": avSS(grantRootElement(digestKey(t.ID), t.ExpiresAt)),
-					":one":  avN(1),
-				},
-			}},
+			(&txOp{kind: txPutIfAbsent, table: table, pk: readS(entry, attrPK), item: entry}).action(),
+			listOp.action(),
 		},
 	})
-	if err != nil {
-		// The token's insert is the only guarded action.
-		if isTransactionCanceledByCondition(err) {
-			return store.ErrAlreadyExists
-		}
+	if err == nil {
+		return nil
+	}
+	if !isTransactionCanceledByCondition(err) {
 		return wrapErr("refreshes.Save", err)
 	}
-	return nil
+	if codes := transactionCancellationCodes(err); len(codes) > 0 && codes[0] == conditionalCheckFailed {
+		return store.ErrAlreadyExists
+	}
+	return store.ErrConflict
 }
 
-// pruneGrantRoots drops the elements of a grant's root list whose root has
-// expired. It runs as its own update ahead of the insert because one
-// update expression cannot both add to and remove from the same set;
-// removing a named element is idempotent, so it needs no guard against a
-// concurrent insert.
-func (s *refreshStore) pruneGrantRoots(ctx context.Context, grantID string) error {
-	found, err := s.parent.get(ctx, s.parent.names.refreshes, grantRootsKey(grantID))
-	if errors.Is(err, store.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return wrapErr("refreshes.Save.roots", err)
-	}
-	_, stale := s.splitGrantRoots(found)
-	if len(stale) == 0 {
-		return nil
-	}
-	_, err = s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:        aws.String(s.parent.names.refreshes),
-		Key:              key(grantRootsKey(grantID)),
-		UpdateExpression: aws.String("DELETE #roots :stale ADD #version :one"),
-		ExpressionAttributeNames: map[string]string{
-			"#roots":   attrRoots,
-			"#version": attrRecordVersion,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":stale": avSS(stale...),
-			":one":   avN(1),
-		},
-	})
-	if err != nil {
-		return wrapErr("refreshes.Save.roots", err)
-	}
-	return nil
-}
-
-// splitGrantRoots partitions a root list into the elements whose root is
-// still live and those whose root has expired.
-func (s *refreshStore) splitGrantRoots(found item) (live, stale []string) {
-	for _, element := range readSS(found, attrRoots) {
-		if _, expiresAt := parseGrantRoot(element); s.parent.isExpired(expiresAt) {
-			stale = append(stale, element)
-			continue
+// grantRootsItem renders a grant's root list with t added and the
+// expired roots of found dropped. The list carries a TTL at the latest
+// expiry among its roots, so DynamoDB reclaims it once every root it
+// indexes has expired; a root that never expires leaves it without one.
+func (s *refreshStore) grantRootsItem(pk string, found item, t *store.RefreshToken) item {
+	roots := append(s.liveGrantRoots(found), grantRootElement(digestKey(t.ID), t.ExpiresAt))
+	entry := newItem(pk)
+	entry[attrRoots] = avSS(roots...)
+	var latest time.Time
+	for _, element := range roots {
+		_, expiresAt := parseGrantRoot(element)
+		if expiresAt.IsZero() {
+			return entry
 		}
-		live = append(live, element)
+		if expiresAt.After(latest) {
+			latest = expiresAt
+		}
 	}
-	return live, stale
+	if ttl, ok := avTTL(latest); ok {
+		entry[attrTTL] = ttl
+	}
+	return entry
+}
+
+// liveGrantRoots returns the elements of a root list whose root has not
+// expired.
+func (s *refreshStore) liveGrantRoots(found item) []string {
+	var live []string
+	for _, element := range readSS(found, attrRoots) {
+		if _, expiresAt := parseGrantRoot(element); !s.parent.isExpired(expiresAt) {
+			live = append(live, element)
+		}
+	}
+	return live
 }
 
 // saveStaged is [refreshStore.Save] inside a transaction: the token, and
@@ -295,9 +296,7 @@ func (s *refreshStore) stageGrantRoot(ctx context.Context, t *store.RefreshToken
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return wrapErr("refreshes.Save.roots", err)
 	}
-	live, _ := s.splitGrantRoots(found)
-	entry := newItem(pk)
-	entry[attrRoots] = avSS(append(live, grantRootElement(digestKey(t.ID), t.ExpiresAt))...)
+	entry := s.grantRootsItem(pk, found, t)
 	return s.tx.putVersioned(ctx, s.parent.names.refreshes, pk, entry, attrRecordVersion)
 }
 
@@ -577,10 +576,9 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
-			if replay, findErr := s.findByCredential(ctx, id); findErr == nil && replay.ConsumedAt != nil {
-				return replay, store.ErrAlreadyConsumed
-			}
-			return nil, store.ErrAlreadyConsumed
+			return rejectedConsume(ctx, func(ctx context.Context) (*store.RefreshToken, error) {
+				return s.findByCredential(ctx, id)
+			})
 		}
 		return nil, wrapErr("refreshes.Consume", err)
 	}

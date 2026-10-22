@@ -346,6 +346,21 @@ func (s *Store) rejectedCounter(ctx context.Context, op, table, pk, attr string)
 	return counter8(found, attr), nil
 }
 
+// rejectedConsume resolves a single-use consume whose guard turned the
+// write away, re-reading the record through reread. The guard fails for
+// two reasons that owe the caller different answers: the record is gone
+// — reclaimed by TTL or deleted since it was read — which reports
+// [store.ErrNotFound], or another caller stamped it first, which reports
+// [store.ErrAlreadyConsumed] with the record as it now stands.
+func rejectedConsume[T any](ctx context.Context, reread func(context.Context) (T, error)) (T, error) {
+	rec, err := reread(ctx)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return rec, store.ErrAlreadyConsumed
+}
+
 // deleteKey removes one item and reports whether it existed. ALL_OLD
 // return values are what make the distinction possible; DeleteItem is
 // otherwise idempotent and silent.
