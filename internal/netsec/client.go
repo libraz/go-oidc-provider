@@ -142,6 +142,9 @@ type Options struct {
 	// SSRF (private literal IP, cloud metadata host) on the first
 	// request and on every redirect hop, but not a DNS-rebinding peer
 	// that resolves public at gate time and private at dial time.
+	//
+	// A [*http.Transport.Proxy] is kept; see [NewHTTPClient] for how a
+	// proxied request is gated.
 	BaseTransport http.RoundTripper
 
 	// Proxy is the per-request proxy resolver installed on the default
@@ -155,6 +158,7 @@ type Options struct {
 	//
 	// The field is consulted only when [BaseTransport] is nil; a
 	// caller-supplied transport carries its own proxy configuration.
+	// Either way a proxied request is gated as [NewHTTPClient] describes.
 	Proxy func(*http.Request) (*url.URL, error)
 
 	// CheckRedirect is an additional redirect veto layered on the
@@ -372,6 +376,14 @@ func schemeAllowed(scheme string, allowed []string) bool {
 // [http.ProxyFromEnvironment] (or a custom resolver) explicitly so
 // the trust boundary is visible at the call site rather than implied
 // by the deployment environment.
+//
+// When a request is sent through a proxy (from [Options.Proxy] or a
+// caller transport's Proxy), the dial-time gate sees the proxy's
+// address, not the target's: the proxy must itself pass the deny-list,
+// so a private-network proxy needs the matching opt-in. The target is
+// gated by [AssertSafeURLParsed] immediately before the hand-off. The
+// proxy resolves the target independently, so DNS-rebinding protection
+// for the target is limited to that check.
 func NewHTTPClient(opts Options) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   opts.resolveDialTimeout(),
@@ -386,7 +398,7 @@ func NewHTTPClient(opts Options) *http.Client {
 		// is opt-in via [Options.Proxy] so the SSRF model does not
 		// silently inherit HTTP_PROXY / HTTPS_PROXY from the env.
 		transport = &http.Transport{
-			Proxy:                 opts.Proxy,
+			Proxy:                 gateProxyTarget(opts.Proxy, opts),
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          16,
 			IdleConnTimeout:       60 * time.Second,
@@ -403,6 +415,7 @@ func NewHTTPClient(opts Options) *http.Client {
 		clone.DialContext = dialer.DialContext
 		clone.DialTLSContext = nil
 		clone.DialTLS = nil //nolint:staticcheck // the deprecated hook must be cleared too, or HTTPS dials bypass the gate.
+		clone.Proxy = gateProxyTarget(clone.Proxy, opts)
 		transport = clone
 	} else {
 		// The supplied round-tripper is not a [*http.Transport],
@@ -415,6 +428,25 @@ func NewHTTPClient(opts Options) *http.Client {
 		Transport:     transport,
 		Timeout:       opts.resolveTimeout(),
 		CheckRedirect: CheckRedirect(opts),
+	}
+}
+
+// gateProxyTarget wraps a transport's proxy resolver so a request routed
+// through a proxy has its target re-checked by [AssertSafeURLParsed]
+// first; the dial-time gate only ever sees the proxy's address.
+func gateProxyTarget(proxy func(*http.Request) (*url.URL, error), opts Options) func(*http.Request) (*url.URL, error) {
+	if proxy == nil {
+		return nil
+	}
+	return func(req *http.Request) (*url.URL, error) {
+		proxyURL, err := proxy(req)
+		if err != nil || proxyURL == nil {
+			return proxyURL, err
+		}
+		if err := AssertSafeURLParsed(req.Context(), req.URL, opts); err != nil {
+			return nil, err
+		}
+		return proxyURL, nil
 	}
 }
 
