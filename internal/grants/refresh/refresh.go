@@ -202,6 +202,12 @@ type IssueInput struct {
 	// per OIDC Core §12. Empty when the originating request omitted
 	// the parameter.
 	Nonce string
+
+	// ChainID is the [store.RefreshToken.ChainID] to record: the
+	// value from [NewChainID] that the access token minted alongside
+	// was stamped with, or the consumed record's on a rotation. Empty
+	// allocates a fresh one.
+	ChainID string
 }
 
 // Issue mints a new refresh token and persists it. It returns the opaque
@@ -230,6 +236,12 @@ func (i *Issuer) Prepare(in IssueInput) (string, *store.RefreshToken, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	chainID := in.ChainID
+	if chainID == "" {
+		if chainID, err = NewChainID(); err != nil {
+			return "", nil, err
+		}
+	}
 	now := i.clock().UTC()
 	rec := &store.RefreshToken{
 		ID:                    id,
@@ -253,6 +265,7 @@ func (i *Issuer) Prepare(in IssueInput) (string, *store.RefreshToken, error) {
 		DPoPJKT:               in.DPoPJKT,
 		MTLSCertThumbprint:    in.MTLSCertThumbprint,
 		Nonce:                 in.Nonce,
+		ChainID:               chainID,
 	}
 	return id, rec, nil
 }
@@ -463,6 +476,10 @@ type Exchanged struct {
 	// the originating request omitted the parameter.
 	Nonce string
 
+	// ChainID is the consumed record's [store.RefreshToken.ChainID];
+	// empty for a chain written before chains were recorded.
+	ChainID string
+
 	// InGrace reports that this exchange resolved through the RFC
 	// 9700 §2.2.2 grace window: the presented token had already
 	// been consumed within [ExchangerConfig.GraceTTL]. Callers MUST
@@ -539,6 +556,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		DPoPJKT:               rec.DPoPJKT,
 		MTLSCertThumbprint:    rec.MTLSCertThumbprint,
 		Nonce:                 rec.Nonce,
+		ChainID:               rec.ChainID,
 	}, nil
 }
 
@@ -746,6 +764,7 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 		DPoPJKT:               rec.DPoPJKT,
 		MTLSCertThumbprint:    rec.MTLSCertThumbprint,
 		Nonce:                 rec.Nonce,
+		ChainID:               rec.ChainID,
 		InGrace:               true,
 	}, nil
 }
@@ -879,6 +898,22 @@ func resolveScope(bound, requested []string) ([]string, error) {
 
 // newID returns a 256-bit base64url-encoded value suitable for the
 // refresh_token parameter.
+// chainIDLength is the byte length of a chain ID. It is a non-secret
+// identifier, so it needs uniqueness across the grant's chains, not the
+// bearer entropy of [IDLength].
+const chainIDLength = 16
+
+// NewChainID allocates a [store.RefreshToken.ChainID]. A grant that may
+// issue a refresh token calls it before minting the access token that
+// goes out alongside, so both record the same chain.
+func NewChainID() (string, error) {
+	buf := make([]byte, chainIDLength)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("refresh: read random: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
 func newID() (string, error) {
 	buf := make([]byte, IDLength)
 	if _, err := rand.Read(buf); err != nil {

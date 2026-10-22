@@ -61,6 +61,11 @@
 //	                                                OnClientDeleted hook
 //	RefreshChainResolver     Store.RefreshTokens()  chain nodes resolve through Find
 //	                                                instead of the stored-handle lookup
+//	OpaqueAccessTokenChain-  Store.OpaqueAccess-    a refresh rotation retires every
+//	Revoker                  Tokens()               opaque access token of the grant
+//	IssuanceRevocation-      Store.GrantRevo-       an access-token-only tombstone also
+//	Checker                  cations()              refuses the grant's refresh and
+//	                                                code redemptions
 //
 // RevokeByClient is the one extension that is all-or-nothing across the
 // substores it applies to. [RevokeByClient] lists them; a backend that

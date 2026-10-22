@@ -368,6 +368,32 @@ func (s txOpaqueAccessTokens) RevokeByGrant(ctx context.Context, grantID string)
 	return n, nil
 }
 
+// RevokeByChain implements [store.OpaqueAccessTokenChainRevoker] through
+// the overlay.
+func (s txOpaqueAccessTokens) RevokeByChain(ctx context.Context, grantID, chainID string) (int, error) {
+	if s.tx.closed.Load() {
+		return 0, errTxClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if grantID == "" || chainID == "" {
+		return 0, nil
+	}
+	st := s.tx.oatStaging
+	n := 0
+	st.iter(func(key string, rec *store.OpaqueAccessToken) {
+		if rec.GrantID != grantID || rec.ChainID != chainID || rec.Revoked {
+			return
+		}
+		updated := cloneOpaqueAccessToken(rec)
+		updated.Revoked = true
+		st.stage(key, updated)
+		n++
+	})
+	return n, nil
+}
+
 func (s txOpaqueAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
 	if s.tx.closed.Load() {
 		return 0, errTxClosed
@@ -396,7 +422,7 @@ func (s txOpaqueAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, er
 type grantRevocationStaging struct {
 	parent *grantRevocationStore
 
-	tombstonesWritten map[string]*store.GrantTombstone
+	tombstonesWritten map[string]*tombstoneRow
 	tombstonesDeleted map[string]struct{}
 
 	denylistWritten map[string]*store.RevokedJTI
@@ -406,14 +432,14 @@ type grantRevocationStaging struct {
 func newGrantRevocationStaging(parent *grantRevocationStore) *grantRevocationStaging {
 	return &grantRevocationStaging{
 		parent:            parent,
-		tombstonesWritten: make(map[string]*store.GrantTombstone),
+		tombstonesWritten: make(map[string]*tombstoneRow),
 		tombstonesDeleted: make(map[string]struct{}),
 		denylistWritten:   make(map[string]*store.RevokedJTI),
 		denylistDeleted:   make(map[string]struct{}),
 	}
 }
 
-func (s *grantRevocationStaging) lookupTombstone(grantID string) *store.GrantTombstone {
+func (s *grantRevocationStaging) lookupTombstone(grantID string) *tombstoneRow {
 	if rec, ok := s.tombstonesWritten[grantID]; ok {
 		return rec
 	}
@@ -441,7 +467,7 @@ func (s *grantRevocationStaging) lookupDenylist(jti string) *store.RevokedJTI {
 	return nil
 }
 
-func (s *grantRevocationStaging) iterTombstones(fn func(string, *store.GrantTombstone)) {
+func (s *grantRevocationStaging) iterTombstones(fn func(string, *tombstoneRow)) {
 	for id, rec := range s.tombstonesWritten {
 		fn(id, rec)
 	}
@@ -514,18 +540,9 @@ func (s txGrantRevocations) RevokeGrant(ctx context.Context, t store.GrantTombst
 	st := s.tx.grvStaging
 	merged := st.lookupTombstone(t.GrantID)
 	if merged == nil {
-		clone := t
-		merged = &clone
+		merged = newTombstoneRow(t)
 	} else {
-		if t.RevokedAt.After(merged.RevokedAt) {
-			merged.RevokedAt = t.RevokedAt
-		}
-		if t.ExpiresAt.After(merged.ExpiresAt) {
-			merged.ExpiresAt = t.ExpiresAt
-		}
-		if merged.Reason == "" && t.Reason != "" {
-			merged.Reason = t.Reason
-		}
+		merged.merge(t)
 	}
 	delete(st.tombstonesDeleted, t.GrantID)
 	st.tombstonesWritten[t.GrantID] = merged
@@ -570,11 +587,23 @@ func (s txGrantRevocations) IsRevoked(ctx context.Context, grantID, jti string, 
 		return false, nil
 	}
 	tomb := st.lookupTombstone(grantID)
-	if tomb == nil {
+	return tomb != nil && tomb.revokes(iat), nil
+}
+
+// IsIssuanceRevoked implements [store.IssuanceRevocationChecker] through
+// the overlay.
+func (s txGrantRevocations) IsIssuanceRevoked(ctx context.Context, grantID string, issuedAt time.Time) (bool, error) {
+	if s.tx.closed.Load() {
+		return false, errTxClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if grantID == "" {
 		return false, nil
 	}
-	// "revoked iff iat <= RevokedAt": equivalently, NOT iat.After.
-	return !iat.After(tomb.RevokedAt), nil
+	tomb := s.tx.grvStaging.lookupTombstone(grantID)
+	return tomb != nil && tomb.refusesIssuance(issuedAt), nil
 }
 
 func (s txGrantRevocations) GC(ctx context.Context, cutoff time.Time) (int, error) {
@@ -586,8 +615,8 @@ func (s txGrantRevocations) GC(ctx context.Context, cutoff time.Time) (int, erro
 	}
 	st := s.tx.grvStaging
 	n := 0
-	st.iterTombstones(func(id string, rec *store.GrantTombstone) {
-		if rec.ExpiresAt.IsZero() || !rec.ExpiresAt.Before(cutoff) {
+	st.iterTombstones(func(id string, rec *tombstoneRow) {
+		if rec.expiresAt.IsZero() || !rec.expiresAt.Before(cutoff) {
 			return
 		}
 		delete(st.tombstonesWritten, id)

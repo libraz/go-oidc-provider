@@ -100,6 +100,11 @@ type OpaqueAccessToken struct {
 	// change.
 	MTLSCertThumbprint string
 
+	// ChainID is the [RefreshToken.ChainID] of the refresh chain the
+	// token was minted alongside, or empty when no chain was issued with
+	// it. See [OpaqueAccessTokenChainRevoker].
+	ChainID string
+
 	// IssuedAt is the wall-clock time at which the token was minted.
 	IssuedAt time.Time
 
@@ -177,4 +182,22 @@ type OpaqueAccessTokenStore interface {
 	// periodic sweeper alongside the other substores' own GC methods,
 	// or otherwise — is the embedder's responsibility.
 	GC(ctx context.Context, cutoff time.Time) (int, error)
+}
+
+// OpaqueAccessTokenChainRevoker is an OPTIONAL companion to
+// [OpaqueAccessTokenStore] implemented by backends that persist
+// [OpaqueAccessToken.ChainID]. A refresh rotation uses it to retire the
+// access tokens of the rotated chain only: a grant is shared by every
+// session of one subject on one client, so retiring by grant would end
+// the access tokens of the user's other sessions.
+//
+// Backends that do not implement it keep the earlier behaviour: the
+// rotation retires through [OpaqueAccessTokenStore.RevokeByGrant]. The OP
+// also falls back to the grant for a chain with no ChainID.
+type OpaqueAccessTokenChainRevoker interface {
+	// RevokeByChain marks every record whose GrantID equals grantID and
+	// whose ChainID equals chainID as revoked, returning the number of
+	// rows flipped. An empty chainID matches nothing. A missing chain is
+	// not an error.
+	RevokeByChain(ctx context.Context, grantID, chainID string) (int, error)
 }

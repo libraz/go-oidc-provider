@@ -21,6 +21,9 @@ import (
 //   - idempotent revocation: RevokeByID against a missing record returns nil;
 //   - cascade revocation: RevokeByGrant flips every record sharing a GrantID
 //     and reports the count;
+//   - chain revocation: a backend implementing
+//     [store.OpaqueAccessTokenChainRevoker] round-trips ChainID and its
+//     RevokeByChain flips only the records of that grant and chain;
 //   - GC: rows whose ExpiresAt is strictly before the cutoff are dropped.
 //
 // Backends that participate in the atomic-routing cluster (every backend the
@@ -34,6 +37,7 @@ var opaqueAccessTokenCases = []subtest{
 	{"RevokeByID", opaqueATRevokeByID},
 	{"RevokeByIDMissing", opaqueATRevokeByIDMissing},
 	{"RevokeByGrant", opaqueATRevokeByGrant},
+	{"RevokeByChain", opaqueATRevokeByChain},
 	{"GC", opaqueATGC},
 }
 
@@ -183,6 +187,64 @@ func opaqueATRevokeByGrant(t *testing.T, f Factory) {
 	if other.Revoked {
 		t.Fatal("outside grant should NOT be revoked")
 	}
+}
+
+func opaqueATRevokeByChain(t *testing.T, f Factory) {
+	b := f(t)
+	at := requireOpaqueAccessTokens(t, b.Store)
+	chains, ok := at.(store.OpaqueAccessTokenChainRevoker)
+	if !ok {
+		t.Skipf("backend %T does not implement store.OpaqueAccessTokenChainRevoker", at)
+	}
+	ctx := context.Background()
+	rows := seedChainedOpaqueATs(t, at, b.Now())
+	if got, err := at.Find(ctx, "oat-chain-a1"); err != nil || got.ChainID != "chain-a" {
+		t.Fatalf("Find ChainID = %+v, %v; want chain-a", got, err)
+	}
+	if n, err := chains.RevokeByChain(ctx, "grant-shared", ""); err != nil || n != 0 {
+		t.Fatalf("RevokeByChain with empty chain = %d, %v; want 0, nil", n, err)
+	}
+	n, err := chains.RevokeByChain(ctx, "grant-shared", "chain-a")
+	if err != nil {
+		t.Fatalf("RevokeByChain: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("RevokeByChain count = %d, want 2", n)
+	}
+	for _, r := range rows {
+		got, err := at.Find(ctx, r.id)
+		if err != nil {
+			t.Fatalf("Find %s: %v", r.id, err)
+		}
+		want := r.grantID == "grant-shared" && r.chainID == "chain-a"
+		if got.Revoked != want {
+			t.Fatalf("%s Revoked=%v want %v", r.id, got.Revoked, want)
+		}
+	}
+}
+
+// chainedOpaqueAT is one row [opaqueATRevokeByChain] seeds.
+type chainedOpaqueAT struct{ id, grantID, chainID string }
+
+// seedChainedOpaqueATs saves two chains under one grant, a chainless row
+// under it, and a same-named chain under another grant.
+func seedChainedOpaqueATs(t *testing.T, at store.OpaqueAccessTokenStore, now time.Time) []chainedOpaqueAT {
+	t.Helper()
+	rows := []chainedOpaqueAT{
+		{"oat-chain-a1", "grant-shared", "chain-a"},
+		{"oat-chain-a2", "grant-shared", "chain-a"},
+		{"oat-chain-b", "grant-shared", "chain-b"},
+		{"oat-chainless", "grant-shared", ""},
+		{"oat-chain-a-other-grant", "grant-other", "chain-a"},
+	}
+	for _, r := range rows {
+		tok := newOpaqueAT(now, r.id, r.grantID)
+		tok.ChainID = r.chainID
+		if err := at.Save(context.Background(), tok); err != nil {
+			t.Fatalf("Save %s: %v", r.id, err)
+		}
+	}
+	return rows
 }
 
 func opaqueATGC(t *testing.T, f Factory) {

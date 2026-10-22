@@ -45,6 +45,10 @@ const (
 	classAccessTokens class = 1 << iota
 	// classRefresh covers refresh tokens.
 	classRefresh
+	// classIssuance closes the grant to further issuance: under the
+	// grant-tombstone strategy the tombstone also refuses the grant's
+	// refresh chains and unredeemed codes, not only its access tokens.
+	classIssuance
 )
 
 // width is how far a [Scope] reaches: over a whole grant, or over the
@@ -54,13 +58,15 @@ type width uint8
 const (
 	widthNone width = iota
 	widthGrant
+	widthChain
 	widthToken
 )
 
 // Scope names the credentials one teardown retires. Construct it with
-// [WholeGrant], [AccessTokensOfGrant] or [IssuedCredentials]; the zero
-// value retires nothing, which makes an unset scope a no-op rather
-// than an accidental grant-wide sweep.
+// [WholeGrant], [CompromisedGrantAccessTokens], [AccessTokensOfGrant],
+// [OpaqueAccessTokensOfChain] or [IssuedCredentials]; the zero value
+// retires nothing, which makes an unset scope a no-op rather than an
+// accidental grant-wide sweep.
 type Scope struct {
 	// grantID keys every grant-wide rung. Empty means the grant could
 	// not be resolved, which [Revoker.Run] reports rather than treating
@@ -73,6 +79,9 @@ type Scope struct {
 	// contracts require.
 	accessTokenID string
 	refreshToken  string
+
+	// chainID names the refresh chain a chain-wide scope retires.
+	chainID string
 
 	width   width
 	classes class
@@ -87,19 +96,48 @@ func WholeGrant(grantID string) Scope {
 	return Scope{
 		grantID: grantID,
 		width:   widthGrant,
-		classes: classAccessTokens | classRefresh,
+		classes: classAccessTokens | classRefresh | classIssuance,
+	}
+}
+
+// CompromisedGrantAccessTokens returns the scope covering every access
+// token issued under grantID, in both shapes, and closing the grant to
+// further issuance, but retiring no refresh token itself. It is the
+// access-token half of a replay cascade whose refresh side the caller
+// already retired through a chain walk this package does not own.
+func CompromisedGrantAccessTokens(grantID string) Scope {
+	return Scope{
+		grantID: grantID,
+		width:   widthGrant,
+		classes: classAccessTokens | classIssuance,
 	}
 }
 
 // AccessTokensOfGrant returns the scope covering every access token
-// issued under grantID, in both shapes, and no refresh token. It is
-// what a caller uses when it has already retired the refresh side
-// through a path this package does not own (a chain walk from the
-// replayed node, a /revoke chain revocation).
+// issued under grantID, in both shapes, and nothing else: the grant's
+// other refresh chains and unredeemed codes keep redeeming. It is the
+// RFC 7009 §2.1 cascade of revoking one refresh token, whose own chain
+// the caller has already retired.
 func AccessTokensOfGrant(grantID string) Scope {
 	return Scope{
 		grantID: grantID,
 		width:   widthGrant,
+		classes: classAccessTokens,
+	}
+}
+
+// OpaqueAccessTokensOfChain returns the scope covering the opaque access
+// tokens minted from one refresh chain of grantID, which a rotation
+// retires before minting the next. The grant is shared by every session
+// of one subject on one client, so this leaves the other sessions' tokens
+// alone. It widens to every opaque access token of the grant when chainID
+// is empty (a chain written before chains were recorded) or the substore
+// cannot revoke by chain: over-revoking is the safe direction.
+func OpaqueAccessTokensOfChain(grantID, chainID string) Scope {
+	return Scope{
+		grantID: grantID,
+		chainID: chainID,
+		width:   widthChain,
 		classes: classAccessTokens,
 	}
 }
@@ -222,6 +260,8 @@ func (r Revoker) Run(ctx context.Context, s Scope) Outcome {
 	switch s.width {
 	case widthGrant:
 		return r.runGrant(ctx, s)
+	case widthChain:
+		return r.runChain(ctx, s)
 	case widthToken:
 		return r.runToken(ctx, s)
 	case widthNone:
@@ -259,7 +299,7 @@ func (r Revoker) runGrant(ctx context.Context, s Scope) Outcome {
 			AccessTokens:       r.AccessTokens,
 			GrantRevocations:   r.GrantRevocations,
 			RevocationStrategy: r.Strategy,
-		}, s.grantID, r.Now, r.TombstoneRetention, r.Reason); err != nil {
+		}, s.grantID, r.Now, r.TombstoneRetention, r.Reason, s.classes&classIssuance == 0); err != nil {
 			out.add(SurfaceJWTAccessTokens, err)
 		}
 		if r.OpaqueAccessTokens != nil {
@@ -272,6 +312,29 @@ func (r Revoker) runGrant(ctx context.Context, s Scope) Outcome {
 		if err := r.RefreshTokens.RevokeByGrant(ctx, s.grantID); err != nil {
 			out.add(SurfaceRefreshTokens, err)
 		}
+	}
+	return out
+}
+
+// runChain retires the opaque access tokens of one refresh chain. No JWT
+// rung runs: the grant-keyed mechanisms the strategy offers cannot express
+// one chain, and a rotation leaves a chain's JWT access tokens to expire.
+func (r Revoker) runChain(ctx context.Context, s Scope) Outcome {
+	if s.grantID == "" {
+		return Outcome{UnresolvedGrant: true}
+	}
+	if r.OpaqueAccessTokens == nil {
+		return Outcome{}
+	}
+	var err error
+	if chains, ok := r.OpaqueAccessTokens.(store.OpaqueAccessTokenChainRevoker); ok && s.chainID != "" {
+		_, err = chains.RevokeByChain(ctx, s.grantID, s.chainID)
+	} else {
+		_, err = r.OpaqueAccessTokens.RevokeByGrant(ctx, s.grantID)
+	}
+	var out Outcome
+	if err != nil {
+		out.add(SurfaceOpaqueAccessTokens, err)
 	}
 	return out
 }

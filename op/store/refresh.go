@@ -143,6 +143,15 @@ type RefreshToken struct {
 	// nonce); the id_token claim is then omitted on the wire.
 	Nonce string
 
+	// ChainID names the rotation chain the record belongs to: a random,
+	// non-secret value allocated at the chain root and copied onto every
+	// rotation. Opaque access tokens minted from the chain record it as
+	// [OpaqueAccessToken.ChainID], so a rotation retires only its own
+	// chain's access tokens rather than those of every chain under the
+	// grant. Empty on records written before the field existed; the
+	// rotation then falls back to the grant.
+	ChainID string
+
 	// Revoked is true when the record was retired via
 	// [RefreshTokenStore.RevokeChain] (typically after a replay was
 	// detected on a sibling). The library distinguishes "consumed by

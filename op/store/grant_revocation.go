@@ -42,6 +42,19 @@ type GrantTombstone struct {
 	// audit log can recover the cascade trigger without consulting a
 	// second substore.
 	Reason string
+
+	// AccessTokensOnly narrows the tombstone to the grant's access
+	// tokens: the RFC 7009 §2.1 cascade of a single refresh-token
+	// revocation, which must not end the grant's other refresh chains
+	// or its unredeemed authorization codes. The zero value is the
+	// whole-grant tombstone every cascade wrote before the field
+	// existed, so a backend that drops the field over-revokes rather
+	// than under-revokes.
+	//
+	// A backend keeps the two cutoffs apart: [GrantRevocationStore.IsRevoked]
+	// honours both, and [IssuanceRevocationChecker.IsIssuanceRevoked]
+	// honours only the whole-grant one.
+	AccessTokensOnly bool
 }
 
 // RevokedJTI records a single JWT access token revoked through the
@@ -115,6 +128,9 @@ type GrantRevocationStore interface {
 	// decided. Reading and writing back lets the cascade that read
 	// first land last, and a rewound RevokedAt restores every access
 	// token the other cascade had just killed.
+	//
+	// A tombstone with [GrantTombstone.AccessTokensOnly] widens only the
+	// access-token cutoff; one without it widens both.
 	RevokeGrant(ctx context.Context, t GrantTombstone) error
 
 	// RevokeJTI denylists a single JWT access token by its jti. The call
@@ -149,4 +165,24 @@ type GrantRevocationStore interface {
 	// alongside the other substores' own GC methods, or otherwise — is
 	// the embedder's responsibility.
 	GC(ctx context.Context, cutoff time.Time) (int, error)
+}
+
+// IssuanceRevocationChecker is an OPTIONAL companion to
+// [GrantRevocationStore] implemented by backends that keep the
+// [GrantTombstone.AccessTokensOnly] cutoff apart from the whole-grant one.
+// The token endpoint asks it whether a refresh chain or an authorization
+// code issued under a grant may still mint, so revoking one refresh token
+// at /revoke retires the grant's access tokens without ending its other
+// chains and codes.
+//
+// Backends that do not implement it keep the earlier behaviour: issuance
+// is refused through [GrantRevocationStore.IsRevoked], which counts every
+// tombstone, access-token-only ones included.
+type IssuanceRevocationChecker interface {
+	// IsIssuanceRevoked reports whether a credential issued under
+	// grantID at issuedAt may no longer mint: true iff a tombstone
+	// without [GrantTombstone.AccessTokensOnly] has a RevokedAt at or
+	// after issuedAt. A missing entry is (false, nil); an error is a
+	// transport fault and the caller refuses the request.
+	IsIssuanceRevoked(ctx context.Context, grantID string, issuedAt time.Time) (bool, error)
 }

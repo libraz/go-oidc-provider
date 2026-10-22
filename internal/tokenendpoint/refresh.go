@@ -718,7 +718,7 @@ func (c *replayCascade) run(ctx context.Context, deps Deps) {
 	}
 	grantID := exchanger.RevokeReplayedChain(ctx, c.token)
 	out := grantTeardown(deps, teardownReasonRefreshReplay).
-		Run(ctx, teardown.AccessTokensOfGrant(grantID))
+		Run(ctx, teardown.CompromisedGrantAccessTokens(grantID))
 	reportTeardown(ctx, deps, out, auditRefreshGrantRevokeFailed, teardownReasonRefreshReplay, grantID)
 }
 
@@ -902,9 +902,13 @@ func issueRefreshResponse(
 	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
 		return
 	}
+	exchanged, err := withChainID(exchanged)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	publicSubject := exchanged.Subject
 	if !exchanged.SubjectPublic {
-		var err error
 		publicSubject, err = projectPublicSubject(ctx, deps, exchanged.Subject, client)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -924,7 +928,12 @@ func issueRefreshResponse(
 		authCtx.AuthTime,
 		binding,
 		authorizationDetails,
-		accessTokenOverrides{Extra: exchanged.AccessTokenExtra, ForceJWT: refreshMintPinnedJWT(exchanged), Authorization: &authCtx},
+		accessTokenOverrides{
+			Extra:         exchanged.AccessTokenExtra,
+			ForceJWT:      refreshMintPinnedJWT(exchanged),
+			Authorization: &authCtx,
+			ChainID:       exchanged.ChainID,
+		},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -991,7 +1000,7 @@ func issueRefreshResponse(
 // slip a fresh access token past a grant that has since been revoked, and
 // the prior-opaque-access-token cascade, so the retry does not leave the
 // access token from the original rotation live alongside the one it hands
-// back. Both are re-runs of idempotent work — the cascade revokes by grant
+// back. Both are re-runs of idempotent work — the cascade revokes by chain
 // and the tombstone check only reads — so recovering a lost response costs
 // the client nothing extra.
 func reissueGraceAccessToken(
@@ -1034,7 +1043,12 @@ func reissueGraceAccessToken(
 		authCtx.AuthTime,
 		binding,
 		response.AuthorizationDetails,
-		accessTokenOverrides{Extra: exchanged.AccessTokenExtra, ForceJWT: refreshMintPinnedJWT(exchanged), Authorization: &authCtx},
+		accessTokenOverrides{
+			Extra:         exchanged.AccessTokenExtra,
+			ForceJWT:      refreshMintPinnedJWT(exchanged),
+			Authorization: &authCtx,
+			ChainID:       exchanged.ChainID,
+		},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -1044,6 +1058,23 @@ func reissueGraceAccessToken(
 	response.TokenType = binding.tokenTypeFor()
 	response.ExpiresIn = int64(deps.AccessTokenTTL.Seconds())
 	writeSuccess(w, *response)
+}
+
+// withChainID returns exchanged with a chain to record on the successor and
+// on the access token minted alongside. A chain written before chains were
+// recorded is given one here, so its rotations retire by chain from the
+// next one on.
+func withChainID(exchanged *refresh.Exchanged) (*refresh.Exchanged, error) {
+	if exchanged.ChainID != "" {
+		return exchanged, nil
+	}
+	chainID, err := refresh.NewChainID()
+	if err != nil {
+		return nil, err
+	}
+	out := *exchanged
+	out.ChainID = chainID
+	return &out, nil
 }
 
 // refreshExchangedForRotation stamps the successor with the
@@ -1209,6 +1240,7 @@ func rotateRefreshToken(
 		DPoPJKT:              rotatedJKT,
 		MTLSCertThumbprint:   binding.MTLSThumbprint,
 		Nonce:                exchanged.Nonce,
+		ChainID:              exchanged.ChainID,
 		Origin:               exchanged.Origin,
 		SubjectPublic:        exchanged.SubjectPublic,
 		AuthTime:             exchanged.AuthTime,
@@ -1338,7 +1370,7 @@ func enforceGrantTombstoneMintRefusal(
 	if deps.GrantRevocations == nil || exchanged == nil || exchanged.GrantID == "" {
 		return true
 	}
-	revoked, err := deps.GrantRevocations.IsRevoked(ctx, exchanged.GrantID, "", exchanged.IssuedAt)
+	revoked, err := grantClosedToIssuance(ctx, deps.GrantRevocations, exchanged.GrantID, exchanged.IssuedAt)
 	if err != nil {
 		// Substore transport fault on the verify path: handling treats this
 		// as fatal because silently allowing the request would re-introduce
@@ -1355,8 +1387,11 @@ func enforceGrantTombstoneMintRefusal(
 	return true
 }
 
-// revokePriorOpaqueAT revokes every opaque access token tied to
-// grantID when the rotation issues an opaque-format token. The
+// revokePriorOpaqueAT revokes the opaque access tokens of the rotated
+// chain when the rotation issues an opaque-format token. The grant is
+// shared by every session of one subject on one client, so the teardown
+// is chain-scoped and widens to the grant only for a chain written before
+// chains were recorded or a store that cannot revoke by chain. The
 // function is a no-op when:
 //
 //   - The deployment runs JWT-only (no OpaqueAccessTokens substore
@@ -1371,7 +1406,7 @@ func enforceGrantTombstoneMintRefusal(
 //     exchanger. Treat the cascade as a silent no-op so a future
 //     refactor that surfaces empty grants does not crash the path.
 //
-// RevokeByGrant errors are returned before a new access token is minted.
+// Revocation errors are returned before a new access token is minted.
 // This fail-closed ordering prevents a backend fault from creating a fresh
 // bearer credential while a prior opaque credential remains active. The
 // refresh-token grace path can safely retry the same idempotent cascade.
@@ -1381,7 +1416,7 @@ func enforceGrantTombstoneMintRefusal(
 // implementation of that step: a refresh answers 200 with a freshly minted
 // access token from two places — the rotation itself and the
 // sender-constrained re-mint of an RFC 9700 §2.2.2 grace retry — and both
-// have to leave exactly one live opaque access token under the grant.
+// have to leave exactly one live opaque access token on the chain.
 // Calling this immediately before the mint is the whole contract; anything
 // added here reaches both paths.
 //
@@ -1435,8 +1470,8 @@ func revokePriorOpaqueAT(ctx context.Context, deps Deps, exchanged *refresh.Exch
 	if format != store.AccessTokenFormatOpaque {
 		return nil
 	}
-	_, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, exchanged.GrantID)
-	return err
+	return grantTeardown(deps, teardownReasonRotation).
+		Run(ctx, teardown.OpaqueAccessTokensOfChain(exchanged.GrantID, exchanged.ChainID)).Err()
 }
 
 // refreshMintPinnedJWT reports whether a chain's access tokens are minted

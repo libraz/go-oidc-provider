@@ -70,6 +70,10 @@ type refreshIssuance struct {
 	// Nonce is replayed onto id_tokens minted from later rotations.
 	Nonce string
 
+	// ChainID is the chain the access token issued alongside was
+	// stamped with; empty lets the issuer allocate one.
+	ChainID string
+
 	// Origin names the grant that created the chain; metrics and the
 	// audit stream project it to attribute chain creation.
 	Origin store.RefreshTokenOrigin
@@ -153,6 +157,7 @@ func issueRefreshToken(ctx context.Context, deps Deps, in refreshIssuance) (stri
 
 		AuthorizationRecorded: true,
 		Nonce:                 in.Nonce,
+		ChainID:               in.ChainID,
 		DPoPJKT:               refreshDPoPJKT(in.Client, in.Binding.DPoPJKT),
 		MTLSCertThumbprint:    in.Binding.MTLSThumbprint,
 	})

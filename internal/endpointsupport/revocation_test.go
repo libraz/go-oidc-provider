@@ -76,7 +76,7 @@ func TestRevokeJWTAccessTokensByGrant_GrantTombstoneWritesTombstone(t *testing.T
 	err := endpointsupport.RevokeJWTAccessTokensByGrant(context.Background(), endpointsupport.JWTGrantCascadeOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
-	}, "grant-1", now, 15*time.Minute, "logout")
+	}, "grant-1", now, 15*time.Minute, "logout", false)
 	if err != nil {
 		t.Fatalf("RevokeJWTAccessTokensByGrant: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestRevokeJWTAccessTokensByGrant_FallsBackToRegistry(t *testing.T) {
 	err := endpointsupport.RevokeJWTAccessTokensByGrant(context.Background(), endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
-	}, "grant-2", time.Now(), time.Minute, "code_replay")
+	}, "grant-2", time.Now(), time.Minute, "code_replay", false)
 	if err != nil {
 		t.Fatalf("RevokeJWTAccessTokensByGrant: %v", err)
 	}

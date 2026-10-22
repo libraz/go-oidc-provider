@@ -23,6 +23,10 @@ import (
 //     race) and iat == RevokedAt + 1ns is accepted;
 //   - JTI denylist precedence: an access token whose jti has been
 //     /revocation-ed is revoked even when its grant has no tombstone;
+//   - scope: an AccessTokensOnly tombstone revokes access tokens like any
+//     other, and a backend implementing [store.IssuanceRevocationChecker]
+//     keeps it from refusing issuance while a whole-grant tombstone still
+//     does, neither cutoff rewinding the other;
 //   - GC: rows whose ExpiresAt is strictly before the cutoff are dropped.
 //
 // Backends that participate in the atomic-routing cluster (every backend
@@ -38,6 +42,7 @@ var grantRevocationCases = []subtest{
 	{"RevokeJTIDenylistPrecedence", grantRevJTIPrecedence},
 	{"RevokeJTIIdempotent", grantRevJTIIdempotent},
 	{"IsRevokedAbsent", grantRevAbsent},
+	{"AccessTokensOnlyScope", grantRevAccessTokensOnly},
 	{"GC", grantRevGC},
 }
 
@@ -340,5 +345,61 @@ func expectRevoked(t *testing.T, gr store.GrantRevocationStore, ctx context.Cont
 	}
 	if got != want {
 		t.Fatal(failMsg)
+	}
+}
+
+func grantRevAccessTokensOnly(t *testing.T, f Factory) {
+	b := f(t)
+	gr := requireGrantRevocations(t, b.Store)
+	ctx := context.Background()
+	now := b.Now()
+	wholeAt, accessAt := now.Add(-time.Hour), now
+	for _, tomb := range []store.GrantTombstone{
+		{GrantID: "grant-scope", RevokedAt: accessAt, ExpiresAt: now.Add(time.Hour), Reason: "revoke", AccessTokensOnly: true},
+		{GrantID: "grant-scope", RevokedAt: wholeAt, ExpiresAt: now.Add(time.Hour), Reason: "logout"},
+	} {
+		if err := gr.RevokeGrant(ctx, tomb); err != nil {
+			t.Fatalf("RevokeGrant(%+v): %v", tomb, err)
+		}
+	}
+	between := wholeAt.Add(time.Minute)
+	for _, iat := range []time.Time{wholeAt, between, accessAt} {
+		revoked, err := gr.IsRevoked(ctx, "grant-scope", "", iat)
+		if err != nil {
+			t.Fatalf("IsRevoked(iat=%v): %v", iat, err)
+		}
+		if !revoked {
+			t.Fatalf("IsRevoked(iat=%v)=false: an access-token-only tombstone must revoke access tokens", iat)
+		}
+	}
+	if checker, ok := gr.(store.IssuanceRevocationChecker); ok {
+		assertIssuanceCutoff(t, checker, wholeAt, between, accessAt)
+	}
+}
+
+// assertIssuanceCutoff checks that only the whole-grant cutoff, wholeAt,
+// refuses issuance on "grant-scope".
+func assertIssuanceCutoff(t *testing.T, checker store.IssuanceRevocationChecker, wholeAt, between, accessAt time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	for _, c := range []struct {
+		issuedAt time.Time
+		want     bool
+	}{
+		{wholeAt, true},
+		{between, false},
+		{accessAt, false},
+	} {
+		got, err := checker.IsIssuanceRevoked(ctx, "grant-scope", c.issuedAt)
+		if err != nil {
+			t.Fatalf("IsIssuanceRevoked(issuedAt=%v): %v", c.issuedAt, err)
+		}
+		if got != c.want {
+			t.Fatalf("IsIssuanceRevoked(issuedAt=%v)=%v want %v: only the whole-grant cutoff refuses issuance",
+				c.issuedAt, got, c.want)
+		}
+	}
+	if got, err := checker.IsIssuanceRevoked(ctx, "grant-absent", wholeAt); err != nil || got {
+		t.Fatalf("IsIssuanceRevoked on a grant with no tombstone = %v, %v; want false, nil", got, err)
 	}
 }

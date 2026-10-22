@@ -16,6 +16,7 @@ const (
 	teardownReasonOrphanedMint    = "orphaned_mint"
 	teardownReasonGrantTombstoned = "grant_tombstoned"
 	teardownReasonPreparedPoll    = "prepared_poll_lost"
+	teardownReasonRotation        = "refresh_rotation"
 )
 
 // grantTeardown returns the [teardown.Revoker] every credential

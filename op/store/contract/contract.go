@@ -636,6 +636,7 @@ func refreshSaveFindConsume(t *testing.T, f Factory) {
 	rt := newRefresh(b.Now(), "rt-1", nil)
 	rt.Claims = recordedClaimsRequest()
 	rt.AuthorizationRecorded = true
+	rt.ChainID = "chain-1"
 	if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -647,6 +648,12 @@ func refreshSaveFindConsume(t *testing.T, f Factory) {
 		t.Fatalf("unexpected token: %+v", got)
 	}
 	assertRefreshContext(t, got, rt)
+	// A backend whose opaque substore retires by chain relies on the
+	// refresh row carrying its chain; one that does not falls back to the
+	// grant and may drop the field.
+	if _, chained := b.Store.OpaqueAccessTokens().(store.OpaqueAccessTokenChainRevoker); chained && got.ChainID != rt.ChainID {
+		t.Fatalf("ChainID=%q want %q", got.ChainID, rt.ChainID)
+	}
 	consumed, err := b.Store.RefreshTokens().Consume(ctx, "rt-1")
 	if err != nil {
 		t.Fatalf("Consume: %v", err)

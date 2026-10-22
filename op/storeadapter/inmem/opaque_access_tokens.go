@@ -127,6 +127,24 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(_ context.Context, grantID string
 	return n, nil
 }
 
+// RevokeByChain implements [store.OpaqueAccessTokenChainRevoker].
+func (s *opaqueAccessTokenStore) RevokeByChain(_ context.Context, grantID, chainID string) (int, error) {
+	if grantID == "" || chainID == "" {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, rec := range s.m {
+		if rec.GrantID != grantID || rec.ChainID != chainID || rec.Revoked {
+			continue
+		}
+		rec.Revoked = true
+		n++
+	}
+	return n, nil
+}
+
 // RevokeByClient implements [store.RevokeByClient]. The DCR delete
 // cascade probes for it so a deleted client takes its outstanding
 // opaque access-token rows with it. A non-existent client is a

@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
+	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
@@ -306,6 +307,11 @@ func issueAuthCodeResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
+	chainID, err := refresh.NewChainID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
@@ -319,7 +325,7 @@ func issueAuthCodeResponse(
 		authCtx.AuthTime,
 		binding,
 		authorizationDetails,
-		accessTokenOverrides{Authorization: &authCtx},
+		accessTokenOverrides{Authorization: &authCtx, ChainID: chainID},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -361,6 +367,7 @@ func issueAuthCodeResponse(
 	refreshIn.Nonce = exchanged.Nonce
 	refreshIn.Binding = binding
 	refreshIn.Origin = store.RefreshOriginAuthCode
+	refreshIn.ChainID = chainID
 	refreshIn.AuthCtx = authCtx.withAuthorizationDetails(authorizationDetails)
 	refreshToken, err := issueRefreshToken(ctx, deps, refreshIn)
 	if err != nil {
@@ -436,7 +443,7 @@ func enforceAuthCodeGrantTombstoneMintRefusal(
 	if deps.GrantRevocations == nil || grantID == "" {
 		return true
 	}
-	revoked, err := deps.GrantRevocations.IsRevoked(ctx, grantID, "", issuedAt)
+	revoked, err := grantClosedToIssuance(ctx, deps.GrantRevocations, grantID, issuedAt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return false
@@ -446,6 +453,19 @@ func enforceAuthCodeGrantTombstoneMintRefusal(
 		return false
 	}
 	return true
+}
+
+// grantClosedToIssuance reports whether a credential issued under grantID
+// at issuedAt may no longer mint. A store that keeps access-token-only
+// tombstones apart answers through [store.IssuanceRevocationChecker], so
+// revoking one refresh token leaves the grant's other chains and codes
+// redeemable; any other store answers through IsRevoked, which counts
+// every tombstone and so refuses more, never less.
+func grantClosedToIssuance(ctx context.Context, revs store.GrantRevocationStore, grantID string, issuedAt time.Time) (bool, error) {
+	if checker, ok := revs.(store.IssuanceRevocationChecker); ok {
+		return checker.IsIssuanceRevoked(ctx, grantID, issuedAt)
+	}
+	return revs.IsRevoked(ctx, grantID, "", issuedAt)
 }
 
 // grantIDForResponse returns grantID for the token response only when the
@@ -609,6 +629,11 @@ type accessTokenOverrides struct {
 	// carries the userinfo member of the claims request, as {} when
 	// there is none. Nil for grants with no such authorization.
 	Authorization *authContext
+
+	// ChainID is the refresh chain the token goes out with; the opaque
+	// shape records it so a rotation of that chain retires the token and
+	// no other. Empty when no chain can be issued alongside.
+	ChainID string
 }
 
 // mintJWTAccessToken signs the JWT-shaped access token (RFC 9068) and,
@@ -750,6 +775,7 @@ func mintOpaqueAccessToken(
 		AuthorizationRecorded: true,
 		DPoPJKT:               binding.DPoPJKT,
 		MTLSCertThumbprint:    binding.MTLSThumbprint,
+		ChainID:               over.ChainID,
 		IssuedAt:              now,
 		ExpiresAt:             time.Unix(expiresAt, 0).UTC(),
 	}

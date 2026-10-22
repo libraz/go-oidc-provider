@@ -130,6 +130,26 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   silently without a `claims` parameter no longer releases the claims an
   earlier request on the same grant asked for.
 
+- Revoking a refresh token at `/revoke` now revokes it however long its
+  rotation chain has grown. Past 1024 rotations the chain root no longer
+  resolved and the endpoint answered 200 while the token and its access
+  tokens stayed usable; it now falls back to revoking the grant's refresh
+  tokens, as the replay cascade already did.
+
+- Revoking one refresh token no longer ends the user's other sessions on the
+  same client. Under the default grant-tombstone strategy the access-token
+  cascade of `/revoke` also refused every other refresh chain and unredeemed
+  code of the shared grant, while `/introspect` still reported those refresh
+  tokens active; the cascade now revokes the grant's access tokens only.
+
+- Refreshing on one device no longer revokes the opaque access tokens of the
+  user's other sessions on the same client; a rotation retires the access
+  tokens of its own chain.
+
+- On DynamoDB, two concurrent presentations of one refresh token now end with
+  one success and an `invalid_grant` that runs the RFC 9700 §2.2.2 replay
+  cascade, instead of a 500 that skipped it.
+
 ### Changed
 
 - `store.AuthorizationCode`, `store.RefreshToken` and
@@ -150,6 +170,36 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   claims request, or `{}` when it requested none. `/userinfo` releases claims
   from it; resource servers should ignore it. The name is reserved, so a
   custom grant can no longer set it through its extra claims.
+
+- `store.RefreshToken` and `store.OpaqueAccessToken` gain `ChainID`, and
+  `store.GrantTombstone` gains `AccessTokensOnly`. Two optional interfaces
+  use them: `store.OpaqueAccessTokenChainRevoker` (retire one chain's opaque
+  access tokens) and `store.IssuanceRevocationChecker` (an access-token-only
+  tombstone does not refuse refresh or code redemption). A bring-your-own
+  store that implements neither, or drops the fields, keeps the earlier
+  grant-wide behaviour. The DynamoDB adapter does not implement them yet.
+
+- SQL adapter: `oidc_refresh_tokens` and `oidc_opaque_access_tokens` gain
+  `chain_id`, and `oidc_grant_revocations` gains `access_revoked_at`;
+  `Store.Migrate` refuses to start without them. Apply the `ALTER TABLE`
+  statements in
+  [`op/storeadapter/sql/schema/MIGRATIONS.md`](op/storeadapter/sql/schema/MIGRATIONS.md)
+  before upgrading. Until every node runs the new binary, older nodes do not
+  see an access-token-only tombstone.
+
+- `/revoke` reports `surface: "refresh_grant"` on `token.revoked` when it
+  fell back to revoking the grant's refresh tokens, and no longer records
+  `token.revoked` for a JWT access token when nothing was persisted (the
+  `None` strategy, or no substore behind the active one).
+
+### Fixed
+
+- The registration endpoint's `WWW-Authenticate` header now sanitises the
+  issuer realm like every other challenge the OP emits.
+
+- With `AccessTokenTTL` unset, grant tombstones written by the token
+  endpoint's replay cascades now outlive the access tokens they cover, like
+  those written by `/revoke`, `/end_session` and grant management.
 
 ## [v1.3.0] — 2026-09-28
 

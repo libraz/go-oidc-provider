@@ -220,9 +220,11 @@ type JWTGrantCascadeOpts struct {
 //   - RevocationStrategyNone: no-op.
 //   - RevocationStrategyJTIRegistry: call AccessTokens.RevokeByGrant.
 //   - RevocationStrategyGrantTombstone: write a GrantTombstone with the
-//     supplied (now, retention, reason). When GrantRevocations is nil,
-//     fall back to the JTI registry so partially migrated deployments
-//     keep the cascade semantics they already had.
+//     supplied (now, retention, reason), scoped to the grant's access
+//     tokens when accessTokensOnly is set so the grant's other refresh
+//     chains and codes still redeem. When GrantRevocations is nil, fall
+//     back to the JTI registry so partially migrated deployments keep the
+//     cascade semantics they already had.
 //
 // Store errors are returned to the caller. Each endpoint decides whether its
 // user-visible contract is fail-closed (for example Grant Management revoke)
@@ -235,6 +237,7 @@ func RevokeJWTAccessTokensByGrant(
 	now time.Time,
 	retention time.Duration,
 	reason string,
+	accessTokensOnly bool,
 ) error {
 	switch opts.RevocationStrategy {
 	case store.RevocationStrategyNone:
@@ -248,10 +251,11 @@ func RevokeJWTAccessTokensByGrant(
 	default:
 		if opts.GrantRevocations != nil && grantID != "" {
 			return opts.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
-				GrantID:   grantID,
-				RevokedAt: now,
-				ExpiresAt: now.Add(retention),
-				Reason:    reason,
+				GrantID:          grantID,
+				RevokedAt:        now,
+				ExpiresAt:        now.Add(retention),
+				Reason:           reason,
+				AccessTokensOnly: accessTokensOnly,
 			})
 		}
 		if opts.AccessTokens != nil {

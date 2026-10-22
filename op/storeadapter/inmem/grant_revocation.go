@@ -22,13 +22,63 @@ import (
 // to bearer secrets does not apply here.
 type grantRevocationStore struct {
 	mu         sync.RWMutex
-	tombstones map[string]*store.GrantTombstone
+	tombstones map[string]*tombstoneRow
 	denylist   map[string]*store.RevokedJTI
+}
+
+// tombstoneRow is one grant's tombstone. It keeps the whole-grant cutoff
+// apart from the access-token-only one ([store.GrantTombstone.AccessTokensOnly]),
+// so access-token verification can honour both while issuance honours only
+// the first. A zero cutoff means no tombstone of that scope was written.
+type tombstoneRow struct {
+	revokedAt       time.Time
+	accessRevokedAt time.Time
+	expiresAt       time.Time
+	reason          string
+}
+
+func newTombstoneRow(t store.GrantTombstone) *tombstoneRow {
+	r := &tombstoneRow{}
+	r.merge(t)
+	return r
+}
+
+// merge widens the cutoff t's scope names, and ExpiresAt, to the later of
+// the two values, and latches Reason onto the first hint.
+func (r *tombstoneRow) merge(t store.GrantTombstone) {
+	cutoff := &r.revokedAt
+	if t.AccessTokensOnly {
+		cutoff = &r.accessRevokedAt
+	}
+	if t.RevokedAt.After(*cutoff) {
+		*cutoff = t.RevokedAt
+	}
+	if t.ExpiresAt.After(r.expiresAt) {
+		r.expiresAt = t.ExpiresAt
+	}
+	if r.reason == "" && t.Reason != "" {
+		r.reason = t.Reason
+	}
+}
+
+// revokes applies "revoked iff iat <= RevokedAt" to an access token.
+func (r *tombstoneRow) revokes(iat time.Time) bool {
+	return covers(r.revokedAt, iat) || covers(r.accessRevokedAt, iat)
+}
+
+// refusesIssuance applies the same rule to a credential that would mint,
+// ignoring the access-token-only cutoff.
+func (r *tombstoneRow) refusesIssuance(issuedAt time.Time) bool {
+	return covers(r.revokedAt, issuedAt)
+}
+
+func covers(cutoff, iat time.Time) bool {
+	return !cutoff.IsZero() && !iat.After(cutoff)
 }
 
 func newGrantRevocationStore() *grantRevocationStore {
 	return &grantRevocationStore{
-		tombstones: make(map[string]*store.GrantTombstone),
+		tombstones: make(map[string]*tombstoneRow),
 		denylist:   make(map[string]*store.RevokedJTI),
 	}
 }
@@ -54,19 +104,10 @@ func (s *grantRevocationStore) RevokeGrant(_ context.Context, t store.GrantTombs
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.tombstones[t.GrantID]; ok {
-		if t.RevokedAt.After(existing.RevokedAt) {
-			existing.RevokedAt = t.RevokedAt
-		}
-		if t.ExpiresAt.After(existing.ExpiresAt) {
-			existing.ExpiresAt = t.ExpiresAt
-		}
-		if existing.Reason == "" && t.Reason != "" {
-			existing.Reason = t.Reason
-		}
+		existing.merge(t)
 		return nil
 	}
-	clone := t
-	s.tombstones[t.GrantID] = &clone
+	s.tombstones[t.GrantID] = newTombstoneRow(t)
 	return nil
 }
 
@@ -111,11 +152,19 @@ func (s *grantRevocationStore) IsRevoked(_ context.Context, grantID, jti string,
 	if !ok {
 		return false, nil
 	}
-	// "revoked iff iat <= RevokedAt": equivalently, NOT iat.After.
-	if !iat.After(tomb.RevokedAt) {
-		return true, nil
+	return tomb.revokes(iat), nil
+}
+
+// IsIssuanceRevoked implements [store.IssuanceRevocationChecker]: only a
+// whole-grant tombstone refuses issuance.
+func (s *grantRevocationStore) IsIssuanceRevoked(_ context.Context, grantID string, issuedAt time.Time) (bool, error) {
+	if grantID == "" {
+		return false, nil
 	}
-	return false, nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tomb, ok := s.tombstones[grantID]
+	return ok && tomb.refusesIssuance(issuedAt), nil
 }
 
 // GC implements [store.GrantRevocationStore]. Drops every tombstone and
@@ -128,10 +177,10 @@ func (s *grantRevocationStore) GC(_ context.Context, cutoff time.Time) (int, err
 	defer s.mu.Unlock()
 	n := 0
 	for id, tomb := range s.tombstones {
-		if tomb.ExpiresAt.IsZero() {
+		if tomb.expiresAt.IsZero() {
 			continue
 		}
-		if tomb.ExpiresAt.Before(cutoff) {
+		if tomb.expiresAt.Before(cutoff) {
 			delete(s.tombstones, id)
 			n++
 		}

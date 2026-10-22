@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	dcgrant "github.com/libraz/go-oidc-provider/internal/grants/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -474,6 +475,10 @@ func prepareDeviceCodeResponse(
 	if err != nil {
 		return preparedDeviceCodeResponse{}, err
 	}
+	chainID, err := refresh.NewChainID()
+	if err != nil {
+		return preparedDeviceCodeResponse{}, err
+	}
 	accessToken, err = mintAccessToken(
 		ctx,
 		deps,
@@ -487,6 +492,7 @@ func prepareDeviceCodeResponse(
 		authTime,
 		binding,
 		nil,
+		accessTokenOverrides{ChainID: chainID},
 	)
 	if err != nil {
 		return preparedDeviceCodeResponse{}, err
@@ -514,6 +520,7 @@ func prepareDeviceCodeResponse(
 	refreshIn.Resource = resource
 	refreshIn.Binding = binding
 	refreshIn.Origin = store.RefreshOriginDeviceCode
+	refreshIn.ChainID = chainID
 	refreshIn.AuthCtx = authContext{AuthTime: authTime}
 	refreshToken, err = issueRefreshToken(ctx, deps, refreshIn)
 	if err != nil {

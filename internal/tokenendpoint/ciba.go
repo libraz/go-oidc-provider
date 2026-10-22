@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	cgrant "github.com/libraz/go-oidc-provider/internal/grants/ciba"
+	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -506,6 +507,10 @@ func prepareCIBAResponse(
 	if err != nil {
 		return preparedCIBAResponse{}, err
 	}
+	chainID, err := refresh.NewChainID()
+	if err != nil {
+		return preparedCIBAResponse{}, err
+	}
 	accessToken, err = mintAccessToken(
 		ctx,
 		deps,
@@ -519,6 +524,7 @@ func prepareCIBAResponse(
 		authTime,
 		binding,
 		nil,
+		accessTokenOverrides{ChainID: chainID},
 	)
 	if err != nil {
 		return preparedCIBAResponse{}, err
@@ -547,6 +553,7 @@ func prepareCIBAResponse(
 	refreshIn.Resource = resource
 	refreshIn.Binding = binding
 	refreshIn.Origin = store.RefreshOriginCIBA
+	refreshIn.ChainID = chainID
 	refreshIn.AuthCtx = authContext{
 		AuthTime: authTime,
 		ACR:      authorized.ACR,
