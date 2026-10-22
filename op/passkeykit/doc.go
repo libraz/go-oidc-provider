@@ -47,7 +47,8 @@
 //  1. The user reaches the embedder's account page and has already
 //     authenticated. passkeykit does not authenticate anyone; a
 //     registration handler reachable without a session lets an attacker
-//     add their own authenticator to someone else's account.
+//     add their own authenticator to someone else's account. Require a
+//     recent sign-in, not just a live session, before adding one.
 //  2. The embedder calls [Registrar.Begin] with the [User] being
 //     enrolled. It returns the [CreationOptions] to hand the SPA and a
 //     [Session] to keep.

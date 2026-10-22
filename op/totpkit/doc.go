@@ -20,7 +20,9 @@
 // # Lifecycle
 //
 //  1. Embedder collects the user's identity (typically after primary
-//     auth or an account-recovery prompt).
+//     auth or an account-recovery prompt). totpkit authenticates no
+//     one: require a recent sign-in before enrolling or replacing a
+//     factor on an existing account.
 //  2. Embedder calls [NewEnrolment] with the embedder-shared [Codec]
 //     and the (subject, issuer, account) triple. The returned
 //     [Pending] carries the otpauth URI (for the QR code), the raw
