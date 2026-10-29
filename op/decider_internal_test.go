@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -67,7 +68,7 @@ func TestDeciderAdapter_ProjectsEveryDecision(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			a := &deciderAdapter{inner: stubDecider{decision: tc.in}}
-			if got := a.Decide(context.Background(), authn.LoginFlowContext{}); got != tc.want {
+			if got := a.Decide(context.Background(), authn.LoginFlowContext{}); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("Decide(%T) = %#v, want %#v", tc.in, got, tc.want)
 			}
 		})

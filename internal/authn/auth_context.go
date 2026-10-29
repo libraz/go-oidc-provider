@@ -3,6 +3,7 @@ package authn
 import (
 	"slices"
 	"sort"
+	"time"
 )
 
 // EntryAuthn is the authentication the session a request arrived with
@@ -19,6 +20,9 @@ type EntryAuthn struct {
 
 	// AMR is the session's amr set.
 	AMR []string `json:"amr,omitempty"`
+
+	// AuthTime is the session's auth_time.
+	AuthTime time.Time `json:"auth_time,omitempty"`
 }
 
 // AuthContext is the authentication a chain stands on at one point of
@@ -38,8 +42,9 @@ type AuthContext struct {
 	// during the attempt, plus one for an inherited session.
 	Methods int
 
-	// CompletedKinds is the LoginFlow step kinds completed, led by
-	// Primary's kind when the session stands in for it.
+	// CompletedKinds is the LoginFlow step kinds completed, led by the
+	// kinds the session stands in for when it is inherited
+	// ([Orchestrator.InheritedCompletedKinds]).
 	CompletedKinds []string
 
 	// AMR is the union of the session's and the attempt's amr values,
@@ -70,13 +75,76 @@ func (o *Orchestrator) AuthContext(st State) AuthContext {
 	}
 	ac.Inherited = true
 	ac.Methods++
-	if o != nil && o.cfg.LoginFlow != nil && !containsString(ac.CompletedKinds, o.cfg.LoginFlow.primary.kind) {
-		ac.CompletedKinds = append([]string{o.cfg.LoginFlow.primary.kind}, ac.CompletedKinds...)
+	var inherited []string
+	for _, kind := range o.InheritedCompletedKinds(*entry) {
+		if !containsString(ac.CompletedKinds, kind) {
+			inherited = append(inherited, kind)
+		}
 	}
+	ac.CompletedKinds = append(inherited, ac.CompletedKinds...)
 	ac.Level = max(ac.Level, AALFromACRURI(entry.ACR))
 	ac.ACR = ac.Level.ACRURI()
 	ac.AMR = mergeAMR(entry.AMR, amr, ac.Level)
 	return ac
+}
+
+// InheritedCompletedKinds returns the LoginFlow step kinds the entry
+// session stands in for: Primary's, plus every rule step whose
+// satisfying amr set meets the session's amr ("mfa" aside). A one-of
+// step counts when any of its factors would; only its own kind is
+// returned. Captcha and factors with no registered amr value have an
+// empty set and never count. A nil receiver returns nil.
+//
+// The amr does not tell the otp factors apart, so a session made with
+// one of them satisfies a step demanding another; max_age or acr_values
+// force a fresh authentication where that matters.
+func (o *Orchestrator) InheritedCompletedKinds(entry EntryAuthn) []string {
+	if o == nil || o.cfg.LoginFlow == nil {
+		return nil
+	}
+	flow := o.cfg.LoginFlow
+	kinds := []string{flow.primary.kind}
+	for _, r := range flow.rules {
+		if !containsString(kinds, r.then.kind) && amrSatisfies(r.then, entry.AMR) {
+			kinds = append(kinds, r.then.kind)
+		}
+	}
+	return kinds
+}
+
+// amrSatisfies reports whether amr meets step's satisfying set, or for a
+// one-of step the set of any of its factors.
+func amrSatisfies(step compiledStep, amr []string) bool {
+	if len(step.oneOf) > 0 {
+		return slices.ContainsFunc(step.oneOf, func(inner compiledStep) bool { return amrSatisfies(inner, amr) })
+	}
+	for _, v := range satisfyingAMR(step) {
+		if v != amrMFA && slices.Contains(amr, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// satisfyingAMR is the set of session amr values that show step ran,
+// derived from its factor type through [Factor.AMRValue] so it reads the
+// session the way the session was written. A passkey step that demands
+// user verification accepts only the verified value.
+func satisfyingAMR(step compiledStep) []string {
+	if step.isCaptcha {
+		return nil
+	}
+	var set []string
+	for _, uv := range []bool{true, false} {
+		if !uv && step.requireUV {
+			continue
+		}
+		v := Factor{Type: step.factor, UserVerified: uv}.AMRValue()
+		if v != "" && !slices.Contains(set, v) {
+			set = append(set, v)
+		}
+	}
+	return set
 }
 
 // mergeAMR unions two amr sets and recomputes "mfa" over the result

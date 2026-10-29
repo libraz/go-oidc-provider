@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
@@ -166,6 +167,22 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	return interaction.Step{Prompt: a.prompt(remaining)}, nil
 }
 
+// Enrolled implements [authn.EnrollmentProber]: subject has a batch
+// with at least one unused code.
+func (a *Authenticator) Enrolled(ctx context.Context, subject string) (bool, error) {
+	batch, err := a.store.Get(ctx, subject)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("recovery: load batch: %w", err)
+	}
+	if batch == nil {
+		return false, nil
+	}
+	return slices.ContainsFunc(batch.Codes, func(c store.RecoveryCode) bool { return c.ConsumedAt.IsZero() }), nil
+}
+
 // Continue implements [authn.Authenticator]. It loads the batch,
 // verifies the submitted code through the [Verifier], persists the
 // mutated batch on success, and returns the matching [interaction.Step]:
@@ -280,4 +297,7 @@ func (*Authenticator) prompt(remaining int) *interaction.Prompt {
 
 // Compile-time confirmation that *Authenticator satisfies the public
 // interface.
-var _ authn.Authenticator = (*Authenticator)(nil)
+var (
+	_ authn.Authenticator    = (*Authenticator)(nil)
+	_ authn.EnrollmentProber = (*Authenticator)(nil)
+)

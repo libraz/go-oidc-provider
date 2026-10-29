@@ -155,6 +155,19 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	return interaction.Step{Prompt: a.prompt(remaining)}, nil
 }
 
+// Enrolled implements [authn.EnrollmentProber]: subject has a confirmed
+// TOTP record.
+func (a *Authenticator) Enrolled(ctx context.Context, subject string) (bool, error) {
+	rec, err := a.store.Get(ctx, subject)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("totp: load record: %w", err)
+	}
+	return rec != nil && !rec.ConfirmedAt.IsZero(), nil
+}
+
 // attemptsRemaining is the number of wrong codes subject may still submit
 // before either counter that can lock this factor does: the record's own,
 // read with the same rolling window [Verifier.Verify] applies, and the
@@ -333,4 +346,7 @@ func (*Authenticator) prompt(remaining int) *interaction.Prompt {
 // and store fields are reference-typed; a value-receiver method set
 // would force unnecessary copies when the orchestrator hands the
 // adapter through interface boundaries.
-var _ authn.Authenticator = (*Authenticator)(nil)
+var (
+	_ authn.Authenticator    = (*Authenticator)(nil)
+	_ authn.EnrollmentProber = (*Authenticator)(nil)
+)

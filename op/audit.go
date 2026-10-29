@@ -136,6 +136,17 @@ const (
 	//
 	// Stable since v1.5.
 	AuditLockoutEngaged = AuditEvent(auditevent.AuditLockoutEngaged)
+
+	// AuditStepBeginFailed fires once when a LoginFlow step could not
+	// begin, so a factor that refuses before prompting leaves a record.
+	// Extras carry "step_kind" and "reason", one of "not_enrolled",
+	// "aborted", "locked", "not_enrolled_skipped" (a one-of step passed
+	// over because the subject has none of its factors) and "error".
+	// ActorID is the subject when one is bound. A request the client
+	// cancelled is not recorded.
+	//
+	// Stable since v1.5.
+	AuditStepBeginFailed = AuditEvent(auditevent.AuditLoginStepBeginFailed)
 )
 
 // Consent events. AuditConsentGranted fires when the user approves a

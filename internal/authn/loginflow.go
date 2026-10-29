@@ -49,14 +49,42 @@ type LoginFlowStep struct {
 	// drives at runtime. The compiler synthesises this for built-in
 	// Steps (deferred — see notes on [ErrBuiltinStepNotWired]) and
 	// extracts it verbatim from an [op.ExternalStep] for the user-
-	// defined path. MUST be non-nil after a successful compile.
+	// defined path. MUST be non-nil after a successful compile, except
+	// on a one-of step.
 	Authenticator Authenticator
 
 	// IsCaptcha distinguishes the captcha [op.Step] from factor-shaped
 	// Steps. Captcha events do NOT enter [State.Factors] — captcha is
 	// out-of-band from the brute-force / amr-history feed.
 	IsCaptcha bool
+
+	// OneOf, when non-nil, makes this a one-of step: the user completes
+	// exactly one of the listed steps. Authenticator is then nil. The
+	// inner steps may not be captcha or one-of steps themselves.
+	OneOf []LoginFlowStep
+
+	// IfNoneEnrolled decides what a one-of step does when the bound
+	// subject has none of its factors enrolled.
+	IfNoneEnrolled UnenrolledPolicy
+
+	// RequireUserVerification marks a passkey step that demands user
+	// verification. It narrows the session amr that stands in for the
+	// step on a reused session to the verified value.
+	RequireUserVerification bool
 }
+
+// UnenrolledPolicy is what a one-of step does when the subject has none
+// of its factors enrolled.
+type UnenrolledPolicy int
+
+const (
+	// UnenrolledDeny ends the attempt with [ErrFactorNotEnrolled].
+	UnenrolledDeny UnenrolledPolicy = iota
+
+	// UnenrolledSkip passes over the step without completing it, so it
+	// raises neither the level nor the amr.
+	UnenrolledSkip
+)
 
 // LoginFlowRule is the projection of a public [op.Rule] for the
 // compiler. The When predicate operates on [LoginFlowContext] (the
@@ -123,6 +151,16 @@ type LoginFlowContext struct {
 	RemoteIP        string
 	UserAgent       string
 	AcceptLanguage  string
+
+	// Level, Inherited, AMR and ACR mirror [AuthContext] at this pass.
+	Level     AAL
+	Inherited bool
+	AMR       []string
+	ACR       string
+
+	// AuthTime is the inherited session's auth_time; zero while the
+	// attempt authenticates afresh.
+	AuthTime time.Time
 }
 
 // CompiledLoginFlow is the orchestrator's runtime view of an
@@ -140,6 +178,8 @@ type CompiledLoginFlow struct {
 	risk     RiskAssessor
 	byKind   map[string]compiledStep
 	byFactor map[FactorType]compiledStep
+	// parentOf maps each one-of inner step kind to its one-of step kind.
+	parentOf map[string]string
 }
 
 // compiledStep is the orchestrator-side view of a LoginFlowStep with
@@ -154,6 +194,20 @@ type compiledStep struct {
 	// only be honoured through the authenticator's own type.
 	factor    FactorType
 	isCaptcha bool
+	requireUV bool
+	// oneOf is non-empty for a one-of step, whose auth is nil.
+	oneOf      []compiledStep
+	unenrolled UnenrolledPolicy
+}
+
+// innerStep returns the one-of inner step whose kind is kind.
+func (s compiledStep) innerStep(kind string) (compiledStep, bool) {
+	for _, inner := range s.oneOf {
+		if inner.kind == kind {
+			return inner, true
+		}
+	}
+	return compiledStep{}, false
 }
 
 // compiledRule pairs a predicate with the step the orchestrator runs
@@ -177,22 +231,26 @@ var ErrBuiltinStepNotWired = errors.New("authn: built-in Step requires construct
 // CompileLoginFlow validates spec and returns the runtime structure
 // the orchestrator drives. Validation order:
 //
-//  1. Primary != zero (its Authenticator non-nil after projection).
-//  2. Every Rule.Then has a non-nil Authenticator.
-//  3. No two rules share Then.Kind (dedup unit invariant).
-//  4. Primary.Kind does not collide with any Rule.Then.Kind.
-//  5. Captcha-shaped Steps (IsCaptcha) are NOT placed at Primary
+//  1. Primary != zero (its Authenticator, or its OneOf, non-nil after
+//     projection).
+//  2. Every Rule.Then has a non-nil Authenticator or OneOf.
+//  3. No two steps share a kind anywhere in the flow, one-of inner
+//     steps included (dedup unit invariant).
+//  4. Captcha-shaped Steps (IsCaptcha) are NOT placed at Primary
 //     (captcha is a challenge, not a primary credential).
+//  5. A one-of step lists at least one step, none of them captcha or
+//     one-of, and its IfNoneEnrolled is a declared policy.
 //
 // On success the compiler returns a *CompiledLoginFlow whose byKind
-// index maps every declared StepKind to its [compiledStep]; the
-// orchestrator's Decider.Require lookup uses it for O(1) routing. The
-// parallel byFactor index maps each non-captcha step's [FactorType] to
-// the same value so a [RiskOutcome.RequiredFactors] entry can be routed
-// to the Step that satisfies it. Declaration order wins on a collision
-// (two Steps wrapping the same factor type).
+// index maps every declared StepKind — each one-of step and each of its
+// inner steps included — to its [compiledStep]; the orchestrator's
+// Decider.Require lookup uses it for O(1) routing. The parallel byFactor
+// index maps each non-captcha factor step's [FactorType] to the same
+// value so a [RiskOutcome.RequiredFactors] entry can be routed to the
+// Step that satisfies it. Declaration order wins on a collision (two
+// Steps wrapping the same factor type).
 func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
-	if spec.Primary.Authenticator == nil {
+	if spec.Primary.Authenticator == nil && spec.Primary.OneOf == nil {
 		return nil, errors.New("authn: LoginFlow.Primary is nil")
 	}
 	if spec.Primary.IsCaptcha {
@@ -201,48 +259,119 @@ func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 	if spec.Primary.Kind == "" {
 		return nil, errors.New("authn: LoginFlow.Primary.Kind is empty")
 	}
-	primary := compiledStep{
-		kind:      spec.Primary.Kind,
-		auth:      spec.Primary.Authenticator,
-		factor:    spec.Primary.Authenticator.Type(),
-		isCaptcha: spec.Primary.IsCaptcha,
+	c := &loginFlowCompiler{
+		byKind:   map[string]compiledStep{},
+		byFactor: map[FactorType]compiledStep{},
+		parentOf: map[string]string{},
 	}
-	byKind := map[string]compiledStep{primary.kind: primary}
-	byFactor := map[FactorType]compiledStep{}
-	indexFactor(byFactor, primary)
+	primary, err := c.step("LoginFlow.Primary", spec.Primary)
+	if err != nil {
+		return nil, err
+	}
 	rules := make([]compiledRule, 0, len(spec.Rules))
 	for i, r := range spec.Rules {
-		if r.Then.Authenticator == nil {
+		if r.Then.Authenticator == nil && r.Then.OneOf == nil {
 			return nil, fmt.Errorf("authn: LoginFlow.Rules[%d].Then is nil", i)
 		}
 		if r.Then.Kind == "" {
 			return nil, fmt.Errorf("authn: LoginFlow.Rules[%d].Then.Kind is empty", i)
 		}
-		if _, dup := byKind[r.Then.Kind]; dup {
-			return nil, fmt.Errorf("authn: LoginFlow duplicate StepKind %q", r.Then.Kind)
+		then, serr := c.step(fmt.Sprintf("LoginFlow.Rules[%d].Then", i), r.Then)
+		if serr != nil {
+			return nil, serr
 		}
-		step := compiledStep{
-			kind:      r.Then.Kind,
-			auth:      r.Then.Authenticator,
-			factor:    r.Then.Authenticator.Type(),
-			isCaptcha: r.Then.IsCaptcha,
-		}
-		byKind[step.kind] = step
-		indexFactor(byFactor, step)
 		when := r.When
 		if when == nil {
 			when = func(LoginFlowContext) bool { return false }
 		}
-		rules = append(rules, compiledRule{when: when, then: step})
+		rules = append(rules, compiledRule{when: when, then: then})
 	}
 	return &CompiledLoginFlow{
 		primary:  primary,
 		rules:    rules,
 		decider:  spec.Decider,
 		risk:     spec.Risk,
-		byKind:   byKind,
-		byFactor: byFactor,
+		byKind:   c.byKind,
+		byFactor: c.byFactor,
+		parentOf: c.parentOf,
 	}, nil
+}
+
+// loginFlowCompiler accumulates the indexes [CompileLoginFlow] builds.
+type loginFlowCompiler struct {
+	byKind   map[string]compiledStep
+	byFactor map[FactorType]compiledStep
+	parentOf map[string]string
+}
+
+// step compiles s, registering it (and a one-of step's inner steps)
+// under their kinds. where names s in error messages.
+func (c *loginFlowCompiler) step(where string, s LoginFlowStep) (compiledStep, error) {
+	if s.IfNoneEnrolled != UnenrolledDeny && s.IfNoneEnrolled != UnenrolledSkip {
+		return compiledStep{}, fmt.Errorf("authn: %s.IfNoneEnrolled %d is not a declared policy", where, s.IfNoneEnrolled)
+	}
+	if s.OneOf == nil {
+		return c.leaf(s)
+	}
+	switch {
+	case s.Authenticator != nil:
+		return compiledStep{}, fmt.Errorf("authn: %s sets both OneOf and Authenticator", where)
+	case s.IsCaptcha:
+		return compiledStep{}, fmt.Errorf("authn: %s one-of step must not be a captcha step", where)
+	case len(s.OneOf) == 0:
+		return compiledStep{}, fmt.Errorf("authn: %s.OneOf is empty", where)
+	}
+	if err := c.register(compiledStep{kind: s.Kind}); err != nil {
+		return compiledStep{}, err
+	}
+	inner := make([]compiledStep, 0, len(s.OneOf))
+	for j, in := range s.OneOf {
+		innerWhere := fmt.Sprintf("%s.OneOf[%d]", where, j)
+		switch {
+		case in.OneOf != nil:
+			return compiledStep{}, fmt.Errorf("authn: %s must not be a one-of step", innerWhere)
+		case in.IsCaptcha:
+			return compiledStep{}, fmt.Errorf("authn: %s must not be a captcha step", innerWhere)
+		case in.Authenticator == nil:
+			return compiledStep{}, fmt.Errorf("authn: %s is nil", innerWhere)
+		case in.Kind == "":
+			return compiledStep{}, fmt.Errorf("authn: %s.Kind is empty", innerWhere)
+		}
+		leaf, err := c.leaf(in)
+		if err != nil {
+			return compiledStep{}, err
+		}
+		c.parentOf[leaf.kind] = s.Kind
+		inner = append(inner, leaf)
+	}
+	step := compiledStep{kind: s.Kind, oneOf: inner, unenrolled: s.IfNoneEnrolled}
+	c.byKind[step.kind] = step
+	return step, nil
+}
+
+// leaf compiles and registers a step that wraps an Authenticator.
+func (c *loginFlowCompiler) leaf(s LoginFlowStep) (compiledStep, error) {
+	step := compiledStep{
+		kind:      s.Kind,
+		auth:      s.Authenticator,
+		factor:    s.Authenticator.Type(),
+		isCaptcha: s.IsCaptcha,
+		requireUV: s.RequireUserVerification,
+	}
+	if err := c.register(step); err != nil {
+		return compiledStep{}, err
+	}
+	indexFactor(c.byFactor, step)
+	return step, nil
+}
+
+// register indexes step by kind, refusing a kind already declared.
+func (c *loginFlowCompiler) register(step compiledStep) error {
+	if _, dup := c.byKind[step.kind]; dup {
+		return fmt.Errorf("authn: LoginFlow duplicate StepKind %q", step.kind)
+	}
+	c.byKind[step.kind] = step
+	return nil
 }
 
 // indexFactor records step under its [FactorType] unless the slot is
@@ -320,9 +449,13 @@ func recoverDecider(ctx context.Context, logger *slog.Logger, decider LoginFlowD
 // predicate that silently behaves differently depending on where in the
 // chain it runs.
 func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
-	completed := o.AuthContext(st).CompletedKinds
+	ac := o.AuthContext(st)
 	scopes := append([]string(nil), st.RequestedScopes...)
 	acrValues := append([]string(nil), st.ACRValues...)
+	var authTime time.Time
+	if ac.Inherited {
+		authTime = st.EntryAuthn.AuthTime
+	}
 	return LoginFlowContext{
 		Subject:         st.Subject,
 		ClientID:        st.ClientID,
@@ -330,12 +463,24 @@ func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 		FailedAttempts:  st.LastFailures,
 		RiskScore:       st.RiskScoreCached,
 		NewDevice:       st.NewDeviceCached,
-		CompletedKinds:  completed,
+		CompletedKinds:  ac.CompletedKinds,
 		ACRValues:       acrValues,
 		RemoteIP:        st.RemoteIPString(),
 		UserAgent:       st.UserAgent,
 		AcceptLanguage:  st.AcceptLanguage,
+		Level:           ac.Level,
+		Inherited:       ac.Inherited,
+		AMR:             ac.AMR,
+		ACR:             ac.ACR,
+		AuthTime:        authTime,
 	}
+}
+
+// stepSettled reports whether kind needs no run in this attempt: it is
+// completed (or the entry session stands in for it), or it was skipped
+// as unenrolled.
+func stepSettled(st State, lc LoginFlowContext, kind string) bool {
+	return containsString(lc.CompletedKinds, kind) || containsString(st.SkippedStepKinds, kind)
 }
 
 // describeStepKind formats a step kind for log messages. Centralising
@@ -460,9 +605,9 @@ func (o *Orchestrator) evalLoginFlowDecider(ctx context.Context, st State, flow 
 			)
 			return true, st, interaction.Step{}, ErrInvalidStep
 		}
-		if containsString(st.CompletedStepKinds, step.kind) {
-			// Decider asked for a step already completed — fall
-			// through to rules rather than spin on the same step.
+		if stepSettled(st, lc, step.kind) {
+			// Decider asked for a step already completed or skipped —
+			// fall through to rules rather than spin on the same step.
 			return false, st, interaction.Step{}, nil
 		}
 		if !step.isCaptcha {
@@ -521,41 +666,98 @@ func (o *Orchestrator) loginFlowCaptchaPending(st State, flow *CompiledLoginFlow
 }
 
 // LoginFlowRequiresStep reports whether the LoginFlow would demand a
-// factor step for st if the chain ran with Primary already satisfied by
-// the session: the Decider asks for one (Require) or refuses (Deny), or
-// a factor-shaped rule matches. The HTTP layer calls it before serving
-// an authorization from an existing session, so a rule guarding a
-// client or scope is not skipped just because no credential ceremony
-// was due. Primary counts as completed through [State.EntryAuthn] and
-// no other step does, matching a chain started from the session. Risk
-// is not consulted here; risk-driven rules fire only inside the chain.
+// factor step for st if the chain ran on the session's authentication:
+// the Decider asks for one (Require) or refuses (Deny), or a
+// factor-shaped rule matches. The HTTP layer calls it before serving an
+// authorization from an existing session, so a rule guarding a client
+// or scope is not skipped just because no credential ceremony was due.
+// The steps the session stands in for ([Orchestrator.InheritedCompletedKinds])
+// count as completed, matching a chain started from the session. A
+// one-of step under [UnenrolledSkip] is probed for the session subject
+// and not demanded when none of its factors is enrolled; a probe error
+// keeps it demanded. Risk is not consulted here; risk-driven rules fire
+// only inside the chain.
 func (o *Orchestrator) LoginFlowRequiresStep(ctx context.Context, st State) bool {
 	flow := o.cfg.LoginFlow
 	if flow == nil {
 		return false
 	}
 	lc := o.loginFlowContext(st)
-	if flow.decider != nil {
-		switch d := recoverDecider(ctx, o.logger, flow.decider, lc).(type) {
-		case LoginFlowAllow:
-			return false
-		case LoginFlowDeny:
-			return true
-		case LoginFlowRequire:
-			if step, ok := flow.byKind[d.Step.Kind]; !ok || !step.isCaptcha {
-				return true
-			}
-		}
+	if decided, required := o.deciderRequiresStep(ctx, st, flow, lc); decided {
+		return required
 	}
 	for i, r := range flow.rules {
-		if r.then.isCaptcha {
+		if r.then.isCaptcha || stepSettled(st, lc, r.then.kind) {
 			continue
 		}
-		if recoverPredicate(o.logger, i, r.when, lc) {
-			return true
+		if !recoverPredicate(o.logger, i, r.when, lc) {
+			continue
 		}
+		if skipsUnenrolled(ctx, st.Subject, r.then) {
+			continue
+		}
+		return true
 	}
 	return false
+}
+
+// deciderRequiresStep is the Decider half of [Orchestrator.LoginFlowRequiresStep].
+// decided is false when the rules must still be consulted: no Decider, a
+// Pass, or a Require for a step that is captcha-shaped, already settled,
+// or skipped for want of enrollment.
+func (o *Orchestrator) deciderRequiresStep(ctx context.Context, st State, flow *CompiledLoginFlow, lc LoginFlowContext) (decided, required bool) {
+	if flow.decider == nil {
+		return false, false
+	}
+	switch d := recoverDecider(ctx, o.logger, flow.decider, lc).(type) {
+	case LoginFlowAllow:
+		return true, false
+	case LoginFlowDeny:
+		return true, true
+	case LoginFlowRequire:
+		step, ok := flow.byKind[d.Step.Kind]
+		if !ok {
+			return true, true
+		}
+		if !step.isCaptcha && !stepSettled(st, lc, step.kind) && !skipsUnenrolled(ctx, st.Subject, step) {
+			return true, true
+		}
+	}
+	return false, false
+}
+
+// skipsUnenrolled reports whether step is a one-of step under
+// [UnenrolledSkip] that subject has none of the factors of. A probe
+// error answers false, so the step stays demanded.
+func skipsUnenrolled(ctx context.Context, subject string, step compiledStep) bool {
+	if len(step.oneOf) == 0 || step.unenrolled != UnenrolledSkip {
+		return false
+	}
+	enrolled, err := enrolledSteps(ctx, subject, step.oneOf)
+	return err == nil && len(enrolled) == 0
+}
+
+// enrolledSteps returns the steps subject is enrolled in, in declaration
+// order. A step whose authenticator does not implement
+// [EnrollmentProber] counts as enrolled; a probe error fails the whole
+// call.
+func enrolledSteps(ctx context.Context, subject string, steps []compiledStep) ([]compiledStep, error) {
+	var out []compiledStep
+	for _, s := range steps {
+		prober, ok := s.auth.(EnrollmentProber)
+		if !ok {
+			out = append(out, s)
+			continue
+		}
+		enrolled, err := prober.Enrolled(ctx, subject)
+		if err != nil {
+			return nil, fmt.Errorf("authn: enrollment probe for step %s: %w", describeStepKind(s.kind), err)
+		}
+		if enrolled {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 // evalLoginFlowRules dispatches the first matching, not-yet-completed
@@ -580,7 +782,7 @@ func (o *Orchestrator) evalLoginFlowRuleGroup(ctx context.Context, st State, flo
 		if r.then.isCaptcha != captcha {
 			continue
 		}
-		if containsString(st.CompletedStepKinds, r.then.kind) {
+		if stepSettled(st, lc, r.then.kind) {
 			continue
 		}
 		if !recoverPredicate(o.logger, i, r.when, lc) {
@@ -668,8 +870,12 @@ func riskStepUpSatisfied(st State) bool {
 // step.kind. The step's Authenticator may complete immediately (Result
 // in Begin) — the function records that path through [appendFactor]
 // and re-enters the dispatcher so the chain advances to the next
-// pass.
+// pass. A one-of step is handed to [Orchestrator.runOneOfStep]. A Begin
+// error is reported to the audit stream before it propagates.
 func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step compiledStep, now time.Time) (State, interaction.Step, error) {
+	if len(step.oneOf) > 0 {
+		return o.runOneOfStep(ctx, st, step, now)
+	}
 	begin, err := step.auth.Begin(ctx, BeginInput{
 		Subject:         st.Subject,
 		ClientID:        st.ClientID,
@@ -678,6 +884,7 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 		Client:          st.Client,
 	})
 	if err != nil {
+		o.reportBeginFailure(ctx, st, step.kind, err)
 		return st, interaction.Step{}, err
 	}
 	if begin.Prompt != nil {
@@ -704,6 +911,81 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 	return o.advanceLoginFlow(ctx, st, now)
 }
 
+// runOneOfStep drives a one-of step. After Primary only the steps the
+// subject is enrolled in are candidates; at Primary no subject is known
+// yet and every step is. No candidate ends the attempt with
+// [ErrFactorNotEnrolled] or, under [UnenrolledSkip], records the skip and
+// moves on. One candidate is begun directly; more are offered through
+// the factor-choice prompt, signed under the one-of kind. A factor
+// already settled on in this attempt is resumed without probing again.
+func (o *Orchestrator) runOneOfStep(ctx context.Context, st State, step compiledStep, now time.Time) (State, interaction.Step, error) {
+	if st.PendingOneOfKind == step.kind && len(st.OfferedFactorKinds) == 1 {
+		if inner, ok := step.innerStep(st.OfferedFactorKinds[0]); ok {
+			return o.runLoginFlowStep(ctx, st, inner, now)
+		}
+	}
+	candidates := step.oneOf
+	if step.kind != o.cfg.LoginFlow.primary.kind {
+		enrolled, err := enrolledSteps(ctx, st.Subject, step.oneOf)
+		if err != nil {
+			o.reportBeginFailure(ctx, st, step.kind, err)
+			return st, interaction.Step{}, err
+		}
+		candidates = enrolled
+	}
+	switch len(candidates) {
+	case 0:
+		if step.unenrolled == UnenrolledSkip {
+			st.SkippedStepKinds = append(st.SkippedStepKinds, step.kind)
+			o.emitStepBeginFailed(ctx, st, step.kind, beginFailedNotEnrolledSkipped)
+			return o.advanceLoginFlow(ctx, st, now)
+		}
+		o.reportBeginFailure(ctx, st, step.kind, ErrFactorNotEnrolled)
+		return st, interaction.Step{}, ErrFactorNotEnrolled
+	case 1:
+		st.PendingOneOfKind = step.kind
+		st.OfferedFactorKinds = []string{candidates[0].kind}
+		return o.runLoginFlowStep(ctx, st, candidates[0], now)
+	}
+	options := make([]interaction.FactorOption, 0, len(candidates))
+	offered := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		options = append(options, interaction.FactorOption{Kind: c.kind, Label: interaction.FactorLabelKey(c.kind)})
+		offered = append(offered, c.kind)
+	}
+	next := st
+	next.ActiveStepKind = step.kind
+	next.FactorScratch = nil
+	next.PendingOneOfKind = step.kind
+	next.OfferedFactorKinds = offered
+	next, emitted, err := o.emitLoginFlowPrompt(next, step.kind, interaction.Prompt{
+		Type: interaction.PromptTypeChooseFactor,
+		Data: interaction.FactorChoicePromptData{Options: options},
+	}, now)
+	if err != nil {
+		return st, interaction.Step{}, err
+	}
+	return next, emitted, nil
+}
+
+// handleFactorChoice accepts the answer to a one-of step's choice
+// prompt and begins the chosen step. Only a kind the prompt offered is
+// accepted, checked against [State.OfferedFactorKinds] rather than a
+// fresh enrollment probe; anything else is refused like a bad StateRef.
+func (o *Orchestrator) handleFactorChoice(ctx context.Context, st State, in Input, step compiledStep) (State, interaction.Step, error) {
+	choice := in.Submission.Values[interaction.FactorChoiceField]
+	if st.PendingOneOfKind != step.kind || choice == "" || !containsString(st.OfferedFactorKinds, choice) {
+		return st, interaction.Step{}, ErrInvalidStateRef
+	}
+	inner, ok := step.innerStep(choice)
+	if !ok {
+		return st, interaction.Step{}, ErrInvalidStateRef
+	}
+	st.ActiveStepKind = ""
+	st.OfferedFactorKinds = []string{choice}
+	return o.runLoginFlowStep(ctx, st, inner, in.Now)
+}
+
 // emitLoginFlowPrompt issues a fresh StateRef tagged with the step's
 // kind and returns the prompt for the SPA. The kind is appended
 // verbatim so two distinct steps emit distinguishable signed payloads
@@ -728,9 +1010,9 @@ func (o *Orchestrator) emitLoginFlowPrompt(st State, kind string, prompt interac
 // claim.
 //
 // In all cases the step's kind is appended to CompletedStepKinds for
-// dedup, ActiveStepKind is cleared, and the FactorScratch slot is
-// reset so a subsequent step does not inherit the previous step's
-// scratch payload.
+// dedup, followed by its one-of step's kind when it is an inner step,
+// ActiveStepKind is cleared, and the FactorScratch slot is reset so a
+// subsequent step does not inherit the previous step's scratch payload.
 func (o *Orchestrator) recordLoginFlowResult(ctx context.Context, st State, step compiledStep, res interaction.Result, now time.Time) State {
 	if step.isCaptcha {
 		st.CaptchaFailures = 0
@@ -740,6 +1022,15 @@ func (o *Orchestrator) recordLoginFlowResult(ctx context.Context, st State, step
 		o.observeSuccess(ctx, st, now, step.auth.Type())
 	}
 	st.CompletedStepKinds = append(st.CompletedStepKinds, step.kind)
+	if parent, ok := o.cfg.LoginFlow.parentOf[step.kind]; ok {
+		if !containsString(st.CompletedStepKinds, parent) {
+			st.CompletedStepKinds = append(st.CompletedStepKinds, parent)
+		}
+		if st.PendingOneOfKind == parent {
+			st.PendingOneOfKind = ""
+			st.OfferedFactorKinds = nil
+		}
+	}
 	st.ActiveStepKind = ""
 	st.FactorScratch = nil
 	return st
@@ -761,6 +1052,9 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 	step, ok := flow.byKind[kind]
 	if !ok {
 		return st, interaction.Step{}, ErrInvalidStateRef
+	}
+	if len(step.oneOf) > 0 {
+		return o.handleFactorChoice(ctx, st, in, step)
 	}
 	cont, err := step.auth.Continue(ctx, ContinueInput{
 		Subject:         st.Subject,

@@ -180,6 +180,55 @@ func (o *Orchestrator) observeLocked(ctx context.Context, st State, now time.Tim
 	})
 }
 
+// Reasons a login step could not begin, reported as the "reason" extra
+// of [auditevent.AuditLoginStepBeginFailed].
+const (
+	beginFailedNotEnrolled        = "not_enrolled"
+	beginFailedAborted            = "aborted"
+	beginFailedLocked             = "locked"
+	beginFailedNotEnrolledSkipped = "not_enrolled_skipped"
+	beginFailedError              = "error"
+)
+
+// reportBeginFailure files a step whose Begin returned err. A cancelled
+// request reports nothing: the caller went away, the step did not fail.
+// The refinements of [ErrFactorAbort] are tested before it.
+func (o *Orchestrator) reportBeginFailure(ctx context.Context, st State, kind string, err error) {
+	var reason string
+	switch {
+	case errors.Is(err, context.Canceled):
+		return
+	case errors.Is(err, ErrFactorNotEnrolled):
+		reason = beginFailedNotEnrolled
+	case errors.Is(err, ErrFactorLocked):
+		reason = beginFailedLocked
+	case errors.Is(err, ErrFactorAbort):
+		reason = beginFailedAborted
+	default:
+		reason = beginFailedError
+	}
+	o.emitStepBeginFailed(ctx, st, kind, reason)
+}
+
+// emitStepBeginFailed reports that the step of kind did not begin. The
+// subject is the one bound so far, empty before Primary binds one.
+func (o *Orchestrator) emitStepBeginFailed(ctx context.Context, st State, kind, reason string) {
+	level := opaudit.LevelWarn
+	if reason == beginFailedNotEnrolledSkipped {
+		level = opaudit.LevelInfo
+	}
+	o.auditEmitter.Emit(ctx, opaudit.Event{
+		Name:      string(auditevent.AuditLoginStepBeginFailed),
+		Level:     level,
+		Message:   "login step did not begin",
+		ActorID:   st.Subject,
+		ClientID:  st.ClientID,
+		IP:        st.RemoteIPString(),
+		UserAgent: st.UserAgent,
+		Extras:    map[string]any{"step_kind": kind, "reason": reason},
+	})
+}
+
 // emitAttempt reports the same outcome to the OP-wide audit stream
 // under the shared catalogue's login.* / mfa.* vocabulary.
 //

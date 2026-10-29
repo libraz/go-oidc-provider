@@ -307,6 +307,23 @@ type State struct {
 	// once the step's Result lands.
 	ActiveStepKind string `json:"active_step_kind,omitempty"`
 
+	// PendingOneOfKind is the kind of the one-of step in progress: its
+	// factor choice is outstanding, or the factor it settled on has not
+	// completed yet. Empty otherwise.
+	PendingOneOfKind string `json:"pending_one_of_kind,omitempty"`
+
+	// OfferedFactorKinds is the set of inner step kinds the pending one-of
+	// step offered; a factor choice is accepted only from this set. Once a
+	// choice is accepted it narrows to the chosen kind, so a retry of that
+	// factor resumes it rather than offering the choice again.
+	OfferedFactorKinds []string `json:"offered_factor_kinds,omitempty"`
+
+	// SkippedStepKinds records the one-of step kinds skipped during this
+	// attempt because the subject had none of their factors enrolled and
+	// the step's policy was [UnenrolledSkip]. A skipped step is not
+	// completed: it contributes nothing to the level or amr.
+	SkippedStepKinds []string `json:"skipped_step_kinds,omitempty"`
+
 	// ReauthRequired reports that this authorization request may not
 	// be served from the authentication the entry session already
 	// carries: the relying party asked for prompt=login, the session

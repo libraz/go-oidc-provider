@@ -348,6 +348,19 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	return interaction.Step{Prompt: a.sendPrompt()}, nil
 }
 
+// Enrolled implements [authn.EnrollmentProber]: subject exists and has
+// an email claim bound.
+func (a *Authenticator) Enrolled(ctx context.Context, subject string) (bool, error) {
+	user, err := a.users.FindBySubject(ctx, subject)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("emailotp: load user: %w", err)
+	}
+	return claimEmail(user) != "", nil
+}
+
 // Continue implements [op.Authenticator]. The function dispatches on
 // in.Scratch:
 //
@@ -734,4 +747,7 @@ func claimEmail(u *store.User) string {
 // Compile-time confirmation that *Authenticator satisfies the
 // public interface. The receiver is a pointer because the mailer /
 // store / users fields are reference-typed.
-var _ authn.Authenticator = (*Authenticator)(nil)
+var (
+	_ authn.Authenticator    = (*Authenticator)(nil)
+	_ authn.EnrollmentProber = (*Authenticator)(nil)
+)

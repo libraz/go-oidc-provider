@@ -70,15 +70,16 @@ const (
 	AuditAccountFederationLinked    Name = "federation.linked"
 	AuditAccountFederationUnlinked  Name = "federation.unlinked"
 
-	AuditLoginSuccess   Name = "login.success"
-	AuditLoginFailed    Name = "login.failed"
-	AuditLockoutStalled Name = "lockout.stalled"
-	AuditLockoutEngaged Name = "lockout.engaged"
-	AuditMFARequired    Name = "mfa.required"
-	AuditMFASuccess     Name = "mfa.success"
-	AuditMFAFailed      Name = "mfa.failed"
-	AuditStepUpRequired Name = "step_up.required"
-	AuditStepUpSuccess  Name = "step_up.success"
+	AuditLoginSuccess         Name = "login.success"
+	AuditLoginFailed          Name = "login.failed"
+	AuditLoginStepBeginFailed Name = "login.step_begin_failed"
+	AuditLockoutStalled       Name = "lockout.stalled"
+	AuditLockoutEngaged       Name = "lockout.engaged"
+	AuditMFARequired          Name = "mfa.required"
+	AuditMFASuccess           Name = "mfa.success"
+	AuditMFAFailed            Name = "mfa.failed"
+	AuditStepUpRequired       Name = "step_up.required"
+	AuditStepUpSuccess        Name = "step_up.success"
 
 	AuditConsentGranted              Name = "consent.granted"
 	AuditConsentGrantedFirstParty    Name = "consent.granted.first_party"
@@ -217,6 +218,7 @@ var definitions = []Definition{
 	{Name: AuditAccountFederationUnlinked},
 	{Name: AuditLoginSuccess, Metric: MetricLoginAttempts, Label: "success"},
 	{Name: AuditLoginFailed, Metric: MetricLoginAttempts, Label: "failed"},
+	{Name: AuditLoginStepBeginFailed},
 	{Name: AuditLockoutStalled},
 	{Name: AuditLockoutEngaged},
 	{Name: AuditMFARequired},

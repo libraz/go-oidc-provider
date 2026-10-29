@@ -270,6 +270,15 @@ type UserVerificationReporter interface {
 	LastUserVerified(subject string) bool
 }
 
+// EnrollmentProber is an optional interface an [Authenticator] MAY
+// implement to report whether a subject can complete it at all. A
+// one-of step offers only the factors whose authenticator reports the
+// subject enrolled; an authenticator without it counts as enrolled. An
+// error fails the step closed rather than counting either way.
+type EnrollmentProber interface {
+	Enrolled(ctx context.Context, subject string) (bool, error)
+}
+
 // Interaction is a non-authentication screen unit (T&C acceptance,
 // KYC gate, device-trust prompt...). Unlike [Authenticator], an
 // Interaction does not bind a subject — the subject is already known.
