@@ -74,7 +74,7 @@ func (s *cibaRequestStore) gcLocked(now time.Time) {
 // instead of paying O(total requests) on each one.
 func (s *cibaRequestStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if s.savesSinceGC < cibaFullGCSaveInterval {
+	if !sweepDue(s.savesSinceGC, cibaFullGCSaveInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)

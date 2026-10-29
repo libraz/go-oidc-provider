@@ -143,7 +143,9 @@ func (j *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 			return nil
 		}
 		value = expiringJTIPrefix + strconv.FormatInt(expiresAt.UnixMicro(), 10)
-		ttlMillis = max(ttl.Milliseconds(), 1)
+		// Round up: a truncated TTL lets Redis drop the marker while the
+		// adapter clock still reads it live, reopening the replay window.
+		ttlMillis = ceilMillis(ttl)
 	}
 	recorded, err := j.markScript.Run(
 		ctx,
@@ -164,6 +166,12 @@ func (j *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 
 func jtiTTL(now, expiresAt time.Time) time.Duration {
 	return expiresAt.Sub(now)
+}
+
+// ceilMillis converts a positive TTL to whole milliseconds, rounding up
+// so Redis never drops a key before its logical expiry.
+func ceilMillis(ttl time.Duration) int64 {
+	return int64((ttl + time.Millisecond - 1) / time.Millisecond)
 }
 
 // Has reports whether a live marker for jti is present. It applies the

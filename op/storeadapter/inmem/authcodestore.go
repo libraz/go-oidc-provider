@@ -119,7 +119,7 @@ func (s *authCodeStore) gcLocked(now time.Time) {
 // and would otherwise never reach a sweep.
 func (s *authCodeStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if s.savesSinceGC < authCodeFullGCSaveInterval {
+	if !sweepDue(s.savesSinceGC, authCodeFullGCSaveInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)

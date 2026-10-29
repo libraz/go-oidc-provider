@@ -119,7 +119,7 @@ if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
 redis.call("SET", KEYS[1], ARGV[3], "PX", ARGV[4])
 return 1
 `
-	ttlMilliseconds := int64((ttl + time.Millisecond - 1) / time.Millisecond)
+	ttlMilliseconds := ceilMillis(ttl)
 	result, err := s.parent.client.Eval(
 		ctx,
 		compareAndSwapInteraction,

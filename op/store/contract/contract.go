@@ -1474,6 +1474,9 @@ var userStoreCases = []subtest{
 	{"FindByUsernameMatchesVerbatim", userPasswordFindByUsernameVerbatim},
 	{"ReadPasswordHashRoundTrip", userPasswordReadHash},
 	{"ReadPasswordHashMissingSubject", userPasswordReadHashMissing},
+	{"UpdatePasswordHashRoundTrip", userPasswordUpdateHash},
+	{"UpdatePasswordHashMissingSubject", userPasswordUpdateHashMissing},
+	{"UpdatePasswordHashUnchanged", userPasswordUpdateHashUnchanged},
 }
 
 func userStoreFindMissing(t *testing.T, f Factory) {
@@ -1636,5 +1639,70 @@ func userPasswordReadHashMissing(t *testing.T, f Factory) {
 	_, err := passwords.ReadPasswordHash(context.Background(), "contract-absent-subject")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("ReadPasswordHash(absent): want ErrNotFound, got %v", err)
+	}
+}
+
+// requirePasswordHashUpdater skips the current test when the user store
+// does not implement [store.UserPasswordHashUpdater].
+func requirePasswordHashUpdater(t *testing.T, s store.Store) store.UserPasswordHashUpdater {
+	t.Helper()
+	updater, ok := s.Users().(store.UserPasswordHashUpdater)
+	if !ok {
+		t.Skipf("backend %T does not implement store.UserPasswordHashUpdater", s.Users())
+	}
+	return updater
+}
+
+// rehashedPassword is the replacement hash the updater cases write.
+const rehashedPassword = "$argon2id$v=19$m=65536,t=3,p=4$bmV3c2FsdA$cmVoYXNoZWQ" //nolint:gosec // fixture hash, not a credential.
+
+// userPasswordUpdateHash pins that a rehash replaces the stored hash: the
+// next ReadPasswordHash returns the new encoding verbatim, so the next
+// login verifies against argon2id rather than the legacy scheme.
+func userPasswordUpdateHash(t *testing.T, f Factory) {
+	b, user, _, _ := seededUserBackend(t, f)
+	updater := requirePasswordHashUpdater(t, b.Store)
+	passwords := requireUserPasswords(t, b.Store)
+	ctx := context.Background()
+
+	if err := updater.UpdatePasswordHash(ctx, user.Subject, []byte(rehashedPassword)); err != nil {
+		t.Fatalf("UpdatePasswordHash: %v", err)
+	}
+	got, err := passwords.ReadPasswordHash(ctx, user.Subject)
+	if err != nil {
+		t.Fatalf("ReadPasswordHash after update: %v", err)
+	}
+	if string(got) != rehashedPassword {
+		t.Fatalf("ReadPasswordHash after update = %q, want %q", got, rehashedPassword)
+	}
+}
+
+// userPasswordUpdateHashMissing pins the [store.ErrNotFound] answer for
+// an unknown subject, which must not create a credential.
+func userPasswordUpdateHashMissing(t *testing.T, f Factory) {
+	b, _, _, _ := seededUserBackend(t, f)
+	updater := requirePasswordHashUpdater(t, b.Store)
+	passwords := requireUserPasswords(t, b.Store)
+	ctx := context.Background()
+
+	err := updater.UpdatePasswordHash(ctx, "contract-absent-subject", []byte(rehashedPassword))
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("UpdatePasswordHash(absent): want ErrNotFound, got %v", err)
+	}
+	if _, err := passwords.ReadPasswordHash(ctx, "contract-absent-subject"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ReadPasswordHash after a refused update: want ErrNotFound, got %v", err)
+	}
+}
+
+// userPasswordUpdateHashUnchanged pins that only absence is reported as
+// [store.ErrNotFound]: rewriting the hash a subject already carries is a
+// successful update, even on an engine that counts changed rather than
+// matched rows.
+func userPasswordUpdateHashUnchanged(t *testing.T, f Factory) {
+	b, user, _, hash := seededUserBackend(t, f)
+	updater := requirePasswordHashUpdater(t, b.Store)
+
+	if err := updater.UpdatePasswordHash(context.Background(), user.Subject, hash); err != nil {
+		t.Fatalf("UpdatePasswordHash with the stored hash: %v", err)
 	}
 }

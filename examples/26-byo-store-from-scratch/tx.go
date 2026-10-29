@@ -2,8 +2,10 @@
 
 // tx.go — store.Transactional support. BeginTx opens one *sql.Tx and
 // returns a store.Tx whose substore accessors are all bound to it. The OP
-// runtime does not require this extension, but it is useful for embedders
-// that perform their own maintenance or migration writes.
+// requires this extension whenever the browser authorization-code flow is
+// enabled, as it is here: grant creation, PAR consumption and the
+// authorization code commit together through one Tx, and op.New refuses a
+// store without it.
 //
 // store.Tx exposes AuthorizationCodes, Grants, RefreshTokens,
 // PushedAuthRequests, AccessTokens, OpaqueAccessTokens, and

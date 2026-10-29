@@ -106,7 +106,7 @@ func (s *authnLockoutStore) CompareAndSwap(ctx context.Context, expectedVersion 
 // triggered; every other reclaimable row is dropped.
 func (s *authnLockoutStore) maybeGCLocked(now time.Time, keep string) {
 	s.swapsSinceGC++
-	if s.swapsSinceGC < authnLockoutFullGCSwapInterval {
+	if !sweepDue(s.swapsSinceGC, authnLockoutFullGCSwapInterval, len(s.m)) {
 		return
 	}
 	s.swapsSinceGC = 0

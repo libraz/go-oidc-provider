@@ -35,6 +35,37 @@ const postgresImage = "postgres:16-alpine"
 // absence to a failure for release gates.
 func newPostgresFactory(t *testing.T) contract.Factory {
 	t.Helper()
+	openDB := newPostgresDBFactory(t)
+	return func(t *testing.T) contract.Backend {
+		t.Helper()
+		// One clock per sub-test: the harness advances it to reach the
+		// expired-after-the-fact states, and sub-tests run in parallel
+		// against the same server, so a shared clock would let one
+		// sub-test expire another's live records.
+		clock := &fixedClock{now: contract.Reference}
+		db := openDB(t)
+		s, err := oidcsql.New(db, oidcsql.Postgres(), oidcsql.WithClock(clock))
+		if err != nil {
+			t.Fatalf("oidcsql.New: %v", err)
+		}
+		if err := s.Migrate(t.Context()); err != nil {
+			t.Fatalf("Migrate: %v", err)
+		}
+		return contract.Backend{
+			Store: s,
+			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
+			SeedUser: seedContractUser(s),
+		}
+	}
+}
+
+// newPostgresDBFactory boots the container and returns a function that
+// opens a connection to a fresh, empty database per call.
+func newPostgresDBFactory(t *testing.T) func(*testing.T) *databasesql.DB {
+	t.Helper()
 	ctx := context.Background()
 
 	ctr, err := postgresmod.Run(ctx, postgresImage,
@@ -71,13 +102,8 @@ func newPostgresFactory(t *testing.T) contract.Factory {
 
 	var seq atomic.Uint64
 
-	return func(t *testing.T) contract.Backend {
+	return func(t *testing.T) *databasesql.DB {
 		t.Helper()
-		// One clock per sub-test: the harness advances it to reach the
-		// expired-after-the-fact states, and sub-tests run in parallel
-		// against the same server, so a shared clock would let one
-		// sub-test expire another's live records.
-		clock := &fixedClock{now: contract.Reference}
 		dbName := fmt.Sprintf("oidc_t_%d", seq.Add(1))
 		// CREATE DATABASE is not transactional in postgres; database/sql
 		// runs each Exec without an enclosing tx so the statement
@@ -99,22 +125,7 @@ func newPostgresFactory(t *testing.T) contract.Factory {
 			_, _ = admin.ExecContext(context.Background(),
 				`DROP DATABASE IF EXISTS "`+dbName+`" WITH (FORCE)`)
 		})
-
-		s, err := oidcsql.New(db, oidcsql.Postgres(), oidcsql.WithClock(clock))
-		if err != nil {
-			t.Fatalf("oidcsql.New: %v", err)
-		}
-		if err := s.Migrate(t.Context()); err != nil {
-			t.Fatalf("Migrate: %v", err)
-		}
-		return contract.Backend{
-			Store: s,
-			Now:   clock.Now,
-			Advance: func(delta time.Duration) {
-				clock.now = clock.now.Add(delta)
-			},
-			SeedUser: seedContractUser(s),
-		}
+		return db
 	}
 }
 

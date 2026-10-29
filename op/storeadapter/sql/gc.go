@@ -111,7 +111,7 @@ func (s GCStats) Total() int64 {
 // records the work that did land. A partial sweep is safe to repeat:
 // every statement is an unconditional DELETE of already-dead rows.
 //
-// The substores behind the last four sweeps also expose their own GC
+// The substores behind the three sweeps before the last also expose their own GC
 // method, reachable through the matching accessor, for a caller that
 // wants to reclaim one table on its own schedule; [store.ConsumedJTIStore]
 // does not declare GC on its interface, so that one is reachable only
@@ -156,12 +156,14 @@ func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 		{"consumedJTIs", s.jtisImpl.GC, &stats.ConsumedJTIs},
 	}
 	for _, sweep := range sweeps {
+		// A failing sweep may still report rows it removed before failing
+		// (grant revocations delete from two tables), so count first.
 		n, err := sweep.run(ctx, cutoff)
-		if err != nil {
-			return stats, wrapErr("gc."+sweep.name, err)
-		}
 		if sweep.count != nil {
 			*sweep.count = n
+		}
+		if err != nil {
+			return stats, wrapErr("gc."+sweep.name, err)
 		}
 	}
 	return stats, nil

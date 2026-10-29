@@ -51,3 +51,25 @@ func TestDecodeJTIExpiry(t *testing.T) {
 		}
 	}
 }
+
+// TestCeilMillisNeverShortensTheTTL pins that a sub-millisecond remainder
+// rounds up: a truncated PX would let Redis reclaim a replay marker while
+// the adapter clock still reads it live.
+func TestCeilMillisNeverShortensTheTTL(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		ttl  time.Duration
+		want int64
+	}{
+		{time.Nanosecond, 1},
+		{time.Millisecond, 1},
+		{time.Millisecond + time.Nanosecond, 2},
+		{1500 * time.Microsecond, 2},
+		{time.Second, 1000},
+	} {
+		if got := ceilMillis(tc.ttl); got != tc.want {
+			t.Errorf("ceilMillis(%v) = %d, want %d", tc.ttl, got, tc.want)
+		}
+	}
+}

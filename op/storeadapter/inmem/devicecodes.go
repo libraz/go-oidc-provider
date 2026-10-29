@@ -84,7 +84,7 @@ func (s *deviceCodeStore) gcLocked(now time.Time) {
 // each one.
 func (s *deviceCodeStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if s.savesSinceGC < deviceCodeFullGCSaveInterval {
+	if !sweepDue(s.savesSinceGC, deviceCodeFullGCSaveInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)

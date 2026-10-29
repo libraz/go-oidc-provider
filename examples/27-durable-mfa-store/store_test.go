@@ -114,3 +114,29 @@ func TestFactorsSurviveRestart(t *testing.T) {
 		t.Errorf("Version = %d, want 1", gotLockout.Version)
 	}
 }
+
+// TestDurableTOTPKeySurvivesRestart pins that durable mode seals the
+// enrolment with the same key on every boot: the first call stores the
+// fresh key, and a later boot with a different fresh key reloads the
+// stored one, so the surviving TOTP row stays readable.
+func TestDurableTOTPKeySurvivesRestart(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "durable.db.totp-key")
+	first := bytes.Repeat([]byte{0x11}, 32)
+	second := bytes.Repeat([]byte{0x22}, 32)
+
+	got, err := durableTOTPKey(path, first)
+	if err != nil {
+		t.Fatalf("first boot: %v", err)
+	}
+	if !bytes.Equal(got, first) {
+		t.Fatalf("first boot key = %x, want the fresh key %x", got, first)
+	}
+	got, err = durableTOTPKey(path, second)
+	if err != nil {
+		t.Fatalf("second boot: %v", err)
+	}
+	if !bytes.Equal(got, first) {
+		t.Fatalf("second boot key = %x, want the stored key %x", got, first)
+	}
+}

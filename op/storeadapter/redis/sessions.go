@@ -273,10 +273,7 @@ func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, upda
 	if rec.ChooserGroupID != "" {
 		keys = append(keys, s.chooserGroupKey(rec.ChooserGroupID))
 	}
-	ttlMillis := ttl.Milliseconds()
-	if ttlMillis < 1 {
-		ttlMillis = 1
-	}
+	ttlMillis := ceilMillis(ttl)
 	updated, err := s.touchScript.Run(
 		ctx,
 		s.parent.client,

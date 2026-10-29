@@ -126,3 +126,38 @@ func TestStoreGC_SweepsEverySubstore(t *testing.T) {
 		t.Errorf("unexpired PAR record did not survive GC: %v", err)
 	}
 }
+
+// TestStoreGC_PartialSweepKeepsLandedCount pins that a sweep failing
+// half-way still reports the rows it removed: the grant-revocation sweep
+// deletes tombstones before the denylist, so a denylist failure must not
+// hide the tombstone deletion from the returned stats.
+func TestStoreGC_PartialSweepKeepsLandedCount(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := contract.Reference
+	db := openSQLite(t)
+	s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithClock(&fixedClock{now: base}))
+	if err != nil {
+		t.Fatalf("oidcsql.New: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := s.GrantRevocations().RevokeGrant(ctx, store.GrantTombstone{
+		GrantID: "g-tomb", RevokedAt: base, ExpiresAt: base.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, "DROP TABLE oidc_revoked_jtis"); err != nil {
+		t.Fatalf("drop denylist: %v", err)
+	}
+
+	stats, err := s.GC(ctx, base.Add(2*time.Hour))
+	if err == nil {
+		t.Fatal("GC succeeded with the denylist table missing")
+	}
+	if stats.GrantRevocations != 1 {
+		t.Fatalf("GrantRevocations = %d, want 1 (the tombstone deleted before the failure)", stats.GrantRevocations)
+	}
+}

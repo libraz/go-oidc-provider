@@ -48,9 +48,9 @@
 // substore whose map can be grown by an unauthenticated request sweeps
 // itself: authorization codes, sessions, interactions, PAR records,
 // consumed JTIs, device codes, CIBA requests, and the cross-factor
-// lockout counters each run a full sweep once a fixed number of writes
-// has accumulated since the last one, so a write costs O(1) amortised
-// rather than O(total records). Records that collide with the exact key
+// lockout counters each run a full sweep once the writes since the
+// last one reach half the map size (at least a fixed minimum), so a write
+// costs O(1) amortised rather than O(total records). Records that collide with the exact key
 // an insert is claiming are evicted immediately, without waiting for the
 // sweep, so a reused request_uri, device_code, user_code, or
 // auth_req_id is never rejected as a duplicate of a dead row.
@@ -616,7 +616,7 @@ func (s *refreshStore) gcRetriesLocked(now time.Time) {
 
 func (s *refreshStore) maybeGCRetriesLocked(now time.Time) {
 	s.retriesSinceGC++
-	if s.retriesSinceGC < retryResponseFullGCSaveInterval {
+	if !sweepDue(s.retriesSinceGC, retryResponseFullGCSaveInterval, len(s.retries)) {
 		return
 	}
 	s.gcRetriesLocked(now)
@@ -1243,7 +1243,7 @@ func (s *sessionStore) gcLocked(now time.Time) {
 
 func (s *sessionStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if s.savesSinceGC < sessionFullGCSaveInterval {
+	if !sweepDue(s.savesSinceGC, sessionFullGCSaveInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)
@@ -1462,7 +1462,7 @@ func (s *parStore) gcLocked(now time.Time) {
 
 func (s *parStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if s.savesSinceGC < parFullGCSaveInterval {
+	if !sweepDue(s.savesSinceGC, parFullGCSaveInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)
@@ -1531,7 +1531,7 @@ func (s *interactionStore) gcLocked(now time.Time) {
 
 func (s *interactionStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if s.savesSinceGC < interactionFullGCSaveInterval {
+	if !sweepDue(s.savesSinceGC, interactionFullGCSaveInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)
@@ -1674,7 +1674,7 @@ func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 
 func (s *jtiStore) maybeGCJTILocked(now time.Time) {
 	s.marksSinceGC++
-	if s.marksSinceGC < jtiFullGCMarkInterval {
+	if !sweepDue(s.marksSinceGC, jtiFullGCMarkInterval, len(s.m)) {
 		return
 	}
 	for digest, expiresAt := range s.m {
@@ -1985,4 +1985,15 @@ func (s *metadataStore) Set(_ context.Context, key, value string) error {
 	defer s.mu.Unlock()
 	s.m[key] = value
 	return nil
+}
+
+// sweepDue reports whether a substore has accumulated enough writes for a
+// full sweep. The threshold grows with half the current map size so the sweep
+// stays O(1) amortised per write instead of O(live/interval).
+func sweepDue(writes, minInterval uint32, live int) bool {
+	threshold := uint64(minInterval)
+	if l := uint64(max(live, 0)) / 2; l > threshold {
+		threshold = l
+	}
+	return uint64(writes) >= threshold
 }

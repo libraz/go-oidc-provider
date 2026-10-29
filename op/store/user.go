@@ -8,8 +8,9 @@ import (
 
 // ErrPasswordHashUpdateUnsupported is returned by a
 // [UserPasswordHashUpdater] that cannot persist a new hash for this
-// subject (for example a composite store whose Users backend is not an
-// updater). The library then keeps the legacy hash and logs once.
+// subject (for example a store that wraps several backends and whose
+// user backend is not an updater). The library then keeps the legacy
+// hash and logs once.
 //
 // Stable since v1.5.
 var ErrPasswordHashUpdateUnsupported = errors.New("store: password hash update unsupported")

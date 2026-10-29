@@ -354,7 +354,7 @@ func (s *Store) missingColumns(ctx context.Context, table string, required []str
 }
 
 func (s *Store) columnSet(ctx context.Context, table string) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, s.columnListQuery(), physicalTableName(table))
+	rows, err := s.db.QueryContext(ctx, s.columnListQuery(), s.catalogTableName(table))
 	if err != nil {
 		return nil, fmt.Errorf("oidcsql: inspect columns for %s: %w", table, err)
 	}
@@ -386,9 +386,15 @@ func (s *Store) columnListQuery() string {
 	}
 }
 
-func physicalTableName(table string) string {
+// catalogTableName returns the name the catalog records for table. The
+// adapter never quotes identifiers, so PostgreSQL folds a mixed-case
+// [WithNaming] value to lower case when it creates and queries the table.
+func (s *Store) catalogTableName(table string) string {
 	if i := strings.LastIndex(table, "."); i >= 0 {
-		return table[i+1:]
+		table = table[i+1:]
+	}
+	if s.dialect.name == "postgres" {
+		return strings.ToLower(table)
 	}
 	return table
 }

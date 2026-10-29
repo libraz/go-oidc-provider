@@ -145,8 +145,9 @@ type AuthorizationCodeStore interface {
 	// and look up the resulting digest. It MUST return [ErrNotFound] if
 	// no such record exists or the record has expired,
 	// [ErrAlreadyConsumed] if the record's ConsumedAt was already set on
-	// entry, and a non-nil error if the underlying compare-and-set
-	// fails. The expiry check MUST take precedence over the
+	// entry or the call lost the compare-and-set to a concurrent
+	// Consume, and any other non-nil error only for a backend fault.
+	// The expiry check MUST take precedence over the
 	// already-consumed check, so a code that is both expired and
 	// redeemed still reads as ErrNotFound: the token endpoint treats
 	// ErrAlreadyConsumed as replay evidence and runs the RFC 6749

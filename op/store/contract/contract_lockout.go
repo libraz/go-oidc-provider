@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ var authnLockoutCases = []factorCase[AuthnLockoutFactory]{
 	{"UpdateMissingDoesNotInsert", authnLockoutUpdateMissing},
 	{"DefensiveCopies", authnLockoutDefensiveCopies},
 	{"ConcurrentSameVersionHasOneWinner", authnLockoutConcurrentCAS},
+	{"RejectsMalformedInput", authnLockoutRejectsMalformed},
 }
 
 // RunAuthnLockouts exercises the versioned transition guarantees of
@@ -117,6 +119,29 @@ func authnLockoutStale(t *testing.T, f AuthnLockoutFactory) {
 	}
 	if got.FailedCount != fresh.FailedCount || !got.LockedUntil.IsZero() || got.Version != 2 {
 		t.Fatalf("stale transition changed state: %+v", got)
+	}
+}
+
+func authnLockoutRejectsMalformed(t *testing.T, f AuthnLockoutFactory) {
+	ctx := context.Background()
+	s := f(t)
+
+	if swapped, err := s.CompareAndSwap(ctx, 0, nil); err == nil || swapped {
+		t.Fatalf("CompareAndSwap nil record = (%v, %v), want (false, error)", swapped, err)
+	}
+
+	empty := lockoutContractRecord()
+	empty.Subject = ""
+	if swapped, err := s.CompareAndSwap(ctx, 0, empty); err == nil || swapped {
+		t.Fatalf("CompareAndSwap empty subject = (%v, %v), want (false, error)", swapped, err)
+	}
+
+	overflow := lockoutContractRecord()
+	if swapped, err := s.CompareAndSwap(ctx, math.MaxUint64, overflow); err == nil || swapped {
+		t.Fatalf("CompareAndSwap version overflow = (%v, %v), want (false, error)", swapped, err)
+	}
+	if _, err := s.Get(ctx, overflow.Subject); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Get after rejected writes error = %v, want ErrNotFound", err)
 	}
 }
 

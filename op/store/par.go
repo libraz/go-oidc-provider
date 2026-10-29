@@ -77,8 +77,9 @@ type PushedAuthRequestStore interface {
 	// it. The implementation MUST hash the presented uri and look up
 	// the resulting digest. It MUST return [ErrNotFound] when the
 	// record is absent, [ErrAlreadyConsumed] when the record's
-	// ConsumedAt was already set on entry, and a non-nil error if the
-	// compare-and-set fails. The returned record's ConsumedAt MUST be
+	// ConsumedAt was already set on entry or the call lost the
+	// compare-and-set to a concurrent Consume, and any other non-nil
+	// error only for a backend fault. The returned record's ConsumedAt MUST be
 	// non-nil on success.
 	//
 	// On [ErrAlreadyConsumed] the returned record MUST be nil. A

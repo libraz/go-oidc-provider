@@ -526,3 +526,41 @@ func BenchmarkBeginTx(b *testing.B) {
 		})
 	}
 }
+
+func TestSweepDue_ThresholdScalesWithMapSize(t *testing.T) {
+	t.Parallel()
+
+	if !sweepDue(64, 64, 10) {
+		t.Fatal("small map: sweep must be due at the minimum interval")
+	}
+	if sweepDue(64, 64, 100000) {
+		t.Fatal("large map: sweep must not run every minimum interval")
+	}
+	if !sweepDue(50000, 64, 100000) {
+		t.Fatal("large map: sweep must be due once writes reach half the map size")
+	}
+}
+
+func TestJTIStore_LargeLiveSetDoesNotSweepEveryInterval(t *testing.T) {
+	t.Parallel()
+
+	clk := &parTestClock{now: contract.Reference}
+	s := newJTIStore(clk)
+	ctx := context.Background()
+	live := clk.now.Add(time.Hour)
+	for i := range 2000 {
+		if err := s.Mark(ctx, "live-"+strconv.Itoa(i), live); err != nil {
+			t.Fatalf("Mark #%d: %v", i, err)
+		}
+	}
+	s.marksSinceGC = 0
+	clk.now = clk.now.Add(2 * time.Hour)
+	for i := range 64 {
+		if err := s.Mark(ctx, "fresh-"+strconv.Itoa(i), clk.now.Add(time.Hour)); err != nil {
+			t.Fatalf("Mark fresh #%d: %v", i, err)
+		}
+	}
+	if got := len(s.m); got < 2000 {
+		t.Fatalf("map holds %d entries; a 64-write interval must not sweep a 2000-entry map", got)
+	}
+}

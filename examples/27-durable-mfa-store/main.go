@@ -68,14 +68,18 @@
 //     no banner — the same scanned secret keeps working across
 //     restarts because the factor row survives in SQLite.
 //
-// Keys stay ephemeral even in durable mode, so a restart still
-// invalidates every in-flight session and token; only the persisted
-// factor row (and, with OIDC_EXAMPLE_DB set, the core tables) survives.
+// Signing and cookie keys stay ephemeral even in durable mode, so a
+// restart still invalidates every in-flight session and token. The TOTP
+// key is the exception: the enrolment row is sealed with it, so durable
+// mode keeps it in "<db>.totp-key" (hex, mode 0600) and reloads it with
+// op.LoadSymmetricKeys. A fresh key on every boot would leave the
+// surviving row unreadable and the second login failing at the TOTP step.
 //
 // PRODUCTION CAVEATS:
-//   - Keys: ephemeral; load signing / cookie / TOTP keys from a vault
-//     or KMS so both the core tables and the sealed factor secrets
-//     survive process restart.
+//   - Keys: signing / cookie keys are ephemeral and the durable-mode
+//     TOTP key is a plain file next to the database; load all three
+//     from a vault or KMS so the core tables and the sealed factor
+//     secrets survive process restart.
 //   - Migrations: Migrate is a development shortcut. Production runs
 //     storage.Schema() — which covers the factor tables as well as the
 //     core ones — through its own migration tooling.
@@ -92,8 +96,10 @@ package main
 import (
 	"context"
 	databasesql "database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -174,8 +180,12 @@ func run() error {
 	log.Printf("sqlite store at %s (durable=%t) — core tables + factor tables", dbPath, durable)
 
 	keys := devkeys.MustEphemeral("durable-mfa-1")
+	totpKey, err := exampleTOTPKey(dbPath, durable, keys.TOTPKey)
+	if err != nil {
+		return err
+	}
 
-	codec, err := totpkit.NewCodec(keys.TOTPKey)
+	codec, err := totpkit.NewCodec(totpKey)
 	if err != nil {
 		return fmt.Errorf("totp codec: %w", err)
 	}
@@ -190,7 +200,7 @@ func run() error {
 	flow := opkit.WithTOTP(
 		opkit.DefaultLoginFlow(storage.Users().(store.UserPasswordStore)),
 		totpStore,
-		keys.TOTPKey,
+		totpKey,
 	)
 
 	provider, err := op.New(
@@ -268,6 +278,41 @@ func resolveDBPath() (path string, durable bool) {
 		return p, true
 	}
 	return filepath.Join(os.TempDir(), "oidc-example-27.db"), false
+}
+
+// exampleTOTPKey is the ephemeral key in throwaway mode and the key kept
+// beside the database in durable mode.
+func exampleTOTPKey(dbPath string, durable bool, fresh []byte) ([]byte, error) {
+	if !durable {
+		return fresh, nil
+	}
+	return durableTOTPKey(dbPath+".totp-key", fresh)
+}
+
+// durableTOTPKey returns the TOTP sealing key stored at path, writing
+// fresh there first when the file does not exist yet. The enrolment row
+// a durable database carries across restarts can only be opened with the
+// key that sealed it.
+func durableTOTPKey(path string, fresh []byte) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	switch {
+	case err == nil:
+		_, werr := f.WriteString(hex.EncodeToString(fresh) + "\n")
+		if cerr := f.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return nil, fmt.Errorf("write totp key %s: %w", path, werr)
+		}
+		return fresh, nil
+	case !errors.Is(err, fs.ErrExist):
+		return nil, fmt.Errorf("create totp key %s: %w", path, err)
+	}
+	loaded, err := op.LoadSymmetricKeys(path)
+	if err != nil {
+		return nil, err
+	}
+	return loaded[0], nil
 }
 
 // seedUser upserts the demo user and its password hash. The sql

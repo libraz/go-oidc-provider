@@ -255,7 +255,8 @@ type RefreshTokenStore interface {
 	// id and look up the resulting digest. It MUST return [ErrNotFound]
 	// when the record is absent OR expired (see [RefreshTokenStore.Find]),
 	// [ErrAlreadyConsumed] when the record's ConsumedAt was already set
-	// on entry, and a non-nil error if the compare-and-set fails. The
+	// on entry or the call lost the compare-and-set to a concurrent
+	// Consume, and any other non-nil error only for a backend fault. The
 	// expiry check MUST take precedence over the already-consumed check
 	// so an expired-and-consumed row still reads as ErrNotFound rather
 	// than triggering a false replay-revocation cascade. When returning

@@ -701,7 +701,9 @@ func (s *Store) AuthnLockouts() store.AuthnLockoutStore {
 }
 
 // UpdatePasswordHash implements [store.UserPasswordHashUpdater] by forwarding
-// to the backend routed for [Users]. It returns
+// to the backend routed for [Users]. The OP resolves the updater from
+// PrimaryPassword.Store, so pass the Users backend's UserPasswords() there.
+// It returns
 // [store.ErrPasswordHashUpdateUnsupported] when that backend's user store
 // cannot persist a replacement hash.
 func (s *Store) UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error {

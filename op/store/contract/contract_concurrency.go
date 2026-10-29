@@ -157,6 +157,21 @@ func assertOneWinner(t *testing.T, op string, errs []error) int {
 	return assertWinners(t, op, errs, 1)[0]
 }
 
+// assertOneConsumeWinner is [assertOneWinner] for a racing Consume, which
+// also pins what every loser hears: [store.ErrAlreadyConsumed], the answer
+// a sequential replay gets. A loser that reports anything else reaches the
+// token endpoint as a server error, and the replay cascade that answer
+// arms never runs for the request that lost the race.
+func assertOneConsumeWinner(t *testing.T, op string, errs []error) {
+	t.Helper()
+	assertOneWinner(t, op, errs)
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, store.ErrAlreadyConsumed) {
+			t.Fatalf("%s: losing attempt %d: want ErrAlreadyConsumed, got %v", op, i, err)
+		}
+	}
+}
+
 // singleWinnerCases records which sub-test races each method of the
 // concurrency surface. The map is keyed by the (interface, method) pair
 // [singleWinnerSurface] produces, and the value is the path of the case
@@ -385,7 +400,7 @@ func concurrentAuthCodeConsume(t *testing.T, f Factory) {
 			return err
 		})...,
 	)
-	assertOneWinner(t, "AuthorizationCodes().Consume", errs)
+	assertOneConsumeWinner(t, "AuthorizationCodes().Consume", errs)
 
 	// The losers converge on the same answer a sequential replay gets, so
 	// the token endpoint's replay cascade fires for them.
@@ -417,7 +432,7 @@ func concurrentRefreshConsume(t *testing.T, f Factory) {
 			return err
 		})...,
 	)
-	assertOneWinner(t, "RefreshTokens().Consume", errs)
+	assertOneConsumeWinner(t, "RefreshTokens().Consume", errs)
 
 	if _, err := refreshes.Consume(ctx, "rt-race"); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("Consume after the race: want ErrAlreadyConsumed, got %v", err)
@@ -448,7 +463,7 @@ func concurrentPARConsume(t *testing.T, f Factory) {
 			return err
 		})...,
 	)
-	assertOneWinner(t, "PushedAuthRequests().Consume", errs)
+	assertOneConsumeWinner(t, "PushedAuthRequests().Consume", errs)
 
 	if _, err := pars.Consume(ctx, "urn:par:race"); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("Consume after the race: want ErrAlreadyConsumed, got %v", err)
@@ -475,7 +490,7 @@ func concurrentDeviceCodeConsume(t *testing.T, f Factory) {
 			return err
 		})...,
 	)
-	assertOneWinner(t, "DeviceCodes().Consume", errs)
+	assertOneConsumeWinner(t, "DeviceCodes().Consume", errs)
 
 	if _, err := dc.Consume(ctx, "dc-race"); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("Consume after the race: want ErrAlreadyConsumed, got %v", err)
@@ -500,7 +515,7 @@ func concurrentCIBAConsume(t *testing.T, f Factory) {
 			return err
 		})...,
 	)
-	assertOneWinner(t, "CIBARequests().Consume", errs)
+	assertOneConsumeWinner(t, "CIBARequests().Consume", errs)
 
 	if _, err := cr.Consume(ctx, "ar-race"); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("Consume after the race: want ErrAlreadyConsumed, got %v", err)

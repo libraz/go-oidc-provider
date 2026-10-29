@@ -66,7 +66,11 @@ func (s *userStore) UpdatePasswordHash(ctx context.Context, subject string, enco
 		return wrapErr("users.UpdatePasswordHash.RowsAffected", err)
 	}
 	if n == 0 {
-		return store.ErrNotFound
+		// MySQL counts changed rather than matched rows, so rewriting the
+		// hash a subject already carries reports zero. Only a missing row
+		// may be reported as ErrNotFound, so decide presence by reading it.
+		_, err := s.FindBySubject(ctx, subject)
+		return err
 	}
 	return nil
 }

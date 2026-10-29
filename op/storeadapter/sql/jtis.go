@@ -65,8 +65,8 @@ func (s *jtiStore) Has(ctx context.Context, jti string) (bool, error) {
 }
 
 // GC drops every row whose expires_at is strictly before cutoff.
-// Embedders typically run GC from a periodic sweeper; the helper is
-// exported on the concrete type so they can reach it via *Store.
+// Embedders typically run GC from a periodic sweeper; the sweep is
+// reachable only through (*Store).GC.
 func (s *jtiStore) GC(ctx context.Context, cutoff time.Time) (int64, error) {
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.jtiGC, timeToInt64(cutoff))
 	if err != nil {
