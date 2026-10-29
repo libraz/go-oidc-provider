@@ -33,10 +33,10 @@ const responseMaxBytes = 16 * 1024
 
 // ErrSubjectRequired is returned by [Authenticator.Begin] /
 // [Authenticator.Continue] when the orchestrator passes an empty
-// [op.BeginInput.Subject] / [op.ContinueInput.Subject]. v1.0 wires
-// passkey as a known-subject factor (see [Verifier.BeginLogin]); a
-// chain that places passkey first must run an identifying factor
-// (password, login_hint binding) ahead of it.
+// [op.BeginInput.Subject] / [op.ContinueInput.Subject] and the verifier
+// was built without [Config.AllowDiscoverable]. Such a verifier treats
+// passkey as a known-subject factor (see [Verifier.BeginLogin]), so an
+// identifying factor has to run ahead of it.
 var ErrSubjectRequired = errors.New("passkey: subject is required")
 
 // ErrResponseMissing is returned by [Authenticator.Continue] when the
@@ -173,15 +173,18 @@ func (*Authenticator) Prompts() []string { return []string{PromptType} }
 // registered credentials, kicks off a WebAuthn assertion ceremony, and
 // returns the prompt with the challenge plus the encoded session in
 // [interaction.Step.Scratch].
-// Subject is required; v1.0 does not support discoverable-credential
-// flows where the subject is unknown until after the assertion. A
-// subject with no registered credentials returns
+// An empty subject runs a discoverable ceremony when the verifier has
+// [Config.AllowDiscoverable] and returns [ErrSubjectRequired] otherwise.
+// A subject with no registered credentials returns
 // [ErrCredentialNotRegistered] wrapped in [authn.ErrFactorAbort] — the
 // chain ends with a 4xx rather than treating "no passkey" as "skip this
 // factor".
 func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
-		return interaction.Step{}, ErrSubjectRequired
+		if !a.verifier.allowDiscoverable {
+			return interaction.Step{}, ErrSubjectRequired
+		}
+		return a.beginDiscoverable()
 	}
 	creds, err := a.loadCredentials(ctx, in.Subject)
 	if err != nil {
@@ -232,6 +235,9 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	if err != nil {
 		return interaction.Step{}, classifyContinueError(err)
 	}
+	if in.Subject == "" {
+		return a.continueDiscoverable(ctx, in.AuthTime, session, response)
+	}
 	creds, err := a.loadCredentials(ctx, in.Subject)
 	if err != nil {
 		return interaction.Step{}, err
@@ -243,6 +249,53 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	cred, ferr := a.verifier.FinishLogin(ctx, session, in.Subject, in.Subject, creds, response)
 	step, err := a.continueResult(ctx, in.Subject, in.AuthTime, cred, ferr)
 	return step, classifyContinueError(err)
+}
+
+// beginDiscoverable emits a prompt with an empty allow-list. The session
+// carries no user handle, which is what marks it discoverable when
+// [Authenticator.Continue] replays it.
+func (a *Authenticator) beginDiscoverable() (interaction.Step, error) {
+	session, err := a.verifier.beginDiscoverableLogin()
+	if err != nil {
+		return interaction.Step{}, err
+	}
+	scratch, err := json.Marshal(session)
+	if err != nil {
+		return interaction.Step{}, fmt.Errorf("passkey: encode session: %w", err)
+	}
+	return interaction.Step{
+		Prompt:  a.prompt(*session, nil),
+		Scratch: scratch,
+	}, nil
+}
+
+// continueDiscoverable verifies a discoverable assertion and binds the
+// subject from the asserted credential's record. Every rejection reaches
+// the orchestrator as the same [authn.ErrFactorRetry]; a store fault
+// stays unclassified.
+func (a *Authenticator) continueDiscoverable(ctx context.Context, authTime time.Time, session *Session, response []byte) (interaction.Step, error) {
+	lookup := func(id []byte) (string, Credential, error) {
+		rec, err := a.store.Get(ctx, id)
+		if errors.Is(err, store.ErrNotFound) {
+			return "", Credential{}, ErrCredentialNotRegistered
+		}
+		if err != nil {
+			return "", Credential{}, fmt.Errorf("passkey: get credential: %w", err)
+		}
+		return rec.Subject, CredentialFromRecord(*rec), nil
+	}
+	subject, cred, ferr := a.verifier.finishDiscoverableLogin(session, lookup, response)
+	step, err := a.continueResult(ctx, subject, authTime, cred, ferr)
+	return step, classifyContinueError(err)
+}
+
+// Enrolled reports whether subject has at least one registered passkey.
+func (a *Authenticator) Enrolled(ctx context.Context, subject string) (bool, error) {
+	creds, err := a.loadCredentials(ctx, subject)
+	if err != nil {
+		return false, err
+	}
+	return len(creds) > 0, nil
 }
 
 // classifyContinueError stamps the orchestrator-facing failure class on
@@ -296,7 +349,7 @@ func classifyContinueError(err error) error {
 // below the gocognit budget while preserving the trust-boundary checks
 // (subject, scratch, field presence, byte cap, JSON shape).
 func (a *Authenticator) parseContinueInput(in authn.ContinueInput) ([]byte, *Session, error) {
-	if in.Subject == "" {
+	if in.Subject == "" && !a.verifier.allowDiscoverable {
 		return nil, nil, ErrSubjectRequired
 	}
 	if len(in.Scratch) == 0 {

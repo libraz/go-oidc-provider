@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 // AssertionChallenge wraps the JSON-shaped CredentialRequestOptions
@@ -198,8 +199,97 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrAssertionInvalid, err)
 	}
+	return assertedCredential(*wc, parsed, stored)
+}
 
-	out := fromWebauthnCredential(*wc)
+// beginDiscoverableLogin starts an assertion ceremony with an empty
+// allowCredentials list, so the authenticator offers whichever resident
+// credential the user picks. UV is required regardless of
+// [Config.UserVerification]: with no subject bound beforehand, the
+// gesture is what makes the assertion more than possession of a key.
+func (v *Verifier) beginDiscoverableLogin() (*Session, error) {
+	_, sd, err := v.wa.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
+	if err != nil {
+		return nil, fmt.Errorf("passkey: begin discoverable login: %w", err)
+	}
+	sd.Expires = v.clock().Now().Add(v.SessionTTL).UTC()
+	session := encodeSession(*sd)
+	return &session, nil
+}
+
+// credentialLookup resolves the credential an assertion names to its
+// owning subject and stored record. It returns an error wrapping
+// [ErrCredentialNotRegistered] when no such credential exists; any other
+// error is a backend fault.
+type credentialLookup func(credentialID []byte) (subject string, cred Credential, err error)
+
+// finishDiscoverableLogin verifies an assertion produced under
+// [Verifier.beginDiscoverableLogin] and returns the subject that owns the
+// asserted credential. The owner comes from the stored record, and the
+// assertion's userHandle must equal it.
+//
+// An unknown credential, a userHandle mismatch, a missing UV flag and a
+// bad signature all return bare [ErrAssertionInvalid], so the response
+// does not reveal which check failed or whether the credential exists.
+// The AAGUID re-check runs only after the signature has verified, for the
+// same reason. A lookup fault is returned unchanged.
+func (v *Verifier) finishDiscoverableLogin(session *Session, lookup credentialLookup, response []byte) (string, *Credential, error) {
+	if session == nil {
+		return "", nil, fmt.Errorf("%w: nil session", ErrInvalidResponse)
+	}
+	if err := v.checkSessionFresh(session); err != nil {
+		return "", nil, err
+	}
+	parsed, err := protocol.ParseCredentialRequestResponseBytes(response)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %w", ErrInvalidResponse, err)
+	}
+
+	var (
+		subject string
+		stored  Credential
+		fault   error
+	)
+	handler := func(rawID, userHandle []byte) (webauthn.User, error) {
+		sub, cred, lerr := lookup(rawID)
+		if lerr != nil {
+			if !errors.Is(lerr, ErrCredentialNotRegistered) {
+				fault = lerr
+			}
+			return nil, lerr
+		}
+		if !bytes.Equal(userHandle, []byte(sub)) {
+			return nil, ErrAssertionInvalid
+		}
+		subject, stored = sub, cred
+		return newWebauthnUser(sub, sub, sub, []Credential{cred}), nil
+	}
+
+	sd := decodeSession(*session)
+	sd.Expires = sessionZeroTime()
+	sd.UserVerification = protocol.VerificationRequired
+
+	wc, err := v.wa.ValidateDiscoverableLogin(handler, sd, parsed)
+	if fault != nil {
+		return "", nil, fault
+	}
+	if err != nil {
+		return "", nil, ErrAssertionInvalid
+	}
+	if rerr := v.checkAAGUIDOnAssertion([]Credential{stored}, stored.ID); rerr != nil {
+		return "", nil, rerr
+	}
+	out, err := assertedCredential(*wc, parsed, stored)
+	return subject, out, err
+}
+
+// assertedCredential projects a validated assertion onto the result
+// [Credential]. UV is read from this assertion: the upstream library
+// latches it from the stored record, which reports an earlier ceremony's
+// gesture rather than this one's.
+func assertedCredential(wc webauthn.Credential, parsed *protocol.ParsedCredentialAssertionData, stored Credential) (*Credential, error) {
+	out := fromWebauthnCredential(wc)
+	out.Flags.UserVerified = parsed.Response.AuthenticatorData.Flags.HasUserVerified()
 	out.expectedSignCount = stored.Authenticator.SignCount
 	if wc.Authenticator.CloneWarning {
 		// Surface the clone signal as a structured error but still

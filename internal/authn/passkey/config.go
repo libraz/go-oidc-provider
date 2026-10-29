@@ -129,6 +129,13 @@ type Config struct {
 	// check; an empty allowlist short-circuits the assertion-time check
 	// (every AAGUID is accepted, mirroring the registration behaviour).
 	AAGUIDReCheckOnAssertion bool
+
+	// AllowDiscoverable lets [Authenticator.Begin] run a discoverable
+	// (passwordless) ceremony when no subject is bound yet: empty
+	// allowCredentials, UV required, and the subject taken from the
+	// asserted credential's record. False keeps an empty subject an
+	// [ErrSubjectRequired] error.
+	AllowDiscoverable bool
 }
 
 // StepPolicy is the passkey policy an embedder configures once, on the
@@ -244,6 +251,9 @@ type Verifier struct {
 	// When true the verifier re-checks the matched credential's
 	// AAGUID against [aaguidAllowlist] at FinishLogin time.
 	aaguidReCheckOnAssertion bool
+
+	// allowDiscoverable mirrors [Config.AllowDiscoverable].
+	allowDiscoverable bool
 }
 
 // New constructs a [Verifier] from cfg. It validates the required
@@ -358,6 +368,7 @@ func New(cfg Config) (*Verifier, error) {
 		aaguidAllowlist:          allow,
 		attestationRoots:         roots,
 		aaguidReCheckOnAssertion: cfg.AAGUIDReCheckOnAssertion,
+		allowDiscoverable:        cfg.AllowDiscoverable,
 	}, nil
 }
 

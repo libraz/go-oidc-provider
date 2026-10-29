@@ -35,8 +35,8 @@ type Session struct {
 	// CredentialCreationOptions so the authenticator's resident-key
 	// store can de-duplicate and so the FinishRegistration check can
 	// match the response to the issuing user. Empty for discoverable
-	// (passkey) login sessions; v1.0 does not emit such sessions but
-	// the field is preserved for forward compatibility with v1.x.
+	// login sessions, where the owner is read from the asserted
+	// credential's record instead.
 	UserID []byte `json:"user_id,omitempty"`
 
 	// AllowedCredentialIDs is populated for assertion sessions and
