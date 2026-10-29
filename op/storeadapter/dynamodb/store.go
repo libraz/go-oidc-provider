@@ -112,7 +112,7 @@ func WithNaming(overrides map[string]string) Option {
 // [store.ClientRegistry], [store.StaticClientReconciler], and
 // [store.Transactional].
 //
-// Experimental: see the package documentation.
+// Stable since v1.5.
 type Store struct {
 	api   API
 	names nameMap

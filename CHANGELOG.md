@@ -90,7 +90,9 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ## [Unreleased]
 
 Configurations that started and looked correct but were not safe now either
-behave safely by default or fail at `op.New`.
+behave safely by default or fail at `op.New`. Authentication is composed
+through `op.WithLoginFlow` alone, and every surface that was experimental
+except Grant Management is now covered by the SemVer promise.
 
 Deployments that need to do something before upgrading: an
 `op.WithACRValuesSupported` entry that is not one of the canonical AAL URIs
@@ -99,7 +101,11 @@ Deployments that need to do something before upgrading: an
 start. A login flow with a passkey step must use `op.WithSPAUI` or an
 `op.WithInteractionDriver` that runs the WebAuthn ceremony. A custom SPA
 bundle served through `op.WithSPAUI` that loads external scripts, uses inline
-scripts or a `<base>` element must set `SPAUI.ContentSecurityPolicy`.
+scripts or a `<base>` element must set `SPAUI.ContentSecurityPolicy`. A custom
+SPA that reads the prompt JSON must switch to the snake_case keys listed under
+`Changed`. A configuration that uses `op.WithAuthenticators`,
+`op.WithCaptchaVerifier` or `op.WithRiskAssessor` no longer compiles; the
+`Removed` section gives the `op.WithLoginFlow` equivalent of each.
 
 ### Security
 
@@ -136,6 +142,12 @@ scripts or a `<base>` element must set `SPAUI.ContentSecurityPolicy`.
   enrolment (or an unconfirmed TOTP enrolment) ends the attempt with a 4xx
   instead of a 500. The step is never skipped.
 
+- Passkey user verification is read from the flags of each assertion
+  instead of being copied from the stored credential. An assertion that
+  proved user presence only, against a credential registered with user
+  verification, used to be recorded as user-verified (`amr` `hwk`, AAL2).
+  It now counts as presence only (`swk`) and does not reach AAL2.
+
 ### Changed
 
 - With the lockout store wired automatically, TOTP, email-OTP and
@@ -157,6 +169,72 @@ scripts or a `<base>` element must set `SPAUI.ContentSecurityPolicy`.
   carrying `X-Forwarded-For`, `X-Forwarded-Proto` or `X-Forwarded-Host`
   logs one warning per Provider that those headers are ignored.
 
+- **BREAKING:** every member of the prompt JSON served on the SPA state
+  route (`LoginMount/state/{uid}`) is snake_case. The envelope (`type`,
+  `state_ref`, `csrf_token`) already was; the members inside `data` and
+  `inputs` used to carry the Go field names. A custom SPA must read the new
+  keys. Most are the field name in snake_case, with an initialism kept as
+  one word. The ones easy to get wrong:
+
+  | Go field | JSON key |
+  |---|---|
+  | `PasskeyPromptData.AllowCredentials` | `allow_credentials` |
+  | `CaptchaPromptData.SiteKey` | `site_key` |
+  | `ChooserPromptData.AddAccountURL` | `add_account_url` |
+  | `ChooserAccount.SessionID` | `session_id` |
+  | `ClientView.ClientID` | `client_id` |
+  | `ClientView.LogoURL` | `logo_url` |
+  | `ClientView.TosURI` | `tos_uri` |
+  | `FieldSpec.MaxLen` / `MinLen` | `max_len` / `min_len` |
+
+  `FieldSpec.Kind` (`kind`) is now a string, one of `text`, `password`,
+  `otp_code`, `email` and `hidden`, instead of an integer. Byte fields
+  (`challenge`, a credential's `id`) stay standard base64.
+
+- A login in progress while the OP is upgraded has to start over. Its
+  stored interaction state uses the old field encoding and no longer
+  decodes.
+
+- An interaction whose stored state cannot be decoded is answered like an
+  expired one (404, start the login again) instead of with a 500.
+
+- Rules whose `Then` is an `op.StepCaptcha` are evaluated before every
+  other rule, whatever their position in `LoginFlow.Rules`. Rules of each
+  kind keep their declared order among themselves.
+
+- When an established session is reused, a rule's step counts as done if
+  the session's `amr` already carries what that step records: `pwd` for a
+  password, `otp` for TOTP, recovery codes and email OTP, `hwk` for a
+  passkey (`hwk` or `swk` when the step does not require user
+  verification). A `RuleAlways(op.StepTOTP{...})` flow no longer asks for
+  TOTP on every SSO once the session holds it; a password-only session is
+  still asked. The three `otp` factors stand in for each other, so a
+  session created with email OTP satisfies a rule that names TOTP: the ID
+  Token reports them with the same `amr` and level. An `op.StepOneOf`
+  counts as done when any of its steps would. An `op.ExternalStep` (and an
+  `op.StepCaptcha`) is never satisfied by the session and is asked again
+  on every login. A relying party that needs a fresh factor sends
+  `max_age` or `prompt=login`, or requests an essential `acr` above the
+  session's level.
+
+- An established session satisfies `acr_values`, and an essential `acr`
+  claim, when the configured `op.ACRPolicy` accepts one of the requested
+  values for the session's level. It used to require the session's `acr`
+  to appear in the request verbatim, so a custom `op.ACRLevels` ladder
+  re-authenticated on every request: with
+  `op.ACRLevels{"urn:example:mfa": op.AAL2}`, an AAL2 session is now
+  reused for `acr_values=urn:example:mfa`, and an AAL1 session still
+  re-authenticates. A custom `op.ACRPolicy` has its `Satisfies` consulted
+  for this decision, with the session's level and the steps the session
+  stands in for as `completed`, and its `Resolve` receives the same
+  `completed` when the response is served from the session. A policy
+  whose `Satisfies` is loose lets sessions through to the same degree.
+
+- An `op.StepOneOf` with `IfNoneEnrolled: op.UnenrolledSkip` no longer
+  blocks SSO for a user enrolled in none of its steps: `prompt=none`
+  returns a code instead of `interaction_required`. If the enrollment
+  check fails, the step is treated as required.
+
 ### Added
 
 - `op.ACRLevels`, an `op.ACRPolicy` that maps deployment-specific `acr`
@@ -170,6 +248,105 @@ scripts or a `<base>` element must set `SPAUI.ContentSecurityPolicy`.
 - `composite.Store.AuthnLockouts`.
 - `SPAUI.ContentSecurityPolicy`, validated with the same rules as the
   consent and chooser page policies.
+
+- The login and interaction surface graduates out of its experimental
+  marker and is covered by the SemVer promise from this release:
+  `op.LoginFlow`, `op.WithLoginFlow`, `op.WithInteractions`,
+  `op.WithLoginAttemptObserver`, `op.SPAUI`, `op.ConsentUI`,
+  `op.ChooserUI`, the whole `op/interaction` package, and the DynamoDB
+  storage adapter (`op/storeadapter/dynamodb`, its package and `Store`).
+  Grant Management (`op.GrantManagementAction`, `op.WithGrantManagement`)
+  stays experimental: it follows an IETF draft whose wire format may still
+  change.
+
+- `op.StepOneOf` asks for any one of several steps. Only the steps the
+  user is enrolled in are offered; with two or more the user picks one
+  through the new `auth.choose_factor` prompt
+  (`interaction.PromptTypeChooseFactor`, `interaction.FactorChoicePromptData`,
+  submitted in `interaction.FactorChoiceField`), and with one it runs
+  directly. `IfNoneEnrolled` decides what happens when none is enrolled:
+  `op.UnenrolledDeny` (the zero value) ends the attempt with a 4xx,
+  `op.UnenrolledSkip` passes over the step without raising the level. An
+  `op.ExternalStep` whose authenticator implements `op.EnrollmentChecker`
+  reports its own enrollment; otherwise it counts as enrolled. The HTML
+  driver renders the choice as a plain form.
+
+- `PrimaryPassword.LegacySchemes` accepts password hashes that are not
+  argon2id, through an `op.PasswordHashScheme` such as
+  `op.BcryptHashScheme()` (`$2a$`, `$2b$`, `$2y$`). After a successful
+  login against a legacy hash, the hash is rewritten as argon2id if the
+  user store implements the new optional `store.UserPasswordHashUpdater`;
+  a failed rewrite is logged and the login still succeeds. The in-memory,
+  SQL and DynamoDB adapters implement it, and `composite.Store` forwards
+  it to its Users backend, returning `store.ErrPasswordHashUpdateUnsupported`
+  when that backend cannot update hashes, in which case the legacy hash
+  stays in use. Legacy hashes go through the same lockout as argon2id
+  ones. Two limits:
+  - bcrypt reads only the first 72 bytes, so a longer password never
+    matches. A user whose password the previous system truncated to 72
+    bytes before hashing cannot log in and needs a password reset.
+  - Until a legacy hash is rewritten, verifying it takes a different time
+    from an argon2id check.
+
+- An `op.PrimaryPasskey` placed in `LoginFlow.Primary` (or in an
+  `op.StepOneOf` there) runs a passwordless login with a discoverable
+  credential: the user is identified by the credential, whose user handle
+  must match the stored subject. It must set `RequireUserVerification`,
+  or `op.New` fails. The login reports AAL2 and `amr` `["hwk"]`.
+
+- `ExternalStep.CountFailures` puts a custom step under the cross-factor
+  lockout: a locked subject is refused before `Begin`, an
+  `op.ErrFactorRetry` counts one failure, and a completed step resets the
+  count. `op.New` rejects it at `LoginFlow.Primary`, where no subject is
+  known yet.
+
+- `LoginContext.AAL` and `LoginContext.SessionReused`, and
+  `LoginContext.Identity.AuthenticationContext` is now filled (`amr`,
+  `acr`, and `auth_time` when a session is reused). Rule predicates and an
+  `op.ACRPolicy`'s `Resolve` see the same values.
+
+- `op.AuditStepBeginFailed` (`login.step_begin_failed`), emitted once when
+  a login step cannot begin, with `step_kind` and a `reason` of
+  `not_enrolled`, `aborted`, `locked`, `not_enrolled_skipped` or `error`.
+
+- `op/rs`, a verifier and `net/http` middleware for resource servers. It
+  checks RFC 9068 JWT access tokens against the issuer's JWKS, opaque
+  tokens through introspection, and DPoP and mTLS sender constraints, and
+  answers with RFC 6750 / RFC 9449 / RFC 9470 `WWW-Authenticate`
+  challenges. `RequireScope`, `RequireACR` and `RequireMaxAge` add
+  per-route requirements.
+
+- `(*op.Provider).Routes`, the request patterns the Provider registered,
+  so each can be mounted on the embedder's own router.
+
+- `DefaultMaxAge`, `RequireAuthTime` and `DefaultACRValues` on
+  `op.PublicClient`, `op.ConfidentialClient` and `op.PrivateKeyJWTClient`,
+  with the same meaning as the dynamic-registration metadata. `op.New`
+  rejects a negative `DefaultMaxAge` and a default `acr` value that is not
+  advertised.
+
+### Deprecated
+
+- `op.RiskPreFactor` and `op.RiskPostFactor`. No consult point passes
+  either phase any more; a login flow consults its `Risk` assessor at
+  `op.RiskAuthorizeEntry` only.
+- `RiskOutcome.MinAAL`. Its only consumer was the removed pre-factor
+  consult.
+- `op.NewEmailOTPAuthenticator`. Use `op.StepEmailOTP` in a `LoginFlow`.
+
+### Removed
+
+These three options were experimental. Each has a direct `op.WithLoginFlow`
+equivalent.
+
+- **BREAKING:** `op.WithAuthenticators`. Wrap the authenticator in an
+  `op.ExternalStep`:
+  `op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{Authenticator: a, KindLabel: "myorg.x"}})`.
+  Further authenticators go in `LoginFlow.Rules`.
+- **BREAKING:** `op.WithCaptchaVerifier`. Add the rule
+  `op.RuleAfterFailedAttempts(3, op.StepCaptcha{Verifier: v})` to
+  `LoginFlow.Rules`.
+- **BREAKING:** `op.WithRiskAssessor`. Set `LoginFlow.Risk`.
 
 ## [v1.4.0] — 2026-10-23
 

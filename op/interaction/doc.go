@@ -17,10 +17,5 @@
 //     server-side form at /interaction/{uid} and parses the form-encoded
 //     reply, with no script on the page.
 //
-// # Status
-//
-// Experimental: the Driver interface and surrounding types MAY change in
-// a minor release. The SPA endpoints themselves are wired and serving; what
-// remains unsettled is the shape of the types crossing this seam, which MAY
-// still be refined as embedder-driven UIs exercise them.
+// Stable since v1.5.
 package interaction

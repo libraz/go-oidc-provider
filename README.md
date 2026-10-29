@@ -22,10 +22,9 @@ library.
 
 > **Status: `v1.4.0`.** The public `op` surface follows strict
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the 1.0
-> release on. Symbols documented with an `Experimental:` marker are exempt: the
-> authentication-step seam, the interaction UI types, and Grant Management,
-> plus two packages in full — `op/interaction` and the DynamoDB storage
-> adapter (`op/storeadapter/dynamodb`). They are inventoried in
+> release on. Symbols documented with an `Experimental:` marker are exempt.
+> Today that is Grant Management alone, which tracks an IETF draft whose wire
+> shape may still change. The exempt set is inventoried in
 > [`api/experimental.txt`](api/experimental.txt), which `make verify`
 > regenerates and diffs, so the exempt set cannot grow without review.
 > [`CHANGELOG.md`](CHANGELOG.md) carries the migration notes.
@@ -169,7 +168,7 @@ backend, or take one of the shipped adapters:
 | `inmem` | main module | Reference store for development and tests. |
 | `sql` | sub-module | `database/sql` for SQLite, MySQL 8.0+, PostgreSQL 14+, with reference DDL embedded per engine. |
 | `redis` | sub-module | Volatile substores only; refuses to start without TLS and AUTH. |
-| `dynamodb` | sub-module | One table per substore, transactional. Marked `Experimental:`. |
+| `dynamodb` | sub-module | One table per substore, transactional. |
 | `composite` | main module | Hot/cold splitter: durable substores to one backend, volatile to another. |
 
 [`op/store/contract`](op/store/contract) is a reusable conformance harness

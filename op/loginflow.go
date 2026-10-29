@@ -7,17 +7,15 @@ import "github.com/libraz/go-oidc-provider/internal/authn"
 // conditional [Rule] entries, an optional imperative [Decider], and an
 // optional [RiskAssessor] used by [RuleRisk] and the orchestrator's
 // risk gates.
-// LoginFlow is the recommended embedder seam: it separates the
-// orchestration of factors (Rules + Decider) from their implementation
-// (Step values). Embedders who need finer control fall back to the
-// low-level [Authenticator] / [Interaction] surface, which remains
-// supported. See the package godoc on [Rule] / [Decider] for the
-// evaluation order the orchestrator applies on each pass.
+// LoginFlow is the only embedder seam for composing authentication: it
+// separates the orchestration of factors (Rules + Decider) from their
+// implementation (Step values). A factor this package does not
+// implement plugs in as an [ExternalStep] wrapping an [Authenticator];
+// non-factor prompts go through [WithInteractions]. See the package
+// godoc on [Rule] / [Decider] for the evaluation order the orchestrator
+// applies on each pass.
 //
-// Experimental: field names and evaluation order MAY change in a minor
-// release. The seam is young and the shape of a step-ordering policy is
-// the part of this library most likely to be wrong in a way only
-// deployments will reveal; freezing it now would lock in that guess.
+// Stable since v1.5.
 type LoginFlow struct {
 	// Primary is the first step the orchestrator runs. It is the step
 	// that establishes the [Identity] consumed by every subsequent

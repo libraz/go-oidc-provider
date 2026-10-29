@@ -113,11 +113,11 @@ const mfaEncryptionKeyLen = 32
 // knows the password refill their guesses. A counter or store error fails
 // the attempt with a server error rather than letting it through.
 //
-// Scope — the counter is NOT attached to [PrimaryPasskey] or to
-// [ExternalStep] custom factors. A custom factor's guessing budget is
-// owned by whatever the embedder wraps behind [ExternalStep]; the wrapper
-// the built-ins receive is applied inside this package to the concrete
-// factor types it constructs itself and is not exported.
+// Scope — the counter is NOT attached to [PrimaryPasskey], and an
+// [ExternalStep] custom factor is not counted unless it opts in through
+// [ExternalStep.CountFailures]. Opting in needs a subject to count
+// against, so [New] rejects it at [LoginFlow.Primary]; an ExternalStep
+// there relies on the lockout policy of whatever it verifies against.
 //
 // Automatic wiring — when this option is not set and the [WithStore]
 // value exposes an AuthnLockouts() [store.AuthnLockoutStore] method
@@ -212,8 +212,8 @@ func WithScope(s Scope) Option {
 // each registered observer in registration order. This is the brute-
 // force / risk-counter feed; general audit events are emitted by the
 // library to slog and observers MUST NOT duplicate them here.
-// Experimental: the observer contract is settled; the orchestrator
-// emission points around it MAY change in a minor release.
+//
+// Stable since v1.5.
 func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(o) {
@@ -237,8 +237,8 @@ func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 // "consent" and "chooser" are reserved: an extension using either fails
 // [New]. User extensions ship with a unique dotted [Interaction.Name]
 // (e.g., "myorg.tos.accept").
-// Experimental: the contract is settled; per-interaction semantics MAY
-// change in a minor release.
+//
+// Stable since v1.5.
 func WithInteractions(i ...Interaction) Option {
 	return optionFunc(func(c *config) error {
 		if len(i) == 0 {
@@ -271,10 +271,11 @@ func WithInteractions(i ...Interaction) Option {
 // iframes are out of scope, so [SPAUI] does not carry mounts for
 // those surfaces.
 // LoginMount is the only field that affects routing; see the
-// deprecation notes on ConsentMount and LogoutMount.
-// Experimental: the field set MAY gain optional members in a minor
-// release. Embedders SHOULD construct [SPAUI] with named field
-// initialisation so future additions remain source-compatible.
+// deprecation notes on ConsentMount and LogoutMount. Embedders SHOULD
+// construct [SPAUI] with named field initialisation so optional fields
+// added in a minor release remain source-compatible.
+//
+// Stable since v1.5.
 //
 // # State-route contract
 //
@@ -367,7 +368,7 @@ type SPAUI struct {
 	// element MUST supply its own value. A non-empty value replaces the
 	// default and is validated with [interaction.NormalizeCSP], the same
 	// rules as [ConsentUI.ContentSecurityPolicy]; a rejected value fails
-	// [New]. Experimental, like the rest of [SPAUI].
+	// [New].
 	ContentSecurityPolicy string
 }
 
@@ -382,10 +383,8 @@ const spaDefaultCSP = "default-src 'self'; script-src 'self'; style-src 'self' '
 // The struct field set is intentionally narrow: the consent ceremony
 // has a fixed data model (client metadata + scope list + CSRF token)
 // and the embedder supplies an [*template.Template] that consumes it.
-// Experimental: the field set MAY gain members in a minor release. A
-// Strings field for an i18n bundle is reserved for once the public
-// i18n surface stabilises; it is omitted today so embedders are not
-// pinned to a placeholder type.
+//
+// Stable since v1.5.
 type ConsentUI struct {
 	// Template is the [html/template.Template] the consent screen
 	// renders. The library passes the canonical consent context
@@ -415,9 +414,8 @@ type ConsentUI struct {
 // struct field set is intentionally narrow: the chooser screen has a
 // fixed data model (Accounts, AddAccountURL, CSRFToken) and the
 // embedder supplies an [*template.Template] that consumes it.
-// Experimental: the field set MAY gain members in a minor release — a
-// Strings field for an i18n bundle once the public i18n surface
-// stabilises.
+//
+// Stable since v1.5.
 type ChooserUI struct {
 	// Template is the [html/template.Template] the chooser screen
 	// renders. The library passes the canonical chooser context
@@ -455,10 +453,11 @@ type ChooserUI struct {
 // cross-factor lockout counter [WithAuthnLockoutStore] attaches.
 // [ExternalStep] wraps an already-constructed [Authenticator] and is
 // the seam for factors this package does not implement — a step taken
-// through it does not receive that counter, so reach for it only when
-// no built-in Step covers the factor.
-// Experimental: field names and evaluation order MAY change in a
-// minor release; see [LoginFlow] for why the seam is not frozen.
+// through it receives that counter only when it sets
+// [ExternalStep.CountFailures], so reach for it only when no built-in
+// Step covers the factor.
+//
+// Stable since v1.5.
 func WithLoginFlow(flow LoginFlow) Option {
 	return optionFunc(func(c *config) error {
 		if c.loginFlowSet {

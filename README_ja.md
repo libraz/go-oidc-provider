@@ -13,7 +13,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 
 **ドキュメント: [go-oidc-provider.libraz.net](https://go-oidc-provider.libraz.net/ja/)** — 概念・ユースケース・オプションリファレンス・運用ガイド・セキュリティ方針・適合試験スコアボードを掲載しています。本 README では、インストール手順、リポジトリの構成、採用前に把握しておくべき設計判断を扱います。
 
-> **ステータス: `v1.4.0`**。1.0 リリース以降、公開 `op` API は [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。godoc に `Experimental:` マーカーを持つシンボルだけが例外で、対象は認証ステップのシーム、interaction の UI 型、Grant Management に加え、パッケージ全体を対象とする 2 つ — `op/interaction` と DynamoDB ストレージアダプタ（`op/storeadapter/dynamodb`）です。一覧は [`api/experimental.txt`](api/experimental.txt) に機械生成され、`make verify` が再生成して差分を検査するため、例外の範囲がレビューを経ずに広がることはありません。移行時の注意点は [`CHANGELOG.md`](CHANGELOG.md) にまとめています。
+> **ステータス: `v1.4.0`**。1.0 リリース以降、公開 `op` API は [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。godoc に `Experimental:` マーカーを持つシンボルだけが例外で、現在の対象は Grant Management だけです。IETF のドラフトに追従しており、wire 形式がまだ変わりうるためです。一覧は [`api/experimental.txt`](api/experimental.txt) に機械生成され、`make verify` が再生成して差分を検査するため、例外の範囲がレビューを経ずに広がることはありません。移行時の注意点は [`CHANGELOG.md`](CHANGELOG.md) にまとめています。
 >
 > 本プロジェクトは独立して開発・保守しているもので、ベンダー製品ではありません。リリースごとに OpenID Foundation の適合試験スイートで回帰検証していますが、正式な認定は受けておらず、サポートはベストエフォートです。
 
@@ -97,7 +97,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 | `inmem` | main module | 開発・テスト向けのリファレンス実装。 |
 | `sql` | 別モジュール | SQLite / MySQL 8.0+ / PostgreSQL 14+ 向けの `database/sql` アダプタ。エンジンごとのリファレンス DDL を同梱。 |
 | `redis` | 別モジュール | 揮発性サブストア専用。TLS と AUTH が無いと起動を拒否する。 |
-| `dynamodb` | 別モジュール | サブストアごとに 1 テーブル、トランザクション対応。`Experimental:` マーカー付き。 |
+| `dynamodb` | 別モジュール | サブストアごとに 1 テーブル、トランザクション対応。 |
 | `composite` | main module | ホット/コールドの振り分け役。永続サブストアと揮発性サブストアを別々のバックエンドへ。 |
 
 [`op/store/contract`](op/store/contract) は内部テストではなく、再利用できる適合ハーネスです。自作バックエンドを渡すと、godoc が規定するセマンティクスを検証し、実装していない任意拡張はスキップします。同梱アダプタもこのスイートで検証しています。

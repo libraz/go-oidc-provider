@@ -18,10 +18,9 @@
 // complete set is generated from those markers into api/experimental.txt and
 // diffed by the build, so the exemption cannot grow without the diff showing
 // it. Everything absent from that file is stable. The exempt surface today is
-// the authentication-step seam ([LoginFlow] and the options that populate it),
-// the interaction UI hooks, and Grant Management, which tracks an IETF draft,
-// plus two packages in full: op/interaction, whose Driver seam is still
-// settling, and the DynamoDB storage adapter.
+// Grant Management alone ([GrantManagementAction] and [WithGrantManagement]):
+// it tracks an external IETF draft whose wire shape may still change, so its
+// stability is not this library's to promise.
 //
 // # Quickstart
 //

@@ -2,12 +2,9 @@
 // go-oidc-provider. It implements every substore in
 // [github.com/libraz/go-oidc-provider/op/store], including
 // [store.Transactional], so a deployment can run the OP — browser
-// authorization-code flow included — on DynamoDB alone.
-//
-// Experimental: the adapter's construction and option surface has had
-// no production exposure and may change in a minor release. The substore
-// behaviour itself is pinned by the same op/store/contract harness the
-// SQL and in-memory adapters run against, so it is not provisional.
+// authorization-code flow included — on DynamoDB alone. The substore
+// behaviour is pinned by the same op/store/contract harness the SQL and
+// in-memory adapters run against.
 //
 // # Construction
 //
@@ -174,4 +171,6 @@
 // back to the username index for those entries, and their uniqueness is
 // the writer's to enforce. Subjects must not begin with the reservation
 // prefix; the seed helpers reject one that does.
+//
+// Stable since v1.5.
 package oidcdynamo
