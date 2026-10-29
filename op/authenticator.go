@@ -29,7 +29,33 @@ type BeginInput = authn.BeginInput
 type ContinueInput = authn.ContinueInput
 
 // Authenticator is an alias for [authn.Authenticator].
+//
+// Error contract for Begin and Continue, as seen from an [ExternalStep]:
+//   - An error wrapping [ErrFactorRetry] reports a wrong credential. The
+//     failure is counted (login context, audit, observer) and the same
+//     prompt is presented again.
+//   - An error wrapping [ErrFactorAbort] ends the attempt for a reason the
+//     user caused; the response is a 4xx.
+//   - Any other error is treated as a server fault (5xx).
+//   - Returning the prompt again with a nil error is not counted as a
+//     failure.
 type Authenticator = authn.Authenticator
+
+var (
+	// ErrFactorRetry is the sentinel an [Authenticator] wraps to report a
+	// rejected credential. It is the same value the built-in factors use,
+	// so [errors.Is] matches across the boundary.
+	//
+	// Stable since v1.5.
+	ErrFactorRetry = authn.ErrFactorRetry
+
+	// ErrFactorAbort is the sentinel an [Authenticator] wraps to end the
+	// attempt with a 4xx for a failure the user caused. It is the same
+	// value the built-in factors use.
+	//
+	// Stable since v1.5.
+	ErrFactorAbort = authn.ErrFactorAbort
+)
 
 // Interaction is an alias for [authn.Interaction].
 type Interaction = authn.Interaction
