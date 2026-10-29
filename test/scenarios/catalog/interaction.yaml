@@ -319,12 +319,13 @@ rows:
     spec: NIST SP 800-63B §5.2.2 / OP brute-force policy — one lockout counter per subject, shared across factors
     behaviour: |
       Failed authentication attempts MUST share a per-subject counter
-      across every authenticator the OP exposes (TOTP, email-OTP,
-      passkey, recovery codes). An attacker pivoting between factors
-      cannot exceed the configured cumulative threshold by exhausting
-      one factor's local counter and switching to another. Crossing
-      the short threshold (5) stamps a 1-hour lock; crossing the long
-      threshold (25) stamps a 24-hour lock; lock state is visible at
-      the next Begin / Continue regardless of which factor drives it.
+      across the authenticators that check a guessable secret
+      (password, TOTP, email-OTP, recovery codes; passkey is not
+      counted). An attacker pivoting between factors cannot exceed
+      the cumulative threshold by exhausting one factor's local
+      counter and switching to another. Reaching 30 failures within
+      24 hours stamps a 1-hour lock; reaching 90 stamps a 24-hour
+      lock; lock state is visible at the next Begin / Continue
+      regardless of which factor drives it.
     status: out-of-scope
     out_of_scope_reason: "Cross-factor lockout binds against the AuthnLockoutStore substore (op/store/lockout.go), which the orchestrator consults inside a Begin/Continue dispatch tick. Exercising the cross-factor pivot from the public surface requires a multi-authenticator fixture (TOTP factor + email-OTP factor + passkey, all wired into op.WithAuthenticators chain, plus the SPA driver to enumerate ChallengeKinds and Continue against each in turn) that the scenariokit harness does not host. The window-rollover / 1h-then-24h thresholds are pinned by internal/authn/lockout package tests (lockout_test.go, cross_factor_test.go); op/storeadapter/sql implements the substore against a version-CAS record (op/storeadapter/sql/lockout.go) exercised by its own contract suite (mfa_contract_test.go, contract_mysql_test.go), and op/storeadapter/redis does not implement AuthnLockoutStore at all. Re-opening for v1.0 would require a new public 'multi-factor failure replay' helper in scenariokit; not on the v1.0 roadmap."

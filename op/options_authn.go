@@ -98,26 +98,34 @@ func WithMFAEncryptionKeys(keys ...[]byte) Option {
 const mfaEncryptionKeyLen = 32
 
 // WithAuthnLockoutStore wires the cross-factor brute-force counter.
-// When a non-nil store is supplied, every built-in second-factor
-// [Step] (StepTOTP, StepEmailOTP, StepRecoveryCode) consults the same
+// Every built-in [Step] that checks a guessable secret ([PrimaryPassword],
+// [StepTOTP], [StepEmailOTP], [StepRecoveryCode]) consults the same
 // per-subject counter so an attacker pivoting between factors cannot
 // double their guess budget. The store backs a rolling 24-hour
 // window: a 1-hour lockout at 30 cumulative failures, 24-hour at 90.
 //
-// Scope — the counter attaches ONLY to the built-in possession/recovery
-// factors above. It is deliberately NOT attached to the primary
-// credential factor (password / passkey) or to [ExternalStep] custom
-// factors: the primary credential's brute-force defence is the
-// embedder's user store (which owns the password hash, its own attempt
-// throttling, and account-lock policy), and a custom factor's guessing
-// budget is owned by whatever the embedder wraps behind [ExternalStep].
-// There is no library-side opt-in that extends the counter to those two.
-// The wrapper the built-ins receive is applied inside this package to
-// the concrete factor types it constructs itself and is not exported, so
-// an embedder that wants the primary or a custom factor to hold a
-// guessing budget owns that budget in its own implementation — the user
-// store behind the primary credential, or whatever backs the
-// [ExternalStep.Authenticator].
+// Password behaviour — a wrong password is counted; once the subject is
+// locked even the correct password is refused, with the same response as
+// a wrong one, so the lock does not reveal that the account exists.
+// Unknown usernames and accounts without a password hash never touch the
+// counter. A successful password login does not reset it: the budget is
+// shared with the second factors, and a reset there would let anyone who
+// knows the password refill their guesses. A counter or store error fails
+// the attempt with a server error rather than letting it through.
+//
+// Scope — the counter is NOT attached to [PrimaryPasskey] or to
+// [ExternalStep] custom factors. A custom factor's guessing budget is
+// owned by whatever the embedder wraps behind [ExternalStep]; the wrapper
+// the built-ins receive is applied inside this package to the concrete
+// factor types it constructs itself and is not exported.
+//
+// Automatic wiring — when this option is not set and the [WithStore]
+// value exposes an AuthnLockouts() [store.AuthnLockoutStore] method
+// (the in-memory, SQL and DynamoDB adapters do, and composite.Store
+// forwards its Users backend's), that store is used. An explicit
+// option always wins. If no store resolves while the login flow has a
+// counter-consuming step, [New] logs one warning that brute-force
+// limiting is disabled.
 //
 // The attachment is to the [Step], not to the factor. An authenticator
 // built directly — [NewEmailOTPAuthenticator] with an
@@ -145,11 +153,10 @@ const mfaEncryptionKeyLen = 32
 // the wrong shape for anything but a single-process demo. An embedder
 // on another backend supplies its own implementation.
 //
-// The default (nil store, option unset) preserves the per-factor
-// counters the TOTP and email-OTP authenticators keep on their own,
-// each budgeting its own factor; embedders who want defence-in-depth
-// against pivot attacks set this option and route the supplied store
-// to a backend every replica shares.
+// Without a resolved store only the per-factor counters the TOTP and
+// email-OTP authenticators keep on their own apply, each budgeting its
+// own factor and the password not at all; route the store to a backend
+// every replica shares.
 //
 // At most one store may be registered; a second [WithAuthnLockoutStore]
 // call fails [New] with a structured configuration error.

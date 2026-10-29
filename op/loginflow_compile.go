@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // CaptchaSubmissionFieldName is the [interaction.FieldSpec.Name] a
@@ -440,15 +441,18 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, cl
 // timestamps. A nil clock passes nil through and the helper falls back
 // to the system clock.
 func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticator { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-	if c == nil || isNilLike(c.authnLockoutStore) {
+	lockoutStore := resolveAuthnLockoutStore(c)
+	if lockoutStore == nil {
 		return auth
 	}
-	counter, err := lockout.New(c.authnLockoutStore, clockShimOrNil(c.clock))
+	counter, err := lockout.New(lockoutStore, clockShimOrNil(c.clock))
 	if err != nil || counter == nil {
 		return auth
 	}
 	counter = counter.WithEmitter(c.effectiveAuditEmitter())
 	switch t := auth.(type) {
+	case *password.Authenticator:
+		return t.WithLockout(counter)
 	case *totp.Authenticator:
 		return t.WithLockout(counter)
 	case *emailotp.Authenticator:
@@ -456,12 +460,54 @@ func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticat
 	case *recovery.Authenticator:
 		return t.WithLockout(counter)
 	default:
-		// Primary credential factors (password / passkey) and custom
-		// ExternalStep authenticators are intentionally excluded from the
-		// cross-factor counter (see WithAuthnLockoutStore godoc): their
-		// brute-force defence is owned by the embedder's user store or the
-		// wrapped custom factor, not this shared 2FA gate.
+		// Passkey and custom ExternalStep authenticators are intentionally
+		// excluded from the cross-factor counter (see WithAuthnLockoutStore
+		// godoc): a passkey assertion is not a guessable secret, and a
+		// custom factor's budget stays with the wrapped implementation.
 		return auth
+	}
+}
+
+// resolveAuthnLockoutStore is the single source of the cross-factor
+// counter's store: an explicit [WithAuthnLockoutStore] wins, otherwise
+// the [WithStore] value is probed for an AuthnLockouts accessor whose
+// result is non-nil, otherwise nil (the counter is off).
+func resolveAuthnLockoutStore(c *config) store.AuthnLockoutStore { //nolint:ireturn,nolintlint // store.AuthnLockoutStore is the substore contract.
+	if c == nil {
+		return nil
+	}
+	if !isNilLike(c.authnLockoutStore) {
+		return c.authnLockoutStore
+	}
+	if p, ok := c.store.(interface {
+		AuthnLockouts() store.AuthnLockoutStore
+	}); ok {
+		if s := p.AuthnLockouts(); !isNilLike(s) {
+			return s
+		}
+	}
+	return nil
+}
+
+// warnWithoutLockoutStore logs once that brute-force limiting is off
+// when the login flow schedules a counter-consuming step but no
+// lockout store resolves.
+func (c *config) warnWithoutLockoutStore() {
+	if c.logger == nil || resolveAuthnLockoutStore(c) != nil {
+		return
+	}
+	for _, step := range c.loginFlowSteps() {
+		switch step.Kind() {
+		case StepKindPassword, StepKindTOTP, StepKindEmailOTP, StepKindRecoveryCode:
+			c.logger.Warn(
+				"the login flow has a password or second-factor step but no "+
+					"authn lockout store is available, so per-subject brute-force "+
+					"limiting is disabled; use a WithStore value that exposes "+
+					"AuthnLockouts() or configure WithAuthnLockoutStore",
+				"option", "WithAuthnLockoutStore",
+			)
+			return
+		}
 	}
 }
 

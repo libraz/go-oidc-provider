@@ -22,9 +22,13 @@
 //
 //   - Enrolment: registering or rotating a user's password is the
 //     embedder's responsibility (UI, audit hooks, MFA re-prompting).
-//   - Per-user lockout: failed-attempt counters are session-level
-//     today via the orchestrator's RuleAfterFailedAttempts; a
-//     persistent LockoutStore is a future opt-in surface.
+//   - Per-attempt throttling: when the Provider has a lockout store, a
+//     wrong password is counted on the per-subject counter shared with
+//     the second factors (1h lock at 30 failures in 24h, 24h at 90). A
+//     locked subject is refused even with the right password, with the
+//     same error as a wrong one, and a successful login does not reset
+//     the counter. Session-level retry rules (RuleAfterFailedAttempts)
+//     are independent of it.
 //   - Hash migration: bcrypt → argon2id rehash on successful login is
 //     a future surface; embedders with legacy formats wrap their own
 //     [authn.Authenticator] in op.ExternalStep until then.

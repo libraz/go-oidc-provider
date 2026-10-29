@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/argon2id"
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -60,7 +61,20 @@ var ErrFieldMissing = fmt.Errorf("password: required field is missing: %w", auth
 //
 // Construct through [NewAuthenticator]; the zero value is not usable.
 type Authenticator struct {
-	store store.UserPasswordStore
+	store   store.UserPasswordStore
+	lockout *lockout.Counter
+}
+
+// WithLockout returns a copy of a that records wrong passwords on the
+// supplied cross-factor [lockout.Counter] and refuses a locked subject
+// even when the password is correct. A nil counter disables the gate.
+// A successful login does not reset the counter, so a known password
+// cannot refill the budget a second factor shares. The receiver is not
+// mutated; the caller MUST use the returned pointer.
+func (a *Authenticator) WithLockout(c *lockout.Counter) *Authenticator {
+	cp := *a
+	cp.lockout = c
+	return &cp
 }
 
 // ErrStoreRequired is returned by [NewAuthenticator] when its store
@@ -171,12 +185,25 @@ func (a *Authenticator) resolveAndVerify(ctx context.Context, username, candidat
 		}
 	}
 
+	// Only a subject that has a password consults or feeds the shared
+	// counter, so password spray cannot spend the budget of an account
+	// that has no password to guess.
+	counted := userExists && len(hash) > 0 && a.lockout != nil
+	locked := false
+	if counted {
+		l, _, lerr := a.lockout.IsLocked(ctx, user.Subject)
+		if lerr != nil {
+			return "", fmt.Errorf("password: lockout guard: %w", lerr)
+		}
+		locked = l
+	}
+
 	// Equalise the verify cost regardless of which sub-step failed:
 	// every path computes one Argon2id derivation, then a constant-time
 	// compare. The dummyHash is parameter-compatible with library-emitted
 	// hashes so the verify cost matches a real account.
 	verifyAgainst := hash
-	if !userExists || len(hash) == 0 {
+	if !userExists || len(hash) == 0 || locked {
 		verifyAgainst = dummyHash()
 	}
 	verifyErr := Verify(verifyAgainst, candidate)
@@ -186,7 +213,17 @@ func (a *Authenticator) resolveAndVerify(ctx context.Context, username, candidat
 		_ = Verify(dummyHash(), candidate)
 	}
 
-	if !userExists || len(hash) == 0 || verifyErr != nil {
+	if !userExists || len(hash) == 0 || locked {
+		return "", ErrInvalidCredentials
+	}
+	if verifyErr != nil {
+		if counted && errors.Is(verifyErr, ErrPasswordMismatch) {
+			// A lock taking effect, including the long one, answers like any
+			// other wrong password so the response never reveals the account.
+			if _, rerr := a.lockout.RecordFailure(ctx, user.Subject); rerr != nil && !errors.Is(rerr, lockout.ErrResetRequired) {
+				return "", fmt.Errorf("password: lockout record failure: %w", rerr)
+			}
+		}
 		return "", ErrInvalidCredentials
 	}
 	return user.Subject, nil

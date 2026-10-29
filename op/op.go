@@ -961,6 +961,7 @@ func spaWiringFor(cfg *config) (loginMount, staticDir string) {
 // [WithMFAEncryptionKeys] when [StepTOTP.EncryptionKey] is empty), and
 // the Provider-level [WithRiskAssessor] fallback for [LoginFlow.Risk].
 func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, error) {
+	cfg.warnWithoutLockoutStore()
 	assessor, err := resolveLoginFlowRisk(flow, cfg)
 	if err != nil {
 		return nil, err
@@ -1133,6 +1134,7 @@ func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep,
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
+		auth = attachLockoutCounter(auth, cfg)
 		return authn.LoginFlowStep{Kind: string(StepKindPassword), Authenticator: auth}, nil
 	default:
 		// An unrecognised Step shape (a future built-in we forgot to

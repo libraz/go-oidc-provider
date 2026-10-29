@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
+	"github.com/libraz/go-oidc-provider/internal/authn/password"
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -227,11 +230,33 @@ func TestProjectBuiltinStep_AttachesLockoutCounter(t *testing.T) {
 	cfg := &config{authnLockoutStore: st.AuthnLockouts()}
 	totpKey := stubTOTPKey("totp-lockout-key")
 
+	const (
+		username = "lockout-user"
+		secret   = "correct horse battery staple" //nolint:gosec // test fixture, not a real credential.
+	)
+	hash, err := HashPassword(secret)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	st.PutUserWithPassword(context.Background(), &store.User{Subject: subject}, username, hash)
+
 	cases := []struct {
 		name    string
 		step    Step
 		wantErr error
+		// cont, when set, drives Continue instead of Begin: the password
+		// step guards at the point the credential is submitted.
+		cont *authn.ContinueInput
 	}{
+		{
+			name:    "password",
+			step:    PrimaryPassword{Store: st.UserPasswords()},
+			wantErr: password.ErrInvalidCredentials,
+			cont: &authn.ContinueInput{Submission: interaction.FormSubmission{Values: map[string]string{
+				password.UsernameFieldName: username,
+				password.PasswordFieldName: secret,
+			}}},
+		},
 		{
 			name:    "totp",
 			step:    StepTOTP{Store: st.TOTPs(), EncryptionKey: totpKey},
@@ -259,9 +284,107 @@ func TestProjectBuiltinStep_AttachesLockoutCounter(t *testing.T) {
 			if err != nil {
 				t.Fatalf("projectBuiltinStep: %v", err)
 			}
-			_, err = lfStep.Authenticator.Begin(context.Background(), authn.BeginInput{Subject: subject})
+			if tc.cont != nil {
+				_, err = lfStep.Authenticator.Continue(context.Background(), *tc.cont)
+			} else {
+				_, err = lfStep.Authenticator.Begin(context.Background(), authn.BeginInput{Subject: subject})
+			}
 			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("Begin err=%v want %v", err, tc.wantErr)
+				t.Fatalf("err=%v want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// noLockoutsStore is a store whose method set has no AuthnLockouts
+// accessor, like a user-supplied or redis-style store.
+type noLockoutsStore struct{ store.Store }
+
+// nilLockoutsStore exposes the accessor but has no lockout backend, the
+// way a composite whose Users side lacks one does.
+type nilLockoutsStore struct{ store.Store }
+
+func (nilLockoutsStore) AuthnLockouts() store.AuthnLockoutStore { return nil }
+
+// TestResolveAuthnLockoutStore pins the precedence: an explicit
+// WithAuthnLockoutStore, then the WithStore accessor, then nothing.
+func TestResolveAuthnLockoutStore(t *testing.T) {
+	t.Parallel()
+
+	auto := inmem.New()
+	explicit := inmem.New().AuthnLockouts()
+
+	cases := []struct {
+		name string
+		cfg  *config
+		want store.AuthnLockoutStore
+	}{
+		{name: "nil config", cfg: nil, want: nil},
+		{name: "no store at all", cfg: &config{}, want: nil},
+		{name: "store without accessor", cfg: &config{store: noLockoutsStore{Store: auto}}, want: nil},
+		{name: "accessor returns nil", cfg: &config{store: nilLockoutsStore{Store: auto}}, want: nil},
+		{name: "auto from store", cfg: &config{store: auto}, want: auto.AuthnLockouts()},
+		{
+			name: "explicit wins over store",
+			cfg:  &config{store: auto, authnLockoutStore: explicit},
+			want: explicit,
+		},
+		{
+			name: "explicit without store",
+			cfg:  &config{authnLockoutStore: explicit},
+			want: explicit,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveAuthnLockoutStore(tc.cfg); got != tc.want {
+				t.Fatalf("resolveAuthnLockoutStore = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCompile_WarnsWithoutLockoutStore pins that compiling a login flow
+// with a counter-consuming step logs exactly one warning when no lockout
+// store resolves, and stays quiet when one does.
+func TestCompile_WarnsWithoutLockoutStore(t *testing.T) {
+	t.Parallel()
+
+	inner := inmem.New()
+	totpKey := stubTOTPKey("totp-warn-key")
+	flow := LoginFlow{
+		Primary: PrimaryPassword{Store: inner.UserPasswords()},
+		Rules:   []Rule{RuleAlways(StepTOTP{Store: inner.TOTPs(), EncryptionKey: totpKey})},
+	}
+
+	cases := []struct {
+		name     string
+		store    store.Store
+		explicit store.AuthnLockoutStore
+		wantWarn int
+	}{
+		{name: "no accessor", store: noLockoutsStore{Store: inner}, wantWarn: 1},
+		{name: "accessor returns nil", store: nilLockoutsStore{Store: inner}, wantWarn: 1},
+		{name: "auto-wired", store: inner, wantWarn: 0},
+		{name: "explicit", store: noLockoutsStore{Store: inner}, explicit: inner.AuthnLockouts(), wantWarn: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			cfg := &config{
+				store:             tc.store,
+				authnLockoutStore: tc.explicit,
+				logger:            slog.New(slog.NewTextHandler(&buf, nil)),
+				loginFlow:         flow,
+				loginFlowSet:      true,
+			}
+			if _, err := compileLoginFlow(flow, cfg); err != nil {
+				t.Fatalf("compileLoginFlow: %v", err)
+			}
+			if got := strings.Count(buf.String(), "level=WARN"); got != tc.wantWarn {
+				t.Fatalf("lockout warnings = %d, want %d; log:\n%s", got, tc.wantWarn, buf.String())
 			}
 		})
 	}
