@@ -168,6 +168,10 @@ type config struct {
 	// unexpected gaps under durable placement.
 	sessionDurabilityPosture SessionDurabilityPosture
 
+	// sessionDurabilityPostureSet records that the embedder declared the
+	// posture; otherwise it is inferred from the session store.
+	sessionDurabilityPostureSet bool
+
 	// accessTokenTTL is the lifetime of issued access tokens. Zero
 	// before [config.applyDefaults] runs; the defaults pass populates
 	// it with [DefaultAccessTokenTTL] so [config.validate] can compare

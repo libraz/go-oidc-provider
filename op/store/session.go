@@ -63,8 +63,24 @@ type Session struct {
 	UpdatedAt time.Time
 }
 
-// SessionStore is the substore for OP sessions. It is a volatile substore
-// outside the atomic-routing cluster: session writes (Save / Touch / Delete)
+// SessionDurabilityReporter is an optional capability of a [SessionStore]:
+// it reports whether sessions survive a process or node restart. The OP
+// reads it to infer the session durability posture when the embedder does
+// not declare one.
+//
+// Durable returns true only when a Save that has returned nil is still
+// readable after the process (or the node holding the data) restarts.
+//
+// Stable since v1.5.
+type SessionDurabilityReporter interface {
+	// Durable reports whether sessions survive a restart.
+	Durable() bool
+}
+
+// SessionStore is the substore for OP sessions. It is treated as a volatile
+// substore by default (a store may declare itself durable through
+// [SessionDurabilityReporter]) outside the atomic-routing cluster: session
+// writes (Save / Touch / Delete)
 // are NOT coordinated with token-endpoint commits, and the OP tolerates
 // session loss as a normal "user re-logs-in" event rather than a
 // security incident.

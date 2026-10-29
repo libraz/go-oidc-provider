@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // WithTrustedProxies declares the CIDRs from which the [Provider] should
@@ -219,16 +220,48 @@ const (
 // that lets SOC dashboards filter expected gaps under volatile
 // placement from unexpected gaps under durable placement.
 //
-// Default [SessionDurabilityVolatile]. Embedders who route
-// SessionStore to a durable backend (the SQL adapter, an
-// embedder-supplied store with WAL semantics) flip the declaration
-// to [SessionDurabilityDurable].
+// Without this option the posture is derived from the session store:
+// a store implementing [op/store.SessionDurabilityReporter] that
+// reports Durable() true yields [SessionDurabilityDurable] (the SQL and
+// DynamoDB adapters do), anything else [SessionDurabilityVolatile].
+// Declare it explicitly to override the derivation, for example Redis
+// with AOF persistence. [New] logs one warning when
+// [SessionDurabilityDurable] is declared and the store reports that its
+// sessions are not durable; declaring [SessionDurabilityVolatile] on a
+// durable store is accepted silently.
 // Stable since v1.0.
 func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
 	return optionFunc(func(c *config) error {
 		c.sessionDurabilityPosture = p
+		c.sessionDurabilityPostureSet = true
 		return nil
 	})
+}
+
+// sessionStoreDurable reports the session store's own durability claim;
+// reported is false when the store does not implement the capability.
+func (c *config) sessionStoreDurable() (durable, reported bool) {
+	if c.store == nil {
+		return false, false
+	}
+	r, ok := c.store.Sessions().(store.SessionDurabilityReporter)
+	if !ok {
+		return false, false
+	}
+	return r.Durable(), true
+}
+
+// effectiveSessionDurabilityPosture resolves the posture the back-channel
+// coordinator stamps: the explicit declaration, else the session store's
+// report, else the zero value (volatile).
+func (c *config) effectiveSessionDurabilityPosture() SessionDurabilityPosture {
+	if c.sessionDurabilityPostureSet {
+		return c.sessionDurabilityPosture
+	}
+	if durable, _ := c.sessionStoreDurable(); durable {
+		return SessionDurabilityDurable
+	}
+	return c.sessionDurabilityPosture
 }
 
 // WithDPoPNonceSource opts the provider into the RFC 9449 §8 / §9

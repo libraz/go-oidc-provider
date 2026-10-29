@@ -280,9 +280,29 @@ func (c *config) emitPartialWiringWarnings() {
 		)
 	}
 	c.warnUserStoreMismatch()
+	c.warnSessionDurabilityMismatch()
 	c.warnCaptchaOnScriptlessUI()
 	c.warnMTLSOptionsWithoutFeature()
 	c.warnEncryptionKidlessTrialCap()
+}
+
+// warnSessionDurabilityMismatch reports an explicit Durable posture on a
+// session store that says its sessions are volatile. The posture only
+// labels audit events, so the declaration is kept (Redis with AOF is a
+// legitimate case) and the mismatch is surfaced rather than rejected.
+func (c *config) warnSessionDurabilityMismatch() {
+	if !c.sessionDurabilityPostureSet || c.sessionDurabilityPosture != SessionDurabilityDurable {
+		return
+	}
+	if durable, reported := c.sessionStoreDurable(); !reported || durable {
+		return
+	}
+	c.logger.Warn(
+		"WithSessionDurabilityPosture(SessionDurabilityDurable) is declared but the "+
+			"session store reports that its sessions are on a volatile backend; "+
+			"the posture only labels back-channel logout audit events",
+		"option", "WithSessionDurabilityPosture",
+	)
 }
 
 // warnMTLSOptionsWithoutFeature reports mTLS knobs configured on an OP

@@ -811,7 +811,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		Deliverer:                deliverer,
 		Emitter:                  cfg.effectiveAuditEmitter(),
 		Clock:                    cfg.clock,
-		SessionDurabilityPosture: backchannelPostureFor(cfg.sessionDurabilityPosture),
+		SessionDurabilityPosture: backchannelPostureFor(cfg.effectiveSessionDurabilityPosture()),
 		FanOutBudget:             cfg.backchannelFanOutBudget,
 	})
 	if err != nil {
