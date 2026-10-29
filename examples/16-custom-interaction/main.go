@@ -7,8 +7,10 @@
 //     is not called): server-side renders the prompts as a tiny HTML
 //     form. The right choice for a server-rendered embedder.
 //   - [interaction.JSONDriver]: emits the prompt as JSON and reads
-//     submissions as JSON. The right choice when the embedder ships
-//     a SPA that calls the OP's JSON state endpoints directly.
+//     submissions as JSON. The right choice for non-browser or
+//     server-driven UIs that call the OP's JSON state endpoints. A
+//     browser SPA should use [op.WithSPAUI] instead, which serves the
+//     shell and handles the browser-side CSRF and CSP requirements.
 //
 // This example swaps to a thin custom driver that delegates to
 // JSONDriver while demonstrating how an embedder consumes the

@@ -158,6 +158,26 @@ claims from `Users()`; see `Changed`.
 
 ### Changed
 
+- SQL deployments must add two columns to `oidc_clients`,
+  `previous_secret_hash` and `previous_secret_expires_at`, before upgrading;
+  the statements per dialect are in `op/storeadapter/sql/schema/MIGRATIONS.md`.
+  `ValidateSchema` reports both as missing until they exist. A bring-your-own
+  `store.ClientStore` that does not persist the new `store.Client` fields keeps
+  working; it only cannot honour a previous secret.
+
+- An RFC 7592 client update that clears or replaces the client's secret also
+  drops its previous secret, so a rotation window cannot be revived by a later
+  switch back.
+
+- `totpkit.ErrCodeRejected` reads "code was not accepted" and now also covers
+  a code `totpkit.Verify` finds wrong or already used; `errors.Is` comparisons
+  are unaffected.
+
+- Referrer-Policy: no-referrer on the page that submits a login or logout
+  form makes the browser send `Origin: null`, which the same-origin check
+  refuses. The Provider now logs a WARN naming the cause the first time it
+  sees one, once per Provider.
+
 - With the lockout store wired automatically, TOTP, email-OTP and
   recovery-code steps of deployments that did not set
   `op.WithAuthnLockoutStore` now share the cross-factor counter too: a
@@ -266,6 +286,48 @@ claims from `Users()`; see `Changed`.
 - Example `29-passkey` signs in with a password or a passwordless passkey.
 
 ### Added
+
+- An `interaction.Prompt` shown again after a rejected submission carries
+  `error` (`interaction.PromptError`, with `Code` and `Message`) on the SPA
+  wire. `interaction.PromptErrorCredentialsRejected` is the code for a
+  rejected credential, and `interaction.PromptErrorMessageKey` returns the
+  i18n catalogue key of a code. `interaction.FieldSpec.LabelText` and
+  `interaction.FactorOption.LabelText` (`label_text`) carry the label
+  resolved in the prompt's locale. The built-in HTML driver renders the
+  notice as an alert.
+
+- `op.LogoutUI` and `op.WithLogoutUI` replace the RP-Initiated Logout
+  confirmation and signed-out pages with `html/template` templates, executed
+  with `interaction.LogoutConfirmTemplateData` and
+  `interaction.LogoutSignedOutTemplateData`. The confirmation template must
+  render every `interaction.HiddenField` of `Fields` inside its form;
+  `op.New` rejects one that does not. Composes with `op.WithSPAUI`.
+
+- Client secret rotation overlap. `op.ConfidentialClient.PreviousSecret`
+  (or `PreviousSecretHash`) with `PreviousSecretExpiresAt` keeps the
+  outgoing secret valid until the expiry, so callers can switch over without
+  an outage. `store.Client.PreviousSecretHash` and
+  `store.Client.PreviousSecretExpiresAt` hold it, and `op.SyncStaticClients`
+  carries the previous hash across a rotation. Authentication with the
+  previous secret emits `op.AuditClientAuthnPreviousSecret`
+  (`client_authn.previous_secret`) so operators can find clients that have
+  not switched.
+
+- `op.WithIDTokenScopeClaims` writes the claims of the listed scopes
+  (`profile`, `email`, `address`, `phone`, or a custom scope with claims)
+  into the ID Token of the `authorization_code`, `refresh_token`,
+  `device_code` and CIBA grants. This deliberately departs from OIDC Core
+  1.0 section 5.4 so a single-page application whose access token is
+  audience-bound to a resource server can read its profile; it enlarges the
+  ID Token. `op.New` rejects `openid`, `offline_access`, unregistered names,
+  a custom scope releasing a reserved ID Token claim, an empty list and a
+  second call.
+
+- `totpkit.Verify` re-checks a confirmed TOTP code outside the login flow,
+  for example before replacing or removing the factor. It shares replay and
+  failure accounting with the login step and returns `totpkit.ErrLocked`,
+  `totpkit.ErrNotEnrolled`, `totpkit.ErrStoreRequired`,
+  `totpkit.ErrCodecRequired` or `totpkit.ErrCodeRejected`.
 
 - `op.ACRLevels`, an `op.ACRPolicy` that maps deployment-specific `acr`
   values to an `op.AAL`.
