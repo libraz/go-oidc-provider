@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -16,17 +17,17 @@ import (
 // constant is unexported and the test lives in the _test package.
 const captchaMaxFailuresForTest = 5
 
-// buildCaptchaOrchestrator wires a chain of one always-succeeding
-// password factor behind the supplied verifier, with the failure
-// counter already at the captcha threshold so the very first Tick
-// emits the challenge.
+// buildCaptchaOrchestrator wires a flow of one always-succeeding
+// password primary plus the after-N-failures captcha rule backed by the
+// supplied verifier, with the failure counter already at the rule's
+// threshold so the very first Tick emits the challenge.
 func buildCaptchaOrchestrator(t *testing.T, verify func(context.Context, op.CaptchaInput) error) (*authn.Orchestrator, authn.State) {
 	t.Helper()
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{
+		LoginFlow: captchaFlow(t,
 			buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd"),
-		},
-		Captcha:        &stubCaptcha{verify: verify},
+			&stubCaptcha{verify: verify},
+		),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -106,8 +107,8 @@ func TestCaptchaTokenReadFromSubmission(t *testing.T) {
 	if len(seen) != 1 || seen[0] != "provider-token" {
 		t.Fatalf("verifier saw tokens %q, want exactly [provider-token]", seen)
 	}
-	if !next.CaptchaPassed {
-		t.Error("CaptchaPassed = false after a valid token")
+	if !slices.Contains(next.CompletedStepKinds, "captcha") {
+		t.Errorf("CompletedStepKinds = %v, want the captcha step recorded after a valid token", next.CompletedStepKinds)
 	}
 	if step.Prompt == nil || step.Prompt.Type != "auth.password" {
 		t.Fatalf("expected the chain to reach the password prompt, got %+v", step.Prompt)
@@ -151,21 +152,21 @@ func TestCaptchaFailureAdvancesCounter(t *testing.T) {
 		t.Errorf("LastFailures = %d, want %d (captcha must not feed the brute-force counter)",
 			next.LastFailures, wantLastFailures)
 	}
-	if next.CaptchaPassed {
-		t.Error("CaptchaPassed = true after a rejected token")
+	if slices.Contains(next.CompletedStepKinds, "captcha") {
+		t.Error("captcha step recorded as completed after a rejected token")
 	}
 }
 
-// TestCaptchaInterposesOnLegacySoftRetry is the regression for a gate a
-// credential-stuffing loop never reached: on the legacy Authenticators
-// chain the soft-retry path re-emitted the factor's prompt directly, so
-// the captcha decision — which lives in the chain dispatcher — only ran
-// when the browser re-entered through a fresh advance. An attacker
-// posting submission after submission against the same prompt never
-// re-enters, so the threshold could be crossed arbitrarily far without
-// a challenge ever appearing. The miss that reaches the threshold MUST
-// answer with the captcha, without a reload.
-func TestCaptchaInterposesOnLegacySoftRetry(t *testing.T) {
+// TestCaptchaInterposesOnSoftRetry is the regression for a gate a
+// credential-stuffing loop never reached: if the soft-retry path
+// re-emitted the factor's prompt directly, the captcha decision — which
+// lives in the chain dispatcher — would only run when the browser
+// re-entered through a fresh advance. An attacker posting submission
+// after submission against the same prompt never re-enters, so the
+// threshold could be crossed arbitrarily far without a challenge ever
+// appearing. The miss that reaches the threshold MUST answer with the
+// captcha, without a reload.
+func TestCaptchaInterposesOnSoftRetry(t *testing.T) {
 	t.Parallel()
 
 	wrongPassword := fmt.Errorf("password: invalid credentials: %w", authn.ErrFactorRetry)
@@ -182,8 +183,7 @@ func TestCaptchaInterposesOnLegacySoftRetry(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
-		Captcha:        &stubCaptcha{verify: func(context.Context, op.CaptchaInput) error { return nil }},
+		LoginFlow:      captchaFlow(t, pw, &stubCaptcha{verify: func(context.Context, op.CaptchaInput) error { return nil }}),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -224,8 +224,8 @@ func TestCaptchaInterposesOnLegacySoftRetry(t *testing.T) {
 	if st.LastFailures != captchaFailureThresholdForTest {
 		t.Errorf("LastFailures = %d, want %d", st.LastFailures, captchaFailureThresholdForTest)
 	}
-	if st.ActiveFactorIdx != -1 {
-		t.Errorf("ActiveFactorIdx = %d, want -1 once the factor is retired behind the challenge", st.ActiveFactorIdx)
+	if st.ActiveStepKind != "captcha" {
+		t.Errorf("ActiveStepKind = %q, want the captcha step once the factor is retired behind the challenge", st.ActiveStepKind)
 	}
 
 	// The factor's outstanding StateRef is retired by the challenge, so
@@ -252,11 +252,69 @@ func TestCaptchaInterposesOnLegacySoftRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("captcha solve Tick: %v", err)
 	}
-	if !next.CaptchaPassed {
-		t.Error("CaptchaPassed = false after a valid token")
+	if !slices.Contains(next.CompletedStepKinds, "captcha") {
+		t.Errorf("CompletedStepKinds = %v, want the captcha step recorded after a valid token", next.CompletedStepKinds)
 	}
 	if resumed.Prompt == nil || resumed.Prompt.Type != "auth.password" {
 		t.Fatalf("expected the chain to resume at the password prompt, got %+v", resumed.Prompt)
+	}
+}
+
+// TestCaptchaRuleInterposesBeforeDeciderStep pins that a due captcha
+// rule runs ahead of a factor the Decider demands, the same as ahead of
+// a factor a rule selects: the challenge must not depend on which seam
+// picked the next factor.
+func TestCaptchaRuleInterposesBeforeDeciderStep(t *testing.T) {
+	t.Parallel()
+
+	totp := buildSuccessAuthenticator(op.FactorTOTP, op.AAL2, "otp")
+	decider := &stubLoginFlowDecider{
+		decide: func(context.Context, authn.LoginFlowContext) authn.LoginFlowDecision {
+			return authn.LoginFlowRequire{Step: authn.LoginFlowStep{Kind: "totp"}}
+		},
+	}
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "password", Authenticator: buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")},
+		Rules: []authn.LoginFlowRule{
+			{Then: authn.LoginFlowStep{Kind: "totp", Authenticator: totp}},
+			captchaRule(captchaFailureThresholdForTest, &stubCaptcha{verify: func(context.Context, op.CaptchaInput) error { return nil }}),
+		},
+		Decider: decider,
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// The session subject stands in for Primary, so the Decider picks the
+	// next factor on the first Tick.
+	st := initialState()
+	st.Subject = "user-1"
+	st.LastFailures = captchaFailureThresholdForTest
+
+	st, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "captcha" {
+		t.Fatalf("prompt = %+v, want the captcha ahead of the Decider's TOTP step", step.Prompt)
+	}
+
+	_, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{
+			StateRef: step.Prompt.StateRef,
+			Values:   map[string]string{authn.CaptchaTokenField: "provider-token"},
+		},
+		Now: fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("captcha solve Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.totp" {
+		t.Fatalf("prompt after the captcha = %+v, want the Decider's TOTP step", step.Prompt)
 	}
 }
 

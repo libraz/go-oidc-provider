@@ -8,18 +8,15 @@ import (
 )
 
 // This file is the "phases" responsibility within the authn package:
-// the chain dispatcher (advance / advanceOnce), the BeforeAuthn /
-// AfterAuthn / BeforeToken interaction queues (advancePhaseInteractions /
-// advanceInteractions), and the legacy Authenticators-driven
-// advanceAuthn that dispatches into [Orchestrator.advanceLoginFlow]
-// when a [CompiledLoginFlow] is configured.
+// the chain dispatcher (advance / advanceOnce), which hands [PhaseAuthn]
+// to [Orchestrator.advanceLoginFlow], and the BeforeAuthn / AfterAuthn /
+// BeforeToken interaction queues (advancePhaseInteractions /
+// advanceInteractions).
 //
-// They share the [Orchestrator] receiver because the
-// state machine is dense — every advance step reads cfg.Authenticators
-// / cfg.Interactions / cfg.LoginFlow, dispatches to the per-step audit
-// fan-out, and asks the StateRefSigner to mint a fresh token. The
-// behaviour is identical to the pre-split version; only the
-// physical layout has changed.
+// They share the [Orchestrator] receiver because the state machine is
+// dense — every advance step reads cfg.Interactions / cfg.LoginFlow,
+// dispatches to the per-step audit fan-out, and asks the StateRefSigner
+// to mint a fresh token.
 
 // advance executes the current phase. The per-phase helpers each
 // return a Step (when something to render is ready) or signal a
@@ -69,12 +66,12 @@ func (o *Orchestrator) advanceOnce(ctx context.Context, st State, in Input) (Sta
 		}
 		return next, step, transition, err
 	case PhaseAuthn:
-		next, step, err := o.advanceAuthn(ctx, st, in.Now)
-		// LoginFlow path may transition to PhaseAfterAuthn without
-		// emitting a Prompt (Allow / no-rule-matched / decider-Pass
-		// + empty rules). Detect the phase change so the dispatcher
-		// re-enters with the updated phase rather than tripping the
-		// stuck-chain guard.
+		next, step, err := o.advanceLoginFlow(ctx, st, in.Now)
+		// The flow may transition to PhaseAfterAuthn without emitting
+		// a Prompt (Allow / no-rule-matched / decider-Pass + empty
+		// rules). Detect the phase change so the dispatcher re-enters
+		// with the updated phase rather than tripping the stuck-chain
+		// guard.
 		transition := next.Phase != PhaseAuthn
 		return next, step, transition, err
 	case PhaseAfterAuthn:
@@ -145,187 +142,9 @@ func (o *Orchestrator) advanceInteractions(ctx context.Context, st State, now ti
 	return st, interaction.Step{}, true, nil
 }
 
-// advanceAuthn picks the next factor candidate. The branches handle
-// the captcha-before-factor case, the risk consult, and the
-// subject-required factor skip rule.
-// When [Config.LoginFlow] is configured the function delegates to
-// [advanceLoginFlow]; the legacy [Config.Authenticators] body below is
-// used only when LoginFlow is nil.
-func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time) (State, interaction.Step, error) {
-	if o.cfg.LoginFlow != nil {
-		return o.advanceLoginFlow(ctx, st, now)
-	}
-	required, minAAL, denied, err := o.runRiskPreFactor(ctx, st, now)
-	if err != nil {
-		return st, interaction.Step{}, err
-	}
-	if denied {
-		return st, interaction.Step{}, ErrRiskDenied
-	}
-
-	candidates := o.eligibleAuthenticators(st, required, minAAL)
-	if len(candidates) == 0 {
-		return st, interaction.Step{}, ErrNoEligibleAuthenticator
-	}
-
-	if o.captchaRequired(st) {
-		next, step, perr := o.emitCaptchaPrompt(st, now)
-		if perr != nil {
-			return st, interaction.Step{}, perr
-		}
-		return next, step, nil
-	}
-
-	idx, auth := candidates[0].idx, candidates[0].auth
-	step, err := auth.Begin(ctx, BeginInput{
-		Subject:         st.Subject,
-		ClientID:        st.ClientID,
-		AuthTime:        now,
-		RequestedScopes: st.RequestedScopes,
-		Client:          st.Client,
-		ChooserGroupID:  st.ChooserGroupID,
-	})
-	if err != nil {
-		return st, interaction.Step{}, err
-	}
-	if step.Prompt != nil {
-		st.ActiveFactorIdx = idx
-		next, emitted, perr := o.emitFactorPrompt(st, auth, step, now)
-		if perr != nil {
-			return st, interaction.Step{}, perr
-		}
-		return next, emitted, nil
-	}
-	if step.Result == nil {
-		return st, interaction.Step{}, ErrInvalidStep
-	}
-	if rerr := guardFactorResult(st, auth, *step.Result); rerr != nil {
-		return retireActiveFactorToken(st), interaction.Step{}, rerr
-	}
-	st.ActiveFactorIdx = idx
-	st.FactorScratch = nil
-	st = o.appendFactor(st, auth, *step.Result)
-	o.observeSuccess(ctx, st, now, auth.Type())
-	denied2, derr := o.runRiskPostFactor(ctx, st, now, auth.Type())
-	if derr != nil {
-		return st, interaction.Step{}, derr
-	}
-	if denied2 {
-		return st, interaction.Step{}, ErrRiskDenied
-	}
-	st.ActiveFactorIdx = -1
-	st.Phase = PhaseAfterAuthn
-	return st, interaction.Step{}, nil
-}
-
-// candidateAuthenticator pairs an authenticator with its index in the
-// configuration slice so a re-ordered candidate list keeps the index
-// reachable for [State.ActiveFactorIdx].
-type candidateAuthenticator struct {
-	idx  int
-	auth Authenticator
-}
-
-// eligibleAuthenticators filters the registered chain by the
-// risk-required FactorType set (when non-empty), by the risk-required
-// minimum-assurance floor (when minAAL > AAL0), and by the
-// subject-required skip rule. The returned slice preserves the
-// configuration order so the orchestrator's "first candidate wins"
-// rule stays deterministic.
-//
-// Under [State.ReauthRequired] a subject no factor of this attempt has
-// authenticated does not count as bound: it identifies the user but is
-// not a credential, so a possession factor keyed off it cannot stand in
-// for the fresh authentication the request demanded.
-//
-// The two risk filters compose per the RiskOutcome contract: a
-// non-empty required set narrows the chain to those factor types, and
-// minAAL further excludes any candidate whose [Authenticator.AAL] is
-// below the floor. When required is empty but minAAL > AAL0 the
-// directive is "any registered factor that meets minAAL", so the AAL
-// filter alone applies — the whole chain is never returned unfiltered.
-func (o *Orchestrator) eligibleAuthenticators(st State, required []FactorType, minAAL AAL) []candidateAuthenticator {
-	subjectBound := st.Subject != "" && (!st.ReauthRequired || len(st.Factors) > 0)
-	out := make([]candidateAuthenticator, 0, len(o.cfg.Authenticators))
-	for i, a := range o.cfg.Authenticators {
-		if len(required) > 0 && !containsFactor(required, a.Type()) {
-			continue
-		}
-		if minAAL > AAL0 && a.AAL() < minAAL {
-			continue
-		}
-		if requiresSubject(a.Type()) && !subjectBound {
-			continue
-		}
-		out = append(out, candidateAuthenticator{idx: i, auth: a})
-	}
-	return out
-}
-
-// captchaRequired reports whether the orchestrator should emit a
-// captcha challenge before the next factor. The trigger fires when
-// the failure counter has reached the threshold AND a verifier is
-// configured AND the SPA has not already cleared the challenge.
-func (o *Orchestrator) captchaRequired(st State) bool {
-	if o.cfg.Captcha == nil {
-		return false
-	}
-	if st.CaptchaPassed {
-		return false
-	}
-	return st.LastFailures >= captchaFailureThreshold
-}
-
-// emitCaptchaPrompt issues a fresh captcha prompt with a new
-// StepCounter so a stale token cannot replay. The prompt declares the
-// [CaptchaTokenField] input so every driver has somewhere to put the
-// provider's token: the HTML driver renders the hidden field for the
-// widget's JS to fill, and a SPA reads the same field name off the
-// envelope. A prompt without the field would leave the SPA no way to
-// answer the challenge and the chain no way to leave it.
-func (o *Orchestrator) emitCaptchaPrompt(st State, now time.Time) (State, interaction.Step, error) {
-	st.StepCounter++
-	ref, err := o.cfg.StateRefSigner.Issue(st.InteractionUID, tagCaptcha, st.StepCounter, now.Add(stateRefTTL))
-	if err != nil {
-		return st, interaction.Step{}, err
-	}
-	provider, siteKey := CaptchaWidgetFor(o.cfg.Captcha)
-	prompt := interaction.Prompt{
-		Type: "captcha",
-		Data: interaction.CaptchaPromptData{Provider: provider, SiteKey: siteKey},
-		Inputs: []interaction.FieldSpec{{
-			Name:     CaptchaTokenField,
-			Kind:     interaction.FieldHidden,
-			Label:    "auth.captcha.token",
-			Required: true,
-			MaxLen:   captchaTokenMaxLen,
-		}},
-		StateRef: ref,
-	}
-	st = stampActiveInputs(st, prompt.Inputs)
-	return st, interaction.Step{Prompt: &prompt}, nil
-}
-
-// emitFactorPrompt re-issues the prompt the authenticator returned
-// with a freshly minted StateRef bound to the active factor's type.
-// The factor's Scratch is mirrored into [State.FactorScratch] so the
-// next [Authenticator.Continue] sees it via [ContinueInput.Scratch].
-func (o *Orchestrator) emitFactorPrompt(st State, auth Authenticator, step interaction.Step, now time.Time) (State, interaction.Step, error) {
-	st.StepCounter++
-	ref, err := o.cfg.StateRefSigner.Issue(st.InteractionUID, tagAuthPrefix+string(auth.Type()), st.StepCounter, now.Add(stateRefTTL))
-	if err != nil {
-		return st, interaction.Step{}, err
-	}
-	prompt := *step.Prompt
-	prompt.StateRef = ref
-	st.FactorScratch = step.Scratch
-	st = stampActiveInputs(st, prompt.Inputs)
-	return st, interaction.Step{Prompt: &prompt}, nil
-}
-
-// emitInteractionPrompt mirrors emitFactorPrompt for non-authn
-// interactions and stores the active interaction name on st so the
-// next submission routes back here.
+// emitInteractionPrompt issues a fresh StateRef for a non-authn
+// interaction's prompt and stores the active interaction name on st so
+// the next submission routes back here.
 func (o *Orchestrator) emitInteractionPrompt(st State, ix Interaction, prompt interaction.Prompt, now time.Time) (State, interaction.Step, error) {
 	st.StepCounter++
 	ref, err := o.cfg.StateRefSigner.Issue(st.InteractionUID, tagInteractionPrefix+ix.Name(), st.StepCounter, now.Add(stateRefTTL))
@@ -344,8 +163,8 @@ func (o *Orchestrator) emitInteractionPrompt(st State, ix Interaction, prompt in
 // the orchestrator stamped onto [State.ApprovedScopes] (empty when no
 // consent-shaped Interaction ran).
 //
-// It is the single terminal exit of every surface (legacy
-// Authenticators, LoginFlow, chooser), which is why the
+// It is the single terminal exit of every surface (LoginFlow,
+// chooser), which is why the
 // [State.ReauthRequired] backstop lives here rather than in each
 // dispatch branch: a request that demanded a fresh authentication
 // never leaves with a factor-less Result.
@@ -386,17 +205,4 @@ func containsFactor(slice []FactorType, t FactorType) bool {
 		}
 	}
 	return false
-}
-
-// requiresSubject reports whether a factor type can only run after
-// the chain has bound a subject. The set is closed: identifying
-// factors (password, passkey discoverable assertion) MAY appear first;
-// possession-style factors that key off the user record MUST NOT.
-func requiresSubject(t FactorType) bool {
-	switch t {
-	case FactorTOTP, FactorRecoveryCode, FactorEmailOTP:
-		return true
-	default:
-		return false
-	}
 }

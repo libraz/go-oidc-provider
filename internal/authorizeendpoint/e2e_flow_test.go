@@ -89,7 +89,8 @@ func (f *e2eFlow) interactionURL(loc *url.URL) string {
 }
 
 // submitSubject drives the first interaction hop: GET the prompt, then
-// POST the testkit subject factor. The returned response is whatever
+// POST the testkit subject factor unless the session already satisfies
+// the login flow and the prompt is consent. The returned response is whatever
 // the chain produced next — a consent prompt when consent is still
 // owed, or the final redirect back to the RP — and stays open for the
 // caller. The returned token is the CSRF value minted for the authn
@@ -106,16 +107,27 @@ func (f *e2eFlow) submitSubject(t *testing.T, interactionURL, subject string) (*
 		dump, _ := io.ReadAll(stepResp.Body)
 		t.Fatalf("interaction GET status=%d body=%s", stepResp.StatusCode, string(dump))
 	}
-	step := decodeMap(t, stepResp)
-	stateRef, _ := step["state_ref"].(string)
-	if stateRef == "" {
-		t.Fatalf("state_ref missing from interaction step: %v", step)
+	raw, err := io.ReadAll(stepResp.Body)
+	if err != nil {
+		t.Fatalf("read interaction step: %v", err)
 	}
+	stepResp.Body = io.NopCloser(bytes.NewReader(raw))
+	step := decodeMap(t, stepResp)
 	csrfCookie := findCookie(stepResp.Cookies(), cookie.CSRFProfile.Name)
 	if csrfCookie == nil {
 		t.Fatal("csrf cookie missing from interaction step")
 	}
-	raw, err := json.Marshal(map[string]any{
+	// A session that already satisfies the login flow opens straight on
+	// the consent screen; hand that step back as the chain's next one.
+	if typ, _ := step["type"].(string); typ == "consent.scope" {
+		stepResp.Body = io.NopCloser(bytes.NewReader(raw))
+		return stepResp, csrfCookie.Value
+	}
+	stateRef, _ := step["state_ref"].(string)
+	if stateRef == "" {
+		t.Fatalf("state_ref missing from interaction step: %v", step)
+	}
+	body, err := json.Marshal(map[string]any{
 		"state_ref": stateRef,
 		"values":    map[string]string{"subject": subject},
 	})
@@ -123,7 +135,7 @@ func (f *e2eFlow) submitSubject(t *testing.T, interactionURL, subject string) (*
 		t.Fatalf("marshal subject submission: %v", err)
 	}
 	postReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
-		interactionURL, bytes.NewReader(raw))
+		interactionURL, bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("NewRequest POST interaction: %v", err)
 	}

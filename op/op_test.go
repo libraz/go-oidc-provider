@@ -379,9 +379,8 @@ const fixtureFactor op.FactorType = "fixture.primary"
 // validBaseOpts is the minimal option set that builds a provider. The
 // default grant set includes authorization_code, which [op.New] refuses
 // to construct without a way to authenticate anyone, so the fixture
-// carries an authenticator. Tests exercising [op.WithLoginFlow] — which
-// is mutually exclusive with [op.WithAuthenticators] — or the
-// authenticator wiring itself want [validBaseOptsNoAuthn] instead.
+// carries a login flow. Tests that declare their own [op.WithLoginFlow]
+// — which may be called once — want [validBaseOptsNoAuthn] instead.
 func validBaseOpts(tb testing.TB) []op.Option {
 	tb.Helper()
 	return append(validBaseOptsNoAuthn(tb), fixtureAuthenticator())
@@ -392,7 +391,10 @@ func validBaseOpts(tb testing.TB) []op.Option {
 // grant. Tests that assemble their own option slice rather than
 // calling [validBaseOpts] append it.
 func fixtureAuthenticator() op.Option {
-	return op.WithAuthenticators(stubAuthenticator{typ: fixtureFactor, aal: op.AAL1})
+	return op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{
+		Authenticator: stubAuthenticator{typ: fixtureFactor, aal: op.AAL1},
+		KindLabel:     op.StepKind(fixtureFactor),
+	}})
 }
 
 // validBaseOptsNoAuthn is [validBaseOpts] without the fixture

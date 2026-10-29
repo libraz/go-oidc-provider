@@ -114,32 +114,6 @@ func TestWithLoginFlow_ExternalStepConstructs(t *testing.T) {
 	}
 }
 
-// TestWithLoginFlow_RejectsAuthenticatorCombo pins the mutual
-// exclusion contract: WithLoginFlow + WithAuthenticators is a
-// configuration error because the two surfaces drive the orchestrator
-// through different code paths and combining them would silently
-// reorder factors.
-func TestWithLoginFlow_RejectsAuthenticatorCombo(t *testing.T) {
-	t.Parallel()
-
-	flow := op.LoginFlow{
-		Primary: op.ExternalStep{
-			Authenticator: &stubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"},
-			KindLabel:     op.StepKind("myorg.password"),
-		},
-	}
-	_, err := op.New(append(validBaseOptsNoAuthn(t),
-		op.WithLoginFlow(flow),
-		op.WithAuthenticators(&stubAuth{typeID: op.FactorTOTP, aal: op.AAL2, amr: "otp"}),
-	)...)
-	if err == nil {
-		t.Fatal("expected error for WithLoginFlow + WithAuthenticators, got nil")
-	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("err = %v, want mutually-exclusive diagnostic", err)
-	}
-}
-
 // TestWithLoginFlow_RejectsExternalStepBuiltinKindLabel pins the
 // validation that ExternalStep KindLabel cannot collide with a
 // built-in StepKind: an embedder that picks "password" for their
@@ -262,7 +236,9 @@ func TestWithLoginFlow_AbsentLeavesNoError(t *testing.T) {
 
 	// No WithLoginFlow at all: the flow validator must NOT fire
 	// because c.loginFlow.Primary stays nil.
-	if _, err := op.New(validBaseOpts(t)...); err != nil {
+	if _, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithGrants(grant.ClientCredentials),
+	)...); err != nil {
 		t.Fatalf("op.New without WithLoginFlow: %v", err)
 	}
 }
@@ -286,28 +262,13 @@ func TestNew_RejectsAuthorizationCodeWithoutLoginConfiguration(t *testing.T) {
 	if op.IsClientError(err) {
 		t.Errorf("missing login configuration must not be classified as a client error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "WithAuthenticators") ||
-		!strings.Contains(err.Error(), "WithLoginFlow") {
-		t.Errorf("err = %v, want it to name both options that satisfy the requirement", err)
-	}
-}
-
-// TestNew_AuthenticatorsSatisfyTheAuthorizationCodeRequirement covers
-// the first of the two ways to declare the chain.
-func TestNew_AuthenticatorsSatisfyTheAuthorizationCodeRequirement(t *testing.T) {
-	t.Parallel()
-
-	if _, err := op.New(append(validBaseOptsNoAuthn(t),
-		op.WithAuthenticators(&stubAuth{typeID: op.FactorPassword, aal: op.AAL1, amr: "pwd"}),
-	)...); err != nil {
-		t.Fatalf("op.New with WithAuthenticators: %v", err)
+	if !strings.Contains(err.Error(), "WithLoginFlow") {
+		t.Errorf("err = %v, want it to name the option that satisfies the requirement", err)
 	}
 }
 
 // TestNew_LoginFlowSatisfiesTheAuthorizationCodeRequirement covers the
-// second: a LoginFlow declares the same chain in compiled form, so it
-// stands alone without WithAuthenticators (with which it is mutually
-// exclusive).
+// way to declare the chain.
 func TestNew_LoginFlowSatisfiesTheAuthorizationCodeRequirement(t *testing.T) {
 	t.Parallel()
 

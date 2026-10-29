@@ -850,7 +850,7 @@ func backchannelPostureFor(p SessionDurabilityPosture) backchannel.SessionDurabi
 
 // buildOrchestrator constructs the [authn.Orchestrator] the
 // /interaction handler drives. The function returns nil without an
-// error when no [Authenticator] has been registered: deployments
+// error when no [LoginFlow] has been registered: deployments
 // running only non-interactive grants (client_credentials, refresh
 // against an externally-issued code) do not need the chain runner,
 // and the handler treats a nil orchestrator as "interaction
@@ -871,18 +871,8 @@ func backchannelPostureFor(p SessionDurabilityPosture) backchannel.SessionDurabi
 // registration; the orchestrator continues to run consent and any
 // user-extension interactions.
 func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestrator, error) {
-	if len(cfg.authenticators) == 0 && !cfg.loginFlowSet {
+	if !cfg.loginFlowSet {
 		return nil, nil //nolint:nilnil // documented "no orchestrator configured" sentinel
-	}
-	if cfg.loginFlowSet && len(cfg.authenticators) > 0 {
-		// Defence in depth: validateLoginFlow already rejects this
-		// combination, but the orchestrator constructor re-asserts
-		// the invariant so a refactor that loses the option-layer
-		// check still surfaces the misconfiguration here.
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow is mutually exclusive with WithAuthenticators",
-		}
 	}
 	stateRefCurrent, stateRefPrevious := deriveStateRefSigningKeys(cfg.cookieKeys)
 	signer, err := authn.NewStateRefSigner(stateRefCurrent, stateRefPrevious...)
@@ -893,31 +883,25 @@ func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestra
 			Cause:       err,
 		}
 	}
-	var compiled *authn.CompiledLoginFlow
-	if cfg.loginFlowSet {
-		compiled, err = compileLoginFlow(cfg.loginFlow, cfg)
-		if err != nil {
-			// projectStepToFlow / authn.CompileLoginFlow already
-			// produce typed *Error / contextual messages; wrap only
-			// non-typed errors here so the outer message stays
-			// compact.
-			var typed *Error
-			if errors.As(err, &typed) {
-				return nil, typed
-			}
-			return nil, &Error{
-				Code:        codeConfiguration,
-				Description: "WithLoginFlow: " + err.Error(),
-				Cause:       err,
-			}
+	compiled, err := compileLoginFlow(cfg.loginFlow, cfg)
+	if err != nil {
+		// projectStepToFlow / authn.CompileLoginFlow already
+		// produce typed *Error / contextual messages; wrap only
+		// non-typed errors here so the outer message stays
+		// compact.
+		var typed *Error
+		if errors.As(err, &typed) {
+			return nil, typed
+		}
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + err.Error(),
+			Cause:       err,
 		}
 	}
 	interactions := buildBuiltInInteractions(cfg, sessMgr)
 	orch, err := authn.New(authn.Config{
-		Authenticators: cfg.authenticators,
 		Interactions:   interactions,
-		Risk:           cfg.risk,
-		Captcha:        cfg.captcha,
 		Observers:      cfg.loginObservers,
 		AuditEmitter:   cfg.effectiveAuditEmitter(),
 		StateRefSigner: signer,

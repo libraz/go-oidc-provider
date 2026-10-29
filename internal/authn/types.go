@@ -31,8 +31,8 @@ const (
 	PhaseBeforeAuthn Phase = iota
 
 	// PhaseAuthn is the stage during which the orchestrator drives
-	// authenticators. The active factor's index is held in
-	// [State.ActiveFactorIdx].
+	// the login flow's steps. The active step's kind is held in
+	// [State.ActiveStepKind].
 	PhaseAuthn
 
 	// PhaseAfterAuthn is the stage between the last factor and the
@@ -102,12 +102,6 @@ type State struct {
 	// [Aggregate] when the chain reaches [PhaseDone].
 	Factors []Factor
 
-	// CaptchaPassed records whether the SPA cleared the captcha
-	// challenge during this attempt. The orchestrator emits at most
-	// one captcha [interaction.Prompt] per attempt; once the bit is set it
-	// stays set.
-	CaptchaPassed bool
-
 	// CaptchaFailures counts the tokens the [CaptchaVerifier]
 	// rejected during this attempt. It is deliberately separate from
 	// [State.LastFailures]: captcha is out-of-band from the
@@ -119,10 +113,8 @@ type State struct {
 	// loop. A cleared challenge resets it to zero.
 	CaptchaFailures int `json:"captcha_failures,omitempty"`
 
-	// ActiveFactorIdx is the index of the active
-	// [Authenticator] in the chain configuration, or -1 when no
-	// factor is currently mid-ceremony. The orchestrator updates it
-	// when it picks a candidate at [PhaseAuthn].
+	// ActiveFactorIdx is no longer read or written by the
+	// orchestrator; [State.ActiveStepKind] identifies the active step.
 	ActiveFactorIdx int
 
 	// ActiveInteractionName is the [Interaction.Name] of the
@@ -156,9 +148,9 @@ type State struct {
 	InteractionsRun map[string]bool
 
 	// LastFailures is the running count of [AttemptFailure]
-	// outcomes during the active [PhaseAuthn] window. The
-	// orchestrator emits a captcha challenge once it reaches
-	// [captchaFailureThreshold].
+	// outcomes during the active [PhaseAuthn] window. Rule predicates
+	// read it as [LoginFlowContext.FailedAttempts]; a cleared captcha
+	// step resets it.
 	LastFailures int
 
 	// FactorScratch is the opaque byte slice the active factor's
@@ -254,8 +246,7 @@ type State struct {
 	ScopeApprovalRecorded bool `json:"scope_approval_recorded,omitempty"`
 
 	// CompletedStepKinds records which [LoginFlow] step kinds have
-	// run during this attempt. Empty when [Config.LoginFlow] is not
-	// configured. The slice is the dedup unit for [LoginFlowRule]
+	// run during this attempt. The slice is the dedup unit for [LoginFlowRule]
 	// re-evaluation: a rule whose Then.Kind is already present is
 	// skipped on subsequent passes so the same step cannot run twice
 	// in a chain. The dedup invariant defends against timing-oracle
@@ -382,20 +373,6 @@ type Input struct {
 	// is the first call of an attempt (no prompt outstanding).
 	Submission *interaction.FormSubmission
 
-	// CaptchaToken is an out-of-band override for the token the
-	// captcha [interaction.Prompt] asks for. The ordinary route is the
-	// [CaptchaTokenField] entry of [Input.Submission]; the field exists
-	// for callers that drive [Orchestrator.Tick] directly and have
-	// already extracted the token themselves. The submission value
-	// wins when both are present.
-	//
-	// The override does not exempt the submission from the outstanding
-	// prompt's [interaction.FieldSpec] constraints: the built-in
-	// captcha prompt declares [CaptchaTokenField] as required, so a
-	// submission that omits it is rejected before the verifier runs
-	// regardless of what this field carries.
-	CaptchaToken string
-
 	// Now is the wall-clock time for this tick. The HTTP layer
 	// reads it from the configured [Clock] and passes it through
 	// so the orchestrator never calls [time.Now()] directly.
@@ -426,10 +403,8 @@ var (
 	ErrRiskDenied = errors.New("authn: risk denied")
 
 	// ErrNoEligibleAuthenticator is returned when, at
-	// [PhaseAuthn], no registered [Authenticator] satisfies the
-	// chain constraints (Subject already required by candidate set,
-	// risk-required factor not registered...). The HTTP layer
-	// surfaces a fixed error response.
+	// [PhaseAuthn], no declared step can satisfy a risk-required
+	// factor set. The HTTP layer surfaces a fixed error response.
 	ErrNoEligibleAuthenticator = errors.New("authn: no eligible authenticator")
 
 	// ErrInvalidStep is returned when an [Authenticator] or

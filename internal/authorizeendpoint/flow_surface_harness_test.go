@@ -19,33 +19,21 @@ import (
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
-// This file hosts the two-surface harness the authentication-freshness
-// tests drive. The testkit cannot supply it: testkit.NewProvider
-// pre-installs op.WithAuthenticators, which op.New rejects alongside
-// op.WithLoginFlow, so a LoginFlow-configured Provider has to be built
-// through op.New directly. Building both surfaces from one helper is
-// what lets a test assert that the recommended seam (LoginFlow) and the
-// legacy seam (Authenticators) reach the same verdict for the same
-// request.
+// This file hosts the harness the authentication-freshness tests drive.
+// The testkit cannot supply it: testkit.NewProvider pre-installs its
+// own op.WithLoginFlow, which may be called once, so a Provider with
+// this credential factor has to be built through op.New directly.
 
 // authnSurface names the factor-configuration seam a Provider is built
-// on. The freshness rules are surface-independent, so every test that
-// covers one runs both.
+// on.
 type authnSurface int
 
 const (
 	// surfaceLoginFlow builds the Provider with op.WithLoginFlow.
 	surfaceLoginFlow authnSurface = iota
-	// surfaceAuthenticators builds it with op.WithAuthenticators.
-	surfaceAuthenticators
 )
 
-func (s authnSurface) String() string {
-	if s == surfaceLoginFlow {
-		return "LoginFlow"
-	}
-	return "Authenticators"
-}
+func (authnSurface) String() string { return "LoginFlow" }
 
 // movableClock is an op.Clock whose reading the test advances between
 // hops. Freshness assertions need it: with a frozen clock, an auth_time
@@ -153,24 +141,16 @@ func (f *flowFixture) httpClient(t *testing.T) *http.Client {
 	}
 }
 
-// newFlowFixture builds a Provider on the requested surface. Both
-// surfaces get the same credential factor, the same clock, the same
-// store and the same registered client, so a behavioural difference
-// between them is a difference in the dispatch rules and nothing else.
+// newFlowFixture builds a Provider on the requested surface, with the
+// credential factor as the login flow's Primary.
 func newFlowFixture(t *testing.T, surface authnSurface, clock *movableClock, extra ...op.Option) *flowFixture {
 	t.Helper()
-	var authnOpt op.Option
-	switch surface {
-	case surfaceLoginFlow:
-		authnOpt = op.WithLoginFlow(op.LoginFlow{
-			Primary: op.ExternalStep{
-				Authenticator: passwordEchoAuthenticator{clock: clock},
-				KindLabel:     op.StepKind("test.primary"),
-			},
-		})
-	case surfaceAuthenticators:
-		authnOpt = op.WithAuthenticators(passwordEchoAuthenticator{clock: clock})
-	}
+	authnOpt := op.WithLoginFlow(op.LoginFlow{
+		Primary: op.ExternalStep{
+			Authenticator: passwordEchoAuthenticator{clock: clock},
+			KindLabel:     op.StepKind("test.primary"),
+		},
+	})
 	return buildFlowFixture(t, surface.String(), clock, authnOpt, extra...)
 }
 

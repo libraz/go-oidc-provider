@@ -1,9 +1,13 @@
 package authn
 
 import (
+	"bytes"
+	"context"
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 func TestLoginFlowDecisionConstructorsSatisfySealedInterface(t *testing.T) {
@@ -120,6 +124,82 @@ func TestLoginFlowContextProjectionDefensivelyCopiesSlices(t *testing.T) {
 	}
 	if st.RequestedScopes[0] != "openid" {
 		t.Errorf("State.RequestedScopes was mutated through the projection: %v", st.RequestedScopes)
+	}
+}
+
+// promptingStep is an [Authenticator] whose Begin emits a prompt typed
+// with its own kind, so a test can read which step the orchestrator
+// chose off the emitted prompt.
+type promptingStep struct{ kind string }
+
+func (p promptingStep) Type() FactorType  { return FactorType(p.kind) }
+func (promptingStep) AAL() AAL            { return AAL1 }
+func (promptingStep) AMR() string         { return "" }
+func (p promptingStep) Prompts() []string { return []string{p.kind} }
+
+func (p promptingStep) Begin(context.Context, BeginInput) (interaction.Step, error) {
+	return interaction.Step{Prompt: &interaction.Prompt{Type: p.kind}}, nil
+}
+
+func (promptingStep) Continue(context.Context, ContinueInput) (interaction.Step, error) {
+	return interaction.Step{}, ErrInvalidStep
+}
+
+// TestEvalLoginFlowRules_CaptchaRuleFirst pins the evaluation order: a
+// rule whose Then is a captcha step is evaluated before every factor
+// rule, wherever the flow declares it, so a due challenge interposes
+// before the next factor; within each group declaration order holds.
+func TestEvalLoginFlowRules_CaptchaRuleFirst(t *testing.T) {
+	t.Parallel()
+
+	always := func(LoginFlowContext) bool { return true }
+	step := func(kind string, captcha bool) LoginFlowStep {
+		return LoginFlowStep{Kind: kind, Authenticator: promptingStep{kind: kind}, IsCaptcha: captcha}
+	}
+	flow, err := CompileLoginFlow(LoginFlowSpec{
+		Primary: step("myorg.password", false),
+		Rules: []LoginFlowRule{
+			{When: always, Then: step("myorg.totp", false)},
+			{When: always, Then: step("myorg.captcha.first", true)},
+			{When: always, Then: step("myorg.email", false)},
+			{When: always, Then: step("myorg.captcha.second", true)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	signer, err := NewStateRefSigner(bytes.Repeat([]byte{0xAB}, 32))
+	if err != nil {
+		t.Fatalf("NewStateRefSigner: %v", err)
+	}
+	o, err := New(Config{LoginFlow: flow, StateRefSigner: signer})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		completed []string
+		want      string
+	}{
+		{completed: []string{"myorg.password"}, want: "myorg.captcha.first"},
+		{completed: []string{"myorg.password", "myorg.captcha.first"}, want: "myorg.captcha.second"},
+		{completed: []string{"myorg.password", "myorg.captcha.first", "myorg.captcha.second"}, want: "myorg.totp"},
+		{completed: []string{"myorg.password", "myorg.captcha.first", "myorg.captcha.second", "myorg.totp"}, want: "myorg.email"},
+	} {
+		st := State{
+			InteractionUID:     "uid-order",
+			Subject:            "user-1",
+			Phase:              PhaseAuthn,
+			CompletedStepKinds: tc.completed,
+		}
+		handled, ns, got, err := o.evalLoginFlowRules(context.Background(), st, flow, o.loginFlowContext(st), now)
+		if err != nil || !handled {
+			t.Fatalf("completed %v: handled=%v err=%v", tc.completed, handled, err)
+		}
+		if got.Prompt == nil || got.Prompt.Type != tc.want || ns.ActiveStepKind != tc.want {
+			t.Errorf("completed %v: ran %+v (active %q), want %q", tc.completed, got.Prompt, ns.ActiveStepKind, tc.want)
+		}
 	}
 }
 

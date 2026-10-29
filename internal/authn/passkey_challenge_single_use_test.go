@@ -105,7 +105,7 @@ func submitPasskey(stateRef, response string) authn.Input {
 func TestPasskeyChallengeIsSingleUseAfterSoftFailure(t *testing.T) {
 	t.Parallel()
 
-	for _, dispatcher := range []string{"legacy-chain", "login-flow"} {
+	for _, dispatcher := range passkeyDispatchers() {
 		t.Run(dispatcher, func(t *testing.T) {
 			t.Parallel()
 
@@ -113,7 +113,7 @@ func TestPasskeyChallengeIsSingleUseAfterSoftFailure(t *testing.T) {
 			f := newPasskeyFixture(t)
 			o := newPasskeyOrchestrators(t, f.auth, &recordingObserver{}, &recordingAuditEmitter{})[dispatcher]
 
-			st0, prompt0, err := o.Tick(ctx, passkeyState(), authn.Input{Now: fakeNow()})
+			st0, prompt0, err := o.Tick(ctx, o.start, authn.Input{Now: fakeNow()})
 			if err != nil {
 				t.Fatalf("prompt Tick: %v", err)
 			}
@@ -170,7 +170,7 @@ func TestPasskeyChallengeIsSingleUseAfterSoftFailure(t *testing.T) {
 func TestPasskeyChallengeRetiredAfterHardFailure(t *testing.T) {
 	t.Parallel()
 
-	for _, dispatcher := range []string{"legacy-chain", "login-flow"} {
+	for _, dispatcher := range passkeyDispatchers() {
 		t.Run(dispatcher, func(t *testing.T) {
 			t.Parallel()
 
@@ -178,7 +178,7 @@ func TestPasskeyChallengeRetiredAfterHardFailure(t *testing.T) {
 			f, credentials := newFaultablePasskeyFixture(t)
 			o := newPasskeyOrchestrators(t, f.auth, &recordingObserver{}, &recordingAuditEmitter{})[dispatcher]
 
-			st0, prompt0, err := o.Tick(ctx, passkeyState(), authn.Input{Now: fakeNow()})
+			st0, prompt0, err := o.Tick(ctx, o.start, authn.Input{Now: fakeNow()})
 			if err != nil {
 				t.Fatalf("prompt Tick: %v", err)
 			}

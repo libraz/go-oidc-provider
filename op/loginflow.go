@@ -65,9 +65,6 @@ type LoginFlow struct {
 	// factor types before authentication is granted. A flow that
 	// declares no such Step fails the attempt closed rather than
 	// granting at the assurance the assessor refused.
-	//
-	// Risk and [WithRiskAssessor] are two spellings of the same seam.
-	// Setting both fails [New]; setting either one alone wires it here.
 	Risk RiskAssessor
 }
 

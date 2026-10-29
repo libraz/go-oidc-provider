@@ -129,9 +129,8 @@ const mfaEncryptionKeyLen = 32
 //
 // The attachment is to the [Step], not to the factor. An authenticator
 // built directly — [NewEmailOTPAuthenticator] with an
-// [EmailOTPConfig] — and registered through [WithAuthenticators] does
-// NOT inherit the counter from this option, because the option never
-// sees it. Set [EmailOTPConfig.LockoutStore] to the same store to close
+// [EmailOTPConfig] — and wrapped in [ExternalStep] does NOT inherit the
+// counter from this option, because the option never sees it. Set [EmailOTPConfig.LockoutStore] to the same store to close
 // that gap. Leaving it nil is a silent hole rather than an error: the
 // factor still enforces its own per-record FailedCount, so it looks
 // rate-limited under test while an attacker who has exhausted their
@@ -204,100 +203,6 @@ func WithScope(s Scope) Option {
 			}
 		}
 		c.scopes = append(c.scopes, s)
-		return nil
-	})
-}
-
-// WithAuthenticators registers one or more [Authenticator] values.
-// Order is preserved: the orchestrator presents factors in
-// registration order when no [RiskAssessor] overrides the choice.
-// Calling WithAuthenticators multiple times appends to the configured
-// set; duplicates by [Authenticator.Type] are rejected at [New]
-// construction time.
-// At least one authenticator is required for an interactive [Provider]
-// to mount /authorize. The orchestrator surfaces the empty-set case
-// as a construction error at [New] time; this option only stores the
-// registered values.
-// Experimental: the option name and contract are settled; what MAY
-// change in a minor release is per-authenticator semantics, which are
-// still accumulating cases from real factor implementations.
-func WithAuthenticators(a ...Authenticator) Option {
-	return optionFunc(func(c *config) error {
-		if len(a) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAuthenticators requires at least one Authenticator",
-			}
-		}
-		for i, item := range a {
-			if isNilLike(item) {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithAuthenticators received nil Authenticator at position " + strconv.Itoa(i),
-				}
-			}
-		}
-		c.authenticators = append(c.authenticators, a...)
-		return nil
-	})
-}
-
-// WithCaptchaVerifier wires the [CaptchaVerifier] used to validate
-// captcha tokens server-side. At most one verifier is permitted; a
-// second [WithCaptchaVerifier] call fails [New] with a structured
-// configuration error so duplicate registrations surface as
-// misconfigurations rather than silently overwriting the earlier
-// value.
-// Experimental: the verifier contract is settled; the orchestrator
-// trigger points around it MAY change in a minor release.
-func WithCaptchaVerifier(v CaptchaVerifier) Option {
-	return optionFunc(func(c *config) error {
-		if isNilLike(v) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithCaptchaVerifier received nil CaptchaVerifier",
-			}
-		}
-		if c.captcha != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithCaptchaVerifier may be called at most once",
-			}
-		}
-		c.captcha = v
-		return nil
-	})
-}
-
-// WithRiskAssessor wires the [RiskAssessor] the orchestrator consults.
-// At most one assessor is permitted; a second [WithRiskAssessor] call
-// fails [New] with a structured configuration error.
-//
-// The consult points depend on which authentication surface is
-// configured. With [WithAuthenticators] the assessor is called at
-// [RiskPreFactor] and [RiskPostFactor] around every factor. With
-// [WithLoginFlow] it is the flow's assessor — called once per chain at
-// [RiskAuthorizeEntry], exactly as if it had been assigned to
-// [LoginFlow.Risk]. Assigning both that field and this option fails
-// [New]: the LoginFlow path consults one assessor per chain, so the
-// second would never run.
-// Experimental: the assessor contract is settled; the orchestrator
-// trigger points around it MAY change in a minor release.
-func WithRiskAssessor(a RiskAssessor) Option {
-	return optionFunc(func(c *config) error {
-		if isNilLike(a) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithRiskAssessor received nil RiskAssessor",
-			}
-		}
-		if c.risk != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithRiskAssessor may be called at most once",
-			}
-		}
-		c.risk = a
 		return nil
 	})
 }
@@ -543,8 +448,6 @@ type ChooserUI struct {
 //     defer to rules".
 //   - Repeated [WithLoginFlow] calls are rejected so the
 //     misconfiguration surfaces at [New].
-//   - WithLoginFlow is mutually exclusive with [WithAuthenticators];
-//     combining the two surfaces would silently reorder factors.
 //
 // Built-in [Step] values (PrimaryPassword, PrimaryPasskey, StepTOTP,
 // StepEmailOTP, StepRecoveryCode, StepCaptcha) are wired: pass them

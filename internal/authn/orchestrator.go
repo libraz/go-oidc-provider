@@ -3,34 +3,23 @@ package authn
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	opaudit "github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn/audit"
-	"github.com/libraz/go-oidc-provider/internal/authn/risk"
 	internallog "github.com/libraz/go-oidc-provider/internal/log"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
-// captchaFailureThreshold is the number of consecutive
-// [AttemptFailure] outcomes that triggers an interstitial
-// [interaction.CaptchaPromptData] before the next factor begins. The
-// default matches the library's brute-force gate; deployments that need
-// a different threshold drive the same logic through their own
-// [LoginAttemptObserver] and bump [State.LastFailures] externally.
-// Captcha events themselves do NOT increment the counter — captcha is
-// out-of-band from the brute-force feed.
-const captchaFailureThreshold = 3
-
 // captchaMaxFailures bounds how many rejected tokens a single attempt
-// may submit before the orchestrator abandons the chain with
-// [ErrCaptchaExhausted]. The gate is a liveness bound, not a security
-// one: without it a deployment whose verifier rejects everything (a
-// misconfigured site key, an upstream outage) would re-emit the
-// challenge indefinitely and no factor would ever become reachable.
+// may submit to a captcha step before the orchestrator abandons the
+// chain with [ErrCaptchaExhausted]. The gate is a liveness bound, not a
+// security one: without it a deployment whose verifier rejects
+// everything (a misconfigured site key, an upstream outage) would
+// re-emit the challenge indefinitely and no factor would ever become
+// reachable.
 const captchaMaxFailures = 5
 
 // stateRefTTL is how long an issued [interaction.Prompt.StateRef] stays valid
@@ -47,29 +36,11 @@ const stateRefTTL = 10 * time.Minute
 // may be nil; the orchestrator handles the missing dependency by
 // skipping the corresponding phase.
 type Config struct {
-	// Authenticators is the registered factor list in
-	// [op.WithAuthenticators] order. The orchestrator picks the
-	// first candidate that meets the per-tick constraints; risk
-	// directives reorder the choice without mutating the slice.
-	Authenticators []Authenticator
-
 	// Interactions is the registered interaction list. The
 	// orchestrator inserts each entry per its
 	// [InteractionTrigger]; intra-trigger ordering follows
 	// registration order.
 	Interactions []Interaction
-
-	// Risk is the optional [RiskAssessor] consulted at every
-	// [RiskStage] callsite. Nil means "always allow" (the
-	// orchestrator skips the consult).
-	Risk RiskAssessor
-
-	// Captcha is the optional [CaptchaVerifier]. Nil disables
-	// the captcha challenge: the orchestrator never emits the
-	// CaptchaPromptData even when [State.LastFailures] reaches the
-	// threshold (a deployment without a configured verifier would
-	// otherwise loop on a token it cannot validate).
-	Captcha CaptchaVerifier
 
 	// Observers receives one [LoginAttempt] per factor outcome.
 	// The slice is fanned out in registration order.
@@ -99,19 +70,11 @@ type Config struct {
 	// logger.
 	Logger *slog.Logger
 
-	// LoginFlow is the optional compiled high-level flow. Mutually
-	// exclusive with [Authenticators] at construction time: the public
-	// option layer rejects the combination at op.New, and [New] here
-	// re-asserts the invariant so the internal package surface is
-	// also self-protecting.
-	// When non-nil the orchestrator drives the chain through
-	// [advanceLoginFlow] instead of the legacy [advanceAuthn] path.
-	// Risk, Captcha, and Observers continue to work; the differences
-	// are: factor selection follows [CompiledLoginFlow.primary] +
-	// [CompiledLoginFlow.rules] / [CompiledLoginFlow.decider]
-	// instead of the [Config.Authenticators] slice; Risk is invoked
-	// at most once per chain (see [State.RiskScoreCached]); panic
-	// recovery wraps every embedder predicate / decider.
+	// LoginFlow is the compiled flow the orchestrator drives through
+	// [Orchestrator.advanceLoginFlow]. Required. Factor selection follows
+	// its Primary, rules and decider; its risk assessor is consulted at
+	// most once per chain (see [State.RiskScoreCached]); panic recovery
+	// wraps every embedder predicate / decider.
 	LoginFlow *CompiledLoginFlow
 }
 
@@ -125,24 +88,19 @@ type Orchestrator struct {
 	logger         *slog.Logger
 	auditObservers []audit.Observer
 	auditEmitter   opaudit.Emitter
-	riskAssessor   risk.Assessor
 }
 
-// New constructs an [Orchestrator] from cfg. It validates that the
-// chain is non-empty, that authenticators have unique [FactorType]
-// values, that interactions have unique [Interaction.Name] values,
-// and that the StateRef signer is non-nil. Errors here surface at
-// [op.New] construction time so deployment misconfigurations cannot
-// reach the first request.
+// New constructs an [Orchestrator] from cfg. It validates that a
+// [CompiledLoginFlow] is supplied, that interactions have unique
+// [Interaction.Name] values, and that the StateRef signer is non-nil.
+// Errors here surface at [op.New] construction time so deployment
+// misconfigurations cannot reach the first request.
 func New(cfg Config) (*Orchestrator, error) {
 	if err := validateChainShape(cfg); err != nil {
 		return nil, err
 	}
 	if cfg.StateRefSigner == nil {
 		return nil, errors.New("authn: StateRefSigner required")
-	}
-	if err := validateAuthenticators(cfg.Authenticators); err != nil {
-		return nil, err
 	}
 	seenName := make(map[string]struct{}, len(cfg.Interactions))
 	deduped := make([]Interaction, 0, len(cfg.Interactions))
@@ -174,7 +132,6 @@ func New(cfg Config) (*Orchestrator, error) {
 		logger:         logger,
 		auditObservers: wrapAuditObservers(cfg.Observers),
 		auditEmitter:   emitter,
-		riskAssessor:   wrapRiskAssessor(cfg.Risk),
 	}, nil
 }
 
@@ -191,35 +148,11 @@ func (o *Orchestrator) HasInteractions(trigger InteractionTrigger) bool {
 	return false
 }
 
-// validateChainShape enforces the LoginFlow / Authenticators
-// either-or invariant: exactly one of the two must be supplied.
-// Split out so [New] stays under the gocognit ceiling now that
-// LoginFlow added a third construction-time precondition.
+// validateChainShape requires the compiled [Config.LoginFlow]: it is
+// the only path the orchestrator drives factors through.
 func validateChainShape(cfg Config) error {
-	if cfg.LoginFlow != nil && len(cfg.Authenticators) > 0 {
-		return errors.New("authn: LoginFlow and Authenticators are mutually exclusive")
-	}
-	if cfg.LoginFlow == nil && len(cfg.Authenticators) == 0 {
-		return errors.New("authn: at least one Authenticator required")
-	}
-	return nil
-}
-
-// validateAuthenticators rejects nil entries and duplicate
-// [FactorType] values in the legacy chain. The LoginFlow path does
-// not flow through this helper — its primary / rule steps are
-// validated by [CompileLoginFlow] at op.New time.
-func validateAuthenticators(auths []Authenticator) error {
-	seen := make(map[FactorType]struct{}, len(auths))
-	for _, a := range auths {
-		if a == nil {
-			return errors.New("authn: nil Authenticator")
-		}
-		t := a.Type()
-		if _, dup := seen[t]; dup {
-			return fmt.Errorf("authn: duplicate Authenticator type %q", t)
-		}
-		seen[t] = struct{}{}
+	if cfg.LoginFlow == nil {
+		return errors.New("authn: LoginFlow required")
 	}
 	return nil
 }
@@ -248,10 +181,10 @@ func RequireReauth(st State) State {
 // The state machine, in order:
 //  1. Reject ticks against a completed chain ([ErrChainComplete]).
 //  2. If a submission is present, route it to the entity that issued
-//     the StateRef (captcha verifier, active authenticator, or active
-//     interaction) and advance.
+//     the StateRef (active LoginFlow step or active interaction) and
+//     advance.
 //  3. Run the [PhaseBeforeAuthn] interaction queue.
-//  4. Run [PhaseAuthn]: consult risk, pick a candidate, emit Begin.
+//  4. Run [PhaseAuthn]: drive the [CompiledLoginFlow].
 //  5. Run the [PhaseAfterAuthn] interaction queue (consent first).
 //  6. Run the [PhaseBeforeToken] interaction queue.
 //  7. Emit the terminal [interaction.Step] from [PhaseDone].
@@ -278,9 +211,9 @@ func (o *Orchestrator) Tick(ctx context.Context, st State, in Input) (State, int
 }
 
 // consumeSubmission routes a non-nil submission to whichever entity
-// issued the StateRef, returning either an emitted Prompt (factor
-// continues, captcha re-emitted) or a zero Step that lets advance run
-// the next phase from a clean state.
+// issued the StateRef, returning either an emitted Prompt (step
+// continues or is re-emitted) or a zero Step that lets advance run the
+// next phase from a clean state.
 func (o *Orchestrator) consumeSubmission(ctx context.Context, st State, in Input) (State, interaction.Step, error) {
 	payload, err := o.cfg.StateRefSigner.Verify(in.Submission.StateRef, st.InteractionUID, st.StepCounter, in.Now)
 	if err != nil {
@@ -297,10 +230,6 @@ func (o *Orchestrator) consumeSubmission(ctx context.Context, st State, in Input
 		return st, interaction.Step{}, verr
 	}
 	switch {
-	case payload.Tag == tagCaptcha:
-		return o.handleCaptchaSubmission(ctx, st, in)
-	case strings.HasPrefix(payload.Tag, tagAuthPrefix):
-		return o.handleAuthSubmission(ctx, st, in)
 	case strings.HasPrefix(payload.Tag, tagInteractionPrefix):
 		return o.handleInteractionSubmission(ctx, st, in)
 	case strings.HasPrefix(payload.Tag, tagLoginFlowPrefix):
@@ -308,125 +237,6 @@ func (o *Orchestrator) consumeSubmission(ctx context.Context, st State, in Input
 	default:
 		return st, interaction.Step{}, ErrInvalidStateRef
 	}
-}
-
-// handleCaptchaSubmission validates the captcha token; on success
-// CaptchaPassed flips and the chain advances, on failure
-// [State.CaptchaFailures] advances and the captcha Prompt is re-emitted
-// with a fresh nonce (the StepCounter still increments so the previous
-// token cannot replay). Once the failure count reaches
-// [captchaMaxFailures] the chain aborts with [ErrCaptchaExhausted]
-// instead of re-emitting, so a verifier that rejects every token cannot
-// trap the user in a challenge the chain never leaves. Captcha events
-// do NOT call observers, and they do not touch [State.LastFailures] —
-// captcha is intentionally out-of-band from the brute-force feed.
-func (o *Orchestrator) handleCaptchaSubmission(ctx context.Context, st State, in Input) (State, interaction.Step, error) {
-	if o.cfg.Captcha == nil {
-		return st, interaction.Step{}, ErrInvalidStateRef
-	}
-	captchaIn := CaptchaInput{
-		Token:    captchaToken(in),
-		RemoteIP: st.RemoteIP,
-	}
-	if err := o.cfg.Captcha.Verify(ctx, captchaIn); err != nil {
-		st.CaptchaFailures++
-		if st.CaptchaFailures >= captchaMaxFailures {
-			return st, interaction.Step{}, ErrCaptchaExhausted
-		}
-		next, step, err2 := o.emitCaptchaPrompt(st, in.Now)
-		if err2 != nil {
-			return st, interaction.Step{}, err2
-		}
-		return next, step, nil
-	}
-	st.CaptchaPassed = true
-	st.CaptchaFailures = 0
-	st.LastFailures = 0
-	return st, interaction.Step{}, nil
-}
-
-// captchaToken extracts the provider token from the tick input. The
-// submission's [CaptchaTokenField] is the wire route every driver uses
-// (the prompt declares the field, so the HTML driver renders it and the
-// SPA envelope advertises it); [Input.CaptchaToken] remains as an
-// override for callers that drive Tick directly.
-func captchaToken(in Input) string {
-	if in.Submission != nil {
-		if v, ok := in.Submission.Values[CaptchaTokenField]; ok && v != "" {
-			return v
-		}
-	}
-	return in.CaptchaToken
-}
-
-// handleAuthSubmission delegates the submission to the active
-// authenticator, observes the outcome, and runs PostFactor risk if
-// configured.
-func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in Input) (State, interaction.Step, error) {
-	if st.ActiveFactorIdx < 0 || st.ActiveFactorIdx >= len(o.cfg.Authenticators) {
-		return st, interaction.Step{}, ErrInvalidStateRef
-	}
-	auth := o.cfg.Authenticators[st.ActiveFactorIdx]
-	step, err := auth.Continue(ctx, ContinueInput{
-		Subject:         st.Subject,
-		ClientID:        st.ClientID,
-		AuthTime:        st.AuthTime,
-		Submission:      *in.Submission,
-		Scratch:         st.FactorScratch,
-		RequestedScopes: st.RequestedScopes,
-		ChooserGroupID:  st.ChooserGroupID,
-		RemoteIP:        st.RemoteIP,
-	})
-	if err != nil {
-		// One classification drives both what gets recorded and where
-		// the chain goes, so the two can never disagree: a failure
-		// reported as a rejected credential is exactly a failure that
-		// earns a retry prompt.
-		//
-		// Soft failures wrap [ErrFactorRetry]; they are observed,
-		// advance the brute-force counter, and re-emit the factor's
-		// prompt so the SPA can offer a retry — or defer to the
-		// dispatcher when the counter reached the captcha threshold, so
-		// the challenge runs first. Hard failures bubble up so the HTTP
-		// layer can surface 5xx / 4xx unchanged. Scratch is cleared only
-		// on the hard-failure path; the retry helper decides whether to
-		// preserve it (a multi-step factor re-showing its current
-		// sub-step) or reset it (a single-step factor restarting via
-		// Begin).
-		verdict := classifyFactorError(err)
-		o.recordFactorFailure(ctx, st, in.Now, auth.Type(), verdict, err)
-		if verdict == credentialRejected {
-			return o.softRetryAuthFactor(ctx, st, auth, step, in.Now, err)
-		}
-		st = retireActiveFactorToken(st)
-		return st, interaction.Step{}, err
-	}
-	if step.Prompt != nil {
-		next, emitted, ferr := o.emitFactorPrompt(st, auth, step, in.Now)
-		if ferr != nil {
-			return st, interaction.Step{}, ferr
-		}
-		return next, emitted, nil
-	}
-	if step.Result == nil {
-		return st, interaction.Step{}, ErrInvalidStep
-	}
-	if rerr := guardFactorResult(st, auth, *step.Result); rerr != nil {
-		return retireActiveFactorToken(st), interaction.Step{}, rerr
-	}
-	st.FactorScratch = nil
-	st = o.appendFactor(st, auth, *step.Result)
-	o.observeSuccess(ctx, st, in.Now, auth.Type())
-	denied, derr := o.runRiskPostFactor(ctx, st, in.Now, auth.Type())
-	if derr != nil {
-		return st, interaction.Step{}, derr
-	}
-	if denied {
-		return st, interaction.Step{}, ErrRiskDenied
-	}
-	st.ActiveFactorIdx = -1
-	st.Phase = PhaseAfterAuthn
-	return st, interaction.Step{}, nil
 }
 
 // retireActiveFactorToken invalidates everything the ceremony that just
@@ -446,64 +256,6 @@ func retireActiveFactorToken(st State) State {
 	st.FactorScratch = nil
 	st.StepCounter++
 	return st
-}
-
-// softRetryAuthFactor advances the brute-force counter and re-emits
-// the active factor's prompt after a soft credential failure — unless
-// the counter just reached the captcha threshold, in which case the
-// helper retires the factor and defers to the dispatcher so the
-// challenge interposes first. The helper is split out of
-// [handleAuthSubmission] so the latter stays under the gocognit
-// ceiling. origErr is the [ErrFactorRetry]-wrapped error from the
-// authenticator's Continue; we surface it verbatim when Begin cannot
-// produce a retry prompt so the HTTP layer renders the original
-// auth-failure response rather than swallowing the failure into a
-// generic 5xx.
-func (o *Orchestrator) softRetryAuthFactor(ctx context.Context, st State, auth Authenticator, cont interaction.Step, now time.Time, origErr error) (State, interaction.Step, error) {
-	st.LastFailures++
-	// The failure that just landed may be the one that crosses the
-	// captcha threshold. Returning a zero Step hands control back to the
-	// dispatcher, which runs the same [captchaRequired] gate every fresh
-	// advance runs; the LoginFlow path defers the same way. Re-emitting
-	// the factor prompt from here instead would leave the gate reachable
-	// only by re-entering the dispatcher, which a submit-only guessing
-	// loop never does — the browser would have to reload the interaction
-	// for the challenge to appear at all.
-	if o.captchaRequired(st) {
-		st.FactorScratch = nil
-		st.ActiveFactorIdx = -1
-		return st, interaction.Step{}, nil
-	}
-	// A multi-step factor (e.g. email-OTP on its verify screen) returns
-	// the sub-prompt to re-show alongside ErrFactorRetry. Preserve its
-	// scratch (emitFactorPrompt mirrors cont.Scratch into
-	// [State.FactorScratch]) so the retry stays on the same sub-step
-	// instead of restarting the factor at its first screen and
-	// discarding any delivered challenge.
-	if cont.Prompt != nil {
-		next, emitted, perr := o.emitFactorPrompt(st, auth, cont, now)
-		if perr != nil {
-			return st, interaction.Step{}, perr
-		}
-		return next, emitted, nil
-	}
-	// Single-step factor: restart via Begin. Clear the scratch first so
-	// the re-issued prompt starts from a clean slate.
-	st.FactorScratch = nil
-	retry, berr := auth.Begin(ctx, BeginInput{
-		Subject:  st.Subject,
-		ClientID: st.ClientID,
-		AuthTime: st.AuthTime,
-		Client:   st.Client,
-	})
-	if berr != nil || retry.Prompt == nil {
-		return st, interaction.Step{}, origErr
-	}
-	next, emitted, perr := o.emitFactorPrompt(st, auth, retry, now)
-	if perr != nil {
-		return st, interaction.Step{}, perr
-	}
-	return next, emitted, nil
 }
 
 // handleInteractionSubmission dispatches to the active interaction;
@@ -719,8 +471,6 @@ func resolvePasskeyUV(auth Authenticator, result interaction.Result) bool {
 // route a submission to the correct verifier; the strings are part of
 // the signed payload, so tampering is detected by the HMAC.
 const (
-	tagCaptcha           = "captcha"
-	tagAuthPrefix        = "auth:"
 	tagInteractionPrefix = "interaction:"
 	// tagLoginFlowPrefix carries the active LoginFlow [StepKind] so
 	// a submission against a LoginFlow-driven step routes back to the

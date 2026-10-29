@@ -47,7 +47,10 @@ func buildProvider(issuer string) (*op.Provider, error) {
 		// onto /interaction and then, despite the driver's name,
 		// submits the consent itself (completeConsentIfPrompted
 		// approves every requested scope).
-		op.WithAuthenticators(testkit.SubjectAuthenticator{}),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{
+			Authenticator: testkit.SubjectAuthenticator{},
+			KindLabel:     "testkit.subject",
+		}}),
 		op.WithInteractionDriver(testkit.AutoConsentDriver{}),
 		op.WithStaticClients(
 			op.ConfidentialClient{

@@ -87,9 +87,7 @@ func buildSingleSentinelOrchestrator(t *testing.T, sentinelErr error) *authn.Orc
 		t.Fatalf("NewStateRefSigner: %v", err)
 	}
 	orch, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{
-			&singleSentinelAuthenticator{continueErr: sentinelErr},
-		},
+		LoginFlow:      primaryOnlyFlow(t, &singleSentinelAuthenticator{continueErr: sentinelErr}),
 		StateRefSigner: signer,
 	})
 	if err != nil {
@@ -393,9 +391,7 @@ func TestWriteAuthnError_DefaultBranch_Is500(t *testing.T) {
 		t.Fatalf("NewStateRefSigner: %v", err)
 	}
 	orch, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{
-			&alwaysErrAuthenticator{err: arbitraryErr},
-		},
+		LoginFlow:      primaryOnlyFlow(t, &alwaysErrAuthenticator{err: arbitraryErr}),
 		StateRefSigner: signer,
 	})
 	if err != nil {

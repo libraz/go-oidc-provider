@@ -62,7 +62,7 @@ func TestEndToEnd_ConsentRejectionIsClientError(t *testing.T) {
 		{name: "approved_scopes absent", values: map[string]string{}},
 		{name: "required scope declined", values: map[string]string{"approved_scopes": "openid"}},
 	}
-	for _, surface := range []authnSurface{surfaceLoginFlow, surfaceAuthenticators} {
+	for _, surface := range []authnSurface{surfaceLoginFlow} {
 		for _, tc := range cases {
 			t.Run(surface.String()+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()

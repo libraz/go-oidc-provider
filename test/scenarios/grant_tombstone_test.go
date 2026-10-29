@@ -372,7 +372,10 @@ func TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone(t *testing.T) {
 		// The default grant set includes authorization_code, which op.New
 		// refuses without a login configuration. Supplying one keeps the
 		// rejection under test attributable to the revocation strategy.
-		op.WithAuthenticators(testkit.SubjectAuthenticator{}),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{
+			Authenticator: testkit.SubjectAuthenticator{},
+			KindLabel:     "testkit.subject",
+		}}),
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithFeature(feature.DPoP),
 		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyNone),

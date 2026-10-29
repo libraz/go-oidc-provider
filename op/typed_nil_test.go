@@ -248,21 +248,6 @@ func TestPublicAuthnOptions_RejectTypedNilDependencies(t *testing.T) {
 			option: op.WithAuthnLockoutStore(typedNilFrom[store.AuthnLockoutStore](t, st.AuthnLockouts())),
 		},
 		{
-			name:   "authenticator",
-			field:  "WithAuthenticators",
-			option: op.WithAuthenticators(typedNilFrom[op.Authenticator](t, &stubAuth{})),
-		},
-		{
-			name:   "captcha-verifier",
-			field:  "WithCaptchaVerifier",
-			option: op.WithCaptchaVerifier(typedNilFrom[op.CaptchaVerifier](t, &stubCaptcha{})),
-		},
-		{
-			name:   "risk-assessor",
-			field:  "WithRiskAssessor",
-			option: op.WithRiskAssessor(typedNilFrom[op.RiskAssessor](t, &stubRisk{})),
-		},
-		{
 			name:   "login-attempt-observer",
 			field:  "WithLoginAttemptObserver",
 			option: op.WithLoginAttemptObserver(typedNilFrom[op.LoginAttemptObserver](t, &stubObserver{})),

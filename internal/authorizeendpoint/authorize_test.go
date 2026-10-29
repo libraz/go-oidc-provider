@@ -81,13 +81,26 @@ func buildTestOrchestrator(t *testing.T) *authn.Orchestrator {
 		t.Fatalf("authn.NewStateRefSigner: %v", err)
 	}
 	orch, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{testkit.SubjectAuthenticator{}},
+		LoginFlow:      primaryOnlyFlow(t, testkit.SubjectAuthenticator{}),
 		StateRefSigner: signer,
 	})
 	if err != nil {
 		t.Fatalf("authn.New: %v", err)
 	}
 	return orch
+}
+
+// primaryOnlyFlow compiles a login flow whose only step is auth as
+// Primary, keyed by its factor type.
+func primaryOnlyFlow(t *testing.T, auth op.Authenticator) *authn.CompiledLoginFlow {
+	t.Helper()
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: string(auth.Type()), Authenticator: auth},
+	})
+	if err != nil {
+		t.Fatalf("authn.CompileLoginFlow: %v", err)
+	}
+	return flow
 }
 
 // newHarness builds a handler against fresh in-memory infrastructure.

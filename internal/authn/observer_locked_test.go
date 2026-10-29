@@ -39,8 +39,10 @@ func TestTickLockedFactorObservesAttemptLocked(t *testing.T) {
 		},
 	}
 	obs := &recordingObserver{}
+	// The session subject stands in for Primary, so the TOTP rule runs
+	// as the attempt's first step.
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{otp},
+		LoginFlow:      chainFlow(t, buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd"), otp),
 		Observers:      []op.LoginAttemptObserver{obs},
 		StateRefSigner: newSigner(t),
 	})
@@ -116,8 +118,10 @@ func TestTickRetryFactorStillObservesFailure(t *testing.T) {
 		},
 	}
 	obs := &recordingObserver{}
+	// The session subject stands in for Primary, so the TOTP rule runs
+	// as the attempt's first step.
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{otp},
+		LoginFlow:      chainFlow(t, buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd"), otp),
 		Observers:      []op.LoginAttemptObserver{obs},
 		StateRefSigner: newSigner(t),
 	})

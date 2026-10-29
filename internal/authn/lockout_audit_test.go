@@ -204,8 +204,10 @@ func TestAuditLockoutOutcomes(t *testing.T) {
 				auth, toCode, wrong := f.build(t, st, clock, counter)
 				emitter := &recordingAuditEmitter{}
 				observer := &recordingObserver{}
+				// The bound subject stands in for Primary, so the
+				// lockout-aware factor runs as the attempt's first step.
 				o, err := authn.New(authn.Config{
-					Authenticators: []op.Authenticator{auth},
+					LoginFlow:      chainFlow(t, buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd"), auth),
 					AuditEmitter:   emitter,
 					Observers:      []op.LoginAttemptObserver{observer},
 					StateRefSigner: newSigner(t),

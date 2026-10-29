@@ -128,20 +128,6 @@ func aalToPkg(l AAL) risk.AAL {
 	}
 }
 
-// aalFromPkg is the inverse of aalToPkg.
-func aalFromPkg(l risk.AAL) AAL {
-	switch l {
-	case risk.AAL1:
-		return AAL1
-	case risk.AAL2:
-		return AAL2
-	case risk.AAL3:
-		return AAL3
-	default:
-		return AAL0
-	}
-}
-
 // factorTypesToStrings copies a FactorType slice into a string slice
 // for the risk sub-package.
 func factorTypesToStrings(in []FactorType) []string {

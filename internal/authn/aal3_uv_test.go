@@ -40,7 +40,7 @@ func TestTick_AAL3WithoutUVRejected(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{auth},
+		LoginFlow:      chainFlow(t, auth),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -92,7 +92,7 @@ func TestTick_AAL3WithUVAccepted(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{auth},
+		LoginFlow:      chainFlow(t, auth),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -152,7 +152,7 @@ func TestTick_AAL2WithoutUVUnaffected(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{auth},
+		LoginFlow:      chainFlow(t, auth),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {

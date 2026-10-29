@@ -57,18 +57,14 @@ func walkLogin(t *testing.T, d *reauthDriver, path string) []string {
 }
 
 // TestEndToEnd_PromptLoginRunsIdentifyingFactorFirst pins that, with a
-// live session and prompt=login, both login surfaces start the fresh
-// authentication with the identifying factor. On the Authenticators
-// surface a possession factor registered ahead of it would otherwise be
-// picked on the strength of the session subject alone and mint a code
-// with no credential presented in this attempt.
+// live session and prompt=login, the fresh authentication starts with the
+// identifying factor. The possession rule step would otherwise run on
+// the strength of the session subject alone and mint a code with no
+// credential presented in this attempt.
 func TestEndToEnd_PromptLoginRunsIdentifyingFactorFirst(t *testing.T) {
 	t.Parallel()
 
 	surfaces := map[string]func(*movableClock) op.Option{
-		"Authenticators": func(clock *movableClock) op.Option {
-			return op.WithAuthenticators(secondFactorEcho{clock: clock}, passwordEchoAuthenticator{clock: clock})
-		},
 		"LoginFlow": func(clock *movableClock) op.Option {
 			return op.WithLoginFlow(op.LoginFlow{
 				Primary: op.ExternalStep{

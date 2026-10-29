@@ -1,8 +1,8 @@
 package authorizeendpoint_test
 
-// End-to-end coverage for the after-N-failures captcha gate.
+// End-to-end coverage for the after-N-failures captcha rule.
 //
-// The gate is only usable if the token the SPA collects actually
+// The challenge is only usable if the token the SPA collects actually
 // reaches the verifier, which requires three things to line up: the
 // prompt has to advertise the field, the driver has to render (or
 // echo) it, and the orchestrator has to read it back off the
@@ -15,10 +15,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -108,24 +110,78 @@ func (c *countingCaptchaVerifier) seen() []string {
 // The orchestrator never surfaces the reason to the SPA.
 var errCaptchaRejected = errors.New("captcha token rejected")
 
-// captchaThreshold mirrors the orchestrator's unexported credential
-// failure count that interposes the challenge. It is duplicated rather
-// than exported because the number is an internal tuning knob, not a
-// contract; if the two drift the tests below fail loudly on the prompt
-// type rather than silently stopping short of the gate.
+// captchaThreshold is the credential failure count the captcha rule
+// interposes the challenge at, the n of
+// op.RuleAfterFailedAttempts(n, op.StepCaptcha{...}).
 const captchaThreshold = 3
 
+// captchaStepKind is the step kind the captcha rule's step runs under.
+const captchaStepKind = "captcha"
+
+// captchaStepAuthenticator mirrors the op.StepCaptcha adapter: it emits
+// the captcha prompt declaring the token field and hands the submitted
+// token to the verifier, re-issuing the challenge on a rejection.
+type captchaStepAuthenticator struct {
+	verifier op.CaptchaVerifier
+}
+
+func (captchaStepAuthenticator) Type() op.FactorType { return "captcha" }
+func (captchaStepAuthenticator) AAL() op.AAL         { return op.AAL0 }
+func (captchaStepAuthenticator) AMR() string         { return "" }
+func (captchaStepAuthenticator) Prompts() []string   { return []string{"captcha"} }
+
+func (a captchaStepAuthenticator) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+	provider, siteKey := authn.CaptchaWidgetFor(a.verifier)
+	return interaction.Step{Prompt: &interaction.Prompt{
+		Type: "captcha",
+		Data: interaction.CaptchaPromptData{Provider: provider, SiteKey: siteKey},
+		Inputs: []interaction.FieldSpec{{
+			Name:     authn.CaptchaTokenField,
+			Kind:     interaction.FieldHidden,
+			Label:    "auth.captcha.token",
+			Required: true,
+			MaxLen:   4 * 1024,
+		}},
+	}}, nil
+}
+
+func (a captchaStepAuthenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
+	err := a.verifier.Verify(ctx, op.CaptchaInput{
+		Token:    in.Submission.Values[authn.CaptchaTokenField],
+		RemoteIP: in.RemoteIP,
+	})
+	if err != nil {
+		return interaction.Step{}, fmt.Errorf("captcha token rejected: %w: %w", authn.ErrFactorRetry, err)
+	}
+	return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+}
+
 // buildCaptchaOrchestrator wires the chain the captcha tests drive: one
-// soft-failing credential factor plus the counting verifier.
+// soft-failing credential factor as Primary plus an after-N-failures
+// captcha rule backed by the counting verifier.
 func buildCaptchaOrchestrator(t *testing.T, verifier op.CaptchaVerifier) *authn.Orchestrator {
 	t.Helper()
 	signer, err := authn.NewStateRefSigner(bytes.Repeat([]byte{0x5A}, 32))
 	if err != nil {
 		t.Fatalf("NewStateRefSigner: %v", err)
 	}
+	primary := retryingSubjectAuthenticator{}
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: string(primary.Type()), Authenticator: primary},
+		Rules: []authn.LoginFlowRule{{
+			When: func(lc authn.LoginFlowContext) bool { return lc.FailedAttempts >= captchaThreshold },
+			Then: authn.LoginFlowStep{
+				Kind:          captchaStepKind,
+				Authenticator: captchaStepAuthenticator{verifier: verifier},
+				IsCaptcha:     true,
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("authn.CompileLoginFlow: %v", err)
+	}
 	orch, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{retryingSubjectAuthenticator{}},
-		Captcha:        verifier,
+		LoginFlow:      flow,
 		StateRefSigner: signer,
 	})
 	if err != nil {
@@ -293,8 +349,8 @@ func TestInteractionCaptcha_SPAEnvelopeCompletesLogin(t *testing.T) {
 	if prompt.Type != retrySubjectPromptType {
 		t.Fatalf("prompt after clearing the captcha = %q, want the credential prompt", prompt.Type)
 	}
-	if got := persistedAuthnState(t, h, start.uid); !got.CaptchaPassed {
-		t.Error("persisted CaptchaPassed = false after a valid token")
+	if got := persistedAuthnState(t, h, start.uid); !slices.Contains(got.CompletedStepKinds, captchaStepKind) {
+		t.Errorf("persisted CompletedStepKinds = %v, want the captcha step recorded after a valid token", got.CompletedStepKinds)
 	}
 
 	// And the good credential now completes the login.

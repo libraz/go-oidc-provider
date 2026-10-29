@@ -127,11 +127,10 @@ func failingAuthenticator(typeID op.FactorType, aal op.AAL, amr string) *stubAut
 	}
 }
 
-// TestAuditAttemptLegacyChainPrimaryFactor pins the primary-factor
-// vocabulary on the Config.Authenticators path: the first factor to
-// resolve is reported as login.success / login.failed, never under the
-// mfa.* names.
-func TestAuditAttemptLegacyChainPrimaryFactor(t *testing.T) {
+// TestAuditAttemptPrimaryFactor pins the primary-factor vocabulary: the
+// first factor to resolve is reported as login.success / login.failed,
+// never under the mfa.* names.
+func TestAuditAttemptPrimaryFactor(t *testing.T) {
 	t.Parallel()
 
 	t.Run("success", func(t *testing.T) {
@@ -139,7 +138,7 @@ func TestAuditAttemptLegacyChainPrimaryFactor(t *testing.T) {
 
 		emitter := &recordingAuditEmitter{}
 		o, err := authn.New(authn.Config{
-			Authenticators: []op.Authenticator{buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")},
+			LoginFlow:      chainFlow(t, buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")),
 			AuditEmitter:   emitter,
 			StateRefSigner: newSigner(t),
 		})
@@ -168,7 +167,7 @@ func TestAuditAttemptLegacyChainPrimaryFactor(t *testing.T) {
 
 		emitter := &recordingAuditEmitter{}
 		o, err := authn.New(authn.Config{
-			Authenticators: []op.Authenticator{failingAuthenticator(op.FactorPassword, op.AAL1, "pwd")},
+			LoginFlow:      chainFlow(t, failingAuthenticator(op.FactorPassword, op.AAL1, "pwd")),
 			AuditEmitter:   emitter,
 			StateRefSigner: newSigner(t),
 		})
@@ -176,11 +175,12 @@ func TestAuditAttemptLegacyChainPrimaryFactor(t *testing.T) {
 			t.Fatalf("New: %v", err)
 		}
 
-		// Identifier-first deployments bind the subject before the
-		// credential factor runs, which is what gives a failed primary
-		// attempt an actor to record.
+		// A chain that knows the subject but must authenticate it afresh
+		// runs Primary with the subject bound, which is what gives a
+		// failed primary attempt an actor to record.
 		state := initialState()
 		state.Subject = "user-1"
+		state.ReauthRequired = true
 
 		st, step, err := o.Tick(context.Background(), state, authn.Input{Now: fakeNow()})
 		if err != nil {
@@ -199,14 +199,13 @@ func TestAuditAttemptLegacyChainPrimaryFactor(t *testing.T) {
 	})
 }
 
-// TestAuditAttemptLegacyChainAdditionalFactor pins the mfa.* vocabulary
-// on the Config.Authenticators path. The primary/additional distinction
-// is read off State.Factors, so a chain resumed with a factor already
-// recorded reports its next outcome as an additional factor. Both
-// outcomes are covered because the two call sites read the count at
-// deliberately different moments — the success path after the factor is
-// appended, the failure path before.
-func TestAuditAttemptLegacyChainAdditionalFactor(t *testing.T) {
+// TestAuditAttemptAdditionalFactor pins the mfa.* vocabulary. The
+// primary/additional distinction is read off State.Factors, so a chain
+// resumed with a factor already recorded reports its next outcome as an
+// additional factor. Both outcomes are covered because the two call
+// sites read the count at deliberately different moments — the success
+// path after the factor is appended, the failure path before.
+func TestAuditAttemptAdditionalFactor(t *testing.T) {
 	t.Parallel()
 
 	// resumedState is a chain that already recorded a password factor
@@ -237,9 +236,11 @@ func TestAuditAttemptLegacyChainAdditionalFactor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			// The bound subject stands in for Primary, so the rule step
+			// is the next factor to run.
 			emitter := &recordingAuditEmitter{}
 			o, err := authn.New(authn.Config{
-				Authenticators: []op.Authenticator{tc.auth},
+				LoginFlow:      chainFlow(t, buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd"), tc.auth),
 				AuditEmitter:   emitter,
 				StateRefSigner: newSigner(t),
 			})
@@ -263,12 +264,12 @@ func TestAuditAttemptLegacyChainAdditionalFactor(t *testing.T) {
 	}
 }
 
-// TestAuditAttemptLegacyChainImmediateResult covers the third
-// observeSuccess call site on the legacy path: an authenticator whose
-// Begin resolves without ever emitting a prompt (a silent re-auth from a
-// still-valid device binding, say) is dispatched from the chain advance
-// rather than from a submission, and MUST still be recorded.
-func TestAuditAttemptLegacyChainImmediateResult(t *testing.T) {
+// TestAuditAttemptImmediateResult covers the observeSuccess call site an
+// authenticator reaches when its Begin resolves without ever emitting a
+// prompt (a silent re-auth from a still-valid device binding, say): it
+// is dispatched from the chain advance rather than from a submission,
+// and MUST still be recorded.
+func TestAuditAttemptImmediateResult(t *testing.T) {
 	t.Parallel()
 
 	silent := &stubAuthenticator{
@@ -285,7 +286,7 @@ func TestAuditAttemptLegacyChainImmediateResult(t *testing.T) {
 	}
 	emitter := &recordingAuditEmitter{}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{silent},
+		LoginFlow:      chainFlow(t, silent),
 		AuditEmitter:   emitter,
 		StateRefSigner: newSigner(t),
 	})
@@ -293,9 +294,7 @@ func TestAuditAttemptLegacyChainImmediateResult(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	state := initialState()
-	state.Subject = "user-1"
-	_, step, err := o.Tick(context.Background(), state, authn.Input{Now: fakeNow()})
+	_, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
@@ -308,12 +307,9 @@ func TestAuditAttemptLegacyChainImmediateResult(t *testing.T) {
 	})
 }
 
-// TestAuditAttemptLoginFlowChain pins the same vocabulary on the
-// Config.LoginFlow path, which reaches the emitter through its own
-// success / failure call sites. A regression that only unwired one of
-// the two chain implementations would leave the other green, so the
-// primary-then-additional sequence is driven end to end here as well as
-// on the legacy chain.
+// TestAuditAttemptLoginFlowChain drives the primary-then-additional
+// sequence end to end, so both vocabularies are asserted within one
+// chain rather than only from a pre-seeded state.
 func TestAuditAttemptLoginFlowChain(t *testing.T) {
 	t.Parallel()
 
@@ -388,9 +384,10 @@ func TestAuditAttemptLoginFlowChain(t *testing.T) {
 	}
 }
 
-// TestAuditAttemptOnePerResolvedFactor drives a real wrong-code retry on
-// both chain implementations. A multi-step factor re-shows its verify
-// screen after a miss without resolving anything, and that re-emission
+// TestAuditAttemptOnePerResolvedFactor drives a real wrong-code retry
+// with the factor both as a rule step and as Primary. A multi-step
+// factor re-shows its verify screen after a miss without resolving
+// anything, and that re-emission
 // must not add a second record: the login-attempt counter would
 // otherwise drift upward on every re-render.
 func TestAuditAttemptOnePerResolvedFactor(t *testing.T) {
@@ -473,12 +470,14 @@ func TestAuditAttemptOnePerResolvedFactor(t *testing.T) {
 		}
 	}
 
-	t.Run("legacy-chain", func(t *testing.T) {
+	t.Run("rule-step", func(t *testing.T) {
 		t.Parallel()
 
+		// The bound subject stands in for Primary, so the email-OTP rule
+		// step is the first factor of this attempt.
 		emitter := &recordingAuditEmitter{}
 		o, err := authn.New(authn.Config{
-			Authenticators: []op.Authenticator{multiStepOTP()},
+			LoginFlow:      chainFlow(t, buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd"), multiStepOTP()),
 			AuditEmitter:   emitter,
 			StateRefSigner: newSigner(t),
 		})
@@ -496,7 +495,7 @@ func TestAuditAttemptOnePerResolvedFactor(t *testing.T) {
 		})
 	})
 
-	t.Run("login-flow", func(t *testing.T) {
+	t.Run("primary", func(t *testing.T) {
 		t.Parallel()
 
 		emitter := &recordingAuditEmitter{}
@@ -537,7 +536,7 @@ func TestAuditAttemptFailureCarriesSubject(t *testing.T) {
 	emitter := &recordingAuditEmitter{}
 	obs := &recordingObserver{}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{failingAuthenticator(op.FactorPassword, op.AAL1, "pwd")},
+		LoginFlow:      chainFlow(t, failingAuthenticator(op.FactorPassword, op.AAL1, "pwd")),
 		Observers:      []op.LoginAttemptObserver{obs},
 		AuditEmitter:   emitter,
 		StateRefSigner: newSigner(t),
@@ -548,6 +547,7 @@ func TestAuditAttemptFailureCarriesSubject(t *testing.T) {
 
 	state := initialState()
 	state.Subject = "user-1"
+	state.ReauthRequired = true
 	st, step, err := o.Tick(context.Background(), state, authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("first Tick: %v", err)
@@ -614,9 +614,9 @@ func faultingAuthenticator(typeID op.FactorType, aal op.AAL, amr string, fault e
 // so an embedder driving lockout from it locks real users out of their
 // accounts precisely while the backend is unable to authenticate anyone.
 //
-// Both chain implementations are driven because each has its own failure
-// call site; a fix applied to one alone would leave the other silently
-// mis-filing.
+// The factor is driven both as a rule step with the subject bound and as
+// Primary before any subject is known, so a fix that only covered one
+// position would leave the other silently mis-filing.
 func TestAuditAttemptBackendFaultIsNotACredentialFailure(t *testing.T) {
 	t.Parallel()
 
@@ -642,13 +642,16 @@ func TestAuditAttemptBackendFaultIsNotACredentialFailure(t *testing.T) {
 		assertAuditEvents(t, emitter.snapshot(), nil)
 	}
 
-	t.Run("legacy-chain", func(t *testing.T) {
+	t.Run("rule-step", func(t *testing.T) {
 		t.Parallel()
 
 		emitter := &recordingAuditEmitter{}
 		obs := &recordingObserver{}
 		o, err := authn.New(authn.Config{
-			Authenticators: []op.Authenticator{faultingAuthenticator(op.FactorPassword, op.AAL1, "pwd", fault)},
+			LoginFlow: chainFlow(t,
+				buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd"),
+				faultingAuthenticator(op.FactorTOTP, op.AAL2, "otp", fault),
+			),
 			Observers:      []op.LoginAttemptObserver{obs},
 			AuditEmitter:   emitter,
 			StateRefSigner: newSigner(t),
@@ -670,7 +673,7 @@ func TestAuditAttemptBackendFaultIsNotACredentialFailure(t *testing.T) {
 		assertNothingRecorded(t, err, emitter, obs)
 	})
 
-	t.Run("login-flow", func(t *testing.T) {
+	t.Run("primary", func(t *testing.T) {
 		t.Parallel()
 
 		emitter := &recordingAuditEmitter{}
@@ -725,7 +728,7 @@ func TestAuditAttemptNilEmitter(t *testing.T) {
 			t.Parallel()
 
 			o, err := authn.New(authn.Config{
-				Authenticators: []op.Authenticator{tc.auth},
+				LoginFlow:      chainFlow(t, tc.auth),
 				StateRefSigner: newSigner(t),
 			})
 			if err != nil {

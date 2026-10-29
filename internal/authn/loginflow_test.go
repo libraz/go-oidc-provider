@@ -574,10 +574,8 @@ func TestLoginFlowDedupSkipsRule(t *testing.T) {
 	}
 }
 
-// 11. Captcha threshold gate: with LastFailures=3 the captcha prompt
-// fires before Primary, even when LoginFlow does not declare a
-// StepCaptcha — this is the legacy after-N-failures captcha and the
-// LoginFlow path inherits it.
+// 11. After-N-failures captcha rule: with LastFailures=3 the captcha
+// prompt fires before Primary.
 func TestLoginFlowCaptchaThresholdBeforePrimary(t *testing.T) {
 	t.Parallel()
 
@@ -585,12 +583,8 @@ func TestLoginFlowCaptchaThresholdBeforePrimary(t *testing.T) {
 	captcha := &stubCaptcha{
 		verify: func(_ context.Context, _ op.CaptchaInput) error { return nil },
 	}
-	flow, _ := authn.CompileLoginFlow(authn.LoginFlowSpec{
-		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
-	})
 	o, _ := authn.New(authn.Config{
-		LoginFlow:      flow,
-		Captcha:        captcha,
+		LoginFlow:      captchaFlow(t, pw, captcha),
 		StateRefSigner: newSigner(t),
 	})
 
@@ -651,27 +645,6 @@ func TestLoginFlowExternalStepFactorContribution(t *testing.T) {
 	}
 	if len(st.Factors) != 1 || st.Factors[0].Type != "myorg.hwk" || st.Factors[0].AssuranceLevel != op.AAL3 {
 		t.Errorf("Factors = %+v, want one entry with myorg.hwk + AAL3", st.Factors)
-	}
-}
-
-// 13. Rejecting LoginFlow + Authenticators at construction time.
-func TestLoginFlowMutualExclusionAtNew(t *testing.T) {
-	t.Parallel()
-
-	pw := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
-	flow, _ := authn.CompileLoginFlow(authn.LoginFlowSpec{
-		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
-	})
-	_, err := authn.New(authn.Config{
-		LoginFlow:      flow,
-		Authenticators: []op.Authenticator{pw},
-		StateRefSigner: newSigner(t),
-	})
-	if err == nil {
-		t.Fatal("expected error for LoginFlow + Authenticators, got nil")
-	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("err = %v, want mutually-exclusive diagnostic", err)
 	}
 }
 
@@ -1327,8 +1300,8 @@ func TestLoginFlowCaptchaRuleFiresAfterFailedAttempts(t *testing.T) {
 	if got := st.LastFailures; got != 0 {
 		t.Errorf("LastFailures after captcha success = %d, want 0", got)
 	}
-	if !st.CaptchaPassed {
-		t.Errorf("CaptchaPassed = false, want true after captcha success")
+	if got := st.CompletedStepKinds; len(got) != 1 || got[0] != "myorg.captcha" {
+		t.Errorf("CompletedStepKinds = %v, want [myorg.captcha] after captcha success", got)
 	}
 
 	// Final correct password lands the chain in PhaseAfterAuthn.

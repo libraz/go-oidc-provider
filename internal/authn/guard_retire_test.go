@@ -33,7 +33,8 @@ func guardedFactor(aal op.AAL, result interaction.Result) *stubAuthenticator {
 // TestTick_GuardRejectionRetiresFactorToken pins that a factor result the
 // chain refuses to record — a different subject, or AAL3 without user
 // verification — ends the attempt as an ErrFactorAbort and leaves neither
-// the ceremony's scratch nor its StateRef usable, on both login surfaces.
+// the ceremony's scratch nor its StateRef usable, whether the factor runs
+// as Primary or as a rule step.
 func TestTick_GuardRejectionRetiresFactorToken(t *testing.T) {
 	t.Parallel()
 
@@ -62,11 +63,12 @@ func TestTick_GuardRejectionRetiresFactorToken(t *testing.T) {
 		},
 	}
 	for _, g := range guards {
-		for _, surface := range []string{"Authenticators", "LoginFlow"} {
+		for _, surface := range []string{"primary", "rule"} {
 			t.Run(g.name+"/"+surface, func(t *testing.T) {
 				t.Parallel()
 				cfg := authn.Config{StateRefSigner: newSigner(t)}
-				if surface == "LoginFlow" {
+				start := g.st
+				if surface == "primary" {
 					flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
 						Primary: authn.LoginFlowStep{Kind: "test.passkey", Authenticator: g.auth},
 					})
@@ -75,16 +77,26 @@ func TestTick_GuardRejectionRetiresFactorToken(t *testing.T) {
 					}
 					cfg.LoginFlow = flow
 				} else {
-					cfg.Authenticators = []op.Authenticator{g.auth}
+					// Primary binds user-1 in this chain, so the guarded
+					// factor runs as the rule step after it.
+					cfg.LoginFlow = chainFlow(t, buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd"), g.auth)
+					start = initialState()
 				}
 				o, err := authn.New(cfg)
 				if err != nil {
 					t.Fatalf("New: %v", err)
 				}
 
-				st, step, err := o.Tick(context.Background(), g.st, authn.Input{Now: fakeNow()})
+				st, step, err := o.Tick(context.Background(), start, authn.Input{Now: fakeNow()})
 				if err != nil || step.Prompt == nil {
 					t.Fatalf("first Tick: step=%+v err=%v", step, err)
+				}
+				if surface == "rule" {
+					primary := &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{}}
+					st, step, err = o.Tick(context.Background(), st, authn.Input{Submission: primary, Now: fakeNow()})
+					if err != nil || step.Prompt == nil {
+						t.Fatalf("Primary submission: step=%+v err=%v", step, err)
+					}
 				}
 				sub := &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{}}
 				st, _, err = o.Tick(context.Background(), st, authn.Input{Submission: sub, Now: fakeNow()})

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn/risk"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -191,8 +190,7 @@ var ErrBuiltinStepNotWired = errors.New("authn: built-in Step requires construct
 // parallel byFactor index maps each non-captcha step's [FactorType] to
 // the same value so a [RiskOutcome.RequiredFactors] entry can be routed
 // to the Step that satisfies it. Declaration order wins on a collision
-// (two Steps wrapping the same factor type), matching the "first
-// candidate wins" rule the legacy chain path applies.
+// (two Steps wrapping the same factor type).
 func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 	if spec.Primary.Authenticator == nil {
 		return nil, errors.New("authn: LoginFlow.Primary is nil")
@@ -340,56 +338,6 @@ func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 	}
 }
 
-// runRiskOnceForLoginFlow consults Risk at chain start when no step has
-// completed yet, caches the score on st.RiskScoreCached and the
-// required-factor set on st.RiskRequiredFactors, and returns whether the
-// chain is denied. Subsequent calls during the same chain are no-ops;
-// this is the §3.1 budget invariant ("Risk.Assess at most once per
-// chain").
-//
-// A [RiskRequire] outcome that names factors is recorded rather than
-// acted on here: the consult happens before Primary has even run, so the
-// obligation has to survive until the chain would otherwise grant. See
-// [Orchestrator.transitionToAfterAuthn] for where it is discharged.
-//
-// The mapping from [RiskOutcome] onto [State.RiskScoreCached]:
-//
-//   - [RiskOutcome.Score] non-zero — used verbatim. This is the path
-//     an assessor takes to surface [RiskScoreMedium], which the
-//     Decision-only fallback cannot reach.
-//   - Score zero, Decision = [RiskAllow] — cached as [RiskScoreLow]
-//     (a signal was observed but nothing actionable).
-//   - Score zero, Decision = [RiskRequire] — cached as
-//     [RiskScoreHigh] (the assessor recommends a stronger factor).
-//   - Decision = [RiskDeny] — handled separately; the orchestrator
-//     returns [ErrRiskDenied] without caching.
-//
-// Rule predicates `score >= threshold` see the cached value
-// uniformly regardless of which path produced it.
-func (o *Orchestrator) runRiskOnceForLoginFlow(ctx context.Context, st State, flow *CompiledLoginFlow) (State, bool, error) {
-	if flow.risk == nil {
-		return st, false, nil
-	}
-	if st.RiskScoreCached != RiskScoreNone {
-		return st, false, nil
-	}
-	in := o.buildRiskInput(st, "")
-	in.AuthTime = st.AuthTime
-	res, err := risk.RunOnceForLoginFlow(ctx, wrapRiskAssessor(flow.risk), in)
-	if err != nil {
-		return st, false, err
-	}
-	if res.Denied {
-		return st, true, nil
-	}
-	if res.Score != risk.ScoreNone {
-		st.RiskScoreCached = riskScoreFromPkg(res.Score)
-	}
-	st.RiskRequiredFactors = factorTypesFromStrings(res.Required)
-	st.NewDeviceCached = res.NewDevice
-	return st, false, nil
-}
-
 // describeStepKind formats a step kind for log messages. Centralising
 // the formatting keeps the audit shape consistent across rule /
 // decider / dedup paths.
@@ -404,31 +352,30 @@ func describeStepKind(kind string) string {
 }
 
 // advanceLoginFlow drives the [Config.LoginFlow] path for one
-// orchestrator pass. The function is the LoginFlow analogue of
-// [advanceAuthn]: it picks the next step (Primary, Decider verdict, or
-// rule match), emits the step's Begin Prompt with a freshly-issued
+// orchestrator pass: it picks the next step (Primary, Decider verdict,
+// or rule match), emits the step's Begin Prompt with a freshly-issued
 // StateRef tagged with the step's Kind, and returns. Subsequent
 // submissions route back through [handleLoginFlowSubmission].
 //
 // State machine, in order:
 //
-//  1. Reject if Subject is unbound and CompletedStepKinds is empty —
-//     means run Primary's Begin (subject-binding factor).
-//  2. Run Risk once at chain start (cached on st.RiskScoreCached).
-//  3. Captcha threshold gate: if [State.LastFailures] >= the legacy
-//     [captchaFailureThreshold] AND a [Config.Captcha] verifier is
-//     wired AND the user has not already cleared the challenge, emit
-//     the captcha prompt before any factor runs. This path is
-//     independent of [StepCaptcha]: a [LoginFlow] with no StepCaptcha
-//     in its rules still gets the legacy after-N-failures captcha if a
-//     CaptchaVerifier is configured.
-//  4. Decider consult (when wired): Allow → grant, Deny → ErrRiskDenied,
+//  1. Run Risk once at chain start (cached on st.RiskScoreCached).
+//  2. Subject unbound (or reauth required and Primary not yet run) —
+//     fire the first matching captcha rule, otherwise run Primary's
+//     Begin (subject-binding factor). Captcha is a [LoginFlowRule]
+//     whose Then is a captcha step; there is no other captcha path.
+//  3. Decider consult (when wired): Allow → grant, Deny → ErrRiskDenied,
 //     Require{Step} → drive Step (looked up by kind), Pass → fall
 //     through to rules.
-//  5. Rules iteration (declaration order): first When → true && kind
-//     not in CompletedStepKinds wins.
-//  6. No rule matches → grant (transition to PhaseAfterAuthn), which
+//  4. Rules iteration: captcha rules first, then factor rules, each
+//     group in declaration order; the first rule whose When is true
+//     and whose kind is not in CompletedStepKinds wins.
+//  5. No rule matches → grant (transition to PhaseAfterAuthn), which
 //     first discharges any pending risk step-up obligation.
+//
+// A due captcha rule also interposes before the factor step a Decider
+// Require or a risk step-up is about to run, so the challenge comes
+// first wherever the next factor is chosen.
 func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.Time) (State, interaction.Step, error) {
 	flow := o.cfg.LoginFlow
 	if flow == nil {
@@ -446,14 +393,13 @@ func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.
 	}
 	st = next
 
-	// Primary runs first (subject binding). The captcha threshold
-	// gate fires before Primary the same way it fires before any
-	// other factor — an after-N-failures captcha is independent of
-	// the LoginFlow seam. We key the pre-Primary phase off
-	// st.Subject (Primary populates it via appendFactor) rather
-	// than CompletedStepKinds so a pre-Primary captcha that has
-	// already cleared does not flip the chain into the post-Primary
-	// rules pass before the credential factor has bound a subject.
+	// Primary runs first (subject binding). A captcha rule may fire
+	// before Primary the same way it fires before any other factor.
+	// We key the pre-Primary phase off st.Subject (Primary populates
+	// it via appendFactor) rather than CompletedStepKinds so a
+	// pre-Primary captcha that has already cleared does not flip the
+	// chain into the post-Primary rules pass before the credential
+	// factor has bound a subject.
 	//
 	// A Subject the chain did not bind itself is only allowed to
 	// stand in for Primary when the request may be served from the
@@ -462,10 +408,7 @@ func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.
 	// max_age expiry, unsatisfied acr_values), so the decision falls
 	// back to "has Primary actually completed during this attempt".
 	if st.Subject == "" || (st.ReauthRequired && !containsString(st.CompletedStepKinds, flow.primary.kind)) {
-		if o.captchaRequired(st) {
-			return o.emitCaptchaPrompt(st, now)
-		}
-		if handled, ns, step, err := o.evalLoginFlowCaptchaRulesPrePrimary(ctx, st, flow, now); handled {
+		if handled, ns, step, err := o.evalLoginFlowCaptchaRules(ctx, st, flow, now); handled {
 			return ns, step, err
 		}
 		return o.runLoginFlowStep(ctx, st, flow.primary, now)
@@ -522,9 +465,10 @@ func (o *Orchestrator) evalLoginFlowDecider(ctx context.Context, st State, flow 
 			// through to rules rather than spin on the same step.
 			return false, st, interaction.Step{}, nil
 		}
-		if o.captchaRequired(st) && !step.isCaptcha {
-			ns, sstep, err := o.emitCaptchaPrompt(st, now)
-			return true, ns, sstep, err
+		if !step.isCaptcha {
+			if handled, ns, sstep, err := o.evalLoginFlowCaptchaRules(ctx, st, flow, now); handled {
+				return true, ns, sstep, err
+			}
 		}
 		ns, sstep, err := o.runLoginFlowStep(ctx, st, step, now)
 		return true, ns, sstep, err
@@ -535,48 +479,32 @@ func (o *Orchestrator) evalLoginFlowDecider(ctx context.Context, st State, flow 
 	}
 }
 
-// evalLoginFlowCaptchaRulesPrePrimary walks the rule list before
-// Primary runs and fires the first not-yet-completed captcha-shaped
-// rule whose predicate matches. This gives [RuleAfterFailedAttempts]
-// (and other captcha-typed rules) a chance to interpose between a
-// failed credential attempt and the next prompt — without it, a rule
-// whose Then is a captcha Step never gets a chance to fire because
-// rules are otherwise consulted only after Primary completes, which
-// soft credential failures never reach.
+// evalLoginFlowCaptchaRules fires the first not-yet-completed
+// captcha-shaped rule whose predicate matches, ahead of a factor step
+// that is about to run outside the rule pass: Primary, a Decider-required
+// step, or a risk step-up. This gives [RuleAfterFailedAttempts] (and
+// other captcha-typed rules) a chance to interpose between a failed
+// credential attempt and the next prompt — before Primary, a rule whose
+// Then is a captcha Step would otherwise never fire, because rules are
+// consulted only after Primary completes, which soft credential
+// failures never reach.
 //
 // Only captcha-shaped Steps are eligible here. Factor-shaped rules
 // must wait for Primary to complete (subject binding) before they can
-// run, so the pre-Primary scan deliberately ignores them.
-func (o *Orchestrator) evalLoginFlowCaptchaRulesPrePrimary(ctx context.Context, st State, flow *CompiledLoginFlow, now time.Time) (bool, State, interaction.Step, error) {
-	lc := o.loginFlowContext(st)
-	for i, r := range flow.rules {
-		if !r.then.isCaptcha {
-			continue
-		}
-		if containsString(st.CompletedStepKinds, r.then.kind) {
-			continue
-		}
-		if !recoverPredicate(o.logger, i, r.when, lc) {
-			continue
-		}
-		ns, step, err := o.runLoginFlowStep(ctx, st, r.then, now)
-		return true, ns, step, err
-	}
-	return false, st, interaction.Step{}, nil
+// run, so this scan deliberately ignores them.
+func (o *Orchestrator) evalLoginFlowCaptchaRules(ctx context.Context, st State, flow *CompiledLoginFlow, now time.Time) (bool, State, interaction.Step, error) {
+	return o.evalLoginFlowRuleGroup(ctx, st, flow, o.loginFlowContext(st), now, true)
 }
 
 // loginFlowCaptchaPending reports whether a captcha challenge would
 // interpose before the next factor prompt right now. It mirrors the
-// captcha decision [advanceLoginFlow] makes — the built-in failure
-// threshold ([captchaRequired]) plus any not-yet-completed captcha-shaped
-// rule whose predicate currently matches — so the wrong-code retry
-// shortcut in [handleLoginFlowSubmission] does not re-emit a factor's
-// verify prompt when a challenge is due. When it returns true the caller
-// falls through to the dispatcher, which emits the captcha.
+// captcha decision [advanceLoginFlow] makes — any not-yet-completed
+// captcha-shaped rule whose predicate currently matches — so the
+// wrong-code retry shortcut in [handleLoginFlowSubmission] does not
+// re-emit a factor's verify prompt when a challenge is due. When it
+// returns true the caller falls through to the dispatcher, which emits
+// the captcha.
 func (o *Orchestrator) loginFlowCaptchaPending(st State, flow *CompiledLoginFlow) bool {
-	if o.captchaRequired(st) {
-		return true
-	}
 	lc := o.loginFlowContext(st)
 	for i, r := range flow.rules {
 		if !r.then.isCaptcha {
@@ -630,21 +558,33 @@ func (o *Orchestrator) LoginFlowRequiresStep(ctx context.Context, st State) bool
 	return false
 }
 
-// evalLoginFlowRules walks the compiled rule list in declaration
-// order and dispatches the first matching, not-yet-completed step.
-// A panic in an embedder-supplied predicate is recovered and treated
-// as a match (see [recoverPredicate]).
+// evalLoginFlowRules dispatches the first matching, not-yet-completed
+// rule step. Rules whose Then is a captcha step are evaluated before
+// factor rules regardless of declaration order, so a due challenge
+// interposes before the next factor however the flow lists it; within
+// each group declaration order holds. A panic in an embedder-supplied
+// predicate is recovered and treated as a match (see
+// [recoverPredicate]).
 func (o *Orchestrator) evalLoginFlowRules(ctx context.Context, st State, flow *CompiledLoginFlow, lc LoginFlowContext, now time.Time) (bool, State, interaction.Step, error) {
+	if handled, ns, step, err := o.evalLoginFlowRuleGroup(ctx, st, flow, lc, now, true); handled {
+		return true, ns, step, err
+	}
+	return o.evalLoginFlowRuleGroup(ctx, st, flow, lc, now, false)
+}
+
+// evalLoginFlowRuleGroup walks the rules whose Then is (captcha) or is
+// not (!captcha) a captcha step, in declaration order, and runs the
+// first matching, not-yet-completed one.
+func (o *Orchestrator) evalLoginFlowRuleGroup(ctx context.Context, st State, flow *CompiledLoginFlow, lc LoginFlowContext, now time.Time, captcha bool) (bool, State, interaction.Step, error) {
 	for i, r := range flow.rules {
+		if r.then.isCaptcha != captcha {
+			continue
+		}
 		if containsString(st.CompletedStepKinds, r.then.kind) {
 			continue
 		}
 		if !recoverPredicate(o.logger, i, r.when, lc) {
 			continue
-		}
-		if o.captchaRequired(st) && !r.then.isCaptcha {
-			ns, step, err := o.emitCaptchaPrompt(st, now)
-			return true, ns, step, err
 		}
 		ns, step, err := o.runLoginFlowStep(ctx, st, r.then, now)
 		return true, ns, step, err
@@ -673,8 +613,8 @@ func (o *Orchestrator) transitionToAfterAuthn(ctx context.Context, st State, flo
 // enforceRiskStepUp discharges [State.RiskRequiredFactors] before the
 // chain is allowed to leave PhaseAuthn. The bool return reports whether
 // the caller must stop and return the triple: true when a step-up factor
-// was interposed (or a captcha has to clear first), and true with an
-// error when the demand cannot be met.
+// was interposed (or a due captcha rule has to clear first), and true
+// with an error when the demand cannot be met.
 //
 // Three outcomes:
 //
@@ -684,10 +624,9 @@ func (o *Orchestrator) transitionToAfterAuthn(ctx context.Context, st State, flo
 //     has not run yet — that Step is driven, exactly as a matching
 //     [LoginFlowRule] would have driven it.
 //   - No declared Step can satisfy the demand —
-//     [ErrNoEligibleAuthenticator], the same fail-closed sentinel the
-//     legacy chain path returns when its risk-filtered candidate set
-//     comes back empty. Granting instead would hand out a session at
-//     the assurance the assessor just refused.
+//     [ErrNoEligibleAuthenticator], failing closed. Granting instead
+//     would hand out a session at the assurance the assessor just
+//     refused.
 func (o *Orchestrator) enforceRiskStepUp(ctx context.Context, st State, flow *CompiledLoginFlow, now time.Time) (bool, State, interaction.Step, error) {
 	if len(st.RiskRequiredFactors) == 0 || riskStepUpSatisfied(st) {
 		return false, st, interaction.Step{}, nil
@@ -697,8 +636,7 @@ func (o *Orchestrator) enforceRiskStepUp(ctx context.Context, st State, flow *Co
 		if !ok || containsString(st.CompletedStepKinds, step.kind) {
 			continue
 		}
-		if o.captchaRequired(st) {
-			ns, sstep, err := o.emitCaptchaPrompt(st, now)
+		if handled, ns, sstep, err := o.evalLoginFlowCaptchaRules(ctx, st, flow, now); handled {
 			return true, ns, sstep, err
 		}
 		ns, sstep, err := o.runLoginFlowStep(ctx, st, step, now)
@@ -784,9 +722,10 @@ func (o *Orchestrator) emitLoginFlowPrompt(st State, kind string, prompt interac
 // recordLoginFlowResult folds a step's [interaction.Result] into st:
 // for factor-shaped steps it appends a [Factor] (so [Aggregate]
 // observes the AAL contribution and amr value), for captcha-shaped
-// steps it flips [State.CaptchaPassed] without entering [State.Factors]
-// — a captcha is a bot check, not an authentication factor, so it must
-// not contribute to the AAL aggregate or the amr claim.
+// steps it resets the failure counters without entering
+// [State.Factors] — a captcha is a bot check, not an authentication
+// factor, so it must not contribute to the AAL aggregate or the amr
+// claim.
 //
 // In all cases the step's kind is appended to CompletedStepKinds for
 // dedup, ActiveStepKind is cleared, and the FactorScratch slot is
@@ -794,7 +733,6 @@ func (o *Orchestrator) emitLoginFlowPrompt(st State, kind string, prompt interac
 // scratch payload.
 func (o *Orchestrator) recordLoginFlowResult(ctx context.Context, st State, step compiledStep, res interaction.Result, now time.Time) State {
 	if step.isCaptcha {
-		st.CaptchaPassed = true
 		st.CaptchaFailures = 0
 		st.LastFailures = 0
 	} else {
@@ -834,8 +772,8 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 		RemoteIP:        st.RemoteIP,
 	})
 	if err != nil {
-		// The same classification decides what is recorded and where the
-		// chain goes, exactly as on the legacy-chain path. Captcha steps
+		// One classification decides both what is recorded and where the
+		// chain goes, so the two can never disagree. Captcha steps
 		// record nothing either way — a bot check is out-of-band from
 		// the credential feed — but they still follow the retry branch.
 		verdict := classifyFactorError(err)
@@ -848,9 +786,9 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 		// codec misconfiguration) skip this branch and surface to
 		// the HTTP layer as 5xx / 4xx unchanged.
 		if verdict == credentialRejected {
-			// A rejected captcha token spends the same per-attempt budget
-			// the threshold captcha does, so a rule that keeps re-firing
-			// the challenge cannot hold the user in it forever.
+			// A rejected captcha token spends a per-attempt budget, so a
+			// rule that keeps re-firing the challenge cannot hold the
+			// user in it forever.
 			if step.isCaptcha {
 				st.CaptchaFailures++
 				if st.CaptchaFailures >= captchaMaxFailures {

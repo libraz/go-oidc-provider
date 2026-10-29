@@ -11,13 +11,24 @@ import "github.com/libraz/go-oidc-provider/internal/authn"
 type RiskStage = authn.RiskStage
 
 // RiskStage values re-exported from the authn package.
-// RiskTokenExchange is reserved and never raised: the /token endpoint
-// does not consult the [RiskAssessor].
 const (
+	// RiskAuthorizeEntry is the once-per-chain consult [LoginFlow.Risk]
+	// receives at chain start.
 	RiskAuthorizeEntry = authn.RiskAuthorizeEntry
-	RiskPreFactor      = authn.RiskPreFactor
-	RiskPostFactor     = authn.RiskPostFactor
-	RiskTokenExchange  = authn.RiskTokenExchange
+
+	// RiskPreFactor is the stage before each factor's Begin.
+	//
+	// Deprecated: no consult point passes this phase; LoginFlow consults the assessor at RiskAuthorizeEntry only.
+	RiskPreFactor = authn.RiskPreFactor
+
+	// RiskPostFactor is the stage after each factor's Continue.
+	//
+	// Deprecated: no consult point passes this phase; LoginFlow consults the assessor at RiskAuthorizeEntry only.
+	RiskPostFactor = authn.RiskPostFactor
+
+	// RiskTokenExchange is reserved and never raised: the /token endpoint
+	// does not consult the [RiskAssessor].
+	RiskTokenExchange = authn.RiskTokenExchange
 )
 
 // RiskDecision is an alias for [authn.RiskDecision].

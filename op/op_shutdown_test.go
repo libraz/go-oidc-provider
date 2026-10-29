@@ -274,7 +274,10 @@ func TestNew_RecordsBackchannelCoordinator(t *testing.T) {
 		WithStore(inmem.New()),
 		WithKeyset(Keyset{SigningKey{KeyID: "sig-1", Signer: priv}}),
 		WithCookieKeys(cookieKey),
-		WithAuthenticators(shutdownFixtureAuthenticator{}),
+		WithLoginFlow(LoginFlow{Primary: ExternalStep{
+			Authenticator: shutdownFixtureAuthenticator{},
+			KindLabel:     "fixture.primary",
+		}}),
 		WithBackchannelFanOutBudget(3*time.Second),
 	)
 	if err != nil {

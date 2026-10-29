@@ -350,13 +350,13 @@ func (c *config) warnCaptchaOnScriptlessUI() {
 		return
 	}
 	c.logger.Warn(
-		"a captcha challenge is configured but the interaction UI is the "+
+		"a StepCaptcha is scheduled in the LoginFlow but the interaction UI is the "+
 			"built-in HTML driver, which renders no client-side script; the "+
 			"token field is served as a plain text input, so a captcha whose "+
 			"token comes from a browser widget cannot be answered there. "+
 			"Configure WithSPAUI or WithInteractionDriver with a UI that "+
 			"mounts the provider's widget",
-		"option", "WithCaptchaVerifier",
+		"step", string(StepKindCaptcha),
 	)
 }
 
@@ -371,13 +371,9 @@ func (c *config) passkeyScheduled() bool {
 	return false
 }
 
-// captchaScheduled reports whether any wiring can put a captcha prompt
-// in front of a user: the failure-threshold gate that [WithCaptchaVerifier]
-// arms, or a [StepCaptcha] the [LoginFlow] schedules through its rules.
+// captchaScheduled reports whether the [LoginFlow] schedules a
+// [StepCaptcha] through its rules.
 func (c *config) captchaScheduled() bool {
-	if !isNilLike(c.captcha) {
-		return true
-	}
 	for _, step := range c.loginFlowSteps() {
 		if step.Kind() == StepKindCaptcha {
 			return true

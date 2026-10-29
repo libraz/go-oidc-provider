@@ -132,9 +132,7 @@ type EmailOTPConfig struct {
 const DefaultEmailOTPCodeTTL = emailotp.DefaultCodeTTL
 
 // NewEmailOTPAuthenticator constructs the [Authenticator] for the
-// [FactorEmailOTP] factor. Embedders register the returned value
-// through [WithAuthenticators] alongside any other factors they
-// support.
+// [FactorEmailOTP] factor.
 // Behaviour highlights:
 //   - Two-screen UX: "auth.email_otp.send" collects the address;
 //     "auth.email_otp.verify" collects the 6-digit code.
@@ -158,7 +156,9 @@ const DefaultEmailOTPCodeTTL = emailotp.DefaultCodeTTL
 //     factor shares the per-subject counter every other built-in
 //     second factor consults, so guesses cannot be reset by pivoting
 //     between factors.
-func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nolint:ireturn,nolintlint // returns the public Authenticator interface so embedders can pass the result to WithAuthenticators without a concrete-type leak.
+//
+// Deprecated: use StepEmailOTP in a LoginFlow.
+func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nolint:ireturn,nolintlint // returns the public Authenticator interface so the result carries no concrete-type leak.
 	// The internal constructor compares with == nil, which a typed nil
 	// passes, and it never sees the Mailer bare: emailMailerAdapter
 	// wraps it. Check every dependency here, returning the sentinel an

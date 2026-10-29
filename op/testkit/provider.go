@@ -156,7 +156,7 @@ func WithOptions(opts ...op.Option) Option {
 
 // MinimalOptions returns the smallest [op.Option] slice that satisfies
 // the constructor's required-field gates (Issuer / Store / Keyset /
-// CookieKeys / InteractionDriver / Authenticators) plus any extras the
+// CookieKeys / InteractionDriver / LoginFlow) plus any extras the
 // caller appends. The helper is the construction-time analog of
 // [NewProvider] for tests that exercise [op.New]'s rejection paths
 // directly: pass a deliberately invalid extra and assert the returned
@@ -172,9 +172,18 @@ func MinimalOptions(tb testing.TB, extra ...op.Option) []op.Option {
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(generateCookieKey(tb)),
 		op.WithInteractionDriver(AutoConsentDriver{}),
-		op.WithAuthenticators(SubjectAuthenticator{}),
+		subjectLoginFlow(SubjectAuthenticator{}),
 	)
 	return append(out, extra...)
+}
+
+// subjectLoginFlow is the [op.WithLoginFlow] option whose only step is
+// auth, the testkit's subject-echoing authenticator.
+func subjectLoginFlow(auth op.Authenticator) op.Option {
+	return op.WithLoginFlow(op.LoginFlow{Primary: op.ExternalStep{
+		Authenticator: auth,
+		KindLabel:     op.StepKind(auth.Type()),
+	}})
 }
 
 // NewProvider builds a fully wired [Provider] for use in tests. It registers
@@ -208,7 +217,7 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(generateCookieKey(tb)),
 		op.WithInteractionDriver(AutoConsentDriver{}),
-		op.WithAuthenticators(seedingSubjectAuthenticator{users: store}),
+		subjectLoginFlow(seedingSubjectAuthenticator{users: store}),
 	}
 	if cfg.clock != nil {
 		baseOpts = append(baseOpts, op.WithClock(cfg.clock))

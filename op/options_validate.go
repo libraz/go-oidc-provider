@@ -41,7 +41,7 @@ func (c *config) validate() error {
 		c.validateProfiles,
 		c.validateFeatureActivation,
 		c.validateRegistration,
-		c.validateAuthenticators,
+		c.validateLoginFlowRequired,
 		c.validateInteractions,
 		c.validateLocales,
 		c.validateFirstPartyClients,
@@ -580,18 +580,11 @@ func (c *config) validateAccessTokenRevocation() error {
 	return nil
 }
 
-// validateLoginFlow enforces the cross-cutting invariants between
-// [WithLoginFlow] and the legacy authenticator surface:
-//   - [WithLoginFlow] is mutually exclusive with [WithAuthenticators].
-//     The two surfaces drive the orchestrator through different code
-//     paths; combining them invites silent misordering. Reject at the
-//     option-validation phase so the embedder sees a clear error
-//     before the orchestrator construction returns its own (less
-//     specific) refusal.
-//   - When [WithLoginFlow] is present, its [op.ExternalStep]
-//     KindLabel values MUST be user-defined (dotted prefix) so they
-//     cannot collide with the built-in [StepKind] reserved
-//     identifiers.
+// validateLoginFlow enforces the option-layer invariants of
+// [WithLoginFlow]: its step dependencies are wired, and its
+// [op.ExternalStep] KindLabel values are user-defined (dotted prefix)
+// so they cannot collide with the built-in [StepKind] reserved
+// identifiers.
 //
 // The compiler-level checks (duplicate StepKind across rules, nil
 // Authenticator inside ExternalStep, …) live in
@@ -600,12 +593,6 @@ func (c *config) validateAccessTokenRevocation() error {
 func (c *config) validateLoginFlow() error {
 	if !c.loginFlowSet {
 		return nil
-	}
-	if len(c.authenticators) > 0 {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow is mutually exclusive with WithAuthenticators",
-		}
 	}
 	if err := validateLoginFlowDependencies(c.loginFlow); err != nil {
 		return err
@@ -948,37 +935,7 @@ func featureFlagNames(fs []feature.Flag) []string {
 	return names
 }
 
-// validateAuthenticators enforces uniqueness of [Authenticator.Type]
-// across the registered set. The orchestrator layers further rules on
-// top — minimum cardinality, capability checks against the risk
-// engine — but the bare uniqueness invariant is owned here so
-// duplicate registrations surface at [New] rather than the first
-// chain run.
-func (c *config) validateAuthenticators() error {
-	if len(c.authenticators) == 0 {
-		return c.validateAuthenticatorsRequired()
-	}
-	seen := make(map[FactorType]struct{}, len(c.authenticators))
-	for i, a := range c.authenticators {
-		if isNilLike(a) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAuthenticators received nil Authenticator at position " + strconv.Itoa(i),
-			}
-		}
-		t := a.Type()
-		if _, dup := seen[t]; dup {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAuthenticators: duplicate FactorType " + string(t),
-			}
-		}
-		seen[t] = struct{}{}
-	}
-	return nil
-}
-
-// validateAuthenticatorsRequired covers the zero-authenticator case.
+// validateLoginFlowRequired covers the no-[LoginFlow] case.
 //
 // Registering none is legitimate for a deployment that runs only
 // non-interactive grants — client_credentials, or refresh_token against
@@ -993,10 +950,7 @@ func (c *config) validateAuthenticators() error {
 // the relying party and gives the operator nothing to act on. This is
 // exactly the class the boot contract exists to exclude, so it is
 // refused at construction alongside the other required wiring.
-//
-// [WithLoginFlow] satisfies the requirement in place of
-// [WithAuthenticators]: it declares the same chain in compiled form.
-func (c *config) validateAuthenticatorsRequired() error {
+func (c *config) validateLoginFlowRequired() error {
 	if c.loginFlowSet {
 		return nil
 	}
@@ -1006,17 +960,16 @@ func (c *config) validateAuthenticatorsRequired() error {
 		}
 		return &Error{
 			Code: codeConfiguration,
-			Description: "the authorization_code grant is enabled but no Authenticator is registered; " +
-				"supply WithAuthenticators or WithLoginFlow, or drop the grant",
+			Description: "the authorization_code grant is enabled but no LoginFlow is registered; " +
+				"supply WithLoginFlow, or drop the grant",
 		}
 	}
 	return nil
 }
 
 // validateInteractions enforces uniqueness of [Interaction.Name]
-// across the registered set. The same rationale as
-// [config.validateAuthenticators] applies: surface registration
-// mistakes at [New] rather than the first chain run.
+// across the registered set so registration mistakes surface at [New]
+// rather than the first chain run.
 func (c *config) validateInteractions() error {
 	if len(c.interactions) == 0 {
 		return nil

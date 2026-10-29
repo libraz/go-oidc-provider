@@ -134,7 +134,7 @@ func TestTickRejectsSubmissionViolatingFieldSpec(t *testing.T) {
 
 			spy := &spyFactor{prompt: otpFieldPrompt(tc.pattern)}
 			o, err := authn.New(authn.Config{
-				Authenticators: []op.Authenticator{spy},
+				LoginFlow:      chainFlow(t, spy),
 				StateRefSigner: newSigner(t),
 			})
 			if err != nil {
@@ -185,7 +185,7 @@ func TestTickAcceptsConformingSubmission(t *testing.T) {
 
 	spy := &spyFactor{prompt: otpFieldPrompt(`[0-9]{6}`)}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{spy},
+		LoginFlow:      chainFlow(t, spy),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -219,7 +219,7 @@ func TestTickAcceptsConformingSubmission(t *testing.T) {
 }
 
 // TestTickValidatesInteractionSubmission pins the same gate on the
-// Interaction dispatch path. The three submission routes share one
+// Interaction dispatch path. The submission routes share one
 // choke point precisely so a route cannot drift; the test fails if the
 // interaction branch ever grows its own dispatch.
 func TestTickValidatesInteractionSubmission(t *testing.T) {
@@ -247,7 +247,7 @@ func TestTickValidatesInteractionSubmission(t *testing.T) {
 	}
 	pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		Interactions:   []op.Interaction{ix},
 		StateRefSigner: newSigner(t),
 	})
@@ -279,7 +279,7 @@ func TestTickValidatesInteractionSubmission(t *testing.T) {
 }
 
 // TestTickValidatesLoginFlowSubmission pins the gate on the LoginFlow
-// dispatch path, the third route into an authenticator.
+// dispatch path, the route into an authenticator.
 func TestTickValidatesLoginFlowSubmission(t *testing.T) {
 	t.Parallel()
 
@@ -331,7 +331,7 @@ func TestTickValidatesAgainstIssuedPromptOnly(t *testing.T) {
 
 	spy := &spyFactor{prompt: otpFieldPrompt("")}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{spy},
+		LoginFlow:      chainFlow(t, spy),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {

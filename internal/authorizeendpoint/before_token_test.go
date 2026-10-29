@@ -66,7 +66,7 @@ func withBeforeTokenOrchestrator(t *testing.T) func(*authorizeendpoint.Deps) {
 		t.Fatalf("authn.NewStateRefSigner: %v", err)
 	}
 	orch, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{testkit.SubjectAuthenticator{}},
+		LoginFlow:      primaryOnlyFlow(t, testkit.SubjectAuthenticator{}),
 		Interactions:   []op.Interaction{consentScreenInteraction{}, &deviceTrustInteraction{}},
 		StateRefSigner: signer,
 	})

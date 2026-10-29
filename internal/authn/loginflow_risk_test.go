@@ -148,9 +148,7 @@ func TestLoginFlowRiskRequiredFactorSurvivesDeciderAllow(t *testing.T) {
 // TestLoginFlowRiskRequiredFactorNotDeclaredFailsClosed asserts the
 // fail-closed branch: when no declared Step can produce a demanded
 // factor type, the attempt ends in ErrNoEligibleAuthenticator rather
-// than granting a session at the assurance the assessor refused. This
-// mirrors the legacy chain path, whose risk-filtered candidate set
-// returns the same sentinel when it comes back empty.
+// than granting a session at the assurance the assessor refused.
 func TestLoginFlowRiskRequiredFactorNotDeclaredFailsClosed(t *testing.T) {
 	t.Parallel()
 

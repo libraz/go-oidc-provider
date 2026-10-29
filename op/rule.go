@@ -61,8 +61,7 @@ func RuleAfterFailedAttempts(n int, then Step) Rule {
 // Embedders typically pair the rule with a stronger second factor:
 // `RuleRisk(RiskScoreHigh, StepTOTP{...})` requests TOTP only when
 // the configured [RiskAssessor] reports the highest level.
-// The assessor is [LoginFlow.Risk] or, when that is nil, the one
-// installed by [WithRiskAssessor]. When neither is configured the
+// The assessor is [LoginFlow.Risk]. When it is nil the
 // orchestrator does not invoke an assessor and [LoginContext.RiskScore]
 // stays at [RiskScoreNone]; in that case a [RuleRisk] with a non-zero
 // threshold silently never fires.

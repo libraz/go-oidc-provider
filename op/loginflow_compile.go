@@ -25,15 +25,9 @@ import (
 // reCAPTCHA, hCaptcha, …) and submits the resulting token under this
 // key. The constant is exported so SPA documentation references the
 // canonical wire name without a stringly-typed copy.
-// The [StepCaptcha] path is independent of the legacy after-N-failures
-// captcha gate: a [LoginFlow] without a registered StepCaptcha still
-// emits the orchestrator's built-in captcha prompt when
-// [State.LastFailures] crosses the threshold (and a
-// [WithCaptchaVerifier] is wired). StepCaptcha lets embedders schedule
-// captcha through the rule list (e.g., always before TOTP, or only for
-// high-risk requests) instead of relying on the threshold gate alone.
-// Both paths collect the token under the same field name so a SPA
-// written against one renders the other unchanged.
+// [StepCaptcha] is the only captcha path: a [LoginFlow] schedules it
+// through the rule list, e.g. [RuleAfterFailedAttempts] for an
+// after-N-failures challenge.
 const CaptchaSubmissionFieldName = authn.CaptchaTokenField
 
 // captchaSubmissionMaxLen caps the token bytes the captcha step accepts
@@ -246,15 +240,12 @@ func (captchaStepAdapter) AAL() authn.AAL { return authn.AAL0 }
 func (captchaStepAdapter) AMR() string { return "" }
 
 // Prompts implements [authn.Authenticator]. The adapter emits a single
-// prompt type matching the orchestrator's legacy captcha prompt so SPAs
-// can route both surfaces through one renderer.
+// "captcha" prompt type.
 func (captchaStepAdapter) Prompts() []string { return []string{"captcha"} }
 
 // Begin implements [authn.Authenticator]. Returns the captcha prompt
 // with a single hidden submission field for the upstream provider's
-// token. The prompt shape mirrors the orchestrator's legacy
-// [emitCaptchaPrompt] so a SPA written for one path renders the other
-// without modification.
+// token.
 func (a captchaStepAdapter) Begin(_ context.Context, _ authn.BeginInput) (interaction.Step, error) {
 	provider, siteKey := authn.CaptchaWidgetFor(a.verifier)
 	prompt := &interaction.Prompt{

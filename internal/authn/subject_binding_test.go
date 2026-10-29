@@ -66,7 +66,7 @@ func TestTick_FirstFactorMayReplaceInheritedSubject(t *testing.T) {
 	t.Parallel()
 
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{successAuth(op.FactorPassword, op.AAL1, "pwd", "user-2")},
+		LoginFlow:      chainFlow(t, successAuth(op.FactorPassword, op.AAL1, "pwd", "user-2")),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {

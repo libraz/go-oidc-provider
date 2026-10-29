@@ -184,10 +184,10 @@ func (o *Orchestrator) observeLocked(ctx context.Context, st State, now time.Tim
 // under the shared catalogue's login.* / mfa.* vocabulary.
 //
 // Both observe helpers funnel through here rather than emitting at
-// their five call sites, because "one event per resolved factor" is
-// the invariant that makes the login_attempts metric mean anything —
-// spreading the emission across the legacy-chain and LoginFlow paths
-// is how one of them ends up double-counting a retry.
+// their call sites, because "one event per resolved factor" is the
+// invariant that makes the login_attempts metric mean anything —
+// spreading the emission across call sites is how one of them ends up
+// double-counting a retry.
 //
 // # Which name a factor gets
 //

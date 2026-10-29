@@ -38,159 +38,134 @@ type stubObserver struct {
 
 func (s *stubObserver) Observe(_ context.Context, _ op.LoginAttempt) { s.calls++ }
 
-func TestWithAuthenticators_AcceptsAndPreservesOrder(t *testing.T) {
+// externalStep wraps a stub authenticator of factor type typ in an
+// [op.ExternalStep] whose kind is the dotted label the compiler requires.
+func externalStep(typ op.FactorType, aal op.AAL) op.ExternalStep {
+	return op.ExternalStep{
+		Authenticator: stubAuthenticator{typ: typ, aal: aal},
+		KindLabel:     op.StepKind("test." + string(typ)),
+	}
+}
+
+// TestWithLoginFlow_ExternalStepsInPrimaryAndRules pins the shape an
+// embedder with several custom factors takes: the first is Primary and
+// every further one is a Rule.
+func TestWithLoginFlow_ExternalStepsInPrimaryAndRules(t *testing.T) {
 	t.Parallel()
 
-	first := stubAuthenticator{typ: op.FactorPassword, aal: op.AAL1, amr: "pwd"}
-	second := stubAuthenticator{typ: op.FactorTOTP, aal: op.AAL2, amr: "otp"}
-
-	provider, err := op.New(append(validBaseOpts(t),
-		op.WithAuthenticators(first, second),
+	provider, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: externalStep(op.FactorPassword, op.AAL1),
+			Rules:   []op.Rule{op.RuleAlways(externalStep(op.FactorTOTP, op.AAL2))},
+		}),
 	)...)
 	if err != nil {
-		t.Fatalf("WithAuthenticators rejected valid set: %v", err)
+		t.Fatalf("WithLoginFlow rejected valid set: %v", err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil provider")
 	}
 }
 
-func TestWithAuthenticators_AppendsAcrossCalls(t *testing.T) {
+func TestWithLoginFlow_RejectsNilRuleStep(t *testing.T) {
 	t.Parallel()
 
-	a := stubAuthenticator{typ: op.FactorPassword}
-	b := stubAuthenticator{typ: op.FactorTOTP}
-
-	if _, err := op.New(append(validBaseOpts(t),
-		op.WithAuthenticators(a),
-		op.WithAuthenticators(b),
-	)...); err != nil {
-		t.Fatalf("two WithAuthenticators calls failed: %v", err)
-	}
-}
-
-func TestWithAuthenticators_RejectsNil(t *testing.T) {
-	t.Parallel()
-
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithAuthenticators(stubAuthenticator{typ: op.FactorPassword}, nil),
+	_, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: externalStep(op.FactorPassword, op.AAL1),
+			Rules:   []op.Rule{{Then: nil}},
+		}),
 	)...)
 	if err == nil {
-		t.Fatal("WithAuthenticators accepted nil entry")
+		t.Fatal("WithLoginFlow accepted a nil rule step")
 	}
 }
 
-func TestWithAuthenticators_RejectsEmpty(t *testing.T) {
+func TestWithLoginFlow_RejectsDuplicateExternalKind(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(validBaseOpts(t), op.WithAuthenticators())...); err == nil {
-		t.Fatal("WithAuthenticators accepted empty input")
-	}
-}
-
-func TestWithAuthenticators_RejectsDuplicateType(t *testing.T) {
-	t.Parallel()
-
-	a := stubAuthenticator{typ: op.FactorPassword}
-	b := stubAuthenticator{typ: op.FactorPassword}
-
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithAuthenticators(a, b),
+	_, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: externalStep(op.FactorPassword, op.AAL1),
+			Rules: []op.Rule{
+				op.RuleAlways(externalStep(op.FactorTOTP, op.AAL2)),
+				op.RuleAlways(externalStep(op.FactorTOTP, op.AAL2)),
+			},
+		}),
 	)...)
 	if err == nil {
-		t.Fatal("op.New must reject duplicate FactorType across authenticators")
+		t.Fatal("op.New must reject duplicate StepKind across rules")
 	}
 	if op.IsClientError(err) {
-		t.Errorf("duplicate FactorType must surface as a server error, got %v", err)
+		t.Errorf("duplicate StepKind must surface as a server error, got %v", err)
 	}
 }
 
-func TestWithAuthenticators_RejectsDuplicateAcrossCalls(t *testing.T) {
+func TestStepCaptcha_AcceptedAsFailureRule(t *testing.T) {
 	t.Parallel()
 
-	a := stubAuthenticator{typ: op.FactorPassword}
-	b := stubAuthenticator{typ: op.FactorPassword}
-
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithAuthenticators(a),
-		op.WithAuthenticators(b),
-	)...)
-	if err == nil {
-		t.Fatal("op.New must reject duplicate FactorType across WithAuthenticators calls")
-	}
-}
-
-func TestWithCaptchaVerifier_Accepts(t *testing.T) {
-	t.Parallel()
-
-	provider, err := op.New(append(validBaseOpts(t),
-		op.WithCaptchaVerifier(stubCaptcha{}),
+	provider, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: externalStep(op.FactorPassword, op.AAL1),
+			Rules:   []op.Rule{op.RuleAfterFailedAttempts(3, op.StepCaptcha{Verifier: stubCaptcha{}})},
+		}),
 	)...)
 	if err != nil {
-		t.Fatalf("WithCaptchaVerifier rejected non-nil verifier: %v", err)
+		t.Fatalf("StepCaptcha rule rejected with a non-nil verifier: %v", err)
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil provider")
 	}
 }
 
-func TestWithCaptchaVerifier_RejectsNil(t *testing.T) {
+func TestStepCaptcha_RejectsNilVerifier(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(validBaseOpts(t), op.WithCaptchaVerifier(nil))...); err == nil {
-		t.Fatal("WithCaptchaVerifier accepted nil")
+	_, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: externalStep(op.FactorPassword, op.AAL1),
+			Rules:   []op.Rule{op.RuleAfterFailedAttempts(3, op.StepCaptcha{})},
+		}),
+	)...)
+	if err == nil {
+		t.Fatal("StepCaptcha accepted a nil verifier")
 	}
 }
 
-func TestWithCaptchaVerifier_RejectsSecondCall(t *testing.T) {
+func TestStepCaptcha_RejectsSecondCaptchaRule(t *testing.T) {
 	t.Parallel()
 
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithCaptchaVerifier(stubCaptcha{}),
-		op.WithCaptchaVerifier(stubCaptcha{}),
+	_, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: externalStep(op.FactorPassword, op.AAL1),
+			Rules: []op.Rule{
+				op.RuleAfterFailedAttempts(3, op.StepCaptcha{Verifier: stubCaptcha{}}),
+				op.RuleAfterFailedAttempts(5, op.StepCaptcha{Verifier: stubCaptcha{}}),
+			},
+		}),
 	)...)
 	if err == nil {
-		t.Fatal("op.New must reject a second WithCaptchaVerifier call")
+		t.Fatal("op.New must reject a second captcha rule")
 	}
 	var oe *op.Error
 	if !errors.As(err, &oe) {
 		t.Fatalf("expected *op.Error, got %T", err)
 	}
 	if !op.IsServerError(err) {
-		t.Errorf("duplicate WithCaptchaVerifier must classify as server error, got %v", err)
+		t.Errorf("duplicate captcha rule must classify as server error, got %v", err)
 	}
 }
 
-func TestWithRiskAssessor_Accepts(t *testing.T) {
+func TestLoginFlowRisk_Accepts(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(validBaseOpts(t),
-		op.WithRiskAssessor(stubRisk{}),
+	if _, err := op.New(append(validBaseOptsNoAuthn(t),
+		op.WithLoginFlow(op.LoginFlow{
+			Primary: externalStep(op.FactorPassword, op.AAL1),
+			Risk:    stubRisk{},
+		}),
 	)...); err != nil {
-		t.Fatalf("WithRiskAssessor rejected non-nil assessor: %v", err)
-	}
-}
-
-func TestWithRiskAssessor_RejectsNil(t *testing.T) {
-	t.Parallel()
-
-	if _, err := op.New(append(validBaseOpts(t), op.WithRiskAssessor(nil))...); err == nil {
-		t.Fatal("WithRiskAssessor accepted nil")
-	}
-}
-
-func TestWithRiskAssessor_RejectsSecondCall(t *testing.T) {
-	t.Parallel()
-
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithRiskAssessor(stubRisk{}),
-		op.WithRiskAssessor(stubRisk{}),
-	)...)
-	if err == nil {
-		t.Fatal("op.New must reject a second WithRiskAssessor call")
-	}
-	if !op.IsServerError(err) {
-		t.Errorf("duplicate WithRiskAssessor must classify as server error, got %v", err)
+		t.Fatalf("LoginFlow.Risk rejected a non-nil assessor: %v", err)
 	}
 }
 
@@ -360,7 +335,7 @@ func TestRiskInput_FieldsAreReachable(t *testing.T) {
 
 	addr := netip.MustParseAddr("203.0.113.1")
 	in := op.RiskInput{
-		Stage:      op.RiskPreFactor,
+		Stage:      op.RiskAuthorizeEntry,
 		Subject:    "sub-1",
 		ClientID:   "client-1",
 		RemoteIP:   addr,
@@ -374,7 +349,6 @@ func TestRiskInput_FieldsAreReachable(t *testing.T) {
 	out := op.RiskOutcome{
 		Decision:        op.RiskRequire,
 		RequiredFactors: []op.FactorType{op.FactorTOTP},
-		MinAAL:          op.AAL2,
 		Reason:          "anomaly.geoip_mismatch",
 	}
 	if out.Decision != op.RiskRequire {

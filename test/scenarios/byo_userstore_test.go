@@ -202,8 +202,7 @@ func decodeBUSJWTClaims(tb testing.TB, jws string) map[string]any {
 // newBUSSigningKey returns a fresh ECDSA P-256 signer wrapped in
 // op.SigningKey. The helper is duplicated rather than borrowed from
 // testkit because BUS-010 builds its provider through op.New directly
-// (testkit pre-installs WithAuthenticators, which is mutually
-// exclusive with WithLoginFlow).
+// (testkit pre-installs its own login flow).
 func newBUSSigningKey(tb testing.TB) op.SigningKey {
 	tb.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -615,8 +614,8 @@ func TestScenario_BUS_010_PrimaryPasswordStoreIndependentOfUsers(t *testing.T) {
 	}
 
 	// op.New is invoked directly (not via testkit.NewProvider) because
-	// WithLoginFlow is mutually exclusive with WithAuthenticators, and
-	// the testkit pre-installs SubjectAuthenticator. The construction
+	// the testkit pre-installs a login flow around SubjectAuthenticator,
+	// which would replace the one under test. The construction
 	// outcome — not flow execution — is the BUS-010 contract.
 	signKey := newBUSSigningKey(t)
 	cookieKey := newBUSCookieKey(t)

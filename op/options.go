@@ -119,24 +119,6 @@ type config struct {
 	// [Provider.IssueInitialAccessToken].
 	dcr *RegistrationOption
 
-	// authenticators carries the [Authenticator] values registered
-	// through [WithAuthenticators]. The orchestrator presents factors
-	// in this order when [RiskAssessor] does not override the choice.
-	// Order is preserved; duplicates by [Authenticator.Type] are
-	// rejected at construction time.
-	authenticators []Authenticator
-
-	// captcha is the optional [CaptchaVerifier] the orchestrator
-	// consults to validate captcha tokens server-side. Nil means
-	// "no captcha configured"; at most one verifier may be
-	// registered.
-	captcha CaptchaVerifier
-
-	// risk is the optional [RiskAssessor] the orchestrator consults
-	// at each [RiskStage]. Nil means "always allow"; at most one
-	// assessor may be registered.
-	risk RiskAssessor
-
 	// loginObservers carries the [LoginAttemptObserver] values
 	// registered through [WithLoginAttemptObserver]. Multiple
 	// observers stack: the orchestrator fans out every

@@ -2,46 +2,62 @@ package authn
 
 import (
 	"context"
-	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn/risk"
 )
 
 // This file is the orchestrator's "risk" responsibility seam: the
-// PreFactor / PostFactor consult helpers that adapt the orchestrator's
-// State into the risk sub-package's Input shape and translate the
-// returned risk.Outcome back into the orchestrator's authn-package
-// types (FactorType, denied flag).
-//
-// The actual decision wiring lives in internal/authn/risk; this file
-// is a thin per-stage adapter that keeps orchestrator.go free of the
-// per-call boilerplate. The pre-split call sites had identical bodies
-// inlined three times (PreFactor, PostFactor, LoginFlow once-per-chain);
-// consolidating them here makes a future fourth stage (e.g.
-// TokenExchange) a one-line addition rather than a copy-paste.
+// once-per-chain consult that adapts the orchestrator's State into the
+// risk sub-package's Input shape and translates the returned outcome
+// back into the orchestrator's authn-package types. The decision wiring
+// itself lives in internal/authn/risk.
 
-// runRiskPreFactor consults the assessor at PreFactor and returns the
-// factor-type filter the orchestrator should apply (empty = no filter),
-// the minimum-assurance floor (AAL0 = no floor), plus a denied flag.
-func (o *Orchestrator) runRiskPreFactor(ctx context.Context, st State, now time.Time) ([]FactorType, AAL, bool, error) {
+// runRiskOnceForLoginFlow consults Risk at chain start when no step has
+// completed yet, caches the score on st.RiskScoreCached and the
+// required-factor set on st.RiskRequiredFactors, and returns whether the
+// chain is denied. Subsequent calls during the same chain are no-ops;
+// this is the §3.1 budget invariant ("Risk.Assess at most once per
+// chain").
+//
+// A [RiskRequire] outcome that names factors is recorded rather than
+// acted on here: the consult happens before Primary has even run, so the
+// obligation has to survive until the chain would otherwise grant. See
+// [Orchestrator.transitionToAfterAuthn] for where it is discharged.
+//
+// The mapping from [RiskOutcome] onto [State.RiskScoreCached]:
+//
+//   - [RiskOutcome.Score] non-zero — used verbatim. This is the path
+//     an assessor takes to surface [RiskScoreMedium], which the
+//     Decision-only fallback cannot reach.
+//   - Score zero, Decision = [RiskAllow] — cached as [RiskScoreLow]
+//     (a signal was observed but nothing actionable).
+//   - Score zero, Decision = [RiskRequire] — cached as
+//     [RiskScoreHigh] (the assessor recommends a stronger factor).
+//   - Decision = [RiskDeny] — handled separately; the orchestrator
+//     returns [ErrRiskDenied] without caching.
+//
+// Rule predicates `score >= threshold` see the cached value
+// uniformly regardless of which path produced it.
+func (o *Orchestrator) runRiskOnceForLoginFlow(ctx context.Context, st State, flow *CompiledLoginFlow) (State, bool, error) {
+	if flow.risk == nil {
+		return st, false, nil
+	}
+	if st.RiskScoreCached != RiskScoreNone {
+		return st, false, nil
+	}
 	in := o.buildRiskInput(st, "")
-	in.AuthTime = now
-	res, err := risk.RunPreFactor(ctx, o.riskAssessor, in)
+	in.AuthTime = st.AuthTime
+	res, err := risk.RunOnceForLoginFlow(ctx, wrapRiskAssessor(flow.risk), in)
 	if err != nil {
-		return nil, AAL0, false, err
+		return st, false, err
 	}
 	if res.Denied {
-		return nil, AAL0, true, nil
+		return st, true, nil
 	}
-	return factorTypesFromStrings(res.Required), aalFromPkg(res.MinAAL), false, nil
-}
-
-// runRiskPostFactor consults the assessor after a successful factor
-// completion. The current implementation honours [RiskDeny] only;
-// [RiskRequire] at PostFactor is queued by the next PreFactor pass
-// (the orchestrator does not preempt the current factor).
-func (o *Orchestrator) runRiskPostFactor(ctx context.Context, st State, now time.Time, last FactorType) (bool, error) {
-	in := o.buildRiskInput(st, last)
-	in.AuthTime = now
-	return risk.RunPostFactor(ctx, o.riskAssessor, in)
+	if res.Score != risk.ScoreNone {
+		st.RiskScoreCached = riskScoreFromPkg(res.Score)
+	}
+	st.RiskRequiredFactors = factorTypesFromStrings(res.Required)
+	st.NewDeviceCached = res.NewDevice
+	return st, false, nil
 }

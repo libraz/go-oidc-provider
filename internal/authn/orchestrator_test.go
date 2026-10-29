@@ -51,6 +51,100 @@ func initialState() authn.State {
 	}
 }
 
+// chainFlow compiles a LoginFlow whose Primary is auths[0] and whose
+// remaining authenticators each run, in order, through an
+// always-matching rule. Each step's kind is its factor type.
+func chainFlow(t *testing.T, auths ...op.Authenticator) *authn.CompiledLoginFlow {
+	t.Helper()
+	spec := authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: string(auths[0].Type()), Authenticator: auths[0]},
+	}
+	for _, a := range auths[1:] {
+		spec.Rules = append(spec.Rules, authn.LoginFlowRule{
+			When: func(authn.LoginFlowContext) bool { return true },
+			Then: authn.LoginFlowStep{Kind: string(a.Type()), Authenticator: a},
+		})
+	}
+	flow, err := authn.CompileLoginFlow(spec)
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	return flow
+}
+
+// captchaFailureThresholdForTest is the failure count the captcha rules
+// these tests declare interpose at, the value
+// op.RuleAfterFailedAttempts(3, op.StepCaptcha{...}) is written with.
+const captchaFailureThresholdForTest = 3
+
+// captchaRule is the internal projection of
+// op.RuleAfterFailedAttempts(n, op.StepCaptcha{Verifier: v}): a
+// captcha step that interposes once the attempt has n rejected
+// submissions.
+func captchaRule(n int, v op.CaptchaVerifier) authn.LoginFlowRule {
+	return authn.LoginFlowRule{
+		When: func(lc authn.LoginFlowContext) bool { return lc.FailedAttempts >= n },
+		Then: authn.LoginFlowStep{
+			Kind:          "captcha",
+			Authenticator: &captchaStepAuthenticator{verifier: v},
+			IsCaptcha:     true,
+		},
+	}
+}
+
+// captchaFlow compiles a LoginFlow of primary plus the after-N-failures
+// captcha rule, followed by any further rules.
+func captchaFlow(t *testing.T, primary op.Authenticator, v op.CaptchaVerifier, rules ...authn.LoginFlowRule) *authn.CompiledLoginFlow {
+	t.Helper()
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: string(primary.Type()), Authenticator: primary},
+		Rules:   append([]authn.LoginFlowRule{captchaRule(captchaFailureThresholdForTest, v)}, rules...),
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	return flow
+}
+
+// captchaStepAuthenticator mirrors the op.StepCaptcha adapter: it emits
+// the captcha prompt with the token field and hands the submitted token
+// to the verifier, re-issuing the challenge on a rejection.
+type captchaStepAuthenticator struct {
+	verifier op.CaptchaVerifier
+}
+
+func (*captchaStepAuthenticator) Type() op.FactorType { return "captcha" }
+func (*captchaStepAuthenticator) AAL() op.AAL         { return op.AAL0 }
+func (*captchaStepAuthenticator) AMR() string         { return "" }
+func (*captchaStepAuthenticator) Prompts() []string   { return []string{"captcha"} }
+
+func (a *captchaStepAuthenticator) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+	provider, siteKey := authn.CaptchaWidgetFor(a.verifier)
+	return interaction.Step{Prompt: &interaction.Prompt{
+		Type: "captcha",
+		Data: interaction.CaptchaPromptData{Provider: provider, SiteKey: siteKey},
+		Inputs: []interaction.FieldSpec{{
+			Name:     authn.CaptchaTokenField,
+			Kind:     interaction.FieldHidden,
+			Label:    "auth.captcha.token",
+			Required: true,
+			MaxLen:   4 * 1024,
+		}},
+	}}, nil
+}
+
+func (a *captchaStepAuthenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
+	err := a.verifier.Verify(ctx, op.CaptchaInput{
+		Token:    in.Submission.Values[authn.CaptchaTokenField],
+		RemoteIP: in.RemoteIP,
+	})
+	if err != nil {
+		// A rejected token re-issues the challenge, as op.StepCaptcha does.
+		return interaction.Step{}, fmt.Errorf("captcha token rejected: %w: %w", authn.ErrFactorRetry, err)
+	}
+	return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+}
+
 // stubAuthenticator is a hand-rolled op.Authenticator for orchestrator
 // tests. The struct lets each test wire begin / continue behaviour
 // independently without pulling in the per-method packages.
@@ -158,7 +252,7 @@ func TestTickSinglePasswordSuccess(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -202,6 +296,17 @@ func TestTickSinglePasswordSuccess(t *testing.T) {
 	}
 }
 
+// TestNewRequiresLoginFlow pins that the orchestrator has no factor
+// path other than a compiled LoginFlow: a Config without one is refused
+// at construction rather than at the first request.
+func TestNewRequiresLoginFlow(t *testing.T) {
+	t.Parallel()
+
+	if _, err := authn.New(authn.Config{StateRefSigner: newSigner(t)}); err == nil {
+		t.Fatal("New accepted a Config without a LoginFlow")
+	}
+}
+
 // TestTickPropagatesClientView pins the client-view wiring:
 // State.Client (the read-only [interaction.ClientView] populated by
 // the HTTP layer) MUST surface verbatim on every BeginInput.Client
@@ -231,7 +336,7 @@ func TestTickPropagatesClientView(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -277,19 +382,15 @@ func TestTickMultiStepEmailOTP(t *testing.T) {
 		},
 	}
 
-	// Email OTP requires a known subject; pre-seed it.
-	state := initialState()
-	state.Subject = "user-9"
-
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{email},
+		LoginFlow:      chainFlow(t, email),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	st, sendStep, err := o.Tick(context.Background(), state, authn.Input{Now: fakeNow()})
+	st, sendStep, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
 	if err != nil || sendStep.Prompt == nil || sendStep.Prompt.Type != "auth.email_otp.send" {
 		t.Fatalf("send step: err=%v step=%+v", err, sendStep)
 	}
@@ -314,7 +415,8 @@ func TestTickMultiStepEmailOTP(t *testing.T) {
 	}
 }
 
-// 3. Risk Require overrides default order.
+// 3. A risk Require naming a factor selects the declared step that
+// wraps it, ahead of the other declared steps.
 func TestTickRiskRequireSelectsPasskey(t *testing.T) {
 	t.Parallel()
 
@@ -323,96 +425,51 @@ func TestTickRiskRequireSelectsPasskey(t *testing.T) {
 	pk := buildSuccessAuthenticator(op.FactorPasskey, op.AAL2, "hwk")
 
 	risk := &stubRisk{
-		assess: func(_ context.Context, in op.RiskInput) (op.RiskOutcome, error) {
-			if in.Stage == op.RiskPreFactor {
-				return op.RiskOutcome{
-					Decision:        op.RiskRequire,
-					RequiredFactors: []op.FactorType{op.FactorPasskey},
-				}, nil
-			}
-			return op.RiskOutcome{Decision: op.RiskAllow}, nil
+		assess: func(_ context.Context, _ op.RiskInput) (op.RiskOutcome, error) {
+			return op.RiskOutcome{
+				Decision:        op.RiskRequire,
+				RequiredFactors: []op.FactorType{op.FactorPasskey},
+			}, nil
 		},
 	}
+	// Neither second factor has a rule that fires on its own; only the
+	// risk obligation can schedule one.
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			{Then: authn.LoginFlowStep{Kind: "totp", Authenticator: totp}},
+			{Then: authn.LoginFlowStep{Kind: "passkey", Authenticator: pk}},
+		},
+		Risk: risk,
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw, totp, pk},
-		Risk:           risk,
+		LoginFlow:      flow,
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	_, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.password" {
+		t.Fatalf("expected auth.password prompt, got %+v", step.Prompt)
+	}
+	_, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("primary Tick: %v", err)
 	}
 	if step.Prompt == nil || step.Prompt.Type != "auth.passkey" {
 		t.Fatalf("expected auth.passkey prompt, got %+v", step.Prompt)
 	}
-}
-
-// TestTickRiskMinAALWithoutRequiredFactors exercises the MinAAL
-// directive on the legacy Authenticators path: an assessor returns
-// Require with MinAAL AAL2 and an empty RequiredFactors set. The
-// orchestrator must read this as "any registered factor that meets
-// AAL2": a user whose only factor is AAL1 has no eligible candidate
-// (step-up denied), while a user with an AAL2 factor proceeds with it.
-func TestTickRiskMinAALWithoutRequiredFactors(t *testing.T) {
-	t.Parallel()
-
-	riskRequireAAL2 := func() *stubRisk {
-		return &stubRisk{
-			assess: func(_ context.Context, in op.RiskInput) (op.RiskOutcome, error) {
-				if in.Stage == op.RiskPreFactor {
-					return op.RiskOutcome{
-						Decision: op.RiskRequire,
-						MinAAL:   op.AAL2,
-					}, nil
-				}
-				return op.RiskOutcome{Decision: op.RiskAllow}, nil
-			},
-		}
-	}
-
-	t.Run("aal1-only-denied", func(t *testing.T) {
-		t.Parallel()
-
-		pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
-		o, err := authn.New(authn.Config{
-			Authenticators: []op.Authenticator{pw},
-			Risk:           riskRequireAAL2(),
-			StateRefSigner: newSigner(t),
-		})
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		_, _, err = o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
-		if !errors.Is(err, authn.ErrNoEligibleAuthenticator) {
-			t.Fatalf("Tick err = %v, want ErrNoEligibleAuthenticator", err)
-		}
-	})
-
-	t.Run("aal2-proceeds", func(t *testing.T) {
-		t.Parallel()
-
-		pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
-		pk := buildSuccessAuthenticator(op.FactorPasskey, op.AAL2, "hwk")
-		o, err := authn.New(authn.Config{
-			Authenticators: []op.Authenticator{pw, pk},
-			Risk:           riskRequireAAL2(),
-			StateRefSigner: newSigner(t),
-		})
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		_, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
-		if err != nil {
-			t.Fatalf("Tick: %v", err)
-		}
-		if step.Prompt == nil || step.Prompt.Type != "auth.passkey" {
-			t.Fatalf("expected auth.passkey prompt (AAL1 password filtered out), got %+v", step.Prompt)
-		}
-	})
 }
 
 // 4. Risk Deny.
@@ -425,9 +482,15 @@ func TestTickRiskDeny(t *testing.T) {
 			return op.RiskOutcome{Decision: op.RiskDeny, Reason: "anomaly.geo"}, nil
 		},
 	}
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "password", Authenticator: pw},
+		Risk:    risk,
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
-		Risk:           risk,
+		LoginFlow:      flow,
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -442,11 +505,10 @@ func TestTickRiskDeny(t *testing.T) {
 // TestTickOTPWrongCodeObservesFailureAndTripsCaptcha pins the failure-
 // observation contract for OTP-style factors. A wrong code surfaces as
 // an ErrFactorRetry-wrapping error — the shape the TOTP / email-OTP /
-// recovery adapters now return — so the orchestrator MUST fire the
-// observer and advance the brute-force counter on every miss (unlike
-// the old nil-error re-prompt, which left SIEM blind). The miss that
-// crosses the captcha threshold interposes the challenge in the same
-// response, and it stays interposed on the next advance.
+// recovery adapters return — so the orchestrator MUST fire the
+// observer and advance the brute-force counter on every miss. The miss
+// that crosses the captcha rule's threshold interposes the challenge in
+// the same response, and it stays interposed on the next advance.
 func TestTickOTPWrongCodeObservesFailureAndTripsCaptcha(t *testing.T) {
 	t.Parallel()
 
@@ -470,21 +532,15 @@ func TestTickOTPWrongCodeObservesFailureAndTripsCaptcha(t *testing.T) {
 	obs := &recordingObserver{}
 	captcha := &stubCaptcha{verify: func(_ context.Context, _ op.CaptchaInput) error { return nil }}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{otp},
+		LoginFlow:      captchaFlow(t, otp, captcha),
 		Observers:      []op.LoginAttemptObserver{obs},
-		Captcha:        captcha,
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	// OTP is a second factor; the subject is pre-bound so the factor is
-	// eligible without a preceding identifying factor.
-	st := initialState()
-	st.Subject = "user-1"
-
-	st, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("first Tick: %v", err)
 	}
@@ -528,8 +584,8 @@ func TestTickOTPWrongCodeObservesFailureAndTripsCaptcha(t *testing.T) {
 		t.Errorf("observer AttemptFailure events = %d, want %d", failures, captchaFailureThresholdForTest)
 	}
 
-	// A fresh advance (no submission) keeps the captcha gate interposed
-	// because LastFailures has reached the threshold.
+	// A fresh advance (no submission) keeps the captcha interposed
+	// because the rule still matches and has not completed.
 	_, captchaStep, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("post-threshold Tick: %v", err)
@@ -538,11 +594,6 @@ func TestTickOTPWrongCodeObservesFailureAndTripsCaptcha(t *testing.T) {
 		t.Fatalf("expected captcha prompt after %d failures, got %+v", captchaFailureThresholdForTest, captchaStep.Prompt)
 	}
 }
-
-// captchaFailureThresholdForTest mirrors the orchestrator's internal
-// captchaFailureThreshold constant. It is redeclared here because the
-// constant is unexported and the test lives in the _test package.
-const captchaFailureThresholdForTest = 3
 
 // 5. Captcha challenge after 3 failures, then verify and continue.
 func TestTickCaptchaAfterThreeFailures(t *testing.T) {
@@ -557,8 +608,7 @@ func TestTickCaptchaAfterThreeFailures(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
-		Captcha:        verifier,
+		LoginFlow:      captchaFlow(t, pw, verifier),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -578,16 +628,13 @@ func TestTickCaptchaAfterThreeFailures(t *testing.T) {
 
 	// Solve captcha; expect to land on the password prompt. The token
 	// travels in the field the prompt declares — the route every Driver
-	// uses, and the one the orchestrator's field validation requires —
-	// while Input.CaptchaToken carries a different value so the
-	// submission-wins precedence stays covered.
+	// uses, and the one the orchestrator's field validation requires.
 	_, pwStep, err := o.Tick(context.Background(), st, authn.Input{
 		Submission: &interaction.FormSubmission{
 			StateRef: captchaStep.Prompt.StateRef,
 			Values:   map[string]string{authn.CaptchaTokenField: "ok"},
 		},
-		CaptchaToken: "overridden",
-		Now:          fakeNow(),
+		Now: fakeNow(),
 	})
 	if err != nil {
 		t.Fatalf("post-captcha Tick: %v", err)
@@ -613,8 +660,7 @@ func TestTickCaptchaFailureReemits(t *testing.T) {
 	}
 	obs := &recordingObserver{}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
-		Captcha:        verifier,
+		LoginFlow:      captchaFlow(t, pw, verifier),
 		Observers:      []op.LoginAttemptObserver{obs},
 		StateRefSigner: newSigner(t),
 	})
@@ -659,7 +705,7 @@ func TestTickStateRefMismatch(t *testing.T) {
 
 	pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
@@ -704,7 +750,7 @@ func TestTickUnregisteredAMRDropped(t *testing.T) {
 	logBuf := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		StateRefSigner: newSigner(t),
 		Logger:         logger,
 	})
@@ -732,20 +778,40 @@ func TestTickUnregisteredAMRDropped(t *testing.T) {
 	}
 }
 
-// 9. Subject-required factor skip: only TOTP registered, but Subject
-// is empty -> ErrNoEligibleAuthenticator.
+// 9. A risk obligation no declared step can satisfy fails the attempt
+// with ErrNoEligibleAuthenticator rather than granting on the factors
+// that did run.
 func TestTickNoEligibleAuthenticator(t *testing.T) {
 	t.Parallel()
 
-	totp := buildSuccessAuthenticator(op.FactorTOTP, op.AAL2, "otp")
+	pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
+	risk := &stubRisk{
+		assess: func(_ context.Context, _ op.RiskInput) (op.RiskOutcome, error) {
+			return op.RiskOutcome{Decision: op.RiskRequire, RequiredFactors: []op.FactorType{op.FactorTOTP}}, nil
+		},
+	}
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "password", Authenticator: pw},
+		Risk:    risk,
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{totp},
+		LoginFlow:      flow,
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, _, err = o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("first Tick: %v", err)
+	}
+	_, _, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
+		Now:        fakeNow(),
+	})
 	if !errors.Is(err, authn.ErrNoEligibleAuthenticator) {
 		t.Fatalf("Tick err = %v, want ErrNoEligibleAuthenticator", err)
 	}
@@ -771,7 +837,7 @@ func TestTickInteractionBeforeAuthn(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		Interactions:   []op.Interaction{region},
 		StateRefSigner: newSigner(t),
 	})
@@ -807,7 +873,7 @@ func TestTickInteractionAfterAuthn(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		Interactions:   []op.Interaction{consent},
 		StateRefSigner: newSigner(t),
 	})
@@ -852,7 +918,7 @@ func TestTickObserverFanout(t *testing.T) {
 	a := &recordingObserver{}
 	b := &recordingObserver{}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		Observers:      []op.LoginAttemptObserver{a, b},
 		StateRefSigner: newSigner(t),
 	})
@@ -921,16 +987,14 @@ func TestTickFactorScratchRoundtrip(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pk},
+		LoginFlow:      chainFlow(t, pk),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	st0 := initialState()
-	st0.Subject = "user-1"
 
-	st, step, err := o.Tick(context.Background(), st0, authn.Input{Now: fakeNow()})
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("first Tick: %v", err)
 	}
@@ -959,11 +1023,11 @@ func TestTickFactorScratchRoundtrip(t *testing.T) {
 	}
 }
 
-// TestTickMultiStepFactorWrongCodeReShowsVerifyStep pins M-3 on the
-// legacy chain: a multi-step factor (send screen -> verify screen, as
-// email-OTP) that returns its verify prompt alongside ErrFactorRetry on
-// a wrong guess is re-shown the VERIFY prompt with its scratch preserved,
-// rather than restarted at the send screen. A restart would discard the
+// TestTickMultiStepFactorWrongCodeReShowsVerifyStep pins that a
+// multi-step factor (send screen -> verify screen, as email-OTP) that
+// returns its verify prompt alongside ErrFactorRetry on a wrong guess is
+// re-shown the VERIFY prompt with its scratch preserved, rather than
+// restarted at the send screen. A restart would discard the
 // still-valid delivered code and burn the resend budget. The final
 // correct-code submission proves Continue kept seeing the verify scratch.
 func TestTickMultiStepFactorWrongCodeReShowsVerifyStep(t *testing.T) {
@@ -998,17 +1062,15 @@ func TestTickMultiStepFactorWrongCodeReShowsVerifyStep(t *testing.T) {
 		},
 	}
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{otp},
+		LoginFlow:      chainFlow(t, otp),
 		StateRefSigner: newSigner(t),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	st := initialState()
-	st.Subject = "user-1"
 
 	// Begin -> send prompt.
-	st, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("begin Tick: %v", err)
 	}
@@ -1139,15 +1201,13 @@ func TestTickPasskeyUVThreading(t *testing.T) {
 				uv: tc.uv,
 			}
 			o, err := authn.New(authn.Config{
-				Authenticators: []op.Authenticator{pk},
+				LoginFlow:      chainFlow(t, pk),
 				StateRefSigner: newSigner(t),
 			})
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			st := initialState()
-			st.Subject = "user-uv"
-			st1, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+			st1, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
 			if err != nil {
 				t.Fatalf("first Tick: %v", err)
 			}

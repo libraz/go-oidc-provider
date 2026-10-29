@@ -198,7 +198,7 @@ func (d *reauthDriver) codeFrom(loc *url.URL) string {
 // present, which it cannot be for a chain that ran no factor.
 func TestEndToEnd_PromptLoginRunsPrimaryWithLiveSession(t *testing.T) {
 	t.Parallel()
-	for _, surface := range []authnSurface{surfaceLoginFlow, surfaceAuthenticators} {
+	for _, surface := range []authnSurface{surfaceLoginFlow} {
 		t.Run(surface.String(), func(t *testing.T) {
 			t.Parallel()
 			start := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
@@ -249,7 +249,7 @@ func TestEndToEnd_PromptLoginRunsPrimaryWithLiveSession(t *testing.T) {
 // reused, and the resulting id_token must carry the fresh auth_time.
 func TestEndToEnd_MaxAgeRunsPrimaryWithLiveSession(t *testing.T) {
 	t.Parallel()
-	for _, surface := range []authnSurface{surfaceLoginFlow, surfaceAuthenticators} {
+	for _, surface := range []authnSurface{surfaceLoginFlow} {
 		t.Run(surface.String(), func(t *testing.T) {
 			t.Parallel()
 			start := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)

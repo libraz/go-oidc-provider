@@ -105,7 +105,7 @@ func claimStrings(tb testing.TB, claims map[string]any, name string) []string {
 // back off the record.
 func TestEndToEnd_ConsentOnlyKeepsSessionAuthentication(t *testing.T) {
 	t.Parallel()
-	for _, surface := range []authnSurface{surfaceLoginFlow, surfaceAuthenticators} {
+	for _, surface := range []authnSurface{surfaceLoginFlow} {
 		t.Run(surface.String(), func(t *testing.T) {
 			t.Parallel()
 			start := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)

@@ -21,14 +21,12 @@ const (
 	// denylists and region blocks.
 	RiskAuthorizeEntry RiskStage = iota
 
-	// RiskPreFactor fires before each factor's [Authenticator.Begin].
-	// Suitable for dynamic factor selection ("anomalous IP -> require
-	// SMS OTP instead of TOTP").
+	// RiskPreFactor is reserved and never raised: the [LoginFlow] path
+	// consults the assessor once, at [RiskAuthorizeEntry].
 	RiskPreFactor
 
-	// RiskPostFactor fires after each factor's [Authenticator.Continue]
-	// completes. Suitable for step-up evaluation ("password alone
-	// is insufficient at this risk level — append passkey").
+	// RiskPostFactor is reserved and never raised, for the same reason
+	// as [RiskPreFactor].
 	RiskPostFactor
 
 	// RiskTokenExchange is reserved and never raised: the /token
@@ -79,9 +77,9 @@ type RiskInput struct {
 	// NOT retain references across calls.
 	ACRValues []string
 
-	// LastFactor is populated only when [RiskInput.Stage] is
-	// [RiskPostFactor]; it identifies the factor that just
-	// completed. Empty otherwise.
+	// LastFactor would identify the factor that just completed at
+	// [RiskPostFactor]. That stage is never raised, so it is always
+	// empty.
 	LastFactor FactorType
 
 	// AuthTime is the orchestrator's reference time for the attempt.
@@ -159,33 +157,22 @@ type RiskOutcome struct {
 	// outcome raises the risk score without demanding any specific
 	// factor.
 	//
-	// Both authentication surfaces honour it, and both fail the attempt
-	// closed when no configured factor can satisfy the set — granting
-	// would mint a session at the assurance the assessor refused:
-	//
-	//   - The [Config.Authenticators] chain narrows its candidate set to
-	//     these types before picking the next factor.
-	//   - The [Config.LoginFlow] path matches the set against the
-	//     [Authenticator.Type] behind each declared Step and runs the
-	//     first match that has not completed yet, before the chain is
-	//     allowed to leave the authentication phase. A captcha-shaped
-	//     Step never matches: it contributes no [Factor].
+	// The [Config.LoginFlow] path matches the set against the
+	// [Authenticator.Type] behind each declared Step and runs the first
+	// match that has not completed yet, before the chain is allowed to
+	// leave the authentication phase. A captcha-shaped Step never
+	// matches: it contributes no [Factor]. When no declared Step can
+	// satisfy the set the attempt fails closed — granting would mint a
+	// session at the assurance the assessor refused.
 	RequiredFactors []FactorType
 
-	// MinAAL filters [RiskOutcome.RequiredFactors]: only factors
-	// whose [Authenticator.AAL] meets MinAAL are admissible. When
-	// RequiredFactors is empty and MinAAL > AAL0, the orchestrator
-	// reads the directive as "any factor that meets MinAAL".
+	// MinAAL was an assurance floor over an unenumerated candidate set.
+	// The Steps a [Config.LoginFlow] declares are named individually, so
+	// the floor has nothing to filter and the orchestrator never reads
+	// it.
 	//
-	// MinAAL is honoured only on the legacy [Config.Authenticators]
-	// chain path (the orchestrator's eligible-authenticator filter).
-	// The [Config.LoginFlow] path does not consult MinAAL: the Steps a
-	// flow declares are named individually, so an assurance floor over
-	// an unenumerated candidate set has nothing to filter there. A
-	// deployment that needs one under LoginFlow encodes it as an
-	// explicit rule (a step whose Authenticator meets the floor), or
-	// names the qualifying factors in [RiskOutcome.RequiredFactors],
-	// which that path does honour.
+	// Deprecated: name the qualifying factors in RequiredFactors, or
+	// encode the floor as a rule whose step meets it.
 	MinAAL AAL
 
 	// NewDevice reports that the request comes from a device this

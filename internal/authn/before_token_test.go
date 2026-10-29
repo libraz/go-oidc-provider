@@ -54,7 +54,7 @@ func TestTickBeforeTokenRunsAfterConsentBeforeResult(t *testing.T) {
 	// decides when it runs.
 	device := deviceTrustInteraction(&calls)
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		Interactions:   []op.Interaction{device, consent},
 		StateRefSigner: newSigner(t),
 	})
@@ -108,7 +108,7 @@ func TestTickBeforeTokenGatesSessionReuse(t *testing.T) {
 	var calls []string
 	pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		Interactions:   []op.Interaction{deviceTrustInteraction(&calls)},
 		StateRefSigner: newSigner(t),
 	})
@@ -149,7 +149,7 @@ func TestHasInteractions(t *testing.T) {
 	var calls []string
 	pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
 	o, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{pw},
+		LoginFlow:      chainFlow(t, pw),
 		Interactions:   []op.Interaction{deviceTrustInteraction(&calls)},
 		StateRefSigner: newSigner(t),
 	})

@@ -7,8 +7,9 @@ package authn_test
 // so an unclassified one is filed as an authenticator fault — no observer
 // event, no audit record, and a 500 where the user should have seen
 // another prompt. These tests drive the real ceremony against a soft
-// authenticator on both dispatchers, because each has its own failure
-// call site and a fix applied to one would leave the other silent.
+// authenticator with the passkey both as Primary and as a rule step,
+// because the chain re-enters through a different branch for each and a
+// fix applied to one would leave the other silent.
 
 import (
 	"context"
@@ -140,41 +141,64 @@ func passkeyState() authn.State {
 	return st
 }
 
-// newPasskeyOrchestrators builds the same factor on both dispatchers so a
+// passkeyDispatchers names the two positions the passkey step is driven
+// from: as Primary under a reauth demand, and as a rule step after the
+// session subject stood in for Primary.
+func passkeyDispatchers() []string { return []string{"primary", "rule"} }
+
+// passkeyDispatch is an orchestrator together with the state a chain
+// that reaches the passkey step on its first Tick starts from.
+type passkeyDispatch struct {
+	*authn.Orchestrator
+	start authn.State
+}
+
+// newPasskeyOrchestrators builds the same factor in both positions so a
 // case can be driven through each without restating the wiring.
 func newPasskeyOrchestrators(
 	t *testing.T,
 	auth *passkey.Authenticator,
 	obs *recordingObserver,
 	emitter *recordingAuditEmitter,
-) map[string]*authn.Orchestrator {
+) map[string]passkeyDispatch {
 	t.Helper()
 
-	legacy, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{auth},
-		Observers:      []op.LoginAttemptObserver{obs},
-		AuditEmitter:   emitter,
-		StateRefSigner: newSigner(t),
-	})
-	if err != nil {
-		t.Fatalf("New (legacy chain): %v", err)
+	build := func(spec authn.LoginFlowSpec) *authn.Orchestrator {
+		t.Helper()
+		flow, err := authn.CompileLoginFlow(spec)
+		if err != nil {
+			t.Fatalf("CompileLoginFlow: %v", err)
+		}
+		o, err := authn.New(authn.Config{
+			LoginFlow:      flow,
+			Observers:      []op.LoginAttemptObserver{obs},
+			AuditEmitter:   emitter,
+			StateRefSigner: newSigner(t),
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return o
 	}
-	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+	primary := build(authn.LoginFlowSpec{
 		Primary: authn.LoginFlowStep{Kind: passkeyStepKind, Authenticator: auth},
 	})
-	if err != nil {
-		t.Fatalf("CompileLoginFlow: %v", err)
-	}
-	loginFlow, err := authn.New(authn.Config{
-		LoginFlow:      flow,
-		Observers:      []op.LoginAttemptObserver{obs},
-		AuditEmitter:   emitter,
-		StateRefSigner: newSigner(t),
+	rule := build(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{
+			Kind:          "myorg.password",
+			Authenticator: successAuth(op.FactorPassword, op.AAL1, "pwd", passkeySubject),
+		},
+		Rules: []authn.LoginFlowRule{{
+			When: func(authn.LoginFlowContext) bool { return true },
+			Then: authn.LoginFlowStep{Kind: passkeyStepKind, Authenticator: auth},
+		}},
 	})
-	if err != nil {
-		t.Fatalf("New (login flow): %v", err)
+	sessionState := initialState()
+	sessionState.Subject = passkeySubject
+	return map[string]passkeyDispatch{
+		"primary": {Orchestrator: primary, start: passkeyState()},
+		"rule":    {Orchestrator: rule, start: sessionState},
 	}
-	return map[string]*authn.Orchestrator{"legacy-chain": legacy, "login-flow": loginFlow}
 }
 
 // TestPasskeyRejectedAssertionIsRetriedAndRecorded drives the two
@@ -213,7 +237,7 @@ func TestPasskeyRejectedAssertionIsRetriedAndRecorded(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, dispatcher := range []string{"legacy-chain", "login-flow"} {
+			for _, dispatcher := range passkeyDispatchers() {
 				t.Run(dispatcher, func(t *testing.T) {
 					t.Parallel()
 
@@ -223,7 +247,7 @@ func TestPasskeyRejectedAssertionIsRetriedAndRecorded(t *testing.T) {
 					emitter := &recordingAuditEmitter{}
 					o := newPasskeyOrchestrators(t, f.auth, obs, emitter)[dispatcher]
 
-					st, step, err := o.Tick(ctx, passkeyState(), authn.Input{Now: fakeNow()})
+					st, step, err := o.Tick(ctx, o.start, authn.Input{Now: fakeNow()})
 					if err != nil {
 						t.Fatalf("prompt Tick: %v", err)
 					}
@@ -277,11 +301,11 @@ func TestPasskeyCloneDetectionAbortsWithoutAServerError(t *testing.T) {
 	f := newPasskeyFixture(t)
 	obs := &recordingObserver{}
 	emitter := &recordingAuditEmitter{}
-	o := newPasskeyOrchestrators(t, f.auth, obs, emitter)["legacy-chain"]
+	o := newPasskeyOrchestrators(t, f.auth, obs, emitter)["primary"]
 
 	// One good assertion to move the stored counter, then rewind the
 	// authenticator so the next one repeats a counter already seen.
-	st, step, err := o.Tick(ctx, passkeyState(), authn.Input{Now: fakeNow()})
+	st, step, err := o.Tick(ctx, o.start, authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("prompt Tick: %v", err)
 	}
@@ -296,7 +320,7 @@ func TestPasskeyCloneDetectionAbortsWithoutAServerError(t *testing.T) {
 	}
 
 	f.key.SetSignCount(f.key.SignCount() - 1)
-	st, step, err = o.Tick(ctx, passkeyState(), authn.Input{Now: fakeNow()})
+	st, step, err = o.Tick(ctx, o.start, authn.Input{Now: fakeNow()})
 	if err != nil {
 		t.Fatalf("second prompt Tick: %v", err)
 	}

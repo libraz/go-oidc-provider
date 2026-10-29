@@ -56,19 +56,19 @@ var declaredFieldWatch = []watchedType{
 		declFile:  "internal/authn/captcha.go",
 		declName:  "CaptchaInput",
 		literals:  []string{"CaptchaInput"},
-		minSites:  2,
-		symmetric: true,
-		why: "the threshold-triggered captcha and the StepCaptcha adapter both call the same " +
-			"embedder CaptchaVerifier, which cannot tell which one is calling it",
+		minSites:  1,
+		symmetric: false,
+		why: "the StepCaptcha adapter hands this to the embedder CaptchaVerifier; a field it never " +
+			"fills reaches the verifier as a zero value",
 	},
 	{
 		declFile:  "op/interaction/prompt.go",
 		declName:  "CaptchaPromptData",
 		literals:  []string{"CaptchaPromptData", "interaction.CaptchaPromptData"},
-		minSites:  2,
-		symmetric: true,
-		why: "both captcha prompt emission points feed the same SPA renderer, which bootstraps the " +
-			"upstream widget from this data",
+		minSites:  1,
+		symmetric: false,
+		why: "the SPA renderer bootstraps the upstream captcha widget from this data; a field the " +
+			"StepCaptcha prompt never fills leaves the widget unconfigured",
 	},
 	{
 		declFile:  "internal/tokens/verify.go",

@@ -208,7 +208,7 @@ func buildChallengeOrchestrator(t *testing.T, factor op.Authenticator) *authn.Or
 		t.Fatalf("NewStateRefSigner: %v", err)
 	}
 	orch, err := authn.New(authn.Config{
-		Authenticators: []op.Authenticator{factor},
+		LoginFlow:      primaryOnlyFlow(t, factor),
 		StateRefSigner: signer,
 	})
 	if err != nil {
