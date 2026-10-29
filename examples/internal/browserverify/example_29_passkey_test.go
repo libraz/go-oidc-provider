@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/webauthn"
 	"github.com/chromedp/chromedp"
 )
@@ -36,16 +37,15 @@ const (
 	pk29RPBase = "http://localhost:9090"
 )
 
-// TestExample29Passkey runs the whole lifecycle in one browser: enrol a
-// credential on the application's account page, then start an authorization
-// and sign in with it.
+// TestExample29Passkey runs the whole lifecycle in one browser: sign in
+// with the password, enrol a credential on the application's account page,
+// then start a fresh authorization, pick the passkey on the factor-choice
+// prompt and sign in without a password.
 //
 // The claim asserted is "hwk". The virtual authenticator below verifies
 // the user, and the library reads the RFC 8176 token off the assertion's
 // real UV bit — so a run that reported "swk" would mean the flag the
-// browser set was not the flag the session recorded. (apiverify drives
-// the other arm, where an authenticator that only tests presence yields
-// "swk".)
+// browser set was not the flag the session recorded.
 func TestExample29Passkey(t *testing.T) {
 	chrome := requireChrome(t)
 	executedBrowserCases.Add(1)
@@ -67,21 +67,26 @@ func TestExample29Passkey(t *testing.T) {
 		t.Fatalf("install virtual authenticator: %v", err)
 	}
 
+	// First login: the password is the only alternative usable before a
+	// device is enrolled.
+	if _, err := loginInBrowser(ctx, "password"); err != nil {
+		t.Fatalf("password login: %v", err)
+	}
+
 	credentialID, err := enrolPasskeyInBrowser(ctx)
 	if err != nil {
 		t.Fatalf("enrolment: %v", err)
 	}
 	t.Logf("registered credential %s", credentialID)
 
-	spec := exampleSpec{username: "demo", password: "demo", spa: true}
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(pk29RPBase+"/"),
-		chromedp.Click(`a[href="/login"]`, chromedp.ByQuery),
-		chromedp.WaitVisible(`#prompt-form`, chromedp.ByQuery),
-	); err != nil {
-		t.Fatalf("start login: %v", err)
+	// Drop the OP and RP sessions: a reused session would skip the
+	// factor-choice prompt this leg exists to drive. The virtual
+	// authenticator, and the credential in it, survive.
+	if err := chromedp.Run(ctx, network.ClearBrowserCookies()); err != nil {
+		t.Fatalf("clear cookies: %v", err)
 	}
-	body, err := spaLoop(ctx, spec, "", &codeScraper{})
+
+	body, err := loginInBrowser(ctx, "passkey")
 	if err != nil {
 		t.Fatalf("passkey login: %v", err)
 	}
@@ -95,7 +100,24 @@ func TestExample29Passkey(t *testing.T) {
 			t.Fatalf("/me body missing %q; got:\n%s", want, body)
 		}
 	}
+	if strings.Contains(body, `"pwd"`) {
+		t.Fatalf("passkey login reported a password factor:\n%s", body)
+	}
 	t.Logf("passkey round-trip OK: enrolled and signed in with %s", credentialID)
+}
+
+// loginInBrowser starts the RP login and drives the SPA to /me, choosing
+// factor on the factor-choice prompt. It returns the /me body.
+func loginInBrowser(ctx context.Context, factor string) (string, error) {
+	spec := exampleSpec{username: "demo", password: "demo", spa: true, factor: factor}
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(pk29RPBase+"/"),
+		chromedp.Click(`a[href="/login"]`, chromedp.ByQuery),
+		chromedp.WaitVisible(`#prompt-form`, chromedp.ByQuery),
+	); err != nil {
+		return "", fmt.Errorf("start login: %w", err)
+	}
+	return spaLoop(ctx, spec, "", &codeScraper{})
 }
 
 // installVirtualAuthenticator gives the browser a platform authenticator

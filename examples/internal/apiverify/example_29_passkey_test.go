@@ -16,9 +16,10 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/testutil/softkey"
 )
 
-// 29-passkey's deliverable is the whole passkey lifecycle: enrol a device
-// through op/passkeykit on the example's own account page, then sign in
-// with it through op.PrimaryPasskey. The two halves only work together if
+// 29-passkey's deliverable is the whole passkey lifecycle: sign in with
+// the password, enrol a device through op/passkeykit on the example's own
+// account page, then pick the passkey on the factor-choice prompt and sign
+// in passwordless through op.PrimaryPasskey. The two halves only work together if
 // the credential registered under one configuration is the credential the
 // other accepts, and nothing short of running both proves that.
 //
@@ -50,26 +51,46 @@ func TestExample29Passkey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("softkey.New: %v", err)
 	}
+	// The passkey step stands alone as a Primary alternative and so
+	// demands user verification.
+	key.UserVerified = true
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
 	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
 
-	credentialID := enrolPasskey(t, client, key)
-	claims := loginWithPasskey(t, p, client, key)
+	// First login: the factor-choice prompt offers both alternatives and
+	// the password is the only one usable before a device is enrolled.
+	first := login(t, p, client, key, "password")
+	if !strings.Contains(first, `"pwd"`) {
+		t.Errorf("password login /me is missing \"pwd\":\n%s", first)
+	}
 
-	// "swk" is the RFC 8176 token for a software-keyed credential —
-	// what a passkey assertion without user verification reports, and
-	// the proof that the login actually ran the passkey step rather
-	// than stopping at the password.
-	for _, want := range []string{`"swk"`, `"` + pkSubject + `"`} {
+	credentialID := enrolPasskey(t, client, key)
+	if credentialID == "" {
+		t.Error("enrolment reported no credential id")
+	}
+
+	// Second login in a fresh browser: a reused OP session would skip the
+	// prompt, and the point is to reach the passkey through the choice.
+	jar2, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client2 := &http.Client{Jar: jar2, Timeout: 15 * time.Second}
+	claims := login(t, p, client2, key, "passkey")
+
+	// "hwk" is the RFC 8176 token for a hardware-secured key — what a
+	// user-verified passkey assertion reports, and the proof that the
+	// login ran the passkey step rather than the password.
+	for _, want := range []string{`"hwk"`, `"` + pkSubject + `"`} {
 		if !strings.Contains(claims, want) {
 			t.Errorf("/me is missing %s:\n%s", want, claims)
 		}
 	}
-	if credentialID == "" {
-		t.Error("enrolment reported no credential id")
+	if strings.Contains(claims, `"pwd"`) {
+		t.Errorf("passkey login reported a password factor:\n%s", claims)
 	}
 }
 
@@ -108,10 +129,11 @@ func enrolPasskey(t *testing.T, client *http.Client, key *softkey.Key) string {
 	return stored.CredentialID
 }
 
-// loginWithPasskey runs the RP-initiated login to completion and returns
-// the /me body. The SPA answers prompts over JSON, so the loop below is
-// the same one the browser bundle runs, minus the rendering.
-func loginWithPasskey(t *testing.T, p *proc, client *http.Client, key *softkey.Key) string {
+// login runs the RP-initiated login to completion, choosing factor on the
+// factor-choice prompt, and returns the /me body. The SPA answers prompts
+// over JSON, so the loop below is the same one the browser bundle runs,
+// minus the rendering.
+func login(t *testing.T, p *proc, client *http.Client, key *softkey.Key, factor string) string {
 	t.Helper()
 
 	resp, err := client.Get(pkRPBase + "/login") //nolint:noctx // harness request, bounded by the client timeout
@@ -138,7 +160,7 @@ func loginWithPasskey(t *testing.T, p *proc, client *http.Client, key *softkey.K
 			return followToMe(t, client, location)
 		}
 
-		values, err := answerPrompt(prompt, key)
+		values, err := answerPrompt(prompt, key, factor)
 		if err != nil {
 			t.Fatalf("step %d: %v\n%s", step, err, p.readLog())
 		}
@@ -154,8 +176,19 @@ func loginWithPasskey(t *testing.T, p *proc, client *http.Client, key *softkey.K
 // answerPrompt produces the submission values for one prompt. An
 // unrecognised prompt is an error rather than a skip: silently ignoring
 // one would turn a changed flow into a timeout instead of a failure.
-func answerPrompt(prompt map[string]any, key *softkey.Key) (map[string]string, error) {
+func answerPrompt(prompt map[string]any, key *softkey.Key, factor string) (map[string]string, error) {
 	switch prompt["type"] {
+	case "auth.choose_factor":
+		data, _ := prompt["data"].(map[string]any)
+		options, _ := data["options"].([]any)
+		for _, o := range options {
+			entry, _ := o.(map[string]any)
+			if entry["kind"] == factor {
+				return map[string]string{"factor": factor}, nil
+			}
+		}
+		return nil, fmt.Errorf("factor %q not offered: %v", factor, data)
+
 	case "auth.password":
 		return map[string]string{"username": "demo", "password": "demo"}, nil
 

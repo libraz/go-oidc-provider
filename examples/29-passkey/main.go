@@ -15,11 +15,12 @@
 //
 // # The flow
 //
-// Password is the primary step. A rule adds the passkey step, but only
-// for a subject that has one enrolled — a passkey step demanded of a
-// user with no credential has nothing to assert against and would strand
-// the login. Enrol a device and the same login gains a second factor;
-// that transition is the thing this example exists to show.
+// Primary is a [op.StepOneOf] of the password and the passkey, so the SPA
+// opens on a factor-choice prompt. The first login has no passkey to
+// offer, so the user picks the password; after enrolling a device they
+// pick the passkey and sign in without typing anything. The passkey step
+// requires user verification because it stands alone: the login reaches
+// AAL2 with amr ["hwk"], the single-factor hardware-key claim.
 //
 // # What the library will not do for you
 //
@@ -69,17 +70,17 @@
 // Manual verification (needs a browser with a platform authenticator, or
 // Chrome DevTools → WebAuthn → add a virtual authenticator):
 //
-//  1. Open http://localhost:8080/account and sign in as demo / demo.
-//  2. Click "Register a passkey" and complete the browser prompt. The
+//  1. Open http://localhost:9090/ and click "Log in via the OP".
+//  2. On the factor-choice prompt pick "Password" and sign in as
+//     demo / demo, then approve consent.
+//  3. Open http://localhost:8080/account and sign in as demo / demo.
+//  4. Click "Register a passkey" and complete the browser prompt. The
 //     page confirms the credential ID that was stored.
-//  3. Open http://localhost:9090/ and click "Log in via the OP".
-//  4. Sign in as demo / demo. The SPA now asks for the passkey — the
-//     rule fired because a credential exists.
-//  5. Approve the browser's passkey prompt, then approve consent; /me
-//     shows the ID Token with "amr" containing "swk" and "mfa".
-//
-// Without step 1–2 the login is password-only, which is the same
-// example demonstrating the rule from the other side.
+//  5. Return to http://localhost:9090/ and click "Log in via the OP"
+//     again. Pick "Passkey" and approve the browser's prompt; no
+//     password is asked for.
+//  6. Approve consent; /me shows the ID Token with "amr" containing
+//     "hwk".
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
@@ -111,7 +112,6 @@ import (
 	"github.com/libraz/go-oidc-provider/examples/internal/webui"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/passkeykit"
-	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -173,17 +173,18 @@ func run() error {
 		return err
 	}
 
-	// One value, both ceremonies. The login flow below installs this
+	// One value, both ceremonies. The login flow below offers this
 	// step; the enrolment handlers register against a passkeykit built
 	// from the very same value, so the RP identity the credential is
 	// bound to and the one it is later checked against are the same by
 	// construction rather than by review.
 	passkeys := op.PrimaryPasskey{
-		Store:                 st.Passkeys(),
-		RPID:                  rpID,
-		RPDisplayName:         "Example Identity",
-		RPOrigins:             []string{issuer},
-		CloneDetectionHandler: logCloneWarning{},
+		Store:                   st.Passkeys(),
+		RPID:                    rpID,
+		RPDisplayName:           "Example Identity",
+		RPOrigins:               []string{issuer},
+		RequireUserVerification: true,
+		CloneDetectionHandler:   logCloneWarning{},
 	}
 
 	registrar, err := passkeykit.New(passkeys)
@@ -191,17 +192,15 @@ func run() error {
 		return err
 	}
 
+	// The passkey is a Primary alternative, not a second factor: the
+	// browser picks a discoverable credential, the credential names the
+	// subject, and no password is typed. A passkey that stands alone is
+	// the only factor of the login, so user verification is required.
 	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
-		Rules: []op.Rule{
-			// The predicate is what makes this example runnable before
-			// anything is enrolled. A passkey step demanded of a subject
-			// with no registered credential has nothing to build an
-			// assertion against, so the rule asks the store first. It is
-			// also the honest shape for a real deployment: a factor the
-			// user has not set up cannot be required of them.
-			op.RuleWhen(hasPasskey(st.Passkeys()), passkeys),
-		},
+		Primary: op.StepOneOf{Steps: []op.Step{
+			op.PrimaryPassword{Store: st.UserPasswords()},
+			passkeys,
+		}},
 	}
 
 	provider, err := op.New(
@@ -272,7 +271,7 @@ func run() error {
 	rpMux.Handle("/", rp.Handler())
 
 	log.Printf("RP listening on %s — open %s/", rpAddr, rpBase)
-	log.Printf("enrol a passkey first at %s/account (username=%q password=%q)", issuer, demoUsername, demoPassword)
+	log.Printf("sign in with the password once, then enrol a passkey at %s/account (username=%q password=%q)", issuer, demoUsername, demoPassword)
 
 	rpErrCh := make(chan error, 1)
 	go func() { rpErrCh <- serve.Listen(rpAddr, rpMux) }()
@@ -282,31 +281,6 @@ func run() error {
 		return err
 	case err := <-rpErrCh:
 		return err
-	}
-}
-
-// hasPasskey builds the rule predicate that asks whether the subject
-// established by the primary step has a credential to assert with.
-//
-// Predicates are synchronous and carry no context, which is the
-// library's way of saying they are meant to read cheap in-memory state.
-// A store lookup here is fine for a demo and would be a per-login round
-// trip in production; a deployment that minds caches the answer on the
-// user record the primary step already loaded.
-func hasPasskey(passkeys store.PasskeyStore) func(op.LoginContext) bool {
-	return func(lc op.LoginContext) bool {
-		if lc.Identity.Subject == "" {
-			return false
-		}
-		records, err := passkeys.ListBySubject(context.Background(), string(lc.Identity.Subject))
-		if err != nil {
-			// A store fault is not a reason to skip a factor: the safe
-			// reading of "I cannot tell whether this user has a passkey"
-			// is to demand it, and let the ceremony fail loudly.
-			log.Printf("passkey lookup failed for %q: %v", string(lc.Identity.Subject), err)
-			return true
-		}
-		return len(records) > 0
 	}
 }
 

@@ -116,6 +116,11 @@ type exampleSpec struct {
 	// followed by a second /step-up authorization that re-authenticates and
 	// adds a TOTP factor for a higher ACR. Implies spa + totp.
 	stepUp bool
+	// factor is the kind the driver picks on an auth.choose_factor
+	// prompt ("password", "passkey"). An example whose flow offers a
+	// choice must set it; an unset value on a choice prompt is an error
+	// rather than a guess.
+	factor string
 }
 
 // runRoundTrip is the whole body of a default-HTML-driver example test:
@@ -494,6 +499,15 @@ func spaLoop(ctx context.Context, spec exampleSpec, totpSecret string, codes *co
 			); err != nil {
 				return "", fmt.Errorf("spa captcha prompt: %w", err)
 			}
+		case "choose_factor":
+			if spec.factor == "" {
+				return "", errors.New("spa factor-choice prompt: the example offers a choice but the spec names no factor")
+			}
+			if err := chromedp.Run(ctx,
+				chromedp.Click(`#prompt-form input[name="factor"][value="`+spec.factor+`"]`, chromedp.ByQuery),
+			); err != nil {
+				return "", fmt.Errorf("spa factor-choice prompt: %w", err)
+			}
 		case "passkey":
 			// Nothing to fill: the credential comes from the browser's
 			// authenticator, and the bundle runs the ceremony from the
@@ -581,6 +595,7 @@ func spaState(ctx context.Context) string {
     case 'auth.email_otp.verify': return 'email_code';
     case 'auth.recovery_code':    return 'recovery';
     case 'auth.passkey':          return 'passkey';
+    case 'auth.choose_factor':    return 'choose_factor';
     case 'captcha':               return 'captcha';
     case 'consent.scope':         return 'consent';
   }
