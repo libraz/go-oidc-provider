@@ -1,16 +1,17 @@
 // Package totpkit is the embedder-facing facade for RFC 6238 TOTP
-// enrolment. It complements [op.StepTOTP], which drives the verify
-// path during login, with the registration path: turning a fresh
-// authenticator app pairing into a [store.TOTPRecord] the embedder
-// can persist through [store.TOTPStore.Put].
+// enrolment and re-verification. It complements [op.StepTOTP], which
+// drives the verify path during login, with the registration path:
+// turning a fresh authenticator app pairing into a [store.TOTPRecord]
+// the embedder can persist through [store.TOTPStore.Put], and [Verify]
+// for checking a code outside the login flow.
 //
 // # When to use this package
 //
 // Use totpkit when an embedder builds a "set up two-factor auth"
 // screen. The package owns secret generation, the otpauth provisioning
 // URI rendered as a QR code, and the proof-of-possession step that
-// marks an enrolment confirmed. It does NOT own the verify path —
-// that lives in [op.StepTOTP] and the orchestrator's chain dispatcher.
+// marks an enrolment confirmed. The login verify path lives in
+// [op.StepTOTP] and the orchestrator's chain dispatcher.
 //
 // The package deliberately stays out of the HTTP surface: an embedder
 // who wants to render a QR code, a manual-entry secret, and a code
@@ -43,6 +44,18 @@
 //
 // On confirmation failure the embedder MUST NOT persist the record;
 // the secret never leaves the enrolment session and the user retries.
+//
+// # Re-proving the factor
+//
+// [Verify] checks a code against a confirmed record and persists the
+// outcome through the same failure counter and replay guard as the login
+// step, so the two paths cannot be used to double a guess budget or to
+// redeem one code twice. Use it before replacing or removing a factor.
+//
+// Verify is bounded only by the TOTP record's own counters (30 failures
+// in 24 hours lock the record for 1 hour). It does not take part in the
+// login cross-factor lockout. Put the account page behind a recent
+// auth_time and its own rate limit.
 //
 // # Codec sharing
 //

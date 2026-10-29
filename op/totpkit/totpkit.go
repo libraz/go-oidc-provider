@@ -30,6 +30,11 @@ var (
 	// codec — typically because the codec key has rotated past the
 	// retention window or the pending value was tampered with.
 	ErrDecrypt = totp.ErrDecrypt
+
+	// ErrLocked is returned by [Verify] while the subject's TOTP record
+	// is locked, including the 24-hour lock a reset-required failure
+	// stamps.
+	ErrLocked = totp.ErrLocked
 )
 
 // Configuration sentinels reported by the enrolment helpers. Each
@@ -58,10 +63,18 @@ var (
 
 	// ErrCodeRejected is returned by [Confirm] when the submitted
 	// code does not match the pending secret within the standard
-	// skew window. The error is intentionally opaque so callers
-	// cannot distinguish "wrong digit" from "outside skew" through
-	// the sentinel.
-	ErrCodeRejected = errors.New("totpkit: code does not match pending enrolment")
+	// skew window, and by [Verify] when the code is wrong or was
+	// already accepted. The error is intentionally opaque so callers
+	// cannot distinguish "wrong digit" from "outside skew" or from a
+	// replay through the sentinel.
+	ErrCodeRejected = errors.New("totpkit: code was not accepted")
+
+	// ErrNotEnrolled is returned by [Verify] when the subject has no
+	// TOTP record or the record was never confirmed.
+	ErrNotEnrolled = errors.New("totpkit: subject has no confirmed TOTP enrolment")
+
+	// ErrStoreRequired is returned by [Verify] when the store is nil.
+	ErrStoreRequired = errors.New("totpkit: store is required")
 
 	// ErrPendingNil is returned by [Confirm] when the pending
 	// argument is nil. Surfaced as a sentinel so a programming
@@ -73,8 +86,8 @@ var (
 	// pending.Record is nil. Same rationale as [ErrPendingNil].
 	ErrPendingMissingRecord = errors.New("totpkit: pending enrolment carries no record")
 
-	// ErrCodecRequired is returned by [NewEnrolment] / [Confirm]
-	// when the supplied codec is nil. Both helpers refuse to operate
+	// ErrCodecRequired is returned by [NewEnrolment] / [Confirm] /
+	// [Verify] when the supplied codec is nil. The helpers refuse to operate
 	// on an unsealed secret.
 	ErrCodecRequired = errors.New("totpkit: codec is required")
 )

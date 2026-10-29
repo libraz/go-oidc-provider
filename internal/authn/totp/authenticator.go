@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -202,8 +201,6 @@ func (a *Authenticator) attemptsRemaining(ctx context.Context, subject string, r
 //   - On [OutcomeLocked] / [OutcomeResetRequired]: the matching error
 //     is returned so the orchestrator stops the chain. The persisted
 //     record carries the lockout stamp.
-//
-//nolint:gocognit,cyclop // verify path enumerates lockout / replay / window branches in flat shape; refactor would obscure spec mapping.
 func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
@@ -220,106 +217,56 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 			return interaction.Step{}, fmt.Errorf("totp: lockout guard: %w", err)
 		}
 	}
-	for retries := 0; ; retries++ {
-		if retries == 16 {
-			return interaction.Step{}, ErrRetry
-		}
-		rec, err := a.store.Get(ctx, in.Subject)
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return interaction.Step{}, fmt.Errorf("totp: load record: %w", err)
-		}
-		if err != nil || rec == nil {
-			return interaction.Step{}, authn.ErrFactorNotEnrolled
-		}
-
-		previous := cloneRecord(rec)
-		res, verr := a.verifier.Verify(ctx, rec, code)
-		if res != nil && res.Record != nil && res.Outcome != OutcomeLocked &&
-			res.Outcome != OutcomeSuccess && res.Outcome != OutcomeReplayed {
-			// OutcomeLocked and OutcomeReplayed leave the record unchanged
-			// and OutcomeSuccess is persisted through atomic Accept below.
-			// Wrong-code and reset-required branches use CAS to retain
-			// every update.
-			if perr := a.store.CompareAndSwap(ctx, previous, res.Record); perr != nil {
-				if errors.Is(perr, store.ErrAlreadyConsumed) {
-					// Re-read and re-verify against the latest record so a
-					// finite set of concurrent wrong guesses increments the
-					// counter once per request instead of losing updates.
-					continue
-				}
-				return interaction.Step{}, fmt.Errorf("totp: persist record: %w", perr)
+	_, verr := VerifyAndRecord(ctx, a.store, a.verifier, in.Subject, code)
+	switch {
+	case verr == nil:
+		if a.lockout != nil {
+			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
+				return interaction.Step{}, fmt.Errorf("totp: lockout reset: %w", rerr)
 			}
 		}
-
-		switch {
-		case verr == nil:
-			if perr := a.store.Accept(ctx, res.Record); perr != nil {
-				if errors.Is(perr, store.ErrAlreadyConsumed) {
-					// Another write landed since the read. Re-verify against
-					// it: a concurrent wrong guess leaves this code valid,
-					// while a concurrent acceptance of the same code turns
-					// it into a replay, which the next pass reports.
-					continue
-				}
-				return interaction.Step{}, fmt.Errorf("totp: accept record: %w", perr)
+		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+	case errors.Is(verr, ErrReplayed):
+		// A replayed code is a form double-submit or a browser retry,
+		// not a guess against the secret. The verifier already left
+		// the record's own FailedCount alone; the cross-factor counter
+		// is skipped here for the same reason, so a flaky connection
+		// cannot push a legitimate user towards the shared lockout.
+		// ErrRetry is still returned so the orchestrator records the
+		// attempt and re-issues the prompt — a silently swallowed
+		// replay would be an audit blind spot.
+		return interaction.Step{}, ErrRetry
+	case errors.Is(verr, ErrWrongCode):
+		if a.lockout != nil {
+			out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
+			if lerr != nil {
+				return interaction.Step{}, fmt.Errorf("totp: lockout record failure: %w", lerr)
 			}
-			if a.lockout != nil {
-				if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
-					return interaction.Step{}, fmt.Errorf("totp: lockout reset: %w", rerr)
-				}
+			if out.ResetRequired {
+				return interaction.Step{}, ErrResetRequired
 			}
-			return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
-		case errors.Is(verr, ErrReplayed):
-			// A replayed code is a form double-submit or a browser retry,
-			// not a guess against the secret. The verifier already left
-			// the record's own FailedCount alone; the cross-factor counter
-			// is skipped here for the same reason, so a flaky connection
-			// cannot push a legitimate user towards the shared lockout.
-			// ErrRetry is still returned so the orchestrator records the
-			// attempt and re-issues the prompt — a silently swallowed
-			// replay would be an audit blind spot.
-			return interaction.Step{}, ErrRetry
-		case errors.Is(verr, ErrWrongCode):
-			if a.lockout != nil {
-				out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
-				if lerr != nil {
-					return interaction.Step{}, fmt.Errorf("totp: lockout record failure: %w", lerr)
-				}
-				if out.ResetRequired {
-					return interaction.Step{}, ErrResetRequired
-				}
-				// A non-zero stamp is a lock in force: the counter reports
-				// an expired one as zero, so no clock reading is needed
-				// here and none can disagree with the one the transition
-				// was evaluated against.
-				if !out.LockedUntil.IsZero() {
-					return interaction.Step{}, errLockEngaged
-				}
+			// A non-zero stamp is a lock in force: the counter reports
+			// an expired one as zero, so no clock reading is needed
+			// here and none can disagree with the one the transition
+			// was evaluated against.
+			if !out.LockedUntil.IsZero() {
+				return interaction.Step{}, errLockEngaged
 			}
-			// Recoverable wrong guess: surface ErrRetry so the orchestrator
-			// records the failure and re-issues the prompt via Begin (which
-			// reloads the persisted, failure-incremented record). The
-			// AttemptsRemaining the SPA sees on the retry is therefore the
-			// same value a.prompt would have shown here.
-			return interaction.Step{}, ErrRetry
-		default:
-			// ErrLocked / ErrResetRequired / store-decryption failures
-			// flow through verbatim so the orchestrator can dispatch.
-			// The cross-factor counter is intentionally NOT incremented
-			// for these branches: they represent state, not a guess
-			// against the credential.
-			return interaction.Step{}, verr
 		}
+		// Recoverable wrong guess: surface ErrRetry so the orchestrator
+		// records the failure and re-issues the prompt via Begin (which
+		// reloads the persisted, failure-incremented record). The
+		// AttemptsRemaining the SPA sees on the retry is therefore the
+		// same value a.prompt would have shown here.
+		return interaction.Step{}, ErrRetry
+	default:
+		// ErrLocked / ErrResetRequired / not-enrolled / store faults flow
+		// through verbatim so the orchestrator can dispatch. The
+		// cross-factor counter is intentionally NOT incremented for these
+		// branches: they represent state, not a guess against the
+		// credential.
+		return interaction.Step{}, verr
 	}
-}
-
-func cloneRecord(r *store.TOTPRecord) *store.TOTPRecord {
-	if r == nil {
-		return nil
-	}
-	out := *r
-	out.SecretCiphertext = slices.Clone(r.SecretCiphertext)
-	return &out
 }
 
 // prompt builds the [interaction.Prompt] the adapter emits for both Begin and
