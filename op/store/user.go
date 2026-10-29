@@ -2,8 +2,17 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrPasswordHashUpdateUnsupported is returned by a
+// [UserPasswordHashUpdater] that cannot persist a new hash for this
+// subject (for example a composite store whose Users backend is not an
+// updater). The library then keeps the legacy hash and logs once.
+//
+// Stable since v1.5.
+var ErrPasswordHashUpdateUnsupported = errors.New("store: password hash update unsupported")
 
 // User is the persistent representation of an end-user owned by the
 // embedding application. The OP only reads it: registration, password
@@ -75,10 +84,11 @@ type UserStore interface {
 //     Returning a hash for a subject that has no password set is a
 //     [ErrNotFound] case.
 //
-// The interface is intentionally read-only: enrolment, password
-// resets, and rehash-on-login workflows live outside the OP because
-// they touch operational concerns (email delivery, audit hooks, MFA
-// re-prompting) the library does not model.
+// The interface is intentionally read-only: enrolment and password
+// resets live outside the OP because they touch operational concerns
+// (email delivery, audit hooks, MFA re-prompting) the library does not
+// model. The one write the OP performs is the optional
+// [UserPasswordHashUpdater] rehash of a legacy hash.
 type UserPasswordStore interface {
 	UserStore
 
@@ -104,4 +114,20 @@ type UserPasswordStore interface {
 	// orchestrator surfaces the same invalid-credentials prompt as a
 	// hash-mismatch so the response is enumeration-safe.
 	ReadPasswordHash(ctx context.Context, subject string) ([]byte, error)
+}
+
+// UserPasswordHashUpdater is the optional write side of
+// [UserPasswordStore]. When the store behind PrimaryPassword implements
+// it, a successful login against a legacy hash (see
+// op.PasswordHashScheme) re-encodes the password as argon2id and stores
+// it through UpdatePasswordHash.
+//
+// UpdatePasswordHash replaces the PHC-encoded hash for subject and MUST
+// return [ErrNotFound] for an unknown subject. A failure never fails the
+// login: the legacy hash stays and the next login retries. Return
+// [ErrPasswordHashUpdateUnsupported] when the store cannot update.
+//
+// Stable since v1.5.
+type UserPasswordHashUpdater interface {
+	UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error
 }

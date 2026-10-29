@@ -1,15 +1,18 @@
 package password
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/libraz/go-oidc-provider/internal/argon2id"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -61,8 +64,46 @@ var ErrFieldMissing = fmt.Errorf("password: required field is missing: %w", auth
 //
 // Construct through [NewAuthenticator]; the zero value is not usable.
 type Authenticator struct {
-	store   store.UserPasswordStore
-	lockout *lockout.Counter
+	store           store.UserPasswordStore
+	lockout         *lockout.Counter
+	legacy          []LegacyScheme
+	updater         store.UserPasswordHashUpdater
+	logger          *slog.Logger
+	unsupportedOnce *sync.Once
+}
+
+// LegacyScheme verifies password hashes that are not argon2id PHC
+// strings. Recognizes selects the scheme by the stored encoding; Verify
+// reports a match, returning an error only for a backend fault (a
+// mismatch is (false, nil)).
+type LegacyScheme interface {
+	Recognizes(encoded []byte) bool
+	Verify(ctx context.Context, encoded []byte, password string) (bool, error)
+}
+
+// Config carries the optional legacy-hash settings applied by
+// [Authenticator.WithConfig].
+type Config struct {
+	// LegacySchemes are consulted in order for a stored hash that is not
+	// an argon2id PHC string.
+	LegacySchemes []LegacyScheme
+	// HashUpdater, when non-nil, receives the argon2id re-encoding after a
+	// successful legacy verify.
+	HashUpdater store.UserPasswordHashUpdater
+	// Logger receives rehash diagnostics; nil falls back to slog.Default.
+	Logger *slog.Logger
+}
+
+// WithConfig returns a copy of a that accepts cfg.LegacySchemes and
+// rehashes through cfg.HashUpdater. The receiver is not mutated; the
+// caller MUST use the returned pointer.
+func (a *Authenticator) WithConfig(cfg Config) *Authenticator {
+	cp := *a
+	cp.legacy = cfg.LegacySchemes
+	cp.updater = cfg.HashUpdater
+	cp.logger = cfg.Logger
+	cp.unsupportedOnce = &sync.Once{}
+	return &cp
 }
 
 // WithLockout returns a copy of a that records wrong passwords on the
@@ -90,7 +131,7 @@ func NewAuthenticator(s store.UserPasswordStore) (*Authenticator, error) {
 	if s == nil {
 		return nil, ErrStoreRequired
 	}
-	return &Authenticator{store: s}, nil
+	return &Authenticator{store: s, unsupportedOnce: &sync.Once{}}, nil
 }
 
 // Type implements [authn.Authenticator]. Always returns
@@ -183,20 +224,11 @@ func (a *Authenticator) resolveAndVerify(ctx context.Context, username, candidat
 		return "", err
 	}
 
-	// Equalise the verify cost regardless of which sub-step failed:
-	// every path computes one Argon2id derivation, then a constant-time
-	// compare. The dummyHash is parameter-compatible with library-emitted
-	// hashes so the verify cost matches a real account.
-	verifyAgainst := hash
-	if !usable || locked {
-		verifyAgainst = dummyHash()
+	outcome, err := a.verifyCandidate(ctx, hash, candidate, usable && !locked)
+	if err != nil {
+		return "", err
 	}
-	verifyErr := Verify(verifyAgainst, candidate)
-	if errors.Is(verifyErr, ErrInvalidHash) {
-		// An unparsable or out-of-policy stored hash is refused before any
-		// derivation runs; pay the dummy one so the refusal costs the same.
-		_ = Verify(dummyHash(), candidate)
-	}
+	scheme, verifyErr := outcome.scheme, outcome.err
 
 	if !usable || locked {
 		return "", ErrInvalidCredentials
@@ -207,7 +239,92 @@ func (a *Authenticator) resolveAndVerify(ctx context.Context, username, candidat
 		}
 		return "", ErrInvalidCredentials
 	}
+	if scheme != nil {
+		a.rehash(ctx, user.Subject, candidate)
+	}
 	return user.Subject, nil
+}
+
+// verifyCandidate checks candidate against hash, or against the dummy
+// hash when the stored one must not be consulted. Every path costs one
+// Argon2id derivation or one legacy verify, so the outcome of the lookup
+// does not show in the timing; the dummy hash is parameter-compatible
+// with library-emitted hashes. The returned error is a backend fault from
+// a legacy scheme.
+func (a *Authenticator) verifyCandidate(ctx context.Context, hash []byte, candidate string, consult bool) (verifyOutcome, error) {
+	var scheme LegacyScheme
+	if consult {
+		scheme = a.legacySchemeFor(hash)
+	}
+	if scheme != nil {
+		ok, err := scheme.Verify(ctx, hash, candidate)
+		if err != nil {
+			return verifyOutcome{}, fmt.Errorf("password: legacy verify: %w", err)
+		}
+		if !ok {
+			return verifyOutcome{scheme: scheme, err: ErrPasswordMismatch}, nil
+		}
+		return verifyOutcome{scheme: scheme}, nil
+	}
+	if !consult {
+		hash = dummyHash()
+	}
+	verifyErr := Verify(hash, candidate)
+	if errors.Is(verifyErr, ErrInvalidHash) {
+		// An unparsable or out-of-policy stored hash is refused before any
+		// derivation runs; pay the dummy one so the refusal costs the same.
+		_ = Verify(dummyHash(), candidate)
+	}
+	return verifyOutcome{err: verifyErr}, nil
+}
+
+// verifyOutcome is a candidate check's result: the legacy scheme that
+// verified (nil on the argon2id path) and the mismatch or invalid-hash
+// error, if any.
+type verifyOutcome struct {
+	scheme LegacyScheme
+	err    error
+}
+
+// legacySchemeFor returns the first configured scheme that recognizes
+// hash, or nil when hash is an argon2id PHC or no scheme claims it.
+func (a *Authenticator) legacySchemeFor(hash []byte) LegacyScheme { //nolint:ireturn // the scheme is the embedder-supplied interface value.
+	if bytes.HasPrefix(hash, []byte("$argon2id$")) {
+		return nil
+	}
+	for _, s := range a.legacy {
+		if s.Recognizes(hash) {
+			return s
+		}
+	}
+	return nil
+}
+
+// rehash upgrades a verified legacy password to argon2id. A failure never
+// fails the login; the next successful login retries.
+func (a *Authenticator) rehash(ctx context.Context, subject, candidate string) {
+	if a.updater == nil {
+		return
+	}
+	enc, err := (&clientauth.Argon2id{}).Hash(candidate)
+	if err == nil {
+		err = a.updater.UpdatePasswordHash(ctx, subject, []byte(enc))
+	}
+	if err == nil {
+		return
+	}
+	logger := a.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if errors.Is(err, store.ErrPasswordHashUpdateUnsupported) {
+		a.unsupportedOnce.Do(func() {
+			logger.InfoContext(ctx, "password: store does not support hash updates; legacy hashes are kept")
+		})
+		return
+	}
+	logger.WarnContext(ctx, "password: rehash to argon2id failed; will retry on next login",
+		slog.String("subject", subject), slog.Any("error", err))
 }
 
 // lookupCredential resolves username to its user and stored hash. A

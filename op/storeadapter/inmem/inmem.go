@@ -1748,6 +1748,19 @@ func (s *userStore) ReadPasswordHash(_ context.Context, subject string) ([]byte,
 	return out, nil
 }
 
+// UpdatePasswordHash implements [store.UserPasswordHashUpdater].
+func (s *userStore) UpdatePasswordHash(_ context.Context, subject string, encoded []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.m[subject]; !ok {
+		return store.ErrNotFound
+	}
+	stored := make([]byte, len(encoded))
+	copy(stored, encoded)
+	s.hashes[subject] = stored
+	return nil
+}
+
 func (s *userStore) put(u *store.User) {
 	if u == nil {
 		return

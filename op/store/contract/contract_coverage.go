@@ -76,6 +76,7 @@ var allStoreInterfaces = []reflect.Type{
 	typeOf[store.TOTPStore](),
 	typeOf[store.Transactional](),
 	typeOf[store.Tx](),
+	typeOf[store.UserPasswordHashUpdater](),
 	typeOf[store.UserPasswordStore](),
 	typeOf[store.UserStore](),
 }
