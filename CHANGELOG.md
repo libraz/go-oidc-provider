@@ -89,6 +89,88 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ## [Unreleased]
 
+Configurations that started and looked correct but were not safe now either
+behave safely by default or fail at `op.New`.
+
+Deployments that need to do something before upgrading: an
+`op.WithACRValuesSupported` entry that is not one of the canonical AAL URIs
+(`op.AAL1.ACRURI()` and so on) must be declared with
+`op.WithACRPolicy(op.ACRLevels{"<value>": op.AAL2})`, or `op.New` refuses to
+start. A login flow with a passkey step must use `op.WithSPAUI` or an
+`op.WithInteractionDriver` that runs the WebAuthn ceremony. A custom SPA
+bundle served through `op.WithSPAUI` that loads external scripts, uses inline
+scripts or a `<base>` element must set `SPAUI.ContentSecurityPolicy`.
+
+### Security
+
+- The ID Token no longer carries an `acr` the authentication did not
+  satisfy. `op.DefaultACRPolicy` used to report the first requested
+  `acr_values` entry once any factor had run, so a password-only login
+  answered a request for a stronger context with that context. It now
+  satisfies only the canonical AAL URIs at or below the level reached; an
+  unmet voluntary request reports the level actually reached, and an unmet
+  essential request still ends with `unmet_authentication_requirements`.
+  The same applies when a custom `op.ACRPolicy` returns `ok = false` for a
+  voluntary request.
+
+- `op.New` refuses an `acr_values_supported` entry the built-in policy
+  cannot resolve, so a relying party cannot be told a context is offered
+  that no login can produce.
+
+- Password failures now count toward the per-subject cross-factor lockout
+  (30 failures in 24 hours lock the account for an hour, 90 for a day). A
+  locked account is refused even with the right password and answered
+  exactly like a wrong password, so the lock does not reveal which
+  accounts exist. A successful password login does not reset the shared
+  budget, which would otherwise let anyone who knows the password refill
+  their second-factor guesses.
+
+- The lockout store is wired automatically from `op.WithStore` when the
+  store exposes `AuthnLockouts()`: the in-memory, SQL and DynamoDB
+  adapters and `composite.Store` (which forwards its Users backend's). It
+  was previously off unless `op.WithAuthnLockoutStore` was set. `op.New`
+  logs a warning when a password or second-factor step is configured and
+  no lockout store resolves.
+
+- A TOTP, recovery-code or email-OTP step required of a user with no
+  enrolment (or an unconfirmed TOTP enrolment) ends the attempt with a 4xx
+  instead of a 500. The step is never skipped.
+
+### Changed
+
+- With the lockout store wired automatically, TOTP, email-OTP and
+  recovery-code steps of deployments that did not set
+  `op.WithAuthnLockoutStore` now share the cross-factor counter too: a
+  locked subject is refused at `Begin`, the remaining-attempts hint is the
+  smaller of the factor's and the shared count, and a successful second
+  factor resets the shared count.
+
+- `op.New` rejects a passkey step behind the built-in HTML interaction
+  driver (including `interaction.TemplateOverlayDriver` passed by value or
+  pointer) instead of logging a warning; no user could complete it.
+
+- The SPA login shell served under `op.WithSPAUI` carries a default
+  `Content-Security-Policy`
+  (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`).
+
+- When `op.WithTrustedProxies` is not configured, the first request
+  carrying `X-Forwarded-For`, `X-Forwarded-Proto` or `X-Forwarded-Host`
+  logs one warning per Provider that those headers are ignored.
+
+### Added
+
+- `op.ACRLevels`, an `op.ACRPolicy` that maps deployment-specific `acr`
+  values to an `op.AAL`.
+- `op.ErrFactorRetry` and `op.ErrFactorAbort`, so an `op.ExternalStep`
+  authenticator can report a rejected credential (counted, prompt shown
+  again) or a user-caused terminal failure (4xx). Any other error remains a
+  server error.
+- `op.AuditLockoutEngaged` (`lockout.engaged`), emitted once with the
+  subject as ActorID when a failed attempt newly locks the account.
+- `composite.Store.AuthnLockouts`.
+- `SPAUI.ContentSecurityPolicy`, validated with the same rules as the
+  consent and chooser page policies.
+
 ## [v1.4.0] — 2026-10-23
 
 A revocation and authorization-state pass. Credentials issued by the
