@@ -9,7 +9,7 @@
 [![Docs](https://img.shields.io/badge/docs-go--oidc--provider.libraz.net-2563eb)](https://go-oidc-provider.libraz.net/ja/)
 [![Go Report Card](https://goreportcard.com/badge/github.com/libraz/go-oidc-provider)](https://goreportcard.com/report/github.com/libraz/go-oidc-provider)
 
-Go 向けの OpenID Connect Provider（Authorization Server）ライブラリです。`op.New(...)` が返すのは標準の `http.Handler` なので、`net/http` / `chi` / `gin` など任意のルータにマウントできます。フレームワークに依存せず、グローバルな状態も持ちません。対象プロファイルは FAPI 2.0 Baseline と Message Signing です。
+Go 向けの OpenID Connect Provider（Authorization Server）ライブラリです。`op.New(...)` が返すのは `*op.Provider` です。`Shutdown` を備えた `http.Handler` なので、`net/http` / `chi` / `gin` など任意のルータにマウントできます。フレームワークに依存せず、グローバルな状態も持ちません。対象プロファイルは FAPI 2.0 Baseline と Message Signing です。
 
 **ドキュメント: [go-oidc-provider.libraz.net](https://go-oidc-provider.libraz.net/ja/)** — 概念・ユースケース・オプションリファレンス・運用ガイド・セキュリティ方針・適合試験スコアボードを掲載しています。本 README では、インストール手順、リポジトリの構成、採用前に把握しておくべき設計判断を扱います。
 
@@ -60,6 +60,8 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 
 次に読むもの: [クイックスタート](https://go-oidc-provider.libraz.net/ja/getting-started/install)・[必須オプション](https://go-oidc-provider.libraz.net/ja/getting-started/required-options)・[ハンドラのマウント](https://go-oidc-provider.libraz.net/ja/getting-started/mount)・[セキュリティプロファイル](https://go-oidc-provider.libraz.net/ja/use-cases/security-profile)。[`examples/01-minimal`](examples/01-minimal/main.go) は同じ構成を、鍵生成・ストア接続・グレースフルシャットダウンまで含めた形で示しています。
 
+どのページから読むか迷う場合は、[Start here](https://go-oidc-provider.libraz.net/ja/getting-started/start-here) が目的に合うページと example を案内します。
+
 既定値は本番環境を前提にしており、https のみ・公開ネットワークのみを受け付けます。`http://127.0.0.1` は `redirect_uri` と issuer の検査から除外されているため、サンプルの大半はそこでは開発用オプションなしで動きます。IP リテラルでは足りないケースは 2 つあり、文字列ホストの `localhost` を使う場合と、平文 http の `backchannel_logout_uri` を登録する場合です。この除外は OP が持つ他の SSRF ゲート — JWKS、JAR の `request_uri`、`sector_identifier_uri`、バックチャネル配送 — には及びません。いずれもループバック宛てを既定で拒否し、それぞれ個別のオプトインが必要です。詳細は [`redirect_uri`](https://go-oidc-provider.libraz.net/ja/concepts/redirect-uri) と [Issuer](https://go-oidc-provider.libraz.net/ja/concepts/issuer) で説明しています。
 
 ## スコープ
@@ -106,7 +108,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 
 ## サンプル
 
-[`examples/`](examples/README.md) に動作デモが 44 本あります。オプションや機能 1 つにつき 1 本という構成で、それぞれがドキュメントサイトの [ユースケースページ](https://go-oidc-provider.libraz.net/ja/use-cases/) に対応します。
+[`examples/`](examples/README.md) に動作デモが 46 本あります。オプションや機能 1 つにつき 1 本という構成で、それぞれがドキュメントサイトの [ユースケースページ](https://go-oidc-provider.libraz.net/ja/use-cases/) に対応します。
 
 ```sh
 (cd examples/01-minimal && GOWORK=off go run -tags example .)

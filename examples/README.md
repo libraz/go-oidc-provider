@@ -29,7 +29,7 @@ Embedder-side install (the same versions every example pins):
 
 ```sh
 go get github.com/libraz/go-oidc-provider/op@v1.4.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.4.0       # examples 06 / 07 / 08 / 09 / 17 / 24 / 25 / 27
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.4.0       # examples 06 / 07 / 08 / 09 / 17 / 24 / 25 / 27 / 53
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.4.0     # examples 09 / 17
 go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.4.0  # example 18
 ```
@@ -102,7 +102,8 @@ it boots with
 | step a logged-in session up to a higher ACR (RFC 9470) | [`23-step-up`](23-step-up/main.go) |
 | persist MFA factors on the same database as the core tables | [`27-durable-mfa-store`](27-durable-mfa-store/main.go) |
 | use a mailed one-time code, with recovery codes as the fallback | [`28-email-otp-recovery`](28-email-otp-recovery/main.go) |
-| register a passkey and then sign in with it (WebAuthn) | [`29-passkey`](29-passkey/main.go) |
+| let users sign in with a password or a passwordless passkey (WebAuthn) | [`29-passkey`](29-passkey/main.go) |
+| protect an API with access tokens (`op/rs`) and mount the OP under your own router | [`36-resource-server`](36-resource-server/main.go) |
 | drive a TV / IoT / CLI tool via RFC 8628 device authorization | [`31-device-code-cli`](31-device-code-cli/main.go) |
 | issue tokens via Client-Initiated Backchannel Authentication (CIBA) | [`32-ciba-pos`](32-ciba-pos/main.go) |
 | exchange a service token for an audience-narrowed token (RFC 8693) | [`33-token-exchange-delegation`](33-token-exchange-delegation/main.go) |
@@ -113,6 +114,7 @@ it boots with
 | notify RPs when a session ends (Back-Channel Logout) | [`42-back-channel-logout`](42-back-channel-logout/main.go) |
 | run the RFC 9449 §8 DPoP nonce flow | [`51-dpop-nonce`](51-dpop-nonce/main.go) |
 | expose Prometheus metrics | [`52-prometheus-metrics`](52-prometheus-metrics/main.go) |
+| wire a production OP on SQL: key files, reload, GC, schema check, static-client sync, bcrypt users | [`53-production-sql`](53-production-sql/main.go) |
 
 ## The shared SPA bundle
 
@@ -143,7 +145,7 @@ in-flight or v1.x work:
 | 00–09 | bootstrap, core flows, profiles, storage adapters              |
 | 10–19 | UI and browser integration (SPA, consent, chooser, CORS, i18n); 18 holds the storage-adapter overflow, 00–09 being full |
 | 20–29 | MFA, authentication rules, and user-store projection           |
-| 30–39 | advanced grants, subject modes, encrypted tokens, federation   |
+| 30–39 | advanced grants, subject modes, encrypted tokens, resource servers, federation |
 | 40–49 | governance: first-party, DCR, back-channel logout              |
-| 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce         |
+| 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce, production wiring |
 | 60–69 | scopes, claims, and compliance-adjacent examples               |

@@ -105,7 +105,10 @@ scripts or a `<base>` element must set `SPAUI.ContentSecurityPolicy`. A custom
 SPA that reads the prompt JSON must switch to the snake_case keys listed under
 `Changed`. A configuration that uses `op.WithAuthenticators`,
 `op.WithCaptchaVerifier` or `op.WithRiskAssessor` no longer compiles; the
-`Removed` section gives the `op.WithLoginFlow` equivalent of each.
+`Removed` section gives the `op.WithLoginFlow` equivalent of each. A
+deployment that relied on the store's `Users()` differing from the store behind
+`PrimaryPassword` must now pass `op.WithUserStore(st.Users())` to keep reading
+claims from `Users()`; see `Changed`.
 
 ### Security
 
@@ -240,6 +243,28 @@ SPA that reads the prompt JSON must switch to the snake_case keys listed under
   returns a code instead of `interaction_required`. If the enrollment
   check fails, the step is treated as required.
 
+- Without `op.WithUserStore`, the Provider reads claims from the
+  `PrimaryPassword` store of the login flow's `Primary` (the store's
+  `Users()` was the source before). To keep the old source, pass
+  `op.WithUserStore(st.Users())`. `op.New` logs one info line when the
+  claims source is not the store's `Users()`. A store whose `Users()` is nil
+  now starts when such a `PrimaryPassword` exists.
+
+- Without `op.WithSessionDurabilityPosture`, the posture follows what the
+  session store reports through `store.SessionDurabilityReporter`. SQL and
+  DynamoDB deployments therefore label `bcl.no_sessions_for_subject` as
+  durable where it used to be volatile. An explicit durable posture on a
+  store that reports itself volatile makes `op.New` log a warning.
+
+- `oidcsql.GCStats` gained fields, so a positional struct literal no longer
+  compiles; code that only reads the returned value is unaffected.
+  `Store.GC` sweeps more tables and each run takes longer.
+
+- Collectors registered through `op.WithPrometheus` may be unregistered and
+  registered again when `op.Reloadable` hands them to a new Provider.
+
+- Example `29-passkey` signs in with a password or a passwordless passkey.
+
 ### Added
 
 - `op.ACRLevels`, an `op.ACRPolicy` that maps deployment-specific `acr`
@@ -329,6 +354,42 @@ SPA that reads the prompt JSON must switch to the snake_case keys listed under
   with the same meaning as the dynamic-registration metadata. `op.New`
   rejects a negative `DefaultMaxAge` and a default `acr` value that is not
   advertised.
+
+- `op.LoadSigningKey`, `op.LoadKeyset` and `op.LoadSymmetricKeys` read
+  signing keys and symmetric keys from files, so key material need not be
+  built in code.
+
+- `op.Reloadable` (`op.NewReloadable`, `(*op.Reloadable).Reload`) swaps in a
+  Provider built from new options without restarting the process. It hands
+  the Prometheus collectors over to the new Provider and drains the
+  outgoing one. `op.ErrReloadIncompatible` reports options that cannot
+  change across a reload.
+
+- `op.SyncStaticClients` inserts or updates static clients in a store from
+  a list of seeds, for use from a deploy job or an admin command. It never
+  deletes a client and never touches one that is not static.
+
+- `cmd/op-client-secret` generates a client secret and its stored hash, or
+  an Argon2id hash for a plaintext read from standard input.
+
+- `oidcsql.Store.GC` also sweeps access tokens, opaque access tokens, grant
+  revocations and consumed JTIs; the new `GCStats` fields report the counts.
+
+- `oidcsql.Store.ValidateSchema` checks that the database schema matches
+  what the adapter expects, without migrating.
+
+- `store.SessionDurabilityReporter`, an optional interface a session store
+  implements to report whether its sessions survive a restart.
+
+- Examples `36-resource-server`, which protects an API with `op/rs` and
+  mounts the OP route by route, and `53-production-sql`, which wires a SQL
+  deployment with key files, reload, GC, a schema check, static-client
+  sync and bcrypt users.
+
+### Fixed
+
+- The SQL adapter documentation said the consumed-JTI store's interface
+  exposes GC. `Store.GC` now sweeps it.
 
 ### Deprecated
 

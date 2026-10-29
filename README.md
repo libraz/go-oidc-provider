@@ -10,9 +10,10 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/libraz/go-oidc-provider)](https://goreportcard.com/report/github.com/libraz/go-oidc-provider)
 
 OpenID Connect Provider (Authorization Server) library for Go. `op.New(...)`
-returns a standard `http.Handler` that mounts on `net/http`, `chi`, `gin` or any
-other router. It depends on no framework and holds no global state, and it
-targets the FAPI 2.0 Baseline and Message Signing profiles.
+returns a `*op.Provider`, an `http.Handler` with a `Shutdown` method, that
+mounts on `net/http`, `chi`, `gin` or any other router. It depends on no
+framework and holds no global state, and it targets the FAPI 2.0 Baseline and
+Message Signing profiles.
 
 **Documentation: [go-oidc-provider.libraz.net](https://go-oidc-provider.libraz.net)**
 — concepts, use cases, the options reference, operations guides, security
@@ -85,6 +86,9 @@ Next steps: [Quick Start](https://go-oidc-provider.libraz.net/getting-started/in
 · [Security profiles](https://go-oidc-provider.libraz.net/use-cases/security-profile).
 [`examples/01-minimal`](examples/01-minimal/main.go) shows the same setup end to
 end, including key generation, store wiring and graceful shutdown.
+
+Not sure which page to open? [Start here](https://go-oidc-provider.libraz.net/getting-started/start-here)
+picks the pages and examples that match your goal.
 
 The defaults assume production: https only, public network only.
 `http://127.0.0.1` is exempt from the `redirect_uri` and issuer checks, so
@@ -181,7 +185,7 @@ and [Bring your own store](https://go-oidc-provider.libraz.net/use-cases/byo-sto
 
 ## Examples
 
-[`examples/`](examples/README.md) holds 44 runnable demos, one option or
+[`examples/`](examples/README.md) holds 46 runnable demos, one option or
 feature apiece, each mapped to a
 [use-case page](https://go-oidc-provider.libraz.net/use-cases/).
 
