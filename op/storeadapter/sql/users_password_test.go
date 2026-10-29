@@ -86,3 +86,49 @@ func TestUserPasswords_RoundTrip(t *testing.T) {
 		t.Fatalf("FindBySubject after clear subject: got %q", gotBySub.Subject)
 	}
 }
+
+func newPasswordUpdaterStore(t *testing.T) (*oidcsql.Store, store.UserPasswordHashUpdater) {
+	t.Helper()
+	s, err := oidcsql.New(openSQLite(t), oidcsql.SQLite())
+	if err != nil {
+		t.Fatalf("oidcsql.New: %v", err)
+	}
+	if err := s.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	up, ok := s.UserPasswords().(store.UserPasswordHashUpdater)
+	if !ok {
+		t.Fatal("sql user store does not implement UserPasswordHashUpdater")
+	}
+	return s, up
+}
+
+func TestUpdatePasswordHash_ReplacesHash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, up := newPasswordUpdaterStore(t)
+
+	user := &store.User{Subject: "demo-user", Claims: map[string]any{"name": "Demo User"}}
+	if err := s.PutUserWithPassword(ctx, user, "demo", []byte("old-hash")); err != nil {
+		t.Fatalf("PutUserWithPassword: %v", err)
+	}
+	if err := up.UpdatePasswordHash(ctx, "demo-user", []byte("new-hash")); err != nil {
+		t.Fatalf("UpdatePasswordHash: %v", err)
+	}
+	got, err := s.UserPasswords().ReadPasswordHash(ctx, "demo-user")
+	if err != nil {
+		t.Fatalf("ReadPasswordHash: %v", err)
+	}
+	if !bytes.Equal(got, []byte("new-hash")) {
+		t.Fatalf("ReadPasswordHash: got %q want %q", got, "new-hash")
+	}
+}
+
+func TestUpdatePasswordHash_UnknownSubject(t *testing.T) {
+	t.Parallel()
+	_, up := newPasswordUpdaterStore(t)
+	err := up.UpdatePasswordHash(context.Background(), "nobody", []byte("h"))
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}

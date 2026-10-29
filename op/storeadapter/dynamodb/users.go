@@ -146,6 +146,35 @@ func (s *userStore) ReadPasswordHash(ctx context.Context, subject string) ([]byt
 	return hash, nil
 }
 
+// UpdatePasswordHash implements [store.UserPasswordHashUpdater]. It
+// replaces only the hash attribute of an existing directory entry and
+// returns [store.ErrNotFound] when the subject has none.
+func (s *userStore) UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error {
+	if subject == "" || strings.HasPrefix(subject, usernamePrefix) {
+		return store.ErrNotFound
+	}
+	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(s.parent.names.users),
+		Key:                 key(subject),
+		UpdateExpression:    aws.String("SET #hash = :hash"),
+		ConditionExpression: aws.String("attribute_exists(#pk)"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":   attrPK,
+			"#hash": attrCodeHash,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":hash": avB(encoded),
+		},
+	})
+	if err != nil {
+		if isConditionalCheckFailed(err) {
+			return store.ErrNotFound
+		}
+		return wrapErr("users.UpdatePasswordHash", err)
+	}
+	return nil
+}
+
 func decodeUser(found item) (*store.User, error) {
 	var u store.User
 	if err := unmarshalDoc(found, &u); err != nil {
@@ -271,6 +300,7 @@ func (s *Store) putUserClaimingUsername(ctx context.Context, entry item, subject
 func (s *Store) UserPasswords() store.UserPasswordStore { return s.usersImpl }
 
 var (
-	_ store.UserStore         = (*userStore)(nil)
-	_ store.UserPasswordStore = (*userStore)(nil)
+	_ store.UserStore               = (*userStore)(nil)
+	_ store.UserPasswordStore       = (*userStore)(nil)
+	_ store.UserPasswordHashUpdater = (*userStore)(nil)
 )

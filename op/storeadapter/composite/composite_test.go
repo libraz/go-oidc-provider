@@ -234,6 +234,61 @@ func TestStore_TypeAssertionToClientRegistryNotSupported(t *testing.T) {
 	}
 }
 
+// noHashUpdateUsers hides the optional hash-update method of the wrapped
+// user store by embedding only the [store.UserStore] interface.
+type noHashUpdateUsers struct {
+	store.UserStore
+}
+
+// noHashUpdateStore serves a user store without UpdatePasswordHash.
+type noHashUpdateStore struct {
+	store.Store
+}
+
+func (s *noHashUpdateStore) Users() store.UserStore {
+	return noHashUpdateUsers{UserStore: s.Store.Users()}
+}
+
+func TestUpdatePasswordHash_Forwards(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	backend := newInmem(t)
+	backend.PutUserWithPassword(ctx, &store.User{Subject: "sub-1"}, "alice", []byte("old"))
+	s, err := composite.New(composite.WithDefault(backend))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.UpdatePasswordHash(ctx, "sub-1", []byte("new")); err != nil {
+		t.Fatalf("UpdatePasswordHash: %v", err)
+	}
+	got, err := backend.UserPasswords().ReadPasswordHash(ctx, "sub-1")
+	if err != nil {
+		t.Fatalf("ReadPasswordHash: %v", err)
+	}
+	if string(got) != "new" {
+		t.Fatalf("ReadPasswordHash: got %q want %q", got, "new")
+	}
+	if err := s.UpdatePasswordHash(ctx, "nobody", []byte("h")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown subject: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestUpdatePasswordHash_UnsupportedBackend(t *testing.T) {
+	t.Parallel()
+	backend := newInmem(t)
+	s, err := composite.New(
+		composite.WithDefault(backend),
+		composite.With(composite.Users, &noHashUpdateStore{Store: backend}),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = s.UpdatePasswordHash(context.Background(), "sub-1", []byte("h"))
+	if !errors.Is(err, store.ErrPasswordHashUpdateUnsupported) {
+		t.Fatalf("want ErrPasswordHashUpdateUnsupported, got %v", err)
+	}
+}
+
 func TestStore_RoutesPerKind(t *testing.T) {
 	t.Parallel()
 	// Verify that each Kind returns a substore from the routed backend by

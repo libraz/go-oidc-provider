@@ -699,3 +699,17 @@ func (s *Store) StaticClientReconciler() (store.StaticClientReconciler, bool) {
 func (s *Store) AuthnLockouts() store.AuthnLockoutStore {
 	return s.authnLockouts
 }
+
+// UpdatePasswordHash implements [store.UserPasswordHashUpdater] by forwarding
+// to the backend routed for [Users]. It returns
+// [store.ErrPasswordHashUpdateUnsupported] when that backend's user store
+// cannot persist a replacement hash.
+func (s *Store) UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error {
+	u, ok := s.routes[Users].Users().(store.UserPasswordHashUpdater)
+	if !ok {
+		return store.ErrPasswordHashUpdateUnsupported
+	}
+	return u.UpdatePasswordHash(ctx, subject, encoded)
+}
+
+var _ store.UserPasswordHashUpdater = (*Store)(nil)
