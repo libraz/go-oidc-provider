@@ -272,6 +272,13 @@ func IDTokenReservedClaims() map[string]struct{} {
 	return maps.Clone(idTokenStandardKeys)
 }
 
+// AccessTokenReservedClaims returns a copy of the claim names
+// [SignAccessToken] manages itself. Callers that pass
+// [AccessTokenClaims.Extra] MUST NOT include any of these keys.
+func AccessTokenReservedClaims() map[string]struct{} {
+	return maps.Clone(accessTokenStandardKeys)
+}
+
 // idTokenStandardKeys is the single definition behind
 // [IDTokenReservedClaims].
 //

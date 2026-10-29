@@ -467,14 +467,32 @@ func preflightRefreshBeforeConsume(
 	if !enforceStrictOfflineAccess(w, deps, rec.Scope, rec.Origin) {
 		return false
 	}
-	// Sender-constrained refresh tokens must reject a missing or mismatched
-	// proof before Exchange consumes their single-use record. The post-exchange
-	// checks remain below as defence in depth and cover the grace path, whose
-	// consumed record intentionally bypasses this preflight.
+	return preflightRefreshSenderConstraint(w, r, deps, rec, dpopOut)
+}
+
+// preflightRefreshSenderConstraint rejects a missing or mismatched proof
+// before Exchange consumes the single-use record. The post-exchange checks
+// remain as defence in depth and cover the grace path, whose consumed
+// record intentionally bypasses this preflight.
+func preflightRefreshSenderConstraint(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps Deps,
+	rec *store.RefreshToken,
+	dpopOut *dpopOutcome,
+) bool {
 	if !enforceDPoPRefreshBinding(w, deps, dpopOut, rec.DPoPJKT) {
 		return false
 	}
-	return requireMTLSMatch(w, r, deps, rec.MTLSCertThumbprint)
+	if !requireMTLSMatch(w, r, deps, rec.MTLSCertThumbprint) {
+		return false
+	}
+	// A request shape the deployment refuses (no proof or certificate where
+	// sender-constrained tokens are required) must not spend the token.
+	return enforceSenderConstraint(w, deps, tokenBinding{
+		DPoPJKT:        dpopOut.JKT,
+		MTLSThumbprint: rec.MTLSCertThumbprint,
+	})
 }
 
 func preflightRefreshScope(w http.ResponseWriter, granted, requested []string) ([]string, bool) {
@@ -713,10 +731,18 @@ func (c *replayCascade) run(ctx context.Context, deps Deps) {
 		// audit event has already been emitted.
 		return
 	}
-	grantID := exchanger.RevokeReplayedChain(ctx, c.token)
-	out := grantTeardown(deps, teardownReasonRefreshReplay).
-		Run(ctx, teardown.CompromisedGrantAccessTokens(grantID))
-	reportTeardown(ctx, deps, out, auditRefreshGrantRevokeFailed, teardownReasonRefreshReplay, grantID)
+	replayed := exchanger.RevokeReplayedChain(ctx, c.token)
+	// A token-exchange chain joins another client's grant: only the
+	// chain's own opaque access tokens go, never the grant or its issuance.
+	scope := teardown.CompromisedGrantAccessTokens(replayed.GrantID)
+	if replayed.JoinedGrant {
+		if replayed.ChainID == "" {
+			return
+		}
+		scope = teardown.OpaqueAccessTokensOfChain(replayed.GrantID, replayed.ChainID)
+	}
+	out := grantTeardown(deps, teardownReasonRefreshReplay).Run(ctx, scope)
+	reportTeardown(ctx, deps, out, auditRefreshGrantRevokeFailed, teardownReasonRefreshReplay, replayed.GrantID)
 }
 
 // exchangeRefresh runs the [refresh.Exchanger] and translates sentinel
@@ -945,7 +971,7 @@ func issueRefreshResponse(
 	idToken, err := maybeMintRefreshIDToken(deps, refreshIDTokenInput{
 		Subject:  publicSubject,
 		ClientID: client.ID,
-		Scope:    exchanged.Scope,
+		Scope:    refreshIDTokenScope(exchanged),
 		Now:      now,
 		AuthTime: authCtx.AuthTime,
 		ACR:      authCtx.ACR,
@@ -1162,6 +1188,27 @@ type refreshIDTokenInput struct {
 	// the grant carried no §5.5 payload or the projector returned
 	// no values.
 	Extra map[string]any
+}
+
+// refreshIDTokenScope is the scope the refresh id_token is minted under:
+// none for a chain whose id_token a refresh cannot rebuild.
+func refreshIDTokenScope(exchanged *refresh.Exchanged) []string {
+	if exchangeChainWithholdsIDToken(exchanged) {
+		return nil
+	}
+	return exchanged.Scope
+}
+
+// exchangeChainWithholdsIDToken reports a token-exchange chain: the
+// exchange builds its id_token with the OP-computed act chain and cnf
+// binding, which a refresh cannot rebuild, and may have withheld it
+// altogether. Refreshing such a chain returns no id_token.
+func exchangeChainWithholdsIDToken(exchanged *refresh.Exchanged) bool {
+	if exchanged.Origin != store.RefreshOriginCustomGrant {
+		return false
+	}
+	_, hasAct := exchanged.AccessTokenExtra["act"]
+	return hasAct
 }
 
 // maybeMintRefreshIDToken signs an id_token only when the rotated grant

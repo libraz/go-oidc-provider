@@ -155,7 +155,7 @@ func TestExchange_ReplayOnAChainTooLongToWalkStillKillsTheSuccessor(t *testing.T
 	// runs off the grant the exchanger resolved. A fallback that retired the
 	// history but reported no grant would leave every access token under it
 	// redeemable, so the depth path has to surface the grant too.
-	if got := f.exchanger.RevokeReplayedChain(ctx, f.stolen); got != "grant-1" {
+	if got := f.exchanger.RevokeReplayedChain(ctx, f.stolen).GrantID; got != "grant-1" {
 		t.Errorf("resolved grant=%q want %q", got, "grant-1")
 	}
 }

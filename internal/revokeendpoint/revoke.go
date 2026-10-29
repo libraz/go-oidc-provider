@@ -215,7 +215,7 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 	// access tokens issued under the same grant. Mirror the /end_session
 	// cascade so a client that revokes to contain a compromise is not left
 	// with live access tokens until their own exp.
-	cascadeRevokeAccessTokens(ctx, deps, authenticatedClientID, rec.GrantID)
+	cascadeRevokeAccessTokens(ctx, deps, authenticatedClientID, rec)
 	emitRevoked(ctx, deps, revokedEvent{
 		ClientID: authenticatedClientID,
 		Subject:  rec.Subject,
@@ -231,7 +231,7 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 // the token dies. Each store fault is audited; the wire stays 200 (RFC 7009
 // §2.2). The surface names the rung that retired the chain.
 func retireRefreshChain(ctx context.Context, deps Deps, authenticatedClientID string, rec *store.RefreshToken) (string, bool) {
-	r := refreshchain.Retire(ctx, deps.RefreshTokens, rec.ID, rec.GrantID)
+	r := refreshchain.RetireRecord(ctx, deps.RefreshTokens, rec.ID, rec)
 	if r.RootErr != nil {
 		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain_walk", r.RootErr)
 	}
@@ -259,9 +259,17 @@ func retireRefreshChain(ctx context.Context, deps Deps, authenticatedClientID st
 // 7009 §2.2 "always 200" wire posture, so a failed rung is surfaced on the
 // audit channel and the wire answer is unchanged (the refresh-chain
 // revocation itself already succeeded before this runs).
-func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, clientID, grantID string) {
-	if grantID == "" {
+//
+// A chain that joins another client's grant (token exchange) retires only
+// its own opaque access tokens; the grant's other credentials are not the
+// revoking client's.
+func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, clientID string, rec *store.RefreshToken) {
+	if rec.GrantID == "" {
 		return
+	}
+	scope := teardown.AccessTokensOfGrant(rec.GrantID)
+	if refreshchain.JoinsForeignGrant(rec) {
+		scope = teardown.OpaqueAccessTokensOfChain(rec.GrantID, rec.ChainID)
 	}
 	out := teardown.Revoker{
 		OpaqueAccessTokens: deps.OpaqueAccessTokens,
@@ -271,7 +279,7 @@ func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, clientID, grantID
 		Now:                revokeNow(deps),
 		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             "revoke",
-	}.Run(ctx, teardown.AccessTokensOfGrant(grantID))
+	}.Run(ctx, scope)
 	for _, f := range out.Failures {
 		emitRevokeFailed(ctx, deps, clientID, f.Surface, f.Err)
 	}

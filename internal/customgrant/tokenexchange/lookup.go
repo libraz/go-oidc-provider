@@ -107,6 +107,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 			Confirmation:  confirmationFromCnf(claims.Confirmation),
 			Act:           act,
 			ActChainDepth: depthOfAct(act),
+			AuthTime:      authTimeFromUnix(claims.AuthTime),
 			GrantID:       claims.GrantID,
 		},
 	}, nil
@@ -168,6 +169,7 @@ func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, 
 			Confirmation:  confirmationFromCnf(idClaims.Confirmation),
 			Act:           act,
 			ActChainDepth: depthOfAct(act),
+			AuthTime:      authTimeFromUnix(idClaims.AuthTime),
 			GrantID:       grant.ID,
 		},
 	}, nil
@@ -269,6 +271,7 @@ func (h *Handler) lookupOpaqueAccessToken(ctx context.Context, raw string) (look
 			Audience:     aud,
 			ExpiresAt:    rec.ExpiresAt,
 			Confirmation: confirmationFromCnf(view.Confirmation()),
+			AuthTime:     rec.AuthTime,
 			GrantID:      rec.GrantID,
 		},
 	}, nil
@@ -488,6 +491,16 @@ type idTokenClaims struct {
 	ClientID        string            `json:"client_id"`
 	IssuedAt        int64             `json:"iat"`
 	ExpiresAt       int64             `json:"exp"`
+	AuthTime        int64             `json:"auth_time"`
 	Confirmation    map[string]string `json:"cnf"`
 	Act             json.RawMessage   `json:"act"`
+}
+
+// authTimeFromUnix converts an auth_time claim; zero means the token
+// stated none.
+func authTimeFromUnix(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0).UTC()
 }

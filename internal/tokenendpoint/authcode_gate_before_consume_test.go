@@ -130,3 +130,51 @@ func TestAuthCode_PublicClientNoPKCERefusalLeavesCodeUnconsumed(t *testing.T) {
 	}
 	assertCodeUnconsumed(t, f, codeID)
 }
+
+// TestAuthCode_AuthorizationDetailsExceedingGrantLeavesCodeRedeemable sends an
+// authorization_details entry the grant does not carry: the exchange is
+// refused with invalid_authorization_details, the code stays unconsumed, and
+// a conforming retry redeems it.
+func TestAuthCode_AuthorizationDetailsExceedingGrantLeavesCodeRedeemable(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-rar-gate"
+	const grantID = "grant-rar-gate"
+	redirect := client.RedirectURIs[0]
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: "user-rar-gate", ClientID: client.ID,
+		Scope:                []string{"openid"},
+		AuthorizationDetails: []map[string]any{{"type": "payment", "amount": "100"}},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             "user-rar-gate",
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	form := authCodeForm(codeID, redirect, verifier)
+	form.Set("authorization_details", `[{"type":"payment","amount":"999"}]`)
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	if got := decodeJSON(t, resp)["error"]; got != "invalid_authorization_details" {
+		t.Fatalf("error=%v want invalid_authorization_details", got)
+	}
+	assertCodeUnconsumed(t, f, codeID)
+
+	retry := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusOK {
+		t.Fatalf("retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
+	}
+}

@@ -1024,6 +1024,39 @@ func TestScenario_TX_023_HandlerInjectedActClaimStripped(t *testing.T) {
 	}
 }
 
+// TestTokenExchange_AccessTokenStandardExtrasDropped pins that a policy
+// extra naming a claim the OP signs on the access token is dropped like
+// the id_token reserved names, rather than failing the exchange.
+func TestTokenExchange_AccessTokenStandardExtrasDropped(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"scope", "client_id", "gid", "jti", "authorization_details", "userinfo_claims"} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			p := newTXProvider(t, txExtraClaimsPolicy{extras: map[string]any{
+				key:    "forged",
+				"role": "operator",
+			}})
+			subjectJWS := p.mintSubjectToken(t, p.defaultSubjectClaims("tx-reserved-"+key))
+			form := url.Values{
+				"subject_token":      []string{subjectJWS},
+				"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
+			}
+			status, body := p.postTokenExchange(t, form)
+			if status != http.StatusOK {
+				t.Fatalf("status=%d want 200, body=%v", status, body)
+			}
+			at, _ := body["access_token"].(string)
+			claims := decodeTXJWTClaims(t, at)
+			if claims[key] == "forged" {
+				t.Errorf("%s=forged; the policy extra overwrote an OP-managed claim", key)
+			}
+			if claims["role"] != "operator" {
+				t.Errorf("role=%v want operator (non-reserved extra claim)", claims["role"])
+			}
+		})
+	}
+}
+
 func TestScenario_TX_024_RegisterTokenExchangeRequiredAtNew(t *testing.T) {
 	t.Parallel()
 	_, err := op.New(testkit.MinimalOptions(t, op.RegisterTokenExchange(nil))...)

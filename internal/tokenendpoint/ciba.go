@@ -526,7 +526,7 @@ func prepareCIBAResponse(
 		authTime,
 		binding,
 		nil,
-		accessTokenOverrides{ChainID: chainID},
+		accessTokenOverrides{ChainID: chainID, ACR: authorized.ACR},
 	)
 	if err != nil {
 		return preparedCIBAResponse{}, err

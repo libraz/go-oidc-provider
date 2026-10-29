@@ -677,16 +677,32 @@ func (e *Exchanger) onReplayDetected(ctx context.Context, presentedID string) {
 // record is already consumed either way, which is what the chain walk
 // reads.
 //
-// The return is the grant the replayed chain was issued under, so the
-// caller can retire the access tokens descended from the same grant. It
-// is empty when the presented record no longer resolves; a caller MUST
-// treat that as "the grant is unknown", not as "there is nothing left to
+// The return names the grant and chain the replayed token belonged to, so
+// the caller can retire the access tokens descended from them. GrantID is
+// empty when the presented record no longer resolves; a caller MUST treat
+// that as "the grant is unknown", not as "there is nothing left to
 // retire".
-func (e *Exchanger) RevokeReplayedChain(ctx context.Context, presentedToken string) string {
+func (e *Exchanger) RevokeReplayedChain(ctx context.Context, presentedToken string) ReplayedChain {
 	if presentedToken == "" {
-		return ""
+		return ReplayedChain{}
 	}
 	return e.revokeChainBestEffort(ctx, presentedToken)
+}
+
+// ReplayedChain identifies what a replay cascade retired, so the caller
+// can retire the access tokens descended from it.
+type ReplayedChain struct {
+	// GrantID is the grant the replayed token was issued under. Empty when
+	// the presented record no longer resolves.
+	GrantID string
+
+	// ChainID is the rotation chain of the replayed token.
+	ChainID string
+
+	// JoinedGrant reports that GrantID belongs to another client's consent,
+	// which a token-exchange chain joins for revocation only. The cascade
+	// retired the chain alone, and the caller MUST NOT tear the grant down.
+	JoinedGrant bool
 }
 
 // emitReplayDetected fires [auditRefreshReplayDetected]. The Extras
@@ -810,25 +826,34 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 // (auditRefreshChainRevokeFailed / auditRefreshGrantRevokeFailed) so SOC
 // tooling can spot a silent failure even though the wire response stays at the
 // user-visible invalid_grant contract via [ErrTokenReplayed].
-func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) string {
-	// The grant is resolved before anything is revoked: either rung rewrites
+func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) ReplayedChain {
+	// The record is read before anything is revoked: either rung rewrites
 	// the records it would otherwise have to be read back from.
-	grantID := e.presentedGrantID(ctx, presentedID)
-	e.reportRetirement(ctx, refreshchain.Retire(ctx, e.store, presentedID, grantID))
-	return grantID
+	rec := e.presentedRecord(ctx, presentedID)
+	if rec == nil {
+		e.reportRetirement(ctx, refreshchain.Retire(ctx, e.store, presentedID, ""))
+		return ReplayedChain{}
+	}
+	out := ReplayedChain{
+		GrantID:     rec.GrantID,
+		ChainID:     rec.ChainID,
+		JoinedGrant: refreshchain.JoinsForeignGrant(rec),
+	}
+	e.reportRetirement(ctx, refreshchain.RetireRecord(ctx, e.store, presentedID, rec))
+	return out
 }
 
-// presentedGrantID resolves the grant the replayed token was issued under.
+// presentedRecord resolves the record the replayed token names.
 // presentedID is the bearer value the client sent, so it goes through the
-// hash-only credential path rather than the chain-handle path. An empty
-// result means the record could not be read at all; callers treat that as
+// hash-only credential path rather than the chain-handle path. A nil result
+// means the record could not be read at all; callers treat that as
 // "no grant to cascade onto" rather than revoking the zero value.
-func (e *Exchanger) presentedGrantID(ctx context.Context, presentedID string) string {
+func (e *Exchanger) presentedRecord(ctx context.Context, presentedID string) *store.RefreshToken {
 	rec, err := e.store.Find(ctx, presentedID)
-	if err != nil || rec == nil {
-		return ""
+	if err != nil {
+		return nil
 	}
-	return rec.GrantID
+	return rec
 }
 
 // reportRetirement raises one warn-level event per rung of the cascade that

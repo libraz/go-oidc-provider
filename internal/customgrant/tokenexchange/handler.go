@@ -3,6 +3,7 @@ package tokenexchange
 import (
 	"context"
 	"errors"
+	"maps"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -15,29 +16,21 @@ import (
 )
 
 // reservedClaims are the protocol-managed names a handler-supplied
-// ExtraClaims map MUST NOT carry. The token-exchange handler builds
-// its own act chain and cnf binding; an embedder-injected act or cnf
-// would otherwise undermine the chain's structural unforgeability and
-// the RFC 9449 / RFC 8705 sender-constraint pin.
+// ExtraClaims map MUST NOT carry: every claim the OP signs itself on
+// either the id_token or the access token the extras ride on, plus act
+// and cnf. The token-exchange handler builds its own act chain and cnf
+// binding; an embedder-injected act or cnf would otherwise undermine the
+// chain's structural unforgeability and the RFC 9449 / RFC 8705
+// sender-constraint pin.
 //
 //nolint:gochecknoglobals // closed catalog; immutable.
-var reservedClaims = map[string]struct{}{
-	"iss":       {},
-	"sub":       {},
-	"aud":       {},
-	"iat":       {},
-	"exp":       {},
-	"auth_time": {},
-	"nonce":     {},
-	"acr":       {},
-	"amr":       {},
-	"azp":       {},
-	"at_hash":   {},
-	"c_hash":    {},
-	"sid":       {},
-	"act":       {},
-	"cnf":       {},
-}
+var reservedClaims = func() map[string]struct{} {
+	out := tokens.IDTokenReservedClaims()
+	maps.Copy(out, tokens.AccessTokenReservedClaims())
+	out["act"] = struct{}{}
+	out["cnf"] = struct{}{}
+	return out
+}()
 
 // Config bundles the dependencies the handler needs. The op-side
 // adapter constructs the value once at provider build time.
@@ -556,7 +549,8 @@ func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenVie
 		IssueIDToken: issueIDToken,
 	}
 	if issueIDToken && containsOpenID(grantedScope) {
-		resp.AuthTime = h.now()
+		// The subject token's own auth_time: an exchange is not an authentication.
+		resp.AuthTime = subjectView.AuthTime
 		idClaims := filterReservedClaims(extraClaims)
 		if actChain != nil {
 			if idClaims == nil {

@@ -65,6 +65,11 @@ type TokenView struct {
 	// preserve prior delegation history when nesting a new entry.
 	Act map[string]any
 
+	// AuthTime is when the subject authenticated, as the original token
+	// states it. Zero when the token carries no auth_time; an exchange never
+	// substitutes its own clock for it.
+	AuthTime time.Time
+
 	// GrantID is the grant the original token was issued under: the
 	// "gid" claim, the opaque row's GrantID, or the consent record an
 	// id_token was matched to. Empty when the token names none.

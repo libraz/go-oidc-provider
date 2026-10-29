@@ -1340,7 +1340,7 @@ func TestExchange_ChainRevoke_ReportsResolvedGrant(t *testing.T) {
 		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
 	}
 
-	if got := exc.RevokeReplayedChain(ctx, root); got != "grant-1" {
+	if got := exc.RevokeReplayedChain(ctx, root).GrantID; got != "grant-1" {
 		t.Fatalf("RevokeReplayedChain grant=%q want %q", got, "grant-1")
 	}
 
@@ -1371,7 +1371,58 @@ func TestRevokeReplayedChain_UnresolvableRecord_ReportsNoGrant(t *testing.T) {
 		t.Fatalf("NewExchanger: %v", err)
 	}
 
-	if got := exc.RevokeReplayedChain(context.Background(), "unknown-token"); got != "" {
+	if got := exc.RevokeReplayedChain(context.Background(), "unknown-token").GrantID; got != "" {
 		t.Fatalf("RevokeReplayedChain grant=%q want empty", got)
+	}
+}
+
+// TestRevokeReplayedChain_TokenExchangeChainSparesJoinedGrant pins that a
+// replayed token-exchange chain retires itself only: the grant it inherited
+// is another client's consent and its tokens stay redeemable.
+func TestRevokeReplayedChain_TokenExchangeChainSparesJoinedGrant(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cur := t0
+	clk := func() time.Time { return cur }
+	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
+	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{Store: st, Clock: clk, DeferReplayCascade: true})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+
+	owner, err := iss.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue owner: %v", err)
+	}
+	in := goodIssue()
+	in.ClientID = "client-2"
+	in.Origin = store.RefreshOriginCustomGrant
+	exchanged, err := iss.Issue(ctx, in)
+	if err != nil {
+		t.Fatalf("Issue exchange chain: %v", err)
+	}
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: exchanged, ClientID: "client-2"}); err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+	cur = cur.Add(refresh.GraceTTLDefault + time.Second)
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: exchanged, ClientID: "client-2"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+
+	got := exc.RevokeReplayedChain(ctx, exchanged)
+	if !got.JoinedGrant {
+		t.Error("JoinedGrant=false for a custom-grant chain")
+	}
+	if rec, err := st.Find(ctx, exchanged); err != nil || !rec.Revoked {
+		t.Errorf("exchange chain not revoked: rec=%+v err=%v", rec, err)
+	}
+	if rec, err := st.Find(ctx, owner); err != nil || rec.Revoked {
+		t.Errorf("owner client's token was revoked: rec=%+v err=%v", rec, err)
 	}
 }

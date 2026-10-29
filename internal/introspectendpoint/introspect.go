@@ -308,7 +308,7 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 		// is inactive from this client's point of view.
 		return response{}, false
 	}
-	publicSubject, ok := projectIntrospectionSubject(ctx, deps, rec.Subject, rec.ClientID)
+	publicSubject, ok := refreshTokenSubject(ctx, deps, rec)
 	if !ok {
 		return response{}, false
 	}
@@ -392,6 +392,18 @@ func findGrant(ctx context.Context, deps Deps, grantID string) (*store.Grant, er
 		return nil, nil //nolint:nilnil // no grant to consult
 	}
 	return g, err
+}
+
+// refreshTokenSubject returns the wire "sub" for a refresh-token record.
+// A record whose Subject is already the public value
+// ([store.RefreshToken.SubjectPublic], set by custom-grant and
+// token-exchange chains) is reported verbatim; projecting it again would
+// publish a subject no other surface issued for this chain.
+func refreshTokenSubject(ctx context.Context, deps Deps, rec *store.RefreshToken) (string, bool) {
+	if rec.SubjectPublic {
+		return rec.Subject, true
+	}
+	return projectIntrospectionSubject(ctx, deps, rec.Subject, rec.ClientID)
 }
 
 // projectIntrospectionSubject converts the OP-internal raw subject on

@@ -58,7 +58,8 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 		if checkTokenScopeAllowlist(w, deps, client.ID, x.Scope) &&
 			requireRegisteredScopes(w, client, x.Scope) &&
 			enforcePKCEDowngradeGuard(w, client, x) &&
-			enforceDPoPJKTBinding(w, x, binding) {
+			enforceDPoPJKTBinding(w, x, binding) &&
+			admitAuthorizationDetails(ctx, w, deps, x, authorizationDetails) {
 			return nil
 		}
 		return errRedemptionRefused
@@ -81,6 +82,28 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 		return
 	}
 	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, user, binding, authorizationDetails)
+}
+
+// admitAuthorizationDetails refuses a requested authorization_details entry
+// the code's grant does not carry, before the code is consumed. A grant
+// that cannot be read is left to issueAuthCodeResponse, which fails the
+// request after the exchange as it always did.
+func admitAuthorizationDetails(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	x *authcode.Exchanged,
+	requested []map[string]any,
+) bool {
+	if len(requested) == 0 {
+		return true
+	}
+	authCtx, err := codeAuthContext(ctx, deps, x)
+	if err != nil {
+		return true
+	}
+	_, ok := reduceAuthorizationDetails(w, requested, authCtx.AuthorizationDetails)
+	return ok
 }
 
 // authCodeInputs is the de-structured view of the form parameters the
@@ -629,11 +652,16 @@ type accessTokenOverrides struct {
 	ForceJWT bool
 
 	// Authorization is the per-authorization state of an
-	// authorization_code lineage (code exchange and refresh). The opaque
-	// shape records its acr, amr and claims request; the JWT shape
-	// carries the userinfo member of the claims request, as {} when
+	// authorization_code lineage (code exchange and refresh). Both shapes
+	// carry its acr and amr. The opaque shape also records the claims
+	// request; the JWT shape carries its userinfo member, as {} when
 	// there is none. Nil for grants with no such authorization.
 	Authorization *authContext
+
+	// ACR is the acr a grant without an [Authorization] stamps on the
+	// token in either shape (CIBA). It never switches on the claims-request
+	// handling Authorization implies. Ignored when Authorization is set.
+	ACR string
 
 	// ChainID is the refresh chain the token goes out with; the opaque
 	// shape records it so a rotation of that chain retires the token and
@@ -708,6 +736,14 @@ func mintJWTAccessToken(
 		AuthorizationDetails: authorizationDetails,
 		UserInfoClaims:       userInfoClaimsRequest(over),
 		Extra:                cloneClaimsMap(over.Extra),
+	}
+	// RFC 9068 §2.2.1: the acr / amr the opaque row carries too, so a
+	// resource server's step-up check reads the same value in either format.
+	if a := over.Authorization; a != nil {
+		claims.ACR = a.ACR
+		claims.AMR = append([]string(nil), a.AMR...)
+	} else {
+		claims.ACR = over.ACR
 	}
 	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
 	if err != nil {
@@ -788,6 +824,8 @@ func mintOpaqueAccessToken(
 		rec.ACR = a.ACR
 		rec.AMR = append([]string(nil), a.AMR...)
 		rec.Claims = cloneClaimsMap(a.EncodedClaims)
+	} else {
+		rec.ACR = over.ACR
 	}
 	if err := deps.OpaqueAccessTokens.Save(ctx, rec); err != nil {
 		return "", err

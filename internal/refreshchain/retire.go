@@ -78,3 +78,23 @@ func Retire(ctx context.Context, tokens store.RefreshTokenStore, startID, grantI
 	out.GrantErr = tokens.RevokeByGrant(ctx, grantID)
 	return out
 }
+
+// JoinsForeignGrant reports whether rec's GrantID names another client's
+// consent, which a token-exchange chain joins for revocation only. Such a
+// chain is retired on its own: the grant, its issuance and the other
+// clients' credentials are not the holder's to tear down.
+func JoinsForeignGrant(rec *store.RefreshToken) bool {
+	return rec.Origin == store.RefreshOriginCustomGrant
+}
+
+// RetireRecord is [Retire] for a resolved record: the grant rung is keyed
+// on rec's grant unless the chain [JoinsForeignGrant], in which case a
+// chain whose root does not resolve is reported unretired rather than
+// widened onto the foreign grant.
+func RetireRecord(ctx context.Context, tokens store.RefreshTokenStore, startID string, rec *store.RefreshToken) Retirement {
+	grantID := rec.GrantID
+	if JoinsForeignGrant(rec) {
+		grantID = ""
+	}
+	return Retire(ctx, tokens, startID, grantID)
+}

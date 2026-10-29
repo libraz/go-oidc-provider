@@ -185,13 +185,15 @@ type TokenExchangeDecision struct {
 	// opt-in contract is pinned by catalog row TX-021.
 	IssueRefreshToken *bool
 
-	// ExtraClaims are merged into the id_token the provider signs
-	// when [IssueIDToken] resolves to true. The reserved-claim
-	// filter applies: keys naming protocol-managed claims (iss /
-	// sub / aud / iat / exp / auth_time / nonce / acr / amr / azp /
-	// at_hash / c_hash / sid / act / cnf) are dropped without error
-	// so the policy cannot rewrite the act chain, hijack the sub, or
-	// forge the proof-of-possession binding.
+	// ExtraClaims are merged into the issued access token (and every
+	// access token a refresh of the chain mints) and into the id_token
+	// the provider signs when [IssueIDToken] resolves to true. The
+	// reserved-claim filter applies: keys naming protocol-managed
+	// claims (iss / sub / aud / iat / exp / auth_time / nonce / acr /
+	// amr / azp / at_hash / c_hash / sid / client_id / jti / scope /
+	// gid / authorization_details / userinfo_claims / act / cnf) are
+	// dropped without error so the policy cannot rewrite the act chain,
+	// hijack the sub, or forge the proof-of-possession binding.
 	ExtraClaims map[string]any
 }
 
@@ -286,9 +288,10 @@ type SubjectTokenView struct {
 func PtrBool(v bool) *bool { return &v }
 
 // ConfirmationProof is the public projection of an RFC 7800 cnf
-// claim from a verified subject_token or actor_token. At most one
-// of [JKT] and [X5tS256] is non-empty; both empty means the token
-// was unbound (the cnf claim was absent).
+// claim from a verified subject_token or actor_token. Either, both
+// or neither of [JKT] and [X5tS256] may be non-empty (a dual-bound
+// token carries both) and every populated member is enforced; both
+// empty means the token was unbound (the cnf claim was absent).
 //
 // Stable since v1.0.
 type ConfirmationProof struct {

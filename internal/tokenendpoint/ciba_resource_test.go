@@ -87,3 +87,41 @@ func TestHandleCIBA_AccessTokenBoundToRequestedResource(t *testing.T) {
 			stored.Resource, resource)
 	}
 }
+
+// TestHandleCIBA_AccessTokenCarriesApprovedACR pins that the access token
+// reports the acr the authentication device satisfied, as the ID token does,
+// so a resource server's step-up check does not reject a CIBA token.
+func TestHandleCIBA_AccessTokenCarriesApprovedACR(t *testing.T) {
+	t.Parallel()
+
+	const acr = "urn:acr:mfa"
+	f := newCIBAFixture(t)
+	f.seedCIBARequest(t, &store.CIBARequest{
+		ID:     "auth-req-acr",
+		Scope:  []string{"openid"},
+		Status: store.CIBARequestStatusPending,
+	})
+	seedSubject(t, f.store, "user-78")
+	if err := f.store.CIBARequests().Approve(
+		context.Background(), "auth-req-acr", "user-78", acr, f.clock.now,
+	); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
+	form.Set("auth_req_id", "auth-req-acr")
+	rec := f.post(t, form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if got := decodeIDTokenClaims(t, body.AccessToken)["acr"]; got != acr {
+		t.Errorf("access token acr = %v, want %q", got, acr)
+	}
+}

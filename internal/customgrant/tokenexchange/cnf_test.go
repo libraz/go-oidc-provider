@@ -316,3 +316,20 @@ func newAssembleHandler(_ *testing.T) *Handler {
 type fixedClock struct{ now time.Time }
 
 func (f fixedClock) Now() time.Time { return f.now }
+
+// TestAssembleResponse_AuthTimeIsTheSubjectTokens pins that the exchanged
+// id_token reports the subject token's auth_time, and none when the
+// subject token stated none, never the exchange's own clock.
+func TestAssembleResponse_AuthTimeIsTheSubjectTokens(t *testing.T) {
+	t.Parallel()
+	h := newAssembleHandler(t)
+	req := customgrant.Request{Client: &store.Client{ID: "caller"}}
+	authenticated := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	for name, want := range map[string]time.Time{"known": authenticated, "unknown": {}} {
+		resp := h.assembleResponse(req, TokenView{Subject: "user-1", AuthTime: want},
+			[]string{"openid"}, nil, time.Minute, nil, nil, true)
+		if !resp.AuthTime.Equal(want) {
+			t.Errorf("%s: AuthTime = %v, want %v", name, resp.AuthTime, want)
+		}
+	}
+}
