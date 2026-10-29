@@ -2,9 +2,24 @@ package op
 
 import (
 	"slices"
+	"strconv"
 
+	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// checkDefaultMaxAge rejects a negative DefaultMaxAge; nil (unset) and
+// zero (always re-authenticate) are both valid.
+func checkDefaultMaxAge(kind, id string, maxAge *int64) error {
+	if maxAge != nil && *maxAge < 0 {
+		return &Error{
+			Code: codeConfiguration,
+			Description: kind + " " + id + ": DefaultMaxAge must not be negative, got " +
+				strconv.FormatInt(*maxAge, 10),
+		}
+	}
+	return nil
+}
 
 // ClientSeed is the unexported-method interface every typed client
 // builder satisfies. The single method [ClientSeed.seed] projects the
@@ -118,6 +133,30 @@ type PublicClient struct {
 	// subjects. Without [WithPairwiseSubject], "pairwise" is rejected
 	// by static-client validation.
 	SubjectType string
+
+	// DefaultMaxAge is the maximum authentication age, in seconds, the
+	// OP enforces for this client when the request omits max_age. Nil
+	// leaves it unset. A pointer to zero means every request
+	// re-authenticates the user. A negative value is rejected by
+	// [WithStaticClients].
+	//
+	// Stable since v1.5.
+	DefaultMaxAge *int64
+
+	// RequireAuthTime makes the OP include auth_time in every ID token
+	// issued to this client.
+	//
+	// Stable since v1.5.
+	RequireAuthTime bool
+
+	// DefaultACRValues lists the acr values the OP assumes, in order of
+	// preference, when the request omits acr_values. Empty leaves it
+	// unset. Every entry must be listed in [WithACRValuesSupported]
+	// when that option is set and, under the built-in ACR policies,
+	// resolvable by it; [New] rejects the configuration otherwise.
+	//
+	// Stable since v1.5.
+	DefaultACRValues []string
 }
 
 // seed projects c onto a [store.Client] with the public-client
@@ -125,6 +164,9 @@ type PublicClient struct {
 // ClientSourceStatic) applied. The returned record is owned by the
 // caller; subsequent mutation does not affect c.
 func (c PublicClient) seed() (store.Client, error) {
+	if err := checkDefaultMaxAge("PublicClient", c.ID, c.DefaultMaxAge); err != nil {
+		return store.Client{}, err
+	}
 	grants := c.GrantTypes
 	if len(grants) == 0 {
 		grants = defaultGrantTypes()
@@ -152,6 +194,9 @@ func (c PublicClient) seed() (store.Client, error) {
 		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
 		ApplicationType:                  c.ApplicationType,
 		SubjectType:                      c.SubjectType,
+		DefaultMaxAge:                    clone.Int64Ptr(c.DefaultMaxAge),
+		RequireAuthTime:                  c.RequireAuthTime,
+		DefaultACRValues:                 slices.Clone(c.DefaultACRValues),
 	}, nil
 }
 
@@ -245,6 +290,21 @@ type ConfidentialClient struct {
 	// clients; ConfidentialClient records it so callers can share seed
 	// construction code across confidential and private-key clients.
 	TokenEndpointAuthSigningAlg string
+
+	// DefaultMaxAge mirrors [PublicClient.DefaultMaxAge].
+	//
+	// Stable since v1.5.
+	DefaultMaxAge *int64
+
+	// RequireAuthTime mirrors [PublicClient.RequireAuthTime].
+	//
+	// Stable since v1.5.
+	RequireAuthTime bool
+
+	// DefaultACRValues mirrors [PublicClient.DefaultACRValues].
+	//
+	// Stable since v1.5.
+	DefaultACRValues []string
 }
 
 // seed projects c onto a [store.Client] with the confidential-client
@@ -290,6 +350,9 @@ func (c ConfidentialClient) secretHash(method AuthMethod) (string, error) {
 }
 
 func (c ConfidentialClient) seed() (store.Client, error) {
+	if err := checkDefaultMaxAge("ConfidentialClient", c.ID, c.DefaultMaxAge); err != nil {
+		return store.Client{}, err
+	}
 	method := c.AuthMethod
 	if method == "" {
 		method = AuthClientSecretBasic
@@ -326,6 +389,9 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
 		ApplicationType:                  c.ApplicationType,
 		SubjectType:                      c.SubjectType,
+		DefaultMaxAge:                    clone.Int64Ptr(c.DefaultMaxAge),
+		RequireAuthTime:                  c.RequireAuthTime,
+		DefaultACRValues:                 slices.Clone(c.DefaultACRValues),
 	}, nil
 }
 
@@ -398,6 +464,21 @@ type PrivateKeyJWTClient struct {
 	// TokenEndpointAuthSigningAlg restricts client_assertion signatures
 	// for this private_key_jwt client. Empty leaves the OP allow-list.
 	TokenEndpointAuthSigningAlg string
+
+	// DefaultMaxAge mirrors [PublicClient.DefaultMaxAge].
+	//
+	// Stable since v1.5.
+	DefaultMaxAge *int64
+
+	// RequireAuthTime mirrors [PublicClient.RequireAuthTime].
+	//
+	// Stable since v1.5.
+	RequireAuthTime bool
+
+	// DefaultACRValues mirrors [PublicClient.DefaultACRValues].
+	//
+	// Stable since v1.5.
+	DefaultACRValues []string
 }
 
 // seed projects c onto a [store.Client] with the private_key_jwt
@@ -405,6 +486,9 @@ type PrivateKeyJWTClient struct {
 // AuthPrivateKeyJWT, JWKS bytes embedded inline, and Source
 // ClientSourceStatic.
 func (c PrivateKeyJWTClient) seed() (store.Client, error) {
+	if err := checkDefaultMaxAge("PrivateKeyJWTClient", c.ID, c.DefaultMaxAge); err != nil {
+		return store.Client{}, err
+	}
 	grants := c.GrantTypes
 	if len(grants) == 0 {
 		grants = defaultGrantTypes()
@@ -433,5 +517,8 @@ func (c PrivateKeyJWTClient) seed() (store.Client, error) {
 		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
 		ApplicationType:                  c.ApplicationType,
 		SubjectType:                      c.SubjectType,
+		DefaultMaxAge:                    clone.Int64Ptr(c.DefaultMaxAge),
+		RequireAuthTime:                  c.RequireAuthTime,
+		DefaultACRValues:                 slices.Clone(c.DefaultACRValues),
 	}, nil
 }
