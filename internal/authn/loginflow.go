@@ -877,7 +877,7 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 		return o.runOneOfStep(ctx, st, step, now)
 	}
 	begin, err := step.auth.Begin(ctx, BeginInput{
-		Subject:         st.Subject,
+		Subject:         o.stepSubject(st, step.kind),
 		ClientID:        st.ClientID,
 		AuthTime:        now,
 		RequestedScopes: st.RequestedScopes,
@@ -900,7 +900,7 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 		return st, interaction.Step{}, ErrInvalidStep
 	}
 	if !step.isCaptcha {
-		if rerr := guardFactorResult(st, step.auth, *begin.Result); rerr != nil {
+		if rerr := o.guardStepResult(st, step, *begin.Result); rerr != nil {
 			return retireActiveFactorToken(st), interaction.Step{}, rerr
 		}
 	}
@@ -909,6 +909,40 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 	// dropping back through advanceOnce's transition guard.
 	st = o.recordLoginFlowResult(ctx, st, step, *begin.Result, now)
 	return o.advanceLoginFlow(ctx, st, now)
+}
+
+// stepSubject is the subject handed to the authenticator of the step of
+// the given kind. A Primary step identifies the user, so a subject the
+// chain did not bind itself — the one carried over from the entry session
+// of a request that must re-authenticate — is withheld from it: Primary
+// may authenticate a different account, and a passkey would otherwise
+// run subject-bound instead of discoverable. A subject bound by the
+// account chooser or by an earlier factor is passed through.
+func (o *Orchestrator) stepSubject(st State, kind string) string {
+	if st.ChooserBoundSubject || len(st.Factors) > 0 {
+		return st.Subject
+	}
+	primary := o.cfg.LoginFlow.primary.kind
+	if kind == primary || o.cfg.LoginFlow.parentOf[kind] == primary {
+		return ""
+	}
+	return st.Subject
+}
+
+// guardStepResult is [guardFactorResult] plus the Primary-step rule: a
+// Primary completion that leaves no subject bound would send
+// advanceLoginFlow straight back into Primary, so it ends the attempt
+// with [ErrInvalidStep] instead.
+func (o *Orchestrator) guardStepResult(st State, step compiledStep, res interaction.Result) error {
+	if err := guardFactorResult(st, step.auth, res); err != nil {
+		return err
+	}
+	primary := o.cfg.LoginFlow.primary.kind
+	isPrimary := step.kind == primary || o.cfg.LoginFlow.parentOf[step.kind] == primary
+	if isPrimary && res.Subject == "" && st.Subject == "" {
+		return ErrInvalidStep
+	}
+	return nil
 }
 
 // runOneOfStep drives a one-of step. After Primary only the steps the
@@ -1069,7 +1103,7 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 		return o.handleFactorChoice(ctx, st, in, step)
 	}
 	cont, err := step.auth.Continue(ctx, ContinueInput{
-		Subject:         st.Subject,
+		Subject:         o.stepSubject(st, kind),
 		ClientID:        st.ClientID,
 		AuthTime:        st.AuthTime,
 		Submission:      *in.Submission,
@@ -1150,7 +1184,7 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 		return st, interaction.Step{}, ErrInvalidStep
 	}
 	if !step.isCaptcha {
-		if rerr := guardFactorResult(st, step.auth, *cont.Result); rerr != nil {
+		if rerr := o.guardStepResult(st, step, *cont.Result); rerr != nil {
 			return retireActiveFactorToken(st), interaction.Step{}, rerr
 		}
 	}

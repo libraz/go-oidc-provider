@@ -231,14 +231,22 @@ func (e entrySessionAuthn) authContext(context.Context) (grantAuthContext, error
 // request is applied afterwards, by [reportAuthContext], so the session
 // records the level reached rather than that verdict.
 //
-// authTime is the ceremony's own reading.
+// authTime is the ceremony's own reading. entry, when set, re-reads the
+// entry session the chain inherited Primary from: a session signed out or
+// expired mid-ceremony no longer stands in for anything.
 type chainAuthn struct {
 	authn    *authn.Orchestrator
 	state    authn.State
 	authTime time.Time
+	entry    terminalAuthn
 }
 
-func (c chainAuthn) authContext(context.Context) (grantAuthContext, error) {
+func (c chainAuthn) authContext(ctx context.Context) (grantAuthContext, error) {
+	if c.entry != nil {
+		if _, err := c.entry.authContext(ctx); err != nil {
+			return grantAuthContext{}, err
+		}
+	}
 	ac := c.authn.AuthContext(c.state)
 	return grantAuthContext{AuthTime: c.authTime, ACR: ac.ACR, AMR: ac.AMR}, nil
 }
@@ -265,7 +273,11 @@ func interactionExit(
 ) (exitKind, terminalAuthn) {
 	switch {
 	case !noCredentialChainRan(st):
-		return exitInteractiveChain, chainAuthn{authn: deps.Authn, state: st, authTime: authTime}
+		chain := chainAuthn{authn: deps.Authn, state: st, authTime: authTime}
+		if deps.Authn.AuthContext(st).Inherited {
+			chain.entry = entrySessionAuthn{r: r, deps: deps, subject: subject}
+		}
+		return exitInteractiveChain, chain
 	case chooserReentryBound(st):
 		return exitInteractiveChooserSession, chooserSessionAuthn{
 			deps:      deps,

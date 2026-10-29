@@ -4,9 +4,7 @@ package authn_test
 // (primary / post-primary), enrolled count (0 / 1 / 2+), IfNoneEnrolled
 // (Deny / Skip) and factor-choice submission (valid / unoffered / none),
 // with primary x Skip excluded because the public compiler rejects it.
-// The coverwise tools were not reachable from this environment, so the
-// table was built by hand; every remaining value pair appears in at
-// least one row.
+// Every remaining value pair appears in at least one row.
 //
 //	#  position  enrolled  policy  submission
 //	1  primary   0         Deny    valid

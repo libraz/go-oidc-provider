@@ -125,7 +125,7 @@ func wantsHTMLResponse(r *http.Request) bool {
 	}
 	htmlQ, htmlOK := acceptQuality(accept, "text/html")
 	jsonQ, jsonOK := acceptQuality(accept, "application/json")
-	if !htmlOK {
+	if !htmlOK || htmlQ == 0 {
 		return false
 	}
 	if jsonOK && jsonQ > htmlQ {

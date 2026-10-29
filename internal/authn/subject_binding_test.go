@@ -128,3 +128,79 @@ func TestTick_RuleStepCannotRebindInheritedSubject(t *testing.T) {
 		})
 	}
 }
+
+// TestTick_PrimaryDoesNotSeeInheritedSubject pins that the first factor
+// of a re-authenticating chain runs as an identifying step: the subject
+// carried over from the entry session is not handed to it, so a
+// discoverable passkey can authenticate a different account. A subject
+// the account chooser bound is handed through.
+func TestTick_PrimaryDoesNotSeeInheritedSubject(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name         string
+		chooserBound bool
+		want         string
+	}{
+		{name: "inherited from the entry session", want: ""},
+		{name: "bound by the account chooser", chooserBound: true, want: "user-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var begun, continued string
+			primary := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
+			primary.beginFn = func(_ context.Context, in op.BeginInput) (interaction.Step, error) {
+				begun = in.Subject
+				prompt := promptForFactor(op.FactorPassword)
+				return interaction.Step{Prompt: &prompt}, nil
+			}
+			primary.continueFn = func(_ context.Context, in op.ContinueInput) (interaction.Step, error) {
+				continued = in.Subject
+				return interaction.Step{Result: &interaction.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
+			}
+			o, err := authn.New(authn.Config{LoginFlow: chainFlow(t, primary), StateRefSigner: newSigner(t)})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			st := initialState()
+			st.Subject = "user-1"
+			st.ReauthRequired = true
+			st.ChooserBoundSubject = tc.chooserBound
+			if _, err := runChain(t, o, st); err != nil {
+				t.Fatalf("chain: %v", err)
+			}
+			if begun != tc.want || continued != tc.want {
+				t.Errorf("Begin/Continue subject = %q/%q, want %q", begun, continued, tc.want)
+			}
+		})
+	}
+}
+
+// TestTick_PrimaryCompletionWithoutSubjectEndsAttempt pins that a Primary
+// step completing immediately without naming a subject ends the attempt
+// with an error instead of re-entering Primary.
+func TestTick_PrimaryCompletionWithoutSubjectEndsAttempt(t *testing.T) {
+	t.Parallel()
+
+	var begins int
+	primary := successAuth(op.FactorPassword, op.AAL1, "pwd", "")
+	primary.beginFn = func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+		begins++
+		if begins > 3 {
+			t.Fatalf("Primary re-entered %d times", begins)
+		}
+		return interaction.Step{Result: &interaction.Result{AuthTime: fakeNow()}}, nil
+	}
+	o, err := authn.New(authn.Config{LoginFlow: chainFlow(t, primary), StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	st := initialState()
+	st.Subject = ""
+	if _, err := runChain(t, o, st); !errors.Is(err, authn.ErrInvalidStep) {
+		t.Fatalf("err = %v, want ErrInvalidStep", err)
+	}
+	if begins != 1 {
+		t.Fatalf("Begin ran %d times, want 1", begins)
+	}
+}

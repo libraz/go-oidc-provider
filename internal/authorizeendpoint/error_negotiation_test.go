@@ -207,3 +207,15 @@ func TestRenderBrowserError_StampsCeremonyHeaders(t *testing.T) {
 		}
 	}
 }
+
+// TestWantsHTMLResponse_RefusesZeroQuality pins that text/html at q=0,
+// which RFC 9110 §12.4.2 reads as "not acceptable", keeps the JSON
+// envelope.
+func TestWantsHTMLResponse_RefusesZeroQuality(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/authorize", nil)
+	req.Header.Set("Accept", "text/html;q=0")
+	if wantsHTMLResponse(req) {
+		t.Fatal("wantsHTMLResponse(text/html;q=0) = true, want false")
+	}
+}

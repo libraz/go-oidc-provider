@@ -130,14 +130,16 @@ func passkeyChallenge(t *testing.T, prompt *interaction.Prompt) []byte {
 	return data.Challenge
 }
 
-// passkeyState is a chain that already knows who the user is and has been
-// told to authenticate them afresh — the shape a passkey primary runs in,
-// since the factor needs a bound subject and the LoginFlow dispatcher
-// would otherwise let the inherited one stand in for the whole step.
+// passkeyState is a chain whose account chooser already bound the user and
+// that has been told to authenticate them afresh — the shape a
+// subject-bound passkey primary runs in. The orchestrator hands a Primary
+// step only a subject the chain itself bound, so the chooser binding is
+// what lets this verifier run without the discoverable ceremony.
 func passkeyState() authn.State {
 	st := initialState()
 	st.Subject = passkeySubject
 	st.ReauthRequired = true
+	st.ChooserBoundSubject = true
 	return st
 }
 
