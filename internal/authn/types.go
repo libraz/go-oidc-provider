@@ -529,6 +529,13 @@ var (
 	// unchanged: dispatch on [ErrFactorAbort] still matches.
 	ErrFactorLocked = fmt.Errorf("authn: factor locked: %w", ErrFactorAbort)
 
+	// ErrFactorNotEnrolled is the [ErrFactorAbort] refinement a factor
+	// returns when the subject has no usable enrolment for it (no record,
+	// or one never confirmed). The factor is skipped for no one: the attempt
+	// ends as a user-side 4xx rather than a server fault, and a rule that
+	// demands the factor never silently falls back to the primary alone.
+	ErrFactorNotEnrolled = fmt.Errorf("authn: factor not enrolled: %w", ErrFactorAbort)
+
 	// ErrCredentialRejected marks a terminal factor error that follows an
 	// evaluated, rejected submission: the wrong guess that engaged the
 	// brute-force lock, or the one that made a factor reset required. A

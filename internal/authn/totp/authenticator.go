@@ -138,11 +138,11 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 		}
 	}
 	rec, err := a.store.Get(ctx, in.Subject)
-	if err != nil {
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return interaction.Step{}, fmt.Errorf("totp: load record: %w", err)
 	}
-	if rec == nil {
-		return interaction.Step{}, store.ErrNotFound
+	if err != nil || rec == nil || rec.ConfirmedAt.IsZero() {
+		return interaction.Step{}, authn.ErrFactorNotEnrolled
 	}
 	now := a.verifier.clock().Now()
 	if !rec.ConfirmedAt.IsZero() && !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
@@ -212,11 +212,11 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 			return interaction.Step{}, ErrRetry
 		}
 		rec, err := a.store.Get(ctx, in.Subject)
-		if err != nil {
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return interaction.Step{}, fmt.Errorf("totp: load record: %w", err)
 		}
-		if rec == nil {
-			return interaction.Step{}, store.ErrNotFound
+		if err != nil || rec == nil {
+			return interaction.Step{}, authn.ErrFactorNotEnrolled
 		}
 
 		previous := cloneRecord(rec)

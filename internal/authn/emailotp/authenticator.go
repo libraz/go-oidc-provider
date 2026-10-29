@@ -66,7 +66,7 @@ var (
 	ErrSubjectRequired = errors.New("emailotp: subject is required")
 	ErrEmailMissing    = fmt.Errorf("emailotp: email field is missing: %w", authn.ErrFactorAbort)
 	ErrCodeMissing     = fmt.Errorf("emailotp: code field is missing: %w", authn.ErrFactorAbort)
-	ErrEmailNotBound   = fmt.Errorf("emailotp: subject has no bound email claim: %w", authn.ErrFactorAbort)
+	ErrEmailNotBound   = fmt.Errorf("emailotp: subject has no bound email claim: %w", authn.ErrFactorNotEnrolled)
 	ErrMailerRequired  = errors.New("emailotp: mailer is required")
 	ErrStoreRequired   = errors.New("emailotp: store is required")
 	ErrUsersRequired   = errors.New("emailotp: user store is required")

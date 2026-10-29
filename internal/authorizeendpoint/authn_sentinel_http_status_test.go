@@ -144,6 +144,7 @@ var authnSentinelClasses = map[string]sentinelClass{
 	"authn.ErrCredentialRejected":      {err: authn.ErrCredentialRejected, class: wireMarker},
 	"authn.ErrFactorAbort":             {err: authn.ErrFactorAbort, class: wireAbort},
 	"authn.ErrFactorLocked":            {err: authn.ErrFactorLocked, class: wireAbort},
+	"authn.ErrFactorNotEnrolled":       {err: authn.ErrFactorNotEnrolled, class: wireAbort},
 	"authn.ErrFactorRetry":             {err: authn.ErrFactorRetry, class: wireRetry},
 	"authn.ErrInvalidStateRef":         {err: authn.ErrInvalidStateRef, class: wireStateRef},
 	"authn.ErrInvalidStep":             {err: authn.ErrInvalidStep, class: wireServerFault},

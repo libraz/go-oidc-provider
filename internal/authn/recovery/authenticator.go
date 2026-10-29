@@ -132,9 +132,9 @@ func (*Authenticator) Prompts() []string { return []string{PromptType} }
 // Begin implements [authn.Authenticator]. It reads the persisted batch
 // to confirm the subject has one, reads the shared brute-force budget to
 // surface [interaction.RecoveryCodePromptData.AttemptsRemaining], and
-// emits the [PromptType] prompt. Begin surfaces [store.ErrNotFound] when
-// the user has no batch generated so the orchestrator can stop the chain
-// rather than silently rolling over to the next factor.
+// emits the [PromptType] prompt. Begin surfaces [authn.ErrFactorNotEnrolled]
+// when the user has no batch generated so the orchestrator can stop the
+// chain rather than silently rolling over to the next factor.
 func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
@@ -148,11 +148,11 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 		}
 	}
 	batch, err := a.store.Get(ctx, in.Subject)
-	if err != nil {
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return interaction.Step{}, fmt.Errorf("recovery: load batch: %w", err)
 	}
-	if batch == nil {
-		return interaction.Step{}, store.ErrNotFound
+	if err != nil || batch == nil {
+		return interaction.Step{}, authn.ErrFactorNotEnrolled
 	}
 	// Without the cross-factor counter nothing locks this factor, so no
 	// count is known and zero is reported.
@@ -195,11 +195,11 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 		}
 	}
 	batch, err := a.store.Get(ctx, in.Subject)
-	if err != nil {
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return interaction.Step{}, fmt.Errorf("recovery: load batch: %w", err)
 	}
-	if batch == nil {
-		return interaction.Step{}, store.ErrNotFound
+	if err != nil || batch == nil {
+		return interaction.Step{}, authn.ErrFactorNotEnrolled
 	}
 
 	res, verr := a.verifier.Verify(ctx, batch, code)

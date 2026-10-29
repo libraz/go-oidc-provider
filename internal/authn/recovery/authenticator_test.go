@@ -176,7 +176,11 @@ func TestAuthenticator_BeginRequiresSubject(t *testing.T) {
 	}
 }
 
-func TestAuthenticator_BeginPropagatesNotFound(t *testing.T) {
+// TestAuthenticator_BeginNotEnrolled pins that a subject with no recovery
+// batch ends the attempt with authn.ErrFactorNotEnrolled. A missing
+// enrolment is a user-side terminal 4xx, not a server fault, so the
+// store's ErrNotFound must not leak out as a 5xx.
+func TestAuthenticator_BeginNotEnrolled(t *testing.T) {
 	t.Parallel()
 
 	f := newAdapterFixture(t)
@@ -184,8 +188,8 @@ func TestAuthenticator_BeginPropagatesNotFound(t *testing.T) {
 		Subject:  "no-such-user",
 		AuthTime: f.authTime,
 	})
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
+	if !errors.Is(err, authn.ErrFactorNotEnrolled) {
+		t.Fatalf("err = %v, want ErrFactorNotEnrolled", err)
 	}
 }
 
