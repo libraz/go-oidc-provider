@@ -50,8 +50,9 @@ rows:
     behaviour: |
       When the request's `acr_values` are not satisfied by the existing
       session's authentication context, the OP re-authenticates; after a
-      successful step-up the issued ID Token's `acr` claim equals the
-      requested context.
+      re-authentication the issued ID Token's `acr` claim is the
+      context the re-authentication actually reached; a requested
+      context it did not satisfy is never reported.
     status: active
 
   - id: SUP-004

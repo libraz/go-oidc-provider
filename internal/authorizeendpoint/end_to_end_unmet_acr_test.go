@@ -88,7 +88,8 @@ func TestEndToEnd_EssentialACRUnsatisfiedIsRefused(t *testing.T) {
 // TestEndToEnd_VoluntaryACRUnsatisfiedStillMints is the contrast case
 // that keeps the refusal narrow: acr_values is a voluntary hint, so the
 // same unsatisfiable policy verdict yields a normal authorization code
-// and the id_token simply carries no acr claim.
+// and the id_token carries the canonical acr of the level the login
+// reached rather than the unmet request.
 func TestEndToEnd_VoluntaryACRUnsatisfiedStillMints(t *testing.T) {
 	t.Parallel()
 
@@ -127,14 +128,16 @@ func TestEndToEnd_VoluntaryACRUnsatisfiedStillMints(t *testing.T) {
 // claims-parameter wiring: an RP that names its authentication context
 // only through claims.id_token.acr — no acr_values at all — has that
 // value put to the policy, and a policy that accepts it stamps it onto
-// the id_token. Resolving from acr_values alone would leave the policy
-// with nothing to satisfy and the id_token with no acr.
+// the id_token. The value is declared with [op.ACRLevels] at AAL1, which
+// the testkit login reaches. Resolving from acr_values alone would leave
+// the policy with nothing to satisfy.
 func TestEndToEnd_ClaimsOnlyACRIsEchoed(t *testing.T) {
 	t.Parallel()
 
 	const wantACR = "urn:example:acr:claims-only"
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(fakeClock{now: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)}),
+		testkit.WithOptions(op.WithACRPolicy(op.ACRLevels{wantACR: op.AAL1})),
 	)
 	const secret = "rp-secret"
 	hasher := clientauth.Argon2id{}

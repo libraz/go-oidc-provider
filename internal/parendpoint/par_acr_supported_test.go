@@ -30,6 +30,7 @@ func newACRSupportedFixture(tb testing.TB) (*fixture, *store.Client, string) {
 		testkit.WithOptions(
 			op.WithFeature(feature.PAR),
 			op.WithACRValuesSupported("urn:example:aal1", parAdvertisedACR),
+			op.WithACRPolicy(op.ACRLevels{"urn:example:aal1": op.AAL1, parAdvertisedACR: op.AAL2}),
 		),
 	)
 	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/par", clock: clock}

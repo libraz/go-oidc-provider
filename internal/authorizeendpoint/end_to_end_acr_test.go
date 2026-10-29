@@ -17,13 +17,15 @@ import (
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
-// TestEndToEnd_AuthorizeACRValuesEcho exercises the OFCS
+// TestEndToEnd_AuthorizeACRValuesReportsReachedLevel exercises the OFCS
 // `oidcc-ensure-request-with-acr-values-succeeds` shape: the RP supplies
-// acr_values=1 2 on /authorize and the resulting id_token MUST carry an
-// acr claim that is one of the requested entries. The default
-// [op.DefaultACRPolicy] echoes the first satisfied value, so the
-// expected wire shape is acr=="1".
-func TestEndToEnd_AuthorizeACRValuesEcho(t *testing.T) {
+// acr_values=1 2 on /authorize. Neither entry is a canonical URI or a
+// declared value, so the default [op.DefaultACRPolicy] satisfies none of
+// them; the request is voluntary, so the code is still issued and the
+// id_token carries the canonical acr of the level the login reached
+// (AAL1, bronze). The OP reports only an acr the authentication
+// satisfied, never an unknown requested value.
+func TestEndToEnd_AuthorizeACRValuesReportsReachedLevel(t *testing.T) {
 	t.Parallel()
 	clock := fakeClock{now: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)}
 	tk := testkit.NewProvider(t, testkit.WithClock(clock))
@@ -135,8 +137,8 @@ func TestEndToEnd_AuthorizeACRValuesEcho(t *testing.T) {
 	}
 	idClaims := decodeIDTokenPayload(t, idt)
 	gotACR, _ := idClaims["acr"].(string)
-	if gotACR != "1" {
-		t.Errorf("id_token acr = %q, want %q (first satisfied entry of acr_values=1 2)", gotACR, "1")
+	if gotACR != bronzeACR {
+		t.Errorf("id_token acr = %q, want %q (level reached; acr_values=1 2 are unknown)", gotACR, bronzeACR)
 	}
 }
 

@@ -517,6 +517,9 @@ func commonOptions(cfg runConfig, opStore store.Store, users store.UserPasswordS
 		// NOT enable this.
 		op.WithAllowPrivateNetworkJWKS(),
 		op.WithAllowPrivateNetworkJAR(),
+		// Advertise the one acr the default policy satisfies at the
+		// demo's AAL1 login, so OFCS requests a value the OP can honour.
+		op.WithACRValuesSupported(op.AAL1.ACRURI()),
 		// Advertise the standard OIDC Core 1.0 §5 claims that
 		// seedDemoUser fills in. OFCS's claims-parameter test skips
 		// when claims_supported lists no standard claims, so listing

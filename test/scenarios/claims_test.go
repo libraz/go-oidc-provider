@@ -953,9 +953,9 @@ func TestScenario_CL_44_VoluntaryACRMissAllowed(t *testing.T) {
 // applyClientAuthorizeDefaults) and the resulting id_token carries
 // an "acr" claim driven by the OP's ACR policy.
 //
-// The DefaultACRPolicy echoes the first satisfied entry from the
-// backfilled list when the ceremony reached AAL1 or above (the
-// testkit's SubjectAuthenticator provides exactly that). The wire
+// The value is declared with op.ACRLevels at AAL1, so the policy
+// satisfies the first entry of the backfilled list (the testkit's
+// SubjectAuthenticator reaches AAL1). The wire
 // shape proves the backfill: without DefaultACRValues this id_token
 // would carry the AAL-derived InCommon URI rather than the client's
 // configured value.
@@ -964,7 +964,9 @@ func TestScenario_CL_44_VoluntaryACRMissAllowed(t *testing.T) {
 func TestScenario_CL_45_DefaultACRValuesBackfilled(t *testing.T) {
 	t.Parallel()
 
-	tk := testkit.NewProvider(t)
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithACRPolicy(op.ACRLevels{"urn:test:cl-45:loa1": op.AAL1}),
+	))
 	rp, secret := clRegisterRP(t, tk, "rp-cl-45")
 	clSeedAlice(t, tk)
 

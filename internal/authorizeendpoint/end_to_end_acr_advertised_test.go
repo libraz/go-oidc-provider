@@ -42,6 +42,7 @@ func newACRAdvertisedFixture(t *testing.T, clientID string) *acrAdvertisedFixtur
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
 		testkit.WithOptions(
+			op.WithACRPolicy(op.ACRLevels{"urn:example:aal1": op.AAL1, advertisedACR: op.AAL2}),
 			op.WithACRValuesSupported("urn:example:aal1", advertisedACR),
 			op.WithFeature(feature.PAR),
 		),

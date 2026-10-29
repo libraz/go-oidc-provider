@@ -58,10 +58,11 @@
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 //   - TOTP encryption key: 32 bytes (AES-256-GCM at rest); supply
 //     it from a vault / KMS so secrets survive process restart.
-//   - ACR string: opaque to the library — the embedder picks the
-//     value and is responsible for the meaning. Common conventions
-//     are urn:mace:incommon:iap:silver / iap:bronze (InCommon
-//     Federation) or AAL1 / AAL2 / AAL3 (NIST SP 800-63B).
+//   - ACR string: the id_token carries only an acr the login
+//     actually satisfied. The built-in policy knows the canonical
+//     URIs (op.AAL1/2/3 .ACRURI(): bronze / silver / loa4); a custom
+//     acr must be declared with op.WithACRPolicy(op.ACRLevels{...}),
+//     and a custom acr is not reused from an existing session.
 //   - Demo seed: seedkit confirms TOTP at process start, skipping
 //     the round-trip "user types code back" enrolment step a
 //     production registration screen runs.

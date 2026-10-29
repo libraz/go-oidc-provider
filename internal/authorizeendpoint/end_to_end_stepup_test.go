@@ -29,15 +29,15 @@ const (
 //   - a repeat /authorize requesting that acr is served silently (the
 //     session already satisfies the request), and
 //   - a subsequent /authorize requesting the AAL2 acr forces a re-auth
-//     interaction (the session's acr is not in the requested set), after
-//     which the configured policy's verdict for the new request is
-//     reported. The default policy echoes a requested value once any
-//     factor ran, so that verdict is the AAL2 acr.
+//     interaction (the session's acr is not in the requested set). The
+//     testkit re-authentication is single-factor (AAL1), so it does not
+//     satisfy the request, and the id_token reports the level actually
+//     reached (bronze), never the requested silver.
 //
 // This is the full-flow counterpart to the decision-matrix unit tests in
-// authorize_test.go: it proves the step-up not only redirects to an
-// interaction but ends with the requested authentication context on the
-// wire.
+// authorize_test.go: it proves the step-up redirects to an interaction
+// and that a weaker re-authentication is not reported as the stronger
+// context on the wire.
 //
 // Tracks: CVE-2026-97176 — a step-up acr requirement was satisfied by a
 // session that had only reached a weaker level, letting a stale or
@@ -196,7 +196,7 @@ func TestEndToEnd_ACRStepUp(t *testing.T) {
 	}
 
 	// Pass 3: session acr bronze is not in acr_values=silver → step-up
-	// interaction, then the policy's verdict silver is reported.
+	// interaction, then the level reached (bronze) is reported, not silver.
 	resp3 := authorize(t, silverACR)
 	loc3, err := resp3.Location()
 	resp3.Body.Close()
@@ -210,7 +210,7 @@ func TestEndToEnd_ACRStepUp(t *testing.T) {
 		t.Fatalf("pass 3 redirect=%s want interaction path", loc3.String())
 	}
 	claims3 := exchange(t, completeLogin(t, loc3))
-	if got, _ := claims3["acr"].(string); got != silverACR {
-		t.Errorf("pass 3 id_token acr=%q want %s (stepped up)", got, silverACR)
+	if got, _ := claims3["acr"].(string); got != bronzeACR {
+		t.Errorf("pass 3 id_token acr=%q want %s (AAL1 re-auth; %s was not reached)", got, bronzeACR, silverACR)
 	}
 }

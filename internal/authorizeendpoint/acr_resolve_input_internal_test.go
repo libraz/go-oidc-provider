@@ -253,10 +253,11 @@ func TestResolveGrantACRAMR_EssentialUnsatisfiedFails(t *testing.T) {
 	}
 }
 
-// TestResolveGrantACRAMR_VoluntaryUnsatisfiedOmitsACR is the contrast:
-// acr_values is a voluntary hint, so an unsatisfiable request is served
-// with the acr claim omitted rather than refused.
-func TestResolveGrantACRAMR_VoluntaryUnsatisfiedOmitsACR(t *testing.T) {
+// TestResolveGrantACRAMR_VoluntaryUnsatisfiedReportsRecordedACR is the
+// contrast: acr_values is a voluntary hint, so an unsatisfiable request
+// is served with the level the authentication actually reached rather
+// than refused, and never with the requested value.
+func TestResolveGrantACRAMR_VoluntaryUnsatisfiedReportsRecordedACR(t *testing.T) {
 	t.Parallel()
 
 	capture := &acrCapture{out: ACRResolveOutput{OK: false}}
@@ -271,15 +272,15 @@ func TestResolveGrantACRAMR_VoluntaryUnsatisfiedOmitsACR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveGrantACRAMR: %v", err)
 	}
-	if acr != "" {
-		t.Errorf("acr = %q, want the claim to be omitted", acr)
+	if want := "urn:mace:incommon:iap:bronze"; acr != want {
+		t.Errorf("acr = %q, want the recorded level %q", acr, want)
 	}
 }
 
-// TestResolveGrantACRAMR_NonEssentialClaimsSpecOmitsACR pins the
-// boundary between the two branches: naming acr through the claims
+// TestResolveGrantACRAMR_NonEssentialClaimsSpecReportsRecordedACR pins
+// the boundary between the two branches: naming acr through the claims
 // parameter without marking it essential stays voluntary.
-func TestResolveGrantACRAMR_NonEssentialClaimsSpecOmitsACR(t *testing.T) {
+func TestResolveGrantACRAMR_NonEssentialClaimsSpecReportsRecordedACR(t *testing.T) {
 	t.Parallel()
 
 	capture := &acrCapture{out: ACRResolveOutput{OK: false}}
@@ -302,7 +303,7 @@ func TestResolveGrantACRAMR_NonEssentialClaimsSpecOmitsACR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveGrantACRAMR: %v", err)
 	}
-	if acr != "" {
-		t.Errorf("acr = %q, want the claim to be omitted", acr)
+	if want := "urn:mace:incommon:iap:bronze"; acr != want {
+		t.Errorf("acr = %q, want the recorded level %q", acr, want)
 	}
 }

@@ -79,8 +79,8 @@ func sessionAuthContext(active *sessions.Active) grantAuthContext {
 // [authn.AuthContext.CompletedKinds] — and nil for a response served
 // from an established session, because no step of this attempt produced
 // that level. st supplies the remote hints. A voluntary request the
-// policy cannot satisfy is reported with no acr; an essential one fails
-// with [errACRUnmet].
+// policy cannot satisfy is reported with the recorded canonical acr (none
+// at AAL0); an essential one fails with [errACRUnmet].
 func reportAuthContext(
 	ctx context.Context,
 	r *http.Request,
@@ -121,7 +121,9 @@ func reportAuthContext(
 		// party a code for an authentication it declared insufficient.
 		return grantAuthContext{}, errACRUnmet
 	default:
-		reported.ACR = ""
+		// Voluntary and unmet: report the level actually reached (empty
+		// at AAL0) rather than the value the request asked for.
+		reported.ACR = recorded.ACR
 	}
 	return reported, nil
 }

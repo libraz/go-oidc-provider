@@ -74,9 +74,9 @@ func TestScenario_SUP_002_MaxAgeExpiryForcesReauthentication(t *testing.T) {
 // TestScenario_SUP_003_ACRUnsatisfiedForcesStepUp seats a session at
 // AAL1, which the session records as the bronze acr, then requests the
 // silver acr. RFC 9470 §3/§4: the session does not satisfy the requested
-// context, so the OP re-authenticates and the issued ID Token's acr is the
-// configured policy's verdict for the new request — the default policy
-// echoes the requested value.
+// context, so the OP re-authenticates. The harness re-authentication is
+// single-factor (AAL1), so it does not reach silver: the issued ID Token's
+// acr is the level actually reached (bronze), never the requested silver.
 func TestScenario_SUP_003_ACRUnsatisfiedForcesStepUp(t *testing.T) {
 	t.Parallel()
 	env := newSUPEnv(t)
@@ -93,8 +93,8 @@ func TestScenario_SUP_003_ACRUnsatisfiedForcesStepUp(t *testing.T) {
 	if !interacted {
 		t.Fatal("acr_values=silver unsatisfied by the bronze session must force a step-up interaction")
 	}
-	if got, _ := env.exchange(t, code)["acr"].(string); got != supSilverACR {
-		t.Errorf("stepped-up id_token acr=%q want %s", got, supSilverACR)
+	if got, _ := env.exchange(t, code)["acr"].(string); got != supBronzeACR {
+		t.Errorf("re-authenticated id_token acr=%q want %s (AAL1 reached; %s is not reported)", got, supBronzeACR, supSilverACR)
 	}
 }
 

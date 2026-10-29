@@ -7,17 +7,23 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
-// hardwareACR is the canonical acr URI of AAL3.
-const hardwareACR = "http://idmanagement.gov/ns/assurance/loa/4"
+// hardwareACR is a declared custom acr the test provider maps to AAL1,
+// so a single-factor login is granted a context named like a strong one.
+const hardwareACR = "urn:example:acr:hardware"
+
+// hardwareACRPolicy declares hardwareACR at AAL1.
+func hardwareACRPolicy() op.Option {
+	return op.WithACRPolicy(op.ACRLevels{hardwareACR: op.AAL1})
+}
 
 // TestEndToEnd_SessionReuseReportsTheLevelReached pins where the acr a
 // session-served response reports comes from. A single-factor login
-// that asked for the AAL3 acr receives the default policy's echo of it,
-// but the session records only the level the login reached. Every later
+// that asked for a declared custom acr (mapped to AAL1) receives it, but the session records only the level the login reached. Every later
 // response served from that session — the same client's silent pass and
 // another client's silent pass off a cached grant — reports the policy's
 // verdict for its own request over that level, never the string the
@@ -31,7 +37,8 @@ func TestEndToEnd_SessionReuseReportsTheLevelReached(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	f := newE2EFlow(t, "rp-acr-first", testkit.WithClock(fakeClock{now: now}))
+	f := newE2EFlow(t, "rp-acr-first", testkit.WithClock(fakeClock{now: now}),
+		testkit.WithOptions(hardwareACRPolicy()))
 	const subject = "user-acr-cross-client"
 	ctx := context.Background()
 
@@ -39,7 +46,7 @@ func TestEndToEnd_SessionReuseReportsTheLevelReached(t *testing.T) {
 	first.Set("acr_values", hardwareACR)
 	claims := f.exchange(t, f.completeLogin(t, f.authorize(t, first), subject))
 	if got, _ := claims["acr"].(string); got != hardwareACR {
-		t.Fatalf("login id_token acr=%q want the default policy's echo %q", got, hardwareACR)
+		t.Fatalf("login id_token acr=%q want the declared acr %q", got, hardwareACR)
 	}
 
 	// The same client, asking for nothing, is served silently.
@@ -97,16 +104,16 @@ func (f *e2eFlow) sibling(t *testing.T, clientID string) *e2eFlow {
 // TestEndToEnd_ConsentOnlyReportsTheLevelReached is the interactive
 // counterpart: a consent-only pass served from the session reports the
 // policy's verdict for its own request over the level the login
-// reached, not the AAL3 acr the login's request drew.
+// reached, not the declared custom acr the login's request drew.
 func TestEndToEnd_ConsentOnlyReportsTheLevelReached(t *testing.T) {
 	t.Parallel()
-	fix := newFlowFixture(t, surfaceLoginFlow, newMovableClock(time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)))
+	fix := newFlowFixture(t, surfaceLoginFlow, newMovableClock(time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)), hardwareACRPolicy())
 	d := newReauthDriver(t, fix)
 
 	loc1 := d.authorize(url.Values{"scope": {"openid"}, "acr_values": {hardwareACR}})
 	_, redirect1 := d.walkInteraction(loc1.Path)
 	if got, _ := d.exchange(d.codeFrom(redirect1))["acr"].(string); got != hardwareACR {
-		t.Fatalf("login id_token acr=%q want the default policy's echo %q", got, hardwareACR)
+		t.Fatalf("login id_token acr=%q want the declared acr %q", got, hardwareACR)
 	}
 
 	loc2 := d.authorize(nil)

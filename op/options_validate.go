@@ -48,6 +48,7 @@ func (c *config) validate() error {
 		c.validateOpenIDScopeOptional,
 		c.validateStrictOfflineAccess,
 		c.validateLoginFlow,
+		c.validateACRAdvertisement,
 		c.validateInteractionUICapabilities,
 		c.validateAccessTokenFormat,
 		c.validateAccessTokenRevocation,

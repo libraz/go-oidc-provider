@@ -549,20 +549,21 @@ func TestScenario_IDT_05_AuthTimeIncludedWhenEssentialOrMaxAge(t *testing.T) {
 
 // TestScenario_IDT_06_AcrEmittedOnRequestOrDefault asserts that
 // requesting acr_values on /authorize causes the issued id_token to
-// carry an acr claim equal to the first satisfied entry. The
-// reference DefaultACRPolicy (op.DefaultACRPolicy) treats every
-// requested string as satisfied once the ceremony reaches AAL1, so
-// the testkit's SubjectAuthenticator (AAL1) makes the requested
-// value the wire result.
+// carry an acr claim equal to the first satisfied entry. The value is
+// declared with op.ACRLevels at AAL1, which the testkit's
+// SubjectAuthenticator reaches, so the requested value is the wire
+// result; an undeclared value would not be satisfied.
 //
 // Spec: OIDC Core 1.0 §2 / §3.1.2.1 (acr_values, acr).
 func TestScenario_IDT_06_AcrEmittedOnRequestOrDefault(t *testing.T) {
 	t.Parallel()
 
-	tk := testkit.NewProvider(t)
+	const wantACR = "urn:test:idt:loa1"
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithACRPolicy(op.ACRLevels{wantACR: op.AAL1}),
+	))
 	rp, secret := idtRegisterRP(t, tk, "rp-idt-06")
 
-	const wantACR = "urn:test:idt:loa1"
 	pkce := scenariokit.NewPKCEPair("")
 	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
 		ClientID:    rp.ID,

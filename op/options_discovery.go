@@ -438,13 +438,11 @@ func WithOpenIDScopeOptional() Option {
 // WithACRPolicy installs a custom [ACRPolicy] that decides what acr /
 // amr claims the OP writes onto issued id_tokens and which acr_values
 // requests the OP treats as satisfied. The library default is
-// [DefaultACRPolicy] (lax: any AAL>=AAL1 satisfies any requested
-// acr); embedders that need a stricter mapping (e.g. NIST SP 800-63
-// binding, a configured per-acr table à la Keycloak) supply their
-// own implementation. Passing nil restores the library default.
-//
-// The default installation is intentional: a deployment that omits
-// the option gets the OFCS-passing wire shape automatically.
+// [DefaultACRPolicy], which satisfies only the canonical AAL URIs at
+// or below the level the login reached. Pass an [ACRLevels] to give
+// deployment-specific acr values a level, or supply an own
+// implementation for any other mapping. Passing nil restores the
+// library default.
 //
 // Stable since v1.0.
 func WithACRPolicy(p ACRPolicy) Option {
