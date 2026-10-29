@@ -172,17 +172,19 @@ func New(lockoutStore store.AuthnLockoutStore, clock timex.Clock) (*Counter, err
 // A nil emitter leaves the counter silent, so callers can pass an
 // optional sink through unconditionally.
 //
-// The counter emits exactly one event, [auditevent.AuditLockoutStalled],
-// and only from [Counter.RecordFailure]'s contention path. Everything
-// else it decides — a lock taking effect, a reset becoming required —
-// is returned to the caller in the [Outcome]; the authenticator turns it
-// into a terminal error marked authn.ErrCredentialRejected, and the
+// The counter emits two events from [Counter.RecordFailure]:
+// [auditevent.AuditLockoutStalled] on the contention path, and
+// [auditevent.AuditLockoutEngaged] once when an attempt newly engages a
+// lock. The failure itself — and a reset becoming required — is returned
+// to the caller in the [Outcome]; the authenticator turns it into a
+// terminal error marked authn.ErrCredentialRejected, and the
 // orchestrator files that guess under login.* / mfa.* like any other
-// rejected credential. The contention path is
-// different because it has no caller-visible verdict to carry the
-// signal: the attempt is rejected without being counted, so the
-// subject's failure budget silently stops advancing and nothing
-// downstream can tell.
+// rejected credential. The contention path is different because it has
+// no caller-visible verdict to carry the signal: the attempt is rejected
+// without being counted, so the subject's failure budget silently stops
+// advancing and nothing downstream can tell. The engaged event exists
+// because a locked password attempt is answered like a wrong password,
+// leaving the operator no other trace of the lock.
 //
 // Reporting a counted failure is therefore the authenticator chain's
 // job rather than this helper's: the orchestrator raises the login.* /
@@ -326,12 +328,22 @@ func (c *Counter) RecordFailure(ctx context.Context, subject string) (Outcome, e
 		if err != nil {
 			return Outcome{}, err
 		}
+		// applyFailure rewrites next in place, so read the prior lock first.
+		wasLocked := next.LockedUntil.After(now)
 		out := applyFailure(next, now)
 		swapped, err := c.store.CompareAndSwap(ctx, expectedVersion, next)
 		if err != nil {
 			return Outcome{}, err
 		}
 		if swapped {
+			if !wasLocked && out.LockedUntil.After(now) {
+				c.emitter.Emit(ctx, audit.Event{
+					Name:    string(auditevent.AuditLockoutEngaged),
+					Level:   audit.LevelWarn,
+					Message: "cross-factor lockout engaged",
+					ActorID: subject,
+				})
+			}
 			return out, nil
 		}
 	}

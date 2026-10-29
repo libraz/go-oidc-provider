@@ -327,6 +327,7 @@ func TestAuditEvent_LockoutStalledMirror(t *testing.T) {
 
 	want := map[string]op.AuditEvent{
 		"lockout.stalled": op.AuditLockoutStalled,
+		"lockout.engaged": op.AuditLockoutEngaged,
 	}
 	for s, ev := range want {
 		if string(ev) != s {

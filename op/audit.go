@@ -125,6 +125,17 @@ const (
 	// for one ActorID are the signal that matters — an isolated one is
 	// ordinary contention under load.
 	AuditLockoutStalled = AuditEvent(auditevent.AuditLockoutStalled)
+
+	// AuditLockoutEngaged fires once when a failed attempt newly
+	// engages the cross-factor brute-force lock: the subject was not
+	// locked before the attempt and is locked after it. Attempts made
+	// while the lock is already running do not repeat it. ActorID is
+	// the subject. It is the operator's signal for "this user cannot
+	// log in": the wire response for a locked password attempt stays
+	// identical to a wrong password so it cannot enumerate accounts.
+	//
+	// Stable since v1.5.
+	AuditLockoutEngaged = AuditEvent(auditevent.AuditLockoutEngaged)
 )
 
 // Consent events. AuditConsentGranted fires when the user approves a
