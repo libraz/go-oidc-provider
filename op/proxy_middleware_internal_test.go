@@ -43,7 +43,7 @@ func TestWrapWithTrustedProxy_HonoursTrustedHeaders(t *testing.T) {
 	req.Header.Set("X-Forwarded-Host", "op.example.com")
 
 	rw := httptest.NewRecorder()
-	wrapWithTrustedProxy(h, trust).ServeHTTP(rw, req)
+	wrapWithTrustedProxy(h, trust, nil).ServeHTTP(rw, req)
 
 	if sawScheme != "https" {
 		t.Errorf("downstream r.URL.Scheme = %q, want %q", sawScheme, "https")
@@ -77,7 +77,7 @@ func TestWrapWithTrustedProxy_IgnoresUntrustedHeaders(t *testing.T) {
 	req.Header.Set("X-Forwarded-Host", "op.example.com")
 
 	rw := httptest.NewRecorder()
-	wrapWithTrustedProxy(h, trust).ServeHTTP(rw, req)
+	wrapWithTrustedProxy(h, trust, nil).ServeHTTP(rw, req)
 
 	if sawScheme == "https" {
 		t.Error("untrusted X-Forwarded-Proto leaked into r.URL.Scheme")
@@ -112,7 +112,7 @@ func TestWrapWithTrustedProxy_EmptyTrustIsNoOp(t *testing.T) {
 	req.Header.Set("X-Forwarded-Host", "evil.example")
 
 	rw := httptest.NewRecorder()
-	wrapWithTrustedProxy(h, trust).ServeHTTP(rw, req)
+	wrapWithTrustedProxy(h, trust, nil).ServeHTTP(rw, req)
 
 	if sawHost != "op.local" {
 		t.Errorf("empty trust altered r.Host: got %q, want %q", sawHost, "op.local")
@@ -139,7 +139,7 @@ func TestWrapWithTrustedProxy_RejectsDisallowedForwardedHost(t *testing.T) {
 	req.Header.Set("X-Forwarded-Host", "evil.example.com")
 
 	rw := httptest.NewRecorder()
-	wrapWithTrustedProxy(h, trust).ServeHTTP(rw, req)
+	wrapWithTrustedProxy(h, trust, nil).ServeHTTP(rw, req)
 
 	if sawScheme != "https" {
 		t.Errorf("downstream r.URL.Scheme = %q, want %q", sawScheme, "https")

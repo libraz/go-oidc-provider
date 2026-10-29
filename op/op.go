@@ -5,8 +5,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -235,7 +237,7 @@ func New(opts ...Option) (*Provider, error) {
 		return nil, err
 	}
 	handler := wrapWithProfileMiddleware(mux, cfg)
-	handler = wrapWithTrustedProxy(handler, trust)
+	handler = wrapWithTrustedProxy(handler, trust, cfg.logger)
 	provider := &Provider{
 		cfg:     cfg,
 		keys:    keySet,
@@ -272,8 +274,17 @@ func New(opts ...Option) (*Provider, error) {
 // When [WithTrustedProxies] is empty the trust rejects every CIDR and
 // the middleware is functionally a no-op; the wrap is still applied
 // unconditionally so the request flow stays uniform across deployments.
-func wrapWithTrustedProxy(h http.Handler, t *proxy.Trust) http.Handler {
+// In that state the first request carrying X-Forwarded-For,
+// X-Forwarded-Proto or X-Forwarded-Host logs one WARN per wrapped
+// handler (a Provider) on logger; a nil logger disables the warning.
+func wrapWithTrustedProxy(h http.Handler, t *proxy.Trust, logger *slog.Logger) http.Handler {
+	var warnOnce sync.Once
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if logger != nil && !t.IsConfigured() && hasForwardedHeader(r) {
+			warnOnce.Do(func() {
+				logger.Warn("forwarded headers received but WithTrustedProxies is not configured; the OP ignores X-Forwarded-* and uses the peer address for audit, risk and rate decisions")
+			})
+		}
 		resolved := proxy.Resolve(r, t)
 		if !resolved.Trusted {
 			h.ServeHTTP(w, r)
@@ -288,6 +299,17 @@ func wrapWithTrustedProxy(h http.Handler, t *proxy.Trust) http.Handler {
 		}
 		h.ServeHTTP(w, clone)
 	})
+}
+
+// hasForwardedHeader reports whether r carries any of the X-Forwarded-*
+// headers [proxy.Resolve] would honour.
+func hasForwardedHeader(r *http.Request) bool {
+	for _, k := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"} {
+		if len(r.Header.Values(k)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // wrapWithProfileMiddleware decorates the [Provider]'s router with

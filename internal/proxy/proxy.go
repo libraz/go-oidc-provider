@@ -102,9 +102,8 @@ func (t *Trust) hostAllowed(xfh string) bool {
 	return ok
 }
 
-// IsConfigured reports whether the trust has at least one CIDR. It is exposed
-// so the caller can emit the start-up WARNING when the trust
-// is empty but the deployment is presumed to be behind a proxy.
+// IsConfigured reports whether the trust has at least one CIDR. Callers use
+// it to tell an unconfigured trust apart from one that rejects a given peer.
 func (t *Trust) IsConfigured() bool { return t != nil && len(t.cidrs) > 0 }
 
 // Contains reports whether the given remote address (as parsed by [Parse])
