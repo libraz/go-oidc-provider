@@ -45,6 +45,8 @@ ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_recorded INTEGER 
 ALTER TABLE oidc_refresh_tokens ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE oidc_opaque_access_tokens ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE oidc_grant_revocations ADD COLUMN access_revoked_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_clients ADD COLUMN previous_secret_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_clients ADD COLUMN previous_secret_expires_at INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
     ON oidc_grants(client_id, subject, updated_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
@@ -100,6 +102,9 @@ ALTER TABLE oidc_opaque_access_tokens
     ADD COLUMN chain_id VARCHAR(64) NOT NULL DEFAULT '';
 ALTER TABLE oidc_grant_revocations
     ADD COLUMN access_revoked_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE oidc_clients
+    ADD COLUMN previous_secret_hash TEXT NOT NULL,
+    ADD COLUMN previous_secret_expires_at BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE oidc_grants
     ADD INDEX idx_oidc_grants_client_subject (client_id, subject, updated_at);
 ALTER TABLE oidc_grants
@@ -207,6 +212,9 @@ ALTER TABLE oidc_opaque_access_tokens
     ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE oidc_grant_revocations
     ADD COLUMN access_revoked_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE oidc_clients
+    ADD COLUMN previous_secret_hash TEXT NOT NULL DEFAULT '',
+    ADD COLUMN previous_secret_expires_at BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
     ON oidc_grants(client_id, subject, updated_at);
 CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
@@ -232,6 +240,13 @@ CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_client
 CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_client
     ON oidc_opaque_access_tokens(client_id);
 ```
+
+`previous_secret_hash` and `previous_secret_expires_at` on the clients table
+hold the one previous client secret a rotation keeps valid until its expiry
+(epoch seconds, `0` for none). MySQL cannot give a `TEXT` column a literal
+default, so its `ADD COLUMN ... TEXT NOT NULL` fills existing rows with the
+empty string, which reads as no previous secret. `Store.Migrate` refuses to
+start against a clients table that lacks these columns.
 
 The `allowed_scopes` column is nullable intentionally: `NULL` represents an
 unrestricted RAT ceiling, including RATs created before scope ceilings were

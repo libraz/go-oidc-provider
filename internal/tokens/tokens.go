@@ -32,6 +32,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -264,9 +265,15 @@ func HashForAlg(input, alg string) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(sum[:len(sum)/2]), nil
 }
 
-// idTokenStandardKeys is the set of claim names [SignIDToken] manages
-// itself. Callers that pass [IDTokenClaims.Extra] MUST NOT include any
-// of these keys.
+// IDTokenReservedClaims returns a copy of the claim names [SignIDToken]
+// manages itself. Callers that pass [IDTokenClaims.Extra] MUST NOT include
+// any of these keys.
+func IDTokenReservedClaims() map[string]struct{} {
+	return maps.Clone(idTokenStandardKeys)
+}
+
+// idTokenStandardKeys is the single definition behind
+// [IDTokenReservedClaims].
 //
 //nolint:gochecknoglobals // closed allow-list, intentional package state.
 var idTokenStandardKeys = map[string]struct{}{

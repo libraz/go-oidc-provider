@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -337,7 +338,7 @@ func issueAuthCodeResponse(
 	}
 	var idToken string
 	if oidcscope.ContainsOpenID(exchanged.Scope) {
-		idTokenExtra := projectIDTokenClaims(user, authCtx.Claims)
+		idTokenExtra := idTokenExtraClaims(deps, user, exchanged.Scope, authCtx.Claims)
 		idToken, err = mintAuthCodeIDToken(deps, mintIDTokenInput{
 			Subject:     publicSubject,
 			ClientID:    client.ID,
@@ -1038,11 +1039,10 @@ func projectIDTokenClaims(user *store.User, req *authorize.ClaimsRequest) map[st
 		return nil
 	}
 	source := userclaims.Source(user)
+	reserved := tokens.IDTokenReservedClaims()
 	out := map[string]any{}
 	for name, spec := range req.IDToken {
-		switch name {
-		case "sub", "iss", "aud", "iat", "exp", "auth_time", "nonce",
-			"acr", "amr", "azp", "at_hash", "c_hash", "sid":
+		if _, isReserved := reserved[name]; isReserved {
 			// Standard id_token claims are issued by the library
 			// itself; the projector never overwrites them. The
 			// "acr" claim in particular is delegated to the
@@ -1062,4 +1062,57 @@ func projectIDTokenClaims(user *store.User, req *authorize.ClaimsRequest) map[st
 		return nil
 	}
 	return out
+}
+
+// idTokenExtraClaims assembles [tokens.IDTokenClaims.Extra]: the §5.5
+// "claims" projection plus, for the scopes configured through
+// Deps.IDTokenScopeClaims that responseScope carries, the claims those
+// scopes release at /userinfo. A name the "claims" parameter requests is
+// decided by that request alone, so a failed value / values constraint
+// is not overridden from the scope side. A nil user yields nil.
+func idTokenExtraClaims(deps Deps, user *store.User, responseScope []string, req *authorize.ClaimsRequest) map[string]any {
+	if user == nil {
+		return nil
+	}
+	out := projectIDTokenClaims(user, req)
+	scopes := idTokenClaimScopes(deps.IDTokenScopeClaims, responseScope)
+	if len(scopes) == 0 {
+		return out
+	}
+	source := userclaims.Source(user)
+	reserved := tokens.IDTokenReservedClaims()
+	for name := range userclaims.ScopeClaimNames(scopes, deps.CustomScopeClaims) {
+		if _, isReserved := reserved[name]; isReserved || claimsRequestNames(req, name) {
+			continue
+		}
+		if v, ok := source[name]; ok {
+			if out == nil {
+				out = map[string]any{}
+			}
+			out[name] = v
+		}
+	}
+	return out
+}
+
+// idTokenClaimScopes returns the scopes of responseScope that are configured
+// to release their claims into the ID Token.
+func idTokenClaimScopes(configured, responseScope []string) []string {
+	var scopes []string
+	for _, s := range responseScope {
+		if slices.Contains(configured, s) {
+			scopes = append(scopes, s)
+		}
+	}
+	return scopes
+}
+
+// claimsRequestNames reports whether the "claims" parameter's id_token
+// member names claim.
+func claimsRequestNames(req *authorize.ClaimsRequest, claim string) bool {
+	if req == nil {
+		return false
+	}
+	_, named := req.IDToken[claim]
+	return named
 }

@@ -309,6 +309,53 @@ var clientRegistryCases = []subtest{
 	{"DeleteMissing", clientDeleteMissing},
 	{"UpdateRoundTrip", clientUpdateRoundTrip},
 	{"UpdateUnchanged", clientUpdateUnchanged},
+	{"PreviousSecretRoundTrip", clientPreviousSecretRoundTrip},
+}
+
+// clientPreviousSecretRoundTrip pins that the rotation overlap survives a
+// write and a read on every backend: the previous hash verbatim and its
+// expiry at second precision, and that an update can clear both.
+func clientPreviousSecretRoundTrip(t *testing.T, f Factory) {
+	b := f(t)
+	registry := requireRegistry(t, b.Store)
+	ctx := context.Background()
+	expires := time.Date(2090, 1, 2, 3, 4, 5, 0, time.UTC)
+	c := &store.Client{
+		ID:                      "rotating",
+		RedirectURIs:            []string{"https://rp.example.com/cb"},
+		GrantTypes:              []string{"authorization_code"},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		SecretHash:              "current-hash",
+		PreviousSecretHash:      "previous-hash",
+		PreviousSecretExpiresAt: expires,
+	}
+	if err := registry.RegisterClient(ctx, c); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+	got, err := b.Store.Clients().GetClient(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if got.PreviousSecretHash != "previous-hash" {
+		t.Fatalf("PreviousSecretHash = %q, want %q", got.PreviousSecretHash, "previous-hash")
+	}
+	if got.PreviousSecretExpiresAt.Unix() != expires.Unix() {
+		t.Fatalf("PreviousSecretExpiresAt = %v, want %v", got.PreviousSecretExpiresAt, expires)
+	}
+
+	got.PreviousSecretHash = ""
+	got.PreviousSecretExpiresAt = time.Time{}
+	if err := registry.UpdateClient(ctx, got); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	cleared, err := b.Store.Clients().GetClient(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetClient after clear: %v", err)
+	}
+	if cleared.PreviousSecretHash != "" || !cleared.PreviousSecretExpiresAt.IsZero() {
+		t.Fatalf("previous secret not cleared: hash=%q expires=%v", cleared.PreviousSecretHash, cleared.PreviousSecretExpiresAt)
+	}
 }
 
 // clientUpdateUnchanged pins that ErrNotFound reports absence and

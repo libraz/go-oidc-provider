@@ -285,6 +285,8 @@ func authenticate(
 			SecretVerifier:    deps.SecretVerifier,
 			AssertionVerifier: deps.AssertionVerifier,
 			AllowedMethods:    deps.AllowedClientAuthMethods,
+			Now:               revokeNow(deps),
+			Audit:             deps.audit(),
 		},
 		// /revoke does not raise an audit event on pre-authentication
 		// failures: RFC 7009 §2.2 collapses the success path to "always

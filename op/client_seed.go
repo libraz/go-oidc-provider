@@ -3,6 +3,7 @@ package op
 import (
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -245,6 +246,37 @@ type ConfidentialClient struct {
 	// Mutually exclusive with Secret.
 	SecretHash string
 
+	// PreviousSecret is the plaintext of the secret this client used
+	// before its latest rotation. The OP keeps accepting it until
+	// PreviousSecretExpiresAt, so callers can switch over without an
+	// outage. It is hashed with Argon2id, or, when it still verifies
+	// against the stored record, the stored hash is reused so repeated
+	// runs of [SyncStaticClients] stay unchanged.
+	//
+	// Mutually exclusive with PreviousSecretHash. Requires
+	// PreviousSecretExpiresAt.
+	//
+	// Stable since v1.5.
+	PreviousSecret string
+
+	// PreviousSecretHash is the stored encoding of the previous secret,
+	// produced through [NewClientSecret] or [HashHighEntropyClientSecret].
+	// It is the required form under [WithHighEntropyClientSecrets].
+	//
+	// Mutually exclusive with PreviousSecret. Requires
+	// PreviousSecretExpiresAt.
+	//
+	// Stable since v1.5.
+	PreviousSecretHash string
+
+	// PreviousSecretExpiresAt is the instant after which the previous
+	// secret stops authenticating. It is required whenever PreviousSecret
+	// or PreviousSecretHash is set. An instant already in the past is
+	// accepted; the previous secret is then simply ignored.
+	//
+	// Stable since v1.5.
+	PreviousSecretExpiresAt time.Time
+
 	// AuthMethod selects the token-endpoint authentication method.
 	// Empty defaults to [AuthClientSecretBasic].
 	AuthMethod AuthMethod
@@ -349,6 +381,61 @@ func (c ConfidentialClient) secretHash(method AuthMethod) (string, error) {
 	return hash, nil
 }
 
+// previousSecretHash resolves the stored encoding of the previous secret.
+// Both fields empty means no previous secret; otherwise exactly one must be
+// set and the expiry is required.
+func (c ConfidentialClient) previousSecretHash() (string, error) {
+	if c.PreviousSecret == "" && c.PreviousSecretHash == "" {
+		return "", nil
+	}
+	if c.PreviousSecret != "" && c.PreviousSecretHash != "" {
+		return "", &Error{
+			Code:        codeConfiguration,
+			Description: "ConfidentialClient " + c.ID + ": PreviousSecret and PreviousSecretHash are mutually exclusive",
+		}
+	}
+	if c.PreviousSecretExpiresAt.IsZero() {
+		return "", &Error{
+			Code:        codeConfiguration,
+			Description: "ConfidentialClient " + c.ID + ": PreviousSecretExpiresAt is required with a previous secret",
+		}
+	}
+	if c.PreviousSecretHash != "" {
+		return c.PreviousSecretHash, nil
+	}
+	hash, err := HashClientSecret(c.PreviousSecret)
+	if err != nil {
+		return "", &Error{
+			Code:        codeConfiguration,
+			Description: "ConfidentialClient: hashing previous client secret failed",
+			Cause:       err,
+		}
+	}
+	return hash, nil
+}
+
+// staticSeedSecrets carries the plaintexts a ConfidentialClient seed
+// supplied, keyed by client_id, so reconciliation can reuse an existing
+// salted hash that already verifies them. An empty field means the seed did
+// not supply that plaintext.
+type staticSeedSecrets struct {
+	current  string
+	previous string
+}
+
+// staticClientPreviousPlaintext is the previous-secret counterpart of
+// staticClientPlaintext.
+func staticClientPreviousPlaintext(seed ClientSeed) (string, bool) {
+	switch value := seed.(type) {
+	case ConfidentialClient:
+		return value.PreviousSecret, value.PreviousSecret != ""
+	case *ConfidentialClient:
+		return value.PreviousSecret, value.PreviousSecret != ""
+	default:
+		return "", false
+	}
+}
+
 func (c ConfidentialClient) seed() (store.Client, error) {
 	if err := checkDefaultMaxAge("ConfidentialClient", c.ID, c.DefaultMaxAge); err != nil {
 		return store.Client{}, err
@@ -360,6 +447,14 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 	hash, err := c.secretHash(method)
 	if err != nil {
 		return store.Client{}, err
+	}
+	previousHash, err := c.previousSecretHash()
+	if err != nil {
+		return store.Client{}, err
+	}
+	var previousExpiry time.Time
+	if previousHash != "" {
+		previousExpiry = c.PreviousSecretExpiresAt
 	}
 	grants := c.GrantTypes
 	if len(grants) == 0 {
@@ -383,6 +478,8 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 		TokenEndpointAuthMethod:          method.String(),
 		TokenEndpointAuthSigningAlg:      c.TokenEndpointAuthSigningAlg,
 		SecretHash:                       hash,
+		PreviousSecretHash:               previousHash,
+		PreviousSecretExpiresAt:          previousExpiry,
 		Source:                           store.ClientSourceStatic,
 		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),
 		BackchannelLogoutURI:             c.BackchannelLogoutURI,

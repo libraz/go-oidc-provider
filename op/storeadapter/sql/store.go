@@ -318,6 +318,7 @@ func (s *Store) ValidateSchema(ctx context.Context) error {
 		table   string
 		columns []string
 	}{
+		{s.names.clients, []string{"previous_secret_hash", "previous_secret_expires_at"}},
 		{s.names.refreshes, requiredRefreshTokenColumns},
 		{s.names.authCodes, requiredAuthorizationStateColumns},
 		{s.names.opaqueAccessTokens, []string{"authorization_details", "claims", "authorization_recorded", "chain_id"}},

@@ -107,6 +107,9 @@ func serveInteractionGet(w http.ResponseWriter, r *http.Request, deps resolved, 
 // submission and dispatches the resulting [interaction.Step].
 func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
 	if err := csrf.CheckOrigin(r, deps.InteractionOrigins); err != nil {
+		if deps.OnOpaqueOrigin != nil && csrf.IsOpaqueSameOrigin(r) {
+			deps.OnOpaqueOrigin()
+		}
 		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "origin not allowed", "")
 		return
 	}
@@ -143,6 +146,9 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 //nolint:gocognit // The validation and conflict branches preserve the protocol's response distinctions.
 func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
 	if err := csrf.CheckOrigin(r, deps.InteractionOrigins); err != nil {
+		if deps.OnOpaqueOrigin != nil && csrf.IsOpaqueSameOrigin(r) {
+			deps.OnOpaqueOrigin()
+		}
 		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "origin not allowed", "")
 		return
 	}
@@ -1519,5 +1525,39 @@ func stampPromptLocale(r *http.Request, deps resolved, prompt *interaction.Promp
 			out[i] = string(t)
 		}
 		prompt.LocalesAvailable = out
+	}
+	stampPromptText(deps.LocaleResolver, tag, prompt)
+}
+
+// stampPromptText resolves the input labels, the factor-choice option
+// labels and the prompt error message in tag. It copies every slice and
+// struct it writes to, because the prompt is a shallow copy of a value the
+// authenticator may reuse. A key the catalogue lacks leaves its text empty.
+func stampPromptText(res *i18n.Resolver, tag i18n.Tag, prompt *interaction.Prompt) {
+	resolve := func(key string) string {
+		if text, ok := res.Message(tag, key, nil); ok {
+			return text
+		}
+		return ""
+	}
+	if len(prompt.Inputs) > 0 {
+		inputs := slices.Clone(prompt.Inputs)
+		for i := range inputs {
+			inputs[i].LabelText = resolve(inputs[i].Label)
+		}
+		prompt.Inputs = inputs
+	}
+	if data, ok := prompt.Data.(interaction.FactorChoicePromptData); ok && len(data.Options) > 0 {
+		options := slices.Clone(data.Options)
+		for i := range options {
+			options[i].LabelText = resolve(options[i].Label)
+		}
+		data.Options = options
+		prompt.Data = data
+	}
+	if prompt.Error != nil {
+		perr := *prompt.Error
+		perr.Message = resolve(interaction.PromptErrorMessageKey(perr.Code))
+		prompt.Error = &perr
 	}
 }

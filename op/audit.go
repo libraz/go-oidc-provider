@@ -374,6 +374,16 @@ const (
 // fills that gap; the wire shape is unchanged.
 const (
 	AuditClientAuthnFailure = AuditEvent(auditevent.AuditClientAuthnFailure)
+
+	// AuditClientAuthnPreviousSecret fires when a client authenticates
+	// with client_secret_basic or client_secret_post using its previous
+	// secret inside the rotation window. ClientID is the client and
+	// Extras["method"] the method used; the secret is never attached.
+	// Operators use it to find clients that still have to switch before
+	// the window closes.
+	//
+	// Stable since v1.5.
+	AuditClientAuthnPreviousSecret = AuditEvent(auditevent.AuditClientAuthnPreviousSecret)
 )
 
 // Dynamic Client Registration events. Fire from /register and

@@ -48,6 +48,41 @@ func TestCanonicalOrigin(t *testing.T) {
 	}
 }
 
+func TestIsOpaqueSameOrigin(t *testing.T) {
+	t.Parallel()
+
+	rows := []struct {
+		name   string
+		origin string
+		fetch  string
+		want   bool
+	}{
+		{name: "null and same-origin", origin: "null", fetch: "same-origin", want: true},
+		{name: "trimmed and case-insensitive", origin: " null ", fetch: "Same-Origin", want: true},
+		{name: "null without fetch metadata", origin: "null"},
+		{name: "null and cross-site", origin: "null", fetch: "cross-site"},
+		{name: "null and same-site", origin: "null", fetch: "same-site"},
+		{name: "real origin and same-origin", origin: "https://op.example.com", fetch: "same-origin"},
+		{name: "no origin and same-origin", fetch: "same-origin"},
+		{name: "case-different null", origin: "NULL", fetch: "same-origin"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			r := newPOST(t)
+			if row.origin != "" {
+				r.Header.Set("Origin", row.origin)
+			}
+			if row.fetch != "" {
+				r.Header.Set("Sec-Fetch-Site", row.fetch)
+			}
+			if got := csrf.IsOpaqueSameOrigin(r); got != row.want {
+				t.Errorf("IsOpaqueSameOrigin = %v, want %v", got, row.want)
+			}
+		})
+	}
+}
+
 func TestCanonicalOrigin_RejectsRelativeURLs(t *testing.T) {
 	t.Parallel()
 

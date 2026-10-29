@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
     token_endpoint_auth_method TEXT NOT NULL DEFAULT '',
     token_endpoint_auth_signing_alg TEXT NOT NULL DEFAULT '',
     secret_hash TEXT NOT NULL DEFAULT '',
+    previous_secret_hash TEXT NOT NULL DEFAULT '',
+    previous_secret_expires_at BIGINT NOT NULL DEFAULT 0,
     public_client SMALLINT NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT '',
     application_type TEXT NOT NULL DEFAULT '',

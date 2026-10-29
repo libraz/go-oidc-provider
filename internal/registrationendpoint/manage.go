@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
@@ -238,6 +239,12 @@ func applyMetadataToClient(existing *store.Client, m ClientMetadata, secretHash 
 	updated.TokenEndpointAuthMethod = m.TokenEndpointAuthMethod
 	updated.TokenEndpointAuthSigningAlg = m.TokenEndpointAuthSigningAlg
 	updated.SecretHash = secretHash
+	if secretHash != existing.SecretHash {
+		// The current secret was cleared or newly minted; a previous one
+		// must not survive to be revived by a later switch back.
+		updated.PreviousSecretHash = ""
+		updated.PreviousSecretExpiresAt = time.Time{}
+	}
 	updated.PublicClient = isPublicAuthMethod(m.TokenEndpointAuthMethod)
 	updated.ApplicationType = m.ApplicationType
 	updated.SubjectType = m.SubjectType

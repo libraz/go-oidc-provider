@@ -266,10 +266,10 @@ func WithInteractions(i ...Interaction) Option {
 // struct is supplied to [WithSPAUI]; the option stores it on config
 // and the orchestrator wiring translates LoginMount into the shell,
 // JSON state, and asset routes. The scope is deliberately limited to
-// login / consent: the RP-Initiated Logout confirmation is always the
-// OP's built-in page, and front-channel logout and session management
-// iframes are out of scope, so [SPAUI] does not carry mounts for
-// those surfaces.
+// login / consent: the RP-Initiated Logout pages are rendered by the
+// server (restyle them with [WithLogoutUI]), and front-channel logout
+// and session management iframes are out of scope, so [SPAUI] does not
+// carry mounts for those surfaces.
 // LoginMount is the only field that affects routing; see the
 // deprecation notes on ConsentMount and LogoutMount. Embedders SHOULD
 // construct [SPAUI] with named field initialisation so optional fields
@@ -345,10 +345,10 @@ type SPAUI struct {
 	// LogoutMount is the URL path the RP-Initiated Logout confirmation
 	// screen renders under.
 	//
-	// Deprecated: no handler reads this field. The OP renders its
-	// built-in logout confirmation whether LogoutMount is set or empty.
-	// The value is still validated — when non-empty it MUST start with
-	// "/" — but it reserves no route and changes no routing.
+	// Deprecated: no handler reads this field. To change the logout
+	// confirmation and signed-out pages, use [WithLogoutUI]. The value is
+	// still validated — when non-empty it MUST start with "/" — but it
+	// reserves no route and changes no routing.
 	LogoutMount string
 
 	// StaticDir is the on-disk directory the [Provider] serves
@@ -496,11 +496,11 @@ func WithLoginFlow(flow LoginFlow) Option {
 }
 
 // WithSPAUI registers the [SPAUI] mount points the SPA frontend
-// hosts. With a SPA shell active the default-driver fallback in
-// [config.applyDefaults] short-circuits so the embedder's SPA owns
-// rendering; the OP falls back to [interaction.JSONDriver] for the
-// /interaction state endpoint. Mutually exclusive with [WithConsentUI];
-// supplying both fails [New].
+// hosts. With a SPA shell active the default HTML driver is not
+// installed, so the embedder's SPA owns rendering: it reads each prompt
+// as JSON from LoginMount/state/{uid}. The RP-Initiated Logout pages stay
+// server-rendered ([WithLogoutUI] restyles them). Mutually exclusive with
+// [WithConsentUI]; supplying both fails [New].
 //
 // The front end is fully replaceable, so the wire contract it has to
 // implement is part of this option's surface rather than a property of

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -228,6 +229,23 @@ type Deps struct {
 	// back to [audit.Discard] so the handler can emit session.destroyed
 	// unconditionally on successful OP session termination.
 	Audit audit.Emitter
+
+	// ConfirmTemplate replaces the built-in confirmation page when
+	// non-nil. It is executed with [interaction.LogoutConfirmTemplateData].
+	ConfirmTemplate *template.Template
+
+	// SignedOutTemplate replaces the built-in signed-out page when
+	// non-nil. It is executed with [interaction.LogoutSignedOutTemplateData].
+	SignedOutTemplate *template.Template
+
+	// LogoutCSP is the declared Content-Security-Policy for the two
+	// templated pages. It is re-normalized at render time; an empty or
+	// rejected value keeps the strict default.
+	LogoutCSP string
+
+	// OnOpaqueOrigin, when non-nil, is called after the confirmation
+	// POST is rejected and [csrf.IsOpaqueSameOrigin] holds for it.
+	OnOpaqueOrigin func()
 }
 
 func (d Deps) audit() audit.Emitter {
@@ -534,6 +552,9 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, deps Deps, f flow) 
 		return false
 	}
 	if !validateOriginOrReferer(r, deps.Origins) {
+		if deps.OnOpaqueOrigin != nil && csrf.IsOpaqueSameOrigin(r) {
+			deps.OnOpaqueOrigin()
+		}
 		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
 		return false
 	}
@@ -1197,12 +1218,12 @@ func clearSessionCookie(w http.ResponseWriter) {
 // regression that loosens validatePostLogout's exact-match rule.
 func emitResponse(w http.ResponseWriter, r *http.Request, deps Deps, f flow) {
 	if f.req.postLogout == "" {
-		writeLoggedOutPage(w, resolveLoggedOutPage(r, deps, f))
+		writeLoggedOutPage(w, deps, resolveLoggedOutPage(r, deps, f))
 		return
 	}
 	target, ok := buildPostLogoutRedirect(f.req.postLogout, f.req.state)
 	if !ok {
-		writeLoggedOutPage(w, resolveLoggedOutPage(r, deps, f))
+		writeLoggedOutPage(w, deps, resolveLoggedOutPage(r, deps, f))
 		return
 	}
 	http.Redirect(w, r, target, http.StatusFound)

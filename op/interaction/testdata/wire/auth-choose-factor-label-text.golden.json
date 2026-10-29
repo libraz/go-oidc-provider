@@ -1,0 +1,1 @@
+{"options":[{"kind":"totp","label":"auth.factor.totp","label_text":"Authenticator app"},{"kind":"passkey","label":"auth.factor.passkey","label_text":"Passkey"}]}

@@ -306,7 +306,8 @@ func TestAuditEvent_ClientAuthnMirror(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]op.AuditEvent{
-		"client_authn.failure": op.AuditClientAuthnFailure,
+		"client_authn.failure":         op.AuditClientAuthnFailure,
+		"client_authn.previous_secret": op.AuditClientAuthnPreviousSecret,
 	}
 	for s, ev := range want {
 		if string(ev) != s {

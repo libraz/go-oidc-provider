@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -427,6 +428,132 @@ func (f *scdFlow) idTokenClaims(t *testing.T, code string) map[string]any {
 		t.Fatalf("unmarshal id_token claims: %v", err)
 	}
 	return claims
+}
+
+// TestClientSeed_PreviousSecret_Validation pins the shape rules on the
+// previous-secret fields and their interaction with
+// WithHighEntropyClientSecrets.
+func TestClientSeed_PreviousSecret_Validation(t *testing.T) {
+	t.Parallel()
+
+	_, heCurrent, err := op.NewClientSecret()
+	if err != nil {
+		t.Fatalf("NewClientSecret: %v", err)
+	}
+	_, hePrevious, err := op.NewClientSecret()
+	if err != nil {
+		t.Fatalf("NewClientSecret: %v", err)
+	}
+	future := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	past := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	base := func() op.ConfidentialClient {
+		return op.ConfidentialClient{
+			ID:           "rp-rotate",
+			RedirectURIs: []string{scdCallback},
+			Scopes:       []string{"openid"},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		highEntro bool
+		seed      func() op.ConfidentialClient
+		wantError string
+	}{
+		{
+			name: "plaintext previous with expiry",
+			seed: func() op.ConfidentialClient {
+				c := base()
+				c.Secret, c.PreviousSecret, c.PreviousSecretExpiresAt = "new-secret", "old-secret", future
+				return c
+			},
+		},
+		{
+			name: "hash previous with expiry",
+			seed: func() op.ConfidentialClient {
+				c := base()
+				c.Secret, c.PreviousSecretHash, c.PreviousSecretExpiresAt = "new-secret", hePrevious, future
+				return c
+			},
+		},
+		{
+			name: "past expiry is not an error",
+			seed: func() op.ConfidentialClient {
+				c := base()
+				c.Secret, c.PreviousSecret, c.PreviousSecretExpiresAt = "new-secret", "old-secret", past
+				return c
+			},
+		},
+		{
+			name: "both previous forms are exclusive",
+			seed: func() op.ConfidentialClient {
+				c := base()
+				c.Secret, c.PreviousSecret, c.PreviousSecretHash = "new-secret", "old-secret", hePrevious
+				c.PreviousSecretExpiresAt = future
+				return c
+			},
+			wantError: "mutually exclusive",
+		},
+		{
+			name: "plaintext previous needs an expiry",
+			seed: func() op.ConfidentialClient {
+				c := base()
+				c.Secret, c.PreviousSecret = "new-secret", "old-secret"
+				return c
+			},
+			wantError: "PreviousSecretExpiresAt",
+		},
+		{
+			name: "hash previous needs an expiry",
+			seed: func() op.ConfidentialClient {
+				c := base()
+				c.Secret, c.PreviousSecretHash = "new-secret", hePrevious
+				return c
+			},
+			wantError: "PreviousSecretExpiresAt",
+		},
+		{
+			name:      "high entropy rejects an argon2id previous",
+			highEntro: true,
+			seed: func() op.ConfidentialClient {
+				c := base()
+				c.SecretHash, c.PreviousSecret, c.PreviousSecretExpiresAt = heCurrent, "old-secret", future
+				return c
+			},
+			wantError: "previous secret",
+		},
+		{
+			name:      "high entropy accepts a high-entropy previous hash",
+			highEntro: true,
+			seed: func() op.ConfidentialClient {
+				c := base()
+				c.SecretHash, c.PreviousSecretHash, c.PreviousSecretExpiresAt = heCurrent, hePrevious, future
+				return c
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			extra := []op.Option{op.WithStaticClients(tc.seed())}
+			if tc.highEntro {
+				extra = append(extra, op.WithHighEntropyClientSecrets())
+			}
+			_, err := op.New(testkit.MinimalOptions(t, extra...)...)
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatalf("op.New: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("op.New accepted the configuration, want a configuration error")
+			}
+			if desc := configurationDescription(t, err); !strings.Contains(desc, tc.wantError) {
+				t.Errorf("description %q must mention %q", desc, tc.wantError)
+			}
+		})
+	}
 }
 
 // TestClientSeed_PublicSurface pins the public-API shape of the

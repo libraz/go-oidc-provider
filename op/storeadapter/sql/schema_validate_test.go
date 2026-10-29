@@ -80,6 +80,29 @@ func TestValidateSchema_MissingColumn(t *testing.T) {
 	}
 }
 
+func TestValidateSchema_MissingPreviousSecretColumns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, db := newValidateStore(t)
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for _, col := range []string{"previous_secret_hash", "previous_secret_expires_at"} {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE oidc_clients DROP COLUMN "+col); err != nil {
+			t.Fatalf("drop column %s: %v", col, err)
+		}
+	}
+	err := s.ValidateSchema(ctx)
+	if err == nil {
+		t.Fatal("ValidateSchema succeeded with the previous-secret columns missing")
+	}
+	for _, want := range []string{"oidc_clients", "previous_secret_hash", "previous_secret_expires_at"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
 func TestValidateSchema_DoesNotCreate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

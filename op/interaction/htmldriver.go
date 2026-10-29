@@ -208,6 +208,7 @@ func (d HTMLDriver) buildHTMLDocument(prompt Prompt) string {
 	b.WriteString(`<h1>`)
 	b.WriteString(html.EscapeString(title))
 	b.WriteString(`</h1>`)
+	writePromptError(&b, prompt.Error)
 	// The chooser is the one prompt whose page is not "some inputs and
 	// a submit button": the answer is which of N rows the user picked,
 	// so each row carries its own submit and there is no single
@@ -223,6 +224,24 @@ func (d HTMLDriver) buildHTMLDocument(prompt Prompt) string {
 	}
 	b.WriteString(`</body></html>`)
 	return b.String()
+}
+
+// promptErrorFallback is shown when a [PromptError] carries no resolved
+// message.
+const promptErrorFallback = "The details you entered are incorrect. Try again."
+
+// writePromptError emits the rejected-submission notice ahead of the form.
+func writePromptError(b *strings.Builder, perr *PromptError) {
+	if perr == nil {
+		return
+	}
+	message := perr.Message
+	if message == "" {
+		message = promptErrorFallback
+	}
+	b.WriteString(`<p role="alert">`)
+	b.WriteString(html.EscapeString(message))
+	b.WriteString(`</p>`)
 }
 
 // writeStandardBody emits the intro, the form, and the single submit

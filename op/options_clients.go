@@ -37,7 +37,7 @@ func WithStaticClients(seeds ...ClientSeed) Option {
 		}
 		c.staticClients = append(c.staticClients, records...)
 		if len(plaintexts) > 0 && c.staticClientSecrets == nil {
-			c.staticClientSecrets = make(map[string]string, len(plaintexts))
+			c.staticClientSecrets = make(map[string]staticSeedSecrets, len(plaintexts))
 		}
 		maps.Copy(c.staticClientSecrets, plaintexts)
 		return nil
@@ -94,7 +94,7 @@ func WithHighEntropyClientSecrets() Option {
 // [SyncStaticClients]: a nil seed, a seed that fails its own projection
 // (an empty secret, a malformed field) and a duplicate ID within seeds
 // are rejected here.
-func collectStaticClientSeeds(seeds []ClientSeed) (records []store.Client, plaintexts map[string]string, err error) {
+func collectStaticClientSeeds(seeds []ClientSeed) (records []store.Client, plaintexts map[string]staticSeedSecrets, err error) {
 	records = make([]store.Client, 0, len(seeds))
 	for i, seed := range seeds {
 		if isNilLike(seed) {
@@ -112,11 +112,13 @@ func collectStaticClientSeeds(seeds []ClientSeed) (records []store.Client, plain
 			}
 		}
 		records = append(records, rec)
-		if secret, ok := staticClientPlaintext(seed); ok {
+		current, hasCurrent := staticClientPlaintext(seed)
+		previous, hasPrevious := staticClientPreviousPlaintext(seed)
+		if hasCurrent || hasPrevious {
 			if plaintexts == nil {
-				plaintexts = make(map[string]string)
+				plaintexts = make(map[string]staticSeedSecrets)
 			}
-			plaintexts[rec.ID] = secret
+			plaintexts[rec.ID] = staticSeedSecrets{current: current, previous: previous}
 		}
 	}
 	seen := make(map[string]struct{}, len(records))

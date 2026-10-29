@@ -81,14 +81,15 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 		emitDeviceCodeReject(ctx, deps, client.ID, reason)
 		return
 	}
-	if _, err := lookupLiveSubject(ctx, deps, authorized.Subject); err != nil {
+	user, err := lookupLiveSubject(ctx, deps, authorized.Subject)
+	if err != nil {
 		if errors.Is(err, errSubjectDeprovisioned) {
 			retireDeprovisionedDeviceCode(ctx, deps, client.ID, authorized.Subject, in.DeviceCode)
 		}
 		writeSubjectLookupError(w, err)
 		return
 	}
-	issued, err := prepareDeviceCodeResponse(ctx, deps, client, authorized, devicecode.GrantID(in.DeviceCode), binding)
+	issued, err := prepareDeviceCodeResponse(ctx, deps, client, authorized, user, devicecode.GrantID(in.DeviceCode), binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -430,6 +431,7 @@ func prepareDeviceCodeResponse(
 	deps Deps,
 	client *store.Client,
 	authorized *dcgrant.Authorized,
+	user *store.User,
 	grantID string,
 	binding tokenBinding,
 ) (out preparedDeviceCodeResponse, err error) {
@@ -504,6 +506,7 @@ func prepareDeviceCodeResponse(
 			AccessToken: accessToken,
 			Now:         now,
 			AuthTime:    authTime,
+			Extra:       idTokenExtraClaims(deps, user, authorized.Scope, nil),
 		})
 		if err != nil {
 			return preparedDeviceCodeResponse{}, err
@@ -555,6 +558,7 @@ type deviceCodeIDTokenInput struct {
 	AccessToken string
 	Now         time.Time
 	AuthTime    int64
+	Extra       map[string]any
 }
 
 // mintDeviceCodeIDToken signs the id_token issued in response to a
@@ -582,6 +586,7 @@ func mintDeviceCodeIDToken(deps Deps, in deviceCodeIDTokenInput) (string, error)
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
 		AtHash:    atHash,
 		AuthTime:  in.AuthTime,
+		Extra:     in.Extra,
 	}
 	return tokens.SignIDToken(key, claims)
 }

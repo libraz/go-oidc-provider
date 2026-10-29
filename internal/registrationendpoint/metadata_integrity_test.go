@@ -258,11 +258,13 @@ func TestManage_ReadModifyWriteIsLossless(t *testing.T) {
 // round-trip fixture is caught here rather than passing vacuously.
 func assertEveryMetadataFieldSet(t *testing.T, c *store.Client, variant string) {
 	t.Helper()
-	exempt := map[string]string{
+	exempt := map[string]string{ //nolint:gosec // Field names and reasons, not credentials.
 		"Resources":                        "operator-only allow-list, not registration metadata",
 		"PublicClient":                     "false for a confidential auth method",
 		"SectorIdentifierURI":              "needs a pairwise OP and a fetched sector document",
 		"BackchannelLogoutSessionRequired": "true is refused by this OP",
+		"PreviousSecretHash":               "set by secret rotation, not by registration",
+		"PreviousSecretExpiresAt":          "set by secret rotation, not by registration",
 	}
 	if variant == "jwks_uri" {
 		exempt["JWKs"] = "mutually exclusive with jwks_uri"

@@ -54,6 +54,33 @@ func TestPromptWireKeys_Golden(t *testing.T) {
 				{Kind: "passkey", Label: "auth.factor.passkey"},
 			},
 		}},
+		{"prompt-error", interaction.Prompt{
+			Type: "auth.password",
+			Data: interaction.PasswordPromptData{UsernameHint: "alice"},
+			Inputs: []interaction.FieldSpec{
+				{Name: "password", Kind: interaction.FieldPassword, Label: "auth.password.password", LabelText: "Password", Required: true},
+			},
+			StateRef: "ref-1",
+			Locale:   "en",
+			Error: &interaction.PromptError{
+				Code:    interaction.PromptErrorCredentialsRejected,
+				Message: "The details you entered are incorrect. Try again.",
+			},
+		}},
+		{"prompt-error-code-only", interaction.Prompt{
+			Type:     "auth.password",
+			StateRef: "ref-1",
+			Error:    &interaction.PromptError{Code: interaction.PromptErrorCredentialsRejected},
+		}},
+		{"field-specs-label-text", []interaction.FieldSpec{
+			{Name: "code", Kind: interaction.FieldOTPCode, Label: "auth.totp.code", LabelText: "Authenticator code", MaxLen: 6, MinLen: 6, Required: true, Pattern: "[0-9]{6}"},
+		}},
+		{"auth-choose-factor-label-text", interaction.FactorChoicePromptData{
+			Options: []interaction.FactorOption{
+				{Kind: "totp", Label: "auth.factor.totp", LabelText: "Authenticator app"},
+				{Kind: "passkey", Label: "auth.factor.passkey", LabelText: "Passkey"},
+			},
+		}},
 		{"field-specs", []interaction.FieldSpec{
 			{Name: "code", Kind: interaction.FieldOTPCode, Label: "auth.totp.code", MaxLen: 6, MinLen: 6, Required: true, Pattern: "[0-9]{6}"},
 			{Name: "password", Kind: interaction.FieldPassword, Label: "auth.password.password"},

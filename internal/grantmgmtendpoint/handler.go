@@ -198,6 +198,8 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 			SecretVerifier:    deps.SecretVerifier,
 			AssertionVerifier: deps.AssertionVerifier,
 			AllowedMethods:    deps.AllowedClientAuthMethods,
+			Now:               deps.now(),
+			Audit:             deps.audit(),
 		}, nil)
 	if !ok {
 		return nil, nil, false

@@ -32,6 +32,7 @@
   "auth.recovery_code": "リカバリーコードを入力",
   "auth.recovery_code.code": "リカバリーコード",
   "auth.attempts_remaining": "残り試行回数: {count}",
+  "auth.error.credentials_rejected": "入力内容が正しくありません。もう一度お試しください。",
   "auth.passkey": "パスキーを使用",
   "auth.passkey.response": "パスキー応答",
   "auth.choose_factor": "サインイン方法を選択",

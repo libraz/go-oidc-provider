@@ -207,6 +207,11 @@ type Deps struct {
 	// registration belongs in it.
 	InteractionOrigins *csrf.Allowlist
 
+	// OnOpaqueOrigin, when non-nil, is called after a state-changing
+	// /interaction request is rejected on its origin and
+	// [csrf.IsOpaqueSameOrigin] holds for it.
+	OnOpaqueOrigin func()
+
 	// Driver is the [interaction.Driver] the handler delegates UI
 	// rendering to. A nil value falls back to [interaction.JSONDriver].
 	Driver interaction.Driver

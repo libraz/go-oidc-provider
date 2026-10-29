@@ -295,6 +295,15 @@ type Deps struct {
 	// a Deps assembled without the flag fails closed.
 	ClaimsParameterEnabled bool
 
+	// IDTokenScopeClaims lists the scopes whose userinfo claims are also
+	// written into the id_token when the response scope carries them. Empty
+	// disables the projection.
+	IDTokenScopeClaims []string
+
+	// CustomScopeClaims maps a custom scope to the claim names it releases;
+	// it feeds the IDTokenScopeClaims projection.
+	CustomScopeClaims map[string][]string
+
 	// SecretVerifier verifies confidential-client secrets. A nil value
 	// installs the library default ([clientauth.Argon2id]) so deployments
 	// that follow the reference posture need not wire one explicitly.
@@ -686,6 +695,7 @@ func authenticate(
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
 		AllowedMethods:    deps.AllowedClientAuthMethods,
+		Now:               deps.now(),
 		Audit:             deps.audit(),
 		AuditEventName:    auditClientAuthnFailure,
 		AuditMessage:      "client authentication failed at token endpoint",

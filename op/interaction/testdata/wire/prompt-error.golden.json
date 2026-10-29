@@ -1,0 +1,1 @@
+{"type":"auth.password","data":{"username_hint":"alice"},"inputs":[{"name":"password","kind":"password","label":"auth.password.password","label_text":"Password","max_len":0,"min_len":0,"required":true,"pattern":""}],"state_ref":"ref-1","locale":"en","error":{"code":"credentials_rejected","message":"The details you entered are incorrect. Try again."}}

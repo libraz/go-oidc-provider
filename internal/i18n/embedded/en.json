@@ -32,6 +32,7 @@
   "auth.recovery_code": "Enter a recovery code",
   "auth.recovery_code.code": "Recovery code",
   "auth.attempts_remaining": "Attempts remaining: {count}",
+  "auth.error.credentials_rejected": "The details you entered are incorrect. Try again.",
   "auth.passkey": "Use a passkey",
   "auth.passkey.response": "Passkey response",
   "auth.choose_factor": "Choose how to sign in",

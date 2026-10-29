@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -62,6 +63,11 @@ var putFieldDispositions = map[string]putDisposition{
 	// method the update settles on, not a submitted value.
 	"SecretHash":   dispositionDerived,
 	"PublicClient": dispositionDerived,
+
+	// The rotation overlap follows the current secret: carried forward
+	// while the hash is, cleared when the update mints or drops it.
+	"PreviousSecretHash":      dispositionDerived,
+	"PreviousSecretExpiresAt": dispositionDerived,
 
 	"RedirectURIs":                      dispositionMetadata,
 	"PostLogoutRedirectURIs":            dispositionMetadata,
@@ -255,6 +261,12 @@ func TestUpdateKeepsConfigurationTheMetadataCannotExpress(t *testing.T) {
 	if registry.updated.PublicClient {
 		t.Error("PublicClient=true, want false for an update that defaults to a confidential auth method")
 	}
+	if registry.updated.PreviousSecretHash != stored.PreviousSecretHash ||
+		!registry.updated.PreviousSecretExpiresAt.Equal(stored.PreviousSecretExpiresAt) {
+		t.Errorf("previous secret = (%q, %v), want the stored (%q, %v) carried forward with the current hash",
+			registry.updated.PreviousSecretHash, registry.updated.PreviousSecretExpiresAt,
+			stored.PreviousSecretHash, stored.PreviousSecretExpiresAt)
+	}
 }
 
 // seedEveryClientField returns a [store.Client] with every field set to
@@ -282,6 +294,8 @@ func seedEveryClientField(t *testing.T) *store.Client {
 			field.SetInt(1)
 		case field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.String:
 			field.Set(reflect.ValueOf([]string{"seed-" + name}))
+		case field.Type() == reflect.TypeOf(time.Time{}):
+			field.Set(reflect.ValueOf(time.Unix(1, 0).UTC()))
 		case field.Kind() == reflect.Pointer && field.Type().Elem().Kind() == reflect.Int64:
 			seed := int64(1)
 			field.Set(reflect.ValueOf(&seed))

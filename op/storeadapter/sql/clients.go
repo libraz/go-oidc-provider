@@ -5,6 +5,7 @@ import (
 	databasesql "database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -40,6 +41,8 @@ var clientColumns = []string{
 	"token_endpoint_auth_method",
 	"token_endpoint_auth_signing_alg",
 	"secret_hash",
+	"previous_secret_hash",
+	"previous_secret_expires_at",
 	"public_client",
 	"source",
 	"application_type",
@@ -73,6 +76,14 @@ var clientColumns = []string{
 	"introspection_encrypted_response_enc",
 }
 
+// unixOrZero stores an instant as epoch seconds, with the zero time as 0.
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
 // clientArgs returns the bind arguments for an INSERT/UPDATE in the
 // order declared by clientColumns.
 func clientArgs(c *store.Client) []any {
@@ -98,6 +109,8 @@ func clientArgs(c *store.Client) []any {
 		c.TokenEndpointAuthMethod,
 		c.TokenEndpointAuthSigningAlg,
 		c.SecretHash,
+		c.PreviousSecretHash,
+		unixOrZero(c.PreviousSecretExpiresAt),
 		boolToInt64(c.PublicClient),
 		string(c.Source),
 		c.ApplicationType,
@@ -139,7 +152,7 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 		c                                                                                                         store.Client
 		redirectURIs, postLogout, grantTypes, responseTypes, scopes, resources, contacts, defaultACR, requestURIs []byte
 		jwks                                                                                                      []byte
-		sessionRequired, publicClient, requireAuthTime                                                            int64
+		sessionRequired, publicClient, requireAuthTime, previousExpiresAt                                         int64
 		defaultMaxAge                                                                                             databasesql.NullInt64
 		source                                                                                                    string
 	)
@@ -157,6 +170,8 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 		&c.TokenEndpointAuthMethod,
 		&c.TokenEndpointAuthSigningAlg,
 		&c.SecretHash,
+		&c.PreviousSecretHash,
+		&previousExpiresAt,
 		&publicClient,
 		&source,
 		&c.ApplicationType,
@@ -191,6 +206,9 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+	if previousExpiresAt != 0 {
+		c.PreviousSecretExpiresAt = time.Unix(previousExpiresAt, 0).UTC()
 	}
 	c.BackchannelLogoutSessionRequired = int64ToBool(sessionRequired)
 	c.PublicClient = int64ToBool(publicClient)

@@ -510,6 +510,7 @@ func authenticate(
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
 		AllowedMethods:    deps.AllowedClientAuthMethods,
+		Now:               deps.now(),
 		Audit:             deps.auditEmitter(),
 		AuditEventName:    auditClientAuthnFailure,
 		AuditMessage:      "client authentication failed at backchannel-authentication endpoint",

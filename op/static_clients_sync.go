@@ -79,6 +79,14 @@ type StaticClientSyncResult struct {
 // refuses a store whose static client carries an Argon2id hash there, and
 // SyncStaticClients does not see that option.
 //
+// To rotate without an outage, seed Secret with the new value and
+// PreviousSecret with the old one plus PreviousSecretExpiresAt. A previous
+// plaintext that verifies against the stored previous or current hash
+// reuses that hash, so the first run is an update and later runs are
+// unchanged. When the stored current hash is a high-entropy encoding, a
+// previous plaintext that does not verify cannot be hashed to match it: the
+// call returns an error and writes nothing; seed PreviousSecretHash instead.
+//
 // The seeds are validated for shape (nil, empty secret, duplicate IDs),
 // but the metadata checks that depend on the Provider's options run in
 // [New].
@@ -119,7 +127,7 @@ func classifyStaticClient(
 	ctx context.Context,
 	registry store.ClientRegistry,
 	desired *store.Client,
-	plaintexts map[string]string,
+	plaintexts map[string]staticSeedSecrets,
 ) (StaticClientSyncAction, error) {
 	existing, err := registry.GetClient(ctx, desired.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -143,15 +151,43 @@ func classifyStaticClient(
 	if existing.Source == "" {
 		desired.Source = ""
 	}
-	if plaintext, has := plaintexts[desired.ID]; has {
+	secrets := plaintexts[desired.ID]
+	if plaintext := secrets.current; plaintext != "" {
 		if (&clientauth.Argon2id{}).Verify(plaintext, existing.SecretHash) == nil {
 			desired.SecretHash = existing.SecretHash
+		}
+	}
+	if plaintext := secrets.previous; plaintext != "" {
+		if hash, found := verifiedPreviousHash(plaintext, existing); found {
+			desired.PreviousSecretHash = hash
+		} else if clientauth.IsHighEntropyEncoding(existing.SecretHash) {
+			return "", &Error{
+				Code: codeConfiguration,
+				Description: "SyncStaticClients: client " + desired.ID +
+					" has a high-entropy secret, so PreviousSecret cannot be hashed to match it; " +
+					"seed PreviousSecretHash instead",
+			}
 		}
 	}
 	if store.StaticClientEquivalent(existing, desired) {
 		return StaticClientUnchanged, nil
 	}
 	return StaticClientUpdated, nil
+}
+
+// verifiedPreviousHash returns the stored hash a previous-secret plaintext
+// verifies against: the stored previous hash (a re-run) or the stored
+// current hash (the first rotation). Reusing it keeps the record stable
+// across runs, since a fresh Argon2id hash would differ every time.
+func verifiedPreviousHash(plaintext string, existing *store.Client) (string, bool) {
+	verifier := &clientauth.Argon2id{}
+	if existing.PreviousSecretHash != "" && verifier.Verify(plaintext, existing.PreviousSecretHash) == nil {
+		return existing.PreviousSecretHash, true
+	}
+	if existing.SecretHash != "" && verifier.Verify(plaintext, existing.SecretHash) == nil {
+		return existing.SecretHash, true
+	}
+	return "", false
 }
 
 // applyStaticClientSync writes the records the classification marked as

@@ -290,6 +290,10 @@ func newBrowserCtxWithin(chrome string, timeout time.Duration) (context.Context,
 		chromedp.ExecPath(chrome),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-gpu", true),
+		// Pin the UI language so assertions on OP-rendered text do not
+		// depend on the locale of the machine running the suite.
+		chromedp.Flag("lang", "en-US"),
+		chromedp.Flag("accept-lang", "en-US"),
 	)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), allocOpts...)
 	ctx, cancelCtx := chromedp.NewContext(allocCtx)

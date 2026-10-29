@@ -177,6 +177,8 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			OpenIDScopeOptional:            cfg.openIDScopeOptional,
 			GrantManagementEnabled:         cfg.grantManagementEnabled,
 			ClaimsParameterEnabled:         cfg.claimsParameterSupported(),
+			IDTokenScopeClaims:             cfg.idTokenScopeClaims,
+			CustomScopeClaims:              customScopeClaims(cfg.scopes),
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			SecretVerifier:                 cfg.clientSecretVerifier(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
@@ -198,9 +200,10 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifiers.CIBA, strictCORS)
 	// The interaction mount is deliberately not handed strictCORS: its
 	// routes run on the narrower ceremony allowlist.
+	onOpaqueOrigin := newOpaqueOriginWarner(cfg.logger)
 	sessMgr, err := mountAuthorizeHandlers(
 		mux, cfg, scopes, keySet, encResolver, jarVerifiers.Authorize, locales, proxyTrust,
-		interactionOrigins, ceremonyCORS,
+		interactionOrigins, ceremonyCORS, onOpaqueOrigin,
 	)
 	if err != nil {
 		return nil, err
@@ -231,7 +234,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		}
 	}
 	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS, bcc)
-	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, subjectProjector, locales, interactionOrigins, ceremonyCORS)
+	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, subjectProjector, locales, interactionOrigins, ceremonyCORS, onOpaqueOrigin)
 	return mux, nil
 }
 
@@ -552,6 +555,7 @@ func mountAuthorizeHandlers(
 	proxyTrust *proxy.Trust,
 	interactionOrigins *csrf.Allowlist,
 	ceremonyCORS *cors.Strict,
+	onOpaqueOrigin func(),
 ) (*sessions.Manager, error) {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
 		return nil, nil //nolint:nilnil // documented "no manager needed" sentinel.
@@ -595,6 +599,7 @@ func mountAuthorizeHandlers(
 		CookieCodec:              cookieCodec,
 		CSRF:                     csrfSigner,
 		InteractionOrigins:       interactionOrigins,
+		OnOpaqueOrigin:           onOpaqueOrigin,
 		Driver:                   cfg.interactionD,
 		Authn:                    orchestrator,
 		Scopes:                   scopes,
@@ -660,6 +665,7 @@ func mountEndSessionEndpoint(
 	locales *i18n.Resolver,
 	ceremonyOrigins *csrf.Allowlist,
 	ceremonyCORS *cors.Strict,
+	onOpaqueOrigin func(),
 ) {
 	if sessMgr == nil {
 		return
@@ -684,6 +690,10 @@ func mountEndSessionEndpoint(
 			RevocationStrategy: cfg.atRevocation,
 			SubjectProjector:   subjectProjector,
 			Audit:              cfg.effectiveAuditEmitter(),
+			ConfirmTemplate:    cfg.logoutUI.ConfirmTemplate,
+			SignedOutTemplate:  cfg.logoutUI.SignedOutTemplate,
+			LogoutCSP:          cfg.logoutUI.ContentSecurityPolicy,
+			OnOpaqueOrigin:     onOpaqueOrigin,
 		})),
 	)
 }

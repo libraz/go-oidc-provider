@@ -434,6 +434,13 @@ type FieldSpec struct {
 	// it.
 	Label string `json:"label"`
 
+	// LabelText is Label resolved in [Prompt.Locale]. Empty when the OP
+	// was built without a locale resolver; renderers then fall back on
+	// Label.
+	//
+	// Stable since v1.5.
+	LabelText string `json:"label_text,omitempty"`
+
 	// MaxLen is the maximum byte length the orchestrator accepts
 	// for this field. Zero means "use the FieldKind default".
 	MaxLen int `json:"max_len"`
@@ -499,6 +506,13 @@ type FactorOption struct {
 	// catalogue entries; for a kind without one (an external factor's
 	// own kind) renderers show Kind itself.
 	Label string `json:"label"`
+
+	// LabelText is Label resolved in [Prompt.Locale]. Empty when the OP
+	// was built without a locale resolver or the kind has no catalogue
+	// entry; renderers then fall back on Label.
+	//
+	// Stable since v1.5.
+	LabelText string `json:"label_text,omitempty"`
 }
 
 // FactorLabelKey returns the [FactorOption.Label] for kind: the

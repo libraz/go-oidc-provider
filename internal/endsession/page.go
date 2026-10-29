@@ -1,9 +1,13 @@
 package endsession
 
 import (
+	"bytes"
 	"html"
+	"html/template"
 	"net/http"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 // Message keys the confirmation page resolves. They are the only two
@@ -61,7 +65,16 @@ const errorBodyTemplate = `<!DOCTYPE html>
 // resolver selected for this request. The Content-Security-Policy
 // header is the strictest possible value compatible with the document
 // so a future regression that introduces dynamic content fails closed.
-func writeLoggedOutPage(w http.ResponseWriter, page loggedOutPage) {
+func writeLoggedOutPage(w http.ResponseWriter, deps Deps, page loggedOutPage) {
+	if deps.SignedOutTemplate != nil {
+		page = page.withDefaults()
+		writeTemplatedPage(w, deps, deps.SignedOutTemplate, interaction.LogoutSignedOutTemplateData{
+			Locale: page.locale,
+			Title:  page.title,
+			Body:   page.body,
+		})
+		return
+	}
 	stampStaticHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	// The body is a const template whose three placeholders are each
@@ -89,23 +102,47 @@ type loggedOutPage struct {
 // resolver boundary, because a catalogue is embedder-supplied text and
 // [i18n.Resolver.Message] documents its return as raw, unescaped.
 func renderLoggedOutBody(page loggedOutPage) string {
-	locale := page.locale
-	if locale == "" {
-		locale = "en"
-	}
-	title := page.title
-	if title == "" {
-		title = loggedOutTitleFallback
-	}
-	body := page.body
-	if body == "" {
-		body = loggedOutBodyFallback
-	}
-	out := replaceFirst(loggedOutTemplate, "{LANG}", html.EscapeString(locale))
+	page = page.withDefaults()
+	out := replaceFirst(loggedOutTemplate, "{LANG}", html.EscapeString(page.locale))
 	// The title appears twice — <title> and <h1> — so the substitution
 	// runs until no placeholder is left rather than exactly once.
-	out = strings.ReplaceAll(out, "{TITLE}", html.EscapeString(title))
-	return replaceFirst(out, "{BODY}", html.EscapeString(body))
+	out = strings.ReplaceAll(out, "{TITLE}", html.EscapeString(page.title))
+	return replaceFirst(out, "{BODY}", html.EscapeString(page.body))
+}
+
+// withDefaults fills every empty field with its built-in English value.
+func (p loggedOutPage) withDefaults() loggedOutPage {
+	if p.locale == "" {
+		p.locale = "en"
+	}
+	if p.title == "" {
+		p.title = loggedOutTitleFallback
+	}
+	if p.body == "" {
+		p.body = loggedOutBodyFallback
+	}
+	return p
+}
+
+// writeTemplatedPage renders an embedder template into a buffer and
+// writes it with the static headers. Execution failure answers with the
+// fixed error page so no partial output is sent. A declared
+// Content-Security-Policy is re-normalized here and replaces the strict
+// default only when it passes; otherwise the default stays.
+func writeTemplatedPage(w http.ResponseWriter, deps Deps, tpl *template.Template, data any) {
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, data); err != nil {
+		writeLogoutError(w, http.StatusInternalServerError, descInternalError)
+		return
+	}
+	stampStaticHeaders(w)
+	if deps.LogoutCSP != "" {
+		if policy, err := interaction.NormalizeCSP(deps.LogoutCSP); err == nil {
+			w.Header().Set("Content-Security-Policy", policy)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = buf.WriteTo(w)
 }
 
 // writeLogoutError emits the static error page. The Content-Type and

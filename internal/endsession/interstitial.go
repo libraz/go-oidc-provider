@@ -6,6 +6,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 // confirmTokenField is the hidden form field the interstitial submits
@@ -50,12 +51,7 @@ func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, deps Deps,
 		return
 	}
 	http.SetCookie(w, c)
-	stampStaticHeaders(w)
-	w.WriteHeader(http.StatusOK)
-	// buildConfirmationBody passes every interpolated value through
-	// htmlEscapeASCII; the static template carries no script tags and
-	// no caller-controlled URLs.
-	_, _ = w.Write([]byte(buildConfirmationBody(token, confirmationForm{
+	form := confirmationForm{
 		action:           formActionPath(r),
 		clientID:         confirmationClientID(f),
 		postLogout:       f.req.postLogout,
@@ -65,7 +61,51 @@ func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, deps Deps,
 		scopeFingerprint: f.req.logoutScope,
 		chooserGroupID:   f.session.fingerprint.chooserGroupID,
 		page:             resolveConfirmationPage(r, deps, f),
-	})))
+	}
+	if deps.ConfirmTemplate != nil {
+		writeTemplatedPage(w, deps, deps.ConfirmTemplate, confirmTemplateData(token, form, f))
+		return
+	}
+	stampStaticHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	// buildConfirmationBody passes every interpolated value through
+	// htmlEscapeASCII; the static template carries no script tags and
+	// no caller-controlled URLs.
+	_, _ = w.Write([]byte(buildConfirmationBody(token, form)))
+}
+
+// confirmTemplateData assembles the data an embedder confirmation
+// template renders. Fields mirrors the hidden inputs of the built-in
+// form, in the same order, CSRF token first.
+func confirmTemplateData(token string, form confirmationForm, f flow) interaction.LogoutConfirmTemplateData {
+	fields := []interaction.HiddenField{
+		{Name: confirmTokenField, Value: token},
+		{Name: "client_id", Value: form.clientID},
+		{Name: "state", Value: form.state},
+		{Name: "post_logout_redirect_uri", Value: form.postLogout},
+		{Name: "ui_locales", Value: form.uiLocales},
+	}
+	if form.logoutScope == logoutScopeCurrent {
+		fields = append(fields, interaction.HiddenField{Name: "logout_scope", Value: form.logoutScope})
+	}
+	fields = append(fields,
+		interaction.HiddenField{Name: "logout_scope_fingerprint", Value: form.scopeFingerprint},
+		interaction.HiddenField{Name: "chooser_group_id", Value: form.chooserGroupID},
+	)
+	clientName := ""
+	if f.client != nil {
+		clientName = f.client.ClientName
+	}
+	return interaction.LogoutConfirmTemplateData{
+		Locale:       form.page.locale,
+		Title:        form.page.title,
+		Body:         form.page.body,
+		Button:       form.page.button,
+		SubmitMethod: "POST",
+		SubmitAction: form.action,
+		ClientName:   clientName,
+		Fields:       fields,
+	}
 }
 
 // Message keys the interstitial resolves. The body has two forms

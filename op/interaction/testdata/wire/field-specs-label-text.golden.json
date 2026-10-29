@@ -1,0 +1,1 @@
+[{"name":"code","kind":"otp_code","label":"auth.totp.code","label_text":"Authenticator code","max_len":6,"min_len":6,"required":true,"pattern":"[0-9]{6}"}]

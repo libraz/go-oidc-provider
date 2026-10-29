@@ -110,6 +110,16 @@ func CheckOrigin(r *http.Request, allow *Allowlist) error {
 	return nil
 }
 
+// IsOpaqueSameOrigin reports whether r carries Origin: null together with
+// Sec-Fetch-Site: same-origin. A same-origin form POST sends an opaque
+// Origin when a Referrer-Policy of no-referrer applies to the page that
+// holds the form. It is a diagnostic signal only; [CheckOrigin] still
+// rejects the request.
+func IsOpaqueSameOrigin(r *http.Request) bool {
+	return strings.TrimSpace(r.Header.Get("Origin")) == "null" &&
+		strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-origin")
+}
+
 // CanonicalOrigin reduces a URL to "scheme://host[:port]" form. The default
 // ports for http (80) and https (443) are stripped so "https://x" and
 // "https://x:443" compare equal.

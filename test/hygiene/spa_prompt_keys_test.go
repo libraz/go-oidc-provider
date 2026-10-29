@@ -139,6 +139,100 @@ func TestSPABundleReadsDriverPromptKeys(t *testing.T) {
 	}
 }
 
+// TestSPABundleReadsPromptErrorAndLabelText pins the two members the
+// credential screens depend on that sit outside "data": the resolved
+// input label and the rejected-submission notice. Without them the bundle
+// shows an i18n key as a label, or no hint that the password was wrong.
+func TestSPABundleReadsPromptErrorAndLabelText(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile(filepath.Clean(spaBundlePath))
+	if err != nil {
+		t.Fatalf("read SPA bundle: %v", err)
+	}
+	bundle := string(src)
+
+	type reader struct {
+		fn   string
+		keys []string
+	}
+	rejected := &interaction.PromptError{
+		Code:    interaction.PromptErrorCredentialsRejected,
+		Message: "The details you entered are incorrect. Try again.",
+	}
+	cases := []struct {
+		name    string
+		prompt  interaction.Prompt
+		readers []reader
+	}{
+		{
+			name: "password",
+			prompt: interaction.Prompt{
+				Type: "auth.password",
+				Data: interaction.PasswordPromptData{},
+				Inputs: []interaction.FieldSpec{
+					{Name: "password", Kind: interaction.FieldPassword, Label: "auth.password.password", LabelText: "Password"},
+				},
+				Error: rejected,
+			},
+			readers: []reader{
+				{fn: "buildField", keys: []string{"label_text"}},
+				{fn: "renderPromptError", keys: []string{"error", "message"}},
+			},
+		},
+		{
+			name: "totp",
+			prompt: interaction.Prompt{
+				Type: "auth.totp",
+				Data: interaction.TOTPPromptData{AttemptsRemaining: 2},
+				Inputs: []interaction.FieldSpec{
+					{Name: "code", Kind: interaction.FieldOTPCode, Label: "auth.totp.code", LabelText: "Authenticator code"},
+				},
+				Error: rejected,
+			},
+			readers: []reader{
+				{fn: "buildField", keys: []string{"label_text"}},
+				{fn: "renderPromptError", keys: []string{"error", "message"}},
+			},
+		},
+		{
+			name: "factor_choice",
+			prompt: interaction.Prompt{
+				Type: interaction.PromptTypeChooseFactor,
+				Data: interaction.FactorChoicePromptData{
+					Options: []interaction.FactorOption{{Kind: "totp", Label: "auth.factor.totp", LabelText: "Authenticator app"}},
+				},
+			},
+			readers: []reader{{fn: "renderFactorChoice", keys: []string{"label_text"}}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var decoded any
+			if err := json.Unmarshal(renderPrompt(t, tc.prompt), &decoded); err != nil {
+				t.Fatalf("decode prompt: %v", err)
+			}
+			emitted := map[string]bool{}
+			collectKeys(decoded, emitted)
+			for _, r := range tc.readers {
+				fn := rendererBody(t, bundle, r.fn)
+				for _, key := range r.keys {
+					if !emitted[key] {
+						t.Errorf("the JSON driver emits no %q for this prompt (emitted: %v)", key, sortedKeys(emitted))
+						continue
+					}
+					if !strings.Contains(fn, key) {
+						t.Errorf("%s never reads %q, which is the spelling the JSON driver emits", r.fn, key)
+					}
+				}
+			}
+		})
+	}
+}
+
 // renderPrompt returns the JSON body JSONDriver writes for prompt.
 func renderPrompt(tb testing.TB, prompt interaction.Prompt) []byte {
 	tb.Helper()

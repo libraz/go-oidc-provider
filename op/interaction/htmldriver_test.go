@@ -335,6 +335,64 @@ func TestHTMLDriver_ConsentClientNameEscaped(t *testing.T) {
 	}
 }
 
+// TestHTMLDriver_RendersPromptError pins the rejected-submission notice:
+// an alert paragraph ahead of the form, escaped, with an English fallback
+// when the message is empty and nothing when there is no error.
+func TestHTMLDriver_RendersPromptError(t *testing.T) {
+	t.Parallel()
+
+	render := func(t *testing.T, perr *interaction.PromptError) string {
+		t.Helper()
+		prompt := interaction.Prompt{
+			Type:     "auth.password",
+			Data:     interaction.PasswordPromptData{},
+			StateRef: "ref-err",
+			Error:    perr,
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/interaction/u-1", nil)
+		if err := (interaction.HTMLDriver{}).Render(rec, req, prompt); err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		return rec.Body.String()
+	}
+
+	t.Run("message is escaped and precedes the form", func(t *testing.T) {
+		t.Parallel()
+		body := render(t, &interaction.PromptError{
+			Code:    interaction.PromptErrorCredentialsRejected,
+			Message: `<b>bad</b> & "wrong"`,
+		})
+		want := `<p role="alert">&lt;b&gt;bad&lt;/b&gt; &amp; &#34;wrong&#34;</p>`
+		alert := strings.Index(body, want)
+		if alert < 0 {
+			t.Fatalf("escaped alert missing:\n%s", body)
+		}
+		if form := strings.Index(body, `<form`); form < 0 || alert > form {
+			t.Errorf("alert must precede the form:\n%s", body)
+		}
+		if strings.Contains(body, `<b>bad</b>`) {
+			t.Errorf("message was not escaped:\n%s", body)
+		}
+	})
+
+	t.Run("empty message falls back to English", func(t *testing.T) {
+		t.Parallel()
+		body := render(t, &interaction.PromptError{Code: interaction.PromptErrorCredentialsRejected})
+		want := `<p role="alert">The details you entered are incorrect. Try again.</p>`
+		if !strings.Contains(body, want) {
+			t.Errorf("fallback alert missing:\n%s", body)
+		}
+	})
+
+	t.Run("no error renders no alert", func(t *testing.T) {
+		t.Parallel()
+		if body := render(t, nil); strings.Contains(body, `role="alert"`) {
+			t.Errorf("unexpected alert:\n%s", body)
+		}
+	})
+}
+
 // TestHTMLDriver_RenderCSPCompliance is the regression test for the
 // §3.4 CSP guarantees. The body must not carry any of the patterns
 // that would force the embedder to relax script-src / style-src.

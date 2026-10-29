@@ -941,7 +941,7 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	idTokenExtra := projectIDTokenClaims(user, authCtx.Claims)
+	idTokenExtra := idTokenExtraClaims(deps, user, exchanged.Scope, authCtx.Claims)
 	idToken, err := maybeMintRefreshIDToken(deps, refreshIDTokenInput{
 		Subject:  publicSubject,
 		ClientID: client.ID,

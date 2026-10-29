@@ -126,7 +126,9 @@ const (
 	AuditKeyRetiredKidPresented      Name = "key.retired_kid_presented"
 	AuditIntrospectionError          Name = "introspection.error"
 	AuditClientAuthnFailure          Name = "client_authn.failure"
-	AuditInteractionRenderFailed     Name = "interaction.render_failed"
+	//nolint:gosec // Event name, not a credential.
+	AuditClientAuthnPreviousSecret Name = "client_authn.previous_secret"
+	AuditInteractionRenderFailed   Name = "interaction.render_failed"
 
 	AuditDCRIATConsumed                Name = "dcr.iat.consumed"
 	AuditDCRIATExpired                 Name = "dcr.iat.expired"
@@ -266,6 +268,7 @@ var definitions = []Definition{
 	{Name: AuditKeyRetiredKidPresented, Metric: MetricKeyRetiredKidPresented},
 	{Name: AuditIntrospectionError, Metric: MetricIntrospectionErrors},
 	{Name: AuditClientAuthnFailure, Metric: MetricClientAuthnFailures},
+	{Name: AuditClientAuthnPreviousSecret},
 	{Name: AuditInteractionRenderFailed},
 	{Name: AuditDCRIATConsumed, Metric: MetricDCR, Label: "iat.consumed"},
 	{Name: AuditDCRIATExpired, Metric: MetricDCR, Label: "iat.expired"},

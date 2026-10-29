@@ -60,6 +60,7 @@ function renderPrompt(prompt) {
   formEl.dataset.promptType = prompt.type ?? "";
   statusEl.textContent = titleFor(prompt.type);
   applyLocale(prompt);
+  renderPromptError(prompt);
 
   if (prompt.type === "consent.scope") {
     renderConsent(prompt);
@@ -95,6 +96,19 @@ function renderPrompt(prompt) {
     ev.preventDefault();
     submitForm(prompt, collectValues(formEl, prompt.inputs ?? []));
   };
+}
+
+// renderPromptError puts the rejected-submission notice above the
+// fields. prompt.error.message is the OP's text in prompt.locale; it is
+// empty when the OP has no locale resolver, so the bundle falls back on
+// its own English line rather than showing the bare code.
+function renderPromptError(prompt) {
+  if (!prompt.error) return;
+  const alert = document.createElement("p");
+  alert.setAttribute("role", "alert");
+  alert.className = "error";
+  alert.textContent = prompt.error.message || "The details you entered are incorrect.";
+  formEl.appendChild(alert);
 }
 
 // renderCaptcha shows a visible text field for the demo's stub
@@ -314,7 +328,7 @@ function renderFactorChoice(prompt) {
     input.checked = i === 0;
     label.appendChild(input);
     const span = document.createElement("span");
-    span.textContent = factorLabelFor(opt.label) || opt.kind;
+    span.textContent = opt.label_text || factorLabelFor(opt.label) || opt.kind;
     label.appendChild(span);
     formEl.appendChild(label);
   });
@@ -341,7 +355,7 @@ function buildField(spec) {
   const label = document.createElement("label");
   const span = document.createElement("span");
   const labelKey = spec.label || "";
-  span.textContent = labelFor(labelKey) || spec.name || labelKey;
+  span.textContent = spec.label_text || labelFor(labelKey) || spec.name || labelKey;
   label.appendChild(span);
 
   const input = document.createElement("input");

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"time"
 )
 
 // ClientSource identifies how the client record reached the OP. The library
@@ -134,6 +135,17 @@ type Client struct {
 	// secret; the library never writes one back. The value is opaque to
 	// the library, which delegates verification to a hash adapter.
 	SecretHash string
+
+	// PreviousSecretHash is the hash of the secret the client used before
+	// its most recent rotation, in the same encoding as SecretHash. While
+	// PreviousSecretExpiresAt is in the future the token endpoint accepts
+	// either secret, so relying parties can switch at their own pace. A
+	// non-empty hash with a zero PreviousSecretExpiresAt is never accepted.
+	PreviousSecretHash string
+
+	// PreviousSecretExpiresAt is the instant after which PreviousSecretHash
+	// stops authenticating. It is compared at second precision.
+	PreviousSecretExpiresAt time.Time
 
 	// PublicClient marks clients that cannot keep a secret (single-page
 	// apps, native apps). Public clients may not use confidential auth
@@ -405,7 +417,8 @@ type StaticClientReconciler interface {
 // same persisted configuration. It treats nil and empty slices identically
 // because SQL adapters commonly decode an empty JSON array where an in-memory
 // seed used nil, and it treats the legacy empty Source as
-// [ClientSourceStatic]. SecretHash remains part of the comparison; op.New
+// [ClientSourceStatic]. PreviousSecretExpiresAt is compared in whole seconds.
+// SecretHash remains part of the comparison; op.New
 // verifies the configured plaintext against an existing hash and reuses that
 // hash before calling a reconciler.
 func StaticClientEquivalent(a, b *Client) bool {
@@ -432,6 +445,13 @@ func normalizedStaticClient(client Client) Client {
 	}
 	if client.Source == "" {
 		client.Source = ClientSourceStatic
+	}
+	// Backends persist the expiry as epoch seconds, so the monotonic reading
+	// and the location of a seeded value must not count as a difference.
+	if client.PreviousSecretExpiresAt.IsZero() {
+		client.PreviousSecretExpiresAt = time.Time{}
+	} else {
+		client.PreviousSecretExpiresAt = time.Unix(client.PreviousSecretExpiresAt.Unix(), 0).UTC()
 	}
 	return client
 }

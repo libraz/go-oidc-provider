@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -277,6 +278,126 @@ func TestSyncStaticClients_PlaintextThenHighEntropyNewRefuses(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "NewClientSecret") {
 		t.Errorf("error should name the provisioning path: %v", err)
+	}
+}
+
+var syncRotationExpiry = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func syncRotationSeed(secret, previous string) op.ConfidentialClient {
+	c := op.ConfidentialClient{
+		ID: "svc", Secret: secret,
+		RedirectURIs: []string{syncRedirect}, Scopes: []string{"openid"},
+	}
+	if previous != "" {
+		c.PreviousSecret, c.PreviousSecretExpiresAt = previous, syncRotationExpiry
+	}
+	return c
+}
+
+func TestSyncStaticClients_RotationCarriesPreviousHash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := inmem.New()
+	if _, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-before", "")); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+	before, err := st.GetClient(ctx, "svc")
+	if err != nil {
+		t.Fatalf("GetClient before: %v", err)
+	}
+
+	results, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-after", "secret-before"))
+	if err != nil {
+		t.Fatalf("rotation sync: %v", err)
+	}
+	if len(results) != 1 || results[0].Action != op.StaticClientUpdated {
+		t.Fatalf("results=%v want one updated", results)
+	}
+	after, err := st.GetClient(ctx, "svc")
+	if err != nil {
+		t.Fatalf("GetClient after: %v", err)
+	}
+	if after.PreviousSecretHash != before.SecretHash {
+		t.Error("previous hash is not the hash the client had before the rotation")
+	}
+	if !after.PreviousSecretExpiresAt.Equal(syncRotationExpiry) {
+		t.Errorf("PreviousSecretExpiresAt=%v want %v", after.PreviousSecretExpiresAt, syncRotationExpiry)
+	}
+	if !op.VerifyPassword([]byte(after.SecretHash), "secret-after") ||
+		op.VerifyPassword([]byte(after.SecretHash), "secret-before") {
+		t.Error("current hash does not verify exactly the new secret")
+	}
+}
+
+func TestSyncStaticClients_RotationRerunIsUnchanged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := inmem.New()
+	for _, seed := range []op.ConfidentialClient{
+		syncRotationSeed("secret-before", ""),
+		syncRotationSeed("secret-after", "secret-before"),
+	} {
+		if _, err := op.SyncStaticClients(ctx, st, seed); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+	}
+	rotated, err := st.GetClient(ctx, "svc")
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+
+	results, err := op.SyncStaticClients(ctx, st, syncRotationSeed("secret-after", "secret-before"))
+	if err != nil {
+		t.Fatalf("rerun: %v", err)
+	}
+	if len(results) != 1 || results[0].Action != op.StaticClientUnchanged {
+		t.Fatalf("results=%v want one unchanged", results)
+	}
+	again, err := st.GetClient(ctx, "svc")
+	if err != nil {
+		t.Fatalf("GetClient again: %v", err)
+	}
+	if again.SecretHash != rotated.SecretHash || again.PreviousSecretHash != rotated.PreviousSecretHash {
+		t.Error("rerun rewrote the stored hashes")
+	}
+}
+
+func TestSyncStaticClients_HighEntropyUnverifiedPreviousRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := inmem.New()
+	_, current, err := op.NewClientSecret()
+	if err != nil {
+		t.Fatalf("NewClientSecret: %v", err)
+	}
+	if _, err := op.SyncStaticClients(ctx, st, op.ConfidentialClient{
+		ID: "svc", SecretHash: current,
+		RedirectURIs: []string{syncRedirect}, Scopes: []string{"openid"},
+	}); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+
+	// The rotating client comes second, so the refusal also has to
+	// leave the earlier, writable seed unwritten.
+	_, err = op.SyncStaticClients(ctx, st,
+		op.PublicClient{ID: "spa", RedirectURIs: []string{syncRedirect}, Scopes: []string{"openid"}},
+		syncRotationSeed("secret-after", "unverifiable-previous"),
+	)
+	if err == nil {
+		t.Fatal("Sync accepted a previous plaintext it cannot match to a high-entropy hash")
+	}
+	if !strings.Contains(err.Error(), "PreviousSecretHash") {
+		t.Errorf("error should point at PreviousSecretHash: %v", err)
+	}
+	if _, getErr := st.GetClient(ctx, "spa"); !errors.Is(getErr, store.ErrNotFound) {
+		t.Errorf("an earlier seed was written despite the refusal: err=%v", getErr)
+	}
+	got, getErr := st.GetClient(ctx, "svc")
+	if getErr != nil {
+		t.Fatalf("GetClient: %v", getErr)
+	}
+	if got.SecretHash != current || got.PreviousSecretHash != "" {
+		t.Error("the refused client was modified")
 	}
 }
 

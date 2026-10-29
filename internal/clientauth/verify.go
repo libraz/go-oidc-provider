@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -37,67 +38,115 @@ type VerifyOpts struct {
 	// [VerifyClient] enforce FAPI 2.0 §3.1.3 without duplicating the
 	// switch.
 	AllowedMethods []Method
+
+	// Now is the wall-clock reading that bounds the previous secret's
+	// acceptance window. The zero value never accepts the previous
+	// secret, so a caller that forgets it fails closed.
+	Now time.Time
+}
+
+// Verified is the outcome of a successful [VerifyClient] call.
+type Verified struct {
+	// Method is the authentication method the credentials used.
+	Method Method
+
+	// PreviousSecret reports that a secret method matched the client's
+	// previous secret rather than its current one.
+	PreviousSecret bool
 }
 
 // VerifyClient cross-checks the parsed credentials against the
-// registered client. On success it returns the method actually used; on
-// failure it returns one of the package's sentinel errors.
+// registered client. On success it returns the method actually used and
+// whether the previous secret matched; on failure it returns one of the
+// package's sentinel errors. creds is never written.
 //
 // The verifier always evaluates the entire credential pathway (even on
 // known-bad inputs) so the timing channel does not reveal whether the
 // client_id exists, whether the registered method matches, or whether
 // the secret was wrong.
-func VerifyClient(ctx context.Context, creds *Credentials, client *store.Client, opts VerifyOpts) (Method, error) {
+func VerifyClient(ctx context.Context, creds *Credentials, client *store.Client, opts VerifyOpts) (Verified, error) {
 	if creds == nil {
-		return "", ErrNoCredentials
+		return Verified{}, ErrNoCredentials
 	}
 	if client == nil {
 		runDummyVerify(creds, opts)
-		return "", ErrCredentialsInvalid
+		return Verified{}, ErrCredentialsInvalid
 	}
 	if creds.ClientID != client.ID {
 		runDummyVerify(creds, opts)
-		return "", ErrClientMismatch
+		return Verified{}, ErrClientMismatch
 	}
 	if !methodAllowedForClient(creds.Method, client) {
 		runDummyVerify(creds, opts)
-		return "", ErrCredentialsInvalid
+		return Verified{}, ErrCredentialsInvalid
 	}
 	if !methodAllowedByPolicy(creds.Method, opts.AllowedMethods) {
 		runDummyVerify(creds, opts)
-		return "", ErrCredentialsInvalid
+		return Verified{}, ErrCredentialsInvalid
 	}
 
 	switch creds.Method {
 	case MethodNone:
 		// "none" requires the client be registered as public. Method
 		// matching is already enforced above; nothing else to do.
-		return MethodNone, nil
+		return Verified{Method: MethodNone}, nil
 
 	case MethodSecretBasic:
-		if err := verifySecret(opts, creds.SecretBasic, client.SecretHash); err != nil {
-			return "", err
+		previous, err := verifyClientSecret(opts, creds.SecretBasic, client)
+		if err != nil {
+			return Verified{}, err
 		}
-		return MethodSecretBasic, nil
+		return Verified{Method: MethodSecretBasic, PreviousSecret: previous}, nil
 
 	case MethodSecretPost:
-		if err := verifySecret(opts, creds.SecretPost, client.SecretHash); err != nil {
-			return "", err
+		previous, err := verifyClientSecret(opts, creds.SecretPost, client)
+		if err != nil {
+			return Verified{}, err
 		}
-		return MethodSecretPost, nil
+		return Verified{Method: MethodSecretPost, PreviousSecret: previous}, nil
 
 	case MethodPrivateKeyJWT:
 		if opts.AssertionVerifier == nil {
-			return "", errors.New("authn: AssertionVerifier required for private_key_jwt")
+			return Verified{}, errors.New("authn: AssertionVerifier required for private_key_jwt")
 		}
 		if err := opts.AssertionVerifier.Verify(ctx, client.ID, creds.AssertionJWT); err != nil {
-			return "", err
+			return Verified{}, err
 		}
-		return MethodPrivateKeyJWT, nil
+		return Verified{Method: MethodPrivateKeyJWT}, nil
 
 	default:
-		return "", ErrUnsupportedMethod
+		return Verified{}, ErrUnsupportedMethod
 	}
+}
+
+// verifyClientSecret checks presented against the current secret and,
+// failing that, against the previous secret while its window is open.
+// It reports previous=true when only the previous secret matched.
+//
+// Whether the second check runs depends on the client's stored state,
+// which is not secret, so the extra latency it adds is not a leak.
+func verifyClientSecret(opts VerifyOpts, presented string, client *store.Client) (bool, error) {
+	err := verifySecret(opts, presented, client.SecretHash)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, ErrCredentialsInvalid) || !previousSecretActive(client, opts.Now) {
+		return false, err
+	}
+	if prevErr := verifySecret(opts, presented, client.PreviousSecretHash); prevErr != nil {
+		return false, prevErr
+	}
+	return true, nil
+}
+
+// previousSecretActive reports whether the client's previous secret is
+// still accepted at now. A hash without an expiry, or a zero now, fails
+// closed; the expiry instant itself is already outside the window.
+func previousSecretActive(client *store.Client, now time.Time) bool {
+	if client.PreviousSecretHash == "" || client.PreviousSecretExpiresAt.IsZero() || now.IsZero() {
+		return false
+	}
+	return now.Before(client.PreviousSecretExpiresAt)
 }
 
 // methodAllowedForClient reports whether the registered client may use

@@ -7,8 +7,8 @@
 // requires, rather than calling a single "do everything" function whose
 // behaviour depends on a half-dozen flags.
 //
-// The package only depends on net/http, internal/audit, internal/clientauth,
-// internal/httpx, and op/store so it can be imported from any endpoint
+// The package only depends on net/http, internal/audit, internal/auditevent,
+// internal/clientauth, internal/httpx, and op/store so it can be imported from any endpoint
 // package without an import cycle.
 package endpointsupport
 
@@ -17,8 +17,10 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -46,6 +48,17 @@ type AuthenticateOpts struct {
 	// methods the endpoint accepts. An empty slice admits every method
 	// the parser supports.
 	AllowedMethods []clientauth.Method
+
+	// Now is the request's wall-clock reading. It bounds the window in
+	// which a client's previous secret is still accepted; the zero value
+	// accepts the current secret only.
+	Now time.Time
+
+	// Audit receives the success-path event raised when a client
+	// authenticates with its previous secret. A nil value collapses onto
+	// [audit.Discard]. Failure-path events stay with the caller's
+	// onFailure hook.
+	Audit audit.Emitter
 }
 
 // AuthenticateClient resolves the client credentials carried by the
@@ -87,7 +100,7 @@ func AuthenticateClient(
 		WriteInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
 		return nil, nil, false
 	}
-	client, err := resolveAndVerifyClient(ctx, creds, opts)
+	client, verified, err := resolveAndVerifyClient(ctx, creds, opts)
 	if err != nil {
 		if onFailure != nil {
 			onFailure(creds, err)
@@ -95,7 +108,26 @@ func AuthenticateClient(
 		WriteAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
+	if verified.PreviousSecret {
+		emitPreviousSecretUsed(ctx, opts.Audit, client.ID, verified.Method)
+	}
 	return client, creds, true
+}
+
+// emitPreviousSecretUsed records that a client authenticated with its
+// previous secret, so operators can see which clients still have to
+// switch before the window closes. The secret itself is never attached.
+func emitPreviousSecretUsed(ctx context.Context, emitter audit.Emitter, clientID string, method clientauth.Method) {
+	if emitter == nil {
+		emitter = audit.Discard()
+	}
+	emitter.Emit(ctx, audit.Event{
+		Name:     string(auditevent.AuditClientAuthnPreviousSecret),
+		Level:    audit.LevelWarn,
+		Message:  "client authenticated with its previous secret",
+		ClientID: clientID,
+		Extras:   map[string]any{"method": string(method)},
+	})
 }
 
 // resolveAndVerifyClient looks the presented client_id up and verifies
@@ -119,7 +151,7 @@ func resolveAndVerifyClient(
 	ctx context.Context,
 	creds *clientauth.Credentials,
 	opts AuthenticateOpts,
-) (*store.Client, error) {
+) (*store.Client, clientauth.Verified, error) {
 	verifier := opts.SecretVerifier
 	if verifier == nil {
 		verifier = &clientauth.Argon2id{}
@@ -128,6 +160,7 @@ func resolveAndVerifyClient(
 		SecretVerifier:    verifier,
 		AssertionVerifier: opts.AssertionVerifier,
 		AllowedMethods:    opts.AllowedMethods,
+		Now:               opts.Now,
 	}
 
 	client, err := LookupClient(ctx, opts.Clients, creds.ClientID)
@@ -135,12 +168,13 @@ func resolveAndVerifyClient(
 		if errors.Is(err, clientauth.ErrCredentialsInvalid) {
 			_, err = clientauth.VerifyClient(ctx, creds, nil, verifyOpts)
 		}
-		return nil, err
+		return nil, clientauth.Verified{}, err
 	}
-	if _, err := clientauth.VerifyClient(ctx, creds, client, verifyOpts); err != nil {
-		return nil, err
+	verified, err := clientauth.VerifyClient(ctx, creds, client, verifyOpts)
+	if err != nil {
+		return nil, clientauth.Verified{}, err
 	}
-	return client, nil
+	return client, verified, nil
 }
 
 func usedBasicAuth(r *http.Request) bool {

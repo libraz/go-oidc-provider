@@ -59,14 +59,14 @@ func TestVerifyClient_BasicAuth_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	method, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
+	verified, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
 		SecretVerifier: smallArgon2id(),
 	})
 	if err != nil {
 		t.Fatalf("VerifyClient: %v", err)
 	}
-	if method != clientauth.MethodSecretBasic {
-		t.Errorf("method=%v", method)
+	if verified.Method != clientauth.MethodSecretBasic {
+		t.Errorf("method=%v", verified.Method)
 	}
 }
 
@@ -123,12 +123,12 @@ func TestVerifyClient_PublicClientNonePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	method, err := clientauth.VerifyClient(context.Background(), creds, public, clientauth.VerifyOpts{})
+	verified, err := clientauth.VerifyClient(context.Background(), creds, public, clientauth.VerifyOpts{})
 	if err != nil {
 		t.Fatalf("VerifyClient: %v", err)
 	}
-	if method != clientauth.MethodNone {
-		t.Errorf("method=%v", method)
+	if verified.Method != clientauth.MethodNone {
+		t.Errorf("method=%v", verified.Method)
 	}
 }
 
@@ -172,7 +172,7 @@ func TestVerifyClient_AllowedMethodsAcceptsListed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	method, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
+	verified, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
 		SecretVerifier: smallArgon2id(),
 		AllowedMethods: []clientauth.Method{
 			clientauth.MethodSecretBasic,
@@ -182,8 +182,8 @@ func TestVerifyClient_AllowedMethodsAcceptsListed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyClient: %v", err)
 	}
-	if method != clientauth.MethodSecretBasic {
-		t.Errorf("method=%v", method)
+	if verified.Method != clientauth.MethodSecretBasic {
+		t.Errorf("method=%v", verified.Method)
 	}
 }
 
@@ -199,14 +199,14 @@ func TestVerifyClient_AllowedMethodsEmptyMeansNoOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	method, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
+	verified, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
 		SecretVerifier: smallArgon2id(),
 	})
 	if err != nil {
 		t.Fatalf("VerifyClient: %v", err)
 	}
-	if method != clientauth.MethodSecretBasic {
-		t.Errorf("method=%v", method)
+	if verified.Method != clientauth.MethodSecretBasic {
+		t.Errorf("method=%v", verified.Method)
 	}
 }
 

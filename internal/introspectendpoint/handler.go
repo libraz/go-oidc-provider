@@ -361,6 +361,8 @@ func authenticate(
 			SecretVerifier:    deps.SecretVerifier,
 			AssertionVerifier: deps.AssertionVerifier,
 			AllowedMethods:    deps.AllowedClientAuthMethods,
+			Now:               deps.now(),
+			Audit:             deps.auditEmitter(),
 		},
 		func(creds *clientauth.Credentials, err error) {
 			clientID := ""

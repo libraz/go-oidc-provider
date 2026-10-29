@@ -15,6 +15,7 @@ package clientauthhttp
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
@@ -70,6 +71,11 @@ type Authenticator struct {
 	// the list or the request fails with invalid_client.
 	AllowedMethods []clientauth.Method
 
+	// Now is the request's wall-clock reading. It bounds the window in
+	// which a client's previous secret is still accepted; the zero value
+	// accepts the current secret only.
+	Now time.Time
+
 	// Audit is the structured audit-event sink. A nil emitter falls
 	// back to [audit.Discard] so call sites can invoke Emit
 	// unconditionally.
@@ -113,6 +119,8 @@ func (a *Authenticator) Authenticate(ctx context.Context, w http.ResponseWriter,
 		SecretVerifier:    a.SecretVerifier,
 		AssertionVerifier: a.AssertionVerifier,
 		AllowedMethods:    a.AllowedMethods,
+		Now:               a.Now,
+		Audit:             a.Audit,
 	}, func(creds *clientauth.Credentials, err error) {
 		clientID := ""
 		method := ""

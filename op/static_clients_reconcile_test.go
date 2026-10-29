@@ -166,6 +166,59 @@ func TestWithStaticClients_DifferentSecretConflicts(t *testing.T) {
 	}
 }
 
+func TestNew_RotatedSeedConflictsBeforeSync(t *testing.T) {
+	t.Parallel()
+
+	st := inmem.New()
+	if _, err := op.New(syncProviderOpts(t, st, syncRotationSeed("secret-before", ""))...); err != nil {
+		t.Fatalf("initial op.New: %v", err)
+	}
+	before, err := st.GetClient(context.Background(), "svc")
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	_, err = op.New(syncProviderOpts(t, st, syncRotationSeed("secret-after", "secret-before"))...)
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("rotated seed error=%v want ErrConflict", err)
+	}
+	after, err := st.GetClient(context.Background(), "svc")
+	if err != nil {
+		t.Fatalf("GetClient after: %v", err)
+	}
+	if after.SecretHash != before.SecretHash || after.PreviousSecretHash != "" {
+		t.Error("op.New rotated the stored secret; rotation belongs to SyncStaticClients")
+	}
+}
+
+func TestNew_RotatedSeedAfterSync(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := inmem.New()
+	for _, seed := range []op.ConfidentialClient{
+		syncRotationSeed("secret-before", ""),
+		syncRotationSeed("secret-after", "secret-before"),
+	} {
+		if _, err := op.SyncStaticClients(ctx, st, seed); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+	}
+	synced, err := st.GetClient(ctx, "svc")
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if _, err := op.New(syncProviderOpts(t, st, syncRotationSeed("secret-after", "secret-before"))...); err != nil {
+		t.Fatalf("op.New after sync: %v", err)
+	}
+	after, err := st.GetClient(ctx, "svc")
+	if err != nil {
+		t.Fatalf("GetClient after: %v", err)
+	}
+	if after.SecretHash != synced.SecretHash || after.PreviousSecretHash != synced.PreviousSecretHash {
+		t.Error("op.New rewrote the synced hashes")
+	}
+}
+
 func TestWithStaticClients_RemovedSeedIsNotDeleted(t *testing.T) {
 	t.Parallel()
 

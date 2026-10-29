@@ -19,31 +19,15 @@ package userinfo
 
 import (
 	"errors"
-	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
-	"github.com/libraz/go-oidc-provider/internal/oidcscope"
+	"github.com/libraz/go-oidc-provider/internal/userinfo/userclaims"
 )
 
 // ErrSubjectRequired is returned by [Build] when the input does not carry a
 // non-empty Subject. Every UserInfo response MUST include "sub" (OIDC Core
 // 1.0 §5.3.2); a call site that omits it is a programmer error.
 var ErrSubjectRequired = errors.New("userinfo: Subject is required")
-
-// Standard scope names the package recognises. They are aliases of the
-// canonical spellings in internal/oidcscope rather than fresh literals:
-// the public package declares the same six values as embedder-facing
-// vocabulary and pins its constants against that package, so a single
-// spelling per value is what makes the two surfaces provably agree.
-// This package still cannot import op — construction runs the other way
-// — but it no longer has to mirror it by hand.
-const (
-	scopeOpenID  = oidcscope.ScopeOpenID
-	scopeProfile = oidcscope.ScopeProfile
-	scopeEmail   = oidcscope.ScopeEmail
-	scopeAddress = oidcscope.ScopeAddress
-	scopePhone   = oidcscope.ScopePhone
-)
 
 // Input is the bundle [Build] consumes.
 type Input struct {
@@ -96,7 +80,7 @@ func Build(in Input) (map[string]any, error) {
 	out := map[string]any{
 		"sub": in.Subject,
 	}
-	allowed := allowedClaimNames(in.Scopes, in.CustomScopeClaims)
+	allowed := userclaims.ScopeClaimNames(in.Scopes, in.CustomScopeClaims)
 	for name := range allowed {
 		if name == "sub" {
 			continue
@@ -147,83 +131,4 @@ func projectRequestedClaims(out map[string]any, in Input) {
 		}
 		out[name] = v
 	}
-}
-
-// allowedClaimNames returns the set of claim names the granted scopes
-// authorise. The merge favours the caller's CustomScopeClaims for scope
-// names also present in the standard mapping; that lets embedders
-// override (rare, but explicitly supported by OIDC Core 1.0 §5.4).
-func allowedClaimNames(scopes []string, custom map[string][]string) map[string]struct{} {
-	out := make(map[string]struct{})
-	for _, scope := range scopes {
-		if extras, ok := custom[scope]; ok {
-			for _, name := range extras {
-				out[name] = struct{}{}
-			}
-			continue
-		}
-		for _, name := range standardScopeClaims(scope) {
-			out[name] = struct{}{}
-		}
-	}
-	return out
-}
-
-// standardScopeClaims returns the claim names a recognised standard scope
-// authorises, per OIDC Core 1.0 §5.4. Unknown scopes return nil and are
-// ignored by [allowedClaimNames]. The slice returned is a fresh copy so
-// callers cannot mutate the package's internal lists.
-func standardScopeClaims(scope string) []string {
-	switch scope {
-	case scopeOpenID:
-		// "sub" is always released; nothing extra.
-		return nil
-	case scopeProfile:
-		return slices.Clone(profileClaims)
-	case scopeEmail:
-		return slices.Clone(emailClaims)
-	case scopeAddress:
-		return slices.Clone(addressClaims)
-	case scopePhone:
-		return slices.Clone(phoneClaims)
-	default:
-		return nil
-	}
-}
-
-// profileClaims is the closed set of claim names released by the
-// "profile" scope (OIDC Core 1.0 §5.4). The list is package-private and
-// returned as a clone by [standardScopeClaims].
-var profileClaims = []string{ //nolint:gochecknoglobals // closed mapping per RFC.
-	"name",
-	"family_name",
-	"given_name",
-	"middle_name",
-	"nickname",
-	"preferred_username",
-	"profile",
-	"picture",
-	"website",
-	"gender",
-	"birthdate",
-	"zoneinfo",
-	"locale",
-	"updated_at",
-}
-
-// emailClaims is the closed set released by the "email" scope.
-var emailClaims = []string{ //nolint:gochecknoglobals // closed mapping per RFC.
-	"email",
-	"email_verified",
-}
-
-// addressClaims is the closed set released by the "address" scope.
-var addressClaims = []string{ //nolint:gochecknoglobals // closed mapping per RFC.
-	"address",
-}
-
-// phoneClaims is the closed set released by the "phone" scope.
-var phoneClaims = []string{ //nolint:gochecknoglobals // closed mapping per RFC.
-	"phone_number",
-	"phone_number_verified",
 }

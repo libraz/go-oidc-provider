@@ -349,6 +349,20 @@ type config struct {
 	// regardless of option invocation order.
 	chooserUIShadowedBySPA bool
 
+	// logoutUI stores the [LogoutUI] supplied through [WithLogoutUI].
+	// Unlike consentUI it composes with [config.spaUI]: the logout pages
+	// are rendered server-side in every mode.
+	logoutUI LogoutUI
+
+	// logoutUISet records whether [WithLogoutUI] was invoked.
+	logoutUISet bool
+
+	// idTokenScopeClaims carries the deduplicated scope names supplied
+	// through [WithIDTokenScopeClaims]; idTokenScopeClaimsSet records the
+	// call so a second one can be rejected.
+	idTokenScopeClaims    []string
+	idTokenScopeClaimsSet bool
+
 	// highEntropyClientSecrets records [WithHighEntropyClientSecrets].
 	// It selects the client_secret verifier installed on every endpoint
 	// that authenticates a client, which in turn fixes both the
@@ -368,7 +382,7 @@ type config struct {
 	// freshly salted desired hash with an existing hash semantically. New
 	// clears the map before returning; plaintext never reaches a store or the
 	// constructed Provider.
-	staticClientSecrets map[string]string
+	staticClientSecrets map[string]staticSeedSecrets
 
 	// firstPartyClients carries the client_id values supplied
 	// through [WithFirstPartyClients]. Validated against

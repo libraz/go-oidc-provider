@@ -38,6 +38,7 @@ func (c *config) validate() error {
 	}
 	for _, fn := range []func() error{
 		c.validateScopes,
+		c.validateIDTokenScopeClaims,
 		c.validateProfiles,
 		c.validateFeatureActivation,
 		c.validateRegistration,
@@ -393,10 +394,19 @@ func (c *config) validateStaticClients() error {
 // and quietly answers an unknown client_id in microseconds while
 // answering this one in ninety milliseconds.
 func (c *config) validateStaticClientSecretFormat(index int, seed store.Client) error {
-	if !c.highEntropyClientSecrets || seed.SecretHash == "" {
+	if !c.highEntropyClientSecrets {
 		return nil
 	}
-	if clientauth.IsHighEntropyEncoding(seed.SecretHash) {
+	if seed.PreviousSecretHash != "" && !clientauth.IsHighEntropyEncoding(seed.PreviousSecretHash) {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithStaticClients[" + strconv.Itoa(index) +
+				"] (client_id " + seed.ID + "): WithHighEntropyClientSecrets requires a previous secret " +
+				"provisioned through NewClientSecret or HashHighEntropyClientSecret; " +
+				"set ConfidentialClient.PreviousSecretHash, not PreviousSecret",
+		}
+	}
+	if seed.SecretHash == "" || clientauth.IsHighEntropyEncoding(seed.SecretHash) {
 		return nil
 	}
 	return &Error{

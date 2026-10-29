@@ -602,11 +602,17 @@ func normalizeStaticClientSeed(
 	if existing.Source == "" {
 		desired.Source = ""
 	}
-	if plaintext, ok := cfg.staticClientSecrets[desired.ID]; ok {
+	secrets := cfg.staticClientSecrets[desired.ID]
+	if plaintext := secrets.current; plaintext != "" {
 		if err := (&clientauth.Argon2id{}).Verify(plaintext, existing.SecretHash); err != nil {
 			return nil, staticClientConflict(desired.ID)
 		}
 		desired.SecretHash = existing.SecretHash
+	}
+	if plaintext := secrets.previous; plaintext != "" {
+		if hash, found := verifiedPreviousHash(plaintext, existing); found {
+			desired.PreviousSecretHash = hash
+		}
 	}
 	if !store.StaticClientEquivalent(existing, &desired) {
 		return nil, staticClientConflict(desired.ID)

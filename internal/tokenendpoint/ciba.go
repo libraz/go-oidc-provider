@@ -72,14 +72,15 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 		emitCIBAReject(ctx, deps, client.ID, reason)
 		return
 	}
-	if _, err := lookupLiveSubject(ctx, deps, authorized.Subject); err != nil {
+	user, err := lookupLiveSubject(ctx, deps, authorized.Subject)
+	if err != nil {
 		if errors.Is(err, errSubjectDeprovisioned) {
 			retireDeprovisionedCIBARequest(ctx, deps, client.ID, authorized.Subject, in.AuthReqID)
 		}
 		writeSubjectLookupError(w, err)
 		return
 	}
-	issued, err := prepareCIBAResponse(ctx, deps, client, authorized, binding)
+	issued, err := prepareCIBAResponse(ctx, deps, client, authorized, user, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -462,6 +463,7 @@ func prepareCIBAResponse(
 	deps Deps,
 	client *store.Client,
 	authorized *cgrant.Authorized,
+	user *store.User,
 	binding tokenBinding,
 ) (out preparedCIBAResponse, err error) {
 	now := deps.now().UTC()
@@ -537,6 +539,7 @@ func prepareCIBAResponse(
 			Now:         now,
 			AuthTime:    authTime,
 			ACR:         authorized.ACR,
+			Extra:       idTokenExtraClaims(deps, user, authorized.Scope, nil),
 		})
 		if err != nil {
 			return preparedCIBAResponse{}, err
@@ -593,6 +596,7 @@ type cibaIDTokenInput struct {
 	Now         time.Time
 	AuthTime    int64
 	ACR         string
+	Extra       map[string]any
 }
 
 // mintCIBAIDToken signs the id_token issued in response to a
@@ -620,6 +624,7 @@ func mintCIBAIDToken(deps Deps, in cibaIDTokenInput) (string, error) {
 		AuthTime:  in.AuthTime,
 	}
 	claims.ACR = in.ACR
+	claims.Extra = in.Extra
 	return tokens.SignIDToken(key, claims)
 }
 

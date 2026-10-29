@@ -128,6 +128,49 @@ type Prompt struct {
 	// [op.Provider.SetLocaleCookie], which writes the cookie the
 	// resolver reads on the next request.
 	LocalesAvailable []string `json:"locales_available,omitempty"`
+
+	// Error, when non-nil, reports that the submission that produced
+	// this prompt was rejected. It is a one-shot notice: the next prompt
+	// built from a fresh request (including a GET of the same state)
+	// carries none.
+	//
+	// Stable since v1.5.
+	Error *PromptError `json:"error,omitempty"`
+}
+
+// PromptErrorCredentialsRejected is the [PromptError.Code] for a rejected
+// credential submission (wrong password, wrong code). It is the same
+// code whether the account exists or not.
+//
+// Stable since v1.5.
+const PromptErrorCredentialsRejected = "credentials_rejected"
+
+// PromptError is the notice a [Prompt] carries after a rejected
+// submission. Code comes from a closed set (see
+// [PromptErrorCredentialsRejected]); a client should treat an unknown
+// code as a generic failure.
+//
+// Stable since v1.5.
+type PromptError struct {
+	// Code is the stable machine-readable identifier.
+	Code string `json:"code"`
+
+	// Message is Code's text in [Prompt.Locale]. Empty when the OP was
+	// built without a locale resolver; renderers then fall back on Code.
+	Message string `json:"message,omitempty"`
+}
+
+// PromptErrorMessageKey returns the i18n catalogue key for the message of
+// code, or "" for a code outside the closed set.
+//
+// Stable since v1.5.
+func PromptErrorMessageKey(code string) string {
+	switch code {
+	case PromptErrorCredentialsRejected:
+		return "auth.error.credentials_rejected"
+	default:
+		return ""
+	}
 }
 
 // Step is the discriminated union an [op.Authenticator] /

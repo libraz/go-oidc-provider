@@ -1001,6 +1001,18 @@ func (o *Orchestrator) emitLoginFlowPrompt(st State, kind string, prompt interac
 	return st, interaction.Step{Prompt: &prompt}, nil
 }
 
+// withRejectedNotice returns step with a credentials-rejected notice on a
+// copy of its Prompt; a step without a Prompt is returned unchanged.
+func withRejectedNotice(step interaction.Step) interaction.Step {
+	if step.Prompt == nil {
+		return step
+	}
+	p := *step.Prompt
+	p.Error = &interaction.PromptError{Code: interaction.PromptErrorCredentialsRejected}
+	step.Prompt = &p
+	return step
+}
+
 // recordLoginFlowResult folds a step's [interaction.Result] into st:
 // for factor-shaped steps it appends a [Factor] (so [Aggregate]
 // observes the AAL contribution and amr value), for captcha-shaped
@@ -1105,7 +1117,7 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 				if perr != nil {
 					return st, interaction.Step{}, perr
 				}
-				return next, emitted, nil
+				return next, withRejectedNotice(emitted), nil
 			}
 			// Re-enter the dispatcher so a captcha-shaped rule whose
 			// predicate just became true (e.g., RuleAfterFailedAttempts
@@ -1114,7 +1126,11 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 			// same factor's prompt.
 			st.FactorScratch = nil
 			st.ActiveStepKind = ""
-			return o.advanceLoginFlow(ctx, st, in.Now)
+			next, emitted, aerr := o.advanceLoginFlow(ctx, st, in.Now)
+			if aerr != nil {
+				return next, emitted, aerr
+			}
+			return next, withRejectedNotice(emitted), nil
 		}
 		st = retireActiveFactorToken(st)
 		return st, interaction.Step{}, err
