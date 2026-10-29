@@ -278,7 +278,13 @@ func dispatchUserInfoResponse(
 	wantsJWT := wantsJWTShape(r)
 	client, ok := resolved, resolved != nil
 	if !ok {
-		client, ok = resolveClient(r.Context(), deps, clientID)
+		var err error
+		if client, ok, err = resolveClient(r.Context(), deps, clientID); err != nil {
+			// Serving JSON here would hand plaintext claims to a client
+			// that may have registered userinfo encryption.
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
 	}
 	encryptionRegistered := ok && client != nil && client.UserInfoEncryptedResponseAlg != ""
 	if !wantsJWT && !encryptionRegistered {
@@ -889,7 +895,11 @@ func projectResponseSubject(
 	if deps.SubjectProjector == nil {
 		return rawSubject, nil, true
 	}
-	client, ok := resolveClient(ctx, deps, clientID)
+	client, ok, err := resolveClient(ctx, deps, clientID)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return "", nil, false
+	}
 	if !ok {
 		respondGenericInvalidToken(w)
 		return "", nil, false

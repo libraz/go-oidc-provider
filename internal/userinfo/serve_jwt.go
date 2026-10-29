@@ -210,28 +210,30 @@ func maybeEncryptUserInfo(
 // is going to fire. A nil [HandlerDeps.Clients] disables the lookup;
 // the caller treats that as "no JWT-shape" and falls back to JSON.
 //
-// The function returns ([client], true) on a successful read, and
-// (nil, false) when the client was deleted between AT issuance and the
-// userinfo call — the caller MUST then emit the invalid_token challenge
-// rather than a plain signed body, because the AT was minted for a
-// client the OP no longer recognises.
-func resolveClient(ctx context.Context, deps HandlerDeps, clientID string) (*store.Client, bool) {
+// The function returns ([client], true, nil) on a successful read, and
+// (nil, false, nil) when the client was deleted between AT issuance and
+// the userinfo call — the caller MUST then emit the invalid_token
+// challenge rather than a plain signed body, because the AT was minted
+// for a client the OP no longer recognises. A non-nil error means the
+// registry could not answer: the caller cannot tell which response shape
+// the client registered, so it fails the request instead of guessing.
+func resolveClient(ctx context.Context, deps HandlerDeps, clientID string) (*store.Client, bool, error) {
 	if deps.Clients == nil || clientID == "" {
-		return nil, true
+		return nil, true, nil
 	}
 	c, err := deps.Clients.GetClient(ctx, clientID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, false
+			return nil, false, nil
 		}
-		return nil, false
+		return nil, false, fmt.Errorf("userinfo: client lookup: %w", err)
 	}
 	if c == nil {
 		// A nil client alongside a nil error violates the store contract.
 		// The two nil-client returns mean different things here — (nil, true)
 		// is "lookup disabled" — so an unproducible record joins the
 		// "client gone" branch and the challenge fires.
-		return nil, false
+		return nil, false, nil
 	}
-	return c, true
+	return c, true, nil
 }

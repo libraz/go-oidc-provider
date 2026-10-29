@@ -1,7 +1,9 @@
 package clientauth
 
 import (
+	"bytes"
 	"context"
+	"crypto"
 	"errors"
 	"fmt"
 	"slices"
@@ -250,8 +252,9 @@ type jwksRefresher interface {
 // supports a refetch AND the assertion's signing kid is absent from the
 // keyset just tried. It returns ok=false when rotation cannot explain the
 // miss (resolver has no refetch, kid is present so the signature is
-// simply wrong, or the refetch failed), so the caller rejects without a
-// wasted retry. A server-side refetch failure is returned as an error.
+// simply wrong, the refetch failed, or it returned the keyset just tried),
+// so the caller rejects without a wasted retry. A server-side refetch
+// failure is returned as an error.
 func refreshedKeysOnKIDMiss(
 	ctx context.Context,
 	resolver JWKSResolver,
@@ -274,7 +277,36 @@ func refreshedKeysOnKIDMiss(
 	if fresh == nil || len(fresh.Keys) == 0 {
 		return nil, false, nil
 	}
+	// An inline keyset, or a refetch the throttle answered from cache,
+	// returns the keys just tried; re-trialling them would double the
+	// per-request verification bound without any chance of success.
+	if sameKeySet(fresh, tried) {
+		return nil, false, nil
+	}
 	return fresh, true, nil
+}
+
+// sameKeySet reports whether a and b hold the same keys in the same order,
+// compared by kid and RFC 7638 thumbprint. A key whose thumbprint cannot
+// be computed makes the sets differ, so the caller falls back to a retry.
+func sameKeySet(a, b *josev4.JSONWebKeySet) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil || len(a.Keys) != len(b.Keys) {
+		return false
+	}
+	for i := range a.Keys {
+		if a.Keys[i].KeyID != b.Keys[i].KeyID {
+			return false
+		}
+		ta, errA := a.Keys[i].Thumbprint(crypto.SHA256)
+		tb, errB := b.Keys[i].Thumbprint(crypto.SHA256)
+		if errA != nil || errB != nil || !bytes.Equal(ta, tb) {
+			return false
+		}
+	}
+	return true
 }
 
 // keySourceUnavailable reports whether a key-resolution failure is a

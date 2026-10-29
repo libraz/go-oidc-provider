@@ -812,16 +812,20 @@ func applyJARMFeature(in Input, doc *Document) {
 }
 
 // applyEndpointAuthMirrors copies the token-endpoint auth methods onto
-// the introspection / revocation endpoints (RFC 8414 §2) and emits the
-// assertion-bearing alg list (FAPI 2.0 §5.4 / OIDC Core §9) when one of
-// those methods survives profile narrowing. The mirrors run AFTER every
-// feature-driven extension so a single toggle of either feature keeps
-// the lists in lock-step.
+// the introspection / revocation endpoints (RFC 8414 §2) and emits each
+// endpoint's assertion-bearing alg list (RFC 8414 §2 / FAPI 2.0 §5.4 /
+// OIDC Core §9) when one of those methods survives profile narrowing.
+// The three endpoints share one assertion alg allow-list. The mirrors
+// run AFTER every feature-driven extension so a single toggle of either
+// feature keeps the lists in lock-step.
 func applyEndpointAuthMirrors(in Input, doc *Document) {
 	if in.Features.Introspect {
 		doc.IntrospectionEndpointAuthMethodsSupported = confidentialAuthMethods(
 			doc.TokenEndpointAuthMethodsSupported,
 		)
+		if containsAssertionBearingMethod(doc.IntrospectionEndpointAuthMethodsSupported) {
+			doc.IntrospectionEndpointAuthSigningAlgValuesSupported = clientSigningAlgs(in)
+		}
 		// RFC 9701 §6: advertise the alg values the OP signs JWT-
 		// formatted introspection responses with. The list mirrors
 		// the ID-token / JARM posture (ES256 only) because the
@@ -831,6 +835,9 @@ func applyEndpointAuthMirrors(in Input, doc *Document) {
 	if in.Features.Revoke {
 		doc.RevocationEndpointAuthMethodsSupported = append([]string(nil),
 			doc.TokenEndpointAuthMethodsSupported...)
+		if containsAssertionBearingMethod(doc.RevocationEndpointAuthMethodsSupported) {
+			doc.RevocationEndpointAuthSigningAlgValuesSupported = clientSigningAlgs(in)
+		}
 	}
 	if containsAssertionBearingMethod(doc.TokenEndpointAuthMethodsSupported) {
 		doc.TokenEndpointAuthSigningAlgValuesSupported = clientSigningAlgs(in)

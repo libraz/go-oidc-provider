@@ -151,7 +151,7 @@ const probeRedirectURI = "https://rp.test.invalid/callback"
 // public scope catalog.
 var minimalUpdateValues = map[string]any{
 	"RedirectURIs":             []string{probeRedirectURI},
-	"GrantTypes":               []string{"authorization_code", "refresh_token"},
+	"GrantTypes":               []string{"authorization_code"},
 	"ResponseTypes":            []string{"code"},
 	"TokenEndpointAuthMethod":  defaultAuthMethod,
 	"SubjectType":              defaultSubjectType,

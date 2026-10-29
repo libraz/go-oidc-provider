@@ -65,6 +65,12 @@ type Document struct {
 	// the field when the Introspect feature is enabled.
 	IntrospectionEndpointAuthMethodsSupported []string `json:"introspection_endpoint_auth_methods_supported,omitempty"`
 
+	// IntrospectionEndpointAuthSigningAlgValuesSupported lists the JWS
+	// alg values accepted on a client_assertion at the introspection
+	// endpoint. RFC 8414 §2 requires it whenever
+	// IntrospectionEndpointAuthMethodsSupported names private_key_jwt.
+	IntrospectionEndpointAuthSigningAlgValuesSupported []string `json:"introspection_endpoint_auth_signing_alg_values_supported,omitempty"`
+
 	// RevocationEndpoint is the absolute URL of the RFC 7009 token
 	// revocation endpoint. Only emitted when the feature is enabled.
 	RevocationEndpoint string `json:"revocation_endpoint,omitempty"`
@@ -77,6 +83,12 @@ type Document struct {
 	// revocation handler reuses the same authentication machinery)
 	// and only emits the field when the Revoke feature is enabled.
 	RevocationEndpointAuthMethodsSupported []string `json:"revocation_endpoint_auth_methods_supported,omitempty"`
+
+	// RevocationEndpointAuthSigningAlgValuesSupported lists the JWS alg
+	// values accepted on a client_assertion at the revocation endpoint.
+	// RFC 8414 §2 requires it whenever
+	// RevocationEndpointAuthMethodsSupported names private_key_jwt.
+	RevocationEndpointAuthSigningAlgValuesSupported []string `json:"revocation_endpoint_auth_signing_alg_values_supported,omitempty"`
 
 	// PushedAuthorizationRequestEndpoint is the absolute URL of the
 	// RFC 9126 PAR endpoint. Only emitted when the feature is enabled.

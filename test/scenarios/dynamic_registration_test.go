@@ -372,9 +372,8 @@ func TestScenario_DCR_DEF_04_RequireAuthTimeDefaultsFalse(t *testing.T) {
 }
 
 // TestScenario_DCR_DEF_05_GrantTypesDefaultAuthCode confirms that
-// grant_types defaults to ["authorization_code"] when omitted. We
-// constrain AllowedGrantTypes to a one-element list so the default
-// is unambiguous (the library default also admits refresh_token).
+// grant_types defaults to ["authorization_code"] when omitted, even
+// when the allow-list is wider (the allow-list is a ceiling).
 //
 // Spec: OpenID Connect Dynamic Client Registration 1.0 §2.
 func TestScenario_DCR_DEF_05_GrantTypesDefaultAuthCode(t *testing.T) {
@@ -382,7 +381,7 @@ func TestScenario_DCR_DEF_05_GrantTypesDefaultAuthCode(t *testing.T) {
 
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithDynamicRegistration(op.RegistrationOption{
-			AllowedGrantTypes: []string{"authorization_code"},
+			AllowedGrantTypes: []string{"authorization_code", "refresh_token"},
 		}),
 	))
 	endpoint := tk.Server.URL + "/oidc/register"

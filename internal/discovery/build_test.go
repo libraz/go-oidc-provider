@@ -3,6 +3,7 @@ package discovery_test
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/discovery"
@@ -528,6 +529,48 @@ func TestBuild_IntrospectionAuthMethodsExcludeNone(t *testing.T) {
 	}
 	if len(doc.IntrospectionEndpointAuthMethodsSupported) == 0 {
 		t.Fatal("introspection_endpoint_auth_methods_supported is empty")
+	}
+}
+
+// TestBuild_IntrospectionRevocationAuthSigningAlgs pins RFC 8414 §2:
+// an endpoint whose auth-method list names private_key_jwt also
+// publishes the JWS algs accepted on its client_assertion, and omits the
+// list when no assertion-bearing method survives profile narrowing.
+func TestBuild_IntrospectionRevocationAuthSigningAlgs(t *testing.T) {
+	t.Parallel()
+
+	endpoints := discovery.EndpointPaths{
+		JWKS: "/jwks", Token: "/token", Introspect: "/introspect", Revoke: "/revoke",
+	}
+	features := discovery.Features{Introspect: true, Revoke: true}
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:            "https://idp.example.com",
+		MountPrefix:       "/oidc",
+		Endpoints:         endpoints,
+		Features:          features,
+		ClientSigningAlgs: []string{"PS256", "ES256"},
+	})
+	want := []string{"PS256", "ES256"}
+	if got := doc.IntrospectionEndpointAuthSigningAlgValuesSupported; !slices.Equal(got, want) {
+		t.Errorf("introspection_endpoint_auth_signing_alg_values_supported=%v want %v", got, want)
+	}
+	if got := doc.RevocationEndpointAuthSigningAlgValuesSupported; !slices.Equal(got, want) {
+		t.Errorf("revocation_endpoint_auth_signing_alg_values_supported=%v want %v", got, want)
+	}
+
+	secretOnly := discovery.Build(discovery.Input{
+		Issuer:                    "https://idp.example.com",
+		MountPrefix:               "/oidc",
+		Endpoints:                 endpoints,
+		Features:                  features,
+		ProfileAllowedAuthMethods: []string{"client_secret_basic"},
+	})
+	if got := secretOnly.IntrospectionEndpointAuthSigningAlgValuesSupported; got != nil {
+		t.Errorf("introspection_endpoint_auth_signing_alg_values_supported=%v want omitted without private_key_jwt", got)
+	}
+	if got := secretOnly.RevocationEndpointAuthSigningAlgValuesSupported; got != nil {
+		t.Errorf("revocation_endpoint_auth_signing_alg_values_supported=%v want omitted without private_key_jwt", got)
 	}
 }
 

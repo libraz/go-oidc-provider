@@ -56,7 +56,7 @@ func validatePolicy(
 	if len(m.RedirectURIs) == 0 {
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
 	}
-	canonical := applyMetadataDefaults(m, allowedGrantTypes, allowedResponseTypes)
+	canonical := applyMetadataDefaults(m, allowedResponseTypes)
 	if err := validateSignedResponseAlg(introspectionSignedResponseSurface(), canonical.IntrospectionSignedResponseAlg); err != nil {
 		return ClientMetadata{}, err
 	}
@@ -357,12 +357,13 @@ func registrationDefaultScopeNames(scopes *scoperegistry.Registry) []string {
 }
 
 // applyMetadataDefaults populates fields the client left blank with
-// the library defaults, returning the canonical metadata the policy
+// the library defaults (grant_types defaults to authorization_code per
+// RFC 7591 §2, never to the allow-list), returning the canonical metadata the policy
 // validator and persistence layer consume.
-func applyMetadataDefaults(m ClientMetadata, allowedGrantTypes, allowedResponseTypes []string) ClientMetadata {
+func applyMetadataDefaults(m ClientMetadata, allowedResponseTypes []string) ClientMetadata {
 	out := m
 	if len(out.GrantTypes) == 0 {
-		out.GrantTypes = cloneStrings(allowedGrantTypes)
+		out.GrantTypes = []string{"authorization_code"}
 	}
 	if len(out.ResponseTypes) == 0 {
 		out.ResponseTypes = cloneStrings(allowedResponseTypes)
