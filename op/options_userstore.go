@@ -6,22 +6,53 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// effectiveUserStore resolves where the OP reads end-user claims from:
-// the dedicated [WithUserStore] value when one was supplied, otherwise
-// the Users() substore of the [WithStore] backend.
+// effectiveUserStore resolves where the OP reads end-user claims from, in
+// order: the dedicated [WithUserStore] value when one was supplied; the
+// Store of the login flow's primary [PrimaryPassword] (see
+// inferredUserStore); the Users() substore of the [WithStore] backend.
 //
 // Resolution rather than wrapping is the point of the option. A wrapper
 // that shadows Users() has to be built out of the concrete backend type
 // to keep the backend's optional capabilities visible to the type
 // assertions [New] makes; building it out of the [store.Store]
 // interface instead compiles cleanly and silently erases them. Choosing
-// between two values here cannot lose anything, because the backend the
+// between values here cannot lose anything, because the backend the
 // rest of the library sees is the one the embedder passed.
+//
+// The login-flow inference exists so the records a login resolves a
+// subject from and the records claims are read from need not be wired
+// twice; a deployment that wants them apart says so with
+// [WithUserStore].
 func (c *config) effectiveUserStore() store.UserStore { //nolint:ireturn,nolintlint // store.UserStore is the substore contract.
 	if !isNilLike(c.userStore) {
 		return c.userStore
 	}
+	if inferred := c.inferredUserStore(); inferred != nil {
+		return inferred
+	}
 	return c.store.Users()
+}
+
+// inferredUserStore returns the Store of the login flow's primary
+// [PrimaryPassword], or of the first [PrimaryPassword] inside a primary
+// [StepOneOf]. It returns nil when no login flow is set or no such step
+// carries a usable Store.
+func (c *config) inferredUserStore() store.UserStore { //nolint:ireturn,nolintlint // store.UserStore is the substore contract.
+	if !c.loginFlowSet {
+		return nil
+	}
+	candidates := []Step{c.loginFlow.Primary}
+	if oneOf, ok := c.loginFlow.Primary.(StepOneOf); ok {
+		candidates = oneOf.Steps
+	}
+	for _, s := range candidates {
+		pw, ok := s.(PrimaryPassword)
+		if !ok || isNilLike(pw.Store) {
+			continue
+		}
+		return pw.Store
+	}
+	return nil
 }
 
 // warnUserStoreMismatch reports a login flow that authenticates against
@@ -39,11 +70,16 @@ func (c *config) effectiveUserStore() store.UserStore { //nolint:ireturn,nolintl
 // comparable) are left alone rather than guessed at: reporting a
 // mismatch that may not exist would train the reader to ignore the
 // line.
+//
+// When the claim side was inferred from the primary PrimaryPassword the
+// two sides agree by construction; the only thing worth saying is that a
+// differing Users() substore is no longer the claim source.
 func (c *config) warnUserStoreMismatch() {
 	claims := c.effectiveUserStore()
 	if isNilLike(claims) {
 		return
 	}
+	c.infoInferredUserStore(claims)
 	for _, step := range c.loginFlowSteps() {
 		authn, field := stepUserStore(step)
 		if isNilLike(authn) || !comparableStores(authn, claims) {
@@ -62,6 +98,25 @@ func (c *config) warnUserStoreMismatch() {
 			"claim_source", claimSourceOption(c),
 		)
 	}
+}
+
+// infoInferredUserStore logs once when claims were inferred from the
+// primary PrimaryPassword and the backend's Users() is a different,
+// comparable store, so an embedder upgrading from a release that read
+// claims from Users() sees the change.
+func (c *config) infoInferredUserStore(claims store.UserStore) {
+	if !isNilLike(c.userStore) || c.inferredUserStore() == nil {
+		return
+	}
+	backend := c.store.Users()
+	if isNilLike(backend) || !comparableStores(claims, backend) || any(claims) == any(backend) {
+		return
+	}
+	c.logger.Info(
+		"claims are read from the login flow's PrimaryPassword.Store, which "+
+			"differs from Store.Users(); pass WithUserStore to override",
+		"claim_source", claimSourceOption(c),
+	)
 }
 
 // loginFlowSteps returns every [Step] the configured flow can run, in
@@ -117,6 +172,9 @@ func comparableStores(a, b store.UserStore) bool {
 func claimSourceOption(c *config) string {
 	if !isNilLike(c.userStore) {
 		return "WithUserStore"
+	}
+	if c.inferredUserStore() != nil {
+		return "LoginFlow.Primary PrimaryPassword.Store"
 	}
 	return "WithStore(...).Users()"
 }

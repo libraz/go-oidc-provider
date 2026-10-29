@@ -836,11 +836,17 @@ func WithStore(s store.Store) Option {
 // The store is read-only from the library's perspective: it supplies the
 // claims released through the ID Token and /userinfo, projected by the scopes
 // the grant carries. Authentication is a separate wiring — [PrimaryPassword]
-// carries its own store — and the two are meant to be the same records. [New]
-// warns when they are not, because a login that resolves a subject from one
-// set of records and then serves claims from another fails silently.
+// carries its own store — and the two are meant to be the same records.
 //
-// Omitting the option leaves claim reads on [store.Store.Users].
+// Omitting the option, claims are read from the Store of the [LoginFlow]
+// Primary when it is a [PrimaryPassword] (or the first [PrimaryPassword]
+// inside a Primary [StepOneOf]), and from [store.Store.Users] otherwise. When
+// that inference picks a store different from a comparable Store.Users(), [New]
+// logs one INFO line. An explicit value overrides the inference; [New] then
+// warns when a [PrimaryPassword] or [StepEmailOTP] authenticates against
+// different records, because a login that resolves a subject from one set of
+// records and then serves claims from another fails silently. Stores whose
+// dynamic types are not comparable are never reported.
 // Stable since v1.0.
 func WithUserStore(s store.UserStore) Option {
 	return optionFunc(func(c *config) error {

@@ -54,6 +54,13 @@ const userInfoTokenClientID = "client-1"
 // subject and returns the "email" claim the OP released.
 func userInfoEmail(tb testing.TB, provider *op.Provider, key op.SigningKey, subject string) any {
 	tb.Helper()
+	return userInfoClaim(tb, provider, key, subject, "email")
+}
+
+// userInfoClaim drives /userinfo with a self-signed access token for
+// subject and returns the named claim the OP released.
+func userInfoClaim(tb testing.TB, provider *op.Provider, key op.SigningKey, subject, claim string) any {
+	tb.Helper()
 
 	jws, err := tokens.SignAccessToken(tokens.SigningKey{
 		KeyID:  key.KeyID,
@@ -67,7 +74,7 @@ func userInfoEmail(tb testing.TB, provider *op.Provider, key op.SigningKey, subj
 		IssuedAt:  time.Now().Add(-time.Minute).Unix(),
 		ExpiresAt: time.Now().Add(time.Hour).Unix(),
 		JTI:       "at-userstore-" + subject,
-		Scope:     []string{"openid", "email"},
+		Scope:     []string{"openid", "email", "profile"},
 	})
 	if err != nil {
 		tb.Fatalf("SignAccessToken: %v", err)
@@ -86,7 +93,7 @@ func userInfoEmail(tb testing.TB, provider *op.Provider, key op.SigningKey, subj
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		tb.Fatalf("decode userinfo: %v", err)
 	}
-	return body["email"]
+	return body[claim]
 }
 
 // TestWithUserStore_ServesClaimsFromTheSuppliedStore is the whole point
@@ -183,7 +190,8 @@ func warnings(tb testing.TB, opts ...op.Option) string {
 // the misconfiguration the two-sided wiring makes possible: the login
 // resolves a subject out of one set of records and the ID Token is then
 // assembled from another. Nothing fails, which is exactly why it needs
-// to be said out loud.
+// to be said out loud. Only an explicit WithUserStore can create it: left
+// to inference, the claim source is the primary step's own store.
 func TestNew_WarnsWhenTheLoginFlowAuthenticatesAgainstOtherRecords(t *testing.T) {
 	t.Parallel()
 
