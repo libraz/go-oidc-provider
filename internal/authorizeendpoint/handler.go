@@ -256,6 +256,11 @@ type Deps struct {
 	// /state JSON routes are mounted.
 	SPAStaticDir string
 
+	// SPAContentSecurityPolicy, when non-empty, is sent as the
+	// Content-Security-Policy of the SPA shell response. Assets carry
+	// none. The value is expected to be already normalised.
+	SPAContentSecurityPolicy string
+
 	// Clock supplies the current wall-clock reading. A nil value falls
 	// back to [timex.SystemClock].
 	Clock Clock

@@ -451,7 +451,24 @@ type SPAUI struct {
 	// MUST exist at construction time so a typo surfaces at
 	// [New] rather than the first request.
 	StaticDir string
+
+	// ContentSecurityPolicy is the policy sent with the SPA shell
+	// (LoginMount/{uid}); asset responses carry none. Empty means the
+	// default policy:
+	//
+	//	default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'
+	//
+	// A bundle that needs inline scripts, external origins or a <base>
+	// element MUST supply its own value. A non-empty value replaces the
+	// default and is validated with [interaction.NormalizeCSP], the same
+	// rules as [ConsentUI.ContentSecurityPolicy]; a rejected value fails
+	// [New]. Experimental, like the rest of [SPAUI].
+	ContentSecurityPolicy string
 }
+
+// spaDefaultCSP is the shell policy applied when
+// [SPAUI.ContentSecurityPolicy] is empty.
+const spaDefaultCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 
 // ConsentUI declares the template the [Provider] uses to render the
 // consent screen when the embedder wants to keep the HTML driver but
@@ -608,6 +625,19 @@ func WithSPAUI(ui SPAUI) Option {
 		}
 		if err := validateSPAUIStaticDir(ui.StaticDir); err != nil {
 			return err
+		}
+		if ui.ContentSecurityPolicy == "" {
+			ui.ContentSecurityPolicy = spaDefaultCSP
+		} else {
+			policy, err := interaction.NormalizeCSP(ui.ContentSecurityPolicy)
+			if err != nil {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithSPAUI: ContentSecurityPolicy rejected",
+					Cause:       err,
+				}
+			}
+			ui.ContentSecurityPolicy = policy
 		}
 		c.spaUI = ui
 		c.spaUISet = true

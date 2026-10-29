@@ -935,13 +935,13 @@ func (c *config) allowedClientAuthMethods() []clientauth.Method {
 }
 
 // spaWiringFor projects the [config.spaUI] state onto the
-// authorizeendpoint deps fields. An unset SPAUI returns the empty
-// pair; the consumer treats it as "legacy /interaction wiring".
-func spaWiringFor(cfg *config) (loginMount, staticDir string) {
+// authorizeendpoint deps fields. An unset SPAUI returns empty values;
+// the consumer treats it as "legacy /interaction wiring".
+func spaWiringFor(cfg *config) (loginMount, staticDir, csp string) {
 	if !cfg.spaUISet {
-		return "", ""
+		return "", "", ""
 	}
-	return cfg.spaUI.LoginMount, cfg.spaUI.StaticDir
+	return cfg.spaUI.LoginMount, cfg.spaUI.StaticDir, cfg.spaUI.ContentSecurityPolicy
 }
 
 // compileLoginFlow projects the public [LoginFlow] onto the internal

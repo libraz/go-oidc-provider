@@ -83,6 +83,9 @@ func newSPAShellHandler(deps resolved) http.Handler {
 			return
 		}
 		stampSPAShellHeaders(w)
+		if deps.SPAContentSecurityPolicy != "" {
+			w.Header().Set("Content-Security-Policy", deps.SPAContentSecurityPolicy)
+		}
 		http.ServeFile(w, r, indexPath)
 	})
 }
@@ -95,12 +98,8 @@ func newSPAShellHandler(deps resolved) http.Handler {
 // stamps Content-Type when the header is absent and the embedder may
 // have wrapped the handler in middleware that pre-populates it.
 //
-// Content-Security-Policy is the one header the driver stamps and this
-// handler cannot: the shell loads the embedder's own bundle, so the
-// script-src / connect-src / style-src the policy would have to admit
-// are unknown here and any fixed policy would either break the bundle
-// or be too loose to be worth stamping. The embedder owns the shell's
-// CSP, which is why StaticDir is documented as embedder-controlled.
+// Content-Security-Policy is stamped by the caller from the configured
+// policy, since it is not fixed by the OP.
 func stampSPAShellHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
