@@ -190,16 +190,16 @@ func completeConsentIfPrompted(ctx context.Context, client *http.Client, interac
 	return postInteraction(ctx, client, interactionURL, origin, csrf, body)
 }
 
-// approvedScopesFromPrompt walks the consent envelope's data.Scopes
+// approvedScopesFromPrompt walks the consent envelope's data.scopes
 // list and returns the names as a space-delimited string (the wire
 // shape the consent submission expects).
 func approvedScopesFromPrompt(env map[string]any) string {
 	data, _ := env["data"].(map[string]any)
-	scopesAny, _ := data["Scopes"].([]any)
+	scopesAny, _ := data["scopes"].([]any)
 	out := make([]string, 0, len(scopesAny))
 	for _, s := range scopesAny {
 		entry, _ := s.(map[string]any)
-		name, _ := entry["Name"].(string)
+		name, _ := entry["name"].(string)
 		if name != "" {
 			out = append(out, name)
 		}

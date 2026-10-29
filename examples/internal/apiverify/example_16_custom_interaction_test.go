@@ -12,5 +12,5 @@ import "testing"
 func TestExample16CustomInteraction(t *testing.T) {
 	runAuthorizeInteraction(t, "../../16-custom-interaction", "http://127.0.0.1:8080",
 		authorizeParams("demo-spa", "http://localhost:5173/callback", "openid profile"),
-		[]string{`"type":"auth.password"`, `"Name":"password"`})
+		[]string{`"type":"auth.password"`, `"name":"password"`})
 }

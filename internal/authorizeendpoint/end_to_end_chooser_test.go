@@ -166,8 +166,8 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	}
 	subjectToSession := map[string]string{}
 	for _, a := range accounts {
-		subj, _ := a["Subject"].(string)
-		sid, _ := a["SessionID"].(string)
+		subj, _ := a["subject"].(string)
+		sid, _ := a["session_id"].(string)
 		subjectToSession[subj] = sid
 	}
 	if subjectToSession["user-A"] != sessA.SessionID || subjectToSession["user-B"] != sessB.SessionID {
@@ -1018,7 +1018,7 @@ func chooserAccountsFromPrompt(tb testing.TB, env map[string]any) []map[string]a
 	if data == nil {
 		tb.Fatalf("prompt envelope missing data: %v", env)
 	}
-	rawAccounts, _ := data["Accounts"].([]any)
+	rawAccounts, _ := data["accounts"].([]any)
 	out := make([]map[string]any, 0, len(rawAccounts))
 	for _, a := range rawAccounts {
 		entry, _ := a.(map[string]any)
@@ -1035,6 +1035,6 @@ func chooserAddAccountURLFromPrompt(tb testing.TB, env map[string]any) string {
 	if data == nil {
 		tb.Fatalf("prompt envelope missing data: %v", env)
 	}
-	out, _ := data["AddAccountURL"].(string)
+	out, _ := data["add_account_url"].(string)
 	return out
 }

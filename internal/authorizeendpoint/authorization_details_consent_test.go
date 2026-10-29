@@ -65,7 +65,7 @@ func TestEndToEnd_AuthorizationDetails_RideTheRequestNotTheConsentAnswer(t *test
 		t.Fatalf("consent prompt carries no data: %v", envelope)
 	}
 	got := slices.Sorted(maps.Keys(data))
-	if want := []string{"Client", "Scopes"}; !slices.Equal(got, want) {
+	if want := []string{"client", "scopes"}; !slices.Equal(got, want) {
 		t.Errorf("consent prompt data keys=%v want %v; the payload changed and the coverage docs must follow", got, want)
 	}
 

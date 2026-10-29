@@ -1,0 +1,1 @@
+{"options":[{"kind":"totp","label":"auth.factor.totp"},{"kind":"passkey","label":"auth.factor.passkey"}]}

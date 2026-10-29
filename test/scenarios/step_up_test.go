@@ -359,11 +359,11 @@ func findStepUpCookie(cookies []*http.Cookie, name string) *http.Cookie {
 
 func approvedStepUpScopes(env map[string]any) string {
 	data, _ := env["data"].(map[string]any)
-	scopesAny, _ := data["Scopes"].([]any)
+	scopesAny, _ := data["scopes"].([]any)
 	out := make([]string, 0, len(scopesAny))
 	for _, s := range scopesAny {
 		entry, _ := s.(map[string]any)
-		if name, _ := entry["Name"].(string); name != "" {
+		if name, _ := entry["name"].(string); name != "" {
 			out = append(out, name)
 		}
 	}

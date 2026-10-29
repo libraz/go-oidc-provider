@@ -398,11 +398,11 @@ func completeConsentIfPromptedPAR(t testing.TB, client *http.Client, interaction
 // string.
 func approvedScopesFromPromptPAR(env map[string]any) string {
 	data, _ := env["data"].(map[string]any)
-	scopesAny, _ := data["Scopes"].([]any)
+	scopesAny, _ := data["scopes"].([]any)
 	out := make([]string, 0, len(scopesAny))
 	for _, s := range scopesAny {
 		entry, _ := s.(map[string]any)
-		name, _ := entry["Name"].(string)
+		name, _ := entry["name"].(string)
 		if name != "" {
 			out = append(out, name)
 		}

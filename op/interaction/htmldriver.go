@@ -213,9 +213,12 @@ func (d HTMLDriver) buildHTMLDocument(prompt Prompt) string {
 	// so each row carries its own submit and there is no single
 	// Continue to press. It gets its own body writer rather than three
 	// conditionals threaded through the shared one.
-	if data, ok := prompt.Data.(ChooserPromptData); ok {
+	switch data := prompt.Data.(type) {
+	case ChooserPromptData:
 		d.writeChooserBody(&b, prompt, data)
-	} else {
+	case FactorChoicePromptData:
+		d.writeFactorChoiceBody(&b, prompt, data)
+	default:
 		d.writeStandardBody(&b, prompt)
 	}
 	b.WriteString(`</body></html>`)
@@ -281,6 +284,35 @@ func (d HTMLDriver) writeChooserBody(b *strings.Builder, prompt Prompt, data Cho
 	b.WriteString(`">`)
 	b.WriteString(html.EscapeString(d.messageOr(prompt.Locale, "chooser.add_account", nil, chooserAddAccountFallback)))
 	b.WriteString(`</a></p>`)
+}
+
+// writeFactorChoiceBody renders the factor picker as a radio group inside
+// one form. The first option is pre-selected so a bare submit still
+// answers the prompt. An option label that the catalogue cannot resolve
+// shows the kind string as-is.
+func (d HTMLDriver) writeFactorChoiceBody(b *strings.Builder, prompt Prompt, data FactorChoicePromptData) {
+	b.WriteString(`<form method="post">`)
+	writeHiddenStateRef(b, prompt.StateRef)
+	if prompt.CSRFToken != "" {
+		writeHiddenInput(b, "csrf_token", prompt.CSRFToken)
+	}
+	for i, opt := range data.Options {
+		label := d.messageOr(prompt.Locale, opt.Label, nil, opt.Kind)
+		b.WriteString(`<p><label><input type="radio" name="`)
+		b.WriteString(html.EscapeString(FactorChoiceField))
+		b.WriteString(`" value="`)
+		b.WriteString(html.EscapeString(opt.Kind))
+		b.WriteString(`"`)
+		if i == 0 {
+			b.WriteString(` checked`)
+		}
+		b.WriteString(` required> `)
+		b.WriteString(html.EscapeString(label))
+		b.WriteString(`</label></p>`)
+	}
+	b.WriteString(`<button type="submit">`)
+	b.WriteString(html.EscapeString(d.buttonFor(prompt)))
+	b.WriteString(`</button></form>`)
 }
 
 // writeChooserAccountButton emits one account row. The label is the
@@ -690,6 +722,8 @@ func htmlTitleFor(promptType string) string {
 		return "Authorize access"
 	case "interaction.chooser":
 		return "Choose an account"
+	case PromptTypeChooseFactor:
+		return "Choose how to sign in"
 	default:
 		if promptType == "" {
 			return "Continue"

@@ -71,6 +71,11 @@ function renderPrompt(prompt) {
     return;
   }
 
+  if (prompt.type === "auth.choose_factor") {
+    renderFactorChoice(prompt);
+    return;
+  }
+
   if (prompt.type === "captcha") {
     renderCaptcha(prompt);
     return;
@@ -101,10 +106,10 @@ function renderPrompt(prompt) {
 // any non-empty string.
 function renderCaptcha(prompt) {
   const data = prompt.data ?? {};
-  if (data.Provider || data.provider) {
+  if (data.provider) {
     const note = document.createElement("p");
     note.className = "muted";
-    note.textContent = "Provider: " + (data.Provider || data.provider);
+    note.textContent = "Provider: " + data.provider;
     formEl.appendChild(note);
   }
 
@@ -162,11 +167,11 @@ async function requestAssertion(data) {
   // and with the +/ alphabet rather than the -_ one the WebAuthn wire
   // format uses elsewhere. Decoding is the only translation needed.
   const publicKey = {
-    challenge: b64ToBytes(data.Challenge),
-    allowCredentials: (data.AllowCredentials ?? []).map((c) => ({
-      type: c.Type || "public-key",
-      id: b64ToBytes(c.ID),
-      transports: c.Transports?.length ? c.Transports : undefined,
+    challenge: b64ToBytes(data.challenge),
+    allowCredentials: (data.allow_credentials ?? []).map((c) => ({
+      type: c.type || "public-key",
+      id: b64ToBytes(c.id),
+      transports: c.transports?.length ? c.transports : undefined,
     })),
     userVerification: "preferred",
     // rpId is deliberately absent: it defaults to the effective domain
@@ -210,19 +215,16 @@ function bytesToB64url(buffer) {
 }
 
 // renderConsent draws the scope list the user is being asked to
-// approve. The prompt payload is the Go struct serialised without
-// json tags, so its members arrive exported ("Scopes", "Name"); the
-// lowercase spellings are accepted too, the way every other renderer
-// here does, so a driver that adds tags later keeps working.
+// approve. The payload members are snake_case ("scopes", "name").
 //
 // Reading the wrong spelling is not a cosmetic bug: the list renders
 // empty, the user approves a dialogue that showed them nothing, and
 // the submission carries no scope at all.
 function renderConsent(prompt) {
   const data = prompt.data ?? {};
-  const scopes = Array.isArray(data.Scopes ?? data.scopes) ? (data.Scopes ?? data.scopes) : [];
-  const client = data.Client ?? data.client ?? {};
-  const clientName = client.Name || client.name || "";
+  const scopes = Array.isArray(data.scopes) ? data.scopes : [];
+  const client = data.client ?? {};
+  const clientName = client.name || "";
   if (clientName) {
     const who = document.createElement("p");
     who.className = "muted";
@@ -233,18 +235,17 @@ function renderConsent(prompt) {
   list.className = "scopes";
   for (const s of scopes) {
     const li = document.createElement("li");
-    const scopeName = s.Name ?? s.name ?? "";
     const name = document.createElement("strong");
-    name.textContent = scopeName;
+    name.textContent = s.name ?? "";
     li.appendChild(name);
-    const description = s.Description ?? s.description;
+    const description = s.description;
     if (description) {
       const desc = document.createElement("div");
       desc.className = "muted";
       desc.textContent = description;
       li.appendChild(desc);
     }
-    if (s.Required ?? s.required) {
+    if (s.required) {
       const req = document.createElement("span");
       req.className = "muted";
       req.textContent = " (required)";
@@ -256,7 +257,7 @@ function renderConsent(prompt) {
   formEl.appendChild(buildSubmit("Approve"));
   formEl.onsubmit = (ev) => {
     ev.preventDefault();
-    const approved = scopes.map((s) => s.Name ?? s.name ?? "").filter(Boolean).join(" ");
+    const approved = scopes.map((s) => s.name ?? "").filter(Boolean).join(" ");
     submitForm(prompt, { approved_scopes: approved });
   };
 }
@@ -268,16 +269,16 @@ function renderConsent(prompt) {
 // with nothing to choose.
 function renderChooser(prompt) {
   const data = prompt.data ?? {};
-  const accounts = Array.isArray(data.Accounts ?? data.accounts) ? (data.Accounts ?? data.accounts) : [];
+  const accounts = Array.isArray(data.accounts) ? data.accounts : [];
   const list = document.createElement("ul");
   list.className = "scopes";
   for (const a of accounts) {
-    const sessionID = a.SessionID ?? a.sessionId ?? a.session_id ?? "";
+    const sessionID = a.session_id ?? "";
     const li = document.createElement("li");
     const button = document.createElement("button");
     button.type = "submit";
     button.value = sessionID;
-    button.textContent = a.DisplayName || a.displayName || a.Subject || a.subject || sessionID;
+    button.textContent = a.display_name || a.subject || sessionID;
     button.onclick = (ev) => {
       ev.preventDefault();
       submitForm(prompt, { session_id: sessionID });
@@ -287,7 +288,7 @@ function renderChooser(prompt) {
   }
   formEl.appendChild(list);
 
-  const addURL = data.AddAccountURL || data.addAccountUrl || data.add_account_url || "";
+  const addURL = data.add_account_url || "";
   if (addURL) {
     const link = document.createElement("a");
     link.href = addURL;
@@ -297,21 +298,60 @@ function renderChooser(prompt) {
   formEl.onsubmit = (ev) => ev.preventDefault();
 }
 
+// renderFactorChoice draws the factor picker as a radio group. Each
+// option's label is an i18n key; keys this bundle cannot resolve (an
+// external factor's own kind, say) show the kind string as-is.
+function renderFactorChoice(prompt) {
+  const data = prompt.data ?? {};
+  const options = Array.isArray(data.options) ? data.options : [];
+  options.forEach((opt, i) => {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "factor";
+    input.value = opt.kind;
+    input.required = true;
+    input.checked = i === 0;
+    label.appendChild(input);
+    const span = document.createElement("span");
+    span.textContent = factorLabelFor(opt.label) || opt.kind;
+    label.appendChild(span);
+    formEl.appendChild(label);
+  });
+  formEl.appendChild(buildSubmit("Continue"));
+  formEl.onsubmit = (ev) => {
+    ev.preventDefault();
+    const chosen = new FormData(formEl).get("factor");
+    submitForm(prompt, { factor: typeof chosen === "string" ? chosen : "" });
+  };
+}
+
+function factorLabelFor(key) {
+  switch (key) {
+    case "auth.factor.password":      return "Password";
+    case "auth.factor.passkey":       return "Passkey";
+    case "auth.factor.totp":          return "Authenticator app";
+    case "auth.factor.email_otp":     return "Email code";
+    case "auth.factor.recovery_code": return "Recovery code";
+    default:                          return "";
+  }
+}
+
 function buildField(spec) {
   const label = document.createElement("label");
   const span = document.createElement("span");
-  const labelKey = spec.Label || spec.label || "";
-  span.textContent = labelFor(labelKey) || spec.Name || spec.name || labelKey;
+  const labelKey = spec.label || "";
+  span.textContent = labelFor(labelKey) || spec.name || labelKey;
   label.appendChild(span);
 
   const input = document.createElement("input");
-  input.name = spec.Name || spec.name;
-  input.type = inputTypeFor(spec.Kind ?? spec.kind);
-  input.required = !!(spec.Required ?? spec.required);
-  if (spec.MinLen ?? spec.minLen) input.minLength = spec.MinLen ?? spec.minLen;
-  if (spec.MaxLen ?? spec.maxLen) input.maxLength = spec.MaxLen ?? spec.maxLen;
-  if (spec.Pattern ?? spec.pattern) input.pattern = spec.Pattern ?? spec.pattern;
-  input.autocomplete = autocompleteFor(spec.Name || spec.name);
+  input.name = spec.name;
+  input.type = inputTypeFor(spec.kind);
+  input.required = !!spec.required;
+  if (spec.min_len) input.minLength = spec.min_len;
+  if (spec.max_len) input.maxLength = spec.max_len;
+  if (spec.pattern) input.pattern = spec.pattern;
+  input.autocomplete = autocompleteFor(spec.name);
   label.appendChild(input);
   return label;
 }
@@ -327,7 +367,7 @@ function collectValues(form, inputs) {
   const data = new FormData(form);
   const out = {};
   for (const spec of inputs) {
-    const name = spec.Name || spec.name;
+    const name = spec.name;
     const v = data.get(name);
     if (typeof v === "string") out[name] = v;
   }
@@ -340,9 +380,8 @@ async function submitForm(prompt, values) {
   statusEl.removeAttribute("data-error");
   statusEl.textContent = "Submitting…";
 
-  // FieldKind values arrive as integers per Go encoding; the prompt
-  // envelope's state_ref MUST round-trip exactly. Spread the prompt's
-  // declared values into a {state_ref, values} envelope per
+  // The prompt envelope's state_ref MUST round-trip exactly. Wrap the
+  // values in a {state_ref, values} envelope per
   // op/interaction.FormSubmission.
   const body = {
     state_ref: prompt.state_ref,
@@ -419,12 +458,11 @@ function submitTerminalForm(action, fields) {
 }
 
 function inputTypeFor(kind) {
-  // FieldKind iota: 0=text, 1=password, 2=otp, 3=email, 4=hidden.
+  // FieldKind arrives as its text name: text, password, otp_code, email, hidden.
   switch (kind) {
-    case 1: return "password";
-    case 2: return "text";
-    case 3: return "email";
-    case 4: return "hidden";
+    case "password": return "password";
+    case "email": return "email";
+    case "hidden": return "hidden";
     default: return "text";
   }
 }
@@ -450,6 +488,7 @@ function titleFor(type) {
     case "captcha":                return "Verify you are human";
     case "consent.scope":          return "Authorize access";
     case "interaction.chooser":    return "Choose an account";
+    case "auth.choose_factor":     return "Choose how to sign in";
     default:                       return type || "Continue";
   }
 }

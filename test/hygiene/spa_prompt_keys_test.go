@@ -59,7 +59,7 @@ func TestSPABundleReadsDriverPromptKeys(t *testing.T) {
 		{
 			name:     "consent",
 			renderer: "renderConsent",
-			required: []string{"Scopes", "Name", "Description", "Required", "Client"},
+			required: []string{"scopes", "name", "description", "required", "client"},
 			prompt: interaction.Prompt{
 				Type: "consent.scope",
 				Data: interaction.ConsentScopePromptData{
@@ -74,7 +74,7 @@ func TestSPABundleReadsDriverPromptKeys(t *testing.T) {
 		{
 			name:     "chooser",
 			renderer: "renderChooser",
-			required: []string{"Accounts", "SessionID", "DisplayName", "AddAccountURL"},
+			required: []string{"accounts", "session_id", "display_name", "add_account_url"},
 			prompt: interaction.Prompt{
 				Type: "interaction.chooser",
 				Data: interaction.ChooserPromptData{
@@ -85,6 +85,34 @@ func TestSPABundleReadsDriverPromptKeys(t *testing.T) {
 						AuthTime:    time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
 					}},
 					AddAccountURL: "https://op.example/oidc/authorize?prompt=login",
+				},
+			},
+		},
+		{
+			name:     "factor_choice",
+			renderer: "renderFactorChoice",
+			required: []string{"options", "kind", "label"},
+			prompt: interaction.Prompt{
+				Type: interaction.PromptTypeChooseFactor,
+				Data: interaction.FactorChoicePromptData{
+					Options: []interaction.FactorOption{
+						{Kind: "totp", Label: "auth.factor.totp"},
+						{Kind: "passkey", Label: "auth.factor.passkey"},
+					},
+				},
+			},
+		},
+		{
+			name:     "passkey",
+			renderer: "requestAssertion",
+			required: []string{"challenge", "allow_credentials", "id", "type", "transports"},
+			prompt: interaction.Prompt{
+				Type: "auth.passkey",
+				Data: interaction.PasskeyPromptData{
+					Challenge: []byte("challenge"),
+					AllowCredentials: []interaction.PasskeyCredentialDescriptor{
+						{ID: []byte("cred"), Type: "public-key", Transports: []string{"usb"}},
+					},
 				},
 			},
 		},
@@ -123,13 +151,13 @@ func renderPrompt(tb testing.TB, prompt interaction.Prompt) []byte {
 }
 
 // dataKeys returns the set of member names reachable under the
-// prompt's "Data" member, including members of objects nested inside
+// prompt's "data" member, including members of objects nested inside
 // arrays. The prompt envelope itself is excluded: its keys are read
 // by the shared dispatch path, not by a per-prompt renderer.
 func dataKeys(tb testing.TB, body []byte) map[string]bool {
 	tb.Helper()
 	var envelope struct {
-		Data json.RawMessage `json:"Data"`
+		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		tb.Fatalf("decode prompt envelope: %v", err)

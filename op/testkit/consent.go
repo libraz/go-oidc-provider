@@ -28,13 +28,12 @@ const ApproveAllScopes = ""
 // authorization request is what makes it an approval: the OP decides
 // which scopes reach the screen, and a test that submits the request's
 // scope list instead would approve entries the user was never shown.
-// The member names are the ones the JSON driver writes for
-// [interaction.ConsentScopePromptData]; the lowercase spellings are
-// accepted too so a driver that adds tags later keeps working.
+// The member names are the json tags of
+// [interaction.ConsentScopePromptData] and [interaction.ConsentScope].
 func ApprovedScopesFrom(tb testing.TB, envelope map[string]any) string {
 	tb.Helper()
 	data, _ := envelope["data"].(map[string]any)
-	raw, _ := pick(data, "Scopes", "scopes").([]any)
+	raw, _ := data["scopes"].([]any)
 	if len(raw) == 0 {
 		tb.Fatalf("testkit: consent envelope presented no scopes: %v", envelope)
 	}
@@ -44,7 +43,7 @@ func ApprovedScopesFrom(tb testing.TB, envelope map[string]any) string {
 		case string:
 			names = append(names, v)
 		case map[string]any:
-			if name, ok := pick(v, "Name", "name").(string); ok && name != "" {
+			if name, ok := v["name"].(string); ok && name != "" {
 				names = append(names, name)
 			}
 		}
@@ -53,18 +52,6 @@ func ApprovedScopesFrom(tb testing.TB, envelope map[string]any) string {
 		tb.Fatalf("testkit: consent envelope carried %d scope rows but no names: %v", len(raw), envelope)
 	}
 	return strings.Join(names, " ")
-}
-
-// pick returns the first member present under any of keys. The JSON
-// driver serialises the prompt payload without struct tags, so its
-// members arrive exported; readers accept both spellings.
-func pick(m map[string]any, keys ...string) any {
-	for _, k := range keys {
-		if v, ok := m[k]; ok {
-			return v
-		}
-	}
-	return nil
 }
 
 // IsConsentPrompt reports whether resp is a JSON envelope from the

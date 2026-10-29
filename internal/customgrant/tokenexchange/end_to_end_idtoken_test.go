@@ -363,11 +363,11 @@ func approveConsent(t *testing.T, client *http.Client, interactionURL, origin, c
 // promptScopes lists the scope names the consent prompt asked about.
 func promptScopes(envelope map[string]any) []string {
 	data, _ := envelope["data"].(map[string]any)
-	entries, _ := data["Scopes"].([]any)
+	entries, _ := data["scopes"].([]any)
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		fields, _ := entry.(map[string]any)
-		if name, _ := fields["Name"].(string); name != "" {
+		if name, _ := fields["name"].(string); name != "" {
 			out = append(out, name)
 		}
 	}

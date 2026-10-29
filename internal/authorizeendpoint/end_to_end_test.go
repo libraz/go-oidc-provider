@@ -264,11 +264,11 @@ func completeConsentIfPrompted(t *testing.T, client *http.Client, interactionURL
 // that exercise scope dropping build their own subset.
 func approvedScopesFromPrompt(env map[string]any) string {
 	data, _ := env["data"].(map[string]any)
-	scopesAny, _ := data["Scopes"].([]any)
+	scopesAny, _ := data["scopes"].([]any)
 	out := make([]string, 0, len(scopesAny))
 	for _, s := range scopesAny {
 		entry, _ := s.(map[string]any)
-		name, _ := entry["Name"].(string)
+		name, _ := entry["name"].(string)
 		if name != "" {
 			out = append(out, name)
 		}

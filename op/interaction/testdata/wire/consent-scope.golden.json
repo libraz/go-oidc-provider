@@ -1,0 +1,1 @@
+{"scopes":[{"name":"openid","description":"Sign you in","required":true},{"name":"email","description":"Email address","required":false}],"client":{"client_id":"rp-1","name":"Example RP","logo_url":"","client_uri":"","policy_uri":"","tos_uri":""}}

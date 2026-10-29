@@ -1,6 +1,9 @@
 package interaction
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // PromptData is the sealed interface implemented by every concrete
 // prompt-data type the library exposes. The set is closed by design
@@ -27,7 +30,7 @@ type PromptData interface {
 type PasswordPromptData struct {
 	// UsernameHint is the login_hint passthrough; "" when not
 	// provided. The SPA pre-fills the username field from it.
-	UsernameHint string
+	UsernameHint string `json:"username_hint"`
 }
 
 func (PasswordPromptData) isPromptData() {}
@@ -37,7 +40,7 @@ type TOTPPromptData struct {
 	// AttemptsRemaining is the number of failed submissions left
 	// before the factor locks, the lower of every counter that can
 	// lock it. Zero means none remain or no count is known.
-	AttemptsRemaining int
+	AttemptsRemaining int `json:"attempts_remaining"`
 }
 
 func (TOTPPromptData) isPromptData() {}
@@ -54,11 +57,11 @@ type EmailOTPVerifyPromptData struct {
 	// MaskedEmail is the destination address with privacy-preserving
 	// masking applied (e.g., "a***@e***"). The full address never
 	// leaves the orchestrator.
-	MaskedEmail string
+	MaskedEmail string `json:"masked_email"`
 
 	// ExpiresAt is the wall-clock time at which the issued code
 	// stops being acceptable. The SPA renders a countdown.
-	ExpiresAt time.Time
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 func (EmailOTPVerifyPromptData) isPromptData() {}
@@ -71,13 +74,15 @@ func (EmailOTPVerifyPromptData) isPromptData() {}
 // exposure safe.
 type PasskeyPromptData struct {
 	// Challenge is the WebAuthn challenge bytes. Each authorize
-	// attempt MUST receive an independent value.
-	Challenge []byte
+	// attempt MUST receive an independent value. On the wire it is
+	// standard base64 (padded, "+/" alphabet), as encoding/json renders
+	// []byte, not the base64url form WebAuthn uses elsewhere.
+	Challenge []byte `json:"challenge"`
 
 	// AllowCredentials is the WebAuthn allowCredentials list. Empty
 	// means "discoverable credentials": the browser will choose a
 	// resident credential without a username hint.
-	AllowCredentials []PasskeyCredentialDescriptor
+	AllowCredentials []PasskeyCredentialDescriptor `json:"allow_credentials"`
 }
 
 func (PasskeyPromptData) isPromptData() {}
@@ -88,17 +93,18 @@ func (PasskeyPromptData) isPromptData() {}
 // therefore copied verbatim from the browser API: any divergence would
 // force the SPA into a translation step the orchestrator already does.
 type PasskeyCredentialDescriptor struct {
-	// ID is the credential identifier as raw bytes.
-	ID []byte
+	// ID is the credential identifier as raw bytes. On the wire it is
+	// standard base64, as encoding/json renders []byte.
+	ID []byte `json:"id"`
 
 	// Type is the WebAuthn credential type. Currently always
 	// "public-key"; the WebAuthn spec keeps the field for forward
 	// compatibility with future credential kinds.
-	Type string
+	Type string `json:"type"`
 
 	// Transports lists the WebAuthn transports the browser may use
 	// for this credential ("usb", "nfc", "ble", "internal", "hybrid").
-	Transports []string
+	Transports []string `json:"transports"`
 }
 
 // RecoveryCodePromptData backs Prompt.Type "auth.recovery_code".
@@ -106,7 +112,7 @@ type RecoveryCodePromptData struct {
 	// AttemptsRemaining is the number of failed submissions left
 	// before the factor locks, the lower of every counter that can
 	// lock it. Zero means none remain or no count is known.
-	AttemptsRemaining int
+	AttemptsRemaining int `json:"attempts_remaining"`
 }
 
 func (RecoveryCodePromptData) isPromptData() {}
@@ -124,11 +130,11 @@ func (RecoveryCodePromptData) isPromptData() {}
 type CaptchaPromptData struct {
 	// Provider is the upstream captcha service identifier.
 	// Stable values: "turnstile", "hcaptcha", "recaptcha_v3".
-	Provider string
+	Provider string `json:"provider"`
 
 	// SiteKey is the public site key registered with the upstream
 	// provider. SPA passes it to the provider's client SDK.
-	SiteKey string
+	SiteKey string `json:"site_key"`
 }
 
 func (CaptchaPromptData) isPromptData() {}
@@ -151,25 +157,25 @@ func (CaptchaPromptData) isPromptData() {}
 // it as a security decision, not a convenience one.
 type ClientView struct {
 	// ClientID is the registered client_id (RFC 7591 §2).
-	ClientID string
+	ClientID string `json:"client_id"`
 
 	// Name is the human-friendly label (RFC 7591 client_name). May
 	// be empty; templates fall back to ClientID in that case.
-	Name string
+	Name string `json:"name"`
 
 	// LogoURL is the RFC 7591 logo_uri. May be empty.
-	LogoURL string
+	LogoURL string `json:"logo_url"`
 
 	// ClientURI is the RFC 7591 client_uri (homepage). May be empty.
-	ClientURI string
+	ClientURI string `json:"client_uri"`
 
 	// PolicyURI is the RFC 7591 policy_uri (privacy policy). May be
 	// empty.
-	PolicyURI string
+	PolicyURI string `json:"policy_uri"`
 
 	// TosURI is the RFC 7591 tos_uri (terms of service). May be
 	// empty.
-	TosURI string
+	TosURI string `json:"tos_uri"`
 }
 
 // ConsentScope is the slim view of an OAuth scope the consent screen
@@ -179,17 +185,17 @@ type ClientView struct {
 // fields the SPA needs to render a consent dialogue.
 type ConsentScope struct {
 	// Name is the scope identifier (e.g. "openid", "profile").
-	Name string
+	Name string `json:"name"`
 
 	// Description is the human-readable summary the SPA shows to
 	// the user. The library does not interpret the value beyond
 	// echoing it; localisation is the embedder's responsibility.
-	Description string
+	Description string `json:"description"`
 
 	// Required reports whether the scope cannot be deselected by
 	// the user (typically "openid" itself or scopes the client
 	// declared as required at registration).
-	Required bool
+	Required bool `json:"required"`
 }
 
 // ConsentScopePromptData backs Prompt.Type "consent.scope". The SPA
@@ -197,18 +203,18 @@ type ConsentScope struct {
 //
 // The serialised payload carries the client projection alongside the
 // scope rows: the six [ClientView] fields appear nested under
-// "Client". Embedders pinning the JSON envelope through golden tests
+// "client". Embedders pinning the JSON envelope through golden tests
 // must cover them as well as the scope list.
 type ConsentScopePromptData struct {
 	// Scopes is the list of scopes the user is being asked to grant.
 	// Order matches the orchestrator's display order.
-	Scopes []ConsentScope
+	Scopes []ConsentScope `json:"scopes"`
 
 	// Client is the read-only projection of the requesting client.
 	// The built-in consent template overlay reads this field; SPAs
 	// may also surface the client_name without a separate discovery
 	// call.
-	Client ClientView
+	Client ClientView `json:"client"`
 }
 
 func (ConsentScopePromptData) isPromptData() {}
@@ -262,13 +268,13 @@ type ChooserAccount struct {
 	// the submission's "session_id" field. Treat as a write-once
 	// token: the orchestrator validates it belongs to the active
 	// chooser group before honouring the switch.
-	SessionID string
+	SessionID string `json:"session_id"`
 
 	// Subject is the OP-internal subject identifier for this
 	// account row. The SPA may render it directly (e.g.,
 	// "user_017fa3...") or use it to call /userinfo for a
 	// richer display.
-	Subject string
+	Subject string `json:"subject"`
 
 	// DisplayName is the human-friendly label the chooser screen
 	// shows. The built-in chooser resolves it from the "name" claim
@@ -280,11 +286,11 @@ type ChooserAccount struct {
 	// subject, or carries no "name" claim. Renderers fall back to
 	// Subject in that case — the shipped drivers, the chooser
 	// template overlay and the SPA bundle all do.
-	DisplayName string
+	DisplayName string `json:"display_name"`
 
 	// AuthTime is when the account last authenticated. SPAs
 	// typically render it as a relative timestamp ("2 hours ago").
-	AuthTime time.Time
+	AuthTime time.Time `json:"auth_time"`
 }
 
 // ChooserPromptData backs Prompt.Type "interaction.chooser". The
@@ -297,13 +303,13 @@ type ChooserPromptData struct {
 	// first). An empty slice indicates no live accounts; the
 	// chooser screen typically renders an "add account" CTA
 	// only.
-	Accounts []ChooserAccount
+	Accounts []ChooserAccount `json:"accounts"`
 
 	// AddAccountURL is the URL the SPA navigates to when the user
 	// clicks "Add another account". Typically the same /authorize
 	// request with prompt=login appended; populated by the
 	// orchestrator at render time.
-	AddAccountURL string
+	AddAccountURL string `json:"add_account_url"`
 }
 
 func (ChooserPromptData) isPromptData() {}
@@ -350,7 +356,43 @@ type ChooserTemplateData struct {
 // The set is intentionally small: the orchestrator validates length /
 // charset / count limits per kind, and adding a new kind is a v1.x
 // extension rather than an embedder concern.
+//
+// On the wire a FieldKind is its text name ("text", "password",
+// "otp_code", "email", "hidden"); see [FieldKind.MarshalText].
 type FieldKind int
+
+// fieldKindNames maps each FieldKind to its wire spelling.
+//
+//nolint:gochecknoglobals // closed lookup table, read-only.
+var fieldKindNames = [...]string{
+	FieldText:     "text",
+	FieldPassword: "password",
+	FieldOTPCode:  "otp_code",
+	FieldEmail:    "email",
+	FieldHidden:   "hidden",
+}
+
+// MarshalText implements [encoding.TextMarshaler], rendering the kind as
+// its wire name. A value outside the defined set is an error rather than
+// a silently wrong spelling.
+func (k FieldKind) MarshalText() ([]byte, error) {
+	if k < 0 || int(k) >= len(fieldKindNames) {
+		return nil, fmt.Errorf("interaction: unknown FieldKind %d", int(k))
+	}
+	return []byte(fieldKindNames[k]), nil
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler]. An unknown name is
+// an error.
+func (k *FieldKind) UnmarshalText(text []byte) error {
+	for i, name := range fieldKindNames {
+		if name == string(text) {
+			*k = FieldKind(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("interaction: unknown FieldKind %q", text)
+}
 
 // FieldKind values. The mapping to HTML <input type="..."> is the
 // SPA's responsibility; the orchestrator enforces only the server-
@@ -381,34 +423,34 @@ const (
 // field to a custom widget.
 type FieldSpec struct {
 	// Name is the form key the SPA submits in [FormSubmission.Values].
-	Name string
+	Name string `json:"name"`
 
 	// Kind selects the server-side validation profile. See
 	// [FieldKind].
-	Kind FieldKind
+	Kind FieldKind `json:"kind"`
 
 	// Label is the i18n key the SPA resolves through its locale
 	// table. The library does not interpret the value beyond echoing
 	// it.
-	Label string
+	Label string `json:"label"`
 
 	// MaxLen is the maximum byte length the orchestrator accepts
 	// for this field. Zero means "use the FieldKind default".
-	MaxLen int
+	MaxLen int `json:"max_len"`
 
 	// MinLen is the minimum byte length the orchestrator accepts
 	// for this field. Zero means "no minimum". The bound applies only
 	// to a value that was actually submitted: an optional field
 	// submitted empty counts as omitted, because a browser posts every
 	// rendered input whether or not the user filled it in.
-	MinLen int
+	MinLen int `json:"min_len"`
 
 	// Required marks fields the SPA must include in its submission.
 	// The orchestrator rejects a submission that omits the field or
 	// submits it empty. A field whose empty value is a meaningful
 	// answer therefore MUST NOT be marked Required; express "the SPA
 	// must send something" with MinLen instead.
-	Required bool
+	Required bool `json:"required"`
 
 	// Pattern is an optional regex the orchestrator validates the
 	// value against before passing it to [op.Authenticator.Continue].
@@ -419,5 +461,64 @@ type FieldSpec struct {
 	// else; anchoring the pattern yourself is harmless. A pattern that
 	// does not compile rejects every submission for the field rather
 	// than passing them through unchecked.
-	Pattern string
+	Pattern string `json:"pattern"`
+}
+
+// PromptTypeChooseFactor is the [Prompt.Type] of the factor-choice
+// prompt, backed by [FactorChoicePromptData].
+//
+// Stable since v1.5.
+const PromptTypeChooseFactor = "auth.choose_factor"
+
+// FactorChoiceField is the form field the factor-choice prompt submits
+// the chosen [FactorOption.Kind] under.
+//
+// Stable since v1.5.
+const FactorChoiceField = "factor"
+
+// FactorChoicePromptData backs Prompt.Type [PromptTypeChooseFactor]. The
+// user picks one of Options and submits its Kind under
+// [FactorChoiceField].
+//
+// Stable since v1.5.
+type FactorChoicePromptData struct {
+	// Options lists the factors the user may pick, in display order.
+	Options []FactorOption `json:"options"`
+}
+
+func (FactorChoicePromptData) isPromptData() {}
+
+// FactorOption is one choice in a [FactorChoicePromptData].
+//
+// Stable since v1.5.
+type FactorOption struct {
+	// Kind is the step kind to submit under [FactorChoiceField].
+	Kind string `json:"kind"`
+
+	// Label is the i18n key "auth.factor.<kind>". Built-in kinds have
+	// catalogue entries; for a kind without one (an external factor's
+	// own kind) renderers show Kind itself.
+	Label string `json:"label"`
+}
+
+// FactorLabelKey returns the [FactorOption.Label] for kind: the
+// catalogue key "auth.factor.<kind>". The built-in kinds are spelled out
+// so the catalogue entries they resolve stay discoverable in source.
+//
+// Stable since v1.5.
+func FactorLabelKey(kind string) string {
+	switch kind {
+	case "password":
+		return "auth.factor.password"
+	case "passkey":
+		return "auth.factor.passkey"
+	case "totp":
+		return "auth.factor.totp"
+	case "email_otp":
+		return "auth.factor.email_otp"
+	case "recovery_code":
+		return "auth.factor.recovery_code"
+	default:
+		return "auth.factor." + kind
+	}
 }

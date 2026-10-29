@@ -167,15 +167,12 @@ func answerPrompt(prompt map[string]any, key *softkey.Key) (map[string]string, e
 		return map[string]string{"response": string(assertion)}, nil
 
 	case "consent.scope":
-		// interaction.ConsentScopePromptData carries no JSON tags, so the
-		// envelope spells its members with the Go field names — "Scopes"
-		// and "Name", the same reason the challenge above is "Challenge".
 		data, _ := prompt["data"].(map[string]any)
-		scopes, _ := data["Scopes"].([]any)
+		scopes, _ := data["scopes"].([]any)
 		names := make([]string, 0, len(scopes))
 		for _, s := range scopes {
 			entry, _ := s.(map[string]any)
-			if name, ok := entry["Name"].(string); ok {
+			if name, ok := entry["name"].(string); ok {
 				names = append(names, name)
 			}
 		}
@@ -199,7 +196,7 @@ func answerPrompt(prompt map[string]any, key *softkey.Key) (map[string]string, e
 // uses, which is why the two encodings appear side by side here.
 func assertPasskey(prompt map[string]any, key *softkey.Key) ([]byte, error) {
 	data, _ := prompt["data"].(map[string]any)
-	encoded, _ := data["Challenge"].(string)
+	encoded, _ := data["challenge"].(string)
 	challenge, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("decode challenge %q: %w", encoded, err)

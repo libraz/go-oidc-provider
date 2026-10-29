@@ -36,7 +36,8 @@ const (
 // Prompt.Type follows these namespace rules:
 //   - "auth.*"        — Authenticator-emitted prompts ("auth.password",
 //     "auth.totp", "auth.email_otp.send", "auth.email_otp.verify",
-//     "auth.passkey", "auth.recovery_code", "auth.<myorg>.<factor>.*").
+//     "auth.passkey", "auth.recovery_code", "auth.choose_factor",
+//     "auth.<myorg>.<factor>.*").
 //   - "consent.*"     — consent screens ("consent.scope").
 //   - "captcha"       — bot-detection prompt.
 //   - "interaction.*" — orchestrator-driven non-authn prompts

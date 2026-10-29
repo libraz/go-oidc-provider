@@ -42,7 +42,7 @@ func TestEndToEnd_ChooserAddAccount_SecondChooserListsBothAccounts(t *testing.T)
 	accounts := chooserAccountsFromPrompt(t, second)
 	subjects := make(map[string]bool, len(accounts))
 	for _, a := range accounts {
-		subject, _ := a["Subject"].(string)
+		subject, _ := a["subject"].(string)
 		subjects[subject] = true
 	}
 	if len(accounts) != 2 || !subjects["user-A"] || !subjects["user-B"] {

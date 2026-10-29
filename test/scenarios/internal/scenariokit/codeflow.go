@@ -259,6 +259,11 @@ func completeInteraction(tb testing.TB, client *http.Client, interactionURL, ori
 	if stepResp.StatusCode != http.StatusOK {
 		tb.Fatalf("scenariokit: GET %s status=%d", interactionURL, stepResp.StatusCode)
 	}
+	raw, err := io.ReadAll(stepResp.Body)
+	if err != nil {
+		tb.Fatalf("scenariokit: read interaction prompt: %v", err)
+	}
+	stepResp.Body = io.NopCloser(bytes.NewReader(raw))
 	step := decodeJSON(tb, stepResp)
 	stateRef, _ := step["state_ref"].(string)
 	if stateRef == "" {
@@ -267,6 +272,12 @@ func completeInteraction(tb testing.TB, client *http.Client, interactionURL, ori
 	csrfCookie := findCookie(stepResp.Cookies(), "__Host-oidc_csrf")
 	if csrfCookie == nil {
 		tb.Fatal("scenariokit: __Host-oidc_csrf cookie missing on interaction prompt")
+	}
+	// A session that already satisfies the login flow opens straight on
+	// the consent screen.
+	if typ, _ := step["type"].(string); typ == "consent.scope" {
+		stepResp.Body = io.NopCloser(bytes.NewReader(raw))
+		return completeConsentIfPrompted(tb, client, interactionURL, origin, csrfCookie, stepResp)
 	}
 
 	// The OP's testkit SubjectAuthenticator binds whatever value lands
@@ -468,11 +479,11 @@ func completeConsentIfPrompted(tb testing.TB, client *http.Client, interactionUR
 // subset and call [testkit.PostConsentApproval] directly.
 func approvedScopesFromPrompt(env map[string]any) string {
 	data, _ := env["data"].(map[string]any)
-	scopesAny, _ := data["Scopes"].([]any)
+	scopesAny, _ := data["scopes"].([]any)
 	out := make([]string, 0, len(scopesAny))
 	for _, s := range scopesAny {
 		entry, _ := s.(map[string]any)
-		name, _ := entry["Name"].(string)
+		name, _ := entry["name"].(string)
 		if name != "" {
 			out = append(out, name)
 		}
