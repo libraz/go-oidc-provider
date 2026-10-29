@@ -68,6 +68,7 @@ type Provider struct {
 	scopes  *scoperegistry.Registry
 	locales *i18n.Resolver
 	mux     *http.ServeMux
+	routes  []string
 	handler http.Handler
 }
 
@@ -232,10 +233,11 @@ func New(opts ...Option) (*Provider, error) {
 		return nil, err
 	}
 	cfg.interactionD = wireHTMLDriverTranslator(cfg.interactionD, locales)
-	mux, err := buildRouter(cfg, keySet, encSet, scopes, locales, trust)
+	router, err := buildRouter(cfg, keySet, encSet, scopes, locales, trust)
 	if err != nil {
 		return nil, err
 	}
+	mux := router.mux
 	handler := wrapWithProfileMiddleware(mux, cfg)
 	handler = wrapWithTrustedProxy(handler, trust, cfg.logger)
 	provider := &Provider{
@@ -244,6 +246,7 @@ func New(opts ...Option) (*Provider, error) {
 		scopes:  scopes,
 		locales: locales,
 		mux:     mux,
+		routes:  router.patterns,
 		handler: handler,
 	}
 	if err := seedStaticClients(cfg); err != nil {

@@ -45,8 +45,8 @@ import (
 // grants.
 //
 //nolint:gocognit,cyclop // Router construction keeps every protocol mount and dependency boundary visible together.
-func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scopes *scoperegistry.Registry, locales *i18n.Resolver, proxyTrust *proxy.Trust) (*http.ServeMux, error) {
-	mux := http.NewServeMux()
+func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scopes *scoperegistry.Registry, locales *i18n.Resolver, proxyTrust *proxy.Trust) (*routeMux, error) {
+	mux := newRouteMux()
 	discoveryInput := buildDiscoveryInput(cfg, scopes, locales)
 	if err := discovery.ValidateMTLSEndpointAliases(discoveryInput.Metadata, discoveryInput); err != nil {
 		return nil, &Error{
@@ -248,7 +248,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 // endpoints, so an endpoint override can occupy it. That combination is
 // rejected at construction time instead of shadowing the discovery document or
 // panicking the router.
-func mountDiscovery(mux *http.ServeMux, cfg *config, publicCORS *cors.Public, discHandler http.Handler) error {
+func mountDiscovery(mux *routeMux, cfg *config, publicCORS *cors.Public, discHandler http.Handler) error {
 	handler := publicCORS.Handler(discHandler)
 	mux.Handle(discoveryEndpointPath(cfg), handler)
 	concatenated := discoveryConcatenatedPath(cfg)
@@ -273,7 +273,7 @@ func mountDiscovery(mux *http.ServeMux, cfg *config, publicCORS *cors.Public, di
 // behind [WithMountPrefix]) because RFC 9728 §3 fixes their location, so
 // the path is used verbatim rather than via [joinPath]. The OP issuer is
 // stamped into authorization_servers for every document.
-func mountProtectedResourceMetadata(mux *http.ServeMux, cfg *config, publicCORS *cors.Public) error {
+func mountProtectedResourceMetadata(mux *routeMux, cfg *config, publicCORS *cors.Public) error {
 	for i := range cfg.protectedResources {
 		pr := cfg.protectedResources[i]
 		doc := protectedresource.Build(protectedresource.Input{
@@ -302,7 +302,7 @@ func mountProtectedResourceMetadata(mux *http.ServeMux, cfg *config, publicCORS 
 // draft endpoint (GET / DELETE {endpoint}/{grant_id}) when the feature is
 // enabled via [WithGrantManagement]. Without the option no route is added;
 // discovery gates the advertisement on the same condition.
-func mountGrantManagementEndpoint(mux *http.ServeMux, cfg *config, assertionVerifier clientauth.AssertionVerifier, strictCORS *cors.Strict) {
+func mountGrantManagementEndpoint(mux *routeMux, cfg *config, assertionVerifier clientauth.AssertionVerifier, strictCORS *cors.Strict) {
 	if !cfg.grantManagementEnabled {
 		return
 	}
@@ -339,7 +339,7 @@ func mountGrantManagementEndpoint(mux *http.ServeMux, cfg *config, assertionVeri
 // the advertisement on the same condition, so the OP cannot tell
 // clients the endpoint exists while quietly serving 404.
 func mountRegistrationEndpoint(
-	mux *http.ServeMux,
+	mux *routeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	strictCORS *cors.Strict,
@@ -412,7 +412,7 @@ func mountRegistrationEndpoint(
 // surfaces invalid_request_object for any inbound request that
 // carries a "request" parameter.
 func mountPAREndpoint(
-	mux *http.ServeMux,
+	mux *routeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	jarVerifier *jar.Verifier,
@@ -452,7 +452,7 @@ func mountPAREndpoint(
 // mountIntrospectionEndpoint registers the /introspect handler when the
 // [feature.Introspect] flag is enabled.
 func mountIntrospectionEndpoint(
-	mux *http.ServeMux,
+	mux *routeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
@@ -494,7 +494,7 @@ func mountIntrospectionEndpoint(
 // mountRevocationEndpoint registers the /revoke handler when the
 // [feature.Revoke] flag is enabled.
 func mountRevocationEndpoint(
-	mux *http.ServeMux,
+	mux *routeMux,
 	cfg *config,
 	keySet *keys.Set,
 	assertionVerifier clientauth.AssertionVerifier,
@@ -542,7 +542,7 @@ func mountRevocationEndpoint(
 // the authorize handler treats it as "request_uri / request not
 // supported" rather than panicking.
 func mountAuthorizeHandlers(
-	mux *http.ServeMux,
+	mux *routeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
@@ -650,7 +650,7 @@ func mountAuthorizeHandlers(
 // router-wide list on either layer would admit a client's redirect_uri
 // origin to a ceremony it does not participate in.
 func mountEndSessionEndpoint(
-	mux *http.ServeMux,
+	mux *routeMux,
 	cfg *config,
 	keySet *keys.Set,
 	sessMgr *sessions.Manager,
@@ -703,7 +703,7 @@ func mountEndSessionEndpoint(
 // any residual misconfiguration surfaces as 500 server_error
 // rather than a nil-interface panic.
 func mountDeviceAuthorizationEndpoint(
-	mux *http.ServeMux,
+	mux *routeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	dpopVerifier *dpop.Verifier,
@@ -807,7 +807,7 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 // against, so both surfaces honour the retiring-key window
 // identically.
 func mountBackchannelAuthenticationEndpoint(
-	mux *http.ServeMux,
+	mux *routeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,

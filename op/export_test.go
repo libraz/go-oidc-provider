@@ -2,6 +2,7 @@ package op
 
 import (
 	"io"
+	"net/http"
 	"testing"
 	"time"
 
@@ -63,4 +64,11 @@ func FormatForAudienceForTest(tb testing.TB, opts []Option, resource string) Acc
 		tb.Fatalf("FormatForAudienceForTest: newConfig: %v", err)
 	}
 	return c.formatForAudience(resource)
+}
+
+// RoutePatternForTest reports the pattern the provider's router matches
+// for r, or "" when no registered route does.
+func RoutePatternForTest(p *Provider, r *http.Request) string {
+	_, pattern := p.mux.Handler(r)
+	return pattern
 }
