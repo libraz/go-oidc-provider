@@ -369,14 +369,16 @@ claims from `Users()`; see `Changed`.
   login against a legacy hash, the hash is rewritten as argon2id if the
   user store implements the new optional `store.UserPasswordHashUpdater`;
   a failed rewrite is logged and the login still succeeds. The in-memory,
-  SQL and DynamoDB adapters implement it, and `composite.Store` forwards
-  it to its Users backend, returning `store.ErrPasswordHashUpdateUnsupported`
-  when that backend cannot update hashes, in which case the legacy hash
-  stays in use. Legacy hashes go through the same lockout as argon2id
-  ones. Two limits:
+  SQL and DynamoDB adapters implement it. With a composite store, pass the
+  Users backend's `UserPasswords()` as `PrimaryPassword.Store`; a store
+  without the updater leaves the legacy hash in use. Legacy hashes go
+  through the same lockout as argon2id ones. Three limits:
   - bcrypt reads only the first 72 bytes, so a longer password never
     matches. A user whose password the previous system truncated to 72
     bytes before hashing cannot log in and needs a password reset.
+  - A bcrypt hash stored with a cost above 15 is refused without running
+    bcrypt, so one imported row cannot make a login attempt cost minutes
+    of CPU. Such a user needs a password reset.
   - Until a legacy hash is rewritten, verifying it takes a different time
     from an argon2id check.
 
@@ -452,6 +454,68 @@ claims from `Users()`; see `Changed`.
 
 - The SQL adapter documentation said the consumed-JTI store's interface
   exposes GC. `Store.GC` now sweeps it.
+
+- JWT access tokens from the authorization-code and refresh-token grants
+  now carry the `acr` and `amr` of the authentication, as the opaque form
+  already recorded, and CIBA access tokens carry the approved `acr` in
+  either form. A resource server's step-up check reads the same value
+  whichever format the client was issued.
+
+- Revoking or replaying a refresh token issued by token exchange retires
+  that chain and the opaque access tokens minted from it, and no longer
+  revokes the grant of the client whose token was exchanged.
+
+- A token-exchange id_token states the subject token's `auth_time` rather
+  than the time of the exchange, and refreshing an exchange chain that
+  carries an `act` claim returns no id_token instead of one without the
+  delegation chain.
+
+- A `TokenExchangePolicy` whose `ExtraClaims` name a claim the OP signs on
+  the access token (`scope`, `client_id`, `jti`, `gid`,
+  `authorization_details`, `userinfo_claims`) has that key dropped like the
+  other reserved names, instead of the exchange failing with
+  `server_error`.
+
+- A refresh request refused because the deployment requires
+  sender-constrained tokens and the request carried no proof, and a code
+  exchange whose `authorization_details` exceed the grant, are now refused
+  before the refresh token or code is consumed, so the client can retry.
+
+- A step-up login that finishes after the user signed out of the session
+  it continued answers `login_required` instead of issuing a code.
+
+- `/authorize` errors honour `Accept: text/html;q=0` and answer JSON.
+
+- Discovery lists `introspection_endpoint_auth_signing_alg_values_supported`
+  and `revocation_endpoint_auth_signing_alg_values_supported` whenever those
+  endpoints accept `private_key_jwt` or `client_secret_jwt`.
+
+- Introspecting a custom-grant or token-exchange refresh token reports the
+  `sub` the token endpoint issued for it instead of projecting it a second
+  time.
+
+- A dynamic registration that omits `grant_types` is registered for
+  `authorization_code` (RFC 7591 §2) instead of every grant type the OP
+  allows.
+
+- `/userinfo` answers 500 when the client registry cannot be read, instead
+  of returning plaintext JSON to a client that may have registered
+  encrypted responses.
+
+- The Redis adapter rounds replay-marker and session TTLs up to the next
+  millisecond, so a key never expires before its logical expiry.
+
+- `oidcsql.Store.GC` reports the rows a sweep deleted before it failed.
+
+- The `op/store/contract` suite now requires every losing `Consume` racer
+  to report `store.ErrAlreadyConsumed`, the answer a sequential replay gets,
+  and checks that the lockout store rejects a nil record, an empty subject
+  and a version overflow. A bring-your-own store that answered a lost race
+  with another error sent the token endpoint a server error instead of
+  arming the replay cascade.
+
+- Example `27-durable-mfa-store` keeps its TOTP sealing key beside the
+  database in durable mode, so a TOTP login works after a restart.
 
 ### Deprecated
 

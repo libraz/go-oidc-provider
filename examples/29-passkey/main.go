@@ -76,9 +76,10 @@
 //  3. Open http://localhost:8080/account and sign in as demo / demo.
 //  4. Click "Register a passkey" and complete the browser prompt. The
 //     page confirms the credential ID that was stored.
-//  5. Return to http://localhost:9090/ and click "Log in via the OP"
-//     again. Pick "Passkey" and approve the browser's prompt; no
-//     password is asked for.
+//  5. Clear the cookies for localhost: the password session from step 2
+//     would otherwise be reused and skip the factor-choice prompt. Then open
+//     http://localhost:9090/ and click "Log in via the OP". Pick "Passkey"
+//     and approve the browser's prompt; no password is asked for.
 //  6. Approve consent; /me shows the ID Token with "amr" containing
 //     "hwk".
 //

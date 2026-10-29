@@ -108,8 +108,9 @@ their own opt-in. Documented under
   interfaces; the library never touches your `users` table directly.
 - **Headless interaction driver.** Login and consent can be driven from a SPA
   via `op.WithSPAUI`, or rendered from your own templates with
-  `op.WithConsentUI`. The logout confirmation is always the OP's built-in,
-  localised page.
+  `op.WithConsentUI`. The logout confirmation and signed-out pages are the
+  OP's built-in, localised ones unless `op.WithLogoutUI` replaces them with
+  your own templates.
 - **Audit-first observability.** Business events go through `audit.Emitter`,
   and `op.WithPrometheus(reg)` registers a curated counter set on your
   registry. The library does not mount `/metrics`, install request-duration
