@@ -6,6 +6,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 func TestValidateInteractionUICapabilities(t *testing.T) {
@@ -56,5 +57,32 @@ func TestValidateInteractionUICapabilities(t *testing.T) {
 				t.Fatalf("error does not name the remedy: %v", err)
 			}
 		})
+	}
+}
+
+// TestValidateInteractionUICapabilities_PasskeyInsideOneOf pins that a
+// passkey offered only through a StepOneOf is still rejected behind the
+// scriptless HTML driver.
+func TestValidateInteractionUICapabilities_PasskeyInsideOneOf(t *testing.T) {
+	t.Parallel()
+
+	st := inmem.New()
+	opts := append(validBaseOptsWithStoreNoAuthn(t, st),
+		op.WithLoginFlow(flowWithRule(op.StepOneOf{Steps: []op.Step{
+			op.PrimaryPasskey{
+				Store:         st.Passkeys(),
+				RPID:          "id.example.com",
+				RPDisplayName: "Example",
+				RPOrigins:     []string{"https://id.example.com"},
+			},
+			op.ExternalStep{Authenticator: stubExternalAuthenticator{}, KindLabel: op.StepKind("test.second")},
+		}})),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("op.New accepted a passkey inside a StepOneOf on the scriptless HTML driver")
+	}
+	if !strings.Contains(err.Error(), "WithSPAUI") {
+		t.Fatalf("error does not name the remedy: %v", err)
 	}
 }

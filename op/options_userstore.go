@@ -65,20 +65,26 @@ func (c *config) warnUserStoreMismatch() {
 }
 
 // loginFlowSteps returns every [Step] the configured flow can run, in
-// declaration order. Rules are included because a second factor may
-// carry its own user store.
+// declaration order, with each [StepOneOf] followed by its inner steps.
+// Rules are included because a second factor may carry its own user
+// store.
 func (c *config) loginFlowSteps() []Step {
 	if !c.loginFlowSet {
 		return nil
 	}
 	steps := make([]Step, 0, 1+len(c.loginFlow.Rules))
-	if c.loginFlow.Primary != nil {
-		steps = append(steps, c.loginFlow.Primary)
-	}
-	for _, rule := range c.loginFlow.Rules {
-		if rule.Then != nil {
-			steps = append(steps, rule.Then)
+	add := func(s Step) {
+		if s == nil {
+			return
 		}
+		steps = append(steps, s)
+		if oneOf, ok := s.(StepOneOf); ok {
+			steps = append(steps, oneOf.Steps...)
+		}
+	}
+	add(c.loginFlow.Primary)
+	for _, rule := range c.loginFlow.Rules {
+		add(rule.Then)
 	}
 	return steps
 }

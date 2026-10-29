@@ -63,12 +63,8 @@ var errCaptchaVerifierNil = errors.New("op: StepCaptcha.Verifier is nil")
 // binds the subject, and the built-in steps that assert for a known subject
 // need one already bound.
 func validateLoginFlowDependencies(flow LoginFlow) error {
-	if name := subjectBoundStepName(flow.Primary); name != "" {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithLoginFlow: Primary must not be " + name + " — the step needs a subject a previous" +
-				" step bound; use PrimaryPassword or an ExternalStep as Primary and " + name + " in a Rule",
-		}
+	if err := validatePrimaryPosition(flow.Primary); err != nil {
+		return err
 	}
 	if flow.Decider != nil && isNilLike(flow.Decider) {
 		return loginFlowDependencyError("LoginFlow.Decider")
@@ -88,12 +84,64 @@ func validateLoginFlowDependencies(flow LoginFlow) error {
 	return nil
 }
 
+// validatePrimaryPosition refuses a Primary, or a step of a [StepOneOf]
+// placed there, that cannot run before a subject is bound. Nil steps are
+// left to the dependency checks.
+func validatePrimaryPosition(step Step) error {
+	oneOf, ok := step.(StepOneOf)
+	if !ok {
+		return validatePrimaryCapable("Primary", step, false)
+	}
+	if oneOf.IfNoneEnrolled == UnenrolledSkip {
+		return newConfigurationError("WithLoginFlow: Primary StepOneOf must not use UnenrolledSkip — "+
+			"no subject is bound yet, so there is no enrollment to check", nil)
+	}
+	for i, inner := range oneOf.Steps {
+		if isNilLike(inner) {
+			continue
+		}
+		if err := validatePrimaryCapable("Primary.StepOneOf.Steps["+strconv.Itoa(i)+"]", inner, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validatePrimaryCapable checks one step at the Primary position. A step
+// of a Primary [StepOneOf] must be one that can stand first; Primary
+// itself leaves other shapes to the compiler.
+func validatePrimaryCapable(where string, step Step, inOneOf bool) error {
+	switch s := step.(type) {
+	case PrimaryPassword:
+		return nil
+	case PrimaryPasskey:
+		if !s.RequireUserVerification {
+			return newConfigurationError("WithLoginFlow: "+where+": a passkey that stands alone must verify the user;"+
+				" set PrimaryPasskey.RequireUserVerification or move the passkey to a Rule", nil)
+		}
+		return nil
+	case ExternalStep:
+		if s.CountFailures {
+			return newConfigurationError("WithLoginFlow: "+where+": ExternalStep.CountFailures needs a bound subject to"+
+				" count against and none is bound at Primary; leave guessing limits to the remote verifier", nil)
+		}
+		return nil
+	}
+	if name := subjectBoundStepName(step); name != "" {
+		return newConfigurationError("WithLoginFlow: "+where+" must not be "+name+" — the step needs a subject a previous"+
+			" step bound; use PrimaryPassword or an ExternalStep as Primary and "+name+" in a Rule", nil)
+	}
+	if inOneOf {
+		return newConfigurationError("WithLoginFlow: "+where+" must be PrimaryPassword, PrimaryPasskey or ExternalStep"+
+			" — a StepOneOf at Primary offers only steps that can bind the subject", nil)
+	}
+	return nil
+}
+
 // subjectBoundStepName names a built-in [Step] that can only run for a
 // subject an earlier step bound, or returns "" for any other Step.
 func subjectBoundStepName(step Step) string {
 	switch step.(type) {
-	case PrimaryPasskey:
-		return "PrimaryPasskey"
 	case StepTOTP:
 		return "StepTOTP"
 	case StepEmailOTP:
@@ -127,6 +175,29 @@ func validateStepDependencies(where string, step Step) error {
 		return validateCaptchaDependencies(where, s)
 	case ExternalStep:
 		return validateExternalStepDependencies(where, s)
+	case StepOneOf:
+		return validateOneOfDependencies(where, s)
+	}
+	return nil
+}
+
+// validateOneOfDependencies checks every step of a [StepOneOf]. Nesting,
+// captcha steps, kind collisions and the policy range are checked by the
+// compiler, which sees the whole flow.
+func validateOneOfDependencies(where string, step StepOneOf) error {
+	if len(step.Steps) == 0 {
+		return newConfigurationError("WithLoginFlow: "+where+".StepOneOf.Steps must not be empty", nil)
+	}
+	for i, inner := range step.Steps {
+		innerWhere := where + ".StepOneOf.Steps[" + strconv.Itoa(i) + "]"
+		if err := validateStepDependencies(innerWhere, inner); err != nil {
+			return err
+		}
+		if ext, ok := inner.(ExternalStep); ok {
+			if err := checkExternalStepKind(innerWhere, ext); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -134,6 +205,11 @@ func validateStepDependencies(where string, step Step) error {
 func validatePrimaryPasswordDependencies(where string, step PrimaryPassword) error {
 	if isNilLike(step.Store) {
 		return loginFlowDependencyError(where + ".PrimaryPassword.Store")
+	}
+	for i, scheme := range step.LegacySchemes {
+		if isNilLike(scheme) {
+			return loginFlowDependencyError(where + ".PrimaryPassword.LegacySchemes[" + strconv.Itoa(i) + "]")
+		}
 	}
 	return nil
 }
@@ -292,22 +368,37 @@ func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput
 // that drives the [PrimaryPassword] step. The builder validates the
 // store dependency up-front so a misconfigured PrimaryPassword
 // surfaces at op.New time rather than at the first authorize request.
-func buildPrimaryPassword(s PrimaryPassword) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
+// The legacy schemes, the store's optional hash updater and the provider
+// logger ride the authenticator's config.
+func buildPrimaryPassword(s PrimaryPassword, cfg *config) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if isNilLike(s.Store) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "PrimaryPassword.Store is nil",
 		}
 	}
-	return password.NewAuthenticator(s.Store)
+	auth, err := password.NewAuthenticator(s.Store)
+	if err != nil {
+		return nil, err
+	}
+	var updater store.UserPasswordHashUpdater
+	if u, ok := s.Store.(store.UserPasswordHashUpdater); ok {
+		updater = u
+	}
+	return auth.WithConfig(password.Config{
+		LegacySchemes: append([]PasswordHashScheme(nil), s.LegacySchemes...),
+		HashUpdater:   updater,
+		Logger:        cfg.logger,
+	}), nil
 }
 
 // buildPrimaryPasskey constructs the internal [passkey.Verifier] +
 // [passkey.Authenticator] that drives the [PrimaryPasskey] step. The
 // builder validates RP-side configuration up-front so a misconfigured
 // PrimaryPasskey surfaces at op.New time rather than at the first
-// authorize request.
-func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
+// authorize request. discoverable enables the passwordless ceremony the
+// Primary position runs.
+func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock, discoverable bool) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if isNilLike(s.Store) {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -319,7 +410,7 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 	// must agree on — user verification, conveyance preference — is
 	// computed once. A credential registered under a policy the login side
 	// reads differently is a credential the user can never sign in with.
-	v, err := passkey.New(passkey.ConfigFrom(passkey.StepPolicy{
+	ceremony := passkey.ConfigFrom(passkey.StepPolicy{
 		RPID:                     s.RPID,
 		RPDisplayName:            s.RPDisplayName,
 		RPOrigins:                s.RPOrigins,
@@ -328,7 +419,9 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 		AAGUIDAllowlist:          s.AAGUIDAllowlist,
 		AttestationRoots:         s.AttestationRoots,
 		AAGUIDReCheckOnAssertion: s.AAGUIDReCheckOnAssertion,
-	}))
+	})
+	ceremony.AllowDiscoverable = discoverable
+	v, err := passkey.New(ceremony)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -419,28 +512,14 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, cl
 // a no-op and auth is returned as-is. The function is internal to the
 // op package and consumed by the orchestrator wiring layer when a
 // built-in second-factor [Step] is compiled into its authenticator.
-// The per-factor WithLockout wrappers it dispatches to are methods on
-// the internal factor types, so an [ExternalStep] authenticator cannot
-// be opted in from embedder code; a custom factor's guessing budget
-// stays with the implementation behind it (see the
-// [WithAuthnLockoutStore] godoc).
-//
-// The [Clock] interface is structurally identical to the clock the
-// library uses internally, and clockShim forwards the
-// embedder-supplied value through, so the lockout helper observes the
-// same instant the rest of the library uses for token TTLs and audit
-// timestamps. A nil clock passes nil through and the helper falls back
-// to the system clock.
+// An [ExternalStep] opts in through [ExternalStep.CountFailures], which
+// wraps its authenticator with the same counter (see
+// [projectExternalStep]).
 func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticator { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-	lockoutStore := resolveAuthnLockoutStore(c)
-	if lockoutStore == nil {
+	counter := newLockoutCounter(c)
+	if counter == nil {
 		return auth
 	}
-	counter, err := lockout.New(lockoutStore, clockShimOrNil(c.clock))
-	if err != nil || counter == nil {
-		return auth
-	}
-	counter = counter.WithEmitter(c.effectiveAuditEmitter())
 	switch t := auth.(type) {
 	case *password.Authenticator:
 		return t.WithLockout(counter)
@@ -451,12 +530,31 @@ func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticat
 	case *recovery.Authenticator:
 		return t.WithLockout(counter)
 	default:
-		// Passkey and custom ExternalStep authenticators are intentionally
-		// excluded from the cross-factor counter (see WithAuthnLockoutStore
-		// godoc): a passkey assertion is not a guessable secret, and a
-		// custom factor's budget stays with the wrapped implementation.
+		// A passkey assertion is not a guessable secret, so it is not
+		// counted; ExternalStep opts in through CountFailures.
 		return auth
 	}
+}
+
+// newLockoutCounter returns the cross-factor lockout counter over the
+// store [resolveAuthnLockoutStore] picks, or nil when none resolves.
+//
+// The [Clock] interface is structurally identical to the clock the
+// library uses internally, and clockShim forwards the
+// embedder-supplied value through, so the lockout helper observes the
+// same instant the rest of the library uses for token TTLs and audit
+// timestamps. A nil clock passes nil through and the helper falls back
+// to the system clock.
+func newLockoutCounter(c *config) *lockout.Counter {
+	lockoutStore := resolveAuthnLockoutStore(c)
+	if lockoutStore == nil {
+		return nil
+	}
+	counter, err := lockout.New(lockoutStore, clockShimOrNil(c.clock))
+	if err != nil || counter == nil {
+		return nil
+	}
+	return counter.WithEmitter(c.effectiveAuditEmitter())
 }
 
 // resolveAuthnLockoutStore is the single source of the cross-factor
@@ -488,20 +586,31 @@ func (c *config) warnWithoutLockoutStore() {
 		return
 	}
 	for _, step := range c.loginFlowSteps() {
-		switch step.Kind() {
-		case StepKindPassword, StepKindTOTP, StepKindEmailOTP, StepKindRecoveryCode:
-			c.logger.Warn(
-				"the login flow has a password or second-factor step but no "+
-					"authn lockout store is available, so per-subject brute-force "+
-					"limiting is disabled; use a WithStore value that exposes "+
-					"AuthnLockouts() or configure WithAuthnLockoutStore",
-				"option", "WithAuthnLockoutStore",
-			)
-			return
-		case StepKindPasskey, StepKindCaptcha:
-			// Not counted: a passkey assertion is not a guessable secret and
-			// a captcha is not a credential.
+		if !countsFailures(step) {
+			continue
 		}
+		c.logger.Warn(
+			"the login flow has a password or second-factor step but no "+
+				"authn lockout store is available, so per-subject brute-force "+
+				"limiting is disabled; use a WithStore value that exposes "+
+				"AuthnLockouts() or configure WithAuthnLockoutStore",
+			"option", "WithAuthnLockoutStore",
+		)
+		return
+	}
+}
+
+// countsFailures reports whether step feeds the cross-factor lockout
+// counter. A passkey assertion is not a guessable secret and a captcha is
+// not a credential, so neither is counted.
+func countsFailures(step Step) bool {
+	switch s := step.(type) {
+	case PrimaryPassword, StepTOTP, StepEmailOTP, StepRecoveryCode:
+		return true
+	case ExternalStep:
+		return s.CountFailures
+	default:
+		return false
 	}
 }
 

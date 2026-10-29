@@ -24,8 +24,10 @@ type LoginFlow struct {
 	// rule predicate. Primary MUST be non-nil; the orchestrator
 	// rejects a LoginFlow with a nil Primary at construction time, and
 	// one whose Primary is a built-in step that needs a subject already
-	// bound ([PrimaryPasskey], [StepTOTP], [StepEmailOTP],
-	// [StepRecoveryCode]).
+	// bound ([StepTOTP], [StepEmailOTP], [StepRecoveryCode]). A
+	// [PrimaryPasskey] here runs passwordless and must require user
+	// verification; a [StepOneOf] here may hold only steps that can
+	// stand first.
 	Primary Step
 
 	// Rules is the ordered list of conditional follow-up steps the
@@ -36,11 +38,11 @@ type LoginFlow struct {
 	//
 	// Rules and [Decider] are evaluated per authorization request. A
 	// request /authorize could serve from an existing session is first
-	// checked against them with Primary taken as complete and no other
-	// step done; if one demands a step, the chain runs from the
-	// session's subject (prompt=none yields interaction_required).
-	// Risk is not consulted for that check, so risk-driven rules fire
-	// only inside the chain.
+	// checked against them with the steps the session stands in for
+	// taken as complete (see [LoginContext.CompletedSteps]); if one
+	// demands a step, the chain runs from the session's subject
+	// (prompt=none yields interaction_required). Risk is not consulted
+	// for that check, so risk-driven rules fire only inside the chain.
 	Rules []Rule
 
 	// Decider, when non-nil, is consulted before [Rules] on every
@@ -100,9 +102,7 @@ const (
 //   - ClientID is the OAuth client_id of the relying party that
 //     started the authorize request.
 //   - RequestedScopes is the scope list the relying party asked for.
-//   - FailedAttempts is the cumulative count of rejected submissions
-//     in this attempt, sourced from the configured login-attempt
-//     observer.
+//   - FailedAttempts is this attempt's rejected submissions.
 //   - RiskScore is the [LoginFlow.Risk] assessor's verdict; the
 //     orchestrator invokes [RiskAssessor.Assess] once per login chain
 //     (at chain start, before Primary) and every subsequent evaluation
@@ -119,12 +119,24 @@ const (
 //     library does not implement).
 //   - Remote is the request's [ClientHints]: trusted-proxy-resolved
 //     IP, user-agent, accept-language header.
+//   - AAL, SessionReused and Identity.AuthenticationContext describe the
+//     authentication the attempt stands on so far.
 //
 // The struct is read-only by convention: rule predicates MUST NOT
-// mutate slices or maps it carries. A future revision may freeze the
-// fields behind methods.
+// mutate slices or maps it carries.
+//
+// An [ACRPolicy] receives a LoginContext too. Its Resolve sees the same
+// AAL, SessionReused and Identity.AuthenticationContext a rule predicate
+// sees for the authentication being reported.
 type LoginContext struct {
 	// Identity is the subject the primary step produced.
+	//
+	// Identity.AuthenticationContext carries the amr and acr of the
+	// authentication so far — the inherited session's merged with the
+	// factors run in this attempt — and, when the session is reused, the
+	// session's auth_time. While the attempt authenticates afresh
+	// AuthTime is zero: auth_time is fixed only when the session is
+	// written. Factors carry no completion time of their own.
 	Identity Identity
 
 	// ClientID is the relying-party client_id.
@@ -133,8 +145,7 @@ type LoginContext struct {
 	// RequestedScopes is the authorize request's scope list.
 	RequestedScopes ScopeSet
 
-	// FailedAttempts is the cumulative failed-submission count for
-	// this attempt.
+	// FailedAttempts is this attempt's rejected submissions.
 	FailedAttempts int
 
 	// RiskScore is the most recent [RiskAssessor.Assess] verdict.
@@ -148,9 +159,19 @@ type LoginContext struct {
 
 	// CompletedSteps is the [StepKind] history of this attempt in
 	// completion order. When the request is served from an existing
-	// session that stands in for [LoginFlow.Primary], Primary's kind
-	// leads the list, so a predicate sees the same history as after a
-	// fresh login with the same steps.
+	// session, the kinds the session stands in for lead the list:
+	// Primary's, plus each rule step whose amr the session carries —
+	// "pwd" for [PrimaryPassword], "otp" for [StepTOTP],
+	// [StepRecoveryCode] and [StepEmailOTP], "hwk" for [PrimaryPasskey]
+	// ("swk" too unless it requires user verification), and for a
+	// [StepOneOf] the amr of any of its steps. [ExternalStep] and
+	// [StepCaptcha] leave no amr of their own and are never counted, so
+	// they run again on every authorization their rule fires for.
+	//
+	// The otp factors share one amr value, so a session made with email
+	// OTP also stands in for a TOTP rule; the id_token does not tell them
+	// apart either, and both reach the same level. A relying party that
+	// needs a specific factor re-run sends max_age or acr_values.
 	CompletedSteps []StepKind
 
 	// ACRValues is the OIDC Core 1.0 §3.1.2.1 acr_values request
@@ -162,6 +183,19 @@ type LoginContext struct {
 
 	// Remote is the request's de-proxied client hints.
 	Remote ClientHints
+
+	// AAL is the assurance level the authentication has reached so far:
+	// the higher of the reused session's level and the factors run in
+	// this attempt.
+	//
+	// Stable since v1.5.
+	AAL AAL
+
+	// SessionReused reports that an existing session's authentication
+	// stands in for [LoginFlow.Primary] in this attempt.
+	//
+	// Stable since v1.5.
+	SessionReused bool
 }
 
 // ClientHints is the read-only view of request-scoped network and

@@ -60,6 +60,7 @@ func TestStepBeginContinueNotWired(t *testing.T) {
 		{"StepEmailOTP", op.StepEmailOTP{}},
 		{"StepCaptcha", op.StepCaptcha{}},
 		{"StepRecoveryCode", op.StepRecoveryCode{}},
+		{"StepOneOf", op.StepOneOf{}},
 	}
 	ctx := context.Background()
 	for _, s := range steps {
@@ -71,6 +72,37 @@ func TestStepBeginContinueNotWired(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), stepNotWiredMessage) {
 			t.Errorf("%s.Continue: err=%v, want error containing %q", s.name, err, stepNotWiredMessage)
 		}
+	}
+}
+
+// TestStepOneOfKind pins the one-of kind: the inner kinds sorted and
+// joined, so declaration order does not change it.
+func TestStepOneOfKind(t *testing.T) {
+	t.Parallel()
+	ext := op.ExternalStep{KindLabel: "myorg.sms"}
+	cases := []struct {
+		name string
+		step op.StepOneOf
+		want op.StepKind
+	}{
+		{name: "sorted", step: op.StepOneOf{Steps: []op.Step{op.StepTOTP{}, op.PrimaryPasskey{}}}, want: "one_of(passkey,totp)"},
+		{name: "order independent", step: op.StepOneOf{Steps: []op.Step{op.PrimaryPasskey{}, op.StepTOTP{}}}, want: "one_of(passkey,totp)"},
+		{name: "external", step: op.StepOneOf{Steps: []op.Step{op.StepRecoveryCode{}, ext}}, want: "one_of(myorg.sms,recovery_code)"},
+		{name: "single", step: op.StepOneOf{Steps: []op.Step{op.StepTOTP{}}}, want: "one_of(totp)"},
+		{name: "empty", step: op.StepOneOf{}, want: "one_of()"},
+	}
+	for _, tc := range cases {
+		if got := tc.step.Kind(); got != tc.want {
+			t.Errorf("%s: Kind() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestUnenrolledPolicyZeroIsDeny pins that an unset IfNoneEnrolled denies.
+func TestUnenrolledPolicyZeroIsDeny(t *testing.T) {
+	t.Parallel()
+	if got := (op.StepOneOf{}).IfNoneEnrolled; got != op.UnenrolledDeny {
+		t.Fatalf("zero IfNoneEnrolled = %v, want UnenrolledDeny", got)
 	}
 }
 
@@ -94,4 +126,5 @@ var (
 	_ op.Step = op.StepEmailOTP{}
 	_ op.Step = op.StepCaptcha{}
 	_ op.Step = op.StepRecoveryCode{}
+	_ op.Step = op.StepOneOf{}
 )

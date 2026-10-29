@@ -57,6 +57,19 @@ var (
 	ErrFactorAbort = authn.ErrFactorAbort
 )
 
+// EnrollmentChecker is the optional interface an [Authenticator] wrapped
+// in an [ExternalStep] implements to tell a [StepOneOf] whether a subject
+// can complete it. Enrolled reports (true, nil) for a subject that has
+// the factor set up and (false, nil) for one that does not; a StepOneOf
+// offers only the steps that report true. A non-nil error ends the
+// attempt as a server error rather than counting the factor either way.
+// An authenticator that does not implement it counts as enrolled.
+//
+// Implementations MUST be safe for concurrent use.
+//
+// Stable since v1.5.
+type EnrollmentChecker = authn.EnrollmentProber
+
 // Interaction is an alias for [authn.Interaction].
 type Interaction = authn.Interaction
 

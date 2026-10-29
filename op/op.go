@@ -964,7 +964,7 @@ func spaWiringFor(cfg *config) (loginMount, staticDir, csp string) {
 // [WithMFAEncryptionKeys] when [StepTOTP.EncryptionKey] is empty).
 func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, error) {
 	cfg.warnWithoutLockoutStore()
-	primary, err := projectStepToFlow("Primary", flow.Primary, cfg)
+	primary, err := projectStepAt("Primary", flow.Primary, cfg, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1011,6 +1011,7 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 //   - [ExternalStep] (embedder-wrapped Authenticator): forwarded
 //     verbatim, the orchestrator drives the wrapped authenticator
 //     directly.
+//   - [StepOneOf]: each step projected at the one-of step's position.
 //   - Built-in Steps with construction-time wiring (PrimaryPassword,
 //     PrimaryPasskey, StepTOTP, StepEmailOTP, StepRecoveryCode,
 //     StepCaptcha): the matching builder synthesises the internal
@@ -1021,35 +1022,86 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 //     use [ExternalStep] until a missing built-in lands.
 //
 // cfg threads the Provider-level fallbacks (e.g. MFA encryption keys)
-// through to the built-in builders.
+// through to the built-in builders. The step is projected for a rule
+// position; [compileLoginFlow] projects Primary through [projectStepAt].
 func projectStepToFlow(where string, s Step, cfg *config) (authn.LoginFlowStep, error) {
+	return projectStepAt(where, s, cfg, false)
+}
+
+// projectStepAt is [projectStepToFlow] with the position made explicit:
+// primary is true for [LoginFlow.Primary] and the steps of a [StepOneOf]
+// placed there, where no subject is bound yet. A [PrimaryPasskey] in that
+// position runs the discoverable ceremony.
+func projectStepAt(where string, s Step, cfg *config, primary bool) (authn.LoginFlowStep, error) {
 	if isNilLike(s) {
 		return authn.LoginFlowStep{}, &Error{
 			Code:        codeConfiguration,
 			Description: "WithLoginFlow: " + where + " must not be nil",
 		}
 	}
-	if ext, ok := s.(ExternalStep); ok {
-		return projectExternalStep(where, ext)
+	switch v := s.(type) {
+	case ExternalStep:
+		return projectExternalStep(where, v, cfg)
+	case StepOneOf:
+		return projectOneOfStep(where, v, cfg, primary)
+	case PrimaryPasskey:
+		if primary {
+			return projectPasskeyStep(where, v, cfg, true)
+		}
 	}
 	return projectBuiltinStep(where, s, cfg)
 }
 
+// projectOneOfStep projects a [StepOneOf] and each of its steps at the
+// same position. OneOf is non-nil even when Steps is empty, so the
+// compiler reads the step as a one-of step and reports the empty list.
+func projectOneOfStep(where string, s StepOneOf, cfg *config, primary bool) (authn.LoginFlowStep, error) {
+	inner := make([]authn.LoginFlowStep, 0, len(s.Steps))
+	for i, step := range s.Steps {
+		projected, err := projectStepAt(where+".StepOneOf.Steps["+strconv.Itoa(i)+"]", step, cfg, primary)
+		if err != nil {
+			return authn.LoginFlowStep{}, err
+		}
+		inner = append(inner, projected)
+	}
+	return authn.LoginFlowStep{
+		Kind:           string(s.Kind()),
+		OneOf:          inner,
+		IfNoneEnrolled: s.IfNoneEnrolled,
+	}, nil
+}
+
 // projectExternalStep is the [projectStepToFlow] arm for an
-// [ExternalStep]: validate the wrapped authenticator and forward
-// verbatim. The split keeps [projectStepToFlow] under the cyclop
-// budget without conflating the ExternalStep contract (verbatim
-// forward) with the built-in builder dispatch.
-func projectExternalStep(where string, ext ExternalStep) (authn.LoginFlowStep, error) {
+// [ExternalStep]: validate the wrapped authenticator and forward it,
+// gated by the cross-factor lockout counter when CountFailures is set.
+func projectExternalStep(where string, ext ExternalStep, cfg *config) (authn.LoginFlowStep, error) {
 	if isNilLike(ext.Authenticator) {
 		return authn.LoginFlowStep{}, &Error{
 			Code:        codeConfiguration,
 			Description: "WithLoginFlow: " + where + " ExternalStep.Authenticator must not be nil",
 		}
 	}
+	auth := ext.Authenticator
+	if ext.CountFailures {
+		auth = authn.WithLockoutCounter(auth, newLockoutCounter(cfg))
+	}
 	return authn.LoginFlowStep{
 		Kind:          string(ext.KindLabel),
-		Authenticator: ext.Authenticator,
+		Authenticator: auth,
+	}, nil
+}
+
+// projectPasskeyStep builds a [PrimaryPasskey]; discoverable is true at
+// the Primary position.
+func projectPasskeyStep(where string, s PrimaryPasskey, cfg *config, discoverable bool) (authn.LoginFlowStep, error) {
+	auth, err := buildPrimaryPasskey(s, clockShimOrNil(cfg.clock), discoverable)
+	if err != nil {
+		return authn.LoginFlowStep{}, projectStepError(where, err)
+	}
+	return authn.LoginFlowStep{
+		Kind:                    string(StepKindPasskey),
+		Authenticator:           auth,
+		RequireUserVerification: s.RequireUserVerification,
 	}, nil
 }
 
@@ -1065,11 +1117,7 @@ func projectExternalStep(where string, ext ExternalStep) (authn.LoginFlowStep, e
 func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep, error) {
 	switch v := s.(type) {
 	case PrimaryPasskey:
-		auth, err := buildPrimaryPasskey(v, clockShimOrNil(cfg.clock))
-		if err != nil {
-			return authn.LoginFlowStep{}, projectStepError(where, err)
-		}
-		return authn.LoginFlowStep{Kind: string(StepKindPasskey), Authenticator: auth}, nil
+		return projectPasskeyStep(where, v, cfg, false)
 	case StepTOTP:
 		fallbackCurrent, fallbackPrev := totpFallbackKeys(cfg)
 		auth, err := buildStepTOTP(v, fallbackCurrent, fallbackPrev, clockShimOrNil(cfg.clock))
@@ -1099,7 +1147,7 @@ func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep,
 		}
 		return authn.LoginFlowStep{Kind: string(StepKindCaptcha), Authenticator: auth, IsCaptcha: true}, nil
 	case PrimaryPassword:
-		auth, err := buildPrimaryPassword(v)
+		auth, err := buildPrimaryPassword(v, cfg)
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
@@ -1161,7 +1209,10 @@ func toPublicLoginContext(lc authn.LoginFlowContext) LoginContext {
 		completed[i] = StepKind(k)
 	}
 	return LoginContext{
-		Identity:        Identity{Subject: Subject(lc.Subject)},
+		Identity: Identity{
+			Subject:               Subject(lc.Subject),
+			AuthenticationContext: publicAuthContext(lc.AMR, lc.ACR, lc.AuthTime),
+		},
 		ClientID:        lc.ClientID,
 		RequestedScopes: scopes,
 		FailedAttempts:  lc.FailedAttempts,
@@ -1174,7 +1225,19 @@ func toPublicLoginContext(lc authn.LoginFlowContext) LoginContext {
 			UserAgent:      lc.UserAgent,
 			AcceptLanguage: lc.AcceptLanguage,
 		},
+		AAL:           lc.Level,
+		SessionReused: lc.Inherited,
 	}
+}
+
+// publicAuthContext builds the [AuthContext] a [LoginContext] carries. A
+// zero authTime stays 0 ("unknown") rather than a negative Unix value.
+func publicAuthContext(amr []string, acr string, authTime time.Time) AuthContext {
+	ac := AuthContext{AMR: append([]string(nil), amr...), ACR: acr}
+	if !authTime.IsZero() {
+		ac.AuthTime = authTime.Unix()
+	}
+	return ac
 }
 
 // deciderAdapter projects the public [Decider] surface onto the
@@ -1252,6 +1315,11 @@ func derefDecision(d Decision) Decision { //nolint:ireturn // Decision is a seal
 // [LoginContext]. The function never returns nil so the wire layer
 // always sees a configured resolver: a nil [config.acrPolicy] triggers
 // the [DefaultACRPolicy] fallback.
+//
+// The authentication fields follow [toPublicLoginContext]: AAL is the
+// recorded level, the acr its canonical URI, and auth_time is reported
+// only for a reused session, so Resolve reads the same values a rule
+// predicate reads for that authentication.
 func newACRResolver(cfg *config) authorizeendpoint.ACRResolver {
 	policy := cfg.effectiveACRPolicy()
 	return func(ctx context.Context, in authorizeendpoint.ACRResolveInput) authorizeendpoint.ACRResolveOutput {
@@ -1263,8 +1331,15 @@ func newACRResolver(cfg *config) authorizeendpoint.ACRResolver {
 		for i, k := range in.CompletedKinds {
 			completed[i] = StepKind(k)
 		}
+		var authTime time.Time
+		if in.SessionReused {
+			authTime = in.AuthTime
+		}
 		lc := LoginContext{
-			Identity:        Identity{Subject: Subject(in.Subject)},
+			Identity: Identity{
+				Subject:               Subject(in.Subject),
+				AuthenticationContext: publicAuthContext(in.AMR, in.InternalAAL.ACRURI(), authTime),
+			},
 			ClientID:        in.ClientID,
 			RequestedScopes: scopes,
 			CompletedSteps:  completed,
@@ -1274,6 +1349,8 @@ func newACRResolver(cfg *config) authorizeendpoint.ACRResolver {
 				UserAgent:      in.UserAgent,
 				AcceptLanguage: in.AcceptLanguage,
 			},
+			AAL:           in.InternalAAL,
+			SessionReused: in.SessionReused,
 		}
 		acr, amr, ok := policy.Resolve(ctx, lc, in.InternalAAL)
 		return authorizeendpoint.ACRResolveOutput{

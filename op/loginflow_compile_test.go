@@ -291,19 +291,12 @@ func TestProjectStepToFlow_PrimaryPassword_RejectsNilStore(t *testing.T) {
 // TestNew_RejectsSubjectBoundStepAsPrimary pins that a LoginFlow whose
 // Primary is a built-in step that asserts for a known subject fails
 // construction. Primary binds the subject on a fresh login, so such a
-// flow would answer every first login with a server error.
+// flow would answer every first login with a server error. A passkey is
+// allowed there under its own rule; see TestCompile_PrimaryPasskeyRequiresUV.
 func TestNew_RejectsSubjectBoundStepAsPrimary(t *testing.T) {
 	t.Parallel()
 	totpKey := bytes32("totp-encryption-key-32-bytes-aaa")
 	cases := map[string]func(st *inmem.Store) op.Step{
-		"PrimaryPasskey": func(st *inmem.Store) op.Step {
-			return op.PrimaryPasskey{
-				Store:         st.Passkeys(),
-				RPID:          "id.example.com",
-				RPDisplayName: "Example",
-				RPOrigins:     []string{"https://id.example.com"},
-			}
-		},
 		"StepTOTP": func(st *inmem.Store) op.Step {
 			return op.StepTOTP{Store: st.TOTPs(), EncryptionKey: totpKey}
 		},
@@ -329,6 +322,304 @@ func TestNew_RejectsSubjectBoundStepAsPrimary(t *testing.T) {
 			}
 		})
 	}
+}
+
+// compilePasskeyStep returns a PrimaryPasskey over st whose
+// RequireUserVerification is uv.
+func compilePasskeyStep(st *inmem.Store, uv bool) op.PrimaryPasskey {
+	return op.PrimaryPasskey{
+		Store:                   st.Passkeys(),
+		RPID:                    "id.example.com",
+		RPDisplayName:           "Example",
+		RPOrigins:               []string{"https://id.example.com"},
+		RequireUserVerification: uv,
+	}
+}
+
+// compileNew runs op.New over flow with a UI that can run a passkey
+// ceremony, so only the flow decides the outcome.
+func compileNew(t *testing.T, st *inmem.Store, flow op.LoginFlow) error {
+	t.Helper()
+	opts := append(validBaseOptsWithStoreNoAuthn(t, st), op.WithLoginFlow(flow),
+		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}))
+	_, err := op.New(opts...)
+	return err
+}
+
+// compileRequireConfigError asserts err is a configuration_error whose
+// message contains want.
+func compileRequireConfigError(t *testing.T, err error, want string) {
+	t.Helper()
+	var typed *op.Error
+	if !errors.As(err, &typed) || typed.Code != "configuration_error" {
+		t.Fatalf("op.New: err = %v, want a configuration_error", err)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("op.New: error %q does not contain %q", err.Error(), want)
+	}
+}
+
+// TestCompile_PrimaryPasskeyRequiresUV pins that a passkey standing first
+// — as Primary or inside a StepOneOf there — must require user
+// verification, while a passkey in a rule keeps its own choice.
+func TestCompile_PrimaryPasskeyRequiresUV(t *testing.T) {
+	t.Parallel()
+	const want = "a passkey that stands alone must verify the user"
+	cases := []struct {
+		name    string
+		flow    func(st *inmem.Store) op.LoginFlow
+		wantErr bool
+	}{
+		{
+			name:    "primary without UV",
+			flow:    func(st *inmem.Store) op.LoginFlow { return op.LoginFlow{Primary: compilePasskeyStep(st, false)} },
+			wantErr: true,
+		},
+		{
+			name: "primary one-of without UV",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{Primary: op.StepOneOf{Steps: []op.Step{
+					op.PrimaryPassword{Store: st.UserPasswords()}, compilePasskeyStep(st, false),
+				}}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "primary with UV",
+			flow: func(st *inmem.Store) op.LoginFlow { return op.LoginFlow{Primary: compilePasskeyStep(st, true)} },
+		},
+		{
+			name: "primary one-of with UV",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{Primary: op.StepOneOf{Steps: []op.Step{
+					op.PrimaryPassword{Store: st.UserPasswords()}, compilePasskeyStep(st, true),
+				}}}
+			},
+		},
+		{
+			name: "rule without UV",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{
+					Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+					Rules:   []op.Rule{op.RuleAlways(compilePasskeyStep(st, false))},
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := inmem.New()
+			err := compileNew(t, st, tc.flow(st))
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("op.New: %v", err)
+				}
+				return
+			}
+			compileRequireConfigError(t, err, want)
+		})
+	}
+}
+
+// TestCompile_CountFailuresOnPrimaryRejected pins that CountFailures is
+// refused where no subject is bound yet to count against, and accepted
+// after Primary.
+func TestCompile_CountFailuresOnPrimaryRejected(t *testing.T) {
+	t.Parallel()
+	const want = "ExternalStep.CountFailures needs a bound subject"
+	counted := op.ExternalStep{Authenticator: stubExternalAuthenticator{}, KindLabel: "test.counted", CountFailures: true}
+	cases := []struct {
+		name    string
+		flow    func(st *inmem.Store) op.LoginFlow
+		wantErr bool
+	}{
+		{
+			name:    "primary",
+			flow:    func(*inmem.Store) op.LoginFlow { return op.LoginFlow{Primary: counted} },
+			wantErr: true,
+		},
+		{
+			name: "primary one-of",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{Primary: op.StepOneOf{Steps: []op.Step{op.PrimaryPassword{Store: st.UserPasswords()}, counted}}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "rule",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{Primary: op.PrimaryPassword{Store: st.UserPasswords()}, Rules: []op.Rule{op.RuleAlways(counted)}}
+			},
+		},
+		{
+			name: "rule one-of",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{
+					Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+					Rules:   []op.Rule{op.RuleAlways(op.StepOneOf{Steps: []op.Step{counted}})},
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := inmem.New()
+			err := compileNew(t, st, tc.flow(st))
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("op.New: %v", err)
+				}
+				return
+			}
+			compileRequireConfigError(t, err, want)
+		})
+	}
+}
+
+// TestCompile_StepOneOf_EdgeRows walks the construction-time edge rows of
+// StepOneOf: what op.New refuses and the shapes it accepts.
+func TestCompile_StepOneOf_EdgeRows(t *testing.T) {
+	t.Parallel()
+	totpKey := bytes32("totp-encryption-key-32-bytes-aaa")
+	totp := func(st *inmem.Store) op.Step { return op.StepTOTP{Store: st.TOTPs(), EncryptionKey: totpKey} }
+	password := func(st *inmem.Store) op.Step { return op.PrimaryPassword{Store: st.UserPasswords()} }
+	afterPassword := func(st *inmem.Store, rules ...op.Rule) op.LoginFlow {
+		return op.LoginFlow{Primary: password(st), Rules: rules}
+	}
+	other := op.ExternalStep{Authenticator: stubExternalAuthenticator{}, KindLabel: "test.other"}
+	cases := []struct {
+		name string
+		flow func(st *inmem.Store) op.LoginFlow
+		want string // empty: op.New succeeds
+	}{
+		{
+			name: "nil steps",
+			flow: func(st *inmem.Store) op.LoginFlow { return afterPassword(st, op.RuleAlways(op.StepOneOf{})) },
+			want: "StepOneOf.Steps must not be empty",
+		},
+		{
+			name: "empty steps",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return afterPassword(st, op.RuleAlways(op.StepOneOf{Steps: []op.Step{}}))
+			},
+			want: "StepOneOf.Steps must not be empty",
+		},
+		{
+			name: "nil element",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return afterPassword(st, op.RuleAlways(op.StepOneOf{Steps: []op.Step{totp(st), nil}}))
+			},
+			want: "StepOneOf.Steps[1] is nil",
+		},
+		{
+			name: "nested one-of",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return afterPassword(st, op.RuleAlways(op.StepOneOf{Steps: []op.Step{
+					totp(st), op.StepOneOf{Steps: []op.Step{other}},
+				}}))
+			},
+			want: "must not be a one-of step",
+		},
+		{
+			name: "captcha element",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return afterPassword(st, op.RuleAlways(op.StepOneOf{Steps: []op.Step{
+					totp(st), op.StepCaptcha{Verifier: stubCaptchaVerifier{}},
+				}}))
+			},
+			want: "must not be a captcha step",
+		},
+		{
+			name: "kind duplicated by another rule",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return afterPassword(st, op.RuleAlways(totp(st)), op.RuleAlways(op.StepOneOf{Steps: []op.Step{totp(st), other}}))
+			},
+			want: "duplicate StepKind",
+		},
+		{
+			name: "policy above range",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return afterPassword(st, op.RuleAlways(op.StepOneOf{Steps: []op.Step{totp(st)}, IfNoneEnrolled: op.UnenrolledPolicy(2)}))
+			},
+			want: "is not a declared policy",
+		},
+		{
+			name: "negative policy",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return afterPassword(st, op.RuleAlways(op.StepOneOf{Steps: []op.Step{totp(st)}, IfNoneEnrolled: op.UnenrolledPolicy(-1)}))
+			},
+			want: "is not a declared policy",
+		},
+		{
+			name: "external element with a bare kind",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				bare := op.ExternalStep{Authenticator: stubExternalAuthenticator{}, KindLabel: "bare"}
+				return afterPassword(st, op.RuleAlways(op.StepOneOf{Steps: []op.Step{totp(st), bare}}))
+			},
+			want: "dotted prefix",
+		},
+		{
+			name: "skip at primary",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{Primary: op.StepOneOf{Steps: []op.Step{password(st), other}, IfNoneEnrolled: op.UnenrolledSkip}}
+			},
+			want: "must not use UnenrolledSkip",
+		},
+		{
+			name: "subject-bound element at primary",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{Primary: op.StepOneOf{Steps: []op.Step{password(st), totp(st)}}}
+			},
+			want: "Primary.StepOneOf.Steps[1] must not be StepTOTP",
+		},
+		{
+			name: "captcha element at primary",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{Primary: op.StepOneOf{Steps: []op.Step{password(st), op.StepCaptcha{Verifier: stubCaptchaVerifier{}}}}}
+			},
+			want: "must be PrimaryPassword, PrimaryPasskey or ExternalStep",
+		},
+		{
+			name: "single step after primary",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return afterPassword(st, op.RuleAlways(op.StepOneOf{Steps: []op.Step{totp(st)}, IfNoneEnrolled: op.UnenrolledSkip}))
+			},
+		},
+		{
+			name: "password or external at primary",
+			flow: func(st *inmem.Store) op.LoginFlow {
+				return op.LoginFlow{Primary: op.StepOneOf{Steps: []op.Step{password(st), other}}}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := inmem.New()
+			err := compileNew(t, st, tc.flow(st))
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("op.New: %v", err)
+				}
+				return
+			}
+			compileRequireConfigError(t, err, tc.want)
+		})
+	}
+}
+
+// TestCompile_PrimaryPasswordLegacySchemesNilElement pins that a nil
+// legacy scheme is refused with its position.
+func TestCompile_PrimaryPasswordLegacySchemesNilElement(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	err := compileNew(t, st, op.LoginFlow{Primary: op.PrimaryPassword{
+		Store:         st.UserPasswords(),
+		LegacySchemes: []op.PasswordHashScheme{op.BcryptHashScheme(), nil},
+	}})
+	compileRequireConfigError(t, err, "PrimaryPassword.LegacySchemes[1] is nil")
 }
 
 // TestProjectStepToFlow_StepTOTP_FallsBackToProviderKey pins the

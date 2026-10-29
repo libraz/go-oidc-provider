@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -148,17 +150,36 @@ func (k StepKind) IsUserDefined() bool {
 // returns the encoded password hash, and the library drives prompt
 // rendering and constant-time Argon2id verification.
 //
-// The library accepts password hashes in PHC argon2id encoding
-// (`$argon2id$v=19$m=...,t=...,p=...$<salt>$<hash>`). Embedders with
-// legacy encodings (bcrypt, scrypt, custom) wrap their own
-// [Authenticator] in [ExternalStep]. The library deliberately ships
-// no hash-migration surface: omitting it keeps the verifier path
-// branch-free and the library never inspects unfamiliar encodings.
+// The library verifies password hashes in PHC argon2id encoding
+// (`$argon2id$v=19$m=...,t=...,p=...$<salt>$<hash>`) natively. A user
+// table carried over from another system keeps working through
+// [PrimaryPassword.LegacySchemes]: a stored hash that is not argon2id is
+// verified by the first scheme that recognizes it, and on success it is
+// rewritten as argon2id when Store implements
+// [store.UserPasswordHashUpdater]. A hash no scheme recognizes is treated
+// like a wrong password.
 type PrimaryPassword struct {
 	// Store is the user-account store the password is verified
 	// against. MUST be non-nil; the orchestrator rejects a flow with
 	// a nil Store at construction time.
 	Store store.UserPasswordStore
+
+	// LegacySchemes verifies stored hashes that are not argon2id, in
+	// declaration order; the first scheme whose Recognizes reports true
+	// decides. Nil or empty accepts argon2id only. A nil element is
+	// rejected by [New].
+	//
+	// After a successful legacy verification the password is re-encoded
+	// as argon2id and written back through
+	// [store.UserPasswordHashUpdater] when Store implements it. A failed
+	// write is logged and the login still succeeds; the rewrite is
+	// retried on the next login. A store without the interface, or one
+	// that answers [store.ErrPasswordHashUpdateUnsupported], keeps the
+	// legacy hash. Lockout and the unknown-user dummy verification apply
+	// to legacy hashes as they do to argon2id ones.
+	//
+	// Stable since v1.5.
+	LegacySchemes []PasswordHashScheme
 }
 
 // Begin implements [Step]. PrimaryPassword is a configuration
@@ -180,12 +201,22 @@ func (PrimaryPassword) Continue(_ context.Context, _ ContinueInput) (interaction
 func (PrimaryPassword) Kind() StepKind { return StepKindPassword }
 
 // PrimaryPasskey is the built-in passkey [Step] backed by a
-// [store.PasskeyStore]. The factor performs a WebAuthn assertion
-// against the credentials of a subject an earlier step already bound,
-// so it runs as a [Rule] step after [PrimaryPassword]. Discoverable
-// credentials, where the assertion itself names the user, are not
-// supported, and [New] rejects a [LoginFlow] whose Primary is a
-// PrimaryPasskey.
+// [store.PasskeyStore]. Its behaviour follows its position:
+//
+//   - As a [Rule] step it asserts against the credentials of the subject
+//     an earlier step bound.
+//   - As [LoginFlow.Primary], or inside a [StepOneOf] there, it runs a
+//     passwordless ceremony with discoverable credentials: the browser
+//     picks a resident credential, the credential's record names the
+//     subject, and the assertion's user handle must match it. There the
+//     step must set [PrimaryPasskey.RequireUserVerification]; [New]
+//     rejects it otherwise, because a passkey that stands alone is the
+//     only factor of the login. Such a login reaches AAL2 with amr
+//     ["hwk"].
+//
+// An unknown credential and a user handle that does not match the
+// credential's subject are both answered with the same fresh challenge,
+// so the response does not reveal which credentials exist.
 type PrimaryPasskey struct {
 	// Store is the passkey credential store. MUST be non-nil.
 	Store store.PasskeyStore
@@ -501,6 +532,10 @@ func (StepRecoveryCode) Kind() StepKind { return StepKindRecoveryCode }
 // implement [Authenticator] for an existing factor. Adopting it
 // preserves their verifier code while allowing them to express
 // step-up policies through [Rule] and [Decider].
+//
+// An ExternalStep authenticator may implement [EnrollmentChecker]; a
+// [StepOneOf] then offers it only to subjects it reports enrolled.
+// Without it the step counts as enrolled for every subject.
 type ExternalStep struct {
 	// Authenticator is the embedder-supplied factor implementation.
 	// MUST be non-nil; the [LoginFlow] compiler rejects an
@@ -513,6 +548,24 @@ type ExternalStep struct {
 	// [LoginFlow] compiler rejects bare or built-in labels at
 	// construction time.
 	KindLabel StepKind
+
+	// CountFailures puts the step under the cross-factor lockout
+	// counter the built-in factors share (see [WithAuthnLockoutStore]):
+	// a locked subject is refused before Begin with the same 4xx as a
+	// built-in second factor, a Continue that returns [ErrFactorRetry]
+	// counts one failure (a retry carrying a re-prompt included), and a
+	// Continue that completes resets the count.
+	//
+	// Leave it false for a factor whose secret cannot be guessed, such
+	// as a hardware key, so a user fumbling the device is not locked
+	// out. Setting it requires a subject to count against, so [New]
+	// rejects it on [LoginFlow.Primary] and inside a StepOneOf placed
+	// there. An ExternalStep at Primary — a directory bind, say — has no
+	// library lockout; the remote verifier's own policy (a directory's
+	// password lockout) is what limits guessing there.
+	//
+	// Stable since v1.5.
+	CountFailures bool
 }
 
 // Begin implements [Step] by forwarding verbatim to the wrapped
@@ -542,3 +595,100 @@ func (e ExternalStep) Continue(ctx context.Context, in ContinueInput) (interacti
 // "myorg.totp_first" and "myorg.totp_step_up" reusing one TOTP
 // implementation).
 func (e ExternalStep) Kind() StepKind { return e.KindLabel }
+
+// StepOneOf is a [Step] the user completes with exactly one of Steps:
+// "one of the second factors this user has registered". How it runs
+// depends on its position:
+//
+//   - In a [Rule], the subject is known, so only the steps the subject
+//     is enrolled in are candidates. Two or more are offered through the
+//     factor-choice prompt ([interaction.PromptTypeChooseFactor], answered
+//     under [interaction.FactorChoiceField]); one is begun directly; none
+//     follows IfNoneEnrolled.
+//   - As [LoginFlow.Primary] no subject is known yet, so every step is
+//     offered without an enrollment check. Each must be able to stand
+//     first: [PrimaryPassword], [PrimaryPasskey] with
+//     RequireUserVerification, or [ExternalStep] without CountFailures.
+//     IfNoneEnrolled must stay [UnenrolledDeny] there.
+//
+// A choice outside the offered kinds is refused like a stale state_ref.
+// Once a factor is chosen the attempt stays on it; restarting the login
+// offers the choice again. On completion both the chosen step's kind and
+// the StepOneOf's kind are recorded in [LoginContext.CompletedSteps], so
+// another rule naming the same step does not run it twice.
+//
+// Enrollment is read through [EnrollmentChecker]: the built-in second
+// factors report it from their stores, an [ExternalStep] whose
+// authenticator implements it reports its own, and any other step counts
+// as enrolled. A check that fails ends the attempt rather than guessing.
+//
+// On a reused session the step counts as done when the session's amr
+// shows any of its steps ran; see [LoginContext.CompletedSteps]. A step
+// skipped under [UnenrolledSkip] leaves no trace in the session, so the
+// next authorization checks enrollment again, and a subject still
+// enrolled in none of the steps is not stopped by it, prompt=none
+// included.
+//
+// [New] rejects an empty Steps, a nil element, a nested StepOneOf, a
+// [StepCaptcha] element, a kind used twice anywhere in the flow, and an
+// IfNoneEnrolled outside the declared values.
+//
+// Stable since v1.5.
+type StepOneOf struct {
+	// Steps are the alternatives, in display order. MUST be non-empty.
+	Steps []Step
+
+	// IfNoneEnrolled decides what happens when the subject is enrolled
+	// in none of Steps. The zero value is [UnenrolledDeny].
+	IfNoneEnrolled UnenrolledPolicy
+}
+
+// Begin implements [Step]. StepOneOf is a configuration descriptor the
+// [LoginFlow] compiler resolves; direct dispatch returns
+// [errStepBuiltinNotCompiled].
+func (StepOneOf) Begin(_ context.Context, _ BeginInput) (interaction.Step, error) {
+	return interaction.Step{}, errStepBuiltinNotCompiled
+}
+
+// Continue implements [Step]. See [StepOneOf.Begin].
+func (StepOneOf) Continue(_ context.Context, _ ContinueInput) (interaction.Step, error) {
+	return interaction.Step{}, errStepBuiltinNotCompiled
+}
+
+// Kind implements [Step]. Returns "one_of(" followed by the kinds of
+// Steps sorted and joined with ",", then ")" — "one_of(passkey,totp)" —
+// so the value does not depend on display order.
+func (s StepOneOf) Kind() StepKind {
+	kinds := make([]string, 0, len(s.Steps))
+	for _, step := range s.Steps {
+		if isNilLike(step) {
+			kinds = append(kinds, "")
+			continue
+		}
+		kinds = append(kinds, string(step.Kind()))
+	}
+	slices.Sort(kinds)
+	return StepKind("one_of(" + strings.Join(kinds, ",") + ")")
+}
+
+// UnenrolledPolicy is what a [StepOneOf] does when the subject is
+// enrolled in none of its steps.
+//
+// Stable since v1.5.
+type UnenrolledPolicy = authn.UnenrolledPolicy
+
+const (
+	// UnenrolledDeny ends the attempt with a 4xx. It is the zero value,
+	// so a step a deployment declared is never silently left out.
+	//
+	// Stable since v1.5.
+	UnenrolledDeny = authn.UnenrolledDeny
+
+	// UnenrolledSkip passes over the step without completing it: the
+	// login continues at the level the other steps reach, and the step
+	// adds no amr. The skip is reported as the audit event
+	// [AuditStepBeginFailed] with reason "not_enrolled_skipped".
+	//
+	// Stable since v1.5.
+	UnenrolledSkip = authn.UnenrolledSkip
+)
