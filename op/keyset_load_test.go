@@ -376,6 +376,14 @@ func TestLoadKeyset_DuplicateRejected(t *testing.T) {
 		klRequireConfigError(t, err, p2)
 	})
 
+	t.Run("same_key_as_jwk_with_kid_collides", func(t *testing.T) {
+		t.Parallel()
+		j, _ := klECJWK(t, ec, "named")
+		pj := klWrite(t, "named.jwk", j)
+		_, err := op.LoadKeyset(a, pj)
+		klRequireConfigError(t, err, pj)
+	})
+
 	t.Run("no_paths", func(t *testing.T) {
 		t.Parallel()
 		_, err := op.LoadKeyset()
@@ -617,5 +625,34 @@ func TestLoadSymmetricKeys_Inputs(t *testing.T) {
 		if got2[0][0] != raw[0] {
 			t.Fatal("second load observed the first load's mutation")
 		}
+	})
+}
+
+func TestLoadSigningKey_PEMBlockSelection(t *testing.T) {
+	t.Parallel()
+
+	ec := klECKey(t, elliptic.P256())
+	sec1, err := x509.MarshalECPrivateKey(ec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := klPEM("EC PARAMETERS", []byte{0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07})
+	key := klPEM("EC PRIVATE KEY", sec1)
+
+	t.Run("ec_parameters_block_is_skipped", func(t *testing.T) {
+		t.Parallel()
+		got, err := op.LoadSigningKey(klWrite(t, "k.pem", append(append([]byte{}, params...), key...)))
+		if err != nil {
+			t.Fatalf("LoadSigningKey: %v", err)
+		}
+		if got.KeyID != klThumbprint(ec) {
+			t.Fatalf("KeyID = %q, want thumbprint", got.KeyID)
+		}
+	})
+	t.Run("two_private_key_blocks_rejected", func(t *testing.T) {
+		t.Parallel()
+		path := klWrite(t, "k.pem", append(append([]byte{}, key...), key...))
+		_, err := op.LoadSigningKey(path)
+		klRequireConfigError(t, err, path)
 	})
 }

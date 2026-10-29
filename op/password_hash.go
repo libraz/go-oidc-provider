@@ -13,6 +13,11 @@ import (
 // truncated by some implementations.
 const bcryptMaxPasswordBytes = 72
 
+// bcryptMaxCost is the highest stored work factor [BcryptHashScheme] will
+// run. A hash above it is treated as a mismatch, so a corrupted or hostile
+// imported row cannot make one login attempt cost seconds to hours of CPU.
+const bcryptMaxCost = 15
+
 // PasswordHashScheme verifies password hashes that are not argon2id, so an
 // existing user table can log in without a forced reset. Recognizes
 // selects the scheme from the stored encoding; Verify reports a match and
@@ -30,6 +35,9 @@ type PasswordHashScheme = password.LegacyScheme
 // user whose migration source truncated a longer password before storing
 // the hash can therefore no longer log in or be rehashed and needs a
 // password reset.
+//
+// A stored hash whose cost factor is above 15 is refused as a mismatch
+// without running bcrypt; such a user needs a password reset.
 //
 // Verifying a legacy hash takes a different time than an argon2id one.
 // The difference disappears for a user once the hash is rewritten, which
@@ -50,6 +58,9 @@ func (bcryptScheme) Recognizes(encoded []byte) bool {
 func (bcryptScheme) Verify(_ context.Context, encoded []byte, pw string) (bool, error) {
 	if len(pw) > bcryptMaxPasswordBytes {
 		return false, nil
+	}
+	if cost, err := bcrypt.Cost(encoded); err != nil || cost > bcryptMaxCost {
+		return false, nil //nolint:nilerr // a malformed or over-cost stored hash is a mismatch, not a backend fault.
 	}
 	// Any bcrypt failure, including a malformed stored hash, is a mismatch:
 	// the caller treats the account like any other failed login.

@@ -19,7 +19,8 @@ import (
 // the aggregate set are rejected by [New]. The configured Store MUST expose
 // store.StaticClientReconciler. Provider construction applies the complete
 // set as one atomic, idempotent batch after every other fallible build step
-// has succeeded. Existing equivalent static clients are accepted unchanged;
+// except the final subject-mode marker commit; a build that fails in that
+// commit can leave the batch applied, and the next build accepts it. Existing equivalent static clients are accepted unchanged;
 // metadata or secret differences return a configuration conflict rather than
 // overwriting an operator-managed record.
 // Stable since v1.0.

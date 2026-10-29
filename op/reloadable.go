@@ -75,7 +75,10 @@ var ErrReloadIncompatible = &Error{
 //     retiring signing key listed until tokens it signed have expired.
 //   - State a Provider builds in memory does not carry over. A DPoP nonce
 //     source constructed inside the option builder starts afresh (nonces
-//     the old one issued stop verifying), a closure handed to
+//     the old one issued stop verifying) and its rotation goroutine runs
+//     until its context is cancelled. Construct the source once, outside
+//     the builder, and pass the same instance to every build; that keeps
+//     issued nonces valid across a reload. A closure handed to
 //     [WithJWKSRotationActive] is whatever the new option list carries,
 //     and the [WithPrometheus] counters restart from zero. Between the
 //     outgoing collector being unregistered and the new one registered, a

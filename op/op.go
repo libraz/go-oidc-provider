@@ -549,9 +549,11 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 }
 
 // seedStaticClients reconciles the complete [WithStaticClients] set through
-// one atomic [store.StaticClientReconciler] call. New invokes it only after
-// every other fallible construction step has succeeded, so a failed Provider
-// build never leaves client records behind.
+// one atomic [store.StaticClientReconciler] call. New invokes it after every
+// other fallible construction step except the subject-mode marker commit,
+// which runs last so a build that fails here never pins the store's subject
+// mode. A failure in that commit can leave the seeded records behind; the
+// reconcile is idempotent, so the next successful build accepts them.
 func seedStaticClients(cfg *config) error {
 	if len(cfg.staticClients) == 0 {
 		return nil

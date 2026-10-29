@@ -98,7 +98,10 @@ func HashPassword(plain string) ([]byte, error) {
 // change or a second-factor enrolment — reads the stored record
 // through [store.UserPasswordStore.ReadPasswordHash] and checks it
 // here rather than parsing the encoding itself. Any valid PHC argon2id
-// encoding verifies, not only one this package produced.
+// encoding verifies, not only one this package produced. A hash in a
+// [PrimaryPassword.LegacySchemes] encoding that has not been rewritten
+// yet is not argon2id and reports false here; check it with that
+// scheme's Verify instead.
 //
 // Every way of not matching is the same false. A wrong password, a
 // stored record that does not parse, and one whose Argon2id parameters

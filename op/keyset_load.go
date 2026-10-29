@@ -71,6 +71,7 @@ func LoadKeyset(paths ...string) (Keyset, error) {
 	}
 	ks := make(Keyset, 0, len(paths))
 	seen := make(map[string]string, len(paths))
+	seenKey := make(map[string]string, len(paths))
 	for _, p := range paths {
 		k, err := LoadSigningKey(p)
 		if err != nil {
@@ -81,7 +82,12 @@ func LoadKeyset(paths ...string) (Keyset, error) {
 				"LoadKeyset: "+p+" has the same kid as "+prev+" (kid "+k.KeyID+")", nil,
 			)
 		}
+		thumb := p256Thumbprint(k.Signer.(*ecdsa.PrivateKey))
+		if prev, dup := seenKey[thumb]; dup {
+			return nil, newConfigurationError("LoadKeyset: "+p+" holds the same key as "+prev, nil)
+		}
 		seen[k.KeyID] = p
+		seenKey[thumb] = p
 		ks = append(ks, k)
 	}
 	return ks, nil
@@ -149,9 +155,9 @@ func parseSigningKey(raw []byte) (priv *ecdsa.PrivateKey, kid, reason string) {
 	if !bytes.HasPrefix(trimmed, []byte("-----BEGIN ")) {
 		return nil, "", "not a PEM block or a JWK"
 	}
-	block, _ := pem.Decode(trimmed)
+	block, reason := privateKeyBlock(trimmed)
 	if block == nil {
-		return nil, "", "malformed PEM block"
+		return nil, "", reason
 	}
 	if block.Type == "ENCRYPTED PRIVATE KEY" ||
 		strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED") {
@@ -182,6 +188,31 @@ func parseSigningKey(raw []byte) (priv *ecdsa.PrivateKey, kid, reason string) {
 		return nil, "", "key curve is " + ec.Curve.Params().Name + "; only P-256 is supported"
 	}
 	return ec, "", ""
+}
+
+// privateKeyBlock returns the one private-key block in a PEM file. Non-key
+// blocks such as EC PARAMETERS may precede the key; a nil block comes with
+// the reason.
+func privateKeyBlock(pemBytes []byte) (*pem.Block, string) {
+	var block *pem.Block
+	for rest := pemBytes; ; {
+		b, next := pem.Decode(rest)
+		if b == nil {
+			break
+		}
+		rest = next
+		if b.Type == "EC PARAMETERS" {
+			continue
+		}
+		if block != nil {
+			return nil, "more than one private key block"
+		}
+		block = b
+	}
+	if block == nil {
+		return nil, "malformed PEM block"
+	}
+	return block, ""
 }
 
 // parsePrivateJWK reads a private EC P-256 JWK without a JOSE library.
