@@ -69,7 +69,7 @@ func (o *Orchestrator) AuthContext(st State) AuthContext {
 		Level:          level,
 	}
 	entry := st.EntryAuthn
-	if entry == nil || st.ReauthRequired || entry.Subject == "" || entry.Subject != st.Subject {
+	if !entryStandsIn(st) {
 		ac.ACR = ac.Level.ACRURI()
 		return ac
 	}
@@ -86,6 +86,14 @@ func (o *Orchestrator) AuthContext(st State) AuthContext {
 	ac.ACR = ac.Level.ACRURI()
 	ac.AMR = mergeAMR(entry.AMR, amr, ac.Level)
 	return ac
+}
+
+// entryStandsIn reports whether the entry session's authentication
+// stands in for Primary: it was recorded for st's subject and the
+// request did not demand a fresh authentication.
+func entryStandsIn(st State) bool {
+	entry := st.EntryAuthn
+	return entry != nil && !st.ReauthRequired && entry.Subject != "" && entry.Subject == st.Subject
 }
 
 // InheritedCompletedKinds returns the LoginFlow step kinds the entry

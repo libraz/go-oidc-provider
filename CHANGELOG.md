@@ -148,6 +148,11 @@ SPA that reads the prompt JSON must switch to the snake_case keys listed under
   verification, used to be recorded as user-verified (`amr` `hwk`, AAL2).
   It now counts as presence only (`swk`) and does not reach AAL2.
 
+- A login that continues an existing session is bound to that session's
+  subject. A rule step (typically an `op.ExternalStep`) whose result names
+  another subject now ends the attempt with a 4xx. It used to sign that
+  other account in on the strength of the first account's session.
+
 ### Changed
 
 - With the lockout store wired automatically, TOTP, email-OTP and

@@ -654,6 +654,8 @@ func (e *ucExternal) Continue(_ context.Context, in op.ContinueInput) (interacti
 		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 	case "again":
 		return interaction.Step{Prompt: ucExternalCodePrompt()}, fmt.Errorf("uctest: wrong code: %w", op.ErrFactorRetry)
+	case "other":
+		return interaction.Step{Result: &interaction.Result{Subject: "uctest-other", AuthTime: in.AuthTime}}, nil
 	default:
 		return interaction.Step{}, fmt.Errorf("uctest: wrong code: %w", op.ErrFactorRetry)
 	}
@@ -1070,6 +1072,24 @@ func TestEndToEnd_SessionReuse_ExternalStepNeverSatisfiedByAMR(t *testing.T) {
 	// itself; the factor still runs again.
 	p = f.openAt(f.authorize(ucClient, nil))
 	f.requireType(p, ucExternalPrompt)
+}
+
+func TestEndToEnd_SessionReuse_ExternalStepCannotSwitchSubject(t *testing.T) {
+	t.Parallel()
+	ext := &ucExternal{}
+	f := newUCFixture(t, ucJSONDriver, func(f *ucFixture) op.LoginFlow {
+		return op.LoginFlow{Primary: f.passwordStep(), Rules: []op.Rule{op.RuleAlways(ucExternalStep(ext, false))}}
+	})
+	f.seedArgonUser()
+
+	p := f.answer(f.open(ucClient), ucCredentials())
+	f.code(f.finish(p, map[string]string{ucExternalField: "ok"}))
+
+	// The chain stands on the session's subject; a result naming another
+	// account ends it instead of signing that account in.
+	p = f.openAt(f.authorize(ucClient, nil))
+	f.requireType(p, ucExternalPrompt)
+	f.requireStatus(f.post(p, map[string]string{ucExternalField: "other"}), 400, 499) //nolint:bodyclose // the callee closes the body.
 }
 
 // --- Begin failure audit ---

@@ -83,3 +83,48 @@ func TestTick_FirstFactorMayReplaceInheritedSubject(t *testing.T) {
 		t.Errorf("Subject = %q, want user-2", st.Subject)
 	}
 }
+
+// TestTick_RuleStepCannotRebindInheritedSubject pins that a chain
+// standing on the entry session's authentication is bound to that
+// session's subject: a rule step answering for another subject ends the
+// chain, as it would after a factor run in the same attempt.
+func TestTick_RuleStepCannotRebindInheritedSubject(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		subject string
+		wantErr error
+	}{
+		{name: "other subject", subject: "user-2", wantErr: authn.ErrSubjectMismatch},
+		{name: "session subject", subject: "user-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+				Primary: authn.LoginFlowStep{Kind: "test.password", Authenticator: successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")},
+				Rules: []authn.LoginFlowRule{{
+					When: func(authn.LoginFlowContext) bool { return true },
+					Then: authn.LoginFlowStep{Kind: "test.external", Authenticator: successAuth(op.FactorType("test.external"), op.AAL2, "", tc.subject)},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("CompileLoginFlow: %v", err)
+			}
+			o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			st := initialState()
+			st.Subject = "user-1"
+			st.EntryAuthn = &authn.EntryAuthn{Subject: "user-1", AMR: []string{"pwd"}}
+			st, err = runChain(t, o, st)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if st.Subject != "user-1" {
+				t.Errorf("Subject = %q, want the session's user-1", st.Subject)
+			}
+		})
+	}
+}

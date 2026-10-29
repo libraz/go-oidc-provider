@@ -385,11 +385,12 @@ func guardAAL3RequiresUV(auth Authenticator, result interaction.Result) error {
 
 // guardSubjectBinding refuses a factor result that names a subject
 // other than the one this chain already bound, through an earlier
-// factor or the account chooser. A subject inherited from the entry
-// session is not chain-bound: the first factor may authenticate a
-// different account.
+// factor, the account chooser, or an entry session standing in for
+// Primary. A subject carried without that session's authentication is
+// not chain-bound: the first factor may authenticate a different
+// account.
 func guardSubjectBinding(st State, result interaction.Result) error {
-	bound := len(st.Factors) > 0 || st.ChooserBoundSubject
+	bound := len(st.Factors) > 0 || st.ChooserBoundSubject || entryStandsIn(st)
 	if bound && result.Subject != "" && result.Subject != st.Subject {
 		return ErrSubjectMismatch
 	}
