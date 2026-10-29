@@ -231,8 +231,8 @@ func (s *Store) Schema() string {
 // statement-terminating semicolons exclusively (which the bundled DDL
 // does).
 //
-// After applying the DDL, Migrate re-reads the tables whose shape has
-// compatibility-sensitive columns and fails when one is absent. CREATE TABLE
+// After applying the DDL, Migrate runs [Store.ValidateSchema], which
+// fails when a table or a compatibility-sensitive column is absent. CREATE TABLE
 // IF NOT EXISTS deliberately does not alter an existing table; this check
 // therefore makes a forgotten explicit ALTER fail at startup rather than
 // surfacing as a less actionable query error later.
@@ -246,10 +246,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("oidcsql: applying schema statement %q: %w", trimForError(stmt), err)
 		}
 	}
-	if err := s.validateSchema(ctx); err != nil {
-		return err
-	}
-	return nil
+	return s.ValidateSchema(ctx)
 }
 
 var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema invariant table; read-only.
@@ -291,7 +288,32 @@ var requiredAuthorizationStateColumns = []string{ //nolint:gochecknoglobals // s
 	"authorization_recorded",
 }
 
-func (s *Store) validateSchema(ctx context.Context) error {
+// ValidateSchema checks that the connected database carries every table
+// the adapter uses and that the tables whose shape has changed across
+// releases carry their required columns. It reads the catalog only: it
+// never creates, alters or drops anything, so the connecting role needs
+// no CREATE privilege.
+//
+// Production deployments should apply the DDL through their own migration
+// tool — schema/<dialect>/v1.sql, or [Store.Schema] when [WithNaming] is
+// in use — and call only ValidateSchema at startup, so a missing table or
+// column fails fast instead of surfacing as a query error under load. A
+// missing table is reported as "oidcsql: schema for <table> is missing";
+// a missing column as "oidcsql: schema for <table> is missing required
+// columns: <names>". [Store.Migrate] runs this check after applying the
+// DDL.
+//
+// Stable since v1.5.
+func (s *Store) ValidateSchema(ctx context.Context) error {
+	for _, table := range s.names.all() {
+		cols, err := s.columnSet(ctx, table)
+		if err != nil {
+			return err
+		}
+		if len(cols) == 0 {
+			return fmt.Errorf("oidcsql: schema for %s is missing", table)
+		}
+	}
 	checks := []struct {
 		table   string
 		columns []string

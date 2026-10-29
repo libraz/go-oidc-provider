@@ -18,6 +18,7 @@ import (
 // therefore derived from the source rather than restated in prose.
 
 const (
+	sqlGCSourceDir   = "op/storeadapter/sql"
 	sqlGCSourcePath  = "op/storeadapter/sql/gc.go"
 	sqlGCDocPath     = "op/storeadapter/sql/doc.go"
 	sqlGCRetentionH  = "# Retention"
@@ -52,6 +53,18 @@ func TestSQLGCSweepsMatchStatsAndOverview(t *testing.T) {
 		if !containsString(counters, name) {
 			t.Errorf("%s.%s is reported to callers but no sweep in Store.GC ever fills it, so it always reads zero",
 				sqlGCStatsStruct, name)
+		}
+	}
+
+	// Every substore that carries a GC method must be swept by Store.GC.
+	// The Store fields are matched by type, so a substore added later is
+	// caught without anyone listing it here.
+	referenced := gcSweepSubstoreRefs(t, file)
+	for typeName, field := range gcSubstoreFields(t, filepath.Join(root, sqlGCSourceDir)) {
+		if !referenced[field] {
+			t.Errorf("%s has a GC method and is held by Store.%s, but the sweep table in Store.GC "+
+				"never calls s.%s.GC, so its expired rows are never reclaimed",
+				typeName, field, field)
 		}
 	}
 
@@ -99,6 +112,120 @@ func gcSweepCounters(tb testing.TB, file *ast.File) []string {
 		})
 		return false
 	})
+	return out
+}
+
+// gcSweepSubstoreRefs returns the Store field names X for which the sweep
+// table in Store.GC mentions `s.X.GC`.
+func gcSweepSubstoreRefs(tb testing.TB, file *ast.File) map[string]bool {
+	tb.Helper()
+
+	out := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "GC" || fn.Recv == nil {
+			return true
+		}
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			lit, ok := inner.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if _, isSlice := lit.Type.(*ast.ArrayType); !isSlice {
+				return true
+			}
+			ast.Inspect(lit, func(elt ast.Node) bool {
+				sel, ok := elt.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "GC" {
+					return true
+				}
+				field, ok := sel.X.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if recv, ok := field.X.(*ast.Ident); ok && recv.Name == "s" {
+					out[field.Sel.Name] = true
+				}
+				return true
+			})
+			return false
+		})
+		return false
+	})
+	return out
+}
+
+// gcSubstoreFields returns, for every type T (other than Store) with a
+// `func (s *T) GC(` method in the adapter's non-test sources, the name
+// of the Store struct field of type *T.
+func gcSubstoreFields(tb testing.TB, dir string) map[string]string {
+	tb.Helper()
+
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		tb.Fatalf("glob %s: %v", dir, err)
+	}
+	receivers := map[string]bool{}
+	fieldOf := map[string]string{}
+	fset := token.NewFileSet()
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			tb.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range f.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Name.Name != "GC" || d.Recv == nil || len(d.Recv.List) != 1 {
+					continue
+				}
+				if star, ok := d.Recv.List[0].Type.(*ast.StarExpr); ok {
+					if id, ok := star.X.(*ast.Ident); ok && id.Name != "Store" {
+						receivers[id.Name] = true
+					}
+				}
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok || ts.Name.Name != "Store" {
+						continue
+					}
+					st, ok := ts.Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+					for _, field := range st.Fields.List {
+						star, ok := field.Type.(*ast.StarExpr)
+						if !ok {
+							continue
+						}
+						id, ok := star.X.(*ast.Ident)
+						if !ok {
+							continue
+						}
+						for _, name := range field.Names {
+							fieldOf[id.Name] = name.Name
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(receivers) == 0 {
+		tb.Fatalf("no substore GC methods found under %s; the extraction is broken rather than the source", dir)
+	}
+	out := map[string]string{}
+	for typeName := range receivers {
+		field, ok := fieldOf[typeName]
+		if !ok {
+			tb.Errorf("%s has a GC method but no *%s field on Store, so Store.GC cannot reach it", typeName, typeName)
+			continue
+		}
+		out[typeName] = field
+	}
 	return out
 }
 

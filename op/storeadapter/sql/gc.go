@@ -34,22 +34,44 @@ type GCStats struct {
 	// so a grant a client keeps refreshing contributes nothing to this
 	// figure however many rotations it has been through.
 	RefreshTokens int64
+
+	// AccessTokens is the number of expired rows deleted from the
+	// access-token registry.
+	AccessTokens int64
+
+	// OpaqueAccessTokens is the number of expired opaque access tokens
+	// deleted.
+	OpaqueAccessTokens int64
+
+	// GrantRevocations is the number of expired grant tombstones and
+	// revoked-jti denylist rows deleted, counted together.
+	GrantRevocations int64
+
+	// ConsumedJTIs is the number of expired consumed-jti markers deleted.
+	ConsumedJTIs int64
 }
 
 // Total returns the sum of every per-table count.
 func (s GCStats) Total() int64 {
-	return s.AuthorizationCodes + s.PushedAuthRequests + s.Interactions + s.Sessions + s.RefreshTokens
+	return s.AuthorizationCodes + s.PushedAuthRequests + s.Interactions + s.Sessions + s.RefreshTokens +
+		s.AccessTokens + s.OpaqueAccessTokens + s.GrantRevocations + s.ConsumedJTIs
 }
 
-// GC deletes rows whose expires_at has passed from the five tables that
-// accumulate one row per request and are never reclaimed by the request
-// path itself: authorization codes, PAR records, interactions, sessions,
-// and refresh-token rotation records. A row is deleted only when its
-// expires_at is strictly
+// GC deletes rows whose expires_at has passed from the nine tables that
+// accumulate rows the request path never reclaims itself: authorization
+// codes, PAR records, interactions, sessions, refresh-token rotation
+// records, access-token registry rows, opaque access tokens, grant
+// revocations (tombstones and the revoked-jti denylist), and consumed
+// JTIs. A row is deleted only when its expires_at is strictly
 // before cutoff, so passing a cutoff in the past retains a grace window
 // for forensics; passing the current time reclaims everything expired.
 // Rows whose expires_at is zero are treated as "no expiry" and are
 // never deleted.
+//
+// Deleting an expired access-token, revocation or consumed-JTI row never
+// weakens replay detection or revocation: an expired row is by contract
+// the same as an absent one, and a tombstone's expiry is computed by the
+// OP with a grace window past the last token it can revoke.
 //
 // Refresh tokens carry one further condition, because their own expiry
 // is not what decides whether they are still needed. Replay revocation
@@ -89,43 +111,58 @@ func (s GCStats) Total() int64 {
 // records the work that did land. A partial sweep is safe to repeat:
 // every statement is an unconditional DELETE of already-dead rows.
 //
-// The other substores that retain rows past their usefulness expose
-// their own sweeps on the interfaces they implement, because their
-// retention is a policy question the OP itself answers rather than a
-// pure expiry: [store.AccessTokenRegistry], [store.OpaqueAccessTokenStore],
-// [store.GrantRevocationStore], and [store.ConsumedJTIStore] each carry
-// a GC method reachable through the matching accessor on this Store.
-// Device codes and CIBA requests need no scheduling at all: their
-// substores evict expired rows on the insert path.
+// The substores behind the last four sweeps also expose their own GC
+// method, reachable through the matching accessor, for a caller that
+// wants to reclaim one table on its own schedule; [store.ConsumedJTIStore]
+// does not declare GC on its interface, so that one is reachable only
+// through this method. Device codes and CIBA requests need no scheduling
+// at all: their substores evict expired rows on the insert path.
+//
+// GC must not be reachable from an HTTP route; run it from the
+// embedder's scheduler.
 func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 	var stats GCStats
 	// cutoff appears twice in the refresh sweep: once to select the
 	// expired rows and once to decide which grants are still live. Both
 	// readings must be the same instant, or a row could be reclaimed
 	// against a liveness answer computed at a different time.
+	query := func(q string, args ...any) func(context.Context, time.Time) (int64, error) {
+		return func(ctx context.Context, _ time.Time) (int64, error) { return s.sweep(ctx, q, args) }
+	}
+	cut := timeToInt64(cutoff)
+	widen := func(f func(context.Context, time.Time) (int, error)) func(context.Context, time.Time) (int64, error) {
+		return func(ctx context.Context, c time.Time) (int64, error) {
+			n, err := f(ctx, c)
+			return int64(n), err
+		}
+	}
 	sweeps := []struct {
 		name  string
-		query string
-		args  []any
+		run   func(ctx context.Context, cutoff time.Time) (int64, error)
 		count *int64
 	}{
-		{"authorizationCodes", s.queries.authCodeGC, []any{timeToInt64(cutoff)}, &stats.AuthorizationCodes},
-		{"pushedAuthRequests", s.queries.parGC, []any{timeToInt64(cutoff)}, &stats.PushedAuthRequests},
-		{"interactions", s.queries.interactionGC, []any{timeToInt64(cutoff)}, &stats.Interactions},
-		{"sessions", s.queries.sessionGC, []any{timeToInt64(cutoff)}, &stats.Sessions},
-		{"refreshTokens", s.queries.refreshGC, []any{timeToInt64(cutoff), timeToInt64(cutoff)}, &stats.RefreshTokens},
+		{"authorizationCodes", query(s.queries.authCodeGC, cut), &stats.AuthorizationCodes},
+		{"pushedAuthRequests", query(s.queries.parGC, cut), &stats.PushedAuthRequests},
+		{"interactions", query(s.queries.interactionGC, cut), &stats.Interactions},
+		{"sessions", query(s.queries.sessionGC, cut), &stats.Sessions},
+		{"refreshTokens", query(s.queries.refreshGC, cut, cut), &stats.RefreshTokens},
+		// Clearing the cached retry responses runs after the deletes so it
+		// only touches rows the refresh sweep decided to keep; it removes
+		// no row, so it has no counter.
+		{"refreshRetryResponses", query(s.queries.refreshRetryGC, cut), nil},
+		{"accessTokens", widen(s.accessTokensImpl.GC), &stats.AccessTokens},
+		{"opaqueAccessTokens", widen(s.opaqueAccessTokensImpl.GC), &stats.OpaqueAccessTokens},
+		{"grantRevocations", widen(s.grantRevocationsImpl.GC), &stats.GrantRevocations},
+		{"consumedJTIs", s.jtisImpl.GC, &stats.ConsumedJTIs},
 	}
 	for _, sweep := range sweeps {
-		n, err := s.sweep(ctx, sweep.query, sweep.args)
+		n, err := sweep.run(ctx, cutoff)
 		if err != nil {
 			return stats, wrapErr("gc."+sweep.name, err)
 		}
-		*sweep.count = n
-	}
-	// Clearing the cached retry responses runs after the deletes so it
-	// only touches rows the refresh sweep decided to keep.
-	if _, err := s.sweep(ctx, s.queries.refreshRetryGC, []any{timeToInt64(cutoff)}); err != nil {
-		return stats, wrapErr("gc.refreshRetryResponses", err)
+		if sweep.count != nil {
+			*sweep.count = n
+		}
 	}
 	return stats, nil
 }

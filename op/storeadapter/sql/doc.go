@@ -34,7 +34,9 @@
 // out to psql/mysql; [Store.Migrate] applies it to the live connection
 // for development convenience. Production deployments are expected to
 // run migrations through their existing tooling rather than hand
-// control to the adapter.
+// control to the adapter, and to call [Store.ValidateSchema] at startup:
+// it checks that every table and required column exists without
+// creating anything.
 // Existing databases are not altered by Store.Migrate; see
 // schema/MIGRATIONS.md for the explicit per-dialect ALTER statements for
 // newly added columns and indexes.
@@ -69,38 +71,40 @@
 // deletes them once they expire: an authorization code that was never
 // redeemed, a PAR record whose client walked away, an interaction the
 // user abandoned, a session that timed out, and the rotation record
-// behind a refresh token nobody redeemed all stay on disk. One
-// authorization request writes one row, and an unauthenticated caller
-// can drive that loop, so a deployment that never reclaims them grows
-// until the disk or the index does. Operating this adapter includes
-// scheduling the reclamation.
+// behind a refresh token nobody redeemed all stay on disk, as do
+// expired access-token records, revocation tombstones and consumed-JTI
+// markers. One authorization request writes one row, and an
+// unauthenticated caller can drive that loop, so a deployment that never
+// reclaims them grows until the disk or the index does. Operating this
+// adapter includes scheduling the reclamation.
 //
 // [Store.GC] is the entry point. It deletes expired authorization
-// codes, PAR records, interactions, sessions and refresh-token rotation
-// records in one call, returns per-table counts as [GCStats], and runs
-// on the *sql.DB the Store already holds — a cron job or worker needs
-// nothing but a handle to the same Store. The adapter starts no
-// goroutine of its own: when the sweep runs, how often, and on which
-// replica are the embedder's decisions, not the library's.
+// codes, PAR records, interactions, sessions, refresh-token rotation
+// records, access-token registry rows, opaque access tokens, grant
+// revocations and consumed JTIs in one call, returns per-table counts as
+// [GCStats], and runs on the *sql.DB the Store already holds — a cron
+// job or worker needs nothing but a handle to the same Store. The
+// adapter starts no goroutine of its own: when the sweep runs, how
+// often, and on which replica are the embedder's decisions, not the
+// library's.
 //
 //	stats, err := store.GC(ctx, time.Now())
 //
 // Passing an earlier cutoff keeps a grace window; rows whose expires_at
 // is zero opt out of the sweep entirely.
 //
-// The five sweeps do not cost the same. Four are range scans on
+// The nine sweeps do not cost the same. Eight are range scans on
 // expires_at; the refresh-token one is a per-grant anti-join, because a
 // rotation record stays needed until every refresh token issued under
 // its grant has expired (see [Store.GC] for why). Size the schedule
 // against that sweep rather than against the row counts.
 //
-// The remaining expiring tables are already covered elsewhere and do
-// not need to be added to the schedule twice. Access tokens, opaque
-// access tokens, grant revocations and consumed JTIs each expose a GC
-// method on the substore interface they implement, because how long a
-// revocation record outlives the token it revokes is an OP policy
-// decision rather than plain expiry. Device codes and CIBA requests
-// evict expired rows on their own insert path.
+// The access-token, opaque access-token and grant-revocation substores
+// also expose a GC method of their own, for a caller that wants to
+// reclaim one table on a separate schedule; Store.GC already covers
+// them, so a schedule need not add them twice. The consumed-JTI GC is
+// reachable only through Store.GC. Device codes and CIBA requests evict
+// expired rows on their own insert path.
 //
 // Every table any of those sweeps deletes from carries an index on
 // expires_at in the reference DDL, as does the grants table on
