@@ -281,7 +281,6 @@ func (c *config) emitPartialWiringWarnings() {
 	}
 	c.warnUserStoreMismatch()
 	c.warnCaptchaOnScriptlessUI()
-	c.warnPasskeyOnScriptlessUI()
 	c.warnMTLSOptionsWithoutFeature()
 	c.warnEncryptionKidlessTrialCap()
 }
@@ -361,30 +360,6 @@ func (c *config) warnCaptchaOnScriptlessUI() {
 	)
 }
 
-// warnPasskeyOnScriptlessUI reports a passkey ceremony scheduled behind
-// the built-in HTML interaction surface.
-//
-// The passkey prompt carries the assertion the browser's WebAuthn call
-// produces. That call is script, and [interaction.HTMLDriver] ships
-// none, so the field is served as a text input a user has no way to
-// fill: unlike a captcha, there is no deployment where a human can
-// type the answer. The condition is still reported rather than
-// rejected, because an embedder may serve the ceremony from its own
-// page and drive this endpoint only for the submission.
-func (c *config) warnPasskeyOnScriptlessUI() {
-	if !c.passkeyScheduled() || !rendersWithoutScript(c.interactionD) {
-		return
-	}
-	c.logger.Warn(
-		"a passkey step is configured but the interaction UI is the "+
-			"built-in HTML driver, which renders no client-side script; the "+
-			"assertion field is served as a plain text input, and a WebAuthn "+
-			"assertion cannot be produced by typing. Configure WithSPAUI or "+
-			"WithInteractionDriver with a UI that runs the ceremony",
-		"option", "WithLoginFlow",
-	)
-}
-
 // passkeyScheduled reports whether a passkey step can be put in front of
 // a user through the compiled login flow.
 func (c *config) passkeyScheduled() bool {
@@ -422,6 +397,8 @@ func rendersWithoutScript(d interaction.Driver) bool {
 		return true
 	case interaction.TemplateOverlayDriver:
 		return rendersWithoutScript(v.Inner)
+	case *interaction.TemplateOverlayDriver:
+		return v != nil && rendersWithoutScript(v.Inner)
 	default:
 		return false
 	}

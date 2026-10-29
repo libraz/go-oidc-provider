@@ -115,30 +115,13 @@ func passkeyFlowOpts(tb testing.TB) []op.Option {
 	)
 }
 
-// TestNew_WarnsWhenPasskeyRunsOnTheScriptlessHTMLSurface covers the
-// stricter half of the same condition. A captcha behind the built-in
-// HTML driver is answerable when the deployment's captcha is one a
-// person reads and types; a passkey never is, because the value the
-// field carries is what the browser's WebAuthn call returns. The
-// condition is still reported rather than rejected: an embedder may run
-// the ceremony on a page of its own and drive this endpoint only for
-// the submission.
-func TestNew_WarnsWhenPasskeyRunsOnTheScriptlessHTMLSurface(t *testing.T) {
-	t.Parallel()
-
-	logged := warnings(t, passkeyFlowOpts(t)...)
-	if !strings.Contains(logged, "WebAuthn assertion cannot be produced by typing") {
-		t.Fatalf("no warning about the passkey ceremony on the scriptless surface; got:\n%s", logged)
-	}
-}
-
-// TestNew_DoesNotWarnAboutPasskeyOnAnEmbedderDriver keeps the line worth
-// reading, the same way its captcha counterpart does.
+// TestNew_DoesNotWarnAboutPasskeyOnAnEmbedderDriver pins the other side
+// of the passkey rejection: a Driver the library did not write is assumed
+// to run the ceremony, so construction succeeds.
 func TestNew_DoesNotWarnAboutPasskeyOnAnEmbedderDriver(t *testing.T) {
 	t.Parallel()
 
-	logged := warnings(t, append(passkeyFlowOpts(t), op.WithInteractionDriver(scriptedDriver{}))...)
-	if strings.Contains(logged, "WebAuthn assertion cannot be produced by typing") {
-		t.Fatalf("warned about a passkey behind an embedder driver; got:\n%s", logged)
+	if _, err := op.New(append(passkeyFlowOpts(t), op.WithInteractionDriver(scriptedDriver{}))...); err != nil {
+		t.Fatalf("op.New rejected a passkey behind an embedder driver: %v", err)
 	}
 }
