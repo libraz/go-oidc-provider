@@ -168,34 +168,19 @@ func extractCredentials(s interaction.FormSubmission) (username, candidate strin
 // transient infrastructure failure. Every other failure mode collapses
 // onto [ErrInvalidCredentials] for enumeration safety.
 func (a *Authenticator) resolveAndVerify(ctx context.Context, username, candidate string) (string, error) {
-	user, lookupErr := a.store.FindByUsername(ctx, username)
-	if lookupErr != nil && !errors.Is(lookupErr, store.ErrNotFound) {
-		return "", fmt.Errorf("password: lookup user: %w", lookupErr)
+	user, hash, err := a.lookupCredential(ctx, username)
+	if err != nil {
+		return "", err
 	}
-	userExists := lookupErr == nil && user != nil
-
-	var (
-		hash    []byte
-		hashErr error
-	)
-	if userExists {
-		hash, hashErr = a.store.ReadPasswordHash(ctx, user.Subject)
-		if hashErr != nil && !errors.Is(hashErr, store.ErrNotFound) {
-			return "", fmt.Errorf("password: read hash: %w", hashErr)
-		}
-	}
+	usable := user != nil && len(hash) > 0
 
 	// Only a subject that has a password consults or feeds the shared
 	// counter, so password spray cannot spend the budget of an account
 	// that has no password to guess.
-	counted := userExists && len(hash) > 0 && a.lockout != nil
-	locked := false
-	if counted {
-		l, _, lerr := a.lockout.IsLocked(ctx, user.Subject)
-		if lerr != nil {
-			return "", fmt.Errorf("password: lockout guard: %w", lerr)
-		}
-		locked = l
+	counted := usable && a.lockout != nil
+	locked, err := a.lockedSubject(ctx, counted, user)
+	if err != nil {
+		return "", err
 	}
 
 	// Equalise the verify cost regardless of which sub-step failed:
@@ -203,7 +188,7 @@ func (a *Authenticator) resolveAndVerify(ctx context.Context, username, candidat
 	// compare. The dummyHash is parameter-compatible with library-emitted
 	// hashes so the verify cost matches a real account.
 	verifyAgainst := hash
-	if !userExists || len(hash) == 0 || locked {
+	if !usable || locked {
 		verifyAgainst = dummyHash()
 	}
 	verifyErr := Verify(verifyAgainst, candidate)
@@ -213,20 +198,61 @@ func (a *Authenticator) resolveAndVerify(ctx context.Context, username, candidat
 		_ = Verify(dummyHash(), candidate)
 	}
 
-	if !userExists || len(hash) == 0 || locked {
+	if !usable || locked {
 		return "", ErrInvalidCredentials
 	}
 	if verifyErr != nil {
 		if counted && errors.Is(verifyErr, ErrPasswordMismatch) {
-			// A lock taking effect, including the long one, answers like any
-			// other wrong password so the response never reveals the account.
-			if _, rerr := a.lockout.RecordFailure(ctx, user.Subject); rerr != nil && !errors.Is(rerr, lockout.ErrResetRequired) {
-				return "", fmt.Errorf("password: lockout record failure: %w", rerr)
-			}
+			return "", a.recordMismatch(ctx, user.Subject)
 		}
 		return "", ErrInvalidCredentials
 	}
 	return user.Subject, nil
+}
+
+// lookupCredential resolves username to its user and stored hash. A
+// missing user (nil) or missing hash (empty) is not an error; any other
+// backend fault is returned so the chain stops.
+func (a *Authenticator) lookupCredential(ctx context.Context, username string) (*store.User, []byte, error) {
+	user, err := a.store.FindByUsername(ctx, username)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("password: lookup user: %w", err)
+	}
+	if user == nil {
+		return nil, nil, nil
+	}
+	hash, err := a.store.ReadPasswordHash(ctx, user.Subject)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, nil, fmt.Errorf("password: read hash: %w", err)
+	}
+	return user, hash, nil
+}
+
+// lockedSubject reports whether the shared counter currently locks
+// user. counted is false when the counter must not be consulted.
+func (a *Authenticator) lockedSubject(ctx context.Context, counted bool, user *store.User) (bool, error) {
+	if !counted {
+		return false, nil
+	}
+	locked, _, err := a.lockout.IsLocked(ctx, user.Subject)
+	if err != nil {
+		return false, fmt.Errorf("password: lockout guard: %w", err)
+	}
+	return locked, nil
+}
+
+// recordMismatch counts a wrong password against subject and returns
+// [ErrInvalidCredentials]. A lock taking effect, including the long one,
+// answers like any other wrong password so the response never reveals
+// the account; a counter fault is returned instead.
+func (a *Authenticator) recordMismatch(ctx context.Context, subject string) error {
+	if _, err := a.lockout.RecordFailure(ctx, subject); err != nil && !errors.Is(err, lockout.ErrResetRequired) {
+		return fmt.Errorf("password: lockout record failure: %w", err)
+	}
+	return ErrInvalidCredentials
 }
 
 // passwordPrompt builds the [interaction.Prompt] the adapter emits on

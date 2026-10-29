@@ -507,6 +507,9 @@ func (c *config) warnWithoutLockoutStore() {
 				"option", "WithAuthnLockoutStore",
 			)
 			return
+		case StepKindPasskey, StepKindCaptcha:
+			// Not counted: a passkey assertion is not a guessable secret and
+			// a captcha is not a credential.
 		}
 	}
 }

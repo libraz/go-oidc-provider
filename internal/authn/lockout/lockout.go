@@ -336,14 +336,7 @@ func (c *Counter) RecordFailure(ctx context.Context, subject string) (Outcome, e
 			return Outcome{}, err
 		}
 		if swapped {
-			if !wasLocked && out.LockedUntil.After(now) {
-				c.emitter.Emit(ctx, audit.Event{
-					Name:    string(auditevent.AuditLockoutEngaged),
-					Level:   audit.LevelWarn,
-					Message: "cross-factor lockout engaged",
-					ActorID: subject,
-				})
-			}
+			c.reportEngaged(ctx, subject, wasLocked, out.LockedUntil.After(now))
 			return out, nil
 		}
 	}
@@ -439,4 +432,18 @@ func (c *Counter) Reset(ctx context.Context, subject string) error {
 	rec.LockedUntil = time.Time{}
 	_, err = c.store.CompareAndSwap(ctx, rec.Version, rec)
 	return err
+}
+
+// reportEngaged emits [auditevent.AuditLockoutEngaged] when a committed
+// failure moved subject from unlocked to locked.
+func (c *Counter) reportEngaged(ctx context.Context, subject string, wasLocked, lockedNow bool) {
+	if wasLocked || !lockedNow {
+		return
+	}
+	c.emitter.Emit(ctx, audit.Event{
+		Name:    string(auditevent.AuditLockoutEngaged),
+		Level:   audit.LevelWarn,
+		Message: "cross-factor lockout engaged",
+		ActorID: subject,
+	})
 }

@@ -37,7 +37,7 @@ import (
 
 const (
 	acrStrictUsername = "acr-strict-user"
-	acrStrictPassword = "correct horse battery staple" //nolint:gosec // test fixture, not a real credential.
+	acrStrictPassword = "correct horse battery staple"
 	acrStrictSubject  = "user-acr-strict"
 	acrStrictCustom   = "urn:example:acr:strict"
 )

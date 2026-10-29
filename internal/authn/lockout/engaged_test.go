@@ -23,7 +23,7 @@ func TestRecordFailure_EmitsEngagedOnce(t *testing.T) {
 
 	fail := func(t *testing.T, c *lockout.Counter, n int) {
 		t.Helper()
-		for i := 0; i < n; i++ {
+		for range n {
 			if _, err := c.RecordFailure(ctx, "alice"); err != nil {
 				t.Fatalf("RecordFailure: %v", err)
 			}

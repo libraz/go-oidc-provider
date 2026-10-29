@@ -56,6 +56,7 @@ func TestSPAShellCSP(t *testing.T) {
 	}
 
 	t.Run("configured value on the shell", func(t *testing.T) {
+		t.Parallel()
 		resp := get(spaHandlerWithCSP(t, h, defaultCSP), h.loginMount+"/"+uid, true)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -65,18 +66,21 @@ func TestSPAShellCSP(t *testing.T) {
 	})
 
 	t.Run("custom value replaces it", func(t *testing.T) {
+		t.Parallel()
 		resp := get(spaHandlerWithCSP(t, h, customCSP), h.loginMount+"/"+uid, true)
 		defer resp.Body.Close()
 		checkHeader(t, resp, "Content-Security-Policy", customCSP)
 	})
 
 	t.Run("empty value stamps nothing", func(t *testing.T) {
+		t.Parallel()
 		resp := get(spaHandlerWithCSP(t, h, ""), h.loginMount+"/"+uid, true)
 		defer resp.Body.Close()
 		checkHeader(t, resp, "Content-Security-Policy", "")
 	})
 
 	t.Run("assets carry none", func(t *testing.T) {
+		t.Parallel()
 		resp := get(spaHandlerWithCSP(t, h, defaultCSP), h.loginMount+"/assets/main.js", false)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {

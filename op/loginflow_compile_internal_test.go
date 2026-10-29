@@ -232,7 +232,7 @@ func TestProjectBuiltinStep_AttachesLockoutCounter(t *testing.T) {
 
 	const (
 		username = "lockout-user"
-		secret   = "correct horse battery staple" //nolint:gosec // test fixture, not a real credential.
+		secret   = "correct horse battery staple"
 	)
 	hash, err := HashPassword(secret)
 	if err != nil {
