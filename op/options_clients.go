@@ -1,6 +1,11 @@
 package op
 
-import "strconv"
+import (
+	"maps"
+	"strconv"
+
+	"github.com/libraz/go-oidc-provider/op/store"
+)
 
 // WithStaticClients seeds the [Provider]'s static-client surface from
 // the supplied [ClientSeed] values. Each seed is projected onto a
@@ -26,11 +31,15 @@ func WithStaticClients(seeds ...ClientSeed) Option {
 				Description: "WithStaticClients requires at least one ClientSeed",
 			}
 		}
-		for i, s := range seeds {
-			if err := appendStaticClientSeed(c, i, s); err != nil {
-				return err
-			}
+		records, plaintexts, err := collectStaticClientSeeds(seeds)
+		if err != nil {
+			return err
 		}
+		c.staticClients = append(c.staticClients, records...)
+		if len(plaintexts) > 0 && c.staticClientSecrets == nil {
+			c.staticClientSecrets = make(map[string]string, len(plaintexts))
+		}
+		maps.Copy(c.staticClientSecrets, plaintexts)
 		return nil
 	})
 }
@@ -79,35 +88,49 @@ func WithHighEntropyClientSecrets() Option {
 	})
 }
 
-func appendStaticClientSeed(c *config, index int, seed ClientSeed) error {
-	if isNilLike(seed) {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithStaticClients[" + strconv.Itoa(index) + "]: nil ClientSeed",
+// collectStaticClientSeeds projects seeds onto store.Client records and
+// captures the plaintext each seed carried, keyed by client ID. It is the
+// single validation path shared by [WithStaticClients] and
+// [SyncStaticClients]: a nil seed, a seed that fails its own projection
+// (an empty secret, a malformed field) and a duplicate ID within seeds
+// are rejected here.
+func collectStaticClientSeeds(seeds []ClientSeed) (records []store.Client, plaintexts map[string]string, err error) {
+	records = make([]store.Client, 0, len(seeds))
+	for i, seed := range seeds {
+		if isNilLike(seed) {
+			return nil, nil, &Error{
+				Code:        codeConfiguration,
+				Description: "WithStaticClients[" + strconv.Itoa(i) + "]: nil ClientSeed",
+			}
+		}
+		rec, seedErr := seed.seed()
+		if seedErr != nil {
+			return nil, nil, &Error{
+				Code:        codeConfiguration,
+				Description: "WithStaticClients[" + strconv.Itoa(i) + "]: " + seedErr.Error(),
+				Cause:       seedErr,
+			}
+		}
+		records = append(records, rec)
+		if secret, ok := staticClientPlaintext(seed); ok {
+			if plaintexts == nil {
+				plaintexts = make(map[string]string)
+			}
+			plaintexts[rec.ID] = secret
 		}
 	}
-	rec, err := seed.seed()
-	if err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithStaticClients[" + strconv.Itoa(index) + "]: " + err.Error(),
-			Cause:       err,
+	seen := make(map[string]struct{}, len(records))
+	for i := range records {
+		if _, dup := seen[records[i].ID]; dup {
+			return nil, nil, &Error{
+				Code: codeConfiguration,
+				Description: "WithStaticClients[" + strconv.Itoa(i) +
+					"]: duplicate client_id " + records[i].ID,
+			}
 		}
+		seen[records[i].ID] = struct{}{}
 	}
-	c.staticClients = append(c.staticClients, rec)
-	rememberStaticClientSecret(c, rec.ID, seed)
-	return nil
-}
-
-func rememberStaticClientSecret(c *config, id string, seed ClientSeed) {
-	secret, ok := staticClientPlaintext(seed)
-	if !ok {
-		return
-	}
-	if c.staticClientSecrets == nil {
-		c.staticClientSecrets = make(map[string]string)
-	}
-	c.staticClientSecrets[id] = secret
+	return records, plaintexts, nil
 }
 
 // staticClientPlaintext extracts the plaintext a seed carried, if it
