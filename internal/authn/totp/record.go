@@ -26,7 +26,7 @@ const maxPersistRetries = 16
 // and an exhausted retry budget is [ErrRetry]. Store faults are wrapped. The
 // cross-factor lockout is the caller's concern.
 func VerifyAndRecord(ctx context.Context, st store.TOTPStore, v *Verifier, subject, code string) (*Result, error) {
-	for retries := 0; retries < maxPersistRetries; retries++ {
+	for range maxPersistRetries {
 		rec, err := st.Get(ctx, subject)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return nil, fmt.Errorf("totp: load record: %w", err)
@@ -37,29 +37,41 @@ func VerifyAndRecord(ctx context.Context, st store.TOTPStore, v *Verifier, subje
 
 		previous := cloneRecord(rec)
 		res, verr := v.Verify(ctx, rec, code)
-		// Locked and replayed leave the record unchanged and success goes
-		// through Accept below; the remaining outcomes use CAS to keep
-		// every counter update.
-		if res != nil && res.Record != nil && res.Outcome != OutcomeLocked &&
-			res.Outcome != OutcomeSuccess && res.Outcome != OutcomeReplayed {
-			if perr := st.CompareAndSwap(ctx, previous, res.Record); perr != nil {
-				if errors.Is(perr, store.ErrAlreadyConsumed) {
-					continue
-				}
-				return nil, fmt.Errorf("totp: persist record: %w", perr)
-			}
+		retry, perr := persistOutcome(ctx, st, previous, res, verr)
+		if perr != nil {
+			return nil, perr
 		}
-		if verr == nil {
-			if perr := st.Accept(ctx, res.Record); perr != nil {
-				if errors.Is(perr, store.ErrAlreadyConsumed) {
-					continue
-				}
-				return nil, fmt.Errorf("totp: accept record: %w", perr)
-			}
+		if retry {
+			continue
 		}
 		return res, verr
 	}
 	return nil, ErrRetry
+}
+
+// persistOutcome writes the verifier's verdict back. Locked and replayed
+// leave the record unchanged and success goes through Accept; the remaining
+// outcomes use CAS to keep every counter update. retry reports a lost race
+// that the caller resolves by re-reading the record.
+func persistOutcome(ctx context.Context, st store.TOTPStore, previous *store.TOTPRecord, res *Result, verr error) (retry bool, err error) {
+	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked &&
+		res.Outcome != OutcomeSuccess && res.Outcome != OutcomeReplayed {
+		if perr := st.CompareAndSwap(ctx, previous, res.Record); perr != nil {
+			if errors.Is(perr, store.ErrAlreadyConsumed) {
+				return true, nil
+			}
+			return false, fmt.Errorf("totp: persist record: %w", perr)
+		}
+	}
+	if verr == nil {
+		if perr := st.Accept(ctx, res.Record); perr != nil {
+			if errors.Is(perr, store.ErrAlreadyConsumed) {
+				return true, nil
+			}
+			return false, fmt.Errorf("totp: accept record: %w", perr)
+		}
+	}
+	return false, nil
 }
 
 func cloneRecord(r *store.TOTPRecord) *store.TOTPRecord {

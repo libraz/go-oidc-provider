@@ -92,7 +92,7 @@ func TestVerify(t *testing.T) {
 	t.Run("locked", func(t *testing.T) {
 		t.Parallel()
 		f := newVerifyFixture(t)
-		for i := 0; i < 30; i++ {
+		for i := range 30 {
 			err := totpkit.Verify(ctx, f.codec, f.st, verifySubject, wrongCode, f.now)
 			if !errors.Is(err, totpkit.ErrCodeRejected) {
 				t.Fatalf("wrong attempt %d err=%v want ErrCodeRejected", i+1, err)
