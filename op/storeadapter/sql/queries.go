@@ -120,11 +120,12 @@ type queries struct {
 	jtiGC            string
 
 	// users
-	userFindBySubject    string
-	userFindByUsername   string
-	userReadPasswordHash string
-	userPut              string
-	userPutWithPassword  string
+	userFindBySubject      string
+	userFindByUsername     string
+	userReadPasswordHash   string
+	userUpdatePasswordHash string
+	userPut                string
+	userPutWithPassword    string
 
 	// initial access tokens
 	iatPut                 string
@@ -721,6 +722,9 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		),
 		userReadPasswordHash: d.rebind(
 			"SELECT password_hash FROM " + n.users + " WHERE subject = ?",
+		),
+		userUpdatePasswordHash: d.rebind(
+			"UPDATE " + n.users + " SET password_hash = ? WHERE subject = ?",
 		),
 		userPut: d.rebind(
 			"INSERT INTO " + n.users + " (subject, claims, updated_at) VALUES (?, ?, ?)" +

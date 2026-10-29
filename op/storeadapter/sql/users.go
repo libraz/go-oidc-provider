@@ -57,10 +57,7 @@ func (s *userStore) ReadPasswordHash(ctx context.Context, subject string) ([]byt
 // UpdatePasswordHash implements [store.UserPasswordHashUpdater]. It
 // returns [store.ErrNotFound] when no row carries the subject.
 func (s *userStore) UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error {
-	q := s.parent.dialect.rebind(
-		"UPDATE " + s.parent.names.users + " SET password_hash = ? WHERE subject = ?",
-	)
-	res, err := s.runner().ExecContext(ctx, q, encoded, subject)
+	res, err := s.runner().ExecContext(ctx, s.parent.queries.userUpdatePasswordHash, encoded, subject)
 	if err != nil {
 		return wrapErr("users.UpdatePasswordHash", err)
 	}
