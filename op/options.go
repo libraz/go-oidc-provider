@@ -969,9 +969,12 @@ func (c *config) effectiveAuditEmitter() audit.Emitter {
 // metric name. Two Providers configured with the same issuer on the
 // same registry remain a collision and fail [New].
 //
-// The registry's lifecycle is the embedder's responsibility — the
-// library calls Unregister only to undo a partially completed
-// registration when [New] fails, never on a live collector.
+// The registry's lifecycle is the embedder's responsibility. The
+// library calls Unregister to undo a partially completed registration
+// when [New] fails, and [Reloadable] unregisters the outgoing
+// Provider's collectors before building the replacement — so the same
+// issuer can be registered again — and re-registers them if the
+// replacement fails or is rejected.
 //
 // Stable since v1.0.
 func WithPrometheus(registry *prometheus.Registry) Option {

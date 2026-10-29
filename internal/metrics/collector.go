@@ -37,12 +37,15 @@ type Options struct {
 
 // Collector bundles the Prometheus collectors the OP registers. The
 // struct is constructed once at [op.New] and reused for the lifetime
-// of the [op.Provider]; mutation after construction is forbidden.
+// of the [op.Provider]; only its registration state changes after
+// construction ([Collector.Unregister] / [Collector.Register]), the
+// metric values themselves are never replaced.
 type Collector struct {
 	opts                      Options
 	registry                  *prometheus.Registry
-	registered                []prometheus.Collector
-	unregisterOnce            sync.Once
+	collectors                []prometheus.Collector
+	mu                        sync.Mutex
+	registered                bool
 	tokenIssued               *prometheus.CounterVec
 	tokensRefreshed           *prometheus.CounterVec
 	loginAttempts             *prometheus.CounterVec
@@ -241,28 +244,59 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 		c.dpopLooseMethodCase,
 		c.keyRetiredKidPresented,
 	}
-	registered := make([]prometheus.Collector, 0, len(collectors))
-	for _, col := range collectors {
+	c.collectors = collectors
+	if err := registerAll(reg, collectors); err != nil {
+		return nil, err
+	}
+	c.registered = true
+	return c, nil
+}
+
+// registerAll registers every collector on reg, all-or-nothing: on the
+// first refusal the ones already accepted are unregistered and the error
+// is returned, so a failed call leaves reg exactly as it was found.
+func registerAll(reg *prometheus.Registry, collectors []prometheus.Collector) error {
+	for i, col := range collectors {
 		if err := reg.Register(col); err != nil {
-			// Roll back so a rejected collector cannot leave a partially
-			// populated registry behind: the embedder owns reg and may
-			// keep using it after New reports the misconfiguration.
-			for _, done := range registered {
+			// The embedder owns reg and may keep using it after the error.
+			for _, done := range collectors[:i] {
 				reg.Unregister(done)
 			}
-			return nil, err
+			return err
 		}
-		registered = append(registered, col)
 	}
-	c.registered = registered
-	return c, nil
+	return nil
+}
+
+// Register re-registers every collector of c on the registry it owns,
+// after a prior [Collector.Unregister]. It is all-or-nothing in the same
+// way as [New]: on a refusal the collectors already re-added are removed
+// again and the error is returned, leaving c unregistered. Calling it
+// while c is registered is a no-op returning nil.
+//
+// The metric values survive the round trip: the same collector values
+// are re-added, so counters resume where they stopped.
+func (c *Collector) Register() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.registered {
+		return nil
+	}
+	if err := registerAll(c.registry, c.collectors); err != nil {
+		return err
+	}
+	c.registered = true
+	return nil
 }
 
 // Unregister removes every collector registered by c from the registry it
 // owns. It is safe to call more than once (including from competing rollback
-// paths); only the first call attempts removal and returns whether at least
-// one collector was removed. A false return means that c was already cleaned
-// up, or that none of its collectors were still registered.
+// paths); it acts only while c is registered and returns whether at least
+// one collector was removed. A false return means that c was already
+// unregistered, or that none of its collectors were still on the registry.
 //
 // The op constructor should call c.Unregister from its rollback path after a
 // later construction step fails. Collectors owned by another constructor are
@@ -271,16 +305,17 @@ func (c *Collector) Unregister() (removed bool) {
 	if c == nil {
 		return false
 	}
-	c.unregisterOnce.Do(func() {
-		if c.registry == nil {
-			return
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.registered {
+		return false
+	}
+	c.registered = false
+	for _, collector := range c.collectors {
+		if c.registry.Unregister(collector) {
+			removed = true
 		}
-		for _, collector := range c.registered {
-			if c.registry.Unregister(collector) {
-				removed = true
-			}
-		}
-	})
+	}
 	return removed
 }
 

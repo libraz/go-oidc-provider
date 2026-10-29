@@ -127,6 +127,58 @@ func TestCollector_UnregisterIsIdempotentAndOwnsOnlyItsCollectors(t *testing.T) 
 	}
 }
 
+// TestCollector_RegisterAfterUnregister asserts the registration state
+// can round-trip any number of times on one registry, which a provider
+// swap relies on to restore the outgoing collector after a failed build.
+func TestCollector_RegisterAfterUnregister(t *testing.T) {
+	t.Parallel()
+
+	// Scalar counters are gathered without a sample, so presence is observable.
+	const probe = "oidc_refresh_replay_detected_total"
+	present := func(reg *prometheus.Registry) bool {
+		t.Helper()
+		families, err := reg.Gather()
+		if err != nil {
+			t.Fatalf("Gather: %v", err)
+		}
+		for _, fam := range families {
+			if fam.GetName() == probe {
+				return true
+			}
+		}
+		return false
+	}
+
+	reg := prometheus.NewRegistry()
+	c, err := metrics.New(reg, metrics.Options{Issuer: testIssuer})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !present(reg) {
+		t.Fatal("family absent after New")
+	}
+	for round := 1; round <= 2; round++ {
+		if !c.Unregister() {
+			t.Fatalf("round %d: Unregister returned false", round)
+		}
+		if present(reg) {
+			t.Fatalf("round %d: family present after Unregister", round)
+		}
+		if err := c.Register(); err != nil {
+			t.Fatalf("round %d: Register: %v", round, err)
+		}
+		if !present(reg) {
+			t.Fatalf("round %d: family absent after Register", round)
+		}
+	}
+	if err := c.Register(); err != nil {
+		t.Fatalf("Register while registered: %v", err)
+	}
+	if _, err := metrics.New(reg, metrics.Options{Issuer: testIssuer}); err == nil {
+		t.Fatal("a second collector for the same issuer was accepted while c is registered")
+	}
+}
+
 // TestCollector_New_DistinctIssuersShareRegistry asserts two OPs can
 // point at one registry: the issuer constant label separates their
 // series without the metric names changing.
