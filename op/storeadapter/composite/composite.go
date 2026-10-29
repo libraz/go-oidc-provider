@@ -358,6 +358,10 @@ type Store struct {
 	// implementation may support one-record DCR writes without an atomic
 	// multi-record reconciliation boundary.
 	staticReconciler store.StaticClientReconciler
+
+	// authnLockouts is the [store.AuthnLockoutStore] exposed by the Users
+	// backend when it has an AuthnLockouts method. nil otherwise.
+	authnLockouts store.AuthnLockoutStore
 }
 
 // New builds a composite [Store] from the supplied options. The validation
@@ -399,6 +403,12 @@ func New(opts ...Option) (*Store, error) {
 	}
 	registry, _ := routes[Clients].(store.ClientRegistry)
 	staticReconciler, _ := routes[Clients].(store.StaticClientReconciler)
+	var authnLockouts store.AuthnLockoutStore
+	if p, ok := routes[Users].(interface {
+		AuthnLockouts() store.AuthnLockoutStore
+	}); ok {
+		authnLockouts = p.AuthnLockouts()
+	}
 	txAnchor, ok := anchor.(store.Transactional)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -411,6 +421,7 @@ func New(opts ...Option) (*Store, error) {
 		txAnchor:         txAnchor,
 		registry:         registry,
 		staticReconciler: staticReconciler,
+		authnLockouts:    authnLockouts,
 	}, nil
 }
 
@@ -678,4 +689,13 @@ func (s *Store) StaticClientReconciler() (store.StaticClientReconciler, bool) {
 		return nil, false
 	}
 	return s.staticReconciler, true
+}
+
+// AuthnLockouts returns the [store.AuthnLockoutStore] of the backend routed
+// for [Users], or nil when that backend has no AuthnLockouts method. Lockout
+// records are keyed by subject, so they must live and stay durable alongside
+// the users they protect. A nil result means the OP falls back to whatever
+// op.WithAuthnLockoutStore configures.
+func (s *Store) AuthnLockouts() store.AuthnLockoutStore {
+	return s.authnLockouts
 }
