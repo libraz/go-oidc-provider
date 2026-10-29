@@ -1,6 +1,7 @@
 package rs_test
 
 import (
+	"context"
 	"crypto/elliptic"
 	"crypto/tls"
 	"crypto/x509"
@@ -16,6 +17,7 @@ import (
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
+	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/rs"
 )
@@ -150,11 +152,21 @@ func TestVerifier_MalformedAuthorization(t *testing.T) {
 
 	f := newFixture(t)
 	v := f.verifier(t)
-	for _, header := range []string{"Basic dXNlcjpwYXNz", "Bearer", "Bearer ", "DPoP ", "Bearer a b", "Bearer a\"b", "Token abc", ""} {
+	for _, header := range []string{"Bearer", "Bearer ", "DPoP ", "Bearer a b", "Bearer a\"b"} {
 		req := newRequest(t, "", "")
 		req.Header.Set("Authorization", header)
 		_, err := v.Verify(req)
 		wantError(t, err, http.StatusBadRequest, "invalid_request")
+	}
+
+	for _, header := range []string{"Basic dXNlcjpwYXNz", "Token abc", ""} {
+		req := newRequest(t, "", "")
+		req.Header.Set("Authorization", header)
+		_, err := v.Verify(req)
+		e := wantError(t, err, http.StatusUnauthorized, "")
+		if strings.Contains(e.WWWAuthenticate(), "error=") {
+			t.Errorf("challenge %q carries an error attribute for an unsupported scheme", e.WWWAuthenticate())
+		}
 	}
 
 	req := newRequest(t, "Bearer", f.token(t, nil))
@@ -246,6 +258,20 @@ func TestVerifier_RejectsFutureIssuedAt(t *testing.T) {
 	mustVerify(t, v, newRequest(t, "Bearer", f.token(t, func(c map[string]any) { c["iat"] = testNow.Unix() })))
 
 	future := f.token(t, func(c map[string]any) { c["iat"] = testNow.Add(time.Second).Unix() })
+	_, err := v.Verify(newRequest(t, "Bearer", future))
+	wantError(t, err, http.StatusUnauthorized, "invalid_token")
+}
+
+// TestVerifier_RejectsFutureNotBefore: nbf later than now is rejected with
+// no leeway; nbf equal to now is accepted.
+func TestVerifier_RejectsFutureNotBefore(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	v := f.verifier(t)
+	mustVerify(t, v, newRequest(t, "Bearer", f.token(t, func(c map[string]any) { c["nbf"] = testNow.Unix() })))
+
+	future := f.token(t, func(c map[string]any) { c["nbf"] = testNow.Add(time.Second).Unix() })
 	_, err := v.Verify(newRequest(t, "Bearer", future))
 	wantError(t, err, http.StatusUnauthorized, "invalid_token")
 }
@@ -599,4 +625,35 @@ func panics(fn func()) (did bool) {
 	}()
 	fn()
 	return false
+}
+
+// TestVerifier_UnknownKidUnderLoadPressureIsInvalidToken: when the shared
+// URL-load gate is saturated, a token naming an unknown kid is rejected as
+// invalid_token against the held key set, and a cached kid still verifies.
+// It is not parallel: it saturates the process-wide gate.
+func TestVerifier_UnknownKidUnderLoadPressureIsInvalidToken(t *testing.T) { //nolint:paralleltest // saturates the process-wide URL-load gate.
+	f := newFixture(t)
+	v := f.verifier(t)
+	mustVerify(t, v, newRequest(t, "Bearer", f.token(t, nil)))
+
+	gate := remotecache.SharedLoadGate(remotecache.DefaultMaxInflight)
+	var releases []func()
+	defer func() {
+		for _, r := range releases {
+			r()
+		}
+	}()
+	for {
+		release, err := gate.Acquire(context.Background())
+		if err != nil {
+			break
+		}
+		releases = append(releases, release)
+	}
+
+	mustVerify(t, v, newRequest(t, "Bearer", f.token(t, nil)))
+	other := newECKey(t, elliptic.P256())
+	raw := signJWS(t, josev4.ES256, other, "unknown-kid", "at+jwt", baseClaims())
+	_, err := v.Verify(newRequest(t, "Bearer", raw))
+	wantError(t, err, http.StatusUnauthorized, "invalid_token")
 }

@@ -8,7 +8,8 @@
 //	go run github.com/libraz/go-oidc-provider/cmd/op-client-secret
 //
 // With -argon2id it reads one plaintext line from standard input and
-// prints its Argon2id hash, the form op.ConfidentialClient.Secret stores:
+// prints its Argon2id hash, the form op.ConfidentialClient.SecretHash
+// (or PreviousSecretHash) stores:
 //
 //	printf '%s\n' "$SECRET" | go run github.com/libraz/go-oidc-provider/cmd/op-client-secret -argon2id
 //

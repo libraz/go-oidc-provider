@@ -36,8 +36,8 @@
 //
 //     Expect 200 and the orders JSON.
 //
-//  4. No token: expect 401 and a bare "WWW-Authenticate: Bearer realm=..."
-//     challenge with no error attribute:
+//  4. No token: expect 401 and both a Bearer and a DPoP challenge in
+//     WWW-Authenticate, neither carrying an error attribute:
 //
 //     curl -i http://127.0.0.1:8080/api/orders
 //

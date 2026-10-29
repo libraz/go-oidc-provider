@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 )
 
@@ -80,7 +81,8 @@ func parseAuthorization(r *http.Request) (authScheme, string, *Error) {
 	case "dpop":
 		scheme = schemeDPoP
 	default:
-		return schemeOther, "", invalidRequest("unsupported authorization scheme")
+		// An unsupported scheme counts as no credentials (RFC 6750 §3.1).
+		return schemeNone, "", &Error{Status: http.StatusUnauthorized, Description: "no access token presented"}
 	}
 	raw := strings.TrimLeft(rest, " ")
 	if !isToken68(raw) {
@@ -124,7 +126,7 @@ func (v *Verifier) verifyToken(r *http.Request, scheme authScheme, raw string) (
 	if e != nil {
 		return nil, e
 	}
-	if e = v.checkClaims(claims, now); e != nil {
+	if e = v.checkClaims(claims, all, now); e != nil {
 		return nil, e
 	}
 	binding := Binding{JKT: claims.Confirmation["jkt"], CertThumbprint: claims.Confirmation["x5t#S256"]}
@@ -179,7 +181,13 @@ func (v *Verifier) verifySignature(ctx context.Context, raw string) ([]byte, *Er
 	kid := sig.Header.KeyID
 	set, err := v.keys.Fetch(ctx, uri)
 	if err == nil && kid != "" && len(set.Key(kid)) == 0 {
+		cached := set
 		set, err = v.keys.FetchFresh(ctx, uri)
+		if err != nil && errors.Is(err, rpjwks.ErrOverloaded) {
+			// Capacity pressure must not turn a held key set into a 503; the
+			// unknown kid is then rejected as an invalid token.
+			set, err = cached, nil
+		}
 	}
 	if err != nil {
 		v.logFault("JWK Set fetch failed", err)
@@ -215,8 +223,9 @@ func keyEligible(kid, alg, keyID, use, keyAlg string) bool {
 // checkClaims applies the iss, aud and time rules every accepted token
 // obeys, whether it was a JWT or an introspection response. exp is
 // exclusive (a token is expired at its exp second) and iat may not lie in
-// the future; neither takes a leeway.
-func (v *Verifier) checkClaims(c *tokens.AccessTokenClaims, now time.Time) *Error {
+// the future and nbf, when present, may not lie ahead of now; none takes a
+// leeway. raw is the full payload or introspection response.
+func (v *Verifier) checkClaims(c *tokens.AccessTokenClaims, raw map[string]any, now time.Time) *Error {
 	switch {
 	case c.Issuer != v.issuer:
 		return invalidToken("access token was issued by another issuer")
@@ -226,6 +235,9 @@ func (v *Verifier) checkClaims(c *tokens.AccessTokenClaims, now time.Time) *Erro
 		return invalidToken("access token has expired")
 	case c.IssuedAt > now.Unix():
 		return invalidToken("access token is issued in the future")
+	}
+	if nbf, ok := raw["nbf"].(float64); ok && float64(now.Unix()) < nbf {
+		return invalidToken("access token is not yet valid")
 	}
 	return nil
 }
