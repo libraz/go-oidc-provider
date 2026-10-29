@@ -611,6 +611,7 @@ func mountAuthorizeHandlers(
 		ClaimsParameterEnabled:   cfg.claimsParameterSupported(),
 		ACRValuesSupported:       cfg.acrValuesSupportedCopy(),
 		ACRResolver:              newACRResolver(cfg),
+		ACRSatisfier:             newACRSatisfier(cfg, orchestrator),
 		LocaleResolver:           locales,
 		ProxyTrust:               proxyTrust,
 		ClientEncJWKs:            encResolver,

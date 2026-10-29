@@ -18,10 +18,11 @@ import (
 //
 // Resolve runs for every response, including one served from an
 // existing session without a new ceremony. There internal is the level
-// the session recorded, [LoginContext.CompletedSteps] is empty, and the
-// verdict is for the requesting client alone: a session records the
-// canonical acr of the level it reached ([AAL.ACRURI]), never an acr an
-// earlier request drew from the policy.
+// the session recorded, [LoginContext.CompletedSteps] is the step kinds
+// that session stands in for (the same list Satisfies judged the reuse
+// with), and the verdict is for the requesting client alone: a session
+// records the canonical acr of the level it reached ([AAL.ACRURI]),
+// never an acr an earlier request drew from the policy.
 //
 // The library default is [DefaultACRPolicy], which writes only an acr
 // the ceremony actually satisfied. Embedders that need a different
@@ -47,6 +48,15 @@ type ACRPolicy interface {
 	// list is enough to claim the requested acr string. The default
 	// implementation consults a per-acr level table ([ACRLevels]);
 	// deployments with other rules override it.
+	//
+	// Satisfies also decides whether an existing session may be reused
+	// for a request naming acr_values (or an essential acr claim)
+	// without re-authentication. There internal is the level the session
+	// recorded and completed is the step kinds that session stands in
+	// for; a session is reused when any requested value is satisfied.
+	// A permissive Satisfies therefore also lets an existing session
+	// skip step-up. Resolve then sees the same completed list for that
+	// response.
 	Satisfies(ctx context.Context, requested string, internal AAL, completed []StepKind) bool
 }
 

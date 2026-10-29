@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -85,8 +86,8 @@ var errTerminalConsentUncovered = errors.New("authorizeendpoint: terminal subjec
 // errACRUnmet signals that the authentication backing the response
 // cannot satisfy the authentication context the request required — the
 // configured ACR policy refused an acr the request marked essential, or
-// the session an account chooser bound carries an acr outside the
-// requested set. The caller translates it into the
+// the session an account chooser bound does not satisfy the requested
+// acr. The caller translates it into the
 // unmet_authentication_requirements wire error; flattening the acr to
 // "" instead (the treatment a voluntary request gets) would hand the
 // relying party a code for an authentication it declared insufficient.
@@ -146,7 +147,7 @@ func validateTerminalAuthorization(
 	if err := validateTerminalGrant(deps, req, in); err != nil {
 		return grantAuthContext{}, err
 	}
-	authCtx, err := resolveTerminalAuthentication(ctx, req, in, deps.now().UTC())
+	authCtx, err := resolveTerminalAuthentication(ctx, deps, req, in, deps.now().UTC())
 	if err != nil {
 		return grantAuthContext{}, err
 	}
@@ -226,14 +227,14 @@ func claimsPayloadEqual(stored, requested map[string]any) bool {
 // established before this attempt — the routes [exitSpec] marks
 // ServesEstablishedSession. A ceremony that ran during the attempt
 // satisfies prompt=login and max_age by construction, and its acr is the
-// ACR resolution seam's verdict; re-deriving one here from string
-// membership would overrule the configured [op.ACRPolicy].
+// ACR resolution seam's verdict.
 //
 // The read happens here rather than at the caller so the exit cannot
 // hand the gate an assurance of its own composition, and the resolved
 // value is returned so the two never diverge downstream.
 func resolveTerminalAuthentication(
 	ctx context.Context,
+	deps resolved,
 	req *authorize.Request,
 	in terminalAuthorization,
 	now time.Time,
@@ -248,25 +249,31 @@ func resolveTerminalAuthentication(
 	if !in.Exit.spec().ServesEstablishedSession {
 		return authCtx, nil
 	}
-	if err := sessionMayServe(req, authCtx, now); err != nil {
+	if err := sessionMayServe(ctx, deps, req, authCtx.entry(in.Subject), now); err != nil {
 		return grantAuthContext{}, err
 	}
 	return authCtx, nil
 }
 
 // sessionMayServe applies the request's prompt=login, max_age and
-// acr_values constraints to an established session's authentication.
+// acr constraints to an established session's authentication entry.
 // The door, the chooser pick and the terminal gate all ask it, so the
 // three readings cannot drift. It returns [errStaleAuthentication] or
 // [errACRUnmet], staleness first.
-func sessionMayServe(req *authorize.Request, authCtx grantAuthContext, now time.Time) error {
+func sessionMayServe(
+	ctx context.Context,
+	deps resolved,
+	req *authorize.Request,
+	entry authn.EntryAuthn,
+	now time.Time,
+) error {
 	if containsString(req.Prompt, interaction.PromptLogin) {
 		return errStaleAuthentication
 	}
-	if req.MaxAge != nil && authorize.AuthenticationIsStale(authCtx.AuthTime, now, *req.MaxAge) {
+	if req.MaxAge != nil && authorize.AuthenticationIsStale(entry.AuthTime, now, *req.MaxAge) {
 		return errStaleAuthentication
 	}
-	if acrUnsatisfiedByRequest(authCtx.ACR, req) {
+	if acrUnsatisfiedByRequest(ctx, deps, entry, req) {
 		return errACRUnmet
 	}
 	return nil

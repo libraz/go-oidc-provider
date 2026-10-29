@@ -694,7 +694,7 @@ func buildHintState(
 	if out.hasSession {
 		// The door, the chooser pick and the terminal gate share
 		// [sessionMayServe] so their readings of the request cannot drift.
-		serveErr := sessionMayServe(req, sessionAuthContext(active), now)
+		serveErr := sessionMayServe(ctx, deps, req, sessionAuthContext(active).entry(currentSubject(active)), now)
 		out.forceLogin = out.forceLogin || errors.Is(serveErr, errStaleAuthentication)
 		out.acrUnsatisfied = errors.Is(serveErr, errACRUnmet)
 		g, err := findGrantForConsentDecision(
@@ -807,36 +807,40 @@ func authorizationDetailsCovered(requested []map[string]any, grant *store.Grant)
 	return true
 }
 
-// acrSatisfiedBySession reports whether the existing session's recorded
-// ACR is one of the acr_values the request asked for. RFC 9470 step-up:
-// when an RP requests one or more acr_values and the current session's
-// authentication context is not among them, the OP must re-authenticate
-// to reach a requested context rather than silently reuse the weaker
-// session.
+// acrSatisfiedBySession reports whether the established session entry
+// satisfies any of the requested acr values. RFC 9470 step-up: when no
+// requested context is satisfied, the OP re-authenticates rather than
+// silently reuse the weaker session.
 //
-// The predicate is exact string membership, deliberately not routed
-// through [op.ACRPolicy]: the session records only the canonical URI of
-// the level it reached ([authn.AAL.ACRURI]), never an acr a request
-// asked for, and the lax default policy treats any AAL >= 1 as
-// satisfying any acr — which would make step-up a no-op. A request
-// naming any other vocabulary therefore re-authenticates. Membership is
-// the conservative reading: a session ACR
-// outside the requested set (an empty ACR included) is unsatisfied and
-// forces re-authentication. ACR hierarchies (a stronger session ACR
-// subsuming a weaker request) are intentionally not modelled; erring
-// toward an extra prompt is the safe direction.
-func acrSatisfiedBySession(sessionACR string, requested []string) bool {
-	if sessionACR == "" {
-		return false
+// The judgement is the configured [op.ACRPolicy]'s, through
+// [Deps.ACRSatisfier]: the session's canonical acr gives its level, and
+// the policy's own ladder decides which requested values that level
+// reaches. The policy that picks the acr a response reports is the one
+// that decides whether the session may serve it, so the two cannot
+// disagree. A nil satisfier keeps exact membership of the session's acr,
+// where an empty acr satisfies nothing.
+func acrSatisfiedBySession(ctx context.Context, deps resolved, entry authn.EntryAuthn, requested []string) bool {
+	for _, want := range requested {
+		if deps.ACRSatisfier != nil {
+			if deps.ACRSatisfier(ctx, want, entry) {
+				return true
+			}
+			continue
+		}
+		if entry.ACR != "" && entry.ACR == want {
+			return true
+		}
 	}
-	return containsString(requested, sessionACR)
+	return false
 }
 
-func acrUnsatisfiedByRequest(sessionACR string, req *authorize.Request) bool {
+// acrUnsatisfiedByRequest reports whether entry fails the request's
+// acr_values or its essential acr claim.
+func acrUnsatisfiedByRequest(ctx context.Context, deps resolved, entry authn.EntryAuthn, req *authorize.Request) bool {
 	if req == nil {
 		return false
 	}
-	if len(req.ACRValues) > 0 && !acrSatisfiedBySession(sessionACR, req.ACRValues) {
+	if len(req.ACRValues) > 0 && !acrSatisfiedBySession(ctx, deps, entry, req.ACRValues) {
 		return true
 	}
 	spec, ok := req.Claims.IDTokenSpec("acr")
@@ -844,17 +848,18 @@ func acrUnsatisfiedByRequest(sessionACR string, req *authorize.Request) bool {
 		return false
 	}
 	if len(spec.Values) == 0 && spec.Value == nil {
-		return sessionACR == ""
+		return entry.ACR == ""
 	}
-	if value, ok := spec.Value.(string); ok && sessionACR == value {
-		return false
+	var wanted []string
+	if value, ok := spec.Value.(string); ok {
+		wanted = append(wanted, value)
 	}
 	for _, candidate := range spec.Values {
-		if value, ok := candidate.(string); ok && sessionACR == value {
-			return false
+		if value, ok := candidate.(string); ok {
+			wanted = append(wanted, value)
 		}
 	}
-	return true
+	return !acrSatisfiedBySession(ctx, deps, entry, wanted)
 }
 
 // decideHintPromptNone resolves the matrix when prompt=none is present.
@@ -1152,9 +1157,10 @@ func entryAuthn(active *sessions.Active, mayNotServe bool) *authn.EntryAuthn {
 		return nil
 	}
 	return &authn.EntryAuthn{
-		Subject: active.Session.Subject,
-		ACR:     active.Session.ACR,
-		AMR:     slices.Clone(active.Session.AMR),
+		Subject:  active.Session.Subject,
+		ACR:      active.Session.ACR,
+		AMR:      slices.Clone(active.Session.AMR),
+		AuthTime: active.Session.AuthTime,
 	}
 }
 
@@ -1202,8 +1208,8 @@ func mintAndRedirect(
 		emitAuthorizeError(w, r, deps, req, errServerError, "missing session or grant for silent mint")
 		return
 	}
-	reported, err := reportAuthContext(r.Context(), r, deps, req, active.Session.Subject,
-		authn.State{}, nil, sessionAuthContext(active))
+	reported, err := reportSessionAuthContext(r.Context(), r, deps, req, active.Session.Subject,
+		authn.State{}, sessionAuthContext(active))
 	if err != nil {
 		code, description, _ := terminalRefusal(err)
 		emitAuthorizeError(w, r, deps, req, code, description)

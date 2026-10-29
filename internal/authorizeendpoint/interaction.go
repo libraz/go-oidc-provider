@@ -96,7 +96,8 @@ func serveInteractionGet(w http.ResponseWriter, r *http.Request, deps resolved, 
 	}
 	authnState, err := decodeAuthnState(state.Authn)
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction state corrupted", "")
+		// A chain state this build cannot read restarts like an expired one.
+		http.NotFound(w, r)
 		return
 	}
 	dispatchTick(w, r, deps, rec, state, authnState, nil)
@@ -122,7 +123,8 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 	}
 	authnState, err := decodeAuthnState(state.Authn)
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction state corrupted", "")
+		// A chain state this build cannot read restarts like an expired one.
+		http.NotFound(w, r)
 		return
 	}
 	submission, err := deps.Driver.ParseSubmission(r)
@@ -692,7 +694,7 @@ func reauthenticateChooserPick(
 	if err != nil {
 		return st, step, nil //nolint:nilerr // the terminal exit reads the same session and maps the failure
 	}
-	if sessionMayServe(state.Library.ToRequest(), authCtx, now) == nil {
+	if sessionMayServe(r.Context(), deps, state.Library.ToRequest(), authCtx.entry(picked.subject), now) == nil {
 		return st, step, nil
 	}
 	return deps.Authn.Tick(r.Context(), authn.RequireReauth(st), authn.Input{Now: now})
@@ -795,12 +797,13 @@ func terminateInteraction(
 		failTerminalAuthorization(w, r, deps, rec, req, err)
 		return
 	}
-	var completed []string
-	if !exit.spec().ServesEstablishedSession {
-		// Steps run this attempt did not produce an established session's level.
-		completed = deps.Authn.AuthContext(authnState).CompletedKinds
+	var reported grantAuthContext
+	if exit.spec().ServesEstablishedSession {
+		reported, err = reportSessionAuthContext(r.Context(), r, deps, req, result.Subject, authnState, authCtx)
+	} else {
+		completed := deps.Authn.AuthContext(authnState).CompletedKinds
+		reported, err = reportAuthContext(r.Context(), r, deps, req, result.Subject, authnState, completed, authCtx)
 	}
-	reported, err := reportAuthContext(r.Context(), r, deps, req, result.Subject, authnState, completed, authCtx)
 	if err != nil {
 		failTerminalAuthorization(w, r, deps, rec, req, err)
 		return

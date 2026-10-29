@@ -69,6 +69,17 @@ func sessionAuthContext(active *sessions.Active) grantAuthContext {
 	}
 }
 
+// entry is ac as the authentication entry of subject's session, the shape
+// the ACR satisfier and the inherited-step reading take.
+func (ac grantAuthContext) entry(subject string) authn.EntryAuthn {
+	return authn.EntryAuthn{
+		Subject:  subject,
+		ACR:      ac.ACR,
+		AMR:      slices.Clone(ac.AMR),
+		AuthTime: ac.AuthTime,
+	}
+}
+
 // reportAuthContext resolves what a grant reports to the client req came
 // from: the configured ACR policy's verdict for this request over the
 // level recorded, which is recovered from recorded.ACR. The recorded acr
@@ -76,11 +87,11 @@ func sessionAuthContext(active *sessions.Active) grantAuthContext {
 // lax policy cannot reach another client through a session they share.
 //
 // completed is the step kinds behind recorded's level — the chain's
-// [authn.AuthContext.CompletedKinds] — and nil for a response served
-// from an established session, because no step of this attempt produced
-// that level. st supplies the remote hints. A voluntary request the
-// policy cannot satisfy is reported with the recorded canonical acr (none
-// at AAL0); an essential one fails with [errACRUnmet].
+// [authn.AuthContext.CompletedKinds]. A response served from an
+// established session goes through [reportSessionAuthContext] instead.
+// st supplies the remote hints. A voluntary request the policy cannot
+// satisfy is reported with the recorded canonical acr (none at AAL0); an
+// essential one fails with [errACRUnmet].
 func reportAuthContext(
 	ctx context.Context,
 	r *http.Request,
@@ -89,6 +100,40 @@ func reportAuthContext(
 	subject string,
 	st authn.State,
 	completed []string,
+	recorded grantAuthContext,
+) (grantAuthContext, error) {
+	return resolveReportedAuthContext(ctx, r, deps, req, subject, st, completed, false, recorded)
+}
+
+// reportSessionAuthContext is [reportAuthContext] for a response served
+// from an established session. completed is the step kinds that session
+// stands in for ([authn.Orchestrator.InheritedCompletedKinds]), the same
+// list [Deps.ACRSatisfier] judged the reuse with, so a policy that let the
+// session serve an essential acr cannot then refuse it here.
+func reportSessionAuthContext(
+	ctx context.Context,
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+	subject string,
+	st authn.State,
+	recorded grantAuthContext,
+) (grantAuthContext, error) {
+	completed := deps.Authn.InheritedCompletedKinds(recorded.entry(subject))
+	return resolveReportedAuthContext(ctx, r, deps, req, subject, st, completed, true, recorded)
+}
+
+// resolveReportedAuthContext is the shared body of [reportAuthContext]
+// and [reportSessionAuthContext].
+func resolveReportedAuthContext(
+	ctx context.Context,
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+	subject string,
+	st authn.State,
+	completed []string,
+	sessionReused bool,
 	recorded grantAuthContext,
 ) (grantAuthContext, error) {
 	reported := grantAuthContext{
@@ -109,6 +154,9 @@ func reportAuthContext(
 		RemoteIP:           acrRemoteIP(r, deps, st),
 		UserAgent:          acrUserAgent(r, st),
 		AcceptLanguage:     r.Header.Get("Accept-Language"),
+		SessionReused:      sessionReused,
+		AMR:                slices.Clone(recorded.AMR),
+		AuthTime:           recorded.AuthTime,
 	})
 	switch {
 	case out.OK:

@@ -40,7 +40,20 @@ type ACRResolveInput struct {
 	RemoteIP           string
 	UserAgent          string
 	AcceptLanguage     string
+
+	// SessionReused reports that the response is served from an
+	// established session rather than a ceremony run this attempt.
+	SessionReused bool
+
+	// AMR and AuthTime describe the authentication the response reports.
+	AMR      []string
+	AuthTime time.Time
 }
+
+// ACRSatisfier reports whether an established session's authentication
+// satisfies one requested acr value, judged by the configured
+// [op.ACRPolicy].
+type ACRSatisfier func(ctx context.Context, requested string, entry authn.EntryAuthn) bool
 
 // ACRResolveOutput is the policy verdict the wire layer applies before
 // stamping acr / amr onto the persisted grant. ok=false signals the
@@ -340,6 +353,13 @@ type Deps struct {
 	// the legacy wire shape (the aggregator's acr / amr flow through
 	// unchanged).
 	ACRResolver ACRResolver
+
+	// ACRSatisfier decides whether an established session satisfies a
+	// requested acr, so the session may be reused without
+	// re-authentication. The library wires it from the same
+	// [op.ACRPolicy] as [Deps.ACRResolver]. A nil value falls back to
+	// exact membership of the session's canonical acr.
+	ACRSatisfier ACRSatisfier
 
 	// LocaleResolver, when non-nil, walks the locale priority chain
 	// (PreferredLocaleStore → ui_locales → __Host-oidc_locale cookie
