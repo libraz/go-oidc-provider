@@ -65,7 +65,7 @@ func Thumbprint(jwk *josev4.JSONWebKey) (string, error) {
 // [minRSAKeyBits]. RFC 9449 §3 limits proof signatures to asymmetric
 // JWS algorithms "deemed secure"; FAPI 2.0 narrows that to ES256 / EdDSA
 // while RFC 9449 itself permits PS256 — so the wrapper accepts the RSA
-// shape (paired with PS256 in [allowedProofAlgs]) but rejects ES384 /
+// shape (paired with PS256 in [proofAlgs]) but rejects ES384 /
 // ES512 because the project's DPoP allow-list has no matching alg
 // entry. Admitting an RSA key while the alg gate still allowed only
 // EC/Ed would let a client bind a token to a key it could never prove

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,21 +25,26 @@ const proofTyp = "dpop+jwt"
 // is comfortably above any UUID encoding the typical client emits.
 const maxJTILen = 256
 
-// allowedProofAlgs is the set of "alg" values [parseProof] accepts on
-// the JWS header. ES256 / EdDSA are FAPI 2.0 baseline; PS256 is included
-// because RFC 9449 §4.1 permits any asymmetric JWS algorithm "deemed
-// secure" and PS256 (RSASSA-PSS) is the FAPI-recommended RSA scheme.
-// RS256 (PKCS#1 v1.5) is excluded — modern profiles steer RSA toward PSS
-// and OFCS's negative-test pipeline relies on this rejection. ES384 is
-// absent because [jose.Algorithm] has no member for it — the
-// verification alg set is a closed enum there, so widening this map
-// alone would name a constant that does not exist.
+// proofAlgs is the set of "alg" values [parseProof] accepts on the JWS
+// header, in the order discovery and resource-server challenges list
+// them. ES256 / EdDSA are FAPI 2.0 baseline; PS256 is included because
+// RFC 9449 §4.1 permits any asymmetric JWS algorithm "deemed secure" and
+// PS256 (RSASSA-PSS) is the FAPI-recommended RSA scheme. RS256 (PKCS#1
+// v1.5) is excluded — modern profiles steer RSA toward PSS and OFCS's
+// negative-test pipeline relies on this rejection. ES384 is absent
+// because [jose.Algorithm] has no member for it.
 //
 //nolint:gochecknoglobals // closed allow-list, intentional package state.
-var allowedProofAlgs = map[jose.Algorithm]struct{}{
-	jose.AlgES256: {},
-	jose.AlgEdDSA: {},
-	jose.AlgPS256: {},
+var proofAlgs = []jose.Algorithm{jose.AlgES256, jose.AlgEdDSA, jose.AlgPS256}
+
+// SupportedProofAlgs returns the DPoP proof "alg" values the verifier
+// accepts, for advertising in discovery and in DPoP challenges.
+func SupportedProofAlgs() []string {
+	out := make([]string, len(proofAlgs))
+	for i, a := range proofAlgs {
+		out[i] = string(a)
+	}
+	return out
 }
 
 // proofClaims is the decoded claim bundle of a DPoP proof JWT. RFC 9449
@@ -83,7 +89,7 @@ func parseProof(raw string) (*parsedProof, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrProofMalformed, err)
 	}
-	if _, ok := allowedProofAlgs[alg]; !ok {
+	if !slices.Contains(proofAlgs, alg) {
 		return nil, fmt.Errorf("%w: alg %q not allowed for DPoP", ErrProofMalformed, alg)
 	}
 	if len(jws.Signatures) != 1 {

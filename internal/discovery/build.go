@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/dpop"
 )
 
 // ErrIssuerInvalid is returned by [Validate] when the issuer URL fails
@@ -732,13 +734,12 @@ func applyJARFeature(in Input, doc *Document) {
 }
 
 // applyDPoPFeature publishes the RFC 9449 §5.1 alg list when DPoP is
-// enabled. ES256 / EdDSA / PS256 covers FAPI 2.0 baseline plus the
-// FAPI-recommended RSA-PSS scheme.
+// enabled, listing the proof algorithms the DPoP verifier accepts.
 func applyDPoPFeature(in Input, doc *Document) {
 	if !in.Features.DPoP {
 		return
 	}
-	doc.DPoPSigningAlgValuesSupported = []string{"ES256", "EdDSA", "PS256"}
+	doc.DPoPSigningAlgValuesSupported = dpop.SupportedProofAlgs()
 }
 
 // applyMTLSFeature publishes the RFC 8705 §3 binding signal and (when
