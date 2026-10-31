@@ -236,3 +236,51 @@ func TestValidateRedirectURIs_WebImplicitForbidsLoopbackHost(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateRedirectURIs_CaseVariantDangerousSchemes pins that
+// javascript: and data: redirect URIs are rejected regardless of scheme
+// letter case, for both redirect_uris and post_logout_redirect_uris.
+// Tracks: CVE-2026-9086 (Keycloak) — case-variant javascript:/data: scheme bypassed redirect URI validation
+func TestValidateRedirectURIs_CaseVariantDangerousSchemes(t *testing.T) {
+	t.Parallel()
+
+	uris := []string{"JavaScript:alert(1)", "JAVASCRIPT:alert(1)", "DaTa:text/html,x", "Data:text/html,x"}
+	for _, appType := range []string{"web", "native"} {
+		for _, uri := range uris {
+			t.Run(appType+"/"+uri, func(t *testing.T) {
+				t.Parallel()
+				if err := validateRedirectURIs([]string{uri}, appType, false, false); err == nil {
+					t.Errorf("validateRedirectURIs(%q, %s) = nil, want error", uri, appType)
+				}
+				if err := validatePostLogoutRedirectURIs([]string{uri}, appType, false); err == nil {
+					t.Errorf("validatePostLogoutRedirectURIs(%q, %s) = nil, want error", uri, appType)
+				}
+			})
+		}
+	}
+}
+
+// TestValidateRedirectURIs_LoopbackUserinfoSmuggling pins that a
+// loopback-looking prefix followed by userinfo and a foreign host is
+// rejected whether or not the localhost opt-in is enabled.
+// Tracks: GHSA-jj7h-c3hg-m23x (Authlib) — loopback prefix match let localhost:80@evil host pass
+func TestValidateRedirectURIs_LoopbackUserinfoSmuggling(t *testing.T) {
+	t.Parallel()
+
+	uris := []string{"http://localhost:80@evil.example/cb", "http://127.0.0.1:80@evil.example/cb"}
+	for _, appType := range []string{"web", "native"} {
+		for _, optIn := range []bool{false, true} {
+			for _, uri := range uris {
+				t.Run(appType+"/"+uri, func(t *testing.T) {
+					t.Parallel()
+					if err := validateRedirectURIs([]string{uri}, appType, false, optIn); err == nil {
+						t.Errorf("validateRedirectURIs(%q, %s, optIn=%v) = nil, want error", uri, appType, optIn)
+					}
+					if err := validatePostLogoutRedirectURIs([]string{uri}, appType, optIn); err == nil {
+						t.Errorf("validatePostLogoutRedirectURIs(%q, %s, optIn=%v) = nil, want error", uri, appType, optIn)
+					}
+				})
+			}
+		}
+	}
+}

@@ -800,6 +800,31 @@ func TestManage_Delete_HappyPath(t *testing.T) {
 	}
 }
 
+// TestManage_OperatorDeletedClientRATCannotRecreate pins that a registration
+// access token cannot resurrect a client the operator removed out of band.
+// Tracks: CVE-2026-9705 (Keycloak) — registration access token re-enabled a client the admin had disabled
+func TestManage_OperatorDeletedClientRATCannotRecreate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	created := f.register(t, nil)
+
+	// Operator action: remove the client directly through the store.
+	if err := f.prov.Store.DeleteClient(context.Background(), created.clientID); err != nil {
+		t.Fatalf("operator DeleteClient: %v", err)
+	}
+
+	resp := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, minimalMetadata())
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
+	}
+	if _, err := f.prov.Store.GetClient(context.Background(), created.clientID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("client lookup after PUT: want ErrNotFound, got %v", err)
+	}
+}
+
 func TestManage_Delete_DirectBackchannelUsesPreDeleteSnapshot(t *testing.T) {
 	t.Parallel()
 

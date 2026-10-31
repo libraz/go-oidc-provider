@@ -89,6 +89,9 @@ func TestResolve_NoTrust_IgnoresForwardedHeaders(t *testing.T) {
 // letting the header spoof the identity a step-up or rate-limit
 // decision was keyed on. The stale-enrollment half of the same class
 // is pinned by totpAcceptStaleEnrollment.
+//
+// Tracks: GHSA-2ffq-g2xg-c22p (Echo) — forwarded scheme headers trusted
+// from any peer.
 func TestResolve_UntrustedRemote_IgnoresForwardedHeaders(t *testing.T) {
 	t.Parallel()
 

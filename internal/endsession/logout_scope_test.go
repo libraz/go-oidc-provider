@@ -178,6 +178,72 @@ func TestHandler_LogoutScopeRevokesRefreshChain(t *testing.T) {
 	}
 }
 
+// TestHandler_LogoutLeavesSubjectlessGrantUntouched pins that the logout
+// token cascade is scoped to the logged-out subject and never sweeps up a
+// grant or token row whose Subject is empty.
+// Tracks: GHSA-q735-3ffp-vv6j (doorkeeper) — nil resource owner matched every subject-less grant for revocation
+func TestHandler_LogoutLeavesSubjectlessGrantUntouched(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, _ := h.issueSession(t)
+	ctx := context.Background()
+	now := h.clock.now
+
+	seed := func(grantID, jti, refreshID, subject string) {
+		t.Helper()
+		if err := h.store.Grants().Save(ctx, &store.Grant{
+			ID: grantID, Subject: subject, ClientID: h.clientID,
+			Scope: []string{"openid"}, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("Grants().Save(%s): %v", grantID, err)
+		}
+		if err := h.store.AccessTokens().Register(ctx, store.AccessTokenRecord{
+			JTI: jti, GrantID: grantID, Subject: subject, ClientID: h.clientID,
+			IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("AccessTokens().Register(%s): %v", jti, err)
+		}
+		if err := h.store.RefreshTokens().Save(ctx, &store.RefreshToken{
+			ID: refreshID, ClientID: h.clientID, Subject: subject, GrantID: grantID,
+			Scope: []string{"openid"}, ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("RefreshTokens().Save(%s): %v", refreshID, err)
+		}
+	}
+	seed("g-user", "jti-user", "rt-user", "user-1")
+	seed("g-nosub", "jti-nosub", "rt-nosub", "")
+
+	resp := confirmScope(t, h, url.Values{}, cookieValue)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+
+	for _, tc := range []struct {
+		jti, refresh string
+		wantRevoked  bool
+	}{
+		{"jti-user", "rt-user", true},
+		{"jti-nosub", "rt-nosub", false},
+	} {
+		at, err := h.store.AccessTokens().Find(ctx, tc.jti)
+		if err != nil || at == nil {
+			t.Fatalf("AccessTokens().Find(%s) = %v, %v", tc.jti, at, err)
+		}
+		if at.Revoked != tc.wantRevoked {
+			t.Errorf("access token %s Revoked=%v want %v", tc.jti, at.Revoked, tc.wantRevoked)
+		}
+		rt, err := h.store.RefreshTokens().Find(ctx, tc.refresh)
+		if err != nil || rt == nil {
+			t.Fatalf("RefreshTokens().Find(%s) = %v, %v", tc.refresh, rt, err)
+		}
+		if rt.Revoked != tc.wantRevoked {
+			t.Errorf("refresh token %s Revoked=%v want %v", tc.refresh, rt.Revoked, tc.wantRevoked)
+		}
+	}
+}
+
 func TestHandler_LogoutScopeCurrentRemovesOnlyActiveAndRebinds(t *testing.T) {
 	t.Parallel()
 

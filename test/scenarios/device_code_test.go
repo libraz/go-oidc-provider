@@ -548,6 +548,7 @@ func TestScenario_DEV_023_DeviceCodeGrantWithOfflineAccess(t *testing.T) {
 // invalid_request.
 //
 // Spec: RFC 8628 §3.4.
+// Tracks: GHSA-3jp2-3mrg-2vxc (oauthlib) — the device_code grant issued a token without validating device_code.
 func TestScenario_DEV_024_TokenRequestMissingDeviceCode(t *testing.T) {
 	t.Parallel()
 	p := newDevProvider(t, []string{"openid"})
@@ -564,11 +565,35 @@ func TestScenario_DEV_024_TokenRequestMissingDeviceCode(t *testing.T) {
 
 // TestScenario_DEV_025_TokenRequestUnknownDeviceCode is OOS — v1.0
 // maps not-found to expired_token, not invalid_grant. See catalog
-// out_of_scope_reason; the not-found→expired_token path is exercised
-// via DEV-028 (expired record) which surfaces the same wire code.
+// out_of_scope_reason; TestAdvisory_UnknownDeviceCodeMintsNoToken pins
+// the not-found path with the wire code the OP does return.
 func TestScenario_DEV_025_TokenRequestUnknownDeviceCode(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: DEV-025 (see catalog out_of_scope_reason)")
+}
+
+// TestAdvisory_UnknownDeviceCodeMintsNoToken pins the not-found path on
+// the /token device_code grant: a device_code the OP never issued is
+// rejected with 400 expired_token, the code the OP deliberately shares
+// with an expired record, and no access_token is minted.
+//
+// Spec: RFC 8628 §3.5.
+// Tracks: GHSA-3jp2-3mrg-2vxc (oauthlib) — the device_code grant issued a token without validating device_code.
+func TestAdvisory_UnknownDeviceCodeMintsNoToken(t *testing.T) {
+	t.Parallel()
+	p := newDevProvider(t, []string{"openid"})
+
+	status, body := p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {"never-issued"},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "expired_token")
+	if _, ok := body["access_token"]; ok {
+		t.Fatalf("access_token minted for a never-issued device_code: %v", body)
+	}
 }
 
 // DEV-026 is TestScenario_DEV_026_TokenRequestAccountNotFound in
@@ -581,6 +606,7 @@ func TestScenario_DEV_025_TokenRequestUnknownDeviceCode(t *testing.T) {
 // distinct wire code.
 //
 // Spec: RFC 8628 §3.4.
+// Tracks: GHSA-3jp2-3mrg-2vxc (oauthlib) — the device_code grant issued a token without validating device_code.
 func TestScenario_DEV_027_TokenRequestClientMismatch(t *testing.T) {
 	t.Parallel()
 	p := newDevProvider(t, []string{"openid"})

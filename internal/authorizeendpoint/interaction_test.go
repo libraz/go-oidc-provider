@@ -3,6 +3,8 @@ package authorizeendpoint_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -350,6 +352,136 @@ func TestInteractionDelete_Cancels_RedirectsAccessDenied(t *testing.T) {
 	if !strings.Contains(loc, "error=access_denied") {
 		t.Errorf("Location=%q want access_denied", loc)
 	}
+}
+
+// TestInteractionDelete_DenyIgnoresRequestRedirectParams pins that the
+// consent-deny redirect target comes from the stored authorization request,
+// never from redirect_uri / client_id / response_type on the DELETE.
+// Tracks: GHSA-86wh-7qgj-4px7 (doorkeeper) — consent deny redirected to an unvalidated redirect_uri
+func TestInteractionDelete_DenyIgnoresRequestRedirectParams(t *testing.T) {
+	t.Parallel()
+
+	const attackerParams = "redirect_uri=https%3A%2F%2Fattacker.example%2Fcb&client_id=other&response_type=token"
+	for _, tc := range []struct {
+		name  string
+		query string
+		form  bool
+	}{
+		{name: "query", query: "?" + attackerParams},
+		{name: "form-body", form: true},
+		{name: "query-and-form-body", query: "?" + attackerParams, form: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			start := startInteractionFlow(t, h)
+			getResp := doInteractionGet(t, h, start)
+			_, csrfCookie := readPromptStateRef(t, getResp)
+			getResp.Body.Close()
+
+			var body *strings.Reader
+			if tc.form {
+				body = strings.NewReader(attackerParams)
+			} else {
+				body = strings.NewReader("")
+			}
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodDelete, h.interactionPth+"/"+start.uid+tc.query, body)
+			if tc.form {
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			}
+			req.Header.Set("Origin", "https://op.example.com")
+			req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+			req.AddCookie(start.interactionCk)
+			req.AddCookie(csrfCookie)
+			rr := httptest.NewRecorder()
+			h.handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusFound {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			loc := rr.Header().Get("Location")
+			if !strings.HasPrefix(loc, start.requestRedirect+"?") && !strings.HasPrefix(loc, start.requestRedirect+"#") {
+				t.Errorf("Location=%q want prefix %q", loc, start.requestRedirect)
+			}
+			if !strings.Contains(loc, "error=access_denied") {
+				t.Errorf("Location=%q want access_denied", loc)
+			}
+			if strings.Contains(loc, "attacker.example") {
+				t.Errorf("Location=%q must not carry the attacker redirect_uri", loc)
+			}
+		})
+	}
+}
+
+// TestInteraction_ProofCookieNotDerivableFromClientKnownValues pins that the
+// interaction cookie and the CSRF token cannot be forged from the uid alone,
+// and that a genuine cookie is bound to its own interaction.
+// Tracks: GHSA-84fg-x5h4-w8xv (ZITADEL) — step-completion proof derived from client-known values was forgeable
+func TestInteraction_ProofCookieNotDerivableFromClientKnownValues(t *testing.T) {
+	t.Parallel()
+
+	t.Run("plaintext-uid-cookie", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		start := startInteractionFlow(t, h)
+		forged := &http.Cookie{Name: start.interactionCk.Name, Value: start.uid}
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.interactionPth+"/"+start.uid, nil)
+		req.AddCookie(forged)
+		rr := httptest.NewRecorder()
+		h.handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("status=%d want 404", rr.Code)
+		}
+	})
+
+	t.Run("client-computed-csrf", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		start := startInteractionFlow(t, h)
+		getResp := doInteractionGet(t, h, start)
+		stateRef, csrfCookie := readPromptStateRef(t, getResp)
+		getResp.Body.Close()
+
+		sum := sha256.Sum256([]byte(start.uid))
+		forged := &http.Cookie{Name: csrfCookie.Name, Value: hex.EncodeToString(sum[:])}
+		raw, err := json.Marshal(interaction.FormSubmission{
+			StateRef: stateRef,
+			Values:   map[string]string{testkit.SubjectFieldName: "user-1"},
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, h.interactionPth+"/"+start.uid, bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "https://op.example.com")
+		req.Header.Set("X-CSRF-Token", forged.Value)
+		req.AddCookie(start.interactionCk)
+		req.AddCookie(forged)
+		rr := httptest.NewRecorder()
+		h.handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("status=%d want 403 body=%s", rr.Code, rr.Body.String())
+		}
+		if strings.Contains(rr.Header().Get("Location"), "code=") {
+			t.Errorf("forged CSRF completed the step: Location=%q", rr.Header().Get("Location"))
+		}
+	})
+
+	t.Run("cookie-bound-to-other-interaction", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		a := startInteractionFlow(t, h)
+		b := startInteractionFlow(t, h)
+		if a.uid == b.uid {
+			t.Fatal("expected distinct interaction uids")
+		}
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.interactionPth+"/"+b.uid, nil)
+		req.AddCookie(a.interactionCk)
+		rr := httptest.NewRecorder()
+		h.handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("status=%d want 404", rr.Code)
+		}
+	})
 }
 
 func TestInteractionDelete_OriginAndCSRFFailuresDoNotMutate(t *testing.T) {

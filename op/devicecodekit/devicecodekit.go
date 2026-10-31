@@ -676,6 +676,11 @@ func VerifyUserCodeWithAttemptKey(ctx context.Context, deps *Deps, attemptKey, s
 // is the verification-page companion to [VerifyUserCodeByUserCode]:
 // embedders can build the whole browser approval path without exposing
 // device_code to that browser.
+//
+// The approval prompt must show the requesting client and the scopes from
+// the record [store.DeviceCodeStore.FindByUserCode] returns, never values
+// carried in the URL: a user approving a phished user_code otherwise cannot
+// tell what they are authorizing (RFC 8628 §5.4).
 func ApproveUserCode(ctx context.Context, deps *Deps, userCode, subject string, authTime time.Time) error {
 	if deps == nil || deps.DeviceCodes == nil {
 		return ErrInvalidArgument

@@ -201,6 +201,10 @@ func TestVerifier_IntrospectionProtocolFailureIsServerFault(t *testing.T) {
 
 // TestVerifier_IntrospectedTokenObeysClaimRules: an active introspection
 // answer still passes the iss, aud and exp rules a JWT does.
+//
+// Tracks: GHSA-rvq5-wwqv-78pq / GHSA-w4fh-qvv9-3v23 (MCP SDKs) — an
+// active token for another resource must not pass the audience rule on
+// the introspection path either.
 func TestVerifier_IntrospectedTokenObeysClaimRules(t *testing.T) {
 	t.Parallel()
 

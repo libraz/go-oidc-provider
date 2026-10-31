@@ -539,6 +539,8 @@ func TestScenario_CA_COMMON_04_RegisteredMethodMismatchRejected(t *testing.T) {
 // which the HTTP layer collapses onto 401 invalid_client so the
 // caller cannot tell which channel held the canonical id.
 //
+// Tracks: GHSA-7984-qgvg-3j9c (oauthlib) — a token request authenticated one
+// client but authorized the grant against a different body client_id.
 // Spec: RFC 6749 §2.3.1 / §5.2.
 func TestScenario_CA_COMMON_05_BodyClientIDMismatchRejected(t *testing.T) {
 	t.Parallel()
@@ -563,6 +565,100 @@ func TestScenario_CA_COMMON_05_BodyClientIDMismatchRejected(t *testing.T) {
 	}
 	if got, _ := resp.Body["error"].(string); got != "invalid_client" {
 		t.Errorf("error=%q want invalid_client (body=%v)", got, resp.Body)
+	}
+}
+
+// TestAdvisory_BodyClientIDMismatchAcrossGrantsAndEndpoints extends the
+// Basic-header versus body client_id disagreement to the grants and
+// endpoints beyond authorization_code. The caller authenticates as a
+// registered client while the body names another registered client; no
+// path may proceed under either identity.
+//
+// Tracks: GHSA-7984-qgvg-3j9c (oauthlib) — a token request authenticated one client but authorized the grant against a different body client_id.
+func TestAdvisory_BodyClientIDMismatchAcrossGrantsAndEndpoints(t *testing.T) {
+	t.Parallel()
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		scenariokit.WithClientCredentials(),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.Introspect),
+		op.WithFeature(feature.Revoke),
+	))
+	const clientID = "ca-adv-mismatch"
+	const otherID = "ca-adv-mismatch-other"
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "ca-adv-mismatch-secret"
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	for _, id := range []string{clientID, otherID} {
+		tk.RegisterClient(t, testkit.ClientFixture{
+			ID:                      id,
+			SecretHash:              hash,
+			TokenEndpointAuthMethod: "client_secret_basic",
+			GrantTypes:              []string{"authorization_code", "refresh_token", "client_credentials"},
+			RedirectURIs:            []string{"https://rp.testkit.invalid/callback"},
+		})
+	}
+
+	cases := []struct {
+		name string
+		path string
+		form url.Values
+	}{
+		{"refresh_token", "/oidc/token", url.Values{
+			"grant_type": {"refresh_token"}, "refresh_token": {"never-issued"},
+		}},
+		{"client_credentials", "/oidc/token", url.Values{
+			"grant_type": {"client_credentials"},
+		}},
+		{"par", "/oidc/par", url.Values{
+			"response_type": {"code"}, "redirect_uri": {"https://rp.testkit.invalid/callback"},
+			"scope": {"openid"},
+		}},
+		{"introspect", "/oidc/introspect", url.Values{"token": {"never-issued"}}},
+		{"revoke", "/oidc/revoke", url.Values{"token": {"never-issued"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			form := url.Values{"client_id": {otherID}}
+			for k, v := range tc.form {
+				form[k] = v
+			}
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+				tk.Server.URL+tc.path, strings.NewReader(form.Encode()))
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.SetBasicAuth(clientID, clientSecret)
+			resp, err := tk.HTTPClient(nil).Do(req)
+			if err != nil {
+				t.Fatalf("POST %s: %v", tc.path, err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			raw, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			body := map[string]any{}
+			if len(raw) > 0 {
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Fatalf("body is not JSON: %v (raw=%q)", err, raw)
+				}
+			}
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
+			}
+			if got, _ := body["error"].(string); got != "invalid_client" {
+				t.Errorf("error=%q want invalid_client (body=%s)", got, raw)
+			}
+			if _, ok := body["access_token"]; ok {
+				t.Errorf("response carries access_token: %s", raw)
+			}
+		})
 	}
 }
 
@@ -1047,6 +1143,8 @@ func TestScenario_CA_BASIC_04_AppendixBFormURLEncoding(t *testing.T) {
 // response intentionally does not name which channel held the
 // canonical id. This is the Basic-only counterpart to CA-COMMON-05.
 //
+// Tracks: GHSA-7984-qgvg-3j9c (oauthlib) — a token request authenticated one
+// client but authorized the grant against a different body client_id.
 // Spec: RFC 6749 §2.3.1 / §5.2.
 func TestScenario_CA_BASIC_05_BasicHeaderBodyClientIDMismatch(t *testing.T) {
 	t.Parallel()

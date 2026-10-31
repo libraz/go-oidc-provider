@@ -276,6 +276,14 @@ func TestVerifier_RejectsFutureNotBefore(t *testing.T) {
 	wantError(t, err, http.StatusUnauthorized, "invalid_token")
 }
 
+// TestVerifier_AudienceShapes rejects every aud shape that does not name
+// the configured resource, so a token minted for another resource server
+// sharing the same authorization server is refused.
+//
+// Tracks:
+//   - GHSA-rvq5-wwqv-78pq (MCP TypeScript SDK) — bearer verification
+//     accepted tokens issued for another resource server.
+//   - GHSA-w4fh-qvv9-3v23 (MCP Python SDK) — same defect class.
 func TestVerifier_AudienceShapes(t *testing.T) {
 	t.Parallel()
 

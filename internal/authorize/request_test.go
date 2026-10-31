@@ -1316,3 +1316,38 @@ func TestParseValues_RequestURIShape(t *testing.T) {
 		}
 	})
 }
+
+// TestRequest_Validate_LoopbackWildcardRejectsUserinfoSmuggling pins that the
+// native loopback port wildcard is matched on the parsed host, not on a
+// string prefix, so userinfo cannot smuggle a foreign host past it.
+// Tracks: GHSA-jj7h-c3hg-m23x (Authlib) — loopback prefix match let 127.0.0.1:80@evil host pass
+func TestRequest_Validate_LoopbackWildcardRejectsUserinfoSmuggling(t *testing.T) {
+	t.Parallel()
+
+	client := goodClient()
+	client.PublicClient = true
+	client.ApplicationType = "native"
+	client.RedirectURIs = []string{"http://127.0.0.1/cb"}
+
+	for _, uri := range []string{
+		"http://127.0.0.1:80@evil.example/cb",
+		"http://127.0.0.1@evil.example/cb",
+	} {
+		t.Run(uri, func(t *testing.T) {
+			t.Parallel()
+			values := goodValues()
+			values.Set("redirect_uri", uri)
+			req, err := authorize.ParseValues(values)
+			if err != nil {
+				t.Fatalf("ParseValues: %v", err)
+			}
+			err = req.Validate(client, nil, authorize.Policy{
+				PKCERequired:         true,
+				StateOrNonceRequired: true,
+			})
+			if !errors.Is(err, authorize.ErrRedirectURIInvalid) {
+				t.Fatalf("Validate(%q) err=%v want ErrRedirectURIInvalid", uri, err)
+			}
+		})
+	}
+}

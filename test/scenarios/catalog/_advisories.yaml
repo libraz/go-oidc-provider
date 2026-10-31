@@ -85,6 +85,27 @@ advisories:
       registration whose value has no single unambiguous reading is
       refused outright.
       Aliases: CVE-2026-67333, CVE-2026-18211.
+  - id: CVE-2026-9086
+    severity: P2
+    source: https://github.com/advisories/GHSA-v3f7-2p4r-mwfw
+    threat: T-01
+    status: covered
+    notes: |
+      Keycloak (GHSA-v3f7-2p4r-mwfw) let a case-variant javascript: / data:
+      redirect URI past validation. Schemes are parsed and lowercased before
+      the allow-list; TestValidateRedirectURIs_CaseVariantDangerousSchemes
+      covers redirect and post-logout URIs for web and native clients.
+  - id: GHSA-jj7h-c3hg-m23x
+    severity: P2
+    source: https://github.com/advisories/GHSA-jj7h-c3hg-m23x
+    threat: T-01
+    status: covered
+    notes: |
+      Authlib (CVE-2026-114614) prefix-matched the loopback exemption so
+      http://localhost:80@evil.example/cb passed. Loopback is decided on the
+      parsed host: TestValidateRedirectURIs_LoopbackUserinfoSmuggling at
+      registration and TestRequest_Validate_LoopbackWildcardRejectsUserinfoSmuggling
+      at /authorize.
 
   # --- T-02 State / nonce / PKCE required ---------------------------
   - id: CVE-2024-10318
@@ -245,6 +266,27 @@ advisories:
       Authlib's JWT bearer grant checked only that aud was present. This OP
       has no jwt-bearer grant; the same binding governs client_assertion and
       is pinned by TestPrivateKeyJWTVerifier_AudOtherAS_Rejected.
+  - id: GHSA-rvq5-wwqv-78pq
+    severity: P2
+    source: https://github.com/advisories/GHSA-rvq5-wwqv-78pq
+    threat: T-04
+    status: covered
+    notes: |
+      MCP TypeScript SDK (CVE-2026-111771) and its Python twin
+      GHSA-w4fh-qvv9-3v23 (CVE-2026-116684) accepted bearer tokens for
+      another resource server. op/rs requires an audience at construction
+      and rejects any aud without it on both the JWT and introspection
+      paths: TestVerifier_AudienceShapes,
+      TestVerifier_IntrospectedTokenObeysClaimRules.
+  - id: GHSA-w4fh-qvv9-3v23
+    severity: P2
+    source: https://github.com/advisories/GHSA-w4fh-qvv9-3v23
+    threat: T-04
+    status: covered
+    notes: |
+      MCP Python SDK (CVE-2026-116684) twin of GHSA-rvq5-wwqv-78pq: bearer
+      verification accepted tokens for another resource server. Pinned by
+      the same op/rs audience tests.
 
   # --- T-05 Algorithm downgrade -------------------------------------
   - id: CVE-2015-2951
@@ -480,6 +522,16 @@ advisories:
       always refuses none) and TestVerify_UnknownKidReturnsSignatureError (a
       key-lookup miss fails closed).
       Aliases: GHSA-8wpc-h4q6-8fxv.
+  - id: GHSA-pxh4-856f-4h89
+    severity: P2
+    source: https://github.com/advisories/GHSA-pxh4-856f-4h89
+    threat: T-05
+    status: covered
+    notes: |
+      PyJWT verified tokens under an oct JWK with an empty k. This OP has no
+      HMAC client authentication (client_secret_jwt is unsupported) and
+      inbound JWK Sets never yield a symmetric key;
+      TestParseJWKSet_RejectsSymmetricKey covers empty and non-empty k.
 
   # --- T-06 JOSE structural anomalies -------------------------------
   - id: CVE-2017-11424
@@ -801,6 +853,87 @@ advisories:
       TestVerify_ReplayKeysOnJTINotRawProof: a re-signed token with the same
       jti is refused as a replay.
       Aliases: GHSA-hxm8-2xgr-2p9m.
+  - id: GHSA-r39w-98wm-9pp6
+    severity: P1
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-r39w-98wm-9pp6
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose (*JSONWebKey).Thumbprint panicked on an RSA key with exponent 0,
+      and unmarshaling a JWK did not reject it. Reachable here: a client JWKS
+      (self_signed_tls_client_auth, jwks_uri refresh comparison) went through
+      member-wise decoding that never called Valid. Fixed in go-jose v4.1.7;
+      DecodeJWKSet now also drops members that fail Valid.
+  - id: GHSA-mgcc-cww5-fp2q
+    severity: P2
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-mgcc-cww5-fp2q
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose CPU exhaustion parsing a JWK with an oversized RSA key
+      (CVE-2026-116587), fixed in v4.1.6. DPoP proofs are now capped at
+      8 KiB before the embedded jwk is parsed (TestVerify_RejectsOversizedProof);
+      jwks_uri bodies and client assertions were already size-capped.
+  - id: GHSA-vvm8-gf78-28g4
+    severity: P2
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-vvm8-gf78-28g4
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose JSON parsing panics (CVE-2026-116586), fixed in v4.1.5.
+      Class-covered by FuzzJOSEParse and FuzzDecodeJWKSet, the no-panic
+      contracts on the JWS and JWK Set entry points.
+  - id: GHSA-4w3g-jfj2-cw2q
+    severity: P2
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-4w3g-jfj2-cw2q
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose panic during AES-CBC-HMAC JWE processing (CVE-2026-116585).
+      The enc allow-list admits GCM only and runs before the JOSE layer
+      parses anything; TestDecrypt_EncAllowList pins ErrJWEEncNotAllowed
+      for every CBC-HMAC enc.
+  - id: GHSA-c67m-wr4h-2ccg
+    severity: P2
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-c67m-wr4h-2ccg
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose quadratic CPU on JWS/JWE JSON serialization with many
+      signatures or recipients. Both parsers are compact-only:
+      TestParseSigned_RejectsJSONSerialisationShapes for JWS and
+      TestDecrypt_RejectsJSONSerialisation (64-recipient general form)
+      for JWE.
+  - id: GHSA-p9j4-2j95-j4rv
+    severity: P2
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-p9j4-2j95-j4rv
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose let unprotected JWE headers override protected fields whose
+      value was "" or null. Decrypt accepts compact serialization only,
+      which carries no unprotected header; TestDecrypt_RejectsJSONSerialisation
+      pins that a JSON JWE with an unprotected header is malformed.
+  - id: GHSA-v6h2-qj3f-2h6v
+    severity: P2
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-v6h2-qj3f-2h6v
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose CPU exhaustion in Header.Certificates() on an x5c chain with
+      a huge RSA key. x5c is never a trust source here; TestNoForbiddenJOSECalls
+      fails if non-test code calls Certificates().
+  - id: GHSA-27pc-rm86-68pq
+    severity: P2
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-27pc-rm86-68pq
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose json fork panicked decoding a claim into a struct embedding
+      an unexported type. Inbound payloads decode through encoding/json;
+      TestNoForbiddenJOSECalls fails if non-test code reaches the fork via
+      jwt.ParseSigned, ParseSignedAndEncrypted or
+      UnsafeClaimsWithoutVerification.
 
   # --- T-07 Replay --------------------------------------------------
   - id: CVE-2020-15222
@@ -1173,6 +1306,17 @@ advisories:
       TestHandler_BadIDTokenSignature: a tampered hint is refused with 400
       before its aud can select the client whose post-logout URI would be
       honoured.
+  - id: GHSA-86wh-7qgj-4px7
+    severity: P2
+    source: https://github.com/doorkeeper-gem/doorkeeper/security/advisories/GHSA-86wh-7qgj-4px7
+    threat: T-11
+    status: covered
+    notes: |
+      doorkeeper's deny path redirected to an unvalidated redirect_uri.
+      The interaction cancel answers from server-stored request state only;
+      TestInteractionDelete_DenyIgnoresRequestRedirectParams pins that
+      redirect_uri / client_id / response_type in the deny request are
+      ignored.
 
   # --- T-12 Session fixation ---------------------------------------
   - id: GHSA-xhpr-465j-7p9q
@@ -1286,6 +1430,38 @@ advisories:
       supplied through the embedder's RiskAssessor.
       Aliases: GHSA-pj38-8h4x-w384.
       The mitigation belongs to the embedder. Reviewed and excluded.
+  - id: GHSA-84fg-x5h4-w8xv
+    severity: P2
+    source: https://github.com/zitadel/zitadel/security/advisories/GHSA-84fg-x5h4-w8xv
+    threat: T-12
+    status: covered
+    notes: |
+      ZITADEL kept a step-completion proof in a cookie derived from
+      client-known values. Interaction progress is server-side, the cookie
+      is an AEAD seal of the uid and CSRF tokens are HMAC-bound;
+      TestInteraction_ProofCookieNotDerivableFromClientKnownValues pins
+      that plaintext or client-computable values and a cookie from another
+      interaction are refused.
+  - id: GHSA-mchc-246r-6m76
+    severity: P2
+    source: https://github.com/zitadel/zitadel/security/advisories/GHSA-mchc-246r-6m76
+    threat: T-12
+    status: covered
+    notes: |
+      ZITADEL built emailed links from client-supplied forwarding headers.
+      Every absolute URL this OP emits derives from the configured issuer;
+      TestAdvisory_EmittedURLsIgnoreHostHeaders sends hostile Host /
+      X-Forwarded-* / Forwarded to discovery and device authorization.
+  - id: GHSA-q735-3ffp-vv6j
+    severity: P2
+    source: https://github.com/doorkeeper-gem/doorkeeper/security/advisories/GHSA-q735-3ffp-vv6j
+    threat: T-12
+    status: covered
+    notes: |
+      doorkeeper matched every owner-less grant through a nil resource
+      owner. Grant management is keyed by grant_id and client, and logout
+      revocation skips empty subjects;
+      TestHandler_LogoutLeavesSubjectlessGrantUntouched pins the latter.
 
   # --- T-13 Confused deputy ----------------------------------------
   - id: CVE-2026-1486
@@ -1466,6 +1642,30 @@ advisories:
     notes: |
       Doorkeeper accepted several client authentication methods at once.
       Pinned by TestParse_AmbiguousBasicAndForm (ErrAmbiguousCredentials).
+  - id: GHSA-7984-qgvg-3j9c
+    severity: P1
+    source: https://github.com/advisories/GHSA-7984-qgvg-3j9c
+    threat: T-13
+    status: covered
+    notes: |
+      oauthlib (CVE-2026-118669) authenticated one client but authorized
+      the grant against a different body client_id. A body client_id that
+      differs from the authenticated client is invalid_client:
+      TestScenario_CA_COMMON_05 / CA_BASIC_05 on /token and
+      TestAdvisory_BodyClientIDMismatchAcrossGrantsAndEndpoints across
+      refresh_token, client_credentials, PAR, introspection and revocation.
+
+  # --- T-14 TLS / mTLS boundary ------------------------------------
+  - id: GHSA-2ffq-g2xg-c22p
+    severity: P2
+    source: https://github.com/advisories/GHSA-2ffq-g2xg-c22p
+    threat: T-14
+    status: covered
+    notes: |
+      Echo (CVE-2026-118657) trusted forwarded scheme headers from any peer.
+      Forwarding headers are honoured only from configured trusted proxies:
+      TestWrapWithTrustedProxy_IgnoresUntrustedHeaders and
+      TestResolve_UntrustedRemote_IgnoresForwardedHeaders.
 
   # --- T-15 TOTP / RFC 6238 ----------------------------------------
   - id: GHSA-9r3w-4j8q-pw98
@@ -2008,6 +2208,27 @@ advisories:
       embedder, which owns the authentication it performed.
       Aliases: GHSA-ggxp-hq23-v84f.
       The mitigation belongs to the embedder. Reviewed and excluded.
+  - id: GHSA-3jp2-3mrg-2vxc
+    severity: P1
+    source: https://github.com/advisories/GHSA-3jp2-3mrg-2vxc
+    threat: T-22
+    status: covered
+    notes: |
+      oauthlib (CVE-2026-49272) issued a device_code token without
+      validating device_code. Missing, never-issued and other-client codes
+      mint nothing: TestScenario_DEV_024, TestAdvisory_UnknownDeviceCodeMintsNoToken
+      (expired_token by design) and TestScenario_DEV_027.
+  - id: GHSA-q84f-53jg-9ppm
+    severity: P2
+    source: https://github.com/advisories/GHSA-q84f-53jg-9ppm
+    threat: T-22
+    status: out-of-scope
+    out_of_scope_reason: |
+      better-auth's device approval page did not show the requesting client
+      or scopes. This OP serves no device verification page: the embedder
+      builds it on devicecodekit, whose ApproveUserCode godoc requires the
+      prompt to show the client and scopes from FindByUserCode. Embedder-
+      owned. Reviewed and excluded.
 
   # --- T-23 Dynamic Client Registration / RAT ----------------------
   - id: CVE-2026-22752
@@ -2100,6 +2321,17 @@ advisories:
       Pinned by TestManage_ReadModifyWriteIsLossless: GET, PUT the body back,
       GET again yields identical responses and an unchanged stored client.
       Aliases: GHSA-qxj8-968q-qm7w.
+  - id: CVE-2026-9705
+    severity: P1
+    source: https://github.com/advisories/GHSA-r7rc-c989-86g6
+    threat: T-23
+    status: covered
+    notes: |
+      Keycloak (GHSA-r7rc-c989-86g6): a registration access token re-enabled
+      an administrator-disabled client. This OP has no disabled state; an
+      operator removes a client by deleting it, and
+      TestManage_OperatorDeletedClientRATCannotRecreate pins that the old
+      RAT gets 401 and cannot recreate it.
 
   # --- Out-of-scope (not OP responsibility) ------------------------
   - id: GHSA-gr79-9v6v-gc9r
@@ -2335,3 +2567,38 @@ advisories:
       decryption keys arrive from the embedder as Go key values (crypto.Signer,
       *rsa / *ecdsa private keys), and inbound JWKs are public only. Feature
       absent. Reviewed and excluded.
+  - id: CVE-2026-9800
+    severity: P2
+    source: https://github.com/advisories/GHSA-f5p5-6xmx-p252
+    threat: T-13
+    status: out-of-scope
+    out_of_scope_reason: |
+      Keycloak Policy Enforcer authorization bypass via the access-denied page
+      path. Resource-server policy enforcement is not part of this OP. Feature
+      absent. Reviewed and excluded.
+  - id: CVE-2026-9799
+    severity: P2
+    source: https://github.com/advisories/GHSA-w3p3-7cjg-vgfw
+    threat: T-13
+    status: out-of-scope
+    out_of_scope_reason: |
+      Keycloak UMA permission ticket bypass. This OP implements no UMA. Feature
+      absent. Reviewed and excluded.
+  - id: GHSA-h2r5-x5m7-3935
+    severity: P2
+    source: https://github.com/advisories/GHSA-h2r5-x5m7-3935
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      Python Social Auth (CVE-2026-115910) did not bind the nonce to the
+      browser session on the relying-party side. Nonce binding is the RP's
+      duty; the OP echoes the nonce it received. Reviewed and excluded.
+  - id: GHSA-68wq-phq7-p2vg
+    severity: P2
+    source: https://github.com/advisories/GHSA-68wq-phq7-p2vg
+    threat: T-15
+    status: out-of-scope
+    out_of_scope_reason: |
+      SilverStripe MFA (CVE-2026-55186) issued a session from the password
+      reset flow before MFA. Password reset belongs to the embedder's account
+      management, outside the OP. Reviewed and excluded.

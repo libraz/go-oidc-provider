@@ -57,6 +57,9 @@ func TestWrapWithTrustedProxy_HonoursTrustedHeaders(t *testing.T) {
 // middleware leaves the request untouched when the source IP is not
 // inside the configured trust. A hostile client must not be able to
 // forge issuer scheme or host by injecting headers.
+//
+// Tracks: GHSA-2ffq-g2xg-c22p (Echo) — the request scheme was taken from
+// X-Forwarded-Proto and its siblings sent by any peer.
 func TestWrapWithTrustedProxy_IgnoresUntrustedHeaders(t *testing.T) {
 	t.Parallel()
 
