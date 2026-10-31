@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/tools/internal/gatekit"
 )
 
 // The kinds of vocabulary the gate walks. Each is also the first
@@ -58,26 +60,6 @@ func (f finding) String() string {
 	return head + ": " + f.detail
 }
 
-// libraryFile reports whether a repo-relative path is library code —
-// the shipping OP itself, not a demo, a harness, or a build tool.
-//
-// Reachability is a claim about the library: an example that mentions a
-// sentinel demonstrates the name, it does not show the OP ever
-// producing the value. Counting demos as reach would let every item
-// this gate exists to catch be answered by adding it to a sample.
-func libraryFile(path string) bool {
-	root := path
-	if i := strings.Index(path, "/"); i >= 0 {
-		root = path[:i]
-	}
-	switch root {
-	case "examples", "cmd", "sample", "tools", "test", "conformance":
-		return false
-	default:
-		return true
-	}
-}
-
 // publicPkg reports whether a repo-relative package directory is part
 // of the surface an embedder can import.
 func publicPkg(pkg string) bool {
@@ -100,14 +82,14 @@ func checkSymbols(ix *index, al *allowlist) []finding {
 		if !publicPkg(d.pkg) || !isExported(d.name) || !symbolCandidate(d) {
 			continue
 		}
-		if ix.usedIn(d.name, libraryFile) {
+		if ix.usedIn(d.name, gatekit.LibraryFile) {
 			continue
 		}
-		if d.alias != "" && ix.usedIn(d.alias, libraryFile) {
+		if d.alias != "" && ix.usedIn(d.alias, gatekit.LibraryFile) {
 			continue
 		}
 		id := d.qualified()
-		if al.allows(kindSymbol, id) {
+		if allowed(al, kindSymbol, id) {
 			continue
 		}
 		out = append(out, finding{
@@ -143,17 +125,17 @@ func checkConsulted(ix *index, al *allowlist) []finding {
 		}
 		// A symbol nothing names at all is checkSymbols' finding; this
 		// one speaks only about symbols that are named but inert.
-		if !ix.usedIn(d.name, libraryFile) {
+		if !ix.usedIn(d.name, gatekit.LibraryFile) {
 			continue
 		}
-		if ix.consultedIn(d.name, libraryFile) {
+		if ix.consultedIn(d.name, gatekit.LibraryFile) {
 			continue
 		}
-		if d.alias != "" && ix.consultedIn(d.alias, libraryFile) {
+		if d.alias != "" && ix.consultedIn(d.alias, gatekit.LibraryFile) {
 			continue
 		}
 		id := d.qualified()
-		if al.allows(kindConsult, id) {
+		if allowed(al, kindConsult, id) {
 			continue
 		}
 		out = append(out, finding{
@@ -252,7 +234,7 @@ func eventFinding(ix *index, al *allowlist, event, alias decl) []finding {
 			detail: fmt.Sprintf("documented %q but a library code path emits it; drop the caveat", reservedMarker),
 		}}
 	case !emitted && !reserved:
-		if al.allows(kindEvent, event.str) {
+		if allowed(al, kindEvent, event.str) {
 			return nil
 		}
 		return []finding{{
@@ -269,7 +251,7 @@ func eventFinding(ix *index, al *allowlist, event, alias decl) []finding {
 // be raised from. The registry that declares the vocabulary and the
 // public block that aliases it both name every event and emit none.
 func emissionSite(path string) bool {
-	if !libraryFile(path) {
+	if !gatekit.LibraryFile(path) {
 		return false
 	}
 	if path == auditAliasFile {
@@ -312,7 +294,7 @@ func checkMessages(root string, ix *index, al *allowlist) ([]finding, int, error
 	}
 	var out []finding
 	for key := range seed {
-		if rendered(ix, key) || al.allows(kindMessage, key) {
+		if rendered(ix, key) || allowed(al, kindMessage, key) {
 			continue
 		}
 		out = append(out, finding{
@@ -327,7 +309,7 @@ func checkMessages(root string, ix *index, al *allowlist) ([]finding, int, error
 // rendered reports whether library code names the key as a literal.
 func rendered(ix *index, key string) bool {
 	for file := range ix.literals[key] {
-		if libraryFile(file) && !strings.HasPrefix(file, "internal/i18n/") {
+		if gatekit.LibraryFile(file) && !strings.HasPrefix(file, "internal/i18n/") {
 			return true
 		}
 	}
@@ -348,7 +330,7 @@ func checkIndexes(ix *index, al *allowlist) []finding {
 			continue
 		}
 		queried := ix.usedIn(d.name, func(file string) bool { return file != d.file })
-		if queried || al.allows(kindIndex, d.str) {
+		if queried || allowed(al, kindIndex, d.str) {
 			continue
 		}
 		out = append(out, finding{

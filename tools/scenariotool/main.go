@@ -110,9 +110,23 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 	}
 }
 
+// Defaults shared by the subcommands, relative to the working directory.
+const (
+	defaultCatalogDir   = "test/scenarios/catalog"
+	defaultTestRoot     = "test/scenarios"
+	defaultTestsPattern = "./" + defaultTestRoot + "/..."
+	defaultSourceRoots  = "internal,op,test"
+)
+
+// catalogDirFlag registers the -dir flag every subcommand reading the
+// catalog takes.
+func catalogDirFlag(fs *flag.FlagSet) *string {
+	return fs.String("dir", defaultCatalogDir, "catalog directory")
+}
+
 func validateCmd(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	dir := catalogDirFlag(fs)
 	lenient := fs.Bool("lenient", false, "downgrade dangling cross_ref errors to warnings")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -122,7 +136,7 @@ func validateCmd(args []string) error {
 
 func listCmd(args []string) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	dir := catalogDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -134,9 +148,9 @@ func listCmd(args []string) error {
 
 func lookupCmd(args []string) error {
 	fs := flag.NewFlagSet("lookup", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	dir := catalogDirFlag(fs)
 	cwd := fs.String("cwd", "", "working directory used to resolve -test-root (defaults to current directory)")
-	testRoot := fs.String("test-root", "test/scenarios", "directory holding <feature>_test.go files; pass empty to skip the test_file lookup")
+	testRoot := fs.String("test-root", defaultTestRoot, "directory holding <feature>_test.go files; pass empty to skip the test_file lookup")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -148,7 +162,7 @@ func lookupCmd(args []string) error {
 
 func statsCmd(args []string) error {
 	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	dir := catalogDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -161,7 +175,7 @@ func statsCmd(args []string) error {
 
 func shapeCmd(args []string) error {
 	fs := flag.NewFlagSet("shape", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	dir := catalogDirFlag(fs)
 	check := fs.Bool("check", false, "fail on a feature file whose rows demand only presence")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -175,9 +189,9 @@ func shapeCmd(args []string) error {
 
 func nextCmd(args []string) error {
 	fs := flag.NewFlagSet("next", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	dir := catalogDirFlag(fs)
 	cwd := fs.String("cwd", "", "working directory used to resolve -test-root")
-	testRoot := fs.String("test-root", "test/scenarios", "directory holding <feature>_test.go files")
+	testRoot := fs.String("test-root", defaultTestRoot, "directory holding <feature>_test.go files")
 	severity := fs.String("severity", "", "filter to one severity (P0|P1|P2)")
 	count := fs.Int("count", 1, "maximum number of rows to print")
 	if err := fs.Parse(args); err != nil {
@@ -192,7 +206,7 @@ func nextCmd(args []string) error {
 
 func flipCmd(args []string) error {
 	fs := flag.NewFlagSet("flip", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	dir := catalogDirFlag(fs)
 	reason := fs.String("reason", "", "why the row is out of scope (required when flipping to out-of-scope)")
 	// The documented form is `flip <id> <status> -reason ...`, with the
 	// flag after the positionals, which flag.Parse alone stops short of.
@@ -214,10 +228,10 @@ func flipCmd(args []string) error {
 
 func coverageCmd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("coverage", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
-	tests := fs.String("tests", "./test/scenarios/...", "go test package selector")
+	dir := catalogDirFlag(fs)
+	tests := fs.String("tests", defaultTestsPattern, "go test package selector")
 	cwd := fs.String("cwd", "", "working directory for `go test -list` (defaults to current directory)")
-	testRoot := fs.String("test-root", "test/scenarios", "directory holding <feature>_test.go files; must reach the suite (use -yaml-only to report without it)")
+	testRoot := fs.String("test-root", defaultTestRoot, "directory holding <feature>_test.go files; must reach the suite (use -yaml-only to report without it)")
 	strict := fs.Bool("strict", false, "exit non-zero when any binding gap exists, skip-only bindings included")
 	checkBindings := fs.Bool("check-bindings", false, "exit non-zero on a row without a test, a test without a row, or a running test under an out-of-scope row")
 	yamlOnly := fs.Bool("yaml-only", false, "skip `go test -list` and report only YAML-side counts")
@@ -229,9 +243,9 @@ func coverageCmd(ctx context.Context, args []string) error {
 
 func advisoriesCmd(args []string) error {
 	fs := flag.NewFlagSet("advisories", flag.ContinueOnError)
-	dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+	dir := catalogDirFlag(fs)
 	cwd := fs.String("cwd", "", "working directory used to resolve -source roots (defaults to current directory)")
-	source := fs.String("source", "internal,op,test", "comma-separated source roots scanned for `// Tracks:` comments")
+	source := fs.String("source", defaultSourceRoots, "comma-separated source roots scanned for `// Tracks:` comments")
 	check := fs.Bool("check", false, "exit non-zero on drift / orphan / wrong-status")
 	asJSON := fs.Bool("json", false, "emit machine-readable JSON instead of the dashboard")
 	if err := fs.Parse(args); err != nil {

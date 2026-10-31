@@ -92,12 +92,12 @@ func run(args []string, out io.Writer) error {
 	if err := counts.assertScanReachedSources(ix); err != nil {
 		return err
 	}
-	findings = append(findings, al.stale()...)
+	findings = append(findings, staleRows(al)...)
 
 	_, _ = fmt.Fprintf(out, "reachtool: %d files, %d public symbols, %d audit events, %d message keys, %d indexes\n",
 		ix.files, counts.symbols, counts.events, counts.messages, counts.indexes)
 	if len(findings) == 0 {
-		_, _ = fmt.Fprintf(out, "reachtool: OK (%d allowlisted)\n", len(al.rows))
+		_, _ = fmt.Fprintf(out, "reachtool: OK (%d allowlisted)\n", len(al.Rows))
 		return nil
 	}
 	sort.SliceStable(findings, func(i, j int) bool {

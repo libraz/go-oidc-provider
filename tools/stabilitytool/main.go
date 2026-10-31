@@ -41,6 +41,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/tools/internal/gatekit"
 )
 
 // experimentalMarker introduces the rationale for an exemption. The convention
@@ -398,21 +400,18 @@ func scan(root, module string, kind reportKind) ([]entry, error) {
 		entries []entry
 		problem []string
 	)
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	fset := token.NewFileSet()
+	// No directory is skipped: the root is a package tree, and a file that
+	// does not parse fails the run rather than silently dropping its markers.
+	err := gatekit.ParseGoFiles(root, fset, gatekit.ParseOptions{
+		Mode:   parser.ParseComments,
+		Strict: true,
+	}, func(f gatekit.File) error {
+		importPath, err := importPathFor(f.Path, root, module)
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		importPath, err := importPathFor(path, root, module)
-		if err != nil {
-			return err
-		}
-		found, issues, err := scanFile(path, importPath, kind)
-		if err != nil {
-			return err
-		}
+		found, issues := scanFile(fset, f.Syntax, importPath, kind)
 		entries = append(entries, found...)
 		problem = append(problem, issues...)
 		return nil
@@ -461,12 +460,7 @@ func importPathFor(path, root, module string) (string, error) {
 	return module + "/" + filepath.ToSlash(rel), nil
 }
 
-func scanFile(path, importPath string, kind reportKind) (entries []entry, issues []string, err error) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-	if err != nil {
-		return nil, nil, err
-	}
+func scanFile(fset *token.FileSet, file *ast.File, importPath string, kind reportKind) (entries []entry, issues []string) {
 	// The package doc is scanned alongside the declarations. A package can
 	// declare its whole surface exempt, and reading only file.Decls made
 	// that declaration invisible to a report whose contract is "anything
@@ -489,7 +483,7 @@ func scanFile(path, importPath string, kind reportKind) (entries []entry, issues
 			entries, issues = scanGenDecl(d, importPath, kind, fset, entries, issues)
 		}
 	}
-	return entries, issues, nil
+	return entries, issues
 }
 
 // scanGenDecl handles type, const, and var groups. A grouped declaration can

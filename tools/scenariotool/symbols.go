@@ -5,13 +5,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/libraz/go-oidc-provider/tools/internal/gatekit"
 )
 
 // The catalog cites code in prose so a reviewer can check an
@@ -33,15 +34,6 @@ import (
 //
 //nolint:gochecknoglobals // closed table; treated as a constant.
 var skippedCitationExts = []string{".go", ".yaml", ".yml", ".json", ".md", ".sh", ".sql", ".html", ".js"}
-
-// skippedSourceDirs are directory names never scanned for
-// declarations: version control, the gitignored design-doc tree, and
-// vendored / generated trees that declare nothing the catalog cites.
-//
-//nolint:gochecknoglobals // closed table; treated as a constant.
-var skippedSourceDirs = map[string]bool{
-	".git": true, "backup": true, "node_modules": true, "testdata": true, ".github": true,
-}
 
 // citationRe matches a candidate `package.Symbol` or
 // `pkg/path.Type.Member` token in prose. Matching is deliberately
@@ -92,26 +84,17 @@ func buildSymbolIndex(root string) (*symbolIndex, error) {
 		byName:       map[string][]string{},
 		packageNames: map[string]string{},
 	}
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if skippedSourceDirs[d.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		// Test files are skipped on purpose. The catalog cites the
-		// shipping surface; a symbol that exists only in a _test.go
-		// file is not something an out-of-scope claim may lean on.
-		// Skipping them also keeps an external `package foo_test` from
-		// masking the real package name for its own directory.
-		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
-		return ix.addFile(fset, root, path)
+	// Test files are skipped on purpose. The catalog cites the
+	// shipping surface; a symbol that exists only in a _test.go
+	// file is not something an out-of-scope claim may lean on.
+	// Skipping them also keeps an external `package foo_test` from
+	// masking the real package name for its own directory.
+	err := gatekit.ParseGoFiles(root, token.NewFileSet(), gatekit.ParseOptions{
+		SkipDirs: gatekit.SkipDirs(),
+		Mode:     parser.SkipObjectResolution,
+	}, func(f gatekit.File) error {
+		ix.addFile(f)
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("index go sources under %q: %w", root, err)
@@ -126,19 +109,10 @@ func buildSymbolIndex(root string) (*symbolIndex, error) {
 	return ix, nil
 }
 
-// addFile records one file's declarations. A file that does not parse
-// is skipped rather than fatal: a tree mid-edit must not turn this
-// gate into a build error with a confusing message.
-func (ix *symbolIndex) addFile(fset *token.FileSet, root, path string) error {
-	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-	if err != nil {
-		return nil //nolint:nilerr // an unparseable file contributes nothing; it is not this gate's failure to report.
-	}
-	rel, err := filepath.Rel(root, filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	rel = filepath.ToSlash(rel)
+// addFile records one file's declarations.
+func (ix *symbolIndex) addFile(file gatekit.File) {
+	f := file.Syntax
+	rel := filepath.ToSlash(filepath.Dir(file.Rel))
 	if rel == "." {
 		rel = ""
 	}
@@ -151,7 +125,6 @@ func (ix *symbolIndex) addFile(fset *token.FileSet, root, path string) error {
 	for _, decl := range f.Decls {
 		addDecl(names, decl)
 	}
-	return nil
 }
 
 // addDecl records the names one declaration introduces.

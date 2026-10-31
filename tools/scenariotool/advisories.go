@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/libraz/go-oidc-provider/tools/internal/gatekit"
 )
 
 // advisoryFileName is the catalog-adjacent inventory paired with this
@@ -215,18 +217,10 @@ func scanSource(roots []string) ([]advisoryHit, error) {
 // under it.
 func scanSourceRoot(root string) ([]advisoryHit, error) {
 	var hits []advisoryHit
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		switch {
-		case walkErr != nil:
-			return walkErr
-		case d.IsDir():
-			if isUntaggedTree(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		case !strings.HasSuffix(path, ".go"):
-			return nil
-		}
+	// Test files are scanned too: a covering test is where an advisory
+	// ID is claimed. Vendored and generated trees are skipped because
+	// they would contribute mentions nobody here wrote.
+	err := gatekit.WalkGoFiles(root, gatekit.SkipDirs("vendor"), true, func(path string) error {
 		fhits, err := scanGoFile(path)
 		if err != nil {
 			return err
@@ -238,17 +232,6 @@ func scanSourceRoot(root string) ([]advisoryHit, error) {
 		return nil, fmt.Errorf("walk %s: %w", root, err)
 	}
 	return hits, nil
-}
-
-// isUntaggedTree reports whether a directory holds vendored or
-// generated code this repository never tags, and which would otherwise
-// contribute advisory mentions nobody here wrote.
-func isUntaggedTree(name string) bool {
-	switch name {
-	case "vendor", "testdata", ".git", "node_modules":
-		return true
-	}
-	return false
 }
 
 // sortAdvisoryHits orders hits by ID, then file, then line, so the

@@ -5,10 +5,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/tools/internal/gatekit"
 )
 
 // declKind distinguishes the two declaration forms the checks reason
@@ -83,17 +84,6 @@ type index struct {
 	files int
 }
 
-// skippedDirs are directory names the walk never descends into:
-// version control, the gitignored design-doc tree, fixture trees, and
-// vendored sources. None of them declare or reach the vocabulary under
-// test, and testdata in particular holds golden files whose contents
-// would make an unrendered message key look rendered.
-func skippedDirs() map[string]bool {
-	return map[string]bool{
-		".git": true, ".github": true, "backup": true, "node_modules": true, "testdata": true,
-	}
-}
-
 // buildIndex parses every non-test Go file under root and records what
 // it declares and what it names.
 //
@@ -107,23 +97,17 @@ func buildIndex(root string) (*index, error) {
 		literals: map[string]map[string]bool{},
 		consults: map[string]map[string]bool{},
 	}
-	skip := skippedDirs()
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if skip[d.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		name := d.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			return nil
-		}
-		return ix.addFile(fset, root, path)
+	// Version control, the gitignored design-doc tree, fixture trees and
+	// vendored sources are skipped: none declare or reach the vocabulary
+	// under test, and testdata in particular holds golden files whose
+	// contents would make an unrendered message key look rendered.
+	err := gatekit.ParseGoFiles(root, fset, gatekit.ParseOptions{
+		SkipDirs: gatekit.SkipDirs(),
+		Mode:     parser.ParseComments | parser.SkipObjectResolution,
+	}, func(f gatekit.File) error {
+		ix.addFile(fset, f)
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("index go sources under %q: %w", root, err)
@@ -131,28 +115,17 @@ func buildIndex(root string) (*index, error) {
 	return ix, nil
 }
 
-// addFile records one file's declarations and identifier uses. A file
-// that does not parse contributes nothing rather than failing the run:
-// a tree mid-edit must not turn this gate into a confusing build error.
-func (ix *index) addFile(fset *token.FileSet, root, path string) error {
-	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
-	if err != nil {
-		return nil //nolint:nilerr // an unparseable file contributes nothing; reporting it is not this gate's job.
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return err
-	}
-	rel = filepath.ToSlash(rel)
+// addFile records one file's declarations and identifier uses.
+func (ix *index) addFile(fset *token.FileSet, file gatekit.File) {
+	rel := file.Rel
 	pkg := filepath.ToSlash(filepath.Dir(rel))
 	if pkg == "." {
 		pkg = ""
 	}
 	ix.files++
-	ix.addDecls(fset, pkg, rel, f)
-	ix.addUses(rel, f)
-	ix.addConsults(rel, f)
-	return nil
+	ix.addDecls(fset, pkg, rel, file.Syntax)
+	ix.addUses(rel, file.Syntax)
+	ix.addConsults(rel, file.Syntax)
 }
 
 // addDecls records the package-level const and var specs one file

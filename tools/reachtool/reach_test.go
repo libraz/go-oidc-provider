@@ -238,7 +238,7 @@ const Reserved = "reserved"
 	if got := checkSymbols(ix, al); len(got) != 0 {
 		t.Fatalf("allowlisted symbol reported: %v", ids(got))
 	}
-	if got := al.stale(); len(got) != 0 {
+	if got := staleRows(al); len(got) != 0 {
 		t.Fatalf("consulted row reported stale: %v", ids(got))
 	}
 }
@@ -470,7 +470,7 @@ func TestAllowlist_StaleRowIsAFinding(t *testing.T) {
 	if got := checkSymbols(ix, al); len(got) != 0 {
 		t.Fatalf("unexpected findings: %v", ids(got))
 	}
-	wantIDs(t, al.stale(), "op.Deleted")
+	wantIDs(t, staleRows(al), "op.Deleted")
 }
 
 // An empty index reports every row reachable, which is indistinguishable

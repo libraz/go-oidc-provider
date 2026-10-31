@@ -7,3 +7,7 @@ module github.com/libraz/go-oidc-provider/tools/stabilitytool
 go 1.25.0
 
 toolchain go1.27.3
+
+require github.com/libraz/go-oidc-provider/tools/internal/gatekit v0.0.0
+
+replace github.com/libraz/go-oidc-provider/tools/internal/gatekit => ../internal/gatekit

@@ -3,6 +3,7 @@ package main
 import (
 	"go/parser"
 	"go/token"
+	"os"
 	"strings"
 	"testing"
 )
@@ -283,8 +284,8 @@ func TestLoadAllowlist_AcceptsAJustifiedRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAllowlist: %v", err)
 	}
-	if !got.allows("internal/x/x.go:12") {
-		t.Errorf("allowlist = %v, want the justified row", got.rows)
+	if !got.Allows("internal/x/x.go:12") {
+		t.Errorf("allowlist = %v, want the justified row", got.Rows)
 	}
 }
 
@@ -305,8 +306,8 @@ func TestAllowlist_StaleRowIsReported(t *testing.T) {
 	if got := keep(nil, allowed); len(got) != 0 {
 		t.Fatalf("keep() = %v, want none", got)
 	}
-	if got := allowed.stale(); len(got) != 1 || got[0] != "internal/x/x.go:99" {
-		t.Fatalf("stale() = %v, want [internal/x/x.go:99]", got)
+	if got := allowed.Unused(); len(got) != 1 || got[0] != "internal/x/x.go:99" {
+		t.Fatalf("Unused() = %v, want [internal/x/x.go:99]", got)
 	}
 }
 
@@ -327,7 +328,13 @@ func TestAllowlist_ConsultedRowIsNotStale(t *testing.T) {
 	if got := keep(findings, allowed); len(got) != 0 {
 		t.Fatalf("keep() = %v, want the allowlisted finding dropped", got)
 	}
-	if got := allowed.stale(); len(got) != 0 {
-		t.Fatalf("stale() = %v, want none", got)
+	if got := allowed.Unused(); len(got) != 0 {
+		t.Fatalf("Unused() = %v, want none", got)
 	}
+}
+
+// writeFile is a thin os.WriteFile wrapper the tests use to build
+// allowlist fixtures.
+func writeFile(path, body string) error {
+	return os.WriteFile(path, []byte(body), 0o600)
 }

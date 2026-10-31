@@ -174,7 +174,7 @@ verify_harness_modules() {
 # rather than fail, which is how these two went unlinted.
 tool_modules() {
   local d
-  for d in reachtool scenariotool stabilitytool gatetool failopentool; do
+  for d in reachtool scenariotool stabilitytool gatetool failopentool internal/gatekit; do
     if [ -f "$REPO_ROOT/tools/$d/go.mod" ]; then
       printf '%s\t./...\n' "$REPO_ROOT/tools/$d"
     fi
