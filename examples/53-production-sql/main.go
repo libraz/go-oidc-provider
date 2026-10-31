@@ -55,6 +55,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -187,6 +188,9 @@ func buildOptions(cfg config, storage *oidcsql.Store, users *userTable) ([]op.Op
 	}
 	return []op.Option{
 		op.WithIssuer(cfg.issuer),
+		// Without a logger the OP's start-up and claim diagnostics are
+		// discarded; route them, and the audit events, to your pipeline.
+		op.WithLogger(slog.Default()),
 		op.WithStore(storage),
 		op.WithKeyset(keyset),
 		op.WithCookieKeys(cookieKeys...),
@@ -226,23 +230,18 @@ func reloadOnHangup(ctx context.Context, handler *op.Reloadable, build func() ([
 	}
 }
 
-// sweepExpiredRows deletes expired OP rows once an hour. Run it on exactly
-// one replica (a leader-elected worker or a cron job when there are
-// several); it must never be reachable from an HTTP route.
+// sweepExpiredRows deletes expired OP rows at startup and once an hour.
+// Run it on exactly one replica (a leader-elected worker or a cron job
+// when there are several); it must never be reachable from an HTTP route.
 func sweepExpiredRows(ctx context.Context, storage *oidcsql.Store) {
-	tick := time.NewTicker(time.Hour)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
+	err := storage.RunGC(ctx, time.Hour, func(stats oidcsql.GCStats, err error) {
+		if err != nil {
+			log.Printf("gc failed after deleting %d rows: %v", stats.Total(), err)
 			return
-		case now := <-tick.C:
-			stats, err := storage.GC(ctx, now)
-			if err != nil {
-				log.Printf("gc failed after deleting %d rows: %v", stats.Total(), err)
-				continue
-			}
-			log.Printf("gc deleted %d expired rows", stats.Total())
 		}
+		log.Printf("gc deleted %d expired rows", stats.Total())
+	})
+	if err != nil {
+		log.Printf("gc not scheduled: %v", err)
 	}
 }

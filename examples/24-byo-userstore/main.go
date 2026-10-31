@@ -19,10 +19,12 @@
 //   - All OIDC-specific records (clients, codes, refresh tokens,
 //     grants, sessions, PAR, access tokens, IATs, RATs) live in the
 //     bundled op/storeadapter/sql schema.
-//   - op.WithUserStore points the OP's /userinfo and ID Token
-//     assembly at MemberUserStore. Nothing wraps the bundled store,
-//     so it keeps every capability it declares. Replacing more than
-//     one substore is what op/storeadapter/composite is for.
+//   - MemberUserStore goes to op.PrimaryPassword, and the OP reads
+//     /userinfo and ID Token claims from that same store. Nothing
+//     wraps the bundled store, so it keeps every capability it
+//     declares. op.WithUserStore is only for claims kept apart from
+//     the credential records; replacing more than one substore is
+//     what op/storeadapter/composite is for.
 //
 // Run with the example build tag:
 //
@@ -41,7 +43,7 @@
 //   - main.go  — entrypoint, package godoc, listener orchestration,
 //     SQLite open + DDL apply, RP wiring through rpkit.
 //   - op.go    — OP-side wiring: buildProvider passes oidcsql.Store to
-//     op.WithStore and MemberUserStore to op.WithUserStore.
+//     op.WithStore and MemberUserStore to op.PrimaryPassword.
 //   - store.go — the embedder-owned MemberUserStore (FindBySubject /
 //     FindByUsername / ReadPasswordHash) plus the members DDL the
 //     run() bootstrap applies.

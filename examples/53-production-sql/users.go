@@ -7,7 +7,6 @@ import (
 	databasesql "database/sql"
 	"errors"
 	"log"
-	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
@@ -18,7 +17,9 @@ import (
 // userTable adapts the application's own users table to the login flow.
 // The OP never sees the column names: it asks for a user by subject or
 // by username, reads the stored hash, and writes a new hash back once a
-// bcrypt hash has verified. The subject is the row id as a string.
+// bcrypt hash has verified. The subject is the subject column, an opaque
+// value assigned once per row and never reused; the row id would leak
+// the user count to every RP and can be reissued after a delete.
 type userTable struct{ db *databasesql.DB }
 
 var (
@@ -28,21 +29,7 @@ var (
 
 // FindBySubject resolves the "sub" claim back to a row.
 func (u *userTable) FindBySubject(ctx context.Context, sub string) (*store.User, error) {
-	id, err := rowID(sub)
-	if err != nil {
-		return nil, err
-	}
-	return u.find(ctx, "id = ?", id)
-}
-
-// rowID maps a subject to its row id. A subject that is not a row id is
-// an unknown user, not a backend fault.
-func rowID(subject string) (int64, error) {
-	id, err := strconv.ParseInt(subject, 10, 64)
-	if err != nil {
-		return 0, store.ErrNotFound
-	}
-	return id, nil
+	return u.find(ctx, "subject = ?", sub)
 }
 
 // FindByUsername looks the login name up by email, case-folded the same
@@ -52,12 +39,9 @@ func (u *userTable) FindByUsername(ctx context.Context, username string) (*store
 }
 
 func (u *userTable) find(ctx context.Context, where string, arg any) (*store.User, error) {
-	var (
-		id          int64
-		email, name string
-	)
-	err := u.db.QueryRowContext(ctx, "SELECT id, email, display_name FROM app_users WHERE "+where, arg).
-		Scan(&id, &email, &name)
+	var subject, email, name string
+	err := u.db.QueryRowContext(ctx, "SELECT subject, email, display_name FROM app_users WHERE "+where, arg).
+		Scan(&subject, &email, &name)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -65,8 +49,10 @@ func (u *userTable) find(ctx context.Context, where string, arg any) (*store.Use
 		return nil, err
 	}
 	return &store.User{
-		Subject: strconv.FormatInt(id, 10),
-		Claims:  map[string]any{"name": name, "email": email},
+		Subject: subject,
+		// The table records no email verification, so email_verified
+		// is released as false.
+		Claims: store.StandardClaims{Name: name, Email: email}.Map(),
 	}, nil
 }
 
@@ -74,12 +60,8 @@ func (u *userTable) find(ctx context.Context, where string, arg any) (*store.Use
 // is verified by the scheme listed in LegacySchemes, an "$argon2id$" one
 // by the OP itself.
 func (u *userTable) ReadPasswordHash(ctx context.Context, subject string) ([]byte, error) {
-	id, err := rowID(subject)
-	if err != nil {
-		return nil, err
-	}
 	var hash databasesql.NullString
-	err = u.db.QueryRowContext(ctx, "SELECT password_hash FROM app_users WHERE id = ?", id).Scan(&hash)
+	err := u.db.QueryRowContext(ctx, "SELECT password_hash FROM app_users WHERE subject = ?", subject).Scan(&hash)
 	if errors.Is(err, databasesql.ErrNoRows) || (err == nil && hash.String == "") {
 		return nil, store.ErrNotFound
 	}
@@ -93,11 +75,7 @@ func (u *userTable) ReadPasswordHash(ctx context.Context, subject string) ([]byt
 // password that matched a bcrypt hash. A failure here never fails the
 // login; the OP retries on the next one.
 func (u *userTable) UpdatePasswordHash(ctx context.Context, subject string, encoded []byte) error {
-	id, err := rowID(subject)
-	if err != nil {
-		return err
-	}
-	res, err := u.db.ExecContext(ctx, "UPDATE app_users SET password_hash = ? WHERE id = ?", string(encoded), id)
+	res, err := u.db.ExecContext(ctx, "UPDATE app_users SET password_hash = ? WHERE subject = ?", string(encoded), subject)
 	if err != nil {
 		return err
 	}
@@ -123,9 +101,13 @@ var demoUsers = []struct{ email, name, password string }{
 // runs with EXAMPLE53_MIGRATE=1 only; a real deployment owns this table
 // and its rows. INSERT OR IGNORE is SQLite (MySQL spells it INSERT
 // IGNORE), and it keeps a hash a previous login already rewrote.
+// A table without an opaque immutable identifier adds the subject column
+// and backfills it once; the random default here is SQLite's spelling
+// (MySQL 8.0.13+ writes DEFAULT (UUID())).
 func createDemoUsers(ctx context.Context, db *databasesql.DB) error {
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS app_users (
 		id INTEGER PRIMARY KEY,
+		subject TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
 		email TEXT UNIQUE NOT NULL,
 		display_name TEXT NOT NULL,
 		password_hash TEXT

@@ -9,10 +9,12 @@
 // lives here too so the schema and the projection that depends on it
 // stay co-located — run() in main.go applies the DDL before
 // buildProvider() in op.go passes MemberUserStore to
-// op.WithUserStore.
+// op.PrimaryPassword, which also makes it the claim source.
 //
-// There is no wrapper type around the bundled store. Replacing one
-// substore is what op.WithUserStore is for; replacing several is what
+// There is no wrapper type around the bundled store. Supplying the user
+// records is what PrimaryPassword.Store (or, for claims kept apart from
+// the credentials, op.WithUserStore) is for; replacing several
+// substores is what
 // op/storeadapter/composite is for. Hand-writing a wrapper that embeds
 // the store.Store interface is the shape to avoid — it compiles, and
 // it silently drops every optional capability the backend implements.
@@ -122,16 +124,13 @@ func (m *MemberUserStore) scanMember(ctx context.Context, query, arg string) (*s
 		return nil, fmt.Errorf("members.scan: %w", err)
 	}
 
-	claims := map[string]any{}
-	if email.Valid {
-		claims["email"] = email.String
-	}
-	if fullName.Valid {
-		claims["name"] = fullName.String
-	}
-	if localePref.Valid {
-		claims["locale"] = localePref.String
-	}
+	// StandardClaims gives each standard claim its OIDC JSON type and
+	// leaves out the empty ones; a NULL column scans as "".
+	claims := store.StandardClaims{
+		Email:  email.String,
+		Name:   fullName.String,
+		Locale: localePref.String,
+	}.Map()
 	if tenantID.Valid {
 		// Custom embedder claim. Not authorised by any standard
 		// scope, so the OP filters it out of /userinfo and ID Token

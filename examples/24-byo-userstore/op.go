@@ -8,21 +8,21 @@
 // tokens, JTIs, revocations) while MemberUserStore (in store.go)
 // projects the embedder-owned members table onto store.UserStore.
 //
-// op.WithUserStore is what joins them. Nothing wraps the bundled store,
-// so the transactional cluster (authorization-code exchange,
-// refresh-token rotation, PAR consumption) keeps committing against the
-// same SQLite database and every optional capability the adapter
-// implements stays visible to op.New.
-//
-// The same MemberUserStore value is handed to PrimaryPassword, so the
-// records a login authenticates against are the records the ID Token is
-// built from. op.New warns when those two differ.
+// PrimaryPassword.Store is what joins them: with no op.WithUserStore,
+// the OP reads ID Token and /userinfo claims from the store the password
+// step authenticates against, so the login and the claims come from the
+// same members rows. Nothing wraps the bundled store, so the
+// transactional cluster (authorization-code exchange, refresh-token
+// rotation, PAR consumption) keeps committing against the same SQLite
+// database and every optional capability the adapter implements stays
+// visible to op.New.
 
 package main
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
@@ -52,10 +52,12 @@ func buildProvider(ctx context.Context, db *databasesql.DB) (*op.Provider, error
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),
+		// Logs the claim source at start-up and any standard claim
+		// dropped for having the wrong JSON type.
+		op.WithLogger(slog.Default()),
+		// Every OIDC record stays in the bundled schema; the end-user
+		// claims come from the members table through the login flow.
 		op.WithStore(durable),
-		// Every OIDC record stays in the bundled schema; only the
-		// end-user claims come from the members table.
-		op.WithUserStore(members),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),

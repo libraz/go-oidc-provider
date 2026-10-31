@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -52,7 +53,7 @@ func TestExample53ProductionSQL(t *testing.T) {
 			first.kill()
 		}
 	}()
-	kid := example53SignIn(t, first, baseURL, alice)
+	kid, sub := example53SignIn(t, first, baseURL, alice)
 	if want := p256KeyFileThumbprint(t, filepath.Join(keysDir, "signing.pem")); kid != want {
 		t.Fatalf("JWKS kid = %q, want the RFC 7638 thumbprint of the generated key %q", kid, want)
 	}
@@ -62,8 +63,12 @@ func TestExample53ProductionSQL(t *testing.T) {
 
 	second := buildAndStartWithEnv(t, dir, env)
 	defer second.kill()
-	if got := example53SignIn(t, second, baseURL, alice); got != kid {
-		t.Fatalf("kid after restart = %q, want %q from the same key file", got, kid)
+	gotKid, gotSub := example53SignIn(t, second, baseURL, alice)
+	if gotKid != kid {
+		t.Fatalf("kid after restart = %q, want %q from the same key file", gotKid, kid)
+	}
+	if gotSub != sub {
+		t.Fatalf("sub after restart = %q, want the stored subject %q", gotSub, sub)
 	}
 	if strings.Contains(second.readLog(), rehashed) {
 		t.Fatalf("the second login rewrote the hash again, so the first rewrite was not stored:\n%s", second.readLog())
@@ -72,9 +77,9 @@ func TestExample53ProductionSQL(t *testing.T) {
 
 // example53SignIn asserts JWKS publishes exactly one key, signs user in
 // through the built-in HTML screens, redeems the code, and checks the ID
-// token is signed with that key and carries the users-table row id as
-// sub. It returns the kid.
-func example53SignIn(t *testing.T, p *proc, baseURL string, user exampleUser) string {
+// token is signed with that key and carries the users-table subject
+// column, not the row id, as sub. It returns the kid and the sub.
+func example53SignIn(t *testing.T, p *proc, baseURL string, user exampleUser) (string, string) {
 	t.Helper()
 	const (
 		clientID    = "production-sql-rp"
@@ -117,12 +122,13 @@ func example53SignIn(t *testing.T, p *proc, baseURL string, user exampleUser) st
 	if header.Kid != kid {
 		t.Fatalf("id_token kid = %q, want the published %q", header.Kid, kid)
 	}
-	// alice is the first row the example inserts.
-	if claims.Sub != "1" {
-		t.Fatalf("id_token sub = %q, want the app_users row id \"1\"", claims.Sub)
+	if !example53Subject.MatchString(claims.Sub) {
+		t.Fatalf("id_token sub = %q, want the 32-hex-digit app_users subject column", claims.Sub)
 	}
-	return kid
+	return kid, claims.Sub
 }
+
+var example53Subject = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func decodeJWTPart(t *testing.T, part string, out any) {
 	t.Helper()
