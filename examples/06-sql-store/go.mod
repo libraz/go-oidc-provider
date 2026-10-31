@@ -20,7 +20,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.6 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.7 // indirect
 	github.com/go-sql-driver/mysql v1.10.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-webauthn/webauthn v0.18.2 // indirect
