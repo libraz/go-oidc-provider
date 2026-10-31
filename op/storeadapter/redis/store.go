@@ -208,6 +208,8 @@ type Store struct {
 	interactionsImpl *interactionStore
 	jtisImpl         *jtiStore
 	sessionsImpl     *sessionStore
+	ssfStreamsImpl   *ssfStreamStore
+	ssfEventsImpl    *ssfEventStore
 }
 
 // New constructs a Store from the supplied options. New fails when:
@@ -249,6 +251,9 @@ func New(ctx context.Context, opts ...Option) (*Store, error) {
 	s.interactionsImpl = newInteractionStore(s)
 	s.jtisImpl = newJTIStore(s)
 	s.sessionsImpl = newSessionStore(s)
+	ssfScripts := newSSFScripts()
+	s.ssfStreamsImpl = &ssfStreamStore{parent: s, scripts: ssfScripts}
+	s.ssfEventsImpl = &ssfEventStore{parent: s, scripts: ssfScripts}
 	return s, nil
 }
 
@@ -467,6 +472,17 @@ func (s *Store) CIBARequests() store.CIBARequestStore { return nil }
 // cache is the appropriate backend. Embedders compose this accessor
 // with the other Kinds via op/storeadapter/composite.
 func (s *Store) Sessions() store.SessionStore { return s.sessionsImpl }
+
+// SSFStreams implements [store.SharedSignalsStore]. The two SSF
+// substores are in scope on Redis, but the queue carries no TTL and must
+// not sit on an evicting maxmemory policy: an evicted event is a SET
+// never delivered. Embedders route the SSF Kinds here through
+// op/storeadapter/composite, since this Store alone is not a full
+// aggregate.
+func (s *Store) SSFStreams() store.SSFStreamStore { return s.ssfStreamsImpl }
+
+// SSFEvents implements [store.SharedSignalsStore]; see [Store.SSFStreams].
+func (s *Store) SSFEvents() store.SSFEventStore { return s.ssfEventsImpl }
 
 // PushedAuthRequests implements [store.Store]; out-of-scope on
 // Redis. Returns nil; op.New rejects the config when [feature.PAR]
