@@ -24,9 +24,9 @@ library.
 > **Status: `v1.4.0`.** The public `op` surface follows strict
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the 1.0
 > release on. Symbols documented with an `Experimental:` marker are exempt.
-> Today that is Grant Management and the ID-JAG profile (issuing and
-> redeeming Identity Assertion JWT Authorization Grants), each of which tracks
-> an IETF draft whose wire shape may still change. The exempt set is inventoried in
+> Today that is Grant Management, Client ID Metadata Documents and the ID-JAG
+> profile (issuing and redeeming Identity Assertion JWT Authorization Grants),
+> each of which tracks an IETF draft whose wire shape may still change. The exempt set is inventoried in
 > [`api/experimental.txt`](api/experimental.txt), which `make verify`
 > regenerates and diffs, so the exempt set cannot grow without review.
 > [`CHANGELOG.md`](CHANGELOG.md) carries the migration notes.
@@ -135,6 +135,9 @@ hashing and no email delivery), a generic OAuth2 framework, and a UI kit. See
 - **Token and client lifecycle.** JWT access tokens (RFC 9068), revocation
   (RFC 7009), introspection (RFC 7662), Dynamic Client Registration and its
   management API (RFC 7591 / RFC 7592).
+- **Client registration.** Dynamic Client Registration as above, plus Client ID
+  Metadata Documents (experimental, opt-in) for clients that identify
+  themselves with an HTTPS URL, such as MCP clients.
 - **Session termination.** RP-Initiated Logout 1.0 and Back-Channel Logout 1.0.
   Front-channel logout is not implemented.
 
