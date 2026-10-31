@@ -829,9 +829,15 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) ReplayedChain {
 	// The record is read before anything is revoked: either rung rewrites
 	// the records it would otherwise have to be read back from.
-	rec := e.presentedRecord(ctx, presentedID)
-	if rec == nil {
-		e.reportRetirement(ctx, refreshchain.Retire(ctx, e.store, presentedID, ""))
+	rec, err := e.store.Find(ctx, presentedID)
+	if err != nil {
+		r := refreshchain.Retire(ctx, e.store, presentedID, "")
+		// The walk retries the read; when it only misses, the fault that
+		// kept the record from resolving here is the one to report.
+		if r.RootUnresolved && r.RootErr == nil && !errors.Is(err, store.ErrNotFound) {
+			r.RootErr = err
+		}
+		e.reportRetirement(ctx, r)
 		return ReplayedChain{}
 	}
 	out := ReplayedChain{
@@ -841,19 +847,6 @@ func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID strin
 	}
 	e.reportRetirement(ctx, refreshchain.RetireRecord(ctx, e.store, presentedID, rec))
 	return out
-}
-
-// presentedRecord resolves the record the replayed token names.
-// presentedID is the bearer value the client sent, so it goes through the
-// hash-only credential path rather than the chain-handle path. A nil result
-// means the record could not be read at all; callers treat that as
-// "no grant to cascade onto" rather than revoking the zero value.
-func (e *Exchanger) presentedRecord(ctx context.Context, presentedID string) *store.RefreshToken {
-	rec, err := e.store.Find(ctx, presentedID)
-	if err != nil {
-		return nil
-	}
-	return rec
 }
 
 // reportRetirement raises one warn-level event per rung of the cascade that

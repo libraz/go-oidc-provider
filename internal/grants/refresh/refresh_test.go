@@ -1056,15 +1056,22 @@ func (s *graceFindFaultStore) RevokeByGrant(context.Context, string) error { ret
 // unresolvable, covering the case where the walk has no node at all to
 // cascade from.
 type rootLookupFaultStore struct {
-	rec        *store.RefreshToken
-	hideRecord bool
-	revoked    string
-	revokes    int
+	rec         *store.RefreshToken
+	hideRecord  bool
+	findFault   error // returned by Find call number findFaultAt only
+	findFaultAt int
+	finds       int
+	revoked     string
+	revokes     int
 }
 
 func (s *rootLookupFaultStore) Save(context.Context, *store.RefreshToken) error { return nil }
 
 func (s *rootLookupFaultStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
+	s.finds++
+	if s.findFault != nil && s.finds == s.findFaultAt {
+		return nil, s.findFault
+	}
 	if id == s.rec.ID && !s.hideRecord {
 		return s.rec, nil
 	}
@@ -1235,6 +1242,28 @@ func TestExchange_ReplayWithNoResolvableNodeEmitsAuditEvent(t *testing.T) {
 	}
 	if !hasChainRevokeFailure(em.snapshot(), "chain_root_lookup_failed") {
 		t.Fatalf("expected chain_root_lookup_failed audit event, got %+v", em.snapshot())
+	}
+}
+
+// TestExchange_ReplayReportsTheFaultThatHidTheRecord pins that a backend
+// fault on the first read of the replayed record reaches the audit event
+// even when the chain walk's own retry only misses: the operator must see
+// a store that did not answer, not a record that does not exist.
+func TestExchange_ReplayReportsTheFaultThatHidTheRecord(t *testing.T) {
+	t.Parallel()
+
+	st, em, exc, _ := newRootLookupFixture(t, true)
+	// Call 1 is the grace-window lookup; call 2 is the cascade's read of
+	// the replayed record, the one whose fault used to be dropped.
+	st.findFault = errors.New("synthetic find fault")
+	st.findFaultAt = 2
+
+	_, err := exc.Exchange(context.Background(), refresh.ExchangeInput{Token: "rt-replayed", ClientID: "client-1"})
+	if !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+	if !hasChainRevokeFailure(em.snapshot(), "synthetic find fault") {
+		t.Fatalf("expected the find fault as the chain_revoke_failed reason, got %+v", em.snapshot())
 	}
 }
 
