@@ -111,8 +111,9 @@ type Policy struct {
 	// the list.
 	//
 	// Matching is case-insensitive and ignores parameters (e.g.
-	// "; charset=utf-8"); subtype suffixes (e.g. "+json") MUST be
-	// listed verbatim.
+	// "; charset=utf-8"). An entry of the form "type/*+suffix" (e.g.
+	// "application/*+json") admits any subtype carrying that structured
+	// syntax suffix; every other entry matches only verbatim.
 	AcceptContentTypes []string
 
 	// Timeout is the per-request budget. Zero falls back to
@@ -433,8 +434,8 @@ func (c *Client) DoAndDiscard(req *http.Request) (*http.Response, error) {
 
 // contentTypeAllowed reports whether ct (the raw header value) matches
 // any entry in allowed. Matching is case-insensitive and ignores
-// parameters (e.g. "; charset=utf-8"); subtype suffixes (e.g. "+json")
-// MUST be listed verbatim.
+// parameters (e.g. "; charset=utf-8"); a "type/*+suffix" entry matches
+// any subtype ending in that suffix (see [suffixPatternMatch]).
 func contentTypeAllowed(ct string, allowed []string) bool {
 	if ct == "" {
 		return false
@@ -444,9 +445,27 @@ func contentTypeAllowed(ct string, allowed []string) bool {
 	}
 	ct = strings.TrimSpace(strings.ToLower(ct))
 	for _, a := range allowed {
-		if strings.EqualFold(ct, a) {
+		if strings.EqualFold(ct, a) || suffixPatternMatch(ct, strings.ToLower(a)) {
 			return true
 		}
 	}
 	return false
+}
+
+// suffixPatternMatch reports whether the lower-cased media type ct
+// matches a lower-cased "type/*+suffix" pattern (RFC 6838 §4.2.8
+// structured syntax suffix). The subtype must carry a non-empty name
+// before the suffix, so "application/+json" does not match. A pattern
+// without the "/*+" shape never matches here.
+func suffixPatternMatch(ct, pattern string) bool {
+	typ, rest, ok := strings.Cut(pattern, "/*+")
+	if !ok || typ == "" || rest == "" || strings.ContainsAny(rest, "/*") {
+		return false
+	}
+	subtype, ok := strings.CutPrefix(ct, typ+"/")
+	if !ok {
+		return false
+	}
+	name, ok := strings.CutSuffix(subtype, "+"+rest)
+	return ok && name != "" && !strings.Contains(name, "/")
 }

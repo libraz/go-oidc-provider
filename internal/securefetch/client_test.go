@@ -125,6 +125,54 @@ func TestClient_Get_AcceptContentTypeIgnoresParameters(t *testing.T) {
 	}
 }
 
+// TestClient_Get_AcceptContentTypeSuffixPattern pins the "type/*+suffix"
+// allow-list entry: any subtype carrying the structured syntax suffix
+// matches, parameters stay ignored, and a verbatim entry keeps its exact
+// meaning.
+func TestClient_Get_AcceptContentTypeSuffixPattern(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		allowed []string
+		ct      string
+		want    bool
+	}{
+		{"suffix subtype", []string{"application/*+json"}, "application/oauth-client-id+json", true},
+		{"suffix with parameters and case", []string{"application/*+json"}, "Application/OAuth-Client-ID+JSON; charset=utf-8", true},
+		{"pattern case-insensitive", []string{"APPLICATION/*+JSON"}, "application/foo+json", true},
+		{"bare type is not a suffix match", []string{"application/*+json"}, "application/json", false},
+		{"empty subtype name", []string{"application/*+json"}, "application/+json", false},
+		{"other top-level type", []string{"application/*+json"}, "text/foo+json", false},
+		{"other suffix", []string{"application/*+json"}, "application/foo+jsonx", false},
+		{"unrelated type", []string{"application/*+json"}, "application/jwt", false},
+		{"verbatim entry stays exact", []string{"application/json"}, "application/foo+json", false},
+		{"both entries admit bare json", []string{"application/json", "application/*+json"}, "application/json; charset=utf-8", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.ct)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+
+			c := mustClient(t, securefetch.Policy{
+				AllowPrivateNetwork: true,
+				AcceptContentTypes:  tc.allowed,
+			})
+			_, _, err := c.Get(context.Background(), srv.URL) //nolint:bodyclose // securefetch.Get drains and closes the body internally.
+			if tc.want && err != nil {
+				t.Fatalf("Content-Type %q against %v: err=%v, want accepted", tc.ct, tc.allowed, err)
+			}
+			if !tc.want && !errors.Is(err, securefetch.ErrUnexpectedContentType) {
+				t.Fatalf("Content-Type %q against %v: err=%v, want ErrUnexpectedContentType", tc.ct, tc.allowed, err)
+			}
+		})
+	}
+}
+
 // TestClient_Get_BodyCap pins the body-cap gate. The upstream emits
 // MaxBodyBytes+1 bytes; the helper surfaces ErrBodyTooLarge instead
 // of silently truncating.
