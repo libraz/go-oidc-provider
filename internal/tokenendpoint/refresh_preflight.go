@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"reflect"
 
-	"github.com/libraz/go-oidc-provider/internal/grants/grantscope"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -30,7 +29,7 @@ import (
 // defence in depth for the grace path, whose consumed record bypasses
 // the preflight.
 func requireRegisteredScopes(w http.ResponseWriter, client *store.Client, scope []string) bool {
-	if client == nil || grantscope.Subset(scope, client.Scopes) {
+	if client == nil || oidcscope.Subset(scope, client.Scopes) {
 		return true
 	}
 	writeError(w, http.StatusBadRequest, errInvalidScope,

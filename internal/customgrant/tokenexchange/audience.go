@@ -1,9 +1,5 @@
 package tokenexchange
 
-import (
-	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
-)
-
 // dedupe collapses duplicate entries in s while preserving order.
 func dedupe(s []string) []string {
 	if len(s) == 0 {
@@ -19,38 +15,6 @@ func dedupe(s []string) []string {
 		out = append(out, v)
 	}
 	return out
-}
-
-// scopeSubset reports whether every entry of want is present in have.
-// An empty want vacuously satisfies the check.
-func scopeSubset(want, have []string) bool {
-	if len(want) == 0 {
-		return true
-	}
-	idx := make(map[string]struct{}, len(have))
-	for _, v := range have {
-		idx[v] = struct{}{}
-	}
-	for _, v := range want {
-		if _, ok := idx[v]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// audienceSubset reports whether every entry of granted appears in
-// requested. Equality is [resourceindicator.ContainsLabel], the OP-wide
-// policy, so a policy-granted "HTTPS://API.EXAMPLE:443/" matches a
-// requested "https://api.example" here exactly as it does at
-// client_credentials. An empty granted vacuously passes.
-func audienceSubset(granted, requested []string) bool {
-	for _, v := range granted {
-		if !resourceindicator.ContainsLabel(requested, v) {
-			return false
-		}
-	}
-	return true
 }
 
 // intersectScope returns the entries of want that also appear in

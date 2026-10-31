@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/grants/grantscope"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -182,7 +182,7 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !grantscope.Subset(in.Record.Scope, in.Client.Scopes) {
+	if !oidcscope.Subset(in.Record.Scope, in.Client.Scopes) {
 		return nil, ErrScopeForbidden
 	}
 	return &Authorized{

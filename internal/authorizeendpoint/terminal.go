@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -169,7 +170,7 @@ func validateTerminalGrant(deps resolved, req *authorize.Request, in terminalAut
 	if g.ID == "" || g.Subject != in.Subject || g.ClientID != req.ClientID {
 		return errTerminalGrantMismatch
 	}
-	if !scopeIsSubset(in.Scope, g.Scope) {
+	if !oidcscope.Subset(in.Scope, g.Scope) {
 		return errTerminalGrantMismatch
 	}
 	if !terminalClaimsCurrent(deps, req, g) {

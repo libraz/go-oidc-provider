@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -37,7 +38,7 @@ func consentAlreadyCovered(req *authorize.Request, existing *store.Grant) bool {
 	if req.GrantManagementAction != "" {
 		return false
 	}
-	return scopeIsSubset(req.Scope, existing.Scope) &&
+	return oidcscope.Subset(req.Scope, existing.Scope) &&
 		authorizationDetailsCovered(req.AuthorizationDetails, existing)
 }
 

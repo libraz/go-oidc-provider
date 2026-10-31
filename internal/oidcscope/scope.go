@@ -3,8 +3,8 @@
 //
 // The package is a tiny, dependency-free utility layer: it owns the
 // well-known scope-name constants ([ScopeOpenID], [ScopeOfflineAccess])
-// and the three membership / parsing helpers ([ContainsOpenID],
-// [ContainsOfflineAccess], [Parse]) that the token endpoint, the
+// the membership / parsing helpers ([ContainsOpenID],
+// [ContainsOfflineAccess], [Parse], [Subset]) that the token endpoint, the
 // authorization layer, and the userinfo projector all need. Centralising
 // the strings (rather than letting each consumer redeclare its own
 // const) prevents a typo in one branch from drifting the spec

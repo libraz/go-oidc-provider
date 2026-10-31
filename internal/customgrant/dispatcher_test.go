@@ -459,7 +459,7 @@ func TestAudienceSubsetFollowsTheSharedResourcePolicy(t *testing.T) {
 			t.Parallel()
 
 			want := resourceindicator.EqualLabel(tc.registered, tc.returned)
-			if got := audienceSubset([]string{tc.returned}, []string{tc.registered}); got != want {
+			if got := resourceindicator.SubsetLabel([]string{tc.returned}, []string{tc.registered}); got != want {
 				t.Fatalf("audienceSubset=%v want %v (shared policy)", got, want)
 			}
 		})

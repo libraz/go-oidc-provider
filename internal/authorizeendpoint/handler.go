@@ -578,18 +578,6 @@ func containsString(haystack []string, needle string) bool {
 	return false
 }
 
-// scopeIsSubset reports whether every element of want is present in have.
-// Comparison is byte-equal because OAuth scope tokens are case-sensitive
-// per RFC 6749 §3.3.
-func scopeIsSubset(want, have []string) bool {
-	for _, s := range want {
-		if !containsString(have, s) {
-			return false
-		}
-	}
-	return true
-}
-
 // clearCookie writes a Set-Cookie header that instructs the browser to
 // remove the named cookie. Errors during construction are swallowed: a
 // failure here is a programming bug (the profile is a package constant)

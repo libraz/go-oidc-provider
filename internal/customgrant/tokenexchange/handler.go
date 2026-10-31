@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -403,7 +404,7 @@ func (h *Handler) emitRequestedAudit(ctx context.Context, req customgrant.Reques
 // must subset the subject_token's scope, audience must subset the
 // client's registered resources.
 func (h *Handler) enforceScopeAudience(ctx context.Context, client *store.Client, subjectView TokenView, requestedScope, requestedAudience []string) error {
-	if !scopeSubset(requestedScope, subjectView.Scope) {
+	if !oidcscope.Subset(requestedScope, subjectView.Scope) {
 		h.emit(ctx, auditScopeInflationBlocked, audit.LevelWarn,
 			"token-exchange rejected: requested scope inflates beyond subject_token",
 			clientIDOf(client), subjectView.Subject,
@@ -445,7 +446,7 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 	// requested scope and the granted audience MUST remain a subset of
 	// the RFC 8707-normalised requested audience; a policy that returns
 	// a broader set is a privilege escalation and is rejected here.
-	if !scopeSubset(grantedScope, requestedScope) {
+	if !oidcscope.Subset(grantedScope, requestedScope) {
 		h.emit(ctx, auditScopeInflationBlocked, audit.LevelWarn,
 			"token-exchange rejected: policy granted scope inflates beyond requested scope",
 			clientIDOf(req.Client), subjectView.Subject,
@@ -455,7 +456,7 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 			})
 		return customgrant.Response{}, invalidScope("granted scope exceeds the requested scope")
 	}
-	if !audienceSubset(grantedAudience, requestedAudience) {
+	if !resourceindicator.SubsetLabel(grantedAudience, requestedAudience) {
 		h.emit(ctx, auditAudienceBlocked, audit.LevelWarn,
 			"token-exchange rejected: policy granted audience inflates beyond requested audience",
 			clientIDOf(req.Client), subjectView.Subject,

@@ -71,45 +71,15 @@ func TestAudienceEqualityMatchesTheClientCredentialsSurface(t *testing.T) {
 			if got := audienceAllowed([]string{tc.requested}, &store.Client{Resources: registered}); got != tc.want {
 				t.Errorf("audienceAllowed=%v want %v", got, tc.want)
 			}
-			if got := audienceSubset([]string{tc.requested}, registered); got != tc.want {
-				t.Errorf("audienceSubset=%v want %v", got, tc.want)
+			if got := resourceindicator.SubsetLabel([]string{tc.requested}, registered); got != tc.want {
+				t.Errorf("SubsetLabel=%v want %v", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestAudienceSubsetCanonicalisesBothSides(t *testing.T) {
-	t.Parallel()
-
-	if !audienceSubset(
-		[]string{"HTTPS://API.EXAMPLE/foo/", "https://other.example/"},
-		[]string{"https://api.example/foo", "HTTPS://OTHER.EXAMPLE"},
-	) {
-		t.Fatal("audienceSubset rejected equivalent canonical resources")
-	}
-	if audienceSubset(
-		[]string{"https://api.example", "https://extra.example"},
-		[]string{"https://api.example"},
-	) {
-		t.Fatal("audienceSubset accepted an audience broader than requested")
-	}
-	if !audienceSubset(nil, []string{"https://api.example"}) {
-		t.Fatal("empty granted audience should be a subset")
-	}
-}
-
 func TestScopeHelpersPreserveDownscopeSemantics(t *testing.T) {
 	t.Parallel()
-
-	if !scopeSubset([]string{"read", "write"}, []string{"profile", "write", "read"}) {
-		t.Fatal("scopeSubset rejected scopes present in the source token")
-	}
-	if scopeSubset([]string{"read", "admin"}, []string{"read", "write"}) {
-		t.Fatal("scopeSubset accepted a scope absent from the source token")
-	}
-	if !scopeSubset(nil, []string{"read"}) {
-		t.Fatal("empty requested scope should be a subset")
-	}
 
 	got := intersectScope([]string{"write", "read", "admin", "read"}, []string{"read", "write"})
 	want := []string{"write", "read", "read"}

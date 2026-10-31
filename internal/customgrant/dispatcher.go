@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -404,10 +405,10 @@ func (d *Dispatcher) validateResponse(client *store.Client, resp *Response) erro
 	if err := d.validateBoundAccessToken(client, resp); err != nil {
 		return err
 	}
-	if !scopeSubset(resp.Scope, client.Scopes) {
+	if !oidcscope.Subset(resp.Scope, client.Scopes) {
 		return ErrScopeNotAllowed
 	}
-	if !audienceSubset(resp.Audience, client.Resources) {
+	if !resourceindicator.SubsetLabel(resp.Audience, client.Resources) {
 		return ErrAudienceNotAllowed
 	}
 	return nil
@@ -446,7 +447,7 @@ func (d *Dispatcher) validateBoundAccessToken(client *store.Client, resp *Respon
 	if d.maxAccessTTL > 0 && resp.BoundAccessToken.TTL > d.maxAccessTTL {
 		resp.BoundAccessToken.TTL = d.maxAccessTTL
 	}
-	if !audienceSubset(resp.BoundAccessToken.Audience, client.Resources) {
+	if !resourceindicator.SubsetLabel(resp.BoundAccessToken.Audience, client.Resources) {
 		return ErrAudienceNotAllowed
 	}
 	return nil
@@ -543,33 +544,6 @@ func clientGrantPermitted(client *store.Client, grantType string) bool {
 		return false
 	}
 	return slices.Contains(client.GrantTypes, grantType)
-}
-
-// scopeSubset reports whether every entry of want is present in
-// allowed. An empty want vacuously satisfies the check.
-func scopeSubset(want, allowed []string) bool {
-	for _, scope := range want {
-		if !slices.Contains(allowed, scope) {
-			return false
-		}
-	}
-	return true
-}
-
-// audienceSubset reports whether every entry of want is present in
-// allowed, under the OP-wide equality policy
-// ([resourceindicator.ContainsLabel]): a handler that returns the
-// canonical form for a resource indicator the embedder registered with
-// a trailing slash (or a default port) still satisfies the allow-list,
-// and a value carrying a fragment or userinfo satisfies nothing. An
-// empty want vacuously satisfies the check.
-func audienceSubset(want, allowed []string) bool {
-	for _, aud := range want {
-		if !resourceindicator.ContainsLabel(allowed, aud) {
-			return false
-		}
-	}
-	return true
 }
 
 // emitRequested records one dispatch attempt on the audit sink. The

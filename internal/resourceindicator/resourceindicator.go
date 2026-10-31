@@ -258,6 +258,17 @@ func ContainsLabel(set []string, raw string) bool {
 	return false
 }
 
+// SubsetLabel reports whether every entry of want is held by allowed
+// under [EqualLabel]. An empty want vacuously passes.
+func SubsetLabel(want, allowed []string) bool {
+	for _, v := range want {
+		if !ContainsLabel(allowed, v) {
+			return false
+		}
+	}
+	return true
+}
+
 // labelKey returns the value an audience-label comparison keys on and
 // whether the label may match at all.
 //
