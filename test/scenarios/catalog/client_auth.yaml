@@ -720,7 +720,7 @@ rows:
     spec: RFC 7515 §4.1.4
     behaviour: |
       A "kid" the registered JWKS does not list is refused outright:
-      internal/clientauth.verifySignature narrows the candidate set to
+      internal/rpjwks.VerifySignature narrows the candidate set to
       that kid and does NOT fall back to trialling every registered
       key, because trialling would restore the signature-verification
       amplification the kid gate exists to remove. An assertion with no
