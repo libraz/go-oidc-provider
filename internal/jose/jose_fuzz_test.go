@@ -33,6 +33,9 @@ import (
 //     input. Class-covered: ParseSigned never reaches JWE decrypt.
 //   - GHSA-c6gw-w398-hv78 (go-jose) — parse DoS on pathological JSON.
 //     Class-covered by the no-panic fuzz contract.
+//   - GHSA-vvm8-gf78-28g4 (go-jose) — panics in JSON parsing. Class-
+//     covered by the no-panic fuzz contract; FuzzDecodeJWKSet covers the
+//     JWK Set entry point.
 //   - GHSA-c5q2-7r4c-mv6g (go-jose) — compression amplification on
 //     JWE (CVE-2024-29371 cluster). Class-covered: compact JWS only;
 //     JWE / compression paths are out of the parse surface.

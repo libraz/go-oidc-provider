@@ -119,7 +119,11 @@ func TestDecrypt_AlgAllowList(t *testing.T) {
 
 // TestDecrypt_EncAllowList rejects every JWE whose `enc` is outside
 // the package allow-list. Constructed JWEs use the legitimate alg
-// (RSA-OAEP-256) so the failure isolates to the enc gate.
+// (RSA-OAEP-256) so the failure isolates to the enc gate, which runs
+// before the JOSE layer parses or decrypts anything.
+//
+// Tracks: GHSA-4w3g-jfj2-cw2q (go-jose) — panic during AES-CBC-HMAC JWE
+// processing; no CBC-HMAC content encryption reaches the JOSE layer.
 func TestDecrypt_EncAllowList(t *testing.T) {
 	t.Parallel()
 
@@ -133,8 +137,83 @@ func TestDecrypt_EncAllowList(t *testing.T) {
 
 			jwe := craftJWEWithAlgEnc(t, "RSA-OAEP-256", encAlg, "k1", &rsaKey.PublicKey)
 			_, err := jose.Decrypt(jwe, resolver)
-			if !errors.Is(err, jose.ErrJWEEncNotAllowed) && !errors.Is(err, jose.ErrJWEMalformed) {
-				t.Fatalf("Decrypt %s: want ErrJWEEncNotAllowed or ErrJWEMalformed, got %v", encAlg, err)
+			if !errors.Is(err, jose.ErrJWEEncNotAllowed) {
+				t.Fatalf("Decrypt %s: want ErrJWEEncNotAllowed, got %v", encAlg, err)
+			}
+		})
+	}
+}
+
+// TestDecrypt_RejectsJSONSerialisation pins that Decrypt is compact-only:
+// a correctly encrypted JWE in flattened JSON form, the same object with an
+// unprotected header added, and a general form with many recipients all
+// fail as malformed, while the compact form of the same JWE decrypts. The
+// compact form has no unprotected header and exactly one recipient.
+//
+// Tracks:
+//   - GHSA-p9j4-2j95-j4rv (go-jose) — unprotected JWE headers overrode
+//     protected fields whose value was "" or null.
+//   - GHSA-c67m-wr4h-2ccg (go-jose) — quadratic CPU on JWE JSON
+//     serialisation with many recipients.
+func TestDecrypt_RejectsJSONSerialisation(t *testing.T) {
+	t.Parallel()
+
+	rsaKey := mustRSAKey(t)
+	resolver := singleKeyResolver{kid: "k1", key: rsaKey}
+	encrypter, err := josev4.NewEncrypter(josev4.A128GCM, josev4.Recipient{
+		Algorithm: josev4.RSA_OAEP_256, Key: &rsaKey.PublicKey, KeyID: "k1",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewEncrypter: %v", err)
+	}
+	obj, err := encrypter.Encrypt([]byte("hello jwe"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	compact, err := obj.CompactSerialize()
+	if err != nil {
+		t.Fatalf("CompactSerialize: %v", err)
+	}
+	if _, err := jose.Decrypt(compact, resolver); err != nil {
+		t.Fatalf("compact control: %v", err)
+	}
+
+	flattened := obj.FullSerialize()
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(flattened), &doc); err != nil {
+		t.Fatalf("unmarshal flattened: %v", err)
+	}
+	doc["unprotected"] = map[string]any{"cty": "JWT"}
+	withUnprotected, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal unprotected: %v", err)
+	}
+	recipient := map[string]any{"header": map[string]any{"alg": "RSA-OAEP-256", "kid": "k1"}, "encrypted_key": doc["encrypted_key"]}
+	recipients := make([]any, 64)
+	for i := range recipients {
+		recipients[i] = recipient
+	}
+	general, err := json.Marshal(map[string]any{
+		"protected": doc["protected"], "recipients": recipients,
+		"iv": doc["iv"], "ciphertext": doc["ciphertext"], "tag": doc["tag"],
+	})
+	if err != nil {
+		t.Fatalf("marshal general: %v", err)
+	}
+
+	for name, raw := range map[string]string{
+		"flattened":               flattened,
+		"flattened+unprotected":   string(withUnprotected),
+		"general many recipients": string(general),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := jose.Decrypt(raw, resolver)
+			if !errors.Is(err, jose.ErrJWEMalformed) {
+				t.Fatalf("Decrypt: err=%v want ErrJWEMalformed", err)
+			}
+			if got.Plaintext != nil {
+				t.Fatalf("plaintext surfaced from a JSON-serialised JWE: %q", got.Plaintext)
 			}
 		})
 	}
