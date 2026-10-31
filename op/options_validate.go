@@ -46,6 +46,7 @@ func (c *config) validate() error {
 		c.validateAccessTokenRevocation,
 		c.validateDeviceCodeGrant,
 		c.validateCIBAGrant,
+		c.validateJWTBearerGrant,
 		c.validateEncryptionKeyset,
 		c.validateStaticClients,
 		c.validateStoreCapabilities,
@@ -337,7 +338,8 @@ func checkRegistrationKindUnique(flow LoginFlow, kind StepKind) error {
 		where string
 		step  Step
 	}
-	steps := []placed{{"Primary", flow.Primary}}
+	steps := make([]placed, 0, 1+len(flow.Rules))
+	steps = append(steps, placed{"Primary", flow.Primary})
 	for i, r := range flow.Rules {
 		steps = append(steps, placed{"Rules[" + strconv.Itoa(i) + "].Then", r.Then})
 	}

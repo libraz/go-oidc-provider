@@ -42,6 +42,11 @@ func TestBuiltinGrantTypeWires_CoversEveryEnumeratedGrantType(t *testing.T) {
 			break
 		}
 	}
+	if _, ok := builtinGrantTypeWires[grant.JWTBearer.String()]; !ok {
+		t.Errorf("grant type %q is absent from the custom-grant collision set; it is "+
+			"reserved unconditionally, whether or not WithJWTBearerGrant is configured",
+			grant.JWTBearer.String())
+	}
 }
 
 // TestBuiltinGrantTypeWires_CoversEveryInTreeExtensionGrant asserts
@@ -130,6 +135,21 @@ func TestStaticClientAllowedGrantTypes_MatchesTheImplementedSet(t *testing.T) {
 				"implement", wire)
 		}
 	}
+	if !slices.Contains(allowed, grant.JWTBearer.String()) {
+		t.Errorf("static-client whitelist omits %q; a static client must be able to name "+
+			"every built-in grant", grant.JWTBearer.String())
+	}
+}
+
+// TestSecretLikeFormParameters_CoversTheAssertionParameter pins that the
+// jwt-bearer grant's credential parameter cannot be exempted from the
+// single-value rule by a custom grant's ParamPolicy.
+func TestSecretLikeFormParameters_CoversTheAssertionParameter(t *testing.T) {
+	t.Parallel()
+
+	if _, ok := secretLikeFormParameters["assertion"]; !ok {
+		t.Error(`"assertion" is not in secretLikeFormParameters`)
+	}
 }
 
 // TestBuiltinGrantTypeWireList_OrderIsWireVisible pins the order, not
@@ -150,6 +170,7 @@ func TestBuiltinGrantTypeWireList_OrderIsWireVisible(t *testing.T) {
 		"client_credentials",
 		"urn:ietf:params:oauth:grant-type:device_code",
 		"urn:openid:params:grant-type:ciba",
+		"urn:ietf:params:oauth:grant-type:jwt-bearer",
 		TokenExchangeGrantType,
 	}
 	got := builtinGrantTypeWireList()

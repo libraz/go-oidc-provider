@@ -45,6 +45,15 @@ const (
 	// only; push and ping delivery modes are reserved for a future
 	// release.
 	CIBA
+
+	// JWTBearer selects the urn:ietf:params:oauth:grant-type:jwt-bearer
+	// grant from RFC 7523 §2.1: a client redeems a JWT assertion from an
+	// issuer the embedder trusts for an access token. Enable it with
+	// [op.WithJWTBearerGrant], which declares the trusted issuers and the
+	// subject mapping; listing it in [op.WithGrants] alone fails [op.New].
+	//
+	// Stable since v1.5.
+	JWTBearer
 )
 
 // String returns the wire form of the grant_type. The wire form is the value
@@ -62,6 +71,8 @@ func (t Type) String() string {
 		return "urn:ietf:params:oauth:grant-type:device_code"
 	case CIBA:
 		return "urn:openid:params:grant-type:ciba"
+	case JWTBearer:
+		return "urn:ietf:params:oauth:grant-type:jwt-bearer"
 	case typeUnspecified:
 		return ""
 	default:
@@ -74,7 +85,7 @@ func (t Type) String() string {
 // it.
 func (t Type) IsValid() bool {
 	switch t {
-	case AuthorizationCode, RefreshToken, ClientCredentials, DeviceCode, CIBA:
+	case AuthorizationCode, RefreshToken, ClientCredentials, DeviceCode, CIBA, JWTBearer:
 		return true
 	case typeUnspecified:
 		return false

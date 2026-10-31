@@ -213,6 +213,8 @@ func grantActivationOption(g grant.Type) string {
 		return "WithCIBA(WithCIBAHintResolver(...))"
 	case grant.DeviceCode:
 		return "WithDeviceCodeGrant()"
+	case grant.JWTBearer:
+		return "WithJWTBearerGrant(...)"
 	case grant.AuthorizationCode, grant.ClientCredentials, grant.RefreshToken:
 		return "WithGrants(..., grant." + g.String() + ")"
 	}

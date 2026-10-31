@@ -589,6 +589,18 @@ type config struct {
 	// [RegisterTokenExchange] call yields [ErrTokenExchangeDuplicate].
 	tokenExchangePolicy TokenExchangePolicy
 
+	// idjagIssuancePolicy stores the [IDJAGIssuancePolicy] supplied
+	// through [WithIDJAGIssuance]. Non-nil enables the token-exchange
+	// branch that issues ID-JAGs for requested_token_type id-jag.
+	idjagIssuancePolicy IDJAGIssuancePolicy
+
+	// jwtBearerGrant holds the trust declaration supplied through
+	// [WithJWTBearerGrant], deep-copied at the option site. Nil means
+	// the option was not called; a non-nil value adds [grant.JWTBearer]
+	// to the resolved grant set and is checked by
+	// [config.validateJWTBearerGrant].
+	jwtBearerGrant *JWTBearerGrant
+
 	// deviceCodeGrantEnabled records the explicit
 	// [WithDeviceCodeGrant] opt-in. When true the construction-time
 	// validator requires the configured [store.Store] to expose a

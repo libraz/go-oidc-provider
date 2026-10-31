@@ -191,6 +191,12 @@ const (
 	AuditTokenExchangeRefreshIssued             Name = "token_exchange.refresh_issued"
 	AuditTokenExchangeSelfExchange              Name = "token_exchange.self_exchange"
 	AuditTokenExchangeSubjectTokenRegistryError Name = "token_exchange.subject_token_registry_error"
+	AuditTokenExchangeIDJAGIssued               Name = "token_exchange.idjag_issued"
+
+	//nolint:gosec // Event name, not a credential.
+	AuditJWTBearerGranted Name = "jwt_bearer.granted"
+	//nolint:gosec // Event name, not a credential.
+	AuditJWTBearerRejected Name = "jwt_bearer.rejected"
 
 	// AuditStartupProfile records the security posture a Provider was
 	// constructed with: the declared profiles, features, and grants,
@@ -324,6 +330,9 @@ var definitions = []Definition{
 	{Name: AuditTokenExchangeRefreshIssued, Metric: MetricTokenExchange, Label: "refresh_issued"},
 	{Name: AuditTokenExchangeSelfExchange, Metric: MetricTokenExchange, Label: "self_exchange"},
 	{Name: AuditTokenExchangeSubjectTokenRegistryError, Metric: MetricTokenExchange, Label: "subject_token_registry_error"},
+	{Name: AuditTokenExchangeIDJAGIssued, Metric: MetricTokenExchange, Label: "idjag_issued"},
+	{Name: AuditJWTBearerGranted},
+	{Name: AuditJWTBearerRejected},
 	{Name: AuditStartupProfile},
 }
 

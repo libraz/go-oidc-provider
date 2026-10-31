@@ -87,6 +87,7 @@ var secretLikeFormParameters = map[string]struct{}{
 	"password":              {},
 	"client_assertion":      {},
 	"client_assertion_type": {},
+	"assertion":             {},
 }
 
 // WithCustomGrant registers an embedder-defined grant_type at the

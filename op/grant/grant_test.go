@@ -33,6 +33,7 @@ func TestType_String(t *testing.T) {
 		{"client_credentials", grant.ClientCredentials, "client_credentials"},
 		{"device_code", grant.DeviceCode, "urn:ietf:params:oauth:grant-type:device_code"},
 		{"ciba", grant.CIBA, "urn:openid:params:grant-type:ciba"},
+		{"jwt_bearer", grant.JWTBearer, "urn:ietf:params:oauth:grant-type:jwt-bearer"},
 		{"zero", grant.Type(0), ""},
 		{"unknown", grant.Type(99), ""},
 	}
@@ -56,6 +57,7 @@ func TestType_IsValid(t *testing.T) {
 		grant.ClientCredentials,
 		grant.DeviceCode,
 		grant.CIBA,
+		grant.JWTBearer,
 	}
 	for _, v := range valid {
 		if !v.IsValid() {

@@ -223,8 +223,8 @@ func isStandardScope(name string) bool {
 
 // resolveGrants assembles the final grant set from the two ways an
 // embedder can reach it: the wholesale [WithGrants] list and the
-// per-grant opt-in options ([WithCIBA], [WithDeviceCodeGrant]) that
-// also wire the grant's collaborators.
+// per-grant opt-in options ([WithCIBA], [WithDeviceCodeGrant],
+// [WithJWTBearerGrant]) that also wire the grant's collaborators.
 //
 // The base is the [WithGrants] list when it was supplied, and the
 // authorization_code + refresh_token default otherwise. Per-grant
@@ -253,6 +253,7 @@ func (c *config) resolveGrants() {
 	}{
 		{c.deviceCodeGrantEnabled, grant.DeviceCode},
 		{c.cibaGrantEnabled, grant.CIBA},
+		{c.jwtBearerGrant != nil, grant.JWTBearer},
 	} {
 		if !opt.enabled || slices.Contains(c.grants, opt.grant) {
 			continue

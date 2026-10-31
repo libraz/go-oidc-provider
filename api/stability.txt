@@ -16,8 +16,14 @@ github.com/libraz/go-oidc-provider/op	ACRLevels	v1.5
 github.com/libraz/go-oidc-provider/op	ACRPolicy	v1.0
 github.com/libraz/go-oidc-provider/op	AccessTokenFormat	v1.0
 github.com/libraz/go-oidc-provider/op	AccessTokenRevocationStrategy	v1.0
+github.com/libraz/go-oidc-provider/op	AssertionIssuer	v1.5
+github.com/libraz/go-oidc-provider/op	AssertionProfile	v1.5
+github.com/libraz/go-oidc-provider/op	AssertionProfileJWT	v1.5
+github.com/libraz/go-oidc-provider/op	AssertionSubject	v1.5
 github.com/libraz/go-oidc-provider/op	AuditClientAuthnPreviousSecret	v1.5
 github.com/libraz/go-oidc-provider/op	AuditEvent	v1.0
+github.com/libraz/go-oidc-provider/op	AuditJWTBearerGranted	v1.5
+github.com/libraz/go-oidc-provider/op	AuditJWTBearerRejected	v1.5
 github.com/libraz/go-oidc-provider/op	AuditLockoutEngaged	v1.5
 github.com/libraz/go-oidc-provider/op	AuditStepBeginFailed	v1.5
 github.com/libraz/go-oidc-provider/op	AuthorizationDetailType	v1.0
@@ -60,11 +66,13 @@ github.com/libraz/go-oidc-provider/op	EnrollmentChecker	v1.5
 github.com/libraz/go-oidc-provider/op	ErrFactorAbort	v1.5
 github.com/libraz/go-oidc-provider/op	ErrFactorRetry	v1.5
 github.com/libraz/go-oidc-provider/op	ErrReloadIncompatible	v1.5
+github.com/libraz/go-oidc-provider/op	ErrUnknownAssertionSubject	v1.5
 github.com/libraz/go-oidc-provider/op	Error.OAuthCode	v1.0
 github.com/libraz/go-oidc-provider/op	Error.WriteOAuthError	v1.0
 github.com/libraz/go-oidc-provider/op	ExternalStep.CountFailures	v1.5
 github.com/libraz/go-oidc-provider/op	IsClientError	v1.0
 github.com/libraz/go-oidc-provider/op	IsServerError	v1.0
+github.com/libraz/go-oidc-provider/op	JWTBearerGrant	v1.5
 github.com/libraz/go-oidc-provider/op	LoadKeyset	v1.5
 github.com/libraz/go-oidc-provider/op	LoadSigningKey	v1.5
 github.com/libraz/go-oidc-provider/op	LoadSymmetricKeys	v1.5
@@ -168,6 +176,7 @@ github.com/libraz/go-oidc-provider/op	WithInteractions	v1.5
 github.com/libraz/go-oidc-provider/op	WithIssuer	v1.0
 github.com/libraz/go-oidc-provider/op	WithJWKSHTTPTransport	v1.0
 github.com/libraz/go-oidc-provider/op	WithJWKSRotationActive	v1.0
+github.com/libraz/go-oidc-provider/op	WithJWTBearerGrant	v1.5
 github.com/libraz/go-oidc-provider/op	WithKeyset	v1.0
 github.com/libraz/go-oidc-provider/op	WithLocale	v1.0
 github.com/libraz/go-oidc-provider/op	WithLogger	v1.0
@@ -198,6 +207,7 @@ github.com/libraz/go-oidc-provider/op	WithSupportedEncryptionAlgs	v1.0
 github.com/libraz/go-oidc-provider/op	WithTrustedProxies	v1.0
 github.com/libraz/go-oidc-provider/op	WithTrustedProxyHosts	v1.0
 github.com/libraz/go-oidc-provider/op	WithUserStore	v1.0
+github.com/libraz/go-oidc-provider/op/grant	JWTBearer	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	*	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	FactorChoiceField	v1.5
 github.com/libraz/go-oidc-provider/op/interaction	FactorChoicePromptData	v1.5

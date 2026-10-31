@@ -49,6 +49,12 @@
 // is missing, op.New returns a configuration error naming both the interface
 // and the condition, so a backend author can act on the message alone.
 //
+// Core substores carry grant-specific obligations too. Under
+// op.WithJWTBearerGrant, op.New requires a UserStore, which confirms every
+// redeemed subject, and each assertion's jti is recorded in
+// [ConsumedJTIStore]. A deployment running several OP nodes MUST share that
+// substore across them, or every node accepts the same assertion once.
+//
 // Extensions that stay optional, and what the OP does without them:
 //
 //	Extension                Asserted on            Fallback when absent

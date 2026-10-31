@@ -543,6 +543,32 @@ const (
 	// ("registry_error"), is_subject (true when the failed lookup was
 	// for subject_token, false for actor_token).
 	AuditTokenExchangeSubjectTokenRegistryError = AuditEvent(auditevent.AuditTokenExchangeSubjectTokenRegistryError)
+
+	// AuditTokenExchangeIDJAGIssued fires when the token-exchange handler
+	// issues an Identity Assertion JWT Authorization Grant under
+	// [WithIDJAGIssuance].
+	//
+	// Experimental: tracks an IETF draft, so the event MAY change in a
+	// minor release on a wire-incompatible draft bump.
+	AuditTokenExchangeIDJAGIssued = AuditEvent(auditevent.AuditTokenExchangeIDJAGIssued)
+)
+
+// JWT bearer grant events. Fire from the token endpoint's RFC 7523
+// grant enabled by [WithJWTBearerGrant].
+const (
+	// AuditJWTBearerGranted fires when an assertion is redeemed for an
+	// access token.
+	//
+	// Stable since v1.5.
+	AuditJWTBearerGranted = AuditEvent(auditevent.AuditJWTBearerGranted)
+
+	// AuditJWTBearerRejected fires when an assertion is refused.
+	// Extras["reason"] names the verification stage that failed (parse,
+	// issuer, typ, signature, claims, idjag, replay), so an operator can
+	// tell a misconfigured issuer from a replayed assertion.
+	//
+	// Stable since v1.5.
+	AuditJWTBearerRejected = AuditEvent(auditevent.AuditJWTBearerRejected)
 )
 
 // Provider lifecycle events.
