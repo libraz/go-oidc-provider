@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -255,6 +256,35 @@ func TestVerify_RejectsEmpty(t *testing.T) {
 	})
 	if !errors.Is(err, dpop.ErrProofMalformed) {
 		t.Fatalf("err=%v want ErrProofMalformed", err)
+	}
+}
+
+// TestVerify_RejectsOversizedProof pins a size ceiling on the proof that
+// fires before the embedded jwk header is parsed, so an attacker cannot
+// make the OP decode an arbitrarily large RSA key. A correctly signed
+// proof over the limit is rejected; the same proof without padding passes.
+//
+// Tracks: GHSA-mgcc-cww5-fp2q (go-jose) — CPU exhaustion parsing a JWK
+// carrying an oversized RSA key.
+func TestVerify_RejectsOversizedProof(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	key := newPS256Key(t)
+	claims := goodClaims(now)
+	claims["pad"] = strings.Repeat("A", 8*1024)
+	raw := signProof(t, key, claims, "")
+	v := newVerifier(t, now)
+	_, err := v.Verify(context.Background(), dpop.VerifyInput{
+		ProofHeader: raw,
+		Method:      "POST",
+		URL:         mustParseURL(t, "https://op.example/oidc/token"),
+		TLS:         true,
+	})
+	if !errors.Is(err, dpop.ErrProofMalformed) {
+		t.Fatalf("oversized proof: err=%v want ErrProofMalformed", err)
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized proof rejected for another reason: %v", err)
 	}
 }
 

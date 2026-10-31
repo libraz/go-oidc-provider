@@ -76,6 +76,11 @@ type parsedProof struct {
 	jwk *josev4.JSONWebKey
 }
 
+// maxProofBytes caps a DPoP proof before its embedded jwk is parsed. A
+// proof carrying a 4096-bit RSA key is under 2 KB; without the cap only the
+// embedder's header limit bounds the key the JOSE layer would decode.
+const maxProofBytes = 8 * 1024
+
 // parseProof validates the proof JWT structurally and verifies its
 // self-signature. The function returns either a [*parsedProof] or one
 // of the [Err*] sentinels; it never returns a wrapped third-party
@@ -84,6 +89,9 @@ type parsedProof struct {
 func parseProof(raw string) (*parsedProof, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("%w: empty proof", ErrProofMalformed)
+	}
+	if len(raw) > maxProofBytes {
+		return nil, fmt.Errorf("%w: proof exceeds %d bytes", ErrProofMalformed, maxProofBytes)
 	}
 	jws, alg, err := jose.ParseSigned(raw)
 	if err != nil {
