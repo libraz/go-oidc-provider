@@ -1120,8 +1120,8 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 // access-token record bound to a grant the subject still holds is
 // marked revoked. The test stops at the registry boundary; the
 // follow-on "userinfo returns 401 for a revoked record" path is
-// covered by internal/userinfo/handler_test.go's
-// enforceRevocationStatus tests, so the two layers together prove
+// covered by internal/endpointsupport/bearer_test.go's
+// revocation tests, so the two layers together prove
 // the FAPI 2.0 SP §5.3.2.2 / OIDC RP-Initiated Logout 1.0 §5
 // expectation is honoured.
 func TestHandler_RevokesAccessTokensOnLogout(t *testing.T) {

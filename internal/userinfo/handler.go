@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/revocation"
-
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
@@ -175,20 +173,6 @@ type HandlerDeps struct {
 // release). The returned handler is safe for concurrent use; deps MUST
 // NOT be mutated after the call.
 func Handler(deps HandlerDeps) http.Handler {
-	// The userinfo Clock and the tokens Clock share a structural shape;
-	// a non-nil value satisfies both interfaces directly, and a nil
-	// propagates so the verifier falls back to its system clock.
-	var verifierClock tokens.Clock
-	if deps.Clock != nil {
-		verifierClock = deps.Clock
-	}
-	verifier := &tokens.AccessTokenVerifier{
-		Keys:       deps.Keys,
-		Issuer:     deps.Issuer,
-		Clock:      verifierClock,
-		Leeway:     deps.Leeway,
-		RequireJTI: revocation.RequireJTIFor(deps.RevocationStrategy),
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The registry is wrapped per request, not once here: the memo
 		// is only sound for the duration of a single request, and a
@@ -197,15 +181,16 @@ func Handler(deps HandlerDeps) http.Handler {
 		if deps.Clients != nil {
 			perRequest.Clients = &requestClientCache{inner: deps.Clients}
 		}
-		serveUserInfo(w, r, perRequest, verifier)
+		serveUserInfo(w, r, perRequest)
 	})
 }
 
 // serveUserInfo runs one /userinfo request through the dispatch ladder:
-// method gate → bearer extraction → opaque-or-JWT branch → claim
-// assembly. Pulled out of [Handler] so the cognitive complexity of each
-// individual function stays under the lint budget.
-func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps, verifier *tokens.AccessTokenVerifier) {
+// method gate → bearer extraction → token acceptance → claim assembly.
+// Acceptance (JWT or opaque, audience, sender constraint, revocation) is
+// [endpointsupport.AcceptBearerToken], shared with every endpoint that
+// takes the OP's own access tokens.
+func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps) {
 	if !methodAllowed(r.Method) {
 		w.Header().Set("Allow", "GET, HEAD, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -216,39 +201,49 @@ func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps, ver
 		respondBearerExtractError(w, err)
 		return
 	}
-	// Opaque first: a presented bearer that is not JWS-shaped resolves
-	// through the opaque substore. The JWT verifier would always reject
-	// a non-JWS shape, so taking the opaque branch ahead of it avoids a
-	// spurious "malformed JWT" diagnostic and keeps the WWW-Authenticate
-	// challenges aligned with the format the token endpoint actually
-	// issued.
-	if !endpointsupport.LooksLikeJWT(raw) && deps.OpaqueAccessTokens != nil {
-		serveUserInfoOpaque(w, r, deps, raw)
-		return
-	}
-	serveUserInfoJWT(w, r, deps, verifier, raw)
-}
-
-func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, verifier *tokens.AccessTokenVerifier, raw string) {
-	claims, _, err := verifier.Verify(r.Context(), raw)
+	access, err := endpointsupport.AcceptBearerToken(r, raw, bearerDeps(deps))
 	if err != nil {
-		respondInvalidToken(w, err)
+		respondBearerRejected(w, err)
 		return
 	}
-	if !enforceAudience(w, deps.Issuer, claims.Audience) {
-		return
-	}
-	if !enforceCnfBinding(w, r, deps, claims, raw) {
-		return
-	}
-	if !enforceRevocationStatus(r.Context(), w, deps, claims) {
-		return
-	}
-	out, client, ok := assembleClaims(r.Context(), w, deps, claims, claims.UserInfoClaims != nil)
+	claims := access.Claims
+	out, client, ok := assembleClaims(r.Context(), w, deps, claims, access.AuthorizationRecorded)
 	if !ok {
 		return
 	}
 	dispatchUserInfoResponse(r, w, deps, claims.ClientID, out, client)
+}
+
+// bearerDeps projects the handler's dependencies onto the shared bearer
+// acceptance rules.
+func bearerDeps(deps HandlerDeps) endpointsupport.BearerDeps {
+	return endpointsupport.BearerDeps{
+		Keys:               deps.Keys,
+		Issuer:             deps.Issuer,
+		Clock:              deps.Clock,
+		Leeway:             deps.Leeway,
+		Clients:            deps.Clients,
+		Grants:             deps.Grants,
+		SubjectProjector:   deps.SubjectProjector,
+		OpaqueAccessTokens: deps.OpaqueAccessTokens,
+		AccessTokens:       deps.AccessTokens,
+		GrantRevocations:   deps.GrantRevocations,
+		RevocationStrategy: deps.RevocationStrategy,
+		DPoP:               deps.DPoP,
+		DPoPNonces:         deps.DPoPNonces,
+		MTLS:               deps.MTLS,
+	}
+}
+
+// respondBearerRejected writes the challenge for a token
+// [endpointsupport.AcceptBearerToken] refused.
+func respondBearerRejected(w http.ResponseWriter, err error) {
+	var be *endpointsupport.BearerError
+	if !errors.As(err, &be) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	be.WriteResponse(w)
 }
 
 // dispatchUserInfoResponse picks the response shape based on the
@@ -307,177 +302,10 @@ func dispatchUserInfoResponse(
 	writeUserInfoJWT(r.Context(), w, deps, clientID, body)
 }
 
-// enforceAudience refuses an access token whose "aud" claim is set but
-// does not contain the OP's issuer URL. The check keeps a token minted
-// for an external resource server (RFC 8707 §2.1, aud=<resource>) from
-// being usable at /userinfo even though it shares the OP's signing key.
-//
-// An empty Audience is accepted: aud is OPTIONAL on the OP-default
-// access token shape (and on legacy / external tokens that the
-// embedder may also accept), so an absent claim is the audience-less
-// path covered by RI-070.
-//
-// On rejection the response is the bare RFC 6750 §3.1 invalid_token
-// challenge — the description does not name the sub-cause, matching
-// the privacy posture every other userinfo failure path takes.
-func enforceAudience(w http.ResponseWriter, issuer string, audience []string) bool {
-	if issuer == "" || len(audience) == 0 {
-		return true
-	}
-	for _, a := range audience {
-		if a == issuer {
-			return true
-		}
-	}
-	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "The access token is invalid"))
-	w.WriteHeader(http.StatusUnauthorized)
-	return false
-}
-
-// enforceCnfBinding verifies the sender-constraint proof on the
-// request whenever the access token carries a cnf claim (RFC 7800).
-// Two binding methods are recognised:
-//
-//   - "jkt": RFC 9449 DPoP. Requires a "DPoP" header carrying a proof
-//     whose JWK thumbprint equals the bound value.
-//   - "x5t#S256": RFC 8705 §3. Requires a client cert (TLS handshake
-//     or trusted reverse-proxy header) whose DER bytes hash to the
-//     bound value.
-//
-// A token may carry BOTH members; the function then enforces both
-// proofs. A token with no cnf claim leaves the request on the
-// bearer path. The function emits a 401 with the appropriate
-// WWW-Authenticate challenge and returns false on any failure.
-func enforceCnfBinding(
-	w http.ResponseWriter,
-	r *http.Request,
-	deps HandlerDeps,
-	claims *tokens.AccessTokenClaims,
-	rawAccessToken string,
-) bool {
-	cnf := claims.Confirmation
-	if len(cnf) == 0 {
-		// Bearer token: nothing to enforce.
-		return true
-	}
-	if jkt := cnf[tokens.CnfJKT]; jkt != "" {
-		if !enforceDPoPCnf(w, r, deps, jkt, rawAccessToken) {
-			return false
-		}
-	}
-	if x5t := cnf[tokens.CnfX5tS256]; x5t != "" {
-		if !enforceMTLSCnf(w, r, deps, x5t) {
-			return false
-		}
-	}
-	return true
-}
-
-// enforceDPoPCnf is the DPoP-specific half of [enforceCnfBinding].
-// Split out so the two confirmation methods stay readable when both
-// are present on the same token.
-func enforceDPoPCnf(
-	w http.ResponseWriter,
-	r *http.Request,
-	deps HandlerDeps,
-	jkt, rawAccessToken string,
-) bool {
-	if deps.DPoP == nil {
-		respondDPoPInvalid(w, "DPoP verification is not enabled")
-		return false
-	}
-	// RFC 9449 §7.1: a DPoP-bound access token MUST be presented with the
-	// "DPoP" authentication scheme, not "Bearer" (and not via the POST
-	// access_token body channel, which carries no scheme). The proof check
-	// below would also reject a request that lacks a valid proof, but a
-	// Bearer-scheme presentation of a sender-constrained token is itself a
-	// §7.1 violation and blurs the signal the scheme is meant to carry, so
-	// reject it up front. enforceDPoPCnf is only reached for jkt-bound
-	// tokens, so this never affects plain bearer tokens.
-	if _, scheme, _ := endpointsupport.BearerCredentialFromHeader(r.Header.Get("Authorization")); scheme != endpointsupport.BearerSchemeDPoP {
-		respondDPoPInvalid(w, "DPoP-bound access token must use the DPoP authentication scheme")
-		return false
-	}
-	if !dpop.HasProof(r) {
-		respondDPoPInvalid(w, "DPoP proof required")
-		return false
-	}
-	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, rawAccessToken)
-	if err != nil {
-		if dpop.IsNonceError(err) {
-			respondUseDPoPNonce(w, deps)
-			return false
-		}
-		respondDPoPInvalid(w, "DPoP proof rejected")
-		return false
-	}
-	if res.JKT != jkt {
-		respondDPoPInvalid(w, "DPoP proof key does not match the bound thumbprint")
-		return false
-	}
-	return true
-}
-
-// enforceMTLSCnf is the mTLS-specific half of [enforceCnfBinding]. It
-// surfaces the appropriate WWW-Authenticate challenge for missing /
-// mismatched client certificates without leaking which sub-class of
-// failure produced the rejection.
-func enforceMTLSCnf(
-	w http.ResponseWriter,
-	r *http.Request,
-	deps HandlerDeps,
-	bound string,
-) bool {
-	if deps.MTLS == nil {
-		respondMTLSInvalid(w, "mTLS verification is not enabled")
-		return false
-	}
-	if err := deps.MTLS.VerifyBoundRequest(r, bound); err != nil {
-		respondMTLSInvalid(w, "client certificate does not match the bound thumbprint")
-		return false
-	}
-	return true
-}
-
-// respondDPoPInvalid writes the RFC 9449 §7.1 challenge for a token
-// that requires DPoP but failed verification. The library uses the
-// "invalid_token" code (rather than the spec's "invalid_dpop_proof")
-// so RP libraries that key off the OAuth-Bearer challenge taxonomy
-// continue to function; the description carries enough detail for
-// the operator to triage the failure from logs.
-func respondDPoPInvalid(w http.ResponseWriter, description string) {
-	w.Header().Set("WWW-Authenticate", buildDPoPChallenge("invalid_token", description))
-	w.WriteHeader(http.StatusUnauthorized)
-}
-
-// respondUseDPoPNonce writes the RFC 9449 §9 nonce challenge: a 401
-// with WWW-Authenticate: DPoP error="use_dpop_nonce" and a
-// "DPoP-Nonce" response header carrying a fresh value the client
-// should embed in the next proof's "nonce" claim. A nil
-// [HandlerDeps.DPoPNonces] omits the "DPoP-Nonce" header (the issuer
-// is offline) but still carries the error code so a debugger can see
-// the gate fired; the client then has no nonce to retry with, which
-// is the most truthful signal the server can give in that
-// misconfiguration.
+// respondUseDPoPNonce writes the RFC 9449 §9 use_dpop_nonce challenge,
+// issuing a fresh DPoP-Nonce from [HandlerDeps.DPoPNonces].
 func respondUseDPoPNonce(w http.ResponseWriter, deps HandlerDeps) {
-	if deps.DPoPNonces != nil {
-		if nonce := deps.DPoPNonces.IssueNonce(); nonce != "" {
-			w.Header().Set("DPoP-Nonce", nonce)
-		}
-	}
-	w.Header().Set("WWW-Authenticate", buildDPoPChallenge("use_dpop_nonce",
-		"DPoP proof requires a server-supplied nonce; retry using the value in the DPoP-Nonce response header"))
-	w.WriteHeader(http.StatusUnauthorized)
-}
-
-// respondMTLSInvalid writes the RFC 8705 §3.2 equivalent challenge for
-// a token that requires a client certificate but failed verification.
-// The challenge stays on the OAuth-Bearer code "invalid_token" so RP
-// libraries that key off the bearer state machine continue to
-// function; mTLS does not define a new error code for this case.
-func respondMTLSInvalid(w http.ResponseWriter, description string) {
-	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", description))
-	w.WriteHeader(http.StatusUnauthorized)
+	endpointsupport.NewUseDPoPNonceError(deps.DPoPNonces).WriteResponse(w)
 }
 
 // methodAllowed reports whether method is one of the two verbs the
@@ -627,77 +455,6 @@ func buildBearerChallenge(code, description string) string {
 		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeError, Value: code},
 		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeErrorDescription, Value: description},
 	)
-}
-
-// buildDPoPChallenge is the DPoP-scheme counterpart of [buildBearerChallenge]
-// for RFC 9449 §7.1 / §9 challenges. The description flows through the
-// same [endpointsupport.SanitizeChallengeValue] gate so the two challenge
-// shapes share their CR/LF/quote/backslash defenses.
-func buildDPoPChallenge(code, description string) string {
-	return endpointsupport.BuildBearerChallenge(endpointsupport.BearerSchemeDPoP,
-		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeError, Value: code},
-		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeErrorDescription, Value: description},
-	)
-}
-
-// enforceRevocationStatus rejects the request when the access token
-// has been revoked. The actual lookup shape depends on
-// [HandlerDeps.RevocationStrategy]:
-//
-//   - [store.RevocationStrategyGrantTombstone] (default): consult
-//     [store.GrantRevocationStore.IsRevoked], which evaluates the jti
-//     denylist and the grant tombstone keyed by the AT's "gid" private
-//     claim independently — an AT without "gid" (client_credentials
-//     mints one) is still closed by its denylist row. Only when that
-//     substore reports a grantless AT live does the lookup fall back to
-//     the [store.AccessTokenRegistry]; embedders that wired neither
-//     substore opt out entirely.
-//   - [store.RevocationStrategyJTIRegistry]: consult the registry by
-//     JTI; the marked-revoked row collapses onto invalid_token. This
-//     is the per-JTI behaviour preserved for embedders pinning the
-//     legacy strategy.
-//   - [store.RevocationStrategyNone]: no check; the JWT lives until
-//     exp.
-//
-// Lookup errors are fatal on every path: silently allowing the request
-// would re-introduce the cascade gap that the revocation registry
-// closes.
-func enforceRevocationStatus(
-	ctx context.Context,
-	w http.ResponseWriter,
-	deps HandlerDeps,
-	claims *tokens.AccessTokenClaims,
-) bool {
-	revoked, ok := revocation.JWTAccessTokenRevoked(ctx, revocation.JWTRevocationOpts{
-		AccessTokens:       deps.AccessTokens,
-		GrantRevocations:   deps.GrantRevocations,
-		Clients:            deps.Clients,
-		RevocationStrategy: deps.RevocationStrategy,
-	}, claims)
-	if !ok {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return false
-	}
-	if revoked {
-		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "The access token has been revoked"))
-		w.WriteHeader(http.StatusUnauthorized)
-		return false
-	}
-	return true
-}
-
-// respondInvalidToken writes a 401 response with the error="invalid_token"
-// challenge mandated by RFC 6750 §3.1. The description distinguishes
-// the expired case (so RPs can decide whether to refresh) but does NOT
-// leak which sub-class of signature / parse failure produced any other
-// rejection.
-func respondInvalidToken(w http.ResponseWriter, err error) {
-	desc := invalidTokenDescription
-	if errors.Is(err, tokens.ErrAccessTokenExpired) {
-		desc = "The access token expired"
-	}
-	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", desc))
-	w.WriteHeader(http.StatusUnauthorized)
 }
 
 const invalidTokenDescription = "The access token is invalid"

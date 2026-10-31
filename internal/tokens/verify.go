@@ -159,8 +159,8 @@ type AccessTokenVerifier struct {
 //
 // Verify intentionally does NOT validate the audience claim against an
 // expected value. Audience policy varies by caller and is enforced one
-// layer up: the /userinfo handler calls its own enforceAudience to
-// require aud-contains-issuer, while a downstream resource server
+// layer up: the shared bearer acceptance (endpointsupport.AcceptBearer) used by /userinfo
+// requires aud-contains-issuer, while a downstream resource server
 // validates that aud contains its own resource identifier. Callers
 // that want the assertion compare claims.Audience after Verify
 // returns and surface [ErrAccessTokenAudienceMismatch] on failure.
