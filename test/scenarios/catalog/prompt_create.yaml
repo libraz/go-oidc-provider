@@ -1,0 +1,206 @@
+# yaml-language-server: $schema=./schema.json
+feature: prompt_create
+prefix: PCR
+title: prompt=create and LoginFlow.Registration
+specs:
+  - OpenID Connect Initiating User Registration 1.0 §4.1, §4.2
+  - OIDC Core 1.0 §3.1.2.1 (`prompt`)
+  - OIDC Core 1.0 §3.1.2.6 (Authentication Error Response)
+  - RFC 9126 (PAR)
+  - RFC 9101 (JAR)
+
+description: |
+  A request carrying `prompt=create` starts at the registration step the
+  embedder configured in `op.LoginFlow.Registration` instead of `Primary`,
+  and discovery advertises `create` only when that step exists. The OP does
+  not create accounts itself: the embedder's step binds the subject, and the
+  rest of the authorization (rules, consent, code, ID Token) proceeds as
+  after `Primary`. Without a registration step, `create` is an unrecognised
+  value, and `create` never combines with another value.
+
+rows:
+  - id: PCR-001
+    severity: P0
+    spec: Prompt Create 1.0 §4.1
+    shape: identity
+    behaviour: |
+      With a registration step configured and no session, `prompt=create`
+      MUST run the registration step and never `Primary`; the step MUST be
+      handed an empty subject at Begin; after consent the ID Token
+      `sub` MUST be the subject the step bound, `auth_time` MUST equal the
+      moment the step completed (not the interaction's creation time) and
+      `amr` MUST be the registration authenticator's `AMR()`.
+    status: active
+
+  - id: PCR-002
+    severity: P1
+    spec: Prompt Create 1.0 §4.1
+    shape: order
+    behaviour: |
+      A rule predicate reading `op.LoginContext.CompletedSteps` MUST see the
+      registration step's kind after it completes, so a follow-up step is
+      scheduled between registration and consent; an ordinary login in the
+      same flow MUST NOT trigger that step.
+    status: active
+
+  - id: PCR-003
+    severity: P0
+    spec: Prompt Create 1.0 §4.1
+    shape: identity
+    behaviour: |
+      With a live session whose subject holds a grant covering the request,
+      `prompt=create` MUST NOT be served from the session: the registration
+      step runs with an empty subject, consent MUST be shown for the new
+      subject, and the ID Token `sub`, `auth_time` and `amr` MUST be the
+      registration attempt's rather than the session's. A later request
+      without `prompt` MUST then be served as the new subject.
+    status: active
+
+  - id: PCR-004
+    severity: P1
+    spec: Prompt Create 1.0 §4.1
+    shape: value
+    behaviour: |
+      Without a registration step, `prompt=create` MUST be refused with
+      `invalid_request` and the description "prompt contains an
+      unrecognised value", redirected to the RP with `state` echoed and no
+      code. `CREATE` (upper case) MUST be refused identically even when a
+      registration step is configured.
+    status: active
+
+  - id: PCR-005
+    severity: P1
+    spec: Prompt Create 1.0 §4.1
+    shape: value
+    behaviour: |
+      With a registration step configured, `create` combined with `login`,
+      `consent` or `select_account` MUST be refused with `invalid_request`
+      and "prompt=create cannot combine with other prompts"; combined with
+      `none` it MUST be refused with the existing none conflict text; a
+      tab-separated pair MUST be refused as an unrecognised value; and a
+      repeated `create create` MUST be accepted as `create`.
+    status: active
+
+  - id: PCR-006
+    severity: P1
+    spec: RFC 9126 §2.1
+    shape: value
+    behaviour: |
+      A pushed request MUST be judged by the same rules: `create` is
+      accepted at `/par` and, redeemed at `/authorize`, runs the
+      registration step; without a registration step `/par` MUST answer
+      400 `invalid_request` with the unrecognised-value description; a
+      pushed `create login` MUST be refused at `/par` with the create
+      conflict text.
+    status: active
+
+  - id: PCR-007
+    severity: P1
+    spec: RFC 9101 §4
+    shape: value
+    behaviour: |
+      A `prompt` claim in a signed request object MUST be judged by the
+      same rules: a string `create` runs the registration step; an array
+      claim `["create","login"]` is joined with spaces and refused with the
+      create conflict text; without a registration step `create` is refused
+      with the unrecognised-value description.
+    status: active
+
+  - id: PCR-008
+    severity: P1
+    spec: Prompt Create 1.0 §4.2
+    shape: value
+    behaviour: |
+      Discovery `prompt_values_supported` MUST be exactly
+      `["none","login","consent","select_account","create"]` when a
+      registration step is configured and the same list without `create`
+      otherwise. `op.New` MUST refuse an `op.DiscoveryMetadata` `Extra` map
+      containing `prompt_values_supported`, naming the key.
+    status: active
+
+  - id: PCR-009
+    severity: P1
+    spec: implementation contract
+    shape: value
+    behaviour: |
+      `op.New` MUST refuse an `op.LoginFlow.Registration` that is a built-in
+      step, an `op.StepOneOf`, an `op.ExternalStep` with `CountFailures`
+      set, one whose kind label is already used by `Primary`, or one named
+      by a rule, and MUST accept a valid `op.ExternalStep`.
+    status: active
+
+  - id: PCR-010
+    severity: P2
+    spec: implementation contract
+    shape: value
+    behaviour: |
+      The pairwise matrix driving PCR-011 MUST contain, for every two
+      factors, every pair of their levels: 61 distinct pairs over
+      Registration x prompt x route x session.
+    status: active
+    notes: |
+      Guards the matrix recorded in PCR-011's notes against a row being
+      edited out.
+
+  - id: PCR-011
+    severity: P0
+    spec: Prompt Create 1.0 §4.1 / OIDC Core §3.1.2.1
+    shape: identity
+    behaviour: |
+      Across the pairwise matrix of Registration x prompt x route x session,
+      a combination containing `create` MUST be refused when no registration
+      step is configured (unrecognised value) or when another value
+      accompanies it (create conflict, or the none conflict text with
+      `none`), and otherwise MUST run only the registration step and issue
+      the new subject with `amr` ["otp"]; a combination without `create`
+      MUST behave as an ordinary login, with Primary invoked only when
+      `prompt=login` or no session exists, and the registration step never
+      invoked. Refusals surface at `/par` for the PAR route and as an RP
+      redirect otherwise.
+    status: active
+    notes: |
+      Factors and levels: Registration {on, off}; prompt {create,
+      create+login, create+none, login, absent}; route {plain, PAR, JAR};
+      session {none, session without a covering grant, session with a
+      covering grant}. coverwise was unavailable, so the 15 rows were built
+      by hand: the 5 prompts x 3 routes product, with the session level
+      rotated per prompt (shift 0,1,2,0,1 over route) so prompt x session
+      and route x session are complete, and Registration alternated so each
+      prompt, route and session sees both levels.
+
+      Rows (Registration / prompt / route / session):
+       1  on  create        plain  none
+       2  on  create        PAR    session
+       3  off create        JAR    grant
+       4  off create+login  plain  session
+       5  on  create+login  PAR    grant
+       6  on  create+login  JAR    none
+       7  on  create+none   plain  grant
+       8  off create+none   PAR    none
+       9  on  create+none   JAR    session
+      10  off login         plain  none
+      11  on  login         PAR    session
+      12  off login         JAR    grant
+      13  on  absent        plain  session
+      14  off absent        PAR    grant
+      15  on  absent        JAR    none
+
+      Pair coverage (61 pairs; every cell is covered by the rows listed):
+       Reg x prompt: on/create 1,2; off/create 3; on/create+login 5,6;
+         off/create+login 4; on/create+none 7,9; off/create+none 8;
+         on/login 11; off/login 10,12; on/absent 13,15; off/absent 14
+       Reg x route: on/plain 1,7,13; off/plain 4,10; on/PAR 2,5,11;
+         off/PAR 8,14; on/JAR 6,9,15; off/JAR 3,12
+       Reg x session: on/none 1,6,15; off/none 8,10; on/session 2,9,11,13;
+         off/session 4; on/grant 5,7; off/grant 3,12,14
+       prompt x route: create 1,2,3; create+login 4,5,6; create+none 7,8,9;
+         login 10,11,12; absent 13,14,15 (one row per route each)
+       prompt x session: create none 1, session 2, grant 3; create+login
+         session 4, grant 5, none 6; create+none grant 7, none 8, session 9;
+         login none 10, session 11, grant 12; absent session 13, grant 14,
+         none 15
+       route x session: plain/none 1,10; plain/session 4,13; plain/grant 7;
+         PAR/none 8; PAR/session 2,11; PAR/grant 5,14; JAR/none 6,15;
+         JAR/session 9; JAR/grant 3,12
+
+      PCR-010 recomputes the 61-pair coverage from the matrix in the test.

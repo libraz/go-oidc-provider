@@ -291,7 +291,7 @@ rows:
       is unresolved MUST 303 to the interaction redirect (e.g.
       `validateInteraction('custom', 'custom_prompt')`).
     status: out-of-scope
-    out_of_scope_reason: "Vendor-specific 'registered prompt=custom whose interaction is unresolved' wire. v1.0 does not expose a public prompt-registration extension API — the prompt taxonomy is the orchestrator's closed set ({login, consent, mfa, chooser, captcha, ...}) and the OIDC core 'prompt' parameter is parsed for {none, login, consent, select_account} per the spec. RP-supplied prompt=custom would be rejected as unsupported, not routed to an embedder-registered handler. The upstream extension hook this row asserts is not v1.0 surface."
+    out_of_scope_reason: "Vendor-specific 'registered prompt=custom whose interaction is unresolved' wire. v1.0 does not expose a public prompt-registration extension API — the prompt taxonomy is the orchestrator's closed set ({login, consent, mfa, chooser, captcha, ...}) and the OIDC core 'prompt' parameter is parsed for {none, login, consent, select_account}, plus 'create' only when the login flow configures a registration step (see PCR rows). RP-supplied prompt=custom would be rejected as unsupported, not routed to an embedder-registered handler. The upstream extension hook this row asserts is not v1.0 surface."
 
   - id: ITX-071
     severity: P1

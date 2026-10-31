@@ -353,7 +353,28 @@ issuer.
   passing it to `op.WithUserStore`. Both examples build their claims with
   `store.StandardClaims` and set `op.WithLogger`.
 
+- `op.New` refuses an `op.WithDiscoveryMetadata` `Extra` map that contains
+  `prompt_values_supported`. The OP now publishes that member itself, so the
+  key is controlled like the other protocol-defining metadata; drop it from
+  `Extra`.
+
 ### Added
+
+- `op.LoginFlow.Registration` makes a request carrying `prompt=create`
+  (OpenID Connect Initiating User Registration, 1.0) start at an account
+  creation step instead of `Primary`. It must be an `op.ExternalStep` with
+  `CountFailures` unset and a `KindLabel` that no other step uses. The step
+  runs whether or not a session exists, receives no inherited subject, and
+  binds the subject it creates; rules, consent and code issuance then proceed
+  as after `Primary`, and the ID Token carries the new subject, the
+  registration's `auth_time` and the step's `AMR()`. Without `Registration`,
+  `prompt=create` is still refused with `invalid_request`, and `create`
+  combined with any other `prompt` value is refused. `interaction.PromptCreate`
+  is the value.
+
+- The discovery document carries `prompt_values_supported`: `none`, `login`,
+  `consent` and `select_account`, plus `create` when `LoginFlow.Registration`
+  is set.
 
 - `store.StandardClaims` is the typed form of the OpenID Connect Core §5.1
   standard claims, with `store.Address` for the address claim. Its `Map()`
