@@ -78,6 +78,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
@@ -126,9 +127,7 @@ func run() error {
 		return err
 	}
 
-	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
-	}
+	flow := opkit.DefaultLoginFlow(st.UserPasswords())
 
 	nonces, err := op.NewInMemoryDPoPNonceSource(context.Background(), nonceRotation)
 	if err != nil {

@@ -118,6 +118,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/examples/internal/webui"
@@ -189,9 +190,7 @@ func run() error {
 		return fmt.Errorf("composite.New: %w", err)
 	}
 
-	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: durable.UserPasswords()},
-	}
+	flow := opkit.DefaultLoginFlow(durable.UserPasswords())
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),

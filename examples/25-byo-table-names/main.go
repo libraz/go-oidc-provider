@@ -53,6 +53,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -153,9 +154,7 @@ func run() error {
 		// The password prompt reads the renamed auth_users table through
 		// the adapter's store interface; the rename is invisible above
 		// this line, which is the whole point of WithNaming.
-		op.WithLoginFlow(op.LoginFlow{
-			Primary: op.PrimaryPassword{Store: storage.UserPasswords()},
-		}),
+		op.WithLoginFlow(opkit.DefaultLoginFlow(storage.UserPasswords())),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://rp.example.com/cb"},

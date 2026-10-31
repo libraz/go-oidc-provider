@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -62,9 +63,7 @@ func buildProvider() (*op.Provider, error) {
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
-		op.WithLoginFlow(op.LoginFlow{
-			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
-		}),
+		op.WithLoginFlow(opkit.DefaultLoginFlow(st.UserPasswords())),
 		// JSONDriver is selected so the self-verify probe and any
 		// SPA fetch see a JSON envelope. Embedders that ship a
 		// server-rendered UI replace this with their own

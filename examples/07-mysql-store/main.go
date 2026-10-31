@@ -80,6 +80,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
@@ -149,9 +150,7 @@ func run() error {
 		return fmt.Errorf("seed demo user: %w", err)
 	}
 
-	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: storage.UserPasswords()},
-	}
+	flow := opkit.DefaultLoginFlow(storage.UserPasswords())
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),

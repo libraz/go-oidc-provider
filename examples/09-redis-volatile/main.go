@@ -119,6 +119,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
@@ -216,9 +217,7 @@ func run() error {
 	}
 
 	// --- LoginFlow: password primary against the SQL UserPasswordStore
-	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: durable.UserPasswords()},
-	}
+	flow := opkit.DefaultLoginFlow(durable.UserPasswords())
 
 	// op.WithStaticClients seeds clients through composite.Store via
 	// the optional ClientRegistry() probe (see the godoc on
