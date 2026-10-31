@@ -118,6 +118,14 @@ var tableCatalog = []tableInfo{
 		"authn_lockouts", "AuthnLockouts", "Per-subject failure counters of the brute-force gate.",
 		"The login flow has a password or second-factor step and `op.WithAuthnLockoutStore` names no other store.",
 	},
+	{
+		"ssf_streams", "SSFStreams", "Shared Signals Framework streams, one per receiving client.",
+		"`op.WithSharedSignals`.",
+	},
+	{
+		"ssf_events", "SSFEvents", "Security Event Tokens queued for delivery to a stream, as unsigned claims.",
+		"`op.WithSharedSignals`.",
+	},
 }
 
 // tableColumns names columns added to one table, by WithNaming key.
@@ -126,14 +134,16 @@ type tableColumns struct {
 	columns []string
 }
 
-// schemaRelease lists the columns a release added to tables that already
-// existed. Each entry has a matching "## <version>" section in
-// schema/MIGRATIONS.md, and [Store.ValidateSchema] requires every column
-// here, naming the section to apply when one is missing. Releases that
-// changed only indexes or collations have a section but no entry.
+// schemaRelease lists the tables a release created and the columns it
+// added to tables that already existed. Each entry has a matching
+// "## <version>" section in schema/MIGRATIONS.md, and
+// [Store.ValidateSchema] names that section when one of them is missing.
+// Releases that changed only indexes or collations have a section but no
+// entry.
 type schemaRelease struct {
 	version string
 	columns []tableColumns
+	tables  []string // WithNaming keys
 }
 
 //nolint:gochecknoglobals // schema history; read-only.
@@ -142,16 +152,16 @@ var schemaReleases = []schemaRelease{
 		{"registration_access_tokens", []string{"allowed_scopes"}},
 		{"totp_secrets", []string{"row_version"}},
 		{"email_otps", []string{"row_version"}},
-	}},
+	}, nil},
 	{"v1.4.0", []tableColumns{
 		{"authorization_codes", []string{"auth_time", "acr", "amr", "authorization_details", "claims", "authorization_recorded"}},
 		{"refresh_tokens", []string{"claims", "authorization_recorded", "chain_id"}},
 		{"opaque_access_tokens", []string{"authorization_details", "claims", "authorization_recorded", "chain_id"}},
 		{"grant_revocations", []string{"access_revoked_at"}},
-	}},
+	}, nil},
 	{"v1.5.0", []tableColumns{
 		{"clients", []string{"previous_secret_hash", "previous_secret_expires_at"}},
-	}},
+	}, []string{"ssf_streams", "ssf_events"}},
 }
 
 // columnAddedIn returns the release that added column to the table with
@@ -166,6 +176,19 @@ func columnAddedIn(key, column string) string {
 				if c == column {
 					return r.version
 				}
+			}
+		}
+	}
+	return ""
+}
+
+// tableAddedIn returns the release that created the table with the given
+// WithNaming key, or "" for a table present since v1.0.0.
+func tableAddedIn(key string) string {
+	for _, r := range schemaReleases {
+		for _, k := range r.tables {
+			if k == key {
+				return r.version
 			}
 		}
 	}

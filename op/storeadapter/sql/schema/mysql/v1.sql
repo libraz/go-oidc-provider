@@ -453,3 +453,42 @@ CREATE TABLE IF NOT EXISTS oidc_authn_lockouts (
     first_failure_at BIGINT NOT NULL DEFAULT 0,
     locked_until BIGINT NOT NULL DEFAULT 0
 );
+
+-- Shared Signals Framework transmitter state. A receiver owns at most
+-- one stream, which the unique client_id index enforces atomically.
+-- sealed_authorization_header is library-sealed ciphertext stored
+-- verbatim; NULL means no header.
+CREATE TABLE IF NOT EXISTS oidc_ssf_streams (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    delivery_method VARCHAR(32) NOT NULL,
+    endpoint_url TEXT NOT NULL,
+    sealed_authorization_header VARBINARY(8192) NULL,
+    events_requested JSON NOT NULL,
+    events_delivered JSON NOT NULL,
+    description TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    status_reason TEXT NOT NULL,
+    updated_at BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL DEFAULT 0,
+    UNIQUE KEY idx_oidc_ssf_streams_client (client_id)
+);
+
+-- Outbound Security Event Token queue. claims is the unsigned SET claims
+-- JSON, stored verbatim in a BLOB rather than a JSON column, which would
+-- normalise it; the push worker scans next_attempt_at for due events
+-- and leases them by moving it forward.
+CREATE TABLE IF NOT EXISTS oidc_ssf_events (
+    jti VARCHAR(255) NOT NULL PRIMARY KEY,
+    stream_id VARCHAR(255) NOT NULL,
+    kind VARCHAR(32) NOT NULL,
+    delivery_method VARCHAR(32) NOT NULL,
+    held TINYINT(1) NOT NULL DEFAULT 0,
+    claims MEDIUMBLOB NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    next_attempt_at BIGINT NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL DEFAULT 0,
+    INDEX idx_oidc_ssf_events_stream (stream_id),
+    INDEX idx_oidc_ssf_events_next_attempt (next_attempt_at),
+    INDEX idx_oidc_ssf_events_expires (expires_at)
+);

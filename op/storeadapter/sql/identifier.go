@@ -78,6 +78,8 @@ type nameMap struct {
 	recoveryCodes      string
 	emailOTPs          string
 	authnLockouts      string
+	ssfStreams         string
+	ssfEvents          string
 }
 
 // defaultNames returns the canonical table names. Embedders that
@@ -110,6 +112,8 @@ func defaultNames() nameMap {
 		recoveryCodes:      "oidc_recovery_codes",
 		emailOTPs:          "oidc_email_otps",
 		authnLockouts:      "oidc_authn_lockouts",
+		ssfStreams:         "oidc_ssf_streams",
+		ssfEvents:          "oidc_ssf_events",
 	}
 }
 
@@ -170,6 +174,10 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 			n.emailOTPs = physical
 		case "authn_lockouts":
 			n.authnLockouts = physical
+		case "ssf_streams":
+			n.ssfStreams = physical
+		case "ssf_events":
+			n.ssfEvents = physical
 		default:
 			return fmt.Errorf("oidcsql: unknown WithNaming key %q (valid keys: %s)",
 				logical, strings.Join(knownNamingKeys, ", "))
@@ -247,6 +255,8 @@ func (n nameMap) all() []string {
 		n.recoveryCodes,
 		n.emailOTPs,
 		n.authnLockouts,
+		n.ssfStreams,
+		n.ssfEvents,
 	}
 }
 
@@ -289,6 +299,8 @@ var knownNamingKeys = []string{
 	"recovery_codes",
 	"email_otps",
 	"authn_lockouts",
+	"ssf_streams",
+	"ssf_events",
 }
 
 // rewriteSchema swaps every default table name in the embedded DDL
@@ -337,6 +349,8 @@ func rewriteSchema(raw []byte, n nameMap) string {
 		defaults.recoveryCodes:      n.recoveryCodes,
 		defaults.emailOTPs:          n.emailOTPs,
 		defaults.authnLockouts:      n.authnLockouts,
+		defaults.ssfStreams:         n.ssfStreams,
+		defaults.ssfEvents:          n.ssfEvents,
 	}
 	names := make([]string, 0, len(replacements))
 	for from := range replacements {

@@ -208,6 +208,27 @@ type queries struct {
 	lockoutGet    string
 	lockoutInsert string
 	lockoutUpdate string
+
+	// shared-signals streams and SET queue
+	ssfStreamInsert         string
+	ssfStreamGet            string
+	ssfStreamGetByClient    string
+	ssfStreamListActive     string
+	ssfStreamUpdate         string
+	ssfStreamExists         string
+	ssfStreamDelete         string
+	ssfEventInsert          string
+	ssfEventDropOtherVerify string
+	ssfEventSelectDue       string
+	ssfEventLease           string
+	ssfEventReschedule      string
+	ssfEventExists          string
+	ssfEventAck             string
+	ssfEventPending         string
+	ssfEventRetag           string
+	ssfEventPurgeKind       string
+	ssfEventPurgeStream     string
+	ssfEventDeleteExpired   string
 }
 
 // The authentication-factor column lists are declared once so the
@@ -241,6 +262,33 @@ var (
 		"consumed_at",
 		"send_window_start",
 		"last_send_attempt_at",
+	}
+
+	ssfStreamColumns = []string{
+		"id",
+		"client_id",
+		"delivery_method",
+		"endpoint_url",
+		"sealed_authorization_header",
+		"events_requested",
+		"events_delivered",
+		"description",
+		"status",
+		"status_reason",
+		"updated_at",
+		"created_at",
+	}
+
+	ssfEventColumns = []string{
+		"jti",
+		"stream_id",
+		"kind",
+		"delivery_method",
+		"held",
+		"claims",
+		"attempts",
+		"next_attempt_at",
+		"expires_at",
 	}
 
 	// passkeyValueColumns leads with subject; passkeyRewriteOwn assigns
@@ -1078,6 +1126,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" WHERE subject = ? AND record_version = ?",
 		),
 	}
+	addSSFQueries(&q, d, n)
 
 	// Layer 6: scan every produced query for SQL-injection
 	// metacharacters and structural surprises. The check is
@@ -1089,6 +1138,61 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		return queries{}, fmt.Errorf("oidcsql: query audit: %w", err)
 	}
 	return q, nil
+}
+
+// addSSFQueries fills the shared-signals templates. ID and client_id
+// identify a stream and are never rewritten by an update.
+func addSSFQueries(q *queries, d Dialect, n nameMap) {
+	streamCols := joinColumns(ssfStreamColumns)
+	eventCols := joinColumns(ssfEventColumns)
+
+	q.ssfStreamInsert = d.rebind(
+		"INSERT INTO " + n.ssfStreams + " (" + streamCols + ") VALUES (" + placeholders(len(ssfStreamColumns)) + ")",
+	)
+	q.ssfStreamGet = d.rebind("SELECT " + streamCols + " FROM " + n.ssfStreams + " WHERE id = ?")
+	q.ssfStreamGetByClient = d.rebind("SELECT " + streamCols + " FROM " + n.ssfStreams + " WHERE client_id = ?")
+	q.ssfStreamListActive = d.rebind("SELECT " + streamCols + " FROM " + n.ssfStreams + " WHERE status IN (?, ?)")
+	q.ssfStreamUpdate = d.rebind(
+		"UPDATE " + n.ssfStreams + " SET " + updateSetList(ssfStreamColumns, "id", "client_id") + " WHERE id = ?",
+	)
+	q.ssfStreamExists = d.rebind("SELECT 1 FROM " + n.ssfStreams + " WHERE id = ?")
+	q.ssfStreamDelete = d.rebind("DELETE FROM " + n.ssfStreams + " WHERE id = ?")
+
+	q.ssfEventInsert = d.rebind(
+		"INSERT INTO " + n.ssfEvents + " (" + eventCols + ") VALUES (" + placeholders(len(ssfEventColumns)) + ")",
+	)
+	// The JTI just inserted is excluded so a duplicate cannot delete its
+	// own predecessor before the insert is refused.
+	q.ssfEventDropOtherVerify = d.rebind(
+		"DELETE FROM " + n.ssfEvents + " WHERE stream_id = ? AND kind = ? AND jti <> ?",
+	)
+	q.ssfEventSelectDue = d.rebind(
+		"SELECT " + eventCols + " FROM " + n.ssfEvents +
+			" WHERE delivery_method = ? AND held = 0 AND next_attempt_at <= ?" +
+			" ORDER BY next_attempt_at, jti LIMIT ?",
+	)
+	// The lease is a compare-and-swap on the next_attempt_at the candidate
+	// scan observed, so of several concurrent claimers exactly one matches.
+	q.ssfEventLease = d.rebind(
+		"UPDATE " + n.ssfEvents + " SET next_attempt_at = ?" +
+			" WHERE jti = ? AND next_attempt_at = ? AND held = 0 AND delivery_method = ?",
+	)
+	q.ssfEventReschedule = d.rebind("UPDATE " + n.ssfEvents + " SET next_attempt_at = ?, attempts = ? WHERE jti = ?")
+	q.ssfEventExists = d.rebind("SELECT 1 FROM " + n.ssfEvents + " WHERE jti = ?")
+	q.ssfEventAck = d.rebind("DELETE FROM " + n.ssfEvents + " WHERE stream_id = ? AND jti = ?")
+	q.ssfEventPending = d.rebind(
+		"SELECT " + eventCols + " FROM " + n.ssfEvents +
+			" WHERE stream_id = ? AND delivery_method = ? AND held = 0 ORDER BY jti LIMIT ?",
+	)
+	// Only ordinary events take the hold; control events are always
+	// written unheld.
+	q.ssfEventRetag = d.rebind(
+		"UPDATE " + n.ssfEvents +
+			" SET delivery_method = ?, held = CASE WHEN kind = ? THEN ? ELSE 0 END WHERE stream_id = ?",
+	)
+	q.ssfEventPurgeKind = d.rebind("DELETE FROM " + n.ssfEvents + " WHERE stream_id = ? AND kind = ?")
+	q.ssfEventPurgeStream = d.rebind("DELETE FROM " + n.ssfEvents + " WHERE stream_id = ?")
+	q.ssfEventDeleteExpired = d.rebind("DELETE FROM " + n.ssfEvents + " WHERE expires_at <= ?")
 }
 
 // joinColumns renders cols as a comma-separated list. The argument is

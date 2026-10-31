@@ -57,8 +57,8 @@ func WithClock(c Clock) Option {
 // "consumed_jtis", "users", "initial_access_tokens",
 // "registration_access_tokens", "op_metadata", "device_codes",
 // "ciba_requests", "totp_secrets", "passkeys", "recovery_codes",
-// "email_otps", "authn_lockouts"); values are the physical identifiers
-// to use.
+// "email_otps", "authn_lockouts", "ssf_streams", "ssf_events"); values
+// are the physical identifiers to use.
 // Unknown logical keys cause [New] to return an error so typos surface
 // at construction time. Each physical identifier is validated against
 // the SQL standard regular identifier grammar before any query is
@@ -75,8 +75,8 @@ func WithNaming(overrides map[string]string) Option {
 }
 
 // Store is the SQL adapter. It satisfies [store.Store],
-// [store.ClientRegistry], [store.StaticClientReconciler], and
-// [store.Transactional] without any runtime detection: callers can perform a
+// [store.ClientRegistry], [store.StaticClientReconciler],
+// [store.SharedSignalsStore], and [store.Transactional] without any runtime detection: callers can perform a
 // direct type assertion when they know they hold a *Store, but the library
 // itself works through the interfaces.
 type Store struct {
@@ -114,6 +114,9 @@ type Store struct {
 	recoveryCodesImpl *recoveryStore
 	emailOTPsImpl     *emailOTPStore
 	authnLockoutsImpl *authnLockoutStore
+
+	ssfStreamsImpl *ssfStreamStore
+	ssfEventsImpl  *ssfEventStore
 }
 
 // New constructs a Store backed by the supplied *sql.DB. The caller is
@@ -186,6 +189,8 @@ func (s *Store) attachSubstores() {
 	s.recoveryCodesImpl = newRecoveryStore(s)
 	s.emailOTPsImpl = newEmailOTPStore(s)
 	s.authnLockoutsImpl = newAuthnLockoutStore(s)
+	s.ssfStreamsImpl = &ssfStreamStore{parent: s}
+	s.ssfEventsImpl = &ssfEventStore{parent: s}
 }
 
 // The authentication-factor substores are deliberately absent from
@@ -321,11 +326,11 @@ func (s *Store) ValidateSchema(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		key := knownNamingKeys[i]
 		if len(cols) == 0 {
-			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing", table))
+			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing%s", table, tableMigrationHint(key)))
 			continue
 		}
-		key := knownNamingKeys[i]
 		var missing []string
 		for _, col := range required[key] {
 			if !cols[col] {
@@ -338,6 +343,15 @@ func (s *Store) ValidateSchema(ctx context.Context) error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// tableMigrationHint names the schema/MIGRATIONS.md section that creates
+// the table, or returns "" when it predates them.
+func tableMigrationHint(key string) string {
+	if v := tableAddedIn(key); v != "" {
+		return "; apply the " + v + " section of schema/MIGRATIONS.md"
+	}
+	return ""
 }
 
 // migrationHint names the schema/MIGRATIONS.md sections that add the

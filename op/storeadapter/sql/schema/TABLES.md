@@ -45,6 +45,8 @@ an existing database applies the matching section of `MIGRATIONS.md`.
 | `oidc_recovery_codes` | `recovery_codes` | Hashed single-use recovery codes. | `Store.RecoveryCodes()` is passed to `op.StepRecoveryCode` or `op/recoverykit`. |
 | `oidc_email_otps` | `email_otps` | Pending email one-time codes. | `Store.EmailOTPs()` is passed to `op.StepEmailOTP`. |
 | `oidc_authn_lockouts` | `authn_lockouts` | Per-subject failure counters of the brute-force gate. | The login flow has a password or second-factor step and `op.WithAuthnLockoutStore` names no other store. |
+| `oidc_ssf_streams` | `ssf_streams` | Shared Signals Framework streams, one per receiving client. | `op.WithSharedSignals`. |
+| `oidc_ssf_events` | `ssf_events` | Security Event Tokens queued for delivery to a stream, as unsigned claims. | `op.WithSharedSignals`. |
 
 ## Columns
 
@@ -424,3 +426,34 @@ Substore: `Store.AuthnLockouts()`
 - `record_version`
 - `first_failure_at`
 - `locked_until`
+
+### `oidc_ssf_streams`
+
+Substore: `Store.SSFStreams()`
+
+- `id`
+- `client_id`
+- `delivery_method`
+- `endpoint_url`
+- `sealed_authorization_header`
+- `events_requested`
+- `events_delivered`
+- `description`
+- `status`
+- `status_reason`
+- `updated_at`
+- `created_at`
+
+### `oidc_ssf_events`
+
+Substore: `Store.SSFEvents()`
+
+- `jti`
+- `stream_id`
+- `kind`
+- `delivery_method`
+- `held`
+- `claims`
+- `attempts`
+- `next_attempt_at`
+- `expires_at`
