@@ -108,7 +108,11 @@ SPA that reads the prompt JSON must switch to the snake_case keys listed under
 `Removed` section gives the `op.WithLoginFlow` equivalent of each. A
 deployment that relied on the store's `Users()` differing from the store behind
 `PrimaryPassword` must now pass `op.WithUserStore(st.Users())` to keep reading
-claims from `Users()`; see `Changed`.
+claims from `Users()`; see `Changed`. An option list that passes the same
+single-valued option twice, typically a shared base list followed by an
+override, must wrap the base in `op.WithDefaults`, or `op.New` refuses to
+start. `op.WithAllowInsecureBackchannelLogoutForDev` requires a development
+issuer.
 
 ### Security
 
@@ -177,9 +181,34 @@ claims from `Users()`; see `Changed`.
 
 ### Changed
 
+- **BREAKING:** an option that takes a value is single-valued unless its
+  documentation says it is additive. Passing it twice, or passing two options
+  that set the same setting (`op.WithSubjectGenerator` and
+  `op.WithPairwiseSubject`), makes `op.New` fail with `<Name> may be called at
+  most once` or `<Name> conflicts with prior <Other>`. Before, most such
+  options let the later call silently replace the earlier one, so a
+  deployment-specific `op.WithKeyset`, `op.WithCookieKeys` or
+  `op.WithIssuer` composed from several helpers could vanish. The options
+  that already refused a repeat now report it in the same words.
+  `op.WithEndpoints` may be repeated, but each path is single-valued, and so
+  is each key of an `op.WithLocale` locale. To layer overrides on a shared
+  base list, wrap the base in `op.WithDefaults` (see `Added`).
+  `op.RegisterTokenExchange` still reports a repeat as
+  `op.ErrTokenExchangeDuplicate`.
+
+- `op.WithTrustedProxies` is additive: repeated calls accumulate CIDRs, as
+  `op.WithTrustedProxyHosts` accumulates hosts. It used to keep only the
+  last call's list.
+
+- `op.New` refuses `op.WithAllowInsecureBackchannelLogoutForDev` unless the
+  issuer is a development host: a loopback IP literal, `localhost`, or a name
+  under `.localhost`, `.test`, `.invalid` or `.example`. It used to accept
+  any issuer and only log a warning.
+
 - SQL deployments must add two columns to `oidc_clients`,
   `previous_secret_hash` and `previous_secret_expires_at`, before upgrading;
-  the statements per dialect are in `op/storeadapter/sql/schema/MIGRATIONS.md`.
+  the statements per dialect are in the v1.5.0 section of
+  `op/storeadapter/sql/schema/MIGRATIONS.md`.
   `ValidateSchema` reports both as missing until they exist. A bring-your-own
   `store.ClientStore` that does not persist the new `store.Client` fields keeps
   working; it only cannot honour a previous secret.
@@ -305,6 +334,11 @@ claims from `Users()`; see `Changed`.
 - Example `29-passkey` signs in with a password or a passwordless passkey.
 
 ### Added
+
+- `op.WithDefaults(opts...)` marks options as defaults: a single-valued option
+  inside it gives way when an option outside it sets the same setting,
+  whatever their order, while additive and flag options inside it apply as
+  usual.
 
 - An `interaction.Prompt` shown again after a rejected submission carries
   `error` (`interaction.PromptError`, with `Code` and `Message`) on the SPA
@@ -446,7 +480,13 @@ claims from `Users()`; see `Changed`.
   Provider built from new options without restarting the process. It hands
   the Prometheus collectors over to the new Provider and drains the
   outgoing one. `op.ErrReloadIncompatible` reports options that cannot
-  change across a reload.
+  replace the running ones: a changed issuer or route set, a cookie key list
+  or keyset without the running active key (the same `KeyID` with a different
+  key counts as missing), a missing MFA encryption key the running
+  configuration holds through `op.WithMFAEncryptionKeys` or a `StepTOTP`, or
+  a `op.WithDPoPNonceSource` that is not the same instance. The current
+  Provider keeps serving; retire an MFA key by restarting once every TOTP
+  record is re-sealed.
 
 - `op.SyncStaticClients` inserts or updates static clients in a store from
   a list of seeds, for use from a deploy job or an admin command. It never
@@ -459,7 +499,18 @@ claims from `Users()`; see `Changed`.
   revocations and consumed JTIs; the new `GCStats` fields report the counts.
 
 - `oidcsql.Store.ValidateSchema` checks that the database schema matches
-  what the adapter expects, without migrating.
+  what the adapter expects, without migrating. A missing column's error names
+  the `MIGRATIONS.md` section that adds it.
+
+- `op/storeadapter/sql/schema/TABLES.md` lists every adapter table with its
+  `WithNaming` key, what it holds, the option or login step that makes the OP
+  use it, and its columns, generated from the adapter source. Every table must
+  exist; one whose feature is not configured stays empty, including
+  `oidc_users` when users come from your own `store.UserStore`.
+
+- `op/storeadapter/sql/schema/MIGRATIONS.md` is split into one section per
+  release that changed the schema. An existing database applies every section
+  after the release that created it, in order.
 
 - `store.SessionDurabilityReporter`, an optional interface a session store
   implements to report whether its sessions survive a restart.
