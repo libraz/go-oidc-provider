@@ -48,6 +48,7 @@ surfaces:
     title: UserInfo endpoint
     paths:
       - internal/userinfo
+      - internal/userclaims
 
   - id: introspection-revocation
     title: Introspection and revocation

@@ -21,7 +21,7 @@ import (
 	"errors"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
-	"github.com/libraz/go-oidc-provider/internal/userinfo/userclaims"
+	"github.com/libraz/go-oidc-provider/internal/userclaims"
 )
 
 // ErrSubjectRequired is returned by [Build] when the input does not carry a

@@ -15,7 +15,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
-	"github.com/libraz/go-oidc-provider/internal/userinfo/userclaims"
+	"github.com/libraz/go-oidc-provider/internal/userclaims"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 

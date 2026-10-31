@@ -15,7 +15,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
-	"github.com/libraz/go-oidc-provider/internal/userinfo/userclaims"
+	"github.com/libraz/go-oidc-provider/internal/userclaims"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
