@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cibaendpoint"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
+	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/internal/cors"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/devicecodeendpoint"
@@ -885,4 +886,110 @@ func buildSectorResolver(cfg *config) *sector.Resolver {
 		opts = append(opts, sector.AllowPrivateNetwork())
 	}
 	return sector.New(opts...)
+}
+
+// wrapValidateMetadata adapts a caller-supplied
+// [RegistrationOption.ValidateMetadata] hook (which sees the public
+// op.ClientMetadata) into the internal-package signature
+// (registrationendpoint.ClientMetadata). internal/* must not import
+// op/, so the conversion lives here.
+//
+// A nil input returns nil so the internal handler can short-circuit
+// the hook entirely.
+func wrapValidateMetadata(fn func(ctx context.Context, m ClientMetadata) error) func(ctx context.Context, m registrationendpoint.ClientMetadata) error {
+	if fn == nil {
+		return nil
+	}
+	return func(ctx context.Context, m registrationendpoint.ClientMetadata) error {
+		return fn(ctx, fromInternalMetadata(m))
+	}
+}
+
+// fromInternalMetadata projects the internal-shape metadata onto the
+// public [ClientMetadata]. The two structs are field-for-field
+// identical; the conversion exists solely to honour the rule that
+// internal/* must not import op/.
+func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata {
+	return ClientMetadata{
+		RedirectURIs:                      m.RedirectURIs,
+		GrantTypes:                        m.GrantTypes,
+		ResponseTypes:                     m.ResponseTypes,
+		Scope:                             m.Scope,
+		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
+		ApplicationType:                   m.ApplicationType,
+		SubjectType:                       m.SubjectType,
+		IDTokenSignedResponseAlg:          m.IDTokenSignedResponseAlg,
+		SectorIdentifierURI:               m.SectorIdentifierURI,
+		ClientName:                        m.ClientName,
+		ClientURI:                         m.ClientURI,
+		LogoURI:                           m.LogoURI,
+		PolicyURI:                         m.PolicyURI,
+		TosURI:                            m.TosURI,
+		JWKsURI:                           m.JWKsURI,
+		JWKs:                              m.JWKs,
+		Contacts:                          m.Contacts,
+		DefaultMaxAge:                     clone.Int64Ptr(m.DefaultMaxAge),
+		RequireAuthTime:                   m.RequireAuthTime,
+		DefaultACRValues:                  m.DefaultACRValues,
+		InitiateLoginURI:                  m.InitiateLoginURI,
+		RequestURIs:                       m.RequestURIs,
+		RequestObjectSigningAlg:           m.RequestObjectSigningAlg,
+		RequestObjectEncryptionAlg:        m.RequestObjectEncryptionAlg,
+		RequestObjectEncryptionEnc:        m.RequestObjectEncryptionEnc,
+		IDTokenEncryptedResponseAlg:       m.IDTokenEncryptedResponseAlg,
+		IDTokenEncryptedResponseEnc:       m.IDTokenEncryptedResponseEnc,
+		UserInfoEncryptedResponseAlg:      m.UserInfoEncryptedResponseAlg,
+		UserInfoEncryptedResponseEnc:      m.UserInfoEncryptedResponseEnc,
+		AuthorizationEncryptedResponseAlg: m.AuthorizationEncryptedResponseAlg,
+		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
+		IntrospectionSignedResponseAlg:    m.IntrospectionSignedResponseAlg,
+		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
+		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
+		PostLogoutRedirectURIs:            m.PostLogoutRedirectURIs,
+		BackchannelLogoutURI:              m.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
+	}
+}
+
+// spaWiringFor projects the [config.spaUI] state onto the
+// authorizeendpoint deps fields. An unset SPAUI returns empty values;
+// the consumer treats it as "legacy /interaction wiring".
+func spaWiringFor(cfg *config) (loginMount, staticDir, csp string) {
+	if !cfg.spaUISet {
+		return "", "", ""
+	}
+	return cfg.spaUI.LoginMount, cfg.spaUI.StaticDir, cfg.spaUI.ContentSecurityPolicy
+}
+
+// customScopeClaims projects the public scope catalogue onto the
+// runtime-only scope -> claim-name mapping consumed by /userinfo.
+// Scopes with no claim mapping are omitted entirely so downstream code
+// can treat absence and "no custom claims" identically.
+func customScopeClaims(scopes []Scope) map[string][]string {
+	out := make(map[string][]string)
+	for _, s := range scopes {
+		if len(s.Claims) == 0 {
+			continue
+		}
+		out[s.Name] = append([]string(nil), s.Claims...)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// authorizePARStore returns the substore the authorize handler should use
+// to consume PAR records when the feature is enabled. When PAR is
+// disabled the helper returns nil, which the handler treats as
+// "request_uri is not supported".
+//
+// The function exists so the wiring at [mountAuthorizeHandlers] reads as
+// a flat field assignment rather than a multi-line conditional.
+func authorizePARStore(cfg *config) store.PushedAuthRequestStore {
+	if !featureEnabled(cfg.features, feature.PAR) {
+		return nil
+	}
+	return cfg.store.PushedAuthRequests()
 }

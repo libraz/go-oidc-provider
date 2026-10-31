@@ -31,6 +31,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -1183,6 +1184,23 @@ func buildFeatures(flags []feature.Flag) discovery.Features {
 			// grant_management_* Input fields, not a boolean
 			// [discovery.Features] flag, so there is nothing to toggle.
 		}
+	}
+	return out
+}
+
+// consentCatalog projects the public [Scope] catalogue onto the slim
+// [interaction.ConsentScope] shape the consent screen renders. UI
+// metadata that the SPA owns (Title, Icon, Category, I18n, Claims,
+// AllowedClients) is dropped at the boundary; the consent prompt
+// surfaces only the fields the design fixes.
+func consentCatalog(scopes []Scope) []interaction.ConsentScope {
+	out := make([]interaction.ConsentScope, 0, len(scopes))
+	for _, s := range scopes {
+		out = append(out, interaction.ConsentScope{
+			Name:        s.Name,
+			Description: s.Description,
+			Required:    s.Required,
+		})
 	}
 	return out
 }
