@@ -57,6 +57,13 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 		Primary: primary,
 		Rules:   rules,
 	}
+	if flow.Registration != nil {
+		registration, rerr := projectStepAt("Registration", flow.Registration, cfg, true)
+		if rerr != nil {
+			return nil, rerr
+		}
+		spec.Registration = registration
+	}
 	if !isNilLike(flow.Risk) {
 		spec.Risk = flow.Risk
 	}

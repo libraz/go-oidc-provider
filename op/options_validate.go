@@ -311,6 +311,50 @@ func validateLoginFlowKinds(flow LoginFlow) error {
 			}
 		}
 	}
+	if ext, ok := flow.Registration.(ExternalStep); ok {
+		if err := checkExternalStepKind("Registration", ext); err != nil {
+			return err
+		}
+		if err := checkRegistrationKindUnique(flow, ext.KindLabel); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkRegistrationKindUnique refuses a Registration KindLabel that
+// Primary or a step of a [StepOneOf] anywhere in the flow already uses.
+// A Rule whose Then carries it is refused by [WithLoginFlow].
+func checkRegistrationKindUnique(flow LoginFlow, kind StepKind) error {
+	clash := func(where string, step Step) error {
+		if isNilLike(step) || step.Kind() != kind {
+			return nil
+		}
+		return newConfigurationError("WithLoginFlow: Registration.KindLabel "+kind.String()+
+			" is already used by "+where, nil)
+	}
+	type placed struct {
+		where string
+		step  Step
+	}
+	steps := []placed{{"Primary", flow.Primary}}
+	for i, r := range flow.Rules {
+		steps = append(steps, placed{"Rules[" + strconv.Itoa(i) + "].Then", r.Then})
+	}
+	for _, s := range steps {
+		if err := clash(s.where, s.step); err != nil {
+			return err
+		}
+		oneOf, ok := s.step.(StepOneOf)
+		if !ok {
+			continue
+		}
+		for j, inner := range oneOf.Steps {
+			if err := clash(s.where+".StepOneOf.Steps["+strconv.Itoa(j)+"]", inner); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

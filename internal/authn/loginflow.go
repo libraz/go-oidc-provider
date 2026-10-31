@@ -25,6 +25,12 @@ type LoginFlowSpec struct {
 	// (the compiler rejects a nil Primary).
 	Primary LoginFlowStep
 
+	// Registration, when its Authenticator is set, is the step a
+	// [State.Registration] chain runs in place of Primary. It must wrap
+	// an Authenticator directly (no one-of, no captcha) under a kind no
+	// other step uses. The zero value means no registration step.
+	Registration LoginFlowStep
+
 	// Rules is the ordered list of conditional follow-up steps.
 	Rules []LoginFlowRule
 
@@ -180,6 +186,37 @@ type CompiledLoginFlow struct {
 	byFactor map[FactorType]compiledStep
 	// parentOf maps each one-of inner step kind to its one-of step kind.
 	parentOf map[string]string
+
+	// registration is the [LoginFlowSpec.Registration] step; its kind is
+	// "" when the flow declares none. It is in byKind but not byFactor.
+	registration compiledStep
+
+	// binders is the set of kinds that bind the subject: Primary, its
+	// one-of inner steps, and Registration. See bindsSubject.
+	binders map[string]struct{}
+}
+
+// bindsSubject reports whether the step of the given kind is one that
+// identifies the user — Primary (or a step of a one-of Primary) or
+// Registration — rather than one that runs for a subject already bound.
+func (f *CompiledLoginFlow) bindsSubject(kind string) bool {
+	_, ok := f.binders[kind]
+	return ok
+}
+
+// isRegistration reports whether kind is the flow's Registration step.
+func (f *CompiledLoginFlow) isRegistration(kind string) bool {
+	return f.registration.kind != "" && kind == f.registration.kind
+}
+
+// requirable resolves the step a Decider Require names. Registration is
+// not requirable: it runs only in a [State.Registration] chain.
+func (f *CompiledLoginFlow) requirable(kind string) (compiledStep, bool) {
+	if f.isRegistration(kind) {
+		return compiledStep{}, false
+	}
+	step, ok := f.byKind[kind]
+	return step, ok
 }
 
 // compiledStep is the orchestrator-side view of a LoginFlowStep with
@@ -240,6 +277,8 @@ var ErrBuiltinStepNotWired = errors.New("authn: built-in Step requires construct
 //     (captcha is a challenge, not a primary credential).
 //  5. A one-of step lists at least one step, none of them captcha or
 //     one-of, and its IfNoneEnrolled is a declared policy.
+//  6. Registration, when declared, wraps an Authenticator directly and
+//     shares its kind with no other step.
 //
 // On success the compiler returns a *CompiledLoginFlow whose byKind
 // index maps every declared StepKind — each one-of step and each of its
@@ -268,6 +307,17 @@ func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 	if err != nil {
 		return nil, err
 	}
+	binders := map[string]struct{}{primary.kind: {}}
+	for _, inner := range primary.oneOf {
+		binders[inner.kind] = struct{}{}
+	}
+	registration, err := c.registration(spec.Registration)
+	if err != nil {
+		return nil, err
+	}
+	if registration.kind != "" {
+		binders[registration.kind] = struct{}{}
+	}
 	rules := make([]compiledRule, 0, len(spec.Rules))
 	for i, r := range spec.Rules {
 		if r.Then.Authenticator == nil && r.Then.OneOf == nil {
@@ -287,14 +337,46 @@ func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 		rules = append(rules, compiledRule{when: when, then: then})
 	}
 	return &CompiledLoginFlow{
-		primary:  primary,
-		rules:    rules,
-		decider:  spec.Decider,
-		risk:     spec.Risk,
-		byKind:   c.byKind,
-		byFactor: c.byFactor,
-		parentOf: c.parentOf,
+		primary:      primary,
+		rules:        rules,
+		decider:      spec.Decider,
+		risk:         spec.Risk,
+		byKind:       c.byKind,
+		byFactor:     c.byFactor,
+		parentOf:     c.parentOf,
+		registration: registration,
+		binders:      binders,
 	}, nil
+}
+
+// registration compiles [LoginFlowSpec.Registration]. A zero step yields
+// a zero compiledStep (no registration). The step is registered by kind,
+// so a Rule naming it is refused as a duplicate, but not by factor: a
+// risk step-up must never reach it.
+func (c *loginFlowCompiler) registration(s LoginFlowStep) (compiledStep, error) {
+	if s.Authenticator == nil && s.OneOf == nil && s.Kind == "" && !s.IsCaptcha {
+		return compiledStep{}, nil
+	}
+	switch {
+	case s.OneOf != nil:
+		return compiledStep{}, errors.New("authn: LoginFlow.Registration must not be a one-of step")
+	case s.IsCaptcha:
+		return compiledStep{}, errors.New("authn: LoginFlow.Registration must not be a captcha step")
+	case s.Authenticator == nil:
+		return compiledStep{}, errors.New("authn: LoginFlow.Registration is nil")
+	case s.Kind == "":
+		return compiledStep{}, errors.New("authn: LoginFlow.Registration.Kind is empty")
+	}
+	step := compiledStep{
+		kind:      s.Kind,
+		auth:      s.Authenticator,
+		factor:    s.Authenticator.Type(),
+		requireUV: s.RequireUserVerification,
+	}
+	if err := c.register(step); err != nil {
+		return compiledStep{}, err
+	}
+	return step, nil
 }
 
 // loginFlowCompiler accumulates the indexes [CompileLoginFlow] builds.
@@ -507,8 +589,10 @@ func describeStepKind(kind string) string {
 //  1. Run Risk once at chain start (cached on st.RiskScoreCached).
 //  2. Subject unbound (or reauth required and Primary not yet run) —
 //     fire the first matching captcha rule, otherwise run Primary's
-//     Begin (subject-binding factor). Captcha is a [LoginFlowRule]
-//     whose Then is a captcha step; there is no other captcha path.
+//     Begin (subject-binding factor), or Registration's in a
+//     [State.Registration] chain (see subjectBindingStep). Captcha is a
+//     [LoginFlowRule] whose Then is a captcha step; there is no other
+//     captcha path.
 //  3. Decider consult (when wired): Allow → grant, Deny → ErrRiskDenied,
 //     Require{Step} → drive Step (looked up by kind), Pass → fall
 //     through to rules.
@@ -552,11 +636,15 @@ func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.
 	// layer has already established that it may not (prompt=login,
 	// max_age expiry, unsatisfied acr_values), so the decision falls
 	// back to "has Primary actually completed during this attempt".
-	if st.Subject == "" || (st.ReauthRequired && !containsString(st.CompletedStepKinds, flow.primary.kind)) {
+	bind, due, err := subjectBindingStep(st, flow)
+	if err != nil {
+		return st, interaction.Step{}, err
+	}
+	if due {
 		if handled, ns, step, err := o.evalLoginFlowCaptchaRules(ctx, st, flow, now); handled {
 			return ns, step, err
 		}
-		return o.runLoginFlowStep(ctx, st, flow.primary, now)
+		return o.runLoginFlowStep(ctx, st, bind, now)
 	}
 
 	// After Primary completes, build the LoginFlowContext fresh so
@@ -579,6 +667,24 @@ func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.
 	return o.transitionToAfterAuthn(ctx, st, flow, now)
 }
 
+// subjectBindingStep returns the step that binds the subject — Primary,
+// or Registration for a [State.Registration] chain — and whether it is
+// still due. A Registration chain runs Registration until Registration
+// itself completes, whatever Subject holds, so no subject the chain did
+// not bind stands in for the new account. A Registration chain on a flow
+// that declares no Registration ends with [ErrInvalidStep] rather than
+// falling back to a login.
+func subjectBindingStep(st State, flow *CompiledLoginFlow) (compiledStep, bool, error) {
+	if st.Registration {
+		if flow.registration.kind == "" {
+			return compiledStep{}, false, ErrInvalidStep
+		}
+		return flow.registration, !containsString(st.CompletedStepKinds, flow.registration.kind), nil
+	}
+	due := st.Subject == "" || (st.ReauthRequired && !containsString(st.CompletedStepKinds, flow.primary.kind))
+	return flow.primary, due, nil
+}
+
 // evalLoginFlowDecider consults the Decider once and dispatches the
 // returned [LoginFlowDecision]. The bool return reports whether the
 // dispatcher loop should stop here: Allow / Deny / Require all stop;
@@ -598,7 +704,7 @@ func (o *Orchestrator) evalLoginFlowDecider(ctx context.Context, st State, flow 
 		)
 		return true, st, interaction.Step{}, ErrRiskDenied
 	case LoginFlowRequire:
-		step, ok := flow.byKind[d.Step.Kind]
+		step, ok := flow.requirable(d.Step.Kind)
 		if !ok {
 			o.logger.Error("authn: LoginFlow Decider.Require references unknown StepKind",
 				slog.String("step_kind", describeStepKind(d.Step.Kind)),
@@ -715,7 +821,7 @@ func (o *Orchestrator) deciderRequiresStep(ctx context.Context, st State, flow *
 	case LoginFlowDeny:
 		return true, true
 	case LoginFlowRequire:
-		step, ok := flow.byKind[d.Step.Kind]
+		step, ok := flow.requirable(d.Step.Kind)
 		if !ok {
 			return true, true
 		}
@@ -917,29 +1023,36 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 // of a request that must re-authenticate — is withheld from it: Primary
 // may authenticate a different account, and a passkey would otherwise
 // run subject-bound instead of discoverable. A subject bound by the
-// account chooser or by an earlier factor is passed through.
+// account chooser or by an earlier factor is passed through. Registration
+// creates an account, so it is never handed a subject at all.
 func (o *Orchestrator) stepSubject(st State, kind string) string {
+	flow := o.cfg.LoginFlow
+	if flow.isRegistration(kind) {
+		return ""
+	}
 	if st.ChooserBoundSubject || len(st.Factors) > 0 {
 		return st.Subject
 	}
-	primary := o.cfg.LoginFlow.primary.kind
-	if kind == primary || o.cfg.LoginFlow.parentOf[kind] == primary {
+	if flow.bindsSubject(kind) {
 		return ""
 	}
 	return st.Subject
 }
 
-// guardStepResult is [guardFactorResult] plus the Primary-step rule: a
+// guardStepResult is [guardFactorResult] plus the subject-binding rule: a
 // Primary completion that leaves no subject bound would send
 // advanceLoginFlow straight back into Primary, so it ends the attempt
-// with [ErrInvalidStep] instead.
+// with [ErrInvalidStep] instead. A Registration completion must name the
+// subject itself; a subject the chain inherited does not stand in for it.
 func (o *Orchestrator) guardStepResult(st State, step compiledStep, res interaction.Result) error {
 	if err := guardFactorResult(st, step.auth, res); err != nil {
 		return err
 	}
-	primary := o.cfg.LoginFlow.primary.kind
-	isPrimary := step.kind == primary || o.cfg.LoginFlow.parentOf[step.kind] == primary
-	if isPrimary && res.Subject == "" && st.Subject == "" {
+	flow := o.cfg.LoginFlow
+	if !flow.bindsSubject(step.kind) || res.Subject != "" {
+		return nil
+	}
+	if flow.isRegistration(step.kind) || st.Subject == "" {
 		return ErrInvalidStep
 	}
 	return nil

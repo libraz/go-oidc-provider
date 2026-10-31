@@ -75,6 +75,14 @@ func validateLoginFlowDependencies(flow LoginFlow) error {
 	if err := validateStepDependencies("Primary", flow.Primary); err != nil {
 		return err
 	}
+	if flow.Registration != nil {
+		if err := validateStepDependencies("Registration", flow.Registration); err != nil {
+			return err
+		}
+		if err := validateRegistrationShape(flow.Registration); err != nil {
+			return err
+		}
+	}
 	for i, rule := range flow.Rules {
 		where := "Rules[" + strconv.Itoa(i) + "].Then"
 		if err := validateStepDependencies(where, rule.Then); err != nil {
@@ -134,6 +142,23 @@ func validatePrimaryCapable(where string, step Step, inOneOf bool) error {
 	if inOneOf {
 		return newConfigurationError("WithLoginFlow: "+where+" must be PrimaryPassword, PrimaryPasskey or ExternalStep"+
 			" — a StepOneOf at Primary offers only steps that can bind the subject", nil)
+	}
+	return nil
+}
+
+// validateRegistrationShape refuses a [LoginFlow.Registration] that is
+// not an [ExternalStep], or one that counts failures: a built-in step
+// matches an existing account rather than creating one, and no subject
+// is bound yet to count against.
+func validateRegistrationShape(step Step) error {
+	ext, ok := step.(ExternalStep)
+	if !ok {
+		return newConfigurationError("WithLoginFlow: Registration must be an ExternalStep — a built-in Step or a"+
+			" StepOneOf signs an existing account in rather than creating one", nil)
+	}
+	if ext.CountFailures {
+		return newConfigurationError("WithLoginFlow: Registration: ExternalStep.CountFailures needs a bound subject to"+
+			" count against and none is bound before Registration", nil)
 	}
 	return nil
 }

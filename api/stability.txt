@@ -71,6 +71,7 @@ github.com/libraz/go-oidc-provider/op	LoadSymmetricKeys	v1.5
 github.com/libraz/go-oidc-provider/op	LoginContext.AAL	v1.5
 github.com/libraz/go-oidc-provider/op	LoginContext.SessionReused	v1.5
 github.com/libraz/go-oidc-provider/op	LoginFlow	v1.5
+github.com/libraz/go-oidc-provider/op	LoginFlow.Registration	v1.5
 github.com/libraz/go-oidc-provider/op	LogoutUI	v1.5
 github.com/libraz/go-oidc-provider/op	MTLSProxy	v1.1
 github.com/libraz/go-oidc-provider/op	New	v1.0

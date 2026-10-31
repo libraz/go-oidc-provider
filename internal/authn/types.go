@@ -348,6 +348,14 @@ type State struct {
 	// which the orchestrator never sees.
 	ReauthRequired bool `json:"reauth_required,omitempty"`
 
+	// Registration reports that the relying party asked for account
+	// creation (prompt=create). The HTTP layer sets it when it starts the
+	// chain; the LoginFlow seam then runs the flow's Registration step in
+	// place of Primary until Registration itself completes, and never
+	// hands that step a subject. A flow without a Registration step ends
+	// such a chain with [ErrInvalidStep].
+	Registration bool `json:"registration,omitempty"`
+
 	// EntryAuthn is the authentication of the session the chain took
 	// its [State.Subject] from. The HTTP layer records it only when that
 	// session may serve the request; [Orchestrator.AuthContext] folds it

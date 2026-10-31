@@ -28,6 +28,26 @@ type LoginFlow struct {
 	// stand first.
 	Primary Step
 
+	// Registration, when non-nil, is the step the orchestrator runs in
+	// place of Primary for an authorization request carrying
+	// prompt=create (OpenID Connect Prompt Create 1.0). Its
+	// [Authenticator] creates the account and binds the new subject;
+	// Rules, Decider, consent and the session write then follow exactly
+	// as after Primary, and [LoginContext.CompletedSteps] carries its
+	// KindLabel so a rule can tell a registration from a login. Leaving
+	// it nil keeps prompt=create rejected as invalid_request.
+	//
+	// Registration MUST be an [ExternalStep] whose CountFailures is false
+	// and whose KindLabel no other step in the flow uses; [New] rejects
+	// a built-in Step, a [StepOneOf], and a Rule whose Then names the
+	// Registration kind. The step never sees the subject of an existing
+	// session, runs only for prompt=create, and cannot be demanded by a
+	// [Decider] Require or a risk step-up. A completion that binds no
+	// subject ends the attempt.
+	//
+	// Stable since v1.5.
+	Registration Step
+
 	// Rules is the ordered list of conditional follow-up steps the
 	// orchestrator evaluates after Primary completes. Rules whose
 	// [Rule.When] returns true and whose [Rule.Then.Kind] is not

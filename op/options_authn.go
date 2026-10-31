@@ -446,6 +446,9 @@ type ChooserUI struct {
 //   - No two [Rule.Then] entries may share a [Step.Kind]; duplicate
 //     kinds are rejected so the orchestrator's completed-step
 //     deduplication has a unique discriminator per rule.
+//   - [LoginFlow.Registration], when set, MUST be an [ExternalStep]
+//     with CountFailures false and a KindLabel no other step uses; a
+//     Rule whose Then names that kind is rejected.
 //   - Decider MAY be nil; the orchestrator treats nil as "always
 //     defer to rules".
 //   - Repeated [WithLoginFlow] calls are rejected so the
@@ -474,6 +477,10 @@ func WithLoginFlow(flow LoginFlow) Option {
 			}
 		}
 		seen := make(map[StepKind]struct{}, len(flow.Rules))
+		var registration StepKind
+		if !isNilLike(flow.Registration) {
+			registration = flow.Registration.Kind()
+		}
 		for i, r := range flow.Rules {
 			if isNilLike(r.Then) {
 				return &Error{
@@ -482,6 +489,12 @@ func WithLoginFlow(flow LoginFlow) Option {
 				}
 			}
 			k := r.Then.Kind()
+			if registration != "" && k == registration {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not name the Registration StepKind " + k.String(),
+				}
+			}
 			if _, dup := seen[k]; dup {
 				return &Error{
 					Code:        codeConfiguration,
