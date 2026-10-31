@@ -186,6 +186,8 @@ type Store struct {
 	metadata           *metadataStore
 	deviceCodes        *deviceCodeStore
 	cibaRequests       *cibaRequestStore
+	ssfStreams         *ssfStreamStore
+	ssfEvents          *ssfEventStore
 }
 
 var _ store.StaticClientReconciler = (*Store)(nil)
@@ -223,6 +225,9 @@ func New(opts ...Option) *Store {
 	s.metadata = newMetadataStore()
 	s.deviceCodes = newDeviceCodeStore(s.clock)
 	s.cibaRequests = newCIBARequestStore(s.clock)
+	ssf := newSSFState()
+	s.ssfStreams = &ssfStreamStore{st: ssf}
+	s.ssfEvents = &ssfEventStore{st: ssf}
 	return s
 }
 
