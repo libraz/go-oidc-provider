@@ -42,12 +42,4 @@ consulted	op.ScopeNameOfflineAccess	Embedder-facing vocabulary; the value the OP
 consulted	op.ScopeNameOpenID	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopeOpenID, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
 consulted	op.ScopeNamePhone	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopePhone, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
 consulted	op.ScopeNameProfile	Embedder-facing vocabulary; the value the OP matches on is internal/oidcscope.ScopeProfile, which the consuming packages read without importing op. Parity is pinned by op.TestScopeNameParity.
-event	ssf.poll_set_error	Catalogued ahead of the SSF transmitter that emits it, so the store contract and the emitters can land separately; the row goes when the emitter does.
-event	ssf.push_abandoned	Catalogued ahead of the SSF transmitter that emits it, so the store contract and the emitters can land separately; the row goes when the emitter does.
-event	ssf.push_delivered	Catalogued ahead of the SSF transmitter that emits it, so the store contract and the emitters can land separately; the row goes when the emitter does.
-event	ssf.push_rejected	Catalogued ahead of the SSF transmitter that emits it, so the store contract and the emitters can land separately; the row goes when the emitter does.
-event	ssf.push_retried	Catalogued ahead of the SSF transmitter that emits it, so the store contract and the emitters can land separately; the row goes when the emitter does.
-event	ssf.stream.created	Catalogued ahead of the SSF transmitter that emits it, so the store contract and the emitters can land separately; the row goes when the emitter does.
-event	ssf.stream.deleted	Catalogued ahead of the SSF transmitter that emits it, so the store contract and the emitters can land separately; the row goes when the emitter does.
-event	ssf.stream.updated	Catalogued ahead of the SSF transmitter that emits it, so the store contract and the emitters can land separately; the row goes when the emitter does.
 message	consent.button.deny	Reserved for embedder-supplied consent UIs; the bundled HTMLDriver ships no decline control, as the WithLocale godoc records.
