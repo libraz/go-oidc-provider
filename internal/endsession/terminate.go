@@ -17,7 +17,8 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// terminateSession is the success-path side effect: delete the session
+// terminateSessionForScope performs the destructive part of /end_session.
+// It is the success-path side effect: delete the session
 // record the cookie pointed at, hand a back-channel logout fan-out to
 // the affected RPs off to the coordinator, and clear the cookie in the
 // response. Downstream revocation and back-channel failures are
@@ -38,11 +39,7 @@ import (
 // lookup is the classified session read [serve] performed before the
 // CSRF gate ran, so the session that gets destroyed is exactly the one
 // the gate authorised.
-func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps, lookup sessionLookup) error {
-	return terminateSessionForScope(w, r, deps, lookup, logoutScopeAll)
-}
-
-// terminateSessionForScope performs the destructive part of /end_session.
+//
 // The all-scope branch snapshots the chooser group before deleting anything;
 // the snapshot is the source of truth for both the revocation and BCL
 // cascades. The current-scope branch removes only the active row and lets the

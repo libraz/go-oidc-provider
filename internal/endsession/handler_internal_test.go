@@ -166,7 +166,7 @@ func TestTerminateSession_AuditsSessionStoreFailureWithoutFalseSuccess(t *testin
 	w := httptest.NewRecorder()
 	req := logoutRequest(outcome.Cookie)
 	deps := Deps{Sessions: manager, Audit: recorder}
-	if err := terminateSession(w, req, deps, readSessionLookup(req, deps)); err == nil {
+	if err := terminateSessionForScope(w, req, deps, readSessionLookup(req, deps), logoutScopeAll); err == nil {
 		t.Fatal("termination reported success although the session row was not deleted")
 	}
 
@@ -276,7 +276,7 @@ func TestTerminateSession_AuditsTokenRevocationFailure(t *testing.T) {
 		},
 		Audit: recorder,
 	}
-	terminateSession(httptest.NewRecorder(), req, deps, readSessionLookup(req, deps))
+	terminateSessionForScope(httptest.NewRecorder(), req, deps, readSessionLookup(req, deps), logoutScopeAll)
 
 	if !recorder.has("session.destroyed") {
 		t.Fatalf("session.destroyed not emitted: %#v", recorder.snapshot())
@@ -321,9 +321,9 @@ func TestTerminateSession_ClientLookupFaultReachesBackchannelAudit(t *testing.T)
 		Backchannel: coordinator,
 		Audit:       recorder,
 	}
-	terminateSession(httptest.NewRecorder(), req, deps, readSessionLookup(req, deps))
+	terminateSessionForScope(httptest.NewRecorder(), req, deps, readSessionLookup(req, deps), logoutScopeAll)
 	// The fan-out is detached from the request, so the evidence lands
-	// after terminateSession has returned.
+	// after terminateSessionForScope has returned.
 	drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := coordinator.Drain(drainCtx); err != nil {

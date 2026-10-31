@@ -308,7 +308,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 }
 
 // enforceCSRFGate is the CSRF guard for /end_session. The function
-// returns true when the caller may proceed to terminateSession, false
+// returns true when the caller may proceed to terminateSessionForScope, false
 // when the response has already been written (interstitial page on
 // GET, error on a forged POST).
 //
@@ -524,10 +524,11 @@ func resolveByClientID(
 }
 
 // validatePostLogout enforces the rule that post_logout_redirect_uri
-// requires a resolved client and an exact-match entry in
-// [op/store.Client.PostLogoutRedirectURIs]. An empty value is always
-// valid; the handler renders the static confirmation page in that
-// case.
+// requires a resolved client and a matching entry in
+// [op/store.Client.PostLogoutRedirectURIs]: exact, or the RFC 8252 §7.3
+// loopback any-port match a native or public client is allowed. An
+// empty value is always valid; the handler renders the static
+// confirmation page in that case.
 func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout string) bool {
 	if postLogout == "" {
 		return true
