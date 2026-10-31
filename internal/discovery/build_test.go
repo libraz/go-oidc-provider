@@ -917,6 +917,36 @@ func TestBuild_SubjectTypes_PairwiseAdvertisedWhenEnabled(t *testing.T) {
 	}
 }
 
+// TestBuild_PromptValuesSupported confirms prompt_values_supported always
+// carries the four OIDC Core values and gains "create" only when the OP
+// is configured to accept prompt=create.
+//
+// Spec: OIDC Core 1.0 §3.1.2.1 / Initiating User Registration 1.0 §4.2.
+func TestBuild_PromptValuesSupported(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		promptCreate bool
+		want         []string
+	}{
+		{"create off", false, []string{"none", "login", "consent", "select_account"}},
+		{"create on", true, []string{"none", "login", "consent", "select_account", "create"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := baseInput()
+			in.PromptCreate = tc.promptCreate
+			doc := discovery.Build(in)
+			if !slices.Equal(doc.PromptValuesSupported, tc.want) {
+				t.Errorf("prompt_values_supported = %v, want %v", doc.PromptValuesSupported, tc.want)
+			}
+		})
+	}
+}
+
 // TestBuild_CIBA_OmittedWhenGrantOff confirms the four CIBA Core 1.0
 // §3 metadata fields stay absent from the wire when the OP does not
 // advertise the CIBA grant. An OP that mounted /bc-authorize without

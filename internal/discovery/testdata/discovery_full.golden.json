@@ -68,6 +68,13 @@
   "subject_types_supported": [
     "public"
   ],
+  "prompt_values_supported": [
+    "none",
+    "login",
+    "consent",
+    "select_account",
+    "create"
+  ],
   "id_token_signing_alg_values_supported": [
     "ES256"
   ],

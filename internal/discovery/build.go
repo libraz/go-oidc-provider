@@ -97,6 +97,12 @@ type Input struct {
 	// "public" is advertised.
 	PairwiseEnabled bool
 
+	// PromptCreate reports whether the OP accepts prompt=create (i.e. a
+	// registration flow is configured). When true the discovery document
+	// advertises "create" in prompt_values_supported alongside the four
+	// standard values; when false only the standard values are advertised.
+	PromptCreate bool
+
 	// ClaimsSupported carries the explicit claim-name enumeration the
 	// embedder supplied through op.WithClaimsSupported. Nil leaves
 	// the discovery document's claims_supported field omitted, which
@@ -625,6 +631,7 @@ func newBaseDocument(in Input) Document {
 		ResponseModesSupported:            []string{"query", "form_post"},
 		GrantTypesSupported:               in.GrantsSupported,
 		SubjectTypesSupported:             subjectTypesFor(in.PairwiseEnabled),
+		PromptValuesSupported:             promptValuesFor(in.PromptCreate),
 		IDTokenSigningAlgValuesSupported:  []string{"ES256"},
 		UserInfoSigningAlgValuesSupported: []string{"ES256"},
 		ScopesSupported:                   append([]string(nil), in.ScopesSupported...),
@@ -669,6 +676,19 @@ func subjectTypesFor(pairwiseEnabled bool) []string {
 		return []string{"public", "pairwise"}
 	}
 	return []string{"public"}
+}
+
+// promptValuesFor returns the prompt_values_supported slice: the four
+// OIDC Core 1.0 §3.1.2.1 values, plus "create" (Initiating User
+// Registration 1.0) only when the OP can actually run a registration
+// flow, so a value the authorization endpoint would reject is never
+// advertised.
+func promptValuesFor(createEnabled bool) []string {
+	values := []string{"none", "login", "consent", "select_account"}
+	if createEnabled {
+		values = append(values, "create")
+	}
+	return values
 }
 
 // applyFeatureEndpoints publishes the per-feature endpoint URLs

@@ -172,6 +172,14 @@ type Document struct {
 	// or a custom op.WithSubjectGenerator that emits pairwise subs.
 	SubjectTypesSupported []string `json:"subject_types_supported"`
 
+	// PromptValuesSupported lists the prompt values the authorization
+	// endpoint accepts (OIDC Core 1.0 §3.1.2.1; Initiating User
+	// Registration 1.0 §4.2 asks an OP that defines the member to
+	// enumerate every value). "none", "login", "consent" and
+	// "select_account" are always present; "create" is appended when the
+	// OP is configured with a registration flow.
+	PromptValuesSupported []string `json:"prompt_values_supported,omitempty"`
+
 	// IDTokenSigningAlgValuesSupported lists the alg values the OP uses
 	// to sign ID tokens. Always "ES256".
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
