@@ -1,9 +1,7 @@
 package clientauth
 
 import (
-	"bytes"
 	"context"
-	"crypto"
 	"errors"
 	"fmt"
 	"slices"
@@ -86,9 +84,10 @@ type assertionSigningAlgResolver interface {
 
 const maxAssertionLifetime = 5 * time.Minute
 
-// maxJTILen bounds the "jti" claim length, matching the DPoP proof and
-// request-object replay gates so no replay-store key grows unbounded.
-const maxJTILen = 256
+// MaxJTILen bounds the "jti" claim length, matching the DPoP proof and
+// request-object replay gates so no replay-store key grows unbounded. The
+// jwt-bearer grant verifier shares it.
+const MaxJTILen = 256
 
 // DefaultAssertionLeeway is the skew tolerance applied to the time
 // claims of a client assertion when [PrivateKeyJWTVerifier.Leeway] is
@@ -218,7 +217,7 @@ func resolveAndVerify(ctx context.Context, resolver JWKSResolver, clientID strin
 		burnJWTVerify()
 		return nil, ErrCredentialsInvalid
 	}
-	if payload, vErr := verifySignature(jws, keys); vErr == nil {
+	if payload, vErr := rpjwks.VerifySignature(jws, keys); vErr == nil {
 		return payload, nil
 	}
 	// RP key rotation: the assertion may be signed with a key the client
@@ -232,7 +231,7 @@ func resolveAndVerify(ctx context.Context, resolver JWKSResolver, clientID strin
 	if !ok {
 		return nil, ErrCredentialsInvalid
 	}
-	payload, err := verifySignature(jws, refreshed)
+	payload, err := rpjwks.VerifySignature(jws, refreshed)
 	if err != nil {
 		return nil, ErrCredentialsInvalid
 	}
@@ -249,12 +248,12 @@ type jwksRefresher interface {
 
 // refreshedKeysOnKIDMiss returns a freshly-fetched keyset, and true, when
 // a verification miss is plausibly a rotated-out key: the resolver
-// supports a refetch AND the assertion's signing kid is absent from the
-// keyset just tried. It returns ok=false when rotation cannot explain the
-// miss (resolver has no refetch, kid is present so the signature is
-// simply wrong, the refetch failed, or it returned the keyset just tried),
-// so the caller rejects without a wasted retry. A server-side refetch
-// failure is returned as an error.
+// supports a refetch AND [rpjwks.RefreshOnKIDMiss] accepts the miss. It
+// returns ok=false when rotation cannot explain the miss (resolver has no
+// refetch, kid is present so the signature is simply wrong, the refetch
+// failed, or it returned the keyset just tried), so the caller rejects
+// without a wasted retry. A server-side refetch failure is returned as an
+// error.
 func refreshedKeysOnKIDMiss(
 	ctx context.Context,
 	resolver JWKSResolver,
@@ -263,10 +262,12 @@ func refreshedKeysOnKIDMiss(
 	tried *josev4.JSONWebKeySet,
 ) (*josev4.JSONWebKeySet, bool, error) {
 	refresher, ok := resolver.(jwksRefresher)
-	if !ok || !assertionKIDAbsent(jws, tried) {
+	if !ok {
 		return nil, false, nil
 	}
-	fresh, err := refresher.RefreshJWKS(ctx, clientID)
+	fresh, ok, err := rpjwks.RefreshOnKIDMiss(ctx, jws, tried, func(ctx context.Context) (*josev4.JSONWebKeySet, error) {
+		return refresher.RefreshJWKS(ctx, clientID)
+	})
 	if err != nil {
 		if keySourceUnavailable(err) {
 			return nil, false, classifyKeyResolution(err)
@@ -274,39 +275,7 @@ func refreshedKeysOnKIDMiss(
 		// A client-side refetch failure cannot explain the miss.
 		return nil, false, nil
 	}
-	if fresh == nil || len(fresh.Keys) == 0 {
-		return nil, false, nil
-	}
-	// An inline keyset, or a refetch the throttle answered from cache,
-	// returns the keys just tried; re-trialling them would double the
-	// per-request verification bound without any chance of success.
-	if sameKeySet(fresh, tried) {
-		return nil, false, nil
-	}
-	return fresh, true, nil
-}
-
-// sameKeySet reports whether a and b hold the same keys in the same order,
-// compared by kid and RFC 7638 thumbprint. A key whose thumbprint cannot
-// be computed makes the sets differ, so the caller falls back to a retry.
-func sameKeySet(a, b *josev4.JSONWebKeySet) bool {
-	if a == b {
-		return true
-	}
-	if a == nil || b == nil || len(a.Keys) != len(b.Keys) {
-		return false
-	}
-	for i := range a.Keys {
-		if a.Keys[i].KeyID != b.Keys[i].KeyID {
-			return false
-		}
-		ta, errA := a.Keys[i].Thumbprint(crypto.SHA256)
-		tb, errB := b.Keys[i].Thumbprint(crypto.SHA256)
-		if errA != nil || errB != nil || !bytes.Equal(ta, tb) {
-			return false
-		}
-	}
-	return true
+	return fresh, ok, nil
 }
 
 // keySourceUnavailable reports whether a key-resolution failure is a
@@ -325,29 +294,6 @@ func classifyKeyResolution(err error) error {
 		return fmt.Errorf("authn: client key resolution: %w", err)
 	}
 	return ErrCredentialsInvalid
-}
-
-// assertionKIDAbsent reports whether the assertion's signing key id is
-// missing from keys. A signature with no kid is treated as absent (a
-// single-key rotation still warrants one refetch); an empty keyset is
-// absent by definition.
-func assertionKIDAbsent(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) bool {
-	if len(jws.Signatures) == 0 {
-		return false
-	}
-	kid := jws.Signatures[0].Header.KeyID
-	if keys == nil || len(keys.Keys) == 0 {
-		return true
-	}
-	if kid == "" {
-		return true
-	}
-	for i := range keys.Keys {
-		if keys.Keys[i].KeyID == kid {
-			return false
-		}
-	}
-	return true
 }
 
 // policyAllowsAlg reports whether the assertion's alg is inside
@@ -381,92 +327,6 @@ func checkAssertionAlgPin(ctx context.Context, resolver JWKSResolver, clientID s
 		return ErrCredentialsInvalid
 	}
 	return nil
-}
-
-// verifySignature returns the verified payload on the first candidate key
-// that validates the assertion, or an error if none do.
-//
-// Candidate selection bounds the CPU an attacker can force per request
-// (the assertion endpoints run before client authentication, so a garbage
-// signature against a maximally large JWKS would otherwise trigger one
-// RSA verify per registered key):
-//   - When the assertion header names a `kid` (RFC 7515 §4.1.4), only
-//     keys bearing that kid are trialled — an O(1) lookup instead of a
-//     full-keyset sweep. A named-but-unknown kid matches nothing; the
-//     miss is surfaced so the caller's rotation-refetch path can retry.
-//   - A kid-less assertion trials the alg/shape-matching keys but caps
-//     the number of actual verifications at [jose.MaxKidlessTrialKeys],
-//     mirroring the kid-less bound the JWE decrypt path already applies.
-//
-// Each candidate is first gated through [signingUsable] and then through
-// [jose.AssertAlgKeyShape]: the
-// OP's own signing keys are held to the RFC 7518 §3.3 / RFC 8725 §3.2
-// floor (RSA >= 2048 bits, curve pinned to the declared alg), and a
-// client registering a weaker or mismatched key MUST NOT receive a laxer
-// check than the OP applies to itself. A key whose shape does not match
-// the declared alg is skipped rather than handed to go-jose (and does not
-// count against the kid-less trial cap), so a sub-floor key can never
-// satisfy the assertion. Compliant keys are unaffected: the gate is a
-// superset of what go-jose already enforces.
-//
-// A key whose "use" member declares a purpose other than signatures is
-// likewise skipped, so the verifier is no laxer than the registration
-// gate that refuses to count such a key as a signing key.
-func verifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) ([]byte, error) {
-	if len(jws.Signatures) == 0 {
-		return nil, errors.New("authn: assertion has no signatures")
-	}
-	header := jws.Signatures[0].Header
-	alg := header.Algorithm
-
-	candidates := keys.Keys
-	if header.KeyID != "" {
-		candidates = keys.Key(header.KeyID)
-		if len(candidates) == 0 {
-			// The named kid is absent from this keyset. Do NOT fall back
-			// to trialling every key: that would restore the amplification
-			// the kid gate removes. The caller consults the rotation
-			// refetch path (assertionKIDAbsent) on this miss.
-			return nil, errors.New("authn: assertion signature does not verify")
-		}
-	}
-
-	trials := 0
-	for i := range candidates {
-		if !signingUsable(candidates[i].Use) {
-			continue
-		}
-		if jose.AssertAlgKeyShape(alg, candidates[i].Key) != nil {
-			continue
-		}
-		payload, err := jws.Verify(candidates[i])
-		if err == nil {
-			return payload, nil
-		}
-		trials++
-		// Bound the trial verifications regardless of whether a kid was
-		// named. The kid-less branch trials every alg/shape-matching key,
-		// but a kid-present branch is only bounded to a single key when the
-		// keyset carries at most one key per kid — nothing enforces kid
-		// uniqueness, so a client serving many same-kid, same-alg keys would
-		// otherwise reopen the per-key amplification the cap exists to close.
-		// A legitimate client has at most a handful of keys sharing an exact
-		// kid (rotation overlap), well under the cap.
-		if trials >= jose.MaxKidlessTrialKeys {
-			break
-		}
-	}
-	return nil, errors.New("authn: assertion signature does not verify")
-}
-
-// signingUsable reports whether a JWK whose "use" member is declared as
-// use may verify a signature. RFC 7517 §4.2 makes the declaration
-// binding: a key published as "enc" is the client's encryption key, not
-// a verification key, and an unrecognised value names a purpose this OP
-// cannot honour. An absent "use" leaves the key unrestricted, which
-// RFC 7517 permits and many clients rely on.
-func signingUsable(use string) bool {
-	return use == "" || use == "sig"
 }
 
 // decodeAssertionClaims unmarshals the JWS payload onto AssertionClaims,
@@ -539,9 +399,9 @@ func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAu
 var replayKeyEscaper = strings.NewReplacer("%", "%25", ":", "%3A")
 
 // assertionReplayKey builds the consumed-JTI key for an assertion,
-// rejecting a jti that is empty or longer than [maxJTILen].
+// rejecting a jti that is empty or longer than [MaxJTILen].
 func assertionReplayKey(clientID, jti string) (string, error) {
-	if jti == "" || len(jti) > maxJTILen {
+	if jti == "" || len(jti) > MaxJTILen {
 		return "", ErrAssertionMalformed
 	}
 	return "clientassertion:" + replayKeyEscaper.Replace(clientID) + ":" + jti, nil

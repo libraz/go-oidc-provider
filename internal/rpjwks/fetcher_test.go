@@ -3,6 +3,10 @@ package rpjwks
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1171,5 +1175,101 @@ func TestResolve_RequiresExactlyOneSource(t *testing.T) {
 	}
 	if got := hits.Load(); got != 1 {
 		t.Errorf("hits = %d, want 1: a refused pair must not reach the network", got)
+	}
+}
+
+// signedWith returns a compact ES256 JWS over a fixed payload, signed by key
+// under kid, parsed back so the test holds what a verifier receives.
+func signedWith(t *testing.T, key *ecdsa.PrivateKey, kid string) *josev4.JSONWebSignature {
+	t.Helper()
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.ES256, Key: key},
+		(&josev4.SignerOptions{}).WithHeader("kid", kid),
+	)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	obj, err := signer.Sign([]byte(`{"ok":true}`))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	compact, err := obj.CompactSerialize()
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	jws, err := josev4.ParseSignedCompact(compact, []josev4.SignatureAlgorithm{josev4.ES256})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return jws
+}
+
+func publicJWKS(t *testing.T, kid string, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	b, err := json.Marshal(josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{
+		{Key: &key.PublicKey, KeyID: kid, Use: "sig", Algorithm: "ES256"},
+	}})
+	if err != nil {
+		t.Fatalf("marshal jwks: %v", err)
+	}
+	return b
+}
+
+// TestResolveForKID_RefetchesOnceOnKIDMiss pins the shared rotation rule: a
+// signature naming a kid the cached keyset lacks costs exactly one fresh
+// fetch, a second unknown kid inside the throttle window costs none, and an
+// inline keyset is never re-trialled.
+func TestResolveForKID_RefetchesOnceOnKIDMiss(t *testing.T) {
+	t.Parallel()
+
+	oldKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSet, newSet := publicJWKS(t, "old", oldKey), publicJWKS(t, "new", newKey)
+
+	hits := &atomic.Int32{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := newSet
+		if hits.Add(1) == 1 {
+			body = oldSet
+		}
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		w.Header().Set("Cache-Control", "max-age=300")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	f := newTestFetcher(t, Config{Clock: testClock()})
+	ctx := context.Background()
+
+	if _, err := f.ResolveForKID(ctx, nil, srv.URL, signedWith(t, oldKey, "old")); err != nil {
+		t.Fatalf("cached kid: %v", err)
+	}
+	if _, err := f.ResolveForKID(ctx, nil, srv.URL, signedWith(t, newKey, "new")); err != nil {
+		t.Fatalf("rotated kid: %v", err)
+	}
+	if n := hits.Load(); n != 2 {
+		t.Fatalf("hits = %d after the kid miss, want 2", n)
+	}
+	if _, err := f.ResolveForKID(ctx, nil, srv.URL, signedWith(t, newKey, "absent")); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("unknown kid: err = %v, want ErrSignatureInvalid", err)
+	}
+	if n := hits.Load(); n != 2 {
+		t.Errorf("hits = %d after a throttled kid miss, want still 2", n)
+	}
+
+	if _, err := f.ResolveForKID(ctx, oldSet, "", signedWith(t, oldKey, "old")); err != nil {
+		t.Errorf("inline keyset: %v", err)
+	}
+	if _, err := f.ResolveForKID(ctx, oldSet, "", signedWith(t, newKey, "new")); !errors.Is(err, ErrSignatureInvalid) {
+		t.Errorf("inline kid miss: err = %v, want ErrSignatureInvalid", err)
+	}
+	if _, err := f.ResolveForKID(ctx, oldSet, "", signedWith(t, newKey, "old")); !errors.Is(err, ErrSignatureInvalid) {
+		t.Errorf("wrong key under a present kid: err = %v, want ErrSignatureInvalid", err)
 	}
 }

@@ -1,7 +1,9 @@
 package rpjwks
 
 import (
+	"bytes"
 	"context"
+	"crypto"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -388,6 +391,162 @@ func CheckKeySource(jwks []byte, jwksURI string) error {
 	default:
 		return nil
 	}
+}
+
+// ErrSignatureInvalid reports that no candidate key verified a signature, the
+// named kid was absent even after a rotation refetch, or the keyset was empty.
+var ErrSignatureInvalid = errors.New("rpjwks: signature does not verify")
+
+// ResolveForKID resolves the keyset a peer registered (inline jwks or
+// jwksURI), verifies jws against it with [VerifySignature], and on a miss that
+// key rotation could explain ([RefreshOnKIDMiss]) refetches fresh once and
+// retries. It returns the verified payload. A resolution or refetch failure the
+// caller should answer as retryable satisfies [IsKeySourceUnavailable]; every
+// other failure wraps [ErrSignatureInvalid] or the fetch sentinel.
+func (f *Fetcher) ResolveForKID(
+	ctx context.Context,
+	jwks []byte,
+	jwksURI string,
+	jws *josev4.JSONWebSignature,
+) ([]byte, error) {
+	keys, err := f.Resolve(ctx, jwks, jwksURI)
+	if err != nil {
+		return nil, err
+	}
+	payload, verifyErr := VerifySignature(jws, keys)
+	if verifyErr == nil {
+		return payload, nil
+	}
+	fresh, ok, err := RefreshOnKIDMiss(ctx, jws, keys, func(ctx context.Context) (*josev4.JSONWebKeySet, error) {
+		return f.ResolveFresh(ctx, jwks, jwksURI)
+	})
+	if err != nil && IsKeySourceUnavailable(err) {
+		return nil, err
+	}
+	if !ok {
+		return nil, verifyErr
+	}
+	return VerifySignature(jws, fresh)
+}
+
+// RefreshOnKIDMiss is the one rotation-recovery rule: it calls refetch and
+// returns the fresh keyset, with true, only when the signature's kid is absent
+// from tried ([KIDAbsent]) and the refetch produced a non-empty keyset that
+// differs from tried. ok=false means rotation cannot explain the miss, so the
+// caller rejects without a wasted retry. A refetch failure is returned as-is
+// with ok=false; the caller decides whether it is a server-side fault.
+func RefreshOnKIDMiss(
+	ctx context.Context,
+	jws *josev4.JSONWebSignature,
+	tried *josev4.JSONWebKeySet,
+	refetch func(context.Context) (*josev4.JSONWebKeySet, error),
+) (*josev4.JSONWebKeySet, bool, error) {
+	if !KIDAbsent(jws, tried) {
+		return nil, false, nil
+	}
+	fresh, err := refetch(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if fresh == nil || len(fresh.Keys) == 0 {
+		return nil, false, nil
+	}
+	// An inline keyset, or a refetch the throttle answered from cache,
+	// returns the keys just tried; re-trialling them would double the
+	// per-request verification bound without any chance of success.
+	if SameKeySet(fresh, tried) {
+		return nil, false, nil
+	}
+	return fresh, true, nil
+}
+
+// KIDAbsent reports whether the signature's key id is missing from keys. A
+// signature with no kid is treated as absent (a single-key rotation still
+// warrants one refetch); an empty keyset is absent by definition.
+func KIDAbsent(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) bool {
+	if len(jws.Signatures) == 0 {
+		return false
+	}
+	kid := jws.Signatures[0].Header.KeyID
+	if keys == nil || len(keys.Keys) == 0 || kid == "" {
+		return true
+	}
+	return len(keys.Key(kid)) == 0
+}
+
+// SameKeySet reports whether a and b hold the same keys in the same order,
+// compared by kid and RFC 7638 thumbprint. A key whose thumbprint cannot be
+// computed makes the sets differ, so the caller falls back to a retry.
+func SameKeySet(a, b *josev4.JSONWebKeySet) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil || len(a.Keys) != len(b.Keys) {
+		return false
+	}
+	for i := range a.Keys {
+		if a.Keys[i].KeyID != b.Keys[i].KeyID {
+			return false
+		}
+		ta, errA := a.Keys[i].Thumbprint(crypto.SHA256)
+		tb, errB := b.Keys[i].Thumbprint(crypto.SHA256)
+		if errA != nil || errB != nil || !bytes.Equal(ta, tb) {
+			return false
+		}
+	}
+	return true
+}
+
+// VerifySignature returns the verified payload on the first candidate key
+// that validates jws, or an error wrapping [ErrSignatureInvalid].
+//
+// Candidate selection bounds the CPU a peer can force per request:
+//   - A named kid (RFC 7515 §4.1.4) trials only keys bearing it; a named but
+//     unknown kid matches nothing, so the caller's rotation refetch can retry.
+//   - Trials are capped at [jose.MaxKidlessTrialKeys] whether or not a kid is
+//     named, since nothing enforces kid uniqueness in a keyset.
+//
+// A key whose "use" is not a signature purpose, or whose shape fails
+// [jose.AssertAlgKeyShape] for the declared alg, is skipped without counting
+// against the cap, so a peer's key is held to the same floor as the OP's own.
+func VerifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) ([]byte, error) {
+	if len(jws.Signatures) == 0 {
+		return nil, fmt.Errorf("%w: no signatures", ErrSignatureInvalid)
+	}
+	if keys == nil {
+		return nil, ErrSignatureInvalid
+	}
+	header := jws.Signatures[0].Header
+	alg := header.Algorithm
+
+	candidates := keys.Keys
+	if header.KeyID != "" {
+		candidates = keys.Key(header.KeyID)
+	}
+	trials := 0
+	for i := range candidates {
+		if !signingUsable(candidates[i].Use) {
+			continue
+		}
+		if jose.AssertAlgKeyShape(alg, candidates[i].Key) != nil {
+			continue
+		}
+		payload, err := jws.Verify(candidates[i])
+		if err == nil {
+			return payload, nil
+		}
+		trials++
+		if trials >= jose.MaxKidlessTrialKeys {
+			break
+		}
+	}
+	return nil, ErrSignatureInvalid
+}
+
+// signingUsable reports whether a JWK whose "use" member is use may verify a
+// signature (RFC 7517 §4.2): absent or "sig" only.
+func signingUsable(use string) bool {
+	return use == "" || use == "sig"
 }
 
 func (f *Fetcher) resolve(
