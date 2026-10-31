@@ -308,36 +308,36 @@ func requiredColumns() map[string][]string {
 // missing table is reported as "oidcsql: schema for <table> is missing";
 // a missing column as "oidcsql: schema for <table> is missing required
 // columns: <names>", followed by the schema/MIGRATIONS.md sections that
-// add them. [Store.Migrate] runs this check after applying the DDL.
+// add them. Every gap is reported in the one returned error, a line
+// each, so a single run lists the whole migration still to apply.
+// [Store.Migrate] runs this check after applying the DDL.
 //
 // Stable since v1.5.
 func (s *Store) ValidateSchema(ctx context.Context) error {
-	for _, table := range s.names.all() {
+	required := requiredColumns()
+	var problems []error
+	for i, table := range s.names.all() {
 		cols, err := s.columnSet(ctx, table)
 		if err != nil {
 			return err
 		}
 		if len(cols) == 0 {
-			return fmt.Errorf("oidcsql: schema for %s is missing", table)
-		}
-	}
-	required := requiredColumns()
-	for _, key := range knownNamingKeys {
-		columns, ok := required[key]
-		if !ok {
+			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing", table))
 			continue
 		}
-		table := s.names.byKey(key)
-		missing, err := s.missingColumns(ctx, table, columns)
-		if err != nil {
-			return err
+		key := knownNamingKeys[i]
+		var missing []string
+		for _, col := range required[key] {
+			if !cols[col] {
+				missing = append(missing, col)
+			}
 		}
 		if len(missing) > 0 {
-			return fmt.Errorf("oidcsql: schema for %s is missing required columns: %s%s",
-				table, strings.Join(missing, ", "), migrationHint(key, missing))
+			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing required columns: %s%s",
+				table, strings.Join(missing, ", "), migrationHint(key, missing)))
 		}
 	}
-	return nil
+	return errors.Join(problems...)
 }
 
 // migrationHint names the schema/MIGRATIONS.md sections that add the
@@ -360,20 +360,6 @@ func migrationHint(key string, missing []string) string {
 	default:
 		return "; apply the " + strings.Join(versions, ", ") + " sections of schema/MIGRATIONS.md"
 	}
-}
-
-func (s *Store) missingColumns(ctx context.Context, table string, required []string) ([]string, error) {
-	have, err := s.columnSet(ctx, table)
-	if err != nil {
-		return nil, err
-	}
-	missing := make([]string, 0)
-	for _, col := range required {
-		if !have[col] {
-			missing = append(missing, col)
-		}
-	}
-	return missing, nil
 }
 
 func (s *Store) columnSet(ctx context.Context, table string) (map[string]bool, error) {

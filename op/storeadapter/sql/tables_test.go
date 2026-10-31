@@ -219,8 +219,23 @@ func renderTablesDoc(t *testing.T) []byte {
 	b.WriteString("Every table below must exist: `Store.ValidateSchema` checks all of them at\n")
 	b.WriteString("startup. A table whose \"Used when\" condition your configuration does not meet\n")
 	b.WriteString("stays empty, so create it and leave it. `WithNaming` renames a table through\n")
-	b.WriteString("its key; the columns are fixed. Your own users table needs no new column: the\n")
-	b.WriteString("OP only needs a stable subject from it, through a `store.UserStore`.\n\n")
+	b.WriteString("its key; the columns are fixed. Your own users table needs no new column when\n")
+	b.WriteString("it already has an opaque identifier that is assigned once and never reused: the\n")
+	b.WriteString("OP only needs that subject from it, through a `store.UserStore`. A table keyed\n")
+	b.WriteString("only by an auto-increment id or an email address adds one such column.\n\n")
+	minimal := make([]string, 0, len(minimalTables))
+	for _, key := range minimalTables {
+		name := names.byKey(key)
+		if name == "" {
+			t.Fatalf("minimalTables names unknown key %q", key)
+		}
+		minimal = append(minimal, "`"+name+"`")
+	}
+	b.WriteString("A minimal deployment (the default `authorization_code` and `refresh_token`\n")
+	b.WriteString("grants, password login against your own user store, every other option at its\n")
+	b.WriteString("default) writes rows to " + strings.Join(minimal, ", ") + ".\n")
+	b.WriteString("`oidc_authn_lockouts` fills only on failed logins. The other tables stay empty\n")
+	b.WriteString("until the option in their \"Used when\" column is set.\n\n")
 	b.WriteString("Column types differ by dialect; `schema/<dialect>/v1.sql` is authoritative.\n")
 	b.WriteString("A column marked with a release was added to an existing table in that release;\n")
 	b.WriteString("an existing database applies the matching section of `MIGRATIONS.md`.\n\n")

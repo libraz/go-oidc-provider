@@ -106,6 +106,37 @@ func TestValidateSchema_MissingPreviousSecretColumns(t *testing.T) {
 	}
 }
 
+func TestValidateSchema_ReportsEveryGap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, db := newValidateStore(t)
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for _, stmt := range []string{
+		"DROP TABLE oidc_consumed_jtis",
+		"DROP TABLE oidc_passkeys",
+		"ALTER TABLE oidc_totp_secrets DROP COLUMN row_version",
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	err := s.ValidateSchema(ctx)
+	if err == nil {
+		t.Fatal("ValidateSchema succeeded with three gaps")
+	}
+	for _, want := range []string{
+		"schema for oidc_consumed_jtis is missing",
+		"schema for oidc_passkeys is missing",
+		"schema for oidc_totp_secrets is missing required columns: row_version",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not report %q", err, want)
+		}
+	}
+}
+
 func TestValidateSchema_DoesNotCreate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

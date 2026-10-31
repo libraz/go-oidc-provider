@@ -5,8 +5,16 @@
 Every table below must exist: `Store.ValidateSchema` checks all of them at
 startup. A table whose "Used when" condition your configuration does not meet
 stays empty, so create it and leave it. `WithNaming` renames a table through
-its key; the columns are fixed. Your own users table needs no new column: the
-OP only needs a stable subject from it, through a `store.UserStore`.
+its key; the columns are fixed. Your own users table needs no new column when
+it already has an opaque identifier that is assigned once and never reused: the
+OP only needs that subject from it, through a `store.UserStore`. A table keyed
+only by an auto-increment id or an email address adds one such column.
+
+A minimal deployment (the default `authorization_code` and `refresh_token`
+grants, password login against your own user store, every other option at its
+default) writes rows to `oidc_clients`, `oidc_authorization_codes`, `oidc_refresh_tokens`, `oidc_grants`, `oidc_sessions`, `oidc_interactions`, `oidc_op_metadata`, `oidc_authn_lockouts`.
+`oidc_authn_lockouts` fills only on failed logins. The other tables stay empty
+until the option in their "Used when" column is set.
 
 Column types differ by dialect; `schema/<dialect>/v1.sql` is authoritative.
 A column marked with a release was added to an existing table in that release;

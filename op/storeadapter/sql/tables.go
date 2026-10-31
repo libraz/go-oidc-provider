@@ -10,6 +10,18 @@ type tableInfo struct {
 	used     string // when the OP reads or writes the table
 }
 
+// minimalTables are the keys of the tables a minimal deployment writes
+// rows to: the default authorization_code and refresh_token grants,
+// password login against the embedder's own user store, and every other
+// option at its default. schema/TABLES.md lists them so the reader can
+// tell the tables that fill from the ones created only to exist.
+//
+//nolint:gochecknoglobals // documentation table; read-only.
+var minimalTables = []string{
+	"clients", "authorization_codes", "refresh_tokens", "grants",
+	"sessions", "interactions", "op_metadata", "authn_lockouts",
+}
+
 // tableCatalog lists every table in [knownNamingKeys] order.
 //
 //nolint:gochecknoglobals // documentation table; read-only.

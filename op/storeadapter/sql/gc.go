@@ -2,6 +2,7 @@ package oidcsql
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -96,15 +97,15 @@ func (s GCStats) Total() int64 {
 // waiting for the row to go. Clearing it removes no row and therefore
 // contributes to no count.
 //
-// The adapter does not sweep on its own. It starts no goroutine and
-// owns no timer, because a library that is handed a *sql.DB has no
-// standing to decide when the process it lives in should do background
-// work: the embedder knows whether this replica is the one that should
-// sweep, how the work interleaves with their traffic, and when to stop.
-// Call GC from an existing scheduler — a cron job, a leader-elected
-// worker, a ticker in main. It runs on the *sql.DB the Store was
-// constructed with, so scheduling it needs no second connection pool
-// and no second Store.
+// The adapter does not sweep on its own. It starts no goroutine,
+// because a library that is handed a *sql.DB has no standing to decide
+// when the process it lives in should do background work: the embedder
+// knows whether this replica is the one that should sweep, how the work
+// interleaves with their traffic, and when to stop. Call GC from an
+// existing scheduler — a cron job, a leader-elected worker — or run
+// [Store.RunGC] on a goroutine of your own. It runs on the *sql.DB the
+// Store was constructed with, so scheduling it needs no second
+// connection pool and no second Store.
 //
 // GC stops at the first failing table and returns the counts collected
 // so far alongside the error, so a caller that publishes the stats
@@ -167,6 +168,45 @@ func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 		}
 	}
 	return stats, nil
+}
+
+// RunGC sweeps once immediately and then every interval until ctx is
+// done, using the adapter's clock for the cutoff so every expired row is
+// reclaimed. Each sweep's stats and error go to report when it is
+// non-nil; a failed sweep does not stop the loop, the next tick retries.
+// RunGC blocks on the caller's goroutine and returns nil once ctx is
+// done, or an error at once when interval is not positive:
+//
+//	go func() {
+//		if err := store.RunGC(ctx, time.Hour, report); err != nil {
+//			log.Print(err)
+//		}
+//	}()
+//
+// In a multi-replica deployment run it on one replica, or accept that
+// concurrent sweeps repeat the same idempotent DELETEs.
+//
+// Stable since v1.5.
+func (s *Store) RunGC(ctx context.Context, interval time.Duration, report func(GCStats, error)) error {
+	if interval <= 0 {
+		return errors.New("oidcsql: RunGC interval must be positive")
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		stats, err := s.GC(ctx, s.clock.Now())
+		if ctx.Err() != nil {
+			return nil
+		}
+		if report != nil {
+			report(stats, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+		}
+	}
 }
 
 // sweep runs one DELETE and reports the number of rows it removed. It
