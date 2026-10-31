@@ -427,6 +427,14 @@ type config struct {
 	grantManagementActions        []GrantManagementAction
 	grantManagementActionRequired bool
 
+	// cimd and allowPrivateNetworkCIMD carry the client ID metadata
+	// document configuration from [WithClientIDMetadataDocuments] and
+	// [WithAllowPrivateNetworkClientIDMetadata]. clients is the resolved
+	// client store, set when the router is built.
+	cimd                    *ClientIDMetadataDocuments
+	allowPrivateNetworkCIMD bool
+	clients                 store.ClientStore
+
 	// claimsParameterSupportedSet records whether
 	// [WithClaimsParameterSupported] was invoked. When false the
 	// library defaults to true (the parser is always wired). When

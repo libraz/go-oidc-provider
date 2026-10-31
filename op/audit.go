@@ -571,6 +571,33 @@ const (
 	AuditJWTBearerRejected = AuditEvent(auditevent.AuditJWTBearerRejected)
 )
 
+// Client ID Metadata Document events. Fire when the OP resolves a
+// URL-form client_id through [WithClientIDMetadataDocuments].
+const (
+	// AuditCIMDFetched fires when a client ID metadata document is
+	// fetched and validated.
+	//
+	// Experimental: tracks an IETF draft, so the event MAY change in a
+	// minor release on a wire-incompatible draft bump.
+	AuditCIMDFetched = AuditEvent(auditevent.AuditCIMDFetched)
+
+	// AuditCIMDFetchFailed fires when the fetch or validation of a
+	// client ID metadata document fails. Extras["reason"] is one of
+	// status, network, too_large, content_type, json, validation; for
+	// validation, Extras["error_code"] carries the validation error code.
+	//
+	// Experimental: tracks an IETF draft, so the event MAY change in a
+	// minor release on a wire-incompatible draft bump.
+	AuditCIMDFetchFailed = AuditEvent(auditevent.AuditCIMDFetchFailed)
+
+	// AuditCIMDClientDenied fires when [ClientIDMetadataDocuments].Allow
+	// refuses a client_id URL.
+	//
+	// Experimental: tracks an IETF draft, so the event MAY change in a
+	// minor release on a wire-incompatible draft bump.
+	AuditCIMDClientDenied = AuditEvent(auditevent.AuditCIMDClientDenied)
+)
+
 // Provider lifecycle events.
 const (
 	// AuditStartupProfile fires once from [New], after validation

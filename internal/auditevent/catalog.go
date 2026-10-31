@@ -198,6 +198,10 @@ const (
 	//nolint:gosec // Event name, not a credential.
 	AuditJWTBearerRejected Name = "jwt_bearer.rejected"
 
+	AuditCIMDFetched      Name = "cimd.fetched"
+	AuditCIMDFetchFailed  Name = "cimd.fetch_failed"
+	AuditCIMDClientDenied Name = "cimd.client_denied"
+
 	// AuditStartupProfile records the security posture a Provider was
 	// constructed with: the declared profiles, features, and grants,
 	// plus the policy values they resolved to. It fires once per
@@ -333,6 +337,9 @@ var definitions = []Definition{
 	{Name: AuditTokenExchangeIDJAGIssued, Metric: MetricTokenExchange, Label: "idjag_issued"},
 	{Name: AuditJWTBearerGranted},
 	{Name: AuditJWTBearerRejected},
+	{Name: AuditCIMDFetched},
+	{Name: AuditCIMDFetchFailed},
+	{Name: AuditCIMDClientDenied},
 	{Name: AuditStartupProfile},
 }
 

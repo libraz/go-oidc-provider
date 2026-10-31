@@ -226,6 +226,9 @@ var auditNamesNotYetWired = map[auditevent.Name]string{
 	auditevent.AuditPKCEViolation:          "a failed code_verifier check returns a protocol error with no audit record",
 	auditevent.AuditRedirectURIMismatch:    "a rejected redirect_uri returns a protocol error with no audit record",
 	auditevent.AuditAlgLegacyUsed:          "no path reports admitting a legacy algorithm",
+	auditevent.AuditCIMDFetched:            "the client ID metadata document resolver that raises it is not wired into the router yet",
+	auditevent.AuditCIMDFetchFailed:        "the client ID metadata document resolver that raises it is not wired into the router yet",
+	auditevent.AuditCIMDClientDenied:       "the client ID metadata document resolver that raises it is not wired into the router yet",
 }
 
 // TestCatalogNames_ReachAnEmitterOrAreDeclaredUnemitted is the converse

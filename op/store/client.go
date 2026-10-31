@@ -37,6 +37,16 @@ const (
 	// purposes of auto-consent gating; the discriminator exists so audit
 	// log analysis can tell them apart.
 	ClientSourceAdmin ClientSource = "admin"
+
+	// ClientSourceMetadataDocument marks clients resolved from a client
+	// ID metadata document fetched at the client_id URL. The value is
+	// never persisted: the OP builds the record per resolution and no
+	// [ClientRegistry] sees it. Like dynamic clients, they never get
+	// FirstParty auto-consent.
+	//
+	// Experimental: tracks an IETF draft, so the value MAY change in a
+	// minor release on a wire-incompatible draft bump.
+	ClientSourceMetadataDocument ClientSource = "metadata_document"
 )
 
 // Client is the persistent representation of a registered OAuth 2.0 / OpenID

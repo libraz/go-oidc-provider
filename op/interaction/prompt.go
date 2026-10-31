@@ -155,6 +155,10 @@ func (CaptchaPromptData) isPromptData() {}
 // added becomes readable by every consent template an embedder ships,
 // including ones rendering attacker-influenced client metadata. Treat
 // it as a security decision, not a convenience one.
+//
+// MetadataDocumentHost and RedirectHost carry attacker-influenced
+// strings for a client resolved from a client ID metadata document
+// (any host can publish one); templates MUST escape them like ClientID.
 type ClientView struct {
 	// ClientID is the registered client_id (RFC 7591 §2).
 	ClientID string `json:"client_id"`
@@ -176,6 +180,32 @@ type ClientView struct {
 	// TosURI is the RFC 7591 tos_uri (terms of service). May be
 	// empty.
 	TosURI string `json:"tos_uri"`
+
+	// MetadataDocumentHost is the host of the client_id URL, with the
+	// port when the URL names one (host:port), for a client resolved
+	// from a client ID metadata document. Empty for every other client.
+	//
+	// Experimental: tracks an IETF draft, so the field MAY change in a
+	// minor release on a wire-incompatible draft bump.
+	MetadataDocumentHost string `json:"metadata_document_host"`
+
+	// RedirectHost is the host of the redirect_uri of this request, for
+	// a client resolved from a client ID metadata document. Empty for
+	// every other client, whose redirect URIs were vetted at
+	// registration.
+	//
+	// Experimental: tracks an IETF draft, so the field MAY change in a
+	// minor release on a wire-incompatible draft bump.
+	RedirectHost string `json:"redirect_host"`
+
+	// RedirectLoopback reports that the redirect_uri of this request
+	// targets a loopback address, for a client resolved from a client
+	// ID metadata document. Templates should warn the user. False for
+	// every other client.
+	//
+	// Experimental: tracks an IETF draft, so the field MAY change in a
+	// minor release on a wire-incompatible draft bump.
+	RedirectLoopback bool `json:"redirect_loopback"`
 }
 
 // ConsentScope is the slim view of an OAuth scope the consent screen
