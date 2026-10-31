@@ -9,7 +9,6 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
-	tokenexchangegrant "github.com/libraz/go-oidc-provider/internal/customgrant/tokenexchange"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -67,7 +66,10 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		writeCustomGrantError(w, err)
 		return
 	}
-	if !checkTokenScopeAllowlist(w, deps, client.ID, resp.Scope) {
+	// A response issuing a credential for another authorization server
+	// carries that server's scope namespace, which this OP's per-client
+	// scope registry does not describe.
+	if resp.IssuesAccessToken() && !checkTokenScopeAllowlist(w, deps, client.ID, resp.Scope) {
 		deps.CustomGrants.ReportFailure(ctx, dispatchIn, "scope_restricted")
 		return
 	}
@@ -91,18 +93,18 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 	if resp.OnIssued != nil {
 		resp.OnIssued(ctx, issued.RefreshToken != "")
 	}
-	issuedTokenType := ""
-	if grantType == tokenexchangegrant.GrantType {
-		issuedTokenType = tokenexchangegrant.TokenTypeAccessToken
+	tokenType := resp.TokenType
+	if tokenType == "" {
+		tokenType = binding.tokenTypeFor()
 	}
 	writeSuccess(w, successResponse{
 		AccessToken:     issued.AccessToken,
-		TokenType:       binding.tokenTypeFor(),
+		TokenType:       tokenType,
 		ExpiresIn:       int64(issued.AccessTokenTTL.Seconds()),
 		RefreshToken:    issued.RefreshToken,
 		IDToken:         issued.IDToken,
 		Scope:           joinScope(resp.Scope),
-		IssuedTokenType: issuedTokenType,
+		IssuedTokenType: resp.IssuedTokenType,
 	})
 }
 

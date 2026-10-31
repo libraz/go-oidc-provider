@@ -36,9 +36,14 @@ var reservedClaims = func() map[string]struct{} {
 // Config bundles the dependencies the handler needs. The op-side
 // adapter constructs the value once at provider build time.
 type Config struct {
-	// Policy is the embedder-supplied admission hook. Required; a nil
-	// value is rejected at op.New construction time.
+	// Policy is the embedder-supplied admission hook for access-token
+	// exchange. At least one of Policy and IDJAGPolicy is required; with
+	// Policy nil, a request for an access token is invalid_request.
 	Policy PolicyFunc
+
+	// IDJAGPolicy admits requested_token_type [TokenTypeIDJAG]. Nil
+	// leaves that type unsupported (invalid_request).
+	IDJAGPolicy IDJAGPolicyFunc
 
 	// Issuer is the OP issuer URL. The handler uses it both as the
 	// pin against subject_token / actor_token "iss" claims (external-
@@ -120,6 +125,7 @@ type Config struct {
 // constructed by [New]; the zero value is not usable.
 type Handler struct {
 	policy             PolicyFunc
+	idjagPolicy        IDJAGPolicyFunc
 	issuer             string
 	keys               *keys.Set
 	accessTokens       store.AccessTokenRegistry
@@ -136,10 +142,10 @@ type Handler struct {
 }
 
 // New constructs a Handler from cfg. Construction-time invariants
-// surface here: a nil policy yields an error so the op layer can
+// surface here: neither policy set yields an error so the op layer can
 // fail op.New rather than panic at request time.
 func New(cfg Config) (*Handler, error) {
-	if cfg.Policy == nil {
+	if cfg.Policy == nil && cfg.IDJAGPolicy == nil {
 		return nil, errors.New("tokenexchange: nil policy")
 	}
 	if cfg.Keys == nil {
@@ -154,6 +160,7 @@ func New(cfg Config) (*Handler, error) {
 	}
 	return &Handler{
 		policy:             cfg.Policy,
+		idjagPolicy:        cfg.IDJAGPolicy,
 		issuer:             cfg.Issuer,
 		keys:               cfg.Keys,
 		accessTokens:       cfg.AccessTokens,
@@ -202,6 +209,19 @@ func (h *Handler) ParamPolicy() customgrant.ParamPolicy {
 // lifting lives in the helpers below so each phase stays focused.
 func (h *Handler) Handle(ctx context.Context, req customgrant.Request) (customgrant.Response, error) {
 	h.emitRequestedAudit(ctx, req)
+	requested, err := requestedTokenType(req.Form)
+	if err != nil {
+		return customgrant.Response{}, err
+	}
+	if requested == TokenTypeIDJAG {
+		if h.idjagPolicy == nil {
+			return customgrant.Response{}, invalidRequest("requested_token_type is not supported")
+		}
+		return h.handleIDJAG(ctx, req)
+	}
+	if h.policy == nil {
+		return customgrant.Response{}, invalidRequest("requested_token_type must be " + TokenTypeIDJAG)
+	}
 	subjectView, actorView, err := h.parseAndVerify(ctx, req)
 	if err != nil {
 		return customgrant.Response{}, err
@@ -307,9 +327,6 @@ func (h *Handler) boundedActChain(ctx context.Context, client *store.Client, sub
 //
 //nolint:gocognit // parseAndVerify enumerates the RFC 8693 §2.1 subject/actor token gates in flat shape; refactor would obscure spec mapping.
 func (h *Handler) parseAndVerify(ctx context.Context, req customgrant.Request) (TokenView, *TokenView, error) {
-	if err := validateRequestedTokenType(req.Form); err != nil {
-		return TokenView{}, nil, err
-	}
 	subjectRaw, err := requireFormSingle(req.Form, "subject_token")
 	if err != nil {
 		return TokenView{}, nil, err
@@ -533,10 +550,11 @@ func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenVie
 			TTL:         ttl,
 			ExtraClaims: mergedExtras,
 		},
-		AccessTokenTTL: ttl,
-		Subject:        subjectView.Subject,
-		Scope:          append([]string(nil), grantedScope...),
-		Audience:       append([]string(nil), grantedAudience...),
+		AccessTokenTTL:  ttl,
+		Subject:         subjectView.Subject,
+		Scope:           append([]string(nil), grantedScope...),
+		Audience:        append([]string(nil), grantedAudience...),
+		IssuedTokenType: TokenTypeAccessToken,
 		// The resolved policy decision rides onto the response so the
 		// wire layer withholds the id_token whenever the policy did.
 		// Without it an exchange that declined the token would still
@@ -675,20 +693,23 @@ func (h *Handler) computeTTL(requested time.Duration, subjectExpiresAt time.Time
 	return out, reason
 }
 
-// validateRequestedTokenType rejects requested_token_type values
-// other than access_token (or absent).
-func validateRequestedTokenType(form map[string][]string) error {
+// requestedTokenType returns the requested_token_type value: empty when
+// absent, otherwise access_token or id-jag. Any other value, or a
+// repeated one, is invalid_request.
+func requestedTokenType(form map[string][]string) (string, error) {
 	values, ok := form["requested_token_type"]
 	if !ok || len(values) == 0 {
-		return nil
+		return "", nil
 	}
 	if len(values) > 1 {
-		return invalidRequest("requested_token_type must be a single value")
+		return "", invalidRequest("requested_token_type must be a single value")
 	}
-	if values[0] != "" && values[0] != TokenTypeAccessToken {
-		return invalidRequest("requested_token_type is not supported")
+	switch values[0] {
+	case "", TokenTypeAccessToken, TokenTypeIDJAG:
+		return values[0], nil
+	default:
+		return "", invalidRequest("requested_token_type is not supported")
 	}
-	return nil
 }
 
 // requireFormSingle extracts the single-valued form parameter named

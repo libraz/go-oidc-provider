@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/assertiongrant"
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
@@ -76,6 +77,7 @@ const (
 	grantTypeClientCredentials = "client_credentials"
 	grantTypeDeviceCode        = "urn:ietf:params:oauth:grant-type:device_code"
 	grantTypeCIBA              = "urn:openid:params:grant-type:ciba"
+	grantTypeJWTBearer         = "urn:ietf:params:oauth:grant-type:jwt-bearer" //nolint:gosec // G101: grant type URN, not a credential.
 )
 
 // grantEnabled reports whether the Provider accepts grantType. A nil
@@ -90,7 +92,7 @@ func (d *Deps) grantEnabled(grantType string) bool {
 // tokenSingleValuedParams is the closed list of /token form parameters
 // RFC 6749 §3.2 forbids from appearing more than once. The list spans
 // every grant the dispatcher routes (authorization_code, refresh_token,
-// device_code, ciba, client_credentials) plus the credentials the
+// device_code, ciba, client_credentials, jwt-bearer) plus the credentials the
 // shared [clientauth] parser consumes; running the duplicate check
 // before grant dispatch closes the wire-shape gap independent of which
 // grant the request claims.
@@ -124,6 +126,7 @@ var tokenSingleValuedParams = []string{
 	"device_code",
 	"auth_req_id",
 	"authorization_details",
+	"assertion",
 }
 
 // Clock is the package-local view of the wall clock. It mirrors the
@@ -167,7 +170,8 @@ type Deps struct {
 	// UserStore is the read-only end-user lookup the handler consults
 	// before every authorization_code, refresh_token, device_code and
 	// CIBA redemption — a subject it no longer holds earns invalid_grant
-	// and a grant teardown — and when projecting the OIDC Core 1.0 §5.5
+	// and a grant teardown (a jwt-bearer redemption earns access_denied,
+	// having no grant to tear down) — and when projecting the OIDC Core 1.0 §5.5
 	// "claims" request payload onto the id_token. A nil value disables
 	// both: the redemption proceeds and the id_token carries only the
 	// standard claims plus the per-grant ACR/AMR/auth_time.
@@ -483,6 +487,25 @@ type Deps struct {
 	// ([ciba.MaxPollViolations], currently 5).
 	CIBAMaxPollViolations uint8
 
+	// JWTBearer verifies RFC 7523 §2.1 authorization grant assertions,
+	// including the ID-JAG profile. A nil value disables the jwt-bearer
+	// grant: requests carrying its grant_type are rejected with
+	// unsupported_grant_type. The op layer wires it from
+	// [op.WithJWTBearerGrant] together with the two fields below.
+	JWTBearer *assertiongrant.Verifier
+
+	// ResolveAssertionSubject maps a verified assertion subject onto the
+	// local subject the access token is minted for. Returning
+	// [assertiongrant.ErrUnknownSubject] answers access_denied; any other
+	// error, or an empty subject, answers server_error. Required when
+	// JWTBearer is set.
+	ResolveAssertionSubject func(ctx context.Context, s assertiongrant.Subject) (string, error)
+
+	// JWTBearerAllowedClients returns the client_ids permitted to redeem
+	// assertions from issuer, or nil when issuer is not configured.
+	// Required when JWTBearer is set.
+	JWTBearerAllowedClients func(issuer string) []string
+
 	// EnabledGrants is the set of wire grant_type values the Provider
 	// accepts, in the same membership the discovery document advertises
 	// through grant_types_supported (built-ins plus registered custom
@@ -568,6 +591,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		handleDeviceCode(w, r, deps)
 	case grantTypeCIBA:
 		handleCIBA(w, r, deps)
+	case grantTypeJWTBearer:
+		handleJWTBearer(w, r, deps)
 	default:
 		if deps.CustomGrants != nil && deps.CustomGrants.HasHandler(grantType) {
 			handleCustomGrant(w, r, deps, grantType)

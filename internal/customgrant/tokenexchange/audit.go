@@ -25,6 +25,7 @@ const (
 	auditSubjectTokenInvalid   = string(auditevent.AuditTokenExchangeSubjectTokenInvalid)
 	auditRefreshIssued         = string(auditevent.AuditTokenExchangeRefreshIssued)
 	auditSelfExchange          = string(auditevent.AuditTokenExchangeSelfExchange)
+	auditIDJAGIssued           = string(auditevent.AuditTokenExchangeIDJAGIssued)
 
 	// auditSubjectTokenRegistryError fires when the access-token
 	// registry returned a non-ErrNotFound error during subject_token

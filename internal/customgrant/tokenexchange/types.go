@@ -3,8 +3,10 @@ package tokenexchange
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -22,9 +24,14 @@ const MaxActChainDepth = 5
 
 // Token-type URNs accepted on the wire (RFC 8693 §3).
 const (
-	TokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token" //nolint:gosec // URN, not a credential
-	TokenTypeJWT         = "urn:ietf:params:oauth:token-type:jwt"          //nolint:gosec // URN, not a credential
-	TokenTypeIDToken     = "urn:ietf:params:oauth:token-type:id_token"     //nolint:gosec // URN, not a credential
+	TokenTypeAccessToken = customgrant.IssuedTokenTypeAccessToken
+	TokenTypeJWT         = "urn:ietf:params:oauth:token-type:jwt"      //nolint:gosec // URN, not a credential
+	TokenTypeIDToken     = "urn:ietf:params:oauth:token-type:id_token" //nolint:gosec // URN, not a credential
+
+	// TokenTypeIDJAG names the Identity Assertion JWT Authorization
+	// Grant (draft-ietf-oauth-identity-assertion-authz-grant §4.3) as a
+	// requested_token_type and as the issued_token_type.
+	TokenTypeIDJAG = "urn:ietf:params:oauth:token-type:id-jag" //nolint:gosec // URN, not a credential
 )
 
 // TokenView is the read-only projection of a verified subject_token
@@ -117,3 +124,36 @@ type Decision struct {
 // TokenExchangePolicy.Allow into this shape before constructing the
 // handler so the internal package never imports op/.
 type PolicyFunc func(ctx context.Context, req RequestView) (*Decision, error)
+
+// IDJAGRequest is the input the [IDJAGPolicyFunc] receives. Mirrors
+// op.IDJAGRequest; the bridge in op/tokenexchange_adapter.go translates
+// between the two shapes.
+type IDJAGRequest struct {
+	Client   *store.Client
+	Subject  string
+	Audience string
+	Resource []string
+	Scope    []string
+}
+
+// IDJAGDecision mirrors op.IDJAGDecision.
+type IDJAGDecision struct {
+	ClientID string
+	Scope    []string
+	Resource []string
+	Email    string
+	TTL      time.Duration
+}
+
+// IDJAGPolicyFunc is the embedder-supplied ID-JAG issuance hook bridged
+// across the package boundary, the ID-JAG counterpart of [PolicyFunc].
+// The op-side adapter maps op.ErrIDJAGUnknownAudience and
+// op.ErrIDJAGDenied onto [ErrIDJAGUnknownAudience] and [ErrIDJAGDenied].
+type IDJAGPolicyFunc func(ctx context.Context, req IDJAGRequest) (*IDJAGDecision, error)
+
+// Sentinels an [IDJAGPolicyFunc] returns; see op.ErrIDJAGUnknownAudience
+// and op.ErrIDJAGDenied.
+var (
+	ErrIDJAGUnknownAudience = errors.New("tokenexchange: ID-JAG audience is not a known authorization server")
+	ErrIDJAGDenied          = errors.New("tokenexchange: ID-JAG issuance denied")
+)

@@ -239,6 +239,33 @@ func SignAccessToken(key SigningKey, claims AccessTokenClaims) (string, error) {
 	return serializeJWT(signer, merged)
 }
 
+// ErrTypedJWTType is returned by [SignTypedJWT] for an empty "typ" or for
+// one of the two types [SignIDToken] and [SignAccessToken] own.
+var ErrTypedJWTType = errors.New("tokens: typed JWT requires a dedicated, non-empty typ")
+
+// SignTypedJWT serialises claims as a compact JWS whose "typ" header is
+// typ, for the explicitly-typed JWTs that have no claim struct of their
+// own (the ID-JAG's "oauth-id-jag+jwt"). The caller owns the claim set;
+// "sub" must be a non-empty string. "JWT" and "at+jwt" are refused so an
+// id_token or access token cannot be minted around the reserved-claim
+// checks of their dedicated signers.
+func SignTypedJWT(key SigningKey, typ string, claims map[string]any) (string, error) {
+	if key.Signer == nil {
+		return "", ErrSignerInvalid
+	}
+	if typ == "" || jose.IsTypJWT(typ) || strings.EqualFold(typ, accessTokenTypeHeader) {
+		return "", ErrTypedJWTType
+	}
+	if sub, _ := claims["sub"].(string); sub == "" {
+		return "", ErrSubjectMissing
+	}
+	signer, err := NewSigner(key, typ)
+	if err != nil {
+		return "", err
+	}
+	return serializeJWT(signer, maps.Clone(claims))
+}
+
 // Hash is a convenience for tests and fixtures pinned to the ES256
 // signing policy; production callers MUST go through [HashForAlg] with the
 // active SigningKey.Alg so the digest follows the signing algorithm if

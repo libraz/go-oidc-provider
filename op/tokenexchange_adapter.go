@@ -2,6 +2,8 @@ package op
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
@@ -11,19 +13,21 @@ import (
 
 // buildExtensionDispatcher wires the customgrant dispatcher with both
 // embedder-supplied custom-grant handlers and the in-tree token-
-// exchange handler when [RegisterTokenExchange] was invoked. The
+// exchange handler when [RegisterTokenExchange] or [WithIDJAGIssuance]
+// was invoked. The
 // helper is the single seam through which the token endpoint reaches
 // the extension grants so a future addition (CIBA / device-code / ...)
 // keeps the wiring local to one file.
 func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispatcher {
 	var extras []customgrant.Handler
-	if cfg.tokenExchangePolicy != nil {
+	if cfg.tokenExchangePolicy != nil || cfg.idjagIssuancePolicy != nil {
 		var clock interface{ Now() time.Time }
 		if cfg.clock != nil {
 			clock = cfg.clock
 		}
 		h, err := tokenexchange.New(tokenexchange.Config{
 			Policy:             tokenExchangeAdapter(cfg.tokenExchangePolicy),
+			IDJAGPolicy:        idjagIssuanceAdapter(cfg.idjagIssuancePolicy),
 			Issuer:             cfg.issuer,
 			Keys:               keySet,
 			AccessTokens:       cfg.store.AccessTokens(),
@@ -47,8 +51,8 @@ func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispat
 		if err == nil {
 			extras = append(extras, h)
 		}
-		// A construction-time error here is unreachable: cfg.validate
-		// gated nil policy, the keyset is non-nil by op.New invariants,
+		// A construction-time error here is unreachable: one of the two
+		// policies is non-nil, the keyset is non-nil by op.New invariants,
 		// and the issuer is non-empty. The defensive nil check on
 		// extras keeps the dispatcher correct under future changes.
 	}
@@ -125,5 +129,40 @@ func toInternalDecision(d *TokenExchangeDecision) *tokenexchange.Decision {
 		IssueIDToken:      d.IssueIDToken,
 		IssueRefreshToken: d.IssueRefreshToken,
 		ExtraClaims:       cloneClaims(d.ExtraClaims),
+	}
+}
+
+// idjagIssuanceAdapter projects the public [IDJAGIssuancePolicy] onto
+// the internal [tokenexchange.IDJAGPolicyFunc] shape, mapping the public
+// sentinels onto the internal ones the handler classifies.
+func idjagIssuanceAdapter(policy IDJAGIssuancePolicy) tokenexchange.IDJAGPolicyFunc {
+	if policy == nil {
+		return nil
+	}
+	return func(ctx context.Context, req tokenexchange.IDJAGRequest) (*tokenexchange.IDJAGDecision, error) {
+		decision, err := policy.Allow(ctx, IDJAGRequest{
+			Client:   req.Client,
+			Subject:  Subject(req.Subject),
+			Audience: req.Audience,
+			Resource: slices.Clone(req.Resource),
+			Scope:    slices.Clone(req.Scope),
+		})
+		switch {
+		case errors.Is(err, ErrIDJAGUnknownAudience):
+			return nil, tokenexchange.ErrIDJAGUnknownAudience
+		case errors.Is(err, ErrIDJAGDenied):
+			return nil, tokenexchange.ErrIDJAGDenied
+		case err != nil:
+			return nil, err
+		case decision == nil:
+			return nil, nil
+		}
+		return &tokenexchange.IDJAGDecision{
+			ClientID: decision.ClientID,
+			Scope:    slices.Clone(decision.Scope),
+			Resource: slices.Clone(decision.Resource),
+			Email:    decision.Email,
+			TTL:      decision.TTL,
+		}, nil
 	}
 }

@@ -397,6 +397,55 @@ func TestSignIDToken_NilSignerReturnsSentinel(t *testing.T) {
 	}
 }
 
+func TestSignTypedJWT_CarriesTypAndClaims(t *testing.T) {
+	t.Parallel()
+	key := newTestSigner(t)
+	claims := map[string]any{"iss": "https://op.example.com", "sub": "user-1", "client_id": "c1"}
+	jws, err := tokens.SignTypedJWT(key, "oauth-id-jag+jwt", claims)
+	if err != nil {
+		t.Fatalf("SignTypedJWT: %v", err)
+	}
+	header := decodeHeader(t, jws)
+	if header["typ"] != "oauth-id-jag+jwt" || header["alg"] != "ES256" || header["kid"] != "k1" {
+		t.Errorf("header=%v", header)
+	}
+	payload := decodePayload(t, jws)
+	if payload["sub"] != "user-1" || payload["client_id"] != "c1" || payload["iss"] != "https://op.example.com" {
+		t.Errorf("payload=%v", payload)
+	}
+	parsed, err := josev4.ParseSignedCompact(jws, []josev4.SignatureAlgorithm{josev4.ES256})
+	if err != nil {
+		t.Fatalf("ParseSigned: %v", err)
+	}
+	if _, err := parsed.Verify(key.Signer.Public()); err != nil {
+		t.Errorf("Verify: %v", err)
+	}
+}
+
+func TestSignTypedJWT_RejectsReservedOrEmptyTyp(t *testing.T) {
+	t.Parallel()
+	key := newTestSigner(t)
+	claims := map[string]any{"sub": "user-1"}
+	for _, typ := range []string{"", "JWT", "jwt", "at+jwt", "AT+JWT"} {
+		if _, err := tokens.SignTypedJWT(key, typ, claims); !errors.Is(err, tokens.ErrTypedJWTType) {
+			t.Errorf("typ %q: err=%v want ErrTypedJWTType", typ, err)
+		}
+	}
+}
+
+func TestSignTypedJWT_RejectsMissingSubjectAndSigner(t *testing.T) {
+	t.Parallel()
+	key := newTestSigner(t)
+	for _, claims := range []map[string]any{nil, {"sub": ""}, {"sub": 42}} {
+		if _, err := tokens.SignTypedJWT(key, "oauth-id-jag+jwt", claims); !errors.Is(err, tokens.ErrSubjectMissing) {
+			t.Errorf("claims %v: err=%v want ErrSubjectMissing", claims, err)
+		}
+	}
+	if _, err := tokens.SignTypedJWT(tokens.SigningKey{KeyID: "k1"}, "oauth-id-jag+jwt", map[string]any{"sub": "u"}); !errors.Is(err, tokens.ErrSignerInvalid) {
+		t.Errorf("nil signer: err=%v want ErrSignerInvalid", err)
+	}
+}
+
 func TestHash_AtHashLeftHalfBase64URL(t *testing.T) {
 	t.Parallel()
 

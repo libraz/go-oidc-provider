@@ -107,3 +107,14 @@ func serverError() error {
 func invalidTarget(description string) error {
 	return &wireError{code: "invalid_target", description: description}
 }
+
+// accessDenied builds an access_denied wireError for an issuance the
+// embedder's policy refused.
+func accessDenied(description string) error {
+	return &wireError{code: "access_denied", description: description}
+}
+
+// invalidClient builds an invalid_client wireError, written with 401.
+func invalidClient(description string) error {
+	return &wireError{code: "invalid_client", description: description}
+}

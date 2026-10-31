@@ -396,13 +396,19 @@ func (d *Dispatcher) invokeHandler(ctx context.Context, h Handler, req Request) 
 // Scope is a subset of the client's allowed set, Audience (on both
 // the response and the bound mint) is a subset of the client's
 // registered resources. The function mutates *resp in place when a
-// value is truncated so the caller writes the validated shape.
+// value is truncated so the caller writes the validated shape. A
+// response that issues no access token of this OP
+// ([Response.IssuesAccessToken] false) skips the Scope / Audience
+// checks: those name another authorization server's namespace.
 func (d *Dispatcher) validateResponse(client *store.Client, resp *Response) error {
 	if err := d.validateAccessTokenShape(resp); err != nil {
 		return err
 	}
 	if err := d.validateBoundAccessToken(client, resp); err != nil {
 		return err
+	}
+	if !resp.IssuesAccessToken() {
+		return nil
 	}
 	if !oidcscope.Subset(resp.Scope, client.Scopes) {
 		return ErrScopeNotAllowed
@@ -427,7 +433,9 @@ func (d *Dispatcher) validateAccessTokenShape(resp *Response) error {
 	if resp.AccessTokenTTL < 0 {
 		return ErrNegativeTTL
 	}
-	if d.maxAccessTTL > 0 && resp.AccessTokenTTL > d.maxAccessTTL {
+	// The cap bounds access tokens; an issued token of another type
+	// (an ID-JAG) carries its own exp, which expires_in must match.
+	if d.maxAccessTTL > 0 && resp.IssuesAccessToken() && resp.AccessTokenTTL > d.maxAccessTTL {
 		resp.AccessTokenTTL = d.maxAccessTTL
 	}
 	return nil

@@ -205,12 +205,38 @@ type Response struct {
 	// holds it, as it does every built-in redemption.
 	GrantSubject string
 
+	// TokenType is the token_type response member. Empty selects the
+	// binding's own value ("DPoP" or "Bearer"); a handler issuing a
+	// credential that is not an access token states it here ("N_A", RFC
+	// 8693 §2.2.1).
+	TokenType string
+
+	// IssuedTokenType is the RFC 8693 issued_token_type response member,
+	// omitted when empty. A value other than
+	// [IssuedTokenTypeAccessToken] means the response issues a credential
+	// for another authorization server, whose Scope and Audience name
+	// that server's namespace; see [Response.IssuesAccessToken].
+	IssuedTokenType string
+
 	// OnIssued, when non-nil, is called by the wire layer once the
 	// response has been issued and is about to be written, never on a
 	// path that answers with an error. refreshIssued reports whether a
 	// refresh token went out with it. Handlers emit their success-class
 	// audit events here so those events agree with the wire outcome.
 	OnIssued func(ctx context.Context, refreshIssued bool)
+}
+
+// IssuedTokenTypeAccessToken is the RFC 8693 §3 access-token URN.
+const IssuedTokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token" //nolint:gosec // URN, not a credential
+
+// IssuesAccessToken reports whether the response issues an access token
+// of this OP. It is false only for an [IssuedTokenType] naming another
+// token type (the ID-JAG), whose Scope and Audience are another
+// authorization server's namespace
+// (draft-ietf-oauth-identity-assertion-authz-grant §4.3), so the
+// client-registration subset checks do not apply to them.
+func (r *Response) IssuesAccessToken() bool {
+	return r.IssuedTokenType == "" || r.IssuedTokenType == IssuedTokenTypeAccessToken
 }
 
 // DupCap is the hard cap on the number of values the dispatcher
