@@ -519,3 +519,14 @@ func (s *Store) GrantRevocations() store.GrantRevocationStore { return nil }
 // renamed accessor would break silently — the adapter would still build
 // on its own and fail only where it is wired — so it is pinned here.
 var _ store.Store = (*Store)(nil)
+
+// checkPayloadSize rejects a serialised record larger than the configured
+// value cap. kind names the record in the error ("session",
+// "interaction").
+func (s *Store) checkPayloadSize(kind string, payload []byte) error {
+	if len(payload) > s.maxValueBytes {
+		return fmt.Errorf("oidcredis: %s payload %d bytes exceeds %d-byte cap",
+			kind, len(payload), s.maxValueBytes)
+	}
+	return nil
+}

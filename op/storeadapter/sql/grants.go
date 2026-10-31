@@ -110,34 +110,12 @@ func (s *grantStore) ListClientIDsBySubject(
 	if limit <= 0 {
 		return store.GrantClientPage{}, errors.New("oidcsql: grant client page limit must be positive")
 	}
-	rows, err := s.runner().QueryContext(
-		ctx,
-		s.parent.queries.grantListClientIDs,
-		subject,
-		cursor,
-		limit+1,
-	)
+	ids, next, err := scanKeysetPage(ctx, s.runner(), "grants.ListClientIDsBySubject",
+		s.parent.queries.grantListClientIDs, subject, cursor, limit)
 	if err != nil {
-		return store.GrantClientPage{}, wrapErr("grants.ListClientIDsBySubject", err)
+		return store.GrantClientPage{}, err
 	}
-	defer rows.Close() //nolint:errcheck // rows.Err below reports iteration failures.
-	clientIDs := make([]string, 0, limit+1)
-	for rows.Next() {
-		var clientID string
-		if err := rows.Scan(&clientID); err != nil {
-			return store.GrantClientPage{}, wrapErr("grants.ListClientIDsBySubject.scan", err)
-		}
-		clientIDs = append(clientIDs, clientID)
-	}
-	if err := rows.Err(); err != nil {
-		return store.GrantClientPage{}, wrapErr("grants.ListClientIDsBySubject.iter", err)
-	}
-	page := store.GrantClientPage{ClientIDs: clientIDs}
-	if len(page.ClientIDs) > limit {
-		page.ClientIDs = page.ClientIDs[:limit]
-		page.NextCursor = page.ClientIDs[len(page.ClientIDs)-1]
-	}
-	return page, nil
+	return store.GrantClientPage{ClientIDs: ids, NextCursor: next}, nil
 }
 
 // ListSubjectsByClient returns a bounded, distinct keyset page for the
@@ -152,34 +130,45 @@ func (s *grantStore) ListSubjectsByClient(
 	if limit <= 0 {
 		return store.GrantSubjectPage{}, errors.New("oidcsql: grant subject page limit must be positive")
 	}
-	rows, err := s.runner().QueryContext(
-		ctx,
-		s.parent.queries.grantListSubjects,
-		clientID,
-		cursor,
-		limit+1,
-	)
+	subjects, next, err := scanKeysetPage(ctx, s.runner(), "grants.ListSubjectsByClient",
+		s.parent.queries.grantListSubjects, clientID, cursor, limit)
 	if err != nil {
-		return store.GrantSubjectPage{}, wrapErr("grants.ListSubjectsByClient", err)
+		return store.GrantSubjectPage{}, err
+	}
+	return store.GrantSubjectPage{Subjects: subjects, NextCursor: next}, nil
+}
+
+// scanKeysetPage runs a keyset query taking (scope, cursor, limit+1) and
+// scanning one string key per row. The extra row lets it report whether
+// another page follows: next is the last key of the returned page, or
+// empty on the final one.
+func scanKeysetPage(
+	ctx context.Context,
+	r runner,
+	op, query, scope, cursor string,
+	limit int,
+) (keys []string, next string, err error) {
+	rows, err := r.QueryContext(ctx, query, scope, cursor, limit+1)
+	if err != nil {
+		return nil, "", wrapErr(op, err)
 	}
 	defer rows.Close() //nolint:errcheck // rows.Err below reports iteration failures.
-	subjects := make([]string, 0, limit+1)
+	keys = make([]string, 0, limit+1)
 	for rows.Next() {
-		var subject string
-		if err := rows.Scan(&subject); err != nil {
-			return store.GrantSubjectPage{}, wrapErr("grants.ListSubjectsByClient.scan", err)
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, "", wrapErr(op+".scan", err)
 		}
-		subjects = append(subjects, subject)
+		keys = append(keys, key)
 	}
 	if err := rows.Err(); err != nil {
-		return store.GrantSubjectPage{}, wrapErr("grants.ListSubjectsByClient.iter", err)
+		return nil, "", wrapErr(op+".iter", err)
 	}
-	page := store.GrantSubjectPage{Subjects: subjects}
-	if len(page.Subjects) > limit {
-		page.Subjects = page.Subjects[:limit]
-		page.NextCursor = page.Subjects[len(page.Subjects)-1]
+	if len(keys) > limit {
+		keys = keys[:limit]
+		next = keys[len(keys)-1]
 	}
-	return page, nil
+	return keys, next, nil
 }
 
 func (s *grantStore) HasAny(ctx context.Context) (bool, error) {
@@ -195,18 +184,7 @@ func (s *grantStore) HasAny(ctx context.Context) (bool, error) {
 }
 
 func (s *grantStore) Delete(ctx context.Context, id string) error {
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.grantDelete, id)
-	if err != nil {
-		return wrapErr("grants.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("grants.Delete.RowsAffected", err)
-	}
-	if n == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return execDeleteOne(ctx, s.runner(), "grants.Delete", s.parent.queries.grantDelete, id)
 }
 
 // RevokeByClient implements [store.RevokeByClient]. The dynamic

@@ -33,6 +33,7 @@ var patternsSharedInTree = map[string]bool{
 	"IsExpiredStrict":      true,
 	"IsExpiredInclusive":   true,
 	"Digest":               true,
+	"DigestBytes":          true,
 	"ConstantTimeKeyMatch": true,
 }
 

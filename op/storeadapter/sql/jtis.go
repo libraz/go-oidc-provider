@@ -56,7 +56,7 @@ func (s *jtiStore) Has(ctx context.Context, jti string) (bool, error) {
 	if err != nil {
 		return false, wrapErr("jtis.Has", err)
 	}
-	if exp != 0 && s.parent.clock.Now().UnixNano() >= exp {
+	if patterns.IsExpiredInclusive(int64ToTime(exp), s.parent.clock.Now()) {
 		// Treat expired entries as absent so stale evictions surface
 		// to the caller; the contract permits this shape.
 		return false, nil

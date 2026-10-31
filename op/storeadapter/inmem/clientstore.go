@@ -3,7 +3,6 @@ package inmem
 import (
 	"context"
 	"errors"
-	"slices"
 	"sync"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -25,7 +24,7 @@ func (s *clientStore) GetClient(_ context.Context, id string) (*store.Client, er
 	if !ok {
 		return nil, store.ErrNotFound
 	}
-	return cloneClient(c), nil
+	return c.Clone(), nil
 }
 
 func (s *clientStore) Register(_ context.Context, c *store.Client) error {
@@ -37,7 +36,7 @@ func (s *clientStore) Register(_ context.Context, c *store.Client) error {
 	if _, exists := s.m[c.ID]; exists {
 		return store.ErrAlreadyExists
 	}
-	s.m[c.ID] = cloneClient(c)
+	s.m[c.ID] = c.Clone()
 	return nil
 }
 
@@ -50,7 +49,7 @@ func (s *clientStore) Update(_ context.Context, c *store.Client) error {
 	if _, exists := s.m[c.ID]; !exists {
 		return store.ErrNotFound
 	}
-	s.m[c.ID] = cloneClient(c)
+	s.m[c.ID] = c.Clone()
 	return nil
 }
 
@@ -86,7 +85,7 @@ func (s *clientStore) ReconcileStatic(ctx context.Context, clients []*store.Clie
 			}
 			continue
 		}
-		next[desired.ID] = cloneClient(desired)
+		next[desired.ID] = desired.Clone()
 	}
 	s.m = next
 	return nil
@@ -111,28 +110,4 @@ func validateStaticClient(
 	}
 	seen[desired.ID] = struct{}{}
 	return nil
-}
-
-func cloneClient(c *store.Client) *store.Client {
-	if c == nil {
-		return nil
-	}
-	out := *c
-	out.RedirectURIs = slices.Clone(c.RedirectURIs)
-	out.PostLogoutRedirectURIs = slices.Clone(c.PostLogoutRedirectURIs)
-	out.GrantTypes = slices.Clone(c.GrantTypes)
-	out.ResponseTypes = slices.Clone(c.ResponseTypes)
-	out.Scopes = slices.Clone(c.Scopes)
-	out.Resources = slices.Clone(c.Resources)
-	out.Contacts = slices.Clone(c.Contacts)
-	out.DefaultACRValues = slices.Clone(c.DefaultACRValues)
-	out.RequestURIs = slices.Clone(c.RequestURIs)
-	if c.DefaultMaxAge != nil {
-		v := *c.DefaultMaxAge
-		out.DefaultMaxAge = &v
-	}
-	if len(c.JWKs) > 0 {
-		out.JWKs = append([]byte(nil), c.JWKs...)
-	}
-	return &out
 }

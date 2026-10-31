@@ -33,9 +33,9 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 }
 
 func (s *sessionStore) Find(ctx context.Context, id string) (*store.Session, error) {
-	rec, err := s.scan(s.runner().QueryRowContext(ctx, s.parent.queries.sessionFind, id))
-	if errors.Is(err, databasesql.ErrNoRows) {
-		return nil, store.ErrNotFound
+	rec, err := s.find(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, err
 	}
 	if err != nil {
 		return nil, wrapErr("sessions.Find", err)
@@ -97,23 +97,10 @@ func (s *sessionStore) exists(ctx context.Context, id string) error {
 // still awaiting collection, so the read comes first: an expired
 // session is absent on every path, and the row is reclaimed regardless.
 func (s *sessionStore) Delete(ctx context.Context, id string) error {
-	_, findErr := s.Find(ctx, id)
-	absent := errors.Is(findErr, store.ErrNotFound)
-	if findErr != nil && !absent {
-		return findErr
-	}
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.sessionDelete, id)
-	if err != nil {
-		return wrapErr("sessions.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("sessions.Delete.RowsAffected", err)
-	}
-	if n == 0 || absent {
-		return store.ErrNotFound
-	}
-	return nil
+	return deleteLive(ctx, s.runner(), "sessions.Delete", s.parent.queries.sessionDelete, id, func() error {
+		_, err := s.Find(ctx, id)
+		return err
+	})
 }
 
 func (s *sessionStore) ListByChooserGroup(ctx context.Context, groupID string) ([]*store.Session, error) {
@@ -139,7 +126,7 @@ func (s *sessionStore) ListByChooserGroup(ctx context.Context, groupID string) (
 	return out, nil
 }
 
-// find is the no-expiry-filter helper used by Touch.
+// find is the no-expiry-filter lookup shared by Find and Touch.
 func (s *sessionStore) find(ctx context.Context, id string) (*store.Session, error) {
 	rec, err := s.scan(s.runner().QueryRowContext(ctx, s.parent.queries.sessionFind, id))
 	if errors.Is(err, databasesql.ErrNoRows) {

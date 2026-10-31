@@ -101,16 +101,5 @@ func (s *iatStore) IncrementUses(ctx context.Context, id string) (int, error) {
 }
 
 func (s *iatStore) Delete(ctx context.Context, id string) error {
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.iatDelete, id)
-	if err != nil {
-		return wrapErr("iats.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("iats.Delete.RowsAffected", err)
-	}
-	if n == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return execDeleteOne(ctx, s.runner(), "iats.Delete", s.parent.queries.iatDelete, id)
 }

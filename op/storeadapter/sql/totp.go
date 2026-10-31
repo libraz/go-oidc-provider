@@ -5,9 +5,7 @@ import (
 	databasesql "database/sql"
 	"errors"
 	"fmt"
-	"math"
 
-	internalkeys "github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -36,44 +34,15 @@ func (s *totpStore) Put(ctx context.Context, r *store.TOTPRecord) error {
 	if r.Subject == "" {
 		return errors.New("oidcsql: totp record missing Subject")
 	}
-	version, err := internalkeys.RandomInt63Except(0)
-	if err != nil {
-		return fmt.Errorf("oidcsql: totp.Put: generate Version: %w", err)
-	}
-	args := append([]any{r.Subject, version}, totpValues(r)...)
-	if _, err := s.parent.db.ExecContext(ctx, s.parent.queries.totpPut, args...); err != nil {
-		return wrapErr("totp.Put", err)
-	}
-	return nil
+	return versionedPut(ctx, s.parent.db, s.parent.queries.totpPut, "totp.Put", r.Subject, totpValues(r))
 }
 
 func (s *totpStore) CompareAndSwap(ctx context.Context, previous, next *store.TOTPRecord) error {
 	if previous == nil || next == nil || previous.Subject == "" || next.Subject != previous.Subject {
 		return errors.New("oidcsql: invalid totp compare-and-swap record")
 	}
-	if previous.Version == 0 || previous.Version >= math.MaxInt64 || next.Version != previous.Version {
-		return store.ErrAlreadyConsumed
-	}
-	version, err := internalkeys.RandomInt63Except(int64(previous.Version))
-	if err != nil {
-		return fmt.Errorf("oidcsql: totp.CompareAndSwap: generate Version: %w", err)
-	}
-	args := totpValues(next)
-	args = append(args, version, previous.Subject)
-	args = append(args, int64(previous.Version))
-	args = append(args, totpValues(previous)...)
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.totpCompareAndSwap, args...)
-	if err != nil {
-		return wrapErr("totp.CompareAndSwap", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("totp.CompareAndSwap.RowsAffected", err)
-	}
-	if n > 0 {
-		return nil
-	}
-	return store.ErrAlreadyConsumed
+	return versionedSwap(ctx, s.parent.db, s.parent.queries.totpCompareAndSwap, "totp.CompareAndSwap",
+		previous.Subject, previous.Version, next.Version, totpValues(next), totpValues(previous))
 }
 
 func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
@@ -88,12 +57,12 @@ func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 	if r.LastAcceptedStep == 0 {
 		return store.ErrAlreadyConsumed
 	}
-	if r.Version == 0 || r.Version >= math.MaxInt64 {
+	if !usableVersion(r.Version) {
 		return store.ErrAlreadyConsumed
 	}
-	version, err := internalkeys.RandomInt63Except(int64(r.Version))
+	version, err := newVersion("totp.Accept", int64(r.Version))
 	if err != nil {
-		return fmt.Errorf("oidcsql: totp.Accept: generate Version: %w", err)
+		return err
 	}
 	args := totpValues(r)
 	args = append(args, version, r.Subject, r.LastAcceptedStep,
@@ -118,18 +87,7 @@ func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 }
 
 func (s *totpStore) Delete(ctx context.Context, subject string) error {
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.totpDelete, subject)
-	if err != nil {
-		return wrapErr("totp.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("totp.Delete.RowsAffected", err)
-	}
-	if n == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return execDeleteOne(ctx, s.parent.db, "totp.Delete", s.parent.queries.totpDelete, subject)
 }
 
 func (s *totpStore) scanOne(ctx context.Context, subject string) (*store.TOTPRecord, error) {

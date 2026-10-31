@@ -117,8 +117,7 @@ func (s *Store) getLive(ctx context.Context, table, pk string) (item, error) {
 }
 
 func (s *Store) expired(found item) bool {
-	expiresAt := readTime(found, attrExpiresAt)
-	return !expiresAt.IsZero() && expiresAt.Before(s.now())
+	return s.isExpired(readTime(found, attrExpiresAt))
 }
 
 // overwrite replaces whatever the key holds. It is the adapter's only
@@ -398,16 +397,43 @@ func (s *Store) deleteLiveKey(ctx context.Context, table, pk string) (bool, erro
 	return !s.expired(out.Attributes), nil
 }
 
-// queryIndex enumerates every item whose indexed attribute equals
-// value. Index reads cannot be strongly consistent, so callers that act
-// on an individual result re-read it by primary key first, and a caller
-// that must not miss a recent write pairs it with a consistent read.
-func (s *Store) queryIndex(ctx context.Context, table, index, attr, value string) ([]item, error) {
+// collectPages drives the LastEvaluatedKey pagination loop shared by
+// every enumeration. fetch reads the page that starts after start (nil
+// for the first) and returns its items and the key to continue from; an
+// empty key ends the walk. A positive limit stops it once that many
+// items are held and returns exactly limit of them.
+func collectPages(
+	limit int32,
+	fetch func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error),
+) ([]item, error) {
 	var (
 		out   []item
 		start map[string]types.AttributeValue
 	)
 	for {
+		items, next, err := fetch(start)
+		if err != nil {
+			return nil, err
+		}
+		for _, raw := range items {
+			out = append(out, raw)
+		}
+		if limit > 0 && len(out) >= int(limit) {
+			return out[:limit], nil
+		}
+		if len(next) == 0 {
+			return out, nil
+		}
+		start = next
+	}
+}
+
+// queryIndex enumerates every item whose indexed attribute equals
+// value. Index reads cannot be strongly consistent, so callers that act
+// on an individual result re-read it by primary key first, and a caller
+// that must not miss a recent write pairs it with a consistent read.
+func (s *Store) queryIndex(ctx context.Context, table, index, attr, value string) ([]item, error) {
+	return collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
 		page, err := s.api.Query(ctx, &dynamodb.QueryInput{
 			TableName:                 aws.String(table),
 			IndexName:                 aws.String(index),
@@ -417,26 +443,16 @@ func (s *Store) queryIndex(ctx context.Context, table, index, attr, value string
 			ExclusiveStartKey:         start,
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		for _, raw := range page.Items {
-			out = append(out, raw)
-		}
-		if len(page.LastEvaluatedKey) == 0 {
-			return out, nil
-		}
-		start = page.LastEvaluatedKey
-	}
+		return page.Items, page.LastEvaluatedKey, nil
+	})
 }
 
 // queryPartition enumerates every item sharing a partition key, in sort
 // order. It backs the composite-key tables (recovery-code slots).
 func (s *Store) queryPartition(ctx context.Context, table, pk string) ([]item, error) {
-	var (
-		out   []item
-		start map[string]types.AttributeValue
-	)
-	for {
+	return collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
 		page, err := s.api.Query(ctx, &dynamodb.QueryInput{
 			TableName:                 aws.String(table),
 			KeyConditionExpression:    aws.String("#k = :v"),
@@ -446,27 +462,17 @@ func (s *Store) queryPartition(ctx context.Context, table, pk string) ([]item, e
 			ConsistentRead:            aws.Bool(true),
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		for _, raw := range page.Items {
-			out = append(out, raw)
-		}
-		if len(page.LastEvaluatedKey) == 0 {
-			return out, nil
-		}
-		start = page.LastEvaluatedKey
-	}
+		return page.Items, page.LastEvaluatedKey, nil
+	})
 }
 
 // scanAll walks an entire table. It is used only where the store
 // contract asks a question that has no key — HasAny and the static
 // client reconciliation — and never on a request path.
 func (s *Store) scanAll(ctx context.Context, table string, limit int32) ([]item, error) {
-	var (
-		out   []item
-		start map[string]types.AttributeValue
-	)
-	for {
+	return collectPages(limit, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
 		in := &dynamodb.ScanInput{
 			TableName:         aws.String(table),
 			ExclusiveStartKey: start,
@@ -476,19 +482,10 @@ func (s *Store) scanAll(ctx context.Context, table string, limit int32) ([]item,
 		}
 		page, err := s.api.Scan(ctx, in)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		for _, raw := range page.Items {
-			out = append(out, raw)
-		}
-		if limit > 0 && len(out) >= int(limit) {
-			return out[:limit], nil
-		}
-		if len(page.LastEvaluatedKey) == 0 {
-			return out, nil
-		}
-		start = page.LastEvaluatedKey
-	}
+		return page.Items, page.LastEvaluatedKey, nil
+	})
 }
 
 // scanMatching returns every item whose attr equals value, projected to
@@ -497,11 +494,7 @@ func (s *Store) scanAll(ctx context.Context, table string, limit int32) ([]item,
 // no bounded key to read — the refresh cascade of client deletion — and
 // never a request path.
 func (s *Store) scanMatching(ctx context.Context, table, attr, value string) ([]item, error) {
-	var (
-		out   []item
-		start map[string]types.AttributeValue
-	)
-	for {
+	return collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
 		page, err := s.api.Scan(ctx, &dynamodb.ScanInput{
 			TableName:                 aws.String(table),
 			FilterExpression:          aws.String("#a = :v"),
@@ -512,14 +505,8 @@ func (s *Store) scanMatching(ctx context.Context, table, attr, value string) ([]
 			ConsistentRead:            aws.Bool(true),
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		for _, raw := range page.Items {
-			out = append(out, raw)
-		}
-		if len(page.LastEvaluatedKey) == 0 {
-			return out, nil
-		}
-		start = page.LastEvaluatedKey
-	}
+		return page.Items, page.LastEvaluatedKey, nil
+	})
 }

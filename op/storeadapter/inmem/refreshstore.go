@@ -18,6 +18,7 @@ type refreshStore struct {
 	m              map[string]*store.RefreshToken
 	byClient       refreshIndex
 	byGrant        refreshIndex
+	byParent       refreshIndex
 	retries        map[string]retryResponse
 	retriesSinceGC uint32
 }
@@ -56,6 +57,7 @@ func newRefreshStore(c Clock) *refreshStore {
 		m:        make(map[string]*store.RefreshToken),
 		byClient: make(refreshIndex),
 		byGrant:  make(refreshIndex),
+		byParent: make(refreshIndex),
 		retries:  make(map[string]retryResponse),
 	}
 }
@@ -239,7 +241,7 @@ func (s *refreshStore) RevokeChain(_ context.Context, rootID string) error {
 		return store.ErrNotFound
 	}
 	now := s.clock.Now()
-	revokeChainLocked(s.m, rootKey, now)
+	s.revokeChainLocked(rootKey, now)
 	return nil
 }
 
@@ -249,8 +251,7 @@ func (s *refreshStore) RevokeChain(_ context.Context, rootID string) error {
 // inspection) cannot reconstruct the bearer secret the OP issued.
 // ParentID is left as the raw parent identifier so callers reading the
 // record back via Find / Consume see the same value they passed in;
-// [revokeOneGeneration] hashes ParentID on the fly to walk into the
-// hash-keyed map.
+// [refreshStore.indexRefreshLocked] hashes it into the parent index.
 func storeRefresh(token *store.RefreshToken, key string) *store.RefreshToken {
 	stored := cloneRefresh(token)
 	stored.ID = key
@@ -282,9 +283,9 @@ func (s *refreshStore) RevokeByClient(_ context.Context, clientID string) error 
 	return nil
 }
 
-// refreshIndex maps one stable record attribute to the hashed primary keys
-// carrying that value. Refresh-token rows are retained after revocation for
-// replay detection and audit, so their immutable ClientID and GrantID entries
+// refreshIndex maps one stable record attribute (client, grant, or hashed
+// parent key) to the hashed primary keys carrying that value. Refresh-token rows are retained after revocation for
+// replay detection and audit, so their immutable ClientID, GrantID and ParentID entries
 // have the same lifetime as the primary map entry.
 type refreshIndex map[string]map[string]struct{}
 
@@ -306,6 +307,9 @@ func (i refreshIndex) add(value, id string) {
 func (s *refreshStore) indexRefreshLocked(id string, rec *store.RefreshToken) {
 	s.byClient.add(rec.ClientID, id)
 	s.byGrant.add(rec.GrantID, id)
+	if rec.ParentID != nil {
+		s.byParent.add(hashKey(*rec.ParentID), id)
+	}
 }
 
 func (s *refreshStore) revokeByGrantLocked(grantID string, now time.Time) int {
@@ -333,43 +337,27 @@ func (s *refreshStore) revokeByIndexLocked(index refreshIndex, value string, now
 	return visited
 }
 
-// revokeChainLocked walks the parent pointers in m starting at rootID and
-// stamps ConsumedAt on rootID and every descendant. The traversal repeatedly
-// scans m until a full pass adds no new revocations; this keeps the helper
-// O(n^2) but tolerates parents that appear after their children in the map.
-func revokeChainLocked(m map[string]*store.RefreshToken, rootID string, now time.Time) {
-	markRevoked(m[rootID], now)
-	revoked := map[string]struct{}{rootID: {}}
-	for revokeOneGeneration(m, revoked, now) {
+// revokeChainLocked stamps rootKey and every descendant consumed and
+// revoked, following the parent index breadth-first so the cost is
+// proportional to the chain rather than to the whole map. A descendant is
+// reached through its parent's key whether or not the parent row is still
+// present. The caller must hold refreshStore.mu for writing.
+func (s *refreshStore) revokeChainLocked(rootKey string, now time.Time) {
+	markRevoked(s.m[rootKey], now)
+	seen := map[string]struct{}{rootKey: {}}
+	queue := []string{rootKey}
+	for len(queue) > 0 {
+		parentKey := queue[0]
+		queue = queue[1:]
+		for childKey := range s.byParent[parentKey] {
+			if _, done := seen[childKey]; done {
+				continue
+			}
+			seen[childKey] = struct{}{}
+			markRevoked(s.m[childKey], now)
+			queue = append(queue, childKey)
+		}
 	}
-}
-
-// revokeOneGeneration scans m and stamps every record whose parent is already
-// in revoked. Returns true if any new record was added so the caller can loop
-// until a fixed point.
-//
-// The map keys are SHA-256 hashes of the raw bearer secret (see
-// [storeRefresh]); [store.RefreshToken.ParentID] is stored as the raw
-// parent identifier. The walk hashes ParentID on the fly so the
-// parent-revoked check is a single map lookup keyed on the digest.
-func revokeOneGeneration(m map[string]*store.RefreshToken, revoked map[string]struct{}, now time.Time) bool {
-	grew := false
-	for id, rec := range m {
-		if _, already := revoked[id]; already {
-			continue
-		}
-		if rec.ParentID == nil {
-			continue
-		}
-		parentKey := hashKey(*rec.ParentID)
-		if _, parentRevoked := revoked[parentKey]; !parentRevoked {
-			continue
-		}
-		markRevoked(rec, now)
-		revoked[id] = struct{}{}
-		grew = true
-	}
-	return grew
 }
 
 // markRevoked stamps rec as both consumed and revoked. The Revoked

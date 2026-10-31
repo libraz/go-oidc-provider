@@ -12,15 +12,15 @@
 //
 // Two categories are shared by the in-tree adapters. Expiry:
 // [IsExpiredStrict] backs inmem, SQL and DynamoDB, [IsExpiredInclusive]
-// backs Redis. And the hash-on-store contract: [Digest] is called from
-// every adapter that persists an opaque bearer secret, with
+// backs Redis and the SQL consumed-JTI check. And the hash-on-store
+// contract: [Digest] is called from every adapter that persists an
+// opaque bearer secret as text, [DigestBytes] from the SQL adapter for
+// the opaque access-token table whose key column is binary, with
 // [ConstantTimeKeyMatch] where the lookup is not an exact-key one.
 //
 // The rest of the package is offered to third-party adapters rather than
 // relied on here, and the two paragraphs below say why for the cases
-// where that is a decision rather than an accident. [DigestBytes] is
-// simply the byte-form companion to [Digest] for a backend that stores
-// the digest as BYTEA / BLOB; no in-tree adapter does.
+// where that is a decision rather than an accident.
 //
 // The not-found mappers are deliberately not used in-tree. Every
 // in-tree lookup either labels a non-sentinel failure with the

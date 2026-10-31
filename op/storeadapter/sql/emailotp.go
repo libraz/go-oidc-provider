@@ -5,11 +5,10 @@ import (
 	databasesql "database/sql"
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
-	internalkeys "github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // emailOTPStore is the SQL-backed [store.EmailOTPStore].
@@ -45,15 +44,7 @@ func (s *emailOTPStore) Put(ctx context.Context, r *store.EmailOTPRecord) error 
 	if r.Subject == "" {
 		return errors.New("oidcsql: email otp record missing Subject")
 	}
-	version, err := internalkeys.RandomInt63Except(0)
-	if err != nil {
-		return fmt.Errorf("oidcsql: emailOTPs.Put: generate Version: %w", err)
-	}
-	args := append([]any{r.Subject, version}, emailOTPValues(r)...)
-	if _, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPPut, args...); err != nil {
-		return wrapErr("emailOTPs.Put", err)
-	}
-	return nil
+	return versionedPut(ctx, s.parent.db, s.parent.queries.emailOTPPut, "emailOTPs.Put", r.Subject, emailOTPValues(r))
 }
 
 func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *store.EmailOTPRecord) error {
@@ -66,29 +57,8 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 	if previous.Subject != next.Subject {
 		return errors.New("oidcsql: invalid email otp compare-and-swap record")
 	}
-	if previous.Version == 0 || previous.Version >= math.MaxInt64 || next.Version != previous.Version {
-		return store.ErrAlreadyConsumed
-	}
-	version, err := internalkeys.RandomInt63Except(int64(previous.Version))
-	if err != nil {
-		return fmt.Errorf("oidcsql: emailOTPs.CompareAndSwap: generate Version: %w", err)
-	}
-	args := emailOTPValues(next)
-	args = append(args, version, previous.Subject)
-	args = append(args, int64(previous.Version))
-	args = append(args, emailOTPValues(previous)...)
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPCompareAndSwap, args...)
-	if err != nil {
-		return wrapErr("emailOTPs.CompareAndSwap", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("emailOTPs.CompareAndSwap.RowsAffected", err)
-	}
-	if n > 0 {
-		return nil
-	}
-	return store.ErrAlreadyConsumed
+	return versionedSwap(ctx, s.parent.db, s.parent.queries.emailOTPCompareAndSwap, "emailOTPs.CompareAndSwap",
+		previous.Subject, previous.Version, next.Version, emailOTPValues(next), emailOTPValues(previous))
 }
 
 // createIfAbsent handles the nil-previous form of CompareAndSwap, which
@@ -103,9 +73,9 @@ func (s *emailOTPStore) CompareAndSwap(ctx context.Context, previous, next *stor
 // free — nothing stored, or a row whose retention horizon has passed —
 // and each is atomic against a concurrent writer on its own.
 func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTPRecord) error {
-	version, err := internalkeys.RandomInt63Except(0)
+	version, err := newVersion("emailOTPs.CompareAndSwap", 0)
 	if err != nil {
-		return fmt.Errorf("oidcsql: emailOTPs.CompareAndSwap: generate Version: %w", err)
+		return err
 	}
 	insertArgs := append([]any{next.Subject, version}, emailOTPValues(next)...)
 	placed, err := s.insertIfAbsent(ctx, insertArgs)
@@ -119,16 +89,16 @@ func (s *emailOTPStore) createIfAbsent(ctx context.Context, next *store.EmailOTP
 	// horizon, which is re-checked as part of the UPDATE rather than
 	// beforehand.
 	now := timeToInt64(s.parent.clock.Now())
-	version, err = internalkeys.RandomInt63Except(0)
+	version, err = newVersion("emailOTPs.CompareAndSwap.replaceStale", 0)
 	if err != nil {
-		return fmt.Errorf("oidcsql: emailOTPs.CompareAndSwap: generate stale-reclaim Version: %w", err)
+		return err
 	}
 	values := emailOTPValues(next)
 	staleArgs := make([]any, 0, 1+len(values)+3)
 	staleArgs = append(staleArgs, version)
 	staleArgs = append(staleArgs, values...)
 	staleArgs = append(staleArgs, next.Subject, now, now)
-	replaced, err := s.execAffects(ctx, s.parent.queries.emailOTPReplaceStale, "emailOTPs.CompareAndSwap.replaceStale", staleArgs)
+	replaced, err := execAffects(ctx, s.parent.db, s.parent.queries.emailOTPReplaceStale, "emailOTPs.CompareAndSwap.replaceStale", staleArgs)
 	if err != nil {
 		return err
 	}
@@ -164,21 +134,6 @@ func (s *emailOTPStore) insertIfAbsent(ctx context.Context, args []any) (bool, e
 	return true, nil
 }
 
-// execAffects runs a conditional statement and reports whether it
-// changed a row. The label names the operation in a wrapped backend
-// error.
-func (s *emailOTPStore) execAffects(ctx context.Context, query, label string, args []any) (bool, error) {
-	res, err := s.parent.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return false, wrapErr(label, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, wrapErr(label+".RowsAffected", err)
-	}
-	return n > 0, nil
-}
-
 func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) error {
 	if r == nil {
 		return errors.New("oidcsql: nil email otp record")
@@ -186,12 +141,12 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	if r.Subject == "" {
 		return errors.New("oidcsql: email otp record missing Subject")
 	}
-	if r.Version == 0 || r.Version >= math.MaxInt64 {
+	if !usableVersion(r.Version) {
 		return store.ErrAlreadyConsumed
 	}
-	version, err := internalkeys.RandomInt63Except(int64(r.Version))
+	version, err := newVersion("emailOTPs.Consume", int64(r.Version))
 	if err != nil {
-		return fmt.Errorf("oidcsql: emailOTPs.Consume: generate Version: %w", err)
+		return err
 	}
 	// Marking the challenge is this method's job. The statement's
 	// predicate is "consumed_at = 0", so writing the presented value
@@ -199,9 +154,9 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	// already hold whenever the caller left it unstamped: the row
 	// version rotates, the UPDATE reports success, and the challenge
 	// stays redeemable for anyone who re-reads it. Mirrors
-	// [recoveryStore.stampFor], which carries the same post-condition.
+	// [consumeStamp], which carries the same post-condition.
 	stamped := *r
-	stamped.ConsumedAt = s.stampFor(r.ConsumedAt)
+	stamped.ConsumedAt = consumeStamp(r.ConsumedAt, s.parent.clock)
 	args := emailOTPValues(&stamped)
 	args = append(args,
 		version,
@@ -224,18 +179,6 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	return s.explainRejectedConsume(ctx, r)
 }
 
-// stampFor resolves the ConsumedAt a redemption writes onto the record.
-// A caller that already stamped keeps its value — it is the OP's own
-// clock reading for the verification that just succeeded — while an
-// unstamped record is stamped from the adapter's clock so a nil return
-// always means the challenge is spent.
-func (s *emailOTPStore) stampFor(presented time.Time) time.Time {
-	if !presented.IsZero() {
-		return presented
-	}
-	return s.parent.clock.Now()
-}
-
 // explainRejectedConsume separates the three ways a redemption can be
 // refused. An absent or expired code reads as [store.ErrNotFound] —
 // from the redemption path's point of view the code is gone — while an
@@ -249,26 +192,14 @@ func (s *emailOTPStore) explainRejectedConsume(ctx context.Context, r *store.Ema
 	if err != nil {
 		return err
 	}
-	now := s.parent.clock.Now()
-	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(now) {
+	if isExpired(current.ExpiresAt, s.parent.clock) {
 		return store.ErrNotFound
 	}
 	return store.ErrAlreadyConsumed
 }
 
 func (s *emailOTPStore) Delete(ctx context.Context, subject string) error {
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPDelete, subject)
-	if err != nil {
-		return wrapErr("emailOTPs.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("emailOTPs.Delete.RowsAffected", err)
-	}
-	if n == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return execDeleteOne(ctx, s.parent.db, "emailOTPs.Delete", s.parent.queries.emailOTPDelete, subject)
 }
 
 //nolint:funlen // one scan target per column; splitting it would only hide the mapping.
@@ -342,7 +273,7 @@ func emailOTPRetentionElapsed(rec *store.EmailOTPRecord, now time.Time) bool {
 	if horizon.IsZero() {
 		horizon = rec.ExpiresAt
 	}
-	return !horizon.IsZero() && horizon.Before(now)
+	return patterns.IsExpiredStrict(horizon, now)
 }
 
 var _ store.EmailOTPStore = (*emailOTPStore)(nil)

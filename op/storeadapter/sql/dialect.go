@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -93,7 +94,7 @@ func (d Dialect) rebind(query string) string {
 		if r == '?' {
 			idx++
 			b.WriteByte('$')
-			b.WriteString(itoa(idx))
+			b.WriteString(strconv.Itoa(idx))
 			continue
 		}
 		b.WriteRune(r)
@@ -208,21 +209,4 @@ func (d Dialect) serializesTransactions() bool { return d.name == "sqlite" }
 // supplied) without losing the original RevokedAt.
 func (d Dialect) greatestExpr(a, b string) string {
 	return d.greatest + "(" + a + ", " + b + ")"
-}
-
-// itoa renders a non-negative int without pulling in strconv (the
-// rebind hot path is exercised on every query and the int values are
-// always small parameter indices).
-func itoa(n int) string {
-	if n < 10 {
-		return string(rune('0' + n)) //nolint:gosec // n is bounded to [0,9] by the caller; no overflow possible.
-	}
-	var buf [16]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }

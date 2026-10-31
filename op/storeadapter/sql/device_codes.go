@@ -16,7 +16,8 @@ import (
 // compare-and-swap embedded in Consume provides the single-use
 // guarantee on its own, so the handle never carries a *sql.Tx.
 type deviceCodeStore struct {
-	parent *Store
+	parent  *Store
+	sweeper saveSweeper
 }
 
 func newDeviceCodeStore(s *Store) *deviceCodeStore {
@@ -42,17 +43,17 @@ func (s *deviceCodeStore) Save(ctx context.Context, code *store.DeviceCode) erro
 	if status == 0 {
 		status = store.DeviceCodeStatusPending
 	}
-	if err := s.gcExpired(ctx); err != nil {
-		return err
-	}
 	idDigest := patterns.Digest(code.ID)
-	_, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeSave,
-		idDigest, code.ClientID, code.UserCode, code.Subject,
-		encodeStrings(code.Scope), encodeStrings(code.Resource),
-		code.DPoPJKT, code.MTLSCertS256, int64(code.Interval), int64(status),
-		timeToInt64(code.AuthTime), code.DenyReason,
-		int64(code.UserCodeStrikes), int64(code.PollViolations),
-		timePtrToInt64Ptr(code.LastPolledAt), timeToInt64(code.ExpiresAt), timeToInt64(code.IssuedAt))
+	err := insertReclaimingExpired(ctx, &s.sweeper, s.gcExpired, func() error {
+		_, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeSave,
+			idDigest, code.ClientID, code.UserCode, code.Subject,
+			encodeStrings(code.Scope), encodeStrings(code.Resource),
+			code.DPoPJKT, code.MTLSCertS256, int64(code.Interval), int64(status),
+			timeToInt64(code.AuthTime), code.DenyReason,
+			int64(code.UserCodeStrikes), int64(code.PollViolations),
+			timePtrToInt64Ptr(code.LastPolledAt), timeToInt64(code.ExpiresAt), timeToInt64(code.IssuedAt))
+		return err
+	})
 	if err != nil {
 		if isDuplicate(err) {
 			return store.ErrAlreadyExists
@@ -111,7 +112,7 @@ func (s *deviceCodeStore) Approve(ctx context.Context, deviceCode, subject strin
 	if err != nil {
 		return wrapErr("deviceCodes.Approve", err)
 	}
-	return s.afterTransition(ctx, idDigest, res)
+	return s.afterTransition(ctx, s.parent.queries.deviceCodeFind, idDigest, res)
 }
 
 func (s *deviceCodeStore) ApproveByUserCode(ctx context.Context, userCode, subject string, authTime time.Time) error {
@@ -121,7 +122,7 @@ func (s *deviceCodeStore) ApproveByUserCode(ctx context.Context, userCode, subje
 	if err != nil {
 		return wrapErr("deviceCodes.ApproveByUserCode", err)
 	}
-	return s.afterTransitionByUserCode(ctx, userCode, res)
+	return s.afterTransition(ctx, s.parent.queries.deviceCodeFindByUserCode, userCode, res)
 }
 
 func (s *deviceCodeStore) Deny(ctx context.Context, deviceCode, reason string) error {
@@ -132,7 +133,7 @@ func (s *deviceCodeStore) Deny(ctx context.Context, deviceCode, reason string) e
 	if err != nil {
 		return wrapErr("deviceCodes.Deny", err)
 	}
-	return s.afterTransition(ctx, idDigest, res)
+	return s.afterTransition(ctx, s.parent.queries.deviceCodeFind, idDigest, res)
 }
 
 func (s *deviceCodeStore) DenyByUserCode(ctx context.Context, userCode, reason string) error {
@@ -142,7 +143,7 @@ func (s *deviceCodeStore) DenyByUserCode(ctx context.Context, userCode, reason s
 	if err != nil {
 		return wrapErr("deviceCodes.DenyByUserCode", err)
 	}
-	return s.afterTransitionByUserCode(ctx, userCode, res)
+	return s.afterTransition(ctx, s.parent.queries.deviceCodeFindByUserCode, userCode, res)
 }
 
 func (s *deviceCodeStore) Revoke(ctx context.Context, deviceCode, reason string) error {
@@ -176,43 +177,26 @@ func (s *deviceCodeStore) Revoke(ctx context.Context, deviceCode, reason string)
 }
 
 func (s *deviceCodeStore) RecordPoll(ctx context.Context, deviceCode string, when time.Time, nextInterval time.Duration) error {
-	idDigest := patterns.Digest(deviceCode)
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeRecordPoll,
-		timeToInt64(when), int64(nextInterval), int64(nextInterval), idDigest, s.now())
-	if err != nil {
-		return wrapErr("deviceCodes.RecordPoll", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("deviceCodes.RecordPoll.RowsAffected", err)
-	}
-	if n == 0 {
-		// MySQL reports zero affected rows when a valid poll repeats the
-		// exact same timestamp and interval. Distinguish that no-op update
-		// from a missing / expired row before returning ErrNotFound.
-		if _, findErr := s.FindByDeviceCode(ctx, deviceCode); findErr == nil {
-			return nil
-		} else if !errors.Is(findErr, store.ErrNotFound) {
-			return findErr
-		}
-		// Missing or expired; the library treats both as expired_token.
-		return store.ErrNotFound
-	}
-	return nil
+	return recordPollUpdate(ctx, s.runner(), s.parent.queries.deviceCodeRecordPoll, "deviceCodes.RecordPoll",
+		patterns.Digest(deviceCode), when, nextInterval, s.now(),
+		func() error {
+			_, err := s.FindByDeviceCode(ctx, deviceCode)
+			return err
+		})
 }
 
 func (s *deviceCodeStore) IncrementUserCodeStrike(ctx context.Context, deviceCode string) (uint8, error) {
-	return s.increment(ctx, deviceCode,
+	return s.increment(ctx, patterns.Digest(deviceCode),
 		s.parent.queries.deviceCodeStrikeIncrement, s.parent.queries.deviceCodeStrikeRead)
 }
 
 func (s *deviceCodeStore) IncrementUserCodeStrikeByUserCode(ctx context.Context, userCode string) (uint8, error) {
-	return s.incrementByUserCode(ctx, userCode,
+	return s.increment(ctx, userCode,
 		s.parent.queries.deviceCodeStrikeIncrUser, s.parent.queries.deviceCodeStrikeReadUser)
 }
 
 func (s *deviceCodeStore) IncrementPollViolation(ctx context.Context, deviceCode string) (uint8, error) {
-	return s.increment(ctx, deviceCode,
+	return s.increment(ctx, patterns.Digest(deviceCode),
 		s.parent.queries.deviceCodeViolationIncr, s.parent.queries.deviceCodeViolationRead)
 }
 
@@ -233,102 +217,38 @@ func (s *deviceCodeStore) Consume(ctx context.Context, deviceCode string) (*stor
 	default:
 		return nil, store.ErrConflict
 	}
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeConsume,
-		int64(store.DeviceCodeStatusConsumed), idDigest, int64(store.DeviceCodeStatusApproved), s.now())
+	err = consumeUpdate(ctx, s.runner(), s.parent.queries.deviceCodeConsume, "deviceCodes.Consume", idDigest,
+		int64(store.DeviceCodeStatusConsumed), int64(store.DeviceCodeStatusApproved), s.now(),
+		func() bool {
+			replay, _, findErr := s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest)
+			return findErr == nil && replay.Status == store.DeviceCodeStatusConsumed
+		})
 	if err != nil {
-		return nil, wrapErr("deviceCodes.Consume", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return nil, wrapErr("deviceCodes.Consume.RowsAffected", err)
-	}
-	if n == 0 {
-		// Lost the compare-and-swap to a concurrent Consume.
-		if replay, _, findErr := s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest); findErr == nil &&
-			replay.Status == store.DeviceCodeStatusConsumed {
-			return nil, store.ErrAlreadyConsumed
-		}
-		return nil, store.ErrConflict
+		return nil, err
 	}
 	rec.Status = store.DeviceCodeStatusConsumed
 	rec.ID = deviceCode
 	return rec, nil
 }
 
-// afterTransition maps the RowsAffected of an Approve/Deny CAS onto the
-// documented error set: a hit returns nil; a miss is ErrNotFound when
-// the record is absent or expired and ErrConflict otherwise (the status
-// was not Pending, or a concurrent transition won the race).
-func (s *deviceCodeStore) afterTransition(ctx context.Context, idDigest string, res databasesql.Result) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("deviceCodes.transition.RowsAffected", err)
-	}
-	if n > 0 {
-		return nil
-	}
-	rec, _, findErr := s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest)
-	if findErr != nil {
-		return findErr
-	}
-	if isExpired(rec.ExpiresAt, s.parent.clock) {
-		return store.ErrNotFound
-	}
-	return store.ErrConflict
+// afterTransition resolves the outcome of an Approve/Deny CAS (see
+// [transitionMiss]); findQ and key select the record the miss is
+// diagnosed against.
+func (s *deviceCodeStore) afterTransition(ctx context.Context, findQ, key string, res databasesql.Result) error {
+	return transitionMiss(res, "deviceCodes.transition", s.parent.clock, func() (time.Time, error) {
+		rec, _, err := s.scanOne(ctx, findQ, key)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return rec.ExpiresAt, nil
+	})
 }
 
-func (s *deviceCodeStore) afterTransitionByUserCode(ctx context.Context, userCode string, res databasesql.Result) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("deviceCodes.transitionByUserCode.RowsAffected", err)
-	}
-	if n > 0 {
-		return nil
-	}
-	rec, _, findErr := s.scanOne(ctx, s.parent.queries.deviceCodeFindByUserCode, userCode)
-	if findErr != nil {
-		return findErr
-	}
-	if isExpired(rec.ExpiresAt, s.parent.clock) {
-		return store.ErrNotFound
-	}
-	return store.ErrConflict
-}
-
-// increment runs the +1 update (saturating at 255 via the query's
-// WHERE guard) and reads the resulting value back. Missing or expired
-// records surface as ErrNotFound; a saturated counter reports 255.
-func (s *deviceCodeStore) increment(ctx context.Context, deviceCode, updateQ, readQ string) (uint8, error) {
-	idDigest := patterns.Digest(deviceCode)
-	now := s.now()
-	if _, err := s.runner().ExecContext(ctx, updateQ, idDigest, now); err != nil {
-		return 0, wrapErr("deviceCodes.increment", err)
-	}
-	var v int64
-	err := s.runner().QueryRowContext(ctx, readQ, idDigest, now).Scan(&v)
-	if errors.Is(err, databasesql.ErrNoRows) {
-		return 0, store.ErrNotFound
-	}
-	if err != nil {
-		return 0, wrapErr("deviceCodes.increment.read", err)
-	}
-	return uint8(v), nil //nolint:gosec // counter is capped at 255 by the update guard.
-}
-
-func (s *deviceCodeStore) incrementByUserCode(ctx context.Context, userCode, updateQ, readQ string) (uint8, error) {
-	now := s.now()
-	if _, err := s.runner().ExecContext(ctx, updateQ, userCode, now); err != nil {
-		return 0, wrapErr("deviceCodes.incrementByUserCode", err)
-	}
-	var v int64
-	err := s.runner().QueryRowContext(ctx, readQ, userCode, now).Scan(&v)
-	if errors.Is(err, databasesql.ErrNoRows) {
-		return 0, store.ErrNotFound
-	}
-	if err != nil {
-		return 0, wrapErr("deviceCodes.incrementByUserCode.read", err)
-	}
-	return uint8(v), nil //nolint:gosec // counter is capped at 255 by the update guard.
+// increment bumps a saturating counter on the record selected by key,
+// which is either the device-code digest or the user_code depending on
+// which update/read pair the caller supplies.
+func (s *deviceCodeStore) increment(ctx context.Context, key, updateQ, readQ string) (uint8, error) {
+	return bumpSaturatingCounter(ctx, s.runner(), updateQ, readQ, "deviceCodes.increment", key, s.now())
 }
 
 // scanOne runs query with args and decodes a single device-code row.

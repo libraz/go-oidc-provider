@@ -2,8 +2,6 @@ package oidcredis
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -109,8 +107,7 @@ const (
 // SCAN access. The hash is not a secret — its only purpose is bounded
 // length and deterministic key derivation.
 func (j *jtiStore) jtiKey(jti string) string {
-	h := sha256.Sum256([]byte(jti))
-	return j.parent.prefix + "jti:" + hex.EncodeToString(h[:])
+	return j.parent.prefix + "jti:" + patterns.Digest(jti)
 }
 
 // Mark records jti as consumed. It returns [store.ErrAlreadyConsumed]

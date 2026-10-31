@@ -175,6 +175,30 @@ func isExpired(t time.Time, clock Clock) bool {
 	return patterns.IsExpiredStrict(t, clock.Now())
 }
 
+// consumeStamp resolves the timestamp a redemption writes onto the
+// consumed record or slot. A value the caller already stamped keeps that
+// value — it is the OP's own clock reading for the verification that
+// just succeeded — while an unstamped one is stamped here from the
+// adapter's clock.
+//
+// A zero value must never reach the UPDATE. The statement's predicate is
+// "consumed_at = 0", so writing zero sets the column to the value it is
+// required to already hold: the row matches, nothing changes, and the
+// slot stays redeemable. Whether that surfaces as one affected row or
+// none is then a per-engine choice — MySQL counts changed rows while
+// SQLite and PostgreSQL count matched ones — so the same call reports
+// success on one engine and refusal on another, and the success is the
+// dangerous half: a single-use code the caller was told it had spent.
+// Stamping makes the write a real transition on every engine, which
+// collapses matched-rows and changed-rows onto the same answer and
+// makes a nil return mean the slot is spent.
+func consumeStamp(presented time.Time, clock Clock) time.Time {
+	if !presented.IsZero() {
+		return presented
+	}
+	return clock.Now()
+}
+
 // boolToInt64 maps a Go bool to the integer 0/1 the schema stores.
 // Every dialect's boolean-shaped column is declared as an integer type
 // (MySQL TINYINT(1), SQLite INTEGER, PostgreSQL SMALLINT) so one bind

@@ -165,18 +165,7 @@ func (s *passkeyStore) UpdateAssertion(
 }
 
 func (s *passkeyStore) Delete(ctx context.Context, credentialID []byte) error {
-	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.passkeyDelete, nonNilBytes(credentialID))
-	if err != nil {
-		return wrapErr("passkeys.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("passkeys.Delete.RowsAffected", err)
-	}
-	if n == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return execDeleteOne(ctx, s.parent.db, "passkeys.Delete", s.parent.queries.passkeyDelete, nonNilBytes(credentialID))
 }
 
 // applyAssertion folds one verified assertion into the stored record,

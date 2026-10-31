@@ -16,7 +16,8 @@ import (
 // approve→consume compare-and-swap embedded in Consume is the
 // single-use guarantee, so the handle never carries a *sql.Tx.
 type cibaRequestStore struct {
-	parent *Store
+	parent  *Store
+	sweeper saveSweeper
 }
 
 func newCIBARequestStore(s *Store) *cibaRequestStore {
@@ -38,17 +39,17 @@ func (s *cibaRequestStore) Save(ctx context.Context, req *store.CIBARequest) err
 	if status == 0 {
 		status = store.CIBARequestStatusPending
 	}
-	if err := s.gcExpired(ctx); err != nil {
-		return err
-	}
 	idDigest := patterns.Digest(req.ID)
-	_, err := s.runner().ExecContext(ctx, s.parent.queries.cibaSave,
-		idDigest, req.ClientID, req.Subject,
-		encodeStrings(req.Scope), encodeStrings(req.Resource), encodeStrings(req.ACRValues), req.ACR,
-		req.BindingMessage, req.UserCode, req.DPoPJKT, req.MTLSCertS256,
-		int64(req.Interval), int64(status), timeToInt64(req.AuthTime), req.DenyReason,
-		int64(req.PollViolations), timePtrToInt64Ptr(req.LastPolledAt),
-		timeToInt64(req.ExpiresAt), timeToInt64(req.IssuedAt))
+	err := insertReclaimingExpired(ctx, &s.sweeper, s.gcExpired, func() error {
+		_, err := s.runner().ExecContext(ctx, s.parent.queries.cibaSave,
+			idDigest, req.ClientID, req.Subject,
+			encodeStrings(req.Scope), encodeStrings(req.Resource), encodeStrings(req.ACRValues), req.ACR,
+			req.BindingMessage, req.UserCode, req.DPoPJKT, req.MTLSCertS256,
+			int64(req.Interval), int64(status), timeToInt64(req.AuthTime), req.DenyReason,
+			int64(req.PollViolations), timePtrToInt64Ptr(req.LastPolledAt),
+			timeToInt64(req.ExpiresAt), timeToInt64(req.IssuedAt))
+		return err
+	})
 	if err != nil {
 		if isDuplicate(err) {
 			return store.ErrAlreadyExists
@@ -104,44 +105,18 @@ func (s *cibaRequestStore) Deny(ctx context.Context, authReqID, reason string) e
 }
 
 func (s *cibaRequestStore) RecordPoll(ctx context.Context, authReqID string, when time.Time, nextInterval time.Duration) error {
-	idDigest := patterns.Digest(authReqID)
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.cibaRecordPoll,
-		timeToInt64(when), int64(nextInterval), int64(nextInterval), idDigest, s.now())
-	if err != nil {
-		return wrapErr("ciba.RecordPoll", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("ciba.RecordPoll.RowsAffected", err)
-	}
-	if n == 0 {
-		// MySQL counts an update writing identical poll values as zero
-		// rows. Resolve the record before treating this as not found.
-		if _, findErr := s.FindByAuthReqID(ctx, authReqID); findErr == nil {
-			return nil
-		} else if !errors.Is(findErr, store.ErrNotFound) {
-			return findErr
-		}
-		return store.ErrNotFound
-	}
-	return nil
+	return recordPollUpdate(ctx, s.runner(), s.parent.queries.cibaRecordPoll, "ciba.RecordPoll",
+		patterns.Digest(authReqID), when, nextInterval, s.now(),
+		func() error {
+			_, err := s.FindByAuthReqID(ctx, authReqID)
+			return err
+		})
 }
 
 func (s *cibaRequestStore) IncrementPollViolation(ctx context.Context, authReqID string) (uint8, error) {
-	idDigest := patterns.Digest(authReqID)
-	now := s.now()
-	if _, err := s.runner().ExecContext(ctx, s.parent.queries.cibaViolationIncr, idDigest, now); err != nil {
-		return 0, wrapErr("ciba.IncrementPollViolation", err)
-	}
-	var v int64
-	err := s.runner().QueryRowContext(ctx, s.parent.queries.cibaViolationRead, idDigest, now).Scan(&v)
-	if errors.Is(err, databasesql.ErrNoRows) {
-		return 0, store.ErrNotFound
-	}
-	if err != nil {
-		return 0, wrapErr("ciba.IncrementPollViolation.read", err)
-	}
-	return uint8(v), nil //nolint:gosec // counter is capped at 255 by the update guard.
+	return bumpSaturatingCounter(ctx, s.runner(),
+		s.parent.queries.cibaViolationIncr, s.parent.queries.cibaViolationRead,
+		"ciba.IncrementPollViolation", patterns.Digest(authReqID), s.now())
 }
 
 func (s *cibaRequestStore) Consume(ctx context.Context, authReqID string) (*store.CIBARequest, error) {
@@ -161,45 +136,30 @@ func (s *cibaRequestStore) Consume(ctx context.Context, authReqID string) (*stor
 	default:
 		return nil, store.ErrConflict
 	}
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.cibaConsume,
-		int64(store.CIBARequestStatusConsumed), idDigest, int64(store.CIBARequestStatusApproved), s.now())
+	err = consumeUpdate(ctx, s.runner(), s.parent.queries.cibaConsume, "ciba.Consume", idDigest,
+		int64(store.CIBARequestStatusConsumed), int64(store.CIBARequestStatusApproved), s.now(),
+		func() bool {
+			replay, _, findErr := s.scanOne(ctx, s.parent.queries.cibaFind, idDigest)
+			return findErr == nil && replay.Status == store.CIBARequestStatusConsumed
+		})
 	if err != nil {
-		return nil, wrapErr("ciba.Consume", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return nil, wrapErr("ciba.Consume.RowsAffected", err)
-	}
-	if n == 0 {
-		if replay, _, findErr := s.scanOne(ctx, s.parent.queries.cibaFind, idDigest); findErr == nil &&
-			replay.Status == store.CIBARequestStatusConsumed {
-			return nil, store.ErrAlreadyConsumed
-		}
-		return nil, store.ErrConflict
+		return nil, err
 	}
 	rec.Status = store.CIBARequestStatusConsumed
 	rec.ID = authReqID
 	return rec, nil
 }
 
-// afterTransition maps the RowsAffected of an Approve/Deny CAS onto the
-// documented error set, identically to the device-code substore.
+// afterTransition resolves the outcome of an Approve/Deny CAS (see
+// [transitionMiss]).
 func (s *cibaRequestStore) afterTransition(ctx context.Context, idDigest string, res databasesql.Result) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("ciba.transition.RowsAffected", err)
-	}
-	if n > 0 {
-		return nil
-	}
-	rec, _, findErr := s.scanOne(ctx, s.parent.queries.cibaFind, idDigest)
-	if findErr != nil {
-		return findErr
-	}
-	if isExpired(rec.ExpiresAt, s.parent.clock) {
-		return store.ErrNotFound
-	}
-	return store.ErrConflict
+	return transitionMiss(res, "ciba.transition", s.parent.clock, func() (time.Time, error) {
+		rec, _, err := s.scanOne(ctx, s.parent.queries.cibaFind, idDigest)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return rec.ExpiresAt, nil
+	})
 }
 
 // scanOne runs query with args and decodes a single CIBA row. Expiry

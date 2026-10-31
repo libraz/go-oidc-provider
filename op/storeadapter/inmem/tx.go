@@ -305,7 +305,7 @@ func (s *refreshStaging) flushLocked() {
 		// descendants. The chain root itself is already marked via
 		// updated; revokeChainLocked is idempotent.
 		now := s.parent.clock.Now()
-		revokeChainLocked(s.parent.m, root, now)
+		s.parent.revokeChainLocked(root, now)
 	}
 }
 

@@ -16,6 +16,7 @@ type sessionStore struct {
 	mu           sync.RWMutex
 	clock        Clock
 	m            map[string]*store.Session
+	byGroup      map[string]map[string]struct{} // ChooserGroupID -> session ids
 	savesSinceGC uint32
 }
 
@@ -27,7 +28,11 @@ type sessionStore struct {
 const sessionFullGCSaveInterval uint32 = 64
 
 func newSessionStore(c Clock) *sessionStore {
-	return &sessionStore{clock: c, m: make(map[string]*store.Session)}
+	return &sessionStore{
+		clock:   c,
+		m:       make(map[string]*store.Session),
+		byGroup: make(map[string]map[string]struct{}),
+	}
 }
 
 func (s *sessionStore) Save(_ context.Context, sess *store.Session) error {
@@ -37,8 +42,32 @@ func (s *sessionStore) Save(_ context.Context, sess *store.Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maybeGCLocked(s.clock.Now())
-	s.m[sess.ID] = cloneSession(sess)
+	s.dropLocked(sess.ID)
+	stored := cloneSession(sess)
+	s.m[sess.ID] = stored
+	ids := s.byGroup[stored.ChooserGroupID]
+	if ids == nil {
+		ids = make(map[string]struct{})
+		s.byGroup[stored.ChooserGroupID] = ids
+	}
+	ids[sess.ID] = struct{}{}
 	return nil
+}
+
+// dropLocked removes the session id from the primary map and from the
+// chooser-group index. The caller must hold sessionStore.mu for writing.
+func (s *sessionStore) dropLocked(id string) {
+	rec, ok := s.m[id]
+	if !ok {
+		return
+	}
+	delete(s.m, id)
+	if ids := s.byGroup[rec.ChooserGroupID]; ids != nil {
+		delete(ids, id)
+		if len(ids) == 0 {
+			delete(s.byGroup, rec.ChooserGroupID)
+		}
+	}
 }
 
 // gcLocked drops every session whose ExpiresAt has passed. Find, Touch,
@@ -48,7 +77,7 @@ func (s *sessionStore) Save(_ context.Context, sess *store.Session) error {
 func (s *sessionStore) gcLocked(now time.Time) {
 	for id, rec := range s.m {
 		if isExpiredAtStrict(rec.ExpiresAt, now) {
-			delete(s.m, id)
+			s.dropLocked(id)
 		}
 	}
 	s.savesSinceGC = 0
@@ -100,7 +129,7 @@ func (s *sessionStore) Delete(_ context.Context, id string) error {
 	// Reclaim the entry either way, but report an expired record as
 	// absent: the contract makes the answer turn on ExpiresAt, not on
 	// whether the sweep has reached this key yet.
-	delete(s.m, id)
+	s.dropLocked(id)
 	if isExpired(rec.ExpiresAt, s.clock) {
 		return store.ErrNotFound
 	}
@@ -111,10 +140,8 @@ func (s *sessionStore) ListByChooserGroup(_ context.Context, groupID string) ([]
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*store.Session, 0)
-	for _, rec := range s.m {
-		if rec.ChooserGroupID != groupID {
-			continue
-		}
+	for id := range s.byGroup[groupID] {
+		rec := s.m[id]
 		if isExpired(rec.ExpiresAt, s.clock) {
 			continue
 		}

@@ -73,7 +73,7 @@ func (s *parStore) find(ctx context.Context, uri string) (*store.PushedAuthReque
 		return nil, store.ErrNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, wrapErr("par.Find", err)
 	}
 	if !patterns.ConstantTimeKeyMatch(stored, uriDigest) {
 		return nil, store.ErrNotFound

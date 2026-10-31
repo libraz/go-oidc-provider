@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"time"
 )
 
@@ -411,6 +412,32 @@ type StaticClientReconciler interface {
 	ClientStore
 
 	ReconcileStaticClients(ctx context.Context, clients []*Client) error
+}
+
+// Clone returns a deep copy of c: every slice, byte buffer and pointer
+// field is duplicated, so mutating the copy never reaches c. A nil
+// receiver yields nil. Backends use it to isolate stored records from
+// caller-held values.
+func (c *Client) Clone() *Client {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.RedirectURIs = slices.Clone(c.RedirectURIs)
+	out.PostLogoutRedirectURIs = slices.Clone(c.PostLogoutRedirectURIs)
+	out.GrantTypes = slices.Clone(c.GrantTypes)
+	out.ResponseTypes = slices.Clone(c.ResponseTypes)
+	out.Scopes = slices.Clone(c.Scopes)
+	out.Resources = slices.Clone(c.Resources)
+	out.Contacts = slices.Clone(c.Contacts)
+	out.DefaultACRValues = slices.Clone(c.DefaultACRValues)
+	out.RequestURIs = slices.Clone(c.RequestURIs)
+	out.JWKs = slices.Clone(c.JWKs)
+	if c.DefaultMaxAge != nil {
+		v := *c.DefaultMaxAge
+		out.DefaultMaxAge = &v
+	}
+	return &out
 }
 
 // StaticClientEquivalent reports whether two static-client records carry the

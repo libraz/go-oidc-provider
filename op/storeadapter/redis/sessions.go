@@ -135,9 +135,8 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	if err != nil {
 		return err
 	}
-	if len(payload) > s.parent.maxValueBytes {
-		return fmt.Errorf("oidcredis: session payload %d bytes exceeds %d-byte cap",
-			len(payload), s.parent.maxValueBytes)
+	if err := s.parent.checkPayloadSize("session", payload); err != nil {
+		return err
 	}
 	ttl := sess.ExpiresAt.Sub(s.parent.clock.Now())
 	if ttl <= 0 {
@@ -258,9 +257,8 @@ func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, upda
 	if err != nil {
 		return fmt.Errorf("oidcredis: marshal session: %w", err)
 	}
-	if len(payload) > s.parent.maxValueBytes {
-		return fmt.Errorf("oidcredis: session payload %d bytes exceeds %d-byte cap",
-			len(payload), s.parent.maxValueBytes)
+	if err := s.parent.checkPayloadSize("session", payload); err != nil {
+		return err
 	}
 	ttl := expiresAt.Sub(s.parent.clock.Now())
 	if ttl <= 0 {

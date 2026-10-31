@@ -316,16 +316,5 @@ func (s *clientStore) exists(ctx context.Context, id string) error {
 }
 
 func (s *clientStore) Delete(ctx context.Context, id string) error {
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.clientDelete, id)
-	if err != nil {
-		return wrapErr("clients.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("clients.Delete.RowsAffected", err)
-	}
-	if n == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return execDeleteOne(ctx, s.runner(), "clients.Delete", s.parent.queries.clientDelete, id)
 }

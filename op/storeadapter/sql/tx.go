@@ -26,8 +26,7 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 	}
 	tx := &sqlTx{
 		store:              s,
-		tx:                 dbtx,
-		release:            release,
+		txLifecycle:        txLifecycle{tx: dbtx, release: release},
 		authCodes:          newAuthCodeStore(s, dbtx),
 		refreshes:          newRefreshStore(s, dbtx),
 		grants:             newGrantStore(s, dbtx),
@@ -78,9 +77,46 @@ func (s *Store) acquireTxGate(ctx context.Context) (func(), error) {
 // transaction read the same as statements outside one and carry the same
 // settled-transaction translation.
 type internalTx struct {
-	tx      *databasesql.Tx
+	txLifecycle
+}
+
+// txLifecycle is the settle-once state of a transaction: the driver
+// transaction, the gate slot to hand back, and whether either Commit or
+// Rollback already ran. It is shared by the public handle and the
+// internal one so the two cannot disagree on what a settled handle does.
+type txLifecycle struct {
+	tx *databasesql.Tx
+	// release hands the transaction slot back to the Store. It is
+	// idempotent, so the deferred-Rollback cleanup pattern cannot
+	// release a slot a Commit already gave up.
 	release func()
 	done    bool
+}
+
+// commit finalises the transaction and returns the gate slot. A second
+// settle reports [errTxClosed]; the driver error is returned undecorated.
+func (l *txLifecycle) commit() error {
+	if l.done {
+		return errTxClosed
+	}
+	l.done = true
+	defer l.release()
+	return l.tx.Commit()
+}
+
+// rollback discards every change. It is a no-op after either settle, so
+// a deferred call is safe, and it tolerates the driver having already
+// settled the transaction.
+func (l *txLifecycle) rollback() error {
+	if l.done {
+		return nil
+	}
+	l.done = true
+	defer l.release()
+	if err := l.tx.Rollback(); err != nil && !errors.Is(err, databasesql.ErrTxDone) {
+		return err
+	}
+	return nil
 }
 
 // beginInternalTx takes the transaction gate and then opens the
@@ -98,34 +134,17 @@ func (s *Store) beginInternalTx(ctx context.Context, label string) (*internalTx,
 		release()
 		return nil, wrapErr(label, err)
 	}
-	return &internalTx{tx: dbtx, release: release}, nil
+	return &internalTx{txLifecycle{tx: dbtx, release: release}}, nil
 }
 
 // Commit finalises the transaction and returns the gate slot. The
 // driver error is returned undecorated; the substore labels it.
-func (t *internalTx) Commit() error {
-	if t.done {
-		return errTxClosed
-	}
-	t.done = true
-	defer t.release()
-	return t.tx.Commit()
-}
+func (t *internalTx) Commit() error { return t.commit() }
 
 // Rollback discards every change. It is idempotent and safe after
 // Commit, so a deferred Rollback can be used as a cleanup pattern
 // without releasing a slot Commit already gave up.
-func (t *internalTx) Rollback() error {
-	if t.done {
-		return nil
-	}
-	t.done = true
-	defer t.release()
-	if err := t.tx.Rollback(); err != nil && !errors.Is(err, databasesql.ErrTxDone) {
-		return err
-	}
-	return nil
-}
+func (t *internalTx) Rollback() error { return t.rollback() }
 
 func (t *internalTx) ExecContext(ctx context.Context, query string, args ...any) (databasesql.Result, error) {
 	return txRunner{tx: t.tx}.ExecContext(ctx, query, args...)
@@ -146,8 +165,8 @@ var _ runner = (*internalTx)(nil)
 // the transaction from a single goroutine and call Commit or Rollback
 // before the handle is dropped.
 type sqlTx struct {
+	txLifecycle
 	store *Store
-	tx    *databasesql.Tx
 
 	authCodes          *authCodeStore
 	refreshes          *refreshStore
@@ -156,13 +175,6 @@ type sqlTx struct {
 	accessTokens       *accessTokenStore
 	opaqueAccessTokens *opaqueAccessTokenStore
 	grantRevocations   *grantRevocationStore
-
-	// release hands the transaction slot back to the Store. It is
-	// idempotent, so the deferred-Rollback cleanup pattern cannot
-	// release a slot a Commit already gave up.
-	release func()
-
-	done bool
 }
 
 // AuthorizationCodes returns the tx-bound [store.AuthorizationCodeStore].
@@ -199,27 +211,18 @@ func (t *sqlTx) GrantRevocations() store.GrantRevocationStore {
 // MUST NOT be used; further calls — reads, writes, and a second Commit
 // alike — return [errTxClosed].
 func (t *sqlTx) Commit() error {
-	if t.done {
-		return errTxClosed
+	err := t.commit()
+	if err == nil || errors.Is(err, errTxClosed) {
+		return err
 	}
-	t.done = true
-	defer t.release()
-	if err := t.tx.Commit(); err != nil {
-		return fmt.Errorf("oidcsql: commit transaction: %w", err)
-	}
-	return nil
+	return fmt.Errorf("oidcsql: commit transaction: %w", err)
 }
 
 // Rollback discards every change. Rollback is safe to call after
 // Commit; it is a no-op in that case so a deferred Rollback can be
 // used as a cleanup pattern.
 func (t *sqlTx) Rollback() error {
-	if t.done {
-		return nil
-	}
-	t.done = true
-	defer t.release()
-	if err := t.tx.Rollback(); err != nil && !errors.Is(err, databasesql.ErrTxDone) {
+	if err := t.rollback(); err != nil {
 		return fmt.Errorf("oidcsql: rollback transaction: %w", err)
 	}
 	return nil

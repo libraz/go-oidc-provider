@@ -20,12 +20,44 @@ import (
 // the configured prefix to keep the keyspace disjoint from other
 // stores sharing the Redis instance.
 type interactionStore struct {
-	parent *Store
+	parent       *Store
+	casScript    *redis.Script
+	deleteScript *redis.Script
 }
 
 func newInteractionStore(parent *Store) *interactionStore {
-	return &interactionStore{parent: parent}
+	return &interactionStore{
+		parent:       parent,
+		casScript:    redis.NewScript(compareAndSwapInteractionLua),
+		deleteScript: redis.NewScript(deleteInteractionIfUnchangedLua),
+	}
 }
+
+// compareAndSwapInteractionLua replaces the stored interaction when its
+// id and raw state still match (ARGV[1], ARGV[2]). It returns -1 for an
+// absent key, 0 for a mismatch and 1 on success.
+const compareAndSwapInteractionLua = `
+local current = redis.call("GET", KEYS[1])
+if not current then return -1 end
+local decoded = cjson.decode(current)
+local raw = decoded["raw"] or ""
+if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
+redis.call("SET", KEYS[1], ARGV[3], "PX", ARGV[4])
+return 1
+`
+
+// deleteInteractionIfUnchangedLua deletes the stored interaction when
+// its id and raw state still match; the return codes mirror
+// compareAndSwapInteractionLua.
+const deleteInteractionIfUnchangedLua = `
+local current = redis.call("GET", KEYS[1])
+if not current then return -1 end
+local decoded = cjson.decode(current)
+local raw = decoded["raw"] or ""
+if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
+redis.call("DEL", KEYS[1])
+return 1
+`
 
 // interactionRecord is the on-the-wire shape Save / Find round-trip.
 // The exported field tags are short to keep the serialised payload
@@ -53,21 +85,12 @@ func (s *interactionStore) Save(ctx context.Context, i *store.Interaction) error
 	if i == nil {
 		return errors.New("oidcredis: nil interaction")
 	}
-	payload, err := json.Marshal(interactionRecord{
-		ID:        i.ID,
-		ClientID:  i.ClientID,
-		Step:      i.Step,
-		RawState:  i.RawState,
-		ExpiresAt: i.ExpiresAt,
-		CreatedAt: i.CreatedAt,
-		UpdatedAt: i.UpdatedAt,
-	})
+	payload, err := marshalInteraction(i)
 	if err != nil {
-		return fmt.Errorf("oidcredis: marshal interaction: %w", err)
+		return err
 	}
-	if len(payload) > s.parent.maxValueBytes {
-		return fmt.Errorf("oidcredis: interaction payload %d bytes exceeds %d-byte cap",
-			len(payload), s.parent.maxValueBytes)
+	if err := s.parent.checkPayloadSize("interaction", payload); err != nil {
+		return err
 	}
 	ttl := i.ExpiresAt.Sub(s.parent.clock.Now())
 	if ttl <= 0 {
@@ -102,27 +125,17 @@ func (s *interactionStore) CompareAndSwap(
 	if err != nil {
 		return err
 	}
-	if len(replacement) > s.parent.maxValueBytes {
-		return fmt.Errorf("oidcredis: interaction payload %d bytes exceeds %d-byte cap",
-			len(replacement), s.parent.maxValueBytes)
+	if err := s.parent.checkPayloadSize("interaction", replacement); err != nil {
+		return err
 	}
 	ttl := next.ExpiresAt.Sub(s.parent.clock.Now())
 	if ttl <= 0 {
 		return store.ErrNotFound
 	}
-	const compareAndSwapInteraction = `
-local current = redis.call("GET", KEYS[1])
-if not current then return -1 end
-local decoded = cjson.decode(current)
-local raw = decoded["raw"] or ""
-if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
-redis.call("SET", KEYS[1], ARGV[3], "PX", ARGV[4])
-return 1
-`
 	ttlMilliseconds := ceilMillis(ttl)
-	result, err := s.parent.client.Eval(
+	result, err := s.casScript.Run(
 		ctx,
-		compareAndSwapInteraction,
+		s.parent.client,
 		[]string{s.interactionKey(previous.ID)},
 		previous.ID,
 		base64.StdEncoding.EncodeToString(previous.RawState),
@@ -152,18 +165,9 @@ func (s *interactionStore) DeleteIfUnchanged(
 	if patterns.IsExpiredInclusive(previous.ExpiresAt, s.parent.clock.Now()) {
 		return store.ErrNotFound
 	}
-	const deleteInteractionIfUnchanged = `
-local current = redis.call("GET", KEYS[1])
-if not current then return -1 end
-local decoded = cjson.decode(current)
-local raw = decoded["raw"] or ""
-if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
-redis.call("DEL", KEYS[1])
-return 1
-`
-	result, err := s.parent.client.Eval(
+	result, err := s.deleteScript.Run(
 		ctx,
-		deleteInteractionIfUnchanged,
+		s.parent.client,
 		[]string{s.interactionKey(previous.ID)},
 		previous.ID,
 		base64.StdEncoding.EncodeToString(previous.RawState),

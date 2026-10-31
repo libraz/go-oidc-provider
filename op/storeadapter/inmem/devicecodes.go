@@ -178,19 +178,24 @@ func (s *deviceCodeStore) FindByUserCode(_ context.Context, userCode string) (*s
 }
 
 func (s *deviceCodeStore) Approve(_ context.Context, deviceCode, subject string, authTime time.Time) error {
-	return s.transition(deviceCode, func(rec *store.DeviceCode) error {
-		if rec.Status != store.DeviceCodeStatusPending {
-			return store.ErrConflict
-		}
-		rec.Status = store.DeviceCodeStatusApproved
-		rec.Subject = subject
-		rec.AuthTime = authTime
-		return nil
-	})
+	return s.transition(deviceCode, approveMutation(subject, authTime))
 }
 
 func (s *deviceCodeStore) ApproveByUserCode(_ context.Context, userCode, subject string, authTime time.Time) error {
-	return s.transitionByUserCode(userCode, func(rec *store.DeviceCode) error {
+	return s.transitionByUserCode(userCode, approveMutation(subject, authTime))
+}
+
+func (s *deviceCodeStore) Deny(_ context.Context, deviceCode, reason string) error {
+	return s.transition(deviceCode, denyMutation(reason))
+}
+
+func (s *deviceCodeStore) DenyByUserCode(_ context.Context, userCode, reason string) error {
+	return s.transitionByUserCode(userCode, denyMutation(reason))
+}
+
+// approveMutation moves a Pending record to Approved for subject.
+func approveMutation(subject string, authTime time.Time) func(*store.DeviceCode) error {
+	return func(rec *store.DeviceCode) error {
 		if rec.Status != store.DeviceCodeStatusPending {
 			return store.ErrConflict
 		}
@@ -198,29 +203,19 @@ func (s *deviceCodeStore) ApproveByUserCode(_ context.Context, userCode, subject
 		rec.Subject = subject
 		rec.AuthTime = authTime
 		return nil
-	})
+	}
 }
 
-func (s *deviceCodeStore) Deny(_ context.Context, deviceCode, reason string) error {
-	return s.transition(deviceCode, func(rec *store.DeviceCode) error {
+// denyMutation moves a Pending record to Denied with reason.
+func denyMutation(reason string) func(*store.DeviceCode) error {
+	return func(rec *store.DeviceCode) error {
 		if rec.Status != store.DeviceCodeStatusPending {
 			return store.ErrConflict
 		}
 		rec.Status = store.DeviceCodeStatusDenied
 		rec.DenyReason = reason
 		return nil
-	})
-}
-
-func (s *deviceCodeStore) DenyByUserCode(_ context.Context, userCode, reason string) error {
-	return s.transitionByUserCode(userCode, func(rec *store.DeviceCode) error {
-		if rec.Status != store.DeviceCodeStatusPending {
-			return store.ErrConflict
-		}
-		rec.Status = store.DeviceCodeStatusDenied
-		rec.DenyReason = reason
-		return nil
-	})
+	}
 }
 
 func (s *deviceCodeStore) Revoke(_ context.Context, deviceCode, reason string) error {
@@ -257,56 +252,24 @@ func (s *deviceCodeStore) RecordPoll(_ context.Context, deviceCode string, when 
 }
 
 func (s *deviceCodeStore) IncrementUserCodeStrike(_ context.Context, deviceCode string) (uint8, error) {
-	var strikes uint8
-	err := s.transition(deviceCode, func(rec *store.DeviceCode) error {
-		if rec.UserCodeStrikes == 255 {
-			// Saturate rather than overflow; the brute-force gate
-			// will already have triggered Deny well before this.
-			strikes = rec.UserCodeStrikes
-			return nil
-		}
-		rec.UserCodeStrikes++
-		strikes = rec.UserCodeStrikes
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return strikes, nil
+	return incrementCounter(
+		func(mutate func(*store.DeviceCode) error) error { return s.transition(deviceCode, mutate) },
+		func(rec *store.DeviceCode) *uint8 { return &rec.UserCodeStrikes },
+	)
 }
 
 func (s *deviceCodeStore) IncrementUserCodeStrikeByUserCode(_ context.Context, userCode string) (uint8, error) {
-	var strikes uint8
-	err := s.transitionByUserCode(userCode, func(rec *store.DeviceCode) error {
-		if rec.UserCodeStrikes == 255 {
-			strikes = rec.UserCodeStrikes
-			return nil
-		}
-		rec.UserCodeStrikes++
-		strikes = rec.UserCodeStrikes
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return strikes, nil
+	return incrementCounter(
+		func(mutate func(*store.DeviceCode) error) error { return s.transitionByUserCode(userCode, mutate) },
+		func(rec *store.DeviceCode) *uint8 { return &rec.UserCodeStrikes },
+	)
 }
 
 func (s *deviceCodeStore) IncrementPollViolation(_ context.Context, deviceCode string) (uint8, error) {
-	var violations uint8
-	err := s.transition(deviceCode, func(rec *store.DeviceCode) error {
-		if rec.PollViolations == 255 {
-			violations = rec.PollViolations
-			return nil
-		}
-		rec.PollViolations++
-		violations = rec.PollViolations
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return violations, nil
+	return incrementCounter(
+		func(mutate func(*store.DeviceCode) error) error { return s.transition(deviceCode, mutate) },
+		func(rec *store.DeviceCode) *uint8 { return &rec.PollViolations },
+	)
 }
 
 func (s *deviceCodeStore) Consume(_ context.Context, deviceCode string) (*store.DeviceCode, error) {

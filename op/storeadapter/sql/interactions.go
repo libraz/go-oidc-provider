@@ -155,21 +155,8 @@ func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interact
 // interaction is absent on every path, and the row is reclaimed
 // regardless.
 func (s *interactionStore) Delete(ctx context.Context, id string) error {
-	_, findErr := s.Find(ctx, id)
-	absent := errors.Is(findErr, store.ErrNotFound)
-	if findErr != nil && !absent {
-		return findErr
-	}
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.interactionDelete, id)
-	if err != nil {
-		return wrapErr("interactions.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("interactions.Delete.RowsAffected", err)
-	}
-	if n == 0 || absent {
-		return store.ErrNotFound
-	}
-	return nil
+	return deleteLive(ctx, s.runner(), "interactions.Delete", s.parent.queries.interactionDelete, id, func() error {
+		_, err := s.Find(ctx, id)
+		return err
+	})
 }

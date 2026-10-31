@@ -2,13 +2,13 @@ package oidcsql
 
 import (
 	"context"
-	"crypto/sha256"
 	databasesql "database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // opaqueAccessTokenStore is the SQL implementation of
@@ -30,7 +30,7 @@ func (s *opaqueAccessTokenStore) runner() runner { return pickRunner(s.parent, s
 // string lets the binary PK column store the 32-byte value verbatim
 // across MySQL VARBINARY, Postgres BYTEA, and SQLite BLOB.
 func (s *opaqueAccessTokenStore) digest(rawID string) []byte {
-	sum := sha256.Sum256([]byte(rawID))
+	sum := patterns.DigestBytes(rawID)
 	return sum[:]
 }
 

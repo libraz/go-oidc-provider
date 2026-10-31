@@ -54,16 +54,5 @@ func (s *ratStore) GetByClientID(ctx context.Context, clientID string) (*store.R
 }
 
 func (s *ratStore) Delete(ctx context.Context, clientID string) error {
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.ratDelete, clientID)
-	if err != nil {
-		return wrapErr("rats.Delete", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return wrapErr("rats.Delete.RowsAffected", err)
-	}
-	if n == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return execDeleteOne(ctx, s.runner(), "rats.Delete", s.parent.queries.ratDelete, clientID)
 }

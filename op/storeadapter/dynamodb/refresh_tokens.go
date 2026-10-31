@@ -97,21 +97,7 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 // set the cascade reads or refused by the guard.
 func (s *refreshStore) saveRotation(ctx context.Context, t *store.RefreshToken, entry item) error {
 	_, err := s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{Put: &types.Put{
-				TableName:           aws.String(s.parent.names.refreshes),
-				Item:                entry,
-				ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
-			}},
-			{Update: &types.Update{
-				TableName:                 aws.String(s.parent.names.refreshes),
-				Key:                       key(digestKey(*t.ParentID)),
-				UpdateExpression:          aws.String("ADD #children :child"),
-				ConditionExpression:       aws.String(parentAliveCondition),
-				ExpressionAttributeNames:  parentAliveNames(),
-				ExpressionAttributeValues: parentAliveValues(digestKey(t.ID)),
-			}},
-		},
+		TransactItems: s.rotationWrites(entry, digestKey(*t.ParentID), digestKey(t.ID), nil),
 	})
 	if err == nil {
 		return nil
@@ -136,6 +122,39 @@ func (s *refreshStore) saveRotation(ctx context.Context, t *store.RefreshToken, 
 		return store.ErrAlreadyConsumed
 	}
 	return store.ErrConflict
+}
+
+// rotationWrites builds the pair of writes a rotation commits together:
+// the successor's insert and the parent's children-set update, guarded by
+// [parentAliveCondition]. A non-nil sealed response is attached to the
+// parent in the same update; that is the only way the two callers differ.
+// The order is fixed (successor, then parent) because
+// [refreshStore.rotationRejected] reads the cancellation reasons by
+// position.
+func (s *refreshStore) rotationWrites(entry item, parentDigest, childDigest string, sealed []byte) []types.TransactWriteItem {
+	names := parentAliveNames()
+	values := parentAliveValues(childDigest)
+	expr := "ADD #children :child"
+	if sealed != nil {
+		names["#retry"] = attrRetryResponse
+		values[":sealed"] = avB(sealed)
+		expr = "SET #retry = :sealed " + expr
+	}
+	return []types.TransactWriteItem{
+		{Put: &types.Put{
+			TableName:           aws.String(s.parent.names.refreshes),
+			Item:                entry,
+			ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+		}},
+		{Update: &types.Update{
+			TableName:                 aws.String(s.parent.names.refreshes),
+			Key:                       key(parentDigest),
+			UpdateExpression:          aws.String(expr),
+			ConditionExpression:       aws.String(parentAliveCondition),
+			ExpressionAttributeNames:  names,
+			ExpressionAttributeValues: values,
+		}},
+	}
 }
 
 // parentAliveCondition admits a write to a rotation's parent only while
@@ -372,26 +391,8 @@ func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.Refre
 	if err != nil {
 		return err
 	}
-	retryNames := parentAliveNames()
-	retryNames["#retry"] = attrRetryResponse
-	retryValues := parentAliveValues(digestKey(t.ID))
-	retryValues[":sealed"] = avB(sealed)
 	_, err = s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{Put: &types.Put{
-				TableName:           aws.String(s.parent.names.refreshes),
-				Item:                entry,
-				ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
-			}},
-			{Update: &types.Update{
-				TableName:                 aws.String(s.parent.names.refreshes),
-				Key:                       key(parentDigest),
-				UpdateExpression:          aws.String("SET #retry = :sealed ADD #children :child"),
-				ConditionExpression:       aws.String(parentAliveCondition),
-				ExpressionAttributeNames:  retryNames,
-				ExpressionAttributeValues: retryValues,
-			}},
-		},
+		TransactItems: s.rotationWrites(entry, parentDigest, digestKey(t.ID), sealed),
 	})
 	if err != nil {
 		if isTransactionCanceledByCondition(err) {
@@ -560,20 +561,7 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 		return rec, nil
 	}
 
-	_, err = s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:           aws.String(s.parent.names.refreshes),
-		Key:                 key(digest),
-		UpdateExpression:    aws.String("SET #consumed = :now"),
-		ConditionExpression: aws.String("attribute_exists(#pk) AND #consumed = :zero"),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":       attrPK,
-			"#consumed": attrConsumedAt,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":now":  avTime(now),
-			":zero": avN(0),
-		},
-	})
+	_, err = s.parent.api.UpdateItem(ctx, s.stampConsumedInput(digest, now))
 	if err != nil {
 		if isConditionalCheckFailed(err) {
 			return rejectedConsume(ctx, func(ctx context.Context) (*store.RefreshToken, error) {
@@ -774,11 +762,11 @@ func (s *refreshStore) revokeOneStaged(ctx context.Context, pk, grantID string, 
 	return children, nil
 }
 
-// stampConsumedIfUnset sets consumed_at only when it is still zero, so
-// a revocation does not overwrite the instant a legitimate rotation
-// consumed the token.
-func (s *refreshStore) stampConsumedIfUnset(ctx context.Context, pk string, now time.Time) error {
-	_, err := s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+// stampConsumedInput builds the update that sets consumed_at on pk only
+// while it is still zero, so neither a rotation nor a revocation
+// overwrites the instant an earlier one recorded.
+func (s *refreshStore) stampConsumedInput(pk string, now time.Time) *dynamodb.UpdateItemInput {
+	return &dynamodb.UpdateItemInput{
 		TableName:           aws.String(s.parent.names.refreshes),
 		Key:                 key(pk),
 		UpdateExpression:    aws.String("SET #consumed = :now"),
@@ -791,7 +779,14 @@ func (s *refreshStore) stampConsumedIfUnset(ctx context.Context, pk string, now 
 			":now":  avTime(now),
 			":zero": avN(0),
 		},
-	})
+	}
+}
+
+// stampConsumedIfUnset sets consumed_at only when it is still zero, so
+// a revocation does not overwrite the instant a legitimate rotation
+// consumed the token.
+func (s *refreshStore) stampConsumedIfUnset(ctx context.Context, pk string, now time.Time) error {
+	_, err := s.parent.api.UpdateItem(ctx, s.stampConsumedInput(pk, now))
 	if err != nil && !isConditionalCheckFailed(err) {
 		return wrapErr("refreshes.revoke.consume", err)
 	}

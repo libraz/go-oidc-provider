@@ -153,22 +153,10 @@ func (s *cibaRequestStore) RecordPoll(_ context.Context, authReqID string, when 
 }
 
 func (s *cibaRequestStore) IncrementPollViolation(_ context.Context, authReqID string) (uint8, error) {
-	var violations uint8
-	err := s.transition(authReqID, func(rec *store.CIBARequest) error {
-		if rec.PollViolations == 255 {
-			// Saturate rather than overflow; the poll-abuse gate will
-			// already have triggered Deny well before this.
-			violations = rec.PollViolations
-			return nil
-		}
-		rec.PollViolations++
-		violations = rec.PollViolations
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return violations, nil
+	return incrementCounter(
+		func(mutate func(*store.CIBARequest) error) error { return s.transition(authReqID, mutate) },
+		func(rec *store.CIBARequest) *uint8 { return &rec.PollViolations },
+	)
 }
 
 func (s *cibaRequestStore) Consume(_ context.Context, authReqID string) (*store.CIBARequest, error) {

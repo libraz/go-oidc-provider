@@ -334,12 +334,20 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 	clientUpdateSets := updateSetList(clientColumns, "id")
 
 	const deviceCodeCols = "id, client_id, user_code, subject, scope, resource, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, user_code_strikes, poll_violations, last_polled_at, expires_at, issued_at"
+	// liveGuard keeps a row whose expires_at has not passed; zero opts out
+	// of expiry. sweepGuard is its complement and selects the rows a GC
+	// pass may delete, so the two never overlap.
+	const liveGuard = "(expires_at = 0 OR expires_at >= ?)"
+	const sweepGuard = "expires_at > 0 AND expires_at < ?"
 	// notExpiredGuard tails every device-code and CIBA state-transition
 	// query so an expired-but-not-yet-collected row behaves identically
 	// to a missing one (ErrNotFound), matching the strict-less-than
 	// expiry semantic the inmem reference and contract harness pin. A
 	// zero expires_at opts out of expiry.
-	const notExpiredGuard = " AND (expires_at = 0 OR expires_at >= ?)"
+	const notExpiredGuard = " AND " + liveGuard
+	const authCodeCols = "id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, auth_time, acr, amr, authorization_details, claims, authorization_recorded, expires_at, consumed_at, created_at"
+	const refreshFindCols = "id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked"
+	const opaqueAccessTokenCols = "token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked"
 	const cibaCols = "id, client_id, subject, scope, resource, acr_values, acr, binding_message, user_code, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, poll_violations, last_polled_at, expires_at, issued_at"
 
 	q := queries{
@@ -366,18 +374,18 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// authorization codes
 		authCodeSave: d.rebind(
 			"INSERT INTO " + n.authCodes +
-				" (id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, auth_time, acr, amr, authorization_details, claims, authorization_recorded, expires_at, consumed_at, created_at)" +
+				" (" + authCodeCols + ")" +
 				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		),
 		authCodeFind: d.rebind(
-			"SELECT id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, auth_time, acr, amr, authorization_details, claims, authorization_recorded, expires_at, consumed_at, created_at" +
+			"SELECT " + authCodeCols +
 				" FROM " + n.authCodes + " WHERE id = ?",
 		),
 		authCodeConsume: d.rebind(
 			"UPDATE " + n.authCodes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
 		),
 		authCodeGC: d.rebind(
-			"DELETE FROM " + n.authCodes + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.authCodes + " WHERE " + sweepGuard,
 		),
 
 		// refresh tokens
@@ -387,11 +395,11 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		),
 		refreshFind: d.rebind(
-			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
+			"SELECT " + refreshFindCols +
 				" FROM " + n.refreshes + " WHERE id IN (?, ?)",
 		),
 		refreshFindForUpdate: d.rebind(
-			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
+			"SELECT " + refreshFindCols +
 				" FROM " + n.refreshes + " WHERE id IN (?, ?)" + d.forUpdate(),
 		),
 		// refreshParentRevoked re-reads a rotation parent's revoked flag
@@ -404,7 +412,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		),
 		refreshConsume: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL" +
-				" AND (expires_at = 0 OR expires_at >= ?)",
+				" AND " + liveGuard,
 		),
 		refreshRevokeChainUpdate: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE id = ?",
@@ -437,7 +445,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		refreshRetryFind: d.rebind(
 			"SELECT retry_response FROM " + n.refreshes +
 				" WHERE id = ? AND retry_response IS NOT NULL" +
-				" AND (expires_at = 0 OR expires_at >= ?)",
+				" AND " + liveGuard,
 		),
 		// refreshRetryGC drops the sealed responses the read above has
 		// stopped serving. It clears a column instead of deleting the
@@ -447,7 +455,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// expires.
 		refreshRetryGC: d.rebind(
 			"UPDATE " + n.refreshes + " SET retry_response = NULL" +
-				" WHERE retry_response IS NOT NULL AND expires_at > 0 AND expires_at < ?",
+				" WHERE retry_response IS NOT NULL AND " + sweepGuard,
 		),
 		// refreshGC deletes expired rotation records, but only from
 		// chains that are wholly dead. A row's own expiry is not
@@ -467,7 +475,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// on the same grant lives, which over-retains and never
 		// under-retains.
 		refreshGC: d.rebind(
-			"DELETE FROM " + n.refreshes + " WHERE expires_at > 0 AND expires_at < ?" +
+			"DELETE FROM " + n.refreshes + " WHERE " + sweepGuard +
 				" AND grant_id NOT IN (SELECT grant_id FROM (SELECT grant_id FROM " + n.refreshes +
 				" WHERE expires_at = 0 OR expires_at >= ?) AS live)",
 		),
@@ -495,7 +503,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0",
 		),
 		accessTokenGC: d.rebind(
-			"DELETE FROM " + n.accessTokens + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.accessTokens + " WHERE " + sweepGuard,
 		),
 
 		// opaque access tokens. The PK is the SHA-256 digest of the raw
@@ -503,11 +511,11 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// touches the wire to the database.
 		opaqueAccessTokenSave: d.rebind(
 			"INSERT INTO " + n.opaqueAccessTokens +
-				" (token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked)" +
+				" (" + opaqueAccessTokenCols + ")" +
 				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		),
 		opaqueAccessTokenFind: d.rebind(
-			"SELECT token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked" +
+			"SELECT " + opaqueAccessTokenCols +
 				" FROM " + n.opaqueAccessTokens + " WHERE token_hash = ?",
 		),
 		opaqueAccessTokenRevokeByID: d.rebind(
@@ -523,7 +531,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0",
 		),
 		opaqueAccessTokenGC: d.rebind(
-			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.opaqueAccessTokens + " WHERE " + sweepGuard,
 		),
 
 		// grant revocation. Two physical tables share one substore:
@@ -552,7 +560,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT revoked_at, access_revoked_at FROM " + n.grantTombstones + " WHERE grant_id = ?",
 		),
 		grantTombstoneGC: d.rebind(
-			"DELETE FROM " + n.grantTombstones + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.grantTombstones + " WHERE " + sweepGuard,
 		),
 		revokedJTIInsert: d.rebind(
 			"INSERT INTO " + n.revokedJTIs +
@@ -564,7 +572,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT expires_at FROM " + n.revokedJTIs + " WHERE jti = ?",
 		),
 		revokedJTIGC: d.rebind(
-			"DELETE FROM " + n.revokedJTIs + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.revokedJTIs + " WHERE " + sweepGuard,
 		),
 
 		// grants (upsert keyed on id)
@@ -647,7 +655,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" FROM " + n.sessions + " WHERE chooser_group_id = ?",
 		),
 		sessionGC: d.rebind(
-			"DELETE FROM " + n.sessions + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.sessions + " WHERE " + sweepGuard,
 		),
 
 		// PAR
@@ -664,7 +672,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.pars + " SET consumed_at = ? WHERE uri = ? AND consumed_at IS NULL",
 		),
 		parGC: d.rebind(
-			"DELETE FROM " + n.pars + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.pars + " WHERE " + sweepGuard,
 		),
 
 		// interactions (upsert keyed on id)
@@ -686,17 +694,17 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		interactionCompareAndSwap: d.rebind(
 			"UPDATE " + n.interactions +
 				" SET client_id = ?, step = ?, raw_state = ?, expires_at = ?, created_at = ?, updated_at = ?" +
-				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)",
+				" WHERE id = ? AND raw_state = ? AND " + liveGuard,
 		),
 		interactionDeleteIfUnchanged: d.rebind(
 			"DELETE FROM " + n.interactions +
-				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)",
+				" WHERE id = ? AND raw_state = ? AND " + liveGuard,
 		),
 		interactionDelete: d.rebind(
 			"DELETE FROM " + n.interactions + " WHERE id = ?",
 		),
 		interactionGC: d.rebind(
-			"DELETE FROM " + n.interactions + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.interactions + " WHERE " + sweepGuard,
 		),
 
 		// consumed JTIs
@@ -710,7 +718,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT expires_at FROM " + n.jtis + " WHERE jti = ?",
 		),
 		jtiGC: d.rebind(
-			"DELETE FROM " + n.jtis + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.jtis + " WHERE " + sweepGuard,
 		),
 
 		// users
@@ -851,7 +859,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT poll_violations FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard,
 		),
 		deviceCodeGC: d.rebind(
-			"DELETE FROM " + n.deviceCodes + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.deviceCodes + " WHERE " + sweepGuard,
 		),
 
 		// CIBA requests (OpenID Connect CIBA Core 1.0). The id column
@@ -891,7 +899,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT poll_violations FROM " + n.cibaRequests + " WHERE id = ?" + notExpiredGuard,
 		),
 		cibaGC: d.rebind(
-			"DELETE FROM " + n.cibaRequests + " WHERE expires_at > 0 AND expires_at < ?",
+			"DELETE FROM " + n.cibaRequests + " WHERE " + sweepGuard,
 		),
 
 		// TOTP enrolments (RFC 6238)
@@ -1028,7 +1036,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" SET row_version = ?, " + assignPlaceholders(emailOTPValueColumns) +
 				" WHERE subject = ?" +
 				" AND ((retain_until > 0 AND retain_until < ?)" +
-				" OR (retain_until = 0 AND expires_at > 0 AND expires_at < ?))",
+				" OR (retain_until = 0 AND " + sweepGuard + "))",
 		),
 		emailOTPCompareAndSwap: d.rebind(
 			"UPDATE " + n.emailOTPs +
@@ -1042,7 +1050,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.emailOTPs +
 				" SET " + assignPlaceholders(emailOTPValueColumns) + ", row_version = ?" +
 				" WHERE subject = ? AND code_salt = ? AND code_hash = ? AND consumed_at = 0" +
-				" AND row_version = ? AND (expires_at = 0 OR expires_at >= ?)",
+				" AND row_version = ? AND " + liveGuard,
 		),
 		emailOTPDelete: d.rebind(
 			"DELETE FROM " + n.emailOTPs + " WHERE subject = ?",
