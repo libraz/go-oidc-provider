@@ -1,4 +1,4 @@
-package refreshchain
+package revocation
 
 import (
 	"context"

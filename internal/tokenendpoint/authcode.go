@@ -11,9 +11,9 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/internal/userclaims"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -295,7 +295,7 @@ func revokeChainForCode(ctx context.Context, deps Deps, code, replayGrantID stri
 	// RevocationStrategyJTIRegistry the AT also passes through Register
 	// which is a fresh row, leaving the next refresh attempt blocked
 	// once the RT half of the cascade lands.
-	out := grantTeardown(deps, teardownReasonCodeReplay).Run(ctx, teardown.WholeGrant(grantID))
+	out := grantTeardown(deps, teardownReasonCodeReplay).Run(ctx, revocation.WholeGrant(grantID))
 	reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonCodeReplay, grantID)
 }
 
@@ -410,7 +410,7 @@ func issueAuthCodeResponse(
 		// token this exchange had already minted — and, for the opaque
 		// format, persisted — before the refusal fired.
 		out := grantTeardown(deps, teardownReasonGrantTombstoned).
-			Run(ctx, teardown.WholeGrant(exchanged.GrantID))
+			Run(ctx, revocation.WholeGrant(exchanged.GrantID))
 		reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonGrantTombstoned, exchanged.GrantID)
 		return
 	}
@@ -444,7 +444,7 @@ func issueAuthCodeResponse(
 // RevokeByID is idempotent when no row matches, so both collapse to a no-op.
 func revokeOrphanedOpaqueAccessToken(ctx context.Context, deps Deps, grantID, accessToken string) {
 	out := grantTeardown(deps, teardownReasonOrphanedMint).
-		Run(ctx, teardown.IssuedCredentials(accessToken, ""))
+		Run(ctx, revocation.IssuedCredentials(accessToken, ""))
 	reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonOrphanedMint, grantID)
 }
 

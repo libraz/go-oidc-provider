@@ -6,7 +6,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -151,7 +151,7 @@ func revokePriorOpaqueAT(ctx context.Context, deps Deps, exchanged *refresh.Exch
 		return nil
 	}
 	return grantTeardown(deps, teardownReasonRotation).
-		Run(ctx, teardown.OpaqueAccessTokensOfChain(exchanged.GrantID, exchanged.ChainID)).Err()
+		Run(ctx, revocation.OpaqueAccessTokensOfChain(exchanged.GrantID, exchanged.ChainID)).Err()
 }
 
 // refreshMintPinnedJWT reports whether a chain's access tokens are minted

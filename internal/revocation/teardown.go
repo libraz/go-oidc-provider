@@ -1,5 +1,6 @@
-// Package teardown owns the retirement of credentials the OP issued
-// under a grant.
+// Package revocation owns the retirement of credentials the OP issued
+// under a grant, and the checks that tell a verifier whether one has been
+// retired.
 //
 // Every endpoint that has to make a credential stop working — the token
 // endpoint's replay cascades and its post-mint cleanups, /revoke's
@@ -18,12 +19,16 @@
 //     opaque access token is a store row whatever the JWT strategy
 //     says — cannot be forgotten at one site and applied at another.
 //
-// The refresh chain walk itself is NOT here: retiring a replayed
-// rotation chain needs the parent-pointer walk and the audit vocabulary
-// that live on the refresh exchanger. A caller that retires a replayed
-// chain runs that first, then hands the resolved grant to
-// [Revoker.Run] for the access-token classes.
-package teardown
+// Refresh rotation chains are retired by [Retire] and [RetireRecord],
+// which walk the parent pointers ([FindRoot]) and fall back to the grant;
+// the refresh exchanger keeps only the audit vocabulary for a replayed
+// chain. Its caller then hands the resolved grant to [Revoker.Run] for the
+// access-token classes.
+//
+// The read side shares the same strategy dispatch: [JWTAccessTokenRevoked]
+// is what /introspect, /userinfo and token exchange consult before
+// accepting a JWT access token.
+package revocation
 
 import (
 	"context"
@@ -31,7 +36,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -295,7 +299,7 @@ func (r Revoker) runGrant(ctx context.Context, s Scope) Outcome {
 	}
 	var out Outcome
 	if s.classes&classAccessTokens != 0 {
-		if err := endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+		if err := RevokeJWTAccessTokensByGrant(ctx, JWTGrantCascadeOpts{
 			AccessTokens:       r.AccessTokens,
 			GrantRevocations:   r.GrantRevocations,
 			RevocationStrategy: r.Strategy,

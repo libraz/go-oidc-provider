@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 )
 
 // The token endpoint's replay cascades must write tombstones with the same
@@ -14,7 +14,7 @@ func TestGrantTeardown_RetentionMatchesSharedFormula(t *testing.T) {
 
 	for _, ttl := range []time.Duration{0, -time.Second, 42 * time.Minute} {
 		got := grantTeardown(Deps{AccessTokenTTL: ttl}, teardownReasonRefreshReplay).TombstoneRetention
-		if want := teardown.TombstoneRetention(ttl); got != want {
+		if want := revocation.TombstoneRetention(ttl); got != want {
 			t.Errorf("AccessTokenTTL=%v: TombstoneRetention=%v want %v", ttl, got, want)
 		}
 	}

@@ -12,7 +12,7 @@ import (
 )
 
 // chainDepthBeyondWalkLimit is a rotation depth deeper than the parent-walk
-// limit internal/refreshchain applies. The limit is unexported, so the
+// limit internal/revocation applies. The limit is unexported, so the
 // fixture names a depth known to exceed it.
 const chainDepthBeyondWalkLimit = 1100
 

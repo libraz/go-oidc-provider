@@ -1,4 +1,4 @@
-package endpointsupport_test
+package revocation_test
 
 import (
 	"context"

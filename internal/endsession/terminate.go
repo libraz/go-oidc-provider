@@ -11,7 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -255,7 +255,7 @@ func notifyBackchannelForSnapshot(ctx context.Context, deps Deps, snapshot []*st
 // user-visible-successful, but receives any store errors to emit an accurate
 // audit event.
 //
-// Each grant is torn down through [teardown.Revoker], the same dispatch
+// Each grant is torn down through [revocation.Revoker], the same dispatch
 // /revoke and grant management use, so the JWT / opaque / refresh rungs
 // and the tombstone-retention formula cannot drift between the three
 // endpoints.
@@ -267,14 +267,14 @@ func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 	if err != nil {
 		return fmt.Errorf("list grants: %w", err)
 	}
-	revoker := teardown.Revoker{
+	revoker := revocation.Revoker{
 		RefreshTokens:      deps.RefreshTokens,
 		OpaqueAccessTokens: deps.OpaqueAccessTokens,
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		Strategy:           deps.RevocationStrategy,
 		Now:                endSessionNow(deps),
-		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
+		TombstoneRetention: revocation.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             "logout",
 	}
 	var errs []error
@@ -282,7 +282,7 @@ func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 		if g == nil || g.ID == "" {
 			continue
 		}
-		out := revoker.Run(ctx, teardown.WholeGrant(g.ID))
+		out := revoker.Run(ctx, revocation.WholeGrant(g.ID))
 		for _, f := range out.Failures {
 			errs = append(errs, fmt.Errorf("grant %s %s: %w", g.ID, f.Surface, f.Err))
 		}

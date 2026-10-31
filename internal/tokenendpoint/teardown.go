@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 )
 
 // Teardown reasons. The value is written onto a grant tombstone and
@@ -19,20 +19,20 @@ const (
 	teardownReasonRotation        = "refresh_rotation"
 )
 
-// grantTeardown returns the [teardown.Revoker] every credential
+// grantTeardown returns the [revocation.Revoker] every credential
 // retirement on this endpoint runs through. Building it from Deps in
 // one place is what keeps the substore set and the revocation-strategy
 // dispatch identical across the replay cascades and the post-mint
-// cleanups; the call sites only choose a [teardown.Scope] and a reason.
-func grantTeardown(deps Deps, reason string) teardown.Revoker {
-	return teardown.Revoker{
+// cleanups; the call sites only choose a [revocation.Scope] and a reason.
+func grantTeardown(deps Deps, reason string) revocation.Revoker {
+	return revocation.Revoker{
 		RefreshTokens:      deps.RefreshTokens,
 		OpaqueAccessTokens: deps.OpaqueAccessTokens,
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		Strategy:           deps.RevocationStrategy,
 		Now:                deps.now().UTC(),
-		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
+		TombstoneRetention: revocation.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             reason,
 	}
 }
@@ -46,7 +46,7 @@ func grantTeardown(deps Deps, reason string) teardown.Revoker {
 // silent: a cascade that retired nothing because it never learned which
 // grant to clear is indistinguishable, from the wire, from one that had
 // nothing to clear — and only the first is a fail-open.
-func reportTeardown(ctx context.Context, deps Deps, out teardown.Outcome, event, surface, grantID string) {
+func reportTeardown(ctx context.Context, deps Deps, out revocation.Outcome, event, surface, grantID string) {
 	if out.Complete() {
 		return
 	}

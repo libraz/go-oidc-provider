@@ -1,4 +1,4 @@
-package endpointsupport
+package revocation
 
 import (
 	"context"

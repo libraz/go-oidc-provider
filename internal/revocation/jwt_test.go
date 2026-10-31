@@ -1,4 +1,4 @@
-package endpointsupport_test
+package revocation_test
 
 import (
 	"context"
@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
+
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -73,7 +74,7 @@ func TestRevokeJWTAccessTokensByGrant_GrantTombstoneWritesTombstone(t *testing.T
 
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	revs := &fakeGrantRevocations{}
-	err := endpointsupport.RevokeJWTAccessTokensByGrant(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	err := revocation.RevokeJWTAccessTokensByGrant(context.Background(), revocation.JWTGrantCascadeOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "grant-1", now, 15*time.Minute, "logout", false)
@@ -94,7 +95,7 @@ func TestRevokeJWTAccessTokensByGrant_FallsBackToRegistry(t *testing.T) {
 	t.Parallel()
 
 	reg := &fakeATRegistry{}
-	err := endpointsupport.RevokeJWTAccessTokensByGrant(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	err := revocation.RevokeJWTAccessTokensByGrant(context.Background(), revocation.JWTGrantCascadeOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "grant-2", time.Now(), time.Minute, "code_replay", false)
@@ -112,7 +113,7 @@ func TestRevokeJWTAccessTokenByJTI_GrantTombstoneWritesDenylist(t *testing.T) {
 
 	exp := time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC)
 	revs := &fakeGrantRevocations{}
-	persisted, err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	persisted, err := revocation.RevokeJWTAccessTokenByJTI(context.Background(), revocation.JWTGrantCascadeOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "jti-1", "grant-1", exp)
@@ -133,7 +134,7 @@ func TestRevokeJWTAccessTokenByJTI_FallsBackToRegistry(t *testing.T) {
 	t.Parallel()
 
 	reg := &fakeATRegistry{}
-	persisted, err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	persisted, err := revocation.RevokeJWTAccessTokenByJTI(context.Background(), revocation.JWTGrantCascadeOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "jti-2", "grant-2", time.Now().UTC())
@@ -153,12 +154,12 @@ func TestRevokeJWTAccessTokenByJTI_ReportsNothingPersisted(t *testing.T) {
 
 	reg := &fakeATRegistry{}
 	revs := &fakeGrantRevocations{}
-	for name, opts := range map[string]endpointsupport.JWTGrantCascadeOpts{
+	for name, opts := range map[string]revocation.JWTGrantCascadeOpts{
 		"none":                  {AccessTokens: reg, GrantRevocations: revs, RevocationStrategy: store.RevocationStrategyNone},
 		"jti registry unwired":  {GrantRevocations: revs, RevocationStrategy: store.RevocationStrategyJTIRegistry},
 		"grant tombstone empty": {RevocationStrategy: store.RevocationStrategyGrantTombstone},
 	} {
-		persisted, err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), opts, "jti-3", "grant-3", time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC))
+		persisted, err := revocation.RevokeJWTAccessTokenByJTI(context.Background(), opts, "jti-3", "grant-3", time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC))
 		if err != nil || persisted {
 			t.Errorf("%s: persisted=%v err=%v want false, nil", name, persisted, err)
 		}
@@ -177,7 +178,7 @@ func TestJWTAccessTokenRevoked_GrantTombstoneUsesGrantStore(t *testing.T) {
 		GrantID:  "grant-3",
 		IssuedAt: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC).Unix(),
 	}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, claims)
@@ -197,7 +198,7 @@ func TestJWTAccessTokenRevoked_GrantTombstoneConsultsDenylistWithoutGrantID(t *t
 	iat := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	revs := &fakeGrantRevocations{revoked: true}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-grantless", IssuedAt: iat.Unix()}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, claims)
@@ -222,7 +223,7 @@ func TestJWTAccessTokenRevoked_GrantTombstoneLookupErrorWithoutGrantID(t *testin
 
 	revs := &fakeGrantRevocations{err: errors.New("boom")}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-grantless-fault"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   revs,
 		AccessTokens:       &fakeATRegistry{},
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
@@ -232,7 +233,7 @@ func TestJWTAccessTokenRevoked_GrantTombstoneLookupErrorWithoutGrantID(t *testin
 	}
 }
 
-// faultRecorder collects the errors handed to [endpointsupport.JWTRevocationOpts.OnStoreFault]
+// faultRecorder collects the errors handed to [revocation.JWTRevocationOpts.OnStoreFault]
 // so a test can pin both that the callback fired and what it carried.
 type faultRecorder struct {
 	errs []error
@@ -252,7 +253,7 @@ func TestJWTAccessTokenRevoked_GrantTombstoneLookupErrorReportsFault(t *testing.
 	revs := &fakeGrantRevocations{err: boom}
 	rec := &faultRecorder{}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-3", GrantID: "grant-3"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 		OnStoreFault:       rec.record,
@@ -274,7 +275,7 @@ func TestJWTAccessTokenRevoked_JTIRegistryLookupErrorReportsFault(t *testing.T) 
 	boom := errors.New("boom")
 	rec := &faultRecorder{}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-fault"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		AccessTokens:       &fakeATRegistry{findErr: boom},
 		RevocationStrategy: store.RevocationStrategyJTIRegistry,
 		OnStoreFault:       rec.record,
@@ -296,7 +297,7 @@ func TestJWTAccessTokenRevoked_ErrNotFoundNeverReportsAsAFault(t *testing.T) {
 
 	rec := &faultRecorder{}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-404"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		AccessTokens:       &fakeATRegistry{findErr: store.ErrNotFound},
 		RevocationStrategy: store.RevocationStrategyJTIRegistry,
 		OnStoreFault:       rec.record,
@@ -319,7 +320,7 @@ func TestJWTAccessTokenRevoked_GrantlessLiveTokenStillFallsBackToRegistry(t *tes
 	revs := &fakeGrantRevocations{}
 	reg := &fakeATRegistry{find: &store.AccessTokenRecord{JTI: "jti-legacy", Revoked: true}}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-legacy"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   revs,
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
@@ -339,7 +340,7 @@ func TestJWTAccessTokenRevoked_GrantBoundLiveTokenSkipsRegistry(t *testing.T) {
 	revs := &fakeGrantRevocations{}
 	reg := &fakeATRegistry{find: &store.AccessTokenRecord{JTI: "jti-bound", Revoked: true}}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-bound", GrantID: "grant-bound"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   revs,
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
@@ -354,7 +355,7 @@ func TestJWTAccessTokenRevoked_GrantTombstoneFallsBackToRegistry(t *testing.T) {
 
 	reg := &fakeATRegistry{find: &store.AccessTokenRecord{JTI: "jti-4", Revoked: true}}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-4"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, claims)
@@ -368,7 +369,7 @@ func TestJWTAccessTokenRevoked_LookupErrorReportsNotOK(t *testing.T) {
 
 	reg := &fakeATRegistry{findErr: errors.New("boom")}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-1"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyJTIRegistry,
 	}, claims)
@@ -382,7 +383,7 @@ func TestJWTAccessTokenRevoked_ErrNotFoundIsTreatedAsAbsent(t *testing.T) {
 
 	reg := &fakeATRegistry{findErr: store.ErrNotFound}
 	claims := &tokens.AccessTokenClaims{JTI: "jti-404"}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyJTIRegistry,
 	}, claims)

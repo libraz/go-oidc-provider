@@ -7,9 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
-	"github.com/libraz/go-oidc-provider/internal/refreshchain"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -136,7 +134,7 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 	// RFC 7009 §2.2 "always 200" path. token.revoked is recorded only when
 	// a row was written: under the None strategy, or with no substore
 	// behind the active one, the token keeps verifying until exp.
-	persisted, err := endpointsupport.RevokeJWTAccessTokenByJTI(ctx, endpointsupport.JWTGrantCascadeOpts{
+	persisted, err := revocation.RevokeJWTAccessTokenByJTI(ctx, revocation.JWTGrantCascadeOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		RevocationStrategy: deps.RevocationStrategy,
@@ -226,12 +224,12 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 }
 
 // retireRefreshChain revokes the rotation chain holding rec through the
-// shared [refreshchain.Retire], which falls back to the grant's refresh
+// shared [revocation.Retire], which falls back to the grant's refresh
 // tokens when no chain root resolves, so chain depth never decides whether
 // the token dies. Each store fault is audited; the wire stays 200 (RFC 7009
 // §2.2). The surface names the rung that retired the chain.
 func retireRefreshChain(ctx context.Context, deps Deps, authenticatedClientID string, rec *store.RefreshToken) (string, bool) {
-	r := refreshchain.RetireRecord(ctx, deps.RefreshTokens, rec.ID, rec)
+	r := revocation.RetireRecord(ctx, deps.RefreshTokens, rec.ID, rec)
 	if r.RootErr != nil {
 		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain_walk", r.RootErr)
 	}
@@ -267,17 +265,17 @@ func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, clientID string, 
 	if rec.GrantID == "" {
 		return
 	}
-	scope := teardown.AccessTokensOfGrant(rec.GrantID)
-	if refreshchain.JoinsForeignGrant(rec) {
-		scope = teardown.OpaqueAccessTokensOfChain(rec.GrantID, rec.ChainID)
+	scope := revocation.AccessTokensOfGrant(rec.GrantID)
+	if revocation.JoinsForeignGrant(rec) {
+		scope = revocation.OpaqueAccessTokensOfChain(rec.GrantID, rec.ChainID)
 	}
-	out := teardown.Revoker{
+	out := revocation.Revoker{
 		OpaqueAccessTokens: deps.OpaqueAccessTokens,
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		Strategy:           deps.RevocationStrategy,
 		Now:                revokeNow(deps),
-		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
+		TombstoneRetention: revocation.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             "revoke",
 	}.Run(ctx, scope)
 	for _, f := range out.Failures {

@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -62,13 +62,13 @@ type deprovisionedRedemption struct {
 }
 
 // retireDeprovisionedGrant tears the refused redemption's grant down
-// through the shared [teardown.Revoker] and records the refusal. The
+// through the shared [revocation.Revoker] and records the refusal. The
 // teardown is best-effort: the client is owed invalid_grant either way,
 // and a rung that did not run raises the same warn-level event every
 // other teardown on this endpoint does.
 func retireDeprovisionedGrant(ctx context.Context, deps Deps, in deprovisionedRedemption) {
 	if in.GrantID != "" {
-		out := grantTeardown(deps, teardownReasonSubjectDeprovisioned).Run(ctx, teardown.WholeGrant(in.GrantID))
+		out := grantTeardown(deps, teardownReasonSubjectDeprovisioned).Run(ctx, revocation.WholeGrant(in.GrantID))
 		reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonSubjectDeprovisioned, in.GrantID)
 	}
 	extras := map[string]any{

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/revocation"
+
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
@@ -185,7 +187,7 @@ func Handler(deps HandlerDeps) http.Handler {
 		Issuer:     deps.Issuer,
 		Clock:      verifierClock,
 		Leeway:     deps.Leeway,
-		RequireJTI: endpointsupport.RequireJTIFor(deps.RevocationStrategy),
+		RequireJTI: revocation.RequireJTIFor(deps.RevocationStrategy),
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The registry is wrapped per request, not once here: the memo
@@ -674,7 +676,7 @@ func enforceRevocationStatus(
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
 ) bool {
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(ctx, revocation.JWTRevocationOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		Clients:            deps.Clients,

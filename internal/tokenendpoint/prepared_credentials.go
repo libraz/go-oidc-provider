@@ -3,7 +3,7 @@ package tokenendpoint
 import (
 	"context"
 
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 )
 
 // cleanupPreparedCredentials retires persisted credentials created by a
@@ -21,6 +21,6 @@ func cleanupPreparedCredentials(ctx context.Context, deps Deps, accessToken, ref
 		accessToken = ""
 	}
 	out := grantTeardown(deps, teardownReasonPreparedPoll).
-		Run(ctx, teardown.IssuedCredentials(accessToken, refreshToken))
+		Run(ctx, revocation.IssuedCredentials(accessToken, refreshToken))
 	reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonPreparedPoll, "")
 }

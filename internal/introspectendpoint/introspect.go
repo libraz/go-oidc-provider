@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/revocation"
+
 	"github.com/libraz/go-oidc-provider/internal/audit"
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -212,7 +213,7 @@ func isJWTAccessTokenRevoked(
 	authenticatedClientID string,
 	claims *tokens.AccessTokenClaims,
 ) (revoked, ok bool) {
-	return endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
+	return revocation.JWTAccessTokenRevoked(ctx, revocation.JWTRevocationOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		Clients:            deps.Clients,

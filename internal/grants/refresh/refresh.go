@@ -47,7 +47,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
-	"github.com/libraz/go-oidc-provider/internal/refreshchain"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -805,7 +805,7 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 // and from [Exchanger.RevokeReplayedChain] when the caller deferred the
 // cascade.
 //
-// [refreshchain.Retire] revokes from the chain root, or from the grant the
+// [revocation.Retire] revokes from the chain root, or from the grant the
 // presented token was issued under whenever the chain rung cannot be shown
 // to have run. A chain longer than the walk limit is the ordinary outcome of
 // a client that has kept refreshing, and RFC 9700 §2.2.2 requires the
@@ -831,7 +831,7 @@ func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID strin
 	// the records it would otherwise have to be read back from.
 	rec, err := e.store.Find(ctx, presentedID)
 	if err != nil {
-		r := refreshchain.Retire(ctx, e.store, presentedID, "")
+		r := revocation.Retire(ctx, e.store, presentedID, "")
 		// The walk retries the read; when it only misses, the fault that
 		// kept the record from resolving here is the one to report.
 		if r.RootUnresolved && r.RootErr == nil && !errors.Is(err, store.ErrNotFound) {
@@ -843,16 +843,16 @@ func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID strin
 	out := ReplayedChain{
 		GrantID:     rec.GrantID,
 		ChainID:     rec.ChainID,
-		JoinedGrant: refreshchain.JoinsForeignGrant(rec),
+		JoinedGrant: revocation.JoinsForeignGrant(rec),
 	}
-	e.reportRetirement(ctx, refreshchain.RetireRecord(ctx, e.store, presentedID, rec))
+	e.reportRetirement(ctx, revocation.RetireRecord(ctx, e.store, presentedID, rec))
 	return out
 }
 
 // reportRetirement raises one warn-level event per rung of the cascade that
 // did not run. An unresolved grant is reported rather than ignored: it is the
 // only state in which the OP has confirmed a replay and retired nothing.
-func (e *Exchanger) reportRetirement(ctx context.Context, r refreshchain.Retirement) {
+func (e *Exchanger) reportRetirement(ctx context.Context, r revocation.Retirement) {
 	switch {
 	case r.RootUnresolved:
 		// A store fault resolving the presented token is reported by its

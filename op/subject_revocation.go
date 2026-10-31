@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 )
 
 // RevokeSubject revokes every grant the subject holds, for an embedder
@@ -55,14 +55,14 @@ func (p *Provider) RevokeSubject(ctx context.Context, subject string) error {
 			Cause:       err,
 		}
 	}
-	revoker := teardown.Revoker{
+	revoker := revocation.Revoker{
 		RefreshTokens:      p.cfg.store.RefreshTokens(),
 		OpaqueAccessTokens: p.cfg.store.OpaqueAccessTokens(),
 		AccessTokens:       p.cfg.store.AccessTokens(),
 		GrantRevocations:   p.cfg.store.GrantRevocations(),
 		Strategy:           p.cfg.atRevocation,
 		Now:                p.cfg.clock.Now().UTC(),
-		TombstoneRetention: teardown.TombstoneRetention(p.cfg.accessTokenTTL),
+		TombstoneRetention: revocation.TombstoneRetention(p.cfg.accessTokenTTL),
 		Reason:             "subject_revoked",
 	}
 	var errs []error

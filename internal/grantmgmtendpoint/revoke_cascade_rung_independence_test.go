@@ -36,7 +36,7 @@ func (s *spyRefreshTokenStore) RevokeByGrant(ctx context.Context, grantID string
 }
 
 // TestHandler_RevokeJWTFailureStillAttemptsOtherRungs pins the
-// attempt-each-rung-independently invariant [teardown.Revoker.Run]
+// attempt-each-rung-independently invariant [revocation.Revoker.Run]
 // shares with /revoke and /end_session: a JWT-cascade fault must not
 // skip the opaque or refresh rungs. The old revokeGrantCascade returned
 // on the first error, so the opaque and refresh spies below would never

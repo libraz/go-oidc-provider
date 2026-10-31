@@ -1,6 +1,4 @@
-// Package refreshchain contains backend-agnostic helpers for walking
-// refresh-token rotation chains.
-package refreshchain
+package revocation
 
 import (
 	"context"

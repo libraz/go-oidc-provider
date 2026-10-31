@@ -55,6 +55,7 @@ surfaces:
     paths:
       - internal/introspectendpoint
       - internal/revokeendpoint
+      - internal/revocation
 
   - id: end-session
     title: End-session and back-channel logout

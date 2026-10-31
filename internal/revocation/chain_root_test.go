@@ -1,4 +1,4 @@
-package refreshchain_test
+package revocation_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/libraz/go-oidc-provider/internal/refreshchain"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -25,7 +25,7 @@ func TestFindRootUsesStoredHandleResolverAfterPresentedCredential(t *testing.T) 
 		},
 	}
 
-	got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "presented-refresh-token", 4)
+	got, ok, err := revocation.FindRoot(context.Background(), tokens, "presented-refresh-token", 4)
 	if !ok {
 		t.Fatal("FindRoot reported no root for a valid chain")
 	}
@@ -54,7 +54,7 @@ func TestFindRootFallsBackToFindForRawParentPointerBackends(t *testing.T) {
 		},
 	}
 
-	got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "raw-leaf-token", 2)
+	got, ok, err := revocation.FindRoot(context.Background(), tokens, "raw-leaf-token", 2)
 	if !ok {
 		t.Fatal("FindRoot reported no root for a valid raw-pointer chain")
 	}
@@ -85,7 +85,7 @@ func TestFindRootRejectsAmbiguousOrUnsafeChains(t *testing.T) {
 			},
 		}
 
-		if got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 2); ok || got != "" || err != nil {
+		if got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 2); ok || got != "" || err != nil {
 			t.Fatalf("FindRoot = (%q, %v, %v), want empty/false/nil for mixed-client chain", got, ok, err)
 		}
 	})
@@ -105,7 +105,7 @@ func TestFindRootRejectsAmbiguousOrUnsafeChains(t *testing.T) {
 			},
 		}
 
-		if got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 2); ok || got != "" || err != nil {
+		if got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 2); ok || got != "" || err != nil {
 			t.Fatalf("FindRoot = (%q, %v, %v), want empty/false/nil when limit is exhausted", got, ok, err)
 		}
 	})
@@ -130,7 +130,7 @@ func TestFindRootRejectsAmbiguousOrUnsafeChains(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				if got, ok, err := refreshchain.FindRoot(context.Background(), tc.tokens, tc.startID, tc.limit); ok || got != "" || err != nil {
+				if got, ok, err := revocation.FindRoot(context.Background(), tc.tokens, tc.startID, tc.limit); ok || got != "" || err != nil {
 					t.Fatalf("FindRoot = (%q, %v, %v), want empty/false/nil", got, ok, err)
 				}
 			})
@@ -159,7 +159,7 @@ func TestFindRootStopsAtTheDeepestResolvableAncestor(t *testing.T) {
 			},
 		}
 
-		got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8)
+		got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 8)
 		if !ok {
 			t.Fatal("FindRoot gave up because an ancestor was gone; the cascade would never run")
 		}
@@ -181,7 +181,7 @@ func TestFindRootStopsAtTheDeepestResolvableAncestor(t *testing.T) {
 			},
 		}
 
-		got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8)
+		got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 8)
 		if !ok || got != "leaf" {
 			t.Fatalf("FindRoot = (%q, %v), want (\"leaf\", true)", got, ok)
 		}
@@ -198,7 +198,7 @@ func TestFindRootStopsAtTheDeepestResolvableAncestor(t *testing.T) {
 		// ordinary ErrNotFound miss, not a fault, so err stays nil.
 		tokens := &recordingRefreshStore{}
 
-		if got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8); ok || got != "" || err != nil {
+		if got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 8); ok || got != "" || err != nil {
 			t.Fatalf("FindRoot = (%q, %v, %v), want empty/false/nil", got, ok, err)
 		}
 	})
@@ -222,7 +222,7 @@ func TestFindRootStopsAtTheDeepestResolvableAncestor(t *testing.T) {
 			},
 		}
 
-		got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8)
+		got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 8)
 		if !ok {
 			t.Fatal("FindRoot gave up on a transport fault; the cascade would never run")
 		}
@@ -248,7 +248,7 @@ func TestFindRootStopsAtTheDeepestResolvableAncestor(t *testing.T) {
 			nilHandles: map[string]bool{parent: true},
 		}
 
-		got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8)
+		got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 8)
 		if !ok || got != "leaf" {
 			t.Fatalf("FindRoot = (%q, %v), want (\"leaf\", true)", got, ok)
 		}
@@ -269,7 +269,7 @@ func TestFindRootStopsAtTheDeepestResolvableAncestor(t *testing.T) {
 			credentialErr: map[string]error{"leaf": context.DeadlineExceeded},
 		}
 
-		got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8)
+		got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 8)
 		if ok || got != "" {
 			t.Fatalf("FindRoot = (%q, %v), want empty/false", got, ok)
 		}
@@ -294,7 +294,7 @@ func TestFindRootStopsAtTheDeepestResolvableAncestor(t *testing.T) {
 			},
 		}
 
-		if got, ok, err := refreshchain.FindRoot(context.Background(), tokens, "leaf", 8); ok || got != "" || err != nil {
+		if got, ok, err := revocation.FindRoot(context.Background(), tokens, "leaf", 8); ok || got != "" || err != nil {
 			t.Fatalf("FindRoot = (%q, %v, %v), want empty/false/nil for a mixed-client chain", got, ok, err)
 		}
 	})
@@ -312,7 +312,7 @@ func TestFindByHandleUsesStoredHandleResolver(t *testing.T) {
 		},
 	}
 
-	got, err := refreshchain.FindByHandle(context.Background(), tokens, "leaked-digest")
+	got, err := revocation.FindByHandle(context.Background(), tokens, "leaked-digest")
 	if err != nil {
 		t.Fatalf("FindByHandle returned error: %v", err)
 	}

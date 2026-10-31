@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
+
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -72,7 +73,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 		Issuer:     h.issuer,
 		Clock:      h.clock,
 		Leeway:     h.leeway,
-		RequireJTI: endpointsupport.RequireJTIFor(h.revocationStrategy),
+		RequireJTI: revocation.RequireJTIFor(h.revocationStrategy),
 	}
 	claims, _, err := verifier.Verify(ctx, raw)
 	if err != nil {
@@ -85,7 +86,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 	// verifies. This follows the same strategy dispatcher as userinfo
 	// and introspection, so grant tombstones close the token-exchange
 	// bypass as well as per-JTI registry rows.
-	if revoked, ok := endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
+	if revoked, ok := revocation.JWTAccessTokenRevoked(ctx, revocation.JWTRevocationOpts{
 		AccessTokens:       h.accessTokens,
 		GrantRevocations:   h.grantRevocations,
 		Clients:            h.clients,

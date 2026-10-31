@@ -3,7 +3,7 @@ package tokenendpoint
 import (
 	"context"
 
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 )
 
 // replayCascade carries a detected refresh-token replay out of the
@@ -60,14 +60,14 @@ func (c *replayCascade) armed() bool {
 // transport fault raises a warn-level audit event and the client keeps
 // the invalid_grant answer it has already been given.
 //
-// A deprovisioned grant is torn down whole through [teardown.Revoker].
+// A deprovisioned grant is torn down whole through [revocation.Revoker].
 // A replay runs two rungs, in this order:
 //
 //   - The refresh chain, through the exchanger, which walks parent
 //     pointers to the root and falls back to the whole grant. It hands
 //     back the grant it resolved.
 //   - Every access token issued under that grant, through the shared
-//     [teardown.Revoker]: the JWT half under whatever
+//     [revocation.Revoker]: the JWT half under whatever
 //     [store.AccessTokenRevocationStrategy] is configured, and the
 //     opaque half independently of it. RFC 9700 §2.2.2 requires the
 //     tokens issued from a compromised grant to be revoked, and an
@@ -94,12 +94,12 @@ func (c *replayCascade) run(ctx context.Context, deps Deps) {
 	replayed := exchanger.RevokeReplayedChain(ctx, c.token)
 	// A token-exchange chain joins another client's grant: only the
 	// chain's own opaque access tokens go, never the grant or its issuance.
-	scope := teardown.CompromisedGrantAccessTokens(replayed.GrantID)
+	scope := revocation.CompromisedGrantAccessTokens(replayed.GrantID)
 	if replayed.JoinedGrant {
 		if replayed.ChainID == "" {
 			return
 		}
-		scope = teardown.OpaqueAccessTokensOfChain(replayed.GrantID, replayed.ChainID)
+		scope = revocation.OpaqueAccessTokensOfChain(replayed.GrantID, replayed.ChainID)
 	}
 	out := grantTeardown(deps, teardownReasonRefreshReplay).Run(ctx, scope)
 	reportTeardown(ctx, deps, out, auditRefreshGrantRevokeFailed, teardownReasonRefreshReplay, replayed.GrantID)

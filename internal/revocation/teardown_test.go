@@ -1,11 +1,11 @@
-package teardown_test
+package revocation_test
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -43,11 +43,11 @@ func TestOpaqueAccessTokensOfChain(t *testing.T) {
 					t.Fatalf("Save %s: %v", id, err)
 				}
 			}
-			r := teardown.Revoker{OpaqueAccessTokens: oat}
+			r := revocation.Revoker{OpaqueAccessTokens: oat}
 			if c.hide {
 				r.OpaqueAccessTokens = opaqueOnly{oat}
 			}
-			if out := r.Run(ctx, teardown.OpaqueAccessTokensOfChain("grant-1", c.chainID)); !out.Complete() {
+			if out := r.Run(ctx, revocation.OpaqueAccessTokensOfChain("grant-1", c.chainID)); !out.Complete() {
 				t.Fatalf("Run: %v", out.Err())
 			}
 			for id, want := range map[string]bool{"at-a": true, "at-b": c.wantSibling} {
@@ -70,19 +70,19 @@ func TestGrantScopesAndIssuance(t *testing.T) {
 
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	for name, c := range map[string]struct {
-		scope      teardown.Scope
+		scope      revocation.Scope
 		wantClosed bool
 	}{
-		"access tokens of grant":          {teardown.AccessTokensOfGrant("grant-1"), false},
-		"compromised grant access tokens": {teardown.CompromisedGrantAccessTokens("grant-1"), true},
-		"whole grant":                     {teardown.WholeGrant("grant-1"), true},
+		"access tokens of grant":          {revocation.AccessTokensOfGrant("grant-1"), false},
+		"compromised grant access tokens": {revocation.CompromisedGrantAccessTokens("grant-1"), true},
+		"whole grant":                     {revocation.WholeGrant("grant-1"), true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			ctx := context.Background()
 			revs := inmem.New().GrantRevocations()
-			out := teardown.Revoker{
+			out := revocation.Revoker{
 				GrantRevocations:   revs,
 				Strategy:           store.RevocationStrategyGrantTombstone,
 				Now:                now,

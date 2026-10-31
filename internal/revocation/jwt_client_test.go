@@ -1,11 +1,12 @@
-package endpointsupport_test
+package revocation_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
+
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -45,7 +46,7 @@ func TestJWTAccessTokenRevoked_DeletedClientRevokesTheToken(t *testing.T) {
 
 	clients := deletedClientStore()
 	grants := &fakeGrantRevocations{}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   grants,
 		Clients:            clients,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
@@ -63,7 +64,7 @@ func TestJWTAccessTokenRevoked_DeletedClientRevokesTheToken(t *testing.T) {
 func TestJWTAccessTokenRevoked_DeletedClientRevokesAGrantlessToken(t *testing.T) {
 	t.Parallel()
 
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		AccessTokens:       &fakeATRegistry{findErr: store.ErrNotFound},
 		Clients:            deletedClientStore(),
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
@@ -80,7 +81,7 @@ func TestJWTAccessTokenRevoked_DeletedClientRevokesUnderTheJTIStrategy(t *testin
 	t.Parallel()
 
 	registry := &fakeATRegistry{findErr: store.ErrNotFound}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		AccessTokens:       registry,
 		Clients:            deletedClientStore(),
 		RevocationStrategy: store.RevocationStrategyJTIRegistry,
@@ -98,7 +99,7 @@ func TestJWTAccessTokenRevoked_StrategyNoneDoesNotProbeTheRegistry(t *testing.T)
 	t.Parallel()
 
 	clients := deletedClientStore()
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		Clients:            clients,
 		RevocationStrategy: store.RevocationStrategyNone,
 	}, grantBoundClaims())
@@ -116,7 +117,7 @@ func TestJWTAccessTokenRevoked_LiveClientDefersToTheStrategy(t *testing.T) {
 
 	clients := &fakeClientStore{}
 	grants := &fakeGrantRevocations{}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   grants,
 		Clients:            clients,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
@@ -135,7 +136,7 @@ func TestJWTAccessTokenRevoked_LiveClientDefersToTheStrategy(t *testing.T) {
 func TestJWTAccessTokenRevoked_ClientLookupFaultIsUnresolved(t *testing.T) {
 	t.Parallel()
 
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   &fakeGrantRevocations{},
 		Clients:            &fakeClientStore{err: errors.New("backend down")},
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
@@ -154,7 +155,7 @@ func TestJWTAccessTokenRevoked_ClientLookupFaultReportsFault(t *testing.T) {
 
 	boom := errors.New("backend down")
 	rec := &faultRecorder{}
-	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+	revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 		GrantRevocations:   &fakeGrantRevocations{},
 		Clients:            &fakeClientStore{err: boom},
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
@@ -189,7 +190,7 @@ func TestJWTAccessTokenRevoked_NoRegistryOrNoClientIDSkipsTheProbe(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+			revoked, ok := revocation.JWTAccessTokenRevoked(context.Background(), revocation.JWTRevocationOpts{
 				GrantRevocations:   &fakeGrantRevocations{},
 				Clients:            tc.clients,
 				RevocationStrategy: store.RevocationStrategyGrantTombstone,

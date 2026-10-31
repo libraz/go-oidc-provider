@@ -36,7 +36,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
-	"github.com/libraz/go-oidc-provider/internal/grants/teardown"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -292,7 +292,7 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// revokeGrantCascade tears one grant down through [teardown.Revoker] —
+// revokeGrantCascade tears one grant down through [revocation.Revoker] —
 // the same JWT / opaque / refresh rungs and tombstone-retention formula
 // /revoke and /end_session use — then deletes the grant record so a
 // subsequent query reports it gone. Every rung is attempted independently
@@ -306,14 +306,14 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 // duplicate from a grant the client created deliberately, and only the
 // addressed grant_id was authenticated against the client.
 func revokeGrantCascade(ctx context.Context, deps Deps, grantID string) error {
-	err := teardown.Revoker{
+	err := revocation.Revoker{
 		RefreshTokens:      deps.RefreshTokens,
 		OpaqueAccessTokens: deps.OpaqueAccessTokens,
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		Strategy:           deps.RevocationStrategy,
 		Now:                deps.now().UTC(),
-		TombstoneRetention: teardown.TombstoneRetention(deps.AccessTokenTTL),
+		TombstoneRetention: revocation.TombstoneRetention(deps.AccessTokenTTL),
 		Reason:             "grant_management_revoke",
 	}.RevokeGrant(ctx, deps.Grants, grantID)
 	if err != nil {

@@ -296,7 +296,7 @@ func (s *secondFindFaultRefreshStore) RevokeByGrant(ctx context.Context, grantID
 // [findChainRoot]'s walk (as opposed to the handler's own initial
 // RefreshTokens.Find) must not be collapsed into the same silent
 // false as a legitimate empty walk. On the old code findChainRoot
-// (and the [refreshchain.FindRoot] it wraps) had no error return at
+// (and the [revocation.FindRoot] it wraps) had no error return at
 // all, so this fault could never reach the audit channel.
 func TestHandler_ChainRootLookup_StoreFault_EmitsAudit(t *testing.T) {
 	t.Parallel()

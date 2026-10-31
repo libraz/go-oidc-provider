@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/revocation"
+
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
@@ -267,7 +269,7 @@ func newAccessTokenVerifier(d Deps) *tokens.AccessTokenVerifier {
 		Issuer:     d.Issuer,
 		Clock:      verifierClock,
 		Leeway:     d.Leeway,
-		RequireJTI: endpointsupport.RequireJTIFor(d.RevocationStrategy),
+		RequireJTI: revocation.RequireJTIFor(d.RevocationStrategy),
 	}
 }
 
