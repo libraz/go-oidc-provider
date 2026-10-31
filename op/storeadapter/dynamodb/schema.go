@@ -24,6 +24,8 @@ const (
 	indexByUsername      = "by_username"
 	indexByChooserGroup  = "by_chooser_group"
 	indexByHash          = "by_hash"
+	indexByStream        = "by_stream"
+	indexSSFDue          = "ssf_due"
 )
 
 // Projected attribute names. These are the attributes an index or a
@@ -70,6 +72,17 @@ const (
 	// kept apart from attrRevokedAt, which also refuses issuance.
 	attrAccessRevokedAt = "access_revoked_at"
 	attrChainID         = "chain_id"
+	// The SSF event attributes are the mutable half of a queued event; the
+	// document holds the immutable claims and is never rewritten.
+	attrStreamID      = "stream_id"
+	attrKind          = "kind"
+	attrDelivery      = "delivery"
+	attrHeld          = "held"
+	attrAttempts      = "attempts"
+	attrNextAttemptAt = "next_attempt_at"
+	// attrDueQueue is present only on push, unheld events, which makes
+	// ssf_due a sparse index of exactly what ClaimDue may lease.
+	attrDueQueue = "due_queue"
 )
 
 // TableDefinition describes one table the adapter expects. Embedders
@@ -344,6 +357,32 @@ func (s *Store) TableDefinitions() []TableDefinition {
 			Name:                 n.authnLockouts,
 			KeySchema:            keySchema(attrPK),
 			AttributeDefinitions: stringAttr(attrPK),
+		},
+		{
+			// Two item shapes: the stream, keyed "stream#<id>", and the
+			// claim that reserves its client, keyed "client#<client_id>".
+			// The claim is the one-stream-per-receiver constraint, and
+			// ListActive is a consistent Scan of a table holding one item
+			// pair per receiver, so no secondary index is needed.
+			Name:                 n.ssfStreams,
+			KeySchema:            keySchema(attrPK),
+			AttributeDefinitions: stringAttr(attrPK),
+		},
+		{
+			// ssf_due is sparse over due_queue and sorted by
+			// next_attempt_at, so ClaimDue reads due push events earliest
+			// first. by_stream serves Pending, Retag, Purge and the
+			// cascade of stream deletion. The table also holds one
+			// "verification#<stream_id>" pointer per stream, which carries
+			// neither index key.
+			Name:                 n.ssfEvents,
+			KeySchema:            keySchema(attrPK),
+			AttributeDefinitions: append(stringAttr(attrPK, attrStreamID, attrDueQueue), numberAttr(attrNextAttemptAt)),
+			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
+				gsiWithSort(indexSSFDue, attrDueQueue, attrNextAttemptAt),
+				gsi(indexByStream, attrStreamID),
+			},
+			TTLAttribute: attrTTL,
 		},
 	}
 }

@@ -93,7 +93,8 @@ func WithTablePrefix(prefix string) Option {
 // "par_records", "interactions", "consumed_jtis", "users",
 // "initial_access_tokens", "registration_access_tokens", "op_metadata",
 // "device_codes", "ciba_requests", "totp_secrets", "passkeys",
-// "recovery_codes", "email_otps", "authn_lockouts"); values are the
+// "recovery_codes", "email_otps", "authn_lockouts", "ssf_streams",
+// "ssf_events"); values are the
 // physical table names to use. An override replaces the prefixed
 // default outright. Unknown keys cause [New] to return an error so
 // typos surface at construction time.
@@ -109,8 +110,8 @@ func WithNaming(overrides map[string]string) Option {
 }
 
 // Store is the DynamoDB adapter. It satisfies [store.Store],
-// [store.ClientRegistry], [store.StaticClientReconciler], and
-// [store.Transactional].
+// [store.ClientRegistry], [store.StaticClientReconciler],
+// [store.Transactional], and [store.SharedSignalsStore].
 //
 // Stable since v1.5.
 type Store struct {
@@ -141,6 +142,9 @@ type Store struct {
 	recoveryCodesImpl *recoveryStore
 	emailOTPsImpl     *emailOTPStore
 	authnLockoutsImpl *authnLockoutStore
+
+	ssfStreamsImpl *ssfStreamStore
+	ssfEventsImpl  *ssfEventStore
 }
 
 // New constructs a Store that issues requests through api. The caller
@@ -194,6 +198,8 @@ func (s *Store) attachSubstores() {
 	s.recoveryCodesImpl = &recoveryStore{parent: s}
 	s.emailOTPsImpl = &emailOTPStore{parent: s}
 	s.authnLockoutsImpl = &authnLockoutStore{parent: s}
+	s.ssfStreamsImpl = &ssfStreamStore{parent: s}
+	s.ssfEventsImpl = &ssfEventStore{parent: s}
 }
 
 func (s *Store) now() time.Time { return s.clock.Now() }
@@ -271,6 +277,12 @@ func (s *Store) EmailOTPs() store.EmailOTPStore { return s.emailOTPsImpl }
 // authn_lockouts table.
 func (s *Store) AuthnLockouts() store.AuthnLockoutStore { return s.authnLockoutsImpl }
 
+// SSFStreams implements [store.SharedSignalsStore].
+func (s *Store) SSFStreams() store.SSFStreamStore { return s.ssfStreamsImpl }
+
+// SSFEvents implements [store.SharedSignalsStore].
+func (s *Store) SSFEvents() store.SSFEventStore { return s.ssfEventsImpl }
+
 // GetClient implements [store.ClientStore] on the aggregate so a caller
 // holding a *Store can reach the client substore without a hop.
 func (s *Store) GetClient(ctx context.Context, id string) (*store.Client, error) {
@@ -302,4 +314,5 @@ var (
 	_ store.ClientRegistry         = (*Store)(nil)
 	_ store.StaticClientReconciler = (*Store)(nil)
 	_ store.Transactional          = (*Store)(nil)
+	_ store.SharedSignalsStore     = (*Store)(nil)
 )
