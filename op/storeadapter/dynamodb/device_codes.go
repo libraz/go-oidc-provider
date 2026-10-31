@@ -335,6 +335,13 @@ func (s *deviceCodeStore) Consume(ctx context.Context, deviceCode string) (*stor
 		current.Status = store.DeviceCodeStatusConsumed
 		return nil
 	}, int64(store.DeviceCodeStatusApproved)); err != nil {
+		// A racer that won the status-guarded write leaves the record
+		// consumed; the loser reports that, not a generic conflict.
+		if errors.Is(err, store.ErrConflict) {
+			if cur, _, ferr := s.findLive(ctx, pk); ferr == nil && cur.Status == store.DeviceCodeStatusConsumed {
+				return nil, store.ErrAlreadyConsumed
+			}
+		}
 		return nil, err
 	}
 	rec.ID = deviceCode

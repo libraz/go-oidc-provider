@@ -155,6 +155,13 @@ func (s *cibaRequestStore) Consume(ctx context.Context, authReqID string) (*stor
 		current.Status = store.CIBARequestStatusConsumed
 		return nil
 	}, int64(store.CIBARequestStatusApproved)); err != nil {
+		// A racer that won the status-guarded write leaves the request
+		// consumed; the loser reports that, not a generic conflict.
+		if errors.Is(err, store.ErrConflict) {
+			if cur, ferr := s.findLive(ctx, pk); ferr == nil && cur.Status == store.CIBARequestStatusConsumed {
+				return nil, store.ErrAlreadyConsumed
+			}
+		}
 		return nil, err
 	}
 	rec.ID = authReqID
