@@ -38,6 +38,12 @@
 // [ErrKindNotRouted] if any Kind is left unrouted, and [ErrInvalidKind] if a
 // registration names a Kind outside the enumeration.
 //
+// [SSFStreams] and [SSFEvents] are the one exception: left unrouted with no
+// [WithDefault], they resolve to the backend routed for [Clients] instead of
+// returning [ErrKindNotRouted], so configurations written before those Kinds
+// existed keep starting. [Store.SSFStreams] and [Store.SSFEvents] return nil
+// when the resolved backend does not implement [store.SharedSignalsStore].
+//
 // # Client write capabilities
 //
 // The composite adapter conditionally exposes [store.ClientRegistry] and
@@ -169,6 +175,16 @@ const (
 	// guarantee without coordinating with the access-token /
 	// refresh-token writes.
 	CIBARequests
+
+	// SSFStreams routes [store.SharedSignalsStore.SSFStreams] calls. Outside
+	// the atomic-routing cluster. When neither this Kind nor [WithDefault]
+	// routes it, it falls back to the backend routed for [Clients].
+	SSFStreams
+
+	// SSFEvents routes [store.SharedSignalsStore.SSFEvents] calls. Outside
+	// the atomic-routing cluster. When neither this Kind nor [WithDefault]
+	// routes it, it falls back to the backend routed for [Clients].
+	SSFEvents
 )
 
 // kindNames maps each [Kind] to its unqualified name. Indexed by Kind value
@@ -194,6 +210,8 @@ var kindNames = map[Kind]string{
 	Metadata:                 "Metadata",
 	DeviceCodes:              "DeviceCodes",
 	CIBARequests:             "CIBARequests",
+	SSFStreams:               "SSFStreams",
+	SSFEvents:                "SSFEvents",
 }
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -228,6 +246,8 @@ var allKinds = []Kind{
 	Metadata,
 	DeviceCodes,
 	CIBARequests,
+	SSFStreams,
+	SSFEvents,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -456,11 +476,20 @@ func buildRoutes(cfg *config) (map[Kind]store.Store, error) {
 	for _, k := range allKinds {
 		s, err := resolveKind(cfg, k)
 		if err != nil {
-			return nil, err
+			if !isSSFKind(k) {
+				return nil, err
+			}
+			s = out[Clients]
 		}
 		out[k] = s
 	}
 	return out, nil
+}
+
+// isSSFKind reports whether k is one of the Shared Signals Kinds, which fall
+// back to the Clients backend when unrouted.
+func isSSFKind(k Kind) bool {
+	return k == SSFStreams || k == SSFEvents
 }
 
 // resolveKind returns the backend that should serve k, or [ErrKindNotRouted]
@@ -715,3 +744,25 @@ func (s *Store) UpdatePasswordHash(ctx context.Context, subject string, encoded 
 }
 
 var _ store.UserPasswordHashUpdater = (*Store)(nil)
+
+// SSFStreams returns the stream substore of the backend routed for
+// [SSFStreams], or nil when that backend does not implement
+// [store.SharedSignalsStore]. op.New rejects nil when Shared Signals is
+// enabled.
+func (s *Store) SSFStreams() store.SSFStreamStore {
+	b, ok := s.routes[SSFStreams].(store.SharedSignalsStore)
+	if !ok {
+		return nil
+	}
+	return b.SSFStreams()
+}
+
+// SSFEvents returns the event queue of the backend routed for [SSFEvents],
+// or nil when that backend does not implement [store.SharedSignalsStore].
+func (s *Store) SSFEvents() store.SSFEventStore {
+	b, ok := s.routes[SSFEvents].(store.SharedSignalsStore)
+	if !ok {
+		return nil
+	}
+	return b.SSFEvents()
+}
