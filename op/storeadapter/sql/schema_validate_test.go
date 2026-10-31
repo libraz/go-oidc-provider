@@ -96,7 +96,10 @@ func TestValidateSchema_MissingPreviousSecretColumns(t *testing.T) {
 	if err == nil {
 		t.Fatal("ValidateSchema succeeded with the previous-secret columns missing")
 	}
-	for _, want := range []string{"oidc_clients", "previous_secret_hash", "previous_secret_expires_at"} {
+	for _, want := range []string{
+		"oidc_clients", "previous_secret_hash", "previous_secret_expires_at",
+		"apply the v1.5.0 section of schema/MIGRATIONS.md",
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}

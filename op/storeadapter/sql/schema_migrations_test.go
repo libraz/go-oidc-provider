@@ -69,29 +69,48 @@ func migrationsDoc(t *testing.T) []byte {
 	return raw
 }
 
-// migrationsSection returns the fenced SQL block that follows the given
-// dialect heading in MIGRATIONS.md. Splitting by dialect matters because the
-// statements are not interchangeable: a reader following the MySQL section
-// must find MySQL's own ALTER TABLE ... ADD INDEX there, and finding the name
-// under the SQLite heading would not help them.
+// migrationsSections returns every block that follows the given dialect
+// heading in MIGRATIONS.md, one per release section, in document order.
+// Splitting by dialect matters because the statements are not
+// interchangeable: a reader following the MySQL blocks must find MySQL's own
+// ALTER TABLE ... ADD INDEX there, and finding the name under the SQLite
+// heading would not help them.
+func migrationsSections(t *testing.T, doc []byte, heading string) [][]byte {
+	t.Helper()
+
+	var out [][]byte
+	marker := []byte("\n" + heading + ":\n")
+	for offset := 0; ; {
+		start := bytes.Index(doc[offset:], marker)
+		if start < 0 {
+			break
+		}
+		start += offset
+		// A block runs to whichever comes first of the next dialect heading
+		// and the next markdown header. The search starts one byte in so the
+		// block's own heading cannot terminate it.
+		rest := doc[start+1:]
+		end := len(rest)
+		for _, next := range []string{"\nSQLite:\n", "\nMySQL/MariaDB:\n", "\nPostgreSQL:\n", "\n## "} {
+			if i := bytes.Index(rest[1:], []byte(next)); i >= 0 && i+1 < end {
+				end = i + 1
+			}
+		}
+		out = append(out, rest[:end])
+		offset = start + 1 + end
+	}
+	if len(out) == 0 {
+		t.Fatalf("MIGRATIONS.md has no %q section; the document shape changed and this test stopped checking anything", heading)
+	}
+	return out
+}
+
+// migrationsSection joins every block for one dialect, which is what an
+// operator upgrading from v1.0.0 applies.
 func migrationsSection(t *testing.T, doc []byte, heading string) []byte {
 	t.Helper()
 
-	start := bytes.Index(doc, []byte("\n"+heading+":\n"))
-	if start < 0 {
-		t.Fatalf("MIGRATIONS.md has no %q section; the document shape changed and this test stopped checking anything", heading)
-	}
-	// The section runs to whichever comes first of the next dialect heading
-	// and the next markdown header. The search starts one byte in so the
-	// section's own heading cannot terminate it.
-	rest := doc[start+1:]
-	end := len(rest)
-	for _, marker := range []string{"\nSQLite:\n", "\nMySQL/MariaDB:\n", "\nPostgreSQL:\n", "\n## "} {
-		if i := bytes.Index(rest[1:], []byte(marker)); i >= 0 && i+1 < end {
-			end = i + 1
-		}
-	}
-	return rest[:end]
+	return bytes.Join(migrationsSections(t, doc, heading), nil)
 }
 
 // baselineIndexNames reads the frozen v1.0.0 index set for one dialect.

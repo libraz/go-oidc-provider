@@ -5,6 +5,7 @@ import (
 	databasesql "database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -277,15 +278,21 @@ var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema 
 	"retry_response",
 }
 
-// requiredAuthorizationStateColumns are the authorization-code columns
-// that carry the per-authorization state; see schema/MIGRATIONS.md.
-var requiredAuthorizationStateColumns = []string{ //nolint:gochecknoglobals // schema invariant table; read-only.
-	"auth_time",
-	"acr",
-	"amr",
-	"authorization_details",
-	"claims",
-	"authorization_recorded",
+// requiredColumns returns, by WithNaming key, the columns [Store.ValidateSchema]
+// checks: the full refresh-token layout, plus every column a release added
+// to an existing table.
+func requiredColumns() map[string][]string {
+	out := map[string][]string{"refresh_tokens": requiredRefreshTokenColumns}
+	for _, r := range schemaReleases {
+		for _, tc := range r.columns {
+			for _, c := range tc.columns {
+				if !slices.Contains(out[tc.key], c) {
+					out[tc.key] = append(out[tc.key], c)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // ValidateSchema checks that the connected database carries every table
@@ -300,8 +307,8 @@ var requiredAuthorizationStateColumns = []string{ //nolint:gochecknoglobals // s
 // column fails fast instead of surfacing as a query error under load. A
 // missing table is reported as "oidcsql: schema for <table> is missing";
 // a missing column as "oidcsql: schema for <table> is missing required
-// columns: <names>". [Store.Migrate] runs this check after applying the
-// DDL.
+// columns: <names>", followed by the schema/MIGRATIONS.md sections that
+// add them. [Store.Migrate] runs this check after applying the DDL.
 //
 // Stable since v1.5.
 func (s *Store) ValidateSchema(ctx context.Context) error {
@@ -314,29 +321,45 @@ func (s *Store) ValidateSchema(ctx context.Context) error {
 			return fmt.Errorf("oidcsql: schema for %s is missing", table)
 		}
 	}
-	checks := []struct {
-		table   string
-		columns []string
-	}{
-		{s.names.clients, []string{"previous_secret_hash", "previous_secret_expires_at"}},
-		{s.names.refreshes, requiredRefreshTokenColumns},
-		{s.names.authCodes, requiredAuthorizationStateColumns},
-		{s.names.opaqueAccessTokens, []string{"authorization_details", "claims", "authorization_recorded", "chain_id"}},
-		{s.names.grantTombstones, []string{"access_revoked_at"}},
-		{s.names.rats, []string{"allowed_scopes"}},
-		{s.names.totpSecrets, []string{"row_version"}},
-		{s.names.emailOTPs, []string{"row_version"}},
-	}
-	for _, check := range checks {
-		missing, err := s.missingColumns(ctx, check.table, check.columns)
+	required := requiredColumns()
+	for _, key := range knownNamingKeys {
+		columns, ok := required[key]
+		if !ok {
+			continue
+		}
+		table := s.names.byKey(key)
+		missing, err := s.missingColumns(ctx, table, columns)
 		if err != nil {
 			return err
 		}
 		if len(missing) > 0 {
-			return fmt.Errorf("oidcsql: schema for %s is missing required columns: %s", check.table, strings.Join(missing, ", "))
+			return fmt.Errorf("oidcsql: schema for %s is missing required columns: %s%s",
+				table, strings.Join(missing, ", "), migrationHint(key, missing))
 		}
 	}
 	return nil
+}
+
+// migrationHint names the schema/MIGRATIONS.md sections that add the
+// missing columns, or returns "" when every one predates them.
+func migrationHint(key string, missing []string) string {
+	var versions []string
+	for _, r := range schemaReleases {
+		for _, c := range missing {
+			if columnAddedIn(key, c) == r.version {
+				versions = append(versions, r.version)
+				break
+			}
+		}
+	}
+	switch len(versions) {
+	case 0:
+		return ""
+	case 1:
+		return "; apply the " + versions[0] + " section of schema/MIGRATIONS.md"
+	default:
+		return "; apply the " + strings.Join(versions, ", ") + " sections of schema/MIGRATIONS.md"
+	}
 }
 
 func (s *Store) missingColumns(ctx context.Context, table string, required []string) ([]string, error) {

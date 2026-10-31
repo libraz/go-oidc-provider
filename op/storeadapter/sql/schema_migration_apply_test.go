@@ -52,30 +52,31 @@ func applyMySQLBaselineAndMigrations(t *testing.T, db *databasesql.DB) {
 	}
 }
 
-// mysqlMigrationStatements returns the statements inside the MySQL fenced
+// mysqlMigrationStatements returns the statements inside every MySQL fenced
 // block of MIGRATIONS.md, in document order.
 func mysqlMigrationStatements(t *testing.T) []string {
 	t.Helper()
 
-	section := migrationsSection(t, migrationsDoc(t), "MySQL/MariaDB")
-	fence := strings.Index(string(section), "```sql")
-	if fence < 0 {
-		t.Fatal("MySQL section of MIGRATIONS.md has no sql code fence")
-	}
-	body := string(section)[fence+len("```sql"):]
-	if end := strings.Index(body, "```"); end >= 0 {
-		body = body[:end]
-	}
 	var out []string
-	for _, raw := range strings.Split(body, ";") {
-		stmt := strings.TrimSpace(raw)
-		if stmt == "" {
-			continue
+	for _, section := range migrationsSections(t, migrationsDoc(t), "MySQL/MariaDB") {
+		fence := strings.Index(string(section), "```sql")
+		if fence < 0 {
+			t.Fatal("a MySQL block of MIGRATIONS.md has no sql code fence")
 		}
-		out = append(out, stmt)
+		body := string(section)[fence+len("```sql"):]
+		if end := strings.Index(body, "```"); end >= 0 {
+			body = body[:end]
+		}
+		for _, raw := range strings.Split(body, ";") {
+			stmt := strings.TrimSpace(raw)
+			if stmt == "" {
+				continue
+			}
+			out = append(out, stmt)
+		}
 	}
 	if len(out) == 0 {
-		t.Fatal("no statements parsed from the MySQL section; the document shape changed and this test stopped checking anything")
+		t.Fatal("no statements parsed from the MySQL blocks; the document shape changed and this test stopped checking anything")
 	}
 	return out
 }
