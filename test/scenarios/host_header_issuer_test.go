@@ -31,7 +31,7 @@ func TestAdvisory_EmittedURLsIgnoreHostHeaders(t *testing.T) {
 		r.Header.Set("X-Forwarded-Proto", "http")
 		r.Header.Set("Forwarded", "host="+evil+";proto=http")
 	}
-	do := func(t *testing.T, req *http.Request) (*http.Response, string) {
+	do := func(t *testing.T, req *http.Request) (int, string) {
 		t.Helper()
 		poison(req)
 		resp, err := p.tk.HTTPClient(nil).Do(req)
@@ -49,18 +49,19 @@ func TestAdvisory_EmittedURLsIgnoreHostHeaders(t *testing.T) {
 		if strings.Contains(string(raw), evil) {
 			t.Errorf("%s body contains %q: %s", req.URL.Path, evil, raw)
 		}
-		return resp, string(raw)
+		return resp.StatusCode, string(raw)
 	}
 
 	t.Run("discovery", func(t *testing.T) {
+		t.Parallel()
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
 			p.tk.Server.URL+wellKnownOIDC, http.NoBody)
 		if err != nil {
 			t.Fatalf("NewRequest: %v", err)
 		}
-		resp, raw := do(t, req)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+		status, raw := do(t, req)
+		if status != http.StatusOK {
+			t.Fatalf("status=%d body=%s", status, raw)
 		}
 		var doc map[string]any
 		if err := json.Unmarshal([]byte(raw), &doc); err != nil {
@@ -89,6 +90,7 @@ func TestAdvisory_EmittedURLsIgnoreHostHeaders(t *testing.T) {
 	})
 
 	t.Run("device_authorization", func(t *testing.T) {
+		t.Parallel()
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 			p.tk.Server.URL+"/oidc/device_authorization",
 			strings.NewReader(url.Values{"scope": {"openid"}}.Encode()))
@@ -97,9 +99,9 @@ func TestAdvisory_EmittedURLsIgnoreHostHeaders(t *testing.T) {
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.SetBasicAuth(p.client.ID, devClientSecret)
-		resp, raw := do(t, req)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+		status, raw := do(t, req)
+		if status != http.StatusOK {
+			t.Fatalf("status=%d body=%s", status, raw)
 		}
 		var body map[string]any
 		if err := json.Unmarshal([]byte(raw), &body); err != nil {
