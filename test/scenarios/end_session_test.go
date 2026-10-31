@@ -492,7 +492,7 @@ func TestScenario_ES_015_MalformedIDTokenHintRejected(t *testing.T) {
 // registered client surfaces as the static "invalid client" 400 page.
 // verifyIDTokenHint succeeds (the signature is valid) and hands the
 // aud to resolveByClientID, which collapses ErrNotFound and any
-// transport fault onto descClientNotFound (handler.go:329). The same
+// transport fault onto descClientNotFound (handler.go resolveByClientID). The same
 // description is reused for an unknown client_id parameter (ES-008),
 // so the wire surface is not an existence oracle either way.
 //

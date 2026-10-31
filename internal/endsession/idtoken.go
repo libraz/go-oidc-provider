@@ -168,3 +168,14 @@ func hintNow(c Clock) time.Time {
 	}
 	return timex.SystemClock.Now().UTC()
 }
+
+// maxIDTokenHintAge caps how old an id_token_hint may be measured by
+// its "iat" claim against the current wall clock. RFC 9700 §2.4
+// recommends bounding the freshness of even non-cryptographically-
+// authenticated hints; 30 days is well above the OP's usual id_token
+// lifetime (an hour) while still rejecting the long-tail of stale
+// tokens that an attacker could harvest from forgotten browser tabs
+// or proxy logs. The check applies only when "iat" is present; the
+// signature / issuer / aud validation continues to gate everything
+// else.
+const maxIDTokenHintAge = 30 * 24 * time.Hour
