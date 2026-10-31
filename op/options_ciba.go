@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"time"
@@ -127,6 +128,9 @@ func (f cibaOptionFunc) applyCIBA(c *config) error { return f(c) }
 // every request.
 func WithCIBAHintResolver(r HintResolver) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
+		if err := c.claimOnce("WithCIBAHintResolver"); err != nil {
+			return err
+		}
 		if isNilLike(r) {
 			return &Error{
 				Code:        codeConfiguration,
@@ -150,6 +154,9 @@ func WithCIBAHintResolver(r HintResolver) CIBAOption {
 // the FAPI-CIBA profile a value above ten minutes fails [New].
 func WithCIBADefaultExpiresIn(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
+		if err := c.claimOnce("WithCIBADefaultExpiresIn"); err != nil {
+			return err
+		}
 		if d < 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -174,6 +181,9 @@ func WithCIBADefaultExpiresIn(d time.Duration) CIBAOption {
 // fails [New].
 func WithCIBAMaxExpiresIn(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
+		if err := c.claimOnce("WithCIBAMaxExpiresIn"); err != nil {
+			return err
+		}
 		if d < 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -191,6 +201,9 @@ func WithCIBAMaxExpiresIn(d time.Duration) CIBAOption {
 // option site.
 func WithCIBAPollInterval(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
+		if err := c.claimOnce("WithCIBAPollInterval"); err != nil {
+			return err
+		}
 		if d < 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -226,6 +239,9 @@ func WithCIBAPollInterval(d time.Duration) CIBAOption {
 // auth_req_id's TTL with rapid polls.
 func WithCIBAMaxPollViolations(n uint8) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
+		if err := c.claimOnce("WithCIBAMaxPollViolations"); err != nil {
+			return err
+		}
 		c.cibaMaxPollViolations = n
 		return nil
 	})
@@ -266,6 +282,9 @@ func WithCIBAMaxPollViolations(n uint8) CIBAOption {
 // `backchannel_token_delivery_modes_supported: ["poll"]` exclusively
 // so a client cannot negotiate an unsupported delivery mode.
 //
+// WithCIBA itself may be supplied more than once; each [CIBAOption] is
+// single-valued across all of them.
+//
 // Stable since v1.0.
 func WithCIBA(opts ...CIBAOption) Option {
 	return optionFunc(func(c *config) error {
@@ -281,7 +300,11 @@ func WithCIBA(opts ...CIBAOption) Option {
 					Description: "WithCIBA received nil CIBAOption at position " + strconv.Itoa(i),
 				}
 			}
-			if err := sub.applyCIBA(c); err != nil {
+			err := sub.applyCIBA(c)
+			if errors.Is(err, errShadowedDefault) {
+				continue
+			}
+			if err != nil {
 				return err
 			}
 		}

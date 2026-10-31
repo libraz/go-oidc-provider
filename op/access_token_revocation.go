@@ -91,6 +91,9 @@ const RevocationStrategyNone = store.RevocationStrategyNone
 // Stable since v1.0.
 func WithAccessTokenRevocationStrategy(s AccessTokenRevocationStrategy) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithAccessTokenRevocationStrategy"); err != nil {
+			return err
+		}
 		if !s.IsValid() {
 			return &Error{
 				Code:        codeConfiguration,

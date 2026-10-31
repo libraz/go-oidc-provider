@@ -68,11 +68,8 @@ type LogoutUI struct {
 // Stable since v1.5.
 func WithLogoutUI(ui LogoutUI) Option {
 	return optionFunc(func(c *config) error {
-		if c.logoutUISet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLogoutUI may be called at most once",
-			}
+		if err := c.claimOnce("WithLogoutUI"); err != nil {
+			return err
 		}
 		if ui.ConfirmTemplate == nil {
 			return &Error{
@@ -101,7 +98,6 @@ func WithLogoutUI(ui LogoutUI) Option {
 			return err
 		}
 		c.logoutUI = ui
-		c.logoutUISet = true
 		return nil
 	})
 }

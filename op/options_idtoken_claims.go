@@ -35,11 +35,8 @@ import (
 // Stable since v1.5.
 func WithIDTokenScopeClaims(scopes ...string) Option {
 	return optionFunc(func(c *config) error {
-		if c.idTokenScopeClaimsSet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithIDTokenScopeClaims may be called at most once",
-			}
+		if err := c.claimOnce("WithIDTokenScopeClaims"); err != nil {
+			return err
 		}
 		if len(scopes) == 0 {
 			return &Error{

@@ -146,8 +146,8 @@ func WithClock(clock op.Clock) Option {
 }
 
 // WithOptions appends extra [op.Option] values to the ones the testkit
-// passes to [op.New]. The supplied options are applied AFTER the defaults
-// the testkit installs, so they can override any of them.
+// passes to [op.New]. The testkit passes its own settings through
+// [op.WithDefaults], so a supplied option replaces the matching default.
 func WithOptions(opts ...op.Option) Option {
 	return func(c *providerConfig) {
 		c.extra = append(c.extra, opts...)
@@ -165,15 +165,15 @@ func WithOptions(opts ...op.Option) Option {
 func MinimalOptions(tb testing.TB, extra ...op.Option) []op.Option {
 	tb.Helper()
 	signKey := generateSigningKey(tb, DefaultKeyID)
-	out := make([]op.Option, 0, 6+len(extra))
-	out = append(out,
+	out := make([]op.Option, 0, 1+len(extra))
+	out = append(out, op.WithDefaults(
 		op.WithIssuer(DefaultIssuer),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(generateCookieKey(tb)),
 		op.WithInteractionDriver(AutoConsentDriver{}),
 		subjectLoginFlow(SubjectAuthenticator{}),
-	)
+	))
 	return append(out, extra...)
 }
 
@@ -211,7 +211,7 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 	}
 	store := inmem.New(storeOpts...)
 
-	baseOpts := []op.Option{
+	defaults := []op.Option{
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(store),
 		op.WithKeyset(op.Keyset{signKey}),
@@ -220,13 +220,11 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		subjectLoginFlow(seedingSubjectAuthenticator{users: store}),
 	}
 	if cfg.clock != nil {
-		baseOpts = append(baseOpts, op.WithClock(cfg.clock))
+		defaults = append(defaults, op.WithClock(cfg.clock))
 	}
-	// cfg.extra is appended last so caller-supplied options can override
-	// any default the testkit installed (cookie keys, driver, clock, ...).
-	baseOpts = append(baseOpts, cfg.extra...)
-
-	provider, err := op.New(baseOpts...)
+	// The testkit's settings are defaults, so a caller-supplied option
+	// replaces the matching one (cookie keys, driver, clock, ...).
+	provider, err := op.New(append([]op.Option{op.WithDefaults(defaults...)}, cfg.extra...)...)
 	if err != nil {
 		tb.Fatalf("testkit: op.New: %v", err)
 	}

@@ -370,6 +370,10 @@ func (stubGrantStore) HasAny(context.Context) (bool, error) { return false, nil 
 
 const validIssuer = "https://idp.example.com"
 
+// devIssuer is an issuer [op.WithAllowInsecureBackchannelLogoutForDev]
+// accepts: a host under the special-use .test TLD.
+const devIssuer = "https://idp.example.test"
+
 // fixtureFactor is the [op.FactorType] of the authenticator
 // [validBaseOpts] registers. It is deliberately not one of the built-in
 // factor constants so a test that registers a real factor of its own
@@ -379,11 +383,11 @@ const fixtureFactor op.FactorType = "fixture.primary"
 // validBaseOpts is the minimal option set that builds a provider. The
 // default grant set includes authorization_code, which [op.New] refuses
 // to construct without a way to authenticate anyone, so the fixture
-// carries a login flow. Tests that declare their own [op.WithLoginFlow]
-// — which may be called once — want [validBaseOptsNoAuthn] instead.
+// carries a login flow. Every option is wrapped in [op.WithDefaults], so
+// a test replaces any of them, the login flow included, by passing its own.
 func validBaseOpts(tb testing.TB) []op.Option {
 	tb.Helper()
-	return append(validBaseOptsNoAuthn(tb), fixtureAuthenticator())
+	return append(validBaseOptsNoAuthn(tb), op.WithDefaults(fixtureAuthenticator()))
 }
 
 // fixtureAuthenticator is the [op.Option] that satisfies the login
@@ -402,12 +406,12 @@ func fixtureAuthenticator() op.Option {
 // that assert on what happens when none is supplied.
 func validBaseOptsNoAuthn(tb testing.TB) []op.Option {
 	tb.Helper()
-	return []op.Option{
+	return []op.Option{op.WithDefaults(
 		op.WithIssuer(validIssuer),
 		op.WithStore(stubStore{}),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
-	}
+	)}
 }
 
 func TestNew_RequiresIssuer(t *testing.T) {

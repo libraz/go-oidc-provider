@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 )
 
@@ -104,6 +105,20 @@ func (b *Bundle) Merge(over *Bundle) (*Bundle, error) {
 	maps.Copy(merged, b.messages)
 	maps.Copy(merged, over.messages)
 	return &Bundle{tag: b.tag, messages: merged}, nil
+}
+
+// Keys returns the bundle's message keys in sorted order.
+func (b *Bundle) Keys() []string {
+	return slices.Sorted(maps.Keys(b.messages))
+}
+
+// Omit returns a copy of the bundle without the given keys.
+func (b *Bundle) Omit(keys ...string) *Bundle {
+	messages := maps.Clone(b.messages)
+	for _, k := range keys {
+		delete(messages, k)
+	}
+	return &Bundle{tag: b.tag, messages: messages}
 }
 
 // Has reports whether the bundle carries a message for key.

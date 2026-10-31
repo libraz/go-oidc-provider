@@ -64,6 +64,9 @@ const MaxAccessTokenTTL = timex.AccessTokenTTLMax
 // Stable since v1.0.
 func WithAccessTokenTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithAccessTokenTTL"); err != nil {
+			return err
+		}
 		if ttl < 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -99,6 +102,9 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 // Stable since v1.0.
 func WithRefreshTokenTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithRefreshTokenTTL"); err != nil {
+			return err
+		}
 		if ttl < 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -126,6 +132,9 @@ func WithRefreshTokenTTL(ttl time.Duration) Option {
 // Stable since v1.0.
 func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithRefreshTokenOfflineTTL"); err != nil {
+			return err
+		}
 		if ttl < 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -156,6 +165,9 @@ func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 // Stable since v1.0.
 func WithPARLifetime(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithPARLifetime"); err != nil {
+			return err
+		}
 		if ttl < 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -241,6 +253,9 @@ func WithStrictOfflineAccess() Option {
 // Stable since v1.0.
 func WithAccessTokenFormat(f store.AccessTokenFormat) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithAccessTokenFormat"); err != nil {
+			return err
+		}
 		if !f.IsValid() {
 			return &Error{
 				Code:        codeConfiguration,
@@ -286,13 +301,16 @@ func WithAccessTokenFormat(f store.AccessTokenFormat) Option {
 // [store.OpaqueAccessTokenStore]; the construction-time validator
 // enforces the same rule that [WithAccessTokenFormat] applies.
 //
-// Calling the option more than once replaces the prior map entirely.
+// Pass every audience in a single call; a second call makes [New] fail.
 // The supplied map is defensive-copied so a later mutation of the
 // caller's map cannot silently change the OP's policy at runtime.
 //
 // Stable since v1.0.
 func WithAccessTokenFormatPerAudience(m map[string]store.AccessTokenFormat) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithAccessTokenFormatPerAudience"); err != nil {
+			return err
+		}
 		if len(m) == 0 {
 			return &Error{
 				Code:        codeConfiguration,

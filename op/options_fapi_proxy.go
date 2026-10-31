@@ -61,6 +61,9 @@ import (
 // Stable since v1.0.
 func WithMTLSProxy(headerName string, trustedCIDRs []string) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithMTLSProxy"); err != nil {
+			return err
+		}
 		if headerName == "" {
 			return &Error{
 				Code:        codeConfiguration,

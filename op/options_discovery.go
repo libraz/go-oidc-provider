@@ -45,11 +45,8 @@ import (
 // Stable since v1.0.
 func WithClaimsSupported(claims ...string) Option {
 	return optionFunc(func(c *config) error {
-		if c.claimsSupported != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithClaimsSupported was supplied more than once",
-			}
+		if err := c.claimOnce("WithClaimsSupported"); err != nil {
+			return err
 		}
 		c.claimsSupported = slices.Clone(claims)
 		if c.claimsSupported == nil {
@@ -91,11 +88,8 @@ func WithClaimsSupported(claims ...string) Option {
 // Stable since v1.0.
 func WithACRValuesSupported(values ...string) Option {
 	return optionFunc(func(c *config) error {
-		if c.acrValuesSupported != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithACRValuesSupported was supplied more than once",
-			}
+		if err := c.claimOnce("WithACRValuesSupported"); err != nil {
+			return err
 		}
 		for i, v := range values {
 			if v == "" {
@@ -149,6 +143,9 @@ func WithACRValuesSupported(values ...string) Option {
 // Stable since v1.0.
 func WithClaimsParameterSupported(enabled bool) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithClaimsParameterSupported"); err != nil {
+			return err
+		}
 		c.claimsParameterSupportedSet = true
 		c.claimsParameterSupportedOff = !enabled
 		return nil
@@ -256,11 +253,8 @@ type DiscoveryMetadata struct {
 // Stable since v1.0.
 func WithDiscoveryMetadata(meta DiscoveryMetadata) Option {
 	return optionFunc(func(c *config) error {
-		if c.discoveryMetadataSet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDiscoveryMetadata was supplied more than once",
-			}
+		if err := c.claimOnce("WithDiscoveryMetadata"); err != nil {
+			return err
 		}
 		if err := validateDiscoveryMetadataExtra(meta.Extra); err != nil {
 			return err
@@ -269,7 +263,6 @@ func WithDiscoveryMetadata(meta DiscoveryMetadata) Option {
 			return err
 		}
 		c.discoveryMetadata = cloneDiscoveryMetadata(meta)
-		c.discoveryMetadataSet = true
 		return nil
 	})
 }
@@ -447,6 +440,9 @@ func WithOpenIDScopeOptional() Option {
 // Stable since v1.0.
 func WithACRPolicy(p ACRPolicy) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithACRPolicy"); err != nil {
+			return err
+		}
 		if isNilLike(p) {
 			p = nil
 		}

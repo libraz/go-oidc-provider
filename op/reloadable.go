@@ -1,9 +1,12 @@
 package op
 
 import (
+	"bytes"
 	"context"
+	"crypto"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -12,12 +15,12 @@ import (
 )
 
 // ErrReloadIncompatible is returned by [Reloadable.Reload] when the new
-// options change the issuer or the set of routes the [Provider] serves.
-// Neither can change under a running process: relying parties pin the
-// issuer, and an embedder that mounted the routes one by one (see
-// [Provider.Routes]) cannot follow a route that appears or moves. Make
-// such a change by restarting the process. The returned error wraps this
-// value, so match it with [errors.Is].
+// options cannot replace the running ones without breaking what the
+// running [Provider] already handed out: a changed issuer or route set, a
+// dropped active cookie or signing key, a dropped MFA encryption key, or a
+// different DPoP nonce source. [Reloadable] lists each rule. Make such a
+// change by restarting the process. The returned error wraps this value,
+// so match it with [errors.Is].
 //
 // Stable since v1.5.
 var ErrReloadIncompatible = &Error{
@@ -67,23 +70,26 @@ var ErrReloadIncompatible = &Error{
 //     Provider reads the store the old one wrote. Reconnecting to the same
 //     database through a new handle is fine; pointing at a different
 //     backend silently drops that state.
-//   - Rotate cookie keys ([WithCookieKeys]) and MFA encryption keys
-//     ([WithMFAEncryptionKeys]) by putting the new key first and keeping the retiring key as a later
-//     entry. Dropping a key the running sessions or enrolled TOTP secrets
-//     were sealed with makes them unreadable: every user is logged out and
-//     enrolments must be redone. The same applies to [WithKeyset]: keep the
-//     retiring signing key listed until tokens it signed have expired.
-//   - State a Provider builds in memory does not carry over. A DPoP nonce
-//     source constructed inside the option builder starts afresh (nonces
-//     the old one issued stop verifying) and its rotation goroutine runs
-//     until its context is cancelled. Construct the source once, outside
-//     the builder, and pass the same instance to every build; that keeps
-//     issued nonces valid across a reload. A closure handed to
-//     [WithJWKSRotationActive] is whatever the new option list carries,
-//     and the [WithPrometheus] counters restart from zero. Between the
-//     outgoing collector being unregistered and the new one registered, a
-//     scrape sees no series for the issuer; rate() treats the restart as a
-//     counter reset.
+//   - Rotate cookie keys ([WithCookieKeys]) and signing keys ([WithKeyset])
+//     by putting the new key first and keeping the running active key as a
+//     later entry. Reload refuses a list that drops the running active key,
+//     which would log every user out or leave issued tokens unverifiable;
+//     retire it with the next reload, once its sessions and tokens expire.
+//   - Reload refuses to drop any MFA encryption key, whether supplied
+//     through [WithMFAEncryptionKeys] or a [StepTOTP]: TOTP secrets sealed
+//     with it would become unreadable for good. Retire one by restarting
+//     after every record has been re-sealed under the active key.
+//   - Reload refuses a [WithDPoPNonceSource] that is not the instance the
+//     running Provider holds, since a new one invalidates every nonce
+//     issued and leaves the old one's rotation goroutine running.
+//     Construct the source once, outside the option builder, and pass the
+//     same instance to every build.
+//   - Other state a Provider builds in memory does not carry over. A
+//     closure handed to [WithJWKSRotationActive] is whatever the new
+//     option list carries, and the [WithPrometheus] counters restart from
+//     zero. Between the outgoing collector being unregistered and the new
+//     one registered, a scrape sees no series for the issuer; rate()
+//     treats the restart as a counter reset.
 //   - When a reload is refused with [ErrReloadIncompatible] because the
 //     route set changed, the replacement Provider had already been built,
 //     so new [WithStaticClients] seeds are already in the store. Restarting
@@ -153,9 +159,10 @@ func (r *Reloadable) Routes() []string {
 //
 // The steps, in order:
 //
-//  1. The options are applied and the issuer is compared with the current
-//     one. A different issuer is refused with [ErrReloadIncompatible]
-//     before anything outside the process is touched.
+//  1. The options are applied and compared with the current ones. A
+//     different issuer, or a key or nonce source [Reloadable] requires to
+//     carry over, is refused with [ErrReloadIncompatible] before anything
+//     outside the process is touched.
 //  2. The current Provider's metric collectors are unregistered, so the
 //     replacement can register the same issuer on the same registry.
 //  3. The replacement is built with [New]. If that fails, the current
@@ -186,6 +193,9 @@ func (r *Reloadable) Reload(ctx context.Context, opts ...Option) error {
 	}
 	if cfg.issuer != old.cfg.issuer {
 		return newConfigurationError("reload rejected: the issuer changed", ErrReloadIncompatible)
+	}
+	if err := checkReloadContinuity(old.cfg, cfg); err != nil {
+		return err
 	}
 
 	oldMetrics := old.cfg.metricsCollector
@@ -219,6 +229,79 @@ func (r *Reloadable) Shutdown(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.cur.Load().Shutdown(ctx)
+}
+
+// checkReloadContinuity refuses a replacement configuration that would
+// lose what the running Provider sealed, signed or issued with.
+func checkReloadContinuity(cur, next *config) error {
+	if len(cur.cookieKeys) > 0 && !slices.ContainsFunc(next.cookieKeys, bytesEqual(cur.cookieKeys[0])) {
+		return reloadIncompatible("the active cookie key is missing from WithCookieKeys")
+	}
+	if len(cur.keyset) > 0 && !slices.ContainsFunc(next.keyset, sameSigningKey(cur.keyset[0])) {
+		return reloadIncompatible("the active signing key is missing from WithKeyset")
+	}
+	nextMFA := mfaEncryptionKeys(next)
+	for _, k := range mfaEncryptionKeys(cur) {
+		if !slices.ContainsFunc(nextMFA, bytesEqual(k)) {
+			return reloadIncompatible("an MFA encryption key the running configuration holds is missing")
+		}
+	}
+	if cur.dpopNonces != nil && !sameNonceSource(cur.dpopNonces, next.dpopNonces) {
+		return reloadIncompatible("WithDPoPNonceSource is not the same instance")
+	}
+	return nil
+}
+
+func reloadIncompatible(reason string) error {
+	return newConfigurationError("reload rejected: "+reason, ErrReloadIncompatible)
+}
+
+func bytesEqual(want []byte) func([]byte) bool {
+	return func(k []byte) bool { return bytes.Equal(k, want) }
+}
+
+// sameSigningKey matches a key with want's KeyID and public key: a KeyID
+// reused for a different key leaves the tokens want signed unverifiable.
+func sameSigningKey(want SigningKey) func(SigningKey) bool {
+	wantPub, ok := want.Signer.Public().(interface{ Equal(crypto.PublicKey) bool })
+	return func(k SigningKey) bool {
+		return k.KeyID == want.KeyID && ok && wantPub.Equal(k.Signer.Public())
+	}
+}
+
+// mfaEncryptionKeys lists every key a TOTP secret may be sealed with: the
+// Provider-level keys and the per-step keys of each [StepTOTP] in the flow.
+func mfaEncryptionKeys(c *config) [][]byte {
+	keys := slices.Clone(c.mfaEncryptionKeys)
+	var walk func(Step)
+	walk = func(step Step) {
+		switch s := step.(type) {
+		case StepTOTP:
+			if len(s.EncryptionKey) > 0 {
+				keys = append(keys, s.EncryptionKey)
+			}
+			keys = append(keys, s.EncryptionKeyPrev...)
+		case StepOneOf:
+			for _, inner := range s.Steps {
+				walk(inner)
+			}
+		}
+	}
+	walk(c.loginFlow.Primary)
+	for _, r := range c.loginFlow.Rules {
+		walk(r.Then)
+	}
+	return keys
+}
+
+// sameNonceSource reports whether b is the very source a is. A source of a
+// non-comparable type never matches, since identity cannot be established.
+func sameNonceSource(a, b DPoPNonceSource) bool {
+	if b == nil {
+		return false
+	}
+	ta := reflect.TypeOf(a)
+	return ta == reflect.TypeOf(b) && ta.Comparable() && any(a) == any(b)
 }
 
 // restoreMetrics re-registers the outgoing collectors after a rejected

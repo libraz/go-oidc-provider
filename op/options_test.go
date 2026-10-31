@@ -23,13 +23,13 @@ import (
 // deliberately leaves panicking) construct without panic.
 func validBaseOptsWithInmem(tb testing.TB) []op.Option {
 	tb.Helper()
-	return []op.Option{
+	return []op.Option{op.WithDefaults(
 		op.WithIssuer(validIssuer),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
 		fixtureAuthenticator(),
-	}
+	)}
 }
 
 func TestWithMountPrefix_Validates(t *testing.T) {
@@ -875,7 +875,7 @@ func TestWithACRValuesSupported_RejectsDuplicateOption(t *testing.T) {
 	if typed.Code != "configuration_error" {
 		t.Fatalf("op.Error.Code=%q want configuration_error", typed.Code)
 	}
-	if !strings.Contains(err.Error(), "supplied more than once") {
+	if !strings.Contains(err.Error(), "may be called at most once") {
 		t.Errorf("err = %v, want duplicate-option diagnostic", err)
 	}
 }

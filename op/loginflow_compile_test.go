@@ -678,7 +678,7 @@ func TestProjectStepToFlow_StepTOTP_RejectsMissingKeyAndFallback(t *testing.T) {
 // changes.
 func validBaseOptsWithStore(tb testing.TB, st *inmem.Store) []op.Option {
 	tb.Helper()
-	return append(validBaseOptsWithStoreNoAuthn(tb, st), fixtureAuthenticator())
+	return append(validBaseOptsWithStoreNoAuthn(tb, st), op.WithDefaults(fixtureAuthenticator()))
 }
 
 // validBaseOptsWithStoreNoAuthn is [validBaseOptsWithStore] without the
@@ -686,12 +686,12 @@ func validBaseOptsWithStore(tb testing.TB, st *inmem.Store) []op.Option {
 // configuration through [op.WithLoginFlow].
 func validBaseOptsWithStoreNoAuthn(tb testing.TB, st *inmem.Store) []op.Option {
 	tb.Helper()
-	return []op.Option{
+	return []op.Option{op.WithDefaults(
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
 		op.WithKeyset(validKeyset(tb)),
 		op.WithCookieKeys(newRandomCookieKey(tb)),
-	}
+	)}
 }
 
 // externalPrimary returns an [op.ExternalStep] suitable for use as a

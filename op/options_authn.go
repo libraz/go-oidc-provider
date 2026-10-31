@@ -19,6 +19,9 @@ import (
 // Stable since v1.0.
 func WithInteractionDriver(d interaction.Driver) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithInteractionDriver"); err != nil {
+			return err
+		}
 		if isNilLike(d) {
 			return newConfigurationError("WithInteractionDriver received nil Driver", nil)
 		}
@@ -31,12 +34,14 @@ func WithInteractionDriver(d interaction.Driver) Option {
 // The first key is the active encryption key; remaining keys are accepted on
 // decryption only, supporting graceful rotation. Every key MUST be 32 bytes;
 // an empty list is rejected so the misconfiguration surfaces at startup.
-// Each call replaces any keys configured by a previous WithCookieKeys
-// call. Pass every active and rotated key (single key in the typical
-// case) in a single call.
+// Pass every active and rotated key (single key in the typical case) in a
+// single call; a second WithCookieKeys makes [New] fail.
 // Stable since v1.0.
 func WithCookieKeys(keys ...[]byte) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithCookieKeys"); err != nil {
+			return err
+		}
 		if len(keys) == 0 {
 			return newConfigurationError("WithCookieKeys requires at least one key", nil)
 		}
@@ -59,9 +64,8 @@ func WithCookieKeys(keys ...[]byte) Option {
 // supporting graceful rotation. Every key MUST be 32 bytes; an empty
 // list is rejected so the misconfiguration surfaces at startup.
 //
-// Each call replaces any keys configured by a previous
-// WithMFAEncryptionKeys call. Pass every active and rotated key (a
-// single key in the typical case) in a single call.
+// Pass every active and rotated key (a single key in the typical case) in
+// a single call; a second WithMFAEncryptionKeys makes [New] fail.
 //
 // The keys back every [StepTOTP] whose own EncryptionKey is empty;
 // a per-step EncryptionKey overrides the global value when present
@@ -70,6 +74,9 @@ func WithCookieKeys(keys ...[]byte) Option {
 // Stable since v1.0.
 func WithMFAEncryptionKeys(keys ...[]byte) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithMFAEncryptionKeys"); err != nil {
+			return err
+		}
 		if len(keys) == 0 {
 			return newConfigurationError("WithMFAEncryptionKeys requires at least one key", nil)
 		}
@@ -163,16 +170,13 @@ const mfaEncryptionKeyLen = 32
 // Stable since v1.0.
 func WithAuthnLockoutStore(s store.AuthnLockoutStore) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithAuthnLockoutStore"); err != nil {
+			return err
+		}
 		if isNilLike(s) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithAuthnLockoutStore received nil AuthnLockoutStore",
-			}
-		}
-		if c.authnLockoutStore != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAuthnLockoutStore may be called at most once",
 			}
 		}
 		c.authnLockoutStore = s
@@ -460,11 +464,8 @@ type ChooserUI struct {
 // Stable since v1.5.
 func WithLoginFlow(flow LoginFlow) Option {
 	return optionFunc(func(c *config) error {
-		if c.loginFlowSet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLoginFlow may be called at most once",
-			}
+		if err := c.claimOnce("WithLoginFlow"); err != nil {
+			return err
 		}
 		if isNilLike(flow.Primary) {
 			return &Error{
@@ -519,6 +520,9 @@ func WithLoginFlow(flow LoginFlow) Option {
 //     rather than the first request.
 func WithSPAUI(ui SPAUI) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithSPAUI"); err != nil {
+			return err
+		}
 		if err := checkSPAUIPrecondition(c); err != nil {
 			return err
 		}
@@ -528,19 +532,11 @@ func WithSPAUI(ui SPAUI) Option {
 		if err := validateSPAUIStaticDir(ui.StaticDir); err != nil {
 			return err
 		}
-		if ui.ContentSecurityPolicy == "" {
-			ui.ContentSecurityPolicy = spaDefaultCSP
-		} else {
-			policy, err := interaction.NormalizeCSP(ui.ContentSecurityPolicy)
-			if err != nil {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithSPAUI: ContentSecurityPolicy rejected",
-					Cause:       err,
-				}
-			}
-			ui.ContentSecurityPolicy = policy
+		policy, err := spaUIContentSecurityPolicy(ui.ContentSecurityPolicy)
+		if err != nil {
+			return err
 		}
+		ui.ContentSecurityPolicy = policy
 		c.spaUI = ui
 		c.spaUISet = true
 		// In SPA mode the SPA owns the chooser surface via the JSON state
@@ -553,6 +549,23 @@ func WithSPAUI(ui SPAUI) Option {
 		}
 		return nil
 	})
+}
+
+// spaUIContentSecurityPolicy returns the normalized policy, or the default
+// shell policy when none was declared.
+func spaUIContentSecurityPolicy(declared string) (string, error) {
+	if declared == "" {
+		return spaDefaultCSP, nil
+	}
+	policy, err := interaction.NormalizeCSP(declared)
+	if err != nil {
+		return "", &Error{
+			Code:        codeConfiguration,
+			Description: "WithSPAUI: ContentSecurityPolicy rejected",
+			Cause:       err,
+		}
+	}
+	return policy, nil
 }
 
 // checkSPAUIPrecondition rejects repeated [WithSPAUI] calls and the
@@ -645,11 +658,8 @@ func validateSPAUIStaticDir(dir string) error {
 //   - Repeated [WithConsentUI] calls are rejected.
 func WithConsentUI(ui ConsentUI) Option {
 	return optionFunc(func(c *config) error {
-		if c.consentUISet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithConsentUI may be called at most once",
-			}
+		if err := c.claimOnce("WithConsentUI"); err != nil {
+			return err
 		}
 		if c.spaUISet {
 			return &Error{
@@ -691,11 +701,8 @@ func WithConsentUI(ui ConsentUI) Option {
 //   - Repeated [WithChooserUI] calls are rejected.
 func WithChooserUI(ui ChooserUI) Option {
 	return optionFunc(func(c *config) error {
-		if c.chooserUISet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithChooserUI may be called at most once",
-			}
+		if err := c.claimOnce("WithChooserUI"); err != nil {
+			return err
 		}
 		if ui.Template == nil {
 			return &Error{

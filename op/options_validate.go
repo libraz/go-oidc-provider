@@ -3,6 +3,7 @@ package op
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"net"
 	"net/url"
 	"path"
 	"reflect"
@@ -68,6 +69,26 @@ func (c *config) validate() error {
 	return nil
 }
 
+// isDevelopmentIssuer reports whether issuer names a host that cannot be a
+// public deployment: a loopback IP literal, "localhost", or a name under
+// an RFC 6761 special-use TLD. issuer has already passed issuer validation.
+func isDevelopmentIssuer(issuer string) bool {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	for _, tld := range []string{"localhost", "test", "invalid", "example"} {
+		if host == tld || strings.HasSuffix(host, "."+tld) {
+			return true
+		}
+	}
+	return false
+}
+
 // validateRequired enforces the four-argument boot contract (Issuer +
 // Store + Keyset + cookie keys) plus keyset shape. Split out so
 // [validate] stays under the gocognit ceiling and so a future "what
@@ -80,6 +101,11 @@ func (c *config) validateRequired() error {
 	// opt-in that may have been registered by a later option.
 	if err := discovery.ValidateIssuerWithLocalhostName(c.issuer, c.allowLocalhostLoopback); err != nil {
 		return ErrIssuerInvalid
+	}
+	if c.allowInsecureBackchannelLogoutForDev && !isDevelopmentIssuer(c.issuer) {
+		return newConfigurationError(
+			"WithAllowInsecureBackchannelLogoutForDev requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
+		)
 	}
 	if isNilLike(c.store) {
 		return ErrStoreRequired

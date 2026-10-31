@@ -2,6 +2,7 @@ package op
 
 import (
 	"crypto/x509"
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -23,12 +24,21 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Option configures a [Provider] passed to [New]. Options compose: the order
-// in which they appear in the New call determines the order in which they
-// are applied. Where two options set the same field, the later one wins.
-// Implementors of new options should construct an [Option] via the
-// unexported optionFunc type below; users of the package do not implement
-// the Option interface directly.
+// Option configures a [Provider] passed to [New]. Every option is one of
+// three kinds:
+//
+//   - A single-valued option sets one setting. Supplying it twice, or
+//     supplying two options that set the same setting, makes [New] fail,
+//     so a later call can never silently replace an earlier one. Wrap
+//     the options meant to give way in [WithDefaults].
+//   - An additive option adds entries to a set; repeated calls accumulate.
+//     Its documentation says so.
+//   - A flag option takes no argument; repeating it changes nothing.
+//
+// An option taking an argument is single-valued unless documented as
+// additive.
+//
+// Users of the package do not implement the Option interface directly.
 type Option interface {
 	apply(*config) error
 }
@@ -58,6 +68,14 @@ type config struct {
 	features             []feature.Flag
 	profiles             []profile.Profile
 	interactionD         interaction.Driver
+
+	// claimed maps each single-valued setting to the option that set it;
+	// see [config.claimSlot].
+	claimed map[string]claim
+
+	// applyingDefaults is true while the options wrapped in [WithDefaults]
+	// are applied, after every other option.
+	applyingDefaults bool
 
 	// cookieKeys carries the AES-256-GCM keys used by the Cookie codec.
 	// The first entry is the active encryption key; the remainder are
@@ -305,8 +323,7 @@ type config struct {
 
 	// loginFlowSet records whether [WithLoginFlow] was invoked,
 	// independent of whether the supplied flow had a non-nil
-	// Primary. The flag is used to reject duplicate registrations
-	// without forcing the orchestrator to re-inspect the zero value.
+	// Primary, so readers need not re-inspect the zero value.
 	loginFlowSet bool
 
 	// spaUI stores the [SPAUI] supplied through [WithSPAUI].
@@ -354,12 +371,9 @@ type config struct {
 	// are rendered server-side in every mode.
 	logoutUI LogoutUI
 
-	// logoutUISet records whether [WithLogoutUI] was invoked.
-	logoutUISet bool
-
 	// idTokenScopeClaims carries the deduplicated scope names supplied
-	// through [WithIDTokenScopeClaims]; idTokenScopeClaimsSet records the
-	// call so a second one can be rejected.
+	// through [WithIDTokenScopeClaims]; idTokenScopeClaimsSet records that
+	// the option was supplied.
 	idTokenScopeClaims    []string
 	idTokenScopeClaimsSet bool
 
@@ -530,11 +544,6 @@ type config struct {
 	// no extra discovery keys; populated values are merged into the
 	// document at build time and override-deny-checked at option time.
 	discoveryMetadata DiscoveryMetadata
-
-	// discoveryMetadataSet records whether [WithDiscoveryMetadata]
-	// was invoked, so a duplicate call can fail at construction time
-	// instead of silently overwriting the previous metadata.
-	discoveryMetadataSet bool
 
 	// subjectGenerator stores the [SubjectGenerator] supplied through
 	// [WithSubjectGenerator] or [WithPairwiseSubject]. Nil means
@@ -766,21 +775,123 @@ func (c *config) effectiveACRPolicy() ACRPolicy { //nolint:ireturn,nolintlint //
 	return c.acrPolicy
 }
 
-// newConfig applies opts in order to a fresh config and returns the result
-// or the first option error encountered. After every option has been
-// applied, defaults are filled in for fields the caller chose to omit.
+// newConfig applies opts to a fresh config and returns the result or the
+// first option error encountered. Options wrapped in [WithDefaults] are
+// applied after every other option, wherever they appear in opts. After
+// that, defaults are filled in for fields the caller chose to omit.
 func newConfig(opts []Option) (*config, error) {
 	c := &config{}
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
+	explicit, defaults := splitDefaults(opts)
+	for _, opt := range explicit {
 		if err := opt.apply(c); err != nil {
 			return nil, err
 		}
 	}
+	c.applyingDefaults = true
+	for _, opt := range defaults {
+		if err := opt.apply(c); err != nil && !errors.Is(err, errShadowedDefault) {
+			return nil, err
+		}
+	}
+	c.applyingDefaults = false
 	c.applyDefaults()
 	return c, nil
+}
+
+// splitDefaults separates opts into the options to apply first and the
+// ones [WithDefaults] wrapped, dropping nils.
+func splitDefaults(opts []Option) (explicit, defaults []Option) {
+	for _, opt := range opts {
+		switch o := opt.(type) {
+		case nil:
+		case defaultsOption:
+			defaults = append(defaults, flattenDefaults(o.opts)...)
+		default:
+			explicit = append(explicit, opt)
+		}
+	}
+	return explicit, defaults
+}
+
+// flattenDefaults unwraps a [WithDefaults] nested inside another.
+func flattenDefaults(opts []Option) []Option {
+	out := make([]Option, 0, len(opts))
+	for _, opt := range opts {
+		switch o := opt.(type) {
+		case nil:
+		case defaultsOption:
+			out = append(out, flattenDefaults(o.opts)...)
+		default:
+			out = append(out, opt)
+		}
+	}
+	return out
+}
+
+// claim records which option set a single-valued setting, and whether it
+// came from [WithDefaults].
+type claim struct {
+	option   string
+	fallback bool
+}
+
+// errShadowedDefault tells newConfig that an option wrapped in
+// [WithDefaults] gave way to an explicit one; it never reaches a caller.
+var errShadowedDefault = errors.New("op: default shadowed by an explicit option")
+
+// claimOnce records that the single-valued option is being applied; see
+// [config.claimSlot].
+func (c *config) claimOnce(option string) error {
+	return c.claimSlot(option, option)
+}
+
+// claimSlot records that option is setting the single-valued setting slot.
+// It fails when slot is already set, except that a default yields to an
+// explicit option with errShadowedDefault. Options call it before
+// validating their input, so a default that gives way is never checked.
+func (c *config) claimSlot(slot, option string) error {
+	prior, taken := c.claimed[slot]
+	if !taken {
+		if c.claimed == nil {
+			c.claimed = make(map[string]claim)
+		}
+		c.claimed[slot] = claim{option: option, fallback: c.applyingDefaults}
+		return nil
+	}
+	if c.applyingDefaults && !prior.fallback {
+		return errShadowedDefault
+	}
+	if prior.option == option {
+		return newConfigurationError(option+" may be called at most once", nil)
+	}
+	return newConfigurationError(option+" conflicts with prior "+prior.option, nil)
+}
+
+// defaultsOption is the [Option] [WithDefaults] returns.
+type defaultsOption struct{ opts []Option }
+
+// apply is never reached: newConfig unwraps a defaultsOption before
+// applying anything.
+func (defaultsOption) apply(*config) error { return nil }
+
+// WithDefaults marks opts as defaults: a single-valued option in opts gives
+// way when an option outside any WithDefaults sets the same setting, where
+// it would otherwise make [New] fail as a repeated option. Additive and flag
+// options in opts apply as usual. Two defaults that set the same setting
+// are still a repeated option.
+//
+// The wrapped options are applied after every other option, whatever their
+// position, so a shared base configuration can be combined with
+// deployment-specific overrides in either order:
+//
+//	op.New(
+//		op.WithDefaults(baseOptions()...),
+//		op.WithAccessTokenTTL(5*time.Minute), // replaces the base TTL
+//	)
+//
+// Stable since v1.5.
+func WithDefaults(opts ...Option) Option {
+	return defaultsOption{opts: slices.Clone(opts)}
 }
 
 // WithIssuer sets the OP issuer URL. The value MUST be the canonical form an
@@ -810,6 +921,9 @@ func newConfig(opts []Option) (*config, error) {
 // Stable since v1.0.
 func WithIssuer(issuer string) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithIssuer"); err != nil {
+			return err
+		}
 		if issuer == "" {
 			return ErrIssuerRequired
 		}
@@ -826,6 +940,9 @@ func WithIssuer(issuer string) Option {
 // Stable since v1.0.
 func WithStore(s store.Store) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithStore"); err != nil {
+			return err
+		}
 		if isNilLike(s) {
 			return ErrStoreRequired
 		}
@@ -864,6 +981,9 @@ func WithStore(s store.Store) Option {
 // Stable since v1.0.
 func WithUserStore(s store.UserStore) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithUserStore"); err != nil {
+			return err
+		}
 		if isNilLike(s) {
 			return ErrUserStoreRequired
 		}
@@ -881,6 +1001,9 @@ func WithUserStore(s store.UserStore) Option {
 // Stable since v1.0.
 func WithKeyset(ks Keyset) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithKeyset"); err != nil {
+			return err
+		}
 		if len(ks) == 0 {
 			return ErrKeysetRequired
 		}
@@ -903,6 +1026,9 @@ func WithKeyset(ks Keyset) Option {
 // Stable since v1.0.
 func WithClock(clock Clock) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithClock"); err != nil {
+			return err
+		}
 		if isNilLike(clock) {
 			return &Error{
 				Code:        codeConfiguration,
@@ -928,6 +1054,9 @@ func WithClock(clock Clock) Option {
 // Stable since v1.0.
 func WithLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithLogger"); err != nil {
+			return err
+		}
 		if logger != nil {
 			logger = slog.New(redact.WrapHandler(logger.Handler()))
 		}
@@ -999,6 +1128,9 @@ func (c *config) effectiveAuditEmitter() audit.Emitter {
 // Stable since v1.0.
 func WithPrometheus(registry *prometheus.Registry) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithPrometheus"); err != nil {
+			return err
+		}
 		if registry == nil {
 			return &Error{
 				Code:        codeConfiguration,
@@ -1030,6 +1162,9 @@ func WithPrometheus(registry *prometheus.Registry) Option {
 // Stable since v1.0.
 func WithJWKSRotationActive(predicate func() bool) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithJWKSRotationActive"); err != nil {
+			return err
+		}
 		c.jwksRotationActive = predicate
 		return nil
 	})
@@ -1066,6 +1201,9 @@ func WithJWKSRotationActive(predicate func() bool) Option {
 // Stable since v1.0.
 func WithAuditLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithAuditLogger"); err != nil {
+			return err
+		}
 		if logger != nil {
 			logger = slog.New(redact.WrapHandler(logger.Handler()))
 		}
@@ -1085,6 +1223,9 @@ func WithAuditLogger(logger *slog.Logger) Option {
 // Stable since v1.0.
 func WithMountPrefix(prefix string) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithMountPrefix"); err != nil {
+			return err
+		}
 		if prefix == "" {
 			return &Error{
 				Code:        codeConfiguration,
@@ -1111,10 +1252,25 @@ func WithMountPrefix(prefix string) Option {
 // WithEndpoints overrides individual endpoint paths. Empty fields in e
 // retain the library default; populated fields replace the corresponding
 // path. The discovery document reflects every override automatically.
+// Each field is single-valued: the option may be supplied more than once,
+// but setting the same field twice makes [New] fail.
 // Stable since v1.0.
 func WithEndpoints(e Endpoints) Option {
 	return optionFunc(func(c *config) error {
-		c.endpoints = c.endpoints.merge(e)
+		dst := c.endpoints.fields()
+		for i, f := range e.fields() {
+			if *f.path == "" {
+				continue
+			}
+			err := c.claimOnce("WithEndpoints (" + f.name + ")")
+			if errors.Is(err, errShadowedDefault) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			*dst[i].path = *f.path
+		}
 		return nil
 	})
 }
@@ -1136,16 +1292,8 @@ func WithEndpoints(e Endpoints) Option {
 // Stable since v1.0.
 func WithGrants(grants ...grant.Type) Option {
 	return optionFunc(func(c *config) error {
-		// Reject a second call rather than silently replacing the first
-		// set: a caller composing option slices from several helpers must
-		// not have an earlier WithGrants (e.g. refresh_token + device_code)
-		// vanish under a later one. Mirrors WithProfile /
-		// WithDiscoveryMetadata, whose duplicate calls also error.
-		if c.grantsSet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithGrants may be called at most once",
-			}
+		if err := c.claimOnce("WithGrants"); err != nil {
+			return err
 		}
 		if len(grants) == 0 {
 			return &Error{

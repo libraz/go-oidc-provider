@@ -382,6 +382,7 @@ func TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn(t *testing
 
 			// With the opt-in the URL is accepted.
 			_, err = op.New(append(validBaseOptsWithInmem(t),
+				op.WithIssuer(devIssuer),
 				op.WithAllowInsecureBackchannelLogoutForDev(),
 				op.WithStaticClients(op.ConfidentialClient{
 					ID:                   "demo-rp",
@@ -408,6 +409,7 @@ func TestWithStaticClients_RejectsHTTPNonLoopbackBackchannelEvenWithDevOptIn(t *
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithIssuer(devIssuer),
 		op.WithAllowInsecureBackchannelLogoutForDev(),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                   "demo-rp",
@@ -671,7 +673,7 @@ func TestWithClaimsSupported_RejectsDuplicateInvocation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for duplicate WithClaimsSupported invocation, got nil")
 	}
-	if !strings.Contains(err.Error(), "more than once") {
+	if !strings.Contains(err.Error(), "may be called at most once") {
 		t.Errorf("err = %v, want duplicate-invocation diagnostic", err)
 	}
 }

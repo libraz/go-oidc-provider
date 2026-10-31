@@ -467,11 +467,8 @@ type InitialAccessTokenIssued struct {
 // Stable since v1.0.
 func WithDynamicRegistration(o RegistrationOption) Option {
 	return optionFunc(func(c *config) error {
-		if c.dcr != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDynamicRegistration was supplied more than once",
-			}
+		if err := c.claimOnce("WithDynamicRegistration"); err != nil {
+			return err
 		}
 		if err := validateRegistrationOption(o); err != nil {
 			return err

@@ -66,6 +66,9 @@ func WithDeviceCodeGrant() Option {
 // Stable since v1.0.
 func WithDeviceVerificationURI(uri string) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithDeviceVerificationURI"); err != nil {
+			return err
+		}
 		trimmed := strings.TrimSpace(uri)
 		if trimmed == "" {
 			return &Error{
@@ -110,6 +113,9 @@ func WithDeviceVerificationURI(uri string) Option {
 // Stable since v1.0.
 func WithDeviceCodeExpiry(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithDeviceCodeExpiry"); err != nil {
+			return err
+		}
 		if ttl <= 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -133,6 +139,9 @@ func WithDeviceCodeExpiry(ttl time.Duration) Option {
 // Stable since v1.0.
 func WithDeviceCodePollInterval(interval time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithDeviceCodePollInterval"); err != nil {
+			return err
+		}
 		if interval <= 0 {
 			return &Error{
 				Code:        codeConfiguration,

@@ -70,13 +70,8 @@ func (a GrantManagementAction) valid() bool {
 // minor release on a wire-incompatible draft bump.
 func WithGrantManagement(actions []GrantManagementAction, actionRequired bool) Option {
 	return optionFunc(func(c *config) error {
-		// A second call would silently replace the first action set;
-		// mirrors WithGrants / WithProfile, whose repeats also error.
-		if c.grantManagementEnabled {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithGrantManagement may be called at most once",
-			}
+		if err := c.claimOnce("WithGrantManagement"); err != nil {
+			return err
 		}
 		if len(actions) == 0 {
 			return &Error{

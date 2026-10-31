@@ -80,9 +80,8 @@ func buildMetricsCollector(cfg *config) error {
 // same tag at key granularity: the embedder's keys win on collision,
 // keys present only on the existing bundle are preserved. This means
 // embedders override only the strings they care about without having
-// to re-supply the entire seed catalogue. Layered [WithLocale] calls
-// for the same tag compose by repeated merge, so the last call wins
-// per key.
+// to re-supply the entire seed catalogue. [WithLocale] refuses a key
+// supplied twice, so the order of the merges never decides a value.
 func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 	seeds, err := i18n.DefaultBundles()
 	if err != nil {

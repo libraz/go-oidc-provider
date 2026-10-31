@@ -1,6 +1,7 @@
 package op
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
@@ -101,6 +102,9 @@ const MaxKidlessEncryptionTrialKeys = jose.MaxKidlessTrialKeys
 // Stable since v1.0.
 func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithEncryptionKeyset"); err != nil {
+			return err
+		}
 		if len(ks) == 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -161,11 +165,11 @@ func applyAlgNarrowing(c *config, algs []string) error {
 	if algs == nil {
 		return nil
 	}
-	if c.encryptionAlgsAllowedSet {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSupportedEncryptionAlgs may narrow the algs at most once",
+	if err := c.claimOnce("WithSupportedEncryptionAlgs (algs)"); err != nil {
+		if errors.Is(err, errShadowedDefault) {
+			return nil
 		}
+		return err
 	}
 	for _, a := range algs {
 		if _, ok := jose.ParseJWEAlg(a); !ok {
@@ -187,11 +191,11 @@ func applyEncNarrowing(c *config, encs []string) error {
 	if encs == nil {
 		return nil
 	}
-	if c.encryptionEncsAllowedSet {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSupportedEncryptionAlgs may narrow the encs at most once",
+	if err := c.claimOnce("WithSupportedEncryptionAlgs (encs)"); err != nil {
+		if errors.Is(err, errShadowedDefault) {
+			return nil
 		}
+		return err
 	}
 	for _, e := range encs {
 		if _, ok := jose.ParseJWEEnc(e); !ok {

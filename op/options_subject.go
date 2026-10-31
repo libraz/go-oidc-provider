@@ -27,14 +27,11 @@ package op
 // Stable since v1.0.
 func WithSubjectGenerator(g SubjectGenerator) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimSlot("subject generator", "WithSubjectGenerator"); err != nil {
+			return err
+		}
 		if isNilLike(g) {
 			return ErrSubjectGeneratorRequired
-		}
-		if c.subjectGenerator != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithSubjectGenerator conflicts with prior " + c.subjectGeneratorSource,
-			}
 		}
 		c.subjectGenerator = g
 		c.subjectGeneratorSource = "WithSubjectGenerator"
@@ -99,14 +96,11 @@ func WithSubjectGenerator(g SubjectGenerator) Option {
 // Stable since v1.0.
 func WithPairwiseSubject(salt []byte) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimSlot("subject generator", "WithPairwiseSubject"); err != nil {
+			return err
+		}
 		if len(salt) < 32 {
 			return ErrPairwiseSaltTooShort
-		}
-		if c.subjectGenerator != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithPairwiseSubject conflicts with prior " + c.subjectGeneratorSource,
-			}
 		}
 		stored := make([]byte, len(salt))
 		copy(stored, salt)

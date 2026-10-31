@@ -40,6 +40,9 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 // Stable since v1.0.
 func WithBackchannelAllowPrivateNetwork(allow bool) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithBackchannelAllowPrivateNetwork"); err != nil {
+			return err
+		}
 		c.backchannelAllowPrivateNetwork = allow
 		return nil
 	})
@@ -73,6 +76,9 @@ func WithBackchannelAllowPrivateNetwork(allow bool) Option {
 // Stable since v1.1.
 func WithBackchannelFanOutBudget(d time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithBackchannelFanOutBudget"); err != nil {
+			return err
+		}
 		if d <= 0 {
 			return &Error{
 				Code:        codeConfiguration,

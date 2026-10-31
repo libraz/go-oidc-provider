@@ -49,6 +49,9 @@ import (
 // Stable since v1.1.
 func WithMTLSRootCAs(pool *x509.CertPool) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithMTLSRootCAs"); err != nil {
+			return err
+		}
 		if pool == nil {
 			return &Error{
 				Code:        codeConfiguration,

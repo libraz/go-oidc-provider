@@ -138,6 +138,33 @@ func (e Endpoints) merge(override Endpoints) Endpoints {
 	}
 }
 
+// endpointField is one path of an [Endpoints] value, by field name.
+type endpointField struct {
+	name string
+	path *string
+}
+
+// fields lists the paths of e in declaration order.
+func (e *Endpoints) fields() []endpointField {
+	return []endpointField{
+		{"Discovery", &e.Discovery},
+		{"JWKS", &e.JWKS},
+		{"Authorize", &e.Authorize},
+		{"Token", &e.Token},
+		{"UserInfo", &e.UserInfo},
+		{"EndSession", &e.EndSession},
+		{"Introspect", &e.Introspect},
+		{"Revoke", &e.Revoke},
+		{"PAR", &e.PAR},
+		{"Interaction", &e.Interaction},
+		{"Session", &e.Session},
+		{"Register", &e.Register},
+		{"DeviceAuthorization", &e.DeviceAuthorization},
+		{"Backchannel", &e.Backchannel},
+		{"GrantManagement", &e.GrantManagement},
+	}
+}
+
 // pickEndpoint returns override when it is non-empty, else base. It keeps
 // [Endpoints.merge] a flat field map rather than a long if-ladder.
 func pickEndpoint(override, base string) string {

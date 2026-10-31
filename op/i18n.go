@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
@@ -93,6 +94,9 @@ func (b LocaleBundle) Locale() Locale {
 // Stable since v1.0.
 func WithDefaultLocale(locale Locale) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithDefaultLocale"); err != nil {
+			return err
+		}
 		if locale == "" {
 			return newConfigurationError("WithDefaultLocale requires a non-empty locale", nil)
 		}
@@ -137,6 +141,9 @@ type PreferredLocaleStore interface {
 // Stable since v1.0.
 func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithPreferredLocaleStore"); err != nil {
+			return err
+		}
 		if isNilLike(store) {
 			return newConfigurationError("WithPreferredLocaleStore requires a non-nil store", nil)
 		}
@@ -369,10 +376,10 @@ func injectHTMLTranslator(driver interaction.Driver, translator interaction.Mess
 // handful of titles or button labels and inherit everything else from
 // the seed catalogue.
 //
-// Layered overrides compose deterministically: repeated [WithLocale]
-// calls for the same locale apply in option-list order, so the last
-// call wins per key while earlier overrides remain authoritative for
-// keys the later call did not redefine.
+// Repeated [WithLocale] calls for the same locale compose: each key is
+// single-valued, so two calls may supply different keys of one locale,
+// but supplying the same key twice makes [New] fail. A key supplied
+// inside [WithDefaults] gives way to the same key supplied outside it.
 //
 // Locales the seed catalogue does not ship (e.g. "fr", "de") are
 // registered as-is on first call and merged on subsequent calls. The
@@ -398,6 +405,21 @@ func WithLocale(bundle LocaleBundle) Option {
 	return optionFunc(func(c *config) error {
 		if bundle.internal == nil {
 			return newConfigurationError("WithLocale requires a non-empty bundle", nil)
+		}
+		tag := string(bundle.internal.Tag())
+		var shadowed []string
+		for _, key := range bundle.internal.Keys() {
+			err := c.claimOnce("WithLocale (" + tag + " " + key + ")")
+			if errors.Is(err, errShadowedDefault) {
+				shadowed = append(shadowed, key)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+		}
+		if len(shadowed) > 0 {
+			bundle = LocaleBundle{internal: bundle.internal.Omit(shadowed...)}
 		}
 		c.localeBundles = append(c.localeBundles, bundle)
 		return nil

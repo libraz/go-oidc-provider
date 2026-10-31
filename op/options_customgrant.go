@@ -1,6 +1,7 @@
 package op
 
 import (
+	"errors"
 	"math"
 
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -97,6 +98,8 @@ var secretLikeFormParameters = map[string]struct{}{
 // time, as is a [ParamPolicy.DupesAllowed] entry that names a
 // security-sensitive parameter.
 //
+// The option is additive: each call registers one more handler.
+//
 // The dispatch order matches the registration order, but the order
 // is observable only when a single handler claims multiple Names
 // (which the API forbids). The OP does not interpret the response
@@ -189,11 +192,14 @@ func (c *config) customGrantHandlers() []CustomGrantHandler {
 // Stable since v1.0.
 func RegisterTokenExchange(policy TokenExchangePolicy) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("RegisterTokenExchange"); err != nil {
+			if errors.Is(err, errShadowedDefault) {
+				return err
+			}
+			return ErrTokenExchangeDuplicate
+		}
 		if isNilLike(policy) {
 			return ErrTokenExchangePolicyNil
-		}
-		if c.tokenExchangePolicy != nil {
-			return ErrTokenExchangeDuplicate
 		}
 		c.tokenExchangePolicy = policy
 		return nil

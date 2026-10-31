@@ -149,6 +149,7 @@ github.com/libraz/go-oidc-provider/op	WithCookieKeys	v1.0
 github.com/libraz/go-oidc-provider/op	WithCustomGrant	v1.0
 github.com/libraz/go-oidc-provider/op	WithDPoPNonceSource	v1.0
 github.com/libraz/go-oidc-provider/op	WithDefaultLocale	v1.0
+github.com/libraz/go-oidc-provider/op	WithDefaults	v1.5
 github.com/libraz/go-oidc-provider/op	WithDeviceCodeExpiry	v1.0
 github.com/libraz/go-oidc-provider/op	WithDeviceCodeGrant	v1.0
 github.com/libraz/go-oidc-provider/op	WithDeviceCodePollInterval	v1.0

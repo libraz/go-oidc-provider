@@ -35,11 +35,13 @@ const reloadSeedClientID = "reload-rp"
 func reloadNow() time.Time { return time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC) }
 
 // reloadFixture is the state a Reloadable and every option list built for
-// it share: one store, one cookie key and, when set, one registry.
+// it share: one store, one cookie key, the signing keys created so far and,
+// when set, one registry.
 type reloadFixture struct {
 	st        *inmem.Store
 	reg       *prometheus.Registry
 	cookieKey []byte
+	keys      []op.SigningKey
 }
 
 func newReloadFixture(t *testing.T, withPrometheus bool) *reloadFixture {
@@ -51,13 +53,15 @@ func newReloadFixture(t *testing.T, withPrometheus bool) *reloadFixture {
 	return f
 }
 
-// opts returns a complete option list signing with a fresh key named kid.
+// opts returns a complete option list signing with the key named kid,
+// created on first use. Every other key the fixture created stays listed
+// as a retiring key, so a reload never drops the running active key.
 func (f *reloadFixture) opts(t *testing.T, issuer, kid string, extra ...op.Option) []op.Option {
 	t.Helper()
 	opts := []op.Option{
 		op.WithIssuer(issuer),
 		op.WithStore(f.st),
-		op.WithKeyset(op.Keyset{newTestKey(t, kid)}),
+		op.WithKeyset(f.keyset(t, kid)),
 		op.WithCookieKeys(f.cookieKey),
 		op.WithClock(fakeClock{now: reloadNow()}),
 		fixtureAuthenticator(),
@@ -66,6 +70,23 @@ func (f *reloadFixture) opts(t *testing.T, issuer, kid string, extra ...op.Optio
 		opts = append(opts, op.WithPrometheus(f.reg))
 	}
 	return append(opts, extra...)
+}
+
+// keyset returns the fixture's keys with the one named kid first.
+func (f *reloadFixture) keyset(t *testing.T, kid string) op.Keyset {
+	t.Helper()
+	i := slices.IndexFunc(f.keys, func(k op.SigningKey) bool { return k.KeyID == kid })
+	if i < 0 {
+		f.keys = append(f.keys, newTestKey(t, kid))
+		i = len(f.keys) - 1
+	}
+	ks := op.Keyset{f.keys[i]}
+	for j, k := range f.keys {
+		if j != i {
+			ks = append(ks, k)
+		}
+	}
+	return ks
 }
 
 // reloadSeed seeds the fixture's static client with redirectURI.
@@ -134,14 +155,16 @@ func servedKids(h http.Handler) ([]string, error) {
 	return kids, nil
 }
 
-func assertServedKids(t *testing.T, h http.Handler, want string) {
+// assertActiveKid checks that the JWKS h serves lists want first, as the
+// active signing key.
+func assertActiveKid(t *testing.T, h http.Handler, want string) {
 	t.Helper()
 	kids, err := servedKids(h)
 	if err != nil {
 		t.Fatalf("servedKids: %v", err)
 	}
-	if !slices.Equal(kids, []string{want}) {
-		t.Fatalf("JWKS kids = %v, want [%s]", kids, want)
+	if len(kids) == 0 || kids[0] != want {
+		t.Fatalf("JWKS kids = %v, want %s first", kids, want)
 	}
 }
 
@@ -238,12 +261,12 @@ func TestReloadable_Matrix(t *testing.T) {
 				if r.Provider() == old {
 					t.Fatal("Reload succeeded but the old Provider is still current")
 				}
-				assertServedKids(t, r, "kid-new")
+				assertActiveKid(t, r, "kid-new")
 			} else {
 				if r.Provider() != old {
 					t.Fatal("a rejected Reload replaced the current Provider")
 				}
-				assertServedKids(t, r, "kid-old")
+				assertActiveKid(t, r, "kid-old")
 			}
 			if f.reg != nil {
 				if !metricsRegistered(t, f.reg, validIssuer) {
@@ -272,7 +295,7 @@ func TestReloadable_FailThenSucceedSameRegistry(t *testing.T) {
 		f.opts(t, validIssuer, "kid-fail", reloadSeed(reloadConflictingRedirect))...); err == nil {
 		t.Fatal("Reload with a conflicting static client succeeded")
 	}
-	assertServedKids(t, r, "kid-1")
+	assertActiveKid(t, r, "kid-1")
 	if !metricsRegistered(t, f.reg, validIssuer) {
 		t.Fatal("metrics missing after the failed Reload")
 	}
@@ -281,7 +304,7 @@ func TestReloadable_FailThenSucceedSameRegistry(t *testing.T) {
 		if err := r.Reload(context.Background(), f.opts(t, validIssuer, kid, reloadSeed(reloadSeedRedirect))...); err != nil {
 			t.Fatalf("Reload to %s: %v", kid, err)
 		}
-		assertServedKids(t, r, kid)
+		assertActiveKid(t, r, kid)
 		if !metricsRegistered(t, f.reg, validIssuer) {
 			t.Fatalf("metrics missing after the Reload to %s", kid)
 		}
@@ -316,8 +339,8 @@ func TestReloadable_ConcurrentServeAndReload(t *testing.T) {
 					t.Errorf("serving during reload: %v", err)
 					return
 				}
-				if len(kids) != 1 {
-					t.Errorf("JWKS kids = %v, want exactly one", kids)
+				if len(kids) == 0 {
+					t.Error("JWKS served no keys")
 					return
 				}
 				_ = r.Routes()
@@ -335,7 +358,7 @@ func TestReloadable_ConcurrentServeAndReload(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
-	assertServedKids(t, r, "kid-5")
+	assertActiveKid(t, r, "kid-5")
 }
 
 // TestReloadable_DrainsOldProvider pins that Reload does not return while
@@ -379,7 +402,7 @@ func TestReloadable_DrainsOldProvider(t *testing.T) {
 			BackchannelLogoutURI: rp.URL + "/backchannel-logout",
 		}),
 	}
-	r, err := op.NewReloadable(f.opts(t, validIssuer, "kid-old", extra...)...)
+	r, err := op.NewReloadable(f.opts(t, devIssuer, "kid-old", extra...)...)
 	if err != nil {
 		t.Fatalf("NewReloadable: %v", err)
 	}
@@ -404,7 +427,7 @@ func TestReloadable_DrainsOldProvider(t *testing.T) {
 		t.Fatal("the back-channel delivery never reached the relying party")
 	}
 
-	next := f.opts(t, validIssuer, "kid-new", extra...)
+	next := f.opts(t, devIssuer, "kid-new", extra...)
 	done := make(chan error, 1)
 	go func() {
 		done <- r.Reload(context.Background(), next...)
@@ -439,7 +462,7 @@ func TestReloadable_DrainsOldProvider(t *testing.T) {
 	if r.Provider() == old {
 		t.Fatal("the old Provider is current after Reload")
 	}
-	assertServedKids(t, r, "kid-new")
+	assertActiveKid(t, r, "kid-new")
 }
 
 // TestReloadable_IssuerChangeHasNoSideEffect pins that an issuer change is
@@ -475,5 +498,5 @@ func TestReloadable_IssuerChangeHasNoSideEffect(t *testing.T) {
 	if _, err := f.st.Clients().GetClient(context.Background(), newClientID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetClient(%s) = %v, want ErrNotFound: a refused Reload wrote a static client", newClientID, err)
 	}
-	assertServedKids(t, r, "kid-old")
+	assertActiveKid(t, r, "kid-old")
 }

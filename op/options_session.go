@@ -24,8 +24,9 @@ import (
 // different host because the allowlist intersects the value with the
 // canonical issuer.
 //
-// CIDRs may be IPv4 or IPv6; both notations are accepted. Each call
-// replaces the previous list — pass every trusted CIDR in a single call.
+// CIDRs may be IPv4 or IPv6; both notations are accepted. The option is
+// additive: repeated calls accumulate CIDRs, as [WithTrustedProxyHosts]
+// accumulates hosts.
 // Stable since v1.0.
 func WithTrustedProxies(cidrs ...string) Option {
 	return optionFunc(func(c *config) error {
@@ -37,7 +38,7 @@ func WithTrustedProxies(cidrs ...string) Option {
 		if _, err := proxy.NewTrust(cidrs); err != nil {
 			return newConfigurationError("WithTrustedProxies CIDR rejected", err)
 		}
-		c.trustedProxies = append([]string(nil), cidrs...)
+		c.trustedProxies = append(c.trustedProxies, cidrs...)
 		return nil
 	})
 }
@@ -144,6 +145,9 @@ func WithCORSOrigins(origins ...string) Option {
 // Stable since v1.0.
 func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithBackchannelLogoutHTTPClient"); err != nil {
+			return err
+		}
 		c.backchannelLogoutHTTPClient = client
 		return nil
 	})
@@ -177,6 +181,9 @@ func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 // Stable since v1.0.
 func WithBackchannelLogoutTimeout(d time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithBackchannelLogoutTimeout"); err != nil {
+			return err
+		}
 		c.backchannelLogoutTimeout = d
 		return nil
 	})
@@ -232,6 +239,9 @@ const (
 // Stable since v1.0.
 func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithSessionDurabilityPosture"); err != nil {
+			return err
+		}
 		c.sessionDurabilityPosture = p
 		c.sessionDurabilityPostureSet = true
 		return nil
@@ -291,16 +301,13 @@ func (c *config) effectiveSessionDurabilityPosture() SessionDurabilityPosture {
 // Stable since v1.0.
 func WithDPoPNonceSource(source DPoPNonceSource) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithDPoPNonceSource"); err != nil {
+			return err
+		}
 		if isNilLike(source) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithDPoPNonceSource received nil DPoPNonceSource",
-			}
-		}
-		if c.dpopNonces != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDPoPNonceSource may be called at most once",
 			}
 		}
 		c.dpopNonces = source
@@ -331,16 +338,13 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 // Stable since v1.0.
 func WithRefreshGracePeriod(d time.Duration) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithRefreshGracePeriod"); err != nil {
+			return err
+		}
 		if d < 0 {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithRefreshGracePeriod must not be negative",
-			}
-		}
-		if c.refreshGracePeriodSet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithRefreshGracePeriod may be called at most once",
 			}
 		}
 		c.refreshGracePeriod = d
@@ -487,8 +491,10 @@ func WithAllowLocalhostLoopback() Option {
 // production.
 //
 // Use this option for the in-process demos under examples/ and for
-// CI fixtures that bind a stub RP on a loopback port; never combine
-// it with a non-development WithIssuer.
+// CI fixtures that bind a stub RP on a loopback port. [New] refuses it
+// unless the issuer is a development host: a loopback IP literal,
+// "localhost", or a name under the RFC 6761 special-use TLDs .localhost,
+// .test, .invalid or .example.
 //
 // Stable since v1.0.
 func WithAllowInsecureBackchannelLogoutForDev() Option {
@@ -534,16 +540,13 @@ func WithAllowInsecureBackchannelLogoutForDev() Option {
 // Stable since v1.0.
 func WithJWKSHTTPTransport(rt http.RoundTripper) Option {
 	return optionFunc(func(c *config) error {
+		if err := c.claimOnce("WithJWKSHTTPTransport"); err != nil {
+			return err
+		}
 		if isNilLike(rt) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithJWKSHTTPTransport received nil http.RoundTripper",
-			}
-		}
-		if c.jwksHTTPTransport != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithJWKSHTTPTransport may be called at most once",
 			}
 		}
 		c.jwksHTTPTransport = rt
