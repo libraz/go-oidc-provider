@@ -14,7 +14,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
-	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
@@ -31,7 +30,7 @@ import (
 
 // Audit event names sourced from the typed registry that backs the public
 // op.AuditEvent catalog. auditClientAuthnFailure aliases the canonical
-// constant in [clientauthhttp] so the boundary helper and local emission sites
+// constant in [endpointsupport] so the boundary helper and local emission sites
 // cannot drift.
 const (
 	auditTokenIssued                         = string(auditevent.AuditTokenIssued)
@@ -42,7 +41,7 @@ const (
 	auditRefreshGrantRevokeFailed            = string(auditevent.AuditRefreshGrantRevokeFailed)
 	auditCodeConsumed                        = string(auditevent.AuditCodeConsumed)
 	auditCodeReplayDetected                  = string(auditevent.AuditCodeReplayDetected)
-	auditClientAuthnFailure                  = clientauthhttp.EventClientAuthnFailure
+	auditClientAuthnFailure                  = endpointsupport.EventClientAuthnFailure
 	failureStagePriorAccessTokenRevoke       = "prior_access_token_revoke"
 )
 
@@ -674,7 +673,7 @@ func writeSuccess(w http.ResponseWriter, body successResponse) {
 
 // authenticate resolves the client credentials carried by the request,
 // looks the client up in the registry, and verifies the credentials. The
-// helper delegates to a per-request [clientauthhttp.Authenticator] so
+// helper delegates to a per-request [endpointsupport.AuthenticateClient] so
 // the token endpoint shares an identical authentication contract with
 // the PAR (and any future) endpoint.
 //
@@ -690,17 +689,18 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	authenticator := clientauthhttp.Authenticator{
-		Clients:           deps.Clients,
-		SecretVerifier:    deps.SecretVerifier,
-		AssertionVerifier: deps.AssertionVerifier,
-		AllowedMethods:    deps.AllowedClientAuthMethods,
-		Now:               deps.now(),
-		Audit:             deps.audit(),
-		AuditEventName:    auditClientAuthnFailure,
-		AuditMessage:      "client authentication failed at token endpoint",
-	}
-	return authenticator.Authenticate(ctx, w, r)
+	return endpointsupport.AuthenticateClient(ctx, w, r,
+		endpointsupport.AuthenticateOpts{
+			Clients:           deps.Clients,
+			SecretVerifier:    deps.SecretVerifier,
+			AssertionVerifier: deps.AssertionVerifier,
+			AllowedMethods:    deps.AllowedClientAuthMethods,
+			Now:               deps.now(),
+			Audit:             deps.audit(),
+		},
+		endpointsupport.AuditAuthnFailure(ctx, deps.audit(), auditClientAuthnFailure,
+			"client authentication failed at token endpoint"),
+	)
 }
 
 // isFormContent reports whether ct is application/x-www-form-urlencoded.

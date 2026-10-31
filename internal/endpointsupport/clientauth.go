@@ -289,3 +289,25 @@ func EmitAuthnFailure(
 		Extras:   extras,
 	})
 }
+
+// EventClientAuthnFailure is the canonical audit-event name for a
+// pre-issuance client authentication failure (RFC 6749 §5.2). Endpoints
+// that report such failures under one shared name use it so the audit
+// stream stays uniform; the value comes from the registry exposed publicly
+// as op.AuditClientAuthnFailure.
+const EventClientAuthnFailure = string(auditevent.AuditClientAuthnFailure)
+
+// AuditAuthnFailure returns the onFailure hook for [AuthenticateClient]
+// that raises eventName with message through [EmitAuthnFailure], carrying
+// the attempted client_id and authentication method when the credentials
+// parsed far enough to name them.
+func AuditAuthnFailure(ctx context.Context, emitter audit.Emitter, eventName, message string) func(*clientauth.Credentials, error) {
+	return func(creds *clientauth.Credentials, err error) {
+		clientID, method := "", ""
+		if creds != nil {
+			clientID = creds.ClientID
+			method = string(creds.Method)
+		}
+		EmitAuthnFailure(ctx, emitter, eventName, message, clientID, err, method)
+	}
+}

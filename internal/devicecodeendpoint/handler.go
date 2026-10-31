@@ -15,7 +15,6 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
-	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
@@ -30,7 +29,7 @@ import (
 
 // auditClientAuthnFailure aliases the canonical event constant so
 // the boundary helper and the local emission sites cannot drift.
-const auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
+const auditClientAuthnFailure = endpointsupport.EventClientAuthnFailure
 
 // Tunables the handler uses when [Deps] omits the corresponding
 // field. The defaults match the values.
@@ -360,7 +359,7 @@ func dpopGate(deps Deps) dpop.Gate {
 // authenticate resolves the client credentials carried by the
 // request, looks the client up in the registry, and verifies the
 // credentials. The helper delegates to a per-request
-// [clientauthhttp.Authenticator] so the device-authorization
+// [endpointsupport.AuthenticateClient] so the device-authorization
 // endpoint shares an identical authentication contract with the
 // token and PAR endpoints.
 func authenticate(
@@ -369,17 +368,18 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	authenticator := clientauthhttp.Authenticator{
-		Clients:           deps.Clients,
-		SecretVerifier:    deps.SecretVerifier,
-		AssertionVerifier: deps.AssertionVerifier,
-		AllowedMethods:    deps.AllowedClientAuthMethods,
-		Now:               deps.now(),
-		Audit:             deps.auditEmitter(),
-		AuditEventName:    auditClientAuthnFailure,
-		AuditMessage:      "client authentication failed at device-authorization endpoint",
-	}
-	return authenticator.Authenticate(ctx, w, r)
+	return endpointsupport.AuthenticateClient(ctx, w, r,
+		endpointsupport.AuthenticateOpts{
+			Clients:           deps.Clients,
+			SecretVerifier:    deps.SecretVerifier,
+			AssertionVerifier: deps.AssertionVerifier,
+			AllowedMethods:    deps.AllowedClientAuthMethods,
+			Now:               deps.now(),
+			Audit:             deps.auditEmitter(),
+		},
+		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), auditClientAuthnFailure,
+			"client authentication failed at device-authorization endpoint"),
+	)
 }
 
 // extractMTLSThumbprint returns the SHA-256 thumbprint of the

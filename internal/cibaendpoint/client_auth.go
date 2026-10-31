@@ -9,7 +9,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
-	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
@@ -19,7 +18,7 @@ import (
 
 // auditClientAuthnFailure aliases the canonical event constant so
 // the boundary helper and the local emission sites cannot drift.
-const auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
+const auditClientAuthnFailure = endpointsupport.EventClientAuthnFailure
 
 // authenticateWithDPoP runs DPoP proof verification and client
 // authentication through the shared [dpop.Gate] and returns the
@@ -58,7 +57,7 @@ func dpopGate(deps Deps) dpop.Gate {
 // authenticate resolves the client credentials carried by the
 // request, looks the client up in the registry, and verifies the
 // credentials. The helper delegates to a per-request
-// [clientauthhttp.Authenticator] so /bc-authorize shares an
+// [endpointsupport.AuthenticateClient] so /bc-authorize shares an
 // identical authentication contract with the token, PAR, and
 // device-authorization endpoints.
 func authenticate(
@@ -67,17 +66,18 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	authenticator := clientauthhttp.Authenticator{
-		Clients:           deps.Clients,
-		SecretVerifier:    deps.SecretVerifier,
-		AssertionVerifier: deps.AssertionVerifier,
-		AllowedMethods:    deps.AllowedClientAuthMethods,
-		Now:               deps.now(),
-		Audit:             deps.auditEmitter(),
-		AuditEventName:    auditClientAuthnFailure,
-		AuditMessage:      "client authentication failed at backchannel-authentication endpoint",
-	}
-	return authenticator.Authenticate(ctx, w, r)
+	return endpointsupport.AuthenticateClient(ctx, w, r,
+		endpointsupport.AuthenticateOpts{
+			Clients:           deps.Clients,
+			SecretVerifier:    deps.SecretVerifier,
+			AssertionVerifier: deps.AssertionVerifier,
+			AllowedMethods:    deps.AllowedClientAuthMethods,
+			Now:               deps.now(),
+			Audit:             deps.auditEmitter(),
+		},
+		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), auditClientAuthnFailure,
+			"client authentication failed at backchannel-authentication endpoint"),
+	)
 }
 
 // extractMTLSThumbprint returns the SHA-256 thumbprint of the

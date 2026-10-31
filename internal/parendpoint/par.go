@@ -12,7 +12,6 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
-	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jar"
@@ -418,7 +417,7 @@ func writeSuccess(w http.ResponseWriter, body successResponse) {
 
 // authenticate resolves the client credentials carried by the request,
 // looks the client up in the registry, and verifies the credentials. The
-// helper delegates to a per-request [clientauthhttp.Authenticator] so
+// helper delegates to a per-request [endpointsupport.AuthenticateClient] so
 // /par and /token share an identical authentication contract.
 //
 // The function emits its own response on every failure path so the caller
@@ -433,17 +432,18 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	authenticator := clientauthhttp.Authenticator{
-		Clients:           deps.Clients,
-		SecretVerifier:    deps.SecretVerifier,
-		AssertionVerifier: deps.AssertionVerifier,
-		AllowedMethods:    deps.AllowedClientAuthMethods,
-		Now:               deps.now(),
-		Audit:             deps.auditEmitter(),
-		AuditEventName:    auditClientAuthnFailure,
-		AuditMessage:      "client authentication failed at PAR endpoint",
-	}
-	return authenticator.Authenticate(ctx, w, r)
+	return endpointsupport.AuthenticateClient(ctx, w, r,
+		endpointsupport.AuthenticateOpts{
+			Clients:           deps.Clients,
+			SecretVerifier:    deps.SecretVerifier,
+			AssertionVerifier: deps.AssertionVerifier,
+			AllowedMethods:    deps.AllowedClientAuthMethods,
+			Now:               deps.now(),
+			Audit:             deps.auditEmitter(),
+		},
+		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), auditClientAuthnFailure,
+			"client authentication failed at PAR endpoint"),
+	)
 }
 
 // newRequestURI returns a freshly generated PAR URI. The body is 32 bytes

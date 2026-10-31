@@ -11,8 +11,7 @@ import (
 // endpoint that builds its options without Now therefore rejects the
 // previous secret silently, and one without Audit hides that a client
 // still uses it. Both fields are plain values the compiler cannot
-// require, so every library construction site is checked here, including
-// the literal clientauthhttp builds to relay its own fields.
+// require, so every library construction site is checked here.
 var clientAuthLiteralWatch = []struct {
 	// qualified is the spelling used outside the declaring package.
 	qualified string
@@ -28,19 +27,13 @@ var clientAuthLiteralWatch = []struct {
 		declDir:   "internal/endpointsupport",
 		minSites:  4,
 	},
-	{
-		qualified: "clientauthhttp.Authenticator",
-		local:     "Authenticator",
-		declDir:   "internal/clientauth/clientauthhttp",
-		minSites:  4,
-	},
 }
 
 var clientAuthRequiredFields = []string{"Now", "Audit"}
 
 // TestClientAuthLiteralsSetNowAndAudit asserts that every non-test
-// composite literal of endpointsupport.AuthenticateOpts and
-// clientauthhttp.Authenticator assigns both Now and Audit.
+// composite literal of endpointsupport.AuthenticateOpts assigns both Now
+// and Audit.
 func TestClientAuthLiteralsSetNowAndAudit(t *testing.T) {
 	t.Parallel()
 
