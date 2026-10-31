@@ -358,6 +358,13 @@ issuer.
   key is controlled like the other protocol-defining metadata; drop it from
   `Extra`.
 
+- **BREAKING:** `op.WithCustomGrant` naming
+  `urn:ietf:params:oauth:grant-type:jwt-bearer` is refused by `op.New`, in
+  either option order, whether or not `op.WithJWTBearerGrant` is set. The URN
+  now belongs to the built-in grant like the other built-in grant types. An
+  embedder that registered its own handler for it should move the trust and
+  subject mapping to `op.WithJWTBearerGrant`.
+
 ### Added
 
 - `op.LoginFlow.Registration` makes a request carrying `prompt=create`
@@ -571,6 +578,59 @@ issuer.
   mounts the OP route by route, and `53-production-sql`, which wires a SQL
   deployment with key files, reload, GC, a schema check, static-client
   sync and bcrypt users.
+
+- `op.WithJWTBearerGrant` enables the RFC 7523 JWT bearer authorization grant
+  (`urn:ietf:params:oauth:grant-type:jwt-bearer`, `grant.JWTBearer`). The
+  embedder declares each trusted assertion issuer in an `op.AssertionIssuer`
+  (an exact `Issuer`, a static `JWKS` or an https `JWKSURI`, and the
+  `AllowedClients` that may redeem its assertions) and an
+  `op.JWTBearerGrant.ResolveSubject` callback that maps the verified
+  `op.AssertionSubject` onto a local account, returning
+  `op.ErrUnknownAssertionSubject` for one that is not provisioned. Assertions
+  are verified for issuer, `typ`, signature, `aud` (the issuer or the token
+  endpoint URL), `exp` (at most five minutes ahead, 60 seconds of leeway),
+  `nbf` and a single-use `jti`. A client authenticating with `none` or
+  missing from the issuer's `AllowedClients` is refused with
+  `unauthorized_client`; a refused assertion is `invalid_grant`, an
+  unprovisioned subject `access_denied`, and a transient failure of the
+  issuer's key source 503. The access token carries `cnf` for a DPoP or
+  mutual-TLS request; no refresh token or ID Token is issued. Refusals are
+  recorded as `jwt_bearer.rejected` with the failing stage as the reason, and
+  grants as `jwt_bearer.granted`. `op.New` refuses an incomplete
+  configuration, an issuer equal to the OP issuer, a plain-http `JWKSURI` and
+  `op.WithGrants(grant.JWTBearer)` without `op.WithJWTBearerGrant`. A
+  multi-node deployment must share the store's `ConsumedJTIStore`, or an
+  assertion can be replayed on another node until it expires.
+
+### Experimental
+
+These follow an IETF draft whose wire format may still change, and are not
+covered by the SemVer promise.
+
+- Identity Assertion JWT Authorization Grant
+  (draft-ietf-oauth-identity-assertion-authz-grant-06, the ID-JAG profile).
+  As a resource authorization server, an `op.AssertionIssuer` with
+  `Profile: op.AssertionProfileIDJAG` redeems an ID-JAG through the JWT bearer
+  grant: `typ` `oauth-id-jag+jwt`, `aud` exactly the OP issuer, a `client_id`
+  naming the authenticated client, requested scopes inside the `scope` claim,
+  `resource` values registered for the client, and a `cnf` that matches the
+  DPoP key or client certificate presented. A `tenant` claim is refused. The
+  discovery document then carries `authorization_grant_profiles_supported`.
+
+- `op.WithIDJAGIssuance` makes the OP an identity provider that issues an
+  ID-JAG in exchange for one of its own ID Tokens (RFC 8693 token exchange
+  with `requested_token_type` `urn:ietf:params:oauth:token-type:id-jag`). An
+  `op.IDJAGIssuancePolicy` decides per request, returning the client's
+  identifier at the audience server, the scope, the resource values and an
+  optional email in an `op.IDJAGDecision`, or `op.ErrIDJAGUnknownAudience` /
+  `op.ErrIDJAGDenied`. The assertion is signed with ES256, lives at most five
+  minutes, and is returned with `token_type` `N_A` and no refresh token. The
+  scope and resource are those of the audience server and are not checked
+  against the calling client's registration. The discovery document carries
+  `identity_chaining_requested_token_types_supported`. A client registered for
+  pairwise subjects cannot obtain one. Because the OP signs only with ES256, a
+  resource server that implements only the draft's RS256 baseline rejects
+  these assertions.
 
 ### Fixed
 

@@ -43,6 +43,7 @@ surfaces:
       - internal/grants
       - internal/tokens
       - internal/customgrant
+      - internal/assertiongrant
 
   - id: userinfo
     title: UserInfo endpoint

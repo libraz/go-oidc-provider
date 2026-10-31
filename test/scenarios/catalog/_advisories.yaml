@@ -264,8 +264,11 @@ advisories:
     status: covered
     notes: |
       Authlib's JWT bearer grant checked only that aud was present. This OP
-      has no jwt-bearer grant; the same binding governs client_assertion and
-      is pinned by TestPrivateKeyJWTVerifier_AudOtherAS_Rejected.
+      has a jwt-bearer grant (WithJWTBearerGrant) that refuses an assertion
+      whose aud names another authorization server, pinned by
+      TestScenario_JBG_018_AssertionForAnotherASRefused; the same binding
+      governs client_assertion and is pinned by
+      TestPrivateKeyJWTVerifier_AudOtherAS_Rejected.
   - id: GHSA-rvq5-wwqv-78pq
     severity: P2
     source: https://github.com/advisories/GHSA-rvq5-wwqv-78pq

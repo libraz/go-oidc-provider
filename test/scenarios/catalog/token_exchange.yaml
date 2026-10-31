@@ -154,6 +154,11 @@ rows:
       than urn:ietf:params:oauth:token-type:access_token MUST be
       rejected with 400 invalid_request.
     status: active
+    notes: |
+      The refusal holds whenever ID-JAG issuance is not configured: the
+      id-jag token type is accepted only on a provider configured with
+      op.WithIDJAGIssuance (IDJAG-019 pins the unconfigured case for that
+      type; IDJAG-013 pins the configured one).
 
   - id: TX-016
     severity: P0

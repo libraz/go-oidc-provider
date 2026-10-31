@@ -1,0 +1,278 @@
+# yaml-language-server: $schema=./schema.json
+feature: jwt_bearer_grant
+prefix: JBG
+title: JWT Bearer authorization grant (RFC 7523)
+specs:
+  - RFC 7523 — JWT Profile for OAuth 2.0 Client Authentication and Authorization Grants (§2.1, §3, §3.1)
+  - RFC 6749 §5.2 — Error Response
+  - RFC 9449 — OAuth 2.0 DPoP
+  - RFC 8705 — OAuth 2.0 Mutual-TLS Client Authentication
+
+description: |
+  The urn:ietf:params:oauth:grant-type:jwt-bearer grant at the token
+  endpoint, as enabled by op.WithJWTBearerGrant. The embedder declares each
+  trusted assertion issuer (exact iss, a static JWKS or an https JWKS URI,
+  the client_ids allowed to redeem its assertions) and maps the verified
+  assertion onto a local account. The OP verifies the assertion in a fixed
+  order (parse, issuer, typ, signature, claims, profile rules, replay), and
+  every refusal records the failing stage as the reason of a
+  jwt_bearer.rejected audit event. The issued access token carries no
+  refresh token and no id_token. The ID-JAG profile and the IdP-side
+  issuance are catalogued in id_jag.yaml.
+
+rows:
+  - id: JBG-001
+    severity: P0
+    spec: RFC 7523 §2.1; RFC 8414 §2
+    shape: value
+    behaviour: |
+      When op.WithJWTBearerGrant is configured, grant_types_supported lists
+      urn:ietf:params:oauth:grant-type:jwt-bearer. When it is not, the grant
+      is absent from discovery and a token request naming it receives 400
+      unsupported_grant_type. authorization_grant_profiles_supported is
+      absent when every trusted issuer uses the plain profile, and discovery
+      never names a trusted assertion issuer.
+    status: active
+
+  - id: JBG-002
+    severity: P0
+    spec: RFC 6749 §4.5
+    shape: identity
+    behaviour: |
+      The jwt-bearer URN is reserved for the built-in grant: op.New refuses
+      op.WithCustomGrant naming it in either option order, with or without
+      op.WithJWTBearerGrant, and refuses op.WithGrants naming grant.JWTBearer
+      without op.WithJWTBearerGrant. A custom grant under another URN stays
+      accepted next to the built-in grant.
+    status: active
+
+  - id: JBG-003
+    severity: P0
+    spec: RFC 7523 §3
+    shape: value
+    behaviour: |
+      op.New refuses an op.JWTBearerGrant with no issuers, a nil
+      ResolveSubject, an issuer with neither or both of JWKS and JWKSURI, an
+      empty or duplicated Issuer, an Issuer equal to the OP issuer, a JWKSURI
+      that is not https, or an empty AllowedClients. The unmodified
+      configuration is accepted.
+    status: active
+
+  - id: JBG-004
+    severity: P0
+    spec: RFC 7523 §2.1; RFC 6749 §5.1
+    shape: value
+    behaviour: |
+      A valid plain-profile assertion from an allowed client yields 200 with
+      token_type Bearer and an access token whose sub is the account
+      ResolveSubject returned, whose iss is the OP, whose client_id is the
+      authenticated client and whose aud is the OP issuer, with scope set to
+      the client's registered scopes without openid and no cnf. The response
+      carries no refresh_token and no id_token. A jwt_bearer.granted audit
+      event records the assertion issuer and the profile.
+    status: active
+
+  - id: JBG-005
+    severity: P0
+    spec: RFC 6749 §5.2
+    shape: identity
+    behaviour: |
+      A client authenticating with none receives 400 unauthorized_client
+      with the audit reason public_client, and ResolveSubject is not
+      called.
+    status: active
+
+  - id: JBG-006
+    severity: P0
+    spec: RFC 6749 §5.2
+    shape: identity
+    behaviour: |
+      A client missing from the assertion issuer's AllowedClients receives
+      400 unauthorized_client with the audit reason client_not_allowed, and
+      the refusal does not consume the assertion's jti. A client whose
+      registration lacks the jwt-bearer grant type receives 400
+      unauthorized_client.
+    status: active
+
+  - id: JBG-007
+    severity: P0
+    spec: RFC 7523 §3, §3.1
+    shape: value
+    behaviour: |
+      Each defective assertion yields 400 invalid_grant with the audit
+      reason of the stage that refused it. parse - not a JWS, alg none, alg
+      HS256. issuer - unknown iss, iss differing in case, iss absent. typ -
+      oauth-id-jag+jwt or at+jwt on a plain-profile issuer. signature -
+      signed by another key, kid absent from the issuer's keys. claims - aud
+      naming another server or absent, empty sub, exp absent or non-numeric
+      or negative or past or more than five minutes plus 60 seconds ahead,
+      nbf in the future. replay - jti absent, empty or longer than 256
+      characters. ResolveSubject is not called.
+    status: active
+
+  - id: JBG-008
+    severity: P1
+    spec: RFC 7523 §3
+    shape: value
+    behaviour: |
+      On the plain profile aud is accepted when it is the OP issuer, the
+      token endpoint URL, or an array containing either, and refused when an
+      array names only other servers. exp exactly five minutes plus 60
+      seconds ahead is accepted and one second further is refused. nbf
+      within 60 seconds ahead is accepted. A jti of exactly 256 characters
+      is accepted.
+    status: active
+
+  - id: JBG-009
+    severity: P0
+    spec: RFC 7523 §3
+    shape: order
+    behaviour: |
+      An assertion redeemed once is refused on the second attempt with 400
+      invalid_grant and the audit reason replay. A jti already spent as a
+      client_assertion by the same client does not make the assertion a
+      replay, because the two replay namespaces are separate.
+    status: active
+
+  - id: JBG-010
+    severity: P0
+    spec: RFC 7523 §3
+    shape: identity
+    behaviour: |
+      When ResolveSubject returns op.ErrUnknownAssertionSubject the response
+      is 400 access_denied (audit reason unknown_subject). When it returns a
+      subject the user store does not hold the response is 400 access_denied
+      (subject_not_live). When it returns an empty subject or another error
+      the response is 500 server_error (resolver_fault).
+    status: active
+
+  - id: JBG-011
+    severity: P1
+    spec: RFC 7523 §3
+    shape: value
+    behaviour: |
+      ResolveSubject receives the assertion issuer, the assertion sub
+      verbatim (including non-ASCII text), the authenticated client_id and
+      the full verified claim set, so a claim such as email can be read from
+      it.
+    status: active
+
+  - id: JBG-012
+    severity: P1
+    spec: RFC 6749 §3.3; RFC 8707 §2
+    shape: value
+    behaviour: |
+      The issued scope is the requested scope intersected with the client's
+      registered scopes with openid removed, or the registered scopes
+      without openid when none is requested. A request naming only
+      unregistered scopes is 400 invalid_scope and leaves the assertion
+      unspent. A requested resource that is registered for the client
+      becomes the access token audience; an unregistered resource is 400
+      invalid_target.
+    status: active
+
+  - id: JBG-013
+    severity: P0
+    spec: RFC 9449 §5, §6.1
+    shape: value
+    behaviour: |
+      A request presenting a valid DPoP proof receives token_type DPoP and
+      an access token whose cnf.jkt is the thumbprint of the proof key.
+    status: active
+
+  - id: JBG-014
+    severity: P0
+    spec: RFC 8705 §3
+    shape: value
+    behaviour: |
+      A request presenting a client certificate receives token_type Bearer
+      and an access token whose cnf x5t#S256 is the certificate thumbprint.
+    status: active
+
+  - id: JBG-015
+    severity: P1
+    spec: RFC 6749 §3.2
+    shape: identity
+    behaviour: |
+      A missing assertion parameter and a repeated assertion parameter are
+      each 400 invalid_request, and neither consumes the assertion.
+    status: active
+
+  - id: JBG-016
+    severity: P1
+    spec: RFC 7523 §3.1; RFC 6749 §5.2
+    shape: value
+    behaviour: |
+      When the issuer's key source is transiently unavailable the response
+      is 503 server_error with the audit reason key_source_unavailable, not
+      invalid_grant.
+    status: active
+    covered_by: internal/tokenendpoint.TestJWTBearer_IssuerKeySourceOutage_ServiceUnavailable
+    notes: |
+      The outage needs a key endpoint the OP can reach but that fails
+      transiently. The suite only reaches https hosts through the testkit
+      server, whose certificate the OP's key fetcher does not trust, so the
+      scenario is bound to the token endpoint test that injects the
+      transport.
+
+  - id: JBG-017
+    severity: P1
+    spec: RFC 7523 §3; RFC 9449; RFC 8705
+    shape: value
+    behaviour: |
+      Across profile x client authentication x request binding x assertion
+      cnf, a request from an authenticating client succeeds on the plain
+      profile whatever the assertion's cnf claim says (the plain profile
+      does not read it) and the access token carries the cnf of the
+      credential the request presented; a client authenticating with none
+      is 400 unauthorized_client in every combination.
+    status: active
+    cross_refs:
+      - id_jag#IDJAG-021
+    notes: |
+      Factors: profile {JWT, IDJAG}; client authentication {private_key_jwt,
+      client_secret_basic, none}; request binding {none, DPoP, mTLS};
+      assertion cnf {none, match, mismatch}. No pairwise generator was
+      available, so the set was built by hand: C1-C9 take (auth, binding,
+      cnf) from the Latin-square arrangement cnf = (auth + binding) mod 3
+      and alternate the profile so that each profile meets every level of
+      every other factor. C10-C11 are extra rows: IDJAG with a DPoP or mTLS
+      binding and a mismatching cnf, which the all-pairs rows only reach
+      through an unauthenticated client.
+
+        row  profile  auth                 binding  cnf       outcome
+        C1   JWT      private_key_jwt      none     none      200, no cnf
+        C2   IDJAG    private_key_jwt      DPoP     match     200, cnf.jkt
+        C3   JWT      private_key_jwt      mTLS     mismatch  200, cnf.x5t#S256
+        C4   IDJAG    client_secret_basic  none     match     400 invalid_grant (idjag)
+        C5   JWT      client_secret_basic  DPoP     mismatch  200, cnf.jkt
+        C6   IDJAG    client_secret_basic  mTLS     none      200, cnf.x5t#S256
+        C7   IDJAG    none                 none     mismatch  400 unauthorized_client
+        C8   JWT      none                 DPoP     none      400 unauthorized_client
+        C9   JWT      none                 mTLS     match     400 unauthorized_client
+        C10  IDJAG    private_key_jwt      DPoP     mismatch  400 invalid_grant (idjag)
+        C11  IDJAG    client_secret_basic  mTLS     mismatch  400 invalid_grant (idjag)
+
+      Pair coverage (C1-C9; the test recomputes it and fails on a gap):
+        profile x auth       JWT: pkjwt C1, basic C5, none C8 | IDJAG: pkjwt C2, basic C4, none C7
+        profile x binding    JWT: none C1, DPoP C5, mTLS C3 | IDJAG: none C4, DPoP C2, mTLS C6
+        profile x cnf        JWT: none C1, match C9, mismatch C3 | IDJAG: none C6, match C2, mismatch C7
+        auth x binding       pkjwt: C1 C2 C3 | basic: C4 C5 C6 | none: C7 C8 C9
+        auth x cnf           pkjwt: none C1, match C2, mismatch C3 | basic: match C4, mismatch C5, none C6
+                             none: mismatch C7, none C8, match C9
+        binding x cnf        none: none C1, match C4, mismatch C7 | DPoP: match C2, mismatch C5, none C8
+                             mTLS: mismatch C3, none C6, match C9
+      This row drives the JWT rows (C1, C3, C5, C8, C9); the IDJAG rows
+      run under IDJAG-021.
+
+  - id: JBG-018
+    severity: P0
+    spec: RFC 7523 §3
+    shape: identity
+    behaviour: |
+      An assertion with a valid signature whose aud names another
+      authorization server (its issuer, its token endpoint, or an array of
+      other servers) is 400 invalid_grant with the audit reason claims, and
+      ResolveSubject is not called. The same assertion addressed to this
+      server is accepted.
+    status: active

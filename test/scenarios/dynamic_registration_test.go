@@ -1148,8 +1148,10 @@ func TestScenario_DCR_VAL_02_ApplicationTypeURIScheme(t *testing.T) {
 func TestScenario_DCR_VAL_03_GrantTypesMustBeSupported(t *testing.T) {
 	t.Parallel()
 
-	// Default AllowedGrantTypes = {authorization_code, refresh_token};
-	// urn:ietf:params:oauth:grant-type:jwt-bearer is outside.
+	// Default AllowedGrantTypes = {authorization_code, refresh_token}.
+	// urn:ietf:params:oauth:grant-type:jwt-bearer is implemented
+	// (op.WithJWTBearerGrant) but stays outside that default set, so
+	// registration refuses it unless the embedder allows it.
 	f := newDCRFixture(t)
 	resp := f.post(t, f.mintIAT(t), "", map[string]any{
 		"redirect_uris": []string{"https://rp.test.invalid/cb"},

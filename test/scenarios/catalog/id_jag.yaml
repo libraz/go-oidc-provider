@@ -1,0 +1,289 @@
+# yaml-language-server: $schema=./schema.json
+feature: id_jag
+prefix: IDJAG
+title: Identity Assertion JWT Authorization Grant (ID-JAG)
+specs:
+  - draft-ietf-oauth-identity-assertion-authz-grant-06 — Identity Assertion JWT Authorization Grant (§3, §3.1, §4.3, §4.4, §5.1)
+  - RFC 8693 — OAuth 2.0 Token Exchange
+  - RFC 7523 §3 — JWT assertion claims
+
+description: |
+  Experimental. Two roles of the ID-JAG draft. As a resource authorization
+  server the OP redeems an ID-JAG through the jwt-bearer grant from an
+  issuer configured with op.AssertionProfileIDJAG (rows 001-009). As an
+  identity provider the OP issues an ID-JAG in exchange for one of its own
+  ID tokens when op.WithIDJAGIssuance is configured (rows 010-020). The
+  IdP signs with ES256 only, so the draft's RS256 interoperability
+  requirement is not met; that gap is recorded in IDJAG-022. The wire
+  shape follows the pinned draft revision and may change with it.
+
+rows:
+  - id: IDJAG-001
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §3.1, §4.4.1
+    shape: value
+    behaviour: |
+      An assertion from an ID-JAG issuer whose typ header is absent, JWT,
+      at+jwt or any other value is 400 invalid_grant with the audit reason
+      typ; oauth-id-jag+jwt is accepted.
+    status: active
+
+  - id: IDJAG-002
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.4.1
+    shape: value
+    behaviour: |
+      On an ID-JAG issuer aud must be exactly the OP issuer, as a string or
+      as a one-element array. The token endpoint URL, an array of two
+      members and another server are each 400 invalid_grant with the audit
+      reason claims.
+    status: active
+
+  - id: IDJAG-003
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §3.1, §4.4.1
+    shape: identity
+    behaviour: |
+      A client_id claim that is absent, empty or names a client other than
+      the authenticated one is 400 invalid_grant with the audit reason
+      idjag. A missing iat, or an iat in the future, is 400 invalid_grant
+      with the audit reason claims.
+    status: active
+
+  - id: IDJAG-004
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.4.1
+    shape: identity
+    behaviour: |
+      An ID-JAG carrying a tenant or aud_tenant claim is 400 invalid_grant
+      with the audit reason idjag, and ResolveSubject is not called. The
+      claim is refused rather than ignored because multi-tenant subjects
+      are not supported.
+    status: active
+
+  - id: IDJAG-005
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.4.1
+    shape: value
+    behaviour: |
+      A requested scope outside the ID-JAG's scope claim is 400
+      invalid_grant with the audit reason idjag. A request inside the claim
+      is issued exactly the requested scopes, and a request naming no scope
+      is issued the client's default narrowed to the claim.
+    status: active
+
+  - id: IDJAG-006
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.4.1; RFC 8707 §2
+    shape: value
+    behaviour: |
+      A resource claim naming a value outside the client's registered
+      resources is 400 invalid_grant (reason idjag). With a valid claim, a
+      requested resource inside the claim becomes the access token audience,
+      a requested resource outside it is 400 invalid_target, no request
+      makes the claimed resource the audience (several claimed and none
+      selected is 400 invalid_target), and a request with no claim follows
+      the client's registered resources. With neither, the audience is the
+      OP issuer.
+    status: active
+
+  - id: IDJAG-007
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.4.1, §9.11; RFC 7800
+    shape: identity
+    behaviour: |
+      A cnf claim must carry exactly one of jkt and x5t#S256 and it must
+      equal the thumbprint of the DPoP key or client certificate the request
+      presents; the access token then carries that same cnf. A jkt of another
+      key, an x5t#S256 of another certificate, a jkt while a certificate is
+      presented, a cnf while nothing is presented, both methods, the jwk
+      method and a non-object cnf are each 400 invalid_grant with the audit
+      reason idjag.
+    status: active
+
+  - id: IDJAG-008
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.4.3
+    shape: identity
+    behaviour: |
+      A valid ID-JAG redeemed by an allowed client yields an access token
+      for the account ResolveSubject returned, which receives the assertion
+      issuer, sub, client_id and the full claim set (including email); the
+      jwt_bearer.granted audit event records the profile id-jag and the
+      issuer. A sub that ResolveSubject does not know is 400 access_denied.
+    status: active
+
+  - id: IDJAG-009
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.4
+    shape: identity
+    behaviour: |
+      A client authenticating with none that presents an ID-JAG bound to the
+      DPoP key it proves is still 400 unauthorized_client: a confirmation
+      binding does not replace client authentication.
+    status: active
+
+  - id: IDJAG-010
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §3.1, §4.3
+    shape: value
+    behaviour: |
+      An issued ID-JAG has the header typ oauth-id-jag+jwt and alg ES256 and
+      verifies under the key published at the JWKS endpoint. Its claims are
+      iss the OP issuer, sub the ID token's sub, aud the requested audience,
+      client_id and scope and email from the policy decision, resource as
+      the requested string, iat the current time, exp five minutes later, a
+      non-empty jti, and auth_time and acr equal to the ID token's. cnf,
+      act, azp and nonce are absent when the request is unbound.
+    status: active
+
+  - id: IDJAG-011
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.3.2, §9.11; RFC 8693 §2.2
+    shape: value
+    behaviour: |
+      The exchange response has issued_token_type
+      urn:ietf:params:oauth:token-type:id-jag, token_type N_A (also when a
+      DPoP proof is presented), expires_in 300 and the ID-JAG in
+      access_token, with no refresh_token and no id_token. A DPoP proof puts
+      cnf.jkt into the ID-JAG, a client certificate puts cnf x5t#S256, and
+      both together put exactly one method.
+    status: active
+
+  - id: IDJAG-012
+    severity: P1
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §3.1
+    shape: value
+    behaviour: |
+      The ID-JAG lifetime is the policy decision's TTL capped at five
+      minutes, five minutes when the decision states none: two minutes
+      yields exp - iat = 120, ten minutes and none yield 300. The
+      remaining life of the ID token does not shorten it.
+    status: active
+
+  - id: IDJAG-013
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.3.1, §4.3.3
+    shape: identity
+    behaviour: |
+      With issuance configured an exchange is refused without calling the
+      policy when requested_token_type is absent or access_token, audience is
+      absent or repeated, an actor_token is sent, or subject_token_type is
+      access_token (all 400 invalid_request), when the id_token was issued
+      to another client (400 invalid_grant), when the client authenticates
+      with none (401 invalid_client), and when the subject_token is an
+      ID-JAG (400 invalid_grant).
+    status: active
+
+  - id: IDJAG-014
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.3
+    shape: value
+    behaviour: |
+      Policy outcomes map to errors: op.ErrIDJAGUnknownAudience is 400
+      invalid_target, op.ErrIDJAGDenied and a nil decision are 400
+      access_denied, any other error is 500 server_error, a decision with no
+      client_id is 500 server_error, a resource granted that was not
+      requested is 500 server_error, and a requested resource with none
+      granted is 400 invalid_target.
+    status: active
+
+  - id: IDJAG-015
+    severity: P1
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.3
+    shape: value
+    behaviour: |
+      A client registered only for openid and profile obtains an ID-JAG
+      whose scope and resource are in the resource server's namespace: the
+      requested scope and both requested resources appear in the ID-JAG
+      uncut, and the policy receives the request verbatim together with the
+      audience and the calling client.
+    status: active
+
+  - id: IDJAG-016
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.3, §4.4
+    shape: identity
+    behaviour: |
+      An ID-JAG issued by one provider is redeemed at a second provider that
+      trusts the first: the access token names the account ResolveSubject
+      mapped from the ID token's sub, has the resource AS as iss, the
+      client's client_id, the redeemed scope and the ID-JAG's resource as
+      audience, and carries no refresh token or id_token; a second
+      redemption is 400 invalid_grant. A provider trusting the issuer under
+      the plain profile refuses the ID-JAG on type, and an ID token is
+      refused on type at the ID-JAG profile.
+    status: active
+
+  - id: IDJAG-017
+    severity: P0
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §5.2
+    shape: identity
+    behaviour: |
+      A client registered for pairwise subjects cannot exchange its ID token
+      for an ID-JAG: the exchange is 400 invalid_grant and no pairwise sub
+      reaches a resource server. A client with public subjects at the same
+      provider still receives one.
+    status: active
+
+  - id: IDJAG-018
+    severity: P1
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §6, §7
+    shape: value
+    behaviour: |
+      With op.WithIDJAGIssuance configured, discovery lists the id-jag token
+      type in identity_chaining_requested_token_types_supported and the
+      token-exchange grant in grant_types_supported, and never publishes
+      id_jag_signing_alg_values_supported. Without it the former is absent.
+      A resource AS lists the id-jag profile in
+      authorization_grant_profiles_supported only when it trusts an issuer
+      under op.AssertionProfileIDJAG.
+    status: active
+
+  - id: IDJAG-019
+    severity: P1
+    spec: RFC 8693 §2.2
+    shape: value
+    behaviour: |
+      Without op.WithIDJAGIssuance a request naming the id-jag requested
+      token type keeps the RFC 8693 behaviour of a provider that supports
+      only access tokens: 400 invalid_request, and no
+      token_exchange.idjag_issued event is recorded. TX-015 pins the same
+      refusal for other token types.
+    status: active
+    cross_refs:
+      - token_exchange#TX-015
+
+  - id: IDJAG-020
+    severity: P1
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.3
+    shape: order
+    behaviour: |
+      A token_exchange.idjag_issued audit event is recorded once per
+      issued ID-JAG, for the calling client, and is not recorded for a
+      refused request.
+    status: active
+
+  - id: IDJAG-021
+    severity: P1
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §4.4; RFC 9449; RFC 8705
+    shape: value
+    behaviour: |
+      The ID-JAG-profile rows of the profile x client authentication x
+      request binding x assertion cnf combination set behave as tabulated in
+      JBG-017: matching cnf with DPoP (C2) yields cnf.jkt, no cnf with mTLS
+      (C6) yields cnf.x5t#S256, matching cnf with nothing presented (C4) and
+      mismatching cnf with DPoP or mTLS (C10, C11) are 400 invalid_grant,
+      and a client authenticating with none (C7) is 400 unauthorized_client.
+    status: active
+    cross_refs:
+      - jwt_bearer_grant#JBG-017
+
+  - id: IDJAG-022
+    severity: P2
+    spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §3
+    behaviour: |
+      An ID-JAG signed with RS256 is issued and accepted, as the draft
+      requires of identity providers and resource servers.
+    status: out-of-scope
+    out_of_scope_reason: "The OP signs with ES256 only by library policy, so it issues no RS256 ID-JAG. The IdP role is therefore partial against the draft's RS256 interoperability requirement; a resource server that implements only RS256 rejects this OP's ID-JAGs."
