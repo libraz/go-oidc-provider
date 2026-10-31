@@ -55,7 +55,7 @@ func TestCustomGrant_IDTokenEncryptedWhenClientRegistered(t *testing.T) {
 	if got := strings.Count(idt, "."); got != 4 {
 		t.Fatalf("id_token has %d dots, want 4 (compact JWE); the plain JWS reached the wire", got)
 	}
-	jwe, err := josev4.ParseEncrypted(idt,
+	jwe, err := josev4.ParseEncryptedCompact(idt,
 		[]josev4.KeyAlgorithm{josev4.RSA_OAEP_256},
 		[]josev4.ContentEncryption{josev4.A256GCM},
 	)

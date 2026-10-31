@@ -34,7 +34,7 @@ import (
 // verifies the JWS against the OP's signing JWKS, and returns the
 // claim map.
 func (r *rp) decryptAndVerify(rawJWE string) (map[string]any, error) {
-	jwe, err := josev4.ParseEncrypted(rawJWE,
+	jwe, err := josev4.ParseEncryptedCompact(rawJWE,
 		[]josev4.KeyAlgorithm{josev4.RSA_OAEP_256},
 		[]josev4.ContentEncryption{josev4.A256GCM},
 	)
@@ -46,7 +46,7 @@ func (r *rp) decryptAndVerify(rawJWE string) (map[string]any, error) {
 		return nil, fmt.Errorf("decrypt JWE: %w", err)
 	}
 
-	jws, err := josev4.ParseSigned(string(innerJWS),
+	jws, err := josev4.ParseSignedCompact(string(innerJWS),
 		[]josev4.SignatureAlgorithm{josev4.ES256},
 	)
 	if err != nil {

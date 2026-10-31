@@ -128,12 +128,12 @@ func TestHandler_EncryptionMetadataForcesJWTShape(t *testing.T) {
 	if segs := strings.Split(got, "."); len(segs) != 5 {
 		t.Fatalf("body must be a 5-segment JWE, got %d segments: %s", len(segs), got)
 	}
-	jwe, err := josev4.ParseEncrypted(got,
+	jwe, err := josev4.ParseEncryptedCompact(got,
 		[]josev4.KeyAlgorithm{josev4.RSA_OAEP_256},
 		[]josev4.ContentEncryption{josev4.A256GCM},
 	)
 	if err != nil {
-		t.Fatalf("ParseEncrypted: %v", err)
+		t.Fatalf("ParseEncryptedCompact: %v", err)
 	}
 	innerBytes, err := jwe.Decrypt(kp.priv)
 	if err != nil {
@@ -245,12 +245,12 @@ func TestHandler_JWTShape_EncryptedRSA(t *testing.T) {
 		t.Fatalf("body must be a 5-segment JWE, got %d segments: %s", len(segs), got)
 	}
 
-	jwe, err := josev4.ParseEncrypted(got,
+	jwe, err := josev4.ParseEncryptedCompact(got,
 		[]josev4.KeyAlgorithm{josev4.RSA_OAEP_256},
 		[]josev4.ContentEncryption{josev4.A256GCM},
 	)
 	if err != nil {
-		t.Fatalf("ParseEncrypted: %v", err)
+		t.Fatalf("ParseEncryptedCompact: %v", err)
 	}
 	if cty, _ := jwe.Header.ExtraHeaders["cty"].(string); cty != "JWT" {
 		t.Errorf("cty=%v want JWT", jwe.Header.ExtraHeaders["cty"])

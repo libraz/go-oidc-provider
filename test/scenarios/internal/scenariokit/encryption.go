@@ -121,7 +121,7 @@ func bigIntBytesE(e int) []byte {
 // do not need to re-decode the header.
 func DecryptJWE(tb testing.TB, jwe string, priv *rsa.PrivateKey) string {
 	tb.Helper()
-	parsed, err := josev4.ParseEncrypted(jwe,
+	parsed, err := josev4.ParseEncryptedCompact(jwe,
 		[]josev4.KeyAlgorithm{josev4.RSA_OAEP_256},
 		[]josev4.ContentEncryption{josev4.A128GCM, josev4.A256GCM})
 	if err != nil {

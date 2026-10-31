@@ -489,9 +489,9 @@ func TestSignedToken_VerifiesAgainstJWKS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignIDToken: %v", err)
 	}
-	parsed, err := josev4.ParseSigned(jws, []josev4.SignatureAlgorithm{josev4.ES256})
+	parsed, err := josev4.ParseSignedCompact(jws, []josev4.SignatureAlgorithm{josev4.ES256})
 	if err != nil {
-		t.Fatalf("ParseSigned: %v", err)
+		t.Fatalf("ParseSignedCompact: %v", err)
 	}
 	jwks := set.JWKS()
 	if len(jwks.Keys) == 0 {

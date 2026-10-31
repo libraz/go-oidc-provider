@@ -240,11 +240,11 @@ func TestJARMEncrypt_WithMetadataAndKey_EmitsNestedJWE(t *testing.T) {
 	}
 
 	// Decrypt and verify the inner JWS.
-	parsed, err := josev4.ParseEncrypted(got,
+	parsed, err := josev4.ParseEncryptedCompact(got,
 		[]josev4.KeyAlgorithm{josev4.RSA_OAEP_256},
 		[]josev4.ContentEncryption{josev4.A256GCM})
 	if err != nil {
-		t.Fatalf("ParseEncrypted: %v", err)
+		t.Fatalf("ParseEncryptedCompact: %v", err)
 	}
 	if cty, ok := parsed.Header.ExtraHeaders[josev4.HeaderContentType]; !ok || cty != "JWT" {
 		t.Errorf("inner cty=%v want JWT (extra=%v)", cty, parsed.Header.ExtraHeaders)
