@@ -69,6 +69,9 @@ func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 		PromptCreate:      true,
 		IDJAGGrantProfile: true,
 		IDJAGIssuance:     true,
+		// Client ID metadata documents: the full fixture carries the
+		// field, the minimal one pins its absence.
+		ClientIDMetadataDocuments: true,
 		// The grant list is an input rather than a feature bit, so it
 		// has to be widened by hand to stay coherent with the device
 		// and CIBA bits above: advertising their endpoints while the

@@ -487,14 +487,33 @@ func (d HTMLDriver) writeConsentClient(b *strings.Builder, locale string, client
 	line := d.messageOr(locale, "consent.subtitle",
 		map[string]string{"client_name": name}, consentClientFallback+name)
 	writeParagraph(b, line)
+	d.writeConsentClientOrigin(b, locale, client)
 }
 
-// Built-in English for the two consent lines no [FieldSpec] carries.
+// writeConsentClientOrigin emits, for a client resolved from a client ID
+// metadata document, the host that published the document and the host
+// this request redirects to, plus a warning when that redirect is
+// loopback. Both fields are empty for every other client.
+func (d HTMLDriver) writeConsentClientOrigin(b *strings.Builder, locale string, client ClientView) {
+	d.writeIntroLine(b, locale, "consent.metadata_document_host", "host",
+		client.MetadataDocumentHost, consentDocumentHostFallback)
+	d.writeIntroLine(b, locale, "consent.redirect_host", "host",
+		client.RedirectHost, consentRedirectHostFallback)
+	if client.RedirectLoopback {
+		writeParagraphAttrs(b, ` role="alert"`,
+			d.messageOr(locale, "consent.loopback_redirect_warning", nil, consentLoopbackFallback))
+	}
+}
+
+// Built-in English for the consent lines no [FieldSpec] carries.
 // They follow the same rule as [htmlLabelFor]: the catalogue answers
 // first, these answer when it does not.
 const (
-	consentClientFallback   = "Client: "
-	consentRequiredFallback = "(required)"
+	consentClientFallback       = "Client: "
+	consentRequiredFallback     = "(required)"
+	consentDocumentHostFallback = "Client information published by: "
+	consentRedirectHostFallback = "You will be returned to: "
+	consentLoopbackFallback     = "This request returns to an application on this device. Continue only if you started it from an application you trust."
 )
 
 // writeConsentApprovedField emits the single hidden field the

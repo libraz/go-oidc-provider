@@ -2,8 +2,11 @@ package authorizeendpoint
 
 import (
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -115,7 +118,7 @@ func initialAuthnState(
 		EntryAuthn:               entryAuthn(active, hint.reauth || willRunChooser || addAccount),
 		InteractionUID:           uid,
 		ClientID:                 client.ID,
-		Client:                   projectClientView(client),
+		Client:                   projectClientView(client, req.RedirectURI),
 		Subject:                  subject,
 		RemoteIP:                 clientIPFromRequest(r, deps),
 		UserAgent:                truncateUserAgent(r.UserAgent()),
@@ -211,11 +214,17 @@ func currentSubject(active *sessions.Active) string {
 // fixed by [interaction.ClientView] — adding a field here is a
 // deliberate widening of the template trust boundary and requires
 // its own ADR.
-func projectClientView(c *store.Client) interaction.ClientView {
+//
+// A client resolved from a client ID metadata document is self-asserted,
+// so its view also names the document host and this request's redirect
+// host (and whether that host is loopback) for the user to judge, and
+// drops the logo: hotlinking a document-supplied logo_uri lets the
+// document host observe the consent screen.
+func projectClientView(c *store.Client, redirectURI string) interaction.ClientView {
 	if c == nil {
 		return interaction.ClientView{}
 	}
-	return interaction.ClientView{
+	view := interaction.ClientView{
 		ClientID:  c.ID,
 		Name:      c.ClientName,
 		LogoURL:   c.LogoURI,
@@ -223,6 +232,28 @@ func projectClientView(c *store.Client) interaction.ClientView {
 		PolicyURI: c.PolicyURI,
 		TosURI:    c.TosURI,
 	}
+	if c.Source != store.ClientSourceMetadataDocument {
+		return view
+	}
+	view.LogoURL = ""
+	if u, err := url.Parse(c.ID); err == nil {
+		view.MetadataDocumentHost = u.Host
+	}
+	if u, err := url.Parse(redirectURI); err == nil {
+		view.RedirectHost = u.Hostname()
+		view.RedirectLoopback = isLoopbackHost(view.RedirectHost)
+	}
+	return view
+}
+
+// isLoopbackHost reports whether host is "localhost" or a loopback IP
+// literal (127.0.0.0/8, ::1).
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // setInteractionCookie seals uid under the interaction AAD and writes it as

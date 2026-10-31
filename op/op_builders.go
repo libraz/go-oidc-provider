@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
+	"github.com/libraz/go-oidc-provider/internal/cimd"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
@@ -27,6 +28,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
+	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
@@ -36,6 +38,50 @@ import (
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// clientStore returns the client store every endpoint resolves client_id
+// through: the client ID metadata document decorator when
+// [WithClientIDMetadataDocuments] is set, the configured store otherwise.
+// Reading [store.Store.Clients] directly would bypass the decorator.
+func (c *config) clientStore() store.ClientStore {
+	if c.clients != nil {
+		return c.clients
+	}
+	return c.store.Clients()
+}
+
+// buildClientStore installs the client ID metadata document decorator in
+// [config.clients]. It runs once per Provider so every endpoint shares one
+// document cache and one singleflight group.
+func buildClientStore(cfg *config, scopes *scoperegistry.Registry) {
+	if cfg.cimd == nil {
+		return
+	}
+	opts := registrationendpoint.MetadataDocumentOptions{
+		AllowedGrantTypes:        cfg.staticClientAllowedGrantTypes(),
+		AllowedResponseTypes:     cfg.staticClientAllowedResponseTypes(),
+		AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+		AllowedClientSigningAlgs: cfg.clientSigningJOSEAlgs(),
+		PairwiseEnabled:          cfg.pairwiseEnabled(),
+		JWEPolicy:                cfg.jwePolicy(),
+	}
+	resources := make([]string, 0, len(cfg.protectedResources))
+	for i := range cfg.protectedResources {
+		resources = append(resources, cfg.protectedResources[i].Resource)
+	}
+	cfg.clients = cimd.New(cimd.Config{
+		Inner: cfg.store.Clients(),
+		Validate: func(raw []byte, documentURL string) (*store.Client, error) {
+			return registrationendpoint.ValidateClientMetadataDocument(raw, documentURL, opts)
+		},
+		Allow:        cfg.cimd.Allow,
+		AllowPrivate: cfg.allowPrivateNetworkCIMD,
+		Audit:        cfg.effectiveAuditEmitter(),
+		Clock:        cfg.clock,
+		Resources:    resources,
+		PublicScopes: scopes.PublicNames(),
+	})
+}
 
 // buildMetricsCollector populates [config.metricsCollector] when
 // [WithPrometheus] supplied a registry. The function builds the
@@ -641,7 +687,7 @@ type assertionVerifiers struct {
 // explicitly permits issuer, token endpoint URL, and backchannel
 // authentication endpoint URL.
 func buildAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
-	resolver, err := clientauth.NewStoreJWKSResolver(cfg.store.Clients())
+	resolver, err := clientauth.NewStoreJWKSResolver(cfg.clientStore())
 	if err != nil {
 		return assertionVerifiers{}, &Error{
 			Code:        codeConfiguration,
@@ -887,7 +933,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 	coord, err := backchannel.NewCoordinator(backchannel.Config{
 		Issuer:                   cfg.issuer,
 		Signing:                  backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
-		Clients:                  cfg.store.Clients(),
+		Clients:                  cfg.clientStore(),
 		Grants:                   grants,
 		SubjectProjector:         backchannelSubjectProjector(cfg),
 		Deliverer:                deliverer,
@@ -1094,6 +1140,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 		PromptCreate:                       cfg.promptCreateEnabled(),
 		IDJAGGrantProfile:                  cfg.idjagGrantProfileEnabled(),
 		IDJAGIssuance:                      cfg.idjagIssuancePolicy != nil,
+		ClientIDMetadataDocuments:          cfg.cimd != nil,
 		EncryptionAlgsSupported:            cfg.effectiveEncryptionAlgs(),
 		EncryptionEncsSupported:            cfg.effectiveEncryptionEncs(),
 		InboundEncryptionAlgsSupported:     cfg.inboundEncryptionAlgs(),

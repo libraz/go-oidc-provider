@@ -26,6 +26,54 @@ func isFAPI2Profile(p profile.Profile) bool {
 	return false
 }
 
+// validateClientIDMetadataDocuments refuses the profile combinations
+// [WithClientIDMetadataDocuments] cannot serve. A FAPI profile presumes
+// clients with pre-agreed keys and registration, which a self-asserted
+// document client is not. A profile that drops the "none" method would
+// leave only private_key_jwt document clients, which this library does
+// not offer.
+func (c *config) validateClientIDMetadataDocuments() error {
+	if c.cimd == nil {
+		return nil
+	}
+	for _, p := range c.profiles {
+		if isFAPIProfile(p) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithClientIDMetadataDocuments is incompatible with FAPI profile " + p.String(),
+			}
+		}
+	}
+	if p, ok := profileWithoutNoneAuth(c.profiles, profile.AllowedClientAuthMethods); ok {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithClientIDMetadataDocuments requires the none client authentication method, which WithProfile " +
+				p.String() + " removes; private_key_jwt-only client ID metadata documents are not offered",
+		}
+	}
+	return nil
+}
+
+// isFAPIProfile reports whether p belongs to the FAPI family, FAPI-CIBA
+// included.
+func isFAPIProfile(p profile.Profile) bool {
+	return isFAPI2Profile(p) || p == profile.FAPICIBA
+}
+
+// profileWithoutNoneAuth returns the first profile whose client
+// authentication allow-list excludes "none". A nil list imposes no
+// restriction.
+func profileWithoutNoneAuth(profiles []profile.Profile, allowed func(profile.Profile) []string) (profile.Profile, bool) {
+	for _, p := range profiles {
+		methods := allowed(p)
+		if methods != nil && !slices.Contains(methods, "none") {
+			return p, true
+		}
+	}
+	var zero profile.Profile
+	return zero, false
+}
+
 // validateProfiles enforces the MUST clauses each enabled
 // [profile.Profile] inherits from its source spec. The check runs
 // after [config.applyDefaults] so default-on features are visible to

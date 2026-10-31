@@ -48,6 +48,7 @@ import (
 //nolint:gocognit,cyclop // Router construction keeps every protocol mount and dependency boundary visible together.
 func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scopes *scoperegistry.Registry, locales *i18n.Resolver, proxyTrust *proxy.Trust) (*routeMux, error) {
 	mux := newRouteMux()
+	buildClientStore(cfg, scopes)
 	discoveryInput := buildDiscoveryInput(cfg, scopes, locales)
 	if err := discovery.ValidateMTLSEndpointAliases(discoveryInput.Metadata, discoveryInput); err != nil {
 		return nil, &Error{
@@ -135,7 +136,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		strictCORS.Handler(userinfo.Handler(userinfo.HandlerDeps{
 			Keys:              keySet,
 			Issuer:            cfg.issuer,
-			Clients:           cfg.store.Clients(),
+			Clients:           cfg.clientStore(),
 			UserStore:         claimUsers,
 			Grants:            cfg.store.Grants(),
 			SubjectProjector:  subjectProjector,
@@ -159,7 +160,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		protocolEndpointPath(cfg, cfg.endpoints.Token),
 		strictCORS.Handler(tokenendpoint.Handler(tokenendpoint.Deps{
 			Issuer:                         cfg.issuer,
-			Clients:                        cfg.store.Clients(),
+			Clients:                        cfg.clientStore(),
 			Codes:                          cfg.store.AuthorizationCodes(),
 			RefreshTokens:                  cfg.store.RefreshTokens(),
 			Transactions:                   transactionalStore(cfg.store),
@@ -319,7 +320,7 @@ func mountGrantManagementEndpoint(mux *routeMux, cfg *config, assertionVerifier 
 		return
 	}
 	handler := strictCORS.Handler(grantmgmtendpoint.Handler(grantmgmtendpoint.Deps{
-		Clients:                  cfg.store.Clients(),
+		Clients:                  cfg.clientStore(),
 		Grants:                   cfg.store.Grants(),
 		RefreshTokens:            cfg.store.RefreshTokens(),
 		OpaqueAccessTokens:       cfg.store.OpaqueAccessTokens(),
@@ -439,7 +440,7 @@ func mountPAREndpoint(
 		protocolEndpointPath(cfg, cfg.endpoints.PAR),
 		strictCORS.Handler(parendpoint.Handler(parendpoint.Deps{
 			Issuer:                     cfg.issuer,
-			Clients:                    cfg.store.Clients(),
+			Clients:                    cfg.clientStore(),
 			PARs:                       cfg.store.PushedAuthRequests(),
 			Scopes:                     scopes,
 			RequestPolicy:              authorizeRequestPolicy(cfg),
@@ -480,7 +481,7 @@ func mountIntrospectionEndpoint(
 		protocolEndpointPath(cfg, cfg.endpoints.Introspect),
 		strictCORS.Handler(introspectendpoint.Handler(introspectendpoint.Deps{
 			Issuer:                     cfg.issuer,
-			Clients:                    cfg.store.Clients(),
+			Clients:                    cfg.clientStore(),
 			IntrospectionDelegates:     cfg.introspectionDelegates(),
 			RefreshTokens:              cfg.store.RefreshTokens(),
 			Grants:                     cfg.store.Grants(),
@@ -519,7 +520,7 @@ func mountRevocationEndpoint(
 		protocolEndpointPath(cfg, cfg.endpoints.Revoke),
 		strictCORS.Handler(revokeendpoint.Handler(revokeendpoint.Deps{
 			Issuer:                   cfg.issuer,
-			Clients:                  cfg.store.Clients(),
+			Clients:                  cfg.clientStore(),
 			RefreshTokens:            cfg.store.RefreshTokens(),
 			Keys:                     keySet,
 			Clock:                    cfg.clock,
@@ -594,7 +595,7 @@ func mountAuthorizeHandlers(
 	interactionPath := protocolEndpointPath(cfg, cfg.endpoints.Interaction)
 	spaLoginMount, spaStaticDir, spaCSP := spaWiringFor(cfg)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
-		Clients:                  cfg.store.Clients(),
+		Clients:                  cfg.clientStore(),
 		Codes:                    cfg.store.AuthorizationCodes(),
 		Grants:                   cfg.store.Grants(),
 		Transactions:             transactionalStore(cfg.store),
@@ -684,7 +685,7 @@ func mountEndSessionEndpoint(
 		ceremonyCORS.Handler(endsession.Handler(endsession.Deps{
 			Issuer:             cfg.issuer,
 			Origins:            ceremonyOrigins,
-			Clients:            cfg.store.Clients(),
+			Clients:            cfg.clientStore(),
 			Sessions:           sessMgr,
 			Keys:               keySet,
 			Clock:              cfg.clock,
@@ -739,7 +740,7 @@ func mountDeviceAuthorizationEndpoint(
 		strictCORS.Handler(devicecodeendpoint.Handler(devicecodeendpoint.Deps{
 			Issuer:                   cfg.issuer,
 			VerificationURI:          cfg.effectiveDeviceVerificationURI(),
-			Clients:                  cfg.store.Clients(),
+			Clients:                  cfg.clientStore(),
 			DeviceCodes:              deviceCodesFor(cfg),
 			Scopes:                   scopes,
 			Clock:                    cfg.clock,
@@ -848,7 +849,7 @@ func mountBackchannelAuthenticationEndpoint(
 		protocolEndpointPath(cfg, cfg.endpoints.Backchannel),
 		strictCORS.Handler(cibaendpoint.Handler(cibaendpoint.Deps{
 			Issuer:                   cfg.issuer,
-			Clients:                  cfg.store.Clients(),
+			Clients:                  cfg.clientStore(),
 			CIBARequests:             cibaRequestsFor(cfg),
 			Scopes:                   scopes,
 			Keys:                     keySet,

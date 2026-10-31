@@ -45,6 +45,7 @@
   "registration_endpoint_auth_methods_supported": [
     "initial_access_token"
   ],
+  "client_id_metadata_document_supported": true,
   "device_authorization_endpoint": "https://idp.example.com/oidc/device_authorization",
   "backchannel_authentication_endpoint": "https://idp.example.com/oidc/bc-authorize",
   "backchannel_token_delivery_modes_supported": [

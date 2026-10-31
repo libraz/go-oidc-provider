@@ -37,6 +37,7 @@ func (c *config) validate() error {
 		c.validateInteractions,
 		c.validateLocales,
 		c.validateFirstPartyClients,
+		c.validateClientIDMetadataDocuments,
 		c.validateOpenIDScopeOptional,
 		c.validateStrictOfflineAccess,
 		c.validateLoginFlow,

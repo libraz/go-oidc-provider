@@ -144,6 +144,30 @@ func goldenCases() []struct {
 			},
 		},
 		{
+			// A client resolved from a client ID metadata document: the
+			// document host (with its explicit port), the redirect host
+			// and the loopback warning sit under the client line, and the
+			// host strings go through the same escaping as the name.
+			name: "consent-cimd",
+			prompt: interaction.Prompt{
+				Type: "consent.scope",
+				Data: interaction.ConsentScopePromptData{
+					Client: interaction.ClientView{
+						ClientID:             "https://mcp.example.com:8443/client.json",
+						Name:                 `MCP <Client> & "Co"`,
+						MetadataDocumentHost: "mcp.example.com:8443",
+						RedirectHost:         "127.0.0.1",
+						RedirectLoopback:     true,
+					},
+					Scopes: []interaction.ConsentScope{
+						{Name: "openid", Description: "Sign you in", Required: true},
+					},
+				},
+				StateRef:  "ref-consent-cimd",
+				CSRFToken: "csrf-6",
+			},
+		},
+		{
 			// The picker the built-in chooser interaction emits. The
 			// golden pins that every account is a submit control of its
 			// own and that the add-account link is present, because the

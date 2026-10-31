@@ -6,6 +6,9 @@
   "consent.scope": "Authorize access",
   "consent.scope_required": "(required)",
   "consent.approved_scopes": "Approved access",
+  "consent.metadata_document_host": "Client information published by: {host}",
+  "consent.redirect_host": "You will be returned to: {host}",
+  "consent.loopback_redirect_warning": "This request returns to an application on this device. Continue only if you started it from an application you trust.",
 
   "interaction.chooser": "Choose an account",
   "chooser.session_id": "Account",

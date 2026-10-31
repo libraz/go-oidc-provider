@@ -1024,6 +1024,12 @@ func (e *validationError) Error() string {
 	return e.code + ": " + e.description
 }
 
+// ErrorCode returns the RFC 7591 wire code, the value audit records carry
+// as error_code.
+func (e *validationError) ErrorCode() string {
+	return e.code
+}
+
 // errInvalidClientMetadata constructs a validationError with the
 // "invalid_client_metadata" wire code (RFC 7591 §3.2.2).
 func errInvalidClientMetadata(desc string) error {

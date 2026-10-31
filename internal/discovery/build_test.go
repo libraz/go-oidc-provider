@@ -1002,6 +1002,29 @@ func TestBuild_IDJAGMetadata(t *testing.T) {
 	}
 }
 
+// TestBuild_ClientIDMetadataDocumentSupported pins that the flag is on the
+// wire exactly when the OP resolves client ID metadata documents, and that
+// S256 is advertised either way (the PKCE method those clients look for).
+func TestBuild_ClientIDMetadataDocumentSupported(t *testing.T) {
+	t.Parallel()
+
+	for _, enabled := range []bool{false, true} {
+		in := baseInput()
+		in.ClientIDMetadataDocuments = enabled
+		doc := discovery.Build(in)
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if got := strings.Contains(string(raw), `"client_id_metadata_document_supported":true`); got != enabled {
+			t.Errorf("enabled=%v: client_id_metadata_document_supported present = %v", enabled, got)
+		}
+		if !slices.Contains(doc.CodeChallengeMethodsSupported, "S256") {
+			t.Errorf("enabled=%v: code_challenge_methods_supported = %v, want S256", enabled, doc.CodeChallengeMethodsSupported)
+		}
+	}
+}
+
 // TestBuild_CIBA_OmittedWhenGrantOff confirms the four CIBA Core 1.0
 // §3 metadata fields stay absent from the wire when the OP does not
 // advertise the CIBA grant. An OP that mounted /bc-authorize without

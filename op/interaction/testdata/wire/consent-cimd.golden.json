@@ -1,0 +1,1 @@
+{"scopes":[{"name":"openid","description":"Sign you in","required":true}],"client":{"client_id":"https://mcp.example.com/client.json","name":"Example MCP Client","logo_url":"","client_uri":"","policy_uri":"","tos_uri":"","metadata_document_host":"mcp.example.com","redirect_host":"127.0.0.1","redirect_loopback":true}}

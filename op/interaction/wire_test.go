@@ -42,6 +42,18 @@ func TestPromptWireKeys_Golden(t *testing.T) {
 				{Name: "email", Description: "Email address"},
 			},
 		}},
+		{"consent-cimd", interaction.ConsentScopePromptData{
+			Client: interaction.ClientView{
+				ClientID:             "https://mcp.example.com/client.json",
+				Name:                 "Example MCP Client",
+				MetadataDocumentHost: "mcp.example.com",
+				RedirectHost:         "127.0.0.1",
+				RedirectLoopback:     true,
+			},
+			Scopes: []interaction.ConsentScope{
+				{Name: "openid", Description: "Sign you in", Required: true},
+			},
+		}},
 		{"interaction-chooser", interaction.ChooserPromptData{
 			Accounts: []interaction.ChooserAccount{
 				{SessionID: "sess-A", Subject: "alice", DisplayName: "Alice Example", AuthTime: stamp},

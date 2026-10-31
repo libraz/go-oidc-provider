@@ -112,6 +112,11 @@ type Input struct {
 	// true the document advertises the id-jag requested token type.
 	IDJAGIssuance bool
 
+	// ClientIDMetadataDocuments reports whether the OP resolves URL
+	// client_ids through client ID metadata documents. When true the
+	// document advertises client_id_metadata_document_supported.
+	ClientIDMetadataDocuments bool
+
 	// ClaimsSupported carries the explicit claim-name enumeration the
 	// embedder supplied through op.WithClaimsSupported. Nil leaves
 	// the discovery document's claims_supported field omitted, which
@@ -531,6 +536,7 @@ func Build(in Input) Document {
 	applyACRValuesSupported(in, &doc)
 	applyAuthorizationDetailsTypesSupported(in, &doc)
 	applyIDJAGFeature(in, &doc)
+	doc.ClientIDMetadataDocumentSupported = in.ClientIDMetadataDocuments
 	applyEncryptionFeature(in, &doc)
 	applyCIBAFeature(in, &doc)
 	applyStaticMetadata(in, &doc)

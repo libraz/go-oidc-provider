@@ -245,6 +245,27 @@ function renderConsent(prompt) {
     who.textContent = clientName + " is requesting access to:";
     formEl.appendChild(who);
   }
+  // Set only for a client resolved from a client ID metadata document.
+  if (client.metadata_document_host) {
+    const host = document.createElement("p");
+    host.className = "muted";
+    host.textContent = "Client information published by: " + client.metadata_document_host;
+    formEl.appendChild(host);
+  }
+  if (client.redirect_host) {
+    const redirect = document.createElement("p");
+    redirect.className = "muted";
+    redirect.textContent = "You will be returned to: " + client.redirect_host;
+    formEl.appendChild(redirect);
+  }
+  if (client.redirect_loopback) {
+    const warning = document.createElement("p");
+    warning.setAttribute("role", "alert");
+    warning.className = "error";
+    warning.textContent =
+      "This request returns to an application on this device. Continue only if you started it from an application you trust.";
+    formEl.appendChild(warning);
+  }
   const list = document.createElement("ul");
   list.className = "scopes";
   for (const s of scopes) {

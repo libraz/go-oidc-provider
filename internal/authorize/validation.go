@@ -337,12 +337,16 @@ func (req *Request) validateNonce(required bool) error {
 // at the token endpoint, so PKCE is the only defence against the
 // authorization-code interception attack (a stolen code is unusable
 // without the verifier). Confidential clients authenticate with client
-// credentials and remain governed by [Policy.PKCERequired] alone.
+// credentials and remain governed by [Policy.PKCERequired] alone, except
+// a client resolved from a client ID metadata document: its keys were
+// never vetted out of band, so PKCE is mandatory even with private_key_jwt.
 func clientRequiresPKCE(client *store.Client) bool {
 	if client == nil {
 		return false
 	}
-	return client.PublicClient || strings.EqualFold(client.ApplicationType, "native")
+	return client.PublicClient ||
+		strings.EqualFold(client.ApplicationType, "native") ||
+		client.Source == store.ClientSourceMetadataDocument
 }
 
 // validatePKCE enforces the OP's PKCE policy and delegates challenge

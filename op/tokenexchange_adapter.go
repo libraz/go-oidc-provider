@@ -35,7 +35,7 @@ func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispat
 			RevocationStrategy: cfg.atRevocation,
 			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
 			Grants:             cfg.store.Grants(),
-			Clients:            cfg.store.Clients(),
+			Clients:            cfg.clientStore(),
 			// An opaque subject_token records the OP-internal subject;
 			// the exchanged token must carry the per-client public one a
 			// JWT subject_token already does.

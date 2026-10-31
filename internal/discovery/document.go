@@ -118,6 +118,12 @@ type Document struct {
 	// "initial_access_token" only. Empty when the feature is disabled.
 	RegistrationEndpointAuthMethodsSupported []string `json:"registration_endpoint_auth_methods_supported,omitempty"`
 
+	// ClientIDMetadataDocumentSupported reports that the OP resolves an
+	// HTTPS client_id by fetching its client ID metadata document
+	// (draft-ietf-oauth-client-id-metadata-document). Omitted when the
+	// support is off.
+	ClientIDMetadataDocumentSupported bool `json:"client_id_metadata_document_supported,omitempty"`
+
 	// DeviceAuthorizationEndpoint is the absolute URL of the RFC 8628
 	// §3.1 device-authorization endpoint. Only emitted when the OP is
 	// configured to accept the device_code grant

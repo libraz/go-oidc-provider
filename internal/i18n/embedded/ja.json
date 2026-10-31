@@ -6,6 +6,9 @@
   "consent.scope": "アクセスを承認",
   "consent.scope_required": "（必須）",
   "consent.approved_scopes": "承認するアクセス",
+  "consent.metadata_document_host": "クライアント情報の公開元: {host}",
+  "consent.redirect_host": "承認後の戻り先: {host}",
+  "consent.loopback_redirect_warning": "この要求はこの端末上のアプリケーションに戻ります。信頼できるアプリケーションから開始した場合にのみ続行してください。",
 
   "interaction.chooser": "アカウントを選択",
   "chooser.session_id": "アカウント",
