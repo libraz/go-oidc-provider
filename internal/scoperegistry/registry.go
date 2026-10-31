@@ -82,7 +82,7 @@ func New(entries []Entry) *Registry {
 			continue
 		}
 		if strings.TrimSpace(e.Name) != e.Name {
-			//nolint:forbidigo // construction-time programmer error; op/op.go validates upstream and the panic is a structural backstop.
+			//nolint:forbidigo // construction-time programmer error; op/options_validate.go validates upstream and the panic is a structural backstop.
 			panic(fmt.Errorf("scoperegistry: scope name %q has surrounding whitespace", e.Name))
 		}
 		stored := Entry{

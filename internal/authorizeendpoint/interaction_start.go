@@ -170,9 +170,6 @@ func chooserAddAccountGroupID(req *authorize.Request, active *sessions.Active) s
 	return ""
 }
 
-// currentSubject returns the active session's subject or empty when there
-// is no session. The helper exists so the call sites stay free of nil
-// handling boilerplate.
 // entryAuthn records the authentication of the session a chain takes
 // its subject from. A chain that must re-authenticate, or that may bind
 // another account (the chooser, add-account), records none.
@@ -188,6 +185,9 @@ func entryAuthn(active *sessions.Active, mayNotServe bool) *authn.EntryAuthn {
 	}
 }
 
+// currentSubject returns the active session's subject or empty when there
+// is no session. The helper exists so the call sites stay free of nil
+// handling boilerplate.
 func currentSubject(active *sessions.Active) string {
 	if active == nil || active.Session == nil {
 		return ""

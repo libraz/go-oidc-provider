@@ -332,8 +332,6 @@ func mutateManagedGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 	return g, nil
 }
 
-// unionScopes returns base with every entry of add that is not already
-// present, preserving order (base first, then new entries).
 // removeScopes returns base without any element of drop, preserving
 // base's order.
 func removeScopes(base, drop []string) []string {
@@ -349,6 +347,8 @@ func removeScopes(base, drop []string) []string {
 	return out
 }
 
+// unionScopes returns base with every entry of add that is not already
+// present, preserving order (base first, then new entries).
 func unionScopes(base, add []string) []string {
 	seen := make(map[string]struct{}, len(base))
 	out := append([]string(nil), base...)

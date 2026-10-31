@@ -147,7 +147,7 @@ rows:
       configured in cross-method compatibility mode; the default is to
       require the registered method.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not expose a cross-method compatibility toggle (op/op.go has no WithRelaxedClientAuthMethod option), so the only observable behaviour is the strict-default rejection already covered by CA-COMMON-04. Will be revisited if an embedder requests cross-method acceptance.
+    out_of_scope_reason: v1.0 does not expose a cross-method compatibility toggle (package op has no WithRelaxedClientAuthMethod option), so the only observable behaviour is the strict-default rejection already covered by CA-COMMON-04. Will be revisited if an embedder requests cross-method acceptance.
 
   - id: CA-BASIC-04
     severity: P0

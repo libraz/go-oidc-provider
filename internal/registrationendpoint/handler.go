@@ -428,7 +428,7 @@ func managementClientID(path, base string) (string, bool) {
 }
 
 // joinPath concatenates mountPrefix and endpoint into a full path,
-// matching the rule applied in op/op.go so the handler computes the
+// matching joinPath in op/endpoints.go so the handler computes the
 // same absolute path the router mounts under.
 func joinPath(mountPrefix, endpoint string) string {
 	if mountPrefix == "/" || mountPrefix == "" {

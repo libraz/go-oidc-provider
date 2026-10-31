@@ -1,5 +1,5 @@
 // Package clone holds tiny defensive-copy helpers shared across the
-// library. The package exists so two unrelated call sites (op/op.go's
+// library. The package exists so two unrelated call sites (op/client_seed.go's
 // client-metadata projection and internal/registrationendpoint's DCR
 // canonicaliser) can share a single, audited implementation rather
 // than each re-deriving the helper inline.

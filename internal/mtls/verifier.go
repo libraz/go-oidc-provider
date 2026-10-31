@@ -44,7 +44,7 @@ type VerifierConfig struct {
 
 // NewVerifier returns a [*Verifier] from cfg. It never fails because
 // no field is currently mandatory; the (*Verifier, error) signature is
-// preserved so wiring code at op/op.go can mirror the [dpop.NewVerifier]
+// preserved so wiring code at op/op_builders.go can mirror the [dpop.NewVerifier]
 // shape and so future required fields can be enforced without a
 // signature break.
 //

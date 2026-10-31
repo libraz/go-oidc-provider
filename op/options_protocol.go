@@ -4,7 +4,7 @@ import "time"
 
 // BackchannelAllowsPrivateNetwork reports whether
 // [WithBackchannelAllowPrivateNetwork] was invoked with a true
-// argument against this config. The wiring layer (op.go) consults the
+// argument against this config. The wiring layer (op_builders.go) consults the
 // accessor when constructing the back-channel deliverer so the
 // per-config gate flows through to the SSRF check.
 //

@@ -10,7 +10,7 @@ import (
 // TestDeps_GrantRevocationFieldsAreReachable pins the revocation
 // plumbing surface: the GrantRevocations and RevocationStrategy fields
 // on [tokenendpoint.Deps] must stay assignable from outside the
-// package, because the wiring layer in op.go is the only thing that
+// package, because the wiring layer in op/op_router.go is the only thing that
 // populates them and a field that quietly loses its export breaks that
 // wiring without failing any handler test. This is a build-time check;
 // the zero values are the point, not an omission.

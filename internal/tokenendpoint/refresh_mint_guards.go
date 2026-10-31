@@ -67,29 +67,6 @@ func enforceGrantTombstoneMintRefusal(
 	return true
 }
 
-// revokePriorOpaqueAT revokes the opaque access tokens of the rotated
-// chain when the rotation issues an opaque-format token. The grant is
-// shared by every session of one subject on one client, so the teardown
-// is chain-scoped and widens to the grant only for a chain written before
-// chains were recorded or a store that cannot revoke by chain. The
-// function is a no-op when:
-//
-//   - The deployment runs JWT-only (no OpaqueAccessTokens substore
-//     wired). The JWT path leaves prior tokens alive on rotation by
-//     design — see [issueRefreshResponse].
-//   - The active per-audience policy returns
-//     [store.AccessTokenFormatJWT] for this resource. A mixed-format
-//     deployment may choose JWT for one audience and opaque for
-//     another; only the opaque branch revokes.
-//   - GrantID is empty. Refresh rotation always carries the parent
-//     grant id; an empty value indicates a programmer error in the
-//     exchanger. Treat the cascade as a silent no-op so a future
-//     refactor that surfaces empty grants does not crash the path.
-//
-// Revocation errors are returned before a new access token is minted.
-// This fail-closed ordering prevents a backend fault from creating a fresh
-// bearer credential while a prior opaque credential remains active. The
-// refresh-token grace path can safely retry the same idempotent cascade.
 // retirePriorOpaqueAccessTokens runs the prior-access-token cascade that
 // every refresh exit path minting an opaque-format access token owes, and
 // reports whether the caller may go on to mint. It is the single
@@ -139,6 +116,29 @@ func retirePriorOpaqueAccessTokens(
 	return true
 }
 
+// revokePriorOpaqueAT revokes the opaque access tokens of the rotated
+// chain when the rotation issues an opaque-format token. The grant is
+// shared by every session of one subject on one client, so the teardown
+// is chain-scoped and widens to the grant only for a chain written before
+// chains were recorded or a store that cannot revoke by chain. The
+// function is a no-op when:
+//
+//   - The deployment runs JWT-only (no OpaqueAccessTokens substore
+//     wired). The JWT path leaves prior tokens alive on rotation by
+//     design — see [issueRefreshResponse].
+//   - The active per-audience policy returns
+//     [store.AccessTokenFormatJWT] for this resource. A mixed-format
+//     deployment may choose JWT for one audience and opaque for
+//     another; only the opaque branch revokes.
+//   - GrantID is empty. Refresh rotation always carries the parent
+//     grant id; an empty value indicates a programmer error in the
+//     exchanger. Treat the cascade as a silent no-op so a future
+//     refactor that surfaces empty grants does not crash the path.
+//
+// Revocation errors are returned before a new access token is minted.
+// This fail-closed ordering prevents a backend fault from creating a fresh
+// bearer credential while a prior opaque credential remains active. The
+// refresh-token grace path can safely retry the same idempotent cascade.
 func revokePriorOpaqueAT(ctx context.Context, deps Deps, exchanged *refresh.Exchanged) error {
 	if deps.OpaqueAccessTokens == nil || exchanged.GrantID == "" || refreshMintPinnedJWT(exchanged) {
 		return nil

@@ -565,9 +565,8 @@ func csrfFromForm(r *http.Request) string {
 // noCredentialChainRan reports whether the completing chain established
 // no authentication of its own, so whatever the response reports has to
 // come from an authentication that already existed when the request
-// arrived. It is the predicate the resolver below branches on and the
-// one [terminalAuthorization.SessionBacked] carries, so the two cannot
-// disagree about what the chain did.
+// arrived. [interactionExit] routes on it, so the exit kind and the
+// record the response reads cannot disagree about what the chain did.
 func noCredentialChainRan(st authn.State) bool {
 	return len(st.Factors) == 0
 }
