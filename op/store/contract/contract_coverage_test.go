@@ -95,6 +95,7 @@ func harnessCaseTables() map[string][]string {
 		"RunEmailOTPs":     factorCaseNames(emailOTPCases),
 		"RunPasskeys":      factorCaseNames(passkeyCases),
 		"RunRecoveryCodes": factorCaseNames(recoveryCases),
+		"RunSSF":           factorCaseNames(ssfCases),
 		"RunTOTPs":         factorCaseNames(totpCases),
 	}
 	for _, g := range runGroups {

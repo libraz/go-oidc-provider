@@ -44,6 +44,11 @@
 //	RefreshRetryResponseStore  Store.RefreshTokens()  grant.RefreshToken is enabled
 //	                                                  and cookie keys are configured
 //	ClientRegistry             Store                  op.WithDynamicRegistration
+//	SharedSignalsStore         Store                  op.WithSharedSignals
+//
+// [SharedSignalsStore] is satisfied only when SSFStreams() and SSFEvents()
+// both return a non-nil substore; a nil accessor result fails op.New the same
+// way a missing interface does.
 //
 // Only grant.AuthorizationCode currently mounts /authorize. When one of these
 // is missing, op.New returns a configuration error naming both the interface

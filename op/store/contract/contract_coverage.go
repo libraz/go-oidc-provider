@@ -72,6 +72,9 @@ var allStoreInterfaces = []reflect.Type{
 	typeOf[store.RevokeByClient](),
 	typeOf[store.SessionDurabilityReporter](),
 	typeOf[store.SessionStore](),
+	typeOf[store.SharedSignalsStore](),
+	typeOf[store.SSFEventStore](),
+	typeOf[store.SSFStreamStore](),
 	typeOf[store.StaticClientReconciler](),
 	typeOf[store.Store](),
 	typeOf[store.TOTPStore](),
@@ -88,7 +91,8 @@ var allStoreInterfaces = []reflect.Type{
 // removal (DeleteIfUnchanged), first-writer-wins marking (Mark), a
 // single-use success (Accept), counters that must record every
 // increment (IncrementUses, IncrementPollViolation,
-// IncrementUserCodeStrike, IncrementUserCodeStrikeByUserCode),
+// IncrementUserCodeStrike, IncrementUserCodeStrikeByUserCode), a lease
+// handed to one claimer (ClaimDue),
 // monotonic or widening updates (UpdateAssertion, RevokeGrant, Touch),
 // a rotation with one winner (SaveRotationWithRetry), and the
 // closed-state-machine transitions out of Pending (Approve,
@@ -105,6 +109,7 @@ var singleWinnerNames = []string{
 	"Accept",
 	"Approve",
 	"ApproveByUserCode",
+	"ClaimDue",
 	"CompareAndSwap",
 	"Consume",
 	"DeleteIfUnchanged",

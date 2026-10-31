@@ -598,6 +598,73 @@ const (
 	AuditCIMDClientDenied = AuditEvent(auditevent.AuditCIMDClientDenied)
 )
 
+// Shared Signals Framework transmitter events. Fire when the OP runs as
+// an SSF 1.0 transmitter under [WithSharedSignals]. None of them updates
+// a metric.
+const (
+	// AuditSSFStreamCreated fires when a receiver creates its stream.
+	//
+	// Stable since v1.5.
+	AuditSSFStreamCreated = AuditEvent(auditevent.AuditSSFStreamCreated)
+
+	// AuditSSFStreamUpdated fires when a receiver updates, replaces or
+	// changes the status of its stream.
+	//
+	// Stable since v1.5.
+	AuditSSFStreamUpdated = AuditEvent(auditevent.AuditSSFStreamUpdated)
+
+	// AuditSSFStreamDeleted fires when a receiver deletes its stream,
+	// dropping every event still queued for it.
+	//
+	// Stable since v1.5.
+	AuditSSFStreamDeleted = AuditEvent(auditevent.AuditSSFStreamDeleted)
+
+	// AuditSSFSETEnqueued fires when a Security Event Token is queued
+	// for a stream.
+	//
+	// Stable since v1.5.
+	AuditSSFSETEnqueued = AuditEvent(auditevent.AuditSSFSETEnqueued)
+
+	// AuditSSFEnqueueFailed fires when a security event could not be
+	// queued for its receivers. The operation that raised the event is
+	// not failed. Extras["reason"] names the cause; fanout_capacity
+	// means the subject had more receivers than one fan-out reads.
+	//
+	// Stable since v1.5.
+	AuditSSFEnqueueFailed = AuditEvent(auditevent.AuditSSFEnqueueFailed)
+
+	// AuditSSFPushDelivered fires when a receiver accepts a pushed SET
+	// with 202.
+	//
+	// Stable since v1.5.
+	AuditSSFPushDelivered = AuditEvent(auditevent.AuditSSFPushDelivered)
+
+	// AuditSSFPushRejected fires when a receiver answers a pushed SET
+	// with 400. The SET is dropped without a retry.
+	//
+	// Stable since v1.5.
+	AuditSSFPushRejected = AuditEvent(auditevent.AuditSSFPushRejected)
+
+	// AuditSSFPushRetried fires when a push fails transiently (5xx, 429,
+	// network) and the SET is rescheduled.
+	//
+	// Stable since v1.5.
+	AuditSSFPushRetried = AuditEvent(auditevent.AuditSSFPushRetried)
+
+	// AuditSSFPushAbandoned fires when a SET is dropped after its last
+	// retry, or when its stream's authorization header can no longer be
+	// unsealed (Extras["reason"] = "seal").
+	//
+	// Stable since v1.5.
+	AuditSSFPushAbandoned = AuditEvent(auditevent.AuditSSFPushAbandoned)
+
+	// AuditSSFPollSETError fires when a polling receiver reports a SET
+	// it could not process (RFC 8936 setErrs). The SET is dropped.
+	//
+	// Stable since v1.5.
+	AuditSSFPollSETError = AuditEvent(auditevent.AuditSSFPollSETError)
+)
+
 // Provider lifecycle events.
 const (
 	// AuditStartupProfile fires once from [New], after validation

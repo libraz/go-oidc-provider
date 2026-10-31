@@ -226,6 +226,16 @@ var auditNamesNotYetWired = map[auditevent.Name]string{
 	auditevent.AuditPKCEViolation:          "a failed code_verifier check returns a protocol error with no audit record",
 	auditevent.AuditRedirectURIMismatch:    "a rejected redirect_uri returns a protocol error with no audit record",
 	auditevent.AuditAlgLegacyUsed:          "no path reports admitting a legacy algorithm",
+	auditevent.AuditSSFStreamCreated:       "the SSF stream management endpoint that emits it is not built yet",
+	auditevent.AuditSSFStreamUpdated:       "the SSF stream management endpoint that emits it is not built yet",
+	auditevent.AuditSSFStreamDeleted:       "the SSF stream management endpoint that emits it is not built yet",
+	auditevent.AuditSSFSETEnqueued:         "the SSF transmitter that emits it is not built yet",
+	auditevent.AuditSSFEnqueueFailed:       "the SSF transmitter that emits it is not built yet",
+	auditevent.AuditSSFPushDelivered:       "the SSF push worker that emits it is not built yet",
+	auditevent.AuditSSFPushRejected:        "the SSF push worker that emits it is not built yet",
+	auditevent.AuditSSFPushRetried:         "the SSF push worker that emits it is not built yet",
+	auditevent.AuditSSFPushAbandoned:       "the SSF push worker that emits it is not built yet",
+	auditevent.AuditSSFPollSETError:        "the SSF poll endpoint that emits it is not built yet",
 }
 
 // TestCatalogNames_ReachAnEmitterOrAreDeclaredUnemitted is the converse

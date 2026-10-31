@@ -202,6 +202,17 @@ const (
 	AuditCIMDFetchFailed  Name = "cimd.fetch_failed"
 	AuditCIMDClientDenied Name = "cimd.client_denied"
 
+	AuditSSFStreamCreated Name = "ssf.stream.created"
+	AuditSSFStreamUpdated Name = "ssf.stream.updated"
+	AuditSSFStreamDeleted Name = "ssf.stream.deleted"
+	AuditSSFSETEnqueued   Name = "ssf.set.enqueued"
+	AuditSSFEnqueueFailed Name = "ssf.enqueue_failed"
+	AuditSSFPushDelivered Name = "ssf.push_delivered"
+	AuditSSFPushRejected  Name = "ssf.push_rejected"
+	AuditSSFPushRetried   Name = "ssf.push_retried"
+	AuditSSFPushAbandoned Name = "ssf.push_abandoned"
+	AuditSSFPollSETError  Name = "ssf.poll_set_error"
+
 	// AuditStartupProfile records the security posture a Provider was
 	// constructed with: the declared profiles, features, and grants,
 	// plus the policy values they resolved to. It fires once per
@@ -340,6 +351,16 @@ var definitions = []Definition{
 	{Name: AuditCIMDFetched},
 	{Name: AuditCIMDFetchFailed},
 	{Name: AuditCIMDClientDenied},
+	{Name: AuditSSFStreamCreated},
+	{Name: AuditSSFStreamUpdated},
+	{Name: AuditSSFStreamDeleted},
+	{Name: AuditSSFSETEnqueued},
+	{Name: AuditSSFEnqueueFailed},
+	{Name: AuditSSFPushDelivered},
+	{Name: AuditSSFPushRejected},
+	{Name: AuditSSFPushRetried},
+	{Name: AuditSSFPushAbandoned},
+	{Name: AuditSSFPollSETError},
 	{Name: AuditStartupProfile},
 }
 
