@@ -179,6 +179,15 @@ issuer.
   bound the key the JOSE layer would decode. A proof carrying a 4096-bit RSA
   key is under 2 KB.
 
+- A standard claim whose value from the user store does not have the JSON
+  type OpenID Connect Core §5.1 gives it is left out of the ID Token and
+  `/userinfo`, with one WARN per claim name on the logger set with
+  `op.WithLogger`. Before, it was released as is:
+  a `TINYINT` `email_verified` arrived as a number that strict relying-party
+  libraries reject, and a string `"false"` arrived as a value a relying party
+  that only tests truthiness reads as verified. Custom claims are not checked.
+  `store.StandardClaims` builds the map with the right types.
+
 ### Changed
 
 - **BREAKING:** an option that takes a value is single-valued unless its
@@ -333,7 +342,24 @@ issuer.
 
 - Example `29-passkey` signs in with a password or a passwordless passkey.
 
+- `op.New` logs one INFO line, on the logger set with `op.WithLogger`, naming
+  where ID Token and `/userinfo` claims are read from (`claim_source`), and
+  adds `store_users="not read"` when that is not the backend's `Users()`. It
+  used to log only when an inferred `PrimaryPassword.Store` differed from
+  `Users()`.
+
+- Example `24-byo-userstore` wires the members table through
+  `PrimaryPassword.Store` alone, as `53-production-sql` does, instead of also
+  passing it to `op.WithUserStore`. Both examples build their claims with
+  `store.StandardClaims` and set `op.WithLogger`.
+
 ### Added
+
+- `store.StandardClaims` is the typed form of the OpenID Connect Core §5.1
+  standard claims, with `store.Address` for the address claim. Its `Map()`
+  returns a `User.Claims` map that leaves unset fields out, releases
+  `email_verified` and `phone_number_verified` only alongside the value they
+  qualify, and gives every claim the JSON type the specification fixes.
 
 - `op.WithDefaults(opts...)` marks options as defaults: a single-valued option
   inside it gives way when an option outside it sets the same setting,
@@ -499,8 +525,13 @@ issuer.
   revocations and consumed JTIs; the new `GCStats` fields report the counts.
 
 - `oidcsql.Store.ValidateSchema` checks that the database schema matches
-  what the adapter expects, without migrating. A missing column's error names
-  the `MIGRATIONS.md` section that adds it.
+  what the adapter expects, without migrating. One error lists every missing
+  table and column, and a missing column's line names the `MIGRATIONS.md`
+  section that adds it.
+
+- `oidcsql.Store.RunGC` sweeps at startup and then on an interval until its
+  context ends, reporting each sweep's `GCStats` to a callback. It blocks on
+  the caller's goroutine, so the embedder still decides which replica sweeps.
 
 - `op/storeadapter/sql/schema/TABLES.md` lists every adapter table with its
   `WithNaming` key, what it holds, the option or login step that makes the OP
@@ -521,6 +552,11 @@ issuer.
   sync and bcrypt users.
 
 ### Fixed
+
+- When a refresh-token replay is detected but the store fails to return the
+  replayed record, the `refresh.chain_revoke_failed` audit event carries the
+  store error as its `reason`. It used to report
+  `chain_root_lookup_failed`, the same as a record that does not exist.
 
 - The SQL adapter documentation said the consumed-JTI store's interface
   exposes GC. `Store.GC` now sweeps it.
