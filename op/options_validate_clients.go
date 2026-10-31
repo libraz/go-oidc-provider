@@ -1,0 +1,179 @@
+package op
+
+import (
+	"slices"
+	"strconv"
+
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
+	"github.com/libraz/go-oidc-provider/op/store"
+)
+
+// validateFirstPartyClients enforces the cross-cutting invariants
+// between [WithFirstPartyClients] and the static-client surface:
+//   - every advertised client_id MUST appear in [config.staticClients]
+//     after every option has been applied (the option site cannot
+//     enforce this because the two options are order-independent);
+//   - no FAPI 2.0 profile MAY be active simultaneously. FAPI 2.0
+//     forbids auto-consent because the profile mandates explicit
+//     user authorization for every protected resource.
+func (c *config) validateFirstPartyClients() error {
+	if len(c.firstPartyClients) == 0 {
+		return nil
+	}
+	for _, p := range c.profiles {
+		if isFAPI2Profile(p) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithFirstPartyClients is incompatible with FAPI 2.0 profile " + p.String(),
+			}
+		}
+	}
+	known := make(map[string]struct{}, len(c.staticClients))
+	for _, sc := range c.staticClients {
+		known[sc.ID] = struct{}{}
+	}
+	for _, id := range c.firstPartyClients {
+		if _, ok := known[id]; !ok {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithFirstPartyClients: unknown client_id " + id,
+			}
+		}
+	}
+	return nil
+}
+
+// validateStaticClients runs the same structural validator DCR drives
+// on inbound /register payloads against every embedder-supplied static
+// seed. The check closes the gap where an invalid redirect_uri /
+// backchannel_logout_uri / grant_type / response_type / subject_type
+// value persisted by [WithStaticClients] would only surface at the
+// first request that touched the offending field; running the
+// validator at construction time forces the misconfiguration to land
+// at op.New so embedders see it during boot.
+//
+// Scope catalogue checks are intentionally skipped — the embedder
+// authoritatively names the scopes their static clients carry, and
+// the runtime intersection at /authorize already rejects unregistered
+// values.
+//
+// The seam between this method and the registration-endpoint package
+// flows through a thin shim function so internal/* never imports op/
+// while op/ continues to own the wire-error wrapping.
+func (c *config) validateStaticClients() error {
+	if len(c.staticClients) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(c.staticClients))
+	opts := registrationendpoint.StaticClientValidationOptions{
+		AllowedGrantTypes:                    c.staticClientAllowedGrantTypes(),
+		AllowedResponseTypes:                 c.staticClientAllowedResponseTypes(),
+		AllowedClientAuthMethods:             c.allowedClientAuthMethods(),
+		AllowedClientSigningAlgs:             c.clientSigningJOSEAlgs(),
+		PairwiseEnabled:                      c.pairwiseEnabled(),
+		AllowLocalhostLoopback:               c.allowLocalhostLoopback,
+		AllowInsecureBackchannelLogoutForDev: c.allowInsecureBackchannelLogoutForDev,
+		JWEPolicy:                            c.jwePolicy(),
+	}
+	for i := range c.staticClients {
+		seed := c.staticClients[i]
+		if _, duplicate := seen[seed.ID]; duplicate {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "WithStaticClients[" + strconv.Itoa(i) +
+					"]: duplicate client_id " + seed.ID,
+			}
+		}
+		seen[seed.ID] = struct{}{}
+		if err := c.validateStaticClientSecretFormat(i, seed); err != nil {
+			return err
+		}
+		if err := registrationendpoint.ValidateStaticClient(seed, opts); err != nil {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "WithStaticClients[" + strconv.Itoa(i) +
+					"] (client_id " + seed.ID + "): " + err.Error(),
+				Cause: err,
+			}
+		}
+	}
+	return nil
+}
+
+// validateStaticClientSecretFormat enforces the promise
+// [WithHighEntropyClientSecrets] is built on: with that option set,
+// no client may be stored under the password KDF.
+//
+// The check runs against the projected record rather than the seed's
+// input fields, so it catches a hash that arrived any way at all —
+// [ConfidentialClient.Secret], a pre-computed [ConfidentialClient.SecretHash]
+// produced by the wrong helper, or a builder added later. Refusing at
+// construction is the point: the alternative is an OP that boots, runs,
+// and quietly answers an unknown client_id in microseconds while
+// answering this one in ninety milliseconds.
+func (c *config) validateStaticClientSecretFormat(index int, seed store.Client) error {
+	if !c.highEntropyClientSecrets {
+		return nil
+	}
+	if seed.PreviousSecretHash != "" && !clientauth.IsHighEntropyEncoding(seed.PreviousSecretHash) {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithStaticClients[" + strconv.Itoa(index) +
+				"] (client_id " + seed.ID + "): WithHighEntropyClientSecrets requires a previous secret " +
+				"provisioned through NewClientSecret or HashHighEntropyClientSecret; " +
+				"set ConfidentialClient.PreviousSecretHash, not PreviousSecret",
+		}
+	}
+	if seed.SecretHash == "" || clientauth.IsHighEntropyEncoding(seed.SecretHash) {
+		return nil
+	}
+	return &Error{
+		Code: codeConfiguration,
+		Description: "WithStaticClients[" + strconv.Itoa(index) +
+			"] (client_id " + seed.ID + "): WithHighEntropyClientSecrets requires a secret " +
+			"provisioned through NewClientSecret or HashHighEntropyClientSecret; " +
+			"ConfidentialClient.Secret hashes with Argon2id, which this option does not admit",
+	}
+}
+
+// staticClientAllowedGrantTypes returns the grant_type whitelist the
+// static-client validator runs against. Static clients are trusted
+// configuration: the embedder authoritatively names the grants their
+// clients participate in. The validator therefore admits every
+// grant_type the library implements plus any custom grant the embedder
+// wired through [WithCustomGrant], so a seed listing
+// `["authorization_code", "refresh_token"]` flows through cleanly even
+// when the OP only mounts the CIBA grant at runtime — the runtime
+// dispatcher rejects an unsupported grant on the wire side, and the
+// static-client gate stays focused on structural rules (malformed
+// values, unknown wire form).
+//
+// The library half comes from [builtinGrantTypeWireList] rather than a
+// second transcription of the same wires: a grant added to the library
+// is admitted here with no parallel edit. Membership is unconditional,
+// independent of which grants this deployment enabled — a seed naming
+// a grant the OP does not mount still receives unsupported_grant_type
+// at /token, which is the surface where "configured but not enabled"
+// belongs.
+func (c *config) staticClientAllowedGrantTypes() []string {
+	allowed := builtinGrantTypeWireList()
+	for _, h := range c.customGrants {
+		if h == nil {
+			continue
+		}
+		name := h.Name()
+		if name != "" && !slices.Contains(allowed, name) {
+			allowed = append(allowed, name)
+		}
+	}
+	return allowed
+}
+
+// staticClientAllowedResponseTypes returns the response_type whitelist
+// the static-client validator runs against. v1.0 ships with "code"
+// only at the authorization endpoint, so the helper hard-codes the
+// single value.
+func (c *config) staticClientAllowedResponseTypes() []string {
+	return []string{"code"}
+}
