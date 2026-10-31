@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -200,7 +201,7 @@ func requireLiveRefreshSubject(
 	if !grantIsOwnConsent(exchanged.Origin) {
 		lineage, err := findGrant(ctx, deps, exchanged.GrantID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 			return nil, false
 		}
 		if lineage == nil {
@@ -275,7 +276,7 @@ func handleRefreshTokenTransaction(
 	// the client is told anything, and in both settle directions.
 	cascade.run(ctx, deps)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	staged.copyTo(w)
@@ -367,7 +368,7 @@ func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (refreshInputs,
 		RequestedScope: oidcscope.Parse(r.PostForm.Get("scope")),
 	}
 	if in.Token == "" {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "refresh_token is required")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "refresh_token is required")
 		return refreshInputs{}, false
 	}
 	return in, true
@@ -401,7 +402,7 @@ func exchangeRefresh(
 ) (*refresh.Exchanged, bool) {
 	exchanger, err := newRefreshExchanger(deps)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return nil, false
 	}
 	exchanged, err := exchanger.Exchange(ctx, refresh.ExchangeInput{
@@ -429,11 +430,11 @@ func writeRefreshExchangeError(w http.ResponseWriter, err error) {
 		errors.Is(err, refresh.ErrTokenExpired),
 		errors.Is(err, refresh.ErrTokenReplayed),
 		errors.Is(err, refresh.ErrClientMismatch):
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
 	case errors.Is(err, refresh.ErrScopeWidening):
-		writeError(w, http.StatusBadRequest, errInvalidScope,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 			"requested scope exceeds the original grant")
 	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -47,11 +48,11 @@ func issueRefreshResponse(
 	now := deps.now().UTC()
 	authCtx, err := refreshAuthContext(ctx, deps, exchanged)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
 	}
 	if !retirePriorOpaqueAccessTokens(ctx, w, deps, client, exchanged, transactional) {
@@ -71,14 +72,14 @@ func issueRefreshResponse(
 	}
 	exchanged, err = withChainID(exchanged)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	publicSubject := exchanged.Subject
 	if !exchanged.SubjectPublic {
 		publicSubject, err = projectPublicSubject(ctx, deps, exchanged.Subject, client)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
 	}
@@ -103,7 +104,7 @@ func issueRefreshResponse(
 		},
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	idTokenExtra := idTokenExtraClaims(deps, user, exchanged.Scope, authCtx.Claims)
@@ -120,13 +121,13 @@ func issueRefreshResponse(
 		Extra:    idTokenExtra,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	if idToken != "" {
 		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
 	}
@@ -140,7 +141,7 @@ func issueRefreshResponse(
 		GrantID:              chainGrantIDForResponse(deps, exchanged),
 	}
 	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedForRotation(exchanged, authCtx, authorizationDetails), binding, &response, rotation); err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	writeSuccess(w, response)

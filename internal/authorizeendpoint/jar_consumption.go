@@ -17,12 +17,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// maxJARRequestURIBody caps the body size a JAR request_uri lookup may
-// retrieve. The signed JWT is small in practice (a few KiB); 64 KiB
-// matches the form-body cap so an attacker cannot push the OP into a
-// large allocation through this side channel.
-const maxJARRequestURIBody = int64(64 * 1024)
-
 // jarRequestURITimeout caps the HTTP fetch for a JAR request_uri. The
 // budget mirrors the JWKS fetcher so a malicious upstream cannot stall
 // the request thread.
@@ -306,7 +300,7 @@ func jarRequestURIPolicy(allowPrivate bool) securefetch.Policy {
 		AllowPrivateNetwork: allowPrivate,
 		AllowedSchemes:      schemes,
 		Timeout:             jarRequestURITimeout,
-		MaxBodyBytes:        maxJARRequestURIBody,
+		MaxBodyBytes:        securefetch.DefaultMaxBody,
 		// MaxRedirects=0 (the default) refuses every 30x; the redirect
 		// surfaces as a non-2xx status the fetch-error classifier
 		// reports separately.

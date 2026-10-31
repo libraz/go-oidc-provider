@@ -85,12 +85,3 @@ func WriteAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
 		WriteOAuthError(w, http.StatusInternalServerError, ErrServerError, "")
 	}
 }
-
-// StampNoStore writes the cache-control headers RFC 7662 §4 / RFC 7009
-// §2.2 / RFC 7591 §3.2 mandate on every response, success or failure.
-// The error path goes through [httpx.WriteError] which stamps the same
-// headers; this helper covers the success path so the two never drift.
-func StampNoStore(w http.ResponseWriter) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-}

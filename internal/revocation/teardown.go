@@ -64,11 +64,12 @@ const (
 	widthGrant
 	widthChain
 	widthToken
+	widthJTI
 )
 
 // Scope names the credentials one teardown retires. Construct it with
 // [WholeGrant], [CompromisedGrantAccessTokens], [AccessTokensOfGrant],
-// [OpaqueAccessTokensOfChain] or [IssuedCredentials]; the zero value
+// [OpaqueAccessTokensOfChain], [IssuedCredentials] or [JWTAccessTokenByJTI]; the zero value
 // retires nothing, which makes an unset scope a no-op rather than an
 // accidental grant-wide sweep.
 type Scope struct {
@@ -86,6 +87,11 @@ type Scope struct {
 
 	// chainID names the refresh chain a chain-wide scope retires.
 	chainID string
+
+	// jti and expiresAt name the one JWT access token a JTI scope
+	// retires: its identifier and its own "exp".
+	jti       string
+	expiresAt time.Time
 
 	width   width
 	classes class
@@ -165,6 +171,22 @@ func IssuedCredentials(accessTokenID, refreshToken string) Scope {
 	}
 }
 
+// JWTAccessTokenByJTI returns the scope covering the single JWT access
+// token identified by jti, issued under grantID and expiring at expiresAt.
+// It is the RFC 7009 revocation of one presented JWT: under the
+// grant-tombstone strategy it writes a per-JTI denylist row rather than a
+// grant tombstone, so the grant's other tokens keep verifying. The row
+// outlives expiresAt by [ClockSkewAllowance].
+func JWTAccessTokenByJTI(jti, grantID string, expiresAt time.Time) Scope {
+	return Scope{
+		grantID:   grantID,
+		jti:       jti,
+		expiresAt: expiresAt,
+		width:     widthJTI,
+		classes:   classAccessTokens,
+	}
+}
+
 // Surface names the substore rung a [Failure] came from. The values are
 // a stable enum so an audit consumer can pre-aggregate them.
 const (
@@ -193,6 +215,12 @@ type Outcome struct {
 	// it as "there was nothing to retire": it is the one state in
 	// which the OP confirmed a compromise and retired nothing.
 	UnresolvedGrant bool
+
+	// JTIPersisted reports that a [JWTAccessTokenByJTI] scope wrote a
+	// revocation row. It is false under the none strategy and when no
+	// substore backs the active strategy, where the token keeps
+	// verifying until its own "exp".
+	JTIPersisted bool
 }
 
 // Complete reports whether every rung in scope ran.
@@ -213,14 +241,19 @@ func (o Outcome) Err() error {
 	return errors.Join(errs...)
 }
 
+// ClockSkewAllowance is the slack added past a token's expiry before its
+// revocation record may be dropped, for a verifier whose clock trails the
+// OP's.
+const ClockSkewAllowance = 5 * time.Minute
+
 // TombstoneRetention returns how long past its RevokedAt a grant
 // tombstone must survive: the access-token TTL (one hour when unset)
-// plus five minutes for a verifier whose clock trails the OP's.
+// plus [ClockSkewAllowance].
 func TombstoneRetention(accessTokenTTL time.Duration) time.Duration {
 	if accessTokenTTL <= 0 {
 		accessTokenTTL = time.Hour
 	}
-	return accessTokenTTL + 5*time.Minute
+	return accessTokenTTL + ClockSkewAllowance
 }
 
 // Revoker retires grant-issued credentials. All substore fields are
@@ -255,6 +288,31 @@ type Revoker struct {
 	Reason string
 }
 
+// NewRevoker returns a Revoker over the given substores. now stamps grant
+// tombstones, accessTokenTTL sizes their retention through
+// [TombstoneRetention], and reason labels them.
+func NewRevoker(
+	refreshTokens store.RefreshTokenStore,
+	opaqueAccessTokens store.OpaqueAccessTokenStore,
+	accessTokens store.AccessTokenRegistry,
+	grantRevocations store.GrantRevocationStore,
+	strategy store.AccessTokenRevocationStrategy,
+	accessTokenTTL time.Duration,
+	now time.Time,
+	reason string,
+) Revoker {
+	return Revoker{
+		RefreshTokens:      refreshTokens,
+		OpaqueAccessTokens: opaqueAccessTokens,
+		AccessTokens:       accessTokens,
+		GrantRevocations:   grantRevocations,
+		Strategy:           strategy,
+		Now:                now.UTC(),
+		TombstoneRetention: TombstoneRetention(accessTokenTTL),
+		Reason:             reason,
+	}
+}
+
 // Run retires everything in scope and reports what it could not
 // retire. It never fails the request on the caller's behalf: each rung
 // is attempted independently of the others, so one unreachable
@@ -268,6 +326,8 @@ func (r Revoker) Run(ctx context.Context, s Scope) Outcome {
 		return r.runChain(ctx, s)
 	case widthToken:
 		return r.runToken(ctx, s)
+	case widthJTI:
+		return r.runJTI(ctx, s)
 	case widthNone:
 		return Outcome{}
 	default:
@@ -359,6 +419,21 @@ func (r Revoker) runToken(ctx context.Context, s Scope) Outcome {
 		if err := r.RefreshTokens.RevokeChain(ctx, s.refreshToken); err != nil {
 			out.add(SurfaceRefreshTokens, err)
 		}
+	}
+	return out
+}
+
+// runJTI retires one JWT access token by its identifier under the active
+// strategy. Store faults are reported as a [SurfaceJWTAccessTokens] failure.
+func (r Revoker) runJTI(ctx context.Context, s Scope) Outcome {
+	persisted, err := revokeJWTAccessTokenByJTI(ctx, JWTGrantCascadeOpts{
+		AccessTokens:       r.AccessTokens,
+		GrantRevocations:   r.GrantRevocations,
+		RevocationStrategy: r.Strategy,
+	}, s.jti, s.grantID, s.expiresAt.Add(ClockSkewAllowance).UTC())
+	out := Outcome{JTIPersisted: persisted}
+	if err != nil {
+		out.add(SurfaceJWTAccessTokens, err)
 	}
 	return out
 }

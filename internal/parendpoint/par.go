@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -32,20 +33,17 @@ type successResponse struct {
 // PAR record. Decomposing the body keeps the function under cyclop's
 // max-complexity gate while remaining readable.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		stampNoStore(w)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !httpx.EnforceMethod(w, r, http.MethodPost) {
 		return
 	}
-	if !isFormContent(r.Header.Get("Content-Type")) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"content-type must be application/x-www-form-urlencoded")
 		return
 	}
 	endpointsupport.LimitFormBody(w, r)
 	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
 	dpopJKT, client, ok := authenticateWithDPoP(w, r, deps)
@@ -60,7 +58,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	// pairs a signed "request" with a forbidden "request_uri" survive
 	// to the parser unscathed.
 	if values.Get("request_uri") != "" {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"request_uri is not permitted in a /par request")
 		return
 	}
@@ -118,7 +116,7 @@ func validateRequestExtensions(
 	if rejection == nil {
 		return true
 	}
-	writeError(w, http.StatusBadRequest, rejection.Code, rejection.Description)
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, rejection.Code, rejection.Description)
 	return false
 }
 
@@ -151,14 +149,14 @@ func consumeJARRequestObject(
 			// expectation is the generic invalid_request — a
 			// missing required parameter is the canonical
 			// invalid_request shape per RFC 6749 §5.2.
-			writeError(w, http.StatusBadRequest, errInvalidRequest,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 				"request object is required by the active profile")
 			return nil, false
 		}
 		return values, true
 	}
 	if deps.JAR == nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequestObject,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequestObject,
 			"request is not supported by this OP")
 		return nil, false
 	}
@@ -186,14 +184,14 @@ func consumeJARRequestObject(
 // wording either.
 func writeJARError(w http.ResponseWriter, err error) {
 	if errors.Is(err, jar.ErrKeySourceUnavailable) {
-		writeError(w, http.StatusServiceUnavailable, errServerError, jar.Description(err))
+		endpointsupport.WriteOAuthError(w, http.StatusServiceUnavailable, errServerError, jar.Description(err))
 		return
 	}
 	if errors.Is(err, jar.ErrClientIDMismatch) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
 		return
 	}
-	writeError(w, http.StatusBadRequest, errInvalidRequestObject, jar.Description(err))
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequestObject, jar.Description(err))
 }
 
 // authenticateWithDPoP runs DPoP proof verification and client
@@ -258,7 +256,7 @@ func applyDPoPJKT(w http.ResponseWriter, values url.Values, jkt string) (url.Val
 	}
 	committed := values.Get("dpop_jkt")
 	if committed != "" && committed != jkt {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"DPoP proof key does not match the dpop_jkt commitment")
 		return nil, false
 	}
@@ -317,7 +315,7 @@ func parseAuthorizeRequest(w http.ResponseWriter, values url.Values, authenticat
 	// would invite recursive lookups. Reject before parsing so the error
 	// message stays specific.
 	if values.Get("request_uri") != "" {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"request_uri is not permitted in a /par request")
 		return nil, false
 	}
@@ -327,7 +325,7 @@ func parseAuthorizeRequest(w http.ResponseWriter, values url.Values, authenticat
 		return nil, false
 	}
 	if req.ClientID != "" && req.ClientID != authenticatedID {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"client_id does not match the authenticated client")
 		return nil, false
 	}
@@ -358,10 +356,10 @@ func applyClaimsToggle(req *authorize.Request, enabled bool) {
 func writeAuthorizeError(w http.ResponseWriter, err error) {
 	var ae *authorize.Error
 	if errors.As(err, &ae) {
-		writeError(w, http.StatusBadRequest, ae.Code, ae.Description)
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, ae.Code, ae.Description)
 		return
 	}
-	writeError(w, http.StatusBadRequest, errInvalidRequest, "request could not be parsed")
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "request could not be parsed")
 }
 
 // persist marshals a [authorize.RequestSnapshot] into the PAR record and
@@ -374,12 +372,12 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, req *authori
 	snapshot := authorize.SnapshotFrom(req, now)
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "could not marshal request snapshot")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "could not marshal request snapshot")
 		return
 	}
 	uri, err := newRequestURI()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "could not allocate request_uri")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "could not allocate request_uri")
 		return
 	}
 	expiresAt := now.Add(deps.TTL)
@@ -394,7 +392,7 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, req *authori
 		// ErrAlreadyExists here means a 32-byte collision under
 		// crypto/rand — fatal randomness fault. Surface server_error so
 		// the operator sees the alarm bell rather than a silent retry.
-		writeError(w, http.StatusInternalServerError, errServerError, "could not persist pushed authorization request")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "could not persist pushed authorization request")
 		return
 	}
 	writeSuccess(w, successResponse{
@@ -409,10 +407,8 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, req *authori
 // so the generic 200 used elsewhere in the library would understate the
 // state change.
 func writeSuccess(w http.ResponseWriter, body successResponse) {
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(body)
+	httpx.StampNoStore(w)
+	_ = httpx.WriteJSON(w, http.StatusCreated, body)
 }
 
 // authenticate resolves the client credentials carried by the request,
@@ -441,7 +437,7 @@ func authenticate(
 			Now:               deps.now(),
 			Audit:             deps.auditEmitter(),
 		},
-		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), auditClientAuthnFailure,
+		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), endpointsupport.EventClientAuthnFailure,
 			"client authentication failed at PAR endpoint"),
 	)
 }

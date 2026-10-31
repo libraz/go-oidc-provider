@@ -12,6 +12,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -80,7 +81,7 @@ func parseScope(
 	if err != nil {
 		switch {
 		case errors.Is(err, ciba.ErrMissingScope):
-			writeError(w, http.StatusBadRequest, errInvalidRequest,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 				"scope parameter is required")
 		case errors.Is(err, ciba.ErrScopeMissingOpenID):
 			deps.auditEmitter().Emit(ctx, audit.Event{
@@ -92,10 +93,10 @@ func parseScope(
 					"reason": "scope_missing_openid",
 				},
 			})
-			writeError(w, http.StatusBadRequest, errInvalidScope,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"the openid scope value is required for ciba")
 		default:
-			writeError(w, http.StatusBadRequest, errInvalidRequest,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 				"scope parameter is invalid")
 		}
 		return nil, false
@@ -106,12 +107,12 @@ func parseScope(
 	}
 	for _, s := range scope {
 		if _, ok := allowed[s]; !ok {
-			writeError(w, http.StatusBadRequest, errInvalidScope,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"requested scope is not permitted for this client")
 			return nil, false
 		}
 		if !deps.Scopes.Allows(s, client.ID) {
-			writeError(w, http.StatusBadRequest, errInvalidScope,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"scope is restricted to a different client")
 			return nil, false
 		}
@@ -144,19 +145,19 @@ func parseResource(w http.ResponseWriter, form url.Values, client *store.Client)
 		}
 		canonical, err := resourceindicator.Canonicalize(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, errInvalidTarget,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 				"resource parameter is not a valid absolute URI")
 			return nil, false
 		}
 		if !resourceindicator.Contains(client.Resources, canonical) {
-			writeError(w, http.StatusBadRequest, errInvalidTarget,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 				"resource is not registered for this client")
 			return nil, false
 		}
 		out = append(out, canonical)
 	}
 	if len(out) > 1 {
-		writeError(w, http.StatusBadRequest, errInvalidTarget,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 			"multiple resource indicators are not supported on the backchannel-authentication endpoint")
 		return nil, false
 	}
@@ -186,7 +187,7 @@ func parseACRValues(w http.ResponseWriter, raw string, deps Deps) ([]string, boo
 	}
 	for _, v := range values {
 		if !slices.Contains(deps.ACRValuesSupported, v) {
-			writeError(w, http.StatusBadRequest, errInvalidRequest,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 				"acr_values entry "+v+" is not advertised in acr_values_supported")
 			return nil, false
 		}
@@ -200,11 +201,11 @@ func parseBindingMessage(w http.ResponseWriter, raw string) (string, bool) {
 	value, err := ciba.ValidateBindingMessage(raw)
 	if err != nil {
 		if errors.Is(err, ciba.ErrBindingMessageTooLong) {
-			writeError(w, http.StatusBadRequest, errInvalidBindingMessage,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidBindingMessage,
 				"binding_message exceeds the OP-supported length")
 			return "", false
 		}
-		writeError(w, http.StatusBadRequest, errInvalidBindingMessage,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidBindingMessage,
 			"binding_message is invalid")
 		return "", false
 	}
@@ -233,7 +234,7 @@ func parseRequestedExpiry(
 		if trimmed != "" {
 			n, err := strconv.ParseInt(trimmed, 10, 64)
 			if err == nil && n > int64(FAPICIBAMaxExpiry.Seconds()) {
-				writeError(w, http.StatusBadRequest, errInvalidRequest,
+				endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 					"requested_expiry exceeds FAPI-CIBA 10-minute cap")
 				return 0, false
 			}
@@ -241,7 +242,7 @@ func parseRequestedExpiry(
 	}
 	value, err := ciba.ParseRequestedExpiry(raw, deps.MaxExpiresIn)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"requested_expiry must be a positive integer")
 		return 0, false
 	}
@@ -263,7 +264,7 @@ func parseUserCode(w http.ResponseWriter, raw string) (string, bool) {
 	if strings.TrimSpace(raw) == "" {
 		return "", true
 	}
-	writeError(w, http.StatusBadRequest, errInvalidRequest,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 		"user_code parameter is not supported")
 	return "", false
 }
@@ -272,7 +273,7 @@ func parseClientNotificationToken(w http.ResponseWriter, raw string) bool {
 	if strings.TrimSpace(raw) == "" {
 		return true
 	}
-	writeError(w, http.StatusBadRequest, errInvalidRequest,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 		"client_notification_token parameter is not supported")
 	return false
 }

@@ -9,6 +9,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // expectedUIDLength is the byte length every base64-url-no-pad encoding
@@ -447,7 +449,7 @@ func (s *spaTerminalWriter) writeEnvelope(envelope map[string]any) {
 		}
 		out[k] = vs
 	}
-	stampNoStore(s.inner)
+	httpx.StampNoStore(s.inner)
 	out.Set("Content-Type", "application/json; charset=utf-8")
 	body, _ := json.Marshal(envelope)
 	s.inner.WriteHeader(http.StatusOK)

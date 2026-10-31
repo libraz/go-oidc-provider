@@ -1,6 +1,9 @@
 package tokenendpoint
 
-import "github.com/libraz/go-oidc-provider/op/store"
+import (
+	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op/store"
+)
 
 // tokenBinding bundles the sender-constraint fields a token-endpoint
 // response inherits from the inbound request. Issuance code threads
@@ -27,10 +30,10 @@ func (b tokenBinding) confirmation() map[string]string {
 	}
 	out := make(map[string]string, 2)
 	if b.DPoPJKT != "" {
-		out["jkt"] = b.DPoPJKT
+		out[tokens.CnfJKT] = b.DPoPJKT
 	}
 	if b.MTLSThumbprint != "" {
-		out["x5t#S256"] = b.MTLSThumbprint
+		out[tokens.CnfX5tS256] = b.MTLSThumbprint
 	}
 	return out
 }

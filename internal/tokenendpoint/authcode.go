@@ -9,8 +9,10 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
@@ -133,10 +135,10 @@ func parseAuthCodeRequest(w http.ResponseWriter, r *http.Request) (authCodeInput
 	}
 	switch {
 	case in.Code == "":
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "code is required")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "code is required")
 		return authCodeInputs{}, false
 	case in.RedirectURI == "":
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "redirect_uri is required")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "redirect_uri is required")
 		return authCodeInputs{}, false
 	}
 	// PKCE enforcement is profile-conditional: when the issued code
@@ -168,7 +170,7 @@ func exchangeAuthCode(
 		Clock: deps.clockFunc(),
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return nil, false
 	}
 	exchanged, err := exchanger.Exchange(ctx, authcode.ExchangeInput{
@@ -218,20 +220,20 @@ func writeAuthCodeExchangeError(
 		errors.Is(err, authcode.ErrCodeExpired),
 		errors.Is(err, authcode.ErrClientMismatch),
 		errors.Is(err, authcode.ErrRedirectURIMismatch):
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
 	case errors.Is(err, authcode.ErrCodeReplayed):
 		// A replayed code is treated as evidence that the
 		// chain is compromised. Revoke every refresh token descended
 		// from the same grant before responding.
 		emitCodeReplayDetected(ctx, deps, authcode.ReplayGrantID(err))
 		revokeChainForCode(ctx, deps, code, authcode.ReplayGrantID(err))
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
 	case errors.Is(err, pkce.ErrChallengeMethodUnsupported),
 		errors.Is(err, pkce.ErrVerifierFormat),
 		errors.Is(err, pkce.ErrVerifierMismatch):
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "PKCE verification failed")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "PKCE verification failed")
 	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 	}
 }
 
@@ -319,11 +321,11 @@ func issueAuthCodeResponse(
 	now := deps.now().UTC()
 	authCtx, err := codeAuthContext(ctx, deps, exchanged)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
 	}
 	authorizationDetails, ok := reduceAuthorizationDetails(w, requestedAuthorizationDetails, authCtx.AuthorizationDetails)
@@ -332,12 +334,12 @@ func issueAuthCodeResponse(
 	}
 	publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	chainID, err := refresh.NewChainID()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	accessToken, err := mintAccessToken(
@@ -356,7 +358,7 @@ func issueAuthCodeResponse(
 		accessTokenOverrides{Authorization: &authCtx, ChainID: chainID},
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	var idToken string
@@ -377,13 +379,13 @@ func issueAuthCodeResponse(
 		})
 		if err != nil {
 			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
-			writeError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
 		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
 		if err != nil {
 			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
-			writeError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
 	}
@@ -400,7 +402,7 @@ func issueAuthCodeResponse(
 	refreshToken, err := issueRefreshToken(ctx, deps, refreshIn)
 	if err != nil {
 		revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	if !enforceAuthCodeGrantTombstoneMintRefusal(ctx, w, deps, exchanged.GrantID, exchanged.IssuedAt) {
@@ -473,11 +475,11 @@ func enforceAuthCodeGrantTombstoneMintRefusal(
 	}
 	revoked, err := grantClosedToIssuance(ctx, deps.GrantRevocations, grantID, issuedAt)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
 	if revoked {
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
 		return false
 	}
 	return true
@@ -709,7 +711,7 @@ func mintJWTAccessToken(
 	authorizationDetails []map[string]any,
 	over accessTokenOverrides,
 ) (string, error) {
-	jti, err := newJTI()
+	jti, err := keys.RandomBase64URL(jtiByteLength)
 	if err != nil {
 		return "", err
 	}
@@ -1069,18 +1071,17 @@ func findGrant(ctx context.Context, deps Deps, grantID string) (*store.Grant, er
 // library synthesises from [store.User]'s own columns rather than from
 // its Claims map.
 //
-// user is the record [lookupLiveSubject] resolved before the mint. The
-// function returns nil for an empty request or a nil user so the caller
-// can guard the Extra assignment with a simple non-nil check.
-func projectIDTokenClaims(user *store.User, req *authorize.ClaimsRequest) map[string]any {
-	if req == nil || len(req.IDToken) == 0 || user == nil {
+// source is the [userclaims.Source] projection of the record
+// [lookupLiveSubject] resolved before the mint. The function returns nil
+// for an empty request so the caller can guard the Extra assignment with
+// a simple non-nil check.
+func projectIDTokenClaims(source map[string]any, req *authorize.ClaimsRequest) map[string]any {
+	if req == nil || len(req.IDToken) == 0 {
 		return nil
 	}
-	source := userclaims.Source(user)
-	reserved := tokens.IDTokenReservedClaims()
 	out := map[string]any{}
 	for name, spec := range req.IDToken {
-		if _, isReserved := reserved[name]; isReserved {
+		if tokens.IsIDTokenReservedClaim(name) {
 			// Standard id_token claims are issued by the library
 			// itself; the projector never overwrites them. The
 			// "acr" claim in particular is delegated to the
@@ -1112,15 +1113,17 @@ func idTokenExtraClaims(deps Deps, user *store.User, responseScope []string, req
 	if user == nil {
 		return nil
 	}
-	out := projectIDTokenClaims(user, req)
 	scopes := idTokenClaimScopes(deps.IDTokenScopeClaims, responseScope)
+	if (req == nil || len(req.IDToken) == 0) && len(scopes) == 0 {
+		return nil
+	}
+	source := userclaims.Source(user)
+	out := projectIDTokenClaims(source, req)
 	if len(scopes) == 0 {
 		return out
 	}
-	source := userclaims.Source(user)
-	reserved := tokens.IDTokenReservedClaims()
 	for name := range userclaims.ScopeClaimNames(scopes, deps.CustomScopeClaims) {
-		if _, isReserved := reserved[name]; isReserved || claimsRequestNames(req, name) {
+		if tokens.IsIDTokenReservedClaim(name) || claimsRequestNames(req, name) {
 			continue
 		}
 		if v, ok := source[name]; ok {

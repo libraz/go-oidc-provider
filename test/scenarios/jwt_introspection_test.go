@@ -174,7 +174,7 @@ func TestScenario_JINT_003_DefaultJSONWhenAcceptOmitted(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
 	}
-	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Fatalf("Content-Type=%q want application/json (default JSON path)", got)
 	}
 	var env map[string]any

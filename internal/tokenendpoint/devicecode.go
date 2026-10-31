@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	dcgrant "github.com/libraz/go-oidc-provider/internal/grants/devicecode"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -44,7 +45,7 @@ const (
 func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	ctx := r.Context()
 	if deps.DeviceCodes == nil {
-		writeError(w, http.StatusBadRequest, errUnsupportedGrantType,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnsupportedGrantType,
 			"grant_type is not supported")
 		return
 	}
@@ -91,7 +92,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	}
 	issued, err := prepareDeviceCodeResponse(ctx, deps, client, authorized, user, devicecode.GrantID(in.DeviceCode), binding)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	_, ok = consumeDeviceCode(ctx, w, deps, in.DeviceCode)
@@ -116,7 +117,7 @@ type deviceCodeInputs struct {
 func parseDeviceCodeRequest(w http.ResponseWriter, r *http.Request) (deviceCodeInputs, bool) {
 	in := deviceCodeInputs{DeviceCode: r.PostForm.Get("device_code")}
 	if in.DeviceCode == "" {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "device_code is required")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "device_code is required")
 		return deviceCodeInputs{}, false
 	}
 	return in, true
@@ -178,7 +179,7 @@ func applyPollDecision(
 	switch decision.Decision {
 	case devicecode.PollDecisionAuthorizationPending:
 		emitDeviceCodeReject(ctx, deps, clientID, errAuthorizationPending)
-		writeError(w, http.StatusBadRequest, errAuthorizationPending,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAuthorizationPending,
 			"authorization request is still pending")
 		return false
 	case devicecode.PollDecisionSlowDown:
@@ -189,17 +190,17 @@ func applyPollDecision(
 				_ = deps.DeviceCodes.Deny(ctx, deviceCode, "poll_abuse")
 			}
 		}
-		writeError(w, http.StatusBadRequest, errSlowDown,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errSlowDown,
 			"polling interval has been increased; back off and retry")
 		return false
 	case devicecode.PollDecisionAccessDenied:
 		emitDeviceCodeReject(ctx, deps, clientID, errAccessDenied)
-		writeError(w, http.StatusBadRequest, errAccessDenied,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAccessDenied,
 			"authorization request was denied")
 		return false
 	case devicecode.PollDecisionExpiredToken:
 		emitDeviceCodeReject(ctx, deps, clientID, errExpiredToken)
-		writeError(w, http.StatusBadRequest, errExpiredToken,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errExpiredToken,
 			"device_code expired or already consumed")
 		return false
 	case devicecode.PollDecisionEmit:
@@ -207,7 +208,7 @@ func applyPollDecision(
 	case devicecode.PollDecisionInvalid:
 		fallthrough
 	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
 }
@@ -232,16 +233,16 @@ func lookupDeviceCode(
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			emitDeviceCodeReject(ctx, deps, clientID, errExpiredToken)
-			writeError(w, http.StatusBadRequest, errExpiredToken,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errExpiredToken,
 				"device_code expired or already consumed")
 			return nil, false
 		}
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return nil, false
 	}
 	if rec.ClientID != clientID {
 		emitDeviceCodeReject(ctx, deps, clientID, errInvalidGrant)
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "device_code rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "device_code rejected")
 		return nil, false
 	}
 	return rec, true
@@ -316,29 +317,29 @@ func deviceCodeAuthErrorCode(err error) string {
 func writeDeviceCodeAuthError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, dcgrant.ErrGrantNotPermitted):
-		writeError(w, http.StatusBadRequest, errUnauthorizedClient,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
 			"client is not authorized for the device_code grant")
 	case errors.Is(err, dcgrant.ErrScopeForbidden):
-		writeError(w, http.StatusBadRequest, errInvalidScope,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 			"granted scope exceeds the client's registered set")
 	case errors.Is(err, dcgrant.ErrCnfBindingMismatch),
 		errors.Is(err, dcgrant.ErrCnfBindingMissing):
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"sender-constraint binding does not match the device-authorization record")
 	case errors.Is(err, dcgrant.ErrSubjectMissing):
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"device authorization is not associated with an end user")
 	case errors.Is(err, dcgrant.ErrPendingApproval):
-		writeError(w, http.StatusBadRequest, errAuthorizationPending,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAuthorizationPending,
 			"authorization request is still pending")
 	case errors.Is(err, dcgrant.ErrDenied):
-		writeError(w, http.StatusBadRequest, errAccessDenied,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAccessDenied,
 			"authorization request was denied")
 	case errors.Is(err, dcgrant.ErrExpiredOrConsumed):
-		writeError(w, http.StatusBadRequest, errExpiredToken,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errExpiredToken,
 			"device_code expired or already consumed")
 	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 	}
 }
 
@@ -379,13 +380,13 @@ func consumeDeviceCode(
 		switch {
 		case errors.Is(err, store.ErrAlreadyConsumed),
 			errors.Is(err, store.ErrNotFound):
-			writeError(w, http.StatusBadRequest, errExpiredToken,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errExpiredToken,
 				"device_code expired or already consumed")
 		case errors.Is(err, store.ErrConflict):
-			writeError(w, http.StatusBadRequest, errInvalidGrant,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 				"device_code is not in a consumable state")
 		default:
-			writeError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		}
 		return nil, false
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -265,7 +266,7 @@ func createGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Gra
 	grantID := in.NewGrantID
 	if grantID == "" {
 		var err error
-		grantID, err = newRandomB64(uidByteLength)
+		grantID, err = keys.RandomBase64URL(uidByteLength)
 		if err != nil {
 			return nil, err
 		}

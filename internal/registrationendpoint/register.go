@@ -10,6 +10,8 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -151,7 +153,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 // audit log entry the operator reconciles by dropping the orphan
 // client / RAT pair.
 func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, m ClientMetadata, ver iatVerification) {
-	clientID, err := newOpaqueID(clientIDBytes)
+	clientID, err := keys.RandomBase64URL(clientIDBytes)
 	if err != nil {
 		deps.logger().Error("dcr.client_id.generate_failed", "err", err)
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
@@ -168,7 +170,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 			return
 		}
 	}
-	rat, err := newOpaqueID(ratBytes)
+	rat, err := keys.RandomBase64URL(ratBytes)
 	if err != nil {
 		deps.logger().Error("dcr.rat.generate_failed", "err", err)
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
@@ -367,7 +369,7 @@ func newClientSecret(highEntropy bool) (raw, hash string, err error) {
 	if highEntropy {
 		return clientauth.NewHighEntropySecret()
 	}
-	raw, err = newOpaqueID(clientSecretBytes)
+	raw, err = keys.RandomBase64URL(clientSecretBytes)
 	if err != nil {
 		return "", "", err
 	}
@@ -384,14 +386,10 @@ func newClientSecret(highEntropy bool) (raw, hash string, err error) {
 // The status is 201 for new registrations and 200 for management
 // reads; the caller passes the value.
 func writeRegistrationResponse(w http.ResponseWriter, status int, body registrationResponse) {
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	// Encoding a fixed-shape struct never fails at runtime; an error
-	// here would be a programmer bug. The response carries
-	// credentials, but they were minted for delivery to this client
+	httpx.StampNoStore(w)
+	// The response carries credentials minted for delivery to this client
 	// over TLS, which is the documented purpose of the response.
-	_ = json.NewEncoder(w).Encode(body) //nolint:gosec // RFC 7591 §3.2.1 mandates the field names.
+	_ = httpx.WriteJSON(w, status, body) //nolint:gosec // RFC 7591 §3.2.1 mandates the field names.
 }
 
 // writeMetadataValidationError translates a structural [validationError]

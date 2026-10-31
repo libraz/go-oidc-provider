@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -101,13 +102,13 @@ func authenticateWithDPoP(
 // provider's enabled grants, never a substitute for it: both gates run.
 func clientPermitsGrant(w http.ResponseWriter, client *store.Client, grantType string) bool {
 	if client == nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "client is required")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "client is required")
 		return false
 	}
 	if slices.Contains(client.GrantTypes, grantType) {
 		return true
 	}
-	writeError(w, http.StatusBadRequest, errUnauthorizedClient,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
 		"the client is not authorized to use this grant type")
 	return false
 }
@@ -131,7 +132,7 @@ func clientPermitsGrant(w http.ResponseWriter, client *store.Client, grantType s
 func enforceDPoPRefreshBinding(w http.ResponseWriter, deps Deps, out *dpopOutcome, boundJKT string) bool {
 	if deps.DPoP == nil {
 		if boundJKT != "" {
-			writeError(w, http.StatusBadRequest, errInvalidGrant,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 				"refresh token is DPoP-bound but DPoP is not enabled")
 			return false
 		}
@@ -141,12 +142,12 @@ func enforceDPoPRefreshBinding(w http.ResponseWriter, deps Deps, out *dpopOutcom
 		if boundJKT == "" {
 			return true
 		}
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"DPoP proof required for sender-constrained refresh token")
 		return false
 	}
 	if boundJKT != "" && out.JKT != boundJKT {
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"DPoP proof key does not match the bound thumbprint")
 		return false
 	}

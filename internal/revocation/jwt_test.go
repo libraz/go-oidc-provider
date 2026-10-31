@@ -108,24 +108,35 @@ func TestRevokeJWTAccessTokensByGrant_FallsBackToRegistry(t *testing.T) {
 	}
 }
 
+// runJTIScope revokes one JWT access token through the Revoker and returns
+// the persisted flag and the folded error.
+func runJTIScope(opts revocation.JWTGrantCascadeOpts, jti, grantID string, exp time.Time) (bool, error) {
+	out := revocation.Revoker{
+		AccessTokens:     opts.AccessTokens,
+		GrantRevocations: opts.GrantRevocations,
+		Strategy:         opts.RevocationStrategy,
+	}.Run(context.Background(), revocation.JWTAccessTokenByJTI(jti, grantID, exp))
+	return out.JTIPersisted, out.Err()
+}
+
 func TestRevokeJWTAccessTokenByJTI_GrantTombstoneWritesDenylist(t *testing.T) {
 	t.Parallel()
 
 	exp := time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC)
 	revs := &fakeGrantRevocations{}
-	persisted, err := revocation.RevokeJWTAccessTokenByJTI(context.Background(), revocation.JWTGrantCascadeOpts{
+	persisted, err := runJTIScope(revocation.JWTGrantCascadeOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "jti-1", "grant-1", exp)
 	if err != nil || !persisted {
-		t.Fatalf("RevokeJWTAccessTokenByJTI: persisted=%v err=%v", persisted, err)
+		t.Fatalf("JTI scope: persisted=%v err=%v", persisted, err)
 	}
 
 	if len(revs.revokedJTIs) != 1 {
 		t.Fatalf("revokedJTIs=%d want 1", len(revs.revokedJTIs))
 	}
 	got := revs.revokedJTIs[0]
-	if got.JTI != "jti-1" || got.GrantID != "grant-1" || !got.ExpiresAt.Equal(exp) {
+	if got.JTI != "jti-1" || got.GrantID != "grant-1" || !got.ExpiresAt.Equal(exp.Add(revocation.ClockSkewAllowance)) {
 		t.Fatalf("revokedJTI=%+v", got)
 	}
 }
@@ -134,12 +145,12 @@ func TestRevokeJWTAccessTokenByJTI_FallsBackToRegistry(t *testing.T) {
 	t.Parallel()
 
 	reg := &fakeATRegistry{}
-	persisted, err := revocation.RevokeJWTAccessTokenByJTI(context.Background(), revocation.JWTGrantCascadeOpts{
+	persisted, err := runJTIScope(revocation.JWTGrantCascadeOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "jti-2", "grant-2", time.Now().UTC())
 	if err != nil || !persisted {
-		t.Fatalf("RevokeJWTAccessTokenByJTI: persisted=%v err=%v", persisted, err)
+		t.Fatalf("JTI scope: persisted=%v err=%v", persisted, err)
 	}
 
 	if len(reg.revokeByJTI) != 1 || reg.revokeByJTI[0] != "jti-2" {
@@ -159,7 +170,7 @@ func TestRevokeJWTAccessTokenByJTI_ReportsNothingPersisted(t *testing.T) {
 		"jti registry unwired":  {GrantRevocations: revs, RevocationStrategy: store.RevocationStrategyJTIRegistry},
 		"grant tombstone empty": {RevocationStrategy: store.RevocationStrategyGrantTombstone},
 	} {
-		persisted, err := revocation.RevokeJWTAccessTokenByJTI(context.Background(), opts, "jti-3", "grant-3", time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC))
+		persisted, err := runJTIScope(opts, "jti-3", "grant-3", time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC))
 		if err != nil || persisted {
 			t.Errorf("%s: persisted=%v err=%v want false, nil", name, persisted, err)
 		}

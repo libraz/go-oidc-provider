@@ -222,7 +222,7 @@ func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps, ver
 	// spurious "malformed JWT" diagnostic and keeps the WWW-Authenticate
 	// challenges aligned with the format the token endpoint actually
 	// issued.
-	if !looksLikeJWT(raw) && deps.OpaqueAccessTokens != nil {
+	if !endpointsupport.LooksLikeJWT(raw) && deps.OpaqueAccessTokens != nil {
 		serveUserInfoOpaque(w, r, deps, raw)
 		return
 	}
@@ -360,12 +360,12 @@ func enforceCnfBinding(
 		// Bearer token: nothing to enforce.
 		return true
 	}
-	if jkt := cnf["jkt"]; jkt != "" {
+	if jkt := cnf[tokens.CnfJKT]; jkt != "" {
 		if !enforceDPoPCnf(w, r, deps, jkt, rawAccessToken) {
 			return false
 		}
 	}
-	if x5t := cnf["x5t#S256"]; x5t != "" {
+	if x5t := cnf[tokens.CnfX5tS256]; x5t != "" {
 		if !enforceMTLSCnf(w, r, deps, x5t) {
 			return false
 		}
@@ -567,7 +567,7 @@ func bearerFromBody(w http.ResponseWriter, r *http.Request) (string, bool, error
 	if r.Method != http.MethodPost {
 		return "", false, nil
 	}
-	if !isFormContent(r.Header.Get("Content-Type")) {
+	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
 		return "", false, nil
 	}
 	endpointsupport.LimitFormBody(w, r)
@@ -590,14 +590,6 @@ func bearerFromBody(w http.ResponseWriter, r *http.Request) (string, bool, error
 		return "", true, &bearerError{desc: "access_token specified multiple times"}
 	}
 	return values[0], true, nil
-}
-
-// isFormContent reports whether ct is an application/x-www-form-
-// urlencoded media type. Parameters (charset, boundary) are tolerated.
-// Delegates to [endpointsupport.IsFormContent] so the contract stays
-// uniform across the form-accepting endpoints.
-func isFormContent(ct string) bool {
-	return endpointsupport.IsFormContent(ct)
 }
 
 // respondBearerExtractError writes the 401/400/413 response that

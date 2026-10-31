@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"reflect"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -32,7 +33,7 @@ func requireRegisteredScopes(w http.ResponseWriter, client *store.Client, scope 
 	if client == nil || oidcscope.Subset(scope, client.Scopes) {
 		return true
 	}
-	writeError(w, http.StatusBadRequest, errInvalidScope,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 		"scope exceeds the client's registered scopes")
 	return false
 }
@@ -55,7 +56,7 @@ func checkRefreshScopeAllowlist(
 	}
 	for _, s := range requested {
 		if !deps.Scopes.Allows(s, clientID) {
-			writeError(w, http.StatusBadRequest, errInvalidScope,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"scope is restricted to a different client")
 			return false
 		}
@@ -84,18 +85,18 @@ func preflightRefreshBeforeConsume(
 		if errors.Is(err, store.ErrNotFound) {
 			return true
 		}
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
 	if rec.ConsumedAt != nil {
 		return true
 	}
 	if rec.ClientID != clientID {
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
 		return false
 	}
 	if !rec.ExpiresAt.IsZero() && deps.now().UTC().After(rec.ExpiresAt) {
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
 		return false
 	}
 	scope, ok := preflightRefreshScope(w, rec.Scope, in.RequestedScope)
@@ -150,7 +151,7 @@ func preflightRefreshScope(w http.ResponseWriter, granted, requested []string) (
 	out := make([]string, 0, len(requested))
 	for _, s := range requested {
 		if _, ok := allowed[s]; !ok {
-			writeError(w, http.StatusBadRequest, errInvalidScope,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"requested scope exceeds the original grant")
 			return nil, false
 		}
@@ -193,7 +194,7 @@ func preflightRefreshAuthorizationDetails(
 			// expired handles.
 			return nil, true
 		}
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return nil, false
 	}
 	if rec.ConsumedAt != nil {
@@ -204,7 +205,7 @@ func preflightRefreshAuthorizationDetails(
 
 	grant, err := chainGrant(ctx, deps, rec.Origin, rec.GrantID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return nil, false
 	}
 	granted := chainAuthorizationDetails(grant, rec.ClientID, rec.AuthorizationDetails, rec.AuthorizationRecorded)
@@ -239,7 +240,7 @@ func revalidateRefreshAuthorizationDetails(
 	}
 	grant, err := findGrant(ctx, deps, exchanged.GrantID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
 	granted := chainAuthorizationDetails(grant, exchanged.ClientID, exchanged.AuthorizationDetails, exchanged.AuthorizationRecorded)
@@ -248,7 +249,7 @@ func revalidateRefreshAuthorizationDetails(
 		return false
 	}
 	if !reflect.DeepEqual(want, effective) {
-		writeError(w, http.StatusBadRequest, errInvalidAuthzDetails,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidAuthzDetails,
 			"authorization_details changed while refresh was in flight")
 		return false
 	}
@@ -272,7 +273,7 @@ func enforceStrictOfflineAccess(w http.ResponseWriter, deps Deps, scope []string
 	if oidcscope.ContainsOfflineAccess(scope) {
 		return true
 	}
-	writeError(w, http.StatusBadRequest, errInvalidGrant,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 		"refresh issued without offline_access; refresh disabled by current policy")
 	return false
 }

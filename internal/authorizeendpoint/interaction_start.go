@@ -10,6 +10,8 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -41,7 +43,7 @@ func startInteraction(
 		emitAuthorizeError(w, r, deps, req, errServerError, "interaction is not configured")
 		return
 	}
-	uid, err := newRandomB64(uidByteLength)
+	uid, err := keys.RandomBase64URL(uidByteLength)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate interaction id")
 		return
@@ -78,7 +80,7 @@ func startInteraction(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not set interaction cookie")
 		return
 	}
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	target := deps.authorizeRedirectBase() + "/" + uid
 	http.Redirect(w, r, target, http.StatusFound)
 }

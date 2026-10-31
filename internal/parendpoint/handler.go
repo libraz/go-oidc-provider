@@ -8,21 +8,10 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
-)
-
-// Audit event names mirrored from the public op.AuditEvent catalogue.
-// internal/parendpoint cannot import op/, so the strings are duplicated
-// and TestAuditEvent_ClientAuthnMirror in op/audit_test.go pins the
-// values together. The constant aliases the canonical
-// [endpointsupport.EventClientAuthnFailure] so the boundary helper and
-// the local emission sites stay in lock-step.
-const (
-	auditClientAuthnFailure = endpointsupport.EventClientAuthnFailure
 )
 
 // Defaults the handler applies when [Deps] omits the corresponding field.
@@ -234,15 +223,5 @@ func resolveDeps(d Deps) Deps {
 // now returns the wall-clock reading for this request, falling back to the
 // system clock when [Deps.Clock] is nil.
 func (d *Deps) now() time.Time {
-	if d.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return d.Clock.Now()
-}
-
-// isFormContent reports whether ct is application/x-www-form-urlencoded,
-// tolerating optional parameters (charset, boundary, etc.). Mirrors the
-// helper in internal/tokenendpoint so the two endpoints stay aligned.
-func isFormContent(ct string) bool {
-	return endpointsupport.IsFormContent(ct)
+	return timex.OrSystem(d.Clock).Now()
 }

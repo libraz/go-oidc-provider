@@ -14,6 +14,8 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -146,7 +148,7 @@ func rotateAndUpdate(
 	m ClientMetadata,
 	allowedScopes []string,
 ) (rotatedRegistration, bool) {
-	rawRAT, err := newOpaqueID(ratBytes)
+	rawRAT, err := keys.RandomBase64URL(ratBytes)
 	if err != nil {
 		deps.logger().Error("dcr.rat.generate_failed", "err", err, "client_id", existing.ID)
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
@@ -432,7 +434,7 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		Message:  "client deleted via RFC 7592",
 		ClientID: clientID,
 	})
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

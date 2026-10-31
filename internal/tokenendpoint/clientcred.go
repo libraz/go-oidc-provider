@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/clientcred"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
@@ -83,14 +84,14 @@ func parseClientCredsRequest(w http.ResponseWriter, r *http.Request) ([]string, 
 	first := values[0]
 	for _, candidate := range values[1:] {
 		if candidate != first {
-			writeError(w, http.StatusBadRequest, errInvalidTarget,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 				"only a single resource indicator value is supported")
 			return nil, "", false
 		}
 	}
 	canonical, err := resourceindicator.Canonicalize(first)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errInvalidTarget,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 			"resource parameter is not a valid absolute URI")
 		return nil, "", false
 	}
@@ -113,7 +114,7 @@ func validateClientCredsResource(w http.ResponseWriter, client *store.Client, re
 		return true
 	}
 	if client == nil || !resourceindicator.Contains(client.Resources, resource) {
-		writeError(w, http.StatusBadRequest, errInvalidTarget,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 			"resource indicator is missing, or unknown")
 		return false
 	}
@@ -151,7 +152,7 @@ func checkTokenScopeAllowlist(
 ) bool {
 	for _, s := range granted {
 		if !deps.Scopes.Allows(s, clientID) {
-			writeError(w, http.StatusBadRequest, errInvalidScope,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"scope is restricted to a different client")
 			return false
 		}
@@ -183,16 +184,16 @@ func writeClientCredsAuthError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, clientcred.ErrPublicClient),
 		errors.Is(err, clientcred.ErrGrantNotPermitted):
-		writeError(w, http.StatusBadRequest, errUnauthorizedClient,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
 			"client is not authorized for client_credentials")
 	case errors.Is(err, clientcred.ErrOpenIDScope):
-		writeError(w, http.StatusBadRequest, errInvalidScope,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 			"openid scope is not permitted on client_credentials")
 	case errors.Is(err, clientcred.ErrScopeForbidden):
-		writeError(w, http.StatusBadRequest, errInvalidScope,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 			"requested scope exceeds the client's registered set")
 	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 	}
 }
 
@@ -237,7 +238,7 @@ func issueClientCredsResponse(
 	// principal.
 	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, client.ID, "", scope, resource, now, 0, binding, authorizationDetails)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	writeSuccess(w, successResponse{

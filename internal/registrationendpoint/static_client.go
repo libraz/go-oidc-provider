@@ -207,11 +207,9 @@ func grantUsesRedirect(g string) bool {
 	}
 }
 
-// AsStaticClientValidationError reports whether err is a
-// [*StaticClientValidationError] and, if so, returns its (Code,
-// Description) pair. The helper exists so callers can branch on the
-// typed error without importing this package twice.
-func AsStaticClientValidationError(err error) (*StaticClientValidationError, bool) {
+// asStaticClientValidationError reports whether err is a
+// [*StaticClientValidationError] and, if so, returns it.
+func asStaticClientValidationError(err error) (*StaticClientValidationError, bool) {
 	var sve *StaticClientValidationError
 	if errors.As(err, &sve) {
 		return sve, true

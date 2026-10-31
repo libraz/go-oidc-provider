@@ -38,7 +38,7 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		return
 	}
 	if r.Method == http.MethodPost {
-		if !isFormContent(r.Header.Get("Content-Type")) {
+		if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
 			renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest,
 				"content-type must be application/x-www-form-urlencoded", "")
 			return
@@ -215,13 +215,6 @@ func resolveAuthorizeRequest(
 // authorize endpoint accepts both per RFC 6749 §3.1.
 func methodAllowed(method string) bool {
 	return method == http.MethodGet || method == http.MethodPost
-}
-
-// isFormContent reports whether ct is application/x-www-form-urlencoded,
-// tolerating optional parameters (charset, boundary, etc.). Mirrors the
-// helper in internal/tokenendpoint so the two endpoints stay aligned.
-func isFormContent(ct string) bool {
-	return endpointsupport.IsFormContent(ct)
 }
 
 // writeAuthorizeParseError handles errors emitted by [authorize.ParseRequest].

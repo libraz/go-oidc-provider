@@ -1,11 +1,11 @@
 package registrationendpoint
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // RFC 7591 §3.2.2 / RFC 6749 §5.2 wire codes the handler emits. The
@@ -33,15 +33,8 @@ type errorResponse struct {
 // here so every registration failure response is uncacheable without
 // each call site repeating the header; callers MUST NOT re-stamp it.
 func writeRegistrationError(w http.ResponseWriter, status int, code, description string) {
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	body := errorResponse{Error: code, ErrorDescription: description}
-	// Encoding a tiny fixed-shape struct into a buffered writer never
-	// fails in practice; an error here would be a programmer bug, not
-	// a runtime fault. Drop the error rather than risk a partial body
-	// collision with the WriteHeader call we already issued.
-	_ = json.NewEncoder(w).Encode(body)
+	httpx.StampNoStore(w)
+	_ = httpx.WriteJSON(w, status, errorResponse{Error: code, ErrorDescription: description})
 }
 
 // writeInvalidToken is the dedicated 401 path for the "invalid_token"
@@ -57,14 +50,6 @@ func writeInvalidToken(w http.ResponseWriter, issuer, description string) {
 		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeErrorDescription, Value: sanitizeDescription(description)},
 	))
 	writeRegistrationError(w, http.StatusUnauthorized, codeInvalidToken, description)
-}
-
-// stampNoStore writes the cache-control headers RFC 7591 §3.2 mandates
-// on every registration response; the OP applies them to failures as
-// well so no intermediary caches an error envelope.
-// Splitting the helper keeps the success and error paths from drifting.
-func stampNoStore(w http.ResponseWriter) {
-	endpointsupport.StampNoStore(w)
 }
 
 // sanitizeDescription scrubs an embedder-supplied error string so it is

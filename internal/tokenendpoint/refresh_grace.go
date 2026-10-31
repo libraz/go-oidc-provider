@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -25,7 +26,7 @@ func serveGraceRetry(
 ) {
 	response, found, err := loadRefreshRetryResponse(ctx, deps, exchanged.ConsumedID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	if !found {
@@ -37,13 +38,13 @@ func serveGraceRetry(
 		// the grace window earns — indistinguishable on the wire, and
 		// no chain revocation, because the successor is live and the
 		// client has done nothing wrong.
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
 		return
 	}
 	// A grace retry may not widen or otherwise change the effective scope
 	// of the response originally cached for this predecessor.
 	if response.Scope != joinScope(exchanged.Scope) {
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token retry does not match original exchange")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token retry does not match original exchange")
 		return
 	}
 	// Bearer chains recover the cached response verbatim (RFC 9700
@@ -108,14 +109,14 @@ func reissueGraceAccessToken(
 	now := deps.now().UTC()
 	authCtx, err := refreshAuthContext(ctx, deps, exchanged)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	publicSubject := exchanged.Subject
 	if !exchanged.SubjectPublic {
 		projected, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
 		publicSubject = projected
@@ -141,7 +142,7 @@ func reissueGraceAccessToken(
 		},
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	response.AccessToken = accessToken

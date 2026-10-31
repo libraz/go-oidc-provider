@@ -23,7 +23,7 @@ rows:
       with encodeURIComponent semantics so that ":", "/", "?", "#",
       "%", "&", "=", and "+" are all percent-encoded.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 mints client_ids via base64.RawURLEncoding (URL-safe [A-Za-z0-9_-]); no character ever needs percent-encoding. internal/registrationendpoint.newOpaqueID hard-wires a base64url-encoded 16-byte identifier. The OP does not expose a configuration knob for URL-form client_ids. The 'encodeURIComponent semantics' contract is a vendor-ism imported wholesale; not part of v1.0 surface."
+    out_of_scope_reason: "v1.0 mints client_ids via base64.RawURLEncoding (URL-safe [A-Za-z0-9_-]); no character ever needs percent-encoding. internal/registrationendpoint mints it through internal/keys.RandomBase64URL as a base64url-encoded 16-byte identifier. The OP does not expose a configuration knob for URL-form client_ids. The 'encodeURIComponent semantics' contract is a vendor-ism imported wholesale; not part of v1.0 surface."
 
   - id: CIDU-02
     severity: P0
@@ -97,7 +97,7 @@ rows:
       client_id values are restricted to VSCHAR (%x20-%x7E); control
       characters and non-ASCII code points are forbidden.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not accept user-supplied client_ids. The OP itself mints every client_id via newOpaqueID(16) (internal/registrationendpoint/secret.go) producing base64url-no-pad strings drawn from [A-Za-z0-9_-]; every issued client_id satisfies VSCHAR by construction. The 'enforcement' contract collapses because the OP never reads an external client_id at registration time."
+    out_of_scope_reason: "v1.0 does not accept user-supplied client_ids. The OP itself mints every client_id via internal/keys.RandomBase64URL(16) (internal/registrationendpoint/register.go) producing base64url-no-pad strings drawn from [A-Za-z0-9_-]; every issued client_id satisfies VSCHAR by construction. The 'enforcement' contract collapses because the OP never reads an external client_id at registration time."
 
   - id: CIDU-CHR-02
     severity: P1

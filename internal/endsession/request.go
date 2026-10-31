@@ -110,7 +110,7 @@ func readValues(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 		return nil, false
 	}
 	if r.Method == http.MethodPost {
-		if !isFormContent(r.Header.Get("Content-Type")) {
+		if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
 			writeLogoutError(w, http.StatusBadRequest, descContentTypeRequired)
 			return nil, false
 		}
@@ -162,11 +162,4 @@ func validateLogoutScope(w http.ResponseWriter, values url.Values, scope string)
 	}
 	writeLogoutError(w, http.StatusBadRequest, descInvalidLogoutScope)
 	return false
-}
-
-// isFormContent reports whether ct is application/x-www-form-urlencoded,
-// tolerating optional parameters. Mirrors the helper in the sibling
-// endpoints so the form-content contract stays uniform.
-func isFormContent(ct string) bool {
-	return endpointsupport.IsFormContent(ct)
 }

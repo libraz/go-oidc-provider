@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -70,7 +71,7 @@ func classifyHint(
 				"reason": "hint_combination_invalid",
 			},
 		})
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"exactly one of login_hint, id_token_hint, or login_hint_token is required")
 		return ciba.HintNone, "", false
 	}
@@ -120,7 +121,7 @@ func verifyIDTokenHint(
 	}
 	if client.SubjectType == pairwiseSubjectType {
 		emitHintRejected(ctx, deps, client.ID, "id_token_hint_pairwise_unsupported")
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"id_token_hint is not accepted from a client using pairwise subject identifiers; "+
 				"use login_hint or login_hint_token")
 		return "", false
@@ -129,7 +130,7 @@ func verifyIDTokenHint(
 	if err != nil {
 		if errors.Is(err, ciba.ErrIDTokenHintUnverifiable) {
 			emitHintRejected(ctx, deps, client.ID, "id_token_hint_unverifiable")
-			writeError(w, http.StatusInternalServerError, errServerError,
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError,
 				"id_token_hint verification is not configured")
 			return "", false
 		}
@@ -137,7 +138,7 @@ func verifyIDTokenHint(
 		// description so the wire surface cannot be probed to learn
 		// which check rejected the token.
 		emitHintRejected(ctx, deps, client.ID, "id_token_hint_invalid")
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"id_token_hint is not an id_token this OP issued to this client")
 		return "", false
 	}
@@ -193,7 +194,7 @@ func resolveHint(
 				"reason": "hint_resolution_failed",
 			},
 		})
-		writeError(w, http.StatusBadRequest, errLoginRequired,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errLoginRequired,
 			"end-user authentication is required to resolve the hint")
 		return "", false
 	}
@@ -209,7 +210,7 @@ func resolveHint(
 					"reason": "unknown_user_id",
 				},
 			})
-			writeError(w, http.StatusBadRequest, errUnknownUserID,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnknownUserID,
 				"the hint did not resolve to a known end-user")
 			return "", false
 		}
@@ -222,7 +223,7 @@ func resolveHint(
 				"reason": "hint_resolution_failed",
 			},
 		})
-		writeError(w, http.StatusBadRequest, errLoginRequired,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errLoginRequired,
 			"end-user authentication is required to resolve the hint")
 		return "", false
 	}
@@ -236,7 +237,7 @@ func resolveHint(
 				"reason": "hint_resolution_failed",
 			},
 		})
-		writeError(w, http.StatusBadRequest, errLoginRequired,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errLoginRequired,
 			"end-user authentication is required to resolve the hint")
 		return "", false
 	}

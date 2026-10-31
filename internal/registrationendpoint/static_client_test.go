@@ -60,7 +60,7 @@ func TestValidateStaticClient_RejectsHTTPRedirectURI(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for plaintext redirect_uri, got nil")
 	}
-	sve, ok := AsStaticClientValidationError(err)
+	sve, ok := asStaticClientValidationError(err)
 	if !ok {
 		t.Fatalf("expected *StaticClientValidationError, got %T", err)
 	}
@@ -93,7 +93,7 @@ func TestValidateStaticClient_RejectsBackchannelLogoutHTTP(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for plaintext backchannel_logout_uri, got nil")
 	}
-	sve, ok := AsStaticClientValidationError(err)
+	sve, ok := asStaticClientValidationError(err)
 	if !ok {
 		t.Fatalf("expected *StaticClientValidationError, got %T", err)
 	}
@@ -128,7 +128,7 @@ func TestValidateStaticClient_RejectsUnknownGrantType(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for unknown grant_type, got nil")
 	}
-	sve, ok := AsStaticClientValidationError(err)
+	sve, ok := asStaticClientValidationError(err)
 	if !ok {
 		t.Fatalf("expected *StaticClientValidationError, got %T", err)
 	}
@@ -211,7 +211,7 @@ func TestValidateStaticClient_RejectsPairwiseWithoutOption(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for pairwise without opt-in, got nil")
 	}
-	sve, ok := AsStaticClientValidationError(err)
+	sve, ok := asStaticClientValidationError(err)
 	if !ok {
 		t.Fatalf("expected *StaticClientValidationError, got %T", err)
 	}

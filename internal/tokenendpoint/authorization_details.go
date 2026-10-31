@@ -6,6 +6,7 @@ import (
 	"reflect"
 
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -20,7 +21,7 @@ func parseTokenAuthorizationDetails(w http.ResponseWriter, r *http.Request, deps
 		if errors.Is(err, authorizationdetails.ErrTooLarge) {
 			code = errInvalidRequest
 		}
-		writeError(w, http.StatusBadRequest, code, "authorization_details is not acceptable")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, code, "authorization_details is not acceptable")
 		return nil, false
 	}
 	return details, true
@@ -39,7 +40,7 @@ func reduceAuthorizationDetails(w http.ResponseWriter, requested, granted []map[
 			}
 		}
 		if !found {
-			writeError(w, http.StatusBadRequest, errInvalidAuthzDetails, "authorization_details exceeds the granted authorization")
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidAuthzDetails, "authorization_details exceeds the granted authorization")
 			return nil, false
 		}
 	}

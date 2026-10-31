@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -64,7 +65,7 @@ type errorResponse struct {
 // this shape is what a client that did not ask for HTML receives, and
 // what any client receives when no Driver can render the failure.
 func renderJSONError(w http.ResponseWriter, status int, code, description string) {
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errorResponse{Error: code, ErrorDescription: description})
@@ -222,14 +223,6 @@ func mergeRedirectParams(redirectURI string, params url.Values) (string, error) 
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
-}
-
-// stampNoStore writes the cache headers every authorize / interaction
-// response carries. The values match the token endpoint so embedders that
-// monitor "no-store" presence see a uniform posture.
-func stampNoStore(w http.ResponseWriter) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
 }
 
 // stampCeremonyHeaders writes the hardening headers every dynamic

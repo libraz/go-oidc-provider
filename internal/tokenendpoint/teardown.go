@@ -25,16 +25,10 @@ const (
 // dispatch identical across the replay cascades and the post-mint
 // cleanups; the call sites only choose a [revocation.Scope] and a reason.
 func grantTeardown(deps Deps, reason string) revocation.Revoker {
-	return revocation.Revoker{
-		RefreshTokens:      deps.RefreshTokens,
-		OpaqueAccessTokens: deps.OpaqueAccessTokens,
-		AccessTokens:       deps.AccessTokens,
-		GrantRevocations:   deps.GrantRevocations,
-		Strategy:           deps.RevocationStrategy,
-		Now:                deps.now().UTC(),
-		TombstoneRetention: revocation.TombstoneRetention(deps.AccessTokenTTL),
-		Reason:             reason,
-	}
+	return revocation.NewRevoker(
+		deps.RefreshTokens, deps.OpaqueAccessTokens, deps.AccessTokens, deps.GrantRevocations,
+		deps.RevocationStrategy, deps.AccessTokenTTL, deps.now(), reason,
+	)
 }
 
 // reportTeardown raises the warn-level audit signal for a teardown that

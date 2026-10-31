@@ -13,9 +13,9 @@ import (
 //	    return
 //	}
 //
-// The first method in allowed is the canonical answer to OPTIONS; CORS /
-// Allow headers list every method passed, comma-separated, in the order the
-// caller supplied them.
+// The Allow header lists every method passed, comma-separated, in the order
+// the caller supplied them. The response is the plain-text "method not
+// allowed" body with the no-store headers every dynamic endpoint carries.
 //
 // HEAD is implicitly accepted whenever GET is allowed, matching the
 // [http.ServeMux] convention.
@@ -28,8 +28,20 @@ func EnforceMethod(w http.ResponseWriter, r *http.Request, allowed ...string) bo
 			return true
 		}
 	}
-	w.Header().Set("Allow", buildAllowHeader(allowed))
-	return !writeMethodNotAllowed(w)
+	MethodNotAllowed(w, buildAllowHeader(allowed))
+	return false
+}
+
+// MethodNotAllowed writes the 405 response [EnforceMethod] uses, advertising
+// allow verbatim in the Allow header when it is non-empty. Callers whose
+// method set is not a plain list (a verb the request did not match yet is
+// still routed, or a set that depends on configuration) call it directly.
+func MethodNotAllowed(w http.ResponseWriter, allow string) {
+	if allow != "" {
+		w.Header().Set("Allow", allow)
+	}
+	StampNoStore(w)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 // buildAllowHeader joins the allowed-method list with the canonical
@@ -56,11 +68,4 @@ func buildAllowHeader(allowed []string) string {
 		return strings.Join(out, ", ")
 	}
 	return strings.Join(allowed, ", ")
-}
-
-// writeMethodNotAllowed writes the 405 body and reports true so callers can
-// chain it inline. Returning a bool keeps [EnforceMethod] expression-style.
-func writeMethodNotAllowed(w http.ResponseWriter) bool {
-	_ = WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed for this endpoint")
-	return true
 }

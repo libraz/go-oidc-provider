@@ -570,7 +570,7 @@ func TestScenario_PAR_010_PlainPushSuccess(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status=%d want 201", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Errorf("Content-Type=%q want application/json", got)
 	}
 	body := decodeJSONResp(t, resp)

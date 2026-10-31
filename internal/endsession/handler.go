@@ -19,6 +19,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -444,7 +445,7 @@ func verifyHint(ctx context.Context, w http.ResponseWriter, deps Deps, req reque
 	if req.idTokenHint == "" {
 		return hintClaims{}, true
 	}
-	claims, err := verifyIDTokenHint(ctx, deps.Keys, deps.Issuer, req.idTokenHint, hintNow(deps.Clock))
+	claims, err := verifyIDTokenHint(ctx, deps.Keys, deps.Issuer, req.idTokenHint, timex.OrSystem(deps.Clock).Now().UTC())
 	if err != nil {
 		writeLogoutError(w, http.StatusBadRequest, descIDTokenInvalid)
 		return hintClaims{}, false

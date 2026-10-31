@@ -204,7 +204,7 @@ func TestHandler_HappyPath_ClientSecretBasic(t *testing.T) {
 		dump, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 201; body=%s", resp.StatusCode, dump)
 	}
-	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+	if got := resp.Header.Get("Content-Type"); got != "application/json; charset=utf-8" {
 		t.Errorf("Content-Type=%q", got)
 	}
 	body := decodeJSON(t, resp)

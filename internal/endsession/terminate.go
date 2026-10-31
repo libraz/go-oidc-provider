@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
@@ -184,7 +183,7 @@ func terminateSessionForScope(w http.ResponseWriter, r *http.Request, deps Deps,
 		return sessionErr
 	}
 	if scope == logoutScopeCurrent && removal.Cookie != "" && len(removal.Remaining) > 0 {
-		if err := cookie.SetSession(w, removal.Cookie, removal.ExpiresAt, endSessionNow(deps)); err == nil {
+		if err := cookie.SetSession(w, removal.Cookie, removal.ExpiresAt, timex.OrSystem(deps.Clock).Now().UTC()); err == nil {
 			return nil
 		}
 	}
@@ -267,16 +266,10 @@ func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 	if err != nil {
 		return fmt.Errorf("list grants: %w", err)
 	}
-	revoker := revocation.Revoker{
-		RefreshTokens:      deps.RefreshTokens,
-		OpaqueAccessTokens: deps.OpaqueAccessTokens,
-		AccessTokens:       deps.AccessTokens,
-		GrantRevocations:   deps.GrantRevocations,
-		Strategy:           deps.RevocationStrategy,
-		Now:                endSessionNow(deps),
-		TombstoneRetention: revocation.TombstoneRetention(deps.AccessTokenTTL),
-		Reason:             "logout",
-	}
+	revoker := revocation.NewRevoker(
+		deps.RefreshTokens, deps.OpaqueAccessTokens, deps.AccessTokens, deps.GrantRevocations,
+		deps.RevocationStrategy, deps.AccessTokenTTL, timex.OrSystem(deps.Clock).Now().UTC(), "logout",
+	)
 	var errs []error
 	for _, g := range grants {
 		if g == nil || g.ID == "" {
@@ -311,17 +304,6 @@ func revokeAccessTokensForSnapshot(ctx context.Context, deps Deps, snapshot []*s
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// endSessionNow returns the wall-clock reading the cascade uses for
-// tombstone RevokedAt / ExpiresAt. It mirrors the boundary discipline
-// of the sibling endpoints: a configured [Deps.Clock] wins; the fall-
-// back is [timex.SystemClock] (the single sanctioned wall-clock seam).
-func endSessionNow(deps Deps) time.Time {
-	if deps.Clock != nil {
-		return deps.Clock.Now().UTC()
-	}
-	return timex.SystemClock.Now().UTC()
 }
 
 // errSessionNotDestroyed reports that the destructive workflow could not

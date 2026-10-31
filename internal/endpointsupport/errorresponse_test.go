@@ -146,14 +146,6 @@ func TestWriteAuthnErrorMapsSentinelsToOAuthEnvelopes(t *testing.T) {
 	}
 }
 
-func TestStampNoStore(t *testing.T) {
-	t.Parallel()
-
-	rec := httptest.NewRecorder()
-	endpointsupport.StampNoStore(rec)
-	assertNoStoreHeaders(t, rec.Result())
-}
-
 func assertNoStoreHeaders(tb testing.TB, res *http.Response) {
 	tb.Helper()
 	if got := res.Header.Get("Cache-Control"); got != "no-store" {

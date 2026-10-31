@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -39,7 +40,7 @@ func revokeToken(
 	// short-circuit to opaque immediately to avoid pointless verifier
 	// work (and the spurious "malformed JWT" log entries it would
 	// emit).
-	jwtShaped := looksLikeJWT(token)
+	jwtShaped := endpointsupport.LooksLikeJWT(token)
 	for _, branch := range branchOrder(hint, jwtShaped) {
 		if branch(ctx, deps, verifier, authenticatedClientID, token) {
 			return
@@ -134,15 +135,15 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 	// RFC 7009 §2.2 "always 200" path. token.revoked is recorded only when
 	// a row was written: under the None strategy, or with no substore
 	// behind the active one, the token keeps verifying until exp.
-	persisted, err := revocation.RevokeJWTAccessTokenByJTI(ctx, revocation.JWTGrantCascadeOpts{
-		AccessTokens:       deps.AccessTokens,
-		GrantRevocations:   deps.GrantRevocations,
-		RevocationStrategy: deps.RevocationStrategy,
-	}, claims.JTI, claims.GrantID, time.Unix(claims.ExpiresAt, 0).Add(5*time.Minute).UTC())
+	out := revocation.Revoker{
+		AccessTokens:     deps.AccessTokens,
+		GrantRevocations: deps.GrantRevocations,
+		Strategy:         deps.RevocationStrategy,
+	}.Run(ctx, revocation.JWTAccessTokenByJTI(claims.JTI, claims.GrantID, time.Unix(claims.ExpiresAt, 0)))
 	switch {
-	case err != nil:
-		emitRevokeFailed(ctx, deps, authenticatedClientID, "jwt_access_token", err)
-	case persisted:
+	case !out.Complete():
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "jwt_access_token", out.Failures[0].Err)
+	case out.JTIPersisted:
 		emitRevoked(ctx, deps, revokedEvent{
 			ClientID: authenticatedClientID,
 			Subject:  claims.Subject,
@@ -269,28 +270,13 @@ func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, clientID string, 
 	if revocation.JoinsForeignGrant(rec) {
 		scope = revocation.OpaqueAccessTokensOfChain(rec.GrantID, rec.ChainID)
 	}
-	out := revocation.Revoker{
-		OpaqueAccessTokens: deps.OpaqueAccessTokens,
-		AccessTokens:       deps.AccessTokens,
-		GrantRevocations:   deps.GrantRevocations,
-		Strategy:           deps.RevocationStrategy,
-		Now:                revokeNow(deps),
-		TombstoneRetention: revocation.TombstoneRetention(deps.AccessTokenTTL),
-		Reason:             "revoke",
-	}.Run(ctx, scope)
+	out := revocation.NewRevoker(
+		deps.RefreshTokens, deps.OpaqueAccessTokens, deps.AccessTokens, deps.GrantRevocations,
+		deps.RevocationStrategy, deps.AccessTokenTTL, timex.OrSystem(deps.Clock).Now(), "revoke",
+	).Run(ctx, scope)
 	for _, f := range out.Failures {
 		emitRevokeFailed(ctx, deps, clientID, f.Surface, f.Err)
 	}
-}
-
-// revokeNow returns the wall-clock reading the cascade stamps on tombstone
-// RevokedAt / ExpiresAt: a configured [Deps.Clock] wins, else
-// [timex.SystemClock] (the single sanctioned wall-clock seam).
-func revokeNow(deps Deps) time.Time {
-	if deps.Clock != nil {
-		return deps.Clock.Now().UTC()
-	}
-	return timex.SystemClock.Now().UTC()
 }
 
 // revokeOpaqueAccessToken handles the opaque-format branch. The

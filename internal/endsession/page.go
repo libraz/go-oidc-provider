@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -191,8 +192,7 @@ func stampStaticHeaders(w http.ResponseWriter) {
 		"default-src 'none'; frame-ancestors 'none'; base-uri 'none'; sandbox allow-forms allow-same-origin")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
+	httpx.StampNoStore(w)
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 }

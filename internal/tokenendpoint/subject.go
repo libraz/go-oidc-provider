@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -44,10 +45,10 @@ func lookupLiveSubject(ctx context.Context, deps Deps, subject string) (*store.U
 // server_error so no token is minted on a directory the OP cannot read.
 func writeSubjectLookupError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errSubjectDeprovisioned) {
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "grant subject no longer exists")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "grant subject no longer exists")
 		return
 	}
-	writeError(w, http.StatusInternalServerError, errServerError, "")
+	endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 }
 
 // deprovisionedRedemption describes a redemption refused because its

@@ -7,9 +7,11 @@ import (
 	"strconv"
 	"strings"
 
-	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -72,17 +74,7 @@ func signIntrospectionJWT(deps Deps, audience string, body response) (string, er
 		"iat":                 deps.now().UTC().Unix(),
 		"token_introspection": body,
 	}
-	sk := josev4.SigningKey{
-		Algorithm: josev4.ES256,
-		Key: josev4.JSONWebKey{
-			Key:       deps.SigningKey.Signer,
-			KeyID:     deps.SigningKey.KeyID,
-			Algorithm: string(josev4.ES256),
-			Use:       "sig",
-		},
-	}
-	opts := (&josev4.SignerOptions{}).WithType(jwtTyp)
-	signer, err := josev4.NewSigner(sk, opts)
+	signer, err := tokens.NewSigner(deps.SigningKey, jwtTyp)
 	if err != nil {
 		return "", fmt.Errorf("introspect: build signer: %w", err)
 	}
@@ -117,15 +109,15 @@ func writeJWTResponse(
 ) {
 	signed, err := signIntrospectionJWT(deps, audience, body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	out, err := maybeEncryptIntrospection(ctx, deps, client, signed)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	w.Header().Set("Content-Type", jwtMediaType)
 	w.WriteHeader(http.StatusOK)
 	// out is a compact JWS or JWE produced by the OP's own JOSE

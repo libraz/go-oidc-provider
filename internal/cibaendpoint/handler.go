@@ -184,10 +184,7 @@ func (d *Deps) auditEmitter() audit.Emitter {
 // now returns the wall-clock reading for this request, falling
 // back to the system clock when [Deps.Clock] is nil.
 func (d *Deps) now() time.Time {
-	if d.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return d.Clock.Now()
+	return timex.OrSystem(d.Clock).Now()
 }
 
 // effectiveExpiresIn returns the auth_req_id lifetime resolved
@@ -223,8 +220,8 @@ func Handler(deps Deps) http.Handler {
 	resolved := resolveDeps(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if resolved.CIBARequests == nil {
-			stampNoStore(w)
-			writeError(w, http.StatusInternalServerError, errServerError,
+			httpx.StampNoStore(w)
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError,
 				"backchannel-authentication substore is not configured")
 			return
 		}
@@ -261,7 +258,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	mtlsThumbprint, ok := extractMTLSThumbprint(w, r, deps)
+	mtlsThumbprint, ok := endpointsupport.ExtractMTLSThumbprint(w, r, deps.MTLS)
 	if !ok {
 		return
 	}
@@ -317,24 +314,21 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 // any failure the function writes the wire envelope and returns
 // false. On success r.PostForm is populated and the caller proceeds.
 func parseAndValidateForm(w http.ResponseWriter, r *http.Request) bool {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		stampNoStore(w)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !httpx.EnforceMethod(w, r, http.MethodPost) {
 		return false
 	}
-	if !isFormContent(r.Header.Get("Content-Type")) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"content-type must be application/x-www-form-urlencoded")
 		return false
 	}
 	endpointsupport.LimitFormBody(w, r)
 	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return false
 	}
 	if name, ok := firstDuplicateParameter(r.PostForm); !ok {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"parameter "+name+" must not be repeated")
 		return false
 	}
@@ -368,11 +362,4 @@ var cibaSingleValuedParams = []string{
 // abstraction level as the rest of /bc-authorize.
 func firstDuplicateParameter(values url.Values) (string, bool) {
 	return httpx.FirstDuplicateParameter(values, cibaSingleValuedParams)
-}
-
-// isFormContent reports whether ct is application/x-www-form-
-// urlencoded, tolerating optional parameters (charset, boundary,
-// etc.).
-func isFormContent(ct string) bool {
-	return endpointsupport.IsFormContent(ct)
 }

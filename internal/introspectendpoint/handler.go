@@ -276,10 +276,7 @@ func newAccessTokenVerifier(d Deps) *tokens.AccessTokenVerifier {
 // now returns the wall-clock reading for this request, falling back to
 // the system clock when [Deps.Clock] is nil.
 func (d *Deps) now() time.Time {
-	if d.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return d.Clock.Now()
+	return timex.OrSystem(d.Clock).Now()
 }
 
 // serve is the request-scoped entry point. It validates the request
@@ -287,24 +284,21 @@ func (d *Deps) now() time.Time {
 // response. Decomposing the body keeps the function under cyclop's
 // max-complexity gate while remaining readable.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.AccessTokenVerifier) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		stampNoStore(w)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !httpx.EnforceMethod(w, r, http.MethodPost) {
 		return
 	}
-	if !isFormContent(r.Header.Get("Content-Type")) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"content-type must be application/x-www-form-urlencoded")
 		return
 	}
 	endpointsupport.LimitFormBody(w, r)
 	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
 	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, introspectSingleValuedParams); !ok {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"parameter "+name+" must not be repeated")
 		return
 	}
@@ -320,12 +314,12 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 		}
 		endpointsupport.EmitAuthnFailure(r.Context(), deps.auditEmitter(), auditIntrospectionError,
 			"introspection client authentication rejected", clientID, err)
-		writeError(w, http.StatusUnauthorized, endpointsupport.ErrInvalidClient, err.Error())
+		endpointsupport.WriteOAuthError(w, http.StatusUnauthorized, endpointsupport.ErrInvalidClient, err.Error())
 		return
 	}
 	token := r.PostForm.Get("token")
 	if token == "" {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "token is required")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "token is required")
 		return
 	}
 	hint := r.PostForm.Get("token_type_hint")
@@ -386,27 +380,4 @@ func (d *Deps) auditEmitter() audit.Emitter {
 		return audit.Discard()
 	}
 	return d.Audit
-}
-
-// isFormContent reports whether ct is application/x-www-form-urlencoded.
-// Parameters (charset, boundary, etc.) are tolerated. Delegates to
-// [endpointsupport.IsFormContent] so the form-content contract stays
-// uniform across endpoints.
-func isFormContent(ct string) bool {
-	return endpointsupport.IsFormContent(ct)
-}
-
-// looksLikeJWT reports whether token has the structural shape of a
-// compact-serialised JWS: three base64url segments separated by dots,
-// with the header decoding to a JSON object. The check is deliberately
-// shallow — full parsing happens inside [tokens.AccessTokenVerifier] —
-// because the only purpose of this dispatcher is to pick which branch
-// to take.
-//
-// A token whose header is not valid base64url-encoded JSON is treated
-// as opaque so a malformed JWT cannot bypass the opaque lookup; the
-// JWT branch would reject it anyway, but the conservative choice keeps
-// the dispatcher simple to reason about.
-func looksLikeJWT(token string) bool {
-	return endpointsupport.LooksLikeJWT(token)
 }

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -224,7 +225,7 @@ func TestFetchJARRequestURI_AcceptsAbsentContentType(t *testing.T) {
 func TestFetchJARRequestURI_BodyCapEnforced(t *testing.T) {
 	t.Parallel()
 
-	oversized := strings.Repeat("A", int(maxJARRequestURIBody)+1)
+	oversized := strings.Repeat("A", int(securefetch.DefaultMaxBody)+1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/jwt")
 		_, _ = w.Write([]byte(oversized))
@@ -425,7 +426,7 @@ func TestFetchJARRequestURI_ReusesOneConnectionAcrossFetches(t *testing.T) {
 func TestFetchJARRequestURI_BodyCapPrecedesTheMediaTypeGate(t *testing.T) {
 	t.Parallel()
 
-	oversized := strings.Repeat("A", int(maxJARRequestURIBody)+1)
+	oversized := strings.Repeat("A", int(securefetch.DefaultMaxBody)+1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(oversized))

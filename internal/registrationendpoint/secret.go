@@ -1,11 +1,8 @@
 package registrationendpoint
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"fmt"
 )
 
 // Token / identifier byte lengths the handler uses. The values mirror
@@ -30,19 +27,6 @@ const (
 	// PAR request_uri entropy.
 	ratBytes = 32
 )
-
-// newOpaqueID returns a base64url-no-pad string carrying n bytes of
-// cryptographically random data. The function is the package-local
-// equivalent of op.newOpaqueID; internal/* may not import op/, so the
-// helper is duplicated here. The crypto/rand allow-list in
-// .golangci.yml grants this package access.
-func newOpaqueID(n int) (string, error) {
-	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("registrationendpoint: read random: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
 
 // hashSecret returns the lowercase hex SHA-256 digest of the bearer
 // secret. The format matches the contract documented on

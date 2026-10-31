@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -64,7 +65,7 @@ func newGrantID(ctx context.Context, deps Deps, in grantIssuance) (string, error
 		}
 		return in.InheritedID, nil
 	case grantLineageUnbacked:
-		return newJTI()
+		return keys.RandomBase64URL(jtiByteLength)
 	default:
 		return "", fmt.Errorf("tokenendpoint: unknown grant lineage %d", in.Lineage)
 	}
@@ -76,7 +77,7 @@ func saveConsentGrant(ctx context.Context, deps Deps, g store.Grant) (string, er
 	}
 	derived := g.ID != ""
 	if !derived {
-		id, err := newJTI()
+		id, err := keys.RandomBase64URL(jtiByteLength)
 		if err != nil {
 			return "", err
 		}

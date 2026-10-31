@@ -2,7 +2,6 @@ package cibaendpoint
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"slices"
 
@@ -11,14 +10,9 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
-	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// auditClientAuthnFailure aliases the canonical event constant so
-// the boundary helper and the local emission sites cannot drift.
-const auditClientAuthnFailure = endpointsupport.EventClientAuthnFailure
 
 // authenticateWithDPoP runs DPoP proof verification and client
 // authentication through the shared [dpop.Gate] and returns the
@@ -66,7 +60,7 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	return endpointsupport.AuthenticateClient(ctx, w, r,
+	return endpointsupport.AuthenticateClientAudited(ctx, w, r,
 		endpointsupport.AuthenticateOpts{
 			Clients:           deps.Clients,
 			SecretVerifier:    deps.SecretVerifier,
@@ -75,47 +69,8 @@ func authenticate(
 			Now:               deps.now(),
 			Audit:             deps.auditEmitter(),
 		},
-		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), auditClientAuthnFailure,
-			"client authentication failed at backchannel-authentication endpoint"),
+		"client authentication failed at backchannel-authentication endpoint",
 	)
-}
-
-// extractMTLSThumbprint returns the SHA-256 thumbprint of the
-// inbound mTLS leaf certificate. Returns ("", true) when [Deps.MTLS]
-// is nil or the request did not present a certificate at all; a
-// certificate that was presented but unusable writes the wire error
-// and returns ("", false) so the caller fails closed instead of
-// silently treating the request as unbound, matching how the token
-// endpoint's verifyTokenMTLS behaves.
-func extractMTLSThumbprint(w http.ResponseWriter, r *http.Request, deps Deps) (string, bool) {
-	if deps.MTLS == nil {
-		return "", true
-	}
-	thumb, err := deps.MTLS.ThumbprintFromRequest(r)
-	if err != nil {
-		if errors.Is(err, mtls.ErrNoClientCert) {
-			return "", true
-		}
-		writeMTLSError(w, err)
-		return "", false
-	}
-	return thumb, true
-}
-
-// writeMTLSError translates an mtls.Err* sentinel onto the wire
-// form, mirroring the mapping the token endpoint uses:
-// invalid_request for a certificate that could not be parsed, and
-// invalid_client (RFC 8705 §3) for one that failed chain
-// validation against the configured trust anchors.
-func writeMTLSError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, mtls.ErrCertMalformed):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "client certificate malformed")
-	case errors.Is(err, mtls.ErrCertUntrusted):
-		endpointsupport.WriteInvalidClient(w, false, "client certificate is not trusted")
-	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-	}
 }
 
 // enforceSenderConstraint applies the FAPI 2.0 / FAPI-CIBA rule
@@ -145,7 +100,7 @@ func enforceSenderConstraint(
 			"reason":  "unbound_request",
 		},
 	})
-	writeError(w, http.StatusBadRequest, errInvalidRequest,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 		"backchannel authentication requires DPoP or mTLS under the active profile")
 	return false
 }
@@ -167,7 +122,7 @@ func verifyClientGrantTypeAllowed(ctx context.Context, w http.ResponseWriter, de
 			"reason": "grant_type_not_permitted",
 		},
 	})
-	writeError(w, http.StatusBadRequest, errUnauthorizedClient,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
 		"client is not authorized for the ciba grant")
 	return false
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	tokenexchangegrant "github.com/libraz/go-oidc-provider/internal/customgrant/tokenexchange"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -84,7 +85,7 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		// embedder to the handler and to the OP's audit record rather
 		// than to the client's credentials.
 		deps.CustomGrants.ReportFailure(ctx, dispatchIn, "issuance_failed")
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	if resp.OnIssued != nil {
@@ -488,30 +489,30 @@ func writeCustomGrantError(w http.ResponseWriter, err error) {
 	}
 	switch {
 	case errors.Is(err, customgrant.ErrUnknownGrant):
-		writeError(w, http.StatusBadRequest, errUnsupportedGrantType,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnsupportedGrantType,
 			"grant_type is not supported")
 	case errors.Is(err, customgrant.ErrClientGrantNotPermitted):
-		writeError(w, http.StatusBadRequest, errUnauthorizedClient,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
 			"client is not authorized for this grant_type")
 	case errors.Is(err, customgrant.ErrUnknownParameter),
 		errors.Is(err, customgrant.ErrDuplicateParameter),
 		errors.Is(err, customgrant.ErrDuplicateCapExceeded):
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			sanitizeMessage(err))
 	case errors.Is(err, customgrant.ErrScopeNotAllowed):
-		writeError(w, http.StatusBadRequest, errInvalidScope,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 			"response scope exceeds the client's allowed set")
 	case errors.Is(err, customgrant.ErrAudienceNotAllowed):
-		writeError(w, http.StatusBadRequest, errInvalidTarget,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 			"response audience exceeds the client's registered resources")
 	case errors.Is(err, customgrant.ErrEmptyAccessToken),
 		errors.Is(err, customgrant.ErrNegativeTTL),
 		errors.Is(err, customgrant.ErrPanic),
 		errors.Is(err, customgrant.ErrConflictingAccessTokenForms),
 		errors.Is(err, customgrant.ErrEmptyBoundSubject):
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 	default:
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"the supplied grant could not be honoured")
 	}
 }

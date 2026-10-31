@@ -8,22 +8,17 @@
 package protectedresource
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // WellKnownPrefix is the fixed path segment RFC 9728 §3 reserves for
 // protected-resource metadata. A resource whose identifier carries a
 // path component appends that component per §3.1 (see [WellKnownPath]).
 const WellKnownPrefix = "/.well-known/oauth-protected-resource"
-
-// CacheControl mirrors the discovery document's caching posture: a
-// one-hour cache with a ten-minute stale-while-revalidate window. The
-// metadata is configuration-static for the lifetime of the process, so
-// a long max-age is safe.
-const CacheControl = "public, max-age=3600, stale-while-revalidate=600"
 
 // Document is the RFC 9728 §2 metadata object. Every field except
 // resource is optional and omitted when empty so the served JSON carries
@@ -90,26 +85,10 @@ func WellKnownPath(resource string) string {
 
 // Handler returns a read-only [http.Handler] that serves doc as JSON.
 // The body is marshalled once and reused; the handler answers GET and
-// HEAD only and stamps the shared cache-control header, mirroring the
-// discovery handler's contract.
+// HEAD only and stamps the shared metadata-document cache-control
+// header, mirroring the discovery handler's contract.
 func Handler(doc Document) (http.Handler, error) {
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", CacheControl)
-		if r.Method == http.MethodHead {
-			return
-		}
-		_, _ = w.Write(body)
-	}), nil
+	return httpx.StaticJSONHandler(doc, httpx.StaticDocumentCacheControl)
 }
 
 // cloneNonEmpty returns a defensive copy of in, or nil when in is empty

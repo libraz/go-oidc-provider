@@ -25,7 +25,6 @@ package grantmgmtendpoint
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,6 +35,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -102,10 +102,7 @@ const (
 )
 
 func (d *Deps) now() time.Time {
-	if d.Clock != nil {
-		return d.Clock.Now()
-	}
-	return timex.Now()
+	return timex.OrSystem(d.Clock).Now()
 }
 
 func (d *Deps) audit() audit.Emitter {
@@ -158,11 +155,7 @@ func Handler(deps Deps) http.Handler {
 // action the OP did not advertise. The Allow header reflects only the
 // enabled operations so a client can discover the supported set.
 func rejectMethod(w http.ResponseWriter, deps Deps) {
-	if allow := allowHeader(deps); allow != "" {
-		w.Header().Set("Allow", allow)
-	}
-	stampNoStore(w)
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	httpx.MethodNotAllowed(w, allowHeader(deps))
 }
 
 func allowHeader(deps Deps) string {
@@ -189,7 +182,7 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 	// cap is cheap defence against memory exhaustion).
 	endpointsupport.LimitFormBody(w, r)
 	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "malformed request")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, endpointsupport.ErrInvalidRequest, "malformed request")
 		return nil, nil, false
 	}
 	client, _, ok := endpointsupport.AuthenticateClient(r.Context(), w, r,
@@ -212,13 +205,13 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 		// logs, browser history and Referer headers. Anyone who read
 		// one there could enumerate what a user consented to and revoke
 		// it. The endpoint therefore serves confidential clients only.
-		writeError(w, http.StatusUnauthorized, "invalid_client",
+		endpointsupport.WriteOAuthError(w, http.StatusUnauthorized, endpointsupport.ErrInvalidClient,
 			"grant management requires a confidential client")
 		return nil, nil, false
 	}
 	grantID := strings.TrimSpace(r.PathValue("grant_id"))
 	if grantID == "" {
-		writeError(w, http.StatusNotFound, "invalid_request", "grant_id is required")
+		endpointsupport.WriteOAuthError(w, http.StatusNotFound, endpointsupport.ErrInvalidRequest, "grant_id is required")
 		return nil, nil, false
 	}
 	g, err := deps.Grants.Find(r.Context(), grantID)
@@ -228,13 +221,13 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 		// the grant is already gone, and DELETE's idempotency makes that a
 		// reason not to retry — the grant and its token chain would survive
 		// the incident. Surface the fault so the caller retries.
-		writeError(w, http.StatusInternalServerError, "server_error", "could not resolve grant")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "could not resolve grant")
 		return nil, nil, false
 	}
 	if err != nil || g == nil || g.ClientID != client.ID {
 		// Proven absence, and ownership failure, are both reported as 404 so
 		// the endpoint does not confirm that another client's grant exists.
-		writeError(w, http.StatusNotFound, "invalid_request", "grant not found")
+		endpointsupport.WriteOAuthError(w, http.StatusNotFound, endpointsupport.ErrInvalidRequest, "grant not found")
 		return nil, nil, false
 	}
 	return client, g, true
@@ -249,10 +242,8 @@ func serveQuery(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if len(g.Scope) > 0 {
 		body.Scopes = []scopeEntry{{Scope: strings.Join(g.Scope, " ")}}
 	}
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(body)
+	httpx.StampNoStore(w)
+	_ = httpx.WriteJSON(w, http.StatusOK, body)
 }
 
 func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
@@ -275,7 +266,7 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 				"retryable":     true,
 			},
 		})
-		writeError(w, http.StatusInternalServerError, "server_error", "could not revoke grant")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "could not revoke grant")
 		return
 	}
 	deps.audit().Emit(r.Context(), audit.Event{
@@ -288,7 +279,7 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"grant_id": g.ID,
 		},
 	})
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -306,38 +297,14 @@ func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
 // duplicate from a grant the client created deliberately, and only the
 // addressed grant_id was authenticated against the client.
 func revokeGrantCascade(ctx context.Context, deps Deps, grantID string) error {
-	err := revocation.Revoker{
-		RefreshTokens:      deps.RefreshTokens,
-		OpaqueAccessTokens: deps.OpaqueAccessTokens,
-		AccessTokens:       deps.AccessTokens,
-		GrantRevocations:   deps.GrantRevocations,
-		Strategy:           deps.RevocationStrategy,
-		Now:                deps.now().UTC(),
-		TombstoneRetention: revocation.TombstoneRetention(deps.AccessTokenTTL),
-		Reason:             "grant_management_revoke",
-	}.RevokeGrant(ctx, deps.Grants, grantID)
+	err := revocation.NewRevoker(
+		deps.RefreshTokens, deps.OpaqueAccessTokens, deps.AccessTokens, deps.GrantRevocations,
+		deps.RevocationStrategy, deps.AccessTokenTTL, deps.now(), "grant_management_revoke",
+	).RevokeGrant(ctx, deps.Grants, grantID)
 	if err != nil {
 		// DELETE is an idempotent security operation: RevokeGrant already
 		// reads a concurrently removed record as the desired absent state.
 		return fmt.Errorf("grant management: revoke grant %s: %w", grantID, err)
 	}
 	return nil
-}
-
-// stampNoStore sets the no-cache headers every grant management response
-// carries: the body reflects mutable grant state and MUST NOT be cached.
-func stampNoStore(w http.ResponseWriter) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-}
-
-// writeError emits the RFC 6749 §5.2 JSON error envelope.
-func writeError(w http.ResponseWriter, status int, code, description string) {
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error":             code,
-		"error_description": description,
-	})
 }

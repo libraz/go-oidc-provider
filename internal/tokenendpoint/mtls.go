@@ -85,7 +85,7 @@ func requireMTLSMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundTh
 		// the OP was reconfigured between issuance and refresh. Fail
 		// closed — admitting the request would silently downgrade a
 		// sender-constrained chain to bearer.
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"refresh token is mTLS-bound but mTLS is not enabled")
 		return false
 	}
@@ -107,20 +107,20 @@ func requireMTLSMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundTh
 func writeMTLSError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, mtls.ErrNoClientCert):
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"client certificate required for mTLS-bound token")
 	case errors.Is(err, mtls.ErrCertMalformed):
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"client certificate malformed")
 	case errors.Is(err, mtls.ErrCertSourceConflict):
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"client certificate sources disagree")
 	case errors.Is(err, mtls.ErrCertUntrusted):
 		endpointsupport.WriteInvalidClient(w, false, "client certificate is not trusted")
 	case errors.Is(err, mtls.ErrThumbprintMismatch):
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"client certificate does not match the bound thumbprint")
 	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 	}
 }

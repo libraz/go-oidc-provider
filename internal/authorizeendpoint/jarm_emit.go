@@ -7,6 +7,7 @@ import (
 	"net/url"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 )
 
@@ -230,7 +231,7 @@ func jarmDispatch(
 	if err != nil {
 		return err
 	}
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	//nolint:gosec // G710: redirectURI already exact-matched a registered entry in authorize.Validate; nothing reaches here on a mismatch.
 	http.Redirect(w, r, target, http.StatusFound)
 	return nil
@@ -314,7 +315,7 @@ func emitPlainResponse(
 		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "redirect target rejected", "")
 		return
 	}
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	//nolint:gosec // G710: req.RedirectURI already exact-matched a registered entry in authorize.Validate; nothing reaches here on a mismatch.
 	http.Redirect(w, r, target, http.StatusFound)
 }
@@ -391,7 +392,7 @@ func tryJARMErrorResponse(
 // runtime JARM failure. It intentionally carries no OAuth error fields,
 // state, code, redirect Location, or renderer output.
 func writeJARMFailure(w http.ResponseWriter) {
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusInternalServerError)
 	_, _ = w.Write([]byte("authorization response unavailable\n"))

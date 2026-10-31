@@ -8,7 +8,6 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/idtokenhint"
 	"github.com/libraz/go-oidc-provider/internal/keys"
-	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
 // Sentinel errors returned by [verifyIDTokenHint]. The handler maps
@@ -154,19 +153,6 @@ func translateVerifyError(err error) error {
 	default:
 		return fmt.Errorf("%w: %w", errIDTokenMalformed, err)
 	}
-}
-
-// hintNow returns the wall-clock reading used by [verifyIDTokenHint]
-// for the iat-age comparison. A configured [Deps.Clock] wins; the
-// fallback is [timex.SystemClock] (the single sanctioned wall-clock
-// seam). The helper mirrors [endSessionNow] but is duplicated rather
-// than shared so the dependency direction stays one-way (idtoken.go
-// must not import handler.go's helpers, only the other way around).
-func hintNow(c Clock) time.Time {
-	if c != nil {
-		return c.Now().UTC()
-	}
-	return timex.SystemClock.Now().UTC()
 }
 
 // maxIDTokenHintAge caps how old an id_token_hint may be measured by

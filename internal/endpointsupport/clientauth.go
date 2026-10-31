@@ -311,3 +311,18 @@ func AuditAuthnFailure(ctx context.Context, emitter audit.Emitter, eventName, me
 		EmitAuthnFailure(ctx, emitter, eventName, message, clientID, err, method)
 	}
 }
+
+// AuthenticateClientAudited authenticates the client behind r like
+// [AuthenticateClient], raising [EventClientAuthnFailure] with failureMessage
+// through opts.Audit when authentication fails. The response is written on
+// failure; the bool reports success.
+func AuthenticateClientAudited(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	opts AuthenticateOpts,
+	failureMessage string,
+) (*store.Client, *clientauth.Credentials, bool) {
+	return AuthenticateClient(ctx, w, r, opts,
+		AuditAuthnFailure(ctx, opts.Audit, EventClientAuthnFailure, failureMessage))
+}

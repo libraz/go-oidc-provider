@@ -2,11 +2,7 @@ package devicecodeendpoint
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -19,17 +15,15 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// auditClientAuthnFailure aliases the canonical event constant so
-// the boundary helper and the local emission sites cannot drift.
-const auditClientAuthnFailure = endpointsupport.EventClientAuthnFailure
 
 // Tunables the handler uses when [Deps] omits the corresponding
 // field. The defaults match the values.
@@ -170,10 +164,7 @@ func (d *Deps) auditEmitter() audit.Emitter {
 // now returns the wall-clock reading for this request, falling
 // back to the system clock when [Deps.Clock] is nil.
 func (d *Deps) now() time.Time {
-	if d.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return d.Clock.Now()
+	return timex.OrSystem(d.Clock).Now()
 }
 
 // expiresIn returns the device_code lifetime resolved against the
@@ -246,8 +237,8 @@ func Handler(deps Deps) http.Handler {
 		// configuration error on every probe rather than
 		// passing GET/HEAD through to the 405 path first.
 		if resolved.DeviceCodes == nil {
-			stampNoStore(w)
-			writeError(w, http.StatusInternalServerError, errServerError,
+			httpx.StampNoStore(w)
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError,
 				"device-authorization substore is not configured")
 			return
 		}
@@ -270,24 +261,21 @@ func resolveDeps(d Deps) Deps {
 // parameters, mints the credential pair, and persists the
 // resulting record.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		stampNoStore(w)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !httpx.EnforceMethod(w, r, http.MethodPost) {
 		return
 	}
-	if !isFormContent(r.Header.Get("Content-Type")) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"content-type must be application/x-www-form-urlencoded")
 		return
 	}
 	endpointsupport.LimitFormBody(w, r)
 	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
 	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, deviceAuthSingleValuedParams); !ok {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"parameter "+name+" must not be repeated")
 		return
 	}
@@ -295,7 +283,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	mtlsThumbprint, ok := extractMTLSThumbprint(w, r, deps)
+	mtlsThumbprint, ok := endpointsupport.ExtractMTLSThumbprint(w, r, deps.MTLS)
 	if !ok {
 		return
 	}
@@ -368,7 +356,7 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	return endpointsupport.AuthenticateClient(ctx, w, r,
+	return endpointsupport.AuthenticateClientAudited(ctx, w, r,
 		endpointsupport.AuthenticateOpts{
 			Clients:           deps.Clients,
 			SecretVerifier:    deps.SecretVerifier,
@@ -377,47 +365,8 @@ func authenticate(
 			Now:               deps.now(),
 			Audit:             deps.auditEmitter(),
 		},
-		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), auditClientAuthnFailure,
-			"client authentication failed at device-authorization endpoint"),
+		"client authentication failed at device-authorization endpoint",
 	)
-}
-
-// extractMTLSThumbprint returns the SHA-256 thumbprint of the
-// inbound mTLS leaf certificate. Returns ("", true) when [Deps.MTLS]
-// is nil or the request did not present a certificate at all; a
-// certificate that was presented but unusable writes the wire error
-// and returns ("", false) so the caller fails closed instead of
-// silently treating the request as unbound, matching how the token
-// endpoint's verifyTokenMTLS behaves.
-func extractMTLSThumbprint(w http.ResponseWriter, r *http.Request, deps Deps) (string, bool) {
-	if deps.MTLS == nil {
-		return "", true
-	}
-	thumb, err := deps.MTLS.ThumbprintFromRequest(r)
-	if err != nil {
-		if errors.Is(err, mtls.ErrNoClientCert) {
-			return "", true
-		}
-		writeMTLSError(w, err)
-		return "", false
-	}
-	return thumb, true
-}
-
-// writeMTLSError translates an mtls.Err* sentinel onto the wire
-// form, mirroring the mapping the token endpoint uses:
-// invalid_request for a certificate that could not be parsed, and
-// invalid_client (RFC 8705 §3) for one that failed chain
-// validation against the configured trust anchors.
-func writeMTLSError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, mtls.ErrCertMalformed):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "client certificate malformed")
-	case errors.Is(err, mtls.ErrCertUntrusted):
-		endpointsupport.WriteInvalidClient(w, false, "client certificate is not trusted")
-	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-	}
 }
 
 // enforceSenderConstraint applies the FAPI 2.0 baseline rule that
@@ -447,7 +396,7 @@ func enforceSenderConstraint(
 			"reason":  "unbound_request",
 		},
 	})
-	writeError(w, http.StatusBadRequest, errInvalidRequest,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 		"device authorization requires DPoP or mTLS under the active profile")
 	return false
 }
@@ -469,7 +418,7 @@ func verifyClientGrantTypeAllowed(ctx context.Context, w http.ResponseWriter, de
 			"reason": "grant_type_not_permitted",
 		},
 	})
-	writeError(w, http.StatusBadRequest, errUnauthorizedClient,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
 		"client is not authorized for the device_code grant")
 	return false
 }
@@ -487,16 +436,10 @@ func parseScope(w http.ResponseWriter, form url.Values, client *store.Client, sc
 	// the RFC 6749 §3.3 0x20 separator; spec-conformant inputs tokenise
 	// identically to the wire-facing 0x20-only internal/oidcscope path.
 	requested := strings.Fields(raw)
-	allowed := make(map[string]struct{}, len(client.Scopes))
-	for _, s := range client.Scopes {
-		allowed[s] = struct{}{}
-	}
-	for _, s := range requested {
-		if _, ok := allowed[s]; !ok {
-			writeError(w, http.StatusBadRequest, errInvalidScope,
-				"requested scope is not permitted for this client")
-			return nil, false
-		}
+	if !oidcscope.Subset(requested, client.Scopes) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
+			"requested scope is not permitted for this client")
+		return nil, false
 	}
 	return filterScopeAllowedClients(w, slices.Clone(requested), client.ID, scopes)
 }
@@ -504,7 +447,7 @@ func parseScope(w http.ResponseWriter, form url.Values, client *store.Client, sc
 func filterScopeAllowedClients(w http.ResponseWriter, scope []string, clientID string, scopes *scoperegistry.Registry) ([]string, bool) {
 	for _, s := range scope {
 		if !scopes.Allows(s, clientID) {
-			writeError(w, http.StatusBadRequest, errInvalidScope,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"scope is restricted to a different client")
 			return nil, false
 		}
@@ -537,19 +480,19 @@ func parseResource(w http.ResponseWriter, form url.Values, client *store.Client)
 		}
 		canonical, err := resourceindicator.Canonicalize(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, errInvalidTarget,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 				"resource parameter is not a valid absolute URI")
 			return nil, false
 		}
 		if !resourceindicator.Contains(client.Resources, canonical) {
-			writeError(w, http.StatusBadRequest, errInvalidTarget,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 				"resource is not registered for this client")
 			return nil, false
 		}
 		out = append(out, canonical)
 	}
 	if len(out) > 1 {
-		writeError(w, http.StatusBadRequest, errInvalidTarget,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
 			"multiple resource indicators are not supported on the device-authorization endpoint")
 		return nil, false
 	}
@@ -572,9 +515,9 @@ type persistInput struct {
 // device_code are treated as fatal randomness faults; user_code
 // collisions trigger a bounded retry loop.
 func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistInput) {
-	deviceCode, err := newDeviceCode()
+	deviceCode, err := keys.RandomBase64URL(deviceCodeByteLength)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "could not allocate device_code")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "could not allocate device_code")
 		return
 	}
 	now := deps.now().UTC()
@@ -594,7 +537,7 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 	}
 	userCode, err := saveWithUserCodeRetry(ctx, deps.DeviceCodes, rec)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "could not persist device-code record")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "could not persist device-code record")
 		return
 	}
 	verificationURI := deps.verificationURI()
@@ -612,10 +555,8 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 			"binding":    bindingLabel(in.DPoPJKT, in.MTLSThumbprint),
 		},
 	})
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(successResponse{
+	httpx.StampNoStore(w)
+	_ = httpx.WriteJSON(w, http.StatusOK, successResponse{
 		DeviceCode:              deviceCode,
 		UserCode:                userCode,
 		VerificationURI:         verificationURI,
@@ -687,20 +628,6 @@ func errAlreadyExists() error {
 	return store.ErrAlreadyExists
 }
 
-// newDeviceCode returns a freshly generated device_code: 32 bytes
-// of crypto/rand encoded as base64url-no-pad (256 bits of
-// entropy). The body lives in this package rather than
-// internal/devicecode because the wire-secret path is owned by
-// the issuer side; the helper packages stay free of HTTP / I/O
-// concerns.
-func newDeviceCode() (string, error) {
-	buf := make([]byte, deviceCodeByteLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("devicecodeendpoint: read random: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
 // bindingLabel returns the audit-extras label naming which sender
 // constraint the issued record carries: "dpop", "mtls", or
 // "bearer".
@@ -713,12 +640,4 @@ func bindingLabel(dpopJKT, mtlsThumbprint string) string {
 	default:
 		return "bearer"
 	}
-}
-
-// isFormContent reports whether ct is application/x-www-form-
-// urlencoded, tolerating optional parameters (charset, boundary,
-// etc.). Mirrors the helper in internal/parendpoint so the two
-// endpoints stay aligned.
-func isFormContent(ct string) bool {
-	return endpointsupport.IsFormContent(ct)
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/discovery"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 func TestHandlerServesDiscoveryDocumentForGetAndHead(t *testing.T) {
@@ -38,8 +39,8 @@ func TestHandlerServesDiscoveryDocumentForGetAndHead(t *testing.T) {
 	if ct := get.Result().Header.Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("GET Content-Type = %q, want application/json", ct)
 	}
-	if cc := get.Result().Header.Get("Cache-Control"); cc != discovery.CacheControl {
-		t.Fatalf("GET Cache-Control = %q, want %q", cc, discovery.CacheControl)
+	if cc := get.Result().Header.Get("Cache-Control"); cc != httpx.StaticDocumentCacheControl {
+		t.Fatalf("GET Cache-Control = %q, want %q", cc, httpx.StaticDocumentCacheControl)
 	}
 	var got discovery.Document
 	if err := json.NewDecoder(get.Body).Decode(&got); err != nil {
@@ -57,8 +58,8 @@ func TestHandlerServesDiscoveryDocumentForGetAndHead(t *testing.T) {
 	if head.Body.Len() != 0 {
 		t.Fatalf("HEAD body length = %d, want 0", head.Body.Len())
 	}
-	if cc := head.Result().Header.Get("Cache-Control"); cc != discovery.CacheControl {
-		t.Fatalf("HEAD Cache-Control = %q, want %q", cc, discovery.CacheControl)
+	if cc := head.Result().Header.Get("Cache-Control"); cc != httpx.StaticDocumentCacheControl {
+		t.Fatalf("HEAD Cache-Control = %q, want %q", cc, httpx.StaticDocumentCacheControl)
 	}
 }
 

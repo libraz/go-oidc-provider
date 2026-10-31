@@ -2,11 +2,12 @@ package introspectendpoint
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -116,7 +117,7 @@ func resolveToken(
 	// short-circuit to opaque immediately to avoid pointless verifier
 	// work (and the spurious "malformed JWT" log entries it would
 	// emit).
-	jwtShaped := looksLikeJWT(token)
+	jwtShaped := endpointsupport.LooksLikeJWT(token)
 	for _, branch := range branchOrder(hint, jwtShaped) {
 		if got, ok := branch(ctx, deps, verifier, authenticatedClientID, token); ok {
 			return got
@@ -521,10 +522,10 @@ func refreshTokenCnf(rec *store.RefreshToken) map[string]string {
 	}
 	cnf := make(map[string]string, 2)
 	if rec.DPoPJKT != "" {
-		cnf["jkt"] = rec.DPoPJKT
+		cnf[tokens.CnfJKT] = rec.DPoPJKT
 	}
 	if rec.MTLSCertThumbprint != "" {
-		cnf["x5t#S256"] = rec.MTLSCertThumbprint
+		cnf[tokens.CnfX5tS256] = rec.MTLSCertThumbprint
 	}
 	return cnf
 }
@@ -576,11 +577,6 @@ func emitLookupFault(ctx context.Context, deps Deps, what, clientID string, err 
 // expired" response and RFC 7662 §2.2 forbids distinguishing the two
 // at the HTTP layer.
 func writeResponse(w http.ResponseWriter, body response) {
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	// Marshal failures on a fixed-shape struct are programmer bugs;
-	// dropping the error here mirrors the parendpoint posture and
-	// avoids partial-body collisions with the WriteHeader call.
-	_ = json.NewEncoder(w).Encode(body)
+	httpx.StampNoStore(w)
+	_ = httpx.WriteJSON(w, http.StatusOK, body)
 }

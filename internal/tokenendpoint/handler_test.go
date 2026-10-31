@@ -259,7 +259,13 @@ func TestHandler_GETRejected(t *testing.T) {
 	if got := resp.Header.Get("Allow"); got != http.MethodPost {
 		t.Errorf("Allow=%q want POST", got)
 	}
-	assertCacheControl(t, resp)
+	// The 405 is the shared plain-text answer, not an OAuth error envelope.
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control=%q want no-store", got)
+	}
+	if got := resp.Header.Get("Pragma"); got != "no-cache" {
+		t.Errorf("Pragma=%q want no-cache", got)
+	}
 }
 
 // TestHandler_NoBody returns 400 invalid_request when the body is empty

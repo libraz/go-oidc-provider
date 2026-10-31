@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -39,7 +40,7 @@ func mintAndRedirect(
 		emitAuthorizeError(w, r, deps, req, code, description)
 		return
 	}
-	codeID, err := newRandomB64(codeByteLength)
+	codeID, err := keys.RandomBase64URL(codeByteLength)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")
 		return

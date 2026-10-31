@@ -102,3 +102,31 @@ func TestGrantScopesAndIssuance(t *testing.T) {
 		})
 	}
 }
+
+// NewRevoker stamps the tombstone with the supplied instant, the retention
+// derived from the access-token TTL plus the clock-skew allowance, and the
+// supplied reason.
+func TestNewRevoker_StampsTombstone(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.FixedZone("x", 9*3600))
+	revs := &fakeGrantRevocations{}
+	out := revocation.NewRevoker(nil, nil, nil, revs, store.RevocationStrategyGrantTombstone,
+		30*time.Minute, now, "logout").Run(context.Background(), revocation.WholeGrant("grant-1"))
+	if !out.Complete() {
+		t.Fatalf("outcome incomplete: %v", out.Err())
+	}
+	if len(revs.tombstones) != 1 {
+		t.Fatalf("tombstones=%d want 1", len(revs.tombstones))
+	}
+	got := revs.tombstones[0]
+	if !got.RevokedAt.Equal(now) || got.RevokedAt.Location() != time.UTC {
+		t.Errorf("RevokedAt=%v want %v in UTC", got.RevokedAt, now.UTC())
+	}
+	if want := now.Add(30*time.Minute + revocation.ClockSkewAllowance); !got.ExpiresAt.Equal(want) {
+		t.Errorf("ExpiresAt=%v want %v", got.ExpiresAt, want)
+	}
+	if got.Reason != "logout" {
+		t.Errorf("Reason=%q want logout", got.Reason)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/protectedresource"
 	"github.com/libraz/go-oidc-provider/internal/testutil/golden"
 )
@@ -88,7 +89,7 @@ func TestHandler_ServesJSONOnGetAndHead(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type=%q", ct)
 	}
-	if cc := resp.Header.Get("Cache-Control"); cc != protectedresource.CacheControl {
+	if cc := resp.Header.Get("Cache-Control"); cc != httpx.StaticDocumentCacheControl {
 		t.Errorf("Cache-Control=%q", cc)
 	}
 	body, _ := io.ReadAll(resp.Body)

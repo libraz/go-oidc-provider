@@ -266,7 +266,7 @@ func RevokeJWTAccessTokensByGrant(
 	}
 }
 
-// RevokeJWTAccessTokenByJTI revokes one JWT access token under
+// revokeJWTAccessTokenByJTI revokes one JWT access token under
 // opts.RevocationStrategy. Under GrantTombstone it writes a per-JTI
 // denylist row (not a grant tombstone); when GrantRevocations is nil it
 // falls back to AccessTokens.RevokeByJTI for the migration window.
@@ -276,7 +276,7 @@ func RevokeJWTAccessTokensByGrant(
 // where the token keeps verifying until exp. Store errors are returned;
 // callers keep their wire-level success posture and report the error
 // through audit.
-func RevokeJWTAccessTokenByJTI(
+func revokeJWTAccessTokenByJTI(
 	ctx context.Context,
 	opts JWTGrantCascadeOpts,
 	jti, grantID string,

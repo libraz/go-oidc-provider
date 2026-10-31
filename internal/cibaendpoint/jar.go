@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -46,7 +47,7 @@ func consumeJARRequestObject(
 					"reason": "request_object_required",
 				},
 			})
-			writeError(w, http.StatusBadRequest, errInvalidRequest,
+			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 				"request object is required by the active profile")
 			return nil, false
 		}
@@ -62,7 +63,7 @@ func consumeJARRequestObject(
 				"reason": "request_object_invalid",
 			},
 		})
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"request is not supported by this OP")
 		return nil, false
 	}
@@ -110,8 +111,8 @@ func consumeJARRequestObject(
 // /par.
 func writeJARError(w http.ResponseWriter, err error) {
 	if errors.Is(err, jar.ErrKeySourceUnavailable) {
-		writeError(w, http.StatusServiceUnavailable, errServerError, jar.Description(err))
+		endpointsupport.WriteOAuthError(w, http.StatusServiceUnavailable, errServerError, jar.Description(err))
 		return
 	}
-	writeError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
 }

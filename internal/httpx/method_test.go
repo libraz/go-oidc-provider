@@ -2,7 +2,6 @@ package httpx_test
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -47,12 +46,14 @@ func TestEnforceMethod_RejectsMismatch(t *testing.T) {
 	if allow != "GET, HEAD, POST" {
 		t.Errorf("Allow=%q want GET, HEAD, POST", allow)
 	}
-	var body httpx.ErrorBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
+	if got := rec.Body.String(); got != "method not allowed\n" {
+		t.Errorf("body=%q want plain-text method not allowed", got)
 	}
-	if body.Error != "method_not_allowed" {
-		t.Errorf("error=%q want method_not_allowed", body.Error)
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control=%q want no-store", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Errorf("Pragma=%q want no-cache", got)
 	}
 }
 
@@ -74,5 +75,31 @@ func TestEnforceMethod_PreservesArgumentOrder(t *testing.T) {
 	httpx.EnforceMethod(rec, newReq(t, http.MethodTrace), http.MethodPost, http.MethodGet)
 	if got := rec.Header().Get("Allow"); got != "POST, GET, HEAD" {
 		t.Errorf("Allow=%q want POST, GET, HEAD", got)
+	}
+}
+
+func TestMethodNotAllowed_OmitsEmptyAllow(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	httpx.MethodNotAllowed(rec, "")
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status=%d want 405", rec.Code)
+	}
+	if _, ok := rec.Header()["Allow"]; ok {
+		t.Errorf("Allow header set for an empty method list: %q", rec.Header().Get("Allow"))
+	}
+}
+
+func TestStampNoStore_SetsBothHeaders(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	httpx.StampNoStore(rec)
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control=%q want no-store", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Errorf("Pragma=%q want no-cache", got)
 	}
 }

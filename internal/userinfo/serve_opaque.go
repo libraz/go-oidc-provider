@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -107,10 +106,7 @@ func opaqueAudience(rec *store.OpaqueAccessToken) []string {
 // nil; the reference matches the boundary discipline of the sibling
 // endpoints (no direct [time.Now] call).
 func userInfoNow(deps HandlerDeps) time.Time {
-	if deps.Clock != nil {
-		return deps.Clock.Now()
-	}
-	return timex.SystemClock.Now()
+	return timex.OrSystem(deps.Clock).Now()
 }
 
 // enforceOpaqueCnf re-verifies the sender-constraint proof on the
@@ -128,12 +124,12 @@ func enforceOpaqueCnf(
 	cnf map[string]string,
 	raw string,
 ) bool {
-	if jkt := cnf["jkt"]; jkt != "" {
+	if jkt := cnf[tokens.CnfJKT]; jkt != "" {
 		if !enforceDPoPCnf(w, r, deps, jkt, raw) {
 			return false
 		}
 	}
-	if x5t := cnf["x5t#S256"]; x5t != "" {
+	if x5t := cnf[tokens.CnfX5tS256]; x5t != "" {
 		if !enforceMTLSCnf(w, r, deps, x5t) {
 			return false
 		}
@@ -174,21 +170,4 @@ func projectOpaqueAccessTokenClaims(view *tokens.OpaqueAccessTokenView) *tokens.
 func respondOpaqueInvalid(w http.ResponseWriter, description string) {
 	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", description))
 	w.WriteHeader(http.StatusUnauthorized)
-}
-
-// looksLikeJWT reports whether token has the structural shape of a
-// compact-serialised JWS: three base64url segments separated by dots,
-// with the header decoding to a JSON object. The check is deliberately
-// shallow — full parsing happens inside [tokens.AccessTokenVerifier] —
-// because the only purpose of this dispatcher is to pick which branch
-// to take. Mirrors the helper in the sibling endpoints
-// (introspectendpoint / revokeendpoint) so the JWT-shape probe stays
-// uniform across the protocol surfaces.
-//
-// A token whose header is not valid base64url-encoded JSON is treated
-// as opaque so a malformed JWT cannot bypass the opaque lookup; the
-// JWT branch would reject it anyway, but the conservative choice
-// keeps the dispatcher simple to reason about.
-func looksLikeJWT(token string) bool {
-	return endpointsupport.LooksLikeJWT(token)
 }

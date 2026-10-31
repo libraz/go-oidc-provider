@@ -3,6 +3,7 @@ package tokenendpoint
 import (
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -33,7 +34,7 @@ func enforcePKCEDowngradeGuard(
 	if exchanged.HadCodeChallenge {
 		return true
 	}
-	writeError(w, http.StatusBadRequest, errInvalidGrant,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 		"PKCE is required for public clients (RFC 9700 §2.1.1)")
 	return false
 }
@@ -52,12 +53,12 @@ func enforceDPoPJKTBinding(w http.ResponseWriter, exchanged *authcode.Exchanged,
 		return true
 	}
 	if binding.DPoPJKT == "" {
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"authorization code is bound to a DPoP key but no proof was presented")
 		return false
 	}
 	if binding.DPoPJKT != exchanged.DPoPJKT {
-		writeError(w, http.StatusBadRequest, errInvalidGrant,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"DPoP proof key does not match the dpop_jkt commitment")
 		return false
 	}
@@ -77,7 +78,7 @@ func enforceSenderConstraint(w http.ResponseWriter, deps Deps, b tokenBinding) b
 	if !deps.RequireSenderConstrainedTokens || b.constrained() {
 		return true
 	}
-	writeError(w, http.StatusBadRequest, errInvalidRequest,
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 		"sender-constrained access token required: present a DPoP proof or a client certificate")
 	return false
 }

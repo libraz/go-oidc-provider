@@ -255,8 +255,8 @@ func TestHandler_JSONDefault(t *testing.T) {
 		dump, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d body=%s", resp.StatusCode, dump)
 	}
-	if got := resp.Header.Get("Content-Type"); got != "application/json" {
-		t.Errorf("Content-Type=%q want application/json", got)
+	if got := resp.Header.Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Errorf("Content-Type=%q want application/json; charset=utf-8", got)
 	}
 	body := decodeJSON(t, resp)
 	if active, _ := body["active"].(bool); !active {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -57,11 +58,11 @@ func enforceGrantTombstoneMintRefusal(
 		// a cascade gap. Surface as server_error rather than invalid_grant
 		// so the embedder's monitoring distinguishes a substore outage from
 		// a legitimate revocation.
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
 	if revoked {
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
 		return false
 	}
 	return true
@@ -110,7 +111,7 @@ func retirePriorOpaqueAccessTokens(
 				"retryable":     transactional,
 			},
 		})
-		writeError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
 	return true

@@ -2,15 +2,14 @@ package cibaendpoint
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -55,9 +54,9 @@ type persistInput struct {
 // inside an active record's TTL astronomically rare, so a single
 // failure short-circuits to server_error rather than retrying.
 func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistInput) {
-	authReqID, err := newAuthReqID()
+	authReqID, err := keys.RandomBase64URL(authReqIDByteLength)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "could not allocate auth_req_id")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "could not allocate auth_req_id")
 		return
 	}
 	now := deps.now().UTC()
@@ -80,7 +79,7 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 		Status:         store.CIBARequestStatusPending,
 	}
 	if err := deps.CIBARequests.Save(ctx, rec); err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "could not persist ciba request")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "could not persist ciba request")
 		return
 	}
 	deps.auditEmitter().Emit(ctx, audit.Event{
@@ -99,28 +98,12 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 			"hint_kind":  in.HintKind.String(),
 		},
 	})
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(successResponse{
+	httpx.StampNoStore(w)
+	_ = httpx.WriteJSON(w, http.StatusOK, successResponse{
 		AuthReqID: authReqID,
 		ExpiresIn: int64(in.ExpiresIn.Seconds()),
 		Interval:  int64(interval.Seconds()),
 	})
-}
-
-// newAuthReqID returns a freshly generated auth_req_id: 32 bytes
-// of crypto/rand encoded as base64url-no-pad (256 bits of
-// entropy). The body lives in this package rather than
-// internal/ciba because the wire-secret path is owned by the
-// issuer side; the helper packages stay free of HTTP / I/O
-// concerns.
-func newAuthReqID() (string, error) {
-	buf := make([]byte, authReqIDByteLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("cibaendpoint: read random: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
 // bindingLabel returns the audit-extras label naming which sender

@@ -13,6 +13,8 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -181,7 +183,7 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 	}
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	if state.Library.RedirectURI == "" {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -275,7 +277,7 @@ func dispatchTick(
 		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not set csrf cookie", "")
 		return
 	}
-	stampNoStore(w)
+	httpx.StampNoStore(w)
 	prompt := *step.Prompt
 	// Stamp the CSRF token onto the prompt envelope so a server-
 	// rendered Driver can embed it as a hidden form field. SPA
@@ -552,7 +554,7 @@ func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid,
 // fields from r.PostForm, or calls ParseForm itself and gets the
 // standard library's cached parse.
 func csrfFromForm(r *http.Request) string {
-	if !isFormContent(r.Header.Get("Content-Type")) {
+	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
 		return ""
 	}
 	r.Body = http.MaxBytesReader(nil, r.Body, csrfFormMaxBytes)

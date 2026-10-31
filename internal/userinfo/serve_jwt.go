@@ -8,20 +8,14 @@ import (
 	"net/http"
 	"strings"
 
-	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// userInfoJWTType is the JOSE "typ" header stamped on a signed userinfo
-// response. OIDC Core 1.0 §5.3.2 does not mandate a specific typ value
-// for signed userinfo; "JWT" is the safe default that RP libraries
-// strict-checking the type recognise.
-const userInfoJWTType = "JWT"
 
 // userInfoJWTContentType is the HTTP Content-Type the OP emits for a
 // JWT-shaped userinfo response (signed-only or signed-then-encrypted).
@@ -104,7 +98,8 @@ func writeUserInfoJWT(
 
 // signUserInfoJWT serialises body as a compact-serialised ES256 JWS
 // using the OP's active signing key (RFC 7515 / OIDC Core 1.0 §5.3.2).
-// The `kid` header is set to the active Entry's KeyID; `typ` is "JWT".
+// The `kid` header is set to the active Entry's KeyID; `typ` is [jose.TypJWT]
+// (OIDC Core 1.0 §5.3.2 mandates no value; RP libraries strict-checking the type recognise "JWT").
 // The function fails when [HandlerDeps.Keys] is nil (a misconfigured
 // embedder did not pass a keyset) or when the active entry has a nil
 // Signer (defensive — [keys.NewSet] rejects this at construction time).
@@ -116,17 +111,7 @@ func signUserInfoJWT(set *keys.Set, body map[string]any) (string, error) {
 	if active.Signer == nil {
 		return "", errors.New("userinfo: active signing key has nil Signer")
 	}
-	sk := josev4.SigningKey{
-		Algorithm: josev4.ES256,
-		Key: josev4.JSONWebKey{
-			Key:       active.Signer,
-			KeyID:     active.KeyID,
-			Algorithm: string(josev4.ES256),
-			Use:       "sig",
-		},
-	}
-	opts := (&josev4.SignerOptions{}).WithType(josev4.ContentType(userInfoJWTType))
-	signer, err := josev4.NewSigner(sk, opts)
+	signer, err := tokens.NewSigner(tokens.FromInternalEntry(active), jose.TypJWT)
 	if err != nil {
 		return "", fmt.Errorf("userinfo: build signer: %w", err)
 	}

@@ -2,9 +2,6 @@ package authorizeendpoint
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -481,10 +478,7 @@ func (r resolved) authorizeRedirectBase() string {
 // now returns the wall-clock reading for this request, falling back to the
 // system clock when [Deps.Clock] is nil.
 func (r resolved) now() time.Time {
-	if r.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return r.Clock.Now()
+	return timex.OrSystem(r.Clock).Now()
 }
 
 // isFirstPartyClient reports whether clientID was registered as first
@@ -586,14 +580,4 @@ func clearCookie(w http.ResponseWriter, profile cookie.Profile) {
 	if c, err := cookie.Clear(profile); err == nil {
 		http.SetCookie(w, c)
 	}
-}
-
-// newRandomB64 returns a base64url-no-pad encoded random identifier of the
-// supplied byte length.
-func newRandomB64(length int) (string, error) {
-	buf := make([]byte, length)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("authorizeendpoint: read random: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }

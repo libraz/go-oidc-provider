@@ -2,9 +2,6 @@ package tokenendpoint
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -29,9 +26,7 @@ import (
 )
 
 // Audit event names sourced from the typed registry that backs the public
-// op.AuditEvent catalog. auditClientAuthnFailure aliases the canonical
-// constant in [endpointsupport] so the boundary helper and local emission sites
-// cannot drift.
+// op.AuditEvent catalog.
 const (
 	auditTokenIssued                         = string(auditevent.AuditTokenIssued)
 	auditTokenRefreshed                      = string(auditevent.AuditTokenRefreshed)
@@ -41,7 +36,6 @@ const (
 	auditRefreshGrantRevokeFailed            = string(auditevent.AuditRefreshGrantRevokeFailed)
 	auditCodeConsumed                        = string(auditevent.AuditCodeConsumed)
 	auditCodeReplayDetected                  = string(auditevent.AuditCodeReplayDetected)
-	auditClientAuthnFailure                  = endpointsupport.EventClientAuthnFailure
 	failureStagePriorAccessTokenRevoke       = "prior_access_token_revoke"
 )
 
@@ -526,29 +520,27 @@ func Handler(deps Deps) http.Handler {
 // whether dispatch may proceed, having already written the error
 // response when it may not.
 func acceptTokenRequest(w http.ResponseWriter, r *http.Request, deps Deps) (string, bool) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		writeError(w, http.StatusMethodNotAllowed, errInvalidRequest, "method not allowed")
+	if !httpx.EnforceMethod(w, r, http.MethodPost) {
 		return "", false
 	}
-	if !isFormContent(r.Header.Get("Content-Type")) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"content-type must be application/x-www-form-urlencoded")
 		return "", false
 	}
 	endpointsupport.LimitFormBody(w, r)
 	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return "", false
 	}
 	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, tokenSingleValuedParams); !ok {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"parameter "+name+" must not be repeated")
 		return "", false
 	}
 	grantType := r.PostForm.Get("grant_type")
 	if grantType != "" && !deps.grantEnabled(grantType) {
-		writeError(w, http.StatusBadRequest, errUnsupportedGrantType,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnsupportedGrantType,
 			"grant_type is not supported")
 		return "", false
 	}
@@ -565,7 +557,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	}
 	switch grantType {
 	case "":
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_type is required")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "grant_type is required")
 	case grantTypeAuthorizationCode:
 		handleAuthorizationCode(w, r, deps)
 	case grantTypeRefreshToken:
@@ -581,7 +573,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 			handleCustomGrant(w, r, deps, grantType)
 			return
 		}
-		writeError(w, http.StatusBadRequest, errUnsupportedGrantType,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnsupportedGrantType,
 			"grant_type is not supported")
 	}
 }
@@ -607,10 +599,7 @@ func resolveDeps(d Deps) Deps {
 // now returns the wall-clock reading for this request, falling back to
 // the system clock when [Deps.Clock] is nil.
 func (d *Deps) now() time.Time {
-	if d.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return d.Clock.Now()
+	return timex.OrSystem(d.Clock).Now()
 }
 
 // clockFunc adapts [Deps.Clock] to the func()-shaped clock the grant
@@ -698,16 +687,9 @@ func authenticate(
 			Now:               deps.now(),
 			Audit:             deps.audit(),
 		},
-		endpointsupport.AuditAuthnFailure(ctx, deps.audit(), auditClientAuthnFailure,
+		endpointsupport.AuditAuthnFailure(ctx, deps.audit(), endpointsupport.EventClientAuthnFailure,
 			"client authentication failed at token endpoint"),
 	)
-}
-
-// isFormContent reports whether ct is application/x-www-form-urlencoded.
-// Parameters (charset, etc.) are tolerated so the handler accepts the
-// shape RP libraries actually send.
-func isFormContent(ct string) bool {
-	return endpointsupport.IsFormContent(ct)
 }
 
 // refreshScopePolicy is the scope half of the refresh-token issuance
@@ -806,19 +788,6 @@ func pickRefreshTokenTTL(deps Deps, scope []string) time.Duration {
 // exists so the call sites do not duplicate the boundary copy.
 func activeSigningKey(deps Deps) tokens.SigningKey {
 	return tokens.FromInternalEntry(deps.Keys.Active())
-}
-
-// newJTI returns a base64url-no-pad encoded random identifier suitable
-// for the "jti" claim of access tokens (RFC 9068 §4). The function
-// satisfies the depguard crypto/rand allow-list because internal/grants
-// also uses crypto/rand directly; if the allow-list expands later this
-// helper can be replaced with a shared utility.
-func newJTI() (string, error) {
-	buf := make([]byte, jtiByteLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("tokenendpoint: read random: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
 // joinScope is the canonical RFC 6749 §3.3 space-delimited form. The

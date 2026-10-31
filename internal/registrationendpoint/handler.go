@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sector"
@@ -312,10 +313,7 @@ func resolveDeps(d Deps) Deps {
 // now returns the wall-clock reading for this request, falling back
 // to the system clock when [Deps.Clock] is nil.
 func (d *Deps) now() time.Time {
-	if d.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return d.Clock.Now()
+	return timex.OrSystem(d.Clock).Now()
 }
 
 // logger returns the configured [*slog.Logger] or [slog.Default()] when
@@ -360,10 +358,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 // serveRegistration routes the bare-/register path. POST is the only
 // admitted verb; everything else collapses onto 405.
 func serveRegistration(w http.ResponseWriter, r *http.Request, deps Deps) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		stampNoStore(w)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !httpx.EnforceMethod(w, r, http.MethodPost) {
 		return
 	}
 	handleRegister(w, r, deps)
@@ -380,9 +375,7 @@ func serveManagement(w http.ResponseWriter, r *http.Request, deps Deps, clientID
 	case http.MethodDelete:
 		handleDelete(w, r, deps, clientID)
 	default:
-		w.Header().Set("Allow", "GET, PUT, DELETE")
-		stampNoStore(w)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		httpx.MethodNotAllowed(w, "GET, PUT, DELETE")
 	}
 }
 
