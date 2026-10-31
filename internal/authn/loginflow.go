@@ -13,7 +13,7 @@ import (
 
 // LoginFlowSpec is the public-API LoginFlow shape the compiler
 // consumes. The internal package cannot import op/, so the wiring
-// layer (op/op.go:buildOrchestrator) re-projects the public op.LoginFlow
+// layer (op/loginflow_projection.go:compileLoginFlow) re-projects the public op.LoginFlow
 // onto this struct before invoking [CompileLoginFlow].
 //
 // LoginFlowSpec is intentionally a pure data carrier: it carries no
