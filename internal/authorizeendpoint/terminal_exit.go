@@ -303,3 +303,32 @@ func silentExit(hint authorizeHint, active *sessions.Active) (exitKind, terminal
 	}
 	return kind, activeSessionAuthn{active: active}
 }
+
+// currentSessionAuthContext reads the authentication context off the
+// browser session the completing request carries, for a chain that
+// authenticated nobody itself and is therefore served from that
+// session.
+//
+// The session the chain inherited its subject from can be gone by the
+// time the ceremony ends — it may have expired, been signed out in
+// another tab, or been switched to a different account — and there is
+// then no authentication left for the response to describe. That is a
+// refusal, not a value to invent: a fabricated auth_time is exactly what
+// an RP's freshness check is meant to catch. A store that could not
+// answer is reported as a wrapped fault instead, so the caller can tell
+// the transient case apart and leave the record in place for a retry.
+func currentSessionAuthContext(r *http.Request, deps resolved, subject string) (grantAuthContext, error) {
+	active, err := resolveSessionWithoutTouch(r, deps)
+	return backingSessionAuthContext(
+		currentSubject(active), sessionAuthContext(active),
+		err, subject, errSessionAuthnUnavailable,
+	)
+}
+
+// errSessionAuthnUnavailable signals that a chain which ran no
+// authenticator reached the code-issuing gate with no live session to
+// describe the authentication the response would report. The condition
+// is permanent for this ceremony — the session it inherited its subject
+// from is not coming back — so the caller retires the interaction record
+// and asks the user to log in again.
+var errSessionAuthnUnavailable = errors.New("authorizeendpoint: no session backs the completed authorization")

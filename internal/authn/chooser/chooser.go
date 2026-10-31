@@ -21,7 +21,7 @@
 //     skip the factor chain.
 //
 // The cookie rebind itself happens at the HTTP layer in
-// internal/authorizeendpoint/interaction.go::terminateInteraction,
+// internal/authorizeendpoint/interaction_terminal.go::terminateInteraction,
 // which reads State.ChooserSelectedSessionID and calls
 // [sessions.Manager.Switch] before redirecting back to the RP.
 package chooser

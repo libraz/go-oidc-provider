@@ -553,3 +553,17 @@ func consentAutoGranted(state authorize.RequestState) bool {
 	st, err := decodeAuthnState(state.Authn)
 	return err == nil && st.ConsentAutoGranted
 }
+
+func emitSessionCreated(ctx context.Context, deps resolved, subject, sessionID, chooserGroupID, reason string) {
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:      opAuditSessionCreated,
+		Level:     audit.LevelInfo,
+		Message:   "session created",
+		ActorID:   subject,
+		SessionID: sessionID,
+		Extras: map[string]any{
+			"chooser_group_id": chooserGroupID,
+			"reason":           reason,
+		},
+	})
+}

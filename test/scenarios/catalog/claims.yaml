@@ -443,7 +443,7 @@ rows:
       granted and prompt=none is set, the OP returns consent_required
       ("requested claims not granted").
     status: out-of-scope
-    out_of_scope_reason: "v1.0 gates consent on scope coverage only — needConsent fires when the requested scope is not a subset of the existing grant's scope (internal/authorizeendpoint/authorize.go scopeIsSubset). Claims-driven consent gating ('requested claim was not granted', rejected-claims subset intersection) is unimplemented; the projector silently omits unsatisfied claims rather than triggering consent_required. Revisit if claims-aware consent is added."
+    out_of_scope_reason: "v1.0 gates consent on scope coverage only — needConsent fires when the requested scope is not a subset of the existing grant's scope (internal/authorizeendpoint/consent_coverage.go consentAlreadyCovered). Claims-driven consent gating ('requested claim was not granted', rejected-claims subset intersection) is unimplemented; the projector silently omits unsatisfied claims rather than triggering consent_required. Revisit if claims-aware consent is added."
 
   - id: CL-71
     severity: P1
@@ -453,7 +453,7 @@ rows:
       OP intersects the requested set with the consent's granted
       subset (rejectedClaims concept).
     status: out-of-scope
-    out_of_scope_reason: "v1.0 gates consent on scope coverage only — needConsent fires when the requested scope is not a subset of the existing grant's scope (internal/authorizeendpoint/authorize.go scopeIsSubset). Claims-driven consent gating ('requested claim was not granted', rejected-claims subset intersection) is unimplemented; the projector silently omits unsatisfied claims rather than triggering consent_required. Revisit if claims-aware consent is added."
+    out_of_scope_reason: "v1.0 gates consent on scope coverage only — needConsent fires when the requested scope is not a subset of the existing grant's scope (internal/authorizeendpoint/consent_coverage.go consentAlreadyCovered). Claims-driven consent gating ('requested claim was not granted', rejected-claims subset intersection) is unimplemented; the projector silently omits unsatisfied claims rather than triggering consent_required. Revisit if claims-aware consent is added."
 
   - id: CL-80
     severity: P1

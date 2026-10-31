@@ -462,7 +462,7 @@ func completeConsentIfPrompted(tb testing.TB, client *http.Client, interactionUR
 	if stateRef == "" {
 		tb.Fatal("scenariokit: consent prompt missing state_ref")
 	}
-	// Per-step CSRF scope binding (interaction.go:178) re-issues the
+	// Per-step CSRF scope binding (interaction.go dispatchTick) re-issues the
 	// __Host-oidc_csrf cookie on every step boundary, so the value
 	// minted at the auth.* step does not verify against the consent.*
 	// step. Pull the rotated cookie off the prior response.

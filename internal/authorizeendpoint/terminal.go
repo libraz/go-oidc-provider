@@ -325,3 +325,87 @@ func validateTerminalConsent(
 	}
 	return nil
 }
+
+// acrSatisfiedBySession reports whether the established session entry
+// satisfies any of the requested acr values. RFC 9470 step-up: when no
+// requested context is satisfied, the OP re-authenticates rather than
+// silently reuse the weaker session.
+//
+// The judgement is the configured [op.ACRPolicy]'s, through
+// [Deps.ACRSatisfier]: the session's canonical acr gives its level, and
+// the policy's own ladder decides which requested values that level
+// reaches. The policy that picks the acr a response reports is the one
+// that decides whether the session may serve it, so the two cannot
+// disagree. A nil satisfier keeps exact membership of the session's acr,
+// where an empty acr satisfies nothing.
+func acrSatisfiedBySession(ctx context.Context, deps resolved, entry authn.EntryAuthn, requested []string) bool {
+	for _, want := range requested {
+		if deps.ACRSatisfier != nil {
+			if deps.ACRSatisfier(ctx, want, entry) {
+				return true
+			}
+			continue
+		}
+		if entry.ACR != "" && entry.ACR == want {
+			return true
+		}
+	}
+	return false
+}
+
+// acrUnsatisfiedByRequest reports whether entry fails the request's
+// acr_values or its essential acr claim.
+func acrUnsatisfiedByRequest(ctx context.Context, deps resolved, entry authn.EntryAuthn, req *authorize.Request) bool {
+	if req == nil {
+		return false
+	}
+	if len(req.ACRValues) > 0 && !acrSatisfiedBySession(ctx, deps, entry, req.ACRValues) {
+		return true
+	}
+	spec, ok := req.Claims.IDTokenSpec("acr")
+	if !ok || !spec.Essential {
+		return false
+	}
+	if len(spec.Values) == 0 && spec.Value == nil {
+		return entry.ACR == ""
+	}
+	var wanted []string
+	if value, ok := spec.Value.(string); ok {
+		wanted = append(wanted, value)
+	}
+	for _, candidate := range spec.Values {
+		if value, ok := candidate.(string); ok {
+			wanted = append(wanted, value)
+		}
+	}
+	return !acrSatisfiedBySession(ctx, deps, entry, wanted)
+}
+
+// terminalRefusal renders a terminal-validation sentinel as the wire
+// code, description, and whether the condition is permanent (the record
+// is retired) or transient (the record survives for a retry).
+func terminalRefusal(err error) (code, description string, permanent bool) {
+	switch {
+	case errors.Is(err, errACRUnmet):
+		return errUnmetAuthenticationRequirements,
+			"the authentication performed does not satisfy the requested acr", true
+	case errors.Is(err, errStaleAuthentication):
+		return errLoginRequired,
+			"the selected account's authentication is older than max_age", true
+	case errors.Is(err, errChooserSubjectMismatch):
+		return errAccessDenied,
+			"the selected account no longer matches the authenticated subject", true
+	case errors.Is(err, errSessionAuthnUnavailable):
+		return errLoginRequired,
+			"the session backing this authorization is no longer available", true
+	case errors.Is(err, errTerminalSubjectMissing):
+		return errAccessDenied, "subject was not authenticated", true
+	case errors.Is(err, errTerminalConsentUncovered):
+		return errAccessDenied,
+			"the authenticated account has not consented to the requested scope", true
+	case errors.Is(err, errTerminalGrantMismatch):
+		return errServerError, "the authorization grant does not match the request", false
+	default:
+		return errServerError, "could not resolve authentication context", false
+	}
+}

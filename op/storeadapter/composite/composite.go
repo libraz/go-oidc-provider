@@ -234,7 +234,7 @@ var allKinds = []Kind{
 // backend. The OP core opens [store.Transactional] transactions spanning
 // these substores on paths that require cross-substore atomicity (see
 // internal/tokenendpoint/refresh.go, internal/authorizeendpoint/completion.go,
-// and internal/authorizeendpoint/authorize.go); routing two of these kinds to
+// and internal/authorizeendpoint/silent_commit.go); routing two of these kinds to
 // different backends would split the consistency domain a single transaction
 // needs for replay detection, refresh rotation, and revocation cascades, even
 // where a path relies on a per-substore CAS instead of an explicit Tx.

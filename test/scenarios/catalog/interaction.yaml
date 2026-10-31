@@ -131,7 +131,7 @@ rows:
       `text/html` matching
       `/interaction session and authentication session mismatch/`.
     status: out-of-scope
-    out_of_scope_reason: "An upstream reference OP 'interaction session and authentication session mismatch' text/html error after consent POST when the auth session is destroyed before resume runs. v1.0 has no /auth/resume endpoint — terminateInteraction (internal/authorizeendpoint/interaction.go) runs in the same handler as the consent POST, applying the planned sessions.Establishment synchronously. There is no resume gap and no upstream 'mismatch' error string."
+    out_of_scope_reason: "An upstream reference OP 'interaction session and authentication session mismatch' text/html error after consent POST when the auth session is destroyed before resume runs. v1.0 has no /auth/resume endpoint — terminateInteraction (internal/authorizeendpoint/interaction_terminal.go) runs in the same handler as the consent POST, applying the planned sessions.Establishment synchronously. There is no resume gap and no upstream 'mismatch' error string."
 
   - id: ITX-025
     severity: P0

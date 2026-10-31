@@ -2,6 +2,9 @@ package authorizeendpoint
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -585,4 +588,24 @@ func scopeIsSubset(want, have []string) bool {
 		}
 	}
 	return true
+}
+
+// clearCookie writes a Set-Cookie header that instructs the browser to
+// remove the named cookie. Errors during construction are swallowed: a
+// failure here is a programming bug (the profile is a package constant)
+// and surfacing it would mask the original response we were emitting.
+func clearCookie(w http.ResponseWriter, profile cookie.Profile) {
+	if c, err := cookie.Clear(profile); err == nil {
+		http.SetCookie(w, c)
+	}
+}
+
+// newRandomB64 returns a base64url-no-pad encoded random identifier of the
+// supplied byte length.
+func newRandomB64(length int) (string, error) {
+	buf := make([]byte, length)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("authorizeendpoint: read random: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
