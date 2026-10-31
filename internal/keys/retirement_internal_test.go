@@ -1,4 +1,3 @@
-//nolint:testpackage // Exercises the package-private retirement gate directly.
 package keys
 
 import (

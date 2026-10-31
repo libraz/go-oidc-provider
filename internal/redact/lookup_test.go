@@ -68,6 +68,7 @@ func TestIsSensitive_Classification(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // testing.AllocsPerRun pins GOMAXPROCS and panics when called from a parallel test.
 func TestIsSensitive_CanonicalKeysDoNotAllocate(t *testing.T) {
 	for _, key := range []string{"access_token", "user_id", "token_type", "new_refresh_token"} {
 		if n := testing.AllocsPerRun(100, func() { _ = IsSensitive(key) }); n != 0 {

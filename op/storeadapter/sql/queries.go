@@ -347,6 +347,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 	const notExpiredGuard = " AND " + liveGuard
 	const authCodeCols = "id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, auth_time, acr, amr, authorization_details, claims, authorization_recorded, expires_at, consumed_at, created_at"
 	const refreshFindCols = "id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, claims, authorization_recorded, chain_id, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked"
+	//nolint:gosec // a column list naming the token-hash column, not a credential.
 	const opaqueAccessTokenCols = "token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, authorization_details, claims, authorization_recorded, chain_id, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked"
 	const cibaCols = "id, client_id, subject, scope, resource, acr_values, acr, binding_message, user_code, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, poll_violations, last_polled_at, expires_at, issued_at"
 

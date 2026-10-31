@@ -1,6 +1,7 @@
 package inmem
 
 import (
+	"errors"
 	"math"
 	"testing"
 
@@ -34,7 +35,7 @@ func TestIncrementCounter_ReportsMissingRecord(t *testing.T) {
 		func(func(*store.DeviceCode) error) error { return store.ErrNotFound },
 		func(r *store.DeviceCode) *uint8 { return &r.UserCodeStrikes },
 	)
-	if err != store.ErrNotFound || got != 0 {
+	if !errors.Is(err, store.ErrNotFound) || got != 0 {
 		t.Fatalf("missing record = %d, %v; want 0, ErrNotFound", got, err)
 	}
 }

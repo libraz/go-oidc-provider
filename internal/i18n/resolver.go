@@ -67,15 +67,16 @@ func NewResolver(defTag Tag, bundles ...*Bundle) (*Resolver, error) {
 		r.bundles[b.Tag()] = b
 		r.order = append(r.order, b.Tag())
 	}
-	if strings.TrimSpace(string(defTag)) != "" {
+	switch {
+	case strings.TrimSpace(string(defTag)) != "":
 		canonical := ParseTag(string(defTag))
 		if canonical == "" || r.bundles[canonical] == nil {
 			return nil, errors.New("i18n: default locale " + string(defTag) + " has no registered bundle")
 		}
 		r.defTag = canonical
-	} else if r.bundles[English] != nil {
+	case r.bundles[English] != nil:
 		r.defTag = English
-	} else {
+	default:
 		r.defTag = r.order[0]
 	}
 	r.chains = make(map[Tag][]*Bundle, len(r.order))

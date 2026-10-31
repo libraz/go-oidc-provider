@@ -24,11 +24,14 @@ func newVersion(label string, except int64) (int64, error) {
 	return v, nil
 }
 
-// usableVersion reports whether v can anchor a compare-and-swap: zero
-// means "never issued" and MaxInt64 is outside the range newVersion
-// produces.
-func usableVersion(v uint64) bool {
-	return v != 0 && v < math.MaxInt64
+// anchorVersion returns v as the signed column value a compare-and-swap
+// matches against, and false when v cannot anchor one: zero means "never
+// issued" and MaxInt64 is outside the range newVersion produces.
+func anchorVersion(v uint64) (int64, bool) {
+	if v == 0 || v >= math.MaxInt64 {
+		return 0, false
+	}
+	return int64(v), true
 }
 
 // versionedPut runs an unconditional upsert that stamps a fresh Version
@@ -58,16 +61,17 @@ func versionedSwap(
 	previousVersion, nextVersion uint64,
 	nextValues, previousValues []any,
 ) error {
-	if !usableVersion(previousVersion) || nextVersion != previousVersion {
+	previous, ok := anchorVersion(previousVersion)
+	if !ok || nextVersion != previousVersion {
 		return store.ErrAlreadyConsumed
 	}
-	version, err := newVersion(label, int64(previousVersion))
+	version, err := newVersion(label, previous)
 	if err != nil {
 		return err
 	}
 	args := make([]any, 0, len(nextValues)+3+len(previousValues))
 	args = append(args, nextValues...)
-	args = append(args, version, subject, int64(previousVersion))
+	args = append(args, version, subject, previous)
 	args = append(args, previousValues...)
 	changed, err := execAffects(ctx, e, query, label, args)
 	if err != nil {

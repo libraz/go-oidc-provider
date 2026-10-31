@@ -23,13 +23,7 @@ const (
 )
 
 // codeModulus is 10^codeDigits, the exclusive upper bound of a code.
-var codeModulus = func() uint64 {
-	m := uint64(1)
-	for range codeDigits {
-		m *= 10
-	}
-	return m
-}()
+const codeModulus uint64 = 1_000_000
 
 // generateCode draws codeDigits decimal digits from crypto/rand. The
 // implementation reads a uint64, reduces modulo 10^codeDigits, and

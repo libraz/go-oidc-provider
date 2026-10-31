@@ -60,15 +60,16 @@ func TestInsertReclaimingExpired_RetriesOnlyOnDuplicate(t *testing.T) {
 	}
 }
 
-func TestUsableVersion(t *testing.T) {
+func TestAnchorVersion(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		v    uint64
 		want bool
 	}{{0, false}, {1, true}, {1<<63 - 2, true}, {1<<63 - 1, false}, {1 << 63, false}} {
-		if got := usableVersion(tc.v); got != tc.want {
-			t.Errorf("usableVersion(%d) = %v, want %v", tc.v, got, tc.want)
+		got, ok := anchorVersion(tc.v)
+		if ok != tc.want || (ok && got != int64(tc.v)) { //nolint:gosec // tc.v < MaxInt64 whenever ok.
+			t.Errorf("anchorVersion(%d) = %d, %v, want ok=%v", tc.v, got, ok, tc.want)
 		}
 	}
 	if err := versionedSwap(context.Background(), nil, "", "x", "s", 0, 0, nil, nil); !errors.Is(err, store.ErrAlreadyConsumed) {

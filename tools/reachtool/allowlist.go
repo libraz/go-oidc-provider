@@ -75,8 +75,9 @@ func allowed(a *allowlist, kind, id string) bool { return a.Allows(allowKey(kind
 // Making it fail is what keeps the list from accumulating the exact
 // residue it exists to prevent.
 func staleRows(a *allowlist) []finding {
-	var out []finding
-	for _, key := range a.Unused() {
+	unused := a.Unused()
+	out := make([]finding, 0, len(unused))
+	for _, key := range unused {
 		row := a.Rows[key]
 		out = append(out, finding{
 			kind: row.kind,

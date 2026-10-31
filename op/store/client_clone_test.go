@@ -70,6 +70,8 @@ func scribble(v reflect.Value) {
 		for i := range v.NumField() {
 			scribble(v.Field(i))
 		}
+	default:
+		panic("scribble: unhandled field kind " + v.Kind().String())
 	}
 }
 

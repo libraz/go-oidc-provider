@@ -44,6 +44,7 @@ func TestResolver_MessageFollowsFallbackChain(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // testing.AllocsPerRun pins GOMAXPROCS and panics when called from a parallel test.
 func TestResolver_MessageRegisteredTagDoesNotAllocate(t *testing.T) {
 	r := newMessageResolver(t)
 	if n := testing.AllocsPerRun(100, func() { _, _ = r.Message("pt-br", "b", nil) }); n != 0 {

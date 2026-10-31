@@ -13,7 +13,7 @@ func TestInteractionIDMiddleware_OmitsHeaderWhenGenerationFails(t *testing.T) {
 		called = true
 	}), func() string { return "" })
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	if !called {
 		t.Fatal("next handler not invoked")
 	}

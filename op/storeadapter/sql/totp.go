@@ -57,16 +57,17 @@ func (s *totpStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 	if r.LastAcceptedStep == 0 {
 		return store.ErrAlreadyConsumed
 	}
-	if !usableVersion(r.Version) {
+	current, ok := anchorVersion(r.Version)
+	if !ok {
 		return store.ErrAlreadyConsumed
 	}
-	version, err := newVersion("totp.Accept", int64(r.Version))
+	version, err := newVersion("totp.Accept", current)
 	if err != nil {
 		return err
 	}
 	args := totpValues(r)
 	args = append(args, version, r.Subject, r.LastAcceptedStep,
-		nonNilBytes(r.SecretCiphertext), timeToInt64(r.ConfirmedAt), int64(r.Version))
+		nonNilBytes(r.SecretCiphertext), timeToInt64(r.ConfirmedAt), current)
 	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.totpAccept, args...)
 	if err != nil {
 		return wrapErr("totp.Accept", err)

@@ -389,7 +389,7 @@ func writeRegistrationResponse(w http.ResponseWriter, status int, body registrat
 	httpx.StampNoStore(w)
 	// The response carries credentials minted for delivery to this client
 	// over TLS, which is the documented purpose of the response.
-	_ = httpx.WriteJSON(w, status, body) //nolint:gosec // RFC 7591 §3.2.1 mandates the field names.
+	_ = httpx.WriteJSON(w, status, body)
 }
 
 // writeMetadataValidationError translates a structural [validationError]

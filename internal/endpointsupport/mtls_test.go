@@ -38,7 +38,7 @@ func TestExtractMTLSThumbprint_NilVerifierIsUnbound(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	thumb, ok := endpointsupport.ExtractMTLSThumbprint(rec, httptest.NewRequest(http.MethodPost, "/x", http.NoBody), nil)
+	thumb, ok := endpointsupport.ExtractMTLSThumbprint(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", http.NoBody), nil)
 	if !ok || thumb != "" {
 		t.Fatalf("thumb=%q ok=%v want empty, true", thumb, ok)
 	}

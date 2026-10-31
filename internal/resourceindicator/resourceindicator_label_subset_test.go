@@ -56,6 +56,8 @@ func TestSubsetLabelTable(t *testing.T) {
 
 // TestSubsetLabelCanonicalisesAllowedOnce pins that the allowed list is
 // parsed once per call rather than once per wanted entry.
+//
+//nolint:paralleltest // testing.AllocsPerRun pins GOMAXPROCS and panics when called from a parallel test.
 func TestSubsetLabelCanonicalisesAllowedOnce(t *testing.T) {
 	allowed := make([]string, 16)
 	want := make([]string, 16)

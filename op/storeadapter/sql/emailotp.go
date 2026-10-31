@@ -141,10 +141,11 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 	if r.Subject == "" {
 		return errors.New("oidcsql: email otp record missing Subject")
 	}
-	if !usableVersion(r.Version) {
+	current, ok := anchorVersion(r.Version)
+	if !ok {
 		return store.ErrAlreadyConsumed
 	}
-	version, err := newVersion("emailOTPs.Consume", int64(r.Version))
+	version, err := newVersion("emailOTPs.Consume", current)
 	if err != nil {
 		return err
 	}
@@ -163,7 +164,7 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 		r.Subject,
 		nonNilBytes(r.CodeSalt),
 		nonNilBytes(r.CodeHash),
-		int64(r.Version),
+		current,
 		timeToInt64(s.parent.clock.Now()))
 	res, err := s.parent.db.ExecContext(ctx, s.parent.queries.emailOTPConsume, args...)
 	if err != nil {

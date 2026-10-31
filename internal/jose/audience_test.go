@@ -43,9 +43,20 @@ func TestDecodeAudience(t *testing.T) {
 
 func TestIsTypJWT(t *testing.T) {
 	t.Parallel()
-	for typ, want := range map[string]bool{"JWT": true, "jwt": true, "Jwt": true, "at+jwt": false, "": false, "JWT ": false} {
-		if got := jose.IsTypJWT(typ); got != want {
-			t.Errorf("IsTypJWT(%q) = %v, want %v", typ, got, want)
+	cases := []struct {
+		typ  string
+		want bool
+	}{
+		{"JWT", true},
+		{"jwt", true},
+		{"Jwt", true},
+		{"at+jwt", false},
+		{"", false},
+		{"JWT ", false},
+	}
+	for _, tc := range cases {
+		if got := jose.IsTypJWT(tc.typ); got != tc.want {
+			t.Errorf("IsTypJWT(%q) = %v, want %v", tc.typ, got, tc.want)
 		}
 	}
 }
