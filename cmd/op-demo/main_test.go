@@ -288,20 +288,21 @@ func TestBuildOPStore_BareForNonCIBAProfile(t *testing.T) {
 	}
 }
 
-func TestProfileFor_AcceptsFAPICIBA(t *testing.T) {
+func TestProfileOptions_AcceptsFAPICIBA(t *testing.T) {
 	t.Parallel()
 
-	got, err := profileFor("fapi-ciba")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	opts, err := profileOptions(context.Background(), runConfig{profile: profileNameFAPICIBA}, logger)
 	if err != nil {
-		t.Fatalf("profileFor(fapi-ciba): %v", err)
+		t.Fatalf("profileOptions(fapi-ciba): %v", err)
 	}
-	if got == 0 {
-		t.Fatal("profileFor(fapi-ciba) returned 0; expected profile.FAPICIBA")
+	if len(opts) == 0 {
+		t.Fatal("profileOptions(fapi-ciba) returned no options; expected the FAPI-CIBA wiring")
 	}
-	if !isCIBAProfile("fapi-ciba") {
+	if !isCIBAProfile(profileNameFAPICIBA) {
 		t.Error("isCIBAProfile(fapi-ciba) = false, want true")
 	}
-	if !isFAPIProfile("fapi-ciba") {
+	if !isFAPIProfile(profileNameFAPICIBA) {
 		t.Error("isFAPIProfile(fapi-ciba) = false, want true")
 	}
 }

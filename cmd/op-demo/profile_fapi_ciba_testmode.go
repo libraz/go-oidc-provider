@@ -17,15 +17,11 @@
 package main
 
 import (
-	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // cibaTestMode is the next-action override the OFCS conformance runner
@@ -116,11 +112,7 @@ func scheduleHarness(a *autoApprovingCIBA, authReqID, subject string) {
 	if mode == cibaTestModeSlow {
 		delay = cibaTestSlowDelay
 	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-a.ctx.Done():
+	if !a.wait(delay) {
 		return
 	}
 	if mode == cibaTestModeReject {
@@ -138,14 +130,5 @@ func scheduleHarness(a *autoApprovingCIBA, authReqID, subject string) {
 // user's actual device callback.
 func (a *autoApprovingCIBA) runDeny(authReqID string) {
 	err := a.inner.Deny(a.ctx, authReqID, "user-rejected-test")
-	switch {
-	case err == nil:
-		a.log.Info("ciba auto-denied",
-			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)))
-	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
-	default:
-		a.log.Warn("ciba auto-deny failed",
-			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)),
-			slog.String("err", err.Error()))
-	}
+	a.logOutcome(err, authReqID, "ciba auto-denied", "ciba auto-deny failed")
 }

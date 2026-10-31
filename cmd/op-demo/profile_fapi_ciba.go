@@ -33,7 +33,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -101,26 +100,17 @@ func fapiCIBAOptions() []op.Option {
 // the registered grants list the OP correctly withholds the refresh
 // token but the test fails.
 func fapiCIBAClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
-	seeds := make([]op.ClientSeed, 0, 2)
-	for _, entry := range []struct {
-		id   string
-		path string
-	}{
+	return privateKeyJWTSeeds([]privateKeyJWTEntry{
 		{"demo-fapi-ciba", cfg.fapiClient1JWKS},
 		{"demo-fapi-ciba-2", cfg.fapiClient2JWKS},
-	} {
-		pub, err := op.LoadPublicJWKS(entry.path)
-		if err != nil {
-			return nil, fmt.Errorf("load JWKS %s: %w", entry.path, err)
-		}
-		seeds = append(seeds, op.PrivateKeyJWTClient{
-			ID:         entry.id,
-			JWKS:       pub,
+	}, func(id string, jwks []byte) op.PrivateKeyJWTClient {
+		return op.PrivateKeyJWTClient{
+			ID:         id,
+			JWKS:       jwks,
 			Scopes:     fapiScopeCatalog,
 			GrantTypes: []string{opgrant.CIBA.String(), "refresh_token"},
-		})
-	}
-	return seeds, nil
+		}
+	})
 }
 
 // clientRegistryProvider and staticClientReconcilerProvider mirror the
@@ -221,7 +211,7 @@ func wrapStoreForCIBA(
 // client seeding in [buildClientSeeds], and the conditional mount of
 // the OFCS test-mode handler in [main.run].
 func isCIBAProfile(name string) bool {
-	return name == "fapi-ciba"
+	return name == profileNameFAPICIBA
 }
 
 // demoHintResolver returns a [op.HintResolver] that maps the
@@ -344,35 +334,47 @@ func (a *autoApprovingCIBA) Save(ctx context.Context, req *store.CIBARequest) er
 // path; this helper simulates that callback for op-demo because there
 // is no real device under the OFCS conformance harness.
 func scheduleApprove(a *autoApprovingCIBA, authReqID, subject string) {
-	timer := time.NewTimer(a.delay)
+	if a.wait(a.delay) {
+		a.runApprove(authReqID, subject)
+	}
+}
+
+// wait blocks for d and reports whether it elapsed; it returns false when
+// the op-demo context ended first, so a pending device callback aborts
+// instead of leaking a goroutine.
+func (a *autoApprovingCIBA) wait(d time.Duration) bool {
+	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
+		return true
 	case <-a.ctx.Done():
-		return
+		return false
 	}
-	a.runApprove(authReqID, subject)
 }
 
 // runApprove calls Approve on the inner substore and logs the outcome
-// at the level matching its severity: Info on success, Warn on a real
-// failure, silent on the conflict/not-found shapes that a parallel
-// state change can produce. authTime is left zero: this binary is a
-// smoke-test fixture, the forbidigo gate blocks direct time.Now in
-// cmd/, and a zero AuthTime omits the auth_time claim — which suits a
-// demo that never asserts the value.
+// through [autoApprovingCIBA.logOutcome]. authTime is left zero: this
+// binary is a smoke-test fixture, the forbidigo gate blocks direct
+// time.Now in cmd/, and a zero AuthTime omits the auth_time claim — which
+// suits a demo that never asserts the value.
 func (a *autoApprovingCIBA) runApprove(authReqID, subject string) {
 	err := a.inner.Approve(a.ctx, authReqID, subject, "", time.Time{})
+	a.logOutcome(err, authReqID, "ciba auto-approved", "ciba auto-approve failed", slog.String("subject", subject))
+}
+
+// logOutcome logs the result of a simulated device callback at the level
+// matching its severity: Info on success (with attrs), Warn on a real
+// failure, silent on the conflict/not-found shapes that a parallel state
+// change can produce.
+func (a *autoApprovingCIBA) logOutcome(err error, authReqID, succeeded, failed string, attrs ...any) {
+	prefix := slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID))
 	switch {
 	case err == nil:
-		a.log.Info("ciba auto-approved",
-			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)),
-			slog.String("subject", subject))
+		a.log.Info(succeeded, append([]any{prefix}, attrs...)...)
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
 	default:
-		a.log.Warn("ciba auto-approve failed",
-			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)),
-			slog.String("err", err.Error()))
+		a.log.Warn(failed, prefix, slog.String("err", err.Error()))
 	}
 }
 

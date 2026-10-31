@@ -596,26 +596,39 @@ func chainOnlyTLSConfig(pool *x509.CertPool) *tls.Config {
 	}
 }
 
+// The -profile values. "" is accepted as a synonym for profileNameBasic.
+const (
+	profileNameBasic               = "basic"
+	profileNameBaseline            = "baseline"
+	profileNameFAPI2Baseline       = "fapi2-baseline"
+	profileNameFAPI2MessageSigning = "fapi2-message-signing"
+	profileNameFAPICIBA            = "fapi-ciba"
+
+	// profileNames lists every accepted -profile value for error text.
+	profileNames = profileNameBasic + ", " + profileNameBaseline + ", " + profileNameFAPI2Baseline +
+		", " + profileNameFAPI2MessageSigning + ", " + profileNameFAPICIBA
+)
+
 // profileOptions dispatches to the per-profile helper that returns the
 // options that profile activates. Returns nil for the empty / "basic"
 // profile (the common base IS the basic configuration).
 func profileOptions(ctx context.Context, cfg runConfig, logger *slog.Logger) ([]op.Option, error) {
 	switch cfg.profile {
-	case "", "basic":
+	case "", profileNameBasic:
 		return nil, nil
-	case "baseline":
+	case profileNameBaseline:
 		// The OAuth 2.1 posture needs no supporting wiring: its only
 		// mandate is PKCE on every authorization-code request, which
 		// the common base already satisfies for the demo clients.
 		return []op.Option{op.WithProfile(profile.Baseline)}, nil
-	case "fapi2-baseline":
+	case profileNameFAPI2Baseline:
 		return fapi2BaselineOptions(), nil
-	case "fapi2-message-signing":
+	case profileNameFAPI2MessageSigning:
 		return fapi2MessageSigningOptions(ctx, logger)
-	case "fapi-ciba":
+	case profileNameFAPICIBA:
 		return fapiCIBAOptions(), nil
 	default:
-		return nil, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, baseline, fapi2-baseline, fapi2-message-signing, fapi-ciba)", cfg.profile)
+		return nil, fmt.Errorf("op-demo: unknown -profile %q (expected one of: %s)", cfg.profile, profileNames)
 	}
 }
 
@@ -656,28 +669,6 @@ func mintInitialAccessToken(ctx context.Context, p *op.Provider, logger *slog.Lo
 		slog.String("id", iat.ID),
 		slog.String("expires_at", iat.ExpiresAt.UTC().Format(time.RFC3339)))
 	return nil
-}
-
-// profileFor translates the -profile flag into a [profile.Profile] the
-// op.WithProfile option accepts. Returns 0 (the "no profile" sentinel)
-// for the empty/"basic" case so the OP runs vanilla OIDC Core. Used
-// only by tests; the runtime path goes through profileOptions, which
-// builds the option directly from the per-profile helper.
-func profileFor(name string) (profile.Profile, error) {
-	switch name {
-	case "", "basic":
-		return 0, nil
-	case "baseline":
-		return profile.Baseline, nil
-	case "fapi2-baseline":
-		return profile.FAPI2Baseline, nil
-	case "fapi2-message-signing":
-		return profile.FAPI2MessageSigning, nil
-	case "fapi-ciba":
-		return profile.FAPICIBA, nil
-	default:
-		return 0, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, baseline, fapi2-baseline, fapi2-message-signing, fapi-ciba)", name)
-	}
 }
 
 // scopeCatalog is the OIDC Core scope set every demo client is
@@ -767,9 +758,9 @@ func commonClientSeeds(cfg runConfig, postLogoutURIs []string) []op.ClientSeed {
 // client set; FAPI-CIBA layers two CIBA-only clients on top.
 func profileClientSeeds(cfg runConfig, postLogoutURIs []string) ([]op.ClientSeed, error) {
 	switch cfg.profile {
-	case "fapi2-baseline", "fapi2-message-signing":
+	case profileNameFAPI2Baseline, profileNameFAPI2MessageSigning:
 		return fapi2ClientSeeds(cfg, postLogoutURIs)
-	case "fapi-ciba":
+	case profileNameFAPICIBA:
 		fapiSeeds, err := fapi2ClientSeeds(cfg, postLogoutURIs)
 		if err != nil {
 			return nil, err

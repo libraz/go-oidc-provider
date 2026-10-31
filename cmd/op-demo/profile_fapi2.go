@@ -87,25 +87,40 @@ func fapi2MessageSigningOptions(ctx context.Context, logger *slog.Logger) ([]op.
 // distinct identity.
 func fapi2ClientSeeds(cfg runConfig, postLogoutURIs []string) ([]op.ClientSeed, error) {
 	fapiURIs := withFAPIDummyRedirectURIs(cfg.redirectURIs)
-	seeds := make([]op.ClientSeed, 0, 2)
-	for _, entry := range []struct {
-		id   string
-		path string
-	}{
+	return privateKeyJWTSeeds([]privateKeyJWTEntry{
 		{"demo-fapi", cfg.fapiClient1JWKS},
 		{"demo-fapi-2", cfg.fapiClient2JWKS},
-	} {
+	}, func(id string, jwks []byte) op.PrivateKeyJWTClient {
+		return op.PrivateKeyJWTClient{
+			ID:                     id,
+			JWKS:                   jwks,
+			RedirectURIs:           fapiURIs,
+			Scopes:                 fapiScopeCatalog,
+			PostLogoutRedirectURIs: postLogoutURIs,
+		}
+	})
+}
+
+// privateKeyJWTEntry names a seeded private_key_jwt client and the JWKS
+// file holding its public keys.
+type privateKeyJWTEntry struct {
+	id   string
+	path string
+}
+
+// privateKeyJWTSeeds loads each entry's public JWKS and builds one
+// [op.PrivateKeyJWTClient] per entry with build.
+func privateKeyJWTSeeds(
+	entries []privateKeyJWTEntry,
+	build func(id string, jwks []byte) op.PrivateKeyJWTClient,
+) ([]op.ClientSeed, error) {
+	seeds := make([]op.ClientSeed, 0, len(entries))
+	for _, entry := range entries {
 		pub, err := op.LoadPublicJWKS(entry.path)
 		if err != nil {
 			return nil, fmt.Errorf("load JWKS %s: %w", entry.path, err)
 		}
-		seeds = append(seeds, op.PrivateKeyJWTClient{
-			ID:                     entry.id,
-			JWKS:                   pub,
-			RedirectURIs:           fapiURIs,
-			Scopes:                 fapiScopeCatalog,
-			PostLogoutRedirectURIs: postLogoutURIs,
-		})
+		seeds = append(seeds, build(entry.id, pub))
 	}
 	return seeds, nil
 }
@@ -142,5 +157,5 @@ func withFAPIDummyRedirectURIs(base []string) []string {
 // "what does FAPI mean" reads top-to-bottom without cross-file
 // references.
 func isFAPIProfile(name string) bool {
-	return name == "fapi2-baseline" || name == "fapi2-message-signing" || name == "fapi-ciba"
+	return name == profileNameFAPI2Baseline || name == profileNameFAPI2MessageSigning || name == profileNameFAPICIBA
 }
