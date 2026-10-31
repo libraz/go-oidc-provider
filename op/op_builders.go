@@ -245,15 +245,28 @@ func issuerHost(issuer string) string {
 // so through [WithCORSOrigins], which is an explicit act rather than a
 // side effect of registering a client.
 func buildInteractionOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {
-	allowOrigins := append([]string(nil), cfg.corsOrigins...)
+	return newOriginAllowlist(baseAllowedOrigins(cfg), "interaction csrf allowlist construction failed")
+}
+
+// baseAllowedOrigins returns the [WithCORSOrigins] entries plus the OP's own
+// canonical origin. An issuer that fails canonicalisation is skipped; a
+// malformed issuer is rejected earlier by config.validate.
+func baseAllowedOrigins(cfg *config) []string {
+	origins := append([]string(nil), cfg.corsOrigins...)
 	if origin, oerr := csrf.CanonicalOrigin(cfg.issuer); oerr == nil {
-		allowOrigins = append(allowOrigins, origin)
+		origins = append(origins, origin)
 	}
-	allow, err := csrf.NewAllowlist(allowOrigins)
+	return origins
+}
+
+// newOriginAllowlist builds the allowlist, wrapping a construction failure
+// as a configuration error carrying description.
+func newOriginAllowlist(origins []string, description string) (*csrf.Allowlist, error) {
+	allow, err := csrf.NewAllowlist(origins)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
-			Description: "interaction csrf allowlist construction failed",
+			Description: description,
 			Cause:       err,
 		}
 	}
@@ -283,10 +296,7 @@ func buildInteractionOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {
 // silently — the option layer already validated them at registration time and
 // the allowlist only cares about web-style http(s) origins anyway.
 func buildOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {
-	allowOrigins := append([]string(nil), cfg.corsOrigins...)
-	if origin, oerr := csrf.CanonicalOrigin(cfg.issuer); oerr == nil {
-		allowOrigins = append(allowOrigins, origin)
-	}
+	allowOrigins := baseAllowedOrigins(cfg)
 	for i := range cfg.staticClients {
 		for _, ru := range cfg.staticClients[i].RedirectURIs {
 			origin, oerr := csrf.CanonicalOrigin(ru)
@@ -299,15 +309,7 @@ func buildOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {
 			allowOrigins = append(allowOrigins, origin)
 		}
 	}
-	allow, err := csrf.NewAllowlist(allowOrigins)
-	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "csrf allowlist construction failed",
-			Cause:       err,
-		}
-	}
-	return allow, nil
+	return newOriginAllowlist(allowOrigins, "csrf allowlist construction failed")
 }
 
 // authorizeRequestPolicy renders the profile-conditional requirements
@@ -470,17 +472,13 @@ func buildJARVerifiers(cfg *config, encSet *keys.EncryptionSet) (jarVerifiers, e
 	// wins, and a zero leaves the verifier default in place for
 	// non-FAPI deployments.
 	var (
-		requireNbf  bool
-		fapi        bool
-		fapiCIBA    bool
-		maxLifetime time.Duration
-		maxAge      time.Duration
+		fapi     bool
+		fapiCIBA bool
+		maxAge   time.Duration
 	)
 	for _, p := range cfg.profiles {
-		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
-			requireNbf = true
+		if profile.IsFAPI(p) {
 			fapi = true
-			maxLifetime = 60 * time.Minute
 		}
 		if age := profile.MaxRequestObjectAge(p); age > maxAge {
 			maxAge = age
@@ -505,11 +503,11 @@ func buildJARVerifiers(cfg *config, encSet *keys.EncryptionSet) (jarVerifiers, e
 		Issuer:             cfg.issuer,
 		Resolver:           jar.NewDefaultResolver(cfg.clock, useShared),
 		Clock:              cfg.clock,
-		RequireNbf:         requireNbf,
+		RequireNbf:         fapi,
 		JTIs:               cfg.store.ConsumedJTIs(),
 		EncryptionResolver: jarEncryptionResolver(encSet),
 		AllowMissingJTI:    true,
-		MaxLifetime:        maxLifetime,
+		MaxLifetime:        maxAge,
 		MaxAge:             maxAge,
 		AllowedAlgs:        cfg.clientSigningJOSEAlgs(),
 	}

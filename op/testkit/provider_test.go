@@ -200,3 +200,25 @@ func decodeHeader(tb testing.TB, encoded string) map[string]any {
 	}
 	return hdr
 }
+
+// TestRegisterClient_ReturnedClientIsACopy verifies the returned client does
+// not alias the record held by the store: mutating it leaves the stored
+// slices and JWK bytes intact.
+func TestRegisterClient_ReturnedClientIsACopy(t *testing.T) {
+	t.Parallel()
+
+	tk := testkit.NewProvider(t)
+	const raw = `{"keys":[]}`
+	c := tk.RegisterClient(t, testkit.ClientFixture{ID: "fixture-copy", JWKs: []byte(raw)})
+	c.RedirectURIs[0] = "https://mutated.invalid/cb"
+	c.Scopes[0] = "mutated"
+	c.JWKs[0] = 'X'
+
+	got, err := tk.Store.Clients().GetClient(context.Background(), "fixture-copy")
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if got.RedirectURIs[0] == "https://mutated.invalid/cb" || got.Scopes[0] == "mutated" || string(got.JWKs) != raw {
+		t.Fatalf("stored client was mutated through the returned copy: %+v", got)
+	}
+}

@@ -296,26 +296,21 @@ func hasForwardedHeader(r *http.Request) bool {
 func wrapWithProfileMiddleware(mux http.Handler, cfg *config) http.Handler {
 	handler := mux
 	for _, p := range cfg.profiles {
-		switch p {
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA:
-			// FAPI-CIBA-ID1 §6 inherits the FAPI 1.0 Advanced
-			// requirement that every response carry a stable
-			// x-fapi-interaction-id; the OFCS fapi-ciba modules
-			// EnsureMatchingFAPIInteractionId / CheckForFAPIInteractionId
-			// pin both the presence and the round-trip echo.
-			handler = httpx.InteractionIDMiddleware(handler)
-			// Once any FAPI profile has activated the echo we are
-			// done — repeating it would stamp the header twice and
-			// hide the upstream client value behind a regenerated
-			// UUID. Other profiles will add their own middlewares
-			// here as the constraint set grows.
-			return handler
-		case profile.Baseline:
-			// The OAuth 2.1 posture adds no cross-cutting response
-			// header; x-fapi-interaction-id is a FAPI construct and
-			// stamping it on a non-FAPI deployment would advertise a
-			// profile the OP is not running.
+		// The OAuth 2.1 posture adds no cross-cutting response header;
+		// x-fapi-interaction-id is a FAPI construct and stamping it on a
+		// non-FAPI deployment would advertise a profile the OP is not
+		// running.
+		if !profile.IsFAPI(p) {
+			continue
 		}
+		// FAPI-CIBA-ID1 §6 inherits the FAPI 1.0 Advanced requirement that
+		// every response carry a stable x-fapi-interaction-id; the OFCS
+		// fapi-ciba modules EnsureMatchingFAPIInteractionId /
+		// CheckForFAPIInteractionId pin both the presence and the
+		// round-trip echo. Once any FAPI profile has activated the echo we
+		// are done — repeating it would stamp the header twice and hide the
+		// upstream client value behind a regenerated UUID.
+		return httpx.InteractionIDMiddleware(handler)
 	}
 	return handler
 }

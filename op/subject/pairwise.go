@@ -152,11 +152,10 @@ func uniqueHosts(uris []string) []string {
 	seen := make(map[string]struct{}, len(uris))
 	out := make([]string, 0, len(uris))
 	for _, raw := range uris {
-		u, err := url.Parse(raw)
-		if err != nil || u.Hostname() == "" {
+		host, err := hostOf(raw)
+		if err != nil {
 			continue
 		}
-		host := strings.ToLower(u.Hostname())
 		if _, dup := seen[host]; dup {
 			continue
 		}

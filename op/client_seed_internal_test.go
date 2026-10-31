@@ -372,3 +372,23 @@ var (
 	_ ClientSeed = ConfidentialClient{}
 	_ ClientSeed = PrivateKeyJWTClient{}
 )
+
+func TestSeedGrantAndResponseTypes(t *testing.T) {
+	t.Parallel()
+
+	g, r := seedGrantAndResponseTypes(nil, nil)
+	if !slices.Equal(g, defaultGrantTypes()) || !slices.Equal(r, defaultResponseTypes()) {
+		t.Fatalf("defaults: grants=%v responses=%v", g, r)
+	}
+
+	inG := []string{"client_credentials"}
+	inR := []string{"code", "id_token"}
+	g, r = seedGrantAndResponseTypes(inG, inR)
+	if !slices.Equal(g, inG) || !slices.Equal(r, inR) {
+		t.Fatalf("explicit: grants=%v responses=%v", g, r)
+	}
+	g[0], r[0] = "mutated", "mutated"
+	if inG[0] != "client_credentials" || inR[0] != "code" {
+		t.Fatalf("result aliases its input: %v %v", inG, inR)
+	}
+}

@@ -483,6 +483,16 @@ const PromptTypeChooseFactor = "auth.choose_factor"
 // Stable since v1.5.
 const FactorChoiceField = "factor"
 
+// StateRefField is the hidden form field every [HTMLDriver] form carries
+// the orchestrator's continuation token under, and that
+// [HTMLDriver.ParseSubmission] reads back into [FormSubmission.StateRef].
+const StateRefField = "state_ref"
+
+// CSRFTokenField is the hidden form field the [HTMLDriver] emits the
+// double-submit CSRF token under when the prompt carries one; the
+// interaction endpoint reads it when the X-CSRF-Token header is absent.
+const CSRFTokenField = "csrf_token"
+
 // FactorChoicePromptData backs Prompt.Type [PromptTypeChooseFactor]. The
 // user picks one of Options and submits its Kind under
 // [FactorChoiceField].

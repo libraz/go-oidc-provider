@@ -159,13 +159,13 @@ func (HTMLDriver) ParseSubmission(r *http.Request) (FormSubmission, error) {
 	if err := r.ParseForm(); err != nil {
 		return FormSubmission{}, fmt.Errorf("%w: %w", ErrSubmissionMalformed, err)
 	}
-	stateRef := r.PostForm.Get("state_ref")
+	stateRef := r.PostForm.Get(StateRefField)
 	if stateRef == "" {
 		return FormSubmission{}, ErrMissingStateRef
 	}
 	values := make(map[string]string, len(r.PostForm))
 	for k, vs := range r.PostForm {
-		if k == "state_ref" {
+		if k == StateRefField {
 			continue
 		}
 		if len(vs) > 0 {
@@ -239,24 +239,16 @@ func writePromptError(b *strings.Builder, perr *PromptError) {
 	if message == "" {
 		message = promptErrorFallback
 	}
-	b.WriteString(`<p role="alert">`)
-	b.WriteString(html.EscapeString(message))
-	b.WriteString(`</p>`)
+	writeParagraphAttrs(b, ` role="alert"`, message)
 }
 
 // writeStandardBody emits the intro, the form, and the single submit
 // button every non-chooser prompt shares.
 func (d HTMLDriver) writeStandardBody(b *strings.Builder, prompt Prompt) {
 	d.writePromptIntro(b, prompt)
-	b.WriteString(`<form method="post">`)
-	writeHiddenStateRef(b, prompt.StateRef)
-	if prompt.CSRFToken != "" {
-		writeHiddenInput(b, "csrf_token", prompt.CSRFToken)
-	}
+	writeFormOpen(b, prompt)
 	d.writePromptBody(b, prompt)
-	b.WriteString(`<button type="submit">`)
-	b.WriteString(html.EscapeString(d.buttonFor(prompt)))
-	b.WriteString(`</button></form>`)
+	d.writeSubmitAndFormClose(b, prompt)
 }
 
 // writeChooserBody renders the account picker: one submit button per
@@ -282,11 +274,7 @@ func (d HTMLDriver) writeChooserBody(b *strings.Builder, prompt Prompt, data Cho
 		b.WriteString(html.EscapeString(d.messageOr(prompt.Locale, "chooser.no_accounts", nil, chooserNoAccountsFallback)))
 		b.WriteString(`</p>`)
 	} else {
-		b.WriteString(`<form method="post">`)
-		writeHiddenStateRef(b, prompt.StateRef)
-		if prompt.CSRFToken != "" {
-			writeHiddenInput(b, "csrf_token", prompt.CSRFToken)
-		}
+		writeFormOpen(b, prompt)
 		for _, account := range data.Accounts {
 			writeChooserAccountButton(b, account)
 		}
@@ -310,11 +298,7 @@ func (d HTMLDriver) writeChooserBody(b *strings.Builder, prompt Prompt, data Cho
 // answers the prompt. An option label that the catalogue cannot resolve
 // shows the kind string as-is.
 func (d HTMLDriver) writeFactorChoiceBody(b *strings.Builder, prompt Prompt, data FactorChoicePromptData) {
-	b.WriteString(`<form method="post">`)
-	writeHiddenStateRef(b, prompt.StateRef)
-	if prompt.CSRFToken != "" {
-		writeHiddenInput(b, "csrf_token", prompt.CSRFToken)
-	}
+	writeFormOpen(b, prompt)
 	for i, opt := range data.Options {
 		label := d.messageOr(prompt.Locale, opt.Label, nil, opt.Kind)
 		b.WriteString(`<p><label><input type="radio" name="`)
@@ -329,9 +313,7 @@ func (d HTMLDriver) writeFactorChoiceBody(b *strings.Builder, prompt Prompt, dat
 		b.WriteString(html.EscapeString(label))
 		b.WriteString(`</label></p>`)
 	}
-	b.WriteString(`<button type="submit">`)
-	b.WriteString(html.EscapeString(d.buttonFor(prompt)))
-	b.WriteString(`</button></form>`)
+	d.writeSubmitAndFormClose(b, prompt)
 }
 
 // writeChooserAccountButton emits one account row. The label is the
@@ -422,7 +404,15 @@ func (d HTMLDriver) writeIntroLine(b *strings.Builder, locale, key, placeholder,
 
 // writeParagraph emits text, escaped, as one paragraph.
 func writeParagraph(b *strings.Builder, text string) {
-	b.WriteString(`<p>`)
+	writeParagraphAttrs(b, "", text)
+}
+
+// writeParagraphAttrs emits text, escaped, as one paragraph whose opening
+// tag carries attrs verbatim (a leading space included, or empty).
+func writeParagraphAttrs(b *strings.Builder, attrs, text string) {
+	b.WriteString(`<p`)
+	b.WriteString(attrs)
+	b.WriteString(`>`)
 	b.WriteString(html.EscapeString(text))
 	b.WriteString(`</p>`)
 }
@@ -496,9 +486,7 @@ func (d HTMLDriver) writeConsentClient(b *strings.Builder, locale string, client
 	}
 	line := d.messageOr(locale, "consent.subtitle",
 		map[string]string{"client_name": name}, consentClientFallback+name)
-	b.WriteString(`<p>`)
-	b.WriteString(html.EscapeString(line))
-	b.WriteString(`</p>`)
+	writeParagraph(b, line)
 }
 
 // Built-in English for the two consent lines no [FieldSpec] carries.
@@ -583,12 +571,29 @@ func (d HTMLDriver) writeFieldInput(b *strings.Builder, locale string, in FieldS
 	b.WriteString(`></label></p>`)
 }
 
+// writeFormOpen opens the prompt's POST form and emits the hidden
+// continuation token and, when the prompt carries one, the CSRF token.
+func writeFormOpen(b *strings.Builder, prompt Prompt) {
+	b.WriteString(`<form method="post">`)
+	writeHiddenStateRef(b, prompt.StateRef)
+	if prompt.CSRFToken != "" {
+		writeHiddenInput(b, CSRFTokenField, prompt.CSRFToken)
+	}
+}
+
+// writeSubmitAndFormClose emits the single submit button and closes the form.
+func (d HTMLDriver) writeSubmitAndFormClose(b *strings.Builder, prompt Prompt) {
+	b.WriteString(`<button type="submit">`)
+	b.WriteString(html.EscapeString(d.buttonFor(prompt)))
+	b.WriteString(`</button></form>`)
+}
+
 // writeHiddenStateRef emits the orchestrator-supplied continuation
 // token as a hidden field. The value is mandatory; an empty StateRef
 // would mean the orchestrator handed an unsigned prompt to the driver,
 // which Render does not attempt to repair.
 func writeHiddenStateRef(b *strings.Builder, stateRef string) {
-	writeHiddenInput(b, "state_ref", stateRef)
+	writeHiddenInput(b, StateRefField, stateRef)
 }
 
 // writeHiddenInput emits a single <input type="hidden"> tag. The value

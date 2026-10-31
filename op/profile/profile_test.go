@@ -78,3 +78,41 @@ func TestRequiresAccessTokenRevocation(t *testing.T) {
 		})
 	}
 }
+
+func TestProfilePredicates_AllProfiles(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                                                    string
+		in                                                      profile.Profile
+		fapi, sender, signedReq, signedBC, jarm, signedIntrospc bool
+	}{
+		{"baseline", profile.Baseline, false, false, false, false, false, false},
+		{"fapi2-baseline", profile.FAPI2Baseline, true, true, false, false, false, false},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, true, true, true, false, true, true},
+		{"fapi-ciba", profile.FAPICIBA, true, true, false, true, false, false},
+		{"zero", profile.Profile(0), false, false, false, false, false, false},
+		{"unknown", profile.Profile(99), false, false, false, false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := []struct {
+				name      string
+				got, want bool
+			}{
+				{"IsFAPI", profile.IsFAPI(tc.in), tc.fapi},
+				{"RequiresSenderConstrainedTokens", profile.RequiresSenderConstrainedTokens(tc.in), tc.sender},
+				{"RequiresSignedRequestObject", profile.RequiresSignedRequestObject(tc.in), tc.signedReq},
+				{"RequiresSignedBackchannelRequest", profile.RequiresSignedBackchannelRequest(tc.in), tc.signedBC},
+				{"RequiresJARMResponseMode", profile.RequiresJARMResponseMode(tc.in), tc.jarm},
+				{"RequiresSignedIntrospection", profile.RequiresSignedIntrospection(tc.in), tc.signedIntrospc},
+			}
+			for _, g := range got {
+				if g.got != g.want {
+					t.Errorf("%s=%v want %v", g.name, g.got, g.want)
+				}
+			}
+		})
+	}
+}

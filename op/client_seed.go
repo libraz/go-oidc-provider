@@ -57,6 +57,22 @@ func defaultResponseTypes() []string {
 	return []string{"code"}
 }
 
+// seedGrantAndResponseTypes returns copies of grants and responses, each
+// replaced by its builder default when empty.
+func seedGrantAndResponseTypes(grants, responses []string) (grantTypes, responseTypes []string) {
+	if len(grants) == 0 {
+		grantTypes = defaultGrantTypes()
+	} else {
+		grantTypes = slices.Clone(grants)
+	}
+	if len(responses) == 0 {
+		responseTypes = defaultResponseTypes()
+	} else {
+		responseTypes = slices.Clone(responses)
+	}
+	return grantTypes, responseTypes
+}
+
 // PublicClient is the typed builder for a client that cannot keep a
 // secret (single-page apps, native apps). The seed sets
 // PublicClient: true, Source: ClientSourceStatic, and
@@ -168,18 +184,7 @@ func (c PublicClient) seed() (store.Client, error) {
 	if err := checkDefaultMaxAge("PublicClient", c.ID, c.DefaultMaxAge); err != nil {
 		return store.Client{}, err
 	}
-	grants := c.GrantTypes
-	if len(grants) == 0 {
-		grants = defaultGrantTypes()
-	} else {
-		grants = slices.Clone(grants)
-	}
-	responses := c.ResponseTypes
-	if len(responses) == 0 {
-		responses = defaultResponseTypes()
-	} else {
-		responses = slices.Clone(responses)
-	}
+	grants, responses := seedGrantAndResponseTypes(c.GrantTypes, c.ResponseTypes)
 	return store.Client{
 		ID:                               c.ID,
 		RedirectURIs:                     slices.Clone(c.RedirectURIs),
@@ -456,18 +461,7 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 	if previousHash != "" {
 		previousExpiry = c.PreviousSecretExpiresAt
 	}
-	grants := c.GrantTypes
-	if len(grants) == 0 {
-		grants = defaultGrantTypes()
-	} else {
-		grants = slices.Clone(grants)
-	}
-	responses := c.ResponseTypes
-	if len(responses) == 0 {
-		responses = defaultResponseTypes()
-	} else {
-		responses = slices.Clone(responses)
-	}
+	grants, responses := seedGrantAndResponseTypes(c.GrantTypes, c.ResponseTypes)
 	return store.Client{
 		ID:                               c.ID,
 		RedirectURIs:                     slices.Clone(c.RedirectURIs),
@@ -586,18 +580,7 @@ func (c PrivateKeyJWTClient) seed() (store.Client, error) {
 	if err := checkDefaultMaxAge("PrivateKeyJWTClient", c.ID, c.DefaultMaxAge); err != nil {
 		return store.Client{}, err
 	}
-	grants := c.GrantTypes
-	if len(grants) == 0 {
-		grants = defaultGrantTypes()
-	} else {
-		grants = slices.Clone(grants)
-	}
-	responses := c.ResponseTypes
-	if len(responses) == 0 {
-		responses = defaultResponseTypes()
-	} else {
-		responses = slices.Clone(responses)
-	}
+	grants, responses := seedGrantAndResponseTypes(c.GrantTypes, c.ResponseTypes)
 	return store.Client{
 		ID:                               c.ID,
 		RedirectURIs:                     slices.Clone(c.RedirectURIs),

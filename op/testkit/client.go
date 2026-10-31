@@ -104,7 +104,7 @@ func (p *Provider) RegisterClient(tb testing.TB, fix ClientFixture) *store.Clien
 	if err := p.Store.RegisterClient(context.Background(), c); err != nil {
 		tb.Fatalf("testkit: RegisterClient(%q): %v", c.ID, err)
 	}
-	return cloneClient(c)
+	return c.Clone()
 }
 
 // buildClient applies the testkit defaults to a ClientFixture and returns a
@@ -165,20 +165,4 @@ func coalesce(first, fallback string) string {
 		return first
 	}
 	return fallback
-}
-
-// cloneClient returns a deep copy of c so callers cannot mutate the
-// pointer the in-memory store holds.
-func cloneClient(c *store.Client) *store.Client {
-	cp := *c
-	cp.RedirectURIs = slices.Clone(c.RedirectURIs)
-	cp.PostLogoutRedirectURIs = slices.Clone(c.PostLogoutRedirectURIs)
-	cp.GrantTypes = slices.Clone(c.GrantTypes)
-	cp.ResponseTypes = slices.Clone(c.ResponseTypes)
-	cp.Scopes = slices.Clone(c.Scopes)
-	cp.Resources = slices.Clone(c.Resources)
-	if c.JWKs != nil {
-		cp.JWKs = append(json.RawMessage(nil), c.JWKs...)
-	}
-	return &cp
 }

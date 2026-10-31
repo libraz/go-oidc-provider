@@ -13,6 +13,9 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
+// errExternalStepAuthenticatorNil reports an [ExternalStep] with no wrapped [Authenticator].
+var errExternalStepAuthenticatorNil = errors.New("op: ExternalStep.Authenticator is nil")
+
 // errStepBuiltinNotCompiled is returned by a built-in [Step] when its
 // Begin / Continue method is invoked outside of an
 // [authn.CompiledLoginFlow] context. Built-in Steps are configuration
@@ -573,7 +576,7 @@ type ExternalStep struct {
 // returned [interaction.Step] is the embedder's value unchanged.
 func (e ExternalStep) Begin(ctx context.Context, in BeginInput) (interaction.Step, error) {
 	if isNilLike(e.Authenticator) {
-		return interaction.Step{}, errors.New("op: ExternalStep.Authenticator is nil")
+		return interaction.Step{}, errExternalStepAuthenticatorNil
 	}
 	return e.Authenticator.Begin(ctx, in)
 }
@@ -583,7 +586,7 @@ func (e ExternalStep) Begin(ctx context.Context, in BeginInput) (interaction.Ste
 // the returned [interaction.Step] is the embedder's value unchanged.
 func (e ExternalStep) Continue(ctx context.Context, in ContinueInput) (interaction.Step, error) {
 	if isNilLike(e.Authenticator) {
-		return interaction.Step{}, errors.New("op: ExternalStep.Authenticator is nil")
+		return interaction.Step{}, errExternalStepAuthenticatorNil
 	}
 	return e.Authenticator.Continue(ctx, in)
 }

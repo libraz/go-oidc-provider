@@ -6,6 +6,19 @@ import (
 	"github.com/libraz/go-oidc-provider/op/profile"
 )
 
+// anyProfile reports whether pred holds for at least one active
+// [profile.Profile]. Every "the active set mandates X" gate resolves
+// through it, so a disjunctive set ("FAPI 2.0 Baseline OR something
+// looser") answers true as soon as one profile does.
+func (c *config) anyProfile(pred func(profile.Profile) bool) bool {
+	for _, p := range c.profiles {
+		if pred(p) {
+			return true
+		}
+	}
+	return false
+}
+
 // requireSenderConstrainedTokens reports whether the active
 // [profile.Profile] set forbids the issuance of bearer access
 // tokens. FAPI 2.0 §3.1.4 imposes the mandate on the FAPI 2.0
@@ -15,18 +28,7 @@ import (
 // so the runtime path returning true here means "an /token (or
 // /bc-authorize) request must present a proof or a cert".
 func (c *config) requireSenderConstrainedTokens() bool {
-	for _, p := range c.profiles {
-		switch p {
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA:
-			return true
-		case profile.Baseline:
-			// OAuth 2.1 keeps bearer tokens legal; sender
-			// constraining is a FAPI requirement, and imposing it
-			// here would make the profile unadoptable without DPoP
-			// or mTLS infrastructure.
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresSenderConstrainedTokens)
 }
 
 // requirePKCE reports whether the active [profile.Profile] set
@@ -44,12 +46,7 @@ func (c *config) requireSenderConstrainedTokens() bool {
 // disjunctive set ("FAPI 2.0 Baseline OR something looser") still
 // resolves to "PKCE required".
 func (c *config) requirePKCE() bool {
-	for _, p := range c.profiles {
-		if profile.RequiresPKCE(p) {
-			return true
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresPKCE)
 }
 
 // requireNonce reports whether the active [profile.Profile] set
@@ -60,12 +57,7 @@ func (c *config) requirePKCE() bool {
 // The disjunctive resolution mirrors [config.requirePKCE] so
 // embedders that wire a custom profile keep the same surface.
 func (c *config) requireNonce() bool {
-	for _, p := range c.profiles {
-		if profile.RequiresNonce(p) {
-			return true
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresNonce)
 }
 
 // requireStateOrNonce reports whether the active [profile.Profile]
@@ -73,12 +65,7 @@ func (c *config) requireNonce() bool {
 // of state / nonce. FAPI 2.0 §5.3.2.1.1 is the canonical source.
 // The disjunctive resolution mirrors [config.requirePKCE].
 func (c *config) requireStateOrNonce() bool {
-	for _, p := range c.profiles {
-		if profile.RequiresStateOrNonce(p) {
-			return true
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresStateOrNonce)
 }
 
 // requirePAR reports whether the active [profile.Profile] set
@@ -86,12 +73,7 @@ func (c *config) requireStateOrNonce() bool {
 // request_uri. FAPI 2.0 §5.3.1 requires PAR; vanilla OIDC Core does
 // not. The disjunctive resolution mirrors [config.requirePKCE].
 func (c *config) requirePAR() bool {
-	for _, p := range c.profiles {
-		if profile.RequiresPAR(p) {
-			return true
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresPAR)
 }
 
 // requireSignedRequestObject reports whether the active
@@ -105,19 +87,7 @@ func (c *config) requirePAR() bool {
 // returning true here means "a JAR verifier is guaranteed to be
 // wired".
 func (c *config) requireSignedRequestObject() bool {
-	for _, p := range c.profiles {
-		switch p {
-		case profile.FAPI2MessageSigning:
-			return true
-		case profile.Baseline, profile.FAPI2Baseline, profile.FAPICIBA:
-			// FAPI 2.0 Baseline does not mandate signed_non_repudiation;
-			// FAPI-CIBA mandates signed authentication requests
-			// at /bc-authorize but not at /authorize / /par
-			// (CIBA does not exercise either endpoint), so its
-			// gate lives on [config.requireSignedBackchannelRequest].
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresSignedRequestObject)
 }
 
 // requireSignedBackchannelRequest reports whether the active
@@ -132,17 +102,7 @@ func (c *config) requireSignedRequestObject() bool {
 // any one active profile that mandates signed backchannel
 // requests resolves the answer to true.
 func (c *config) requireSignedBackchannelRequest() bool {
-	for _, p := range c.profiles {
-		switch p {
-		case profile.FAPICIBA:
-			return true
-		case profile.Baseline, profile.FAPI2Baseline, profile.FAPI2MessageSigning:
-			// No other profile mounts a backchannel-authentication
-			// endpoint; the signed-request mandate is specific to
-			// FAPI-CIBA.
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresSignedBackchannelRequest)
 }
 
 // fapiCIBAProfileActive reports whether [profile.FAPICIBA] is in the
@@ -155,16 +115,7 @@ func (c *config) requireSignedBackchannelRequest() bool {
 // names every other profile so an exhaustive linter flags a future
 // addition that needs to revisit the FAPI-CIBA distinction.
 func (c *config) fapiCIBAProfileActive() bool {
-	for _, p := range c.profiles {
-		switch p {
-		case profile.FAPICIBA:
-			return true
-		case profile.Baseline, profile.FAPI2Baseline, profile.FAPI2MessageSigning:
-			// No other profile mounts the backchannel-
-			// authentication endpoint.
-		}
-	}
-	return false
+	return c.anyProfile(func(p profile.Profile) bool { return p == profile.FAPICIBA })
 }
 
 // requireJARMResponseMode reports whether the active
@@ -177,17 +128,7 @@ func (c *config) fapiCIBAProfileActive() bool {
 // runtime path returning true here means "the JARM signer is
 // guaranteed to be wired".
 func (c *config) requireJARMResponseMode() bool {
-	for _, p := range c.profiles {
-		switch p {
-		case profile.FAPI2MessageSigning:
-			return true
-		case profile.Baseline, profile.FAPI2Baseline, profile.FAPICIBA:
-			// Neither the OAuth 2.1 posture nor FAPI 2.0 Baseline
-			// requires response signing; FAPI-CIBA does not
-			// exercise /authorize so JARM does not apply.
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresJARMResponseMode)
 }
 
 // requireSignedIntrospection reports whether the active
@@ -199,19 +140,7 @@ func (c *config) requireJARMResponseMode() bool {
 // which op.New requires unconditionally — so true here means a
 // non-nil signer is guaranteed at request time.
 func (c *config) requireSignedIntrospection() bool {
-	for _, p := range c.profiles {
-		switch p {
-		case profile.FAPI2MessageSigning:
-			return true
-		case profile.Baseline, profile.FAPI2Baseline, profile.FAPICIBA:
-			// Neither the OAuth 2.1 posture nor FAPI 2.0 Baseline
-			// requires introspection signing; FAPI-CIBA inherits
-			// the FAPI 2.0 Baseline posture for /introspect (the
-			// profile only adds backchannel-authentication
-			// mandates).
-		}
-	}
-	return false
+	return c.anyProfile(profile.RequiresSignedIntrospection)
 }
 
 // clientSecretVerifier returns the [clientauth.SecretVerifier] every

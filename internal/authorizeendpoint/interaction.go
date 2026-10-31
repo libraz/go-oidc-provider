@@ -513,7 +513,7 @@ func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid,
 		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "csrf cookie missing", "")
 		return false
 	}
-	submitted := r.Header.Get("X-CSRF-Token")
+	submitted := r.Header.Get(csrf.HeaderName)
 	if submitted == "" {
 		submitted = csrfFromForm(r)
 	}
@@ -561,7 +561,7 @@ func csrfFromForm(r *http.Request) string {
 	if err := r.ParseForm(); err != nil {
 		return ""
 	}
-	return r.PostForm.Get("csrf_token")
+	return r.PostForm.Get(interaction.CSRFTokenField)
 }
 
 // noCredentialChainRan reports whether the completing chain established

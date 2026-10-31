@@ -118,18 +118,12 @@ func toPublicTokenView(view tokenexchange.TokenView) SubjectTokenView {
 // toInternalDecision converts a public TokenExchangeDecision onto the
 // internal Decision shape.
 func toInternalDecision(d *TokenExchangeDecision) *tokenexchange.Decision {
-	out := &tokenexchange.Decision{
+	return &tokenexchange.Decision{
 		GrantedScope:      append([]string(nil), d.GrantedScope...),
 		GrantedAudience:   append([]string(nil), d.GrantedAudience...),
 		GrantedTTL:        d.GrantedTTL,
 		IssueIDToken:      d.IssueIDToken,
 		IssueRefreshToken: d.IssueRefreshToken,
+		ExtraClaims:       cloneClaims(d.ExtraClaims),
 	}
-	if len(d.ExtraClaims) > 0 {
-		out.ExtraClaims = make(map[string]any, len(d.ExtraClaims))
-		for k, v := range d.ExtraClaims {
-			out.ExtraClaims[k] = v
-		}
-	}
-	return out
 }

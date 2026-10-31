@@ -887,3 +887,13 @@ func TestHTMLDriver_ConsentFallbacksStayEnglishWithoutCatalogue(t *testing.T) {
 		}
 	}
 }
+
+// TestFormFieldNames_Wire pins the hidden-field names the driver emits and
+// parses, which the interaction endpoint and SPA clients depend on.
+func TestFormFieldNames_Wire(t *testing.T) {
+	t.Parallel()
+
+	if interaction.StateRefField != "state_ref" || interaction.CSRFTokenField != "csrf_token" {
+		t.Fatalf("StateRefField=%q CSRFTokenField=%q", interaction.StateRefField, interaction.CSRFTokenField)
+	}
+}

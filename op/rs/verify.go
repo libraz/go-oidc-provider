@@ -129,7 +129,7 @@ func (v *Verifier) verifyToken(r *http.Request, scheme authScheme, raw string) (
 	if e = v.checkClaims(claims, all, now); e != nil {
 		return nil, e
 	}
-	binding := Binding{JKT: claims.Confirmation["jkt"], CertThumbprint: claims.Confirmation["x5t#S256"]}
+	binding := Binding{JKT: claims.Confirmation[tokens.CnfJKT], CertThumbprint: claims.Confirmation[tokens.CnfX5tS256]}
 	if e = v.checkBinding(r, scheme, raw, binding); e != nil {
 		return nil, e
 	}

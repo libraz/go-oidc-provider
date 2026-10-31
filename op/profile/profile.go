@@ -115,3 +115,51 @@ func RequiresAccessTokenRevocation(p Profile) bool {
 	}
 	return false
 }
+
+// IsFAPI reports whether p belongs to the FAPI family: [FAPI2Baseline],
+// [FAPI2MessageSigning] or [FAPICIBA]. [Baseline] and an unrecognised
+// value return false.
+func IsFAPI(p Profile) bool {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+		return true
+	case Baseline, profileUnspecified:
+		return false
+	}
+	return false
+}
+
+// RequiresSenderConstrainedTokens reports whether p forbids bearer access
+// tokens. FAPI 2.0 §3.1.4 imposes the mandate on the FAPI 2.0 family and
+// FAPI-CIBA inherits it (FAPI-CIBA-ID1 §5); [Baseline] keeps bearer tokens
+// legal.
+func RequiresSenderConstrainedTokens(p Profile) bool {
+	return IsFAPI(p)
+}
+
+// RequiresSignedRequestObject reports whether p mandates a signed JAR
+// request object on every /authorize and /par request (FAPI 2.0 Message
+// Signing §5.6). FAPI-CIBA's signed-request mandate applies to
+// /bc-authorize only; see [RequiresSignedBackchannelRequest].
+func RequiresSignedRequestObject(p Profile) bool {
+	return p == FAPI2MessageSigning
+}
+
+// RequiresSignedBackchannelRequest reports whether p mandates a signed JAR
+// request object on every /bc-authorize request (FAPI-CIBA-ID1 §5.2.2).
+func RequiresSignedBackchannelRequest(p Profile) bool {
+	return p == FAPICIBA
+}
+
+// RequiresJARMResponseMode reports whether p mandates that every
+// /authorize response be JARM-wrapped (FAPI 2.0 Message Signing §5.5).
+func RequiresJARMResponseMode(p Profile) bool {
+	return p == FAPI2MessageSigning
+}
+
+// RequiresSignedIntrospection reports whether p forces every successful
+// /introspect response onto the RFC 9701 JWT envelope (FAPI 2.0 Message
+// Signing §5).
+func RequiresSignedIntrospection(p Profile) bool {
+	return p == FAPI2MessageSigning
+}
