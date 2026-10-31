@@ -296,8 +296,5 @@ func sharedDerivation(slots []candidate) (argon2id.PHCParams, bool) {
 }
 
 func (v *Verifier) clock() timex.Clock {
-	if v.Clock == nil {
-		return timex.SystemClock
-	}
-	return v.Clock
+	return timex.OrSystem(v.Clock)
 }

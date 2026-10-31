@@ -3,42 +3,21 @@ package recovery
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 
 	"github.com/libraz/go-oidc-provider/internal/argon2id"
 )
 
-// argon2idParams carries the parameter set used for every recovery
-// code hashed by this package. The values come from OWASP's 2024
-// password-hashing guidance (m=64MiB, t=3, p=1, salt=16, key=32) and
-// match the internal/authn.Argon2idDefaults
-// reference impl used for client_secret hashing — but the recovery
-// package keeps the constants private and intentionally NOT
-// configurable in v1.0. Tunability is a future-version surface; for now
-// every recovery batch hashes under the same parameters, which keeps
-// the verifier path branch-free and avoids a footgun where embedders
-// pick weaker parameters than they realise.
-type argon2idParams struct {
-	memory      uint32
-	iterations  uint32
-	parallelism uint8
-	saltLength  uint32
-	keyLength   uint32
-}
-
 // argon2idDefaults is the immutable parameter set [hashCodes] mints
-// under and [verifyPolicy] accepts.
+// under and [verifyPolicy] accepts: the library-wide
+// [argon2id.DefaultParams], intentionally NOT configurable. Every
+// recovery batch hashes under the same parameters, which keeps the
+// verifier path branch-free and avoids a footgun where embedders pick
+// weaker parameters than they realise.
 //
 //nolint:gochecknoglobals // immutable config vector; no per-instance tuning.
-var argon2idDefaults = argon2idParams{
-	memory:      64 * 1024,
-	iterations:  3,
-	parallelism: 1,
-	saltLength:  16,
-	keyLength:   32,
-}
+var argon2idDefaults = argon2id.DefaultParams()
 
 // ErrInvalidHash is returned when a stored slot carries an encoding the
 // verifier cannot parse, or whose Argon2id parameters violate the
@@ -62,9 +41,9 @@ var ErrInvalidHash = errors.New("recovery: hash encoding is invalid")
 // still expected to verify.
 func verifyPolicy() argon2id.Policy {
 	p := argon2id.DefaultPolicy()
-	p.MaxMemory = argon2idDefaults.memory
-	p.MaxIterations = argon2idDefaults.iterations
-	p.MaxParallelism = argon2idDefaults.parallelism
+	p.MaxMemory = argon2idDefaults.Memory
+	p.MaxIterations = argon2idDefaults.Iterations
+	p.MaxParallelism = argon2idDefaults.Parallelism
 	return p
 }
 
@@ -96,7 +75,13 @@ func hashCodes(plain []string) ([]string, error) {
 	p := argon2idDefaults
 	out := make([]string, 0, len(plain))
 	for _, code := range plain {
-		out = append(out, encodePHC(p, salt, deriveKey(code, salt, p)))
+		out = append(out, argon2id.Encode(argon2id.PHCParams{
+			Memory:      p.Memory,
+			Iterations:  p.Iterations,
+			Parallelism: p.Parallelism,
+			Salt:        salt,
+			Hash:        deriveKey(code, salt, p),
+		}))
 	}
 	return out, nil
 }
@@ -114,7 +99,7 @@ func hashCode(plain string) (string, error) {
 
 // newSalt reads a fresh salt from crypto/rand.
 func newSalt() ([]byte, error) {
-	salt := make([]byte, argon2idDefaults.saltLength)
+	salt := make([]byte, argon2idDefaults.SaltLength)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("recovery: read salt: %w", err)
 	}
@@ -124,19 +109,8 @@ func newSalt() ([]byte, error) {
 // deriveKey runs the argon2id derivation for a canonicalised code. It is
 // the only place in the package that spends the work factor, so the
 // verifier's cost bound is exactly "how many times is this called".
-func deriveKey(plain string, salt []byte, p argon2idParams) []byte {
-	return argon2id.Key([]byte(normalise(plain)), salt, p.iterations, p.memory, p.parallelism, p.keyLength)
-}
-
-// encodePHC renders the modular-crypt form
-// `$argon2id$v=...$m=...,t=...,p=...$salt$hash` backends store verbatim.
-func encodePHC(p argon2idParams, salt, key []byte) string {
-	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2id.Version,
-		p.memory, p.iterations, p.parallelism,
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(key),
-	)
+func deriveKey(plain string, salt []byte, p argon2id.Params) []byte {
+	return argon2id.Key([]byte(normalise(plain)), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
 }
 
 // parseStoredHash parses one stored slot encoding under [verifyPolicy].
@@ -158,13 +132,13 @@ func parseStoredHash(encoded string) (argon2id.PHCParams, error) {
 // [deriveKey] can be driven from stored values. The narrowing
 // conversions are safe because [verifyPolicy] has already clamped the
 // salt and key lengths well inside the uint32 domain.
-func paramsOf(parsed argon2id.PHCParams) argon2idParams {
-	return argon2idParams{
-		memory:      parsed.Memory,
-		iterations:  parsed.Iterations,
-		parallelism: parsed.Parallelism,
-		saltLength:  uint32(len(parsed.Salt)), //nolint:gosec // verifyPolicy caps the salt at 128 bytes.
-		keyLength:   uint32(len(parsed.Hash)), //nolint:gosec // verifyPolicy caps the key at 128 bytes.
+func paramsOf(parsed argon2id.PHCParams) argon2id.Params {
+	return argon2id.Params{
+		Memory:      parsed.Memory,
+		Iterations:  parsed.Iterations,
+		Parallelism: parsed.Parallelism,
+		SaltLength:  uint32(len(parsed.Salt)), //nolint:gosec // verifyPolicy caps the salt at 128 bytes.
+		KeyLength:   uint32(len(parsed.Hash)), //nolint:gosec // verifyPolicy caps the key at 128 bytes.
 	}
 }
 

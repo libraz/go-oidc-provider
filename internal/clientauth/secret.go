@@ -5,7 +5,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"math/big"
@@ -80,13 +79,7 @@ type Argon2idParams struct {
 // Argon2idDefaults returns the parameters used when the caller leaves
 // [Argon2idParams] zero-valued.
 func Argon2idDefaults() Argon2idParams {
-	return Argon2idParams{
-		Memory:      64 * 1024,
-		Iterations:  3,
-		Parallelism: 1,
-		SaltLength:  16,
-		KeyLength:   32,
-	}
+	return Argon2idParams(argon2id.DefaultParams())
 }
 
 // resolved returns a copy of p with zero-valued fields filled in from
@@ -123,13 +116,13 @@ func (a *Argon2id) Hash(secret string) (string, error) {
 		return "", fmt.Errorf("authn: read salt: %w", err)
 	}
 	key := argon2id.Key([]byte(secret), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
-	enc := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2id.Version,
-		p.Memory, p.Iterations, p.Parallelism,
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(key),
-	)
-	return enc, nil
+	return argon2id.Encode(argon2id.PHCParams{
+		Memory:      p.Memory,
+		Iterations:  p.Iterations,
+		Parallelism: p.Parallelism,
+		Salt:        salt,
+		Hash:        key,
+	}), nil
 }
 
 func validateHashParams(p Argon2idParams) error {

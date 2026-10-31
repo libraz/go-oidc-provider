@@ -3,7 +3,6 @@ package password
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -426,20 +425,16 @@ var (
 // recommended Argon2id tuning so the derivation cost matches what an
 // embedder using a sane password-hashing library will produce.
 func initDummyHash() {
-	const (
-		memory      uint32 = 64 * 1024
-		iterations  uint32 = 3
-		parallelism uint8  = 1
-		keyLen      uint32 = 32
-	)
+	p := argon2id.DefaultParams()
 	salt := []byte("op-password-eq16")
-	key := argon2id.Key([]byte("dummy"), salt, iterations, memory, parallelism, keyLen)
-	dummyHashCache = []byte(fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2id.Version,
-		memory, iterations, parallelism,
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(key),
-	))
+	key := argon2id.Key([]byte("dummy"), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
+	dummyHashCache = []byte(argon2id.Encode(argon2id.PHCParams{
+		Memory:      p.Memory,
+		Iterations:  p.Iterations,
+		Parallelism: p.Parallelism,
+		Salt:        salt,
+		Hash:        key,
+	}))
 }
 
 // Compile-time confirmation that *Authenticator satisfies the public

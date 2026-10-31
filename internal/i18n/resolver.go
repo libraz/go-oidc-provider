@@ -17,6 +17,12 @@ type Resolver struct {
 	order   []Tag
 	defTag  Tag
 	prefs   PreferredLocaleStore
+
+	// chains holds the message lookup chain for every registered tag,
+	// built once in NewResolver and read-only afterwards. Tags outside
+	// it (arbitrary caller input) build their chain per call, so the
+	// table cannot grow with request traffic.
+	chains map[Tag][]*Bundle
 }
 
 // PreferredLocaleStore is the optional embedder hook that returns
@@ -67,12 +73,14 @@ func NewResolver(defTag Tag, bundles ...*Bundle) (*Resolver, error) {
 			return nil, errors.New("i18n: default locale " + string(defTag) + " has no registered bundle")
 		}
 		r.defTag = canonical
-		return r, nil
-	}
-	if r.bundles[English] != nil {
+	} else if r.bundles[English] != nil {
 		r.defTag = English
 	} else {
 		r.defTag = r.order[0]
+	}
+	r.chains = make(map[Tag][]*Bundle, len(r.order))
+	for _, tag := range r.order {
+		r.chains[tag] = r.buildMessageChain(tag)
 	}
 	return r, nil
 }
@@ -132,6 +140,14 @@ func (r *Resolver) Message(tag Tag, key string, data map[string]string) (string,
 // registered bundle may be partial — the point of the chain is that a
 // key the more specific bundle omits is still served.
 func (r *Resolver) messageChain(tag Tag) []*Bundle {
+	if chain, ok := r.chains[tag]; ok {
+		return chain
+	}
+	return r.buildMessageChain(tag)
+}
+
+// buildMessageChain computes the chain [Resolver.messageChain] serves.
+func (r *Resolver) buildMessageChain(tag Tag) []*Bundle {
 	seen := make(map[Tag]struct{}, 4)
 	chain := make([]*Bundle, 0, 4)
 	for _, tier := range [...]Tag{tag, r.defTag, English} {

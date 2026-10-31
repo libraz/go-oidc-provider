@@ -2,12 +2,11 @@ package sessions
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -654,9 +653,5 @@ func mostRecent(sessions []*store.Session) *store.Session {
 // internal/keys for the central
 // rule.
 func newID() (string, error) {
-	buf := make([]byte, IDLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("sessions: read random: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return keys.RandomBase64URL(IDLength)
 }

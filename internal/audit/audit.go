@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
+	"maps"
 	"runtime"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -163,10 +165,7 @@ func SlogClock(logger *slog.Logger, clock timex.Clock) Emitter {
 	if logger == nil {
 		return Discard()
 	}
-	if clock == nil {
-		clock = timex.SystemClock
-	}
-	return &slogEmitter{logger: logger, clock: clock}
+	return &slogEmitter{logger: logger, clock: timex.OrSystem(clock)}
 }
 
 // slogEmitter is the production [Emitter]. The struct is intentionally
@@ -241,8 +240,8 @@ func attrsFor(ev Event) []slog.Attr {
 	attrs = appendIfSet(attrs, "tag", ev.Tag)
 	if len(ev.Extras) > 0 {
 		extras := make([]slog.Attr, 0, len(ev.Extras))
-		for k, v := range ev.Extras {
-			extras = append(extras, extraAttr(k, v))
+		for _, k := range slices.Sorted(maps.Keys(ev.Extras)) {
+			extras = append(extras, extraAttr(k, ev.Extras[k]))
 		}
 		attrs = append(attrs, slog.Attr{Key: "extras", Value: slog.GroupValue(extras...)})
 	}

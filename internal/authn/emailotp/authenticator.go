@@ -272,10 +272,7 @@ func NewAuthenticator(cfg Config) (*Authenticator, error) {
 	if cfg.Users == nil {
 		return nil, ErrUsersRequired
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock
-	}
+	clock := timex.OrSystem(cfg.Clock)
 	ttl := cfg.CodeTTL
 	if ttl <= 0 {
 		ttl = DefaultCodeTTL

@@ -22,6 +22,15 @@ const (
 	saltLength = 16
 )
 
+// codeModulus is 10^codeDigits, the exclusive upper bound of a code.
+var codeModulus = func() uint64 {
+	m := uint64(1)
+	for range codeDigits {
+		m *= 10
+	}
+	return m
+}()
+
 // generateCode draws codeDigits decimal digits from crypto/rand. The
 // implementation reads a uint64, reduces modulo 10^codeDigits, and
 // zero-pads. The 64-bit modulo bias for a 10^6 modulus is below
@@ -32,11 +41,7 @@ func generateCode() (string, error) {
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", fmt.Errorf("emailotp: read random: %w", err)
 	}
-	modulus := uint64(1)
-	for range codeDigits {
-		modulus *= 10
-	}
-	val := binary.BigEndian.Uint64(buf[:]) % modulus
+	val := binary.BigEndian.Uint64(buf[:]) % codeModulus
 	return fmt.Sprintf("%0*d", codeDigits, val), nil
 }
 
@@ -63,12 +68,6 @@ func hashCode(salt []byte, subject, code string) []byte {
 	return h.Sum(nil)
 }
 
-// constantTimeEqualHashes reports whether two SHA-256 digests are
-// equal in constant time.
-func constantTimeEqualHashes(a, b []byte) bool {
-	return subtle.ConstantTimeCompare(a, b) == 1
-}
-
 // constantTimeEqualEmails compares two addresses case-insensitively
 // in constant time. Real-world email addresses are case-insensitive
 // for the domain (RFC 5321) and, in practice, the local-part as well;
@@ -76,12 +75,6 @@ func constantTimeEqualHashes(a, b []byte) bool {
 // typos from rejecting an otherwise legitimate match.
 func constantTimeEqualEmails(a, b string) bool {
 	la, lb := strings.ToLower(a), strings.ToLower(b)
-	if len(la) != len(lb) {
-		// subtle.ConstantTimeCompare returns 0 on length mismatch
-		// already; the explicit branch keeps the comparison cost
-		// bounded by max(len(a),len(b)) without padding allocations.
-		return false
-	}
 	return subtle.ConstantTimeCompare([]byte(la), []byte(lb)) == 1
 }
 

@@ -1,6 +1,10 @@
 package emailotp
 
-import "time"
+import (
+	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
+)
 
 // CodeDigits exposes the package's OTP-length constant for whitebox
 // tests in the _test package.
@@ -15,11 +19,11 @@ const SaltLength = saltLength
 // numeric values (which would silently desync if the production
 // constants were tuned).
 const (
-	LockThresholdShort = lockThresholdShort
-	LockThresholdLong  = lockThresholdLong
-	LockDurationShort  = lockDurationShort
-	LockDurationLong   = lockDurationLong
-	CounterWindow      = counterWindow
+	LockThresholdShort = lockout.ThresholdShort
+	LockThresholdLong  = lockout.ThresholdLong
+	LockDurationShort  = lockout.DurationShort
+	LockDurationLong   = lockout.DurationLong
+	CounterWindow      = lockout.CounterWindow
 )
 
 // ScratchVerify exposes the verify-step Scratch sentinel so adapter
@@ -27,8 +31,7 @@ const (
 // verify branch.
 var ScratchVerify = scratchVerify
 
-// GenerateCode / GenerateSalt / HashCode / ConstantTimeEqualHashes /
-// ConstantTimeEqualEmails / MaskEmail expose the package-internal
+// GenerateCode / GenerateSalt / HashCode / ConstantTimeEqualEmails / MaskEmail expose the package-internal
 // helpers so the whitebox tests can exercise them without relaxing
 // the production identifier visibility.
 func GenerateCode() (string, error) { return generateCode() }
@@ -37,7 +40,6 @@ func HashCode(salt []byte, sub, code string) []byte {
 	return hashCode(salt, sub, code)
 }
 
-func ConstantTimeEqualHashes(a, b []byte) bool { return constantTimeEqualHashes(a, b) }
 func ConstantTimeEqualEmails(a, b string) bool { return constantTimeEqualEmails(a, b) }
 func MaskEmail(addr string) string             { return maskEmail(addr) }
 

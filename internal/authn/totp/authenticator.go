@@ -173,10 +173,10 @@ func (a *Authenticator) Enrolled(ctx context.Context, subject string) (bool, err
 // cross-factor counter when one is wired.
 func (a *Authenticator) attemptsRemaining(ctx context.Context, subject string, rec *store.TOTPRecord, now time.Time) (int, error) {
 	spent := rec.FailedCount
-	if !rec.FirstFailureAt.IsZero() && now.Sub(rec.FirstFailureAt) > counterWindow {
+	if lockout.WindowExpired(rec.FirstFailureAt, now) {
 		spent = 0
 	}
-	remaining := max(lockThresholdShort-spent, 0)
+	remaining := max(lockout.ThresholdShort-spent, 0)
 	if a.lockout != nil {
 		shared, err := a.lockout.RemainingAttempts(ctx, subject)
 		if err != nil {

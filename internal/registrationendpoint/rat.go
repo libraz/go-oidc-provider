@@ -84,7 +84,7 @@ func verifyRAT(
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
 		return nil, nil, false
 	}
-	if !constantTimeEqualString(hashSecret(bearer), stored.HashedValue) {
+	if subtle.ConstantTimeCompare([]byte(hashSecret(bearer)), []byte(stored.HashedValue)) != 1 {
 		deps.logger().Warn("dcr.rat.invalid", "reason", "hash_mismatch", "client_id", clientID)
 		deps.audit().Emit(ctx, audit.Event{
 			Name:     auditDCRRATInvalid,
@@ -105,17 +105,4 @@ func verifyRAT(
 // clients may use RFC 7592.
 func sourceIsDynamic(s store.ClientSource) bool {
 	return s == store.ClientSourceDynamic
-}
-
-// constantTimeEqualString compares a and b in constant time relative
-// to the longer of the two so the comparison cannot leak the stored
-// hash through timing. crypto/subtle.ConstantTimeCompare returns 1
-// when the inputs are byte-identical and equal length; we additionally
-// short-circuit unequal lengths because the comparator runs in O(min)
-// when lengths differ.
-func constantTimeEqualString(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }

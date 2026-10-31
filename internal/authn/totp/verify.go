@@ -8,36 +8,9 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
-)
-
-// Brute-force defence thresholds. The values are intentionally not
-// exposed as configuration: tuning them per-deployment would silently
-// weaken the defence and make incident response harder to reason about.
-const (
-	// lockThresholdShort triggers a 1-hour LockedUntil stamp once the
-	// 24-hour cumulative FailedCount reaches this value.
-	lockThresholdShort = 30
-
-	// lockThresholdLong triggers a 24-hour LockedUntil stamp AND
-	// returns [ErrResetRequired] so the orchestrator can force a
-	// step-up reset of the factor.
-	lockThresholdLong = 90
-
-	// lockDurationShort is the LockedUntil offset applied at
-	// lockThresholdShort.
-	lockDurationShort = 1 * time.Hour
-
-	// lockDurationLong is the LockedUntil offset applied at
-	// lockThresholdLong.
-	lockDurationLong = 24 * time.Hour
-
-	// counterWindow is the rolling window over which FailedCount
-	// accumulates. A failure recorded more than counterWindow ago is
-	// dropped: the next failure resets FirstFailureAt to "now" and the
-	// counter to 1.
-	counterWindow = 24 * time.Hour
 )
 
 // defaultSkew is the ±step window the verifier accepts. RFC 6238 §5.2
@@ -58,7 +31,7 @@ const (
 
 	// OutcomeWrongCode means the code did not match. The Record's
 	// FailedCount has been incremented and FirstFailureAt has been
-	// stamped if it was zero or older than counterWindow.
+	// stamped if it was zero or older than [lockout.CounterWindow].
 	OutcomeWrongCode
 
 	// OutcomeLocked means LockedUntil is in the future at the time of
@@ -67,7 +40,7 @@ const (
 	OutcomeLocked
 
 	// OutcomeResetRequired is returned alongside [ErrResetRequired]
-	// when FailedCount has crossed lockThresholdLong. The Record
+	// when FailedCount has crossed [lockout.ThresholdLong]. The Record
 	// carries the stamped 24-hour LockedUntil; the orchestrator MUST
 	// persist it before redirecting the user to the recovery flow so
 	// that a concurrent attacker cannot keep guessing.
@@ -111,7 +84,7 @@ var (
 	ErrReplayed = fmt.Errorf("totp: code already accepted: %w", ErrWrongCode)
 
 	// ErrResetRequired is returned when FailedCount has crossed
-	// lockThresholdLong. The orchestrator MUST treat this as a
+	// [lockout.ThresholdLong]. The orchestrator MUST treat this as a
 	// terminal state and route the user to the recovery / step-up
 	// reset flow; the verifier intentionally never disables the
 	// factor on its own.
@@ -180,7 +153,7 @@ type Verifier struct {
 //  5. On match, clear FailedCount / FirstFailureAt / LockedUntil and
 //     return OutcomeSuccess.
 //  6. On miss, increment FailedCount (resetting the window if the
-//     previous FirstFailureAt is older than counterWindow) and stamp
+//     previous FirstFailureAt is older than [lockout.CounterWindow]) and stamp
 //     LockedUntil per the threshold table. Return OutcomeWrongCode or
 //     OutcomeResetRequired.
 //
@@ -250,18 +223,18 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 
 	// Wrong code: roll the counter window forward if necessary, then
 	// increment and stamp lockouts.
-	if rec.FirstFailureAt.IsZero() || now.Sub(rec.FirstFailureAt) > counterWindow {
+	if rec.FirstFailureAt.IsZero() || lockout.WindowExpired(rec.FirstFailureAt, now) {
 		rec.FirstFailureAt = now
 		rec.FailedCount = 0
 	}
 	rec.FailedCount++
 
-	switch {
-	case rec.FailedCount >= lockThresholdLong:
-		rec.LockedUntil = now.Add(lockDurationLong)
+	lockedUntil, resetRequired := lockout.Escalate(rec.FailedCount, now)
+	if !lockedUntil.IsZero() {
+		rec.LockedUntil = lockedUntil
+	}
+	if resetRequired {
 		return &Result{Outcome: OutcomeResetRequired, Record: rec}, ErrResetRequired
-	case rec.FailedCount >= lockThresholdShort:
-		rec.LockedUntil = now.Add(lockDurationShort)
 	}
 	return &Result{Outcome: OutcomeWrongCode, Record: rec}, ErrWrongCode
 }
@@ -321,10 +294,7 @@ func (v *Verifier) matchStep(secret, code []byte, counter uint64) bool {
 }
 
 func (v *Verifier) clock() timex.Clock {
-	if v.Clock == nil {
-		return timex.SystemClock
-	}
-	return v.Clock
+	return timex.OrSystem(v.Clock)
 }
 
 func (v *Verifier) skew() int {

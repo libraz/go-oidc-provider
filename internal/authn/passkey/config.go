@@ -403,10 +403,7 @@ func (v *Verifier) UserVerificationRequired() bool {
 // clock returns the verifier's [timex.Clock], defaulting to
 // [timex.SystemClock] when the field is nil.
 func (v *Verifier) clock() timex.Clock {
-	if v.Clock == nil {
-		return timex.SystemClock
-	}
-	return v.Clock
+	return timex.OrSystem(v.Clock)
 }
 
 // validateOrigins enforces the WebAuthn L3 §13.4.6 binding between

@@ -26,31 +26,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Threshold values. The constants are package-private so embedders
-// cannot tune them per-deployment; the defence is tuned once for the
-// entire library. The values match the per-factor TOTP / email-OTP
-// thresholds.
 const (
-	// thresholdShort triggers a 1-hour LockedUntil stamp.
-	thresholdShort = 30
-
-	// thresholdLong triggers a 24-hour LockedUntil stamp AND the
-	// [Outcome] reports a reset is required so the orchestrator can
-	// route the user through the recovery flow.
-	thresholdLong = 90
-
-	// durationShort is the LockedUntil offset applied at thresholdShort.
-	durationShort = 1 * time.Hour
-
-	// durationLong is the LockedUntil offset applied at thresholdLong.
-	durationLong = 24 * time.Hour
-
-	// counterWindow is the rolling window over which FailedCount
-	// accumulates. A failure recorded more than counterWindow ago is
-	// dropped: the next failure resets FirstFailureAt to "now" and the
-	// counter to 1.
-	counterWindow = 24 * time.Hour
-
 	// maxSwapAttempts bounds the compare-and-swap loop in
 	// [Counter.RecordFailure]. Losing the swap is a normal outcome, so
 	// without a bound a burst of concurrent failed logins against one
@@ -74,7 +50,7 @@ var (
 	ErrLocked = errors.New("lockout: cross-factor brute-force lock active")
 
 	// ErrResetRequired is returned by [Counter.RecordFailure] when the
-	// post-increment count crosses [thresholdLong]. The 24-hour
+	// post-increment count crosses [ThresholdLong]. The 24-hour
 	// LockedUntil stamp has been persisted; the orchestrator MUST
 	// route the user to the recovery / step-up reset flow.
 	ErrResetRequired = errors.New("lockout: factor reset required")
@@ -162,10 +138,7 @@ func New(lockoutStore store.AuthnLockoutStore, clock timex.Clock) (*Counter, err
 	if lockoutStore == nil {
 		return nil, errors.New("lockout: store is required")
 	}
-	if clock == nil {
-		clock = timex.SystemClock
-	}
-	return &Counter{store: lockoutStore, clock: clock, emitter: audit.Discard()}, nil
+	return &Counter{store: lockoutStore, clock: timex.OrSystem(clock), emitter: audit.Discard()}, nil
 }
 
 // WithEmitter returns a copy of c that reports abandoned attempts to e.
@@ -271,12 +244,12 @@ func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time
 // an implicit full budget.
 func (c *Counter) RemainingAttempts(ctx context.Context, subject string) (int, error) {
 	if c == nil || subject == "" {
-		return thresholdShort, nil
+		return ThresholdShort, nil
 	}
 	rec, err := c.store.Get(ctx, subject)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return thresholdShort, nil
+			return ThresholdShort, nil
 		}
 		return 0, err
 	}
@@ -288,10 +261,10 @@ func (c *Counter) RemainingAttempts(ctx context.Context, subject string) (int, e
 		return 0, nil
 	}
 	spent := rec.FailedCount
-	if !rec.FirstFailureAt.IsZero() && now.Sub(rec.FirstFailureAt) > counterWindow {
+	if WindowExpired(rec.FirstFailureAt, now) {
 		spent = 0
 	}
-	remaining := thresholdShort - spent
+	remaining := ThresholdShort - spent
 	if remaining < 0 {
 		return 0, nil
 	}
@@ -364,9 +337,7 @@ func (c *Counter) failureBase(ctx context.Context, subject string) (uint64, *sto
 // lock has run out therefore loses the stamp on its next transition
 // rather than carrying it until the row is reclaimed.
 func applyFailure(next *store.AuthnLockoutRecord, now time.Time) Outcome {
-	windowExpired := !next.FirstFailureAt.IsZero() &&
-		now.Sub(next.FirstFailureAt) > counterWindow
-	if windowExpired {
+	if WindowExpired(next.FirstFailureAt, now) {
 		next.FailedCount = 1
 		next.FirstFailureAt = now
 	} else {
@@ -379,13 +350,7 @@ func applyFailure(next *store.AuthnLockoutRecord, now time.Time) Outcome {
 	}
 
 	out := Outcome{FailedCount: next.FailedCount}
-	switch {
-	case next.FailedCount >= thresholdLong:
-		out.LockedUntil = now.Add(durationLong)
-		out.ResetRequired = true
-	case next.FailedCount >= thresholdShort:
-		out.LockedUntil = now.Add(durationShort)
-	}
+	out.LockedUntil, out.ResetRequired = Escalate(next.FailedCount, now)
 	// Carry an existing stamp forward only while it is still in force at
 	// now: a later failure must never shorten a running lock, but an
 	// elapsed stamp is spent state. Comparing against out.LockedUntil

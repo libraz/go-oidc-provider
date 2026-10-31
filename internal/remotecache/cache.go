@@ -114,9 +114,7 @@ type staleResult[V any] struct {
 // New returns a ready-to-use cache. The zero Config uses bounded production
 // defaults.
 func New[V any](cfg Config) *Cache[V] {
-	if cfg.Clock == nil {
-		cfg.Clock = timex.SystemClock
-	}
+	cfg.Clock = timex.OrSystem(cfg.Clock)
 	if cfg.TTL <= 0 {
 		cfg.TTL = defaultTTL
 	}

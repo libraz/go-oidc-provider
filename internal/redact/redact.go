@@ -14,7 +14,7 @@ import (
 // match on it without a moving target.
 const Sentinel = "[REDACTED]"
 
-// Sensitive is the closed list of attribute keys (lowercased) the
+// sensitiveKeys is the closed list of attribute keys (lowercased) the
 // redactor matches verbatim. Matching is case-insensitive and
 // structural — an attribute group called "code" matches even if the
 // caller wrote it as "Code". The list covers the OIDC / OAuth
@@ -28,7 +28,7 @@ const Sentinel = "[REDACTED]"
 // underscores so a single entry covers both forms.
 //
 //nolint:gochecknoglobals // closed enumeration of credential-bearing OIDC / OAuth fields.
-var Sensitive = []string{
+var sensitiveKeys = []string{
 	"access_token",
 	"refresh_token",
 	"id_token",
@@ -63,7 +63,7 @@ var Sensitive = []string{
 // little precision for a regression-resistant default; legitimate
 // false-positives are covered by [substringAllowlist].
 //
-//nolint:gochecknoglobals // closed enumeration; mirrors Sensitive.
+//nolint:gochecknoglobals // closed enumeration; mirrors sensitiveKeys.
 var sensitiveSubstrings = []string{
 	"secret",
 	"token",
@@ -115,11 +115,28 @@ var substringAllowlist = []string{
 	"refresh_token_cascade_complete",
 }
 
+// Lookup sets built once from the catalogues above, so classifying an
+// attribute is a map probe instead of a scan over each list.
+//
+//nolint:gochecknoglobals // immutable lookup tables derived from the closed catalogues.
+var (
+	sensitiveSet = toSet(sensitiveKeys)
+	allowlistSet = toSet(substringAllowlist)
+)
+
+func toSet(list []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(list))
+	for _, s := range list {
+		set[s] = struct{}{}
+	}
+	return set
+}
+
 // IsSensitive reports whether key (after canonicalisation) names a
 // sensitive attribute. Callers SHOULD use this helper rather than
 // re-implementing the comparison so the catalogue stays single-source.
 //
-// The match is layered: an exact-match against [Sensitive] wins
+// The match is layered: an exact-match against [sensitiveKeys] wins
 // first; otherwise a substring-match against [sensitiveSubstrings]
 // is consulted, with [substringAllowlist] suppressing known
 // false-positives.
@@ -128,15 +145,11 @@ func IsSensitive(key string) bool {
 	if canon == "" {
 		return false
 	}
-	for _, s := range Sensitive {
-		if canon == s {
-			return true
-		}
+	if _, ok := sensitiveSet[canon]; ok {
+		return true
 	}
-	for _, allow := range substringAllowlist {
-		if canon == allow {
-			return false
-		}
+	if _, ok := allowlistSet[canon]; ok {
+		return false
 	}
 	for _, needle := range sensitiveSubstrings {
 		if strings.Contains(canon, needle) {
@@ -148,10 +161,11 @@ func IsSensitive(key string) bool {
 
 // canonicalise lowercases s and rewrites hyphens to underscores so
 // the matcher treats `Set-Cookie`, `set_cookie`, and `set-cookie`
-// uniformly.
+// uniformly. A key already in canonical form is returned as is, without
+// allocating.
 func canonicalise(s string) string {
-	if s == "" {
-		return ""
+	if !needsCanonicalising(s) {
+		return s
 	}
 	out := make([]byte, 0, len(s))
 	for i := range len(s) {
@@ -168,21 +182,26 @@ func canonicalise(s string) string {
 	return string(out)
 }
 
+// needsCanonicalising reports whether s holds an uppercase letter or a
+// hyphen, the only bytes [canonicalise] rewrites.
+func needsCanonicalising(s string) bool {
+	for i := range len(s) {
+		if c := s[i]; c == '-' || (c >= 'A' && c <= 'Z') {
+			return true
+		}
+	}
+	return false
+}
+
 // ReplaceAttr is the [slog.HandlerOptions.ReplaceAttr] hook that
-// performs single-attribute redaction. It is the entry point
-// [WrapHandler] builds on, and reaching it is what an embedder does by
-// passing their own handler to one of the op.With*Logger options: the
-// OP wraps the supplied handler in the redactor, so their rewrites and
-// this one compose without the package being importable from outside.
+// performs single-attribute redaction. [WrapHandler] applies it to
+// every leaf attribute, and it has the shape a handler built from
+// [slog.HandlerOptions] expects.
 //
-// Offering a seam an embedder could hold directly would be an additive
-// change on the public op surface, not something this package can
-// grant: Go's internal rule puts it out of reach of any module but
-// this one.
-//
-// Group attributes are recursed into by the slog runtime, so this
-// hook does not have to descend manually — slog passes each leaf
-// attribute through ReplaceAttr separately.
+// Group attributes are not descended into here: [WrapHandler] recurses
+// through groups and calls this hook per leaf, and the slog runtime
+// does the same when the hook is installed through
+// [slog.HandlerOptions.ReplaceAttr].
 func ReplaceAttr(_ []string, a slog.Attr) slog.Attr {
 	if !IsSensitive(a.Key) {
 		return a
@@ -212,7 +231,7 @@ func WrapHandler(next slog.Handler) slog.Handler {
 
 // handler is the slog.Handler shim. The struct is intentionally
 // minimal — the heavy lifting is in redactRecord — so adding a new
-// sensitive key is a one-line edit to [Sensitive].
+// sensitive key is a one-line edit to [sensitiveKeys].
 type handler struct {
 	next slog.Handler
 }
@@ -275,17 +294,14 @@ func redactAttr(a slog.Attr) slog.Attr {
 		}
 		return slog.Attr{Key: a.Key, Value: slog.GroupValue(out...)}
 	}
-	if IsSensitive(a.Key) {
-		return slog.String(a.Key, Sentinel)
-	}
-	return a
+	return ReplaceAttr(nil, a)
 }
 
 // Mask rewrites recognised `key=value` pairs in s with the sentinel.
 // It is intended for free-form strings (typically URLs or HTTP
 // header values) that embed query parameters before they reach a
 // log call. The function is conservative: it only touches pairs
-// whose key matches the [Sensitive] catalogue, leaves the
+// whose key matches the [sensitiveKeys] catalogue, leaves the
 // surrounding text intact, and never decodes percent-escapes (so a
 // URL with `%26` inside a value is treated as a single value).
 //

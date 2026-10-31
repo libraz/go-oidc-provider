@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
 // The high-entropy encoding and the sizes it is built from.
@@ -140,11 +142,10 @@ func HashHighEntropySecret(secret string) (string, error) {
 // The plaintext is returned for delivery to the client and is never
 // persisted by the library.
 func NewHighEntropySecret() (secret, stored string, err error) {
-	raw := make([]byte, highEntropySecretBytes)
-	if _, err := rand.Read(raw); err != nil {
+	secret, err = keys.RandomBase64URL(highEntropySecretBytes)
+	if err != nil {
 		return "", "", fmt.Errorf("authn: read client secret: %w", err)
 	}
-	secret = base64.RawURLEncoding.EncodeToString(raw)
 	stored, err = HashHighEntropySecret(secret)
 	if err != nil {
 		return "", "", err

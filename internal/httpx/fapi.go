@@ -27,12 +27,20 @@ const FAPIInteractionIDHeader = "x-fapi-interaction-id"
 // op/profile and lets test rigs exercise the echo without standing
 // up a full Provider.
 func InteractionIDMiddleware(next http.Handler) http.Handler {
+	return interactionIDMiddleware(next, NewInteractionID)
+}
+
+// interactionIDMiddleware is [InteractionIDMiddleware] with the id
+// generator injected, so the entropy-failure branch is testable.
+func interactionIDMiddleware(next http.Handler, generate func() string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(FAPIInteractionIDHeader)
 		if id == "" {
-			id = NewInteractionID()
+			id = generate()
 		}
-		w.Header().Set(FAPIInteractionIDHeader, id)
+		if id != "" {
+			w.Header().Set(FAPIInteractionIDHeader, id)
+		}
 		next.ServeHTTP(w, r)
 	})
 }

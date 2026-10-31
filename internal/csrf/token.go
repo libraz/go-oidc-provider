@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
 // keyLen is the byte length required for the HMAC key. SHA-256's block size
@@ -70,9 +72,13 @@ func NewSigner(current []byte, previous ...[]byte) (*Signer, error) {
 	return &Signer{keys: keys}, nil
 }
 
+// HeaderName is the request header that carries the double-submit copy of
+// the CSRF token.
+const HeaderName = "X-CSRF-Token"
+
 // Issue mints a fresh token bound to sessionID and stamped at issuedAt. The
 // returned string is suitable both as the [__Host-oidc_csrf] cookie value
-// and as the X-CSRF-Token header — the double-submit pattern relies on the two
+// and as the [HeaderName] header — the double-submit pattern relies on the two
 // being literally identical.
 // Format: "<nonce_b64>.<unix_seconds>.<hmac_b64>" where the HMAC covers a
 // length-prefixed canonicalisation of (sessionID, nonce, iat, ""). The
@@ -202,11 +208,7 @@ func cloneKey(key []byte) []byte {
 // [Signer.IssueScoped] instead so a token cannot be replayed across
 // steps.
 func NewRandomToken() (string, error) {
-	buf := make([]byte, randomTokenLen)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("csrf: read token: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return keys.RandomBase64URL(randomTokenLen)
 }
 
 // ConstantTimeEqual reports whether the cookie value and the supplied header
@@ -214,8 +216,5 @@ func NewRandomToken() (string, error) {
 // the interaction endpoints require. The function is exported so handlers can use it
 // without re-importing crypto/subtle.
 func ConstantTimeEqual(cookie, header string) bool {
-	if len(cookie) != len(header) {
-		return false
-	}
 	return hmac.Equal([]byte(cookie), []byte(header))
 }

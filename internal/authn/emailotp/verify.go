@@ -2,42 +2,15 @@ package emailotp
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
-)
-
-// Brute-force defence thresholds. The values match the TOTP adapter
-// ; the two factors share a
-// rolling 24-hour window so an attacker who pivots between them
-// cannot reset the counter.
-const (
-	// lockThresholdShort triggers a 1-hour LockedUntil stamp once the
-	// 24-hour cumulative FailedCount reaches this value.
-	lockThresholdShort = 30
-
-	// lockThresholdLong triggers a 24-hour LockedUntil stamp AND
-	// returns [ErrResetRequired] so the orchestrator can force the
-	// user through the recovery flow.
-	lockThresholdLong = 90
-
-	// lockDurationShort is the LockedUntil offset applied at
-	// lockThresholdShort.
-	lockDurationShort = 1 * time.Hour
-
-	// lockDurationLong is the LockedUntil offset applied at
-	// lockThresholdLong.
-	lockDurationLong = 24 * time.Hour
-
-	// counterWindow is the rolling window over which FailedCount
-	// accumulates. A failure recorded more than counterWindow ago is
-	// dropped: the next failure resets FirstFailureAt to "now" and
-	// the counter to 1.
-	counterWindow = 24 * time.Hour
 )
 
 // DefaultCodeTTL is the acceptance window from issuance to
@@ -57,7 +30,7 @@ const (
 
 	// OutcomeWrongCode means the code did not match. The Record's
 	// FailedCount has been incremented and FirstFailureAt has been
-	// stamped if it was zero or older than counterWindow.
+	// stamped if it was zero or older than [lockout.CounterWindow].
 	OutcomeWrongCode
 
 	// OutcomeExpired means rec.ExpiresAt was before the verifier's
@@ -70,7 +43,7 @@ const (
 	OutcomeLocked
 
 	// OutcomeResetRequired is returned alongside [ErrResetRequired]
-	// when FailedCount has crossed lockThresholdLong. The Record
+	// when FailedCount has crossed [lockout.ThresholdLong]. The Record
 	// carries the stamped 24-hour LockedUntil; the orchestrator MUST
 	// persist it before the user is redirected to the recovery flow.
 	OutcomeResetRequired
@@ -113,7 +86,7 @@ var (
 	ErrWrongCode = errors.New("emailotp: code did not match")
 
 	// ErrResetRequired is returned when FailedCount has crossed
-	// lockThresholdLong. The orchestrator MUST treat this as a
+	// [lockout.ThresholdLong]. The orchestrator MUST treat this as a
 	// terminal state and route the user to the recovery / step-up
 	// reset flow.
 	// It always follows a counted wrong guess, so it also wraps
@@ -180,7 +153,7 @@ func (v *Verifier) Verify(_ context.Context, rec *store.EmailOTPRecord, code str
 		return &Result{Outcome: OutcomeExpired, Record: rec}, ErrExpired
 	}
 	candidate := hashCode(rec.CodeSalt, rec.Subject, code)
-	matched := !rec.SentAt.IsZero() && constantTimeEqualHashes(candidate, rec.CodeHash)
+	matched := !rec.SentAt.IsZero() && subtle.ConstantTimeCompare(candidate, rec.CodeHash) == 1
 	if matched {
 		rec.FailedCount = 0
 		rec.FirstFailureAt = time.Time{}
@@ -188,24 +161,21 @@ func (v *Verifier) Verify(_ context.Context, rec *store.EmailOTPRecord, code str
 		rec.ConsumedAt = now
 		return &Result{Outcome: OutcomeSuccess, Record: rec}, nil
 	}
-	if rec.FirstFailureAt.IsZero() || now.Sub(rec.FirstFailureAt) > counterWindow {
+	if rec.FirstFailureAt.IsZero() || lockout.WindowExpired(rec.FirstFailureAt, now) {
 		rec.FirstFailureAt = now
 		rec.FailedCount = 0
 	}
 	rec.FailedCount++
-	switch {
-	case rec.FailedCount >= lockThresholdLong:
-		rec.LockedUntil = now.Add(lockDurationLong)
+	lockedUntil, resetRequired := lockout.Escalate(rec.FailedCount, now)
+	if !lockedUntil.IsZero() {
+		rec.LockedUntil = lockedUntil
+	}
+	if resetRequired {
 		return &Result{Outcome: OutcomeResetRequired, Record: rec}, ErrResetRequired
-	case rec.FailedCount >= lockThresholdShort:
-		rec.LockedUntil = now.Add(lockDurationShort)
 	}
 	return &Result{Outcome: OutcomeWrongCode, Record: rec}, ErrWrongCode
 }
 
 func (v *Verifier) now() time.Time {
-	if v.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return v.Clock.Now()
+	return timex.OrSystem(v.Clock).Now()
 }

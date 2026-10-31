@@ -15,5 +15,5 @@
 // positives (a benign field accidentally named "code") merely lose
 // observability, while a false negative could expose a token to log
 // pipelines that v1.0 cannot recall. New keys go through the
-// [Sensitive] catalogue so the audit boundary stays auditable.
+// sensitive-key catalogue so the audit boundary stays auditable.
 package redact

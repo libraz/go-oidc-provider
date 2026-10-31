@@ -64,19 +64,6 @@ func TestHashCodeStableAndBoundsToInputs(t *testing.T) {
 	}
 }
 
-func TestConstantTimeEqualHashes(t *testing.T) {
-	t.Parallel()
-	a := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	b := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	c := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab")
-	if !emailotp.ConstantTimeEqualHashes(a, b) {
-		t.Errorf("equal hashes reported unequal")
-	}
-	if emailotp.ConstantTimeEqualHashes(a, c) {
-		t.Errorf("unequal hashes reported equal")
-	}
-}
-
 func TestConstantTimeEqualEmailsCaseInsensitive(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

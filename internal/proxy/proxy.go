@@ -199,21 +199,13 @@ func firstForwardedValue(values []string) string {
 }
 
 // parseRemoteAddr strips the optional ":port" suffix from r.RemoteAddr and
-// parses the result as a [netip.Addr]. It tolerates IPv6 literals wrapped in
-// brackets as written by net/http.
+// parses the result as a [netip.Addr] through [parseForwardedToken], so IPv6
+// literals wrapped in brackets (as net/http writes them) resolve like bare ones.
 func parseRemoteAddr(remote string) (netip.Addr, bool) {
 	if remote == "" {
 		return netip.Addr{}, false
 	}
-	host, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		host = remote
-	}
-	addr, err := netip.ParseAddr(strings.TrimSpace(host))
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	return addr.Unmap(), true
+	return parseForwardedToken(remote)
 }
 
 // walkForwardedFor returns the first address in the X-Forwarded-For chain
@@ -259,10 +251,9 @@ func walkForwardedFor(values []string, t *Trust) (netip.Addr, bool) {
 
 // parseForwardedToken normalises a single XFF token to a [netip.Addr],
 // accepting bare IPs, bracketed IPv6 literals, and IPv6 literals with a
-// trailing port. The helper mirrors [parseRemoteAddr] so XFF and
-// RemoteAddr share the same parsing surface; centralising the logic
-// guarantees a token like "[2001:db8::1]:443" resolves to the same
-// address regardless of which header it arrived through.
+// trailing port. [parseRemoteAddr] delegates here so XFF and RemoteAddr
+// share one parsing surface: a token like "[2001:db8::1]:443" resolves to
+// the same address regardless of which header it arrived through.
 func parseForwardedToken(token string) (netip.Addr, bool) {
 	token = strings.TrimSpace(token)
 	if token == "" {

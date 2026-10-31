@@ -27,6 +27,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // preflightMaxAge is the value advertised in Access-Control-Max-Age for
@@ -37,7 +38,7 @@ const preflightMaxAge = 10 * time.Minute
 // allowedHeaders is the static list advertised on every strict preflight.
 // It deliberately omits proprietary headers — anything outside the list
 // requires a config change rather than a runtime override.
-const allowedHeaders = "Content-Type, Authorization, DPoP, X-CSRF-Token"
+const allowedHeaders = "Content-Type, Authorization, DPoP, " + csrf.HeaderName
 
 // allowedHeadersSet is the lower-cased lookup table for [allowedHeaders].
 // It is consulted on every preflight to intersect the request's
@@ -272,7 +273,7 @@ func intersectAllowedHeaders(requested string) string {
 // a FAPI conformant SPA correlate its own logs with the OP's. Omitting
 // this header silently breaks the browser-side nonce-retry loop even
 // though the server-side contract is otherwise correct.
-const exposedHeaders = "DPoP-Nonce, WWW-Authenticate, x-fapi-interaction-id"
+const exposedHeaders = "DPoP-Nonce, WWW-Authenticate, " + httpx.FAPIInteractionIDHeader
 
 // stampActual writes the response headers required on a non-preflight
 // cross-origin request. Browsers consult these to decide whether the JS

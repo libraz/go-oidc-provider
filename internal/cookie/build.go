@@ -90,17 +90,10 @@ func SetSession(w http.ResponseWriter, value string, expiresAt, now time.Time) e
 // cookie defined by [Profile]. The empty value plus MaxAge=-1 is the standard
 // recipe per RFC 6265 §4.1.2.
 func Clear(p Profile) (*http.Cookie, error) {
-	if err := p.validate(); err != nil {
+	c, err := Build(p, "")
+	if err != nil {
 		return nil, err
 	}
-	//nolint:gosec // G124: Secure and SameSite come from the validated profile rather than a literal, which the rule cannot follow.
-	return &http.Cookie{
-		Name:     p.Name,
-		Value:    "",
-		Path:     "/",
-		Secure:   !p.Insecure,
-		HttpOnly: true,
-		SameSite: p.SameSite,
-		MaxAge:   -1,
-	}, nil
+	c.MaxAge = -1
+	return c, nil
 }
