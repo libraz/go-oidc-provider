@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/assertiongrant"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/chooser"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
@@ -678,6 +679,80 @@ func buildAssertionVerifier(
 	}
 }
 
+// jwtBearerDeps is the token-endpoint wiring of [WithJWTBearerGrant]:
+// the three tokenendpoint.Deps fields, all nil when the grant is off.
+type jwtBearerDeps struct {
+	Verifier       *assertiongrant.Verifier
+	ResolveSubject func(ctx context.Context, s assertiongrant.Subject) (string, error)
+	AllowedClients func(issuer string) []string
+}
+
+// buildJWTBearerDeps constructs the assertion verifier once per Provider.
+// Issuer keys resolve through [config.relyingPartyJWKS], so a JWKSURI
+// shares the client jwks_uri cache and SSRF posture.
+func buildJWTBearerDeps(cfg *config) (jwtBearerDeps, error) {
+	g := cfg.jwtBearerGrant
+	if g == nil {
+		return jwtBearerDeps{}, nil
+	}
+	issuers := make([]assertiongrant.Issuer, len(g.Issuers))
+	allowed := make(map[string][]string, len(g.Issuers))
+	for i, iss := range g.Issuers {
+		issuers[i] = assertiongrant.Issuer{
+			Issuer:  iss.Issuer,
+			JWKSURI: iss.JWKSURI,
+			JWKS:    iss.JWKS,
+			Profile: assertionProfileInternal(iss.Profile),
+		}
+		allowed[iss.Issuer] = iss.AllowedClients
+	}
+	v, err := assertiongrant.New(assertiongrant.Config{
+		Issuers:          issuers,
+		KeySource:        cfg.relyingPartyJWKS(),
+		JTIs:             cfg.store.ConsumedJTIs(),
+		Clock:            cfg.clock,
+		OPIssuer:         cfg.issuer,
+		TokenEndpointURL: absoluteEndpointURL(cfg, cfg.endpoints.Token),
+	})
+	if err != nil {
+		return jwtBearerDeps{}, &Error{
+			Code:        codeConfiguration,
+			Description: "jwt-bearer assertion verifier construction failed",
+			Cause:       err,
+		}
+	}
+	resolve := g.ResolveSubject
+	return jwtBearerDeps{
+		Verifier: v,
+		ResolveSubject: func(ctx context.Context, s assertiongrant.Subject) (string, error) {
+			return resolve(ctx, AssertionSubject(s))
+		},
+		AllowedClients: func(issuer string) []string { return allowed[issuer] },
+	}, nil
+}
+
+// idjagGrantProfileEnabled reports whether the jwt-bearer grant trusts
+// at least one issuer under [AssertionProfileIDJAG].
+func (c *config) idjagGrantProfileEnabled() bool {
+	if c.jwtBearerGrant == nil {
+		return false
+	}
+	for _, iss := range c.jwtBearerGrant.Issuers {
+		if iss.Profile == AssertionProfileIDJAG {
+			return true
+		}
+	}
+	return false
+}
+
+// assertionProfileInternal maps the public profile onto the verifier's.
+func assertionProfileInternal(p AssertionProfile) assertiongrant.Profile {
+	if p == AssertionProfileIDJAG {
+		return assertiongrant.ProfileIDJAG
+	}
+	return assertiongrant.ProfileJWT
+}
+
 // absoluteEndpointURL composes the OP's issuer with the mount prefix
 // and the named endpoint, producing the canonical absolute URL the
 // JOSE assertion verifier expects in the "aud" claim. The helper
@@ -1017,6 +1092,8 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 		GrantManagementActionRequired:      cfg.grantManagementActionRequired,
 		PairwiseEnabled:                    cfg.pairwiseEnabled(),
 		PromptCreate:                       cfg.promptCreateEnabled(),
+		IDJAGGrantProfile:                  cfg.idjagGrantProfileEnabled(),
+		IDJAGIssuance:                      cfg.idjagIssuancePolicy != nil,
 		EncryptionAlgsSupported:            cfg.effectiveEncryptionAlgs(),
 		EncryptionEncsSupported:            cfg.effectiveEncryptionEncs(),
 		InboundEncryptionAlgsSupported:     cfg.inboundEncryptionAlgs(),

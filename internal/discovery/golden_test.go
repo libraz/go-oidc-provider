@@ -65,8 +65,10 @@ func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 		InboundEncryptionAlgsSupported: []string{
 			"RSA-OAEP-256", "ECDH-ES", "ECDH-ES+A128KW", "ECDH-ES+A256KW",
 		},
-		RequirePAR:   true,
-		PromptCreate: true,
+		RequirePAR:        true,
+		PromptCreate:      true,
+		IDJAGGrantProfile: true,
+		IDJAGIssuance:     true,
 		// The grant list is an input rather than a feature bit, so it
 		// has to be widened by hand to stay coherent with the device
 		// and CIBA bits above: advertising their endpoints while the
@@ -76,6 +78,8 @@ func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 			"refresh_token",
 			"urn:ietf:params:oauth:grant-type:device_code",
 			"urn:openid:params:grant-type:ciba",
+			"urn:ietf:params:oauth:grant-type:jwt-bearer",
+			"urn:ietf:params:oauth:grant-type:token-exchange",
 		},
 		AuthMethodsSupported: []string{
 			"client_secret_basic",

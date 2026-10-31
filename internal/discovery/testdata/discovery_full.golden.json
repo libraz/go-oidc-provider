@@ -63,7 +63,9 @@
     "authorization_code",
     "refresh_token",
     "urn:ietf:params:oauth:grant-type:device_code",
-    "urn:openid:params:grant-type:ciba"
+    "urn:openid:params:grant-type:ciba",
+    "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    "urn:ietf:params:oauth:grant-type:token-exchange"
   ],
   "subject_types_supported": [
     "public"
@@ -183,5 +185,11 @@
   "introspection_encryption_enc_values_supported": [
     "A128GCM",
     "A256GCM"
+  ],
+  "authorization_grant_profiles_supported": [
+    "urn:ietf:params:oauth:grant-profile:id-jag"
+  ],
+  "identity_chaining_requested_token_types_supported": [
+    "urn:ietf:params:oauth:token-type:id-jag"
   ]
 }

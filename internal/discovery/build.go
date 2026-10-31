@@ -103,6 +103,15 @@ type Input struct {
 	// standard values; when false only the standard values are advertised.
 	PromptCreate bool
 
+	// IDJAGGrantProfile reports whether the jwt-bearer grant trusts at
+	// least one issuer under the ID-JAG profile. When true the document
+	// advertises the id-jag grant profile.
+	IDJAGGrantProfile bool
+
+	// IDJAGIssuance reports whether token exchange issues ID-JAGs. When
+	// true the document advertises the id-jag requested token type.
+	IDJAGIssuance bool
+
 	// ClaimsSupported carries the explicit claim-name enumeration the
 	// embedder supplied through op.WithClaimsSupported. Nil leaves
 	// the discovery document's claims_supported field omitted, which
@@ -521,6 +530,7 @@ func Build(in Input) Document {
 	applyClaimsSupported(in, &doc)
 	applyACRValuesSupported(in, &doc)
 	applyAuthorizationDetailsTypesSupported(in, &doc)
+	applyIDJAGFeature(in, &doc)
 	applyEncryptionFeature(in, &doc)
 	applyCIBAFeature(in, &doc)
 	applyStaticMetadata(in, &doc)
@@ -918,6 +928,20 @@ func applyAuthorizationDetailsTypesSupported(in Input, doc *Document) {
 		return
 	}
 	doc.AuthorizationDetailsTypesSupported = slices.Clone(in.AuthorizationDetailsTypesSupported)
+}
+
+// applyIDJAGFeature publishes the ID-JAG metadata: the grant profile only
+// when an ID-JAG issuer is trusted (advertising it otherwise names a
+// profile the token endpoint cannot redeem), and the requested token type
+// only when token exchange issues ID-JAGs. id_jag_signing_alg_values_supported
+// stays absent: the draft would require RS256 there, and the OP signs ES256.
+func applyIDJAGFeature(in Input, doc *Document) {
+	if in.IDJAGGrantProfile {
+		doc.AuthorizationGrantProfilesSupported = []string{"urn:ietf:params:oauth:grant-profile:id-jag"}
+	}
+	if in.IDJAGIssuance {
+		doc.IdentityChainingRequestedTokenTypesSupported = []string{"urn:ietf:params:oauth:token-type:id-jag"}
+	}
 }
 
 // applyStaticMetadata copies the static RFC 8414 §2 metadata the

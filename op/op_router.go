@@ -81,6 +81,10 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if err != nil {
 		return nil, err
 	}
+	jwtBearer, err := buildJWTBearerDeps(cfg)
+	if err != nil {
+		return nil, err
+	}
 	originAllow, err := buildOriginAllowlist(cfg)
 	if err != nil {
 		return nil, err
@@ -196,6 +200,9 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			CIBARequests:                   cibaRequestsFor(cfg),
 			CIBAMaxPollViolations:          cfg.cibaMaxPollViolations,
 			ClientEncJWKs:                  encResolver,
+			JWTBearer:                      jwtBearer.Verifier,
+			ResolveAssertionSubject:        jwtBearer.ResolveSubject,
+			JWTBearerAllowedClients:        jwtBearer.AllowedClients,
 		})),
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)

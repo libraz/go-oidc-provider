@@ -396,6 +396,18 @@ type Document struct {
 	// (feature.RAR); empty otherwise so the field is omitted.
 	AuthorizationDetailsTypesSupported []string `json:"authorization_details_types_supported,omitempty"`
 
+	// AuthorizationGrantProfilesSupported lists the authorization grant
+	// profiles the token endpoint redeems
+	// (draft-ietf-oauth-identity-assertion-authz-grant). Populated only
+	// when at least one ID-JAG issuer is trusted; the issuers themselves
+	// are never published.
+	AuthorizationGrantProfilesSupported []string `json:"authorization_grant_profiles_supported,omitempty"`
+
+	// IdentityChainingRequestedTokenTypesSupported lists the
+	// requested_token_type values token exchange issues for identity
+	// chaining. Populated only when ID-JAG issuance is configured.
+	IdentityChainingRequestedTokenTypesSupported []string `json:"identity_chaining_requested_token_types_supported,omitempty"`
+
 	// ServiceDocumentation is the URL of a human-readable page that
 	// documents the OP for developers. RFC 8414 §2 lists the field as
 	// RECOMMENDED. The library does not own the URL; the embedder

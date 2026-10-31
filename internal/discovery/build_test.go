@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/discovery"
@@ -942,6 +943,60 @@ func TestBuild_PromptValuesSupported(t *testing.T) {
 			doc := discovery.Build(in)
 			if !slices.Equal(doc.PromptValuesSupported, tc.want) {
 				t.Errorf("prompt_values_supported = %v, want %v", doc.PromptValuesSupported, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuild_IDJAGMetadata confirms the two ID-JAG members are published
+// independently: the grant profile only when an ID-JAG issuer is trusted,
+// the requested token type only when ID-JAG issuance is configured.
+//
+// Spec: draft-ietf-oauth-identity-assertion-authz-grant-06 §6.
+func TestBuild_IDJAGMetadata(t *testing.T) {
+	t.Parallel()
+
+	profiles := []string{"urn:ietf:params:oauth:grant-profile:id-jag"}
+	tokenTypes := []string{"urn:ietf:params:oauth:token-type:id-jag"}
+	cases := []struct {
+		name           string
+		grantProfile   bool
+		issuance       bool
+		wantProfiles   []string
+		wantTokenTypes []string
+	}{
+		{"neither", false, false, nil, nil},
+		{"ras only", true, false, profiles, nil},
+		{"idp only", false, true, nil, tokenTypes},
+		{"both", true, true, profiles, tokenTypes},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := baseInput()
+			in.IDJAGGrantProfile = tc.grantProfile
+			in.IDJAGIssuance = tc.issuance
+			doc := discovery.Build(in)
+			if !slices.Equal(doc.AuthorizationGrantProfilesSupported, tc.wantProfiles) {
+				t.Errorf("authorization_grant_profiles_supported = %v, want %v",
+					doc.AuthorizationGrantProfilesSupported, tc.wantProfiles)
+			}
+			if !slices.Equal(doc.IdentityChainingRequestedTokenTypesSupported, tc.wantTokenTypes) {
+				t.Errorf("identity_chaining_requested_token_types_supported = %v, want %v",
+					doc.IdentityChainingRequestedTokenTypesSupported, tc.wantTokenTypes)
+			}
+			raw, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			for field, want := range map[string]bool{
+				`"authorization_grant_profiles_supported"`:            tc.grantProfile,
+				`"identity_chaining_requested_token_types_supported"`: tc.issuance,
+			} {
+				if got := strings.Contains(string(raw), field); got != want {
+					t.Errorf("%s present = %v, want %v", field, got, want)
+				}
 			}
 		})
 	}
