@@ -307,34 +307,14 @@ func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 	if err != nil {
 		return nil, err
 	}
-	binders := map[string]struct{}{primary.kind: {}}
-	for _, inner := range primary.oneOf {
-		binders[inner.kind] = struct{}{}
-	}
 	registration, err := c.registration(spec.Registration)
 	if err != nil {
 		return nil, err
 	}
-	if registration.kind != "" {
-		binders[registration.kind] = struct{}{}
-	}
-	rules := make([]compiledRule, 0, len(spec.Rules))
-	for i, r := range spec.Rules {
-		if r.Then.Authenticator == nil && r.Then.OneOf == nil {
-			return nil, fmt.Errorf("authn: LoginFlow.Rules[%d].Then is nil", i)
-		}
-		if r.Then.Kind == "" {
-			return nil, fmt.Errorf("authn: LoginFlow.Rules[%d].Then.Kind is empty", i)
-		}
-		then, serr := c.step(fmt.Sprintf("LoginFlow.Rules[%d].Then", i), r.Then)
-		if serr != nil {
-			return nil, serr
-		}
-		when := r.When
-		if when == nil {
-			when = func(LoginFlowContext) bool { return false }
-		}
-		rules = append(rules, compiledRule{when: when, then: then})
+	binders := binderKinds(primary, registration)
+	rules, err := c.rules(spec.Rules)
+	if err != nil {
+		return nil, err
 	}
 	return &CompiledLoginFlow{
 		primary:      primary,
@@ -347,6 +327,42 @@ func CompileLoginFlow(spec LoginFlowSpec) (*CompiledLoginFlow, error) {
 		registration: registration,
 		binders:      binders,
 	}, nil
+}
+
+// rules compiles the declared Rules in order.
+func (c *loginFlowCompiler) rules(specs []LoginFlowRule) ([]compiledRule, error) {
+	rules := make([]compiledRule, 0, len(specs))
+	for i, r := range specs {
+		if r.Then.Authenticator == nil && r.Then.OneOf == nil {
+			return nil, fmt.Errorf("authn: LoginFlow.Rules[%d].Then is nil", i)
+		}
+		if r.Then.Kind == "" {
+			return nil, fmt.Errorf("authn: LoginFlow.Rules[%d].Then.Kind is empty", i)
+		}
+		then, err := c.step(fmt.Sprintf("LoginFlow.Rules[%d].Then", i), r.Then)
+		if err != nil {
+			return nil, err
+		}
+		when := r.When
+		if when == nil {
+			when = func(LoginFlowContext) bool { return false }
+		}
+		rules = append(rules, compiledRule{when: when, then: then})
+	}
+	return rules, nil
+}
+
+// binderKinds collects the kinds that may bind a login: the Primary step,
+// its one-of inner steps, and the Registration step when declared.
+func binderKinds(primary, registration compiledStep) map[string]struct{} {
+	binders := map[string]struct{}{primary.kind: {}}
+	for _, inner := range primary.oneOf {
+		binders[inner.kind] = struct{}{}
+	}
+	if registration.kind != "" {
+		binders[registration.kind] = struct{}{}
+	}
+	return binders
 }
 
 // registration compiles [LoginFlowSpec.Registration]. A zero step yields

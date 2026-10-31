@@ -476,37 +476,46 @@ func WithLoginFlow(flow LoginFlow) Option {
 				Description: "WithLoginFlow: LoginFlow.Primary must not be nil",
 			}
 		}
-		seen := make(map[StepKind]struct{}, len(flow.Rules))
-		var registration StepKind
-		if !isNilLike(flow.Registration) {
-			registration = flow.Registration.Kind()
-		}
-		for i, r := range flow.Rules {
-			if isNilLike(r.Then) {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not be nil",
-				}
-			}
-			k := r.Then.Kind()
-			if registration != "" && k == registration {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not name the Registration StepKind " + k.String(),
-				}
-			}
-			if _, dup := seen[k]; dup {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithLoginFlow: duplicate StepKind " + k.String() + " across Rules",
-				}
-			}
-			seen[k] = struct{}{}
+		if err := checkLoginFlowRuleKinds(flow); err != nil {
+			return err
 		}
 		c.loginFlow = flow
 		c.loginFlowSet = true
 		return nil
 	})
+}
+
+// checkLoginFlowRuleKinds rejects a Rule whose Then is nil, names the
+// Registration StepKind, or repeats another Rule's StepKind.
+func checkLoginFlowRuleKinds(flow LoginFlow) error {
+	seen := make(map[StepKind]struct{}, len(flow.Rules))
+	var registration StepKind
+	if !isNilLike(flow.Registration) {
+		registration = flow.Registration.Kind()
+	}
+	for i, r := range flow.Rules {
+		if isNilLike(r.Then) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not be nil",
+			}
+		}
+		k := r.Then.Kind()
+		if registration != "" && k == registration {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not name the Registration StepKind " + k.String(),
+			}
+		}
+		if _, dup := seen[k]; dup {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithLoginFlow: duplicate StepKind " + k.String() + " across Rules",
+			}
+		}
+		seen[k] = struct{}{}
+	}
+	return nil
 }
 
 // WithSPAUI registers the [SPAUI] mount points the SPA frontend
