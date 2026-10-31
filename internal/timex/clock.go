@@ -41,3 +41,13 @@ func (systemClock) Now() time.Time { return time.Now() }
 // rare top-level code paths (e.g. server start-up logging) where injection
 // would be overkill.
 func Now() time.Time { return SystemClock.Now() }
+
+// OrSystem returns c, or [SystemClock] when c is nil. Packages whose
+// configuration carries an optional [Clock] resolve it through this helper
+// so the nil fallback is written once.
+func OrSystem(c Clock) Clock {
+	if c == nil {
+		return SystemClock
+	}
+	return c
+}

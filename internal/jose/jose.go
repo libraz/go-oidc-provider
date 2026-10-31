@@ -7,6 +7,11 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 )
 
+// TypJWT is the "typ" (and nested-JWT "cty") JOSE header value for a
+// plain JWT: ID tokens (OIDC Core 1.0 §2), JARM responses, signed
+// userinfo responses, and the inner payload of a nested JWE.
+const TypJWT = "JWT"
+
 // ErrAlgorithmNotAllowed is returned when a JWS or JWT header advertises
 // an algorithm outside this package's allow-list. The error wraps the
 // rejected algorithm string for logging but never echoes attacker-supplied

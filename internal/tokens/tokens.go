@@ -170,6 +170,14 @@ var ErrHashAlgUnsupported = errors.New("tokens: unsupported hash-claim alg")
 // put an anonymous credential on the wire.
 var ErrSubjectMissing = errors.New("tokens: claims carry an empty subject")
 
+// RFC 7800 "cnf" members the OP stamps on sender-constrained tokens.
+const (
+	// CnfJKT is the DPoP key thumbprint member (RFC 9449 §6).
+	CnfJKT = "jkt"
+	// CnfX5tS256 is the mTLS certificate thumbprint member (RFC 8705 §3.1).
+	CnfX5tS256 = "x5t#S256"
+)
+
 // idTokenTypeHeader is the value of the "typ" JOSE header for ID Tokens
 // (OIDC Core 1.0 §2). RP libraries that strict-check the type expect
 // the legacy "JWT" value here.
@@ -202,7 +210,7 @@ func SignIDToken(key SigningKey, claims IDTokenClaims) (string, error) {
 	if err := validateNoStandardCollisions(claims.Extra, idTokenStandardKeys); err != nil {
 		return "", err
 	}
-	signer, err := newSigner(key, idTokenTypeHeader)
+	signer, err := NewSigner(key, idTokenTypeHeader)
 	if err != nil {
 		return "", err
 	}
@@ -227,7 +235,7 @@ func SignAccessToken(key SigningKey, claims AccessTokenClaims) (string, error) {
 	if err := validateNoStandardCollisions(claims.Extra, accessTokenStandardKeys); err != nil {
 		return "", err
 	}
-	signer, err := newSigner(key, accessTokenTypeHeader)
+	signer, err := NewSigner(key, accessTokenTypeHeader)
 	if err != nil {
 		return "", err
 	}
@@ -270,6 +278,14 @@ func HashForAlg(input, alg string) (string, error) {
 // any of these keys.
 func IDTokenReservedClaims() map[string]struct{} {
 	return maps.Clone(idTokenStandardKeys)
+}
+
+// IsIDTokenReservedClaim reports whether name is one of the claims
+// [SignIDToken] manages itself. It reads the closed set without copying it,
+// for per-mint projection loops.
+func IsIDTokenReservedClaim(name string) bool {
+	_, ok := idTokenStandardKeys[name]
+	return ok
 }
 
 // AccessTokenReservedClaims returns a copy of the claim names
@@ -464,8 +480,9 @@ func joinScope(scopes []string) string {
 	return strings.Join(scopes, " ")
 }
 
-// newSigner builds the [josev4.Signer] used by [SignIDToken] and
-// [SignAccessToken]. The signer is created on every call (rather than
+// NewSigner builds the [josev4.Signer] every OP-signed JWT goes through
+// (ID tokens, access tokens, JARM responses, logout tokens, signed
+// introspection and userinfo responses). The signer is created on every call (rather than
 // cached) because go-jose's signer holds a reference to the key plus
 // alg-specific state; sharing a signer across goroutines is allowed
 // but the per-call cost is negligible compared to the Sign step.
@@ -476,7 +493,7 @@ func joinScope(scopes []string) string {
 // confusion guard structural rather than relying on a runtime check. The
 // returned interface is intentional: josev4.Signer is the third-party
 // package's contract for stateful JWS signing.
-func newSigner(key SigningKey, typ string) (josev4.Signer, error) {
+func NewSigner(key SigningKey, typ string) (josev4.Signer, error) {
 	alg := josev4.SignatureAlgorithm(key.Alg)
 	if alg == "" {
 		alg = josev4.ES256

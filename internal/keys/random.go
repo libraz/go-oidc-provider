@@ -2,6 +2,8 @@ package keys
 
 import (
 	"crypto/rand"
+	"encoding/base64"
+	"fmt"
 	"math"
 	"math/big"
 )
@@ -47,4 +49,17 @@ func RandomInt63Except(excluded int64) (int64, error) {
 			return result, nil
 		}
 	}
+}
+
+// RandomBase64URL returns n bytes drawn from crypto/rand, encoded as
+// unpadded base64url. It is the single recipe behind the opaque
+// identifiers the OP mints (session ids, codes, jtis, opaque tokens). A
+// read failure is returned so the caller fails closed rather than
+// issuing a predictable identifier.
+func RandomBase64URL(n int) (string, error) {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("keys: read random: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
