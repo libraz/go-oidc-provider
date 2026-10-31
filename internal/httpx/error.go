@@ -34,9 +34,18 @@ type ErrorBody struct {
 // is cheap and the gain in interop with legacy intermediaries is
 // straightforward.
 func WriteError(w http.ResponseWriter, status int, code, description string) error {
-	w.Header().Set("Pragma", "no-cache")
+	StampNoStore(w)
 	return WriteJSON(w, status, ErrorBody{
 		Error:            code,
 		ErrorDescription: description,
 	})
+}
+
+// StampNoStore sets Cache-Control: no-store and Pragma: no-cache. RFC 6749
+// §5.1, RFC 7009 §2.2, RFC 7591 §3.2 and RFC 7662 §4 require them on
+// dynamic responses, success or failure; Pragma covers HTTP/1.0 caches.
+func StampNoStore(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Cache-Control", noStoreCacheControl)
+	h.Set("Pragma", "no-cache")
 }
