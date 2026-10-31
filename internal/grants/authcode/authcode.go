@@ -20,12 +20,11 @@ package authcode
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -487,9 +486,9 @@ func (e *Exchanger) consume(ctx context.Context, code string) (*store.Authorizat
 // parameter. The output uses the unpadded alphabet so it is URL-safe without
 // further encoding.
 func newID() (string, error) {
-	buf := make([]byte, IDLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("authcode: read random: %w", err)
+	id, err := keys.RandomBase64URL(IDLength)
+	if err != nil {
+		return "", fmt.Errorf("authcode: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return id, nil
 }

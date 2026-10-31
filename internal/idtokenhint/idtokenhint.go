@@ -24,7 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -124,7 +124,7 @@ func idTokenType(typ any) bool {
 		return true
 	}
 	s, ok := typ.(string)
-	return ok && strings.EqualFold(s, "JWT")
+	return ok && jose.IsTypJWT(s)
 }
 
 // Contains reports whether the aud claim includes want. An empty want,
@@ -132,23 +132,11 @@ func idTokenType(typ any) bool {
 // array of strings returns false, so an unparseable audience fails
 // closed.
 func Contains(raw json.RawMessage, want string) bool {
-	if want == "" || len(raw) == 0 {
+	if want == "" {
 		return false
 	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		return single == want
-	}
-	var multi []string
-	if err := json.Unmarshal(raw, &multi); err != nil {
-		return false
-	}
-	for _, a := range multi {
-		if a == want {
-			return true
-		}
-	}
-	return false
+	aud, err := jose.DecodeAudience(raw)
+	return err == nil && slices.Contains(aud, want)
 }
 
 // First returns the first audience value. A missing claim, an empty
@@ -156,22 +144,12 @@ func Contains(raw json.RawMessage, want string) bool {
 // reaches for First is one that identifies the requesting client from
 // the audience, and an audience naming nobody cannot do that.
 func First(raw json.RawMessage) (string, error) {
-	if len(raw) == 0 {
-		return "", ErrMalformed
-	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		if single == "" {
-			return "", ErrMalformed
-		}
-		return single, nil
-	}
-	var multi []string
-	if err := json.Unmarshal(raw, &multi); err != nil {
+	aud, err := jose.DecodeAudience(raw)
+	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
-	if len(multi) == 0 || multi[0] == "" {
+	if len(aud) == 0 || aud[0] == "" {
 		return "", ErrMalformed
 	}
-	return multi[0], nil
+	return aud[0], nil
 }

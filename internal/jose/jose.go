@@ -3,6 +3,7 @@ package jose
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 )
@@ -11,6 +12,12 @@ import (
 // plain JWT: ID tokens (OIDC Core 1.0 §2), JARM responses, signed
 // userinfo responses, and the inner payload of a nested JWE.
 const TypJWT = "JWT"
+
+// IsTypJWT reports whether a "typ" header value names a plain JWT. Media
+// type names compare case-insensitively (RFC 7515 §4.1.9), so "jwt" matches.
+func IsTypJWT(typ string) bool {
+	return strings.EqualFold(typ, TypJWT)
+}
 
 // ErrAlgorithmNotAllowed is returned when a JWS or JWT header advertises
 // an algorithm outside this package's allow-list. The error wraps the

@@ -16,16 +16,22 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 )
 
-// TestNewClient_ClampsNegativeMaxBody pins the constructor's
+// TestNewClient_NegativeMaxBodyUsesDefaultCap pins the constructor's
 // no-panic posture: a negative cap is a programming bug, but library
-// code refuses to panic, so the constructor clamps to the default
-// ceiling rather than returning an error or panicking.
-func TestNewClient_ClampsNegativeMaxBody(t *testing.T) {
+// code refuses to panic, so the effective cap falls back to the default
+// ceiling.
+func TestNewClient_NegativeMaxBodyUsesDefaultCap(t *testing.T) {
 	t.Parallel()
 
-	c := securefetch.NewClient(securefetch.Policy{MaxBodyBytes: -1})
-	if got := c.Policy().MaxBodyBytes; got != 0 && got != securefetch.DefaultMaxBody {
-		t.Fatalf("MaxBodyBytes=%d after clamp, want 0 (effective DefaultMaxBody) or DefaultMaxBody", got)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", int(securefetch.DefaultMaxBody)+1)))
+	}))
+	defer srv.Close()
+
+	c := mustClient(t, securefetch.Policy{AllowPrivateNetwork: true, MaxBodyBytes: -1})
+	_, _, err := c.Get(context.Background(), srv.URL) //nolint:bodyclose // securefetch.Get drains and closes the body internally.
+	if !errors.Is(err, securefetch.ErrBodyTooLarge) {
+		t.Fatalf("Get err = %v, want ErrBodyTooLarge", err)
 	}
 }
 

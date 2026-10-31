@@ -264,10 +264,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if emitter == nil {
 		emitter = audit.Discard()
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock
-	}
+	clock := timex.OrSystem(cfg.Clock)
 	ttl := cfg.TokenTTL
 	if ttl <= 0 {
 		ttl = DefaultTokenTTL

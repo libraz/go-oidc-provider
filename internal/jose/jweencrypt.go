@@ -69,7 +69,7 @@ func Encrypt(plaintext []byte, recipient EncryptionRecipient) (string, error) {
 		KeyID:     recipient.KeyID,
 	}
 	opts := (&josev4.EncrypterOptions{}).
-		WithType("JWT")
+		WithType(TypJWT)
 	encrypter, err := josev4.NewEncrypter(josev4.ContentEncryption(recipient.Enc), rcpt, opts)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrJWEUnsupportedKey, err)
@@ -125,8 +125,8 @@ func EncryptNestedJWT(jws string, recipient EncryptionRecipient) (string, error)
 		KeyID:     recipient.KeyID,
 	}
 	opts := (&josev4.EncrypterOptions{}).
-		WithType("JWT").
-		WithContentType("JWT")
+		WithType(TypJWT).
+		WithContentType(TypJWT)
 	encrypter, err := josev4.NewEncrypter(josev4.ContentEncryption(recipient.Enc), rcpt, opts)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrJWEUnsupportedKey, err)

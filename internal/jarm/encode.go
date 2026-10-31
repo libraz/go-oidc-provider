@@ -114,10 +114,7 @@ func NewSigner(cfg SignerConfig) (*Signer, error) {
 	if err != nil {
 		return nil, err
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock
-	}
+	clock := timex.OrSystem(cfg.Clock)
 	expiry := cfg.Expiry
 	if expiry <= 0 {
 		expiry = DefaultExpiry
@@ -212,9 +209,11 @@ func (s *Signer) Sign(p Payload) (string, error) {
 	if p.ErrorURI != "" {
 		claims["error_uri"] = p.ErrorURI
 	}
-	signer, err := newSigner(s.key, s.alg)
+	key := s.key
+	key.Alg = string(s.alg)
+	signer, err := tokens.NewSigner(key, jose.TypJWT)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrEncode, err)
 	}
 	out, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
@@ -254,31 +253,4 @@ func validatePayload(p Payload) error {
 		return fmt.Errorf("%w: code and error are mutually exclusive", ErrEncode)
 	}
 	return nil
-}
-
-// newSigner builds the [josev4.Signer] used by [Signer.Sign]. The
-// algorithm is supplied by the caller (already derived from the key
-// shape at [NewSigner] construction time via [deriveJWSAlgorithm]) so
-// runtime never reads a stale ES256 default for an RSA / Ed25519 key.
-// The configuration mirrors [tokens.newSigner] so both
-// endpoints emit JWTs with identical "kid" / "typ" / "alg" headers;
-// the duplication is preferred over importing the unexported helper. The
-// returned interface is intentional: josev4.Signer is the third-party
-// package's contract for stateful JWS signing.
-func newSigner(key tokens.SigningKey, alg josev4.SignatureAlgorithm) (josev4.Signer, error) {
-	sk := josev4.SigningKey{
-		Algorithm: alg,
-		Key: josev4.JSONWebKey{
-			Key:       key.Signer,
-			KeyID:     key.KeyID,
-			Algorithm: string(alg),
-			Use:       "sig",
-		},
-	}
-	opts := (&josev4.SignerOptions{}).WithType("JWT")
-	signer, err := josev4.NewSigner(sk, opts)
-	if err != nil {
-		return nil, fmt.Errorf("%w: build signer: %w", ErrEncode, err)
-	}
-	return signer, nil
 }

@@ -194,11 +194,11 @@ func TestValidate_Mirrors_Canonicalize(t *testing.T) {
 	}
 }
 
-// TestEqual_Cases pins the byte-equivalence semantics: canonicalisation
+// TestContains_SingleEntryEquivalence pins the byte-equivalence semantics: canonicalisation
 // happens on both sides so the equality predicate is reflexive across
 // every shape Canonicalize tolerates. Malformed input on either side
 // collapses to false, never an accidental match.
-func TestEqual_Cases(t *testing.T) {
+func TestContains_SingleEntryEquivalence(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -271,8 +271,8 @@ func TestEqual_Cases(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := resourceindicator.Equal(tc.a, tc.b); got != tc.want {
-				t.Errorf("Equal(%q,%q)=%v want %v", tc.a, tc.b, got, tc.want)
+			if got := resourceindicator.Contains([]string{tc.a}, tc.b); got != tc.want {
+				t.Errorf("Contains({%q},%q)=%v want %v", tc.a, tc.b, got, tc.want)
 			}
 		})
 	}

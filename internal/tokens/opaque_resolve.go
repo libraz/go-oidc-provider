@@ -83,10 +83,10 @@ func (v *OpaqueAccessTokenView) Confirmation() map[string]string {
 	}
 	cnf := make(map[string]string, 2)
 	if rec.DPoPJKT != "" {
-		cnf["jkt"] = rec.DPoPJKT
+		cnf[CnfJKT] = rec.DPoPJKT
 	}
 	if rec.MTLSCertThumbprint != "" {
-		cnf["x5t#S256"] = rec.MTLSCertThumbprint
+		cnf[CnfX5tS256] = rec.MTLSCertThumbprint
 	}
 	return cnf
 }

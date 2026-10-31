@@ -20,12 +20,22 @@ import (
 // so existing call sites that pass an unzero-valued field observe the
 // same behaviour they had before the consolidation.
 const (
+	// DefaultTimeout is the per-request budget the envelope applies when
+	// [Policy.Timeout] is zero. Five seconds is long enough for a healthy
+	// peer and short enough that a slow one cannot stall the OP.
+	DefaultTimeout = netsec.DefaultTimeout
+
 	// DefaultMaxBody is the response-body cap the envelope applies
 	// when [Policy.MaxBodyBytes] is zero. 64 KiB matches the most
 	// conservative ceiling among the call sites (sector / encryption
 	// JWKS); fetchers needing a larger ceiling (the JAR JWKS path
 	// uses 256 KiB) raise [Policy.MaxBodyBytes] explicitly.
 	DefaultMaxBody = int64(64 * 1024)
+
+	// errorDrainBytes bounds how much of a rejected response body is read
+	// before closing, so the connection can be reused without buffering
+	// an arbitrary error page.
+	errorDrainBytes = 4 * 1024
 )
 
 // Sentinel errors returned by the response-side gates. Callers branch
@@ -220,18 +230,11 @@ type Client struct {
 }
 
 // NewClient returns a [*Client] with the supplied [Policy]. The
-// constructor cannot fail: a negative body cap is clamped to the
+// constructor cannot fail: a non-positive body cap resolves to the
 // default ceiling, and the SSRF posture, redirect policy, and
 // timeouts fall back to the hardened defaults documented on
 // [Policy].
 func NewClient(p Policy) *Client {
-	if p.MaxBodyBytes < 0 {
-		// Clamp negative caps to the default. A negative value is a
-		// programmer error; rather than panic in library code the
-		// constructor falls back to the conservative ceiling so the
-		// envelope still applies a body cap.
-		p.MaxBodyBytes = 0
-	}
 	c := &Client{policy: p}
 	if p.httpClientOverride != nil {
 		c.http = p.httpClientOverride
@@ -368,14 +371,14 @@ func (c *Client) Do(req *http.Request) ([]byte, *http.Response, error) {
 		// Drain a small bounded prefix so the connection is reusable
 		// even on the error path. We do not surface the drained bytes;
 		// the status alone is enough for the caller's error envelope.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errorDrainBytes))
 		return nil, resp, fmt.Errorf("%w: %d", ErrUnexpectedStatus, resp.StatusCode)
 	}
 
 	if len(c.policy.AcceptContentTypes) > 0 {
 		ct := resp.Header.Get("Content-Type")
 		if !contentTypeAllowed(ct, c.policy.AcceptContentTypes) {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024))
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errorDrainBytes))
 			return nil, resp, fmt.Errorf("%w: %q", ErrUnexpectedContentType, ct)
 		}
 	}

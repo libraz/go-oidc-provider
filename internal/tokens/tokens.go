@@ -39,6 +39,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
@@ -178,11 +179,6 @@ const (
 	CnfX5tS256 = "x5t#S256"
 )
 
-// idTokenTypeHeader is the value of the "typ" JOSE header for ID Tokens
-// (OIDC Core 1.0 §2). RP libraries that strict-check the type expect
-// the legacy "JWT" value here.
-const idTokenTypeHeader = "JWT"
-
 // accessTokenTypeHeader is the value of the "typ" JOSE header for
 // JWT-shaped access tokens. RFC 9068 §2.1 requires the explicit
 // "at+jwt" media type so a resource server can distinguish access
@@ -210,7 +206,7 @@ func SignIDToken(key SigningKey, claims IDTokenClaims) (string, error) {
 	if err := validateNoStandardCollisions(claims.Extra, idTokenStandardKeys); err != nil {
 		return "", err
 	}
-	signer, err := NewSigner(key, idTokenTypeHeader)
+	signer, err := NewSigner(key, jose.TypJWT)
 	if err != nil {
 		return "", err
 	}

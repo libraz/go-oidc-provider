@@ -185,7 +185,7 @@ func encPublicAndAlg(priv crypto.PrivateKey, explicitAlg string, policy jose.JWE
 		if k.Curve == nil {
 			return nil, "", errors.New("ECDSA key has nil curve")
 		}
-		if !isAllowedECDHCurve(k.Curve.Params().Name) {
+		if _, _, _, ok := jose.KeyShape(&k.PublicKey); !ok {
 			return nil, "", fmt.Errorf("ECDSA curve %q is not on the OP allow-list", k.Curve.Params().Name)
 		}
 		return chooseEncAlg(&k.PublicKey, explicitAlg, jose.JWEAlgECDHES, "ECDSA", policy)
@@ -268,18 +268,6 @@ func algMatchesKeyFamily(alg jose.JWEAlg, family string) bool {
 	}
 }
 
-// isAllowedECDHCurve reports whether the curve name (Curve.Params().Name)
-// is on the ECDH-ES allow-list. P-256 / P-384 / P-521 are
-// permitted; P-224 and any custom curve are rejected.
-func isAllowedECDHCurve(name string) bool {
-	switch name {
-	case "P-256", "P-384", "P-521":
-		return true
-	default:
-		return false
-	}
-}
-
 // WithContext returns a shallow copy of the set whose retired-kid
 // notifications carry ctx. It implements
 // [jose.ContextualEncryptionKeyResolver] so a decryption caller
@@ -329,14 +317,11 @@ func (s *EncryptionSet) Resolve(keyID string) (any, bool) {
 		if e.KeyID != keyID {
 			continue
 		}
-		if !e.NotAfter.IsZero() {
-			now := s.nowOrSystem()
-			if !now.Before(e.NotAfter) {
-				if s.observer != nil {
-					s.observer(s.observerContext(), keyID)
-				}
-				return nil, false
+		if retiredBy(clockReading(s.now), e.NotAfter) {
+			if s.observer != nil {
+				s.observer(s.observerContext(), keyID)
 			}
+			return nil, false
 		}
 		return e.PrivateKey, true
 	}
@@ -349,9 +334,9 @@ func (s *EncryptionSet) Resolve(keyID string) (any, bool) {
 // fallback respects the same rotation gate as [Resolve].
 func (s *EncryptionSet) All() []any {
 	out := make([]any, 0, len(s.entries))
-	now := s.nowOrSystem()
+	now := clockReading(s.now)
 	for _, e := range s.entries {
-		if !e.NotAfter.IsZero() && !now.Before(e.NotAfter) {
+		if retiredBy(now, e.NotAfter) {
 			continue
 		}
 		out = append(out, e.PrivateKey)
@@ -368,24 +353,13 @@ func (s *EncryptionSet) All() []any {
 // but the keys are shared. Callers MUST NOT mutate the returned
 // [josev4.JSONWebKey] values.
 func (s *EncryptionSet) JWKS() josev4.JSONWebKeySet {
-	now := s.nowOrSystem()
+	now := clockReading(s.now)
 	out := josev4.JSONWebKeySet{Keys: make([]josev4.JSONWebKey, 0, len(s.jwks.Keys))}
 	for i, entry := range s.entries {
-		if !entry.NotAfter.IsZero() && !now.Before(entry.NotAfter) {
+		if retiredBy(now, entry.NotAfter) {
 			continue
 		}
 		out.Keys = append(out.Keys, s.jwks.Keys[i])
 	}
 	return out
-}
-
-// nowOrSystem mirrors [Set.nowOrSystem]. A nil now defensively
-// collapses onto [timex.SystemClock] so the retirement gate cannot
-// accidentally accept a retired kid because the clock seam was
-// missed at construction.
-func (s *EncryptionSet) nowOrSystem() time.Time {
-	if s.now == nil {
-		return timex.SystemClock.Now()
-	}
-	return s.now()
 }

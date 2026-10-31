@@ -3,6 +3,7 @@ package tokenexchange
 import (
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 )
 
 // buildCnfClaim returns the RFC 7800 confirmation object the issued
@@ -23,11 +24,11 @@ import (
 func buildCnfClaim(req customgrant.Request) map[string]string {
 	out := make(map[string]string, 2)
 	if req.DPoPJKT != "" {
-		out["jkt"] = req.DPoPJKT
+		out[tokens.CnfJKT] = req.DPoPJKT
 	}
 	if req.MTLSCert != nil {
 		if thumb := mtls.Thumbprint(req.MTLSCert); thumb != "" {
-			out["x5t#S256"] = thumb
+			out[tokens.CnfX5tS256] = thumb
 		}
 	}
 	if len(out) == 0 {

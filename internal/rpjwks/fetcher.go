@@ -25,7 +25,7 @@ const (
 	// TLS, and body read. It is independent of the inbound request's budget, so
 	// a slowloris RP cannot stall an OP request thread regardless of whatever
 	// timeouts the embedder configured on its own server.
-	DefaultTimeout = 5 * time.Second
+	DefaultTimeout = securefetch.DefaultTimeout
 
 	// DefaultTTL is the longest a fetched keyset stays cached when the caller
 	// configures no TTL of its own. Short enough that a key rotation propagates
@@ -50,7 +50,7 @@ const (
 	// DefaultMaxBodyBytes caps the response body at 64 KiB. Real keysets are
 	// well under 4 KiB, and MaxKeys bounds the member count independently; the
 	// ceiling exists to bound memory against a malicious or misconfigured peer.
-	DefaultMaxBodyBytes = int64(64 * 1024)
+	DefaultMaxBodyBytes = securefetch.DefaultMaxBody
 
 	// DefaultMaxInflight bounds the number of distinct remote URL loads that
 	// may be in flight across all Fetcher instances in this process. The

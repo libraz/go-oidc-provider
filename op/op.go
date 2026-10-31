@@ -347,7 +347,6 @@ func toScopeEntries(scopes []Scope) []scoperegistry.Entry {
 		out = append(out, scoperegistry.Entry{
 			Name:           s.Name,
 			Public:         s.Public,
-			Required:       s.Required,
 			AllowedClients: append([]string(nil), s.AllowedClients...),
 		})
 	}

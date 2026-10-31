@@ -270,10 +270,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if cfg.Resolver == nil {
 		return nil, errors.New("jar: NewVerifier requires Resolver")
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock
-	}
+	clock := timex.OrSystem(cfg.Clock)
 	skew := cfg.MaxFutureSkew
 	if skew <= 0 {
 		skew = DefaultMaxFutureSkew

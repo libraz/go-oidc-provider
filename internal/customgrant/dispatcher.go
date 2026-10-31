@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"runtime/debug"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -298,7 +297,7 @@ func (d *Dispatcher) attempt(ctx context.Context, handler Handler, in DispatchIn
 		Form:           form,
 		DPoPJKT:        in.DPoPJKT,
 		DPoPJTI:        in.DPoPJTI,
-		RequestedScope: parseScopeParam(in.Form),
+		RequestedScope: oidcscope.Parse(in.Form.Get("scope")),
 	}
 	if cert, ok := in.MTLSCert.(*x509.Certificate); ok {
 		req.MTLSCert = cert
@@ -488,28 +487,6 @@ func filterForm(in url.Values, policy ParamPolicy) (map[string][]string, error) 
 		out[name] = slices.Clone(values)
 	}
 	return out, nil
-}
-
-// parseScopeParam reads the canonical RFC 6749 §3.3 space-delimited
-// scope form value. The dispatcher exposes the parsed slice on
-// [Request.RequestedScope] so handlers that participate in scope
-// decisions (token-exchange) read a single normalised shape.
-func parseScopeParam(in url.Values) []string {
-	raw := in.Get("scope")
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, " ")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // isImplicitFormParameter reports whether name is one of the

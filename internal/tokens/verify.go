@@ -298,10 +298,7 @@ func accessTokenTypHeaderMatches(sig josev4.Signature) bool {
 // place; returning [time.Time] (not [Clock]) keeps the [ireturn] lint
 // satisfied without enumerating this package in its allow-list.
 func (v *AccessTokenVerifier) now() time.Time {
-	if v.Clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return v.Clock.Now()
+	return timex.OrSystem(v.Clock).Now()
 }
 
 // accessTokenWire mirrors [AccessTokenClaims] for decoding. The "aud"
@@ -343,7 +340,7 @@ func decodeAccessTokenClaims(payload []byte) (*AccessTokenClaims, error) {
 		return nil, fmt.Errorf("decode payload: %w", err)
 	}
 
-	aud, err := decodeAudience(w.Audience)
+	aud, err := jose.DecodeAudience(w.Audience)
 	if err != nil {
 		return nil, err
 	}
@@ -366,26 +363,4 @@ func decodeAccessTokenClaims(payload []byte) (*AccessTokenClaims, error) {
 		UserInfoClaims:       w.UserInfoClaims,
 	}
 	return out, nil
-}
-
-// decodeAudience handles the dual shape RFC 7519 §4.1.3 mandates: the
-// "aud" claim is either a JSON string or a JSON array of strings. A
-// nil/empty raw message decodes to a nil slice so callers can treat
-// "audience absent" identically to "audience empty".
-func decodeAudience(raw json.RawMessage) ([]string, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		if single == "" {
-			return nil, nil
-		}
-		return []string{single}, nil
-	}
-	var multi []string
-	if err := json.Unmarshal(raw, &multi); err != nil {
-		return nil, fmt.Errorf("decode aud: %w", err)
-	}
-	return multi, nil
 }

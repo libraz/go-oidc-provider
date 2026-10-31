@@ -19,7 +19,7 @@ import (
 // applies when the embedder does not supply one. The value is long
 // enough for a healthy RP to ack, short enough that a stalled RP
 // does not hold the OP's logout flow open beyond the user's patience.
-const DefaultTimeout = 5 * time.Second
+const DefaultTimeout = securefetch.DefaultTimeout
 
 // maxResponseBytes caps the response body the deliverer reads.
 // Logout-token responses are RFC 7807 problem documents at most; a
@@ -269,8 +269,7 @@ func (d *HTTPDeliverer) timeoutOrDefault() time.Duration {
 // "backchannel:" prefix the package has emitted historically.
 func classifyNetsecError(raw string, err error) error {
 	switch {
-	case errors.Is(err, netsec.ErrPrivateNetworkBlocked),
-		errors.Is(err, netsec.ErrCloudMetadataBlocked):
+	case netsec.IsDenyListed(err):
 		return fmt.Errorf("%w: %w", ErrPrivateNetworkBlocked, err)
 	case errors.Is(err, netsec.ErrSchemeNotAllowed):
 		return fmt.Errorf("backchannel: Target.URL %q: %w", raw, err)
@@ -288,10 +287,7 @@ func classifyNetsecError(raw string, err error) error {
 // applicable. The mapping preserves the [errors.Is] matrix the
 // deliverer's tests pin.
 func classifyDeliverError(rawURL string, err error) error {
-	if errors.Is(err, netsec.ErrPrivateNetworkBlocked) ||
-		errors.Is(err, netsec.ErrCloudMetadataBlocked) ||
-		errors.Is(err, netsec.ErrSchemeNotAllowed) ||
-		errors.Is(err, netsec.ErrMissingHost) {
+	if netsec.IsRequestRefusal(err) {
 		return classifyNetsecError(rawURL, err)
 	}
 	if errors.Is(err, securefetch.ErrUnexpectedStatus) {

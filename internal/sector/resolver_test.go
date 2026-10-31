@@ -416,8 +416,8 @@ func TestCanonicaliseURIs_LowercasesHostAndSorts(t *testing.T) {
 
 func TestHashURIs_StableAcrossOrder(t *testing.T) {
 	t.Parallel()
-	a := hashURIs([]string{"https://a.example/cb", "https://b.example/cb"})
-	b := hashURIs([]string{"https://b.example/cb", "https://a.example/cb"})
+	a := hashURIs(canonicaliseURIs([]string{"https://a.example/cb", "https://b.example/cb"}))
+	b := hashURIs(canonicaliseURIs([]string{"https://b.example/cb", "https://a.example/cb"}))
 	if a != b {
 		t.Fatalf("hash differed across input order: %q vs %q", a, b)
 	}

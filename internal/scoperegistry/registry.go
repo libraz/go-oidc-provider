@@ -33,11 +33,6 @@ type Entry struct {
 	// listed client_id values. An empty slice means every client may
 	// request the scope.
 	AllowedClients []string
-
-	// Required marks scopes the user cannot decline at consent. The
-	// field is informational only at this layer; the consent surface
-	// reads it through a separate metadata channel.
-	Required bool
 }
 
 // Registry is the read-only lookup the OP threads into authorize /
@@ -88,7 +83,6 @@ func New(entries []Entry) *Registry {
 		stored := Entry{
 			Name:           e.Name,
 			Public:         e.Public,
-			Required:       e.Required,
 			AllowedClients: append([]string(nil), e.AllowedClients...),
 		}
 		r.byName[e.Name] = stored
@@ -119,18 +113,6 @@ func (r *Registry) IsRegistered(name string) bool {
 	}
 	_, ok := r.byName[name]
 	return ok
-}
-
-// IsPublic reports whether name is registered AND eligible for the
-// discovery scopes_supported list. Unknown names return false; the
-// caller is expected to consult [Registry.IsRegistered] separately if
-// it needs to distinguish "not registered" from "registered private".
-func (r *Registry) IsPublic(name string) bool {
-	if r == nil {
-		return false
-	}
-	e, ok := r.byName[name]
-	return ok && e.Public
 }
 
 // Allows reports whether clientID is permitted to request scope. The

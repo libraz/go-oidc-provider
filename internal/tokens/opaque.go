@@ -1,9 +1,9 @@
 package tokens
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
+
+	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
 // opaqueAccessTokenByteLength is the entropy of an opaque access
@@ -26,9 +26,9 @@ const opaqueAccessTokenByteLength = 32
 // base64.RawURLEncoding output never contains the '.' separator a JWS
 // Compact Serialisation requires).
 func MintOpaqueAccessToken() (string, error) {
-	buf := make([]byte, opaqueAccessTokenByteLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("tokens: read random for opaque access token: %w", err)
+	tok, err := keys.RandomBase64URL(opaqueAccessTokenByteLength)
+	if err != nil {
+		return "", fmt.Errorf("tokens: opaque access token: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return tok, nil
 }

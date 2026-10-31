@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -127,7 +128,7 @@ func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, 
 		return lookupResult{reason: "malformed"}, fmt.Errorf("%w: no signature", errTokenInvalid)
 	}
 	typ, typOK := jws.Signatures[0].Protected.ExtraHeaders["typ"].(string)
-	if !typOK || typ != "JWT" {
+	if !typOK || !jose.IsTypJWT(typ) {
 		return lookupResult{reason: "typ_mismatch"}, fmt.Errorf("%w: id_token typ header is not JWT", errTokenInvalid)
 	}
 	kid := jws.Signatures[0].Header.KeyID
@@ -331,10 +332,10 @@ func confirmationFromCnf(cnf map[string]string) *Confirmation {
 		return nil
 	}
 	out := &Confirmation{}
-	if v, ok := cnf["jkt"]; ok {
+	if v, ok := cnf[tokens.CnfJKT]; ok {
 		out.JKT = v
 	}
-	if v, ok := cnf["x5t#S256"]; ok {
+	if v, ok := cnf[tokens.CnfX5tS256]; ok {
 		out.X5tS256 = v
 	}
 	if out.JKT == "" && out.X5tS256 == "" {
@@ -405,26 +406,17 @@ func decodeRequiredAudience(raw json.RawMessage) ([]string, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("aud claim missing")
 	}
-	var single string
-	if err := json.Unmarshal(raw, &single); err == nil {
-		if single == "" {
-			return nil, errors.New("aud claim empty")
-		}
-		return []string{single}, nil
-	}
-	var multi []string
-	if err := json.Unmarshal(raw, &multi); err != nil {
+	audience, err := jose.DecodeAudience(raw)
+	if err != nil {
 		return nil, fmt.Errorf("aud claim malformed: %w", err)
 	}
-	if len(multi) == 0 {
+	if len(audience) == 0 {
 		return nil, errors.New("aud claim empty")
 	}
-	for _, audience := range multi {
-		if audience == "" {
-			return nil, errors.New("aud claim contains an empty audience")
-		}
+	if slices.Contains(audience, "") {
+		return nil, errors.New("aud claim contains an empty audience")
 	}
-	return multi, nil
+	return audience, nil
 }
 
 func decodeAndValidateIDTokenClaims(payload []byte, now time.Time, leeway time.Duration) (idTokenClaims, []string, string, error) {

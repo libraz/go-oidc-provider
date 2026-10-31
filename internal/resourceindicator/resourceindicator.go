@@ -37,12 +37,12 @@
 //
 // # Equality
 //
-// [Equal] canonicalises both inputs and compares the byte form. If either
-// input fails canonicalisation, [Equal] returns false: a non-canonical or
-// malformed value cannot equal anything by definition. [Contains] applies
-// the same rule to a registered allowlist, which lets historical records
-// that were persisted before this package existed continue to match a
-// canonical request without an explicit migration step.
+// [Contains] canonicalises both sides and compares the byte form. If the
+// probe fails canonicalisation it returns false, and a malformed registered
+// entry is skipped: a non-canonical or malformed value cannot equal anything
+// by definition. Canonicalising the registered side on every call lets
+// historical records that were persisted before this package existed
+// continue to match a canonical request without an explicit migration step.
 //
 // # Error wire mapping
 //
@@ -111,7 +111,7 @@ func defaultPortForScheme(scheme string) string {
 // already lowercases the scheme); the helper additionally lowercases the
 // host, strips a default port for the scheme, and normalises the path's
 // trailing slash. The query is preserved verbatim. The returned string is
-// suitable for direct byte comparison via [Equal].
+// suitable for direct byte comparison.
 //
 // Callers that only need a yes/no validity verdict can use [Validate],
 // which is implemented as Canonicalize-and-discard.
@@ -166,29 +166,8 @@ func Validate(raw string) error {
 	return err
 }
 
-// Equal reports whether a and b denote the same resource indicator after
-// canonicalisation. Returns false if either side fails canonicalisation —
-// a malformed or empty value cannot equal anything.
-//
-// The function is intentionally tolerant of stored records that pre-date
-// the canonicalisation policy: the registered side is canonicalised on
-// every call, so a database row that was persisted in mixed-case form
-// continues to match an equivalent canonical request without an explicit
-// migration step.
-func Equal(a, b string) bool {
-	canonA, err := Canonicalize(a)
-	if err != nil {
-		return false
-	}
-	canonB, err := Canonicalize(b)
-	if err != nil {
-		return false
-	}
-	return canonA == canonB
-}
-
 // Contains reports whether the registered allowlist set contains a value
-// equal to raw under [Equal]. The function is the canonical replacement
+// equal to raw after canonicalisation. The function is the canonical replacement
 // for [slices.Contains] at every site that holds a resource-indicator
 // allowlist; the byte-comparison form mis-handles mixed-case host /
 // trailing-slash variants the wire form admits.
@@ -259,10 +238,27 @@ func ContainsLabel(set []string, raw string) bool {
 }
 
 // SubsetLabel reports whether every entry of want is held by allowed
-// under [EqualLabel]. An empty want vacuously passes.
+// under [EqualLabel]. An empty want vacuously passes. The allowed list
+// is canonicalised once, not once per wanted entry.
 func SubsetLabel(want, allowed []string) bool {
+	switch len(want) {
+	case 0:
+		return true
+	case 1:
+		return ContainsLabel(allowed, want[0])
+	}
+	held := make(map[string]struct{}, len(allowed))
+	for _, candidate := range allowed {
+		if key, ok := labelKey(candidate); ok {
+			held[key] = struct{}{}
+		}
+	}
 	for _, v := range want {
-		if !ContainsLabel(allowed, v) {
+		key, ok := labelKey(v)
+		if !ok {
+			return false
+		}
+		if _, in := held[key]; !in {
 			return false
 		}
 	}

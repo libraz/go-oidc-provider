@@ -172,10 +172,7 @@ func New(cfg Config) (*Handler, error) {
 
 // now returns the current wall-clock reading.
 func (h *Handler) now() time.Time {
-	if h.clock == nil {
-		return timex.SystemClock.Now()
-	}
-	return h.clock.Now()
+	return timex.OrSystem(h.clock).Now()
 }
 
 // Name implements customgrant.Handler.
@@ -549,7 +546,7 @@ func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenVie
 		// its delegation record and of its proof-of-possession pin.
 		IssueIDToken: issueIDToken,
 	}
-	if issueIDToken && containsOpenID(grantedScope) {
+	if issueIDToken && oidcscope.ContainsOpenID(grantedScope) {
 		// The subject token's own auth_time: an exchange is not an authentication.
 		resp.AuthTime = subjectView.AuthTime
 		idClaims := filterReservedClaims(extraClaims)
@@ -748,7 +745,7 @@ func knownTokenType(urn string) bool {
 // computeRequestedAudience folds the audience and resource form
 // values together, normalises each through
 // [resourceindicator.NormalizeLabel], and de-duplicates. Falls back to
-// the subject_token's audience (also normalised) when the request omits
+// the subject_token's audience (already normalised by the lookup) when the request omits
 // both parameters so downstream comparisons see a single canonical
 // form.
 func computeRequestedAudience(form map[string][]string, subject TokenView) []string {
@@ -766,14 +763,8 @@ func computeRequestedAudience(form map[string][]string, subject TokenView) []str
 	if len(out) > 0 {
 		return dedupe(out)
 	}
-	if len(subject.Audience) > 0 {
-		fallback := make([]string, 0, len(subject.Audience))
-		for _, v := range subject.Audience {
-			fallback = append(fallback, resourceindicator.NormalizeLabel(v))
-		}
-		return dedupe(fallback)
-	}
-	return nil
+	// subject.Audience was normalised when the lookup built the view.
+	return dedupe(subject.Audience)
 }
 
 // applyDecision merges the policy decision over the OP defaults.
@@ -828,12 +819,7 @@ func audienceAllowed(want []string, client *store.Client) bool {
 	if client == nil || len(client.Resources) == 0 {
 		return false
 	}
-	for _, v := range want {
-		if !resourceindicator.ContainsLabel(client.Resources, v) {
-			return false
-		}
-	}
-	return true
+	return resourceindicator.SubsetLabel(want, client.Resources)
 }
 
 // filterReservedClaims returns a fresh map carrying every entry of
@@ -847,16 +833,6 @@ func filterReservedClaims(extras map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-// containsOpenID reports whether scope contains "openid".
-func containsOpenID(scope []string) bool {
-	for _, s := range scope {
-		if s == "openid" {
-			return true
-		}
-	}
-	return false
 }
 
 // clientIDOf returns the client_id when client is non-nil; empty

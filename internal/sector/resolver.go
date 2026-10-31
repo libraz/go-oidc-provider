@@ -1,6 +1,7 @@
 package sector
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,12 +11,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/netsec"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -31,13 +34,13 @@ const (
 	// document, including connect, TLS, and body read. Five seconds
 	// matches the JAR / JWKS fetcher budget so the three SSRF gates
 	// share a single operator expectation.
-	defaultTimeout = 5 * time.Second
+	defaultTimeout = securefetch.DefaultTimeout
 
 	// defaultMaxBody caps the body size at 64 KiB. A real
 	// sector_identifier document lists a handful of redirect URIs,
 	// so 64 KiB is two orders of magnitude over the realistic upper
 	// bound while bounding memory use against a malicious peer.
-	defaultMaxBody = int64(64 * 1024)
+	defaultMaxBody = securefetch.DefaultMaxBody
 
 	// jsonContentType is the only Content-Type the resolver accepts.
 	// Sector documents are pure JSON arrays per OIDC Core 1.0 §5;
@@ -223,9 +226,7 @@ func New(opts ...Option) *Resolver {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.clock == nil {
-		cfg.clock = timex.SystemClock
-	}
+	cfg.clock = timex.OrSystem(cfg.clock)
 	policy := securefetch.Policy{
 		AllowPrivateNetwork: cfg.allowPrivate,
 		AllowedSchemes:      []string{"https"},
@@ -318,7 +319,8 @@ func (r *Resolver) doFetch(ctx context.Context, sectorIdentifierURI string) ([]s
 	if err != nil {
 		return nil, "", err
 	}
-	return canonicaliseURIs(uris), hashURIs(uris), nil
+	canon := canonicaliseURIs(uris)
+	return canon, hashURIs(canon), nil
 }
 
 // assertSafeURL is the SSRF gate. It runs before any network I/O so
@@ -355,13 +357,10 @@ func (r *Resolver) assertSafeURL(ctx context.Context, raw string) (string, error
 // [errors.Is] branch; everything else flows through [ErrSectorFetch]
 // so the family root still matches.
 func classifyNetsecError(err error) error {
-	switch {
-	case errors.Is(err, netsec.ErrPrivateNetworkBlocked),
-		errors.Is(err, netsec.ErrCloudMetadataBlocked):
+	if netsec.IsDenyListed(err) {
 		return fmt.Errorf("%w: %w (%w)", ErrSectorFetch, ErrSectorPrivateAddress, err)
-	default:
-		return fmt.Errorf("%w: %w", ErrSectorFetch, err)
 	}
+	return fmt.Errorf("%w: %w", ErrSectorFetch, err)
 }
 
 // classifyFetchError maps an error returned from the
@@ -376,10 +375,7 @@ func classifyFetchError(err error) error {
 	if errors.Is(err, ErrSectorRedirectFollowed) {
 		return err
 	}
-	if errors.Is(err, netsec.ErrPrivateNetworkBlocked) ||
-		errors.Is(err, netsec.ErrCloudMetadataBlocked) ||
-		errors.Is(err, netsec.ErrSchemeNotAllowed) ||
-		errors.Is(err, netsec.ErrMissingHost) {
+	if netsec.IsRequestRefusal(err) {
 		return classifyNetsecError(err)
 	}
 	return fmt.Errorf("%w: %w", ErrSectorFetch, err)
@@ -404,7 +400,7 @@ func parseSectorDocument(body []byte) ([]string, error) {
 		return nil, fmt.Errorf("%w: %w (empty body)", ErrSectorFetch, ErrSectorMalformed)
 	}
 	var uris []string
-	dec := json.NewDecoder(strings.NewReader(string(body)))
+	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields() // catches object-shaped bodies at the top level.
 	if err := dec.Decode(&uris); err != nil {
 		return nil, fmt.Errorf("%w: %w (%w)", ErrSectorFetch, ErrSectorMalformed, err)
@@ -442,11 +438,11 @@ func canonicaliseURIs(uris []string) []string {
 	return out
 }
 
-// hashURIs returns the SHA-256 hex of the canonicalised URI list. The
-// hex form keeps the value safe to log without disclosing the cache
-// key, and lets a debugger compare two stored hashes by eye.
-func hashURIs(uris []string) string {
-	canon := canonicaliseURIs(uris)
+// hashURIs returns the SHA-256 hex of an already canonical URI list (see
+// [canonicaliseURIs]). The hex form keeps the value safe to log without
+// disclosing the cache key, and lets a debugger compare two stored
+// hashes by eye.
+func hashURIs(canon []string) string {
 	h := sha256.New()
 	for _, raw := range canon {
 		_, _ = h.Write([]byte(raw))
@@ -461,23 +457,12 @@ func hashURIs(uris []string) string {
 // path differences ("/cb" vs "/cb/") are intentionally distinct
 // because OAuth 2.0 redirect_uri matching is byte-exact.
 func verifySubset(upstream, registered []string) error {
-	if len(registered) == 0 {
-		// A registration with no redirect URIs has nothing to
-		// validate against the sector document; the OIDC Core
-		// invariant ("every registered redirect appears upstream")
-		// holds vacuously.
+	// A registration with no redirect URIs holds vacuously.
+	if oidcscope.Subset(registered, upstream) {
 		return nil
 	}
-	index := make(map[string]struct{}, len(upstream))
-	for _, u := range upstream {
-		index[u] = struct{}{}
-	}
-	for _, want := range registered {
-		if _, ok := index[want]; !ok {
-			return fmt.Errorf("%w: %w (%q)", ErrSectorFetch, ErrSectorRedirectMissing, want)
-		}
-	}
-	return nil
+	missing := slices.IndexFunc(registered, func(want string) bool { return !slices.Contains(upstream, want) })
+	return fmt.Errorf("%w: %w (%q)", ErrSectorFetch, ErrSectorRedirectMissing, registered[missing])
 }
 
 type cacheEntry struct {

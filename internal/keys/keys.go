@@ -225,30 +225,34 @@ func (s *Set) Find(ctx context.Context, keyID string) (Entry, bool) {
 		if e.KeyID != keyID {
 			continue
 		}
-		if !e.NotAfter.IsZero() {
-			now := s.nowOrSystem()
-			if !now.Before(e.NotAfter) {
-				if s.observer != nil {
-					s.observer(ctx, keyID)
-				}
-				return Entry{}, false
+		if retiredBy(clockReading(s.now), e.NotAfter) {
+			if s.observer != nil {
+				s.observer(ctx, keyID)
 			}
+			return Entry{}, false
 		}
 		return e, true
 	}
 	return Entry{}, false
 }
 
-// nowOrSystem returns the wall-clock reading the retirement gate uses.
-// A nil [Set.now] (defensively possible if a caller built the struct
-// outside [NewSet]) collapses onto [timex.SystemClock], so the gate
-// cannot accidentally accept a retired kid because the clock seam was
-// missed.
-func (s *Set) nowOrSystem() time.Time {
-	if s.now == nil {
+// clockReading returns the wall-clock reading the retirement gate uses.
+// A nil clock (defensively possible if a caller built the struct outside
+// [NewSet]) collapses onto [timex.SystemClock], so the gate cannot
+// accidentally accept a retired kid because the clock seam was missed.
+func clockReading(now func() time.Time) time.Time {
+	if now == nil {
 		return timex.SystemClock.Now()
 	}
-	return s.now()
+	return now()
+}
+
+// retiredBy reports whether an entry whose NotAfter is notAfter has
+// retired at now. A zero notAfter never retires; otherwise the entry is
+// retired once now >= notAfter, so a kid scheduled to retire at T does
+// not verify anything presented at T.
+func retiredBy(now, notAfter time.Time) bool {
+	return !notAfter.IsZero() && !now.Before(notAfter)
 }
 
 // JWKS returns the public JWKS view of the [Set]. The returned value is a

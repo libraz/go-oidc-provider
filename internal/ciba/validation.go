@@ -6,6 +6,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 )
 
 // MaxBindingMessageRunes is the upper bound on binding_message
@@ -75,14 +77,7 @@ func ValidateScope(raw string) ([]string, error) {
 	if len(parts) == 0 {
 		return nil, ErrMissingScope
 	}
-	hasOpenID := false
-	for _, p := range parts {
-		if p == "openid" {
-			hasOpenID = true
-			break
-		}
-	}
-	if !hasOpenID {
+	if !oidcscope.ContainsOpenID(parts) {
 		return nil, ErrScopeMissingOpenID
 	}
 	return parts, nil

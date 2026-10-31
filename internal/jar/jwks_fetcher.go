@@ -2,9 +2,7 @@ package jar
 
 import (
 	"fmt"
-	"net"
 
-	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
@@ -31,22 +29,6 @@ func NewFetcher(clock timex.Clock) *Fetcher {
 		Clock:      clock,
 		FetchError: ErrJWKSFetch,
 	})}
-}
-
-// IsLocalHostname reports whether host is a literal "localhost" string or one
-// of its common variants. Forwards to [netsec.IsLocalHostname] so the
-// deny-list is centralised; retained as a [jar] export because existing call
-// sites (authorizeendpoint, sector, backchannel) reach the helper through this
-// package.
-func IsLocalHostname(host string) bool {
-	return netsec.IsLocalHostname(host)
-}
-
-// IsPrivateIP reports whether ip falls inside one of the deny-listed ranges.
-// Forwards to [netsec.IsPrivateIP]; retained for the same reason as
-// [IsLocalHostname].
-func IsPrivateIP(ip net.IP) bool {
-	return netsec.IsPrivateIP(ip)
 }
 
 // classifyKeyResolution marks a server-side key-source fault with

@@ -38,8 +38,6 @@ package refresh
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"slices"
@@ -47,6 +45,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -925,19 +924,19 @@ const chainIDLength = 16
 // issue a refresh token calls it before minting the access token that
 // goes out alongside, so both record the same chain.
 func NewChainID() (string, error) {
-	buf := make([]byte, chainIDLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("refresh: read random: %w", err)
+	id, err := keys.RandomBase64URL(chainIDLength)
+	if err != nil {
+		return "", fmt.Errorf("refresh: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return id, nil
 }
 
 func newID() (string, error) {
-	buf := make([]byte, IDLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("refresh: read random: %w", err)
+	id, err := keys.RandomBase64URL(IDLength)
+	if err != nil {
+		return "", fmt.Errorf("refresh: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return id, nil
 }
 
 // cloneStringPtr returns a fresh *string with the same value as p, or

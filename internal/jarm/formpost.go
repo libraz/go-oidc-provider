@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // formPostScript is the inline script auto-submitting the form on page
@@ -53,8 +55,7 @@ func WriteFormPost(w http.ResponseWriter, redirectURI, jwtToken string) error {
 	}
 	header := w.Header()
 	header.Set("Content-Type", "text/html; charset=utf-8")
-	header.Set("Cache-Control", "no-store")
-	header.Set("Pragma", "no-cache")
+	httpx.StampNoStore(w)
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("Content-Security-Policy",
 		"default-src 'none'; form-action "+formPostFormActionSource(redirectURI)+
@@ -108,8 +109,7 @@ func WriteParamsFormPost(w http.ResponseWriter, redirectURI string, params url.V
 	}
 	header := w.Header()
 	header.Set("Content-Type", "text/html; charset=utf-8")
-	header.Set("Cache-Control", "no-store")
-	header.Set("Pragma", "no-cache")
+	httpx.StampNoStore(w)
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("Content-Security-Policy",
 		"default-src 'none'; form-action "+formPostFormActionSource(redirectURI)+

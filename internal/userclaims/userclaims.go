@@ -11,8 +11,6 @@
 package userclaims
 
 import (
-	"slices"
-
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -39,17 +37,18 @@ func ScopeClaimNames(scopes []string, custom map[string][]string) map[string]str
 
 // standardScopeClaims returns the claim names a recognised standard scope
 // authorises, per OIDC Core 1.0 §5.4. Unknown scopes (and "openid", whose
-// "sub" is always released) return nil. The slice is a fresh copy.
+// "sub" is always released) return nil. The slice is shared package
+// data: callers must not modify it.
 func standardScopeClaims(scope string) []string {
 	switch scope {
 	case oidcscope.ScopeProfile:
-		return slices.Clone(profileClaims)
+		return profileClaims
 	case oidcscope.ScopeEmail:
-		return slices.Clone(emailClaims)
+		return emailClaims
 	case oidcscope.ScopeAddress:
-		return slices.Clone(addressClaims)
+		return addressClaims
 	case oidcscope.ScopePhone:
-		return slices.Clone(phoneClaims)
+		return phoneClaims
 	default:
 		return nil
 	}

@@ -39,39 +39,6 @@ func TestRegistry_IsRegistered(t *testing.T) {
 	}
 }
 
-// TestRegistry_IsPublic confirms the discovery-eligibility semantics:
-// only registered scopes whose Public flag is true return true; unknown
-// names and a nil receiver collapse to false.
-func TestRegistry_IsPublic(t *testing.T) {
-	t.Parallel()
-
-	r := scoperegistry.New([]scoperegistry.Entry{
-		{Name: "openid", Public: true},
-		{Name: "read:projects", Public: true},
-		{Name: "internal:metrics", Public: false},
-	})
-
-	cases := []struct {
-		name string
-		want bool
-	}{
-		{"openid", true},
-		{"read:projects", true},
-		{"internal:metrics", false},
-		{"unknown", false},
-	}
-	for _, tc := range cases {
-		if got := r.IsPublic(tc.name); got != tc.want {
-			t.Errorf("IsPublic(%q)=%v want %v", tc.name, got, tc.want)
-		}
-	}
-
-	var nilReg *scoperegistry.Registry
-	if nilReg.IsPublic("openid") {
-		t.Error("nil receiver IsPublic must return false")
-	}
-}
-
 // TestRegistry_Allows enumerates the AllowedClients allowlist semantics.
 // The "unknown scope" branch must fail-closed — an admission gate
 // defaults to deny; "empty AllowedClients" must mean every

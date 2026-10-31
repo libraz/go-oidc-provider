@@ -1,14 +1,13 @@
 package backchannel
 
 import (
-	"crypto"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 
-	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+
+	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 )
 
 // EventID is the URI registered by OpenID Connect Back-Channel Logout
@@ -31,19 +30,9 @@ const TokenType = "logout+jwt"
 // identifiers.
 const idLength = 16
 
-// SigningKey carries the ES256 signing material used to mint Logout
-// Tokens. The struct mirrors internal/tokens.SigningKey; the
-// duplication keeps the back-channel package free of the larger
-// id_token / access_token transitive deps.
-type SigningKey struct {
-	// KeyID becomes the JWS "kid" header. RPs use it to pick the
-	// public key when their JWKS cache holds multiple OP keys.
-	KeyID string
-
-	// Signer is the private key. The package only signs with ES256;
-	// non-ECDSA keys fail at signer construction.
-	Signer crypto.Signer
-}
+// SigningKey is the ES256 signing material used to mint Logout Tokens;
+// non-ECDSA keys fail at signer construction.
+type SigningKey = tokens.SigningKey
 
 // LogoutClaims is the OpenID Connect Back-Channel Logout 1.0 §2.4
 // claim set. The struct intentionally exposes only the spec-defined
@@ -118,14 +107,14 @@ func SignLogoutToken(key SigningKey, claims LogoutClaims) (string, error) {
 	jti := claims.JTI
 	if jti == "" {
 		var err error
-		jti, err = randomJTI()
+		jti, err = keys.RandomBase64URL(idLength)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("backchannel: %w", err)
 		}
 	}
-	signer, err := newSigner(key)
+	signer, err := tokens.NewSigner(key, TokenType)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("backchannel: %w", err)
 	}
 	payload := map[string]any{
 		"iss": claims.Issuer,
@@ -148,40 +137,4 @@ func SignLogoutToken(key SigningKey, claims LogoutClaims) (string, error) {
 		return "", fmt.Errorf("backchannel: serialise logout token: %w", err)
 	}
 	return out, nil
-}
-
-// newSigner builds the [josev4.Signer] used by [SignLogoutToken]. The
-// header carries typ="logout+jwt" so a permissive RP that accepts both
-// id_token and logout_token shapes still routes the JWS through the
-// correct verification path. The kid is set to key.KeyID so a key
-// rotation that retires old material does not break in-flight RP
-// verification.
-func newSigner(key SigningKey) (josev4.Signer, error) {
-	sk := josev4.SigningKey{
-		Algorithm: josev4.ES256,
-		Key: josev4.JSONWebKey{
-			Key:       key.Signer,
-			KeyID:     key.KeyID,
-			Algorithm: string(josev4.ES256),
-			Use:       "sig",
-		},
-	}
-	opts := (&josev4.SignerOptions{}).WithType(TokenType)
-	signer, err := josev4.NewSigner(sk, opts)
-	if err != nil {
-		return nil, fmt.Errorf("backchannel: build signer: %w", err)
-	}
-	return signer, nil
-}
-
-// randomJTI returns a base64url-encoded random identifier suitable
-// for the JWT `jti` claim. The entropy source is crypto/rand; a
-// failure is propagated rather than retried because a non-functional
-// RNG is a fatal OP condition.
-func randomJTI() (string, error) {
-	buf := make([]byte, idLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("backchannel: read random: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
