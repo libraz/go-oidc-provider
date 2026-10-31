@@ -156,6 +156,25 @@ claims from `Users()`; see `Changed`.
   another subject now ends the attempt with a 4xx. It used to sign that
   other account in on the strength of the first account's session.
 
+- `go-jose` moves to v4.1.7 in every module, picking up the upstream fixes in
+  GHSA-r39w-98wm-9pp6, GHSA-c67m-wr4h-2ccg, GHSA-p9j4-2j95-j4rv,
+  GHSA-v6h2-qj3f-2h6v and GHSA-27pc-rm86-68pq. The SQL and DynamoDB adapters
+  also leave v4.1.5 behind (GHSA-mgcc-cww5-fp2q).
+
+- A client JWK Set member that decodes but is not a valid key (an RSA key
+  with exponent 0, say) is now ignored like any other unusable member. One
+  registered in a client's JWKS used to panic the token request during
+  `self_signed_tls_client_auth`, and one served from a `jwks_uri` did the
+  same when the keys were refreshed. Dynamic registration that sends such a
+  member next to usable keys now registers the usable ones; it was rejected
+  before.
+
+- A DPoP proof longer than 8 KiB is rejected as a malformed proof (400
+  `invalid_request`, like any other malformed proof) before
+  its embedded `jwk` is parsed. Only the embedder's HTTP header limit used to
+  bound the key the JOSE layer would decode. A proof carrying a 4096-bit RSA
+  key is under 2 KB.
+
 ### Changed
 
 - SQL deployments must add two columns to `oidc_clients`,
