@@ -1096,7 +1096,11 @@ advisories:
     source: https://access.redhat.com/security/cve/CVE-2026-1180
     threat: T-08
     status: covered
-    notes: Keycloak OIDC DCR jwks_uri SSRF during private_key_jwt key resolution.
+    notes: |
+      Keycloak OIDC DCR jwks_uri SSRF during private_key_jwt key resolution.
+      The client ID metadata document fetch (client_id URL) is a second
+      client-supplied URL on the same securefetch dial-time deny-list;
+      TestScenario_CIMD_RES_11_SSRFBlocksPrivateRanges pins it.
   - id: CVE-2026-48522
     severity: P1
     source: https://github.com/advisories/GHSA-993g-76c3-p5m4

@@ -3,467 +3,677 @@ feature: client_id_metadata_document
 prefix: CIMD
 title: Client ID Metadata Document
 specs:
-  - draft-ietf-oauth-client-id-metadata-document
+  - draft-ietf-oauth-client-id-metadata-document (draft-02)
   - RFC 7591 §2 — Client Metadata Field Definitions
   - OpenID Connect Core 1.0 §16.16, §16.17 — fetch security
   - RFC 8414 — Authorization Server Metadata
   - RFC 7517 — JWK / jwks_uri
   - RFC 6749 §3.1.2 — redirect_uri matching
+  - RFC 8252 §7.3 — loopback redirect
+  - RFC 7636 — PKCE
+  - RFC 8707 — Resource Indicators
 
 description: |
-  Clients present an HTTPS URL as their client_id; the OP fetches a
-  JSON metadata document from that URL and treats the client as
-  ephemeral. Covers URL-form validation, fetch lifecycle (including
-  SSRF defenses), metadata validity, discovery advertisement, cache
-  semantics, and integration with the authorization flow.
+  Experimental, opt-in (op.WithClientIDMetadataDocuments). A client
+  presents an HTTPS URL as its client_id; the OP fetches the JSON
+  document at that URL, validates it with the dynamic-registration
+  rules, and treats the client as ephemeral: it is never persisted and
+  a registered client with the same id always wins.
 
-  Status: the entire feature is intentionally out of scope. The
-  source spec (draft-ietf-oauth-client-id-metadata-document) is an
-  unstable IETF working group draft, the OP has no plan to ship
-  URL-form client IDs, and adding an outbound fetch + SSRF defense
-  surface for an evolving spec expands attack surface without an
-  in-scope use case. The supported client lifecycle is covered by
-  static registration and Dynamic Client Registration (RFC 7591) —
-  see the dynamic_registration feature.
+  The OP tightens the draft in places, and the rows describe this OP's
+  behaviour: the URL must carry a path other than "/" and no query,
+  fragment, userinfo or dot segment, an ASCII host and at most 255
+  bytes; the fetch is a single GET with no redirects, a 5 KiB body cap
+  and a 5 second timeout; the cache key is the exact client_id string;
+  the only authentication methods are none and private_key_jwt; one
+  Allow hook decides, on every resolution, whether a URL may be
+  resolved at all.
+
+  The dev-only op.WithAllowPrivateNetworkClientIDMetadata admits http
+  and loopback targets so the rows can serve documents from an httptest
+  server. A rejected document is reported only through the cimd.*
+  audit events; the wire answer is the generic unknown-client one
+  (a 400 page at /authorize, invalid_client at /token), so the fetch
+  outcome is not an oracle.
 
 rows:
   - id: CIMD-URL-01
     severity: P0
     spec: OIDC Core §16.17
+    shape: identity
     behaviour: |
-      Only the https scheme is allowed. An http URL is rejected; the
-      OP does not attempt a CIMD fetch and lookup falls through to
-      not-found.
-    status: out-of-scope
-    out_of_scope_reason: |
-      Client ID Metadata Document
-      (draft-ietf-oauth-client-id-metadata-document) is an unstable
-      IETF working group draft and is not implemented. The OP only
-      accepts opaque client_id values registered via static config
-      or Dynamic Client Registration (RFC 7591).
+      Only the https scheme is accepted. An http client_id is an unknown
+      client: no fetch is attempted and no cimd audit event is written.
+      Only the dev-only private-network option admits http.
+    status: active
+    notes: |
+      Bound by TestScenario_CIMD_URL_01_HTTPSchemeRejected: the same URL
+      is refused with zero requests to the document server on a
+      production-envelope OP and resolved on a dev-option OP.
 
   - id: CIMD-URL-02
     severity: P0
     spec: draft §3
+    shape: identity
     behaviour: |
-      A path component is required. URLs without a path
-      (https://example.com or https://example.com/) are rejected.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A path component other than "/" is required. https://host and
+      https://host/ are unknown clients and are never fetched.
+    status: active
 
   - id: CIMD-URL-03
     severity: P0
     spec: RFC 3986 §5.2.4
+    shape: identity
     behaviour: |
-      URLs whose path contains "." or ".." segments are rejected to
-      prevent directory traversal.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A client_id whose path contains a "." or ".." segment, written
+      plainly or percent-encoded (%2e, %2E), is an unknown client and is
+      never fetched.
+    status: active
 
   - id: CIMD-URL-04
     severity: P0
     spec: RFC 3986 §3.5
+    shape: identity
     behaviour: |
-      URLs containing a fragment (#frag) are rejected.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A client_id containing a fragment is an unknown client and is never
+      fetched.
+    status: active
 
   - id: CIMD-URL-05
     severity: P0
     spec: RFC 3986 §3.2.1
+    shape: identity
     behaviour: |
-      URLs containing userinfo (user@ or user:pass@) are rejected.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A client_id carrying userinfo (user@ or user:pass@) is an unknown
+      client and is never fetched.
+    status: active
 
   - id: CIMD-URL-06
     severity: P1
-    spec: RFC 3986
+    spec: draft §3 (tightened)
+    shape: identity
     behaviour: |
-      An explicit port (e.g. :8443) and a query string (e.g. ?id=123)
-      are accepted.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A client_id with a query string is an unknown client and is never
+      fetched, so one client cannot have several aliases that differ only
+      in their query. An explicit port is accepted, and the consent
+      screen names the document host as host:port.
+    status: active
+    notes: |
+      Rewritten: the draft only discourages a query; this OP refuses it
+      so the exact-string client_id has a single spelling.
 
   - id: CIMD-URL-07
     severity: P0
     spec: draft §3
+    shape: identity
     behaviour: |
-      A non-URL string (e.g. "nonexistent-client") is treated as a
-      regular client_id; CIMD resolution is not attempted.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). The OP always
-      treats client_id values as opaque registry keys.
+      A client_id that is not a URL (for example "nonexistent-client") is
+      an ordinary unknown client_id: no fetch, no Allow call, no cimd
+      audit event.
+    status: active
+
+  - id: CIMD-URL-08
+    severity: P0
+    spec: draft §3 (tightened)
+    shape: value
+    behaviour: |
+      A client_id of 255 bytes is resolved and one of 256 bytes is an
+      unknown client that is never fetched; a non-ASCII host is an unknown
+      client; a percent-encoded path is treated as a plain string and
+      fetched as written.
+    status: active
+    notes: |
+      255 bytes is the longest id the persisted client_id column holds,
+      so any resolvable id can be stored in a grant.
 
   - id: CIMD-RES-01
     severity: P0
     spec: draft §4
+    shape: identity
     behaviour: |
-      Pre-registered static or adapter-managed clients take
-      precedence over CIMD; if a registered client_id collides with
-      the CIMD URL the registered record wins.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A registered (static or dynamically registered) client with the
+      same client_id wins: it is served from the store, the document is
+      not fetched, and the consent screen projects it like any registered
+      client (no document host, no redirect host).
+    status: active
 
   - id: CIMD-RES-02
     severity: P0
     spec: draft §5 / OIDC Core §16.17
+    shape: value
     behaviour: |
-      The OP issues an HTTP GET against the client_id URL.
-      Redirects are forbidden; receiving a 301 or 302 yields 400
-      invalid_client.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). The OP issues no
-      outbound fetch for client_id resolution.
+      The fetch never follows a redirect. A 301, 302 or 307 answer makes
+      the client unknown (400 page at /authorize), the redirect target is
+      never requested, and the cimd.fetch_failed event carries
+      reason=status.
+    status: active
 
   - id: CIMD-RES-03
     severity: P0
     spec: draft §5
+    shape: value
     behaviour: |
-      The fetched response Content-Type MUST be application/json
-      (with application/oauth-client-id+json reserved as a future
-      candidate).
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      The response Content-Type must be application/json (a charset
+      parameter is allowed) or application/*+json such as
+      application/oauth-client-id+json. text/plain, text/html and form
+      encodings are refused with reason=content_type.
+    status: active
 
   - id: CIMD-RES-04
     severity: P0
     spec: draft §5
+    shape: value
     behaviour: |
-      Only HTTP status 200 is accepted; 404 or 5xx yields 400
-      invalid_client.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      Only HTTP status 200 is accepted. 201, 204, 404, 500 and 503 make
+      the client unknown with reason=status.
+    status: active
 
   - id: CIMD-RES-05
     severity: P0
     spec: draft §5
+    shape: value
     behaviour: |
-      A response body that fails JSON parse yields 400 invalid_client.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A body that is not JSON is refused with reason=json. A JSON value
+      that is not an object, and an empty object, are refused with
+      reason=validation and error_code invalid_client_metadata.
+    status: active
 
   - id: CIMD-RES-06
     severity: P0
     spec: OWASP ASVS / SSRF mitigation
+    shape: value
     behaviour: |
-      Bodies larger than the configured maxResponseSize (default
-      around 16 KiB) are rejected early. Content-Length is checked
-      first, and any chunked stream that exceeds the threshold mid-
-      read aborts.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01); without an
-      outbound fetch path, SSRF size limits have no surface.
+      The body is capped at 5 KiB (5120 bytes), a fixed limit with no
+      configuration. A 5120-byte document is accepted; 5121 bytes, or a
+      chunked stream that grows past the cap with no Content-Length, is
+      refused with reason=too_large.
+    status: active
+    notes: |
+      Rewritten: no Content-Length precheck is promised and the cap is not
+      16 KiB; the limit is enforced while reading.
 
   - id: CIMD-RES-07
     severity: P0
     spec: draft §5
+    shape: value
     behaviour: |
-      A network failure, TLS error, or DNS failure during fetch
-      yields 400 invalid_client.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A connection failure (the host is down) yields reason=network. The
+      authorization endpoint answers with the 400 page and the token
+      endpoint with 401 invalid_client.
+    status: active
 
   - id: CIMD-RES-08
     severity: P1
-    spec: RFC 7234 / draft §5
+    spec: RFC 9111 / draft §5
+    shape: value
     behaviour: |
-      The OP honours HTTP Cache-Control: max-age and Expires headers
-      (bounded by configurable minimum and maximum TTLs); a second
-      request for the same URL is served from cache.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      The cache lifetime is Cache-Control max-age (else Expires, else the
+      floor) clamped to [60 s, 24 h]: max-age 0 and 10 give 60 s, 300
+      gives 5 minutes, 100000 gives 24 h. no-store, no-cache and private
+      pin the floor. A request one second before the lifetime ends is
+      served from cache and one second after refetches.
+    status: active
 
   - id: CIMD-RES-09
     severity: P0
     spec: draft §6
+    shape: order
     behaviour: |
-      An OP setting allowFetch(ctx, url) bool gates the request
-      before it leaves the OP; returning false yields 400
-      invalid_client. This is the SSRF gate hook.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01); without an
-      outbound fetch path, the gate hook has no surface.
+      One Allow hook decides whether a client_id URL may be resolved. It
+      is called with the URL on every resolution, cache hits included,
+      and before any fetch; false makes the client unknown, writes a
+      cimd.client_denied event and sends no request. It is never called
+      for a client_id that is not a conforming URL.
+    status: active
+    notes: |
+      Rewritten: there is a single hook (see CIMD-RES-10), not separate
+      fetch and client gates.
 
   - id: CIMD-RES-10
     severity: P1
     spec: draft §6
+    shape: order
     behaviour: |
-      An OP setting allowClient(ctx, metadata) bool runs after the
-      fetch so business rules can refuse the metadata.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      There is no second hook after the fetch. Narrowing the Allow hook
+      takes effect on the next request even when the document is cached
+      (no refetch, cimd.client_denied written), and widening it again
+      restores access.
+    status: active
+    notes: |
+      Rewritten: the design replaces the allowFetch and allowClient pair
+      with one Allow(ctx, url) hook called on every resolution.
 
   - id: CIMD-RES-11
     severity: P0
     spec: RFC 6890 / SSRF mitigation
+    shape: value
     behaviour: |
-      The default allowFetch implementation MUST refuse private IP
-      ranges, link-local, loopback, 0.0.0.0, and the metadata
-      address 169.254.169.254. To prevent DNS rebinding, the
-      resolved IP MUST be re-checked after DNS resolution.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01); the OP performs no
-      client_id-driven outbound fetches that would need an IP
-      allow-list.
+      On a production-envelope OP a client_id whose host is a loopback,
+      private or link-local address, 0.0.0.0, or a name that resolves to
+      one, is refused at dial time with reason=network and the document
+      server is never reached. Even with the dev option that lifts the
+      loopback ban, the cloud metadata address 169.254.169.254 stays
+      refused.
+    status: active
 
   - id: CIMD-RES-12
     severity: P1
     spec: OWASP
+    shape: value
     behaviour: |
-      Both connect and read fetch timeouts are configurable; the
-      defaults are roughly 5 seconds.
+      The fetch times out after a fixed 5 seconds, with no configuration.
+      A document host that never answers yields reason=network after
+      roughly that long.
+    status: active
+    notes: |
+      The only row that waits on wall time; the lower bound is the
+      assertion, a missing timeout would hang the test instead.
+
+  - id: CIMD-RES-13
+    severity: P2
+    spec: draft §9 (security considerations)
+    behaviour: |
+      Fetches are rate limited per origin so one attacker-controlled host
+      cannot be driven through the OP at will.
     status: out-of-scope
     out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      Deliberately not offered. Resolution is bounded by the process-wide
+      load gate shared with the other outbound fetches, a single-flight
+      per client_id, a 5 second failure cache and the 5 KiB body cap;
+      narrowing which origins may be fetched is the Allow hook's job.
+      Per-origin budgets are left to the embedder's network layer.
 
   - id: CIMD-META-01
     severity: P0
     spec: draft §4
+    shape: value
     behaviour: |
-      The metadata's client_id field MUST equal the request's
-      client_id URL exactly; otherwise the OP returns 400
-      invalid_client_metadata.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      The document's client_id must equal the requested client_id string
+      exactly. A different URL, a trailing slash, a different letter case,
+      a missing, empty or non-string member are refused with
+      reason=validation and error_code invalid_client_metadata.
+    status: active
 
   - id: CIMD-META-02
     severity: P0
-    spec: draft §4
+    spec: draft §4 (tightened)
+    shape: value
     behaviour: |
-      token_endpoint_auth_method MUST be one of none,
-      private_key_jwt, tls_client_auth, or
-      self_signed_tls_client_auth; client_secret_* methods are
-      rejected with 400 invalid_client_metadata.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      token_endpoint_auth_method must be none (the default when omitted)
+      or private_key_jwt, and for private_key_jwt the document must carry
+      jwks or jwks_uri with public keys only. client_secret_basic,
+      client_secret_post, client_secret_jwt, tls_client_auth,
+      self_signed_tls_client_auth and unknown methods are refused with
+      error_code invalid_client_metadata.
+    status: active
+    notes: |
+      Rewritten: mutual-TLS client authentication is not offered to
+      document clients, so tls_client_auth and self_signed_tls_client_auth
+      are refused along with the shared-secret methods.
 
   - id: CIMD-META-03
     severity: P0
     spec: draft §4
+    shape: presence
     behaviour: |
-      Presence of a client_secret field is rejected with 400
-      invalid_client_metadata; CIMD clients are public or asymmetric
-      only.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A document carrying client_secret or client_secret_expires_at, even
+      empty, is refused with error_code invalid_client_metadata.
+    status: active
 
   - id: CIMD-META-04
     severity: P0
     spec: RFC 7591 §2 / OIDC Core §2
+    shape: value
     behaviour: |
-      URI-valued metadata fields (client_uri, logo_uri, tos_uri,
-      policy_uri, jwks_uri, sector_identifier_uri,
-      initiate_login_uri, etc.) MUST use https.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). HTTPS-scheme
-      validation for registered clients lives in the
-      dynamic_registration feature.
+      URI-valued members (client_uri, logo_uri, tos_uri, policy_uri,
+      jwks_uri) must use https; an http value or a non-URL value is
+      refused with error_code invalid_client_metadata.
+    status: active
 
   - id: CIMD-META-05
     severity: P0
     spec: RFC 6749 §3.1.2
+    shape: value
     behaviour: |
-      redirect_uris MUST contain at least one entry, and each entry
-      MUST satisfy the registration rules (https, or loopback http
-      where allowed).
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). redirect_uri rules
-      for registered clients live in the dynamic_registration and
-      authorization_code features.
+      redirect_uris is required, and every entry must satisfy the
+      registration rules: https, or an http loopback host (127.0.0.1,
+      [::1] and localhost). One invalid entry refuses the whole document
+      with error_code invalid_redirect_uri; none of the entries is
+      salvaged.
+    status: active
 
   - id: CIMD-META-06
     severity: P0
     spec: RFC 7591 §2
+    shape: value
     behaviour: |
-      Unsupported grant_types values are filtered out; if the
-      filtered list is empty the OP returns 400
-      invalid_client_metadata.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). grant_types
-      filtering for registered clients lives in the
-      dynamic_registration feature.
+      grant_types is intersected with authorization_code and
+      refresh_token (authorization_code when omitted or empty). Other
+      grants are dropped, and the client cannot use them at the token
+      endpoint; an intersection that is empty refuses the document with
+      error_code invalid_client_metadata.
+    status: active
 
   - id: CIMD-META-07
     severity: P1
     spec: RFC 7591 §2
+    shape: value
     behaviour: |
-      Unsupported response_types values are filtered out; an empty
-      filtered list is either accepted (OP default) or rejected with
-      invalid_client_metadata depending on policy.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      response_types is limited to code. Any other value, alone or beside
+      code, refuses the document with error_code invalid_client_metadata.
+    status: active
+    notes: |
+      Rewritten: the draft's filter-and-continue policy for response types
+      is replaced by refusal, since a document is written for every OP.
 
   - id: CIMD-META-08
     severity: P1
-    spec: OAuth Multiple Response Types
+    spec: draft §4
+    shape: value
     behaviour: |
-      Unsupported response_modes values are filtered out; an empty
-      filtered list does not abort registration here (flow failure
-      is handled separately).
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      Members the OP does not know, including response_modes and
+      vendor-specific ones, are ignored and the document is accepted.
+    status: active
+    notes: |
+      Rewritten: the OP does not filter response_modes; it ignores them
+      like any unknown member, so a client written for other servers
+      keeps working.
 
   - id: CIMD-META-09
     severity: P0
     spec: OIDC Core §3
+    shape: value
     behaviour: |
-      After filtering, grant_types and response_types MUST remain
-      consistent (authorization_code <-> code, implicit <-> id_token
-      / token, etc.).
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      grant_types and response_types must remain consistent: code with
+      authorization_code is accepted, and code with only refresh_token or
+      a non-code response type with the implicit grant is refused with
+      error_code invalid_client_metadata.
+    status: active
 
   - id: CIMD-META-10
     severity: P0
     spec: OIDC Core §16.5
+    shape: value
     behaviour: |
-      jwks and jwks_uri MUST NOT be supplied simultaneously.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). The mutual
-      exclusion rule for registered clients lives in the
-      dynamic_registration feature.
+      jwks and jwks_uri must not both appear, for any authentication
+      method; both together refuse the document with error_code
+      invalid_client_metadata.
+    status: active
 
   - id: CIMD-META-11
     severity: P1
-    spec: OIDC Core §2
+    spec: OIDC Core §2 / RFC 8252
+    shape: value
     behaviour: |
-      For application_type=native, redirect_uris are limited to
-      loopback addresses, http://localhost, or custom URI schemes,
-      reusing the OIDC Core rule.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). Native
-      application redirect rules live in the oauth_native_apps
-      feature.
+      application_type native restricts http redirects to loopback hosts,
+      and so does web. When application_type is omitted and every
+      redirect_uri is an http loopback, the client is native and its
+      redirect port may vary; otherwise it is web and the redirect_uri
+      matches exactly.
+    status: active
+
+  - id: CIMD-META-12
+    severity: P1
+    spec: MCP authorization 2026-07-28 / draft §4
+    shape: value
+    behaviour: |
+      The example document from the MCP authorization specification is
+      accepted with default options, including its 127.0.0.1 and localhost
+      loopback redirect_uris, and completes an authorization-code flow.
+    status: active
+
+  - id: CIMD-META-13
+    severity: P0
+    spec: RFC 6749 §3.3
+    shape: value
+    behaviour: |
+      The scopes a document client may request are the document's scope
+      member intersected with the OP's public scopes (all public scopes
+      when the document names none). A scope outside that set ends
+      /authorize with an invalid_scope redirect.
+    status: active
 
   - id: CIMD-DISC-01
     severity: P0
     spec: draft §7
+    shape: value
     behaviour: |
-      OP discovery advertises
-      client_id_metadata_document_supported: true.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01); the discovery flag
-      stays absent.
+      When the feature is enabled, discovery advertises
+      client_id_metadata_document_supported: true, lists none in
+      token_endpoint_auth_methods_supported and S256 in
+      code_challenge_methods_supported.
+    status: active
 
   - id: CIMD-DISC-02
     severity: P1
     spec: draft §7
+    shape: presence
     behaviour: |
-      When the feature is disabled the discovery flag is omitted.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01); the flag is
-      structurally absent.
+      When the feature is not enabled, client_id_metadata_document_supported
+      is absent from the discovery document.
+    status: active
+
+  - id: CIMD-DISC-03
+    severity: P0
+    spec: FAPI 2.0 Security Profile §5.3
+    shape: presence
+    behaviour: |
+      op.New refuses to combine client ID metadata documents with a FAPI
+      profile, whose clients are pre-agreed rather than self-asserted; the
+      error names WithClientIDMetadataDocuments.
+    status: active
 
   - id: CIMD-CACHE-01
     severity: P1
     spec: RFC 3986 §6
+    shape: identity
     behaviour: |
-      Cache keys are normalised URL strings (lower-case scheme and
-      host, port included).
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      The cache key is the exact client_id string; no normalisation is
+      applied. A different letter case of the host is a different client
+      with its own cache entry and its own fetch, and the document's
+      client_id is compared with the requested string byte for byte.
+    status: active
+    notes: |
+      Rewritten: the draft compares URLs as strings, so folding case in
+      the key would let two spellings of one URL share a document that
+      names only one of them.
 
   - id: CIMD-CACHE-02
     severity: P2
     spec: performance
+    shape: value
     behaviour: |
-      It is desirable to suppress concurrent fetches of the same URL
-      across OP instances using singleflight semantics.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      Concurrent resolutions of the same client_id are coalesced into one
+      fetch.
+    status: active
 
   - id: CIMD-CACHE-03
     severity: P2
-    spec: RFC 7234
+    spec: RFC 9111
+    shape: order
     behaviour: |
-      Cache entries strictly expire once max-age elapses; the OP
-      does not implement stale-while-revalidate by default.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      An entry expires exactly when its lifetime elapses and a stale copy
+      is never served: after max-age a document that now fails makes the
+      client unknown instead of being answered from the old entry.
+    status: active
+
+  - id: CIMD-CACHE-04
+    severity: P2
+    spec: draft §5
+    shape: order
+    behaviour: |
+      A failed or invalid document is remembered for 5 seconds, so a
+      repeated request inside the window does not refetch it, and a
+      recovered document is picked up once the window has passed. A failed
+      document is never used as a client.
+    status: active
 
   - id: CIMD-FLOW-01
     severity: P0
     spec: draft §4
+    shape: order
     behaviour: |
-      When /authorize receives a URL-form client_id, the OP first
-      consults static records and only then attempts a CIMD fetch.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). /authorize treats
-      every client_id as an opaque registry key.
+      /authorize resolves a URL-form client_id before any login: the
+      document is fetched while the request is handled, a usable document
+      moves the user to the interaction, and an unusable one ends the
+      request with the 400 page.
+    status: active
 
   - id: CIMD-FLOW-02
     severity: P0
     spec: draft §4
+    shape: identity
     behaviour: |
-      A fetched client is treated as ephemeral; the OP does not
-      issue a registration_access_token for it.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      A client resolved from a document is ephemeral: it is never written
+      to the client store, and the token response carries no
+      registration_access_token, registration_client_uri or
+      client_secret.
+    status: active
 
   - id: CIMD-FLOW-03
     severity: P0
     spec: RFC 6749 §3.1.2
+    shape: value
     behaviour: |
-      redirect_uri matching follows the standard rules (strict
-      equality or the OP's registration policy).
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01). redirect_uri
-      matching for registered clients lives in the
-      authorization_code feature.
+      redirect_uri matching is exact against the document's list, so a
+      different path, port, host, scheme or an added query is refused with
+      the 400 page and no redirect; a loopback redirect may vary its port
+      only.
+    status: active
 
   - id: CIMD-FLOW-04
     severity: P1
     spec: RFC 9126 / draft §4
+    shape: identity
     behaviour: |
-      /par accepts CIMD clients on the same terms as /authorize.
-    status: out-of-scope
-    out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      /par accepts document clients, with none and with private_key_jwt,
+      and the request_uri then completes the flow at /authorize and
+      /token. A client_id that cannot be resolved is refused at /par.
+    status: active
 
   - id: CIMD-FLOW-05
     severity: P0
     spec: draft §4
+    shape: identity
     behaviour: |
-      The token endpoint also performs CIMD resolution during client
-      authentication, since CIMD clients are not present in static
-      storage.
+      The token endpoint resolves document clients: a none client redeems
+      its code, a private_key_jwt client authenticates with a key from
+      its document, and an assertion signed by another key, or no
+      assertion, is invalid_client without consuming the code.
+    status: active
+
+  - id: CIMD-FLOW-06
+    severity: P0
+    spec: RFC 8693 / draft §4
+    shape: identity
+    behaviour: |
+      A document client is resolved at the token-exchange grant and
+      refused there with unauthorized_client, even when its document
+      lists that grant: only authorization_code and refresh_token
+      survive document validation.
+    status: active
+
+  - id: CIMD-FLOW-07
+    severity: P0
+    spec: OIDC Core §3.1.2.4
+    shape: identity
+    behaviour: |
+      A document client is never first-party: naming its URL in
+      op.WithFirstPartyClients makes op.New fail, and its first
+      authorization always reaches the consent screen.
+    status: active
+
+  - id: CIMD-FLOW-08
+    severity: P0
+    spec: RFC 7636 / OAuth 2.1
+    shape: presence
+    behaviour: |
+      A document client must send a PKCE challenge whichever method it
+      authenticates with: /authorize without code_challenge is refused
+      with invalid_request for both none and private_key_jwt.
+    status: active
+
+  - id: CIMD-FLOW-09
+    severity: P1
+    spec: RFC 8707
+    shape: value
+    behaviour: |
+      A document client may request any resource the OP declares with
+      op.WithProtectedResources, and the access token's audience is that
+      resource. A resource that is not declared ends /authorize with an
+      invalid_target redirect.
+    status: active
+
+  - id: CIMD-FLOW-10
+    severity: P0
+    spec: MCP authorization (redirect URI display) / draft §8
+    shape: value
+    behaviour: |
+      The consent screen shows the document host (host:port when the port
+      is explicit) and the host of the requested redirect_uri, flags a
+      loopback redirect, and carries no logo.
+    status: active
+
+  - id: CIMD-FLOW-11
+    severity: P1
+    spec: RFC 6749 §6
+    shape: order
+    behaviour: |
+      A document client can use its refresh token while the document
+      resolves, and the refresh token rotates. When the document is gone
+      and its cache entry has lapsed, the client no longer resolves and
+      the refresh is invalid_client.
+    status: active
+
+  - id: CIMD-FLOW-12
+    severity: P1
+    spec: draft §4 / RFC 9126 / RFC 8707
+    shape: identity
+    behaviour: |
+      Every pair drawn from the four factors works together:
+      authentication method (none, private_key_jwt), route (plain
+      /authorize, PAR), resource (absent, present) and cache state
+      (miss, hit, expired). The access token carries the requested
+      resource as its audience when one was sent, and the document is
+      fetched once for miss and hit and twice for expired.
+    status: active
+    notes: |
+      All-pairs array built by hand (the generator was unavailable), six
+      rows, the minimum for a three-level factor against two-level ones.
+      A = auth method (n none, p private_key_jwt), B = route (L plain,
+      P PAR), C = resource (a absent, r present), D = cache state
+      (m miss, h hit, e expired).
+
+        row  A  B  C  D
+         1   n  L  a  m
+         2   p  P  r  m
+         3   n  P  r  h
+         4   p  L  a  h
+         5   n  L  r  e
+         6   p  P  a  e
+
+      Coverage of every value pair, by row numbers:
+
+        A x B  nL 1,5   nP 3   pL 4   pP 2,6
+        A x C  na 1     nr 3,5 pa 4,6  pr 2
+        B x C  La 1,4   Lr 5   Pa 6    Pr 2,3
+        A x D  nm 1  nh 3  ne 5  pm 2  ph 4  pe 6
+        B x D  Lm 1  Lh 4  Le 5  Pm 2  Ph 3  Pe 6
+        C x D  am 1  ah 4  ae 6  rm 2  rh 3  re 5
+
+      Cache state is reached with a fake clock: hit is a prior
+      resolution, expired is a prior resolution followed by 61 seconds.
+
+  - id: CIMD-FLOW-13
+    severity: P1
+    spec: draft §8.4
+    behaviour: |
+      Changing a client's document invalidates the grants already issued
+      to it.
     status: out-of-scope
     out_of_scope_reason: |
-      CIMD is not implemented (see CIMD-URL-01).
+      Deliberately not offered. A changed redirect_uris or jwks takes
+      effect from the next fetch only; existing grants and refresh tokens
+      stay valid. Exploiting a swapped jwks needs both control of the
+      document host and a stolen refresh token. Revisit if the draft
+      makes revocation on document change a MUST.

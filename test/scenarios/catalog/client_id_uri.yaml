@@ -88,7 +88,7 @@ rows:
       external URL, while CIDU stays under the OP's own base path);
       use a flag or a dedicated base path prefix.
     status: out-of-scope
-    out_of_scope_reason: Client ID Metadata Document (CIMD) is intentionally not implemented in v1.0 (catalog feature client_id_metadata_document has 0 active rows). Without CIMD there is no second URL form to disambiguate against; the contrast the row tests does not exist.
+    out_of_scope_reason: Client ID Metadata Document (CIMD) now exists as an experimental opt-in (op.WithClientIDMetadataDocuments; catalog feature client_id_metadata_document), but the OP still mints only opaque base64url client_ids and never URL-form ones, so there is no OP-issued URL form to tell apart from a metadata-document URL. Any client_id that is an https URL is, by construction, a metadata-document identifier; a registered client with the same id still wins (CIMD-RES-01).
 
   - id: CIDU-CHR-01
     severity: P0

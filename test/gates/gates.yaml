@@ -135,12 +135,13 @@ surfaces:
       - internal/proxy
 
   - id: jar-jarm
-    title: JAR, JARM and RP keysets
+    title: JAR, JARM, RP keysets and client ID metadata documents
     paths:
       - internal/jar
       - internal/jarm
       - internal/rpjwks
       - internal/clientencjwks
+      - internal/cimd
 
   - id: client-auth
     title: Client authentication

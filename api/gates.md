@@ -186,7 +186,7 @@ A green result from the gate on the left says nothing about the classes on the r
 | Session cookie, CSRF and CORS | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `failopen`, `apiverify`, `browserverify` |
 | DPoP | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `fuzz`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `scenario-advisories`, `conformance` |
 | mTLS client authentication and proxy identity | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `conformance` |
-| JAR, JARM and RP keysets | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `fuzz`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `scenario-advisories`, `conformance` |
+| JAR, JARM, RP keysets and client ID metadata documents | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `fuzz`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `scenario-advisories`, `conformance` |
 | Client authentication | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `scenario-advisories`, `conformance` |
 | In-memory store adapter | unit | `gofmt`, `vet`, `lint`, `test`, `test-race`, `failopen` |
 | Composite store adapter | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `failopen`, `store-contracts` |

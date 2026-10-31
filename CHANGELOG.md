@@ -632,6 +632,52 @@ covered by the SemVer promise.
   resource server that implements only the draft's RS256 baseline rejects
   these assertions.
 
+- Client ID metadata documents
+  (draft-ietf-oauth-client-id-metadata-document-02), enabled with
+  `op.WithClientIDMetadataDocuments`. A client presents an https URL as its
+  `client_id`; the OP fetches the JSON document at that URL, validates it with
+  the dynamic-registration rules and serves the client without registering it.
+  This is the registration route the Model Context Protocol authorization
+  specification recommends, so an MCP client works with no pre-registration and
+  no dynamic registration. Discovery then carries
+  `client_id_metadata_document_supported`. The client may use the
+  authorization code and refresh token grants, authenticating with `none` or
+  `private_key_jwt`; secret-based methods and mutual TLS are refused.
+  - URL: the `client_id` must be https, have a path other than `/`, and carry
+    no query, fragment, userinfo or dot segment; the host must be ASCII and the
+    whole URL at most 255 bytes. Anything else is an unknown client and is not
+    fetched.
+  - Fetch: one GET, no redirects, status 200 only, `application/json` or
+    `application/*+json`, a 5 KiB body limit and a 5 second timeout. Private,
+    loopback, link-local and cloud metadata addresses are refused when the
+    connection is made. Unknown members are ignored; `redirect_uris` is
+    required and one invalid entry rejects the document, except that `http`
+    loopback hosts including `localhost` are accepted. A registered client
+    with the same `client_id` always wins.
+  - Cache: the lifetime follows `Cache-Control: max-age` (else `Expires`),
+    clamped to between one minute and 24 hours; `no-store` uses the minimum.
+    A failed or invalid document is remembered for five seconds, and
+    concurrent requests for one `client_id` share a single fetch. The cache
+    key is the exact `client_id` string.
+  - `ClientIDMetadataDocuments.Allow` is called with the URL on every
+    resolution, cache hits included, and a `false` result makes the client
+    unknown. The `cimd.fetched`, `cimd.fetch_failed` and `cimd.client_denied`
+    audit events record the outcome; the failure reason is not returned to the
+    caller.
+  - Consent: a document client is never first-party (`op.New` rejects its URL
+    in `op.WithFirstPartyClients`). The consent screen shows the document host
+    and the host of the requested `redirect_uri`, and warns when that
+    `redirect_uri` is a loopback address. The client's `logo_uri` is not
+    shown. `interaction.ClientView` gains `MetadataDocumentHost`,
+    `RedirectHost` and `RedirectLoopback`.
+  - PKCE is required whichever authentication method the client uses.
+  - A client requesting `resource` can obtain access tokens for the resources
+    declared with `op.WithProtectedResources`, so the OP and the MCP server it
+    protects are served from one deployment.
+  - `op.WithAllowPrivateNetworkClientIDMetadata` admits `http` and private
+    addresses for development and tests only. `op.New` refuses the feature
+    together with a FAPI profile.
+
 ### Fixed
 
 - When a refresh-token replay is detected but the store fails to return the
