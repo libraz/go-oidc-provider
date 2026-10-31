@@ -15,6 +15,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -117,40 +118,70 @@ func TestScenario_NA_007_IPv6LoopbackWithoutPortAllowsAnyPort(t *testing.T) {
 	assertNativeLoopbackAuthorize(t, "http://[::1]/op/callback", "http://[::1]:8888/op/callback")
 }
 
-// TestScenario_NA_008_PostLogoutLocalhostWithRegisteredPort is OOS — see catalog out_of_scope_reason.
+// TestScenario_NA_008_PostLogoutLocalhostWithRegisteredPort pins the post-logout arm of
+// the native-app loopback wildcard for the textual-localhost host registered with a port:
+// /end_session accepts the registered post_logout_redirect_uri on any
+// ephemeral port, mirroring the /authorize redirect_uri rule.
+//
+// Spec: RFC 8252 §7.3 / OIDC RP-Initiated Logout 1.0 §3.
 func TestScenario_NA_008_PostLogoutLocalhostWithRegisteredPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: NA-008 (see catalog out_of_scope_reason)")
+	assertNativeLoopbackPostLogout(t, "http://localhost:2355/op/logout", "http://localhost:8888/op/logout")
 }
 
-// TestScenario_NA_009_PostLogoutLocalhostWithoutPort is OOS — see catalog out_of_scope_reason.
+// TestScenario_NA_009_PostLogoutLocalhostWithoutPort pins the post-logout arm of
+// the native-app loopback wildcard for the textual-localhost host registered without a port:
+// /end_session accepts the registered post_logout_redirect_uri on any
+// ephemeral port, mirroring the /authorize redirect_uri rule.
+//
+// Spec: RFC 8252 §7.3 / OIDC RP-Initiated Logout 1.0 §3.
 func TestScenario_NA_009_PostLogoutLocalhostWithoutPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: NA-009 (see catalog out_of_scope_reason)")
+	assertNativeLoopbackPostLogout(t, "http://localhost/op/logout", "http://localhost:8888/op/logout")
 }
 
-// TestScenario_NA_010_PostLogoutIPv4WithRegisteredPort is OOS — see catalog out_of_scope_reason.
+// TestScenario_NA_010_PostLogoutIPv4WithRegisteredPort pins the post-logout arm of
+// the native-app loopback wildcard for 127.0.0.1 registered with a port:
+// /end_session accepts the registered post_logout_redirect_uri on any
+// ephemeral port, mirroring the /authorize redirect_uri rule.
+//
+// Spec: RFC 8252 §7.3 / OIDC RP-Initiated Logout 1.0 §3.
 func TestScenario_NA_010_PostLogoutIPv4WithRegisteredPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: NA-010 (see catalog out_of_scope_reason)")
+	assertNativeLoopbackPostLogout(t, "http://127.0.0.1:2355/op/logout", "http://127.0.0.1:8888/op/logout")
 }
 
-// TestScenario_NA_011_PostLogoutIPv4WithoutPort is OOS — see catalog out_of_scope_reason.
+// TestScenario_NA_011_PostLogoutIPv4WithoutPort pins the post-logout arm of
+// the native-app loopback wildcard for 127.0.0.1 registered without a port:
+// /end_session accepts the registered post_logout_redirect_uri on any
+// ephemeral port, mirroring the /authorize redirect_uri rule.
+//
+// Spec: RFC 8252 §7.3 / OIDC RP-Initiated Logout 1.0 §3.
 func TestScenario_NA_011_PostLogoutIPv4WithoutPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: NA-011 (see catalog out_of_scope_reason)")
+	assertNativeLoopbackPostLogout(t, "http://127.0.0.1/op/logout", "http://127.0.0.1:8888/op/logout")
 }
 
-// TestScenario_NA_012_PostLogoutIPv6WithRegisteredPort is OOS — see catalog out_of_scope_reason.
+// TestScenario_NA_012_PostLogoutIPv6WithRegisteredPort pins the post-logout arm of
+// the native-app loopback wildcard for [::1] registered with a port:
+// /end_session accepts the registered post_logout_redirect_uri on any
+// ephemeral port, mirroring the /authorize redirect_uri rule.
+//
+// Spec: RFC 8252 §7.3 / OIDC RP-Initiated Logout 1.0 §3.
 func TestScenario_NA_012_PostLogoutIPv6WithRegisteredPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: NA-012 (see catalog out_of_scope_reason)")
+	assertNativeLoopbackPostLogout(t, "http://[::1]:2355/op/logout", "http://[::1]:8888/op/logout")
 }
 
-// TestScenario_NA_013_PostLogoutIPv6WithoutPort is OOS — see catalog out_of_scope_reason.
+// TestScenario_NA_013_PostLogoutIPv6WithoutPort pins the post-logout arm of
+// the native-app loopback wildcard for [::1] registered without a port:
+// /end_session accepts the registered post_logout_redirect_uri on any
+// ephemeral port, mirroring the /authorize redirect_uri rule.
+//
+// Spec: RFC 8252 §7.3 / OIDC RP-Initiated Logout 1.0 §3.
 func TestScenario_NA_013_PostLogoutIPv6WithoutPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: NA-013 (see catalog out_of_scope_reason)")
+	assertNativeLoopbackPostLogout(t, "http://[::1]/op/logout", "http://[::1]:8888/op/logout")
 }
 
 // TestScenario_NA_014_RegistrationRejectsNonLoopbackHTTPRedirect drives
@@ -301,5 +332,51 @@ func assertNativeLoopbackAuthorize(t *testing.T, registered, requested string) {
 	}
 	if got := flow.Location.String(); got == "" || flow.Location.Host == "" {
 		t.Fatalf("callback location malformed: %v", flow.Location)
+	}
+}
+
+// assertNativeLoopbackPostLogout registers a public native client whose
+// post-logout allowlist holds registered, then drives /end_session with
+// requested (same loopback host and path, different port) and expects
+// a 302 to requested. A request whose path differs from the registered
+// one is the control: the wildcard relaxes the port only, so it must
+// not redirect.
+func assertNativeLoopbackPostLogout(t *testing.T, registered, requested string) {
+	t.Helper()
+
+	tk := testkit.NewProvider(t)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "native-loopback-logout",
+		RedirectURIs:            []string{"http://127.0.0.1/op/callback"},
+		PostLogoutRedirectURIs:  []string{registered},
+		PublicClient:            true,
+		TokenEndpointAuthMethod: "none",
+		Scopes:                  []string{"openid"},
+	})
+	hint := mintESIDToken(t, tk, func(c *esIDTokenClaims) { c.Aud = rp.ID })
+
+	resp := esGet(t, tk, url.Values{
+		"id_token_hint":            {hint},
+		"client_id":                {rp.ID},
+		"post_logout_redirect_uri": {requested},
+	})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 302 (loopback any-port must match); body=%s", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Location"); got != requested {
+		t.Errorf("Location=%q want %q", got, requested)
+	}
+
+	otherPath := strings.Replace(requested, "/op/logout", "/op/other", 1)
+	ctrl := esGet(t, tk, url.Values{
+		"id_token_hint":            {hint},
+		"client_id":                {rp.ID},
+		"post_logout_redirect_uri": {otherPath},
+	})
+	defer func() { _ = ctrl.Body.Close() }()
+	if ctrl.StatusCode == http.StatusFound {
+		t.Errorf("control: a different path %q redirected to %q; the wildcard must relax the port only", otherPath, ctrl.Header.Get("Location"))
 	}
 }
