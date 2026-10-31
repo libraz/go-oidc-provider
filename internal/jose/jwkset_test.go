@@ -22,6 +22,10 @@ const (
 	x25519JWK     = `{"kty":"OKP","crv":"X25519","x":"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo","use":"enc","kid":"enc-1"}`
 	ed448JWK      = `{"kty":"OKP","crv":"Ed448","x":"AAAA","use":"sig","kid":"sig-2"}`
 	unknownKtyJWK = `{"kty":"XYZZY","kid":"other-1"}`
+	// zeroExponentRSAJWK decodes, but its exponent of 0 fails Valid and
+	// once panicked RFC 7638 thumbprint computation in the JOSE layer.
+	octJWK             = `{"kty":"oct","k":"c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0","alg":"HS256","use":"sig","kid":"oct-1"}`
+	zeroExponentRSAJWK = `{"kty":"RSA","kid":"rsa-e0","e":"AA","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4Dy1WlUzewbgBHod5pcM9H95GQRV3JDXboIRROSBigeC5yjU1hGzHHyXss8UDprecbAYxknTcQkhslANGRUZmdTOQ5qTRsLAt6BTYuyvVRdhS8exSZEy_c4gs_7svlJJQ4H9_NxsiIoLwAEk7-Q3UXERGYw_75IDrGA84-lA_-Ct4eTlXHBIY2EaV7t7LjJaynVJCpkv4LKjTTAumiGUIuQhrNhZLuF_RJLqHpM2kgWFLU7-VTdL1VbC2tejvcI2BlMkEpk1BzBZI0KQB0GaDWFLN-aEAw3vRw"}`
 )
 
 // TestDecodeJWKSet covers the RFC 7517 §5 rule that a JWK Set member whose
@@ -63,6 +67,13 @@ func TestDecodeJWKSet(t *testing.T) {
 		{
 			name:         "member missing kty dropped",
 			doc:          `{"keys":[{"kid":"no-kty"},` + ecSigJWK + `]}`,
+			wantKIDs:     []string{"sig-1"},
+			wantDeclared: 2,
+		},
+		{
+			// Tracks: GHSA-r39w-98wm-9pp6
+			name:         "degenerate RSA key (exponent 0) dropped",
+			doc:          `{"keys":[` + zeroExponentRSAJWK + `,` + ecSigJWK + `]}`,
 			wantKIDs:     []string{"sig-1"},
 			wantDeclared: 2,
 		},
@@ -192,5 +203,54 @@ func TestParseJWKSet_RejectsPrivateKey(t *testing.T) {
 	}
 	if _, err := jose.ParseJWKSet(privSet); !errors.Is(err, jose.ErrUnsupportedKeyShape) {
 		t.Fatalf("private JWKS: err=%v want ErrUnsupportedKeyShape", err)
+	}
+}
+
+// FuzzDecodeJWKSet pins the no-panic contract on the JWK Set entry point
+// every inbound client key set goes through, and that the declared count
+// never undercounts the survivors.
+//
+// Tracks: GHSA-vvm8-gf78-28g4 (go-jose) — panics in JSON parsing reached
+// through JWK and JWK Set decoding.
+func FuzzDecodeJWKSet(f *testing.F) {
+	for _, member := range []string{ecSigJWK, x25519JWK, ed448JWK, unknownKtyJWK, zeroExponentRSAJWK, octJWK} {
+		f.Add([]byte(`{"keys":[` + member + `]}`))
+	}
+	f.Add([]byte(`{"keys":[{"kty":"RSA","n":null,"e":null}]}`))
+	f.Add([]byte(`{"keys":[{"kty":"EC","crv":"P-256","x":"","y":""}]}`))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		set, declared, err := jose.DecodeJWKSet(raw)
+		if err != nil {
+			return
+		}
+		if declared < len(set.Keys) {
+			t.Fatalf("declared=%d < decoded=%d", declared, len(set.Keys))
+		}
+	})
+}
+
+// TestParseJWKSet_RejectsSymmetricKey pins that an inbound JWK Set never
+// yields an oct key, empty or not, so no client-supplied JWK can key an
+// HMAC verification.
+//
+// Tracks: GHSA-pxh4-856f-4h89 (PyJWT) — an oct JWK with an empty "k"
+// produced a zero-length HMAC key that verified any forged token.
+func TestParseJWKSet_RejectsSymmetricKey(t *testing.T) {
+	t.Parallel()
+
+	for name, member := range map[string]string{
+		"empty k":     `{"kty":"oct","k":"","alg":"HS256","use":"sig","kid":"oct-empty"}`,
+		"non-empty k": octJWK,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			keys, err := jose.ParseJWKSet([]byte(`{"keys":[` + member + `]}`))
+			if err == nil {
+				t.Fatalf("ParseJWKSet accepted a symmetric key: %+v", keys)
+			}
+			if !errors.Is(err, jose.ErrUnsupportedKeyShape) && !errors.Is(err, jose.ErrNoUsableJWK) {
+				t.Fatalf("err=%v want ErrUnsupportedKeyShape or ErrNoUsableJWK", err)
+			}
+		})
 	}
 }

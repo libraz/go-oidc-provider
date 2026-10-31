@@ -525,6 +525,52 @@ func TestVerifySelfSigned_AllKeysUndecodable(t *testing.T) {
 	}
 }
 
+// zeroExponentRSAJWK decodes as an RSA public key whose exponent is 0;
+// computing its RFC 7638 thumbprint dereferenced nil in the JOSE layer.
+const zeroExponentRSAJWK = `{"kty":"RSA","kid":"kid-e0","e":"AA",` +
+	`"n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4Dy1WlUzewbgBHod5pcM9H95GQRV3JDXboIRROSBigeC5yjU1hGzHHyXss8UDprecbAYxknTcQkhslANGRUZmdTOQ5qTRsLAt6BTYuyvVRdhS8exSZEy_c4gs_7svlJJQ4H9_NxsiIoLwAEk7-Q3UXERGYw_75IDrGA84-lA_-Ct4eTlXHBIY2EaV7t7LjJaynVJCpkv4LKjTTAumiGUIuQhrNhZLuF_RJLqHpM2kgWFLU7-VTdL1VbC2tejvcI2BlMkEpk1BzBZI0KQB0GaDWFLN-aEAw3vRw"}`
+
+// TestVerifySelfSigned_ZeroExponentRSAKeyIgnored pins that a registered
+// JWKS member whose thumbprint cannot be computed is skipped rather than
+// panicking the token request, and the usable key still authenticates.
+//
+// Tracks: GHSA-r39w-98wm-9pp6
+func TestVerifySelfSigned_ZeroExponentRSAKeyIgnored(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(5),
+		Subject:      pkix.Name{CommonName: "zero-exponent-keyset"},
+		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2125, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	usable, err := json.Marshal(josev4.JSONWebKey{Key: &priv.PublicKey, KeyID: "kid-0", Use: "sig"})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	jwks := []byte(`{"keys":[` + zeroExponentRSAJWK + `,` + string(usable) + `]}`)
+	if err := mtls.VerifySelfSignedTLSClientAuth(cert, jwks); err != nil {
+		t.Errorf("VerifySelfSignedTLSClientAuth(zero-exponent member): %v", err)
+	}
+	err = mtls.VerifySelfSignedTLSClientAuth(cert, []byte(`{"keys":[`+zeroExponentRSAJWK+`]}`))
+	if !errors.Is(err, mtls.ErrNoMatchingJWK) && !errors.Is(err, mtls.ErrJWKSMalformed) {
+		t.Errorf("err=%v want ErrNoMatchingJWK or ErrJWKSMalformed", err)
+	}
+}
+
 // TestVerifySelfSigned_EmptyJWKS treats an empty payload as malformed
 // (no keys can possibly match).
 func TestVerifySelfSigned_EmptyJWKS(t *testing.T) {

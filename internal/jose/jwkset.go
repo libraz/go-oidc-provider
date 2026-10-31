@@ -48,7 +48,9 @@ func DecodeJWKSet(raw []byte) (*josev4.JSONWebKeySet, int, error) {
 	set := &josev4.JSONWebKeySet{Keys: make([]josev4.JSONWebKey, 0, len(envelope.Keys))}
 	for _, member := range envelope.Keys {
 		var key josev4.JSONWebKey
-		if err := key.UnmarshalJSON(member); err != nil {
+		// Valid rejects decodable-but-degenerate keys (an RSA exponent of 0,
+		// say) that would otherwise reach Thumbprint and verification.
+		if err := key.UnmarshalJSON(member); err != nil || !key.Valid() {
 			continue
 		}
 		set.Keys = append(set.Keys, key)
@@ -71,9 +73,6 @@ func ParseJWKSet(raw []byte) ([]JWK, error) {
 	}
 	out := make([]JWK, 0, len(set.Keys))
 	for _, key := range set.Keys {
-		if !key.Valid() {
-			return nil, ErrUnsupportedKeyShape
-		}
 		// crypto.PublicKey is an alias for `any`, so the previous
 		// `key.Key.(crypto.PublicKey)` assertion never failed and admitted
 		// private (and symmetric) keys as if they were verification keys.
