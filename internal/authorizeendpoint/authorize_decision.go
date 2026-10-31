@@ -130,6 +130,7 @@ type hintState struct {
 	needConsent    bool
 	promptNone     bool
 	selectAcct     bool
+	create         bool
 	existing       *store.Grant
 }
 
@@ -150,6 +151,7 @@ func buildHintState(
 		forceLogin: containsString(req.Prompt, interaction.PromptLogin),
 		promptNone: containsString(req.Prompt, "none"),
 		selectAcct: containsString(req.Prompt, interaction.PromptSelectAccount),
+		create:     containsString(req.Prompt, interaction.PromptCreate),
 	}
 	if out.hasSession {
 		// The door, the chooser pick and the terminal gate share
@@ -232,8 +234,15 @@ func decideHintPromptNone(s hintState) authorizeHint {
 // to register the chooser; consent still runs after the chooser
 // if the picked subject's grant does not cover the requested
 // scope.
+//
+// prompt=create is decided first, whatever the session or acr: the
+// chain runs the LoginFlow's Registration step and binds a new account,
+// so neither the session's authentication nor its subject's grant may
+// stand in for anything.
 func decideHintInteractive(s hintState) authorizeHint {
 	switch {
+	case s.create:
+		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptCreate, reauth: true}
 	case !s.hasSession, s.forceLogin, s.acrUnsatisfied:
 		// acrUnsatisfied joins the login branch: an RFC 9470 step-up runs
 		// the authn chain again to reach the requested acr_values (already

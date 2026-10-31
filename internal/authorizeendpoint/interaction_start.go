@@ -98,7 +98,14 @@ func initialAuthnState(
 	existing := hint.grant
 	willRunChooser := containsString(req.Prompt, interaction.PromptSelectAccount) && active != nil
 	addAccount := chooserAddAccountRequested(req, active)
-	interactionsRun := initialInteractionsRun(req, existing, willRunChooser || addAccount)
+	// prompt=create binds the account Registration creates, never the
+	// session's: no subject, entry authentication or grant carries over.
+	registration := containsString(req.Prompt, interaction.PromptCreate)
+	subject := currentSubject(active)
+	if registration {
+		subject = ""
+	}
+	interactionsRun := initialInteractionsRun(req, existing, willRunChooser || addAccount || registration)
 	autoGranted := hint.autoGrant != nil
 	if autoGranted {
 		interactionsRun[consent.Name] = true
@@ -109,7 +116,7 @@ func initialAuthnState(
 		InteractionUID:           uid,
 		ClientID:                 client.ID,
 		Client:                   projectClientView(client),
-		Subject:                  currentSubject(active),
+		Subject:                  subject,
 		RemoteIP:                 clientIPFromRequest(r, deps),
 		UserAgent:                truncateUserAgent(r.UserAgent()),
 		AcceptLanguage:           r.Header.Get("Accept-Language"),
@@ -123,6 +130,7 @@ func initialAuthnState(
 		ChooserGroupID:           activeChooserGroupID(active, willRunChooser),
 		ChooserAddAccount:        addAccount,
 		ChooserAddAccountGroupID: chooserAddAccountGroupID(req, active),
+		Registration:             registration,
 	}
 }
 
@@ -131,11 +139,12 @@ func initialAuthnState(
 //
 // bindsOtherSubject reports that the chain is expected to bind an account
 // other than the cookie-resolved one — the chooser picking a sibling
-// session, or an AddAccountURL-derived login joining a second account to
-// the group. The grant the dispatcher looked up describes the *current*
-// subject, so it says nothing about what the incoming one has approved:
-// pre-marking consent there would carry one account's approval over to
-// another. The terminal gate re-runs the coverage predicate against the
+// session, an AddAccountURL-derived login joining a second account to
+// the group, or a prompt=create chain binding the account its
+// Registration step creates. The grant the dispatcher looked up
+// describes the *current* subject, so it says nothing about what the
+// incoming one has approved: pre-marking consent there would carry one
+// account's approval over to another. The terminal gate re-runs the coverage predicate against the
 // bound subject and fails the ceremony closed, so the pre-mark does not
 // leak a code — it costs the second account its consent screen and, with
 // it, the whole authorization.

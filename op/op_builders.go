@@ -327,7 +327,16 @@ func authorizeRequestPolicy(cfg *config) authorize.Policy {
 		NonceRequired:        cfg.requireNonce(),
 		StateOrNonceRequired: cfg.requireStateOrNonce(),
 		OpenIDScopeOptional:  cfg.openIDScopeOptional,
+		PromptCreate:         cfg.promptCreateEnabled(),
 	}
+}
+
+// promptCreateEnabled reports whether the OP accepts prompt=create: the
+// LoginFlow declares a Registration step. [authorizeRequestPolicy] and
+// [buildDiscoveryInput] both read it, so the value discovery advertises
+// and the value /authorize accepts cannot diverge.
+func (c *config) promptCreateEnabled() bool {
+	return !isNilLike(c.loginFlow.Registration)
 }
 
 // authorizeExtensionPolicy renders the gates that run once a request has
@@ -1007,6 +1016,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 		GrantManagementActions:             cfg.grantManagementActionStrings(),
 		GrantManagementActionRequired:      cfg.grantManagementActionRequired,
 		PairwiseEnabled:                    cfg.pairwiseEnabled(),
+		PromptCreate:                       cfg.promptCreateEnabled(),
 		EncryptionAlgsSupported:            cfg.effectiveEncryptionAlgs(),
 		EncryptionEncsSupported:            cfg.effectiveEncryptionEncs(),
 		InboundEncryptionAlgsSupported:     cfg.inboundEncryptionAlgs(),

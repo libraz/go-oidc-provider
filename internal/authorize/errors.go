@@ -136,13 +136,20 @@ var (
 
 	// ErrPromptInvalid indicates prompt contains a value other than the
 	// four recognised by OIDC Core §3.1.2.1 ("none", "login", "consent",
-	// "select_account"). Maps to invalid_request.
+	// "select_account"), or "create" while [Policy.PromptCreate] is off.
+	// Maps to invalid_request.
 	ErrPromptInvalid = newErr("invalid_request", "prompt contains an unrecognised value")
 
 	// ErrPromptConflict indicates prompt=none was combined with other
 	// prompt values; OIDC Core §3.1.2.1 requires "none" to appear alone.
 	// Maps to invalid_request.
 	ErrPromptConflict = newErr("invalid_request", "prompt=none cannot combine with other prompts")
+
+	// ErrPromptCreateConflict indicates prompt=create was combined with
+	// another prompt value; the OP refuses rather than pick one, since
+	// Prompt Create 1.0 leaves the combination undefined. Maps to
+	// invalid_request.
+	ErrPromptCreateConflict = newErr("invalid_request", "prompt=create cannot combine with other prompts")
 
 	// ErrMaxAgeInvalid indicates max_age is present but not parseable as a
 	// non-negative integer. Raised by the parser, so NOT redirect-safe.

@@ -28,6 +28,12 @@ const (
 	// the RP asks the OP to complete silently or fail with one of
 	// the *_required errors.
 	PromptNone = "none"
+
+	// PromptCreate is the "create" value of the OIDC prompt parameter
+	// (OpenID Connect Prompt Create 1.0): the RP asks the OP to start
+	// with account creation rather than login. Accepted only when the
+	// OP's LoginFlow declares a Registration step.
+	PromptCreate = "create"
 )
 
 // Prompt is the unit of UI an [op.Authenticator] or [op.Interaction]

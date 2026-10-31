@@ -104,7 +104,7 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 	if err := req.validatePKCE(policy.PKCERequired || clientRequiresPKCE(client)); err != nil {
 		return err
 	}
-	if err := req.validatePrompt(); err != nil {
+	if err := req.validatePrompt(policy.PromptCreate); err != nil {
 		return err
 	}
 	return nil
@@ -373,32 +373,46 @@ func (req *Request) validatePKCE(required bool) error {
 }
 
 // validatePrompt enforces the OIDC Core §3.1.2.1 prompt grammar: every
-// value must be one of the four known names and "none" cannot be combined.
-func (req *Request) validatePrompt() error {
+// value must be one of the four known names (plus "create" when
+// promptCreate admits it), "none" cannot be combined, and "create" cannot
+// be combined with any other value. The checks run in that order.
+func (req *Request) validatePrompt(promptCreate bool) error {
 	if len(req.Prompt) == 0 {
 		return nil
 	}
 	hasNone := false
+	hasCreate := false
+	hasOther := false
 	for _, p := range req.Prompt {
-		if !isKnownPrompt(p) {
+		if !isKnownPrompt(p, promptCreate) {
 			return ErrPromptInvalid
 		}
-		if p == "none" {
+		switch p {
+		case "none":
 			hasNone = true
+		case interaction.PromptCreate:
+			hasCreate = true
+		default:
+			hasOther = true
 		}
 	}
 	if hasNone && len(req.Prompt) > 1 {
 		return ErrPromptConflict
 	}
+	if hasCreate && hasOther {
+		return ErrPromptCreateConflict
+	}
 	return nil
 }
 
 // isKnownPrompt reports whether p is one of the four prompt names OIDC
-// Core §3.1.2.1 defines.
-func isKnownPrompt(p string) bool {
+// Core §3.1.2.1 defines, or "create" when promptCreate admits it.
+func isKnownPrompt(p string, promptCreate bool) bool {
 	switch p {
 	case "none", interaction.PromptLogin, interaction.PromptConsent, interaction.PromptSelectAccount:
 		return true
+	case interaction.PromptCreate:
+		return promptCreate
 	default:
 		return false
 	}

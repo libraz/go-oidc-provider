@@ -204,4 +204,9 @@ type Policy struct {
 	// when they intend to serve plain OAuth 2.0 authorization_code
 	// flows alongside OIDC.
 	OpenIDScopeOptional bool
+
+	// PromptCreate admits prompt=create (OpenID Connect Prompt Create
+	// 1.0). It is true exactly when the LoginFlow declares a
+	// Registration step; otherwise "create" is an unrecognised value.
+	PromptCreate bool
 }

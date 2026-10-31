@@ -91,11 +91,23 @@ func TestParseRequest_HappyPOST(t *testing.T) {
 func TestValidate_SentinelTable(t *testing.T) {
 	t.Parallel()
 
+	sharedPolicy := authorize.Policy{
+		PKCERequired:         true,
+		NonceRequired:        true,
+		StateOrNonceRequired: true,
+	}
+	// createPolicy is sharedPolicy on an OP whose LoginFlow declares a
+	// Registration step.
+	createPolicy := sharedPolicy
+	createPolicy.PromptCreate = true
+
 	cases := []struct {
 		name           string
 		mutate         func(url.Values)
 		want           error
 		wantRedirectOK bool
+		// policy overrides sharedPolicy when non-zero.
+		policy authorize.Policy
 	}{
 		{
 			name:   "missing_client_id",
@@ -179,6 +191,135 @@ func TestValidate_SentinelTable(t *testing.T) {
 			wantRedirectOK: true,
 		},
 		{
+			name:           "prompt_create_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "create") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "prompt_create_create_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "create create") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "prompt_create_none_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "create none") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "prompt_none_create_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "none create") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "prompt_create_login_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "create login") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "prompt_login_create_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "login create") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "prompt_create_uppercase_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "CREATE") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "prompt_create_tab_login_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "create\tlogin") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "prompt_create_non_ascii_registration_off",
+			mutate:         func(v url.Values) { v.Set("prompt", "cr\u00e9ate") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:   "prompt_create_registration_on",
+			mutate: func(v url.Values) { v.Set("prompt", "create") },
+			want:   nil,
+			policy: createPolicy,
+		},
+		{
+			name:   "prompt_create_create_registration_on",
+			mutate: func(v url.Values) { v.Set("prompt", "create create") },
+			want:   nil,
+			policy: createPolicy,
+		},
+		{
+			name:           "prompt_create_none_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "create none") },
+			want:           authorize.ErrPromptConflict,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
+			name:           "prompt_none_create_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "none create") },
+			want:           authorize.ErrPromptConflict,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
+			name:           "prompt_create_login_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "create login") },
+			want:           authorize.ErrPromptCreateConflict,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
+			name:           "prompt_login_create_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "login create") },
+			want:           authorize.ErrPromptCreateConflict,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
+			name:           "prompt_create_consent_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "create consent") },
+			want:           authorize.ErrPromptCreateConflict,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
+			name:           "prompt_select_account_create_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "select_account create") },
+			want:           authorize.ErrPromptCreateConflict,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
+			name:           "prompt_create_uppercase_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "CREATE") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
+			name:           "prompt_create_tab_login_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "create\tlogin") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
+			name:           "prompt_create_non_ascii_registration_on",
+			mutate:         func(v url.Values) { v.Set("prompt", "cr\u00e9ate") },
+			want:           authorize.ErrPromptInvalid,
+			wantRedirectOK: true,
+			policy:         createPolicy,
+		},
+		{
 			// Parse-time: no client has been looked up, so the
 			// rejection cannot take the redirect channel.
 			name:   "max_age_negative",
@@ -223,11 +364,11 @@ func TestValidate_SentinelTable(t *testing.T) {
 			case parseErr != nil:
 				gotErr = parseErr
 			default:
-				gotErr = req.Validate(goodClient(), nil, authorize.Policy{
-					PKCERequired:         true,
-					NonceRequired:        true,
-					StateOrNonceRequired: true,
-				})
+				policy := sharedPolicy
+				if tc.policy != (authorize.Policy{}) {
+					policy = tc.policy
+				}
+				gotErr = req.Validate(goodClient(), nil, policy)
 			}
 			if !errors.Is(gotErr, tc.want) {
 				t.Fatalf("err=%v want %v", gotErr, tc.want)
