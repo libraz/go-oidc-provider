@@ -262,7 +262,7 @@ rows:
       When aud has multiple values or when the OP adds additional
       audiences, azp MUST be set to the current client_id.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 never emits multi-audience id_tokens. internal/tokenendpoint/authcode.go and refresh.go both build IDTokenClaims with Audience: []string{in.ClientID} (single-aud only), and no public option lets the embedder add extra audiences to id_token aud. The azp-required conditional has no v1.0 trigger."
+    out_of_scope_reason: "v1.0 never emits multi-audience id_tokens. internal/tokenendpoint/authcode.go and refresh_response.go both build IDTokenClaims with Audience: []string{in.ClientID} (single-aud only), and no public option lets the embedder add extra audiences to id_token aud. The azp-required conditional has no v1.0 trigger."
 
   - id: IDT-33
     severity: P1
@@ -272,7 +272,7 @@ rows:
       the OP carries a sid claim for front-channel and back-channel
       logout consumers.
     status: out-of-scope
-    out_of_scope_reason: v1.0 never populates sid on id_tokens. internal/tokens/tokens.go declares the SID field with omitempty, but no caller in internal/tokenendpoint/{authcode,refresh,customgrant}.go writes it; sid is only consumed by the back-channel logout payload via internal/sessions, never minted into the id_token wire.
+    out_of_scope_reason: v1.0 never populates sid on id_tokens. internal/tokens/tokens.go declares the SID field with omitempty, but no caller in internal/tokenendpoint/{authcode,refresh_response,customgrant}.go writes it; sid is only consumed by the back-channel logout payload via internal/sessions, never minted into the id_token wire.
 
   - id: IDT-34
     severity: P1

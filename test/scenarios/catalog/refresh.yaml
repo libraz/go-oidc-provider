@@ -175,7 +175,7 @@ rows:
     spec: RFC 9700 §4.13 (refresh token replay -> revoke whole chain)
     behaviour: |
       Refresh-token rotation is the v1.0 default (the library always
-      rotates; see internal/tokenendpoint/refresh.go). With the RFC
+      rotates; see internal/tokenendpoint/refresh_response.go). With the RFC
       9700 §2.2.2 retry window disabled via
       op.WithRefreshGracePeriod(0), redeeming the same refresh_token
       a second time after a successful rotation MUST fail with 400
