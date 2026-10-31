@@ -229,8 +229,6 @@ var auditNamesNotYetWired = map[auditevent.Name]string{
 	auditevent.AuditSSFStreamCreated:       "the SSF stream management endpoint that emits it is not built yet",
 	auditevent.AuditSSFStreamUpdated:       "the SSF stream management endpoint that emits it is not built yet",
 	auditevent.AuditSSFStreamDeleted:       "the SSF stream management endpoint that emits it is not built yet",
-	auditevent.AuditSSFSETEnqueued:         "the SSF transmitter that emits it is not built yet",
-	auditevent.AuditSSFEnqueueFailed:       "the SSF transmitter that emits it is not built yet",
 	auditevent.AuditSSFPushDelivered:       "the SSF push worker that emits it is not built yet",
 	auditevent.AuditSSFPushRejected:        "the SSF push worker that emits it is not built yet",
 	auditevent.AuditSSFPushRetried:         "the SSF push worker that emits it is not built yet",
