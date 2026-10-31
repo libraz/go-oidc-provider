@@ -1,58 +1,36 @@
 package devicecode
 
-import "time"
+import (
+	"time"
 
-// Default polling discipline parameters, per RFC 8628 §3.5. The token
-// endpoint clamps incoming polls below [DefaultInterval] to slow_down,
-// raises the effective interval by [SlowDownIncrement] on each
-// violation (no upper cap; the record's TTL is the hard stop), and
-// rejects sub-[FastPollFloor] repeats once per offence even when the
-// previous response was authorization_pending.
+	"github.com/libraz/go-oidc-provider/internal/pollinterval"
+)
+
+// Polling discipline parameters, per RFC 8628 §3.5. They are defined once in
+// [pollinterval] and re-exported here under this package's names.
 const (
-	// DefaultInterval is the seed value of the slow_down ladder and
-	// the value the OP advertises in the device-authorization
-	// response so a well-behaved device never triggers slow_down on
-	// its first poll.
-	DefaultInterval = 5 * time.Second
+	// DefaultInterval is the seed value of the slow_down ladder.
+	DefaultInterval = pollinterval.DefaultInterval
 
 	// SlowDownIncrement is the amount the effective interval grows by
-	// on every slow_down. RFC 8628 §3.5 instructs the device to
-	// increase its own interval by five seconds for this and all
-	// subsequent requests, so the OP's bar MUST grow by the same
-	// amount: any steeper escalation outruns the interval a compliant
-	// device actually observes, and the device is then strike-counted
-	// out of the flow for polling exactly as instructed.
-	SlowDownIncrement = 5 * time.Second
+	// on every slow_down.
+	SlowDownIncrement = pollinterval.SlowDownIncrement
 
-	// IntervalTolerance is how far a poll may undershoot the
-	// effective interval without earning slow_down. The OP measures
-	// the gap between arrivals while the device measures the gap
-	// between sends, so scheduler and network jitter routinely land
-	// an on-time poll marginally early; a strict comparison would
-	// flag roughly half of them and accumulate strikes against a
-	// device that never polled faster than it was told to.
-	// [FastPollFloor] stays an absolute floor, so the tolerance
-	// cannot admit a tight polling loop.
-	IntervalTolerance = 1 * time.Second
-
-	// FastPollFloor is the absolute minimum gap between two polls
-	// the OP tolerates regardless of the slow_down ladder. A poll
-	// arriving inside this window collapses to a single slow_down
-	// response per offence, distinguishing a misconfigured client
-	// from a brute-force loop.
-	FastPollFloor = 500 * time.Millisecond
+	// IntervalTolerance is how far a poll may undershoot the effective
+	// interval without earning slow_down.
+	IntervalTolerance = pollinterval.IntervalTolerance
 
 	// DefaultExpiresIn is the device_code lifetime advertised on the
 	// device-authorization response and stamped on the substore record.
-	// RFC 8628 §3.4 leaves the value unspecified; 600 s (10 minutes)
-	// is the smallest interval that still accommodates a distracted
-	// user finding a secondary device.
-	DefaultExpiresIn = 600 * time.Second
+	DefaultExpiresIn = pollinterval.DefaultExpiresIn
 
-	// MaxPollViolations is the default number of slow_down offences
-	// tolerated before the token endpoint locks the record with
-	// reason="poll_abuse".
-	MaxPollViolations uint8 = 5
+	// FastPollFloor is the absolute minimum gap between two polls
+	// regardless of the slow_down ladder.
+	FastPollFloor = pollinterval.FastPollFloor
+
+	// MaxPollViolations is the default number of slow_down strikes
+	// tolerated before the record is locked with access_denied.
+	MaxPollViolations = pollinterval.MaxPollViolations
 )
 
 // PollDecision is the closed sum returned by [DecidePoll] naming
@@ -118,62 +96,10 @@ func (d PollDecision) String() string {
 	}
 }
 
-// PollInput is the parameter bundle [DecidePoll] consumes. The
-// caller resolves the substore record, then projects only the
-// fields the discipline cares about.
-type PollInput struct {
-	// Now is the wall-clock reading the caller anchors the gate
-	// against. The caller MUST NOT use [time.Now] directly: every
-	// call site routes through internal/timex.Clock so the
-	// discipline is testable without sleep loops.
-	Now time.Time
-
-	// LastPolledAt is the wall-clock time of the previous poll
-	// against this record, or the zero value when the device has
-	// not polled yet. The caller obtains this from the substore;
-	// after [DecidePoll] returns the caller stamps the record's
-	// LastPolledAt to Now.
-	LastPolledAt time.Time
-
-	// EffectiveInterval is the interval the device is currently
-	// expected to observe. It starts at the value the
-	// device-authorization response advertised (by default
-	// [DefaultInterval]) and grows by [SlowDownIncrement] each time
-	// [DecidePoll] returns [PollDecisionSlowDown]. Callers MAY
-	// persist the raised value alongside the record; the
-	// reference implementation keeps it in [DeviceCode.Interval]
-	// so a later poll observes the elevated bar. A poll landing
-	// within [IntervalTolerance] of the bar counts as on time.
-	EffectiveInterval time.Duration
-
-	// ExpiresAt is the wall-clock time the record becomes invalid.
-	// A poll arriving at or after this point yields
-	// [PollDecisionExpiredToken].
-	ExpiresAt time.Time
-
-	// Approved reports whether the user has approved the
-	// verification ceremony.
-	Approved bool
-
-	// Denied reports whether the user has explicitly denied the
-	// request or the brute-force gate terminated the record.
-	Denied bool
-
-	// Consumed reports whether a previous poll already minted
-	// tokens against this record. Subsequent polls collapse to
-	// expired_token to prevent token-replay across the
-	// approve→consume race window.
-	Consumed bool
-
-	// PollViolations is the current slow_down strike count from the
-	// substore record. When it reaches [MaxPollViolations],
-	// [DecidePoll] returns access_denied.
-	PollViolations uint8
-
-	// MaxPollViolations overrides the default strike threshold. Zero
-	// falls back to [MaxPollViolations].
-	MaxPollViolations uint8
-}
+// PollInput is the parameter bundle [DecidePoll] consumes. The caller
+// resolves the substore record, then projects only the fields the
+// discipline cares about; see [pollinterval.Input] for each field.
+type PollInput = pollinterval.Input
 
 // PollOutput captures the decision plus the next-interval the token
 // endpoint stamps on the record before responding to the device.
@@ -186,79 +112,30 @@ type PollOutput struct {
 	CountThisAsViolation bool
 }
 
-// DecidePoll applies the polling discipline described on the default
-// parameters above. The decision tree:
-//
-//  1. Consumed → expired_token (token-replay guard).
-//  2. ExpiresAt ≤ Now → expired_token (TTL hard stop).
-//  3. Denied → access_denied.
-//  4. PollViolations ≥ [MaxPollViolations] → access_denied.
-//  5. Now − LastPolledAt < FastPollFloor (only when a previous
-//     poll exists) → slow_down (the ladder advances).
-//  6. Now − LastPolledAt < EffectiveInterval − IntervalTolerance
-//     (only when a previous poll exists) → slow_down (same).
-//  7. Approved → emit.
-//  8. Otherwise → authorization_pending.
-//
-// The order matters: the TTL gate runs before the deny gate so a
-// late poll on a denied-then-expired record still surfaces as
-// expired_token (the latest observable state on the wire),
-// matching RFC 8628 §3.5's "MUST" sequencing on token-endpoint
-// errors.
+// DecidePoll applies the shared polling discipline ([pollinterval.Decide])
+// and maps the outcome onto this flow's wire decisions. A consumed record
+// maps to [PollDecisionExpiredToken].
 func DecidePoll(in PollInput) PollOutput {
-	if in.Consumed {
-		return PollOutput{Decision: PollDecisionExpiredToken}
+	res := pollinterval.Decide(in)
+	out := PollOutput{
+		NextInterval:         res.NextInterval,
+		CountThisAsViolation: res.CountThisAsViolation,
 	}
-	if !in.ExpiresAt.IsZero() && !in.Now.Before(in.ExpiresAt) {
-		return PollOutput{Decision: PollDecisionExpiredToken}
+	switch res.Outcome {
+	case pollinterval.OutcomeEmit:
+		out.Decision = PollDecisionEmit
+	case pollinterval.OutcomePending:
+		out.Decision = PollDecisionAuthorizationPending
+	case pollinterval.OutcomeSlowDown:
+		out.Decision = PollDecisionSlowDown
+	case pollinterval.OutcomeDenied:
+		out.Decision = PollDecisionAccessDenied
+	case pollinterval.OutcomeExpired:
+		out.Decision = PollDecisionExpiredToken
+	case pollinterval.OutcomeConsumed:
+		out.Decision = PollDecisionExpiredToken
+	case pollinterval.OutcomeInvalid:
+		out.Decision = PollDecisionInvalid
 	}
-	if in.Denied {
-		return PollOutput{Decision: PollDecisionAccessDenied}
-	}
-	threshold := in.MaxPollViolations
-	if threshold == 0 {
-		threshold = MaxPollViolations
-	}
-	if in.PollViolations >= threshold {
-		return PollOutput{Decision: PollDecisionAccessDenied}
-	}
-	if !in.LastPolledAt.IsZero() {
-		gap := in.Now.Sub(in.LastPolledAt)
-		if gap < FastPollFloor || gap < intervalBar(in.EffectiveInterval) {
-			return PollOutput{
-				Decision:             PollDecisionSlowDown,
-				NextInterval:         nextInterval(in.EffectiveInterval),
-				CountThisAsViolation: true,
-			}
-		}
-	}
-	if in.Approved {
-		return PollOutput{Decision: PollDecisionEmit}
-	}
-	return PollOutput{Decision: PollDecisionAuthorizationPending}
-}
-
-// nextInterval raises current by [SlowDownIncrement], the same step
-// RFC 8628 §3.5 tells the device to apply when it sees slow_down, so
-// the OP's bar and the device's own timer stay in lockstep. A zero or
-// negative current value falls back to [DefaultInterval] so the
-// discipline recovers from an embedder that mis-seeded the substore
-// record.
-func nextInterval(current time.Duration) time.Duration {
-	if current <= 0 {
-		return DefaultInterval
-	}
-	return current + SlowDownIncrement
-}
-
-// intervalBar returns the shortest gap that still clears the interval
-// gate: the effective interval less [IntervalTolerance], floored at
-// zero so a mis-seeded interval leaves [FastPollFloor] as the only
-// gate rather than admitting every poll.
-func intervalBar(effective time.Duration) time.Duration {
-	bar := effective - IntervalTolerance
-	if bar < 0 {
-		return 0
-	}
-	return bar
+	return out
 }

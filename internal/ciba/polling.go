@@ -1,63 +1,37 @@
 package ciba
 
-import "time"
+import (
+	"time"
 
-// Default polling discipline parameters per OIDC CIBA Core 1.0 §11.
-// The token endpoint clamps incoming polls below [DefaultInterval]
-// to slow_down, raises the effective interval by [SlowDownIncrement]
-// on each violation (no upper cap; the record's TTL is the hard
-// stop), rejects sub-[FastPollFloor] repeats once per offence even
-// when the previous response was authorization_pending, and locks the
-// record to access_denied once the violation counter reaches
-// [MaxPollViolations].
+	"github.com/libraz/go-oidc-provider/internal/pollinterval"
+)
+
+// Polling discipline parameters per OIDC CIBA Core 1.0 §11. They are defined once in
+// [pollinterval] and re-exported here under this package's names.
 const (
-	// DefaultInterval is the seed value of the slow_down ladder and
-	// the value the OP advertises in the bc-authorize response so a
-	// well-behaved client never triggers slow_down on its first
-	// poll.
-	DefaultInterval = 5 * time.Second
+	// DefaultInterval is the seed value of the slow_down ladder.
+	DefaultInterval = pollinterval.DefaultInterval
 
-	// SlowDownIncrement is the amount the effective interval grows
-	// by on every slow_down. CIBA Core §11 instructs the client to
-	// increase its own interval by five seconds for this and all
-	// subsequent requests, so the OP's bar MUST grow by the same
-	// amount: any steeper escalation outruns the interval a
-	// compliant client actually observes, and the client is then
-	// strike-counted out of the flow for polling exactly as
-	// instructed.
-	SlowDownIncrement = 5 * time.Second
+	// SlowDownIncrement is the amount the effective interval grows by
+	// on every slow_down.
+	SlowDownIncrement = pollinterval.SlowDownIncrement
 
-	// IntervalTolerance is how far a poll may undershoot the
-	// effective interval without earning slow_down. The OP measures
-	// the gap between arrivals while the client measures the gap
-	// between sends, so scheduler and network jitter routinely land
-	// an on-time poll marginally early; a strict comparison would
-	// flag roughly half of them and accumulate strikes against a
-	// client that never polled faster than it was told to.
-	// [FastPollFloor] stays an absolute floor, so the tolerance
-	// cannot admit a tight polling loop.
-	IntervalTolerance = 1 * time.Second
+	// IntervalTolerance is how far a poll may undershoot the effective
+	// interval without earning slow_down.
+	IntervalTolerance = pollinterval.IntervalTolerance
 
 	// DefaultExpiresIn is the auth_req_id lifetime advertised on the
 	// bc-authorize response and stamped on the substore record.
-	// CIBA Core leaves the value unspecified; 600 s (10 minutes) is
-	// the smallest interval that still accommodates a user reaching
-	// for a secondary authentication device.
-	DefaultExpiresIn = 600 * time.Second
+	DefaultExpiresIn = pollinterval.DefaultExpiresIn
 
 	// FastPollFloor is the absolute minimum gap between two polls
-	// the OP tolerates regardless of the slow_down ladder. A poll
-	// arriving inside this window collapses to a single slow_down
-	// response per offence, distinguishing a misconfigured client
-	// from a brute-force loop.
-	FastPollFloor = 500 * time.Millisecond
-)
+	// regardless of the slow_down ladder.
+	FastPollFloor = pollinterval.FastPollFloor
 
-// MaxPollViolations is the hard cap on the poll-violation strike
-// counter. When the counter reaches this value the token endpoint
-// locks the record by calling CIBARequestStore.Deny with
-// reason="poll_abuse" and surfaces access_denied on the wire.
-const MaxPollViolations uint8 = 5
+	// MaxPollViolations is the default number of slow_down strikes
+	// tolerated before the record is locked with access_denied.
+	MaxPollViolations = pollinterval.MaxPollViolations
+)
 
 // PollDecision is the closed sum returned by [DecidePoll] naming the
 // response the token endpoint should write for this poll. The type
@@ -132,69 +106,10 @@ func (d PollDecision) String() string {
 	}
 }
 
-// PollInput is the parameter bundle [DecidePoll] consumes. The
-// caller resolves the substore record, then projects only the
-// fields the discipline cares about.
-type PollInput struct {
-	// Now is the wall-clock reading the caller anchors the gate
-	// against. The caller MUST NOT use [time.Now] directly: every
-	// call site routes through internal/timex.Clock so the
-	// discipline is testable without sleep loops.
-	Now time.Time
-
-	// LastPolledAt is the wall-clock time of the previous poll
-	// against this record, or the zero value when the client has
-	// not polled yet. The caller obtains this from the substore;
-	// after [DecidePoll] returns the caller stamps the record's
-	// LastPolledAt to Now via CIBARequestStore.RecordPoll.
-	LastPolledAt time.Time
-
-	// EffectiveInterval is the interval the client is currently
-	// expected to observe. It starts at the value the bc-authorize
-	// response advertised ([DefaultInterval]) and grows by
-	// [SlowDownIncrement] each time [DecidePoll] returns
-	// [PollDecisionSlowDown]. Callers persist the raised value
-	// alongside the record; the substore keeps it in
-	// [CIBARequest.Interval] so a later poll observes the elevated
-	// bar. A poll landing within [IntervalTolerance] of the bar
-	// counts as on time.
-	EffectiveInterval time.Duration
-
-	// ExpiresAt is the wall-clock time the record becomes invalid.
-	// A poll arriving at or after this point yields
-	// [PollDecisionExpiredToken].
-	ExpiresAt time.Time
-
-	// Approved reports whether the embedder's authentication device
-	// has approved the request via CIBARequestStore.Approve.
-	Approved bool
-
-	// Denied reports whether the user has explicitly denied the
-	// request, the authentication device timed out, or the
-	// poll-abuse counter has already locked the record.
-	Denied bool
-
-	// Consumed reports whether a previous poll already minted
-	// tokens against this record. Subsequent polls collapse to
-	// expired_token to prevent token-replay across the
-	// approve→consume race window.
-	Consumed bool
-
-	// PollViolations is the current strike count from the
-	// substore record. The discipline locks the record when the
-	// value reaches [MaxPollViolations]; the caller is responsible
-	// for invoking CIBARequestStore.Deny with reason="poll_abuse"
-	// in the same step.
-	PollViolations uint8
-
-	// MaxPollViolations overrides the strike threshold above which
-	// the discipline returns [PollDecisionAccessDenied]. Zero falls
-	// back to the package-level [MaxPollViolations] (currently 5);
-	// a non-zero value lets a caller (typically the token endpoint
-	// reading [tokenendpoint.Deps.CIBAMaxPollViolations]) raise or
-	// lower the cap without forking the polling logic.
-	MaxPollViolations uint8
-}
+// PollInput is the parameter bundle [DecidePoll] consumes. The caller
+// resolves the substore record, then projects only the fields the
+// discipline cares about; see [pollinterval.Input] for each field.
+type PollInput = pollinterval.Input
 
 // PollOutput captures the decision plus the next-interval the token
 // endpoint stamps on the record before responding to the client and
@@ -214,83 +129,30 @@ type PollOutput struct {
 	CountThisAsViolation bool
 }
 
-// DecidePoll applies the polling discipline documented in the
-// package godoc. The decision tree:
-//
-//  1. Consumed → already_redeemed (token-replay guard,
-//     wire invalid_grant per RFC 6749 §5.2).
-//  2. ExpiresAt ≤ Now → expired_token (TTL hard stop,
-//     wire expired_token per CIBA Core §11).
-//  3. Denied → access_denied.
-//  4. PollViolations ≥ [MaxPollViolations] → access_denied
-//     (lockout — the caller MUST also Deny the record with
-//     reason="poll_abuse").
-//  5. Now − LastPolledAt < [FastPollFloor] (only when a previous
-//     poll exists) → slow_down (CountThisAsViolation=true,
-//     NextInterval=EffectiveInterval+[SlowDownIncrement]).
-//  6. Now − LastPolledAt < EffectiveInterval − [IntervalTolerance]
-//     (only when a previous poll exists) → slow_down (same).
-//  7. Approved → emit.
-//  8. Otherwise → authorization_pending.
-//
-// The order matters: the TTL gate runs before the deny gate so a
-// late poll on a denied-then-expired record still surfaces as
-// expired_token (the latest observable state on the wire), matching
-// CIBA Core §11's "MUST" sequencing on token-endpoint errors.
+// DecidePoll applies the shared polling discipline ([pollinterval.Decide])
+// and maps the outcome onto this flow's wire decisions. A consumed record
+// maps to [PollDecisionAlreadyRedeemed].
 func DecidePoll(in PollInput) PollOutput {
-	if in.Consumed {
-		return PollOutput{Decision: PollDecisionAlreadyRedeemed}
+	res := pollinterval.Decide(in)
+	out := PollOutput{
+		NextInterval:         res.NextInterval,
+		CountThisAsViolation: res.CountThisAsViolation,
 	}
-	if !in.ExpiresAt.IsZero() && !in.Now.Before(in.ExpiresAt) {
-		return PollOutput{Decision: PollDecisionExpiredToken}
+	switch res.Outcome {
+	case pollinterval.OutcomeEmit:
+		out.Decision = PollDecisionEmit
+	case pollinterval.OutcomePending:
+		out.Decision = PollDecisionAuthorizationPending
+	case pollinterval.OutcomeSlowDown:
+		out.Decision = PollDecisionSlowDown
+	case pollinterval.OutcomeDenied:
+		out.Decision = PollDecisionAccessDenied
+	case pollinterval.OutcomeExpired:
+		out.Decision = PollDecisionExpiredToken
+	case pollinterval.OutcomeConsumed:
+		out.Decision = PollDecisionAlreadyRedeemed
+	case pollinterval.OutcomeInvalid:
+		out.Decision = PollDecisionInvalid
 	}
-	if in.Denied {
-		return PollOutput{Decision: PollDecisionAccessDenied}
-	}
-	threshold := in.MaxPollViolations
-	if threshold == 0 {
-		threshold = MaxPollViolations
-	}
-	if in.PollViolations >= threshold {
-		return PollOutput{Decision: PollDecisionAccessDenied}
-	}
-	if !in.LastPolledAt.IsZero() {
-		gap := in.Now.Sub(in.LastPolledAt)
-		if gap < FastPollFloor || gap < intervalBar(in.EffectiveInterval) {
-			return PollOutput{
-				Decision:             PollDecisionSlowDown,
-				NextInterval:         nextInterval(in.EffectiveInterval),
-				CountThisAsViolation: true,
-			}
-		}
-	}
-	if in.Approved {
-		return PollOutput{Decision: PollDecisionEmit}
-	}
-	return PollOutput{Decision: PollDecisionAuthorizationPending}
-}
-
-// nextInterval raises current by [SlowDownIncrement], the same step
-// CIBA Core §11 tells the client to apply when it sees slow_down, so
-// the OP's bar and the client's own timer stay in lockstep. A zero or
-// negative current value falls back to [DefaultInterval] so the
-// discipline recovers from an embedder that mis-seeded the substore
-// record.
-func nextInterval(current time.Duration) time.Duration {
-	if current <= 0 {
-		return DefaultInterval
-	}
-	return current + SlowDownIncrement
-}
-
-// intervalBar returns the shortest gap that still clears the interval
-// gate: the effective interval less [IntervalTolerance], floored at
-// zero so a mis-seeded interval leaves [FastPollFloor] as the only
-// gate rather than admitting every poll.
-func intervalBar(effective time.Duration) time.Duration {
-	bar := effective - IntervalTolerance
-	if bar < 0 {
-		return 0
-	}
-	return bar
+	return out
 }
