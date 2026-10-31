@@ -160,7 +160,6 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		return
 	}
 	confidential := isConfidentialAuthMethod(m.TokenEndpointAuthMethod)
-	publicClient := isPublicAuthMethod(m.TokenEndpointAuthMethod)
 	var rawSecret, secretHash string
 	if confidential {
 		rawSecret, secretHash, err = newClientSecret(deps.HighEntropyClientSecrets)
@@ -177,51 +176,9 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		return
 	}
 	now := deps.now().UTC()
-	client := &store.Client{
-		ID:                                clientID,
-		ClientIDIssuedAt:                  now.Unix(),
-		RedirectURIs:                      slices.Clone(m.RedirectURIs),
-		GrantTypes:                        slices.Clone(m.GrantTypes),
-		ResponseTypes:                     slices.Clone(m.ResponseTypes),
-		Scopes:                            oidcscope.Parse(m.Scope),
-		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
-		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
-		SecretHash:                        secretHash,
-		PublicClient:                      publicClient,
-		Source:                            store.ClientSourceDynamic,
-		ApplicationType:                   m.ApplicationType,
-		SubjectType:                       m.SubjectType,
-		IDTokenSignedResponseAlg:          m.IDTokenSignedResponseAlg,
-		SectorIdentifierURI:               m.SectorIdentifierURI,
-		ClientName:                        m.ClientName,
-		ClientURI:                         m.ClientURI,
-		LogoURI:                           m.LogoURI,
-		PolicyURI:                         m.PolicyURI,
-		TosURI:                            m.TosURI,
-		JWKsURI:                           m.JWKsURI,
-		JWKs:                              append(json.RawMessage(nil), m.JWKs...),
-		Contacts:                          slices.Clone(m.Contacts),
-		DefaultMaxAge:                     clone.Int64Ptr(m.DefaultMaxAge),
-		RequireAuthTime:                   m.RequireAuthTime,
-		DefaultACRValues:                  slices.Clone(m.DefaultACRValues),
-		InitiateLoginURI:                  m.InitiateLoginURI,
-		RequestURIs:                       slices.Clone(m.RequestURIs),
-		RequestObjectSigningAlg:           m.RequestObjectSigningAlg,
-		RequestObjectEncryptionAlg:        m.RequestObjectEncryptionAlg,
-		RequestObjectEncryptionEnc:        m.RequestObjectEncryptionEnc,
-		IDTokenEncryptedResponseAlg:       m.IDTokenEncryptedResponseAlg,
-		IDTokenEncryptedResponseEnc:       m.IDTokenEncryptedResponseEnc,
-		UserInfoEncryptedResponseAlg:      m.UserInfoEncryptedResponseAlg,
-		UserInfoEncryptedResponseEnc:      m.UserInfoEncryptedResponseEnc,
-		AuthorizationEncryptedResponseAlg: m.AuthorizationEncryptedResponseAlg,
-		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
-		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
-		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
-		IntrospectionSignedResponseAlg:    m.IntrospectionSignedResponseAlg,
-		PostLogoutRedirectURIs:            slices.Clone(m.PostLogoutRedirectURIs),
-		BackchannelLogoutURI:              m.BackchannelLogoutURI,
-		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
-	}
+	client := clientFromMetadata(m, clientID, secretHash)
+	client.ClientIDIssuedAt = now.Unix()
+	client.Source = store.ClientSourceDynamic
 	if err := deps.Clients.RegisterClient(ctx, client); err != nil {
 		deps.logger().Error("dcr.client.register_failed", "err", err, "client_id", clientID)
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
@@ -313,6 +270,56 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		BackchannelLogoutURI:              m.BackchannelLogoutURI,
 		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
 	})
+}
+
+// clientFromMetadata projects validated metadata onto the [store.Client]
+// record shared by DCR and client ID metadata documents. Every slice is
+// cloned so the record never aliases the parsed metadata. Callers stamp
+// ClientIDIssuedAt and Source, which differ per registration path.
+func clientFromMetadata(m ClientMetadata, clientID, secretHash string) *store.Client {
+	return &store.Client{
+		ID:                                clientID,
+		RedirectURIs:                      slices.Clone(m.RedirectURIs),
+		GrantTypes:                        slices.Clone(m.GrantTypes),
+		ResponseTypes:                     slices.Clone(m.ResponseTypes),
+		Scopes:                            oidcscope.Parse(m.Scope),
+		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
+		SecretHash:                        secretHash,
+		PublicClient:                      isPublicAuthMethod(m.TokenEndpointAuthMethod),
+		ApplicationType:                   m.ApplicationType,
+		SubjectType:                       m.SubjectType,
+		IDTokenSignedResponseAlg:          m.IDTokenSignedResponseAlg,
+		SectorIdentifierURI:               m.SectorIdentifierURI,
+		ClientName:                        m.ClientName,
+		ClientURI:                         m.ClientURI,
+		LogoURI:                           m.LogoURI,
+		PolicyURI:                         m.PolicyURI,
+		TosURI:                            m.TosURI,
+		JWKsURI:                           m.JWKsURI,
+		JWKs:                              append(json.RawMessage(nil), m.JWKs...),
+		Contacts:                          slices.Clone(m.Contacts),
+		DefaultMaxAge:                     clone.Int64Ptr(m.DefaultMaxAge),
+		RequireAuthTime:                   m.RequireAuthTime,
+		DefaultACRValues:                  slices.Clone(m.DefaultACRValues),
+		InitiateLoginURI:                  m.InitiateLoginURI,
+		RequestURIs:                       slices.Clone(m.RequestURIs),
+		RequestObjectSigningAlg:           m.RequestObjectSigningAlg,
+		RequestObjectEncryptionAlg:        m.RequestObjectEncryptionAlg,
+		RequestObjectEncryptionEnc:        m.RequestObjectEncryptionEnc,
+		IDTokenEncryptedResponseAlg:       m.IDTokenEncryptedResponseAlg,
+		IDTokenEncryptedResponseEnc:       m.IDTokenEncryptedResponseEnc,
+		UserInfoEncryptedResponseAlg:      m.UserInfoEncryptedResponseAlg,
+		UserInfoEncryptedResponseEnc:      m.UserInfoEncryptedResponseEnc,
+		AuthorizationEncryptedResponseAlg: m.AuthorizationEncryptedResponseAlg,
+		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
+		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
+		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
+		IntrospectionSignedResponseAlg:    m.IntrospectionSignedResponseAlg,
+		PostLogoutRedirectURIs:            slices.Clone(m.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:              m.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
+	}
 }
 
 // iatAllowedScopes returns the IAT-bound scope allowlist or nil when
