@@ -107,6 +107,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	strictCORS := cors.NewStrict(originAllow, cfg.effectiveAuditEmitter())
 	ceremonyCORS := cors.NewStrict(interactionOrigins, cfg.effectiveAuditEmitter())
 	encResolver := buildClientEncryptionResolver(cfg)
+	claimUsers := newClaimTypeGuard(cfg.effectiveUserStore(), cfg.logger)
 	var subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 	if cfg.subjectGeneratorSource != "" {
 		subjectProjector = buildSubjectProjector(cfg)
@@ -130,7 +131,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Keys:              keySet,
 			Issuer:            cfg.issuer,
 			Clients:           cfg.store.Clients(),
-			UserStore:         cfg.effectiveUserStore(),
+			UserStore:         claimUsers,
 			Grants:            cfg.store.Grants(),
 			SubjectProjector:  subjectProjector,
 			Clock:             cfg.clock,
@@ -158,7 +159,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			RefreshTokens:                  cfg.store.RefreshTokens(),
 			Transactions:                   transactionalStore(cfg.store),
 			Grants:                         cfg.store.Grants(),
-			UserStore:                      cfg.effectiveUserStore(),
+			UserStore:                      claimUsers,
 			SubjectProjector:               subjectProjector,
 			Keys:                           keySet,
 			Clock:                          cfg.clock,

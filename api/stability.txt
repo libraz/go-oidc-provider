@@ -237,10 +237,13 @@ github.com/libraz/go-oidc-provider/op/rs	Token	v1.5
 github.com/libraz/go-oidc-provider/op/rs	Verifier	v1.5
 github.com/libraz/go-oidc-provider/op/rs	Verifier.Middleware	v1.5
 github.com/libraz/go-oidc-provider/op/rs	Verifier.Verify	v1.5
+github.com/libraz/go-oidc-provider/op/store	Address	v1.5
 github.com/libraz/go-oidc-provider/op/store	ErrPasswordHashUpdateUnsupported	v1.5
 github.com/libraz/go-oidc-provider/op/store	SessionDurabilityReporter	v1.5
+github.com/libraz/go-oidc-provider/op/store	StandardClaims	v1.5
 github.com/libraz/go-oidc-provider/op/store	UserPasswordHashUpdater	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb	*	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb	Store	v1.5
+github.com/libraz/go-oidc-provider/op/storeadapter/sql	Store.RunGC	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/sql	Store.ValidateSchema	v1.5
 github.com/libraz/go-oidc-provider/op/totpkit	Verify	v1.5

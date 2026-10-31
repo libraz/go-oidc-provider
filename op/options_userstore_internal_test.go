@@ -84,40 +84,53 @@ func TestEffectiveUserStore_Inference(t *testing.T) {
 	}
 }
 
-// TestEffectiveUserStore_InfoOnInference checks the migration notice: one
-// INFO when the inferred store differs from Store.Users(), none when they
-// are the same value.
-func TestEffectiveUserStore_InfoOnInference(t *testing.T) {
+// TestEffectiveUserStore_InfoNamesClaimSource checks the construction
+// notice: exactly one INFO naming the claim source, which also says
+// Store.Users() goes unread when the source is a different store.
+func TestEffectiveUserStore_InfoNamesClaimSource(t *testing.T) {
 	t.Parallel()
 
 	backend := inmem.New()
 	other := inmem.New()
 
 	cases := []struct {
-		name     string
-		primary  store.UserPasswordStore
-		wantInfo int
+		name       string
+		userSt     store.UserStore
+		primary    store.UserPasswordStore
+		wantSource string
+		wantUnread bool
 	}{
-		{name: "different stores", primary: other.UserPasswords(), wantInfo: 1},
-		{name: "identical stores", primary: backend.UserPasswords(), wantInfo: 0},
+		{name: "inferred, different stores", primary: other.UserPasswords(), wantSource: "LoginFlow.Primary PrimaryPassword.Store", wantUnread: true},
+		{name: "inferred, identical stores", primary: backend.UserPasswords(), wantSource: "LoginFlow.Primary PrimaryPassword.Store"},
+		{name: "explicit WithUserStore", userSt: other.Users(), wantSource: "WithUserStore", wantUnread: true},
+		{name: "Store.Users fallback", wantSource: "WithStore(...).Users()"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var buf bytes.Buffer
 			c := &config{
-				store:        backend,
-				logger:       slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
-				loginFlow:    LoginFlow{Primary: PrimaryPassword{Store: tc.primary}},
-				loginFlowSet: true,
+				store:     backend,
+				userStore: tc.userSt,
+				logger:    slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+			}
+			if tc.primary != nil {
+				c.loginFlow = LoginFlow{Primary: PrimaryPassword{Store: tc.primary}}
+				c.loginFlowSet = true
 			}
 			c.warnUserStoreMismatch()
 			out := buf.String()
-			if got := strings.Count(out, "level=INFO"); got != tc.wantInfo {
-				t.Fatalf("INFO lines = %d, want %d; got:\n%s", got, tc.wantInfo, out)
+			if got := strings.Count(out, "level=INFO"); got != 1 {
+				t.Fatalf("INFO lines = %d, want 1; got:\n%s", got, out)
+			}
+			if !strings.Contains(out, "claim_source="+tc.wantSource) && !strings.Contains(out, `claim_source="`+tc.wantSource+`"`) {
+				t.Fatalf("INFO does not name claim_source %q; got:\n%s", tc.wantSource, out)
+			}
+			if got := strings.Contains(out, "store_users="); got != tc.wantUnread {
+				t.Fatalf("store_users attribute present = %v, want %v; got:\n%s", got, tc.wantUnread, out)
 			}
 			if strings.Contains(out, "level=WARN") {
-				t.Fatalf("inference must not warn; got:\n%s", out)
+				t.Fatalf("resolution must not warn; got:\n%s", out)
 			}
 		})
 	}

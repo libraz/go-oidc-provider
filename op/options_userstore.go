@@ -71,15 +71,14 @@ func (c *config) inferredUserStore() store.UserStore { //nolint:ireturn,nolintli
 // mismatch that may not exist would train the reader to ignore the
 // line.
 //
-// When the claim side was inferred from the primary PrimaryPassword the
-// two sides agree by construction; the only thing worth saying is that a
-// differing Users() substore is no longer the claim source.
+// The resolved claim source itself is always reported at INFO, since it
+// is the answer to "which records does the ID Token come from".
 func (c *config) warnUserStoreMismatch() {
 	claims := c.effectiveUserStore()
 	if isNilLike(claims) {
 		return
 	}
-	c.infoInferredUserStore(claims)
+	c.infoClaimSource(claims)
 	for _, step := range c.loginFlowSteps() {
 		authn, field := stepUserStore(step)
 		if isNilLike(authn) || !comparableStores(authn, claims) {
@@ -100,23 +99,17 @@ func (c *config) warnUserStoreMismatch() {
 	}
 }
 
-// infoInferredUserStore logs once when claims were inferred from the
-// primary PrimaryPassword and the backend's Users() is a different,
-// comparable store, so an embedder upgrading from a release that read
-// claims from Users() sees the change.
-func (c *config) infoInferredUserStore(claims store.UserStore) {
-	if !isNilLike(c.userStore) || c.inferredUserStore() == nil {
-		return
+// infoClaimSource logs the resolved claim source once at construction,
+// because the resolution order is not visible from the option list. When
+// the source is not Store.Users() and that substore is a different value,
+// the line also says Users() goes unread, so an empty oidc_users table
+// does not read as missing data.
+func (c *config) infoClaimSource(claims store.UserStore) {
+	attrs := []any{"claim_source", claimSourceOption(c)}
+	if backend := c.store.Users(); !isNilLike(backend) && comparableStores(claims, backend) && any(claims) != any(backend) {
+		attrs = append(attrs, "store_users", "not read")
 	}
-	backend := c.store.Users()
-	if isNilLike(backend) || !comparableStores(claims, backend) || any(claims) == any(backend) {
-		return
-	}
-	c.logger.Info(
-		"claims are read from the login flow's PrimaryPassword.Store, which "+
-			"differs from Store.Users(); pass WithUserStore to override",
-		"claim_source", claimSourceOption(c),
-	)
+	c.logger.Info("ID Token and /userinfo claims are read from claim_source", attrs...)
 }
 
 // loginFlowSteps returns every [Step] the configured flow can run, in

@@ -28,12 +28,22 @@ var ErrPasswordHashUpdateUnsupported = errors.New("store: password hash update u
 type User struct {
 	// Subject is the OP-internal stable identifier that becomes the
 	// "sub" claim of issued tokens. It MUST be globally unique within
-	// the OP and stable across the user's lifetime.
+	// the OP, stable across the user's lifetime, and never reassigned
+	// to another user (OpenID Connect Core §2). RPs key accounts on it,
+	// so it cannot be changed later: use an opaque value such as a
+	// random UUID. An email address or username changes, and an
+	// auto-increment row id discloses the user count and can be reissued.
 	Subject string
 
 	// Claims is the universe of known claim values for this subject.
 	// The library projects it through internal/userinfo to release
 	// only the names the granted scopes authorise.
+	//
+	// Standard claims carry the JSON type OpenID Connect Core §5.1
+	// gives them (email_verified a bool, updated_at a number, address
+	// an object, the rest strings); one of another type is not released.
+	// Building the map with [StandardClaims.Map] gets the types right
+	// by construction.
 	//
 	// Backends MAY return a fresh map on every call; the library
 	// treats the value as read-only.
