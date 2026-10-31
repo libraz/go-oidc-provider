@@ -24,8 +24,9 @@ library.
 > **Status: `v1.4.0`.** The public `op` surface follows strict
 > [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from the 1.0
 > release on. Symbols documented with an `Experimental:` marker are exempt.
-> Today that is Grant Management alone, which tracks an IETF draft whose wire
-> shape may still change. The exempt set is inventoried in
+> Today that is Grant Management and the ID-JAG profile (issuing and
+> redeeming Identity Assertion JWT Authorization Grants), each of which tracks
+> an IETF draft whose wire shape may still change. The exempt set is inventoried in
 > [`api/experimental.txt`](api/experimental.txt), which `make verify`
 > regenerates and diffs, so the exempt set cannot grow without review.
 > [`CHANGELOG.md`](CHANGELOG.md) carries the migration notes.
@@ -129,8 +130,8 @@ hashing and no email delivery), a generic OAuth2 framework, and a UI kit. See
   (RFC 9207), Rich Authorization Requests (RFC 9396), step-up authentication
   (RFC 9470).
 - **Grants.** Authorization code, refresh token, client credentials, device
-  authorization (RFC 8628), CIBA Core 1.0, token exchange (RFC 8693), and
-  embedder-defined grants through `op.WithCustomGrant`.
+  authorization (RFC 8628), CIBA Core 1.0, token exchange (RFC 8693), JWT bearer
+  (RFC 7523), and embedder-defined grants through `op.WithCustomGrant`.
 - **Token and client lifecycle.** JWT access tokens (RFC 9068), revocation
   (RFC 7009), introspection (RFC 7662), Dynamic Client Registration and its
   management API (RFC 7591 / RFC 7592).

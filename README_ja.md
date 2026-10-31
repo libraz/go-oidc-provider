@@ -13,7 +13,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 
 **ドキュメント: [go-oidc-provider.libraz.net](https://go-oidc-provider.libraz.net/ja/)** — 概念・ユースケース・オプションリファレンス・運用ガイド・セキュリティ方針・適合試験スコアボードを掲載しています。本 README では、インストール手順、リポジトリの構成、採用前に把握しておくべき設計判断を扱います。
 
-> **ステータス: `v1.4.0`**。1.0 リリース以降、公開 `op` API は [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。godoc に `Experimental:` マーカーを持つシンボルだけが例外で、現在の対象は Grant Management だけです。IETF のドラフトに追従しており、wire 形式がまだ変わりうるためです。一覧は [`api/experimental.txt`](api/experimental.txt) に機械生成され、`make verify` が再生成して差分を検査するため、例外の範囲がレビューを経ずに広がることはありません。移行時の注意点は [`CHANGELOG.md`](CHANGELOG.md) にまとめています。
+> **ステータス: `v1.4.0`**。1.0 リリース以降、公開 `op` API は [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。godoc に `Experimental:` マーカーを持つシンボルだけが例外で、現在の対象は Grant Management と ID-JAG プロファイル（Identity Assertion JWT Authorization Grant の発行と償還）です。いずれも IETF のドラフトに追従しており、wire 形式がまだ変わりうるためです。一覧は [`api/experimental.txt`](api/experimental.txt) に機械生成され、`make verify` が再生成して差分を検査するため、例外の範囲がレビューを経ずに広がることはありません。移行時の注意点は [`CHANGELOG.md`](CHANGELOG.md) にまとめています。
 >
 > 本プロジェクトは独立して開発・保守しているもので、ベンダー製品ではありません。リリースごとに OpenID Foundation の適合試験スイートで回帰検証していますが、正式な認定は受けておらず、サポートはベストエフォートです。
 
@@ -77,7 +77,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 
 - **コア**。OpenID Connect Core 1.0、Discovery 1.0、OAuth 2.0 (RFC 6749)、Security BCP (RFC 9700)、Authorization Server Metadata (RFC 8414)。
 - **リクエストとトークンの堅牢化**。PKCE (RFC 7636)、DPoP (RFC 9449)、PAR (RFC 9126)、JAR (RFC 9101)、JARM、mTLS (RFC 8705)、認可レスポンスの issuer 識別 (RFC 9207)、Rich Authorization Requests (RFC 9396)、ステップアップ認証 (RFC 9470)。
-- **grant**。認可コード、リフレッシュトークン、クライアントクレデンシャル、デバイス認可 (RFC 8628)、CIBA Core 1.0、Token Exchange (RFC 8693)。`op.WithCustomGrant` で組み込み側が定義した grant も追加できます。
+- **grant**。認可コード、リフレッシュトークン、クライアントクレデンシャル、デバイス認可 (RFC 8628)、CIBA Core 1.0、Token Exchange (RFC 8693)、JWT Bearer (RFC 7523)。`op.WithCustomGrant` で組み込み側が定義した grant も追加できます。
 - **トークンとクライアントのライフサイクル**。JWT アクセストークン (RFC 9068)、トークン失効 (RFC 7009)、トークンイントロスペクション (RFC 7662)、Dynamic Client Registration とその管理 API (RFC 7591 / RFC 7592)。
 - **セッションの終了**。RP-Initiated Logout 1.0、Back-Channel Logout 1.0。Front-Channel Logout は実装していません。
 
