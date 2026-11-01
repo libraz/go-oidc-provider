@@ -205,6 +205,9 @@ func (r *Reloadable) Reload(ctx context.Context, opts ...Option) error {
 		return restoreMetrics(oldMetrics, err)
 	}
 	if !sameRouteSet(old.Routes(), next.Routes()) {
+		// The rejected candidate has already started its background work
+		// (the shared-signals push worker); stop it before discarding it.
+		_ = next.Shutdown(ctx)
 		next.cfg.metricsCollector.Unregister()
 		return restoreMetrics(oldMetrics,
 			newConfigurationError("reload rejected: the route set changed", ErrReloadIncompatible))
