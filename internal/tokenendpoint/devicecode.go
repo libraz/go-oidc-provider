@@ -10,21 +10,8 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	dcgrant "github.com/libraz/go-oidc-provider/internal/grants/devicecode"
-	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
-	"github.com/libraz/go-oidc-provider/internal/oidcscope"
-	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/internal/pollinterval"
 	"github.com/libraz/go-oidc-provider/op/store"
-)
-
-// errAuthorizationPending / errSlowDown / errAccessDenied / errExpiredToken
-// are the RFC 8628 §3.5 wire codes specific to the device_code grant.
-// They are scoped to this file so the rest of the token endpoint never
-// reaches them by accident; the values match the wire form verbatim.
-const (
-	errAuthorizationPending = "authorization_pending"
-	errSlowDown             = "slow_down"
-	errAccessDenied         = "access_denied"
-	errExpiredToken         = "expired_token"
 )
 
 // handleDeviceCode implements the "grant_type=urn:ietf:params:oauth:
@@ -59,15 +46,8 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	mtlsOut, ok := verifyTokenMTLS(w, r, deps, dpopOut.JKT)
+	binding, _, ok := bindRequest(w, r, deps, dpopOut)
 	if !ok {
-		return
-	}
-	binding := tokenBinding{
-		DPoPJKT:        dpopOut.JKT,
-		MTLSThumbprint: mtlsOut.Thumbprint,
-	}
-	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
 	rec, ok := lookupDeviceCode(ctx, w, deps, in.DeviceCode, client.ID)
@@ -90,17 +70,31 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeSubjectLookupError(w, err)
 		return
 	}
-	issued, err := prepareDeviceCodeResponse(ctx, deps, client, authorized, user, devicecode.GrantID(in.DeviceCode), binding)
+	issued, err := preparePolledResponse(ctx, deps, client, polledRedemption{
+		Subject:  authorized.Subject,
+		Scope:    authorized.Scope,
+		Audience: authorized.Audience,
+		AuthTime: authorized.AuthTime,
+	}, user, binding, polledIssuance{
+		GrantID: devicecode.GrantID(in.DeviceCode),
+		Origin:  store.RefreshOriginDeviceCode,
+	})
 	if err != nil {
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	_, ok = consumeDeviceCode(ctx, w, deps, in.DeviceCode)
-	if !ok {
+	if !consumeDeviceCode(ctx, w, deps, in.DeviceCode) {
 		issued.cleanup(ctx, deps)
 		return
 	}
-	emitDeviceCodeIssued(ctx, deps, issued.audit)
+	emitDeviceCodeIssued(ctx, deps, deviceCodeIssuedExtras{
+		ClientID:         client.ID,
+		Subject:          authorized.Subject,
+		Scope:            authorized.Scope,
+		Audience:         authorized.Audience,
+		SenderConstraint: authorized.SenderConstraint,
+		Scopes:           authorized.Scope,
+	})
 	writeSuccess(w, issued.response)
 }
 
@@ -148,69 +142,26 @@ func applyPollDecision(
 		Consumed:          rec.Status == store.DeviceCodeStatusConsumed,
 		PollViolations:    rec.PollViolations,
 	})
-	// Stamp the poll timestamp AND the (possibly escalated) interval
-	// before any further branching so the next poll's slow_down ladder
-	// sees the current observation. On a non-slow_down decision the
-	// substore preserves the existing Interval (RecordPoll treats a
-	// non-escalating value as no-op on that field). A store fault here
-	// is non-fatal: the worst case is the next poll gets the same
-	// decision because LastPolledAt / Interval are stale, which is the
-	// correct fail-open behaviour for a transient substore outage. We
-	// surface the fault as a warn-level audit event (mirroring the CIBA
-	// grant's applyCIBAPollDecision) so SOC tooling can spot a transient
-	// outage that quietly defeats the slow_down ladder; the poll
-	// decision itself still proceeds because RecordPoll is best-effort
-	// observability rather than a single-use gate.
-	nextInterval := rec.Interval
-	if decision.Decision == devicecode.PollDecisionSlowDown {
-		nextInterval = decision.NextInterval
-	}
-	if err := deps.DeviceCodes.RecordPoll(ctx, deviceCode, now, nextInterval); err != nil {
-		deps.audit().Emit(ctx, audit.Event{
-			Name:     devicecode.AuditPollObservationFailed,
-			Level:    audit.LevelWarn,
-			Message:  "device_code poll observation persistence failed; slow_down ladder may read stale LastPolledAt",
-			ClientID: clientID,
-			Extras: map[string]any{
-				"error": err.Error(),
-			},
-		})
-	}
-	switch decision.Decision {
-	case devicecode.PollDecisionAuthorizationPending:
-		emitDeviceCodeReject(ctx, deps, clientID, errAuthorizationPending)
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAuthorizationPending,
-			"authorization request is still pending")
-		return false
-	case devicecode.PollDecisionSlowDown:
-		emitDeviceCodeSlowDown(ctx, deps, clientID, rec.Interval, decision.NextInterval)
-		if decision.CountThisAsViolation {
-			strikes, err := deps.DeviceCodes.IncrementPollViolation(ctx, deviceCode)
-			if err == nil && strikes >= devicecode.MaxPollViolations {
-				_ = deps.DeviceCodes.Deny(ctx, deviceCode, "poll_abuse")
+	spec := pollSpec{
+		observationFailedEvent:   devicecode.AuditPollObservationFailed,
+		observationFailedMessage: "device_code poll observation persistence failed; slow_down ladder may read stale LastPolledAt",
+		recordPoll: func(ctx context.Context, at time.Time, interval time.Duration) error {
+			return deps.DeviceCodes.RecordPoll(ctx, deviceCode, at, interval)
+		},
+		reject: func(ctx context.Context, code string) { emitDeviceCodeReject(ctx, deps, clientID, code) },
+		slowDown: func(ctx context.Context, d pollinterval.Output) {
+			emitDeviceCodeSlowDown(ctx, deps, clientID, rec.Interval, d.NextInterval)
+			if d.CountThisAsViolation {
+				strikes, err := deps.DeviceCodes.IncrementPollViolation(ctx, deviceCode)
+				if err == nil && strikes >= devicecode.MaxPollViolations {
+					_ = deps.DeviceCodes.Deny(ctx, deviceCode, "poll_abuse")
+				}
 			}
-		}
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errSlowDown,
-			"polling interval has been increased; back off and retry")
-		return false
-	case devicecode.PollDecisionAccessDenied:
-		emitDeviceCodeReject(ctx, deps, clientID, errAccessDenied)
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAccessDenied,
-			"authorization request was denied")
-		return false
-	case devicecode.PollDecisionExpiredToken:
-		emitDeviceCodeReject(ctx, deps, clientID, errExpiredToken)
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errExpiredToken,
-			"device_code expired or already consumed")
-		return false
-	case devicecode.PollDecisionEmit:
-		return true
-	case devicecode.PollDecisionInvalid:
-		fallthrough
-	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
-		return false
+		},
+		expiredDescription:  "device_code expired or already consumed",
+		redeemedDescription: "device_code expired or already consumed",
 	}
+	return applyPollOutcome(ctx, w, deps, spec, decision, now, rec.Interval, clientID)
 }
 
 // lookupDeviceCode resolves the polling record from the substore and
@@ -333,7 +284,7 @@ func retireDeprovisionedDeviceCode(ctx context.Context, deps Deps, clientID, sub
 }
 
 // consumeDeviceCode atomically transitions the record from Approved
-// to Consumed and returns the consumed snapshot. A racing successful
+// to Consumed. A racing successful
 // poll surfaces as [store.ErrAlreadyConsumed] from the substore; the
 // library maps that to expired_token because RFC 8628 §3.5 reserves
 // the wire code for "the device_code has expired or has been
@@ -343,7 +294,7 @@ func consumeDeviceCode(
 	w http.ResponseWriter,
 	deps Deps,
 	deviceCode string,
-) (*store.DeviceCode, bool) {
+) bool {
 	consumed, err := deps.DeviceCodes.Consume(ctx, deviceCode)
 	if err == nil && consumed == nil {
 		// A nil record alongside a nil error violates the store contract;
@@ -362,231 +313,9 @@ func consumeDeviceCode(
 		default:
 			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		}
-		return nil, false
+		return false
 	}
-	return consumed, true
-}
-
-// issueDeviceCodeResponse mints the access token, optionally an
-// id_token (only when scope contains openid), and optionally a
-// refresh token (only when [clientPermitsRefresh] AND the granted
-// scope satisfies the OIDC Core 1.0 §11 / per-client refresh gate).
-// The function reuses [mintAccessToken] / [maybeIssueRefreshToken]
-// so the cnf-claim plumbing, opaque-format dispatch, and audit
-// emission all stay aligned with the authorization_code path.
-//
-// audience selection: the /device_authorization endpoint rejects
-// multi-resource requests with invalid_target, so [authorized.Audience]
-// holds at most one canonicalised entry. The handler reads index 0
-// (or empty when none was registered), matching the access-token
-// aud claim's single-entry encoding.
-type preparedDeviceCodeResponse struct {
-	response successResponse
-	audit    deviceCodeIssuedExtras
-	opaque   bool
-}
-
-func (p preparedDeviceCodeResponse) cleanup(ctx context.Context, deps Deps) {
-	cleanupPreparedCredentials(ctx, deps, p.response.AccessToken, p.response.RefreshToken, p.opaque)
-}
-
-// prepareDeviceCodeResponse completes every fallible token-assembly step
-// before the irreversible DeviceCodeStore.Consume CAS. A signing, JWE, opaque
-// save, or refresh save fault therefore leaves the approved ceremony retryable.
-//
-// The device-authorization record is deliberately not a parameter: its ID
-// is the raw device_code, which is a bearer secret the substore contract
-// requires backends to keep hashed at rest. The grant identifier is
-// [devicecode.GrantID] of it instead, a one-way derivation devicecodekit's
-// Revoke recomputes to reach every credential issued here. The grant record
-// is written first and kept on every failure: a concurrent poll of the same
-// authorization shares it, and the consent it records was given either way.
-func prepareDeviceCodeResponse(
-	ctx context.Context,
-	deps Deps,
-	client *store.Client,
-	authorized *dcgrant.Authorized,
-	user *store.User,
-	grantID string,
-	binding tokenBinding,
-) (out preparedDeviceCodeResponse, err error) {
-	now := deps.now().UTC()
-	grantID, err = newGrantID(ctx, deps, grantIssuance{Lineage: grantLineageConsent, Grant: store.Grant{
-		ID:       grantID,
-		Subject:  authorized.Subject,
-		ClientID: client.ID,
-		Scope:    append([]string(nil), authorized.Scope...),
-		AuthTime: authorized.AuthTime,
-	}})
-	if err != nil {
-		return preparedDeviceCodeResponse{}, err
-	}
-	resource := ""
-	if len(authorized.Audience) > 0 {
-		resource = authorized.Audience[0]
-	}
-	format := store.AccessTokenFormatJWT
-	if deps.AccessTokenFormatFor != nil {
-		format = deps.AccessTokenFormatFor(resource)
-	}
-	var accessToken, idToken, refreshToken string
-	defer func() {
-		if err != nil {
-			cleanupPreparedCredentials(ctx, deps, accessToken, refreshToken, format == store.AccessTokenFormatOpaque)
-		}
-	}()
-	// auth_time is the wall-clock at which the end user completed the
-	// verification ceremony — store.DeviceCodeStore.Approve stamps it
-	// onto the record. A zero value means the substore did not retain
-	// an auth_time (legacy records persisted before the column was
-	// introduced); the encoder omits the claim in that case, matching
-	// OIDC Core 1.0 §2's "OPTIONAL unless the client requires it"
-	// posture. Clients that set RequireAuthTime block id_token
-	// issuance via requireAuthTimeForIDToken below when the value is
-	// zero.
-	if err := requireAuthTimeForIDToken(client, authorized.Scope, authTimeUnix(authorized.AuthTime)); err != nil {
-		return preparedDeviceCodeResponse{}, err
-	}
-	authTime := authTimeUnix(authorized.AuthTime)
-	publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
-	if err != nil {
-		return preparedDeviceCodeResponse{}, err
-	}
-	chainID, err := refresh.NewChainID()
-	if err != nil {
-		return preparedDeviceCodeResponse{}, err
-	}
-	accessToken, err = mintAccessToken(
-		ctx,
-		deps,
-		authorized.Subject,
-		publicSubject,
-		client.ID,
-		grantID,
-		authorized.Scope,
-		resource,
-		now,
-		authTime,
-		binding,
-		nil,
-		accessTokenOverrides{ChainID: chainID},
-	)
-	if err != nil {
-		return preparedDeviceCodeResponse{}, err
-	}
-	if oidcscope.ContainsOpenID(authorized.Scope) {
-		idToken, err = mintDeviceCodeIDToken(deps, deviceCodeIDTokenInput{
-			Subject:     publicSubject,
-			ClientID:    client.ID,
-			AccessToken: accessToken,
-			Now:         now,
-			AuthTime:    authTime,
-			Extra:       idTokenExtraClaims(deps, user, authorized.Scope, nil),
-		})
-		if err != nil {
-			return preparedDeviceCodeResponse{}, err
-		}
-		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
-		if err != nil {
-			return preparedDeviceCodeResponse{}, err
-		}
-	}
-	refreshIn := builtinRefreshIssuance(deps, client)
-	refreshIn.Subject = authorized.Subject
-	refreshIn.GrantID = grantID
-	refreshIn.Scope = authorized.Scope
-	refreshIn.Resource = resource
-	refreshIn.Binding = binding
-	refreshIn.Origin = store.RefreshOriginDeviceCode
-	refreshIn.ChainID = chainID
-	refreshIn.AuthCtx = authContext{AuthTime: authTime}
-	refreshToken, err = issueRefreshToken(ctx, deps, refreshIn)
-	if err != nil {
-		return preparedDeviceCodeResponse{}, err
-	}
-	return preparedDeviceCodeResponse{response: successResponse{
-		AccessToken:  accessToken,
-		TokenType:    binding.tokenTypeFor(),
-		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
-		RefreshToken: refreshToken,
-		IDToken:      idToken,
-		Scope:        joinScope(authorized.Scope),
-		GrantID:      grantIDForResponse(deps, grantID),
-	}, audit: deviceCodeIssuedExtras{
-		ClientID:         client.ID,
-		Subject:          authorized.Subject,
-		Scope:            authorized.Scope,
-		Audience:         authorized.Audience,
-		SenderConstraint: authorized.SenderConstraint,
-		Scopes:           authorized.Scope,
-	}, opaque: format == store.AccessTokenFormatOpaque}, nil
-}
-
-// deviceCodeIDTokenInput collects the parameters
-// [mintDeviceCodeIDToken] needs. The struct exists so the function
-// stays under the project's parameter-count cap; the device flow
-// does not have a code for c_hash and does not preserve a nonce
-// across the verification ceremony, so those fields are absent.
-type deviceCodeIDTokenInput struct {
-	Subject     string
-	ClientID    string
-	AccessToken string
-	Now         time.Time
-	AuthTime    int64
-	Extra       map[string]any
-}
-
-// mintDeviceCodeIDToken signs the id_token issued in response to a
-// device_code redemption. at_hash is populated per OIDC Core §3.1.3.6
-// because the access token is bound to the same redemption and
-// matches the spec's "ID Token issued from a Token Endpoint" shape.
-// c_hash is omitted because the device flow has no authorization
-// code to bind. nonce is omitted because RFC 8628 has no path for
-// the device to commit one at /device_authorization (the embedder
-// MAY surface one through the verification page, but the
-// substore does not retain it). auth_time is populated when the
-// substore stamped a non-zero value at Approve time; the encoder
-// omits the claim on zero.
-func mintDeviceCodeIDToken(deps Deps, in deviceCodeIDTokenInput) (string, error) {
-	key := activeSigningKey(deps)
-	atHash, err := tokens.HashForAlg(in.AccessToken, key.Alg)
-	if err != nil {
-		return "", err
-	}
-	claims := tokens.IDTokenClaims{
-		Issuer:    deps.Issuer,
-		Subject:   in.Subject,
-		Audience:  []string{in.ClientID},
-		IssuedAt:  in.Now.Unix(),
-		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
-		AtHash:    atHash,
-		AuthTime:  in.AuthTime,
-		Extra:     in.Extra,
-	}
-	return tokens.SignIDToken(key, claims)
-}
-
-// authTimeUnix collapses a wall-clock auth_time into the seconds-
-// since-epoch value the id_token claim encodes. A zero time
-// returns zero so the encoder's omit-on-zero behaviour stays
-// active and the claim is left absent on legacy records.
-func authTimeUnix(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix()
-}
-
-// derefTime returns the dereferenced value of t, or the zero time
-// when t is nil. The substore exposes [store.DeviceCode.LastPolledAt]
-// as a *time.Time so an embedder can distinguish "never polled" from
-// "polled at the epoch"; [devicecode.PollInput] consumes a flat
-// time.Time, so we collapse here at the boundary.
-func derefTime(t *time.Time) time.Time {
-	if t == nil {
-		return time.Time{}
-	}
-	return *t
+	return true
 }
 
 // deviceCodeIssuedExtras bundles the audit extras the issuance path

@@ -27,12 +27,6 @@ type mtlsOutcome struct {
 	// the certificate in audit emission without re-parsing the
 	// request.
 	Cert *x509.Certificate
-
-	// Presented reports whether the request carried a client cert
-	// at all. Useful for refresh-token enforcement: a chain bound
-	// to a thumbprint requires a cert to be presented even if the
-	// verifier is configured to issue bearer tokens by default.
-	Presented bool
 }
 
 // verifyTokenMTLS extracts the leaf client certificate from the request
@@ -41,10 +35,9 @@ type mtlsOutcome struct {
 // payload (a header was supplied but did not parse); a missing cert is
 // the bearer / DPoP path and yields (&mtlsOutcome{}, true).
 //
-// The dpopJKT parameter is retained for call-site symmetry with older
-// releases; DPoP presence no longer suppresses mTLS extraction because an
-// issued token may carry both cnf.jkt and cnf.x5t#S256.
-func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps, _ string) (*mtlsOutcome, bool) {
+// DPoP presence does not suppress mTLS extraction because an issued token
+// may carry both cnf.jkt and cnf.x5t#S256.
+func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps) (*mtlsOutcome, bool) {
 	if deps.MTLS == nil {
 		return &mtlsOutcome{}, true
 	}
@@ -61,7 +54,7 @@ func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps, _ string
 	if cert == nil {
 		return &mtlsOutcome{}, true
 	}
-	return &mtlsOutcome{Thumbprint: mtls.Thumbprint(cert), Cert: cert, Presented: true}, true
+	return &mtlsOutcome{Thumbprint: mtls.Thumbprint(cert), Cert: cert}, true
 }
 
 // requireMTLSMatch is the refresh-time variant of [verifyTokenMTLS].

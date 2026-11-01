@@ -36,7 +36,7 @@ func TestRefreshPreflight_SenderConstraintRefusalLeavesTokenUnconsumed(t *testin
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/token", strings.NewReader(""))
 	rec := httptest.NewRecorder()
 
-	ok := preflightRefreshBeforeConsume(ctx, rec, r, deps, client,
+	_, ok := preflightRefreshBeforeConsume(ctx, rec, r, deps, client,
 		refreshInputs{Token: tokenID}, &dpopOutcome{})
 	if ok {
 		t.Fatal("preflight admitted a bearer refresh where sender-constrained tokens are required")
@@ -53,8 +53,8 @@ func TestRefreshPreflight_SenderConstraintRefusalLeavesTokenUnconsumed(t *testin
 	}
 
 	rec = httptest.NewRecorder()
-	if !preflightRefreshBeforeConsume(ctx, rec, r, deps, client,
-		refreshInputs{Token: tokenID}, &dpopOutcome{JKT: "jkt-1", Presented: true}) {
+	if _, ok := preflightRefreshBeforeConsume(ctx, rec, r, deps, client,
+		refreshInputs{Token: tokenID}, &dpopOutcome{JKT: "jkt-1", Presented: true}); !ok {
 		t.Fatalf("preflight refused a proof-carrying refresh: %s", rec.Body.String())
 	}
 }

@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -200,7 +201,7 @@ func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 	if len(in.DeclinedScope) > 0 {
 		existing.Scope = removeScopes(existing.Scope, in.DeclinedScope)
 	}
-	existing.Scope = unionScopes(existing.Scope, in.Scope)
+	existing.Scope = oidcscope.Union(existing.Scope, in.Scope)
 	existing.UpdatedAt = now
 	stampReusedGrantAuthContext(existing, in)
 	if encodedClaims != nil {
@@ -324,12 +325,10 @@ func mutateManagedGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 		g.Scope = append([]string(nil), in.Scope...)
 		g.AuthorizationDetails = authorize.CloneAuthorizationDetails(in.AuthorizationDetails)
 	case gmActionMerge:
-		g.Scope = unionScopes(g.Scope, in.Scope)
+		g.Scope = oidcscope.Union(g.Scope, in.Scope)
 		g.AuthorizationDetails = appendAuthorizationDetails(g.AuthorizationDetails, in.AuthorizationDetails)
 	}
-	g.AuthTime = in.AuthTime
-	g.ACR = in.ACR
-	g.AMR = append(g.AMR[:0:0], in.AMR...)
+	stampReusedGrantAuthContext(g, in)
 	if encodedClaims := authorize.EncodeClaimsToGrant(in.Claims); encodedClaims != nil {
 		g.Claims = encodedClaims
 	}
@@ -355,23 +354,6 @@ func removeScopes(base, drop []string) []string {
 	return out
 }
 
-// unionScopes returns base with every entry of add that is not already
-// present, preserving order (base first, then new entries).
-func unionScopes(base, add []string) []string {
-	seen := make(map[string]struct{}, len(base))
-	out := append([]string(nil), base...)
-	for _, s := range base {
-		seen[s] = struct{}{}
-	}
-	for _, s := range add {
-		if _, ok := seen[s]; !ok {
-			seen[s] = struct{}{}
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 // appendAuthorizationDetails merges the existing and new
 // authorization_details for a Grant Management merge. Elements are
 // deep-cloned so the persisted grant does not alias the request's maps, and
@@ -381,14 +363,7 @@ func unionScopes(base, add []string) []string {
 func appendAuthorizationDetails(base, add []map[string]any) []map[string]any {
 	out := authorize.CloneAuthorizationDetails(base)
 	for _, el := range authorize.CloneAuthorizationDetails(add) {
-		dup := false
-		for _, have := range out {
-			if reflect.DeepEqual(have, el) {
-				dup = true
-				break
-			}
-		}
-		if !dup {
+		if !tokens.ContainsAuthorizationDetail(out, el) {
 			out = append(out, el)
 		}
 	}

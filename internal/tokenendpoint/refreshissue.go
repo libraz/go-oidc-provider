@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -149,7 +150,7 @@ func issueRefreshToken(ctx context.Context, deps Deps, in refreshIssuance) (stri
 		Scope:                append([]string(nil), in.Scope...),
 		Resource:             in.Resource,
 		Origin:               in.Origin,
-		AuthTime:             timeFromUnix(in.AuthCtx.AuthTime),
+		AuthTime:             tokens.TimeFromUnix(in.AuthCtx.AuthTime),
 		ACR:                  in.AuthCtx.ACR,
 		AMR:                  append([]string(nil), in.AuthCtx.AMR...),
 		AuthorizationDetails: authorize.CloneAuthorizationDetails(in.AuthCtx.AuthorizationDetails),

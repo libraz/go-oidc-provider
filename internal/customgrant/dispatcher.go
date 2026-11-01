@@ -164,9 +164,7 @@ func New(handlers []Handler, opts ...Option) *Dispatcher {
 			opt(disp)
 		}
 	}
-	if disp.auditEmit == nil {
-		disp.auditEmit = audit.Discard()
-	}
+	disp.auditEmit = audit.OrDiscard(disp.auditEmit)
 	return disp
 }
 
@@ -279,7 +277,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Response, 
 // emitting, so the audit stream has exactly one record per dispatch
 // outcome regardless of which gate fired.
 func (d *Dispatcher) attempt(ctx context.Context, handler Handler, in DispatchInput) (Response, failure, error) {
-	if !clientGrantPermitted(in.Client, in.GrantType) {
+	if !ClientPermitsGrant(in.Client, in.GrantType) {
 		return Response{}, failure{reason: "client_grant_not_permitted"}, ErrClientGrantNotPermitted
 	}
 	policy := handler.ParamPolicy()
@@ -519,12 +517,12 @@ func isImplicitFormParameter(name string) bool {
 	}
 }
 
-// clientGrantPermitted reports whether client.GrantTypes lists the
+// ClientPermitsGrant reports whether client.GrantTypes lists the
 // requested grant_type. An empty client.GrantTypes is treated as
 // "no grants permitted"; the OP's option layer guarantees at least
 // authorization_code is registered for every interactive client, so
 // the empty case is a hand-built fixture mistake worth surfacing.
-func clientGrantPermitted(client *store.Client, grantType string) bool {
+func ClientPermitsGrant(client *store.Client, grantType string) bool {
 	if client == nil {
 		return false
 	}
@@ -539,7 +537,7 @@ func (d *Dispatcher) emitRequested(ctx context.Context, in DispatchInput) {
 		Name:     AuditEventRequested,
 		Level:    audit.LevelInfo,
 		Message:  "custom grant requested",
-		ClientID: clientIDOf(in.Client),
+		ClientID: ClientIDOf(in.Client),
 		ActorID:  in.SubjectID,
 		Extras: map[string]any{
 			"grant_type": in.GrantType,
@@ -578,16 +576,16 @@ func (d *Dispatcher) emitFailed(ctx context.Context, in DispatchInput, fail fail
 		Name:     AuditEventFailed,
 		Level:    level,
 		Message:  message,
-		ClientID: clientIDOf(in.Client),
+		ClientID: ClientIDOf(in.Client),
 		ActorID:  in.SubjectID,
 		Extras:   extras,
 	})
 }
 
-// clientIDOf returns the client_id string or the empty string when
+// ClientIDOf returns the client_id string or the empty string when
 // the input is nil. Centralised so the audit emitters do not
 // duplicate the nil-check.
-func clientIDOf(c *store.Client) string {
+func ClientIDOf(c *store.Client) string {
 	if c == nil {
 		return ""
 	}

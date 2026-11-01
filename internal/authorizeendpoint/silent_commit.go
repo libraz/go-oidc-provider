@@ -88,23 +88,7 @@ func mintAndRedirect(
 			},
 		})
 	}
-	deps.auditEmitter().Emit(r.Context(), audit.Event{
-		Name:      opAuditCodeIssued,
-		Level:     audit.LevelInfo,
-		Message:   "authorization code issued",
-		ActorID:   active.Session.Subject,
-		ClientID:  client.ID,
-		SessionID: active.Session.ID,
-		Extras: map[string]any{
-			// The code itself is a bearer credential for the whole
-			// TTL, so the audit stream carries only its irreversible
-			// digest. The token endpoint stamps the same key with the
-			// same transform, so the two records still correlate.
-			"code_id":  audit.Fingerprint(codeID),
-			"grant_id": durableGrant.ID,
-			"scope":    append([]string(nil), req.Scope...),
-		},
-	})
+	emitCodeIssued(r.Context(), deps, active.Session.Subject, client.ID, active.Session.ID, codeID, durableGrant.ID, req.Scope)
 	emitAuthorizeSuccess(w, r, deps, req, codeID)
 }
 

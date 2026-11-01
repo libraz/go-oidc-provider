@@ -88,7 +88,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 		Clients:            h.clients,
 		RevocationStrategy: h.revocationStrategy,
 	}, claims); !ok {
-		return lookupResult{reason: "registry_error"}, fmt.Errorf("%w: registry lookup failed", errTokenInvalid)
+		return lookupResult{reason: reasonRegistryError}, fmt.Errorf("%w: registry lookup failed", errTokenInvalid)
 	} else if revoked {
 		return lookupResult{reason: "revoked"}, errTokenInvalid
 	}
@@ -104,7 +104,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 			Confirmation:  confirmationFromCnf(claims.Confirmation),
 			Act:           act,
 			ActChainDepth: depthOfAct(act),
-			AuthTime:      authTimeFromUnix(claims.AuthTime),
+			AuthTime:      tokens.TimeFromUnix(claims.AuthTime),
 			GrantID:       claims.GrantID,
 		},
 	}, nil
@@ -148,7 +148,7 @@ func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, 
 	aud = normaliseAudience(aud)
 	clientID := idTokenClientID(idClaims, aud)
 	if clientID == "" {
-		return lookupResult{reason: "missing_claim"}, fmt.Errorf("%w: id_token names no client", errTokenInvalid)
+		return lookupResult{reason: reasonMissingClaim}, fmt.Errorf("%w: id_token names no client", errTokenInvalid)
 	}
 	grant, reason, err := h.idTokenGrant(ctx, idClaims.Subject, clientID)
 	if err != nil {
@@ -166,7 +166,7 @@ func (h *Handler) lookupIDToken(ctx context.Context, raw string) (lookupResult, 
 			Confirmation:  confirmationFromCnf(idClaims.Confirmation),
 			Act:           act,
 			ActChainDepth: depthOfAct(act),
-			AuthTime:      authTimeFromUnix(idClaims.AuthTime),
+			AuthTime:      tokens.TimeFromUnix(idClaims.AuthTime),
 			GrantID:       grant.ID,
 		},
 	}, nil
@@ -226,7 +226,7 @@ func (h *Handler) idTokenGrant(ctx context.Context, subject, clientID string) (*
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, "grant_not_found", errTokenInvalid
 		}
-		return nil, "store_error", fmt.Errorf("%w: grant store: %w", errTokenInvalid, err)
+		return nil, reasonStoreError, fmt.Errorf("%w: grant store: %w", errTokenInvalid, err)
 	}
 	if grant == nil {
 		return nil, "grant_not_found", errTokenInvalid
@@ -289,7 +289,7 @@ func classifyOpaqueErr(err error) string {
 	case errors.Is(err, tokens.ErrOpaqueAccessTokenSubject):
 		return "subject_projection"
 	default:
-		return "store_error"
+		return reasonStoreError
 	}
 }
 
@@ -339,21 +339,31 @@ func confirmationFromCnf(cnf map[string]string) *Confirmation {
 	return out
 }
 
+// jwtPayload returns the decoded payload segment of a compact JWS the
+// caller has already verified. Padded base64url is tolerated alongside the
+// unpadded form.
+func jwtPayload(raw string) ([]byte, bool) {
+	parts := strings.Split(raw, ".")
+	if len(parts) < 2 {
+		return nil, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return nil, false
+		}
+	}
+	return payload, true
+}
+
 // extractAct re-parses raw to pull the act claim object. The
 // AccessTokenVerifier projects only the standard claim set onto
 // AccessTokenClaims; the act payload rides as an extension claim.
 func extractAct(raw string) map[string]any {
-	parts := strings.Split(raw, ".")
-	if len(parts) < 2 {
+	payload, ok := jwtPayload(raw)
+	if !ok {
 		return nil
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		// Fall back to standard encoding for tolerance.
-		payload, err = base64.URLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return nil
-		}
 	}
 	var generic struct {
 		Act json.RawMessage `json:"act"`
@@ -421,7 +431,7 @@ func decodeAndValidateIDTokenClaims(payload []byte, now time.Time, leeway time.D
 	}
 	audience, err := decodeRequiredAudience(claims.AudienceRaw)
 	if err != nil {
-		return idTokenClaims{}, nil, "missing_claim", err
+		return idTokenClaims{}, nil, reasonMissingClaim, err
 	}
 	if err := validateIDTokenClaims(claims, audience, now, leeway); err != nil {
 		return idTokenClaims{}, nil, classifyIDTokenClaimsErr(err), err
@@ -466,7 +476,7 @@ func classifyIDTokenClaimsErr(err error) string {
 	if errors.Is(err, errIDTokenExpired) {
 		return "expired"
 	}
-	return "missing_claim"
+	return reasonMissingClaim
 }
 
 // idTokenClaims is the minimal projection of the OIDC Core 1.0 §2
@@ -482,13 +492,4 @@ type idTokenClaims struct {
 	AuthTime        int64             `json:"auth_time"`
 	Confirmation    map[string]string `json:"cnf"`
 	Act             json.RawMessage   `json:"act"`
-}
-
-// authTimeFromUnix converts an auth_time claim; zero means the token
-// stated none.
-func authTimeFromUnix(sec int64) time.Time {
-	if sec == 0 {
-		return time.Time{}
-	}
-	return time.Unix(sec, 0).UTC()
 }

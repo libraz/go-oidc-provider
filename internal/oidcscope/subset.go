@@ -24,3 +24,20 @@ func Subset(granted, allowed []string) bool {
 	}
 	return true
 }
+
+// Union returns base followed by every entry of add that base does not
+// already hold, preserving order. The result is freshly allocated.
+func Union(base, add []string) []string {
+	seen := make(map[string]struct{}, len(base))
+	out := append([]string(nil), base...)
+	for _, s := range base {
+		seen[s] = struct{}{}
+	}
+	for _, s := range add {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}

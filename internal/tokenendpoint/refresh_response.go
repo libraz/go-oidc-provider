@@ -75,39 +75,15 @@ func issueRefreshResponse(
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	publicSubject := exchanged.Subject
-	if !exchanged.SubjectPublic {
-		publicSubject, err = projectPublicSubject(ctx, deps, exchanged.Subject, client)
-		if err != nil {
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
-			return
-		}
-	}
-	accessToken, err := mintAccessToken(
-		ctx,
-		deps,
-		exchanged.Subject,
-		publicSubject,
-		client.ID,
-		exchanged.GrantID,
-		exchanged.Scope,
-		exchanged.Resource,
-		now,
-		authCtx.AuthTime,
-		binding,
-		authorizationDetails,
-		accessTokenOverrides{
-			Extra:         exchanged.AccessTokenExtra,
-			ForceJWT:      refreshMintPinnedJWT(exchanged),
-			Authorization: &authCtx,
-			ChainID:       exchanged.ChainID,
-		},
-	)
+	accessToken, publicSubject, err := mintRefreshAccessToken(ctx, deps, client, exchanged, authCtx, binding, authorizationDetails, now)
 	if err != nil {
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	idTokenExtra := idTokenExtraClaims(deps, user, exchanged.Scope, authCtx.Claims)
+	var idTokenExtra map[string]any
+	if oidcscope.ContainsOpenID(refreshIDTokenScope(exchanged)) {
+		idTokenExtra = idTokenExtraClaims(deps, user, exchanged.Scope, authCtx.Claims)
+	}
 	idToken, err := maybeMintRefreshIDToken(deps, refreshIDTokenInput{
 		Subject:  publicSubject,
 		ClientID: client.ID,
@@ -145,6 +121,52 @@ func issueRefreshResponse(
 		return
 	}
 	writeSuccess(w, response)
+}
+
+// mintRefreshAccessToken projects the subject the access token carries and
+// mints the access token for a rotated or grace-replayed refresh. It returns
+// the projected subject for the id_token that may accompany it.
+func mintRefreshAccessToken(
+	ctx context.Context,
+	deps Deps,
+	client *store.Client,
+	exchanged *refresh.Exchanged,
+	authCtx authContext,
+	binding tokenBinding,
+	authorizationDetails []map[string]any,
+	now time.Time,
+) (accessToken, publicSubject string, err error) {
+	publicSubject = exchanged.Subject
+	if !exchanged.SubjectPublic {
+		publicSubject, err = projectPublicSubject(ctx, deps, exchanged.Subject, client)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	accessToken, err = mintAccessToken(
+		ctx,
+		deps,
+		exchanged.Subject,
+		publicSubject,
+		client.ID,
+		exchanged.GrantID,
+		exchanged.Scope,
+		exchanged.Resource,
+		now,
+		authCtx.AuthTime,
+		binding,
+		authorizationDetails,
+		accessTokenOverrides{
+			Extra:         exchanged.AccessTokenExtra,
+			ForceJWT:      refreshMintPinnedJWT(exchanged),
+			Authorization: &authCtx,
+			ChainID:       exchanged.ChainID,
+		},
+	)
+	if err != nil {
+		return "", "", err
+	}
+	return accessToken, publicSubject, nil
 }
 
 // refreshIDTokenInput collects the parameters
@@ -206,18 +228,12 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 	if !oidcscope.ContainsOpenID(in.Scope) {
 		return "", nil
 	}
-	claims := tokens.IDTokenClaims{
-		Issuer:    deps.Issuer,
-		Subject:   in.Subject,
-		Audience:  []string{in.ClientID},
-		IssuedAt:  in.Now.Unix(),
-		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
-		AuthTime:  in.AuthTime,
-		Nonce:     in.Nonce,
-		ACR:       idTokenACRForClaims(in.ACR, in.Claims),
-		AMR:       append([]string(nil), in.AMR...),
-		Extra:     in.Extra,
-	}
+	claims := deps.idTokenClaims(in.Subject, in.ClientID, in.Now)
+	claims.AuthTime = in.AuthTime
+	claims.Nonce = in.Nonce
+	claims.ACR = idTokenACRForClaims(in.ACR, in.Claims)
+	claims.AMR = append([]string(nil), in.AMR...)
+	claims.Extra = in.Extra
 	return tokens.SignIDToken(activeSigningKey(deps), claims)
 }
 

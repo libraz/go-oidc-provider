@@ -30,3 +30,21 @@ func TestSubset(t *testing.T) {
 		})
 	}
 }
+
+func TestUnion(t *testing.T) {
+	t.Parallel()
+
+	got := oidcscope.Union([]string{"openid", "email"}, []string{"email", "profile", "profile"})
+	want := []string{"openid", "email", "profile"}
+	if len(got) != len(want) {
+		t.Fatalf("Union = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Union = %v, want %v", got, want)
+		}
+	}
+	if got := oidcscope.Union(nil, nil); len(got) != 0 {
+		t.Fatalf("Union(nil, nil) = %v, want empty", got)
+	}
+}

@@ -455,7 +455,7 @@ func TestHash_AtHashLeftHalfBase64URL(t *testing.T) {
 	// the exact spec example because the access_token there is taken
 	// from a different fixture; instead we verify the function's
 	// shape: 22 chars, no padding, decodes to 16 bytes.
-	got := tokens.Hash("hello")
+	got, _ := tokens.HashForAlg("hello", "ES256")
 	if len(got) != 22 {
 		t.Errorf("len=%d want 22", len(got))
 	}

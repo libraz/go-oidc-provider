@@ -3,6 +3,7 @@ package tokenendpoint
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"time"
@@ -43,15 +44,8 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
-	mtlsOut, ok := verifyTokenMTLS(w, r, deps, dpopOut.JKT)
+	binding, _, ok := bindRequest(w, r, deps, dpopOut)
 	if !ok {
-		return
-	}
-	binding := tokenBinding{
-		DPoPJKT:        dpopOut.JKT,
-		MTLSThumbprint: mtlsOut.Thumbprint,
-	}
-	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
 	// The gates read the code's record but run before it is consumed, so a
@@ -630,8 +624,8 @@ func mintAccessToken(
 		over.TTL = deps.AccessTokenTTL
 	}
 	format := store.AccessTokenFormatJWT
-	if !over.ForceJWT && deps.AccessTokenFormatFor != nil {
-		format = deps.AccessTokenFormatFor(resource)
+	if !over.ForceJWT {
+		format = accessTokenFormat(deps, resource)
 	}
 	switch format {
 	case store.AccessTokenFormatOpaque:
@@ -842,7 +836,7 @@ func mintOpaqueAccessToken(
 		ClientID:              clientID,
 		Scope:                 append([]string(nil), scope...),
 		Audience:              audience,
-		AuthTime:              opaqueAuthTime(authTime),
+		AuthTime:              tokens.TimeFromUnix(authTime),
 		AuthorizationDetails:  authorize.CloneAuthorizationDetails(authorizationDetails),
 		AuthorizationRecorded: true,
 		DPoPJKT:               binding.DPoPJKT,
@@ -864,19 +858,6 @@ func mintOpaqueAccessToken(
 	return raw, nil
 }
 
-// opaqueAuthTime projects the int64 Unix-second auth_time the issuance
-// helpers thread through onto the [time.Time]-shaped column the
-// [store.OpaqueAccessToken] schema carries. Zero (no end-user
-// authentication, e.g. client_credentials) maps to the zero time so
-// downstream verifiers can detect "absent" with a single
-// [time.Time.IsZero] check.
-func opaqueAuthTime(authTime int64) time.Time {
-	if authTime == 0 {
-		return time.Time{}
-	}
-	return time.Unix(authTime, 0).UTC()
-}
-
 // userInfoClaimsRequest keeps the userinfo member of the claims request,
 // the only part /userinfo reads off a JWT access token. A lineage that
 // carries claims gets an empty map when there is nothing to keep.
@@ -891,22 +872,13 @@ func userInfoClaimsRequest(over accessTokenOverrides) map[string]any {
 	return authorize.EncodeClaimsToGrant(&authorize.ClaimsRequest{UserInfo: c.UserInfo})
 }
 
-func timeFromUnix(v int64) time.Time {
-	if v == 0 {
-		return time.Time{}
-	}
-	return time.Unix(v, 0).UTC()
-}
-
+// cloneClaimsMap copies a claims map; an empty map collapses to nil so the
+// omitempty tags drop it.
 func cloneClaimsMap(in map[string]any) map[string]any {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(in)
 }
 
 // mintAuthCodeIDToken signs the OIDC id_token issued in response to an
@@ -923,20 +895,14 @@ func mintAuthCodeIDToken(deps Deps, in mintIDTokenInput) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	claims := tokens.IDTokenClaims{
-		Issuer:    deps.Issuer,
-		Subject:   in.Subject,
-		Audience:  []string{in.ClientID},
-		IssuedAt:  in.Now.Unix(),
-		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
-		AuthTime:  in.AuthTime,
-		Nonce:     in.Nonce,
-		AtHash:    atHash,
-		CHash:     cHash,
-		ACR:       idTokenACRForClaims(in.ACR, in.Claims),
-		AMR:       append([]string(nil), in.AMR...),
-		Extra:     in.Extra,
-	}
+	claims := deps.idTokenClaims(in.Subject, in.ClientID, in.Now)
+	claims.AuthTime = in.AuthTime
+	claims.Nonce = in.Nonce
+	claims.AtHash = atHash
+	claims.CHash = cHash
+	claims.ACR = idTokenACRForClaims(in.ACR, in.Claims)
+	claims.AMR = append([]string(nil), in.AMR...)
+	claims.Extra = in.Extra
 	return tokens.SignIDToken(key, claims)
 }
 
@@ -1018,9 +984,7 @@ func authContextOf(deps Deps, a tokens.Authorization) authContext {
 		AuthorizationDetails: a.AuthorizationDetails,
 		EncodedClaims:        a.Claims,
 	}
-	if !a.AuthTime.IsZero() {
-		out.AuthTime = a.AuthTime.Unix()
-	}
+	out.AuthTime = tokens.UnixOrZero(a.AuthTime)
 	if deps.ClaimsParameterEnabled {
 		out.Claims = authorize.DecodeClaimsFromGrant(a.Claims)
 	}

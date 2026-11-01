@@ -144,11 +144,7 @@ func revokePriorOpaqueAT(ctx context.Context, deps Deps, exchanged *refresh.Exch
 	if deps.OpaqueAccessTokens == nil || exchanged.GrantID == "" || refreshMintPinnedJWT(exchanged) {
 		return nil
 	}
-	format := store.AccessTokenFormatJWT
-	if deps.AccessTokenFormatFor != nil {
-		format = deps.AccessTokenFormatFor(exchanged.Resource)
-	}
-	if format != store.AccessTokenFormatOpaque {
+	if accessTokenFormat(deps, exchanged.Resource) != store.AccessTokenFormatOpaque {
 		return nil
 	}
 	return grantTeardown(deps, teardownReasonRotation).

@@ -3,10 +3,10 @@ package tokenendpoint
 import (
 	"errors"
 	"net/http"
-	"reflect"
 
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -32,14 +32,7 @@ func reduceAuthorizationDetails(w http.ResponseWriter, requested, granted []map[
 		return granted, true
 	}
 	for _, want := range requested {
-		found := false
-		for _, have := range granted {
-			if reflect.DeepEqual(have, want) {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !tokens.ContainsAuthorizationDetail(granted, want) {
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidAuthzDetails, "authorization_details exceeds the granted authorization")
 			return nil, false
 		}

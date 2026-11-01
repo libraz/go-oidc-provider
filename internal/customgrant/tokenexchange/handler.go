@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -284,8 +285,8 @@ func (h *Handler) grantLineage(ctx context.Context, client *store.Client, subjec
 	if err != nil {
 		h.emit(ctx, auditSubjectTokenRegistryError, audit.LevelWarn,
 			"token-exchange rejected: subject_token grant lookup failed",
-			clientIDOf(client), "",
-			map[string]any{"reason": "store_error", "is_subject": true})
+			customgrant.ClientIDOf(client), "",
+			map[string]any{"reason": reasonStoreError, "is_subject": true})
 		return nil, serverError()
 	}
 	return grant, nil
@@ -301,7 +302,7 @@ func (h *Handler) requireRemainingLifetime(ctx context.Context, client *store.Cl
 	}
 	h.emit(ctx, auditSubjectTokenInvalid, audit.LevelInfo,
 		"token-exchange rejected: subject_token failed verification",
-		clientIDOf(client), "",
+		customgrant.ClientIDOf(client), "",
 		map[string]any{"reason": "expired", "is_subject": true})
 	return invalidGrant("subject_token has no positive remaining lifetime")
 }
@@ -309,11 +310,11 @@ func (h *Handler) requireRemainingLifetime(ctx context.Context, client *store.Cl
 // boundedActChain builds the act chain the issued token will carry and
 // enforces [MaxActChainDepth] on it before the policy runs.
 func (h *Handler) boundedActChain(ctx context.Context, client *store.Client, subjectView TokenView, actorView *TokenView) (map[string]any, error) {
-	actChain, depth := buildActChain(subjectView, actorView, clientIDOf(client))
+	actChain, depth := buildActChain(subjectView, actorView, customgrant.ClientIDOf(client))
 	if depth > MaxActChainDepth {
 		h.emit(ctx, auditActChainTooDeep, audit.LevelWarn,
 			"token-exchange rejected: act chain exceeds maximum depth",
-			clientIDOf(client), subjectView.Subject,
+			customgrant.ClientIDOf(client), subjectView.Subject,
 			map[string]any{"depth": depth, "max": MaxActChainDepth})
 		return nil, invalidGrant("act chain depth exceeds the maximum permitted")
 	}
@@ -371,7 +372,7 @@ func (h *Handler) parseAndVerify(ctx context.Context, req customgrant.Request) (
 	if actorView != nil && actorView.Subject == subjectView.Subject {
 		h.emit(ctx, auditActorEqualsSubject, audit.LevelInfo,
 			"token-exchange rejected: actor equals subject",
-			clientIDOf(req.Client), subjectView.Subject, nil)
+			customgrant.ClientIDOf(req.Client), subjectView.Subject, nil)
 		return TokenView{}, nil, invalidRequest("actor_token resolves to the same subject as subject_token")
 	}
 	return subjectView, actorView, nil
@@ -406,7 +407,7 @@ func (h *Handler) resolveRequestedScope(req customgrant.Request, subjectView Tok
 func (h *Handler) emitRequestedAudit(ctx context.Context, req customgrant.Request) {
 	h.emit(ctx, auditRequested, audit.LevelInfo,
 		"token-exchange requested",
-		clientIDOf(req.Client), "",
+		customgrant.ClientIDOf(req.Client), "",
 		map[string]any{
 			"requested_audience": computeRequestedAudience(req.Form, TokenView{}),
 			"requested_scope":    append([]string(nil), req.RequestedScope...),
@@ -421,7 +422,7 @@ func (h *Handler) enforceScopeAudience(ctx context.Context, client *store.Client
 	if !oidcscope.Subset(requestedScope, subjectView.Scope) {
 		h.emit(ctx, auditScopeInflationBlocked, audit.LevelWarn,
 			"token-exchange rejected: requested scope inflates beyond subject_token",
-			clientIDOf(client), subjectView.Subject,
+			customgrant.ClientIDOf(client), subjectView.Subject,
 			map[string]any{
 				"requested": requestedScope,
 				"original":  subjectView.Scope,
@@ -431,7 +432,7 @@ func (h *Handler) enforceScopeAudience(ctx context.Context, client *store.Client
 	if !audienceAllowed(requestedAudience, client) {
 		h.emit(ctx, auditAudienceBlocked, audit.LevelWarn,
 			"token-exchange rejected: requested audience not in client allowlist",
-			clientIDOf(client), subjectView.Subject,
+			customgrant.ClientIDOf(client), subjectView.Subject,
 			map[string]any{
 				"requested": requestedAudience,
 				"allowed":   append([]string(nil), client.Resources...),
@@ -452,7 +453,7 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 	if len(grantedScope) == 0 {
 		h.emit(ctx, auditEmptyScopeRejected, audit.LevelWarn,
 			"token-exchange rejected: empty scope after downscope",
-			clientIDOf(req.Client), subjectView.Subject, nil)
+			customgrant.ClientIDOf(req.Client), subjectView.Subject, nil)
 		return customgrant.Response{}, invalidScope("granted scope cannot be empty")
 	}
 	// RFC 8693 §2.1 — a policy decision may only narrow, never broaden.
@@ -463,7 +464,7 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 	if !oidcscope.Subset(grantedScope, requestedScope) {
 		h.emit(ctx, auditScopeInflationBlocked, audit.LevelWarn,
 			"token-exchange rejected: policy granted scope inflates beyond requested scope",
-			clientIDOf(req.Client), subjectView.Subject,
+			customgrant.ClientIDOf(req.Client), subjectView.Subject,
 			map[string]any{
 				"granted":   grantedScope,
 				"requested": requestedScope,
@@ -473,7 +474,7 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 	if !resourceindicator.SubsetLabel(grantedAudience, requestedAudience) {
 		h.emit(ctx, auditAudienceBlocked, audit.LevelWarn,
 			"token-exchange rejected: policy granted audience inflates beyond requested audience",
-			clientIDOf(req.Client), subjectView.Subject,
+			customgrant.ClientIDOf(req.Client), subjectView.Subject,
 			map[string]any{
 				"granted":   grantedAudience,
 				"requested": requestedAudience,
@@ -484,7 +485,7 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 	if ttlReason != "" {
 		h.emit(ctx, auditTTLCapped, audit.LevelInfo,
 			"token-exchange TTL capped",
-			clientIDOf(req.Client), subjectView.Subject,
+			customgrant.ClientIDOf(req.Client), subjectView.Subject,
 			map[string]any{
 				"requested": grantedTTL.Seconds(),
 				"granted":   ttl.Seconds(),
@@ -494,7 +495,7 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 	if actorView == nil && req.Client.ID == subjectView.ClientID {
 		h.emit(ctx, auditSelfExchange, audit.LevelInfo,
 			"token-exchange self-exchange detected",
-			clientIDOf(req.Client), subjectView.Subject,
+			customgrant.ClientIDOf(req.Client), subjectView.Subject,
 			map[string]any{"audience": grantedAudience})
 	}
 	resp := h.assembleResponse(req, subjectView, grantedScope, grantedAudience, ttl, actChain, extraClaims, issueIDToken)
@@ -504,7 +505,7 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 	resp.IssueRefreshToken = issueRefresh
 	// The outcome events wait for the wire layer: the dispatcher and the
 	// issuance step can still refuse the response this handler built.
-	clientID, subject, actor := clientIDOf(req.Client), subjectView.Subject, actorSubOf(actorView)
+	clientID, subject, actor := customgrant.ClientIDOf(req.Client), subjectView.Subject, actorSubOf(actorView)
 	depth := depthOfAct(actChain)
 	resp.OnIssued = func(ctx context.Context, refreshIssued bool) {
 		if refreshIssued {
@@ -535,7 +536,9 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 // optional id_token claim merge so the OP-built act chain rides on
 // both tokens regardless of which the resource server inspects.
 func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenView, grantedScope, grantedAudience []string, ttl time.Duration, actChain, extraClaims map[string]any, issueIDToken bool) customgrant.Response {
-	mergedExtras := filterReservedClaims(extraClaims)
+	filtered := filterReservedClaims(extraClaims)
+	idClaims := maps.Clone(filtered)
+	mergedExtras := filtered
 	if actChain != nil {
 		mergedExtras["act"] = actChain
 	}
@@ -567,11 +570,7 @@ func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenVie
 	if issueIDToken && oidcscope.ContainsOpenID(grantedScope) {
 		// The subject token's own auth_time: an exchange is not an authentication.
 		resp.AuthTime = subjectView.AuthTime
-		idClaims := filterReservedClaims(extraClaims)
 		if actChain != nil {
-			if idClaims == nil {
-				idClaims = make(map[string]any)
-			}
 			idClaims["act"] = actChain
 		}
 		// RFC 9449 §6.1 / RFC 8705 §3 — when the request is sender-
@@ -582,9 +581,6 @@ func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenVie
 		// automatically (tokenBinding.confirmation); the id_token claim
 		// map is owned by the handler so we mirror the rule here.
 		if cnf := buildCnfClaim(req); cnf != nil {
-			if idClaims == nil {
-				idClaims = make(map[string]any)
-			}
 			idClaims["cnf"] = cnf
 		}
 		resp.ExtraClaims = idClaims
@@ -609,21 +605,24 @@ func (h *Handler) translateLookupErr(ctx context.Context, client *store.Client, 
 			msg = "token-exchange rejected: actor_token issued by external issuer"
 		}
 		h.emit(ctx, event, audit.LevelInfo, msg,
-			clientIDOf(client), "",
+			customgrant.ClientIDOf(client), "",
 			map[string]any{"detected_issuer": result.reason})
 		return invalidGrant("token issuer not recognised")
 	case errors.Is(err, errTokenInvalid):
+		role := "subject_token"
+		if !isSubject {
+			role = "actor_token"
+		}
+		extras := map[string]any{"reason": result.reason, "is_subject": isSubject}
 		if isRegistryFaultReason(result.reason) {
 			h.emit(ctx, auditSubjectTokenRegistryError, audit.LevelWarn,
-				"token-exchange rejected: subject_token registry observation failed",
-				clientIDOf(client), "",
-				map[string]any{"reason": result.reason, "is_subject": isSubject})
+				"token-exchange rejected: "+role+" registry observation failed",
+				customgrant.ClientIDOf(client), "", extras)
 			return invalidGrant("token failed verification")
 		}
 		h.emit(ctx, auditSubjectTokenInvalid, audit.LevelInfo,
-			"token-exchange rejected: subject_token failed verification",
-			clientIDOf(client), "",
-			map[string]any{"reason": result.reason, "is_subject": isSubject})
+			"token-exchange rejected: "+role+" failed verification",
+			customgrant.ClientIDOf(client), "", extras)
 		return invalidGrant("token failed verification")
 	default:
 		return invalidGrant("token failed verification")
@@ -637,7 +636,7 @@ func (h *Handler) translateLookupErr(ctx context.Context, client *store.Client, 
 // or opaque substore returns a non-ErrNotFound error.
 func isRegistryFaultReason(reason string) bool {
 	switch reason {
-	case "registry_error", "store_error":
+	case reasonRegistryError, reasonStoreError:
 		return true
 	default:
 		return false
@@ -651,13 +650,13 @@ func (h *Handler) translatePolicyErr(ctx context.Context, client *store.Client, 
 	if isOpError(err) {
 		h.emit(ctx, auditPolicyDenied, audit.LevelInfo,
 			"token-exchange policy denied",
-			clientIDOf(client), subject,
+			customgrant.ClientIDOf(client), subject,
 			map[string]any{"reason": err.Error()})
 		return err
 	}
 	h.emit(ctx, auditPolicyError, audit.LevelError,
 		"token-exchange policy error",
-		clientIDOf(client), subject,
+		customgrant.ClientIDOf(client), subject,
 		map[string]any{"cause": err.Error()})
 	return invalidGrant("token-exchange policy denied the request")
 }
@@ -782,10 +781,10 @@ func computeRequestedAudience(form map[string][]string, subject TokenView) []str
 		}
 	}
 	if len(out) > 0 {
-		return dedupe(out)
+		return authorize.DedupePreserve(out)
 	}
 	// subject.Audience was normalised when the lookup built the view.
-	return dedupe(subject.Audience)
+	return authorize.DedupePreserve(subject.Audience)
 }
 
 // applyDecision merges the policy decision over the OP defaults.
@@ -817,10 +816,7 @@ func applyDecision(d *Decision, requestedScope, requestedAudience []string, defa
 		issueRefresh = *d.IssueRefreshToken
 	}
 	if len(d.ExtraClaims) > 0 {
-		extras = make(map[string]any, len(d.ExtraClaims))
-		for k, v := range d.ExtraClaims {
-			extras[k] = v
-		}
+		extras = maps.Clone(d.ExtraClaims)
 	}
 	return scope, audience, ttl, issueIDToken, issueRefresh, extras
 }
@@ -854,15 +850,6 @@ func filterReservedClaims(extras map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-// clientIDOf returns the client_id when client is non-nil; empty
-// otherwise.
-func clientIDOf(client *store.Client) string {
-	if client == nil {
-		return ""
-	}
-	return client.ID
 }
 
 // actorSubOf returns the actor's sub claim or empty when actor is

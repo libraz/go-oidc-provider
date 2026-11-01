@@ -112,35 +112,7 @@ func reissueGraceAccessToken(
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	publicSubject := exchanged.Subject
-	if !exchanged.SubjectPublic {
-		projected, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
-		if err != nil {
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
-			return
-		}
-		publicSubject = projected
-	}
-	accessToken, err := mintAccessToken(
-		ctx,
-		deps,
-		exchanged.Subject,
-		publicSubject,
-		client.ID,
-		exchanged.GrantID,
-		exchanged.Scope,
-		exchanged.Resource,
-		now,
-		authCtx.AuthTime,
-		binding,
-		response.AuthorizationDetails,
-		accessTokenOverrides{
-			Extra:         exchanged.AccessTokenExtra,
-			ForceJWT:      refreshMintPinnedJWT(exchanged),
-			Authorization: &authCtx,
-			ChainID:       exchanged.ChainID,
-		},
-	)
+	accessToken, _, err := mintRefreshAccessToken(ctx, deps, client, exchanged, authCtx, binding, response.AuthorizationDetails, now)
 	if err != nil {
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return

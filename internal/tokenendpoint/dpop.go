@@ -3,8 +3,8 @@ package tokenendpoint
 import (
 	"context"
 	"net/http"
-	"slices"
 
+	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -105,7 +105,7 @@ func clientPermitsGrant(w http.ResponseWriter, client *store.Client, grantType s
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "client is required")
 		return false
 	}
-	if slices.Contains(client.GrantTypes, grantType) {
+	if customgrant.ClientPermitsGrant(client, grantType) {
 		return true
 	}
 	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,

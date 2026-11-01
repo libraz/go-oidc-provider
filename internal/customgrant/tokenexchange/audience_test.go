@@ -90,12 +90,6 @@ func TestScopeHelpersPreserveDownscopeSemantics(t *testing.T) {
 	if got := intersectScope([]string{"admin"}, []string{"read"}); got != nil {
 		t.Fatalf("intersectScope with no overlap = %v, want nil", got)
 	}
-	if got := dedupe([]string{"read", "write", "read", "profile", "write"}); !slices.Equal(got, []string{"read", "write", "profile"}) {
-		t.Fatalf("dedupe order = %v, want [read write profile]", got)
-	}
-	if got := dedupe(nil); got != nil {
-		t.Fatalf("dedupe(nil) = %v, want nil", got)
-	}
 }
 
 func TestWireErrorWritesOAuthJSONEnvelope(t *testing.T) {

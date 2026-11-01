@@ -60,13 +60,6 @@ type SigningKey struct {
 	Alg string
 }
 
-// fromInternalEntry converts an [keys.Entry] to the package-
-// local [SigningKey]. The conversion is trivial; the helper exists so
-// the HTTP layer can keep the conversion in one place.
-func fromInternalEntry(e keys.Entry) SigningKey {
-	return SigningKey{KeyID: e.KeyID, Signer: e.Signer, Alg: string(josev4.ES256)}
-}
-
 // IDTokenClaims is the OIDC Core 1.0 §2 claim set. Fields with omitempty
 // JSON tags are dropped from the wire form when zero so the encoded
 // JWT matches the spec's expectations.
@@ -281,15 +274,6 @@ func SignTypedJWT(key SigningKey, typ string, claims map[string]any) (string, er
 		return "", err
 	}
 	return serializeJWT(signer, maps.Clone(claims))
-}
-
-// Hash is a convenience for tests and fixtures pinned to the ES256
-// signing policy; production callers MUST go through [HashForAlg] with the
-// active SigningKey.Alg so the digest follows the signing algorithm if
-// future versions admit anything beyond ES256 (OIDC Core 1.0 §3.1.3.6).
-func Hash(input string) string {
-	out, _ := HashForAlg(input, "ES256")
-	return out
 }
 
 // HashForAlg computes the at_hash / c_hash digest OIDC Core 1.0 §3.1.3.6
@@ -565,11 +549,29 @@ func serializeJWT(signer josev4.Signer, claims map[string]any) (string, error) {
 	return out, nil
 }
 
-// FromInternalEntry is the exported converter the HTTP layer uses to
-// translate an [keys.Entry] into this package's local
-// [SigningKey]. Inlining the function on every call site would create
-// noise; centralising it here keeps the boundary single-sourced.
-func FromInternalEntry(e keys.Entry) SigningKey { return fromInternalEntry(e) }
+// FromInternalEntry translates a [keys.Entry] into this package's local
+// [SigningKey].
+func FromInternalEntry(e keys.Entry) SigningKey {
+	return SigningKey{KeyID: e.KeyID, Signer: e.Signer, Alg: string(josev4.ES256)}
+}
+
+// TimeFromUnix converts a Unix-second claim to a UTC time; zero means the
+// claim was absent and yields the zero time.
+func TimeFromUnix(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0).UTC()
+}
+
+// UnixOrZero is the inverse of [TimeFromUnix]: the zero time collapses to 0
+// so an omitted auth_time stays absent.
+func UnixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
 
 // ExpiresIn returns now+ttl as an integer Unix timestamp suitable for
 // the "exp" claim. It exists so callers do not have to remember the

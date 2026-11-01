@@ -31,15 +31,8 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 	if !ok {
 		return
 	}
-	mtlsOut, ok := verifyTokenMTLS(w, r, deps, dpopOut.JKT)
+	binding, mtlsOut, ok := bindRequest(w, r, deps, dpopOut)
 	if !ok {
-		return
-	}
-	binding := tokenBinding{
-		DPoPJKT:        dpopOut.JKT,
-		MTLSThumbprint: mtlsOut.Thumbprint,
-	}
-	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
 	// DPoPJKT / DPoPJTI / MTLSCert ride into the dispatcher so the
@@ -241,7 +234,7 @@ func issueCustomGrantRefresh(
 		Resource:         singleAudienceResource(resp.Audience),
 		Origin:           store.RefreshOriginCustomGrant,
 		Binding:          binding,
-		AuthCtx:          authContext{AuthTime: authTimeUnix(resp.AuthTime)},
+		AuthCtx:          authContext{AuthTime: tokens.UnixOrZero(resp.AuthTime)},
 		AccessTokenExtra: customGrantAccessTokenExtra(resp),
 		OnDrop: func(reason string) {
 			deps.audit().Emit(ctx, audit.Event{
@@ -455,21 +448,13 @@ func resolveCustomGrantIDToken(ctx context.Context, deps Deps, client *store.Cli
 	// a client registered with require_auth_time must not receive an
 	// id_token whose auth_time claim was silently omitted, because the
 	// absence reads as "the session is fresh".
-	if err := requireAuthTimeForIDToken(client, resp.Scope, authTimeUnix(resp.AuthTime)); err != nil {
+	if err := requireAuthTimeForIDToken(client, resp.Scope, tokens.UnixOrZero(resp.AuthTime)); err != nil {
 		return "", err
 	}
 	now := deps.now().UTC()
-	claims := tokens.IDTokenClaims{
-		Issuer:    deps.Issuer,
-		Subject:   resp.Subject,
-		Audience:  []string{client.ID},
-		IssuedAt:  now.Unix(),
-		ExpiresAt: tokens.ExpiresIn(now, deps.IDTokenTTL),
-		Extra:     resp.ExtraClaims,
-	}
-	if !resp.AuthTime.IsZero() {
-		claims.AuthTime = resp.AuthTime.Unix()
-	}
+	claims := deps.idTokenClaims(resp.Subject, client.ID, now)
+	claims.Extra = resp.ExtraClaims
+	claims.AuthTime = tokens.UnixOrZero(resp.AuthTime)
 	signed, err := tokens.SignIDToken(activeSigningKey(deps), claims)
 	if err != nil {
 		return "", err

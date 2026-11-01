@@ -57,10 +57,10 @@ func AuthenticationIsStale(authTime, now time.Time, maxAge int64) bool {
 	return int64(elapsed/time.Second) > maxAge
 }
 
-// dedupePreserve returns a copy of in with duplicate elements removed,
+// DedupePreserve returns a copy of in with duplicate elements removed,
 // preserving the first occurrence's position. It is the order-stable
 // equivalent of slices.Compact for an unsorted input.
-func dedupePreserve(in []string) []string {
+func DedupePreserve(in []string) []string {
 	if len(in) == 0 {
 		return nil
 	}

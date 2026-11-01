@@ -2,20 +2,15 @@ package devicecode
 
 import (
 	"errors"
-	"slices"
-	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/oidcscope"
+	"github.com/libraz/go-oidc-provider/internal/grants/pollgrant"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// grantTypeWire is the RFC 8628 §3.4 grant_type wire string. It is
-// duplicated here (rather than imported from op/grant) so the
-// authorization layer stays free of the public op/ namespace; the
-// constant matches op/grant.DeviceCode.String() by construction
-// and is covered by a compile-time assertion in the test suite.
-const grantTypeWire = "urn:ietf:params:oauth:grant-type:device_code"
+// grantTypeWire is the RFC 8628 §3.4 grant_type wire string.
+var grantTypeWire = grant.DeviceCode.String()
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
 //
@@ -169,28 +164,32 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 	if in.Record == nil {
 		return nil, errors.New("devicecode: nil device-code record")
 	}
-	if !slices.Contains(in.Client.GrantTypes, grantTypeWire) {
-		return nil, ErrGrantNotPermitted
-	}
-	if err := mapStatusToError(in.Record.Status); err != nil {
-		return nil, err
-	}
-	if in.Record.Subject == "" {
-		return nil, ErrSubjectMissing
-	}
-	binding, err := matchCnfBinding(in)
+	approval, err := pollgrant.Authorize(in.Client, grantTypeWire, pollgrant.Record{
+		Subject:      in.Record.Subject,
+		Scope:        in.Record.Scope,
+		Resource:     in.Record.Resource,
+		AuthTime:     in.Record.AuthTime,
+		DPoPJKT:      in.Record.DPoPJKT,
+		MTLSCertS256: in.Record.MTLSCertS256,
+	}, pollgrant.Presented{
+		DPoPJKT:      in.PresentedDPoPJKT,
+		MTLSCertS256: in.PresentedMTLSCertS256,
+	}, mapStatusToError(in.Record.Status), pollgrant.Errors{
+		NotPermitted:   ErrGrantNotPermitted,
+		SubjectMissing: ErrSubjectMissing,
+		CnfMissing:     ErrCnfBindingMissing,
+		CnfMismatch:    ErrCnfBindingMismatch,
+		ScopeForbidden: ErrScopeForbidden,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if !oidcscope.Subset(in.Record.Scope, in.Client.Scopes) {
-		return nil, ErrScopeForbidden
-	}
 	return &Authorized{
-		Scope:            slices.Clone(in.Record.Scope),
-		Audience:         slices.Clone(in.Record.Resource),
-		Subject:          in.Record.Subject,
-		AuthTime:         in.Record.AuthTime,
-		SenderConstraint: binding,
+		Scope:            approval.Scope,
+		Audience:         approval.Audience,
+		Subject:          approval.Subject,
+		AuthTime:         approval.AuthTime,
+		SenderConstraint: approval.SenderConstraint,
 	}, nil
 }
 
@@ -211,47 +210,4 @@ func mapStatusToError(s store.DeviceCodeStatus) error {
 	default:
 		return ErrExpiredOrConsumed
 	}
-}
-
-// matchCnfBinding compares the binding stored on the record against
-// the one the polling client presented. It returns the binding
-// label ("dpop", "mtls", "dpop+mtls", or "bearer") on success,
-// [ErrCnfBindingMissing] when the record requires a binding the
-// request did not present, and [ErrCnfBindingMismatch] when the
-// thumbprints do not match.
-//
-// Every confirmation method the record committed to is evaluated
-// independently and all of them must hold (AND). RFC 7800 §3 permits
-// a record to carry several confirmation members, so stopping at the
-// first populated one would let a holder of the device_code plus one
-// matching key redeem a dually bound record without ever proving the
-// other method — and the issued token would still be stamped with the
-// cnf member the OP never re-verified.
-func matchCnfBinding(in AuthorizeInput) (string, error) {
-	methods := make([]string, 0, 2)
-	if in.Record.DPoPJKT != "" {
-		if in.PresentedDPoPJKT == "" {
-			return "", ErrCnfBindingMissing
-		}
-		if in.PresentedDPoPJKT != in.Record.DPoPJKT {
-			return "", ErrCnfBindingMismatch
-		}
-		methods = append(methods, "dpop")
-	}
-	if in.Record.MTLSCertS256 != "" {
-		if in.PresentedMTLSCertS256 == "" {
-			return "", ErrCnfBindingMissing
-		}
-		if in.PresentedMTLSCertS256 != in.Record.MTLSCertS256 {
-			return "", ErrCnfBindingMismatch
-		}
-		methods = append(methods, "mtls")
-	}
-	if len(methods) == 0 {
-		// Bearer flow — record was unbound. The
-		// /device_authorization handler MUST have already
-		// rejected this combination under FAPI 2.0 baseline.
-		return "bearer", nil
-	}
-	return strings.Join(methods, "+"), nil
 }

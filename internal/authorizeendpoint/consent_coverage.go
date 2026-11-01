@@ -1,11 +1,11 @@
 package authorizeendpoint
 
 import (
-	"reflect"
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -67,14 +67,7 @@ func authorizationDetailsCovered(requested []map[string]any, grant *store.Grant)
 		return false
 	}
 	for _, want := range requested {
-		found := false
-		for _, have := range grant.AuthorizationDetails {
-			if reflect.DeepEqual(have, want) {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !tokens.ContainsAuthorizationDetail(grant.AuthorizationDetails, want) {
 			return false
 		}
 	}

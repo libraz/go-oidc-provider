@@ -76,16 +76,9 @@ var (
 // without widening the replay window on a stolen token.
 const DefaultLeeway = 30 * time.Second
 
-// Clock is the package-local view of [timex.Clock]. It is
-// duplicated here (rather than imported transitively through op/) so
-// this package keeps the same SigningKey/Entry split it already uses
-// for keys: the public op/ namespace converts its [op.Clock] to this
-// type at the boundary. Implementations MUST be safe for concurrent
-// use. A nil [AccessTokenVerifier.Clock] falls back to
-// [timex.SystemClock] — see [AccessTokenVerifier.now].
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the wall-clock dependency. A nil [AccessTokenVerifier.Clock] falls
+// back to [timex.SystemClock] — see [AccessTokenVerifier.now].
+type Clock = timex.Clock
 
 // AccessTokenVerifier introspects a JWT-shaped access token (RFC 9068)
 // against a [keys.Set]. The verifier is stateless apart from its

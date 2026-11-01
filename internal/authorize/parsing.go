@@ -77,7 +77,7 @@ func ParseValues(v url.Values) (*Request, error) {
 		ClientID:                singles["client_id"],
 		ResponseType:            singles["response_type"],
 		RedirectURI:             singles["redirect_uri"],
-		Scope:                   dedupePreserve(oidcscope.Parse(multis["scope"])),
+		Scope:                   DedupePreserve(oidcscope.Parse(multis["scope"])),
 		Resource:                singles["resource"],
 		State:                   singles["state"],
 		Nonce:                   singles["nonce"],

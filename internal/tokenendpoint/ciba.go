@@ -10,9 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	cgrant "github.com/libraz/go-oidc-provider/internal/grants/ciba"
-	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
-	"github.com/libraz/go-oidc-provider/internal/oidcscope"
-	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/internal/pollinterval"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -50,15 +48,8 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	mtlsOut, ok := verifyTokenMTLS(w, r, deps, dpopOut.JKT)
+	binding, _, ok := bindRequest(w, r, deps, dpopOut)
 	if !ok {
-		return
-	}
-	binding := tokenBinding{
-		DPoPJKT:        dpopOut.JKT,
-		MTLSThumbprint: mtlsOut.Thumbprint,
-	}
-	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
 	rec, ok := lookupCIBARequest(ctx, w, deps, in.AuthReqID, client.ID)
@@ -81,17 +72,31 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeSubjectLookupError(w, err)
 		return
 	}
-	issued, err := prepareCIBAResponse(ctx, deps, client, authorized, user, binding)
+	issued, err := preparePolledResponse(ctx, deps, client, polledRedemption{
+		Subject:  authorized.Subject,
+		Scope:    authorized.Scope,
+		Audience: authorized.Audience,
+		AuthTime: authorized.AuthTime,
+		ACR:      authorized.ACR,
+	}, user, binding, polledIssuance{
+		Origin:                store.RefreshOriginCIBA,
+		DiscardGrantOnFailure: true,
+	})
 	if err != nil {
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	_, ok = consumeCIBARequest(ctx, w, deps, in.AuthReqID)
-	if !ok {
+	if !consumeCIBARequest(ctx, w, deps, in.AuthReqID) {
 		issued.cleanup(ctx, deps)
 		return
 	}
-	emitCIBAIssued(ctx, deps, issued.audit)
+	emitCIBAIssued(ctx, deps, cibaIssuedExtras{
+		ClientID:         client.ID,
+		Subject:          authorized.Subject,
+		Scope:            authorized.Scope,
+		Audience:         authorized.Audience,
+		SenderConstraint: authorized.SenderConstraint,
+	})
 	writeSuccess(w, issued.response)
 }
 
@@ -142,87 +147,47 @@ func applyCIBAPollDecision(
 		PollViolations:    rec.PollViolations,
 		MaxPollViolations: deps.CIBAMaxPollViolations,
 	})
-	// Stamp the poll timestamp and any slow_down interval escalation before
-	// branching so the next poll's ladder sees the current observation. A
-	// store fault here is non-fatal: the worst case is the next poll gets
-	// the same decision because LastPolledAt or Interval is stale, which is
-	// the correct fail-open behaviour for a transient substore outage. We
-	// surface the fault as a warn-level audit event so SOC tooling can spot
-	// a transient outage that quietly defeats the slow_down ladder; the
-	// poll decision itself still proceeds because RecordPoll is best-effort
-	// observability rather than a single-use gate.
-	nextInterval := rec.Interval
-	if decision.Decision == ciba.PollDecisionSlowDown {
-		nextInterval = decision.NextInterval
+	spec := pollSpec{
+		observationFailedEvent:   ciba.AuditPollObservationFailed,
+		observationFailedMessage: "ciba poll observation persistence failed; slow_down ladder may read stale LastPolledAt",
+		recordPoll: func(ctx context.Context, at time.Time, interval time.Duration) error {
+			return deps.CIBARequests.RecordPoll(ctx, authReqID, at, interval)
+		},
+		reject: func(ctx context.Context, code string) { emitCIBAReject(ctx, deps, clientID, code) },
+		slowDown: func(ctx context.Context, d pollinterval.Output) {
+			emitCIBASlowDown(ctx, deps, clientID, rec.Interval, d.NextInterval)
+			recordCIBAPollViolation(ctx, deps, authReqID, clientID)
+		},
+		expiredDescription:  "auth_req_id expired",
+		redeemedDescription: "auth_req_id was already redeemed",
 	}
-	if err := deps.CIBARequests.RecordPoll(ctx, authReqID, now, nextInterval); err != nil {
-		deps.audit().Emit(ctx, audit.Event{
-			Name:     ciba.AuditPollObservationFailed,
-			Level:    audit.LevelWarn,
-			Message:  "ciba poll observation persistence failed; slow_down ladder may read stale LastPolledAt",
-			ClientID: clientID,
-			Extras: map[string]any{
-				"error": err.Error(),
-			},
-		})
+	return applyPollOutcome(ctx, w, deps, spec, decision, now, rec.Interval, clientID)
+}
+
+// recordCIBAPollViolation counts a slow_down strike against the request and
+// denies it, with an audit event, once the configured threshold is reached.
+func recordCIBAPollViolation(ctx context.Context, deps Deps, authReqID, clientID string) {
+	strikes, err := deps.CIBARequests.IncrementPollViolation(ctx, authReqID)
+	threshold := deps.CIBAMaxPollViolations
+	if threshold == 0 {
+		threshold = ciba.MaxPollViolations
 	}
-	switch decision.Decision {
-	case ciba.PollDecisionAuthorizationPending:
-		emitCIBAReject(ctx, deps, clientID, errAuthorizationPending)
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAuthorizationPending,
-			"authorization request is still pending")
-		return false
-	case ciba.PollDecisionSlowDown:
-		emitCIBASlowDown(ctx, deps, clientID, rec.Interval, decision.NextInterval)
-		strikes, err := deps.CIBARequests.IncrementPollViolation(ctx, authReqID)
-		threshold := deps.CIBAMaxPollViolations
-		if threshold == 0 {
-			threshold = ciba.MaxPollViolations
-		}
-		if err == nil && strikes >= threshold {
-			if denyErr := deps.CIBARequests.Deny(ctx, authReqID, "poll_abuse"); denyErr == nil {
-				deps.audit().Emit(ctx, audit.Event{
-					Name:     ciba.AuditPollAbuseLockout,
-					Level:    audit.LevelWarn,
-					Message:  "ciba record locked: poll-violation count exceeded",
-					ClientID: clientID,
-					Extras: map[string]any{
-						"strikes":     int(strikes),
-						"max_strikes": int(threshold),
-					},
-				})
-			}
-		}
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errSlowDown,
-			"polling interval has been increased; back off and retry")
-		return false
-	case ciba.PollDecisionAccessDenied:
-		emitCIBAReject(ctx, deps, clientID, errAccessDenied)
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAccessDenied,
-			"authorization request was denied")
-		return false
-	case ciba.PollDecisionExpiredToken:
-		emitCIBAReject(ctx, deps, clientID, errExpiredToken)
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errExpiredToken,
-			"auth_req_id expired")
-		return false
-	case ciba.PollDecisionAlreadyRedeemed:
-		// CIBA Core §11 reserves expired_token for TTL elapse only;
-		// auth_req_id replay maps to invalid_grant per RFC 6749
-		// §5.2. OFCS' fapi-ciba CIBA-11 assertion pins this wire
-		// distinction.
-		emitCIBAReject(ctx, deps, clientID, errInvalidGrant)
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
-			"auth_req_id was already redeemed")
-		return false
-	case ciba.PollDecisionEmit:
-		return true
-	case ciba.PollDecisionInvalid:
-		fallthrough
-	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
-		return false
+	if err != nil || strikes < threshold {
+		return
 	}
+	if denyErr := deps.CIBARequests.Deny(ctx, authReqID, "poll_abuse"); denyErr != nil {
+		return
+	}
+	deps.audit().Emit(ctx, audit.Event{
+		Name:     ciba.AuditPollAbuseLockout,
+		Level:    audit.LevelWarn,
+		Message:  "ciba record locked: poll-violation count exceeded",
+		ClientID: clientID,
+		Extras: map[string]any{
+			"strikes":     int(strikes),
+			"max_strikes": int(threshold),
+		},
+	})
 }
 
 // lookupCIBARequest resolves the polling record from the substore
@@ -347,7 +312,7 @@ func retireDeprovisionedCIBARequest(ctx context.Context, deps Deps, clientID, su
 }
 
 // consumeCIBARequest atomically transitions the record from
-// Approved to Consumed and returns the consumed snapshot. The
+// Approved to Consumed. The
 // substore separates two failure modes the wire codes care about:
 //
 //   - [store.ErrAlreadyConsumed] is the replay path (the record
@@ -362,7 +327,7 @@ func consumeCIBARequest(
 	w http.ResponseWriter,
 	deps Deps,
 	authReqID string,
-) (*store.CIBARequest, bool) {
+) bool {
 	consumed, err := deps.CIBARequests.Consume(ctx, authReqID)
 	if err == nil && consumed == nil {
 		// A nil record alongside a nil error violates the store contract;
@@ -383,222 +348,9 @@ func consumeCIBARequest(
 		default:
 			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		}
-		return nil, false
+		return false
 	}
-	return consumed, true
-}
-
-// issueCIBAResponse mints the access token, optionally an
-// id_token (only when scope contains openid), and optionally a
-// refresh token (only when [clientPermitsRefresh] AND the granted
-// scope satisfies the OIDC Core 1.0 §11 / per-client refresh gate).
-// The function reuses [mintAccessToken] / [maybeIssueRefreshToken]
-// so the cnf-claim plumbing, opaque-format dispatch, and audit
-// emission all stay aligned with the authorization_code path.
-//
-// audience selection: the /bc-authorize endpoint rejects
-// multi-resource requests with invalid_target, so
-// [authorized.Audience] holds at most one canonicalised entry. The
-// handler reads index 0 (or empty when none was registered),
-// matching the access-token aud claim's single-entry encoding.
-//
-// acr / amr threading: the bc-authorize record carries requested
-// ACR values for the authentication device, but token issuance stamps
-// only the ACR that the device actually satisfied at Approve time.
-// amr is left unset until the substore retains a real authentication-
-// method signal.
-type preparedCIBAResponse struct {
-	response successResponse
-	audit    cibaIssuedExtras
-	opaque   bool
-	grantID  string
-}
-
-func (p preparedCIBAResponse) cleanup(ctx context.Context, deps Deps) {
-	cleanupPreparedCredentials(ctx, deps, p.response.AccessToken, p.response.RefreshToken, p.opaque)
-	discardGrant(ctx, deps, p.grantID)
-}
-
-// prepareCIBAResponse completes every fallible token-assembly step before
-// CIBARequestStore.Consume makes the authorization irrevocable. This keeps an
-// approved CIBA ceremony retryable after signing, JWE, or persistence faults.
-//
-// The bc-authorize record is deliberately not a parameter: its ID is the raw
-// auth_req_id, which is a bearer secret the substore contract requires
-// backends to keep hashed at rest. Reusing it as the grant identifier would
-// republish it in the access token's "gid" claim, on the access-token /
-// refresh-token rows, and in the audit stream. Redemption therefore records
-// a grant of its own through [newGrantID], whose identifier is safe to
-// disclose because it authorises nothing on its own; a redemption that issues
-// nothing discards it again.
-func prepareCIBAResponse(
-	ctx context.Context,
-	deps Deps,
-	client *store.Client,
-	authorized *cgrant.Authorized,
-	user *store.User,
-	binding tokenBinding,
-) (out preparedCIBAResponse, err error) {
-	now := deps.now().UTC()
-	grantID, err := newGrantID(ctx, deps, grantIssuance{Lineage: grantLineageConsent, Grant: store.Grant{
-		Subject:  authorized.Subject,
-		ClientID: client.ID,
-		Scope:    append([]string(nil), authorized.Scope...),
-		AuthTime: authorized.AuthTime,
-		ACR:      authorized.ACR,
-	}})
-	if err != nil {
-		return preparedCIBAResponse{}, err
-	}
-	resource := ""
-	if len(authorized.Audience) > 0 {
-		resource = authorized.Audience[0]
-	}
-	format := store.AccessTokenFormatJWT
-	if deps.AccessTokenFormatFor != nil {
-		format = deps.AccessTokenFormatFor(resource)
-	}
-	var accessToken, idToken, refreshToken string
-	defer func() {
-		if err != nil {
-			cleanupPreparedCredentials(ctx, deps, accessToken, refreshToken, format == store.AccessTokenFormatOpaque)
-			discardGrant(ctx, deps, grantID)
-		}
-	}()
-	// auth_time is the wall-clock at which the end user completed the
-	// authentication-device interaction —
-	// store.CIBARequestStore.Approve stamps it onto the record. A
-	// zero value means the substore did not retain an auth_time
-	// (legacy records persisted before the column was introduced);
-	// the encoder omits the claim in that case, matching OIDC Core
-	// 1.0 §2's "OPTIONAL unless the client requires it" posture.
-	// Clients that set RequireAuthTime block id_token issuance via
-	// requireAuthTimeForIDToken below when the value is zero.
-	if err := requireAuthTimeForIDToken(client, authorized.Scope, authTimeUnix(authorized.AuthTime)); err != nil {
-		return preparedCIBAResponse{}, err
-	}
-	authTime := authTimeUnix(authorized.AuthTime)
-	publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
-	if err != nil {
-		return preparedCIBAResponse{}, err
-	}
-	chainID, err := refresh.NewChainID()
-	if err != nil {
-		return preparedCIBAResponse{}, err
-	}
-	accessToken, err = mintAccessToken(
-		ctx,
-		deps,
-		authorized.Subject,
-		publicSubject,
-		client.ID,
-		grantID,
-		authorized.Scope,
-		resource,
-		now,
-		authTime,
-		binding,
-		nil,
-		accessTokenOverrides{ChainID: chainID, ACR: authorized.ACR},
-	)
-	if err != nil {
-		return preparedCIBAResponse{}, err
-	}
-	if oidcscope.ContainsOpenID(authorized.Scope) {
-		idToken, err = mintCIBAIDToken(deps, cibaIDTokenInput{
-			Subject:     publicSubject,
-			ClientID:    client.ID,
-			AccessToken: accessToken,
-			Now:         now,
-			AuthTime:    authTime,
-			ACR:         authorized.ACR,
-			Extra:       idTokenExtraClaims(deps, user, authorized.Scope, nil),
-		})
-		if err != nil {
-			return preparedCIBAResponse{}, err
-		}
-		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
-		if err != nil {
-			return preparedCIBAResponse{}, err
-		}
-	}
-	refreshIn := builtinRefreshIssuance(deps, client)
-	refreshIn.Subject = authorized.Subject
-	refreshIn.GrantID = grantID
-	refreshIn.Scope = authorized.Scope
-	refreshIn.Resource = resource
-	refreshIn.Binding = binding
-	refreshIn.Origin = store.RefreshOriginCIBA
-	refreshIn.ChainID = chainID
-	refreshIn.AuthCtx = authContext{
-		AuthTime: authTime,
-		ACR:      authorized.ACR,
-	}
-	refreshToken, err = issueRefreshToken(ctx, deps, refreshIn)
-	if err != nil {
-		return preparedCIBAResponse{}, err
-	}
-	return preparedCIBAResponse{response: successResponse{
-		AccessToken:  accessToken,
-		TokenType:    binding.tokenTypeFor(),
-		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
-		RefreshToken: refreshToken,
-		IDToken:      idToken,
-		Scope:        joinScope(authorized.Scope),
-		GrantID:      grantIDForResponse(deps, grantID),
-	}, audit: cibaIssuedExtras{
-		ClientID:         client.ID,
-		Subject:          authorized.Subject,
-		Scope:            authorized.Scope,
-		Audience:         authorized.Audience,
-		SenderConstraint: authorized.SenderConstraint,
-	}, opaque: format == store.AccessTokenFormatOpaque, grantID: grantID}, nil
-}
-
-// cibaIDTokenInput collects the parameters [mintCIBAIDToken]
-// needs. The struct exists so the function stays under the
-// project's parameter-count cap; CIBA poll mode does not have a
-// code for c_hash and does not preserve a nonce across the
-// authentication-device interaction (the embedder MAY surface
-// one, but the substore does not retain it), so those
-// fields are absent.
-type cibaIDTokenInput struct {
-	Subject     string
-	ClientID    string
-	AccessToken string
-	Now         time.Time
-	AuthTime    int64
-	ACR         string
-	Extra       map[string]any
-}
-
-// mintCIBAIDToken signs the id_token issued in response to a
-// CIBA poll redemption. at_hash is populated per OIDC Core
-// §3.1.3.6 because the access token is bound to the same
-// redemption and matches the spec's "ID Token issued from a
-// Token Endpoint" shape. c_hash is omitted because CIBA has no
-// authorization code to bind. nonce is omitted because the
-// substore does not retain one. auth_time is populated
-// when the substore stamped a non-zero value at Approve time;
-// the encoder omits the claim on zero.
-func mintCIBAIDToken(deps Deps, in cibaIDTokenInput) (string, error) {
-	key := activeSigningKey(deps)
-	atHash, err := tokens.HashForAlg(in.AccessToken, key.Alg)
-	if err != nil {
-		return "", err
-	}
-	claims := tokens.IDTokenClaims{
-		Issuer:    deps.Issuer,
-		Subject:   in.Subject,
-		Audience:  []string{in.ClientID},
-		IssuedAt:  in.Now.Unix(),
-		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
-		AtHash:    atHash,
-		AuthTime:  in.AuthTime,
-	}
-	claims.ACR = in.ACR
-	claims.Extra = in.Extra
-	return tokens.SignIDToken(key, claims)
+	return true
 }
 
 // cibaIssuedExtras bundles the audit extras the issuance path

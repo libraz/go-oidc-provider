@@ -129,12 +129,16 @@ func (v *Verifier) Verify(ctx context.Context, raw string, client ClientContext)
 		return nil, reject(ReasonClaims, err)
 	}
 
+	all, err := c.all()
+	if err != nil {
+		return nil, reject(ReasonClaims, err)
+	}
 	res := &Result{
 		Subject: Subject{
 			Issuer:   issName,
 			Subject:  c.sub,
 			ClientID: client.ID,
-			Claims:   c.all,
+			Claims:   all,
 		},
 		Profile:   iss.Profile,
 		ExpiresAt: c.exp,
@@ -198,10 +202,10 @@ func checkTyp(p Profile, typ any, present bool) error {
 	}
 }
 
-// claims is the decoded payload: the typed members the stages check plus the
-// full claim map handed to the subject resolver.
+// claims is the decoded payload: the raw members the stages check, from which
+// the full claim map handed to the subject resolver is built once the checks
+// pass.
 type claims struct {
-	all map[string]any
 	raw map[string]json.RawMessage
 
 	sub string
@@ -213,10 +217,21 @@ func decodeClaims(payload []byte) (*claims, error) {
 	if err := json.Unmarshal(payload, &c.raw); err != nil {
 		return nil, fmt.Errorf("payload is not a JSON object: %w", err)
 	}
-	if err := json.Unmarshal(payload, &c.all); err != nil {
-		return nil, fmt.Errorf("payload is not a JSON object: %w", err)
-	}
 	return c, nil
+}
+
+// all decodes every member into the generic claim map. Each member already
+// parsed as JSON, so a decode fault is not expected; it is reported anyway.
+func (c *claims) all() (map[string]any, error) {
+	out := make(map[string]any, len(c.raw))
+	for name, raw := range c.raw {
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("claim %q: %w", name, err)
+		}
+		out[name] = v
+	}
+	return out, nil
 }
 
 // checkClaims enforces sub, aud, exp, nbf and iat.

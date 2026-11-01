@@ -38,32 +38,10 @@ func requireRegisteredScopes(w http.ResponseWriter, client *store.Client, scope 
 	return false
 }
 
-// checkRefreshScopeAllowlist enforces the per-scope AllowedClients
-// allowlist for any scope the RP explicitly requested at /token. The
-// check runs before [refresh.Exchanger.Exchange] so an allowlist
-// violation does not consume the presented refresh token. An empty
-// requested-scope list bypasses the check; the rotated token reuses
-// the bound scope, which was already validated when the originating
-// authorization code was issued.
-func checkRefreshScopeAllowlist(
-	w http.ResponseWriter,
-	deps Deps,
-	clientID string,
-	requested []string,
-) bool {
-	if deps.Scopes == nil || len(requested) == 0 {
-		return true
-	}
-	for _, s := range requested {
-		if !deps.Scopes.Allows(s, clientID) {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-				"scope is restricted to a different client")
-			return false
-		}
-	}
-	return true
-}
-
+// preflightRefreshBeforeConsume applies the refresh token's checks that must
+// not spend it. On success it returns the record read, or nil when the token
+// is unknown or already consumed so the exchanger owns replay and invalid_grant
+// handling.
 func preflightRefreshBeforeConsume(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -72,7 +50,7 @@ func preflightRefreshBeforeConsume(
 	client *store.Client,
 	in refreshInputs,
 	dpopOut *dpopOutcome,
-) bool {
+) (*store.RefreshToken, bool) {
 	clientID := client.ID
 	rec, err := deps.RefreshTokens.Find(ctx, in.Token)
 	if err == nil && rec == nil {
@@ -83,36 +61,39 @@ func preflightRefreshBeforeConsume(
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return true
+			return nil, true
 		}
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
-		return false
+		return nil, false
 	}
 	if rec.ConsumedAt != nil {
-		return true
+		return nil, true
 	}
 	if rec.ClientID != clientID {
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
-		return false
+		return nil, false
 	}
 	if !rec.ExpiresAt.IsZero() && deps.now().UTC().After(rec.ExpiresAt) {
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
-		return false
+		return nil, false
 	}
 	scope, ok := preflightRefreshScope(w, rec.Scope, in.RequestedScope)
 	if !ok {
-		return false
+		return nil, false
 	}
-	if deps.Scopes != nil && !checkTokenScopeAllowlist(w, deps, clientID, scope) {
-		return false
+	if !checkTokenScopeAllowlist(w, deps, clientID, scope) {
+		return nil, false
 	}
 	if !requireRegisteredScopes(w, client, scope) {
-		return false
+		return nil, false
 	}
 	if !enforceStrictOfflineAccess(w, deps, rec.Scope, rec.Origin) {
-		return false
+		return nil, false
 	}
-	return preflightRefreshSenderConstraint(w, r, deps, rec, dpopOut)
+	if !preflightRefreshSenderConstraint(w, r, deps, rec, dpopOut) {
+		return nil, false
+	}
+	return rec, true
 }
 
 // preflightRefreshSenderConstraint rejects a missing or mismatched proof
@@ -177,29 +158,12 @@ func preflightRefreshAuthorizationDetails(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
-	token string,
+	rec *store.RefreshToken,
 	requested []map[string]any,
 ) ([]map[string]any, bool) {
-	rec, err := deps.RefreshTokens.Find(ctx, token)
-	if err == nil && rec == nil {
-		// A nil record alongside a nil error violates the store contract.
-		// Treat it as a miss so the presented token earns the same
-		// invalid_grant an unknown handle earns rather than a distinguishable
-		// 5xx; the exchanger below still refuses to issue against it.
-		err = store.ErrNotFound
-	}
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			// Preserve the exchanger's invalid_grant mapping for unknown or
-			// expired handles.
-			return nil, true
-		}
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
-		return nil, false
-	}
-	if rec.ConsumedAt != nil {
-		// Replay detection and grace-window response recovery remain owned by
-		// the exchanger. Neither path issues a new response from these details.
+	if rec == nil {
+		// Unknown or consumed token: the exchanger owns invalid_grant, replay
+		// detection and grace-window recovery, and none issues from these details.
 		return nil, true
 	}
 

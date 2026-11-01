@@ -96,25 +96,42 @@ func serveInteractionGet(w http.ResponseWriter, r *http.Request, deps resolved, 
 	dispatchTick(w, r, deps, rec, state, authnState, nil)
 }
 
-// serveInteractionPost runs the orchestrator against the SPA's
-// submission and dispatches the resulting [interaction.Step].
-func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
+// admitInteractionWrite gates a state-changing request on an interaction:
+// origin check, record load and CSRF verification. An interaction whose
+// completion is already pending resumes it here and reports ok=false, as
+// does any refusal; the response is written in every ok=false case.
+func admitInteractionWrite(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	uid string,
+) (*store.Interaction, authorize.RequestState, bool) {
 	if err := csrf.CheckOrigin(r, deps.InteractionOrigins); err != nil {
 		if deps.OnOpaqueOrigin != nil && csrf.IsOpaqueSameOrigin(r) {
 			deps.OnOpaqueOrigin()
 		}
 		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "origin not allowed", "")
-		return
+		return nil, authorize.RequestState{}, false
 	}
 	rec, state, ok := loadInteraction(w, r, deps, uid)
 	if !ok {
-		return
+		return nil, authorize.RequestState{}, false
 	}
 	if !verifyCSRFToken(w, r, deps, uid, rec.Step) {
-		return
+		return nil, authorize.RequestState{}, false
 	}
 	if state.Completion != nil {
 		resumeInteractionCompletion(w, r, deps, rec, state)
+		return nil, authorize.RequestState{}, false
+	}
+	return rec, state, true
+}
+
+// serveInteractionPost runs the orchestrator against the SPA's
+// submission and dispatches the resulting [interaction.Step].
+func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
+	rec, state, ok := admitInteractionWrite(w, r, deps, uid)
+	if !ok {
 		return
 	}
 	authnState, err := decodeAuthnState(state.Authn)
@@ -138,22 +155,8 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 //
 //nolint:gocognit // The validation and conflict branches preserve the protocol's response distinctions.
 func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
-	if err := csrf.CheckOrigin(r, deps.InteractionOrigins); err != nil {
-		if deps.OnOpaqueOrigin != nil && csrf.IsOpaqueSameOrigin(r) {
-			deps.OnOpaqueOrigin()
-		}
-		renderBrowserError(w, r, deps.Driver, http.StatusForbidden, errInvalidRequest, "origin not allowed", "")
-		return
-	}
-	rec, state, ok := loadInteraction(w, r, deps, uid)
+	rec, state, ok := admitInteractionWrite(w, r, deps, uid)
 	if !ok {
-		return
-	}
-	if !verifyCSRFToken(w, r, deps, uid, rec.Step) {
-		return
-	}
-	if state.Completion != nil {
-		resumeInteractionCompletion(w, r, deps, rec, state)
 		return
 	}
 	cas, err := interactionCAS(deps)

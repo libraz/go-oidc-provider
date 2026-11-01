@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
@@ -25,13 +26,13 @@ var errBadQValue = errors.New("authorizeendpoint: malformed q-value")
 // internal/authorize's sentinels, whose Code
 // [validateRequestExtensions] renders verbatim.
 const (
-	errInvalidRequest           = "invalid_request"
+	errInvalidRequest           = endpointsupport.ErrInvalidRequest
 	errLoginRequired            = "login_required"
 	errConsentRequired          = "consent_required"
 	errInteractionRequired      = "interaction_required"
 	errAccessDenied             = "access_denied"
 	errAccountSelectionRequired = "account_selection_required"
-	errServerError              = "server_error"
+	errServerError              = endpointsupport.ErrServerError
 	errUnsupportedResponseType  = "unsupported_response_type"
 	errUnsupportedResponseMode  = "unsupported_response_mode"
 	errInvalidScope             = "invalid_scope"

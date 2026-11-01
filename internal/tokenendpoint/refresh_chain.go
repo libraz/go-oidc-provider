@@ -43,7 +43,7 @@ func refreshExchangedForRotation(exchanged *refresh.Exchanged, authCtx authConte
 		return nil
 	}
 	out := *exchanged
-	out.AuthTime = timeFromUnix(authCtx.AuthTime)
+	out.AuthTime = tokens.TimeFromUnix(authCtx.AuthTime)
 	out.ACR = authCtx.ACR
 	out.AMR = append([]string(nil), authCtx.AMR...)
 	out.AuthorizationDetails = authorize.CloneAuthorizationDetails(details)

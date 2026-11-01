@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -42,14 +43,15 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	if !checkRefreshScopeAllowlist(w, deps, client.ID, in.RequestedScope) {
+	if !checkTokenScopeAllowlist(w, deps, client.ID, in.RequestedScope) {
 		return
 	}
 	authorizationDetails, ok := parseTokenAuthorizationDetails(w, r, deps, client)
 	if !ok {
 		return
 	}
-	if !preflightRefreshBeforeConsume(ctx, w, r, deps, client, in, dpopOut) {
+	presented, ok := preflightRefreshBeforeConsume(ctx, w, r, deps, client, in, dpopOut)
+	if !ok {
 		return
 	}
 	// Resolve authorization_details before opening the transaction. A SQL
@@ -62,7 +64,7 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 		ctx,
 		w,
 		deps,
-		in.Token,
+		presented,
 		authorizationDetails,
 	)
 	if !ok {
@@ -87,12 +89,12 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	// refused — the same ordering the transactional path gives.
 	var cascade replayCascade
 	var rotation rotationOutcome
-	staged := newStagedResponseWriter()
+	staged := httpx.NewBufferedWriter(http.StatusInternalServerError)
 	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, nil, effectiveAuthorizationDetails, false, false, &cascade, &rotation)
 	// Each write above landed as it ran, so a recorded rotation is durable.
 	rotation.emit(ctx, deps)
 	cascade.run(ctx, deps)
-	staged.copyTo(w)
+	_ = staged.Commit(w)
 }
 
 // rotationOutcome carries the token.refreshed record of a rotation out of
@@ -247,7 +249,7 @@ func handleRefreshTokenTransaction(
 	authorizationDetails []map[string]any,
 ) {
 	var cascade replayCascade
-	run := func() (*stagedResponseWriter, error) {
+	run := func() (*httpx.BufferedWriter, error) {
 		return runRefreshTokenTransaction(
 			ctx,
 			r,
@@ -279,7 +281,7 @@ func handleRefreshTokenTransaction(
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	staged.copyTo(w)
+	_ = staged.Commit(w)
 }
 
 // runRefreshTokenTransaction stages the refresh exchange behind a transaction
@@ -300,7 +302,7 @@ func runRefreshTokenTransaction(
 	requestedAuthorizationDetails []map[string]any,
 	authorizationDetails []map[string]any,
 	cascade *replayCascade,
-) (*stagedResponseWriter, error) {
+) (*httpx.BufferedWriter, error) {
 	tx, err := deps.Transactions.BeginTx(ctx)
 	if err != nil {
 		return nil, err
@@ -313,7 +315,7 @@ func runRefreshTokenTransaction(
 	txDeps.AccessTokens = tx.AccessTokens()
 	txDeps.OpaqueAccessTokens = tx.OpaqueAccessTokens()
 	txDeps.GrantRevocations = tx.GrantRevocations()
-	staged := newStagedResponseWriter()
+	staged := httpx.NewBufferedWriter(http.StatusInternalServerError)
 	var rotation rotationOutcome
 	rollback := completeRefreshToken(
 		ctx,
@@ -335,7 +337,7 @@ func runRefreshTokenTransaction(
 	// Consume has spent the presented token) while rolling back server-side
 	// failures in token assembly/persistence. Request-shape and narrowing
 	// rejections are handled before Exchange.
-	if rollback || staged.status >= http.StatusInternalServerError || staged.status == 0 {
+	if rollback || staged.Status() >= http.StatusInternalServerError || staged.Status() == 0 {
 		return staged, nil
 	}
 	if err := tx.Commit(); err != nil {

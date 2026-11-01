@@ -1,7 +1,6 @@
 package authorizeendpoint
 
 import (
-	"bytes"
 	"errors"
 	"net/http"
 	"net/url"
@@ -69,11 +68,11 @@ func writeFormPostTerminal(w http.ResponseWriter, redirectURI string, params url
 		sink.captureFormPost(redirectURI, params)
 		return nil
 	}
-	buffer := newBufferedResponseWriter()
+	buffer := httpx.NewBufferedWriter(http.StatusOK)
 	if err := jarm.WriteParamsFormPost(buffer, redirectURI, params); err != nil {
 		return err
 	}
-	return buffer.commit(w)
+	return buffer.Commit(w)
 }
 
 // hasRenderableParam reports whether params carries at least one
@@ -396,44 +395,4 @@ func writeJARMFailure(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusInternalServerError)
 	_, _ = w.Write([]byte("authorization response unavailable\n"))
-}
-
-type bufferedResponseWriter struct {
-	header http.Header
-	body   bytes.Buffer
-	status int
-}
-
-func newBufferedResponseWriter() *bufferedResponseWriter {
-	return &bufferedResponseWriter{header: make(http.Header)}
-}
-
-func (w *bufferedResponseWriter) Header() http.Header { return w.header }
-
-func (w *bufferedResponseWriter) WriteHeader(status int) {
-	if w.status == 0 {
-		w.status = status
-	}
-}
-
-func (w *bufferedResponseWriter) Write(p []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
-	return w.body.Write(p)
-}
-
-func (w *bufferedResponseWriter) commit(dst http.ResponseWriter) error {
-	for key, values := range w.header {
-		copied := make([]string, len(values))
-		copy(copied, values)
-		dst.Header()[key] = copied
-	}
-	status := w.status
-	if status == 0 {
-		status = http.StatusOK
-	}
-	dst.WriteHeader(status)
-	_, err := dst.Write(w.body.Bytes())
-	return err
 }

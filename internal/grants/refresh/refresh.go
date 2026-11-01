@@ -40,11 +40,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -251,7 +253,7 @@ func (i *Issuer) Prepare(in IssueInput) (string, *store.RefreshToken, error) {
 		AuthTime:              in.AuthTime,
 		ACR:                   in.ACR,
 		AMR:                   slices.Clone(in.AMR),
-		AuthorizationDetails:  cloneObjectArray(in.AuthorizationDetails),
+		AuthorizationDetails:  authorize.CloneAuthorizationDetails(in.AuthorizationDetails),
 		AccessTokenExtra:      cloneClaims(in.AccessTokenExtra),
 		Claims:                cloneClaims(in.Claims),
 		AuthorizationRecorded: in.AuthorizationRecorded,
@@ -352,10 +354,7 @@ func NewExchanger(cfg ExchangerConfig) (*Exchanger, error) {
 	case graceTTL < 0:
 		graceTTL = 0 // explicit disable
 	}
-	em := cfg.Audit
-	if em == nil {
-		em = audit.Discard()
-	}
+	em := audit.OrDiscard(cfg.Audit)
 	return &Exchanger{
 		store:        cfg.Store,
 		clock:        clock,
@@ -540,7 +539,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		AuthTime:              rec.AuthTime,
 		ACR:                   rec.ACR,
 		AMR:                   slices.Clone(rec.AMR),
-		AuthorizationDetails:  cloneObjectArray(rec.AuthorizationDetails),
+		AuthorizationDetails:  authorize.CloneAuthorizationDetails(rec.AuthorizationDetails),
 		AccessTokenExtra:      cloneClaims(rec.AccessTokenExtra),
 		Claims:                cloneClaims(rec.Claims),
 		AuthorizationRecorded: rec.AuthorizationRecorded,
@@ -764,7 +763,7 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 		AuthTime:              rec.AuthTime,
 		ACR:                   rec.ACR,
 		AMR:                   slices.Clone(rec.AMR),
-		AuthorizationDetails:  cloneObjectArray(rec.AuthorizationDetails),
+		AuthorizationDetails:  authorize.CloneAuthorizationDetails(rec.AuthorizationDetails),
 		AccessTokenExtra:      cloneClaims(rec.AccessTokenExtra),
 		Claims:                cloneClaims(rec.Claims),
 		AuthorizationRecorded: rec.AuthorizationRecorded,
@@ -907,8 +906,6 @@ func resolveScope(bound, requested []string) ([]string, error) {
 	return slices.Clone(requested), nil
 }
 
-// newID returns a 256-bit base64url-encoded value suitable for the
-// refresh_token parameter.
 // chainIDLength is the byte length of a chain ID. It is a non-secret
 // identifier, so it needs uniqueness across the grant's chains, not the
 // bearer entropy of [IDLength].
@@ -925,6 +922,8 @@ func NewChainID() (string, error) {
 	return id, nil
 }
 
+// newID returns a 256-bit base64url-encoded value suitable for the
+// refresh_token parameter.
 func newID() (string, error) {
 	id, err := keys.RandomBase64URL(IDLength)
 	if err != nil {
@@ -945,31 +944,9 @@ func cloneStringPtr(p *string) *string {
 	return &v
 }
 
-func cloneObjectArray(in []map[string]any) []map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]map[string]any, len(in))
-	for i, obj := range in {
-		if obj == nil {
-			continue
-		}
-		cp := make(map[string]any, len(obj))
-		for k, v := range obj {
-			cp[k] = v
-		}
-		out[i] = cp
-	}
-	return out
-}
-
 func cloneClaims(in map[string]any) map[string]any {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(in)
 }

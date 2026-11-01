@@ -1,22 +1,5 @@
 package tokenexchange
 
-// dedupe collapses duplicate entries in s while preserving order.
-func dedupe(s []string) []string {
-	if len(s) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(s))
-	out := make([]string, 0, len(s))
-	for _, v := range s {
-		if _, ok := seen[v]; ok {
-			continue
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
-	}
-	return out
-}
-
 // intersectScope returns the entries of want that also appear in
 // allowed, preserving want's order. The function is the natural
 // "narrow want by allowed" operation; an empty allowed yields an

@@ -90,12 +90,12 @@ func TestAuthCode_HappyPath(t *testing.T) {
 		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
 	}
 	// Verify at_hash binds to the access token by computing it ourselves.
-	wantAtHash := tokens.Hash(at)
+	wantAtHash, _ := tokens.HashForAlg(at, "ES256")
 	idClaims := decodeIDTokenClaims(t, idt)
 	if idClaims["at_hash"] != wantAtHash {
 		t.Errorf("at_hash=%v want %s", idClaims["at_hash"], wantAtHash)
 	}
-	wantCHash := tokens.Hash(codeID)
+	wantCHash, _ := tokens.HashForAlg(codeID, "ES256")
 	if idClaims["c_hash"] != wantCHash {
 		t.Errorf("c_hash=%v want %s", idClaims["c_hash"], wantCHash)
 	}

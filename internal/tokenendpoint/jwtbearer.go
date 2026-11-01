@@ -120,16 +120,12 @@ func acceptJWTBearerRequest(
 	if !applyJWTBearerRequestScope(ctx, w, r, deps, req) {
 		return nil, false
 	}
-	mtlsOut, ok := verifyTokenMTLS(w, r, deps, dpopOut.JKT)
+	binding, _, ok := bindRequest(w, r, deps, dpopOut)
 	if !ok {
 		emitJWTBearerRejected(ctx, deps, client.ID, issuer, jwtBearerReasonBinding)
 		return nil, false
 	}
-	req.binding = tokenBinding{DPoPJKT: dpopOut.JKT, MTLSThumbprint: mtlsOut.Thumbprint}
-	if !enforceSenderConstraint(w, deps, req.binding) {
-		emitJWTBearerRejected(ctx, deps, client.ID, issuer, jwtBearerReasonBinding)
-		return nil, false
-	}
+	req.binding = binding
 	return req, true
 }
 

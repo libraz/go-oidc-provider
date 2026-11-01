@@ -23,6 +23,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -68,17 +69,17 @@ const (
 )
 
 // The wire grant_type values the built-in handlers implement. They are
-// named constants because three separate gates key on them — dispatch,
+// named values because three separate gates key on them — dispatch,
 // the Provider-level enabled-grant set, and the per-client
 // [store.Client.GrantTypes] check — and a literal that drifts in one of
 // them fails open rather than loudly.
-const (
-	grantTypeAuthorizationCode = "authorization_code"
-	grantTypeRefreshToken      = "refresh_token"
-	grantTypeClientCredentials = "client_credentials"
-	grantTypeDeviceCode        = "urn:ietf:params:oauth:grant-type:device_code"
-	grantTypeCIBA              = "urn:openid:params:grant-type:ciba"
-	grantTypeJWTBearer         = "urn:ietf:params:oauth:grant-type:jwt-bearer" //nolint:gosec // G101: grant type URN, not a credential.
+var (
+	grantTypeAuthorizationCode = grant.AuthorizationCode.String()
+	grantTypeRefreshToken      = grant.RefreshToken.String()
+	grantTypeClientCredentials = grant.ClientCredentials.String()
+	grantTypeDeviceCode        = grant.DeviceCode.String()
+	grantTypeCIBA              = grant.CIBA.String()
+	grantTypeJWTBearer         = grant.JWTBearer.String()
 )
 
 // grantEnabled reports whether the Provider accepts grantType. A nil
@@ -134,9 +135,7 @@ var tokenSingleValuedParams = []string{
 // userinfo handler's posture: a structurally-typed interface so a value
 // satisfying [github.com/libraz/go-oidc-provider/op.Clock] flows through
 // without an explicit adapter, and a nil falls back to the system clock.
-type Clock interface {
-	Now() time.Time
-}
+type Clock = timex.Clock
 
 // Deps bundles the runtime dependencies the token endpoint needs. The
 // HTTP layer constructs a [Deps] once at startup and passes it to
@@ -544,22 +543,7 @@ func Handler(deps Deps) http.Handler {
 // whether dispatch may proceed, having already written the error
 // response when it may not.
 func acceptTokenRequest(w http.ResponseWriter, r *http.Request, deps Deps) (string, bool) {
-	if !httpx.EnforceMethod(w, r, http.MethodPost) {
-		return "", false
-	}
-	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"content-type must be application/x-www-form-urlencoded")
-		return "", false
-	}
-	endpointsupport.LimitFormBody(w, r)
-	if err := r.ParseForm(); err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
-		return "", false
-	}
-	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, tokenSingleValuedParams); !ok {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"parameter "+name+" must not be repeated")
+	if !endpointsupport.ParseFormRequest(w, r, tokenSingleValuedParams) {
 		return "", false
 	}
 	grantType := r.PostForm.Get("grant_type")
@@ -628,13 +612,22 @@ func (d *Deps) now() time.Time {
 	return timex.OrSystem(d.Clock).Now()
 }
 
+// idTokenClaims returns the id_token claims every grant shares: issuer,
+// subject, the client as sole audience, and the issue and expiry instants.
+func (d *Deps) idTokenClaims(subject, clientID string, now time.Time) tokens.IDTokenClaims {
+	return tokens.IDTokenClaims{
+		Issuer:    d.Issuer,
+		Subject:   subject,
+		Audience:  []string{clientID},
+		IssuedAt:  now.Unix(),
+		ExpiresAt: tokens.ExpiresIn(now, d.IDTokenTTL),
+	}
+}
+
 // audit returns the configured audit sink, or a [audit.Discard]
 // emitter so call sites can invoke Emit unconditionally.
 func (d *Deps) audit() audit.Emitter {
-	if d.Audit == nil {
-		return audit.Discard()
-	}
-	return d.Audit
+	return audit.OrDiscard(d.Audit)
 }
 
 // ttlBucketFor returns the audit-extras label naming which TTL

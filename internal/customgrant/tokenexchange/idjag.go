@@ -2,7 +2,6 @@ package tokenexchange
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -104,7 +103,7 @@ func (h *Handler) handleIDJAG(ctx context.Context, req customgrant.Request) (cus
 	if lineage != nil {
 		resp.GrantID, resp.GrantSubject = lineage.ID, lineage.Subject
 	}
-	clientID, subject := clientIDOf(req.Client), subjectView.Subject
+	clientID, subject := customgrant.ClientIDOf(req.Client), subjectView.Subject
 	extras := map[string]any{
 		"audience":      in.audience,
 		"aud_client_id": decision.ClientID,
@@ -162,7 +161,7 @@ func parseIDJAGForm(req customgrant.Request) (idjagInput, error) {
 // sentinels and a nil decision are the policy's refusals, anything else
 // it returns that the OP cannot issue is the policy's defect.
 func (h *Handler) checkIDJAGDecision(ctx context.Context, client *store.Client, subject string, in idjagInput, decision *IDJAGDecision, err error) error {
-	clientID := clientIDOf(client)
+	clientID := customgrant.ClientIDOf(client)
 	switch {
 	case errors.Is(err, ErrIDJAGUnknownAudience):
 		h.emit(ctx, auditPolicyDenied, audit.LevelInfo, "token-exchange ID-JAG audience unknown",
@@ -262,12 +261,8 @@ func idjagConfirmation(req customgrant.Request) map[string]string {
 // idTokenAuthContext reads acr and amr off an id_token payload the lookup
 // has already verified; the lookup's claim projection does not carry them.
 func idTokenAuthContext(raw string) (string, []string) {
-	parts := strings.Split(raw, ".")
-	if len(parts) != 3 {
-		return "", nil
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
+	payload, ok := jwtPayload(raw)
+	if !ok {
 		return "", nil
 	}
 	var c struct {

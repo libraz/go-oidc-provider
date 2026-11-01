@@ -45,15 +45,8 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
-	mtlsOut, ok := verifyTokenMTLS(w, r, deps, dpopOut.JKT)
+	binding, _, ok := bindRequest(w, r, deps, dpopOut)
 	if !ok {
-		return
-	}
-	binding := tokenBinding{
-		DPoPJKT:        dpopOut.JKT,
-		MTLSThumbprint: mtlsOut.Thumbprint,
-	}
-	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
 	issueClientCredsResponse(ctx, w, deps, client, authorized.Scope, resource, binding, authorizationDetails)
@@ -145,6 +138,9 @@ func authorizeClientCreds(
 	return authorized, true
 }
 
+// checkTokenScopeAllowlist enforces the per-scope AllowedClients allowlist
+// for every scope in scopes; a scope restricted to other clients is
+// invalid_scope. It runs before the grant is consumed or issued against.
 func checkTokenScopeAllowlist(
 	w http.ResponseWriter,
 	deps Deps,

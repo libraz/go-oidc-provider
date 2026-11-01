@@ -106,12 +106,9 @@ const (
 	interactionAAD = "oidc-interaction"
 )
 
-// Clock is the structural wall-clock dependency, mirroring the interface in
-// internal/tokenendpoint so a value satisfying [op.Clock] flows through
-// without an adapter. A nil [Deps.Clock] falls back to the system clock.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the wall-clock dependency. A nil [Deps.Clock] falls back to the
+// system clock.
+type Clock = timex.Clock
 
 // Deps bundles the runtime dependencies the handler needs. The HTTP layer
 // constructs a [Deps] once at startup and passes it to [Handler]; the
@@ -501,10 +498,7 @@ func (r resolved) isFirstPartyClient(clientID string) bool {
 // the no-op emitter so the handler can call audit() unconditionally
 // without per-call nil checks.
 func (r resolved) auditEmitter() audit.Emitter {
-	if r.Audit == nil {
-		return audit.Discard()
-	}
-	return r.Audit
+	return audit.OrDiscard(r.Audit)
 }
 
 // Handler returns the HTTP handler the OP mounts at its authorize and

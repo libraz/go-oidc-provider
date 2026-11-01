@@ -205,3 +205,37 @@ func TestReuseOrCreateGrant_NewAuthorizationDetailsAmendTheExistingGrant(t *test
 		t.Fatalf("result does not cover both details: %v", result.AuthorizationDetails)
 	}
 }
+
+func TestMutateManagedGrant_EmptyAuthContextKeepsRecordedAuthentication(t *testing.T) {
+	t.Parallel()
+
+	authTime := time.Date(2026, 7, 24, 11, 0, 0, 0, time.UTC)
+	for _, action := range []string{gmActionReplace, gmActionMerge} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			grants := &corruptGrantStore{findResult: &store.Grant{
+				ID:       "grant-1",
+				Subject:  "user-1",
+				ClientID: "client-1",
+				Scope:    []string{"openid"},
+				AuthTime: authTime,
+				ACR:      "urn:acr:2",
+				AMR:      []string{"pwd"},
+			}}
+			g, err := mutateManagedGrant(context.Background(), resolved{Deps: Deps{Grants: grants}}, grantUpsert{
+				Subject:   "user-1",
+				ClientID:  "client-1",
+				Scope:     []string{"openid", "email"},
+				GMAction:  action,
+				GMGrantID: "grant-1",
+				Now:       time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC),
+			})
+			if err != nil {
+				t.Fatalf("mutateManagedGrant: %v", err)
+			}
+			if !g.AuthTime.Equal(authTime) || g.ACR != "urn:acr:2" || len(g.AMR) != 1 || g.AMR[0] != "pwd" {
+				t.Fatalf("recorded authentication overwritten by an empty context: %+v", g)
+			}
+		})
+	}
+}

@@ -79,6 +79,12 @@ func fillFromGrant(out *Authorization, g *store.Grant) {
 	}
 }
 
+// ContainsAuthorizationDetail reports whether set holds an element deeply
+// equal to el.
+func ContainsAuthorizationDetail(set []map[string]any, el map[string]any) bool {
+	return slices.ContainsFunc(set, func(have map[string]any) bool { return reflect.DeepEqual(have, el) })
+}
+
 // narrowAuthorizationDetails keeps the elements of own the grant still
 // holds. A grant without details leaves own as it is.
 func narrowAuthorizationDetails(own, granted []map[string]any) []map[string]any {
@@ -87,7 +93,7 @@ func narrowAuthorizationDetails(own, granted []map[string]any) []map[string]any 
 	}
 	out := make([]map[string]any, 0, len(own))
 	for _, el := range own {
-		if slices.ContainsFunc(granted, func(have map[string]any) bool { return reflect.DeepEqual(have, el) }) {
+		if ContainsAuthorizationDetail(granted, el) {
 			out = append(out, el)
 		}
 	}

@@ -1,7 +1,10 @@
 package tokenendpoint
 
 import (
+	"net/http"
+
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -35,9 +38,9 @@ func (b tokenBinding) confirmation() map[string]string {
 // the binding is on the cnf claim, not the wire token type.
 func (b tokenBinding) tokenTypeFor() string {
 	if b.DPoPJKT != "" {
-		return "DPoP"
+		return endpointsupport.BearerSchemeDPoP
 	}
-	return "Bearer"
+	return endpointsupport.BearerSchemeBearer
 }
 
 // constrained reports whether the binding carries either a DPoP
@@ -68,4 +71,21 @@ func refreshDPoPJKT(client *store.Client, dpopJKT string) string {
 		return ""
 	}
 	return dpopJKT
+}
+
+// bindRequest resolves the sender-constraint binding for a token request: it
+// extracts the mTLS leaf certificate, combines it with the verified DPoP
+// proof, and applies the FAPI sender-constraint requirement. On failure the
+// error response is already written. The returned outcome carries the parsed
+// certificate for callers that forward it.
+func bindRequest(w http.ResponseWriter, r *http.Request, deps Deps, dpopOut *dpopOutcome) (tokenBinding, *mtlsOutcome, bool) {
+	mtlsOut, ok := verifyTokenMTLS(w, r, deps)
+	if !ok {
+		return tokenBinding{}, nil, false
+	}
+	binding := tokenBinding{DPoPJKT: dpopOut.JKT, MTLSThumbprint: mtlsOut.Thumbprint}
+	if !enforceSenderConstraint(w, deps, binding) {
+		return tokenBinding{}, nil, false
+	}
+	return binding, mtlsOut, true
 }

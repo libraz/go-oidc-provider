@@ -479,21 +479,30 @@ func emitCompletionAudit(
 			"completion_id": audit.Fingerprint(intent.CodeID),
 		},
 	})
+	emitCodeIssued(ctx, deps, intent.Subject, clientID, out.SessionID, intent.CodeID, grantID, intent.GrantScope)
+}
+
+// emitCodeIssued records an authorization code handed to the browser. The
+// code is a bearer credential for its whole TTL, so only its irreversible
+// digest reaches the audit stream; the token endpoint stamps the same key
+// with the same transform, so the two records still correlate.
+func emitCodeIssued(
+	ctx context.Context,
+	deps resolved,
+	subject, clientID, sessionID, codeID, grantID string,
+	scope []string,
+) {
 	deps.auditEmitter().Emit(ctx, audit.Event{
 		Name:      opAuditCodeIssued,
 		Level:     audit.LevelInfo,
 		Message:   "authorization code issued",
-		ActorID:   intent.Subject,
+		ActorID:   subject,
 		ClientID:  clientID,
-		SessionID: out.SessionID,
+		SessionID: sessionID,
 		Extras: map[string]any{
-			// The code is a bearer credential for its whole TTL, so
-			// only its irreversible digest reaches the audit stream.
-			// The token endpoint stamps the same key with the same
-			// transform, so the two records still correlate.
-			"code_id":  audit.Fingerprint(intent.CodeID),
+			"code_id":  audit.Fingerprint(codeID),
 			"grant_id": grantID,
-			"scope":    slices.Clone(intent.GrantScope),
+			"scope":    slices.Clone(scope),
 		},
 	})
 }

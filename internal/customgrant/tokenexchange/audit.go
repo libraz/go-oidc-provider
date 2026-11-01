@@ -42,11 +42,7 @@ const (
 // audit.Discard when no emitter was supplied so callers do not need
 // to nil-check at every emission site.
 func (h *Handler) emit(ctx context.Context, name string, level audit.Level, msg, clientID, actor string, extras map[string]any) {
-	em := h.audit
-	if em == nil {
-		em = audit.Discard()
-	}
-	em.Emit(ctx, audit.Event{
+	audit.OrDiscard(h.audit).Emit(ctx, audit.Event{
 		Name:     name,
 		Level:    level,
 		Message:  msg,
@@ -55,3 +51,12 @@ func (h *Handler) emit(ctx context.Context, name string, level audit.Level, msg,
 		Extras:   extras,
 	})
 }
+
+// Failure reasons the token lookup reports and the audit translation
+// consumes: the first two name a transient registry or store fault rather than
+// a defect in the presented token.
+const (
+	reasonRegistryError = "registry_error"
+	reasonStoreError    = "store_error"
+	reasonMissingClaim  = "missing_claim"
+)
