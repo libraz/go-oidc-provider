@@ -127,6 +127,8 @@ func (f cibaOptionFunc) applyCIBA(c *config) error { return f(c) }
 // returns a configuration error when no resolver is supplied
 // because the handler would otherwise return login_required for
 // every request.
+//
+// Stable since v1.0.
 func WithCIBAHintResolver(r HintResolver) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
 		if err := c.claimOnce("WithCIBAHintResolver"); err != nil {
@@ -153,6 +155,8 @@ func WithCIBAHintResolver(r HintResolver) CIBAOption {
 // configured; the combination fails [New]. When only the cap is
 // configured, the library default is clamped down to it. Under
 // the FAPI-CIBA profile a value above ten minutes fails [New].
+//
+// Stable since v1.0.
 func WithCIBADefaultExpiresIn(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
 		if err := c.claimOnce("WithCIBADefaultExpiresIn"); err != nil {
@@ -180,6 +184,8 @@ func WithCIBADefaultExpiresIn(d time.Duration) CIBAOption {
 // explicitly configured [WithCIBADefaultExpiresIn] above the cap
 // fails [New]. Under the FAPI-CIBA profile a value above ten minutes
 // fails [New].
+//
+// Stable since v1.0.
 func WithCIBAMaxExpiresIn(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
 		if err := c.claimOnce("WithCIBAMaxExpiresIn"); err != nil {
@@ -200,6 +206,8 @@ func WithCIBAMaxExpiresIn(d time.Duration) CIBAOption {
 // the /bc-authorize response (CIBA Core 1.0 §7.3). Zero falls back to
 // the library default (5 seconds); a negative value is rejected at the
 // option site.
+//
+// Stable since v1.0.
 func WithCIBAPollInterval(d time.Duration) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
 		if err := c.claimOnce("WithCIBAPollInterval"); err != nil {
@@ -238,6 +246,8 @@ func WithCIBAPollInterval(d time.Duration) CIBAOption {
 // SHOULD prefer a finite cap because the lockout is the only defence
 // against a client that ignores slow_down and burns through the
 // auth_req_id's TTL with rapid polls.
+//
+// Stable since v1.0.
 func WithCIBAMaxPollViolations(n uint8) CIBAOption {
 	return cibaOptionFunc(func(c *config) error {
 		if err := c.claimOnce("WithCIBAMaxPollViolations"); err != nil {

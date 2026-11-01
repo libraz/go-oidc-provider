@@ -541,6 +541,8 @@ func checkLoginFlowRuleKinds(flow LoginFlow) error {
 //   - StaticDir MAY be empty; when set the directory MUST exist at
 //     construction time (an [os.Stat] check) so a typo fails [New]
 //     rather than the first request.
+//
+// Stable since v1.5.
 func WithSPAUI(ui SPAUI) Option {
 	return optionFunc(func(c *config) error {
 		if err := c.claimOnce("WithSPAUI"); err != nil {
@@ -679,6 +681,8 @@ func validateSPAUIStaticDir(dir string) error {
 //   - ContentSecurityPolicy, when set, MUST pass
 //     [interaction.NormalizeCSP].
 //   - Repeated [WithConsentUI] calls are rejected.
+//
+// Stable since v1.5.
 func WithConsentUI(ui ConsentUI) Option {
 	return optionFunc(func(c *config) error {
 		if err := c.claimOnce("WithConsentUI"); err != nil {
@@ -722,6 +726,8 @@ func WithConsentUI(ui ConsentUI) Option {
 //   - ContentSecurityPolicy, when set, MUST pass
 //     [interaction.NormalizeCSP].
 //   - Repeated [WithChooserUI] calls are rejected.
+//
+// Stable since v1.5.
 func WithChooserUI(ui ChooserUI) Option {
 	return optionFunc(func(c *config) error {
 		if err := c.claimOnce("WithChooserUI"); err != nil {

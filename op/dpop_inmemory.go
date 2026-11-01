@@ -85,6 +85,8 @@ type InMemoryDPoPNonceOption func(*InMemoryDPoPNonceSource)
 //
 // A nil logger is treated as "no logging" so the option is safe to call
 // unconditionally with whatever the embedder happens to have on hand.
+//
+// Stable since v1.0.
 func WithInMemoryDPoPNonceLogger(logger *slog.Logger) InMemoryDPoPNonceOption {
 	return func(s *InMemoryDPoPNonceSource) {
 		s.logger = logger

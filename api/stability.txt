@@ -187,10 +187,17 @@ github.com/libraz/go-oidc-provider/op	WithBackchannelFanOutBudget	v1.1
 github.com/libraz/go-oidc-provider/op	WithBackchannelLogoutHTTPClient	v1.0
 github.com/libraz/go-oidc-provider/op	WithBackchannelLogoutTimeout	v1.0
 github.com/libraz/go-oidc-provider/op	WithCIBA	v1.0
+github.com/libraz/go-oidc-provider/op	WithCIBADefaultExpiresIn	v1.0
+github.com/libraz/go-oidc-provider/op	WithCIBAHintResolver	v1.0
+github.com/libraz/go-oidc-provider/op	WithCIBAMaxExpiresIn	v1.0
+github.com/libraz/go-oidc-provider/op	WithCIBAMaxPollViolations	v1.0
+github.com/libraz/go-oidc-provider/op	WithCIBAPollInterval	v1.0
 github.com/libraz/go-oidc-provider/op	WithCORSOrigins	v1.0
+github.com/libraz/go-oidc-provider/op	WithChooserUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithClaimsParameterSupported	v1.0
 github.com/libraz/go-oidc-provider/op	WithClaimsSupported	v1.0
 github.com/libraz/go-oidc-provider/op	WithClock	v1.0
+github.com/libraz/go-oidc-provider/op	WithConsentUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithCookieKeys	v1.0
 github.com/libraz/go-oidc-provider/op	WithCustomGrant	v1.0
 github.com/libraz/go-oidc-provider/op	WithDPoPNonceSource	v1.0
@@ -207,7 +214,9 @@ github.com/libraz/go-oidc-provider/op	WithEndpoints	v1.0
 github.com/libraz/go-oidc-provider/op	WithFeature	v1.0
 github.com/libraz/go-oidc-provider/op	WithFirstPartyClients	v1.0
 github.com/libraz/go-oidc-provider/op	WithGrants	v1.0
+github.com/libraz/go-oidc-provider/op	WithHighEntropyClientSecrets	v1.1
 github.com/libraz/go-oidc-provider/op	WithIDTokenScopeClaims	v1.5
+github.com/libraz/go-oidc-provider/op	WithInMemoryDPoPNonceLogger	v1.0
 github.com/libraz/go-oidc-provider/op	WithInteractionDriver	v1.0
 github.com/libraz/go-oidc-provider/op	WithInteractions	v1.5
 github.com/libraz/go-oidc-provider/op	WithIssuer	v1.0
@@ -234,6 +243,7 @@ github.com/libraz/go-oidc-provider/op	WithProtectedResources	v1.0
 github.com/libraz/go-oidc-provider/op	WithRefreshGracePeriod	v1.0
 github.com/libraz/go-oidc-provider/op	WithRefreshTokenOfflineTTL	v1.0
 github.com/libraz/go-oidc-provider/op	WithRefreshTokenTTL	v1.0
+github.com/libraz/go-oidc-provider/op	WithSPAUI	v1.5
 github.com/libraz/go-oidc-provider/op	WithScope	v1.0
 github.com/libraz/go-oidc-provider/op	WithSessionDurabilityPosture	v1.0
 github.com/libraz/go-oidc-provider/op	WithSharedSignals	v1.5

@@ -491,7 +491,8 @@ issuer.
   marker and is covered by the SemVer promise from this release:
   `op.LoginFlow`, `op.WithLoginFlow`, `op.WithInteractions`,
   `op.WithLoginAttemptObserver`, `op.SPAUI`, `op.ConsentUI`,
-  `op.ChooserUI`, the whole `op/interaction` package, and the DynamoDB
+  `op.ChooserUI` together with `op.WithSPAUI`, `op.WithConsentUI` and
+  `op.WithChooserUI`, the whole `op/interaction` package, and the DynamoDB
   storage adapter (`op/storeadapter/dynamodb`, its package and `Store`).
   Grant Management (`op.GrantManagementAction`, `op.WithGrantManagement`)
   stays experimental: it follows an IETF draft whose wire format may still

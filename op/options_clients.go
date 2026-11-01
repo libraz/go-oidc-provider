@@ -83,6 +83,8 @@ func WithStaticClients(seeds ...ClientSeed) Option {
 // This is exactly why the format is not selected per client. Doing
 // that would put the two costs side by side in every deployment and
 // make the client's own storage format the thing the timing reveals.
+//
+// Stable since v1.1.
 func WithHighEntropyClientSecrets() Option {
 	return optionFunc(func(c *config) error {
 		c.highEntropyClientSecrets = true
