@@ -102,11 +102,8 @@ func (c *config) validateStoreCapabilities() error {
 			continue
 		}
 		if nilcheck.IsNil(check.got) {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "Store." + check.desc + "() returned nil but " +
-					check.because,
-			}
+			return newConfigurationError("Store."+check.desc+"() returned nil but "+
+				check.because, nil)
 		}
 	}
 	if err := c.validateRefreshRetryStoreCapability(); err != nil {
@@ -134,13 +131,10 @@ func (c *config) validateRefreshRetryStoreCapability() error {
 		return nil
 	}
 	if _, ok := refreshTokens.(store.RefreshRetryResponseStore); !ok {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "Store.RefreshTokens() must implement " +
-				"store.RefreshRetryResponseStore because grant.RefreshToken is " +
-				"enabled and cookie keys are configured, which makes the token " +
-				"endpoint persist durable refresh retry responses",
-		}
+		return newConfigurationError("Store.RefreshTokens() must implement "+
+			"store.RefreshRetryResponseStore because grant.RefreshToken is "+
+			"enabled and cookie keys are configured, which makes the token "+
+			"endpoint persist durable refresh retry responses", nil)
 	}
 	return nil
 }
@@ -152,30 +146,21 @@ func (c *config) validateRefreshRetryStoreCapability() error {
 // must implement [store.GrantClientLister].
 func (c *config) validateAuthorizeEndpointStoreCapabilities() error {
 	if tx := transactionalStore(c.store); nilcheck.IsNil(tx) {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "Store must implement store.Transactional because " +
-				"a grant that mounts the browser authorize endpoint is enabled",
-		}
+		return newConfigurationError("Store must implement store.Transactional because "+
+			"a grant that mounts the browser authorize endpoint is enabled", nil)
 	}
 	if interactions := c.store.Interactions(); !nilcheck.IsNil(interactions) {
 		if _, ok := interactions.(store.InteractionStoreCAS); !ok {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "Store.Interactions() must implement " +
-					"store.InteractionStoreCAS because a grant that mounts " +
-					"the browser authorize endpoint is enabled",
-			}
+			return newConfigurationError("Store.Interactions() must implement "+
+				"store.InteractionStoreCAS because a grant that mounts "+
+				"the browser authorize endpoint is enabled", nil)
 		}
 	}
 	if grants := c.store.Grants(); !nilcheck.IsNil(grants) {
 		if _, ok := grants.(store.GrantClientLister); !ok {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "Store.Grants() must implement " +
-					"store.GrantClientLister because a grant that mounts " +
-					"the browser authorize endpoint is enabled",
-			}
+			return newConfigurationError("Store.Grants() must implement "+
+				"store.GrantClientLister because a grant that mounts "+
+				"the browser authorize endpoint is enabled", nil)
 		}
 	}
 	return nil

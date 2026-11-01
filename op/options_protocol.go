@@ -99,10 +99,7 @@ func WithBackchannelFanOutBudget(d time.Duration) Option {
 			return err
 		}
 		if d <= 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithBackchannelFanOutBudget requires a positive duration",
-			}
+			return newConfigurationError("WithBackchannelFanOutBudget requires a positive duration", nil)
 		}
 		c.backchannelFanOutBudget = d
 		return nil

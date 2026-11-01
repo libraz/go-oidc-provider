@@ -493,31 +493,19 @@ func WithDynamicRegistration(o RegistrationOption) Option {
 // [WithDynamicRegistration].
 func validateRegistrationOption(o RegistrationOption) error {
 	if o.IATTTL < 0 {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithDynamicRegistration: IATTTL must not be negative",
-		}
+		return newConfigurationError("WithDynamicRegistration: IATTTL must not be negative", nil)
 	}
 	if o.IATUses < 0 {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithDynamicRegistration: IATUses must not be negative",
-		}
+		return newConfigurationError("WithDynamicRegistration: IATUses must not be negative", nil)
 	}
 	for _, gt := range o.AllowedGrantTypes {
 		if !registrationGrantAllowed(gt) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDynamicRegistration: AllowedGrantTypes contains unsupported value " + gt,
-			}
+			return newConfigurationError("WithDynamicRegistration: AllowedGrantTypes contains unsupported value "+gt, nil)
 		}
 	}
 	for _, rt := range o.AllowedResponseTypes {
 		if rt != "code" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDynamicRegistration: AllowedResponseTypes only accepts \"code\" in v1.0",
-			}
+			return newConfigurationError("WithDynamicRegistration: AllowedResponseTypes only accepts \"code\" in v1.0", nil)
 		}
 	}
 	return nil
@@ -596,16 +584,10 @@ func (p *Provider) IssueInitialAccessToken(ctx context.Context, spec InitialAcce
 		return nil, ErrDynamicRegistrationDisabled
 	}
 	if spec.TTL < 0 {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "IssueInitialAccessToken: TTL must not be negative",
-		}
+		return nil, newConfigurationError("IssueInitialAccessToken: TTL must not be negative", nil)
 	}
 	if spec.MaxUses < 0 {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "IssueInitialAccessToken: MaxUses must not be negative",
-		}
+		return nil, newConfigurationError("IssueInitialAccessToken: MaxUses must not be negative", nil)
 	}
 	ttl := spec.TTL
 	if ttl == 0 {
@@ -678,10 +660,7 @@ func (p *Provider) RevokeInitialAccessToken(ctx context.Context, id string) erro
 		return ErrDynamicRegistrationDisabled
 	}
 	if id == "" {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "RevokeInitialAccessToken: id must not be empty",
-		}
+		return newConfigurationError("RevokeInitialAccessToken: id must not be empty", nil)
 	}
 	if err := p.cfg.store.InitialAccessTokens().Delete(ctx, id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

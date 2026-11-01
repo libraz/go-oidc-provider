@@ -22,10 +22,7 @@ import (
 func WithFeature(f feature.Flag) Option {
 	return optionFunc(func(c *config) error {
 		if !f.IsValid() {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithFeature received an unknown feature flag",
-			}
+			return newConfigurationError("WithFeature received an unknown feature flag", nil)
 		}
 		if featureEnabled(c.features, f) {
 			return nil
@@ -68,16 +65,10 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 			return err
 		}
 		if ttl < 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAccessTokenTTL requires a non-negative duration",
-			}
+			return newConfigurationError("WithAccessTokenTTL requires a non-negative duration", nil)
 		}
 		if ttl > MaxAccessTokenTTL {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAccessTokenTTL exceeds implementation-defined maximum (24h)",
-			}
+			return newConfigurationError("WithAccessTokenTTL exceeds implementation-defined maximum (24h)", nil)
 		}
 		c.accessTokenTTL = ttl
 		return nil
@@ -106,10 +97,7 @@ func WithRefreshTokenTTL(ttl time.Duration) Option {
 			return err
 		}
 		if ttl < 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithRefreshTokenTTL requires a non-negative duration",
-			}
+			return newConfigurationError("WithRefreshTokenTTL requires a non-negative duration", nil)
 		}
 		c.refreshTokenTTL = ttl
 		return nil
@@ -136,10 +124,7 @@ func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 			return err
 		}
 		if ttl < 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithRefreshTokenOfflineTTL requires a non-negative duration",
-			}
+			return newConfigurationError("WithRefreshTokenOfflineTTL requires a non-negative duration", nil)
 		}
 		c.refreshTokenOfflineTTL = ttl
 		return nil
@@ -169,10 +154,7 @@ func WithPARLifetime(ttl time.Duration) Option {
 			return err
 		}
 		if ttl < 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithPARLifetime requires a non-negative duration",
-			}
+			return newConfigurationError("WithPARLifetime requires a non-negative duration", nil)
 		}
 		c.parLifetime = ttl
 		return nil
@@ -257,10 +239,7 @@ func WithAccessTokenFormat(f store.AccessTokenFormat) Option {
 			return err
 		}
 		if !f.IsValid() {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAccessTokenFormat received an unknown AccessTokenFormat value",
-			}
+			return newConfigurationError("WithAccessTokenFormat received an unknown AccessTokenFormat value", nil)
 		}
 		c.accessTokenFormat = f
 		return nil
@@ -312,10 +291,7 @@ func WithAccessTokenFormatPerAudience(m map[string]store.AccessTokenFormat) Opti
 			return err
 		}
 		if len(m) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAccessTokenFormatPerAudience requires at least one entry",
-			}
+			return newConfigurationError("WithAccessTokenFormatPerAudience requires at least one entry", nil)
 		}
 		out := make(map[string]store.AccessTokenFormat, len(m))
 		for raw, f := range m {
@@ -336,29 +312,20 @@ func WithAccessTokenFormatPerAudience(m map[string]store.AccessTokenFormat) Opti
 // linter's gocognit ceiling.
 func canonicalAudienceEntry(raw string, f store.AccessTokenFormat, out map[string]store.AccessTokenFormat) (string, error) {
 	if raw == "" {
-		return "", &Error{
-			Code: codeConfiguration,
-			Description: "WithAccessTokenFormatPerAudience: empty key is " +
-				"reserved; use WithAccessTokenFormat for the default audience",
-		}
+		return "", newConfigurationError("WithAccessTokenFormatPerAudience: empty key is "+
+			"reserved; use WithAccessTokenFormat for the default audience", nil)
 	}
 	if !f.IsValid() {
-		return "", &Error{
-			Code: codeConfiguration,
-			Description: "WithAccessTokenFormatPerAudience[" + raw +
-				"]: unknown AccessTokenFormat value",
-		}
+		return "", newConfigurationError("WithAccessTokenFormatPerAudience["+raw+
+			"]: unknown AccessTokenFormat value", nil)
 	}
 	canonical, err := canonicalAudienceKey(raw)
 	if err != nil {
 		return "", err
 	}
 	if _, dup := out[canonical]; dup {
-		return "", &Error{
-			Code: codeConfiguration,
-			Description: "WithAccessTokenFormatPerAudience: " +
-				"two keys canonicalise to the same value (" + canonical + ")",
-		}
+		return "", newConfigurationError("WithAccessTokenFormatPerAudience: "+
+			"two keys canonicalise to the same value ("+canonical+")", nil)
 	}
 	return canonical, nil
 }
@@ -387,5 +354,5 @@ func canonicalAudienceKey(raw string) (string, error) {
 	default:
 		desc += err.Error()
 	}
-	return "", &Error{Code: codeConfiguration, Description: desc, Cause: err}
+	return "", newConfigurationError(desc, err)
 }

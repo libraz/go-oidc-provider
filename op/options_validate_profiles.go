@@ -38,18 +38,12 @@ func (c *config) validateClientIDMetadataDocuments() error {
 	}
 	for _, p := range c.profiles {
 		if profile.IsFAPI(p) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithClientIDMetadataDocuments is incompatible with FAPI profile " + p.String(),
-			}
+			return newConfigurationError("WithClientIDMetadataDocuments is incompatible with FAPI profile "+p.String(), nil)
 		}
 	}
 	if p, ok := profileWithoutNoneAuth(c.profiles, profile.AllowedClientAuthMethods); ok {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithClientIDMetadataDocuments requires the none client authentication method, which WithProfile " +
-				p.String() + " removes; private_key_jwt-only client ID metadata documents are not offered",
-		}
+		return newConfigurationError("WithClientIDMetadataDocuments requires the none client authentication method, which WithProfile "+
+			p.String()+" removes; private_key_jwt-only client ID metadata documents are not offered", nil)
 	}
 	return nil
 }
@@ -111,22 +105,16 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 		if _, ok := enabled[req]; ok {
 			continue
 		}
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithProfile " + p.String() +
-				" requires WithFeature(" + req.String() + ")",
-		}
+		return newConfigurationError("WithProfile "+p.String()+
+			" requires WithFeature("+req.String()+")", nil)
 	}
 	for _, anyOf := range profile.RequiredAnyOf(p) {
 		if anyEnabled(enabled, anyOf) {
 			continue
 		}
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithProfile " + p.String() +
-				" requires at least one of WithFeature(" +
-				strings.Join(featureFlagNames(anyOf), ") or WithFeature(") + ")",
-		}
+		return newConfigurationError("WithProfile "+p.String()+
+			" requires at least one of WithFeature("+
+			strings.Join(featureFlagNames(anyOf), ") or WithFeature(")+")", nil)
 	}
 	if err := c.validateProfileGrants(p); err != nil {
 		return err
@@ -142,20 +130,14 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 // in the same order.
 func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Flag]struct{}) error {
 	if maxTTL := profile.MaxAccessTokenTTL(p); maxTTL > 0 && c.accessTokenTTL > maxTTL {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithProfile " + p.String() +
-				" caps WithAccessTokenTTL at " + maxTTL.String() +
-				"; got " + c.accessTokenTTL.String(),
-		}
+		return newConfigurationError("WithProfile "+p.String()+
+			" caps WithAccessTokenTTL at "+maxTTL.String()+
+			"; got "+c.accessTokenTTL.String(), nil)
 	}
 	if ceiling := profile.PARLifetimeCeiling(p); ceiling > 0 && c.parLifetime >= ceiling {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithProfile " + p.String() +
-				" requires WithPARLifetime below " + ceiling.String() +
-				"; got " + c.parLifetime.String(),
-		}
+		return newConfigurationError("WithProfile "+p.String()+
+			" requires WithPARLifetime below "+ceiling.String()+
+			"; got "+c.parLifetime.String(), nil)
 	}
 	if p == profile.FAPICIBA {
 		if err := c.validateFAPICIBAExpiry(); err != nil {
@@ -163,11 +145,8 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 		}
 	}
 	if profileForcesDPoPNonce(p) && hasDPoPFeature(enabled) && c.dpopNonces == nil {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithProfile " + p.String() +
-				" requires WithDPoPNonceSource when WithFeature(DPoP) is active",
-		}
+		return newConfigurationError("WithProfile "+p.String()+
+			" requires WithDPoPNonceSource when WithFeature(DPoP) is active", nil)
 	}
 	// The bound is the window the profile itself resolves to when the
 	// option is absent, not a strict zero. FAPI 2.0 §3.1.7 argues for
@@ -180,13 +159,10 @@ func (c *config) validateProfileTiming(p profile.Profile, enabled map[feature.Fl
 	// a five-second window back onto the sixty-second default.
 	if isFAPI2Profile(p) && c.refreshGracePeriodSet &&
 		c.refreshGracePeriod > refresh.GraceTTLDefault {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithProfile " + p.String() +
-				" caps WithRefreshGracePeriod at " +
-				refresh.GraceTTLDefault.String() + "; got " +
-				c.refreshGracePeriod.String(),
-		}
+		return newConfigurationError("WithProfile "+p.String()+
+			" caps WithRefreshGracePeriod at "+
+			refresh.GraceTTLDefault.String()+"; got "+
+			c.refreshGracePeriod.String(), nil)
 	}
 	return nil
 }
@@ -205,12 +181,9 @@ func (c *config) validateFAPICIBAExpiry() error {
 		{"WithCIBAMaxExpiresIn", c.cibaMaxExpiresIn},
 	} {
 		if v.value > limit {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithProfile " + profile.FAPICIBA.String() +
-					" caps " + v.option + " at " + limit.String() +
-					"; got " + v.value.String(),
-			}
+			return newConfigurationError("WithProfile "+profile.FAPICIBA.String()+
+				" caps "+v.option+" at "+limit.String()+
+				"; got "+v.value.String(), nil)
 		}
 	}
 	return nil
@@ -234,12 +207,9 @@ func (c *config) validateProfileGrants(p profile.Profile) error {
 		if slices.Contains(c.grants, want) {
 			continue
 		}
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithProfile " + p.String() +
-				" requires the " + want.String() + " grant; enable it with " +
-				grantActivationOption(want),
-		}
+		return newConfigurationError("WithProfile "+p.String()+
+			" requires the "+want.String()+" grant; enable it with "+
+			grantActivationOption(want), nil)
 	}
 	return nil
 }

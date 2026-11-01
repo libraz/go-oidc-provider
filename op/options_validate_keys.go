@@ -16,10 +16,7 @@ import (
 func validateCookieKeys(keys [][]byte) error {
 	for i, k := range keys {
 		if len(k) != cookieKeyLen {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithCookieKeys: entry " + strconv.Itoa(i) + " is not 32 bytes",
-			}
+			return newConfigurationError("WithCookieKeys: entry "+strconv.Itoa(i)+" is not 32 bytes", nil)
 		}
 	}
 	return nil
@@ -55,30 +52,18 @@ func validateKeyset(ks Keyset) error {
 	seen := make(map[string]struct{}, len(ks))
 	for i, k := range ks {
 		if k.KeyID == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "keyset entry " + strconv.Itoa(i) + " is missing KeyID",
-			}
+			return newConfigurationError("keyset entry "+strconv.Itoa(i)+" is missing KeyID", nil)
 		}
 		if _, dup := seen[k.KeyID]; dup {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "duplicate KeyID " + k.KeyID,
-			}
+			return newConfigurationError("duplicate KeyID "+k.KeyID, nil)
 		}
 		seen[k.KeyID] = struct{}{}
 		if nilcheck.IsNil(k.Signer) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "keyset entry " + k.KeyID + " has nil Signer",
-			}
+			return newConfigurationError("keyset entry "+k.KeyID+" has nil Signer", nil)
 		}
 		pub, ok := k.Signer.Public().(*ecdsa.PublicKey)
 		if !ok || pub.Curve != elliptic.P256() {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "keyset entry " + k.KeyID + " is not ECDSA P-256 (ES256 required)",
-			}
+			return newConfigurationError("keyset entry "+k.KeyID+" is not ECDSA P-256 (ES256 required)", nil)
 		}
 	}
 	return nil
@@ -111,10 +96,7 @@ func validateActiveSigningKeyLive(ks Keyset, now time.Time) error {
 	if active.NotAfter.IsZero() || now.Before(active.NotAfter) {
 		return nil
 	}
-	return &Error{
-		Code: codeConfiguration,
-		Description: "active keyset entry " + active.KeyID +
-			" has already reached its NotAfter deadline, so every token it signs " +
-			"would fail the OP's own verification; promote a live key to the first slot",
-	}
+	return newConfigurationError("active keyset entry "+active.KeyID+
+		" has already reached its NotAfter deadline, so every token it signs "+
+		"would fail the OP's own verification; promote a live key to the first slot", nil)
 }

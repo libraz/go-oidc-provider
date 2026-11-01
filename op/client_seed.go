@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clone"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -13,11 +14,8 @@ import (
 // zero (always re-authenticate) are both valid.
 func checkDefaultMaxAge(kind, id string, maxAge *int64) error {
 	if maxAge != nil && *maxAge < 0 {
-		return &Error{
-			Code: codeConfiguration,
-			Description: kind + " " + id + ": DefaultMaxAge must not be negative, got " +
-				strconv.FormatInt(*maxAge, 10),
-		}
+		return newConfigurationError(kind+" "+id+": DefaultMaxAge must not be negative, got "+
+			strconv.FormatInt(*maxAge, 10), nil)
 	}
 	return nil
 }
@@ -46,7 +44,7 @@ type ClientSeed interface {
 // canonical OIDC code-flow shape and is returned afresh on every
 // call so callers may freely mutate it.
 func defaultGrantTypes() []string {
-	return []string{"authorization_code", "refresh_token"}
+	return []string{grant.AuthorizationCode.String(), grant.RefreshToken.String()}
 }
 
 // defaultResponseTypes() returns the wire-form response_types every
@@ -359,29 +357,19 @@ type ConfidentialClient struct {
 func (c ConfidentialClient) secretHash(method AuthMethod) (string, error) {
 	switch {
 	case c.Secret != "" && c.SecretHash != "":
-		return "", &Error{
-			Code:        codeConfiguration,
-			Description: "ConfidentialClient " + c.ID + ": Secret and SecretHash are mutually exclusive",
-		}
+		return "", newConfigurationError("ConfidentialClient "+c.ID+": Secret and SecretHash are mutually exclusive", nil)
 	case c.SecretHash != "":
 		return c.SecretHash, nil
 	case c.Secret == "":
 		// Hashing "" would store a credential that authenticates an empty client_secret.
 		if method == AuthClientSecretBasic || method == AuthClientSecretPost {
-			return "", &Error{
-				Code:        codeConfiguration,
-				Description: "ConfidentialClient " + c.ID + ": Secret or SecretHash is required",
-			}
+			return "", newConfigurationError("ConfidentialClient "+c.ID+": Secret or SecretHash is required", nil)
 		}
 		return "", nil
 	}
 	hash, err := HashClientSecret(c.Secret)
 	if err != nil {
-		return "", &Error{
-			Code:        codeConfiguration,
-			Description: "ConfidentialClient: hashing client secret failed",
-			Cause:       err,
-		}
+		return "", newConfigurationError("ConfidentialClient: hashing client secret failed", err)
 	}
 	return hash, nil
 }
@@ -394,27 +382,17 @@ func (c ConfidentialClient) previousSecretHash() (string, error) {
 		return "", nil
 	}
 	if c.PreviousSecret != "" && c.PreviousSecretHash != "" {
-		return "", &Error{
-			Code:        codeConfiguration,
-			Description: "ConfidentialClient " + c.ID + ": PreviousSecret and PreviousSecretHash are mutually exclusive",
-		}
+		return "", newConfigurationError("ConfidentialClient "+c.ID+": PreviousSecret and PreviousSecretHash are mutually exclusive", nil)
 	}
 	if c.PreviousSecretExpiresAt.IsZero() {
-		return "", &Error{
-			Code:        codeConfiguration,
-			Description: "ConfidentialClient " + c.ID + ": PreviousSecretExpiresAt is required with a previous secret",
-		}
+		return "", newConfigurationError("ConfidentialClient "+c.ID+": PreviousSecretExpiresAt is required with a previous secret", nil)
 	}
 	if c.PreviousSecretHash != "" {
 		return c.PreviousSecretHash, nil
 	}
 	hash, err := HashClientSecret(c.PreviousSecret)
 	if err != nil {
-		return "", &Error{
-			Code:        codeConfiguration,
-			Description: "ConfidentialClient: hashing previous client secret failed",
-			Cause:       err,
-		}
+		return "", newConfigurationError("ConfidentialClient: hashing previous client secret failed", err)
 	}
 	return hash, nil
 }

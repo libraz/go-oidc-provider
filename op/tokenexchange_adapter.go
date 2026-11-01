@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/customgrant/tokenexchange"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -18,13 +18,9 @@ import (
 // helper is the single seam through which the token endpoint reaches
 // the extension grants so a future addition (CIBA / device-code / ...)
 // keeps the wiring local to one file.
-func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispatcher {
+func buildExtensionDispatcher(cfg *config, keySet *keys.Set, auditEmitter audit.Emitter) (*customgrant.Dispatcher, error) {
 	var extras []customgrant.Handler
 	if cfg.tokenExchangePolicy != nil || cfg.idjagIssuancePolicy != nil {
-		var clock interface{ Now() time.Time }
-		if cfg.clock != nil {
-			clock = cfg.clock
-		}
 		h, err := tokenexchange.New(tokenexchange.Config{
 			Policy:             tokenExchangeAdapter(cfg.tokenExchangePolicy),
 			IDJAGPolicy:        idjagIssuanceAdapter(cfg.idjagIssuancePolicy),
@@ -40,23 +36,20 @@ func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispat
 			// the exchanged token must carry the per-client public one a
 			// JWT subject_token already does.
 			SubjectProjector: subjectProjectorFor(cfg),
-			Audit:            cfg.effectiveAuditEmitter(),
-			Clock:            clock,
+			Audit:            auditEmitter,
+			Clock:            cfg.clock,
 			MaxAccessTTL:     cfg.accessTokenTTL,
 			// The same tolerance /userinfo is wired with, so a
 			// subject_token the resource-server surfaces still accept is
 			// not rejected here under clock skew.
 			Leeway: defaultUserInfoLeeway,
 		})
-		if err == nil {
-			extras = append(extras, h)
+		if err != nil {
+			return nil, newConfigurationError("token-exchange handler construction failed", err)
 		}
-		// A construction-time error here is unreachable: one of the two
-		// policies is non-nil, the keyset is non-nil by op.New invariants,
-		// and the issuer is non-empty. The defensive nil check on
-		// extras keeps the dispatcher correct under future changes.
+		extras = append(extras, h)
 	}
-	return cfg.buildCustomGrantDispatcher(extras...)
+	return cfg.buildCustomGrantDispatcher(auditEmitter, extras...), nil
 }
 
 // tokenExchangeAdapter projects the public [TokenExchangePolicy] onto
@@ -123,8 +116,8 @@ func toPublicTokenView(view tokenexchange.TokenView) SubjectTokenView {
 // internal Decision shape.
 func toInternalDecision(d *TokenExchangeDecision) *tokenexchange.Decision {
 	return &tokenexchange.Decision{
-		GrantedScope:      append([]string(nil), d.GrantedScope...),
-		GrantedAudience:   append([]string(nil), d.GrantedAudience...),
+		GrantedScope:      slices.Clone(d.GrantedScope),
+		GrantedAudience:   slices.Clone(d.GrantedAudience),
 		GrantedTTL:        d.GrantedTTL,
 		IssueIDToken:      d.IssueIDToken,
 		IssueRefreshToken: d.IssueRefreshToken,

@@ -104,10 +104,7 @@ func projectStepToFlow(where string, s Step, cfg *config) (authn.LoginFlowStep, 
 // position runs the discoverable ceremony.
 func projectStepAt(where string, s Step, cfg *config, primary bool) (authn.LoginFlowStep, error) {
 	if nilcheck.IsNil(s) {
-		return authn.LoginFlowStep{}, &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + " must not be nil",
-		}
+		return authn.LoginFlowStep{}, newConfigurationError("WithLoginFlow: "+where+" must not be nil", nil)
 	}
 	switch v := s.(type) {
 	case ExternalStep:
@@ -146,10 +143,7 @@ func projectOneOfStep(where string, s StepOneOf, cfg *config, primary bool) (aut
 // gated by the cross-factor lockout counter when CountFailures is set.
 func projectExternalStep(where string, ext ExternalStep, cfg *config) (authn.LoginFlowStep, error) {
 	if nilcheck.IsNil(ext.Authenticator) {
-		return authn.LoginFlowStep{}, &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + " ExternalStep.Authenticator must not be nil",
-		}
+		return authn.LoginFlowStep{}, newConfigurationError("WithLoginFlow: "+where+" ExternalStep.Authenticator must not be nil", nil)
 	}
 	auth := ext.Authenticator
 	if ext.CountFailures {
@@ -164,7 +158,7 @@ func projectExternalStep(where string, ext ExternalStep, cfg *config) (authn.Log
 // projectPasskeyStep builds a [PrimaryPasskey]; discoverable is true at
 // the Primary position.
 func projectPasskeyStep(where string, s PrimaryPasskey, cfg *config, discoverable bool) (authn.LoginFlowStep, error) {
-	auth, err := buildPrimaryPasskey(s, clockShimOrNil(cfg.clock), discoverable)
+	auth, err := buildPrimaryPasskey(s, cfg.clock, discoverable)
 	if err != nil {
 		return authn.LoginFlowStep{}, projectStepError(where, err)
 	}
@@ -190,21 +184,21 @@ func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep,
 		return projectPasskeyStep(where, v, cfg, false)
 	case StepTOTP:
 		fallbackCurrent, fallbackPrev := totpFallbackKeys(cfg)
-		auth, err := buildStepTOTP(v, fallbackCurrent, fallbackPrev, clockShimOrNil(cfg.clock))
+		auth, err := buildStepTOTP(v, fallbackCurrent, fallbackPrev, cfg.clock)
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
 		auth = attachLockoutCounter(auth, cfg)
 		return authn.LoginFlowStep{Kind: string(StepKindTOTP), Authenticator: auth}, nil
 	case StepEmailOTP:
-		auth, err := buildStepEmailOTP(v, clockShimOrNil(cfg.clock))
+		auth, err := buildStepEmailOTP(v, cfg.clock)
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
 		auth = attachLockoutCounter(auth, cfg)
 		return authn.LoginFlowStep{Kind: string(StepKindEmailOTP), Authenticator: auth}, nil
 	case StepRecoveryCode:
-		auth, err := buildStepRecoveryCode(v, clockShimOrNil(cfg.clock))
+		auth, err := buildStepRecoveryCode(v, cfg.clock)
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
@@ -228,11 +222,7 @@ func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep,
 		// wire, or an embedder-defined value type that satisfies Step
 		// but is not ExternalStep). Surface the same actionable
 		// message so the upgrade path stays obvious.
-		return authn.LoginFlowStep{}, &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + " uses built-in Step " + string(s.Kind()) + " whose primitive is not yet exposed; wrap your own Authenticator in op.ExternalStep until the matching option lands",
-			Cause:       authn.ErrBuiltinStepNotWired,
-		}
+		return authn.LoginFlowStep{}, newConfigurationError("WithLoginFlow: "+where+" uses built-in Step "+string(s.Kind())+" whose primitive is not yet exposed; wrap your own Authenticator in op.ExternalStep until the matching option lands", authn.ErrBuiltinStepNotWired)
 	}
 }
 
@@ -258,11 +248,26 @@ func totpFallbackKeys(cfg *config) ([]byte, [][]byte) {
 // ...). Centralising the wrapping keeps the [projectStepToFlow]
 // switch arms readable.
 func projectStepError(where string, err error) error {
-	return &Error{
-		Code:        codeConfiguration,
-		Description: "WithLoginFlow: " + where + ": " + err.Error(),
-		Cause:       err,
+	return newConfigurationError("WithLoginFlow: "+where+": "+err.Error(), err)
+}
+
+// stepKindsOf converts internal step-kind names to the public [StepKind].
+func stepKindsOf[K ~string](kinds []K) []StepKind {
+	out := make([]StepKind, len(kinds))
+	for i, k := range kinds {
+		out[i] = StepKind(k)
 	}
+	return out
+}
+
+// scopeSetOf converts scope names to a [ScopeSet]; empty input yields an
+// empty, non-nil set.
+func scopeSetOf[S ~string](names []S) ScopeSet {
+	out := make(ScopeSet, len(names))
+	for _, n := range names {
+		out[ScopeName(n)] = struct{}{}
+	}
+	return out
 }
 
 // toPublicLoginContext projects the internal [authn.LoginFlowContext]
@@ -270,14 +275,8 @@ func projectStepError(where string, err error) error {
 // [op.RiskScore] is a type alias for [authn.RiskScore], so the field
 // flows through without a conversion.
 func toPublicLoginContext(lc authn.LoginFlowContext) LoginContext {
-	scopes := make(ScopeSet, len(lc.RequestedScopes))
-	for _, s := range lc.RequestedScopes {
-		scopes[ScopeName(s)] = struct{}{}
-	}
-	completed := make([]StepKind, len(lc.CompletedKinds))
-	for i, k := range lc.CompletedKinds {
-		completed[i] = StepKind(k)
-	}
+	scopes := scopeSetOf(lc.RequestedScopes)
+	completed := stepKindsOf(lc.CompletedKinds)
 	return LoginContext{
 		Identity: Identity{
 			Subject:               Subject(lc.Subject),
@@ -393,14 +392,8 @@ func derefDecision(d Decision) Decision { //nolint:ireturn // Decision is a seal
 func newACRResolver(cfg *config) authorizeendpoint.ACRResolver {
 	policy := cfg.effectiveACRPolicy()
 	return func(ctx context.Context, in authorizeendpoint.ACRResolveInput) authorizeendpoint.ACRResolveOutput {
-		scopes := make(ScopeSet, len(in.RequestedScopes))
-		for _, s := range in.RequestedScopes {
-			scopes[ScopeName(s)] = struct{}{}
-		}
-		completed := make([]StepKind, len(in.CompletedKinds))
-		for i, k := range in.CompletedKinds {
-			completed[i] = StepKind(k)
-		}
+		scopes := scopeSetOf(in.RequestedScopes)
+		completed := stepKindsOf(in.CompletedKinds)
 		var authTime time.Time
 		if in.SessionReused {
 			authTime = in.AuthTime

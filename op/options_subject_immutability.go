@@ -15,10 +15,7 @@ import (
 // 1.0 §5.7 stability and orphaning resource-server caches keyed on
 // "sub". Embedders who need to switch provision a new issuer (and
 // therefore a new marker store) and migrate RPs deliberately.
-var ErrSubjectModeMismatch = &Error{
-	Code:        codeConfiguration,
-	Description: "subject-issuance mode disagrees with the persisted marker; provision a new issuer instead of switching strategies on a populated store",
-}
+var ErrSubjectModeMismatch = newConfigurationError("subject-issuance mode disagrees with the persisted marker; provision a new issuer instead of switching strategies on a populated store", nil)
 
 // effectiveSubjectMode returns the [store.SubjectModeKey] value the
 // gate compares against the persisted marker. The mapping is the
@@ -86,11 +83,7 @@ func (c *config) checkSubjectModeGate(ctx context.Context) (commit func(context.
 		return nil, subjectModeMismatch("persisted=" + persisted + ", configured=" + current)
 	}
 	if !errors.Is(err, store.ErrNotFound) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "subject-mode marker read failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("subject-mode marker read failed", err)
 	}
 	// SubjectModeKey is absent. Two paths reach here legitimately —
 	// a truly fresh install, and an upgrade from a release that predates
@@ -105,11 +98,7 @@ func (c *config) checkSubjectModeGate(ctx context.Context) (commit func(context.
 	}
 	return func(ctx context.Context) error {
 		if err := meta.Set(ctx, store.SubjectModeKey, current); err != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "subject-mode marker write failed",
-				Cause:       err,
-			}
+			return newConfigurationError("subject-mode marker write failed", err)
 		}
 		return c.writeOpInitMarker(ctx, meta)
 	}, nil
@@ -154,11 +143,7 @@ func (c *config) storeHasAnyGrant(ctx context.Context) (bool, *Error) {
 	}
 	has, err := grants.HasAny(ctx)
 	if err != nil {
-		return false, &Error{
-			Code:        codeConfiguration,
-			Description: "grant-store probe for subject-mode gate failed",
-			Cause:       err,
-		}
+		return false, newConfigurationError("grant-store probe for subject-mode gate failed", err)
 	}
 	return has, nil
 }
@@ -168,11 +153,7 @@ func subjectModeMismatch(detail string) *Error {
 	if detail != "" {
 		desc += ": " + detail
 	}
-	return &Error{
-		Code:        codeConfiguration,
-		Description: desc,
-		Cause:       ErrSubjectModeMismatch,
-	}
+	return newConfigurationError(desc, ErrSubjectModeMismatch)
 }
 
 // metadataHasOpInit reports whether the store has previously been
@@ -188,11 +169,7 @@ func (c *config) metadataHasOpInit(ctx context.Context, meta store.MetadataStore
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
 	}
-	return false, &Error{
-		Code:        codeConfiguration,
-		Description: "op-init sentinel read failed",
-		Cause:       err,
-	}
+	return false, newConfigurationError("op-init sentinel read failed", err)
 }
 
 // writeOpInitMarker stamps the [store.OpInitKey] sentinel after the
@@ -201,11 +178,7 @@ func (c *config) metadataHasOpInit(ctx context.Context, meta store.MetadataStore
 // without an upsert distinction.
 func (c *config) writeOpInitMarker(ctx context.Context, meta store.MetadataStore) error {
 	if err := meta.Set(ctx, store.OpInitKey, store.OpInitMarker); err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "op-init sentinel write failed",
-			Cause:       err,
-		}
+		return newConfigurationError("op-init sentinel write failed", err)
 	}
 	return nil
 }

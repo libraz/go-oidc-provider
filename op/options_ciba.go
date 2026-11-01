@@ -135,10 +135,7 @@ func WithCIBAHintResolver(r HintResolver) CIBAOption {
 			return err
 		}
 		if nilcheck.IsNil(r) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithCIBAHintResolver requires a non-nil HintResolver",
-			}
+			return newConfigurationError("WithCIBAHintResolver requires a non-nil HintResolver", nil)
 		}
 		c.cibaHintResolver = r
 		return nil
@@ -163,10 +160,7 @@ func WithCIBADefaultExpiresIn(d time.Duration) CIBAOption {
 			return err
 		}
 		if d < 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithCIBADefaultExpiresIn must be zero or positive",
-			}
+			return newConfigurationError("WithCIBADefaultExpiresIn must be zero or positive", nil)
 		}
 		c.cibaDefaultExpiresIn = d
 		return nil
@@ -192,10 +186,7 @@ func WithCIBAMaxExpiresIn(d time.Duration) CIBAOption {
 			return err
 		}
 		if d < 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithCIBAMaxExpiresIn must be zero or positive",
-			}
+			return newConfigurationError("WithCIBAMaxExpiresIn must be zero or positive", nil)
 		}
 		c.cibaMaxExpiresIn = d
 		return nil
@@ -214,10 +205,7 @@ func WithCIBAPollInterval(d time.Duration) CIBAOption {
 			return err
 		}
 		if d < 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithCIBAPollInterval must be zero or positive",
-			}
+			return newConfigurationError("WithCIBAPollInterval must be zero or positive", nil)
 		}
 		c.cibaPollInterval = d
 		return nil
@@ -306,10 +294,7 @@ func WithCIBA(opts ...CIBAOption) Option {
 		c.cibaGrantEnabled = true
 		for i, sub := range opts {
 			if nilcheck.IsNil(sub) {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithCIBA received nil CIBAOption at position " + strconv.Itoa(i),
-				}
+				return newConfigurationError("WithCIBA received nil CIBAOption at position "+strconv.Itoa(i), nil)
 			}
 			err := sub.applyCIBA(c)
 			if errors.Is(err, errShadowedDefault) {
@@ -343,20 +328,14 @@ func (c *config) validateCIBAGrant() error {
 		return nil
 	}
 	if nilcheck.IsNil(c.store.CIBARequests()) {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "the CIBA grant requires the configured Store to provide " +
-				"a non-nil CIBARequests substore (storeadapter/inmem ships one; " +
-				"SQL / Redis adapters require an explicit implementation)",
-		}
+		return newConfigurationError("the CIBA grant requires the configured Store to provide "+
+			"a non-nil CIBARequests substore (storeadapter/inmem ships one; "+
+			"SQL / Redis adapters require an explicit implementation)", nil)
 	}
 	if nilcheck.IsNil(c.cibaHintResolver) {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "the CIBA grant requires a HintResolver; supply one through " +
-				"WithCIBA(WithCIBAHintResolver(...)) (the resolver maps " +
-				"login_hint / id_token_hint / login_hint_token to a stable subject)",
-		}
+		return newConfigurationError("the CIBA grant requires a HintResolver; supply one through "+
+			"WithCIBA(WithCIBAHintResolver(...)) (the resolver maps "+
+			"login_hint / id_token_hint / login_hint_token to a stable subject)", nil)
 	}
 	// The cap only clamps a client-supplied requested_expiry, so a
 	// default above it would hand every client that omits the
@@ -366,12 +345,9 @@ func (c *config) validateCIBAGrant() error {
 	// in [config.effectiveCIBADefaultExpiresIn], since the cap states
 	// the intent unambiguously.
 	if c.cibaMaxExpiresIn > 0 && c.cibaDefaultExpiresIn > c.cibaMaxExpiresIn {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithCIBADefaultExpiresIn must not exceed WithCIBAMaxExpiresIn; " +
-				"the default applies when the client omits requested_expiry and " +
-				"would otherwise outlive the value a client may ask for",
-		}
+		return newConfigurationError("WithCIBADefaultExpiresIn must not exceed WithCIBAMaxExpiresIn; "+
+			"the default applies when the client omits requested_expiry and "+
+			"would otherwise outlive the value a client may ask for", nil)
 	}
 	return nil
 }

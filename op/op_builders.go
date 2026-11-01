@@ -113,11 +113,7 @@ func buildMetricsCollector(cfg *config) error {
 		Issuer:          cfg.issuer,
 	})
 	if err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithPrometheus collector registration failed",
-			Cause:       err,
-		}
+		return newConfigurationError("WithPrometheus collector registration failed", err)
 	}
 	cfg.metricsCollector = collector
 	return nil
@@ -134,11 +130,7 @@ func buildMetricsCollector(cfg *config) error {
 func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 	seeds, err := i18n.DefaultBundles()
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "embedded locale bundles failed to load",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("embedded locale bundles failed to load", err)
 	}
 	bundles := make(map[i18n.Tag]*i18n.Bundle, len(seeds)+len(cfg.localeBundles))
 	order := make([]i18n.Tag, 0, len(seeds)+len(cfg.localeBundles))
@@ -154,11 +146,7 @@ func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 		if existing, exists := bundles[tag]; exists {
 			merged, mergeErr := existing.Merge(b.internal)
 			if mergeErr != nil {
-				return nil, &Error{
-					Code:        codeConfiguration,
-					Description: "WithLocale: " + mergeErr.Error(),
-					Cause:       mergeErr,
-				}
+				return nil, newConfigurationError("WithLocale: "+mergeErr.Error(), mergeErr)
 			}
 			bundles[tag] = merged
 			continue
@@ -176,11 +164,7 @@ func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 		// locale no bundle serves, and the merge above cannot produce a
 		// duplicate or nil bundle. Typed anyway so no exit path out of
 		// [New] escapes the IsServerError / IsClientError partition.
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "locale resolver construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("locale resolver construction failed", err)
 	}
 	if cfg.preferredLocaleStore != nil {
 		resolver.WithPreferredLocaleStore(preferredLocaleStoreAdapter{store: cfg.preferredLocaleStore})
@@ -203,11 +187,8 @@ func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 func validateAdvertisedLocales(cfg *config, locales *i18n.Resolver) error {
 	for _, advertised := range cfg.discoveryMetadata.UILocalesSupported {
 		if _, ok := locales.Match(i18n.ParseTag(advertised)); !ok {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithDiscoveryMetadata advertises ui_locales_supported entry " +
-					strconv.Quote(advertised) + ", which no registered locale bundle serves",
-			}
+			return newConfigurationError("WithDiscoveryMetadata advertises ui_locales_supported entry "+
+				strconv.Quote(advertised)+", which no registered locale bundle serves", nil)
 		}
 	}
 	return nil
@@ -249,11 +230,7 @@ func buildProxyTrust(cfg *config) (*proxy.Trust, error) {
 	}
 	t, err := proxy.NewTrustWithHosts(cfg.trustedProxies, hosts)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "proxy trust construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("proxy trust construction failed", err)
 	}
 	return t, nil
 }
@@ -312,11 +289,7 @@ func baseAllowedOrigins(cfg *config) []string {
 func newOriginAllowlist(origins []string, description string) (*csrf.Allowlist, error) {
 	allow, err := csrf.NewAllowlist(origins)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: description,
-			Cause:       err,
-		}
+		return nil, newConfigurationError(description, err)
 	}
 	return allow, nil
 }
@@ -439,11 +412,7 @@ func buildDPoPVerifier(cfg *config) (*dpop.Verifier, error) {
 		Emitter: cfg.effectiveAuditEmitter(),
 	})
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "DPoP verifier construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("DPoP verifier construction failed", err)
 	}
 	return v, nil
 }
@@ -475,11 +444,7 @@ func buildMTLSVerifier(cfg *config) (*mtls.Verifier, error) {
 		RootCAs: cfg.mtlsRootCAsPool(),
 	})
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "mTLS verifier construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("mTLS verifier construction failed", err)
 	}
 	return v, nil
 }
@@ -576,7 +541,7 @@ func buildJARVerifiers(cfg *config, encSet *keys.EncryptionSet) (jarVerifiers, e
 	}
 	authorize, err := jar.NewVerifier(authorizeCfg)
 	if err != nil {
-		return jarVerifiers{}, jarVerifierError(err)
+		return jarVerifiers{}, newConfigurationError("JAR verifier construction failed", err)
 	}
 	// FAPI-CIBA §5.2.2 promotes jti and iat from OPTIONAL to MUST on the
 	// backchannel authentication request object (OFCS CIBA-13 drives
@@ -587,17 +552,9 @@ func buildJARVerifiers(cfg *config, encSet *keys.EncryptionSet) (jarVerifiers, e
 	cibaCfg.AllowMissingJTI = !fapiCIBA
 	ciba, err := jar.NewVerifier(cibaCfg)
 	if err != nil {
-		return jarVerifiers{}, jarVerifierError(err)
+		return jarVerifiers{}, newConfigurationError("JAR verifier construction failed", err)
 	}
 	return jarVerifiers{Authorize: authorize, CIBA: ciba}, nil
-}
-
-func jarVerifierError(err error) error {
-	return &Error{
-		Code:        codeConfiguration,
-		Description: "JAR verifier construction failed",
-		Cause:       err,
-	}
 }
 
 // jarEncryptionResolver returns the [jar.EncryptionResolver] backing
@@ -690,11 +647,7 @@ type assertionVerifiers struct {
 func buildAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
 	resolver, err := clientauth.NewStoreJWKSResolver(cfg.clientStore())
 	if err != nil {
-		return assertionVerifiers{}, &Error{
-			Code:        codeConfiguration,
-			Description: "private_key_jwt JWKS resolver construction failed",
-			Cause:       err,
-		}
+		return assertionVerifiers{}, newConfigurationError("private_key_jwt JWKS resolver construction failed", err)
 	}
 	resolver.SetURLFetcher(&jar.Fetcher{Fetcher: cfg.relyingPartyJWKS().WithFetchError(jar.ErrJWKSFetch)})
 	tokenAud := absoluteEndpointURL(cfg, cfg.endpoints.Token)
@@ -720,7 +673,7 @@ func buildAssertionVerifier(
 		Resolver:     resolver,
 		JTIStore:     cfg.store.ConsumedJTIs(),
 		Audience:     audience,
-		AuxAudiences: append([]string(nil), auxAudiences...),
+		AuxAudiences: auxAudiences,
 		Clock:        cfg.clock.Now,
 		AllowedAlgs:  cfg.clientSigningJOSEAlgs(),
 	}
@@ -762,11 +715,7 @@ func buildJWTBearerDeps(cfg *config) (jwtBearerDeps, error) {
 		TokenEndpointURL: absoluteEndpointURL(cfg, cfg.endpoints.Token),
 	})
 	if err != nil {
-		return jwtBearerDeps{}, &Error{
-			Code:        codeConfiguration,
-			Description: "jwt-bearer assertion verifier construction failed",
-			Cause:       err,
-		}
+		return jwtBearerDeps{}, newConfigurationError("jwt-bearer assertion verifier construction failed", err)
 	}
 	resolve := g.ResolveSubject
 	return jwtBearerDeps{
@@ -846,11 +795,7 @@ func buildJARMSigner(cfg *config, keySet *keys.Set) (*jarm.Signer, error) {
 		Clock:  cfg.clock,
 	})
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "JARM signer construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("JARM signer construction failed", err)
 	}
 	return signer, nil
 }
@@ -864,19 +809,11 @@ func buildJARMSigner(cfg *config, keySet *keys.Set) (*jarm.Signer, error) {
 func buildSessionMachinery(cfg *config) (*cookie.Codec, *sessions.Manager, error) {
 	cookieCodec, err := cookie.NewCodec(cfg.cookieKeys[0], cfg.cookieKeys[1:]...)
 	if err != nil {
-		return nil, nil, &Error{
-			Code:        codeConfiguration,
-			Description: "cookie codec rejected configured keys",
-			Cause:       err,
-		}
+		return nil, nil, newConfigurationError("cookie codec rejected configured keys", err)
 	}
 	sessCodec, err := sessions.NewCodec(cookieCodec)
 	if err != nil {
-		return nil, nil, &Error{
-			Code:        codeConfiguration,
-			Description: "sessions codec construction failed",
-			Cause:       err,
-		}
+		return nil, nil, newConfigurationError("sessions codec construction failed", err)
 	}
 	sessMgr, err := sessions.NewManager(sessions.Config{
 		Codec: sessCodec,
@@ -884,11 +821,7 @@ func buildSessionMachinery(cfg *config) (*cookie.Codec, *sessions.Manager, error
 		Clock: cfg.clock.Now,
 	})
 	if err != nil {
-		return nil, nil, &Error{
-			Code:        codeConfiguration,
-			Description: "sessions manager construction failed",
-			Cause:       err,
-		}
+		return nil, nil, newConfigurationError("sessions manager construction failed", err)
 	}
 	return cookieCodec, sessMgr, nil
 }
@@ -908,11 +841,8 @@ func buildSessionMachinery(cfg *config) (*cookie.Codec, *sessions.Manager, error
 func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Coordinator, error) {
 	grants, ok := cfg.store.Grants().(store.GrantClientLister)
 	if !ok {
-		return nil, &Error{
-			Code: codeConfiguration,
-			Description: "Store.Grants() must implement store.GrantClientLister " +
-				"because a grant that mounts the browser authorize endpoint is enabled",
-		}
+		return nil, newConfigurationError("Store.Grants() must implement store.GrantClientLister "+
+			"because a grant that mounts the browser authorize endpoint is enabled", nil)
 	}
 	active := keySet.Active()
 	deliverer := backchannel.NewHTTPDeliverer(cfg.backchannelLogoutTimeout)
@@ -944,11 +874,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		FanOutBudget:             cfg.backchannelFanOutBudget,
 	})
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "back-channel logout coordinator construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("back-channel logout coordinator construction failed", err)
 	}
 	// Recorded on the config so [Provider.Shutdown] drains the very
 	// instance the /end_session handler dispatches to. The fan-out is
@@ -1008,11 +934,7 @@ func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestra
 	stateRefCurrent, stateRefPrevious := deriveStateRefSigningKeys(cfg.cookieKeys)
 	signer, err := authn.NewStateRefSigner(stateRefCurrent, stateRefPrevious...)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "stateref signer construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("stateref signer construction failed", err)
 	}
 	compiled, err := compileLoginFlow(cfg.loginFlow, cfg)
 	if err != nil {
@@ -1024,11 +946,7 @@ func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestra
 		if errors.As(err, &typed) {
 			return nil, typed
 		}
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + err.Error(),
-			Cause:       err,
-		}
+		return nil, newConfigurationError("WithLoginFlow: "+err.Error(), err)
 	}
 	interactions := buildBuiltInInteractions(cfg, sessMgr)
 	orch, err := authn.New(authn.Config{
@@ -1039,11 +957,7 @@ func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestra
 		LoginFlow:      compiled,
 	})
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "authn orchestrator construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("authn orchestrator construction failed", err)
 	}
 	return orch, nil
 }
@@ -1210,32 +1124,25 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 // reaches the issuance path as [ErrPairwiseSectorUnresolved] rather
 // than as an op/subject sentinel no catalog entry names.
 func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, client *store.Client) (string, error) {
+	// pick selects the generator for one client. With built-in pairwise
+	// wiring it dispatches on the per-client subject_type: the pairwise
+	// generator is the one the option recorded, and every other client
+	// collapses onto the package default (UUIDv7 passthrough), which
+	// keeps the verbatim wire shape for clients that did not opt in.
+	gen := cfg.effectiveSubjectGenerator()
+	pick := func(*store.Client) SubjectGenerator { return gen }
 	if cfg.pairwiseEnabled() {
-		// Built-in pairwise wiring: dispatch on the per-client
-		// subject_type. The pairwise generator is the one the option
-		// recorded; the non-pairwise arm collapses onto the package
-		// default (UUIDv7 passthrough), which keeps the verbatim wire
-		// shape for any client that did not opt into pairwise.
 		pairwiseGen := cfg.subjectGenerator
 		fallbackGen := defaultSubjectGenerator()
-		return func(ctx context.Context, raw string, client *store.Client) (string, error) {
-			gen := fallbackGen
+		pick = func(client *store.Client) SubjectGenerator {
 			if client != nil && client.SubjectType == "pairwise" {
-				gen = pairwiseGen
+				return pairwiseGen
 			}
-			sub, err := gen.Generate(ctx, SubjectGeneratorInput{
-				InternalUserID: raw,
-				Client:         client,
-			})
-			if err != nil {
-				return "", bridgeSubjectError(err)
-			}
-			return string(sub), nil
+			return fallbackGen
 		}
 	}
-	gen := cfg.effectiveSubjectGenerator()
 	return func(ctx context.Context, raw string, client *store.Client) (string, error) {
-		sub, err := gen.Generate(ctx, SubjectGeneratorInput{
+		sub, err := pick(client).Generate(ctx, SubjectGeneratorInput{
 			InternalUserID: raw,
 			Client:         client,
 		})

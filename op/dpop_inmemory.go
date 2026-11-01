@@ -190,8 +190,8 @@ func (s *InMemoryDPoPNonceSource) Validate(nonce string) bool {
 	previous := s.previous
 	s.mu.RUnlock()
 
-	matchCurrent := constantTimeStringEqual(nonce, current)
-	matchPrevious := constantTimeStringEqual(nonce, previous)
+	matchCurrent := subtle.ConstantTimeCompare([]byte(nonce), []byte(current))
+	matchPrevious := subtle.ConstantTimeCompare([]byte(nonce), []byte(previous))
 	// Combine without early return so the branch the matched value
 	// took is not observable through timing.
 	return (matchCurrent | matchPrevious) == 1
@@ -207,25 +207,6 @@ func (s *InMemoryDPoPNonceSource) Validate(nonce string) bool {
 // previous nonce for longer than the configured rotation cadence.
 func (s *InMemoryDPoPNonceSource) RotationFailures() uint64 {
 	return s.rotationFailures.Load()
-}
-
-// constantTimeStringEqual reports whether a and b are the same byte
-// sequence in constant time relative to the input length. The helper
-// pads the shorter side onto a scratch buffer of len(a) so
-// [crypto/subtle.ConstantTimeCompare] sees length-equal inputs and
-// does not return early on a mismatch. The result is 1 when equal,
-// 0 otherwise.
-func constantTimeStringEqual(a, b string) int {
-	if len(a) != len(b) {
-		// Force the compare to run against a length-equal scratch
-		// buffer so the early-return inside ConstantTimeCompare does
-		// not leak the length difference. The OR with the length
-		// inequality forces a 0 result regardless of the digest match.
-		scratch := make([]byte, len(a))
-		_ = subtle.ConstantTimeCompare([]byte(a), scratch)
-		return 0
-	}
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b))
 }
 
 // run drives the rotation ticker until ctx is canceled. A failure

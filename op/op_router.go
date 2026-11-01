@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
@@ -52,20 +53,12 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	buildClientStore(cfg, scopes)
 	discoveryInput := buildDiscoveryInput(cfg, scopes, locales)
 	if err := discovery.ValidateMTLSEndpointAliases(discoveryInput.Metadata, discoveryInput); err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "WithDiscoveryMetadata mTLS endpoint aliases do not match enabled endpoints",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("WithDiscoveryMetadata mTLS endpoint aliases do not match enabled endpoints", err)
 	}
 	doc := discovery.Build(discoveryInput)
 	discHandler, err := discovery.Handler(doc)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "discovery document failed to marshal",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("discovery document failed to marshal", err)
 	}
 	dpopVerifier, err := buildDPoPVerifier(cfg)
 	if err != nil {
@@ -110,9 +103,10 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if err != nil {
 		return nil, err
 	}
+	auditEmitter := cfg.effectiveAuditEmitter()
 	publicCORS := cors.NewPublic()
-	strictCORS := cors.NewStrict(originAllow, cfg.effectiveAuditEmitter())
-	ceremonyCORS := cors.NewStrict(interactionOrigins, cfg.effectiveAuditEmitter())
+	strictCORS := cors.NewStrict(originAllow, auditEmitter)
+	ceremonyCORS := cors.NewStrict(interactionOrigins, auditEmitter)
 	encResolver := buildClientEncryptionResolver(cfg)
 	claimUsers := newClaimTypeGuard(cfg.effectiveUserStore(), cfg.logger)
 	subjectProjector := subjectProjectorFor(cfg)
@@ -154,6 +148,10 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			ClientEncJWKs:          encResolver,
 		})),
 	)
+	customGrants, err := buildExtensionDispatcher(cfg, keySet, auditEmitter)
+	if err != nil {
+		return nil, err
+	}
 	mux.Handle(
 		protocolEndpointPath(cfg, cfg.endpoints.Token),
 		strictCORS.Handler(tokenendpoint.Handler(tokenendpoint.Deps{
@@ -192,8 +190,8 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			AccessTokenFormatFor:           cfg.formatForAudience,
 			GrantRevocations:               cfg.store.GrantRevocations(),
 			RevocationStrategy:             cfg.atRevocation,
-			Audit:                          cfg.effectiveAuditEmitter(),
-			CustomGrants:                   buildExtensionDispatcher(cfg, keySet),
+			Audit:                          auditEmitter,
+			CustomGrants:                   customGrants,
 			EnabledGrants:                  enabledGrantWireNames(cfg),
 			DeviceCodes:                    deviceCodesFor(cfg),
 			CIBARequests:                   cibaRequestsFor(cfg),
@@ -204,24 +202,24 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			JWTBearerAllowedClients:        jwtBearer.AllowedClients,
 		})),
 	)
-	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)
-	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifiers.CIBA, strictCORS)
+	mountDeviceAuthorizationEndpoint(mux, cfg, auditEmitter, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)
+	mountBackchannelAuthenticationEndpoint(mux, cfg, auditEmitter, scopes, keySet, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifiers.CIBA, strictCORS)
 	// The interaction mount is deliberately not handed strictCORS: its
 	// routes run on the narrower ceremony allowlist.
 	onOpaqueOrigin := newOpaqueOriginWarner(cfg.logger)
 	sessMgr, err := mountAuthorizeHandlers(
-		mux, cfg, scopes, keySet, encResolver, jarVerifiers.Authorize, locales, proxyTrust,
+		mux, cfg, auditEmitter, scopes, keySet, encResolver, jarVerifiers.Authorize, locales, proxyTrust,
 		interactionOrigins, ceremonyCORS, onOpaqueOrigin,
 	)
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, scopes, jarVerifiers.Authorize, assertionVerifiers.PAR, dpopVerifier, strictCORS); err != nil {
+	if err := mountPAREndpoint(mux, cfg, auditEmitter, scopes, jarVerifiers.Authorize, assertionVerifiers.PAR, dpopVerifier, strictCORS); err != nil {
 		return nil, err
 	}
-	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
-	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifiers.Revoke, strictCORS)
-	mountGrantManagementEndpoint(mux, cfg, assertionVerifiers.Revoke, strictCORS)
+	mountIntrospectionEndpoint(mux, cfg, auditEmitter, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
+	mountRevocationEndpoint(mux, cfg, auditEmitter, keySet, assertionVerifiers.Revoke, strictCORS)
+	mountGrantManagementEndpoint(mux, cfg, auditEmitter, assertionVerifiers.Revoke, strictCORS)
 	if err := mountSharedSignals(mux, cfg, keySet, dpopVerifier, mtlsVerifier, subjectProjector, publicCORS, strictCORS); err != nil {
 		return nil, err
 	}
@@ -244,8 +242,8 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			return nil, err
 		}
 	}
-	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS, bcc)
-	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, subjectProjector, locales, interactionOrigins, ceremonyCORS, onOpaqueOrigin)
+	mountRegistrationEndpoint(mux, cfg, auditEmitter, scopes, strictCORS, bcc)
+	mountEndSessionEndpoint(mux, cfg, auditEmitter, keySet, sessMgr, bcc, subjectProjector, locales, interactionOrigins, ceremonyCORS, onOpaqueOrigin)
 	return mux, nil
 }
 
@@ -270,11 +268,8 @@ func mountDiscovery(mux *routeMux, cfg *config, publicCORS *cors.Public, discHan
 		return nil
 	}
 	if name, conflict := conflictingRouteName(cfg, concatenated); conflict {
-		return &Error{
-			Code: codeConfiguration,
-			Description: name + " occupies " + concatenated +
-				", the discovery URL relying parties derive from the issuer",
-		}
+		return newConfigurationError(name+" occupies "+concatenated+
+			", the discovery URL relying parties derive from the issuer", nil)
 	}
 	mux.Handle(concatenated, handler)
 	return nil
@@ -301,11 +296,7 @@ func mountProtectedResourceMetadata(mux *routeMux, cfg *config, publicCORS *cors
 		})
 		handler, err := protectedresource.Handler(doc)
 		if err != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "protected-resource metadata failed to marshal for " + pr.Resource,
-				Cause:       err,
-			}
+			return newConfigurationError("protected-resource metadata failed to marshal for "+pr.Resource, err)
 		}
 		mux.Handle(protectedresource.WellKnownPath(pr.Resource), publicCORS.Handler(handler))
 	}
@@ -316,7 +307,7 @@ func mountProtectedResourceMetadata(mux *routeMux, cfg *config, publicCORS *cors
 // draft endpoint (GET / DELETE {endpoint}/{grant_id}) when the feature is
 // enabled via [WithGrantManagement]. Without the option no route is added;
 // discovery gates the advertisement on the same condition.
-func mountGrantManagementEndpoint(mux *routeMux, cfg *config, assertionVerifier clientauth.AssertionVerifier, strictCORS *cors.Strict) {
+func mountGrantManagementEndpoint(mux *routeMux, cfg *config, auditEmitter audit.Emitter, assertionVerifier clientauth.AssertionVerifier, strictCORS *cors.Strict) {
 	if !cfg.grantManagementEnabled {
 		return
 	}
@@ -329,7 +320,7 @@ func mountGrantManagementEndpoint(mux *routeMux, cfg *config, assertionVerifier 
 		GrantRevocations:         cfg.store.GrantRevocations(),
 		RevocationStrategy:       cfg.atRevocation,
 		AccessTokenTTL:           cfg.accessTokenTTL,
-		Audit:                    cfg.effectiveAuditEmitter(),
+		Audit:                    auditEmitter,
 		AssertionVerifier:        assertionVerifier,
 		AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		SecretVerifier:           cfg.clientSecretVerifier(),
@@ -355,6 +346,7 @@ func mountGrantManagementEndpoint(mux *routeMux, cfg *config, assertionVerifier 
 func mountRegistrationEndpoint(
 	mux *routeMux,
 	cfg *config,
+	auditEmitter audit.Emitter,
 	scopes *scoperegistry.Registry,
 	strictCORS *cors.Strict,
 	bcc *backchannel.Coordinator,
@@ -399,7 +391,7 @@ func mountRegistrationEndpoint(
 		SectorResolver:                       buildSectorResolver(cfg),
 		ValidateMetadata:                     wrapValidateMetadata(cfg.dcr.ValidateMetadata),
 		Logger:                               cfg.logger,
-		Audit:                                cfg.effectiveAuditEmitter(),
+		Audit:                                auditEmitter,
 		OnClientDeleted:                      cfg.dcr.OnClientDeleted,
 		OnClientDeletedSnapshot:              cfg.dcr.OnClientDeletedSnapshot,
 		Backchannel:                          bcc,
@@ -428,6 +420,7 @@ func mountRegistrationEndpoint(
 func mountPAREndpoint(
 	mux *routeMux,
 	cfg *config,
+	auditEmitter audit.Emitter,
 	scopes *scoperegistry.Registry,
 	jarVerifier *jar.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
@@ -457,7 +450,7 @@ func mountPAREndpoint(
 			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
 			ClaimsParameterEnabled:     cfg.claimsParameterSupported(),
 			ACRValuesSupported:         cfg.acrValuesSupportedCopy(),
-			Audit:                      cfg.effectiveAuditEmitter(),
+			Audit:                      auditEmitter,
 		})),
 	)
 	return nil
@@ -468,6 +461,7 @@ func mountPAREndpoint(
 func mountIntrospectionEndpoint(
 	mux *routeMux,
 	cfg *config,
+	auditEmitter audit.Emitter,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
 	encResolver *clientencjwks.Resolver,
@@ -498,7 +492,7 @@ func mountIntrospectionEndpoint(
 			OpaqueAccessTokens:         cfg.store.OpaqueAccessTokens(),
 			GrantRevocations:           cfg.store.GrantRevocations(),
 			RevocationStrategy:         cfg.atRevocation,
-			Audit:                      cfg.effectiveAuditEmitter(),
+			Audit:                      auditEmitter,
 			ClientEncJWKs:              encResolver,
 			SubjectProjector:           subjectProjector,
 		})),
@@ -510,6 +504,7 @@ func mountIntrospectionEndpoint(
 func mountRevocationEndpoint(
 	mux *routeMux,
 	cfg *config,
+	auditEmitter audit.Emitter,
 	keySet *keys.Set,
 	assertionVerifier clientauth.AssertionVerifier,
 	strictCORS *cors.Strict,
@@ -533,7 +528,7 @@ func mountRevocationEndpoint(
 			GrantRevocations:         cfg.store.GrantRevocations(),
 			RevocationStrategy:       cfg.atRevocation,
 			AccessTokenTTL:           cfg.accessTokenTTL,
-			Audit:                    cfg.effectiveAuditEmitter(),
+			Audit:                    auditEmitter,
 		})),
 	)
 }
@@ -558,6 +553,7 @@ func mountRevocationEndpoint(
 func mountAuthorizeHandlers(
 	mux *routeMux,
 	cfg *config,
+	auditEmitter audit.Emitter,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
 	encResolver *clientencjwks.Resolver,
@@ -582,11 +578,7 @@ func mountAuthorizeHandlers(
 	csrfCurrent, csrfPrevious := deriveCSRFSigningKeys(cfg.cookieKeys)
 	csrfSigner, err := csrf.NewSigner(csrfCurrent, csrfPrevious...)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "csrf signer construction failed",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("csrf signer construction failed", err)
 	}
 	orchestrator, err := buildOrchestrator(cfg, sessMgr)
 	if err != nil {
@@ -633,7 +625,7 @@ func mountAuthorizeHandlers(
 		ProxyTrust:               proxyTrust,
 		ClientEncJWKs:            encResolver,
 		FirstPartyClients:        firstPartyClientSet(cfg),
-		Audit:                    cfg.effectiveAuditEmitter(),
+		Audit:                    auditEmitter,
 	})
 	// /authorize and the SPA shell are top-level navigation targets, not
 	// fetch surfaces, so they carry no CORS layer at all.
@@ -670,6 +662,7 @@ func mountAuthorizeHandlers(
 func mountEndSessionEndpoint(
 	mux *routeMux,
 	cfg *config,
+	auditEmitter audit.Emitter,
 	keySet *keys.Set,
 	sessMgr *sessions.Manager,
 	bcc *backchannel.Coordinator,
@@ -701,7 +694,7 @@ func mountEndSessionEndpoint(
 			GrantRevocations:   cfg.store.GrantRevocations(),
 			RevocationStrategy: cfg.atRevocation,
 			SubjectProjector:   subjectProjector,
-			Audit:              cfg.effectiveAuditEmitter(),
+			Audit:              auditEmitter,
 			ConfirmTemplate:    cfg.logoutUI.ConfirmTemplate,
 			SignedOutTemplate:  cfg.logoutUI.SignedOutTemplate,
 			LogoutCSP:          cfg.logoutUI.ContentSecurityPolicy,
@@ -728,6 +721,7 @@ func mountEndSessionEndpoint(
 func mountDeviceAuthorizationEndpoint(
 	mux *routeMux,
 	cfg *config,
+	auditEmitter audit.Emitter,
 	scopes *scoperegistry.Registry,
 	dpopVerifier *dpop.Verifier,
 	mtlsVerifier *mtls.Verifier,
@@ -755,7 +749,7 @@ func mountDeviceAuthorizationEndpoint(
 			RequireSenderConstraint:  cfg.requireSenderConstrainedTokens(),
 			DeviceCodeTTL:            cfg.effectiveDeviceCodeExpiry(),
 			PollInterval:             cfg.effectiveDeviceCodePollInterval(),
-			Audit:                    cfg.effectiveAuditEmitter(),
+			Audit:                    auditEmitter,
 		})),
 	)
 }
@@ -832,6 +826,7 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 func mountBackchannelAuthenticationEndpoint(
 	mux *routeMux,
 	cfg *config,
+	auditEmitter audit.Emitter,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
 	dpopVerifier *dpop.Verifier,
@@ -871,7 +866,7 @@ func mountBackchannelAuthenticationEndpoint(
 			DefaultExpiresIn:         cfg.effectiveCIBADefaultExpiresIn(),
 			MaxExpiresIn:             cfg.cibaMaxExpiresIn,
 			PollInterval:             cfg.effectiveCIBAPollInterval(),
-			Audit:                    cfg.effectiveAuditEmitter(),
+			Audit:                    auditEmitter,
 		})),
 	)
 }

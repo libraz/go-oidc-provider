@@ -65,27 +65,16 @@ func LoadPublicJWKS(path string) ([]byte, error) {
 	//nolint:gosec // G304: path is operator-supplied at construction time.
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "LoadPublicJWKS: read " + base,
-			Cause:       err,
-		}
+		return nil, newConfigurationError("LoadPublicJWKS: read "+base, err)
 	}
 	var input struct {
 		Keys []map[string]json.RawMessage `json:"keys"`
 	}
 	if err := json.Unmarshal(raw, &input); err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "LoadPublicJWKS: parse " + base,
-			Cause:       err,
-		}
+		return nil, newConfigurationError("LoadPublicJWKS: parse "+base, err)
 	}
 	if len(input.Keys) == 0 {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "LoadPublicJWKS: " + base + " contains no keys",
-		}
+		return nil, newConfigurationError("LoadPublicJWKS: "+base+" contains no keys", nil)
 	}
 
 	output := struct {
@@ -96,21 +85,14 @@ func LoadPublicJWKS(path string) ([]byte, error) {
 	for _, key := range input.Keys {
 		publicKey, reason := normalizePublicJWK(key)
 		if reason != "" {
-			return nil, &Error{
-				Code:        codeConfiguration,
-				Description: "LoadPublicJWKS: " + base + " " + reason,
-			}
+			return nil, newConfigurationError("LoadPublicJWKS: "+base+" "+reason, nil)
 		}
 		output.Keys = append(output.Keys, publicKey)
 	}
 
 	out, err := json.Marshal(output)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "LoadPublicJWKS: marshal " + base,
-			Cause:       err,
-		}
+		return nil, newConfigurationError("LoadPublicJWKS: marshal "+base, err)
 	}
 	return out, nil
 }

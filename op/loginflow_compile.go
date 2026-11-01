@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
@@ -253,10 +252,7 @@ func validatePrimaryPasskeyDependencies(where string, step PrimaryPasskey) error
 		}
 	}
 	if len(step.AAGUIDAllowlist) > 0 && len(step.AttestationRoots) == 0 {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + ".PrimaryPasskey.AAGUIDAllowlist requires AttestationRoots",
-		}
+		return newConfigurationError("WithLoginFlow: "+where+".PrimaryPasskey.AAGUIDAllowlist requires AttestationRoots", nil)
 	}
 	return nil
 }
@@ -303,11 +299,12 @@ func validateExternalStepDependencies(where string, step ExternalStep) error {
 }
 
 func loginFlowDependencyError(field string) error {
-	return &Error{
-		Code:        codeConfiguration,
-		Description: "WithLoginFlow: " + field + " is nil",
-	}
+	return newConfigurationError("WithLoginFlow: "+field+" is nil", nil)
 }
+
+// captchaFactorName is the inert factor type and the prompt type the
+// captcha adapter reports.
+const captchaFactorName = "captcha"
 
 // captchaStepAdapter wraps a [CaptchaVerifier] as an
 // [authn.Authenticator] so the [LoginFlow] orchestrator can drive
@@ -327,7 +324,7 @@ type captchaStepAdapter struct {
 // that is never recorded in [State.Factors] (the LoginFlow compile
 // path tags captcha-shaped Steps so [recordLoginFlowResult] skips
 // [appendFactor]).
-func (captchaStepAdapter) Type() authn.FactorType { return "captcha" }
+func (captchaStepAdapter) Type() authn.FactorType { return captchaFactorName }
 
 // AAL implements [authn.Authenticator]. Returns [authn.AAL0]: a
 // captcha solve does not raise the session assurance level. The
@@ -343,7 +340,7 @@ func (captchaStepAdapter) AMR() string { return "" }
 
 // Prompts implements [authn.Authenticator]. The adapter emits a single
 // "captcha" prompt type.
-func (captchaStepAdapter) Prompts() []string { return []string{"captcha"} }
+func (captchaStepAdapter) Prompts() []string { return []string{captchaFactorName} }
 
 // Begin implements [authn.Authenticator]. Returns the captcha prompt
 // with a single hidden submission field for the upstream provider's
@@ -351,7 +348,7 @@ func (captchaStepAdapter) Prompts() []string { return []string{"captcha"} }
 func (a captchaStepAdapter) Begin(_ context.Context, _ authn.BeginInput) (interaction.Step, error) {
 	provider, siteKey := authn.CaptchaWidgetFor(a.verifier)
 	prompt := &interaction.Prompt{
-		Type: "captcha",
+		Type: captchaFactorName,
 		Data: interaction.CaptchaPromptData{Provider: provider, SiteKey: siteKey},
 		Inputs: []interaction.FieldSpec{{
 			Name:     CaptchaSubmissionFieldName,
@@ -397,12 +394,6 @@ func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput
 // The legacy schemes, the store's optional hash updater and the provider
 // logger ride the authenticator's config.
 func buildPrimaryPassword(s PrimaryPassword, cfg *config) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-	if nilcheck.IsNil(s.Store) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "PrimaryPassword.Store is nil",
-		}
-	}
 	auth, err := password.NewAuthenticator(s.Store)
 	if err != nil {
 		return nil, err
@@ -425,12 +416,6 @@ func buildPrimaryPassword(s PrimaryPassword, cfg *config) (authn.Authenticator, 
 // authorize request. discoverable enables the passwordless ceremony the
 // Primary position runs.
 func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock, discoverable bool) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-	if nilcheck.IsNil(s.Store) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "PrimaryPasskey.Store is nil",
-		}
-	}
 	// The ceremony configuration is derived through the shared helper the
 	// enrolment facade also calls, so every policy axis the two ceremonies
 	// must agree on — user verification, conveyance preference — is
@@ -449,11 +434,7 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock, discoverable bool)
 	ceremony.AllowDiscoverable = discoverable
 	v, err := passkey.New(ceremony)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "PrimaryPasskey rejected by parser",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("PrimaryPasskey rejected by parser", err)
 	}
 	// Share the embedder-supplied clock so the WebAuthn session /
 	// challenge expiry window uses the same instant as the rest of the
@@ -465,12 +446,6 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock, discoverable bool)
 	auth, err := passkey.NewAuthenticator(v, s.Store)
 	if err != nil {
 		return nil, err
-	}
-	if s.CloneDetectionHandler != nil && nilcheck.IsNil(s.CloneDetectionHandler) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "PrimaryPasskey.CloneDetectionHandler is nil",
-		}
 	}
 	if s.CloneDetectionHandler != nil {
 		// Wrap the public hook so the internal package consumes
@@ -503,26 +478,13 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock, discoverable bool)
 // builder so the function signature remains stable across deployments
 // that opt out of the cross-factor defence.
 func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, clock timex.Clock) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-	if nilcheck.IsNil(s.Store) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "StepTOTP.Store is nil",
-		}
-	}
 	current, prev := selectTOTPKeys(s, fallbackCurrent, fallbackPrev)
 	if len(current) == 0 {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKeys at the Provider level)",
-		}
+		return nil, newConfigurationError("StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKeys at the Provider level)", nil)
 	}
 	codec, err := totp.NewCodec(current, prev...)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "StepTOTP rejected by parser",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("StepTOTP rejected by parser", err)
 	}
 	// Share the embedder-supplied clock so the TOTP step window and the
 	// per-record lockout stamp read the same instant as the cross-factor
@@ -565,18 +527,16 @@ func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticat
 // newLockoutCounter returns the cross-factor lockout counter over the
 // store [resolveAuthnLockoutStore] picks, or nil when none resolves.
 //
-// The [Clock] interface is structurally identical to the clock the
-// library uses internally, and clockShim forwards the
-// embedder-supplied value through, so the lockout helper observes the
-// same instant the rest of the library uses for token TTLs and audit
-// timestamps. A nil clock passes nil through and the helper falls back
-// to the system clock.
+// The embedder-supplied [Clock] is passed through, so the lockout
+// helper observes the same instant the rest of the library uses for
+// token TTLs and audit timestamps. A nil clock falls back to the system
+// clock inside the helper.
 func newLockoutCounter(c *config) *lockout.Counter {
 	lockoutStore := resolveAuthnLockoutStore(c)
 	if lockoutStore == nil {
 		return nil
 	}
-	counter, err := lockout.New(lockoutStore, clockShimOrNil(c.clock))
+	counter, err := lockout.New(lockoutStore, c.clock)
 	if err != nil || counter == nil {
 		return nil
 	}
@@ -640,33 +600,6 @@ func countsFailures(step Step) bool {
 	}
 }
 
-// clockShim adapts a [Clock] value to the clock interface the lockout
-// helper requires. The two are structurally identical (a single
-// Now() time.Time method); the shim
-// exists solely because Go does not implicitly convert between named
-// interface types.
-type clockShim struct {
-	inner Clock
-}
-
-func (s clockShim) Now() time.Time {
-	if nilcheck.IsNil(s.inner) {
-		return time.Time{}
-	}
-	return s.inner.Now()
-}
-
-// clockShimOrNil returns a [timex.Clock]-compatible wrapper around c
-// when c is non-nil, or nil otherwise. The lockout helper falls back
-// to [timex.SystemClock] on a nil clock so production code paths that
-// did not configure [WithClock] still see a valid wall-clock reading.
-func clockShimOrNil(c Clock) timex.Clock { //nolint:ireturn,nolintlint // timex.Clock is the helper's contract; nil is the documented "use SystemClock" signal.
-	if nilcheck.IsNil(c) {
-		return nil
-	}
-	return clockShim{inner: c}
-}
-
 // selectTOTPKeys resolves the per-step versus Provider-level encryption
 // keys for a [StepTOTP]. A non-empty [StepTOTP.EncryptionKey] always
 // wins (more-specific-wins); the rotation slot follows the same rule
@@ -692,24 +625,6 @@ func selectTOTPKeys(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepEmailOTP(s StepEmailOTP, clock timex.Clock) (authn.Authenticator, error) {
-	if nilcheck.IsNil(s.Store) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "StepEmailOTP.Store is nil",
-		}
-	}
-	if nilcheck.IsNil(s.Sender) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "StepEmailOTP.Sender is nil",
-		}
-	}
-	if nilcheck.IsNil(s.Users) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "StepEmailOTP.Users is nil",
-		}
-	}
 	mailer := emailotp.MailerFunc(func(ctx context.Context, msg emailotp.Message) error {
 		return s.Sender.Send(ctx, msg.To, msg.Code)
 	})
@@ -735,12 +650,6 @@ func buildStepEmailOTP(s StepEmailOTP, clock timex.Clock) (authn.Authenticator, 
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepRecoveryCode(s StepRecoveryCode, clock timex.Clock) (authn.Authenticator, error) {
-	if nilcheck.IsNil(s.Store) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "StepRecoveryCode.Store is nil",
-		}
-	}
 	// Share the embedder-supplied clock so the recovery-code lockout
 	// stamp reads the same instant as the rest of the flow (WithClock
 	// contract). Nil falls back to SystemClock.
@@ -755,11 +664,5 @@ func buildStepRecoveryCode(s StepRecoveryCode, clock timex.Clock) (authn.Authent
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepCaptcha(s StepCaptcha) (authn.Authenticator, error) {
-	if nilcheck.IsNil(s.Verifier) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "StepCaptcha.Verifier is nil",
-		}
-	}
 	return captchaStepAdapter{verifier: s.Verifier}, nil
 }

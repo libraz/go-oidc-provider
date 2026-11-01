@@ -61,10 +61,7 @@ func WithDeviceCodeGrant(opts ...DeviceCodeOption) Option {
 		c.deviceCodeGrantEnabled = true
 		for i, sub := range opts {
 			if nilcheck.IsNil(sub) {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithDeviceCodeGrant received nil DeviceCodeOption at position " + strconv.Itoa(i),
-				}
+				return newConfigurationError("WithDeviceCodeGrant received nil DeviceCodeOption at position "+strconv.Itoa(i), nil)
 			}
 			err := sub.applyDeviceCode(c)
 			if errors.Is(err, errShadowedDefault) {
@@ -122,24 +119,14 @@ func WithDeviceVerificationURI(uri string) DeviceCodeOption {
 		}
 		trimmed := strings.TrimSpace(uri)
 		if trimmed == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDeviceVerificationURI requires a non-empty URI",
-			}
+			return newConfigurationError("WithDeviceVerificationURI requires a non-empty URI", nil)
 		}
 		u, err := url.Parse(trimmed)
 		if err != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDeviceVerificationURI received an unparseable URI",
-				Cause:       err,
-			}
+			return newConfigurationError("WithDeviceVerificationURI received an unparseable URI", err)
 		}
 		if !u.IsAbs() || u.Host == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDeviceVerificationURI requires an absolute URI with a host",
-			}
+			return newConfigurationError("WithDeviceVerificationURI requires an absolute URI with a host", nil)
 		}
 		c.deviceVerificationURI = trimmed
 		return nil
@@ -170,10 +157,7 @@ func WithDeviceCodeExpiry(ttl time.Duration) DeviceCodeOption {
 			return err
 		}
 		if ttl <= 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDeviceCodeExpiry requires a positive duration",
-			}
+			return newConfigurationError("WithDeviceCodeExpiry requires a positive duration", nil)
 		}
 		c.deviceCodeExpiry = ttl
 		return nil
@@ -198,10 +182,7 @@ func WithDeviceCodePollInterval(interval time.Duration) DeviceCodeOption {
 			return err
 		}
 		if interval <= 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDeviceCodePollInterval requires a positive duration",
-			}
+			return newConfigurationError("WithDeviceCodePollInterval requires a positive duration", nil)
 		}
 		c.deviceCodePollInterval = interval
 		return nil
@@ -250,12 +231,9 @@ func (c *config) validateDeviceCodeGrant() error {
 		return nil
 	}
 	if nilcheck.IsNil(c.store.DeviceCodes()) {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "the device_code grant requires the configured Store to provide " +
-				"a non-nil DeviceCodes substore (storeadapter/inmem ships one; SQL / " +
-				"Redis adapters require an explicit implementation)",
-		}
+		return newConfigurationError("the device_code grant requires the configured Store to provide "+
+			"a non-nil DeviceCodes substore (storeadapter/inmem ships one; SQL / "+
+			"Redis adapters require an explicit implementation)", nil)
 	}
 	return nil
 }

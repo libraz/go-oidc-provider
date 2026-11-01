@@ -87,18 +87,11 @@ type ProtectedResource struct {
 func WithProtectedResources(resources ...ProtectedResource) Option {
 	return optionFunc(func(c *config) error {
 		if len(resources) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithProtectedResources requires at least one ProtectedResource",
-			}
+			return newConfigurationError("WithProtectedResources requires at least one ProtectedResource", nil)
 		}
 		for i, r := range resources {
 			if err := resourceindicator.Validate(r.Resource); err != nil {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithProtectedResources[" + strconv.Itoa(i) + "]: invalid resource " + strconv.Quote(r.Resource),
-					Cause:       err,
-				}
+				return newConfigurationError("WithProtectedResources["+strconv.Itoa(i)+"]: invalid resource "+strconv.Quote(r.Resource), err)
 			}
 		}
 		c.protectedResources = append(c.protectedResources, resources...)
@@ -119,28 +112,18 @@ func (c *config) validateProtectedResources() error {
 		canon, err := resourceindicator.Canonicalize(r.Resource)
 		if err != nil {
 			// Unreachable: the option site already validated every entry.
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithProtectedResources[" + strconv.Itoa(i) + "]: invalid resource " + strconv.Quote(r.Resource),
-				Cause:       err,
-			}
+			return newConfigurationError("WithProtectedResources["+strconv.Itoa(i)+"]: invalid resource "+strconv.Quote(r.Resource), err)
 		}
 		if _, dup := seen[canon]; dup {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithProtectedResources: duplicate resource " + strconv.Quote(r.Resource),
-			}
+			return newConfigurationError("WithProtectedResources: duplicate resource "+strconv.Quote(r.Resource), nil)
 		}
 		seen[canon] = struct{}{}
 
 		path := protectedresource.WellKnownPath(r.Resource)
 		if prev, dup := paths[path]; dup {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithProtectedResources: resources " + strconv.Quote(prev) + " and " +
-					strconv.Quote(r.Resource) + " map to the same metadata path " + strconv.Quote(path) +
-					" (RFC 9728 §3.1 derives the path from the resource path component, ignoring host)",
-			}
+			return newConfigurationError("WithProtectedResources: resources "+strconv.Quote(prev)+" and "+
+				strconv.Quote(r.Resource)+" map to the same metadata path "+strconv.Quote(path)+
+				" (RFC 9728 §3.1 derives the path from the resource path component, ignoring host)", nil)
 		}
 		paths[path] = r.Resource
 	}

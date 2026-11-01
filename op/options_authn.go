@@ -175,10 +175,7 @@ func WithAuthnLockoutStore(s store.AuthnLockoutStore) Option {
 			return err
 		}
 		if nilcheck.IsNil(s) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAuthnLockoutStore received nil AuthnLockoutStore",
-			}
+			return newConfigurationError("WithAuthnLockoutStore received nil AuthnLockoutStore", nil)
 		}
 		c.authnLockoutStore = s
 		return nil
@@ -202,10 +199,7 @@ func WithAuthnLockoutStore(s store.AuthnLockoutStore) Option {
 func WithScope(s Scope) Option {
 	return optionFunc(func(c *config) error {
 		if s.Name == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithScope: Name must not be empty",
-			}
+			return newConfigurationError("WithScope: Name must not be empty", nil)
 		}
 		c.scopes = append(c.scopes, s)
 		return nil
@@ -222,10 +216,7 @@ func WithScope(s Scope) Option {
 func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 	return optionFunc(func(c *config) error {
 		if nilcheck.IsNil(o) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLoginAttemptObserver received nil LoginAttemptObserver",
-			}
+			return newConfigurationError("WithLoginAttemptObserver received nil LoginAttemptObserver", nil)
 		}
 		c.loginObservers = append(c.loginObservers, o)
 		return nil
@@ -247,17 +238,11 @@ func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 func WithInteractions(i ...Interaction) Option {
 	return optionFunc(func(c *config) error {
 		if len(i) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithInteractions requires at least one Interaction",
-			}
+			return newConfigurationError("WithInteractions requires at least one Interaction", nil)
 		}
 		for idx, item := range i {
 			if nilcheck.IsNil(item) {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithInteractions received nil Interaction at position " + strconv.Itoa(idx),
-				}
+				return newConfigurationError("WithInteractions received nil Interaction at position "+strconv.Itoa(idx), nil)
 			}
 		}
 		c.interactions = append(c.interactions, i...)
@@ -472,10 +457,7 @@ func WithLoginFlow(flow LoginFlow) Option {
 			return err
 		}
 		if nilcheck.IsNil(flow.Primary) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLoginFlow: LoginFlow.Primary must not be nil",
-			}
+			return newConfigurationError("WithLoginFlow: LoginFlow.Primary must not be nil", nil)
 		}
 		if err := checkLoginFlowRuleKinds(flow); err != nil {
 			return err
@@ -496,23 +478,14 @@ func checkLoginFlowRuleKinds(flow LoginFlow) error {
 	}
 	for i, r := range flow.Rules {
 		if nilcheck.IsNil(r.Then) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not be nil",
-			}
+			return newConfigurationError("WithLoginFlow: Rules["+strconv.Itoa(i)+"].Then must not be nil", nil)
 		}
 		k := r.Then.Kind()
 		if registration != "" && k == registration {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not name the Registration StepKind " + k.String(),
-			}
+			return newConfigurationError("WithLoginFlow: Rules["+strconv.Itoa(i)+"].Then must not name the Registration StepKind "+k.String(), nil)
 		}
 		if _, dup := seen[k]; dup {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLoginFlow: duplicate StepKind " + k.String() + " across Rules",
-			}
+			return newConfigurationError("WithLoginFlow: duplicate StepKind "+k.String()+" across Rules", nil)
 		}
 		seen[k] = struct{}{}
 	}
@@ -582,15 +555,18 @@ func spaUIContentSecurityPolicy(declared string) (string, error) {
 	if declared == "" {
 		return spaDefaultCSP, nil
 	}
-	policy, err := interaction.NormalizeCSP(declared)
+	return normalizeUICSP("WithSPAUI", declared)
+}
+
+// normalizeUICSP validates policy through [interaction.NormalizeCSP]
+// and returns the normalized value (the default policy for an empty
+// input), or a configuration error naming option.
+func normalizeUICSP(option, policy string) (string, error) {
+	normalized, err := interaction.NormalizeCSP(policy)
 	if err != nil {
-		return "", &Error{
-			Code:        codeConfiguration,
-			Description: "WithSPAUI: ContentSecurityPolicy rejected",
-			Cause:       err,
-		}
+		return "", newConfigurationError(option+": ContentSecurityPolicy rejected", err)
 	}
-	return policy, nil
+	return normalized, nil
 }
 
 // checkSPAUIPrecondition rejects repeated [WithSPAUI] calls and the
@@ -605,16 +581,10 @@ func spaUIContentSecurityPolicy(declared string) (string, error) {
 // single structured warning regardless of option order.
 func checkSPAUIPrecondition(c *config) error {
 	if c.spaUISet {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSPAUI may be called at most once",
-		}
+		return newConfigurationError("WithSPAUI may be called at most once", nil)
 	}
 	if c.consentUISet {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSPAUI is mutually exclusive with WithConsentUI",
-		}
+		return newConfigurationError("WithSPAUI is mutually exclusive with WithConsentUI", nil)
 	}
 	return nil
 }
@@ -625,10 +595,7 @@ func checkSPAUIPrecondition(c *config) error {
 // sequence.
 func validateSPAUIMounts(ui SPAUI) error {
 	if ui.LoginMount == "" {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSPAUI: LoginMount must not be empty",
-		}
+		return newConfigurationError("WithSPAUI: LoginMount must not be empty", nil)
 	}
 	for _, m := range []struct{ name, value string }{
 		{"LoginMount", ui.LoginMount},
@@ -639,10 +606,7 @@ func validateSPAUIMounts(ui SPAUI) error {
 			continue
 		}
 		if !strings.HasPrefix(m.value, "/") {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithSPAUI: " + m.name + " must start with \"/\"",
-			}
+			return newConfigurationError("WithSPAUI: "+m.name+" must start with \"/\"", nil)
 		}
 	}
 	return nil
@@ -658,17 +622,10 @@ func validateSPAUIStaticDir(dir string) error {
 	}
 	info, err := os.Stat(dir)
 	if err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSPAUI: StaticDir " + dir + " not accessible",
-			Cause:       err,
-		}
+		return newConfigurationError("WithSPAUI: StaticDir "+dir+" not accessible", err)
 	}
 	if !info.IsDir() {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSPAUI: StaticDir " + dir + " is not a directory",
-		}
+		return newConfigurationError("WithSPAUI: StaticDir "+dir+" is not a directory", nil)
 	}
 	return nil
 }
@@ -689,24 +646,14 @@ func WithConsentUI(ui ConsentUI) Option {
 			return err
 		}
 		if c.spaUISet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithConsentUI is mutually exclusive with WithSPAUI",
-			}
+			return newConfigurationError("WithConsentUI is mutually exclusive with WithSPAUI", nil)
 		}
 		if ui.Template == nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithConsentUI: Template must not be nil",
-			}
+			return newConfigurationError("WithConsentUI: Template must not be nil", nil)
 		}
-		policy, err := interaction.NormalizeCSP(ui.ContentSecurityPolicy)
+		policy, err := normalizeUICSP("WithConsentUI", ui.ContentSecurityPolicy)
 		if err != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithConsentUI: ContentSecurityPolicy rejected",
-				Cause:       err,
-			}
+			return err
 		}
 		ui.ContentSecurityPolicy = policy
 		c.consentUI = ui
@@ -734,18 +681,11 @@ func WithChooserUI(ui ChooserUI) Option {
 			return err
 		}
 		if ui.Template == nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithChooserUI: Template must not be nil",
-			}
+			return newConfigurationError("WithChooserUI: Template must not be nil", nil)
 		}
-		policy, err := interaction.NormalizeCSP(ui.ContentSecurityPolicy)
+		policy, err := normalizeUICSP("WithChooserUI", ui.ContentSecurityPolicy)
 		if err != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithChooserUI: ContentSecurityPolicy rejected",
-				Cause:       err,
-			}
+			return err
 		}
 		ui.ContentSecurityPolicy = policy
 		c.chooserUI = ui

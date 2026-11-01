@@ -37,32 +37,20 @@ func (c *config) validateBuiltinACRPolicy(levels ACRLevels) error {
 	for _, key := range slices.Sorted(maps.Keys(levels)) {
 		lvl := levels[key]
 		if key == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "ACRLevels: key must not be empty",
-			}
+			return newConfigurationError("ACRLevels: key must not be empty", nil)
 		}
 		if lvl < AAL1 || lvl > AAL3 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "ACRLevels: key " + key + " must map to AAL1, AAL2 or AAL3",
-			}
+			return newConfigurationError("ACRLevels: key "+key+" must map to AAL1, AAL2 or AAL3", nil)
 		}
 		if canonical := authn.AALFromACRURI(key); canonical != AAL0 && canonical != lvl {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "ACRLevels: key " + key + " is the canonical URI of " +
-					canonical.String() + " and cannot map to " + lvl.String(),
-			}
+			return newConfigurationError("ACRLevels: key "+key+" is the canonical URI of "+
+				canonical.String()+" and cannot map to "+lvl.String(), nil)
 		}
 	}
 	for _, v := range c.acrValuesSupported {
 		if _, ok := levels.level(v); !ok {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithACRValuesSupported advertises " + v +
-					", which the ACR policy cannot satisfy; declare it with ACRLevels via WithACRPolicy",
-			}
+			return newConfigurationError("WithACRValuesSupported advertises "+v+
+				", which the ACR policy cannot satisfy; declare it with ACRLevels via WithACRPolicy", nil)
 		}
 	}
 	return nil
@@ -76,18 +64,12 @@ func (c *config) validateStaticClientACRDefaults(levels ACRLevels, builtin bool)
 		client := &c.staticClients[i]
 		for _, v := range client.DefaultACRValues {
 			if len(c.acrValuesSupported) > 0 && !slices.Contains(c.acrValuesSupported, v) {
-				return &Error{
-					Code: codeConfiguration,
-					Description: "static client " + client.ID + ": DefaultACRValues entry " + v +
-						" is not in WithACRValuesSupported",
-				}
+				return newConfigurationError("static client "+client.ID+": DefaultACRValues entry "+v+
+					" is not in WithACRValuesSupported", nil)
 			}
 			if _, ok := levels.level(v); builtin && !ok {
-				return &Error{
-					Code: codeConfiguration,
-					Description: "static client " + client.ID + ": DefaultACRValues entry " + v +
-						" cannot be satisfied by the ACR policy; declare it with ACRLevels via WithACRPolicy",
-				}
+				return newConfigurationError("static client "+client.ID+": DefaultACRValues entry "+v+
+					" cannot be satisfied by the ACR policy; declare it with ACRLevels via WithACRPolicy", nil)
 			}
 		}
 	}

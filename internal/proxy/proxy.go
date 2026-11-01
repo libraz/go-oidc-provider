@@ -16,6 +16,13 @@ import (
 	"strings"
 )
 
+// Canonical names of the forwarded headers [Resolve] consumes.
+const (
+	headerForwardedFor   = "X-Forwarded-For"
+	headerForwardedProto = "X-Forwarded-Proto"
+	headerForwardedHost  = "X-Forwarded-Host"
+)
+
 // Trust is an immutable, concurrency-safe set of trusted proxy CIDRs that
 // determines whether [X-Forwarded-*] headers may be honoured. The zero value is
 // usable and rejects every header — equivalent to "no proxy configured".
@@ -162,10 +169,10 @@ func Resolve(r *http.Request, t *Trust) Resolved {
 		return res
 	}
 	res.Trusted = true
-	if ip, ok := walkForwardedFor(r.Header.Values("X-Forwarded-For"), t); ok {
+	if ip, ok := walkForwardedFor(r.Header.Values(headerForwardedFor), t); ok {
 		res.ClientIP = ip
 	}
-	if scheme := firstForwardedValue(r.Header.Values("X-Forwarded-Proto")); scheme != "" {
+	if scheme := firstForwardedValue(r.Header.Values(headerForwardedProto)); scheme != "" {
 		// Only http and https are meaningful here. Anything else is a
 		// malformed hop; keeping the locally derived scheme is safer
 		// than propagating it into issuer-relative URLs and the DPoP
@@ -174,10 +181,21 @@ func Resolve(r *http.Request, t *Trust) Resolved {
 			res.Scheme = lower
 		}
 	}
-	if host := firstForwardedValue(r.Header.Values("X-Forwarded-Host")); host != "" && t.hostAllowed(host) {
+	if host := firstForwardedValue(r.Header.Values(headerForwardedHost)); host != "" && t.hostAllowed(host) {
 		res.Host = host
 	}
 	return res
+}
+
+// HasForwardedHeader reports whether r carries any of the X-Forwarded-*
+// headers [Resolve] would honour.
+func HasForwardedHeader(r *http.Request) bool {
+	for _, k := range [...]string{headerForwardedFor, headerForwardedProto, headerForwardedHost} {
+		if len(r.Header.Values(k)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // firstForwardedValue returns the left-most element of a forwarded header

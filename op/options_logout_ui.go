@@ -72,25 +72,17 @@ func WithLogoutUI(ui LogoutUI) Option {
 			return err
 		}
 		if ui.ConfirmTemplate == nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLogoutUI: ConfirmTemplate must not be nil",
-			}
+			return newConfigurationError("WithLogoutUI: ConfirmTemplate must not be nil", nil)
 		}
 		if ui.SignedOutTemplate == nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLogoutUI: SignedOutTemplate must not be nil",
-			}
+			return newConfigurationError("WithLogoutUI: SignedOutTemplate must not be nil", nil)
 		}
+		// Empty stays empty: the end-session pages then keep their own
+		// default policy, which differs from the interaction default.
 		if ui.ContentSecurityPolicy != "" {
-			policy, err := interaction.NormalizeCSP(ui.ContentSecurityPolicy)
+			policy, err := normalizeUICSP("WithLogoutUI", ui.ContentSecurityPolicy)
 			if err != nil {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithLogoutUI: ContentSecurityPolicy rejected",
-					Cause:       err,
-				}
+				return err
 			}
 			ui.ContentSecurityPolicy = policy
 		}
@@ -127,18 +119,11 @@ func checkLogoutConfirmFields(tpl *template.Template) error {
 		Fields:       fields,
 	})
 	if err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithLogoutUI: ConfirmTemplate failed to execute",
-			Cause:       err,
-		}
+		return newConfigurationError("WithLogoutUI: ConfirmTemplate failed to execute", err)
 	}
 	for _, f := range fields {
 		if !strings.Contains(out.String(), f.Value) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithLogoutUI: ConfirmTemplate must render every entry of Fields as a hidden input",
-			}
+			return newConfigurationError("WithLogoutUI: ConfirmTemplate must render every entry of Fields as a hidden input", nil)
 		}
 	}
 	return nil

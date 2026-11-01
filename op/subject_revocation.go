@@ -43,17 +43,11 @@ import (
 // revocation.
 func (p *Provider) RevokeSubject(ctx context.Context, subject string) error {
 	if subject == "" {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "RevokeSubject: subject must not be empty",
-		}
+		return newConfigurationError("RevokeSubject: subject must not be empty", nil)
 	}
 	grants := p.cfg.store.Grants()
 	if nilcheck.IsNil(grants) {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "RevokeSubject: the store has no GrantStore",
-		}
+		return newConfigurationError("RevokeSubject: the store has no GrantStore", nil)
 	}
 	list, err := grants.ListBySubject(ctx, subject)
 	if err != nil {

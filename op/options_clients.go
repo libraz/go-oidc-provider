@@ -28,10 +28,7 @@ import (
 func WithStaticClients(seeds ...ClientSeed) Option {
 	return optionFunc(func(c *config) error {
 		if len(seeds) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithStaticClients requires at least one ClientSeed",
-			}
+			return newConfigurationError("WithStaticClients requires at least one ClientSeed", nil)
 		}
 		records, plaintexts, err := collectStaticClientSeeds(seeds)
 		if err != nil {
@@ -102,18 +99,11 @@ func collectStaticClientSeeds(seeds []ClientSeed) (records []store.Client, plain
 	records = make([]store.Client, 0, len(seeds))
 	for i, seed := range seeds {
 		if nilcheck.IsNil(seed) {
-			return nil, nil, &Error{
-				Code:        codeConfiguration,
-				Description: "WithStaticClients[" + strconv.Itoa(i) + "]: nil ClientSeed",
-			}
+			return nil, nil, newConfigurationError("WithStaticClients["+strconv.Itoa(i)+"]: nil ClientSeed", nil)
 		}
 		rec, seedErr := seed.seed()
 		if seedErr != nil {
-			return nil, nil, &Error{
-				Code:        codeConfiguration,
-				Description: "WithStaticClients[" + strconv.Itoa(i) + "]: " + seedErr.Error(),
-				Cause:       seedErr,
-			}
+			return nil, nil, newConfigurationError("WithStaticClients["+strconv.Itoa(i)+"]: "+seedErr.Error(), seedErr)
 		}
 		records = append(records, rec)
 		current, hasCurrent := staticClientPlaintext(seed)
@@ -128,11 +118,8 @@ func collectStaticClientSeeds(seeds []ClientSeed) (records []store.Client, plain
 	seen := make(map[string]struct{}, len(records))
 	for i := range records {
 		if _, dup := seen[records[i].ID]; dup {
-			return nil, nil, &Error{
-				Code: codeConfiguration,
-				Description: "WithStaticClients[" + strconv.Itoa(i) +
-					"]: duplicate client_id " + records[i].ID,
-			}
+			return nil, nil, newConfigurationError("WithStaticClients["+strconv.Itoa(i)+
+				"]: duplicate client_id "+records[i].ID, nil)
 		}
 		seen[records[i].ID] = struct{}{}
 	}
@@ -180,24 +167,15 @@ func staticClientPlaintext(seed ClientSeed) (string, bool) {
 func WithFirstPartyClients(ids ...string) Option {
 	return optionFunc(func(c *config) error {
 		if len(ids) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithFirstPartyClients requires at least one client_id",
-			}
+			return newConfigurationError("WithFirstPartyClients requires at least one client_id", nil)
 		}
 		seen := make(map[string]struct{}, len(ids))
 		for _, id := range ids {
 			if id == "" {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithFirstPartyClients: client_id must not be empty",
-				}
+				return newConfigurationError("WithFirstPartyClients: client_id must not be empty", nil)
 			}
 			if _, dup := seen[id]; dup {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithFirstPartyClients: duplicate client_id " + id,
-				}
+				return newConfigurationError("WithFirstPartyClients: duplicate client_id "+id, nil)
 			}
 			seen[id] = struct{}{}
 		}

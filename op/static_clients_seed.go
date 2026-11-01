@@ -33,11 +33,7 @@ func seedStaticClients(cfg *config) error {
 		desired = append(desired, client)
 	}
 	if err := reconciler.ReconcileStaticClients(ctx, desired); err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithStaticClients: atomic reconciliation failed",
-			Cause:       err,
-		}
+		return newConfigurationError("WithStaticClients: atomic reconciliation failed", err)
 	}
 	return nil
 }
@@ -53,11 +49,7 @@ func normalizeStaticClientSeed(
 		return &desired, nil
 	}
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "WithStaticClients: reading existing client " + desired.ID,
-			Cause:       err,
-		}
+		return nil, newConfigurationError("WithStaticClients: reading existing client "+desired.ID, err)
 	}
 	if existing.Source != "" && existing.Source != store.ClientSourceStatic {
 		return nil, staticClientConflict(desired.ID, "is stored as a "+string(existing.Source)+
@@ -89,11 +81,7 @@ func normalizeStaticClientSeed(
 // staticClientConflict reports a stored client the seed cannot take over;
 // reason states the cause and the remedy.
 func staticClientConflict(id, reason string) error {
-	return &Error{
-		Code:        codeConfiguration,
-		Description: "WithStaticClients: stored client " + id + " " + reason,
-		Cause:       store.ErrConflict,
-	}
+	return newConfigurationError("WithStaticClients: stored client "+id+" "+reason, store.ErrConflict)
 }
 
 // staticClientReconcilerProvider is the conditional capability accessor used
@@ -140,9 +128,6 @@ func resolveStaticClientReconciler(s store.Store) (store.StaticClientReconciler,
 			return reconciler, nil
 		}
 	}
-	return nil, &Error{
-		Code: codeConfiguration,
-		Description: "WithStaticClients requires a Store that implements " +
-			"store.StaticClientReconciler for atomic startup seeding",
-	}
+	return nil, newConfigurationError("WithStaticClients requires a Store that implements "+
+		"store.StaticClientReconciler for atomic startup seeding", nil)
 }

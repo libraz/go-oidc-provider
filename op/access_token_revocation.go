@@ -95,10 +95,7 @@ func WithAccessTokenRevocationStrategy(s AccessTokenRevocationStrategy) Option {
 			return err
 		}
 		if !s.IsValid() {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAccessTokenRevocationStrategy received an unknown AccessTokenRevocationStrategy value",
-			}
+			return newConfigurationError("WithAccessTokenRevocationStrategy received an unknown AccessTokenRevocationStrategy value", nil)
 		}
 		c.atRevocation = s
 		return nil

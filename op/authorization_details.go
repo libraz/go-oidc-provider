@@ -56,29 +56,17 @@ type AuthorizationDetailType struct {
 func WithAuthorizationDetailTypes(types ...AuthorizationDetailType) Option {
 	return optionFunc(func(c *config) error {
 		if len(types) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithAuthorizationDetailTypes requires at least one AuthorizationDetailType",
-			}
+			return newConfigurationError("WithAuthorizationDetailTypes requires at least one AuthorizationDetailType", nil)
 		}
 		for i, dt := range types {
 			if dt.Type == "" {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithAuthorizationDetailTypes[" + strconv.Itoa(i) + "]: Type must not be empty",
-				}
+				return newConfigurationError("WithAuthorizationDetailTypes["+strconv.Itoa(i)+"]: Type must not be empty", nil)
 			}
 			if dt.Validate == nil {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithAuthorizationDetailTypes[" + strconv.Itoa(i) + "]: Validate must not be nil for type " + strconv.Quote(dt.Type),
-				}
+				return newConfigurationError("WithAuthorizationDetailTypes["+strconv.Itoa(i)+"]: Validate must not be nil for type "+strconv.Quote(dt.Type), nil)
 			}
 			if c.hasAuthorizationDetailType(dt.Type) {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithAuthorizationDetailTypes: duplicate type " + strconv.Quote(dt.Type),
-				}
+				return newConfigurationError("WithAuthorizationDetailTypes: duplicate type "+strconv.Quote(dt.Type), nil)
 			}
 			c.authorizationDetailTypes = append(c.authorizationDetailTypes, dt)
 		}

@@ -23,10 +23,7 @@ import (
 // so match it with [errors.Is].
 //
 // Stable since v1.5.
-var ErrReloadIncompatible = &Error{
-	Code:        codeConfiguration,
-	Description: "reload cannot change the issuer or the route set; restart the process instead",
-}
+var ErrReloadIncompatible = newConfigurationError("reload cannot change the issuer or the route set; restart the process instead", nil)
 
 // Reloadable is an [http.Handler] that serves the current [Provider] and
 // swaps it for a freshly built one on [Reloadable.Reload]. It is the

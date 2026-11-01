@@ -55,11 +55,7 @@ func NewClientSecret() (secret, hash string, err error) {
 func HashHighEntropyClientSecret(secret string) (string, error) {
 	hash, err := clientauth.HashHighEntropySecret(secret)
 	if err != nil {
-		return "", &Error{
-			Code:        codeConfiguration,
-			Description: "HashHighEntropyClientSecret: " + err.Error(),
-			Cause:       err,
-		}
+		return "", newConfigurationError("HashHighEntropyClientSecret: "+err.Error(), err)
 	}
 	return hash, nil
 }

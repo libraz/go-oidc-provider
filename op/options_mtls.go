@@ -53,10 +53,7 @@ func WithMTLSRootCAs(pool *x509.CertPool) Option {
 			return err
 		}
 		if pool == nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithMTLSRootCAs: pool must not be nil (omit the option to leave chain validation to the TLS terminator)",
-			}
+			return newConfigurationError("WithMTLSRootCAs: pool must not be nil (omit the option to leave chain validation to the TLS terminator)", nil)
 		}
 		c.mtlsRootCAs = pool
 		return nil

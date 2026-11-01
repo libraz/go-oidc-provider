@@ -306,10 +306,7 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 			return err
 		}
 		if nilcheck.IsNil(source) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDPoPNonceSource received nil DPoPNonceSource",
-			}
+			return newConfigurationError("WithDPoPNonceSource received nil DPoPNonceSource", nil)
 		}
 		c.dpopNonces = source
 		return nil
@@ -343,10 +340,7 @@ func WithRefreshGracePeriod(d time.Duration) Option {
 			return err
 		}
 		if d < 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithRefreshGracePeriod must not be negative",
-			}
+			return newConfigurationError("WithRefreshGracePeriod must not be negative", nil)
 		}
 		c.refreshGracePeriod = d
 		c.refreshGracePeriodSet = true
@@ -545,10 +539,7 @@ func WithJWKSHTTPTransport(rt http.RoundTripper) Option {
 			return err
 		}
 		if nilcheck.IsNil(rt) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithJWKSHTTPTransport received nil http.RoundTripper",
-			}
+			return newConfigurationError("WithJWKSHTTPTransport received nil http.RoundTripper", nil)
 		}
 		c.jwksHTTPTransport = rt
 		return nil

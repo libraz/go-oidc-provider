@@ -1070,10 +1070,7 @@ func WithClock(clock Clock) Option {
 			return err
 		}
 		if nilcheck.IsNil(clock) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithClock received nil Clock",
-			}
+			return newConfigurationError("WithClock received nil Clock", nil)
 		}
 		c.clock = clock
 		return nil
@@ -1183,10 +1180,7 @@ func WithPrometheus(registry *prometheus.Registry) Option {
 			return err
 		}
 		if registry == nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithPrometheus requires a non-nil registry",
-			}
+			return newConfigurationError("WithPrometheus requires a non-nil registry", nil)
 		}
 		c.promRegistry = registry
 		return nil
@@ -1278,22 +1272,13 @@ func WithMountPrefix(prefix string) Option {
 			return err
 		}
 		if prefix == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithMountPrefix prefix must not be empty (use \"/\" for root)",
-			}
+			return newConfigurationError("WithMountPrefix prefix must not be empty (use \"/\" for root)", nil)
 		}
 		if !strings.HasPrefix(prefix, "/") {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithMountPrefix prefix must start with \"/\"",
-			}
+			return newConfigurationError("WithMountPrefix prefix must start with \"/\"", nil)
 		}
 		if prefix != "/" && strings.HasSuffix(prefix, "/") {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithMountPrefix prefix must not end with \"/\"",
-			}
+			return newConfigurationError("WithMountPrefix prefix must not end with \"/\"", nil)
 		}
 		c.mountPrefix = prefix
 		return nil
@@ -1347,24 +1332,15 @@ func WithGrants(grants ...grant.Type) Option {
 			return err
 		}
 		if len(grants) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithGrants requires at least one grant type",
-			}
+			return newConfigurationError("WithGrants requires at least one grant type", nil)
 		}
 		seen := make(map[grant.Type]struct{}, len(grants))
 		for _, g := range grants {
 			if !g.IsValid() {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithGrants received an unknown grant type",
-				}
+				return newConfigurationError("WithGrants received an unknown grant type", nil)
 			}
 			if _, dup := seen[g]; dup {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithGrants received duplicate grant type " + g.String(),
-				}
+				return newConfigurationError("WithGrants received duplicate grant type "+g.String(), nil)
 			}
 			seen[g] = struct{}{}
 		}

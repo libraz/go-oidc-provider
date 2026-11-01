@@ -23,10 +23,7 @@ func (c *config) validateFirstPartyClients() error {
 	}
 	for _, p := range c.profiles {
 		if isFAPI2Profile(p) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithFirstPartyClients is incompatible with FAPI 2.0 profile " + p.String(),
-			}
+			return newConfigurationError("WithFirstPartyClients is incompatible with FAPI 2.0 profile "+p.String(), nil)
 		}
 	}
 	known := make(map[string]struct{}, len(c.staticClients))
@@ -35,10 +32,7 @@ func (c *config) validateFirstPartyClients() error {
 	}
 	for _, id := range c.firstPartyClients {
 		if _, ok := known[id]; !ok {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithFirstPartyClients: unknown client_id " + id,
-			}
+			return newConfigurationError("WithFirstPartyClients: unknown client_id "+id, nil)
 		}
 	}
 	return nil
@@ -79,23 +73,16 @@ func (c *config) validateStaticClients() error {
 	for i := range c.staticClients {
 		seed := c.staticClients[i]
 		if _, duplicate := seen[seed.ID]; duplicate {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithStaticClients[" + strconv.Itoa(i) +
-					"]: duplicate client_id " + seed.ID,
-			}
+			return newConfigurationError("WithStaticClients["+strconv.Itoa(i)+
+				"]: duplicate client_id "+seed.ID, nil)
 		}
 		seen[seed.ID] = struct{}{}
 		if err := c.validateStaticClientSecretFormat(i, seed); err != nil {
 			return err
 		}
 		if err := registrationendpoint.ValidateStaticClient(seed, opts); err != nil {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithStaticClients[" + strconv.Itoa(i) +
-					"] (client_id " + seed.ID + "): " + err.Error(),
-				Cause: err,
-			}
+			return newConfigurationError("WithStaticClients["+strconv.Itoa(i)+
+				"] (client_id "+seed.ID+"): "+err.Error(), err)
 		}
 	}
 	return nil
@@ -117,24 +104,18 @@ func (c *config) validateStaticClientSecretFormat(index int, seed store.Client) 
 		return nil
 	}
 	if seed.PreviousSecretHash != "" && !clientauth.IsHighEntropyEncoding(seed.PreviousSecretHash) {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithStaticClients[" + strconv.Itoa(index) +
-				"] (client_id " + seed.ID + "): WithHighEntropyClientSecrets requires a previous secret " +
-				"provisioned through NewClientSecret or HashHighEntropyClientSecret; " +
-				"set ConfidentialClient.PreviousSecretHash, not PreviousSecret",
-		}
+		return newConfigurationError("WithStaticClients["+strconv.Itoa(index)+
+			"] (client_id "+seed.ID+"): WithHighEntropyClientSecrets requires a previous secret "+
+			"provisioned through NewClientSecret or HashHighEntropyClientSecret; "+
+			"set ConfidentialClient.PreviousSecretHash, not PreviousSecret", nil)
 	}
 	if seed.SecretHash == "" || clientauth.IsHighEntropyEncoding(seed.SecretHash) {
 		return nil
 	}
-	return &Error{
-		Code: codeConfiguration,
-		Description: "WithStaticClients[" + strconv.Itoa(index) +
-			"] (client_id " + seed.ID + "): WithHighEntropyClientSecrets requires a secret " +
-			"provisioned through NewClientSecret or HashHighEntropyClientSecret; " +
-			"ConfidentialClient.Secret hashes with Argon2id, which this option does not admit",
-	}
+	return newConfigurationError("WithStaticClients["+strconv.Itoa(index)+
+		"] (client_id "+seed.ID+"): WithHighEntropyClientSecrets requires a secret "+
+		"provisioned through NewClientSecret or HashHighEntropyClientSecret; "+
+		"ConfidentialClient.Secret hashes with Argon2id, which this option does not admit", nil)
 }
 
 // staticClientAllowedGrantTypes returns the grant_type whitelist the

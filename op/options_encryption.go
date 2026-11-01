@@ -107,10 +107,7 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 			return err
 		}
 		if len(ks) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithEncryptionKeyset requires a non-empty keyset",
-			}
+			return newConfigurationError("WithEncryptionKeyset requires a non-empty keyset", nil)
 		}
 		c.encryptionKeyset = ks
 		return nil
@@ -174,11 +171,8 @@ func applyAlgNarrowing(c *config, algs []string) error {
 	}
 	for _, a := range algs {
 		if _, ok := jose.ParseJWEAlg(a); !ok {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithSupportedEncryptionAlgs received alg outside the supported allow-list: " +
-					a,
-			}
+			return newConfigurationError("WithSupportedEncryptionAlgs received alg outside the supported allow-list: "+
+				a, nil)
 		}
 	}
 	c.encryptionAlgsAllowed = append([]string(nil), algs...)
@@ -200,11 +194,8 @@ func applyEncNarrowing(c *config, encs []string) error {
 	}
 	for _, e := range encs {
 		if _, ok := jose.ParseJWEEnc(e); !ok {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithSupportedEncryptionAlgs received enc outside the supported allow-list: " +
-					e,
-			}
+			return newConfigurationError("WithSupportedEncryptionAlgs received enc outside the supported allow-list: "+
+				e, nil)
 		}
 	}
 	c.encryptionEncsAllowed = append([]string(nil), encs...)
@@ -400,17 +391,11 @@ func (c *config) validateEncryptionKeyset() error {
 	}
 	for i, k := range c.encryptionKeyset {
 		if nilcheck.IsNil(k.PrivateKey) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithEncryptionKeyset: entry " + strconv.Itoa(i) + " PrivateKey is nil",
-			}
+			return newConfigurationError("WithEncryptionKeyset: entry "+strconv.Itoa(i)+" PrivateKey is nil", nil)
 		}
 		if _, dup := signingKids[k.KeyID]; dup {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithEncryptionKeyset kid " + k.KeyID +
-					" collides with a kid in WithKeyset (RFC 7517 §4.2 forbids the same kid for use=sig and use=enc)",
-			}
+			return newConfigurationError("WithEncryptionKeyset kid "+k.KeyID+
+				" collides with a kid in WithKeyset (RFC 7517 §4.2 forbids the same kid for use=sig and use=enc)", nil)
 		}
 	}
 	return nil

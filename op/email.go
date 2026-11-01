@@ -172,12 +172,9 @@ func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nol
 	case nilcheck.IsNil(cfg.Users):
 		return nil, emailotp.ErrUsersRequired
 	case cfg.Clock != nil && nilcheck.IsNil(cfg.Clock):
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "EmailOTPConfig.Clock holds a typed-nil Clock",
-		}
+		return nil, newConfigurationError("EmailOTPConfig.Clock holds a typed-nil Clock", nil)
 	}
-	clk := emailOTPClock(cfg.Clock)
+	clk := cfg.Clock
 	counter, err := emailOTPLockout(cfg.LockoutStore, clk)
 	if err != nil {
 		return nil, err
@@ -214,18 +211,11 @@ func emailOTPLockout(lockoutStore store.AuthnLockoutStore, clk timex.Clock) (*lo
 		return nil, nil //nolint:nilnil // documented "no cross-factor counter" signal
 	}
 	if nilcheck.IsNil(lockoutStore) {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "EmailOTPConfig.LockoutStore holds a typed-nil AuthnLockoutStore",
-		}
+		return nil, newConfigurationError("EmailOTPConfig.LockoutStore holds a typed-nil AuthnLockoutStore", nil)
 	}
 	counter, err := lockout.New(lockoutStore, clk)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "EmailOTPConfig.LockoutStore rejected by the cross-factor counter",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("EmailOTPConfig.LockoutStore rejected by the cross-factor counter", err)
 	}
 	return counter, nil
 }
@@ -250,21 +240,3 @@ func (a emailMailerAdapter) Send(ctx context.Context, msg emailotp.Message) erro
 		ClientID:  msg.ClientID,
 	})
 }
-
-// emailOTPClock resolves the clock the [emailotp.Authenticator]
-// consumes. The public [Clock] interface is structurally compatible
-// with [timex.Clock]; nil falls through to the timex default.
-func emailOTPClock(c Clock) timex.Clock {
-	if c == nil {
-		return nil
-	}
-	return clockAdapter{c: c}
-}
-
-// clockAdapter bridges [Clock] to [timex.Clock]. The two interfaces
-// share the same single Now method but live in different packages,
-// so a one-line wrapper keeps the dependency direction clean.
-type clockAdapter struct{ c Clock }
-
-// Now implements [timex.Clock].
-func (a clockAdapter) Now() time.Time { return a.c.Now() }

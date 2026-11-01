@@ -60,11 +60,8 @@ func validateRouteCollisions(routes []routeReservation) error {
 	for i := range routes {
 		for j := i + 1; j < len(routes); j++ {
 			if routesConflict(routes[i], routes[j]) {
-				return &Error{
-					Code: codeConfiguration,
-					Description: "route collision between " + routes[i].name + " (" + routes[i].path +
-						") and " + routes[j].name + " (" + routes[j].path + ")",
-				}
+				return newConfigurationError("route collision between "+routes[i].name+" ("+routes[i].path+
+					") and "+routes[j].name+" ("+routes[j].path+")", nil)
 			}
 		}
 	}
@@ -98,21 +95,21 @@ func (c *config) configuredEndpoints() []configuredEndpoint {
 func validateConfiguredRoutePath(name, value string, allowRoot bool) error {
 	description := name + " must be a clean absolute path without query, fragment, wildcard, or percent-encoding"
 	if value == "" || !strings.HasPrefix(value, "/") {
-		return &Error{Code: codeConfiguration, Description: description}
+		return newConfigurationError(description, nil)
 	}
 	if (!allowRoot && value == "/") ||
 		strings.ContainsAny(value, "?#{}%\\") ||
 		path.Clean(value) != value {
-		return &Error{Code: codeConfiguration, Description: description}
+		return newConfigurationError(description, nil)
 	}
 	for _, r := range value {
 		if r < ' ' || r == 0x7f {
-			return &Error{Code: codeConfiguration, Description: description}
+			return newConfigurationError(description, nil)
 		}
 	}
 	u, err := url.ParseRequestURI(value)
 	if err != nil || u.IsAbs() || u.Host != "" || u.RawQuery != "" || u.Fragment != "" {
-		return &Error{Code: codeConfiguration, Description: description, Cause: err}
+		return newConfigurationError(description, err)
 	}
 	return nil
 }

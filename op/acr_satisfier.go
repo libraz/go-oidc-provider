@@ -16,11 +16,7 @@ import (
 func newACRSatisfier(cfg *config, orch *authn.Orchestrator) authorizeendpoint.ACRSatisfier {
 	policy := cfg.effectiveACRPolicy()
 	return func(ctx context.Context, requested string, entry authn.EntryAuthn) bool {
-		kinds := orch.InheritedCompletedKinds(entry)
-		completed := make([]StepKind, len(kinds))
-		for i, k := range kinds {
-			completed[i] = StepKind(k)
-		}
+		completed := stepKindsOf(orch.InheritedCompletedKinds(entry))
 		return policy.Satisfies(ctx, requested, authn.AALFromACRURI(entry.ACR), completed)
 	}
 }

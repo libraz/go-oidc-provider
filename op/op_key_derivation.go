@@ -5,6 +5,26 @@ import (
 	"crypto/sha256"
 )
 
+// deriveKey returns the HMAC-SHA256 of label keyed by key.
+func deriveKey(label string, key []byte) []byte {
+	h := hmac.New(sha256.New, key)
+	_, _ = h.Write([]byte(label))
+	return h.Sum(nil)
+}
+
+// deriveKeyRing applies derive to the current key and to every previous key.
+// An empty ring derives nothing.
+func deriveKeyRing(derive func([]byte) []byte, keys [][]byte) ([]byte, [][]byte) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	previous := make([][]byte, 0, len(keys)-1)
+	for _, key := range keys[1:] {
+		previous = append(previous, derive(key))
+	}
+	return derive(keys[0]), previous
+}
+
 // csrfDerivationLabel is the HMAC label used to derive the CSRF signing
 // key from the active cookie key. Including a domain-separation label
 // prevents a key reuse attack across cookie / CSRF surfaces if either
@@ -26,9 +46,7 @@ const completionDerivationLabel = "oidc-authorization-completion-key-v1"
 // which matches the [csrf.NewSigner] requirement, so no truncation is
 // needed.
 func deriveCSRFKey(cookieKey []byte) []byte {
-	h := hmac.New(sha256.New, cookieKey)
-	_, _ = h.Write([]byte(csrfDerivationLabel))
-	return h.Sum(nil)
+	return deriveKey(csrfDerivationLabel, cookieKey)
 }
 
 // deriveCSRFSigningKeys applies the CSRF domain separation to the active
@@ -36,24 +54,14 @@ func deriveCSRFKey(cookieKey []byte) []byte {
 // lets a newly deployed instance verify an interaction form issued by a
 // still-draining previous instance, while issuance remains pinned to current.
 func deriveCSRFSigningKeys(cookieKeys [][]byte) ([]byte, [][]byte) {
-	if len(cookieKeys) == 0 {
-		return nil, nil
-	}
-	current := deriveCSRFKey(cookieKeys[0])
-	previous := make([][]byte, 0, len(cookieKeys)-1)
-	for _, key := range cookieKeys[1:] {
-		previous = append(previous, deriveCSRFKey(key))
-	}
-	return current, previous
+	return deriveKeyRing(deriveCSRFKey, cookieKeys)
 }
 
 // deriveStateRefKey returns a 32-byte HMAC-SHA256 derivation of
 // cookieKey labelled with [stateRefDerivationLabel] for use as the
 // orchestrator's [authn.StateRefSigner] key.
 func deriveStateRefKey(cookieKey []byte) []byte {
-	h := hmac.New(sha256.New, cookieKey)
-	_, _ = h.Write([]byte(stateRefDerivationLabel))
-	return h.Sum(nil)
+	return deriveKey(stateRefDerivationLabel, cookieKey)
 }
 
 // deriveStateRefSigningKeys is the StateRef counterpart of
@@ -61,21 +69,11 @@ func deriveStateRefKey(cookieKey []byte) []byte {
 // accepting a previous cookie key for both short-lived form tokens does not
 // make either token type forgeable as the other.
 func deriveStateRefSigningKeys(cookieKeys [][]byte) ([]byte, [][]byte) {
-	if len(cookieKeys) == 0 {
-		return nil, nil
-	}
-	current := deriveStateRefKey(cookieKeys[0])
-	previous := make([][]byte, 0, len(cookieKeys)-1)
-	for _, key := range cookieKeys[1:] {
-		previous = append(previous, deriveStateRefKey(key))
-	}
-	return current, previous
+	return deriveKeyRing(deriveStateRefKey, cookieKeys)
 }
 
 func deriveCompletionKey(cookieKey []byte) []byte {
-	h := hmac.New(sha256.New, cookieKey)
-	_, _ = h.Write([]byte(completionDerivationLabel))
-	return h.Sum(nil)
+	return deriveKey(completionDerivationLabel, cookieKey)
 }
 
 // ssfSealDerivationLabel namespaces the key that seals an SSF push
@@ -83,22 +81,12 @@ func deriveCompletionKey(cookieKey []byte) []byte {
 const ssfSealDerivationLabel = "oidc-ssf-seal-v1"
 
 func deriveSSFSealKey(cookieKey []byte) []byte {
-	h := hmac.New(sha256.New, cookieKey)
-	_, _ = h.Write([]byte(ssfSealDerivationLabel))
-	return h.Sum(nil)
+	return deriveKey(ssfSealDerivationLabel, cookieKey)
 }
 
 // deriveSSFSealKeys derives the seal ring from the cookie key ring:
 // sealing uses the current key, unsealing also tries the previous ones,
 // so a cookie-key rotation keeps stored push credentials readable.
 func deriveSSFSealKeys(cookieKeys [][]byte) ([]byte, [][]byte) {
-	if len(cookieKeys) == 0 {
-		return nil, nil
-	}
-	current := deriveSSFSealKey(cookieKeys[0])
-	previous := make([][]byte, 0, len(cookieKeys)-1)
-	for _, key := range cookieKeys[1:] {
-		previous = append(previous, deriveSSFSealKey(key))
-	}
-	return current, previous
+	return deriveKeyRing(deriveSSFSealKey, cookieKeys)
 }

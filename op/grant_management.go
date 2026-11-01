@@ -74,24 +74,15 @@ func WithGrantManagement(actions []GrantManagementAction, actionRequired bool) O
 			return err
 		}
 		if len(actions) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithGrantManagement requires at least one GrantManagementAction",
-			}
+			return newConfigurationError("WithGrantManagement requires at least one GrantManagementAction", nil)
 		}
 		seen := make(map[GrantManagementAction]struct{}, len(actions))
 		for i, a := range actions {
 			if !a.valid() {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithGrantManagement[" + strconv.Itoa(i) + "]: unknown action " + strconv.Quote(string(a)),
-				}
+				return newConfigurationError("WithGrantManagement["+strconv.Itoa(i)+"]: unknown action "+strconv.Quote(string(a)), nil)
 			}
 			if _, dup := seen[a]; dup {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithGrantManagement: duplicate action " + strconv.Quote(string(a)),
-				}
+				return newConfigurationError("WithGrantManagement: duplicate action "+strconv.Quote(string(a)), nil)
 			}
 			seen[a] = struct{}{}
 		}

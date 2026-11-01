@@ -94,10 +94,7 @@ func WithACRValuesSupported(values ...string) Option {
 		}
 		for i, v := range values {
 			if v == "" {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithACRValuesSupported received an empty value at index " + strconv.Itoa(i),
-				}
+				return newConfigurationError("WithACRValuesSupported received an empty value at index "+strconv.Itoa(i), nil)
 			}
 		}
 		c.acrValuesSupported = slices.Clone(values)
@@ -278,30 +275,18 @@ func validateDiscoveryMetadataURLs(meta DiscoveryMetadata) error {
 			continue
 		}
 		if !isDiscoveryHTTPSURL(raw) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDiscoveryMetadata: " + field + " must be an absolute https URL (http is allowed only for loopback development hosts)",
-			}
+			return newConfigurationError("WithDiscoveryMetadata: "+field+" must be an absolute https URL (http is allowed only for loopback development hosts)", nil)
 		}
 	}
 	for key, raw := range meta.MTLSEndpointAliases {
 		if key == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDiscoveryMetadata: mtls_endpoint_aliases contains an empty key",
-			}
+			return newConfigurationError("WithDiscoveryMetadata: mtls_endpoint_aliases contains an empty key", nil)
 		}
 		if !isDocumentedMTLSEndpointAlias(key) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDiscoveryMetadata: mtls_endpoint_aliases contains unsupported endpoint key " + key,
-			}
+			return newConfigurationError("WithDiscoveryMetadata: mtls_endpoint_aliases contains unsupported endpoint key "+key, nil)
 		}
 		if !isDiscoveryHTTPSURL(raw) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDiscoveryMetadata: mtls_endpoint_aliases[" + key + "] must be an absolute https URL (http is allowed only for loopback development hosts)",
-			}
+			return newConfigurationError("WithDiscoveryMetadata: mtls_endpoint_aliases["+key+"] must be an absolute https URL (http is allowed only for loopback development hosts)", nil)
 		}
 	}
 	return nil
@@ -351,16 +336,10 @@ func validateDiscoveryMetadataExtra(extra map[string]any) error {
 	denied := opControlledKeySet()
 	for key := range extra {
 		if key == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDiscoveryMetadata: Extra contains an empty key",
-			}
+			return newConfigurationError("WithDiscoveryMetadata: Extra contains an empty key", nil)
 		}
 		if _, blocked := denied[key]; blocked {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDiscoveryMetadata: Extra key " + key + " collides with an OP-controlled discovery field",
-			}
+			return newConfigurationError("WithDiscoveryMetadata: Extra key "+key+" collides with an OP-controlled discovery field", nil)
 		}
 	}
 	return nil
@@ -476,17 +455,11 @@ func WithACRPolicy(p ACRPolicy) Option {
 func WithProfile(p profile.Profile) Option {
 	return optionFunc(func(c *config) error {
 		if !p.IsValid() {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithProfile received an unknown profile",
-			}
+			return newConfigurationError("WithProfile received an unknown profile", nil)
 		}
 		for _, existing := range c.profiles {
 			if existing == p {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithProfile received duplicate profile " + p.String(),
-				}
+				return newConfigurationError("WithProfile received duplicate profile "+p.String(), nil)
 			}
 		}
 		c.profiles = append(c.profiles, p)

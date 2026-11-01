@@ -39,24 +39,15 @@ func WithIDTokenScopeClaims(scopes ...string) Option {
 			return err
 		}
 		if len(scopes) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithIDTokenScopeClaims requires at least one scope",
-			}
+			return newConfigurationError("WithIDTokenScopeClaims requires at least one scope", nil)
 		}
 		out := make([]string, 0, len(scopes))
 		for _, s := range scopes {
 			switch s {
 			case "":
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithIDTokenScopeClaims: scope name must not be empty",
-				}
+				return newConfigurationError("WithIDTokenScopeClaims: scope name must not be empty", nil)
 			case oidcscope.ScopeOpenID, "offline_access":
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithIDTokenScopeClaims: scope " + s + " releases no claims",
-				}
+				return newConfigurationError("WithIDTokenScopeClaims: scope "+s+" releases no claims", nil)
 			}
 			if !slices.Contains(out, s) {
 				out = append(out, s)
@@ -82,17 +73,11 @@ func (c *config) validateIDTokenScopeClaims() error {
 			case oidcscope.ScopeProfile, oidcscope.ScopeEmail, oidcscope.ScopeAddress, oidcscope.ScopePhone:
 				continue
 			}
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithIDTokenScopeClaims: scope " + name + " is not a standard claim scope or a registered scope with Claims",
-			}
+			return newConfigurationError("WithIDTokenScopeClaims: scope "+name+" is not a standard claim scope or a registered scope with Claims", nil)
 		}
 		for _, claim := range s.Claims {
 			if _, isReserved := reserved[claim]; isReserved {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithIDTokenScopeClaims: scope " + name + " releases reserved ID Token claim " + claim,
-				}
+				return newConfigurationError("WithIDTokenScopeClaims: scope "+name+" releases reserved ID Token claim "+claim, nil)
 			}
 		}
 	}

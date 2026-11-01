@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -540,7 +541,7 @@ func customGrantNamesFor(c *config) []string {
 // helper takes the additional dependencies it needs through the
 // supplied callback so the call site in op/op_router.go can hand the
 // same keyset / store handles already wired into the token endpoint.
-func (c *config) buildCustomGrantDispatcher(extra ...customgrant.Handler) *customgrant.Dispatcher {
+func (c *config) buildCustomGrantDispatcher(auditEmitter audit.Emitter, extra ...customgrant.Handler) *customgrant.Dispatcher {
 	handlers := c.customGrantHandlers()
 	if len(handlers) == 0 && len(extra) == 0 {
 		return nil
@@ -552,7 +553,7 @@ func (c *config) buildCustomGrantDispatcher(extra ...customgrant.Handler) *custo
 	adapters = append(adapters, extra...)
 	opts := []customgrant.Option{
 		customgrant.WithMaxAccessTTL(c.accessTokenTTL),
-		customgrant.WithAudit(c.effectiveAuditEmitter()),
+		customgrant.WithAudit(auditEmitter),
 	}
 	if c.clock != nil {
 		opts = append(opts, customgrant.WithClock(c.clock.Now))

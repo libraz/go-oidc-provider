@@ -130,18 +130,10 @@ func (c *config) validateRequired() error {
 // option-name strings together with the wrapper that surfaces them.
 func (c *config) validateNetwork() error {
 	if _, err := proxy.NewTrust(c.trustedProxies); err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithTrustedProxies rejected by parser",
-			Cause:       err,
-		}
+		return newConfigurationError("WithTrustedProxies rejected by parser", err)
 	}
 	if _, err := csrf.NewAllowlist(c.corsOrigins); err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithCORSOrigins rejected by parser",
-			Cause:       err,
-		}
+		return newConfigurationError("WithCORSOrigins rejected by parser", err)
 	}
 	return nil
 }
@@ -159,10 +151,7 @@ func (c *config) validateOpenIDScopeOptional() error {
 	}
 	for _, p := range c.profiles {
 		if isFAPI2Profile(p) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithOpenIDScopeOptional is incompatible with FAPI 2.0 profile " + p.String(),
-			}
+			return newConfigurationError("WithOpenIDScopeOptional is incompatible with FAPI 2.0 profile "+p.String(), nil)
 		}
 	}
 	return nil
@@ -177,10 +166,7 @@ func (c *config) validateOpenIDScopeOptional() error {
 // rather than letting it manifest as missing refresh tokens at /token.
 func (c *config) validateStrictOfflineAccess() error {
 	if c.strictOfflineAccess && c.openIDScopeOptional {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithStrictOfflineAccess is incompatible with WithOpenIDScopeOptional",
-		}
+		return newConfigurationError("WithStrictOfflineAccess is incompatible with WithOpenIDScopeOptional", nil)
 	}
 	return nil
 }
@@ -211,11 +197,8 @@ func (c *config) validateAccessTokenFormat() error {
 		return nil
 	}
 	if nilcheck.IsNil(c.store.OpaqueAccessTokens()) {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "op.WithAccessTokenFormat(AccessTokenFormatOpaque) " +
-				"requires Store.OpaqueAccessTokens() to be non-nil",
-		}
+		return newConfigurationError("op.WithAccessTokenFormat(AccessTokenFormatOpaque) "+
+			"requires Store.OpaqueAccessTokens() to be non-nil", nil)
 	}
 	return nil
 }
@@ -237,41 +220,29 @@ func (c *config) validateAccessTokenFormat() error {
 // every profile.
 func (c *config) validateAccessTokenRevocation() error {
 	if !c.atRevocation.IsValid() {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithAccessTokenRevocationStrategy received an " +
-				"unknown AccessTokenRevocationStrategy value",
-		}
+		return newConfigurationError("WithAccessTokenRevocationStrategy received an "+
+			"unknown AccessTokenRevocationStrategy value", nil)
 	}
 	if c.atRevocation != store.RevocationStrategyNone {
 		if c.atRevocation == store.RevocationStrategyGrantTombstone &&
 			nilcheck.IsNil(c.store.GrantRevocations()) {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "RevocationStrategyGrantTombstone requires " +
-					"Store.GrantRevocations() to be non-nil",
-			}
+			return newConfigurationError("RevocationStrategyGrantTombstone requires "+
+				"Store.GrantRevocations() to be non-nil", nil)
 		}
 		if c.atRevocation == store.RevocationStrategyJTIRegistry &&
 			nilcheck.IsNil(c.store.AccessTokens()) {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "RevocationStrategyJTIRegistry requires " +
-					"Store.AccessTokens() to be non-nil",
-			}
+			return newConfigurationError("RevocationStrategyJTIRegistry requires "+
+				"Store.AccessTokens() to be non-nil", nil)
 		}
 		return nil
 	}
 	for _, p := range c.profiles {
 		if profile.RequiresAccessTokenRevocation(p) {
-			return &Error{
-				Code: codeConfiguration,
-				Description: "FAPI 2.0 Security Profile §5.3.2.2 requires " +
-					"access-token revocation; RevocationStrategyNone is " +
-					"rejected under profile " + p.String() +
-					" — use RevocationStrategyGrantTombstone (default) or " +
-					"RevocationStrategyJTIRegistry",
-			}
+			return newConfigurationError("FAPI 2.0 Security Profile §5.3.2.2 requires "+
+				"access-token revocation; RevocationStrategyNone is "+
+				"rejected under profile "+p.String()+
+				" — use RevocationStrategyGrantTombstone (default) or "+
+				"RevocationStrategyJTIRegistry", nil)
 		}
 	}
 	return nil
@@ -374,28 +345,16 @@ func checkRegistrationKindUnique(flow LoginFlow, kind StepKind) error {
 // offending entry.
 func checkExternalStepKind(where string, ext ExternalStep) error {
 	if nilcheck.IsNil(ext.Authenticator) {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + ".Authenticator must not be nil",
-		}
+		return newConfigurationError("WithLoginFlow: "+where+".Authenticator must not be nil", nil)
 	}
 	if ext.KindLabel == "" {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + ".KindLabel must not be empty",
-		}
+		return newConfigurationError("WithLoginFlow: "+where+".KindLabel must not be empty", nil)
 	}
 	if ext.KindLabel.IsBuiltin() {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + ".KindLabel must not collide with a built-in StepKind (" + ext.KindLabel.String() + ")",
-		}
+		return newConfigurationError("WithLoginFlow: "+where+".KindLabel must not collide with a built-in StepKind ("+ext.KindLabel.String()+")", nil)
 	}
 	if !ext.KindLabel.IsUserDefined() {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + ".KindLabel must use a dotted prefix (e.g., \"myorg.factor\") so it cannot collide with future built-ins",
-		}
+		return newConfigurationError("WithLoginFlow: "+where+".KindLabel must use a dotted prefix (e.g., \"myorg.factor\") so it cannot collide with future built-ins", nil)
 	}
 	return nil
 }
@@ -417,10 +376,7 @@ func (c *config) validateLocales() error {
 	if c.defaultLocale == LocaleEnglish || c.defaultLocale == LocaleJapanese {
 		return nil
 	}
-	return &Error{
-		Code:        codeConfiguration,
-		Description: "WithDefaultLocale references a locale that is not registered through WithLocale or shipped as a seed bundle",
-	}
+	return newConfigurationError("WithDefaultLocale references a locale that is not registered through WithLocale or shipped as a seed bundle", nil)
 }
 
 // validateLoginFlowRequired covers the no-[LoginFlow] case.
@@ -446,11 +402,8 @@ func (c *config) validateLoginFlowRequired() error {
 		if g != grant.AuthorizationCode {
 			continue
 		}
-		return &Error{
-			Code: codeConfiguration,
-			Description: "the authorization_code grant is enabled but no LoginFlow is registered; " +
-				"supply WithLoginFlow, or drop the grant",
-		}
+		return newConfigurationError("the authorization_code grant is enabled but no LoginFlow is registered; "+
+			"supply WithLoginFlow, or drop the grant", nil)
 	}
 	return nil
 }
@@ -465,31 +418,19 @@ func (c *config) validateInteractions() error {
 	seen := make(map[string]struct{}, len(c.interactions))
 	for i, ix := range c.interactions {
 		if nilcheck.IsNil(ix) {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithInteractions received nil Interaction at position " + strconv.Itoa(i),
-			}
+			return newConfigurationError("WithInteractions received nil Interaction at position "+strconv.Itoa(i), nil)
 		}
 		name := ix.Name()
 		if name == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithInteractions: Interaction.Name must not be empty",
-			}
+			return newConfigurationError("WithInteractions: Interaction.Name must not be empty", nil)
 		}
 		// The built-ins register first and de-duplication keeps the
 		// first entry, so a reused built-in name would never run.
 		if name == authn.BuiltinConsentName || name == authn.BuiltinChooserName {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithInteractions: Interaction.Name " + name + " is reserved for the built-in interaction",
-			}
+			return newConfigurationError("WithInteractions: Interaction.Name "+name+" is reserved for the built-in interaction", nil)
 		}
 		if _, dup := seen[name]; dup {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithInteractions: duplicate Interaction.Name " + name,
-			}
+			return newConfigurationError("WithInteractions: duplicate Interaction.Name "+name, nil)
 		}
 		seen[name] = struct{}{}
 	}
@@ -512,49 +453,28 @@ func (c *config) validateRegistration() error {
 	flagOn := featureEnabled(c.features, feature.DynamicRegistration)
 	if c.dcr == nil {
 		if flagOn {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "feature.DynamicRegistration enabled without WithDynamicRegistration",
-			}
+			return newConfigurationError("feature.DynamicRegistration enabled without WithDynamicRegistration", nil)
 		}
 		return nil
 	}
 	if flagOn {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "feature.DynamicRegistration was enabled more than once",
-		}
+		return newConfigurationError("feature.DynamicRegistration was enabled more than once", nil)
 	}
 	if nilcheck.IsNil(c.store.InitialAccessTokens()) {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "InitialAccessTokens not implemented by store backend",
-		}
+		return newConfigurationError("InitialAccessTokens not implemented by store backend", nil)
 	}
 	if nilcheck.IsNil(c.store.RegistrationAccessTokens()) {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "RegistrationAccessTokens not implemented by store backend",
-		}
+		return newConfigurationError("RegistrationAccessTokens not implemented by store backend", nil)
 	}
 	if _, ok := resolveClientRegistry(c.store); !ok {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "Store does not expose ClientRegistry; dynamic registration requires a client backend with write access",
-		}
+		return newConfigurationError("Store does not expose ClientRegistry; dynamic registration requires a client backend with write access", nil)
 	}
 	for _, name := range c.dcr.OpenRegistrationDefaultScopes {
 		if name == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDynamicRegistration: OpenRegistrationDefaultScopes contains an empty entry",
-			}
+			return newConfigurationError("WithDynamicRegistration: OpenRegistrationDefaultScopes contains an empty entry", nil)
 		}
 		if _, ok := c.scopeIndex[name]; !ok {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithDynamicRegistration: OpenRegistrationDefaultScopes contains unknown scope " + name,
-			}
+			return newConfigurationError("WithDynamicRegistration: OpenRegistrationDefaultScopes contains unknown scope "+name, nil)
 		}
 	}
 	// Every check has passed, so the configuration is complete: publish
@@ -575,16 +495,10 @@ func (c *config) validateRegistration() error {
 // [config.validateRegistration], where the store checks it shares live.
 func (c *config) validateFeatureActivation() error {
 	if featureEnabled(c.features, feature.RAR) && len(c.authorizationDetailTypes) == 0 {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "feature.RAR enabled without WithAuthorizationDetailTypes",
-		}
+		return newConfigurationError("feature.RAR enabled without WithAuthorizationDetailTypes", nil)
 	}
 	if featureEnabled(c.features, feature.GrantManagement) && !c.grantManagementEnabled {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "feature.GrantManagement enabled without WithGrantManagement",
-		}
+		return newConfigurationError("feature.GrantManagement enabled without WithGrantManagement", nil)
 	}
 	return nil
 }
@@ -603,22 +517,13 @@ func (c *config) validateScopes() error {
 	c.scopeIndex = make(map[string]Scope, len(c.scopes))
 	for _, s := range c.scopes {
 		if s.Name == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithScope: Name must not be empty",
-			}
+			return newConfigurationError("WithScope: Name must not be empty", nil)
 		}
 		if _, dup := c.scopeIndex[s.Name]; dup {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithScope: duplicate scope " + s.Name,
-			}
+			return newConfigurationError("WithScope: duplicate scope "+s.Name, nil)
 		}
 		if isStandardScope(s.Name) && !s.Public {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "standard OIDC scope " + s.Name + " cannot be registered with Public: false",
-			}
+			return newConfigurationError("standard OIDC scope "+s.Name+" cannot be registered with Public: false", nil)
 		}
 		c.scopeIndex[s.Name] = s
 	}

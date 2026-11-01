@@ -98,10 +98,7 @@ type StaticClientSyncResult struct {
 func SyncStaticClients(ctx context.Context, st store.Store, seeds ...ClientSeed) ([]StaticClientSyncResult, error) {
 	registry, ok := resolveClientRegistry(st)
 	if !ok {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "store has no writable client registry",
-		}
+		return nil, newConfigurationError("store has no writable client registry", nil)
 	}
 	records, plaintexts, err := collectStaticClientSeeds(seeds)
 	if err != nil {
@@ -134,19 +131,11 @@ func classifyStaticClient(
 		return StaticClientInserted, nil
 	}
 	if err != nil {
-		return "", &Error{
-			Code:        codeConfiguration,
-			Description: "SyncStaticClients: reading existing client " + desired.ID,
-			Cause:       err,
-		}
+		return "", newConfigurationError("SyncStaticClients: reading existing client "+desired.ID, err)
 	}
 	if existing.Source != "" && existing.Source != store.ClientSourceStatic {
-		return "", &Error{
-			Code: codeConfiguration,
-			Description: "SyncStaticClients: stored client " + desired.ID +
-				" is not a static client and is not overwritten",
-			Cause: store.ErrConflict,
-		}
+		return "", newConfigurationError("SyncStaticClients: stored client "+desired.ID+
+			" is not a static client and is not overwritten", store.ErrConflict)
 	}
 	if existing.Source == "" {
 		desired.Source = ""
@@ -161,12 +150,9 @@ func classifyStaticClient(
 		if hash, found := verifiedPreviousHash(plaintext, existing); found {
 			desired.PreviousSecretHash = hash
 		} else if clientauth.IsHighEntropyEncoding(existing.SecretHash) {
-			return "", &Error{
-				Code: codeConfiguration,
-				Description: "SyncStaticClients: client " + desired.ID +
-					" has a high-entropy secret, so PreviousSecret cannot be hashed to match it; " +
-					"seed PreviousSecretHash instead",
-			}
+			return "", newConfigurationError("SyncStaticClients: client "+desired.ID+
+				" has a high-entropy secret, so PreviousSecret cannot be hashed to match it; "+
+				"seed PreviousSecretHash instead", nil)
 		}
 	}
 	if store.StaticClientEquivalent(existing, desired) {
@@ -208,11 +194,7 @@ func applyStaticClientSync(
 		case StaticClientUnchanged:
 		}
 		if err != nil {
-			return results[:i], &Error{
-				Code:        codeConfiguration,
-				Description: "SyncStaticClients: writing client " + records[i].ID,
-				Cause:       err,
-			}
+			return results[:i], newConfigurationError("SyncStaticClients: writing client "+records[i].ID, err)
 		}
 	}
 	return results, nil

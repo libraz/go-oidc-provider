@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -209,11 +210,7 @@ func New(opts ...Option) (*Provider, error) {
 		keys.WithRetiredKidObserver(retiredKidObserver(cfg)),
 	)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "keyset rejected by internal validator",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("keyset rejected by internal validator", err)
 	}
 	encSet, err := buildEncryptionSet(cfg)
 	if err != nil {
@@ -282,7 +279,7 @@ func New(opts ...Option) (*Provider, error) {
 func wrapWithTrustedProxy(h http.Handler, t *proxy.Trust, logger *slog.Logger) http.Handler {
 	var warnOnce sync.Once
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if logger != nil && !t.IsConfigured() && hasForwardedHeader(r) {
+		if logger != nil && !t.IsConfigured() && proxy.HasForwardedHeader(r) {
 			warnOnce.Do(func() {
 				logger.Warn("forwarded headers received but WithTrustedProxies is not configured; the OP ignores X-Forwarded-* and uses the peer address for audit, risk and rate decisions")
 			})
@@ -301,17 +298,6 @@ func wrapWithTrustedProxy(h http.Handler, t *proxy.Trust, logger *slog.Logger) h
 		}
 		h.ServeHTTP(w, clone)
 	})
-}
-
-// hasForwardedHeader reports whether r carries any of the X-Forwarded-*
-// headers [proxy.Resolve] would honour.
-func hasForwardedHeader(r *http.Request) bool {
-	for _, k := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"} {
-		if len(r.Header.Values(k)) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // wrapWithProfileMiddleware decorates the [Provider]'s router with
@@ -425,11 +411,7 @@ func buildEncryptionSet(cfg *config) (*keys.EncryptionSet, error) {
 		keys.WithJWEPolicy(cfg.jwePolicy()),
 	)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "WithEncryptionKeyset rejected by internal validator",
-			Cause:       err,
-		}
+		return nil, newConfigurationError("WithEncryptionKeyset rejected by internal validator", err)
 	}
 	return set, nil
 }
@@ -443,8 +425,7 @@ func keysetClock(cfg *config) func() time.Time {
 	if cfg == nil || cfg.clock == nil {
 		return nil
 	}
-	clock := cfg.clock
-	return func() time.Time { return clock.Now() }
+	return cfg.clock.Now
 }
 
 // retiredKidObserver builds the [keys.RetiredKidObserver] that fires
@@ -452,10 +433,10 @@ func keysetClock(cfg *config) func() time.Time {
 // retirement deadline has elapsed. The observer rides on the
 // configured [audit.Emitter] chain so the event lands on every sink
 // (slog audit logger + the Prometheus bridge when [WithPrometheus] is
-// active). [config.effectiveAuditEmitter] never returns nil — an
-// embedder that did not wire any logger collapses onto [audit.Discard]
-// — so the observer always emits, even when the operator has no sink
-// configured (the discard sink is a no-op but keeps the gate uniform).
+// active). [config.effectiveAuditEmitter] never returns nil — without
+// an embedder logger it is a live emitter over a disabled handler —
+// so the observer always emits, even when the operator has no sink
+// configured.
 //
 // The event carries the context of the request that presented the
 // retired kid, so the sink can attach the embedder's request id and the
@@ -481,12 +462,7 @@ func retiredKidObserver(cfg *config) keys.RetiredKidObserver {
 // Used by both /par mounting and the authorize PAR-consumption wiring so
 // the two stay in lock-step.
 func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
-	for _, f := range flags {
-		if f == flag {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(flags, flag)
 }
 
 // grantsRequireAuthorizeEndpoint reports whether any configured grant

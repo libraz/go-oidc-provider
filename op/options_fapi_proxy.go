@@ -65,24 +65,14 @@ func WithMTLSProxy(headerName string, trustedCIDRs []string) Option {
 			return err
 		}
 		if headerName == "" {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithMTLSProxy: headerName must not be empty (omit the option to disable the header path)",
-			}
+			return newConfigurationError("WithMTLSProxy: headerName must not be empty (omit the option to disable the header path)", nil)
 		}
 		if len(trustedCIDRs) == 0 {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithMTLSProxy: trustedCIDRs must not be empty; admit only the proxy(ies) that strip and rewrite the cert header",
-			}
+			return newConfigurationError("WithMTLSProxy: trustedCIDRs must not be empty; admit only the proxy(ies) that strip and rewrite the cert header", nil)
 		}
 		prefixes, err := mtls.ParseTrustedProxies(trustedCIDRs)
 		if err != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithMTLSProxy: trustedCIDRs rejected",
-				Cause:       err,
-			}
+			return newConfigurationError("WithMTLSProxy: trustedCIDRs rejected", err)
 		}
 		c.mtlsProxy = mtlsProxyState{
 			header:  headerName,
