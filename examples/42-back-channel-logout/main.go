@@ -80,7 +80,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -113,7 +112,7 @@ func main() {
 		// Back-channel logout terminates a session, so the demo needs a
 		// way to establish one first: the authorize round-trip that
 		// seeds the session runs through this password step.
-		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// Dev / CI-only: narrow the deliverer's SSRF gate to the loopback
 		// hosts so the http://127.0.0.1 backchannel_logout_uri below is
 		// admitted and the in-process stub RP receives the logout token

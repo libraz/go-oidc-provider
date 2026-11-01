@@ -22,7 +22,6 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -65,7 +64,9 @@ func buildProvider(opEncPriv *rsa.PrivateKey, rpEncPub *rsa.PublicKey) (*op.Prov
 		return nil, fmt.Errorf("register client: %w", err)
 	}
 
-	flow := opkit.DefaultLoginFlow(st.UserPasswords())
+	flow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+	}
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),

@@ -65,7 +65,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -103,7 +102,7 @@ func main() {
 		// oidc_login_attempts_total and oidc_token_issued_total only
 		// move when somebody actually signs in, so the OP needs a
 		// login flow for half the curated set to leave zero.
-		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
 		op.WithAllowLocalhostLoopback(),
 		op.WithPrometheus(registry),

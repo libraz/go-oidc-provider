@@ -70,7 +70,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/seedkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
@@ -177,24 +176,26 @@ func run() error {
 
 	printSeedBanner(seed)
 
-	flow := opkit.DefaultLoginFlow(st.UserPasswords())
-	flow.Risk = acrRiskAssessor{}
-	flow = opkit.WithMFARules(flow,
-		// TOTP fires when the assessor scores RiskScoreHigh or above.
-		// Declaration order sets prompt order, not exclusivity: on
-		// High both rules fire, and TOTP is prompted first only
-		// because it is declared first.
-		op.RuleRisk(op.RiskScoreHigh, op.StepTOTP{
-			Store:         st.TOTPs(),
-			EncryptionKey: keys.TOTPKey,
-		}),
-		// Captcha fires from RiskScoreMedium upward — on High as well
-		// as on Medium. Medium reaches it because the TOTP rule above
-		// gates on High and does not match.
-		op.RuleRisk(op.RiskScoreMedium, op.StepCaptcha{
-			Verifier: stubCaptchaVerifier{},
-		}),
-	)
+	flow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+		Risk:    acrRiskAssessor{},
+		Rules: []op.Rule{
+			// TOTP fires when the assessor scores RiskScoreHigh or above.
+			// Declaration order sets prompt order, not exclusivity: on
+			// High both rules fire, and TOTP is prompted first only
+			// because it is declared first.
+			op.RuleRisk(op.RiskScoreHigh, op.StepTOTP{
+				Store:         st.TOTPs(),
+				EncryptionKey: keys.TOTPKey,
+			}),
+			// Captcha fires from RiskScoreMedium upward — on High as well
+			// as on Medium. Medium reaches it because the TOTP rule above
+			// gates on High and does not match.
+			op.RuleRisk(op.RiskScoreMedium, op.StepCaptcha{
+				Verifier: stubCaptchaVerifier{},
+			}),
+		},
+	}
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),

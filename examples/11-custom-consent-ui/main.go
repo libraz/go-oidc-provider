@@ -54,7 +54,6 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -126,7 +125,7 @@ func main() {
 		// Consent is the second half of an authorization request: the
 		// user has to be signed in before the OP has anyone to ask. A
 		// primary factor is what gets the browser that far.
-		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// Without a policy the consent page inherits the one the
 		// built-in driver uses, which forbids every subresource — the
 		// stylesheet below would be fetched, blocked by the browser,

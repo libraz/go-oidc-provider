@@ -49,7 +49,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
@@ -84,7 +83,9 @@ func run() error {
 		return err
 	}
 
-	flow := opkit.DefaultLoginFlow(st.UserPasswords())
+	flow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+	}
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),

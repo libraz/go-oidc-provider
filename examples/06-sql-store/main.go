@@ -53,7 +53,6 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -114,7 +113,7 @@ func run() error {
 		// The adapter's users table backs the password prompt: the same
 		// SQLite file holds the credential, the session, and every token
 		// record the flow goes on to write.
-		op.WithLoginFlow(opkit.DefaultLoginFlow(storage.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: storage.UserPasswords()}}),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://rp.example.com/cb"},

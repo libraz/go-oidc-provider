@@ -80,10 +80,7 @@ func run() error {
 		return err
 	}
 
-	// The login flow is written out rather than built by a helper: this
-	// is the first example anyone reads, and op.LoginFlow is the value
-	// an embedder writes in their own code. One Primary step and no
-	// rules is the whole of a password-only login.
+	// Password-only login: one Primary step, no rules.
 	loginFlow := op.LoginFlow{
 		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
 	}
@@ -155,10 +152,10 @@ func seedUser(st *inmem.Store) error {
 	}
 	st.PutUserWithPassword(context.Background(), &store.User{
 		Subject: demoSubject,
-		Claims: map[string]any{
-			"name":  "Demo User",
-			"email": "demo@example.com",
-		},
+		Claims: store.StandardClaims{
+			Name:  "Demo User",
+			Email: "demo@example.com",
+		}.Map(),
 	}, demoUsername, hash)
 	return nil
 }

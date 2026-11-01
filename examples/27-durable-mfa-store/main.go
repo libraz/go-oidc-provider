@@ -109,7 +109,6 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/examples/internal/webui"
@@ -197,11 +196,12 @@ func run() error {
 		return err
 	}
 
-	flow := opkit.WithTOTP(
-		opkit.DefaultLoginFlow(storage.Users().(store.UserPasswordStore)),
-		totpStore,
-		totpKey,
-	)
+	flow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: storage.Users().(store.UserPasswordStore)},
+		Rules: []op.Rule{
+			op.RuleAlways(op.StepTOTP{Store: totpStore, EncryptionKey: totpKey}),
+		},
+	}
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),

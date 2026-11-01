@@ -116,7 +116,7 @@ example_modules() {
   # Not every example is its own module: an example that needs no
   # dependency beyond the library is a package of the host module gated
   # behind the "example" tag, as are the helpers those examples import
-  # (examples/internal/{devkeys,opkit,serve,webui}). The host module's
+  # (examples/internal/{devkeys,serve,webui}). The host module's
   # untagged entry cannot see a single one of them — every file is
   # excluded by the build constraint — so they need a pass of their own,
   # narrowed to the subtree that carries the tag rather than

@@ -50,7 +50,6 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -112,7 +111,7 @@ func main() {
 		// A primary factor is what turns a browser into an account the
 		// chooser can list; without it /authorize has no interaction to
 		// hand the user to.
-		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// HTMLDriver is the orchestrator default; setting it explicitly
 		// makes this example self-documenting (compare with example 13,
 		// which opts into JSONDriver for a SPA front-end).

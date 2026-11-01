@@ -56,7 +56,6 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -88,7 +87,7 @@ func main() {
 		// The skip removes the consent screen, never the authentication
 		// step: the OP still has to know who the user is before it can
 		// create the grant on their behalf.
-		op.WithLoginFlow(opkit.DefaultLoginFlow(st.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: st.UserPasswords()}}),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "first-party-app",

@@ -57,7 +57,6 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -85,7 +84,7 @@ func main() {
 		// A primary factor is what turns a browser into an account the
 		// chooser can list; without it /authorize has no interaction to
 		// hand the user to.
-		op.WithLoginFlow(opkit.DefaultLoginFlow(memStore.UserPasswords())),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: memStore.UserPasswords()}}),
 		// No driver option appears anywhere in this call. That absence
 		// is the example: op.New resolves the interaction driver to
 		// interaction.HTMLDriver, and the login, consent and chooser

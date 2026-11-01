@@ -102,7 +102,6 @@ import (
 	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
@@ -173,7 +172,9 @@ func run() error {
 		return fmt.Errorf("seed demo user: %w", err)
 	}
 
-	flow := opkit.DefaultLoginFlow(storage.UserPasswords())
+	flow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: storage.UserPasswords()},
+	}
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),

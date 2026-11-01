@@ -68,7 +68,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
-	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/seedkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
@@ -136,11 +135,12 @@ func run() error {
 
 	printSeedBanner(seed)
 
-	flow := opkit.WithTOTP(
-		opkit.DefaultLoginFlow(st.UserPasswords()),
-		st.TOTPs(),
-		keys.TOTPKey,
-	)
+	flow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+		Rules: []op.Rule{
+			op.RuleAlways(op.StepTOTP{Store: st.TOTPs(), EncryptionKey: keys.TOTPKey}),
+		},
+	}
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),
