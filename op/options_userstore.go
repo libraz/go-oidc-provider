@@ -110,7 +110,7 @@ func (c *config) infoClaimSource(claims store.UserStore) {
 	if backend := c.store.Users(); !nilcheck.IsNil(backend) && comparableStores(claims, backend) && any(claims) != any(backend) {
 		attrs = append(attrs, "store_users", "not read")
 	}
-	c.logger.Info("ID Token and /userinfo claims are read from claim_source", attrs...)
+	c.logger.Info("resolved the source of ID Token and /userinfo claims", attrs...)
 }
 
 // loginFlowSteps returns every [Step] the configured flow can run, in
