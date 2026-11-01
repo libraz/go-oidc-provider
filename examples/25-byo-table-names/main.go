@@ -14,7 +14,7 @@
 //
 //	(cd examples/25-byo-table-names && GOWORK=off go run -tags example .)
 //
-// The example renames all twenty-three OP-internal tables under an
+// The example renames every OP-internal table under an
 // "auth_" prefix, applies the rewritten schema, logs the physical tables the
 // adapter actually created, seeds one password user into the renamed
 // users table, and serves the OP on :8080.
@@ -70,7 +70,7 @@ const (
 
 // naming maps every logical record kind WithNaming accepts onto a
 // physical table name under this embedder's "auth_" convention. Listing
-// all twenty-three keys makes it explicit that the rename covers the
+// every key makes it explicit that the rename covers the
 // whole OP-internal surface — the authentication-factor tables at the
 // bottom as much as the clients table at the top. A key left out is not
 // an error: the adapter keeps its bundled oidc_ default for it, so the
@@ -101,6 +101,8 @@ var naming = map[string]string{
 	"recovery_codes":             "auth_recovery_codes",
 	"email_otps":                 "auth_email_otps",
 	"authn_lockouts":             "auth_authn_lockouts",
+	"ssf_streams":                "auth_ssf_streams",
+	"ssf_events":                 "auth_ssf_events",
 }
 
 func main() {
