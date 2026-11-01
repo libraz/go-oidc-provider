@@ -3,7 +3,7 @@
 // Example 53 is the production wiring checklist for a SQL-backed OP in
 // one place, split by concern so each file can be lifted on its own:
 //
-//   - main.go: configuration from the environment, schema check, the
+//   - main.go: configuration from the environment, the
 //     reloadable handler, SIGHUP reload, the retention sweep and a
 //     graceful shutdown.
 //   - keys.go: the signing key and cookie keys read from a key directory.
@@ -26,10 +26,10 @@
 //	EXAMPLE53_DSN       modernc.org/sqlite DSN (default a file in the os temp dir)
 //	EXAMPLE53_MIGRATE   1 applies the OP schema and creates the demo users table (development only)
 //
-// Without EXAMPLE53_MIGRATE the process only validates the schema, so the
-// database role needs no CREATE privilege. Production applies the DDL
-// (schema/<dialect>/v1.sql in op/storeadapter/sql) through its own
-// migration tool.
+// Without EXAMPLE53_MIGRATE the process creates nothing, so the database
+// role needs no CREATE privilege; op.New checks that the tables the
+// configuration uses exist. Production applies the migration files from
+// Store.Migrations() (op/storeadapter/sql) through its own migration tool.
 //
 // Manual verification:
 //
@@ -154,7 +154,7 @@ func run(args []string) error {
 	return errors.Join(srv.Shutdown(shutdownCtx), handler.Shutdown(shutdownCtx))
 }
 
-// prepareStore wraps db in the SQL adapter and checks the schema. The
+// prepareStore wraps db in the SQL adapter; op.New checks the schema. The
 // DSN is never logged: a MySQL or PostgreSQL DSN carries credentials.
 func prepareStore(ctx context.Context, cfg config, db *databasesql.DB) (*oidcsql.Store, error) {
 	storage, err := oidcsql.New(db, oidcsql.SQLite())
@@ -162,9 +162,6 @@ func prepareStore(ctx context.Context, cfg config, db *databasesql.DB) (*oidcsql
 		return nil, fmt.Errorf("oidcsql.New: %w", err)
 	}
 	if !cfg.migrate {
-		if err := storage.ValidateSchema(ctx); err != nil {
-			return nil, fmt.Errorf("schema check (EXAMPLE53_MIGRATE=1 sets up a development database): %w", err)
-		}
 		return storage, nil
 	}
 	if err := storage.Migrate(ctx); err != nil {

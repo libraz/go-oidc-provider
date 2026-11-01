@@ -190,6 +190,31 @@ issuer.
 
 ### Changed
 
+- `op.New` checks, at construction, the schema of every store the
+  configuration uses and fails naming the missing table. With the SQL
+  adapter only the tables the configuration uses must exist: 13 for the
+  default configuration, `users` is not needed with your own user store, and
+  `authn_lockouts` is not needed with `op.WithAuthnLockoutStore`;
+  `op/storeadapter/sql/schema/TABLES.md` lists the condition for each table.
+  A database that holds all the tables is unaffected. A MySQL DSN without a
+  default database makes every table look missing, so `op.New` now fails
+  where only a `ValidateSchema` caller failed before. Calling `ValidateSchema`
+  at startup is no longer needed; `Store.ValidateSchema` still validates all
+  tables and suits a deploy gate or CI.
+
+- `Store.ValidateSchema` and the substores' `ValidateSchema` on MySQL fail
+  when an identifier column's collation is not `utf8mb4_bin` or
+  `utf8mb4_0900_bin`, naming the column and the migration file to apply. Its
+  hints for a missing column or table name the migration file instead of a
+  section of `MIGRATIONS.md`.
+
+- `Store.GC` skips the pushed-authorization-request sweep when the PAR table
+  does not exist, instead of failing. A missing table elsewhere still fails.
+
+- The SQL of `op/storeadapter/sql/schema/MIGRATIONS.md` moved into the
+  per-release files under `schema/migrations/<dialect>/`; the document now
+  describes how to apply them.
+
 - **BREAKING:** an option that takes a value is single-valued unless its
   documentation says it is additive. Passing it twice, or passing two options
   that set the same setting (`op.WithSubjectGenerator` and
@@ -366,6 +391,20 @@ issuer.
   subject mapping to `op.WithJWTBearerGrant`.
 
 ### Added
+
+- `store.SchemaValidator` is an optional interface for a store that can
+  check its own schema. `op.New` calls it on every store the configuration
+  uses, so a bring-your-own store that implements it gets the same
+  construction-time check as the SQL adapter.
+
+- `(*oidcsql.Store).Migrations()` returns the configured dialect's
+  per-release migration files as an `fs.FS` with any `WithNaming` overrides
+  applied. The files under `op/storeadapter/sql/schema/migrations/<dialect>/`
+  (`000001_v1.0.0` to `000006_v1.5.0`) follow golang-migrate's naming, so its
+  `iofs` source reads them directly and Atlas reads them after
+  `atlas migrate hash`. golang-migrate's MySQL driver needs
+  `multiStatements=true` in the DSN. A database created before adopting the
+  files is first recorded at the last release it applied (`migrate force N`).
 
 - `op.LoginFlow.Registration` makes a request carrying `prompt=create`
   (OpenID Connect Initiating User Registration, 1.0) start at an account

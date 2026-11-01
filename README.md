@@ -70,9 +70,10 @@ if err != nil {
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
 
-`st` holds the OP's own records (clients, codes, tokens, sessions); the SQL
-adapter's [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists its tables
-and when each is used. `users` is your existing users table behind
+`st` holds the OP's own records (clients, codes, tokens, sessions). `op.New`
+checks the SQL adapter's tables your configuration uses and names any that are
+missing; [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists which
+those are. `users` is your existing users table behind
 `store.UserPasswordStore`: three read methods, and no new column when the
 table already has an identifier that is never reassigned. See
 [Bring your own user store](https://go-oidc-provider.libraz.net/use-cases/byo-userstore).
@@ -188,7 +189,7 @@ backend, or take one of the shipped adapters:
 | Adapter | Module | Purpose |
 |---|---|---|
 | `inmem` | main module | Reference store for development and tests. |
-| `sql` | sub-module | `database/sql` for SQLite, MySQL 8.0+, PostgreSQL 14+, with reference DDL embedded per engine. |
+| `sql` | sub-module | `database/sql` for SQLite, MySQL 8.0+, PostgreSQL 14+, with reference DDL embedded per engine and per-release migration files from `Store.Migrations()`. |
 | `redis` | sub-module | Volatile substores only; refuses to start without TLS and AUTH. |
 | `dynamodb` | sub-module | One table per substore, transactional. |
 | `composite` | main module | Hot/cold splitter: durable substores to one backend, volatile to another. |

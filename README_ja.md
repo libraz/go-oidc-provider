@@ -49,7 +49,7 @@ if err != nil {
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
 
-`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を保存します。SQL アダプタのテーブルと、それぞれが使われる条件は [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。`users` は既存のユーザテーブルを `store.UserPasswordStore` として渡したもので、実装するのは読み取りメソッド 3 つです。再割り当てされない識別子の列がすでにあれば、列を足す必要はありません。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
+`st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を保存します。`op.New` は、構成が使う SQL アダプタのテーブルを構築時に検査し、足りないテーブルがあれば名前を挙げて止まります。どのテーブルが対象になるかは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。`users` は既存のユーザテーブルを `store.UserPasswordStore` として渡したもので、実装するのは読み取りメソッド 3 つです。再割り当てされない識別子の列がすでにあれば、列を足す必要はありません。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
 
 `Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
 
@@ -102,7 +102,7 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 | アダプタ | モジュール | 用途 |
 |---|---|---|
 | `inmem` | main module | 開発・テスト向けのリファレンス実装。 |
-| `sql` | 別モジュール | SQLite / MySQL 8.0+ / PostgreSQL 14+ 向けの `database/sql` アダプタ。エンジンごとのリファレンス DDL を同梱。 |
+| `sql` | 別モジュール | SQLite / MySQL 8.0+ / PostgreSQL 14+ 向けの `database/sql` アダプタ。エンジンごとのリファレンス DDL と、リリースごとの migration ファイル（`Store.Migrations()`）を同梱。 |
 | `redis` | 別モジュール | 揮発性サブストア専用。TLS と AUTH が無いと起動を拒否する。 |
 | `dynamodb` | 別モジュール | サブストアごとに 1 テーブル、トランザクション対応。 |
 | `composite` | main module | ホット/コールドの振り分け役。永続サブストアと揮発性サブストアを別々のバックエンドへ。 |

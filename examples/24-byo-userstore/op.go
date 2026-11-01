@@ -38,8 +38,8 @@ func buildProvider(ctx context.Context, db *databasesql.DB) (*op.Provider, error
 	if err != nil {
 		return nil, fmt.Errorf("oidcsql.New: %w", err)
 	}
-	// Migrate is a development shortcut. Production deployments run
-	// durable.Schema() through their own migration tooling instead.
+	// Migrate is a development shortcut. Production deployments apply the
+	// migration files from Store.Migrations() with their own tooling.
 	if err := durable.Migrate(ctx); err != nil {
 		return nil, fmt.Errorf("migrate OIDC schema: %w", err)
 	}
