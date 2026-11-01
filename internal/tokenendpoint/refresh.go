@@ -381,7 +381,7 @@ func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (refreshInputs,
 func newRefreshExchanger(deps Deps) (*refresh.Exchanger, error) {
 	return refresh.NewExchanger(refresh.ExchangerConfig{
 		Store:              deps.RefreshTokens,
-		Clock:              deps.clockFunc(),
+		Clock:              deps.Clock,
 		GraceTTL:           deps.RefreshTokenGraceTTL,
 		Audit:              deps.audit(),
 		DeferReplayCascade: true,

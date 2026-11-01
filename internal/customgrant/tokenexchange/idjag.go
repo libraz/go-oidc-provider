@@ -10,24 +10,22 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// idjagTypHeader is the JOSE "typ" of an ID-JAG
-// (draft-ietf-oauth-identity-assertion-authz-grant §3.1).
-const idjagTypHeader = "oauth-id-jag+jwt"
 
 // idjagTokenTypeNA is the token_type an ID-JAG is answered with: it is
 // not an access token, so RFC 8693 §2.2.1 "N_A" applies even under DPoP.
 const idjagTokenTypeNA = "N_A"
 
 // maxIDJAGTTL caps the ID-JAG lifetime; it is also the lifetime a policy
-// that states none receives. Paired with the five-minute exp bound the
-// redeeming side enforces.
-const maxIDJAGTTL = 5 * time.Minute
+// that states none receives. It is the exp bound the redeeming side
+// enforces.
+const maxIDJAGTTL = clientauth.MaxAssertionLifetime
 
 // idjagJTIBytes is the jti entropy, the same 128 bits the OP's other
 // opaque identifiers carry.
@@ -49,7 +47,7 @@ type idjagInput struct {
 // the policy is the only gate on them.
 func (h *Handler) handleIDJAG(ctx context.Context, req customgrant.Request) (customgrant.Response, error) {
 	// draft §4.3.3: the IdP MUST authenticate the client.
-	if req.Client.PublicClient || req.Client.TokenEndpointAuthMethod == "none" {
+	if clientauth.IsPublicClient(req.Client) {
 		return customgrant.Response{}, invalidClient("ID-JAG issuance requires client authentication")
 	}
 	in, err := parseIDJAGForm(req)
@@ -91,7 +89,7 @@ func (h *Handler) handleIDJAG(ctx context.Context, req customgrant.Request) (cus
 	}
 	now := h.now()
 	claims := h.idjagClaims(req, in, subjectView, decision, jti, now, ttl)
-	signed, err := tokens.SignTypedJWT(tokens.FromInternalEntry(h.keys.Active()), idjagTypHeader, claims)
+	signed, err := tokens.SignTypedJWT(tokens.FromInternalEntry(h.keys.Active()), jose.TypIDJAG, claims)
 	if err != nil {
 		return customgrant.Response{}, serverError()
 	}

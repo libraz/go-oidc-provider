@@ -3,6 +3,7 @@ package tokenendpoint
 import (
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -27,8 +28,7 @@ func enforcePKCEDowngradeGuard(
 	if exchanged == nil || client == nil {
 		return true
 	}
-	publicClient := client.PublicClient || client.TokenEndpointAuthMethod == "none"
-	if !publicClient {
+	if !clientauth.IsPublicClient(client) {
 		return true
 	}
 	if exchanged.HadCodeChallenge {

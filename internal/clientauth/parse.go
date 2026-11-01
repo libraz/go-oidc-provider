@@ -2,6 +2,7 @@ package clientauth
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -153,7 +154,7 @@ func unverifiedAssertionClientID(assertion string) (string, error) {
 		Iss string `json:"iss"`
 		Sub string `json:"sub"`
 	}
-	if err := jsonUnmarshal(body, &claims); err != nil {
+	if err := json.Unmarshal(body, &claims); err != nil {
 		return "", ErrAssertionMalformed
 	}
 	switch {

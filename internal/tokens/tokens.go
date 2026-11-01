@@ -179,6 +179,23 @@ const (
 	CnfX5tS256 = "x5t#S256"
 )
 
+// Confirmation builds the RFC 7800 "cnf" object for the given DPoP key
+// thumbprint and mTLS certificate thumbprint. A member is present only
+// when its thumbprint is non-empty; both empty returns nil (bearer).
+func Confirmation(jkt, x5tS256 string) map[string]string {
+	if jkt == "" && x5tS256 == "" {
+		return nil
+	}
+	cnf := make(map[string]string, 2)
+	if jkt != "" {
+		cnf[CnfJKT] = jkt
+	}
+	if x5tS256 != "" {
+		cnf[CnfX5tS256] = x5tS256
+	}
+	return cnf
+}
+
 // accessTokenTypeHeader is the value of the "typ" JOSE header for
 // JWT-shaped access tokens. RFC 9068 §2.1 requires the explicit
 // "at+jwt" media type so a resource server can distinguish access

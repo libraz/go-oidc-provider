@@ -12,6 +12,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -40,7 +41,7 @@ func (c movingClock) Now() time.Time { return *c.cur }
 func newFixture(tb testing.TB, t0 time.Time) fixture {
 	tb.Helper()
 	cur := t0
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).AuthorizationCodes()
 	iss, err := authcode.NewIssuer(authcode.IssuerConfig{Store: st, Clock: clk})
 	if err != nil {
@@ -279,14 +280,14 @@ func TestExchange_ReplayCarriesGrantIDWhenStoreReturnsConsumedRecord(t *testing.
 	backing := newReplayMetadataCodeStore()
 	issuer, err := authcode.NewIssuer(authcode.IssuerConfig{
 		Store: backing,
-		Clock: func() time.Time { return t0 },
+		Clock: timex.ClockFunc(func() time.Time { return t0 }),
 	})
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
 	exchanger, err := authcode.NewExchanger(authcode.ExchangerConfig{
 		Store: backing,
-		Clock: func() time.Time { return t0 },
+		Clock: timex.ClockFunc(func() time.Time { return t0 }),
 	})
 	if err != nil {
 		t.Fatalf("NewExchanger: %v", err)
@@ -461,7 +462,7 @@ func TestExchange_DetectsExpiredCode(t *testing.T) {
 	cur := t0
 	iss, err := authcode.NewIssuer(authcode.IssuerConfig{
 		Store: st,
-		Clock: func() time.Time { return cur },
+		Clock: timex.ClockFunc(func() time.Time { return cur }),
 		TTL:   60 * time.Second,
 	})
 	if err != nil {
@@ -469,7 +470,7 @@ func TestExchange_DetectsExpiredCode(t *testing.T) {
 	}
 	exc, err := authcode.NewExchanger(authcode.ExchangerConfig{
 		Store: st,
-		Clock: func() time.Time { return cur },
+		Clock: timex.ClockFunc(func() time.Time { return cur }),
 	})
 	if err != nil {
 		t.Fatalf("NewExchanger: %v", err)
@@ -646,7 +647,7 @@ func TestExchange_ReplayByForeignClientIsNotReplay(t *testing.T) {
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	verifier := strings.Repeat("a", 64)
 	backing := newReplayMetadataCodeStore()
-	clk := func() time.Time { return t0 }
+	clk := timex.ClockFunc(func() time.Time { return t0 })
 	issuer, err := authcode.NewIssuer(authcode.IssuerConfig{Store: backing, Clock: clk})
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
@@ -690,7 +691,7 @@ func TestExchange_AdmitRefusalDoesNotSpendCode(t *testing.T) {
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	verifier := strings.Repeat("a", 64)
 	backing := newReplayMetadataCodeStore()
-	clk := func() time.Time { return t0 }
+	clk := timex.ClockFunc(func() time.Time { return t0 })
 	issuer, err := authcode.NewIssuer(authcode.IssuerConfig{Store: backing, Clock: clk})
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)

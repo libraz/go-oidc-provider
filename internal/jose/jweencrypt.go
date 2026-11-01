@@ -7,7 +7,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 )
 
-// ErrJWEUnsupportedKey indicates [Encrypt] was given a recipient
+// ErrJWEUnsupportedKey indicates [EncryptNestedJWT] was given a recipient
 // public key whose Go type is not compatible with the requested
 // [JWEAlg]. Examples: an `*rsa.PublicKey` paired with `ECDH-ES`, or
 // a non-P-curve `*ecdsa.PublicKey` paired with the ECDH-ES family.
@@ -17,7 +17,7 @@ import (
 var ErrJWEUnsupportedKey = errors.New("jose: JWE recipient key not supported by alg")
 
 // EncryptionRecipient is a single (kid, alg, public-key) triple
-// [Encrypt] uses to mint a compact-serialised JWE. The kid is
+// [EncryptNestedJWT] uses to mint a compact-serialised JWE. The kid is
 // stamped into the protected header so the recipient can route to
 // the right private key during decryption.
 //
@@ -32,58 +32,6 @@ type EncryptionRecipient struct {
 	Enc   JWEEnc
 	KeyID string
 	Key   any
-}
-
-// Encrypt serialises plaintext as a compact JWE addressed to
-// recipient. The output is a five-segment dot-separated string the
-// recipient can decrypt with the private half of recipient.Key.
-//
-// The function enforces the same alg / enc allow-list as [Decrypt]
-// (no `RSA1_5`, no symmetric `A*KW` / `dir`, no AES-CBC-HS) so the
-// OP cannot accidentally produce JWE that its own [Decrypt] would
-// reject.
-//
-// The protected header carries `alg`, `enc`, and `kid` (when
-// recipient.KeyID is non-empty). No `crit`, `cty`, or `zip` is
-// emitted by default, so this function alone cannot produce the
-// nested JWE-of-JWS shape: callers that need it sign the inner JWS
-// elsewhere (internal/tokens.SignIDToken and its siblings) and wrap
-// the result through [EncryptNestedJWT], which stamps `cty=JWT`.
-func Encrypt(plaintext []byte, recipient EncryptionRecipient) (string, error) {
-	if !recipient.Alg.IsAllowed() {
-		return "", fmt.Errorf("%w: %q", ErrJWEAlgNotAllowed, recipient.Alg)
-	}
-	if !recipient.Enc.IsAllowed() {
-		return "", fmt.Errorf("%w: %q", ErrJWEEncNotAllowed, recipient.Enc)
-	}
-	if recipient.Key == nil {
-		return "", fmt.Errorf("%w: nil recipient key", ErrJWEUnsupportedKey)
-	}
-	if err := AssertJWEAlgKeyShape(recipient.Alg, recipient.Key); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrJWEUnsupportedKey, err)
-	}
-
-	rcpt := josev4.Recipient{
-		Algorithm: josev4.KeyAlgorithm(recipient.Alg),
-		Key:       recipient.Key,
-		KeyID:     recipient.KeyID,
-	}
-	opts := (&josev4.EncrypterOptions{}).
-		WithType(TypJWT)
-	encrypter, err := josev4.NewEncrypter(josev4.ContentEncryption(recipient.Enc), rcpt, opts)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrJWEUnsupportedKey, err)
-	}
-
-	jwe, err := encrypter.Encrypt(plaintext)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrJWEUnsupportedKey, err)
-	}
-	out, err := jwe.CompactSerialize()
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrJWEMalformed, err)
-	}
-	return out, nil
 }
 
 // EncryptNestedJWT wraps a JWS (already-signed compact JWT) in a JWE

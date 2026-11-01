@@ -2,6 +2,8 @@ package tokenexchange
 
 import (
 	"net/http"
+
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 )
 
 // wireError is the local error shape that satisfies the structural
@@ -40,44 +42,7 @@ func (e *wireError) WriteOAuthError(w http.ResponseWriter) {
 	case "server_error", "temporarily_unavailable", "configuration_error":
 		status = http.StatusInternalServerError
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	body := `{"error":"` + e.code + `"`
-	if e.description != "" {
-		body += `,"error_description":"` + jsonEscape(e.description) + `"`
-	}
-	body += `}` + "\n"
-	_, _ = w.Write([]byte(body))
-}
-
-// jsonEscape escapes a string for safe inclusion inside a JSON value.
-// We avoid the encoding/json import here because every emission path
-// is a fixed-shape envelope; the helper is intentionally minimal.
-func jsonEscape(s string) string {
-	out := make([]byte, 0, len(s)+8)
-	for i := range len(s) {
-		c := s[i]
-		switch c {
-		case '"':
-			out = append(out, '\\', '"')
-		case '\\':
-			out = append(out, '\\', '\\')
-		case '\n':
-			out = append(out, '\\', 'n')
-		case '\r':
-			out = append(out, '\\', 'r')
-		case '\t':
-			out = append(out, '\\', 't')
-		default:
-			if c < 0x20 {
-				continue
-			}
-			out = append(out, c)
-		}
-	}
-	return string(out)
+	endpointsupport.WriteOAuthError(w, status, e.code, e.description)
 }
 
 // invalidRequest builds an invalid_request wireError.

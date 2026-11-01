@@ -280,8 +280,9 @@ func authorizeCIBAPoll(
 		PresentedMTLSCertS256: binding.MTLSThumbprint,
 	})
 	if err != nil {
-		writeCIBAAuthError(w, err)
-		return nil, cibaAuthErrorCode(err), false
+		code, status, description := cibaAuthError(err)
+		endpointsupport.WriteOAuthError(w, status, code, description)
+		return nil, code, false
 	}
 	if !checkTokenScopeAllowlist(w, deps, client.ID, authorized.Scope) {
 		return nil, errInvalidScope, false
@@ -289,31 +290,9 @@ func authorizeCIBAPoll(
 	return authorized, "", true
 }
 
-func cibaAuthErrorCode(err error) string {
-	switch {
-	case errors.Is(err, cgrant.ErrGrantNotPermitted):
-		return errUnauthorizedClient
-	case errors.Is(err, cgrant.ErrScopeForbidden):
-		return errInvalidScope
-	case errors.Is(err, cgrant.ErrPendingApproval):
-		return errAuthorizationPending
-	case errors.Is(err, cgrant.ErrDenied):
-		return errAccessDenied
-	case errors.Is(err, cgrant.ErrExpired):
-		return errExpiredToken
-	case errors.Is(err, cgrant.ErrCnfBindingMismatch),
-		errors.Is(err, cgrant.ErrCnfBindingMissing),
-		errors.Is(err, cgrant.ErrAlreadyRedeemed),
-		errors.Is(err, cgrant.ErrSubjectMissing):
-		return errInvalidGrant
-	default:
-		return errServerError
-	}
-}
-
-// writeCIBAAuthError translates the cgrant.Err* sentinels onto
-// wire codes. The mapping mirrors the comments on the package
-// sentinels (internal/grants/ciba/ciba.go):
+// cibaAuthError translates the cgrant.Err* sentinels onto the wire code,
+// HTTP status and description. The mapping mirrors the comments on the
+// package sentinels (internal/grants/ciba/ciba.go):
 //
 //   - ErrGrantNotPermitted     → unauthorized_client.
 //   - ErrScopeForbidden        → invalid_scope.
@@ -327,35 +306,28 @@ func cibaAuthErrorCode(err error) string {
 //   - ErrSubjectMissing        → invalid_grant (OIDC Core 1.0 §2; the
 //     approval names no end user, so no credential can be minted).
 //   - default                  → server_error (programmer bug).
-func writeCIBAAuthError(w http.ResponseWriter, err error) {
+func cibaAuthError(err error) (code string, status int, description string) {
 	switch {
 	case errors.Is(err, cgrant.ErrGrantNotPermitted):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
-			"client is not authorized for the ciba grant")
+		return errUnauthorizedClient, http.StatusBadRequest, "client is not authorized for the ciba grant"
 	case errors.Is(err, cgrant.ErrScopeForbidden):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-			"granted scope exceeds the client's registered set")
+		return errInvalidScope, http.StatusBadRequest, "granted scope exceeds the client's registered set"
 	case errors.Is(err, cgrant.ErrCnfBindingMismatch),
 		errors.Is(err, cgrant.ErrCnfBindingMissing):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
-			"sender-constraint binding does not match the bc-authorize record")
+		return errInvalidGrant, http.StatusBadRequest,
+			"sender-constraint binding does not match the bc-authorize record"
 	case errors.Is(err, cgrant.ErrPendingApproval):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAuthorizationPending,
-			"authorization request is still pending")
+		return errAuthorizationPending, http.StatusBadRequest, "authorization request is still pending"
 	case errors.Is(err, cgrant.ErrDenied):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAccessDenied,
-			"authorization request was denied")
+		return errAccessDenied, http.StatusBadRequest, "authorization request was denied"
 	case errors.Is(err, cgrant.ErrExpired):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errExpiredToken,
-			"auth_req_id expired")
+		return errExpiredToken, http.StatusBadRequest, "auth_req_id expired"
 	case errors.Is(err, cgrant.ErrAlreadyRedeemed):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
-			"auth_req_id was already redeemed")
+		return errInvalidGrant, http.StatusBadRequest, "auth_req_id was already redeemed"
 	case errors.Is(err, cgrant.ErrSubjectMissing):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
-			"authorization request is not associated with an end user")
+		return errInvalidGrant, http.StatusBadRequest, "authorization request is not associated with an end user"
 	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		return errServerError, http.StatusInternalServerError, ""
 	}
 }
 

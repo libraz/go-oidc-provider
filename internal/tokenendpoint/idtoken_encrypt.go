@@ -2,10 +2,7 @@ package tokenendpoint
 
 import (
 	"context"
-	"errors"
 
-	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
-	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -40,17 +37,11 @@ func maybeEncryptIDToken(
 	if deps.ClientEncJWKs == nil || client == nil {
 		return signed, nil
 	}
-	recipient, err := deps.ClientEncJWKs.ResolveRecipient(
+	return deps.ClientEncJWKs.EncryptNested(
 		ctx,
 		client,
 		client.IDTokenEncryptedResponseAlg,
 		client.IDTokenEncryptedResponseEnc,
+		signed,
 	)
-	if errors.Is(err, clientencjwks.ErrNoEncryptionConfigured) {
-		return signed, nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return jose.EncryptNestedJWT(signed, recipient)
 }

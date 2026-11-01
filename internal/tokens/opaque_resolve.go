@@ -77,18 +77,7 @@ type OpaqueAccessTokenView struct {
 // (RFC 8705 §3.1) members are independent, so a dual-bound token
 // carries both and a reader must verify both.
 func (v *OpaqueAccessTokenView) Confirmation() map[string]string {
-	rec := v.Record
-	if rec.DPoPJKT == "" && rec.MTLSCertThumbprint == "" {
-		return nil
-	}
-	cnf := make(map[string]string, 2)
-	if rec.DPoPJKT != "" {
-		cnf[CnfJKT] = rec.DPoPJKT
-	}
-	if rec.MTLSCertThumbprint != "" {
-		cnf[CnfX5tS256] = rec.MTLSCertThumbprint
-	}
-	return cnf
+	return Confirmation(v.Record.DPoPJKT, v.Record.MTLSCertThumbprint)
 }
 
 // ResolveOpaqueAccessToken is the one place an opaque access token is

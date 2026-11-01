@@ -490,7 +490,7 @@ func VerifySelfSignedTLSClientAuth(cert *x509.Certificate, jwks []byte) error {
 		if err != nil {
 			continue
 		}
-		if equalBytes(got, certThumbprint) {
+		if bytes.Equal(got, certThumbprint) {
 			return nil
 		}
 	}
@@ -503,18 +503,4 @@ func VerifySelfSignedTLSClientAuth(cert *x509.Certificate, jwks []byte) error {
 func jwkThumbprint(pub any) ([]byte, error) {
 	jwk := josev4.JSONWebKey{Key: pub}
 	return jwk.Thumbprint(crypto.SHA256)
-}
-
-// equalBytes is a small constant-time helper. The values being
-// compared are public-key digests so timing leakage is not a real
-// risk, but the function exists so the comparison is auditable.
-func equalBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var diff byte
-	for i := range a {
-		diff |= a[i] ^ b[i]
-	}
-	return diff == 0
 }

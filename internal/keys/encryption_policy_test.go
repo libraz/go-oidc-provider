@@ -23,7 +23,7 @@ func TestEncryptionSet_JWEPolicy_ReachesDecrypt(t *testing.T) {
 	t.Parallel()
 
 	ecKey := mustECDSAKey(t)
-	ciphertext, err := jose.Encrypt([]byte("request object"), jose.EncryptionRecipient{
+	ciphertext, err := jose.EncryptNestedJWT("request object", jose.EncryptionRecipient{
 		Alg:   jose.JWEAlgECDHES,
 		Enc:   jose.JWEEncA256GCM,
 		KeyID: "enc-1",

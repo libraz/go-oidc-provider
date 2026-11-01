@@ -57,8 +57,7 @@ const (
 // from [timex.RefreshTokenTTLDefault] so the value tracks the canonical
 // constant.
 const (
-	defaultAccessTokenTTL = 5 * time.Minute
-	defaultIDTokenTTL     = 10 * time.Minute
+	defaultIDTokenTTL = 10 * time.Minute
 
 	// jtiByteLength is the entropy of the access-token "jti" claim. 16
 	// bytes (128 bits) is well above the birthday bound for any single
@@ -218,7 +217,7 @@ type Deps struct {
 	Clock Clock
 
 	// AccessTokenTTL is the lifetime of issued access tokens. Zero or
-	// negative falls back to [defaultAccessTokenTTL].
+	// negative falls back to [timex.AccessTokenTTLDefault].
 	AccessTokenTTL time.Duration
 
 	// IDTokenTTL is the lifetime of issued id_tokens. Zero or negative
@@ -607,7 +606,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 // value is a fresh copy; the caller's [Deps] is not mutated.
 func resolveDeps(d Deps) Deps {
 	if d.AccessTokenTTL <= 0 {
-		d.AccessTokenTTL = defaultAccessTokenTTL
+		d.AccessTokenTTL = timex.AccessTokenTTLDefault
 	}
 	if d.IDTokenTTL <= 0 {
 		d.IDTokenTTL = defaultIDTokenTTL
@@ -625,16 +624,6 @@ func resolveDeps(d Deps) Deps {
 // the system clock when [Deps.Clock] is nil.
 func (d *Deps) now() time.Time {
 	return timex.OrSystem(d.Clock).Now()
-}
-
-// clockFunc adapts [Deps.Clock] to the func()-shaped clock the grant
-// packages consume. A nil Clock yields nil so the grant packages fall
-// back to their own [timex.SystemClock] default.
-func (d *Deps) clockFunc() func() time.Time {
-	if d.Clock == nil {
-		return nil
-	}
-	return d.Clock.Now
 }
 
 // audit returns the configured audit sink, or a [audit.Discard]
@@ -677,7 +666,7 @@ type successResponse struct {
 // writeSuccess marshals body and writes it with the cache-control and
 // content-type headers the token endpoint owes every response.
 func writeSuccess(w http.ResponseWriter, body successResponse) {
-	w.Header().Set("Pragma", "no-cache")
+	httpx.StampNoStore(w)
 	// gosec G117 flags the AccessToken field name as "secret-shaped";
 	// the field name is required by RFC 6749 §5.1 and the token is the
 	// purpose of this response. There is no leak: the value is delivered

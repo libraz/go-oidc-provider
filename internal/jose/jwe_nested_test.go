@@ -115,12 +115,12 @@ func TestDecryptChain_NonPositiveBudget(t *testing.T) {
 }
 
 // nestedJWE wraps payload as a fresh JWE addressed to pub+kid using
-// the production [jose.Encrypt] entry point. Reusing the production
+// the production [jose.EncryptNestedJWT] entry point. Reusing the production
 // encrypter (rather than hand-crafting compact strings) ensures the
 // test exercises the same parse path the JAR verifier hits at runtime.
 func nestedJWE(t *testing.T, payload string, pub *rsa.PublicKey, kid string) string {
 	t.Helper()
-	out, err := jose.Encrypt([]byte(payload), jose.EncryptionRecipient{
+	out, err := jose.EncryptNestedJWT(payload, jose.EncryptionRecipient{
 		Alg:   jose.JWEAlgRSAOAEP256,
 		Enc:   jose.JWEEncA256GCM,
 		KeyID: kid,

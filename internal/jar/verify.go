@@ -12,6 +12,7 @@ import (
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -42,12 +43,6 @@ const (
 	// rejects request objects the profile declares valid; the
 	// op-level wiring does exactly that from the active profile set.
 	DefaultMaxAge = 10 * time.Minute
-
-	// maxJTILen bounds the "jti" claim length. RFC 9101 sets no cap;
-	// the verifier rejects oversized values to close the unbounded-
-	// allocation surface (replay store key, audit log column). The
-	// value is comfortably above any UUID encoding.
-	maxJTILen = 256
 )
 
 // jtiUse is the typed scope tag for the request-object jti replay key.
@@ -604,11 +599,11 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string,
 		}
 		return ErrJTIMissing
 	}
-	// Cap the jti at 256 bytes. RFC 9101 sets no upper bound; the
+	// Cap the jti at jose.MaxJTILen. RFC 9101 sets no upper bound; the
 	// limit closes an unbounded-allocation surface (replay store key,
 	// audit logs) at the verifier boundary. ErrParse is the right
 	// shape: an oversized jti is a malformed request object.
-	if len(jti) > maxJTILen {
+	if len(jti) > jose.MaxJTILen {
 		return fmt.Errorf("%w: jti too long", ErrParse)
 	}
 	if v.jtis == nil {
@@ -622,7 +617,7 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string,
 		// a malformed-object class.
 		return fmt.Errorf("%w: jti consume: missing exp", ErrParse)
 	}
-	key := "jar:" + string(use) + ":" + replayKeyEscaper.Replace(clientID) + ":" + jti
+	key := clientauth.ReplayKey("jar:"+string(use)+":", clientID, jti)
 	if err := v.jtis.Mark(ctx, key, expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return ErrJTIReplayed
@@ -631,12 +626,6 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string,
 	}
 	return nil
 }
-
-// replayKeyEscaper percent-encodes the key separator in the client id so
-// each (use, client, jti) triple maps to exactly one replay key.
-//
-//nolint:gochecknoglobals // immutable, concurrency-safe replacer.
-var replayKeyEscaper = strings.NewReplacer("%", "%25", ":", "%3A")
 
 // jtiExpiry reads the request object's "exp" claim and projects it onto the
 // wall clock the verifier is using. The consumed-jti row is retained at least

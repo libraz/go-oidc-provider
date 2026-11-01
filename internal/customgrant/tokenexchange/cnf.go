@@ -1,6 +1,8 @@
 package tokenexchange
 
 import (
+	"slices"
+
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -22,19 +24,11 @@ import (
 //   - A bearer request returns nil; the caller MUST NOT pollute an
 //     unbound id_token with a synthesised cnf.
 func buildCnfClaim(req customgrant.Request) map[string]string {
-	out := make(map[string]string, 2)
-	if req.DPoPJKT != "" {
-		out[tokens.CnfJKT] = req.DPoPJKT
-	}
+	var x5t string
 	if req.MTLSCert != nil {
-		if thumb := mtls.Thumbprint(req.MTLSCert); thumb != "" {
-			out[tokens.CnfX5tS256] = thumb
-		}
+		x5t = mtls.Thumbprint(req.MTLSCert)
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return tokens.Confirmation(req.DPoPJKT, x5t)
 }
 
 // requireMatchingSenderConstraint enforces that every confirmation method
@@ -64,20 +58,11 @@ func requireIDTokenAudience(callerClientID string, tok TokenView) error {
 	if tok.Type != TokenTypeIDToken {
 		return nil
 	}
-	if !stringInSlice(callerClientID, tok.Audience) {
+	if !slices.Contains(tok.Audience, callerClientID) {
 		return invalidGrant("id_token audience does not include the calling client")
 	}
 	if tok.ClientID != "" && tok.ClientID != callerClientID {
 		return invalidGrant("id_token authorized party does not match the calling client")
 	}
 	return nil
-}
-
-func stringInSlice(needle string, haystack []string) bool {
-	for _, v := range haystack {
-		if v == needle {
-			return true
-		}
-	}
-	return false
 }

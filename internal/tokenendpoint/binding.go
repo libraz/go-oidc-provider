@@ -1,6 +1,7 @@
 package tokenendpoint
 
 import (
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -25,17 +26,7 @@ type tokenBinding struct {
 // 7800 §3 prescribes. An empty binding returns nil so the access-
 // token mint can guard the cnf assignment with a non-nil check.
 func (b tokenBinding) confirmation() map[string]string {
-	if b.DPoPJKT == "" && b.MTLSThumbprint == "" {
-		return nil
-	}
-	out := make(map[string]string, 2)
-	if b.DPoPJKT != "" {
-		out[tokens.CnfJKT] = b.DPoPJKT
-	}
-	if b.MTLSThumbprint != "" {
-		out[tokens.CnfX5tS256] = b.MTLSThumbprint
-	}
-	return out
+	return tokens.Confirmation(b.DPoPJKT, b.MTLSThumbprint)
 }
 
 // tokenTypeFor returns the "token_type" wire value: "DPoP" when a DPoP
@@ -73,7 +64,7 @@ func refreshDPoPJKT(client *store.Client, dpopJKT string) string {
 	if dpopJKT == "" {
 		return ""
 	}
-	if client != nil && !client.PublicClient && client.TokenEndpointAuthMethod != "none" {
+	if client != nil && !clientauth.IsPublicClient(client) {
 		return ""
 	}
 	return dpopJKT

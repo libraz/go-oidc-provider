@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/argon2id"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 )
 
@@ -51,11 +52,12 @@ func TestArgon2id_VerifyRejectsMalformed(t *testing.T) {
 func TestArgon2id_CustomParamsRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	policy := argon2id.DefaultPolicy()
 	// Use the smallest parameter set still at or above the OWASP floor
 	// the verifier enforces; anything weaker is rejected by Verify.
 	v := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
-		Memory:      clientauth.Argon2idMinMemory,
-		Iterations:  clientauth.Argon2idMinIterations,
+		Memory:      policy.MinMemory,
+		Iterations:  policy.MinIterations,
 		Parallelism: 1,
 		SaltLength:  8,
 		KeyLength:   16,
@@ -75,9 +77,10 @@ func TestArgon2id_CustomParamsRoundTrip(t *testing.T) {
 func TestArgon2id_HashRejectsWeakParams(t *testing.T) {
 	t.Parallel()
 
+	policy := argon2id.DefaultPolicy()
 	weakMemory := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
-		Memory:      clientauth.Argon2idMinMemory - 1024,
-		Iterations:  clientauth.Argon2idMinIterations,
+		Memory:      policy.MinMemory - 1024,
+		Iterations:  policy.MinIterations,
 		Parallelism: 1,
 		SaltLength:  8,
 		KeyLength:   16,
@@ -87,8 +90,8 @@ func TestArgon2id_HashRejectsWeakParams(t *testing.T) {
 	}
 
 	weakIter := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
-		Memory:      clientauth.Argon2idMinMemory,
-		Iterations:  clientauth.Argon2idMinIterations - 1,
+		Memory:      policy.MinMemory,
+		Iterations:  policy.MinIterations - 1,
 		Parallelism: 1,
 		SaltLength:  8,
 		KeyLength:   16,

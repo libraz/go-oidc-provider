@@ -7,13 +7,12 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
-	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 )
 
 // ErrInvalidEncryptionKey is returned by [NewEncryptionSet] when an
@@ -94,12 +93,7 @@ func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*Encryption
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("%w: empty keyset", ErrInvalidEncryptionKey)
 	}
-	cfg := setConfig{now: timex.SystemClock.Now}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&cfg)
-		}
-	}
+	cfg := newSetConfig(opts)
 	seen := make(map[string]struct{}, len(entries))
 	jwks := josev4.JSONWebKeySet{Keys: make([]josev4.JSONWebKey, 0, len(entries))}
 	out := make([]EncryptionEntry, len(entries))
@@ -111,7 +105,7 @@ func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*Encryption
 			return nil, fmt.Errorf("%w: duplicate KeyID %q", ErrInvalidEncryptionKey, e.KeyID)
 		}
 		seen[e.KeyID] = struct{}{}
-		if isNilPrivateKey(e.PrivateKey) {
+		if nilcheck.IsNil(e.PrivateKey) {
 			return nil, fmt.Errorf("%w: entry %q has nil PrivateKey", ErrInvalidEncryptionKey, e.KeyID)
 		}
 		pub, alg, err := encPublicAndAlg(e.PrivateKey, e.Algorithm, cfg.jwe)
@@ -142,22 +136,6 @@ func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*Encryption
 // force.
 func (s *EncryptionSet) JWEPolicy() jose.JWEPolicy {
 	return s.jwe
-}
-
-// isNilPrivateKey detects both a nil interface and a crypto.PrivateKey
-// interface carrying a typed-nil value. The latter otherwise enters the RSA or
-// ECDSA type-switch arm and panics when public-key fields are inspected.
-func isNilPrivateKey(key crypto.PrivateKey) bool {
-	if key == nil {
-		return true
-	}
-	value := reflect.ValueOf(key)
-	switch value.Kind() {
-	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 // encPublicAndAlg extracts the public half of priv and selects the
@@ -313,19 +291,13 @@ func (s *EncryptionSet) observerContext() context.Context {
 // and MUST NOT fall back to trial decryption when kid is present —
 // see [jose.Decrypt] for the rationale.
 func (s *EncryptionSet) Resolve(keyID string) (any, bool) {
-	for _, e := range s.entries {
-		if e.KeyID != keyID {
-			continue
-		}
-		if retiredBy(clockReading(s.now), e.NotAfter) {
-			if s.observer != nil {
-				s.observer(s.observerContext(), keyID)
-			}
-			return nil, false
-		}
-		return e.PrivateKey, true
+	entry, ok := findLive(s.entries, keyID,
+		func(e EncryptionEntry) (string, time.Time) { return e.KeyID, e.NotAfter },
+		s.now, s.observer, s.observerContext())
+	if !ok {
+		return nil, false
 	}
-	return nil, false
+	return entry.PrivateKey, true
 }
 
 // All returns every live private key in rotation order (as the
@@ -334,7 +306,7 @@ func (s *EncryptionSet) Resolve(keyID string) (any, bool) {
 // fallback respects the same rotation gate as [Resolve].
 func (s *EncryptionSet) All() []any {
 	out := make([]any, 0, len(s.entries))
-	now := clockReading(s.now)
+	now := s.now()
 	for _, e := range s.entries {
 		if retiredBy(now, e.NotAfter) {
 			continue
@@ -353,7 +325,7 @@ func (s *EncryptionSet) All() []any {
 // but the keys are shared. Callers MUST NOT mutate the returned
 // [josev4.JSONWebKey] values.
 func (s *EncryptionSet) JWKS() josev4.JSONWebKeySet {
-	now := clockReading(s.now)
+	now := s.now()
 	out := josev4.JSONWebKeySet{Keys: make([]josev4.JSONWebKey, 0, len(s.jwks.Keys))}
 	for i, entry := range s.entries {
 		if retiredBy(now, entry.NotAfter) {

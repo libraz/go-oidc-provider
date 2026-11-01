@@ -2,6 +2,7 @@ package clientauth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -43,31 +44,6 @@ type AssertionClaims struct {
 	ExpiresAt int64    `json:"exp"`
 }
 
-// audienceClaim helps decode the "aud" claim, which RFC 7519 §4.1.3
-// allows to be either a string or an array of strings.
-type audienceClaim []string
-
-// UnmarshalJSON accepts either form of the "aud" claim.
-func (a *audienceClaim) UnmarshalJSON(data []byte) error {
-	if len(data) == 0 {
-		return nil
-	}
-	if data[0] == '"' {
-		var s string
-		if err := jsonUnmarshal(data, &s); err != nil {
-			return err
-		}
-		*a = audienceClaim{s}
-		return nil
-	}
-	var arr []string
-	if err := jsonUnmarshal(data, &arr); err != nil {
-		return err
-	}
-	*a = arr
-	return nil
-}
-
 // JWKSResolver returns the JWKS registered for a client. Embedders wire
 // this to their client store; the package keeps it abstract so it can
 // drive both static registries and JWKS-URI fetchers.
@@ -82,12 +58,9 @@ type assertionSigningAlgResolver interface {
 	AssertionSigningAlg(ctx context.Context, clientID string) (string, error)
 }
 
-const maxAssertionLifetime = 5 * time.Minute
-
-// MaxJTILen bounds the "jti" claim length, matching the DPoP proof and
-// request-object replay gates so no replay-store key grows unbounded. The
-// jwt-bearer grant verifier shares it.
-const MaxJTILen = 256
+// MaxAssertionLifetime bounds how far in the future a client assertion's
+// exp may sit. The jwt-bearer grant verifier shares it.
+const MaxAssertionLifetime = 5 * time.Minute
 
 // DefaultAssertionLeeway is the skew tolerance applied to the time
 // claims of a client assertion when [PrivateKeyJWTVerifier.Leeway] is
@@ -333,21 +306,25 @@ func checkAssertionAlgPin(ctx context.Context, resolver JWKSResolver, clientID s
 // reconciling the "aud" claim's polymorphic shape.
 func decodeAssertionClaims(payload []byte) (AssertionClaims, error) {
 	var raw struct {
-		Iss string        `json:"iss"`
-		Sub string        `json:"sub"`
-		Aud audienceClaim `json:"aud"`
-		Jti string        `json:"jti"`
-		Iat int64         `json:"iat"`
-		Nbf int64         `json:"nbf"`
-		Exp int64         `json:"exp"`
+		Iss string          `json:"iss"`
+		Sub string          `json:"sub"`
+		Aud json.RawMessage `json:"aud"`
+		Jti string          `json:"jti"`
+		Iat int64           `json:"iat"`
+		Nbf int64           `json:"nbf"`
+		Exp int64           `json:"exp"`
 	}
-	if err := jsonUnmarshal(payload, &raw); err != nil {
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return AssertionClaims{}, err
+	}
+	aud, err := jose.DecodeAudience(raw.Aud)
+	if err != nil {
 		return AssertionClaims{}, err
 	}
 	return AssertionClaims{
 		Issuer:    raw.Iss,
 		Subject:   raw.Sub,
-		Audience:  []string(raw.Aud),
+		Audience:  aud,
 		JTI:       raw.Jti,
 		IssuedAt:  raw.Iat,
 		NotBefore: raw.Nbf,
@@ -374,7 +351,7 @@ func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAu
 	if !now.Add(-leeway).Before(exp) {
 		return ErrAssertionMalformed
 	}
-	if exp.After(now.Add(maxAssertionLifetime)) {
+	if exp.After(now.Add(MaxAssertionLifetime)) {
 		return ErrAssertionMalformed
 	}
 	if claims.IssuedAt != 0 {
@@ -392,24 +369,31 @@ func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAu
 	return nil
 }
 
-// replayKeyEscaper percent-encodes the key separator in the client id so
-// each (client, jti) pair maps to exactly one replay key.
+// replayKeyEscaper percent-encodes the key separator in the identifier so
+// each (identifier, jti) pair maps to exactly one replay key.
 //
 //nolint:gochecknoglobals // immutable, concurrency-safe replacer.
 var replayKeyEscaper = strings.NewReplacer("%", "%25", ":", "%3A")
 
+// ReplayKey builds the consumed-JTI store key for a (id, jti) pair under a
+// namespace prefix (which carries its own trailing separator). The id is
+// escaped so distinct pairs never collide on the separator.
+func ReplayKey(prefix, id, jti string) string {
+	return prefix + replayKeyEscaper.Replace(id) + ":" + jti
+}
+
 // assertionReplayKey builds the consumed-JTI key for an assertion,
-// rejecting a jti that is empty or longer than [MaxJTILen].
+// rejecting a jti that is empty or longer than [jose.MaxJTILen].
 func assertionReplayKey(clientID, jti string) (string, error) {
-	if jti == "" || len(jti) > MaxJTILen {
+	if jti == "" || len(jti) > jose.MaxJTILen {
 		return "", ErrAssertionMalformed
 	}
-	return "clientassertion:" + replayKeyEscaper.Replace(clientID) + ":" + jti, nil
+	return ReplayKey("clientassertion:", clientID, jti), nil
 }
 
 func assertionJTIExpiry(claims AssertionClaims, now time.Time, leeway time.Duration) time.Time {
 	expiresAt := time.Unix(claims.ExpiresAt, 0).UTC().Add(leeway)
-	maxRetain := now.Add(maxAssertionLifetime + leeway)
+	maxRetain := now.Add(MaxAssertionLifetime + leeway)
 	if expiresAt.After(maxRetain) {
 		return maxRetain
 	}
@@ -424,17 +408,7 @@ func audienceMatchesAny(aud, expected []string) bool {
 		if e == "" {
 			continue
 		}
-		if audienceMatches(aud, e) {
-			return true
-		}
-	}
-	return false
-}
-
-// audienceMatches reports whether expected appears in aud.
-func audienceMatches(aud []string, expected string) bool {
-	for _, a := range aud {
-		if a == expected {
+		if slices.Contains(aud, e) {
 			return true
 		}
 	}

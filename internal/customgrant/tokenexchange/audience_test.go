@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -118,10 +119,18 @@ func TestWireErrorWritesOAuthJSONEnvelope(t *testing.T) {
 			},
 			wantString: "invalid_request: bad \"subject\"\nnext\tfield",
 			wantHeaders: map[string]string{
-				"Cache-Control": "no-store",
-				"Pragma":        "no-cache",
-				"Content-Type":  "application/json",
+				"Cache-Control":          "no-store",
+				"Pragma":                 "no-cache",
+				"Content-Type":           httpx.JSONContentType,
+				"X-Content-Type-Options": "nosniff",
 			},
+		},
+		{
+			name:       "control characters are escaped not dropped",
+			err:        &wireError{code: "invalid_request", description: "a\x01b"},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   map[string]string{"error": "invalid_request", "error_description": "a\x01b"},
+			wantString: "invalid_request: a\x01b",
 		},
 		{
 			name:       "invalid client is unauthorized",

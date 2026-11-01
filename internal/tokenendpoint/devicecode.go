@@ -269,8 +269,9 @@ func authorizeDeviceCodePoll(
 		PresentedMTLSCertS256: binding.MTLSThumbprint,
 	})
 	if err != nil {
-		writeDeviceCodeAuthError(w, err)
-		return nil, deviceCodeAuthErrorCode(err), false
+		code, status, description := deviceCodeAuthError(err)
+		endpointsupport.WriteOAuthError(w, status, code, description)
+		return nil, code, false
 	}
 	if !checkTokenScopeAllowlist(w, deps, client.ID, authorized.Scope) {
 		return nil, errInvalidScope, false
@@ -278,30 +279,9 @@ func authorizeDeviceCodePoll(
 	return authorized, "", true
 }
 
-func deviceCodeAuthErrorCode(err error) string {
-	switch {
-	case errors.Is(err, dcgrant.ErrGrantNotPermitted):
-		return errUnauthorizedClient
-	case errors.Is(err, dcgrant.ErrScopeForbidden):
-		return errInvalidScope
-	case errors.Is(err, dcgrant.ErrPendingApproval):
-		return errAuthorizationPending
-	case errors.Is(err, dcgrant.ErrDenied):
-		return errAccessDenied
-	case errors.Is(err, dcgrant.ErrExpiredOrConsumed):
-		return errExpiredToken
-	case errors.Is(err, dcgrant.ErrCnfBindingMismatch),
-		errors.Is(err, dcgrant.ErrCnfBindingMissing),
-		errors.Is(err, dcgrant.ErrSubjectMissing):
-		return errInvalidGrant
-	default:
-		return errServerError
-	}
-}
-
-// writeDeviceCodeAuthError translates the dcgrant.Err* sentinels
-// onto wire codes. The mapping mirrors the comments on the package
-// sentinels (internal/grants/devicecode/devicecode.go):
+// deviceCodeAuthError translates the dcgrant.Err* sentinels onto the wire
+// code, HTTP status and description. The mapping mirrors the comments on
+// the package sentinels (internal/grants/devicecode/devicecode.go):
 //
 //   - ErrGrantNotPermitted     → unauthorized_client.
 //   - ErrScopeForbidden        → invalid_scope.
@@ -314,32 +294,26 @@ func deviceCodeAuthErrorCode(err error) string {
 //   - ErrDenied                → access_denied (same defensive note).
 //   - ErrExpiredOrConsumed     → expired_token (same defensive note).
 //   - default                  → server_error (programmer bug).
-func writeDeviceCodeAuthError(w http.ResponseWriter, err error) {
+func deviceCodeAuthError(err error) (code string, status int, description string) {
 	switch {
 	case errors.Is(err, dcgrant.ErrGrantNotPermitted):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
-			"client is not authorized for the device_code grant")
+		return errUnauthorizedClient, http.StatusBadRequest, "client is not authorized for the device_code grant"
 	case errors.Is(err, dcgrant.ErrScopeForbidden):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-			"granted scope exceeds the client's registered set")
+		return errInvalidScope, http.StatusBadRequest, "granted scope exceeds the client's registered set"
 	case errors.Is(err, dcgrant.ErrCnfBindingMismatch),
 		errors.Is(err, dcgrant.ErrCnfBindingMissing):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
-			"sender-constraint binding does not match the device-authorization record")
+		return errInvalidGrant, http.StatusBadRequest,
+			"sender-constraint binding does not match the device-authorization record"
 	case errors.Is(err, dcgrant.ErrSubjectMissing):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
-			"device authorization is not associated with an end user")
+		return errInvalidGrant, http.StatusBadRequest, "device authorization is not associated with an end user"
 	case errors.Is(err, dcgrant.ErrPendingApproval):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAuthorizationPending,
-			"authorization request is still pending")
+		return errAuthorizationPending, http.StatusBadRequest, "authorization request is still pending"
 	case errors.Is(err, dcgrant.ErrDenied):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errAccessDenied,
-			"authorization request was denied")
+		return errAccessDenied, http.StatusBadRequest, "authorization request was denied"
 	case errors.Is(err, dcgrant.ErrExpiredOrConsumed):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errExpiredToken,
-			"device_code expired or already consumed")
+		return errExpiredToken, http.StatusBadRequest, "device_code expired or already consumed"
 	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		return errServerError, http.StatusInternalServerError, ""
 	}
 }
 

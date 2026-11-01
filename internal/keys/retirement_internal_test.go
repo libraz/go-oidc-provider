@@ -27,10 +27,3 @@ func TestRetiredBy(t *testing.T) {
 		})
 	}
 }
-
-func TestClockReadingNilFallsBackToSystem(t *testing.T) {
-	t.Parallel()
-	if got := clockReading(nil); time.Since(got) > time.Minute || time.Until(got) > time.Minute {
-		t.Errorf("clockReading(nil) = %v, want a system clock reading", got)
-	}
-}

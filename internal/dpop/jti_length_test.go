@@ -1,9 +1,11 @@
-package dpop //nolint:testpackage // exercises the package-private decodeProofClaims and maxJTILen.
+package dpop //nolint:testpackage // exercises the package-private decodeProofClaims.
 
 import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/jose"
 )
 
 // TestDecodeProofClaims_RejectsOversizedJTI pins the cap: jti is capped
@@ -14,7 +16,7 @@ func TestDecodeProofClaims_RejectsOversizedJTI(t *testing.T) {
 	t.Parallel()
 
 	// Build a minimal valid claim envelope but with an oversized jti.
-	oversized := strings.Repeat("a", maxJTILen+1)
+	oversized := strings.Repeat("a", jose.MaxJTILen+1)
 	payload := []byte(`{"jti":"` + oversized + `","htm":"POST","htu":"https://op/token","iat":1700000000}`)
 	_, err := decodeProofClaims(payload)
 	if err == nil {
@@ -26,17 +28,17 @@ func TestDecodeProofClaims_RejectsOversizedJTI(t *testing.T) {
 }
 
 // TestDecodeProofClaims_AcceptsJTIAtCap confirms the boundary value
-// (exactly maxJTILen bytes) is admitted.
+// (exactly jose.MaxJTILen bytes) is admitted.
 func TestDecodeProofClaims_AcceptsJTIAtCap(t *testing.T) {
 	t.Parallel()
 
-	exact := strings.Repeat("a", maxJTILen)
+	exact := strings.Repeat("a", jose.MaxJTILen)
 	payload := []byte(`{"jti":"` + exact + `","htm":"POST","htu":"https://op/token","iat":1700000000}`)
 	c, err := decodeProofClaims(payload)
 	if err != nil {
 		t.Fatalf("decodeProofClaims: %v", err)
 	}
 	if c.JTI != exact {
-		t.Errorf("c.JTI length = %d, want %d", len(c.JTI), maxJTILen)
+		t.Errorf("c.JTI length = %d, want %d", len(c.JTI), jose.MaxJTILen)
 	}
 }

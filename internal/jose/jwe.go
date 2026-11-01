@@ -184,30 +184,6 @@ type EncryptionPolicyResolver interface {
 	JWEPolicy() JWEPolicy
 }
 
-// EncryptionKeyResolverFunc adapts a free function plus a key-list
-// slice into [EncryptionKeyResolver]. It exists for callers that
-// already maintain their own keyset rotation logic.
-type EncryptionKeyResolverFunc struct {
-	ResolveFn func(kid string) (any, bool)
-	AllFn     func() []any
-}
-
-// Resolve calls the wrapped ResolveFn.
-func (f EncryptionKeyResolverFunc) Resolve(kid string) (any, bool) {
-	if f.ResolveFn == nil {
-		return nil, false
-	}
-	return f.ResolveFn(kid)
-}
-
-// All calls the wrapped AllFn.
-func (f EncryptionKeyResolverFunc) All() []any {
-	if f.AllFn == nil {
-		return nil
-	}
-	return f.AllFn()
-}
-
 // DecryptedJWE is the result of a successful [Decrypt] call. It
 // carries the verified plaintext alongside the protected-header
 // fields the caller most often needs (kid for audit, alg/enc for

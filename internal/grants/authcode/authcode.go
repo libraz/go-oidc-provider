@@ -110,9 +110,9 @@ type IssuerConfig struct {
 	// Store is the substore the issuer will Save into; required.
 	Store store.AuthorizationCodeStore
 
-	// Clock returns the current wall-clock time. Defaults to
-	// [timex.SystemClock.Now] when nil.
-	Clock func() time.Time
+	// Clock supplies the current wall-clock time. Defaults to
+	// [timex.SystemClock] when nil.
+	Clock timex.Clock
 
 	// TTL overrides [TTLDefault]. Zero or negative values fall back to
 	// [TTLDefault].
@@ -124,10 +124,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("authcode: NewIssuer requires Store")
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock.Now
-	}
+	clock := timex.OrSystem(cfg.Clock).Now
 	ttl := cfg.TTL
 	if ttl <= 0 {
 		ttl = TTLDefault
@@ -225,9 +222,9 @@ type ExchangerConfig struct {
 	// Store is the substore the exchanger will Consume from; required.
 	Store store.AuthorizationCodeStore
 
-	// Clock returns the current wall-clock time. Defaults to
-	// [timex.SystemClock.Now] when nil.
-	Clock func() time.Time
+	// Clock supplies the current wall-clock time. Defaults to
+	// [timex.SystemClock] when nil.
+	Clock timex.Clock
 }
 
 // NewExchanger constructs an [Exchanger] from cfg.
@@ -235,10 +232,7 @@ func NewExchanger(cfg ExchangerConfig) (*Exchanger, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("authcode: NewExchanger requires Store")
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock.Now
-	}
+	clock := timex.OrSystem(cfg.Clock).Now
 	return &Exchanger{store: cfg.Store, clock: clock}, nil
 }
 

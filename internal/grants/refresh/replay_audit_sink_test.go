@@ -13,6 +13,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/redact"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -30,7 +31,7 @@ func TestExchange_Replay_FingerprintSurvivesToSlogSink(t *testing.T) {
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	cur := t0
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 
 	var buf bytes.Buffer

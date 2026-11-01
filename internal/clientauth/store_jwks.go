@@ -92,12 +92,9 @@ func (r *StoreJWKSResolver) SetURLFetcher(f URLFetcher) {
 // when one was registered. An empty string means the client did not pin
 // the assertion algorithm.
 func (r *StoreJWKSResolver) AssertionSigningAlg(ctx context.Context, clientID string) (string, error) {
-	client, err := r.clients.GetClient(ctx, clientID)
+	client, err := r.lookupClient(ctx, clientID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return "", ErrJWKSNotConfigured
-		}
-		return "", fmt.Errorf("%w: %w", errClientLookup, err)
+		return "", err
 	}
 	return client.TokenEndpointAuthSigningAlg, nil
 }
@@ -109,12 +106,9 @@ func (r *StoreJWKSResolver) AssertionSigningAlg(ctx context.Context, clientID st
 // translation is appropriate (today every path collapses to
 // [ErrCredentialsInvalid] to avoid leaking signal).
 func (r *StoreJWKSResolver) JWKS(ctx context.Context, clientID string) (*josev4.JSONWebKeySet, error) {
-	client, err := r.clients.GetClient(ctx, clientID)
+	client, err := r.lookupClient(ctx, clientID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, ErrJWKSNotConfigured
-		}
-		return nil, fmt.Errorf("%w: %w", errClientLookup, err)
+		return nil, err
 	}
 	if err := checkKeySource(client); err != nil {
 		return nil, err
@@ -127,10 +121,7 @@ func (r *StoreJWKSResolver) JWKS(ctx context.Context, clientID string) (*josev4.
 		if err != nil {
 			return nil, fmt.Errorf("clientauth: fetch JWKs: %w", err)
 		}
-		if keys == nil || len(keys.Keys) == 0 {
-			return nil, ErrJWKSNotConfigured
-		}
-		return keys, nil
+		return nonEmptyKeySet(keys)
 	}
 	// Decoding shares [rpjwks.ParseKeySet] with the fetched path, so the
 	// registered keyset is bounded by the same member cap and decoded
@@ -141,10 +132,7 @@ func (r *StoreJWKSResolver) JWKS(ctx context.Context, clientID string) (*josev4.
 	if err != nil {
 		return nil, fmt.Errorf("clientauth: parse client JWKs: %w", err)
 	}
-	if len(keys.Keys) == 0 {
-		return nil, ErrJWKSNotConfigured
-	}
-	return keys, nil
+	return nonEmptyKeySet(keys)
 }
 
 // RefreshJWKS forces a cache-bypassing refetch of a jwks_uri-registered
@@ -159,12 +147,9 @@ func (r *StoreJWKSResolver) JWKS(ctx context.Context, clientID string) (*josev4.
 // yields [ErrJWKSURIUnsupported]; the verifier treats that as "no fresh
 // keys available" and leaves the original miss in place.
 func (r *StoreJWKSResolver) RefreshJWKS(ctx context.Context, clientID string) (*josev4.JSONWebKeySet, error) {
-	client, err := r.clients.GetClient(ctx, clientID)
+	client, err := r.lookupClient(ctx, clientID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, ErrJWKSNotConfigured
-		}
-		return nil, fmt.Errorf("%w: %w", errClientLookup, err)
+		return nil, err
 	}
 	if err := checkKeySource(client); err != nil {
 		return nil, err
@@ -173,13 +158,31 @@ func (r *StoreJWKSResolver) RefreshJWKS(ctx context.Context, clientID string) (*
 		return r.JWKS(ctx, clientID)
 	}
 	fresh, ok := r.urlFetcher.(freshURLFetcher)
-	if r.urlFetcher == nil || !ok {
+	if !ok {
 		return nil, ErrJWKSURIUnsupported
 	}
 	keys, err := fresh.FetchFresh(ctx, client.JWKsURI)
 	if err != nil {
 		return nil, fmt.Errorf("clientauth: refetch JWKs: %w", err)
 	}
+	return nonEmptyKeySet(keys)
+}
+
+// lookupClient loads the client, mapping a missing one to
+// [ErrJWKSNotConfigured] and a store fault to [errClientLookup].
+func (r *StoreJWKSResolver) lookupClient(ctx context.Context, clientID string) (*store.Client, error) {
+	client, err := r.clients.GetClient(ctx, clientID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrJWKSNotConfigured
+		}
+		return nil, fmt.Errorf("%w: %w", errClientLookup, err)
+	}
+	return client, nil
+}
+
+// nonEmptyKeySet returns keys, or [ErrJWKSNotConfigured] when it holds none.
+func nonEmptyKeySet(keys *josev4.JSONWebKeySet) (*josev4.JSONWebKeySet, error) {
 	if keys == nil || len(keys.Keys) == 0 {
 		return nil, ErrJWKSNotConfigured
 	}

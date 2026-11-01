@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -41,7 +42,7 @@ func newLongChainFixture(tb testing.TB, depth int) longChainFixture {
 	tb.Helper()
 
 	cur := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	tokens := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 	events := &recordingEmitter{}
 

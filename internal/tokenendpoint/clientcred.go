@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/clientcred"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -246,6 +247,6 @@ func issueClientCredsResponse(
 		TokenType:            binding.tokenTypeFor(),
 		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
 		Scope:                joinScope(scope),
-		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
+		AuthorizationDetails: authorize.CloneAuthorizationDetails(authorizationDetails),
 	})
 }

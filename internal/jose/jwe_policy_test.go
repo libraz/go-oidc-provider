@@ -38,7 +38,7 @@ func TestDecrypt_PolicyRejectsExcludedAlg(t *testing.T) {
 	t.Parallel()
 
 	rsaKey := mustRSAKey(t)
-	jwe, err := jose.Encrypt([]byte("request object"), jose.EncryptionRecipient{
+	jwe, err := jose.EncryptNestedJWT("request object", jose.EncryptionRecipient{
 		Alg: jose.JWEAlgRSAOAEP256, Enc: jose.JWEEncA256GCM, KeyID: "k1", Key: &rsaKey.PublicKey,
 	})
 	if err != nil {
@@ -67,7 +67,7 @@ func TestDecrypt_PolicyRejectsExcludedEnc(t *testing.T) {
 	t.Parallel()
 
 	ecKey := mustECKey(t, elliptic.P256())
-	jwe, err := jose.Encrypt([]byte("request object"), jose.EncryptionRecipient{
+	jwe, err := jose.EncryptNestedJWT("request object", jose.EncryptionRecipient{
 		Alg: jose.JWEAlgECDHES, Enc: jose.JWEEncA128GCM, KeyID: "k1", Key: &ecKey.PublicKey,
 	})
 	if err != nil {
@@ -91,7 +91,7 @@ func TestDecrypt_PolicyAdmitsRetainedAlg(t *testing.T) {
 	t.Parallel()
 
 	ecKey := mustECKey(t, elliptic.P256())
-	jwe, err := jose.Encrypt([]byte("request object"), jose.EncryptionRecipient{
+	jwe, err := jose.EncryptNestedJWT("request object", jose.EncryptionRecipient{
 		Alg: jose.JWEAlgECDHES, Enc: jose.JWEEncA256GCM, KeyID: "k1", Key: &ecKey.PublicKey,
 	})
 	if err != nil {
@@ -123,7 +123,7 @@ func TestDecrypt_EmptyPolicyPermitsNothing(t *testing.T) {
 	t.Parallel()
 
 	rsaKey := mustRSAKey(t)
-	jwe, err := jose.Encrypt([]byte("request object"), jose.EncryptionRecipient{
+	jwe, err := jose.EncryptNestedJWT("request object", jose.EncryptionRecipient{
 		Alg: jose.JWEAlgRSAOAEP256, Enc: jose.JWEEncA256GCM, KeyID: "k1", Key: &rsaKey.PublicKey,
 	})
 	if err != nil {

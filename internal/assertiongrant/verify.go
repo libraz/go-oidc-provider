@@ -15,16 +15,14 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
 	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// typIDJAG is the JOSE typ an ID-JAG carries (draft-06 §3).
-const typIDJAG = "oauth-id-jag+jwt"
 
 // maxLifetime bounds how far in the future exp may sit. The leeway is added
 // on top so an assertion minted with exp = iat+5m by a peer whose clock runs
 // slightly ahead is not refused.
-const maxLifetime = 5 * time.Minute
+const maxLifetime = clientauth.MaxAssertionLifetime
 
 // maxNumericDate (9999-12-31T23:59:59Z) bounds a NumericDate before it is
 // converted to an integer, so an absurd value cannot overflow.
@@ -37,12 +35,6 @@ const leeway = clientauth.DefaultAssertionLeeway
 // replayKeyPrefix keeps jwt-bearer jti markers apart from the client
 // assertion namespace in the shared ConsumedJTIStore.
 const replayKeyPrefix = "jwtbearer:"
-
-// replayKeyEscaper percent-encodes the key separator in the issuer so each
-// (issuer, jti) pair maps to exactly one replay key.
-//
-//nolint:gochecknoglobals // immutable, concurrency-safe replacer.
-var replayKeyEscaper = strings.NewReplacer("%", "%25", ":", "%3A")
 
 // Verifier verifies jwt-bearer assertions against a fixed issuer set. It is
 // safe for concurrent use.
@@ -192,10 +184,10 @@ func checkTyp(p Profile, typ any, present bool) error {
 	}
 	switch p {
 	case ProfileIDJAG:
-		if s == typIDJAG || s == "application/"+typIDJAG {
+		if s == jose.TypIDJAG || s == "application/"+jose.TypIDJAG {
 			return nil
 		}
-		return fmt.Errorf("typ %q is not %s", s, typIDJAG)
+		return fmt.Errorf("typ %q is not %s", s, jose.TypIDJAG)
 	case ProfileJWT:
 		if !present || jose.IsTypJWT(s) {
 			return nil
@@ -396,9 +388,9 @@ func checkConfirmation(raw json.RawMessage, b Binding) error {
 		method = k
 	}
 	switch method {
-	case "jkt":
+	case tokens.CnfJKT:
 		want = b.DPoPJKT
-	case "x5t#S256":
+	case tokens.CnfX5tS256:
 		want = b.X5TS256
 	default:
 		return fmt.Errorf("cnf method %q is not supported", method)
@@ -417,10 +409,10 @@ func checkConfirmation(raw json.RawMessage, b Binding) error {
 // a server-side fault and is returned unwrapped by [*Error].
 func (v *Verifier) markJTI(ctx context.Context, iss string, c *claims) error {
 	jti, ok := stringClaim(c.raw["jti"])
-	if !ok || jti == "" || len(jti) > clientauth.MaxJTILen {
+	if !ok || jti == "" || len(jti) > jose.MaxJTILen {
 		return reject(ReasonReplay, errors.New("jti missing, empty, oversized or not a string"))
 	}
-	key := replayKeyPrefix + replayKeyEscaper.Replace(iss) + ":" + jti
+	key := clientauth.ReplayKey(replayKeyPrefix, iss, jti)
 	if err := v.jtis.Mark(ctx, key, c.exp.Add(leeway)); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return reject(ReasonReplay, errors.New("jti already consumed"))

@@ -5,6 +5,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -134,7 +135,7 @@ func issueRefreshToken(ctx context.Context, deps Deps, in refreshIssuance) (stri
 	}
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
-		Clock: deps.clockFunc(),
+		Clock: deps.Clock,
 		TTL:   pickRefreshTokenTTL(deps, in.Scope),
 	})
 	if err != nil {
@@ -151,7 +152,7 @@ func issueRefreshToken(ctx context.Context, deps Deps, in refreshIssuance) (stri
 		AuthTime:             timeFromUnix(in.AuthCtx.AuthTime),
 		ACR:                  in.AuthCtx.ACR,
 		AMR:                  append([]string(nil), in.AuthCtx.AMR...),
-		AuthorizationDetails: cloneAuthorizationDetails(in.AuthCtx.AuthorizationDetails),
+		AuthorizationDetails: authorize.CloneAuthorizationDetails(in.AuthCtx.AuthorizationDetails),
 		Claims:               cloneClaimsMap(in.AuthCtx.EncodedClaims),
 		AccessTokenExtra:     in.AccessTokenExtra,
 

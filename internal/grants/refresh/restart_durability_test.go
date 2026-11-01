@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
 // TestExchange_RotationVerdictSurvivesAProcessThatNeverSawTheRotation
@@ -58,7 +59,7 @@ func TestExchange_RotationVerdictSurvivesAProcessThatNeverSawTheRotation(t *test
 	// The restart. Nothing carries over but the store.
 	restarted, err := refresh.NewExchanger(refresh.ExchangerConfig{
 		Store: f.store,
-		Clock: func() time.Time { return *f.cur },
+		Clock: timex.ClockFunc(func() time.Time { return *f.cur }),
 	})
 	if err != nil {
 		t.Fatalf("NewExchanger after restart: %v", err)

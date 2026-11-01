@@ -51,7 +51,7 @@ func FuzzJWENested(f *testing.F) {
 	for _, depth := range []int{0, 1, 5, 10, 11} {
 		payload := leaf
 		for range depth {
-			out, err := jose.Encrypt([]byte(payload), jose.EncryptionRecipient{
+			out, err := jose.EncryptNestedJWT(payload, jose.EncryptionRecipient{
 				Alg:   jose.JWEAlgRSAOAEP256,
 				Enc:   jose.JWEEncA256GCM,
 				KeyID: "k1",
@@ -99,7 +99,7 @@ func FuzzJWENestedDecrypt(f *testing.F) {
 	rsaKey := mustRSAKeyB(f)
 	resolver := singleKeyResolver{kid: "k1", key: rsaKey}
 
-	out, err := jose.Encrypt([]byte("leaf"), jose.EncryptionRecipient{
+	out, err := jose.EncryptNestedJWT("leaf", jose.EncryptionRecipient{
 		Alg:   jose.JWEAlgRSAOAEP256,
 		Enc:   jose.JWEEncA256GCM,
 		KeyID: "k1",

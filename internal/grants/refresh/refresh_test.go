@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -31,7 +32,7 @@ type fixture struct {
 func newFixture(tb testing.TB, t0 time.Time) fixture {
 	tb.Helper()
 	cur := t0
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
 	if err != nil {
@@ -257,7 +258,7 @@ func TestExchange_ReplayDoesNotRevokeCrossClientParentLink(t *testing.T) {
 	st := newAlwaysAliveRefreshStoreWithClock(func() time.Time { return t0 })
 	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
 		Store:    st,
-		Clock:    func() time.Time { return t0 },
+		Clock:    timex.ClockFunc(func() time.Time { return t0 }),
 		GraceTTL: -1,
 	})
 	if err != nil {
@@ -473,7 +474,7 @@ func TestExchange_DetectsExpiredToken(t *testing.T) {
 	cur := t0
 	iss, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: st,
-		Clock: func() time.Time { return cur },
+		Clock: timex.ClockFunc(func() time.Time { return cur }),
 		TTL:   60 * time.Second,
 	})
 	if err != nil {
@@ -481,7 +482,7 @@ func TestExchange_DetectsExpiredToken(t *testing.T) {
 	}
 	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
 		Store: st,
-		Clock: func() time.Time { return cur },
+		Clock: timex.ClockFunc(func() time.Time { return cur }),
 	})
 	if err != nil {
 		t.Fatalf("NewExchanger: %v", err)
@@ -785,7 +786,7 @@ func TestExchange_GraceWindow_BoundaryTable(t *testing.T) {
 			t.Parallel()
 
 			cur := t0
-			clk := func() time.Time { return cur }
+			clk := timex.ClockFunc(func() time.Time { return cur })
 			st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 			iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 30 * 24 * time.Hour})
 			if err != nil {
@@ -938,7 +939,7 @@ func TestExchange_GraceWindow_ExpiredTokenSurfacesExpired(t *testing.T) {
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	cur := t0
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	st := newAlwaysAliveRefreshStoreWithClock(clk)
 	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 90 * time.Second})
 	if err != nil {
@@ -975,9 +976,9 @@ func TestExchange_GraceWindow_FindFaultDoesNotRevokeChain(t *testing.T) {
 	st := &graceFindFaultStore{err: errors.New("redis unavailable")}
 	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
 		Store: st,
-		Clock: func() time.Time {
+		Clock: timex.ClockFunc(func() time.Time {
 			return time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("NewExchanger: %v", err)
@@ -1100,7 +1101,7 @@ func TestExchange_ChainRevokeFailure_EmitsAuditEvent(t *testing.T) {
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	cur := t0
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	base := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 	wrapped := &failingChainStore{RefreshTokenStore: base, err: errors.New("synthetic chain revoke fault")}
 	em := &recordingEmitter{}
@@ -1173,7 +1174,7 @@ func newRootLookupFixture(t *testing.T, hideRecord bool) (*rootLookupFaultStore,
 	em := &recordingEmitter{}
 	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
 		Store: st,
-		Clock: func() time.Time { return t0 },
+		Clock: timex.ClockFunc(func() time.Time { return t0 }),
 		Audit: em,
 	})
 	if err != nil {
@@ -1272,7 +1273,7 @@ func TestExchange_Replay_EmitsReplayDetectedAuditEvent(t *testing.T) {
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	cur := t0
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 	em := &recordingEmitter{}
 
@@ -1340,7 +1341,7 @@ func TestExchange_ChainRevoke_ReportsResolvedGrant(t *testing.T) {
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	cur := t0
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 
 	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
@@ -1389,7 +1390,7 @@ func TestExchange_ChainRevoke_ReportsResolvedGrant(t *testing.T) {
 func TestRevokeReplayedChain_UnresolvableRecord_ReportsNoGrant(t *testing.T) {
 	t.Parallel()
 
-	clk := func() time.Time { return time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC) }
+	clk := timex.ClockFunc(func() time.Time { return time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC) })
 	st := inmem.New().RefreshTokens()
 	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
 		Store:              st,
@@ -1413,7 +1414,7 @@ func TestRevokeReplayedChain_TokenExchangeChainSparesJoinedGrant(t *testing.T) {
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	cur := t0
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
 	if err != nil {

@@ -79,6 +79,17 @@ type setConfig struct {
 	jwe      jose.JWEPolicy
 }
 
+// newSetConfig applies opts over the defaults (system clock, no observer).
+func newSetConfig(opts []SetOption) setConfig {
+	cfg := setConfig{now: timex.SystemClock.Now}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	return cfg
+}
+
 // WithClock pins the wall-clock seam [Set.Find] consults when comparing
 // an [Entry.NotAfter] against "now". A nil function (or omitting the
 // option) falls back to [timex.SystemClock]; tests SHOULD inject a
@@ -142,12 +153,7 @@ func NewSet(entries []Entry, opts ...SetOption) (*Set, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("%w: empty keyset", ErrInvalidKey)
 	}
-	cfg := setConfig{now: timex.SystemClock.Now}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&cfg)
-		}
-	}
+	cfg := newSetConfig(opts)
 	seen := make(map[string]struct{}, len(entries))
 	jwks := josev4.JSONWebKeySet{Keys: make([]josev4.JSONWebKey, 0, len(entries))}
 	out := make([]Entry, len(entries))
@@ -221,30 +227,36 @@ func (s *Set) Active() Entry { return s.entries[0] }
 // semantics: a kid scheduled to retire at T MUST NOT verify a JWS
 // presented at T.
 func (s *Set) Find(ctx context.Context, keyID string) (Entry, bool) {
-	for _, e := range s.entries {
-		if e.KeyID != keyID {
+	return findLive(s.entries, keyID, func(e Entry) (string, time.Time) { return e.KeyID, e.NotAfter },
+		s.now, s.observer, ctx)
+}
+
+// findLive returns the entry whose id matches keyID, unless it has
+// retired per its NotAfter; a retired match notifies the observer with ctx
+// and is reported as absent.
+func findLive[E any](
+	entries []E,
+	keyID string,
+	idAndNotAfter func(E) (string, time.Time),
+	now func() time.Time,
+	observer RetiredKidObserver,
+	ctx context.Context,
+) (E, bool) {
+	var zero E
+	for _, e := range entries {
+		id, notAfter := idAndNotAfter(e)
+		if id != keyID {
 			continue
 		}
-		if retiredBy(clockReading(s.now), e.NotAfter) {
-			if s.observer != nil {
-				s.observer(ctx, keyID)
+		if retiredBy(now(), notAfter) {
+			if observer != nil {
+				observer(ctx, keyID)
 			}
-			return Entry{}, false
+			return zero, false
 		}
 		return e, true
 	}
-	return Entry{}, false
-}
-
-// clockReading returns the wall-clock reading the retirement gate uses.
-// A nil clock (defensively possible if a caller built the struct outside
-// [NewSet]) collapses onto [timex.SystemClock], so the gate cannot
-// accidentally accept a retired kid because the clock seam was missed.
-func clockReading(now func() time.Time) time.Time {
-	if now == nil {
-		return timex.SystemClock.Now()
-	}
-	return now()
+	return zero, false
 }
 
 // retiredBy reports whether an entry whose NotAfter is notAfter has

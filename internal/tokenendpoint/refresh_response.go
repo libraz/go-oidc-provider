@@ -137,7 +137,7 @@ func issueRefreshResponse(
 		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
 		IDToken:              idToken,
 		Scope:                joinScope(exchanged.Scope),
-		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
+		AuthorizationDetails: authorize.CloneAuthorizationDetails(authorizationDetails),
 		GrantID:              chainGrantIDForResponse(deps, exchanged),
 	}
 	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedForRotation(exchanged, authCtx, authorizationDetails), binding, &response, rotation); err != nil {
@@ -256,7 +256,7 @@ func rotateRefreshToken(
 	}
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
-		Clock: deps.clockFunc(),
+		Clock: deps.Clock,
 		TTL:   pickRefreshTokenTTL(deps, exchanged.BoundScope),
 	})
 	if err != nil {
@@ -288,7 +288,7 @@ func rotateRefreshToken(
 		AuthTime:             exchanged.AuthTime,
 		ACR:                  exchanged.ACR,
 		AMR:                  append([]string(nil), exchanged.AMR...),
-		AuthorizationDetails: cloneAuthorizationDetails(exchanged.AuthorizationDetails),
+		AuthorizationDetails: authorize.CloneAuthorizationDetails(exchanged.AuthorizationDetails),
 		AccessTokenExtra:     cloneClaimsMap(exchanged.AccessTokenExtra),
 		Claims:               cloneClaimsMap(exchanged.Claims),
 

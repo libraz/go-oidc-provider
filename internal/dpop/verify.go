@@ -175,10 +175,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if cfg.JTIs == nil {
 		return nil, errors.New("dpop: NewVerifier requires JTIs store")
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock
-	}
+	clock := timex.OrSystem(cfg.Clock)
 	window := cfg.IatWindow
 	if window <= 0 {
 		window = DefaultIatWindow

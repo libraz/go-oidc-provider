@@ -46,7 +46,7 @@ func TestEncryptDecrypt_RoundTrip(t *testing.T) {
 			t.Parallel()
 
 			plaintext := []byte("hello jwe")
-			jwe, err := jose.Encrypt(plaintext, jose.EncryptionRecipient{
+			jwe, err := jose.EncryptNestedJWT(string(plaintext), jose.EncryptionRecipient{
 				Alg: tc.alg, Enc: tc.enc, KeyID: "k1", Key: tc.pub,
 			})
 			if err != nil {
@@ -457,19 +457,19 @@ func TestEncrypt_RejectsNonAllowedAlgEnc(t *testing.T) {
 
 	rsaKey := mustRSAKey(t)
 
-	_, err := jose.Encrypt([]byte("x"), jose.EncryptionRecipient{
+	_, err := jose.EncryptNestedJWT("x", jose.EncryptionRecipient{
 		Alg: "RSA1_5", Enc: jose.JWEEncA256GCM, KeyID: "k1", Key: &rsaKey.PublicKey,
 	})
 	if !errors.Is(err, jose.ErrJWEAlgNotAllowed) {
 		t.Fatalf("Encrypt with RSA1_5: want ErrJWEAlgNotAllowed, got %v", err)
 	}
-	_, err = jose.Encrypt([]byte("x"), jose.EncryptionRecipient{
+	_, err = jose.EncryptNestedJWT("x", jose.EncryptionRecipient{
 		Alg: jose.JWEAlgRSAOAEP256, Enc: "A128CBC-HS256", KeyID: "k1", Key: &rsaKey.PublicKey,
 	})
 	if !errors.Is(err, jose.ErrJWEEncNotAllowed) {
 		t.Fatalf("Encrypt with A128CBC-HS256: want ErrJWEEncNotAllowed, got %v", err)
 	}
-	_, err = jose.Encrypt([]byte("x"), jose.EncryptionRecipient{
+	_, err = jose.EncryptNestedJWT("x", jose.EncryptionRecipient{
 		Alg: jose.JWEAlgRSAOAEP256, Enc: jose.JWEEncA256GCM, KeyID: "k1", Key: nil,
 	})
 	if !errors.Is(err, jose.ErrJWEUnsupportedKey) {
@@ -484,7 +484,7 @@ func TestEncrypt_RejectsSubMinimumRSARecipient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rsa.GenerateKey: %v", err)
 	}
-	_, err = jose.Encrypt([]byte("x"), jose.EncryptionRecipient{
+	_, err = jose.EncryptNestedJWT("x", jose.EncryptionRecipient{
 		Alg: jose.JWEAlgRSAOAEP256, Enc: jose.JWEEncA256GCM, KeyID: "weak", Key: &rsaKey.PublicKey,
 	})
 	if !errors.Is(err, jose.ErrJWEUnsupportedKey) {
@@ -611,41 +611,6 @@ func (r *allCallCounterResolver) Resolve(string) (any, bool) { return nil, false
 func (r *allCallCounterResolver) All() []any {
 	r.allCalls++
 	return r.keys
-}
-
-func TestEncryptionKeyResolverFuncNilSafeAndDelegates(t *testing.T) {
-	t.Parallel()
-
-	var empty jose.EncryptionKeyResolverFunc
-	if got, ok := empty.Resolve("kid-1"); ok || got != nil {
-		t.Fatalf("empty Resolve = (%v, %v), want (nil, false)", got, ok)
-	}
-	if got := empty.All(); got != nil {
-		t.Fatalf("empty All = %v, want nil", got)
-	}
-
-	key := &rsa.PrivateKey{}
-	resolver := jose.EncryptionKeyResolverFunc{
-		ResolveFn: func(kid string) (any, bool) {
-			if kid != "kid-1" {
-				return nil, false
-			}
-			return key, true
-		},
-		AllFn: func() []any {
-			return []any{key}
-		},
-	}
-	if got, ok := resolver.Resolve("kid-1"); !ok || got != key {
-		t.Fatalf("Resolve(kid-1) = (%v, %v), want key,true", got, ok)
-	}
-	if got, ok := resolver.Resolve("missing"); ok || got != nil {
-		t.Fatalf("Resolve(missing) = (%v, %v), want nil,false", got, ok)
-	}
-	all := resolver.All()
-	if len(all) != 1 || all[0] != key {
-		t.Fatalf("All() = %v, want single configured key", all)
-	}
 }
 
 func mustRSAKey(t *testing.T) *rsa.PrivateKey {

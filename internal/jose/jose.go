@@ -13,6 +13,16 @@ import (
 // userinfo responses, and the inner payload of a nested JWE.
 const TypJWT = "JWT"
 
+// TypIDJAG is the JOSE "typ" of an Identity Assertion JWT Authorization
+// Grant (draft-ietf-oauth-identity-assertion-authz-grant §3.1).
+const TypIDJAG = "oauth-id-jag+jwt"
+
+// MaxJTILen bounds the "jti" claim length every replay-guarded JWT
+// verifier (DPoP proof, request object, client and grant assertions)
+// accepts, so no replay-store key grows unbounded. It sits comfortably
+// above any UUID encoding a client emits.
+const MaxJTILen = 256
+
 // IsTypJWT reports whether a "typ" header value names a plain JWT. Media
 // type names compare case-insensitively (RFC 7515 §4.1.9), so "jwt" matches.
 func IsTypJWT(typ string) bool {

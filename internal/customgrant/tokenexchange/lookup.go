@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
@@ -69,13 +70,7 @@ func (h *Handler) lookupAccessToken(ctx context.Context, raw string) (lookupResu
 
 // lookupJWT verifies a JWT-shaped token against the OP keyset.
 func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult, error) {
-	verifier := &tokens.AccessTokenVerifier{
-		Keys:       h.keys,
-		Issuer:     h.issuer,
-		Clock:      h.clock,
-		Leeway:     h.leeway,
-		RequireJTI: revocation.RequireJTIFor(h.revocationStrategy),
-	}
+	verifier := endpointsupport.NewAccessTokenVerifier(h.keys, h.issuer, h.clock, h.leeway, h.revocationStrategy)
 	claims, _, err := verifier.Verify(ctx, raw)
 	if err != nil {
 		if errors.Is(err, tokens.ErrAccessTokenIssuerMismatch) {

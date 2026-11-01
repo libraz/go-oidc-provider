@@ -5,7 +5,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -171,28 +170,13 @@ func (a *Argon2id) VerifyDummy(presented string) {
 // OWASP 2024 minima); otherwise it derives the candidate key and
 // compares it in constant time.
 func (a *Argon2id) verifyArgon2id(presented, stored string) error {
-	switch err := argon2id.Verify([]byte(presented), stored, Argon2idPolicy()); {
-	case err == nil:
-		return nil
-	case errors.Is(err, argon2id.ErrMismatch),
-		errors.Is(err, argon2id.ErrEncoding),
-		errors.Is(err, argon2id.ErrPolicy):
-		return ErrCredentialsInvalid
-	default:
+	// Every failure, mismatch or policy violation alike, collapses to one
+	// error so the wire reveals nothing about the stored record.
+	if err := argon2id.Verify([]byte(presented), stored, Argon2idPolicy()); err != nil {
 		return ErrCredentialsInvalid
 	}
+	return nil
 }
-
-// Argon2idMinMemory is the OWASP 2024 minimum memory cost for
-// Argon2id, in KiB (19 MiB). The verifier rejects stored hashes whose
-// "m=" parameter is below this floor so a database leak cannot be
-// compounded by trivially-broken work factors.
-const Argon2idMinMemory uint32 = 19 * 1024
-
-// Argon2idMinIterations is the OWASP 2024 minimum iteration count
-// (time cost) for Argon2id. The verifier rejects stored hashes whose
-// "t=" parameter is below this floor.
-const Argon2idMinIterations uint32 = 2
 
 // Argon2idPolicy is the [argon2id.Policy] this verifier applies to
 // stored client_secret hashes. The bounds inherit from

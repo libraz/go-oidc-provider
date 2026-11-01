@@ -167,7 +167,7 @@ func exchangeAuthCode(
 ) (*authcode.Exchanged, bool) {
 	exchanger, err := authcode.NewExchanger(authcode.ExchangerConfig{
 		Store: deps.Codes,
-		Clock: deps.clockFunc(),
+		Clock: deps.Clock,
 	})
 	if err != nil {
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
@@ -423,7 +423,7 @@ func issueAuthCodeResponse(
 		RefreshToken:         refreshToken,
 		IDToken:              idToken,
 		Scope:                joinScope(exchanged.Scope),
-		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
+		AuthorizationDetails: authorize.CloneAuthorizationDetails(authorizationDetails),
 		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
 	})
 }
@@ -814,7 +814,7 @@ func mintOpaqueAccessToken(
 		Scope:                 append([]string(nil), scope...),
 		Audience:              audience,
 		AuthTime:              opaqueAuthTime(authTime),
-		AuthorizationDetails:  cloneAuthorizationDetails(authorizationDetails),
+		AuthorizationDetails:  authorize.CloneAuthorizationDetails(authorizationDetails),
 		AuthorizationRecorded: true,
 		DPoPJKT:               binding.DPoPJKT,
 		MTLSCertThumbprint:    binding.MTLSThumbprint,
@@ -867,24 +867,6 @@ func timeFromUnix(v int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(v, 0).UTC()
-}
-
-func cloneAuthorizationDetails(in []map[string]any) []map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]map[string]any, len(in))
-	for i, obj := range in {
-		if obj == nil {
-			continue
-		}
-		cp := make(map[string]any, len(obj))
-		for k, v := range obj {
-			cp[k] = v
-		}
-		out[i] = cp
-	}
-	return out
 }
 
 func cloneClaimsMap(in map[string]any) map[string]any {

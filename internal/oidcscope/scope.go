@@ -31,7 +31,10 @@
 // "scope empty".
 package oidcscope
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // ScopeOpenID is the OIDC Core 1.0 §3.1.2.1 well-known scope name that
 // drives id_token issuance. The value is case-sensitive on the wire
@@ -75,6 +78,14 @@ func ContainsOpenID(scopes []string) bool {
 		}
 	}
 	return false
+}
+
+// WithoutOpenID returns a copy of scopes without [ScopeOpenID]; the input
+// is not modified.
+func WithoutOpenID(scopes []string) []string {
+	return slices.DeleteFunc(slices.Clone(scopes), func(s string) bool {
+		return s == ScopeOpenID
+	})
 }
 
 // ContainsOfflineAccess reports whether scopes lists

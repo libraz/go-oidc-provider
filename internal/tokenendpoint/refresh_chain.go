@@ -3,6 +3,7 @@ package tokenendpoint
 import (
 	"context"
 
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -45,7 +46,7 @@ func refreshExchangedForRotation(exchanged *refresh.Exchanged, authCtx authConte
 	out.AuthTime = timeFromUnix(authCtx.AuthTime)
 	out.ACR = authCtx.ACR
 	out.AMR = append([]string(nil), authCtx.AMR...)
-	out.AuthorizationDetails = cloneAuthorizationDetails(details)
+	out.AuthorizationDetails = authorize.CloneAuthorizationDetails(details)
 	out.Claims = cloneClaimsMap(authCtx.EncodedClaims)
 	out.AuthorizationRecorded = true
 	return &out
@@ -75,7 +76,7 @@ func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Excha
 // issue: its own snapshot narrowed by its live grant, per
 // [tokens.ResolveAuthorization].
 func chainAuthorizationDetails(g *store.Grant, clientID string, snapshot []map[string]any, recorded bool) []map[string]any {
-	own := tokens.Authorization{AuthorizationDetails: cloneAuthorizationDetails(snapshot)}
+	own := tokens.Authorization{AuthorizationDetails: authorize.CloneAuthorizationDetails(snapshot)}
 	return tokens.ResolveAuthorization(own, recorded, g, clientID).AuthorizationDetails
 }
 

@@ -126,9 +126,9 @@ type IssuerConfig struct {
 	// Store is the substore the issuer will Save into; required.
 	Store store.RefreshTokenStore
 
-	// Clock returns the current wall-clock time. Defaults to
-	// [timex.SystemClock.Now] when nil.
-	Clock func() time.Time
+	// Clock supplies the current wall-clock time. Defaults to
+	// [timex.SystemClock] when nil.
+	Clock timex.Clock
 
 	// TTL overrides [timex.RefreshTokenTTLDefault]. Zero or negative
 	// values fall back to [timex.RefreshTokenTTLDefault].
@@ -140,10 +140,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("refresh: NewIssuer requires Store")
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock.Now
-	}
+	clock := timex.OrSystem(cfg.Clock).Now
 	ttl := cfg.TTL
 	if ttl <= 0 {
 		ttl = timex.RefreshTokenTTLDefault
@@ -294,7 +291,7 @@ type Exchanger struct {
 // ExchangerConfig is the parameter bundle for [NewExchanger].
 type ExchangerConfig struct {
 	Store store.RefreshTokenStore
-	Clock func() time.Time
+	Clock timex.Clock
 
 	// GraceTTL bounds the RFC 9700 §2.2.2 window during which a
 	// just-rotated refresh token is still accepted. Three sentinels:
@@ -347,10 +344,7 @@ func NewExchanger(cfg ExchangerConfig) (*Exchanger, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("refresh: NewExchanger requires Store")
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = timex.SystemClock.Now
-	}
+	clock := timex.OrSystem(cfg.Clock).Now
 	graceTTL := cfg.GraceTTL
 	switch {
 	case graceTTL == 0:

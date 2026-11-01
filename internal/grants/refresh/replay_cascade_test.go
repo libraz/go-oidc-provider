@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -26,7 +27,7 @@ type deferredFixture struct {
 func newDeferredFixture(tb testing.TB) deferredFixture {
 	tb.Helper()
 	cur := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
-	clk := func() time.Time { return cur }
+	clk := timex.ClockFunc(func() time.Time { return cur })
 	tokens := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
 	events := &recordingEmitter{}
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{Store: tokens, Clock: clk, TTL: 24 * time.Hour})

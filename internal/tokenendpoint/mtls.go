@@ -109,18 +109,15 @@ func writeMTLSError(w http.ResponseWriter, err error) {
 	case errors.Is(err, mtls.ErrNoClientCert):
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"client certificate required for mTLS-bound token")
-	case errors.Is(err, mtls.ErrCertMalformed):
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"client certificate malformed")
 	case errors.Is(err, mtls.ErrCertSourceConflict):
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"client certificate sources disagree")
-	case errors.Is(err, mtls.ErrCertUntrusted):
-		endpointsupport.WriteInvalidClient(w, false, "client certificate is not trusted")
 	case errors.Is(err, mtls.ErrThumbprintMismatch):
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"client certificate does not match the bound thumbprint")
 	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		// Malformed, untrusted and unexpected errors share the
+		// certificate-read mapping.
+		endpointsupport.WriteMTLSError(w, err)
 	}
 }

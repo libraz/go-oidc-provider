@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/assertiongrant"
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
@@ -99,7 +100,7 @@ func acceptJWTBearerRequest(
 	}
 	// Same code as client_credentials' public-client refusal, so the wire
 	// does not tell "public" apart from "not registered for the grant".
-	if client.PublicClient || client.TokenEndpointAuthMethod == "none" {
+	if clientauth.IsPublicClient(client) {
 		emitJWTBearerRejected(ctx, deps, client.ID, "", jwtBearerReasonPublicClient)
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
 			"client is not authorized for the jwt-bearer grant")
@@ -185,10 +186,10 @@ func applyJWTBearerRequestScope(
 		emitJWTBearerRejected(ctx, deps, req.client.ID, req.issuer, jwtBearerReasonResource)
 		return false
 	}
-	requested = withoutOpenID(requested)
+	requested = oidcscope.WithoutOpenID(requested)
 	var scope []string
 	if len(requested) == 0 {
-		scope = withoutOpenID(req.client.Scopes)
+		scope = oidcscope.WithoutOpenID(req.client.Scopes)
 	} else {
 		scope = slices.DeleteFunc(slices.Clone(requested), func(s string) bool {
 			return !slices.Contains(req.client.Scopes, s)
@@ -206,13 +207,6 @@ func applyJWTBearerRequestScope(
 	}
 	req.requested, req.scope, req.resource = requested, scope, resource
 	return true
-}
-
-// withoutOpenID returns a copy of scope without "openid".
-func withoutOpenID(scope []string) []string {
-	return slices.DeleteFunc(slices.Clone(scope), func(s string) bool {
-		return s == oidcscope.ScopeOpenID
-	})
 }
 
 // verifyJWTBearerAssertion runs the verifier and maps its outcome onto the

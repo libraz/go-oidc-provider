@@ -14,6 +14,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/argon2id"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -35,14 +36,13 @@ func newConfidentialClient(tb testing.TB, secret string) *store.Client {
 }
 
 // smallArgon2id returns an Argon2id verifier whose parameters are at
-// the OWASP floor [Argon2idMinMemory] / [Argon2idMinIterations] so the
-// test runs as fast as the floor allows. Older revisions of this
-// helper used sub-floor parameters; the verifier now rejects those as
-// part of L-STORE-F10.
+// the OWASP floor of [argon2id.DefaultPolicy] so the test runs as fast as
+// the floor allows; the verifier rejects sub-floor parameters.
 func smallArgon2id() *clientauth.Argon2id {
+	policy := argon2id.DefaultPolicy()
 	return &clientauth.Argon2id{Params: clientauth.Argon2idParams{
-		Memory:      clientauth.Argon2idMinMemory,
-		Iterations:  clientauth.Argon2idMinIterations,
+		Memory:      policy.MinMemory,
+		Iterations:  policy.MinIterations,
 		Parallelism: 1,
 		SaltLength:  8,
 		KeyLength:   16,

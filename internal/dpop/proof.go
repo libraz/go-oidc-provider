@@ -19,12 +19,6 @@ import (
 // the header) are rejected before any signature work is done.
 const proofTyp = "dpop+jwt"
 
-// maxJTILen bounds the "jti" claim length. RFC 9449 sets no cap, but
-// the verifier rejects oversized values to close the unbounded-
-// allocation surface (replay store key, audit log column). The value
-// is comfortably above any UUID encoding the typical client emits.
-const maxJTILen = 256
-
 // proofAlgs is the set of "alg" values [parseProof] accepts on the JWS
 // header, in the order discovery and resource-server challenges list
 // them. ES256 / EdDSA are FAPI 2.0 baseline; PS256 is included because
@@ -166,7 +160,7 @@ func decodeProofClaims(payload []byte) (proofClaims, error) {
 	// closing the unbounded-allocation vector at the verifier
 	// boundary. ErrProofMalformed is the right shape: an oversized jti
 	// is a syntactically malformed proof, not a replay.
-	if len(c.JTI) > maxJTILen {
+	if len(c.JTI) > jose.MaxJTILen {
 		return proofClaims{}, fmt.Errorf("%w: jti too long", ErrProofMalformed)
 	}
 	if c.HTM == "" || c.HTU == "" {

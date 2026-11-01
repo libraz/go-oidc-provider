@@ -95,10 +95,7 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 		// The fallback set obeys the same openid ban as an explicit
 		// request: a client registered for openid on its user-facing
 		// grants gets every other registered scope here.
-		scope := slices.DeleteFunc(slices.Clone(in.Client.Scopes), func(s string) bool {
-			return s == oidcscope.ScopeOpenID
-		})
-		return &Authorized{Scope: scope}, nil
+		return &Authorized{Scope: oidcscope.WithoutOpenID(in.Client.Scopes)}, nil
 	}
 	allowed := make(map[string]struct{}, len(in.Client.Scopes))
 	for _, s := range in.Client.Scopes {
