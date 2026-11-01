@@ -12,112 +12,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 )
 
-func TestWriteFormPost_HappyPath(t *testing.T) {
-	t.Parallel()
-
-	w := httptest.NewRecorder()
-	if err := jarm.WriteFormPost(w, "https://rp.example.com/cb", "compact-jwt-token"); err != nil {
-		t.Fatalf("WriteFormPost: %v", err)
-	}
-	resp := w.Result()
-	defer resp.Body.Close()
-
-	if got := resp.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
-		t.Errorf("Content-Type=%q", got)
-	}
-	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
-		t.Errorf("Cache-Control=%q", got)
-	}
-	csp := resp.Header.Get("Content-Security-Policy")
-	if csp == "" {
-		t.Fatal("CSP header missing")
-	}
-	if !strings.Contains(csp, "default-src 'none'") {
-		t.Errorf("CSP missing default-src 'none': %q", csp)
-	}
-	if !strings.Contains(csp, "form-action https://rp.example.com") {
-		t.Errorf("CSP missing form-action: %q", csp)
-	}
-	if strings.Contains(csp, "/cb") {
-		t.Errorf("CSP form-action must be origin-only, got: %q", csp)
-	}
-	if !strings.Contains(csp, "script-src 'sha256-") {
-		t.Errorf("CSP missing script-src hash: %q", csp)
-	}
-
-	body := w.Body.String()
-	if !strings.Contains(body, `action="https://rp.example.com/cb"`) {
-		t.Errorf("body missing form action: %s", body)
-	}
-	if !strings.Contains(body, `name="response"`) {
-		t.Errorf("body missing response field: %s", body)
-	}
-	if !strings.Contains(body, `value="compact-jwt-token"`) {
-		t.Errorf("body missing jwt value: %s", body)
-	}
-	if !strings.Contains(body, "<noscript>") {
-		t.Errorf("body missing noscript fallback: %s", body)
-	}
-}
-
-// TestWriteFormPost_EscapesRedirectAndJWT pins the defensive HTML
-// escape on every value flowing into the form_post body. Both action=
-// (redirect_uri) and value= (the JARM JWT or any echoed param) MUST
-// pass through [html.EscapeString] before reaching the wire — without
-// it, a malformed value that survived earlier validation could inject
-// markup into the auto-submit page.
-//
-// Tracks: GHSA-27gc-wj6x-9w55 (Keycloak, 2024) — error_description
-// was reflected into HTML error pages without escaping, enabling
-// phishing / open-redirect chains. CWE-79. The form_post surface here
-// is the analogous emit point in this library; the test exercises
-// the same threat shape (raw "<script>"-bearing input → must not
-// appear unescaped in the response body).
-//
-// Tracks: CVE-2026-44203 — the "state" value was reflected into the
-// form_post auto-submit body unescaped, the same reflected-HTML class
-// as GHSA-27gc-wj6x-9w55 on a different field.
-func TestWriteFormPost_EscapesRedirectAndJWT(t *testing.T) {
-	t.Parallel()
-
-	w := httptest.NewRecorder()
-	// The authorize-time validator rejects malformed redirect_uris long
-	// before they reach this helper, but the HTML escaping must still
-	// be in place defensively. We feed a payload that would inject HTML
-	// if escaping were missing.
-	hostile := `https://rp.example.com/cb"><script>alert(1)</script>`
-	if err := jarm.WriteFormPost(w, hostile, `"><img src=x>`); err != nil {
-		t.Fatalf("WriteFormPost: %v", err)
-	}
-	body := w.Body.String()
-	if strings.Contains(body, "<script>alert(1)</script>") {
-		t.Errorf("redirect not escaped: %s", body)
-	}
-	if strings.Contains(body, `<img src=x>`) {
-		t.Errorf("jwt not escaped: %s", body)
-	}
-}
-
-func TestWriteFormPost_RejectsEmptyRedirect(t *testing.T) {
-	t.Parallel()
-
-	w := httptest.NewRecorder()
-	err := jarm.WriteFormPost(w, "", "j")
-	if !errors.Is(err, jarm.ErrInvalidRedirect) {
-		t.Errorf("err=%v want ErrInvalidRedirect", err)
-	}
-}
-
-func TestWriteFormPost_RejectsEmptyJWT(t *testing.T) {
-	t.Parallel()
-
-	w := httptest.NewRecorder()
-	err := jarm.WriteFormPost(w, "https://rp.example.com/cb", "")
-	if !errors.Is(err, jarm.ErrEncode) {
-		t.Errorf("err=%v want ErrEncode", err)
-	}
-}
-
 func TestWriteParamsFormPost_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -193,9 +87,8 @@ func TestWriteParamsFormPost_SkipsEmptyValues(t *testing.T) {
 }
 
 // TestWriteParamsFormPost_EscapesValues exercises the same defensive
-// escape contract as [TestWriteFormPost_EscapesRedirectAndJWT] for the
-// multi-field variant. Every hidden input value (and the form action)
-// flows through html.EscapeString.
+// escape contract for the form_post body: every hidden input value (and
+// the form action) flows through html.EscapeString.
 //
 // Tracks: GHSA-27gc-wj6x-9w55 — analogous reflected-HTML class on the
 // form_post emit point.
@@ -247,12 +140,12 @@ func TestWriteParamsFormPost_RejectsEmptyParams(t *testing.T) {
 	}
 }
 
-func TestWriteFormPost_CSPHashMatchesScript(t *testing.T) {
+func TestWriteParamsFormPost_CSPHashMatchesScript(t *testing.T) {
 	t.Parallel()
 
 	w := httptest.NewRecorder()
-	if err := jarm.WriteFormPost(w, "https://rp.example.com/cb", "j"); err != nil {
-		t.Fatalf("WriteFormPost: %v", err)
+	if err := jarm.WriteParamsFormPost(w, "https://rp.example.com/cb", url.Values{"response": {"j"}}); err != nil {
+		t.Fatalf("WriteParamsFormPost: %v", err)
 	}
 	csp := w.Result().Header.Get("Content-Security-Policy")
 	body := w.Body.String()

@@ -16,7 +16,7 @@ import (
 // invalid_request_uri because the latter implies "we recognise PAR, your
 // URI is bad" and would mislead clients about feature availability.
 var errPARDisabled = &authorize.Error{
-	Code:        "invalid_request",
+	Code:        errInvalidRequest,
 	Description: "request_uri is not supported by this OP",
 }
 
@@ -24,7 +24,7 @@ var errPARDisabled = &authorize.Error{
 // cleanly but the request's client_id disagrees with the PAR record's.
 // Per RFC 9126 §2.3 this is invalid_request, not invalid_request_uri.
 var errPARClientMismatch = &authorize.Error{
-	Code:        "invalid_request",
+	Code:        errInvalidRequest,
 	Description: "request_uri client_id does not match request client_id",
 }
 
@@ -35,7 +35,7 @@ var errPARClientMismatch = &authorize.Error{
 // invalid_request, not invalid_request_uri (the latter implies a PAR
 // URI was offered and rejected).
 var errPARRequired = &authorize.Error{
-	Code:        "invalid_request",
+	Code:        errInvalidRequest,
 	Description: "this OP requires authorization requests to be pushed via the PAR endpoint",
 }
 
@@ -89,12 +89,7 @@ func resolvePARIfNeeded(
 		renderAuthorizeError(w, r, deps, errPARDisabled)
 		return nil, true
 	}
-	rec, err := deps.PARs.Find(ctx, uri)
-	if err == nil && rec == nil {
-		// A nil record alongside a nil error violates the store contract;
-		// a request_uri the backend cannot produce is not a valid one.
-		err = store.ErrNotFound
-	}
+	rec, err := requireFound(deps.PARs.Find(ctx, uri))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			renderAuthorizeError(w, r, deps, authorize.ErrInvalidRequestURI)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -268,7 +269,7 @@ func sessionMayServe(
 	entry authn.EntryAuthn,
 	now time.Time,
 ) error {
-	if containsString(req.Prompt, interaction.PromptLogin) {
+	if slices.Contains(req.Prompt, interaction.PromptLogin) {
 		return errStaleAuthentication
 	}
 	if req.MaxAge != nil && authorize.AuthenticationIsStale(entry.AuthTime, now, *req.MaxAge) {

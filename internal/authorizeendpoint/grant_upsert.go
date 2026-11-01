@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -71,7 +72,7 @@ func (d scopeDecision) declined() []string {
 	}
 	out := make([]string, 0, len(d.presented))
 	for _, s := range d.presented {
-		if !containsString(d.approved, s) {
+		if !slices.Contains(d.approved, s) {
 			out = append(out, s)
 		}
 	}
@@ -161,9 +162,9 @@ func upsertGrant(
 func codeAuthorizationDetails(req *authorize.Request, g *store.Grant) []map[string]any {
 	switch req.GrantManagementAction {
 	case gmActionReplace, gmActionMerge:
-		return cloneGrantAuthorizationDetails(g.AuthorizationDetails)
+		return authorize.CloneAuthorizationDetails(g.AuthorizationDetails)
 	default:
-		return cloneGrantAuthorizationDetails(req.AuthorizationDetails)
+		return authorize.CloneAuthorizationDetails(req.AuthorizationDetails)
 	}
 }
 
@@ -248,11 +249,17 @@ func validateReusableGrantLookup(
 		}
 		return fmt.Errorf("authorizeendpoint: find reusable grant: %w", err)
 	}
-	if existing == nil {
-		return errors.New("authorizeendpoint: reusable grant lookup returned nil record")
+	return checkLookedUpGrant(existing, in.Subject, in.ClientID, "reusable grant")
+}
+
+// checkLookedUpGrant rejects a grant-store result that is nil or does not
+// belong to (subject, clientID); label names the lookup in the message.
+func checkLookedUpGrant(g *store.Grant, subject, clientID, label string) error {
+	if g == nil {
+		return fmt.Errorf("authorizeendpoint: %s lookup returned nil record", label)
 	}
-	if existing.ID == "" || existing.Subject != in.Subject || existing.ClientID != in.ClientID {
-		return errors.New("authorizeendpoint: reusable grant lookup returned mismatched record")
+	if g.ID == "" || g.Subject != subject || g.ClientID != clientID {
+		return fmt.Errorf("authorizeendpoint: %s lookup returned mismatched record", label)
 	}
 	return nil
 }
@@ -280,7 +287,7 @@ func createGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Gra
 		ACR:                  in.ACR,
 		AMR:                  append([]string(nil), in.AMR...),
 		Claims:               authorize.EncodeClaimsToGrant(in.Claims),
-		AuthorizationDetails: cloneGrantAuthorizationDetails(in.AuthorizationDetails),
+		AuthorizationDetails: authorize.CloneAuthorizationDetails(in.AuthorizationDetails),
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
@@ -315,7 +322,7 @@ func mutateManagedGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 	switch in.GMAction {
 	case gmActionReplace:
 		g.Scope = append([]string(nil), in.Scope...)
-		g.AuthorizationDetails = cloneGrantAuthorizationDetails(in.AuthorizationDetails)
+		g.AuthorizationDetails = authorize.CloneAuthorizationDetails(in.AuthorizationDetails)
 	case gmActionMerge:
 		g.Scope = unionScopes(g.Scope, in.Scope)
 		g.AuthorizationDetails = appendAuthorizationDetails(g.AuthorizationDetails, in.AuthorizationDetails)
@@ -341,7 +348,7 @@ func removeScopes(base, drop []string) []string {
 	}
 	out := make([]string, 0, len(base))
 	for _, s := range base {
-		if !containsString(drop, s) {
+		if !slices.Contains(drop, s) {
 			out = append(out, s)
 		}
 	}
@@ -372,8 +379,8 @@ func unionScopes(base, add []string) []string {
 // repeated merge of the same authorization_details does not accumulate
 // unbounded duplicates on the grant.
 func appendAuthorizationDetails(base, add []map[string]any) []map[string]any {
-	out := cloneGrantAuthorizationDetails(base)
-	for _, el := range cloneGrantAuthorizationDetails(add) {
+	out := authorize.CloneAuthorizationDetails(base)
+	for _, el := range authorize.CloneAuthorizationDetails(add) {
 		dup := false
 		for _, have := range out {
 			if reflect.DeepEqual(have, el) {
@@ -387,27 +394,6 @@ func appendAuthorizationDetails(base, add []map[string]any) []map[string]any {
 	}
 	if len(out) == 0 {
 		return nil
-	}
-	return out
-}
-
-// cloneGrantAuthorizationDetails deep-copies the authorization_details
-// slice so the persisted grant does not alias the request's maps. A nil or
-// empty slice yields nil.
-func cloneGrantAuthorizationDetails(in []map[string]any) []map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]map[string]any, len(in))
-	for i, el := range in {
-		if el == nil {
-			continue
-		}
-		cp := make(map[string]any, len(el))
-		for k, v := range el {
-			cp[k] = v
-		}
-		out[i] = cp
 	}
 	return out
 }

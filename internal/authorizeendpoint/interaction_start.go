@@ -99,11 +99,11 @@ func initialAuthnState(
 	now time.Time,
 ) authn.State {
 	existing := hint.grant
-	willRunChooser := containsString(req.Prompt, interaction.PromptSelectAccount) && active != nil
+	willRunChooser := slices.Contains(req.Prompt, interaction.PromptSelectAccount) && active != nil
 	addAccount := chooserAddAccountRequested(req, active)
 	// prompt=create binds the account Registration creates, never the
 	// session's: no subject, entry authentication or grant carries over.
-	registration := containsString(req.Prompt, interaction.PromptCreate)
+	registration := slices.Contains(req.Prompt, interaction.PromptCreate)
 	subject := currentSubject(active)
 	if registration {
 		subject = ""

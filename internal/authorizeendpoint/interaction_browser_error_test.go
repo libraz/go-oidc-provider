@@ -11,6 +11,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -20,9 +21,8 @@ import (
 // CSRF rejection puts on the wire for a client that asked for JSON. It is
 // compared byte for byte: the endpoint gained HTML content negotiation,
 // and a SPA whose fetch() parses this response must not have to change a
-// single character because of it. The trailing newline is what
-// [json.Encoder] appends.
-const interactionCSRFMismatchJSON = `{"error":"invalid_request","error_description":"csrf token mismatch"}` + "\n"
+// single character because of it.
+const interactionCSRFMismatchJSON = `{"error":"invalid_request","error_description":"csrf token mismatch"}`
 
 // TestEndToEnd_InteractionFailureNegotiatesHTMLAndJSON covers the
 // /interaction/{uid} failure surface under a server-rendered Driver.
@@ -151,7 +151,7 @@ func TestEndToEnd_InteractionFailureNegotiatesHTMLAndJSON(t *testing.T) {
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("status=%d, want 403", resp.StatusCode)
 		}
-		if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		if got := resp.Header.Get("Content-Type"); got != httpx.JSONContentType {
 			t.Errorf("Content-Type=%q, want application/json", got)
 		}
 		body, err := io.ReadAll(resp.Body)

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
-	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/jar"
@@ -16,11 +16,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// jarRequestURITimeout caps the HTTP fetch for a JAR request_uri. The
-// budget mirrors the JWKS fetcher so a malicious upstream cannot stall
-// the request thread.
-const jarRequestURITimeout = 5 * time.Second
 
 // resolveJARRequestIfNeeded inspects the wire values for a JAR-style
 // "request" or "request_uri" parameter, fetches / verifies the request
@@ -86,12 +81,7 @@ func resolveJARRequestIfNeeded(
 		renderJARError(w, r, deps, errInvalidRequest, "client_id is required", state)
 		return nil, true, true
 	}
-	client, err := deps.Clients.GetClient(ctx, clientID)
-	if err == nil && client == nil {
-		// A nil client alongside a nil error violates the store contract;
-		// a client the backend cannot produce is not a registered one.
-		err = store.ErrNotFound
-	}
+	client, err := requireFound(deps.Clients.GetClient(ctx, clientID))
 	if err != nil {
 		renderClientLookupError(w, r, deps, err, state)
 		return nil, true, true
@@ -299,7 +289,7 @@ func jarRequestURIPolicy(allowPrivate bool) securefetch.Policy {
 	return securefetch.Policy{
 		AllowPrivateNetwork: allowPrivate,
 		AllowedSchemes:      schemes,
-		Timeout:             jarRequestURITimeout,
+		Timeout:             securefetch.DefaultTimeout,
 		MaxBodyBytes:        securefetch.DefaultMaxBody,
 		// MaxRedirects=0 (the default) refuses every 30x; the redirect
 		// surfaces as a non-2xx status the fetch-error classifier
@@ -411,12 +401,7 @@ func classifyJARRequestURIDoError(err error) string {
 // cannot trick the verifier with prefix tricks (e.g. a registered
 // "https://rp.example.com/req" matching "https://rp.example.com/req-evil").
 func isPreregisteredRequestURI(c *store.Client, uri string) bool {
-	for _, allowed := range c.RequestURIs {
-		if allowed == uri {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.RequestURIs, uri)
 }
 
 // writeJAREnvelopeError translates a [jar] sentinel into the OAuth
@@ -432,13 +417,10 @@ func isPreregisteredRequestURI(c *store.Client, uri string) bool {
 // back-channel authentication endpoint. Only the wire code is decided
 // here: the endpoints legitimately differ on that and on nothing else.
 func writeJAREnvelopeError(w http.ResponseWriter, r *http.Request, deps resolved, err error, state string) {
-	switch {
-	case errors.Is(err, jar.ErrKeySourceUnavailable):
-		renderBrowserError(w, r, deps.Driver, http.StatusServiceUnavailable, errServerError,
-			jar.Description(err), state)
-	case errors.Is(err, jar.ErrClientIDMismatch):
-		renderJARError(w, r, deps, errInvalidRequest, jar.Description(err), state)
-	default:
-		renderJARError(w, r, deps, errInvalidRequestObject, jar.Description(err), state)
+	status, code := jar.WireError(err)
+	if status != http.StatusBadRequest {
+		renderBrowserError(w, r, deps.Driver, status, code, jar.Description(err), state)
+		return
 	}
+	renderJARError(w, r, deps, code, jar.Description(err), state)
 }

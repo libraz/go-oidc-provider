@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -46,30 +47,13 @@ func applyExitOverrides(
 	if hint.decision == decisionMint && deps.Authn != nil && active != nil {
 		st := initialAuthnState(r, deps, req, client, active, hint, "", deps.now().UTC())
 		if deps.Authn.LoginFlowRequiresStep(r.Context(), st) {
-			hint = routeThroughLoginFlow(hint, containsString(req.Prompt, "none"))
+			hint = routeMintThroughInteraction(hint, slices.Contains(req.Prompt, interaction.PromptNone), authn.PhaseBeforeAuthn)
 		}
 	}
 	if hint.decision == decisionMint && deps.Authn != nil && deps.Authn.HasInteractions(authn.TriggerBeforeToken) {
-		hint = routeThroughBeforeToken(hint, containsString(req.Prompt, "none"))
+		hint = routeMintThroughInteraction(hint, slices.Contains(req.Prompt, interaction.PromptNone), authn.PhaseBeforeToken)
 	}
 	return hint
-}
-
-// routeThroughLoginFlow replaces a silent mint with an interaction when
-// the LoginFlow demands a factor step for the request. The chain starts
-// with the session's subject, so Primary is not repeated, and the
-// cached grant or first-party auto-grant still stands in for consent.
-// prompt=none forbids the step and yields interaction_required, as an
-// unsatisfied acr_values does.
-func routeThroughLoginFlow(mint authorizeHint, promptNone bool) authorizeHint {
-	if promptNone {
-		return authorizeHint{decision: decisionInteractionRequired}
-	}
-	return authorizeHint{
-		decision:  decisionInteract,
-		grant:     mint.grant,
-		autoGrant: mint.autoGrant,
-	}
 }
 
 // authorizeHint bundles the outcome of the decision matrix together with
@@ -89,7 +73,7 @@ type authorizeHint struct {
 	reauth bool
 
 	// startPhase is the phase the interaction's chain starts in. The
-	// zero value is [authn.PhaseBeforeAuthn]; [routeThroughBeforeToken]
+	// zero value is [authn.PhaseBeforeAuthn]; [routeMintThroughInteraction]
 	// sets [authn.PhaseBeforeToken] for a mint it turned into an
 	// interaction.
 	startPhase authn.Phase
@@ -148,10 +132,10 @@ func buildHintState(
 ) (hintState, error) {
 	out := hintState{
 		hasSession: active != nil,
-		forceLogin: containsString(req.Prompt, interaction.PromptLogin),
-		promptNone: containsString(req.Prompt, "none"),
-		selectAcct: containsString(req.Prompt, interaction.PromptSelectAccount),
-		create:     containsString(req.Prompt, interaction.PromptCreate),
+		forceLogin: slices.Contains(req.Prompt, interaction.PromptLogin),
+		promptNone: slices.Contains(req.Prompt, interaction.PromptNone),
+		selectAcct: slices.Contains(req.Prompt, interaction.PromptSelectAccount),
+		create:     slices.Contains(req.Prompt, interaction.PromptCreate),
 	}
 	if out.hasSession {
 		// The door, the chooser pick and the terminal gate share
@@ -189,11 +173,8 @@ func findGrantForConsentDecision(
 		}
 		return nil, fmt.Errorf("authorizeendpoint: find grant for consent decision: %w", err)
 	}
-	if grant == nil {
-		return nil, errors.New("authorizeendpoint: grant lookup returned nil record")
-	}
-	if grant.ID == "" || grant.Subject != subject || grant.ClientID != clientID {
-		return nil, errors.New("authorizeendpoint: grant lookup returned mismatched record")
+	if err := checkLookedUpGrant(grant, subject, clientID, "grant"); err != nil {
+		return nil, err
 	}
 	return grant, nil
 }
@@ -263,17 +244,16 @@ func decideHintInteractive(s hintState) authorizeHint {
 	}
 }
 
-// routeThroughBeforeToken replaces a silent mint when a
-// [authn.TriggerBeforeToken] interaction is registered: those
-// interactions run after consent on every code the OP issues, so a mint
-// that never drives the chain would skip them.
-//
-// prompt=none forbids the interaction and yields interaction_required.
-// Otherwise the mint becomes an interaction that starts at
-// [authn.PhaseBeforeToken]: the session stands in for authentication and
-// the cached grant or first-party auto-grant for consent, exactly as
-// they did for the silent mint.
-func routeThroughBeforeToken(mint authorizeHint, promptNone bool) authorizeHint {
+// routeMintThroughInteraction replaces a silent mint with an interaction
+// that starts at startPhase: the session stands in for authentication
+// and the cached grant or first-party auto-grant for consent, exactly as
+// they did for the silent mint. Callers use it when the LoginFlow demands
+// a factor step ([authn.PhaseBeforeAuthn], Primary not repeated) or when
+// a [authn.TriggerBeforeToken] interaction is registered
+// ([authn.PhaseBeforeToken], run after consent on every issued code).
+// prompt=none forbids the interaction and yields interaction_required, as
+// an unsatisfied acr_values does.
+func routeMintThroughInteraction(mint authorizeHint, promptNone bool, startPhase authn.Phase) authorizeHint {
 	if promptNone {
 		return authorizeHint{decision: decisionInteractionRequired}
 	}
@@ -281,6 +261,6 @@ func routeThroughBeforeToken(mint authorizeHint, promptNone bool) authorizeHint 
 		decision:   decisionInteract,
 		grant:      mint.grant,
 		autoGrant:  mint.autoGrant,
-		startPhase: authn.PhaseBeforeToken,
+		startPhase: startPhase,
 	}
 }

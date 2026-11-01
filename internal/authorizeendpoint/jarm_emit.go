@@ -151,26 +151,11 @@ func jarmEmitSuccess(
 	mode jarm.ResponseMode,
 	code string,
 ) error {
-	if deps.JARM == nil {
-		return errors.New("authorizeendpoint: JARM signer not configured")
-	}
-	jwtToken, err := deps.JARM.SignDefault(jarm.Payload{
+	return jarmSignEncryptDispatch(w, r, deps, req, mode, jarm.Payload{
 		Audience: req.ClientID,
 		Code:     code,
 		State:    req.State,
 	})
-	if err != nil {
-		return err
-	}
-	client, err := lookupClientForJARM(r.Context(), deps.Clients, req.ClientID)
-	if err != nil {
-		return errors.Join(errJARMEncryptionFailed, err)
-	}
-	jwtToken, err = maybeEncryptJARM(r.Context(), deps.ClientEncJWKs, client, jwtToken)
-	if err != nil {
-		return err
-	}
-	return jarmDispatch(w, r, mode, req.RedirectURI, jwtToken)
 }
 
 // jarmEmitError writes the error response as a JARM JWT in the
@@ -191,15 +176,30 @@ func jarmEmitError(
 	mode jarm.ResponseMode,
 	code, description string,
 ) error {
-	if deps.JARM == nil {
-		return errors.New("authorizeendpoint: JARM signer not configured")
-	}
-	signed, err := deps.JARM.SignDefault(jarm.Payload{
+	return jarmSignEncryptDispatch(w, r, deps, req, mode, jarm.Payload{
 		Audience:         req.ClientID,
 		Error:            code,
 		ErrorDescription: description,
 		State:            req.State,
 	})
+}
+
+// jarmSignEncryptDispatch signs payload, wraps it in a JWE when the
+// client registered response encryption, and dispatches it in mode.
+// A client lookup or encryption failure is propagated rather than
+// downgraded to a signed-only response.
+func jarmSignEncryptDispatch(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+	mode jarm.ResponseMode,
+	payload jarm.Payload,
+) error {
+	if deps.JARM == nil {
+		return errors.New("authorizeendpoint: JARM signer not configured")
+	}
+	signed, err := deps.JARM.SignDefault(payload)
 	if err != nil {
 		return err
 	}

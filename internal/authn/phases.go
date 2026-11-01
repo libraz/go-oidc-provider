@@ -196,13 +196,3 @@ func (o *Orchestrator) findInteractionIndex(name string) int {
 	}
 	return -1
 }
-
-// containsFactor reports whether t is in the supplied slice.
-func containsFactor(slice []FactorType, t FactorType) bool {
-	for _, v := range slice {
-		if v == t {
-			return true
-		}
-	}
-	return false
-}

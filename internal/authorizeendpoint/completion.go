@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -139,11 +138,9 @@ func persistCompletionIntent(
 			"authorizeendpoint: marshal completion intent: %w", err,
 		)
 	}
-	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
-	if !ok {
-		return nil, authorize.RequestState{}, errors.New(
-			"authorizeendpoint: interaction store lacks compare-and-swap",
-		)
+	cas, err := interactionCAS(deps)
+	if err != nil {
+		return nil, authorize.RequestState{}, err
 	}
 	next := *rec
 	next.RawState = raw
@@ -293,9 +290,9 @@ func deleteCompletionAnchor(
 	deps resolved,
 	rec *store.Interaction,
 ) error {
-	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
-	if !ok {
-		return errors.New("authorizeendpoint: interaction store lacks compare-and-swap")
+	cas, err := interactionCAS(deps)
+	if err != nil {
+		return err
 	}
 	return cas.DeleteIfUnchanged(ctx, rec)
 }
@@ -328,7 +325,7 @@ func attemptDurableCompletion(
 	intent *authorize.CompletionIntent,
 ) (*store.AuthorizationCode, bool, error) {
 	if existing, err := deps.Codes.Find(ctx, intent.CodeID); err == nil {
-		if !completionCodeMatches(existing, req, intent) {
+		if !authorizationCodeMatches(existing, req, completionCodeBinding(intent, req, ""), false) {
 			return nil, false, errors.New("authorizeendpoint: stable authorization code collision")
 		}
 		return existing, false, nil
@@ -343,11 +340,8 @@ func attemptDurableCompletion(
 		return nil, false, fmt.Errorf("authorizeendpoint: begin completion transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	txDeps := deps
+	txDeps := transactionalDeps(deps, tx)
 	txDeps.Transactions = nil
-	txDeps.Codes = tx.AuthorizationCodes()
-	txDeps.Grants = tx.Grants()
-	txDeps.PARs = tx.PushedAuthRequests()
 	grant, err := upsertGrant(ctx, txDeps, grantUpsert{
 		Subject:       intent.Subject,
 		ClientID:      req.ClientID,
@@ -374,7 +368,7 @@ func attemptDurableCompletion(
 		return recoverCompletionAfterTxError(ctx, tx, deps, req, intent, err)
 	}
 	now := deps.now().UTC()
-	code := completionAuthorizationCode(req, intent, grant, now, deps.AuthCodeTTL)
+	code := newAuthorizationCode(req, completionCodeBinding(intent, req, grant.ID), grant, now, deps.AuthCodeTTL)
 	if err := txDeps.Codes.Save(ctx, code); err != nil {
 		return recoverCompletionAfterTxError(
 			ctx,
@@ -413,7 +407,7 @@ func recoverCompletionAfterTxError(
 		return nil, false, errors.Join(cause, fmt.Errorf("rollback completion transaction: %w", err))
 	}
 	if existing, err := deps.Codes.Find(ctx, intent.CodeID); err == nil {
-		if completionCodeMatches(existing, req, intent) {
+		if authorizationCodeMatches(existing, req, completionCodeBinding(intent, req, ""), false) {
 			return existing, false, nil
 		}
 		return nil, false, errors.Join(
@@ -429,58 +423,17 @@ func recoverCompletionAfterTxError(
 	return nil, false, cause
 }
 
-func completionAuthorizationCode(
-	req *authorize.Request,
-	intent *authorize.CompletionIntent,
-	grant *store.Grant,
-	now time.Time,
-	ttl time.Duration,
-) *store.AuthorizationCode {
-	return &store.AuthorizationCode{
-		ID:                  intent.CodeID,
-		ClientID:            req.ClientID,
-		Subject:             intent.Subject,
-		GrantID:             grant.ID,
-		RedirectURI:         req.RedirectURI,
-		Scope:               slices.Clone(intent.GrantScope),
-		Resource:            req.Resource,
-		CodeChallenge:       req.CodeChallenge,
-		CodeChallengeMethod: req.CodeChallengeMethod,
-		Nonce:               req.Nonce,
-		State:               req.State,
-		DPoPJKT:             req.DPoPJKT,
-
-		AuthTime:              intent.AuthTime,
-		ACR:                   intent.ACR,
-		AMR:                   slices.Clone(intent.AMR),
-		AuthorizationDetails:  codeAuthorizationDetails(req, grant),
-		Claims:                authorize.EncodeClaimsToGrant(req.Claims),
-		AuthorizationRecorded: true,
-
-		ExpiresAt: now.Add(ttl),
-		CreatedAt: now,
+func completionCodeBinding(intent *authorize.CompletionIntent, req *authorize.Request, grantID string) codeBinding {
+	return codeBinding{
+		ID:       intent.CodeID,
+		ClientID: req.ClientID,
+		Subject:  intent.Subject,
+		GrantID:  grantID,
+		Scope:    slices.Clone(intent.GrantScope),
+		AuthTime: intent.AuthTime,
+		ACR:      intent.ACR,
+		AMR:      slices.Clone(intent.AMR),
 	}
-}
-
-func completionCodeMatches(
-	code *store.AuthorizationCode,
-	req *authorize.Request,
-	intent *authorize.CompletionIntent,
-) bool {
-	if code == nil {
-		return false
-	}
-	return code.ID == intent.CodeID &&
-		code.ClientID == req.ClientID &&
-		code.Subject == intent.Subject &&
-		code.RedirectURI == req.RedirectURI &&
-		slices.Equal(code.Scope, intent.GrantScope) &&
-		code.Resource == req.Resource &&
-		code.CodeChallenge == req.CodeChallenge &&
-		code.CodeChallengeMethod == req.CodeChallengeMethod &&
-		code.Nonce == req.Nonce &&
-		code.State == req.State &&
-		code.DPoPJKT == req.DPoPJKT
 }
 
 // emitCompletionAudit writes the audit records the interactive exit owes:

@@ -1,7 +1,6 @@
 package authorizeendpoint
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -52,23 +51,13 @@ const (
 	errUnmetAuthenticationRequirements = "unmet_authentication_requirements"
 )
 
-// errorResponse mirrors the token endpoint's failure envelope so embedders
-// see a single shape across both endpoints.
-type errorResponse struct {
-	Error            string `json:"error"`
-	ErrorDescription string `json:"error_description,omitempty"`
-}
-
 // renderJSONError writes an RFC 6749 §5.2-shaped envelope. It is the
 // terminal fallback of [renderBrowserError] — every failure path that
 // cannot redirect to the RP goes through the negotiating entry point, so
 // this shape is what a client that did not ask for HTML receives, and
 // what any client receives when no Driver can render the failure.
 func renderJSONError(w http.ResponseWriter, status int, code, description string) {
-	httpx.StampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(errorResponse{Error: code, ErrorDescription: description})
+	_ = httpx.WriteError(w, status, code, description)
 }
 
 // renderBrowserError is the content-negotiating counterpart to

@@ -75,8 +75,8 @@ func TestNewSigner_DefaultClockAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	if signer.Issuer() != "https://op.example.com" {
-		t.Errorf("Issuer=%q", signer.Issuer())
+	if signer == nil {
+		t.Error("NewSigner returned nil signer")
 	}
 }
 

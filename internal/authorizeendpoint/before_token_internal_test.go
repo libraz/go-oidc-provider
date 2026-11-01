@@ -44,7 +44,7 @@ func TestRouteThroughBeforeToken(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := routeThroughBeforeToken(tc.mint, tc.promptNone)
+			got := routeMintThroughInteraction(tc.mint, tc.promptNone, authn.PhaseBeforeToken)
 			if got.decision != tc.want.decision || got.prompt != tc.want.prompt || got.grant != tc.want.grant ||
 				got.autoGrant != tc.want.autoGrant || got.startPhase != tc.want.startPhase {
 				t.Fatalf("got %+v, want %+v", got, tc.want)
@@ -60,7 +60,7 @@ func TestInitialAuthnStateFirstPartyAutoGrant(t *testing.T) {
 	t.Parallel()
 
 	req := &authorize.Request{Scope: []string{"openid", "profile"}}
-	hint := routeThroughBeforeToken(authorizeHint{decision: decisionMint, autoGrant: &grantUpsert{}}, false)
+	hint := routeMintThroughInteraction(authorizeHint{decision: decisionMint, autoGrant: &grantUpsert{}}, false, authn.PhaseBeforeToken)
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/authorize", http.NoBody)
 	st := initialAuthnState(r, resolved{}, req, &store.Client{ID: "client-1"}, nil, hint, "uid", time.Unix(0, 0).UTC())
 	if st.Phase != authn.PhaseBeforeToken || !st.InteractionsRun[consent.Name] || !st.ConsentAutoGranted {

@@ -185,6 +185,12 @@ func loopbackRedirectMatchesAnyPort(registered, requested string) bool {
 	return true
 }
 
+//nolint:gochecknoglobals // immutable loopback literals, parsed once.
+var (
+	loopbackV4 = netip.MustParseAddr("127.0.0.1")
+	loopbackV6 = netip.MustParseAddr("::1")
+)
+
 // isWildcardLoopbackHost reports whether host is one of the loopback
 // shapes the registration endpoint admits for native clients (RFC
 // 8252 §7.3 / OIDC Reg §2): the IP literals 127.0.0.1 and [::1], and
@@ -203,7 +209,7 @@ func isWildcardLoopbackHost(host string) bool {
 	if err != nil {
 		return false
 	}
-	return addr == netip.MustParseAddr("127.0.0.1") || addr == netip.MustParseAddr("::1")
+	return addr == loopbackV4 || addr == loopbackV6
 }
 
 // validateResponseType rejects every value other than the literal "code".
@@ -367,7 +373,7 @@ func (req *Request) validatePKCE(required bool) error {
 		// empty value disables the verifier symmetrically.
 		return nil
 	}
-	if req.CodeChallengeMethod == "" || req.CodeChallengeMethod != pkce.Method {
+	if req.CodeChallengeMethod != pkce.Method {
 		return ErrPKCEMethodUnsupported
 	}
 	if err := pkce.ValidateChallenge(req.CodeChallenge, req.CodeChallengeMethod); err != nil {
@@ -392,7 +398,7 @@ func (req *Request) validatePrompt(promptCreate bool) error {
 			return ErrPromptInvalid
 		}
 		switch p {
-		case "none":
+		case interaction.PromptNone:
 			hasNone = true
 		case interaction.PromptCreate:
 			hasCreate = true
@@ -413,7 +419,7 @@ func (req *Request) validatePrompt(promptCreate bool) error {
 // Core §3.1.2.1 defines, or "create" when promptCreate admits it.
 func isKnownPrompt(p string, promptCreate bool) bool {
 	switch p {
-	case "none", interaction.PromptLogin, interaction.PromptConsent, interaction.PromptSelectAccount:
+	case interaction.PromptNone, interaction.PromptLogin, interaction.PromptConsent, interaction.PromptSelectAccount:
 		return true
 	case interaction.PromptCreate:
 		return promptCreate

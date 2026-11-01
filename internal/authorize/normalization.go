@@ -3,7 +3,6 @@ package authorize
 import (
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -73,28 +72,6 @@ func dedupePreserve(in []string) []string {
 		}
 		seen[s] = struct{}{}
 		out = append(out, s)
-	}
-	return out
-}
-
-// splitPrompt splits the prompt parameter on a single ASCII space, matching
-// the OIDC Core §3.1.2.1 grammar exactly. It is intentionally NOT
-// [strings.Fields]: tabs and newlines in prompt are illegal under the
-// spec, and collapsing them silently would mask malformed clients.
-func splitPrompt(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, " ")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		out = append(out, p)
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }

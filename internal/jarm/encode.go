@@ -152,11 +152,6 @@ func deriveJWSAlgorithm(key tokens.SigningKey) (josev4.SignatureAlgorithm, error
 	return josev4.ES256, nil
 }
 
-// Issuer returns the issuer string this signer stamps onto every JWT.
-// Callers use it to decide whether to override [Payload.Issuer] (in
-// practice they should not).
-func (s *Signer) Issuer() string { return s.issuer }
-
 // Sign serialises p as an ES256-signed compact JWS. The function
 // validates that Issuer / Audience / ExpiresAt are set; on the success
 // path Code is also required; on the error path Error is required.

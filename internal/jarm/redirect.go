@@ -12,7 +12,7 @@ import (
 //
 // The function returns [ErrUseFormPost] when called with
 // [ResponseModeFormPostJWT]: the form-post mode is not a redirect, and
-// the caller MUST switch to [WriteFormPost] instead. [ResponseModeJWT]
+// the caller MUST switch to [WriteParamsFormPost] instead. [ResponseModeJWT]
 // is rejected as well — callers are expected to resolve the bare alias
 // via [Resolve] before reaching this helper.
 //

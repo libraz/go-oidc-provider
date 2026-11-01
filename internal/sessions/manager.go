@@ -21,9 +21,7 @@ const IDLength = 16
 // cookie). The canonical value lives in [timex.SessionIdleTTLDefault];
 // this name is preserved so internal callers and tests retain the
 // session-domain-specific spelling.
-//
-//nolint:gochecknoglobals // re-export of the canonical timex value; var is required for cross-package alias.
-var IdleTTLDefault = timex.SessionIdleTTLDefault
+const IdleTTLDefault = timex.SessionIdleTTLDefault
 
 // ErrCurrentSessionExpired is returned by [Manager.Resolve] when the cookie
 // successfully decrypts but the referenced session has expired or been
@@ -37,9 +35,7 @@ var ErrCurrentSessionExpired = errors.New("sessions: current session expired")
 // value lives in [timex.SessionAbsoluteTTLDefault]; this name is
 // preserved so internal callers and tests retain the
 // session-domain-specific spelling.
-//
-//nolint:gochecknoglobals // re-export of the canonical timex value; var is required for cross-package alias.
-var AbsoluteTTLDefault = timex.SessionAbsoluteTTLDefault
+const AbsoluteTTLDefault = timex.SessionAbsoluteTTLDefault
 
 // Manager orchestrates the SessionStore + cookie codec + clock. It owns the
 // chooser-group lifecycle without exposing the raw [*store.Session] type to

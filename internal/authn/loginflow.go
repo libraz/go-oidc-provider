@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -486,18 +487,6 @@ func indexFactor(byFactor map[FactorType]compiledStep, step compiledStep) {
 	byFactor[step.factor] = step
 }
 
-// containsString reports whether v is in haystack. Used by the
-// orchestrator's CompletedStepKinds dedup; the typed wrapper exists
-// solely to avoid importing slices for a one-line predicate.
-func containsString(haystack []string, v string) bool {
-	for _, s := range haystack {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
-
 // recoverPredicate runs pred(lc) under a recover() so a panicking
 // embedder predicate cannot crash the OP. A panic is logged at error
 // with idx (the rule's position in the LoginFlow) and the predicate is
@@ -578,7 +567,7 @@ func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 // completed (or the entry session stands in for it), or it was skipped
 // as unenrolled.
 func stepSettled(st State, lc LoginFlowContext, kind string) bool {
-	return containsString(lc.CompletedKinds, kind) || containsString(st.SkippedStepKinds, kind)
+	return slices.Contains(lc.CompletedKinds, kind) || slices.Contains(st.SkippedStepKinds, kind)
 }
 
 // describeStepKind formats a step kind for log messages. Centralising
@@ -695,9 +684,9 @@ func subjectBindingStep(st State, flow *CompiledLoginFlow) (compiledStep, bool, 
 		if flow.registration.kind == "" {
 			return compiledStep{}, false, ErrInvalidStep
 		}
-		return flow.registration, !containsString(st.CompletedStepKinds, flow.registration.kind), nil
+		return flow.registration, !slices.Contains(st.CompletedStepKinds, flow.registration.kind), nil
 	}
-	due := st.Subject == "" || (st.ReauthRequired && !containsString(st.CompletedStepKinds, flow.primary.kind))
+	due := st.Subject == "" || (st.ReauthRequired && !slices.Contains(st.CompletedStepKinds, flow.primary.kind))
 	return flow.primary, due, nil
 }
 
@@ -777,7 +766,7 @@ func (o *Orchestrator) loginFlowCaptchaPending(st State, flow *CompiledLoginFlow
 		if !r.then.isCaptcha {
 			continue
 		}
-		if containsString(st.CompletedStepKinds, r.then.kind) {
+		if slices.Contains(st.CompletedStepKinds, r.then.kind) {
 			continue
 		}
 		if recoverPredicate(o.logger, i, r.when, lc) {
@@ -957,7 +946,7 @@ func (o *Orchestrator) enforceRiskStepUp(ctx context.Context, st State, flow *Co
 	}
 	for _, want := range st.RiskRequiredFactors {
 		step, ok := flow.byFactor[want]
-		if !ok || containsString(st.CompletedStepKinds, step.kind) {
+		if !ok || slices.Contains(st.CompletedStepKinds, step.kind) {
 			continue
 		}
 		if handled, ns, sstep, err := o.evalLoginFlowCaptchaRules(ctx, st, flow, now); handled {
@@ -980,7 +969,7 @@ func (o *Orchestrator) enforceRiskStepUp(ctx context.Context, st State, flow *Co
 // whole obligation.
 func riskStepUpSatisfied(st State) bool {
 	for _, f := range st.Factors {
-		if containsFactor(st.RiskRequiredFactors, f.Type) {
+		if slices.Contains(st.RiskRequiredFactors, f.Type) {
 			return true
 		}
 	}
@@ -1137,7 +1126,7 @@ func (o *Orchestrator) runOneOfStep(ctx context.Context, st State, step compiled
 // fresh enrollment probe; anything else is refused like a bad StateRef.
 func (o *Orchestrator) handleFactorChoice(ctx context.Context, st State, in Input, step compiledStep) (State, interaction.Step, error) {
 	choice := in.Submission.Values[interaction.FactorChoiceField]
-	if st.PendingOneOfKind != step.kind || choice == "" || !containsString(st.OfferedFactorKinds, choice) {
+	if st.PendingOneOfKind != step.kind || choice == "" || !slices.Contains(st.OfferedFactorKinds, choice) {
 		return st, interaction.Step{}, ErrInvalidStateRef
 	}
 	inner, ok := step.innerStep(choice)
@@ -1198,7 +1187,7 @@ func (o *Orchestrator) recordLoginFlowResult(ctx context.Context, st State, step
 	}
 	st.CompletedStepKinds = append(st.CompletedStepKinds, step.kind)
 	if parent, ok := o.cfg.LoginFlow.parentOf[step.kind]; ok {
-		if !containsString(st.CompletedStepKinds, parent) {
+		if !slices.Contains(st.CompletedStepKinds, parent) {
 			st.CompletedStepKinds = append(st.CompletedStepKinds, parent)
 		}
 		if st.PendingOneOfKind == parent {

@@ -2,6 +2,7 @@ package authorizeendpoint
 
 import (
 	"reflect"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -32,7 +33,7 @@ func consentAlreadyCovered(req *authorize.Request, existing *store.Grant) bool {
 	if req == nil || existing == nil {
 		return false
 	}
-	if containsString(req.Prompt, interaction.PromptConsent) {
+	if slices.Contains(req.Prompt, interaction.PromptConsent) {
 		return false
 	}
 	if req.GrantManagementAction != "" {

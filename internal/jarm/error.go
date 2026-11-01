@@ -28,8 +28,8 @@ var (
 	// ErrUseFormPost signals that [BuildRedirect] was called with
 	// [ResponseModeFormPostJWT]. The form_post path renders an HTML body
 	// rather than a 302; callers that receive this error MUST switch to
-	// [WriteFormPost] instead. The sentinel keeps the redirect helper's
+	// [WriteParamsFormPost] instead. The sentinel keeps the redirect helper's
 	// signature single-purpose without forcing every caller to know
 	// about the form-post fork.
-	ErrUseFormPost = errors.New("jarm: form_post.jwt requires WriteFormPost")
+	ErrUseFormPost = errors.New("jarm: form_post.jwt requires WriteParamsFormPost")
 )

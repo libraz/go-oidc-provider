@@ -77,7 +77,7 @@ func (o *Orchestrator) AuthContext(st State) AuthContext {
 	ac.Methods++
 	var inherited []string
 	for _, kind := range o.InheritedCompletedKinds(*entry) {
-		if !containsString(ac.CompletedKinds, kind) {
+		if !slices.Contains(ac.CompletedKinds, kind) {
 			inherited = append(inherited, kind)
 		}
 	}
@@ -113,7 +113,7 @@ func (o *Orchestrator) InheritedCompletedKinds(entry EntryAuthn) []string {
 	flow := o.cfg.LoginFlow
 	kinds := []string{flow.primary.kind}
 	for _, r := range flow.rules {
-		if !containsString(kinds, r.then.kind) && amrSatisfies(r.then, entry.AMR) {
+		if !slices.Contains(kinds, r.then.kind) && amrSatisfies(r.then, entry.AMR) {
 			kinds = append(kinds, r.then.kind)
 		}
 	}

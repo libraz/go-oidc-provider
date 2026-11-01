@@ -282,7 +282,7 @@ func TestEndToEnd_JARM_FormPostJWT_Success(t *testing.T) {
 
 // extractFormResponseValue pulls the value of the <input name="response"
 // value="..."/> field from an HTML body. The helper is deliberately
-// minimal: the body shape is fixed by [jarm.WriteFormPost], so we
+// minimal: the body shape is fixed by [jarm.WriteParamsFormPost], so we
 // substring-search rather than HTML-parse to keep the test self-
 // contained.
 func extractFormResponseValue(t *testing.T, body string) string {

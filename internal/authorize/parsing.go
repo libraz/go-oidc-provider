@@ -33,7 +33,7 @@ const PARRequestURIPrefix = "urn:ietf:params:oauth:request_uri:"
 // that have no client dependency (duplicate single-valued parameters,
 // repeated multi-valued parameters, malformed max_age).
 func ParseRequest(r *http.Request) (*Request, error) {
-	values, err := extractValues(r)
+	values, err := ExtractValues(r)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func ParseValues(v url.Values) (*Request, error) {
 		Nonce:                   singles["nonce"],
 		CodeChallenge:           singles["code_challenge"],
 		CodeChallengeMethod:     singles["code_challenge_method"],
-		Prompt:                  splitPrompt(multis["prompt"]),
+		Prompt:                  oidcscope.Parse(multis["prompt"]),
 		MaxAge:                  maxAge,
 		LoginHint:               singles["login_hint"],
 		UILocales:               strings.Fields(multis["ui_locales"]),
@@ -154,21 +154,12 @@ func parseSingleValues(v url.Values) (map[string]string, error) {
 var multiParseFields = []string{"scope", "prompt", "ui_locales", "acr_values"}
 
 // parseMultiValues extracts every multi-valued parameter from v.
-// "scope" / "ui_locales" / "acr_values" are read via [multiValue] and
-// "prompt" is read via [singleEntry]; the difference is documented on
-// the helpers themselves.
+// Each is read via [singleValue], so repetition is rejected rather than
+// concatenated.
 func parseMultiValues(v url.Values) (map[string]string, error) {
 	out := make(map[string]string, len(multiParseFields))
 	for _, name := range multiParseFields {
-		var (
-			val string
-			err error
-		)
-		if name == "prompt" {
-			val, err = singleEntry(v, name)
-		} else {
-			val, err = multiValue(v, name)
-		}
+		val, err := singleValue(v, name)
 		if err != nil {
 			return nil, err
 		}
@@ -177,11 +168,11 @@ func parseMultiValues(v url.Values) (map[string]string, error) {
 	return out, nil
 }
 
-// extractValues returns the [url.Values] the parser should consume.
+// ExtractValues returns the [url.Values] the parser should consume.
 // GET requests use [http.Request.URL.Query()]; POST requests use the parsed
 // form. Other methods return an empty value set so the per-parameter
 // "required" checks fire in the validator.
-func extractValues(r *http.Request) (url.Values, error) {
+func ExtractValues(r *http.Request) (url.Values, error) {
 	if r == nil {
 		return nil, ErrClientIDRequired
 	}
@@ -194,10 +185,12 @@ func extractValues(r *http.Request) (url.Values, error) {
 	return r.URL.Query(), nil
 }
 
-// singleValue returns the value of a single-valued parameter. Multiple
-// occurrences are rejected even when the bytes are identical: accepting a
-// repeated field creates parser asymmetry with the token endpoint and makes
-// request-object merge behaviour harder to reason about.
+// singleValue returns the value of a parameter that may appear at most
+// once, including multi-valued ones whose list lives inside the value.
+// Multiple occurrences are rejected even when the bytes are identical:
+// accepting a repeated field creates parser asymmetry with the token
+// endpoint and makes request-object merge behaviour harder to reason
+// about.
 func singleValue(v url.Values, key string) (string, error) {
 	values, ok := v[key]
 	if !ok || len(values) == 0 {
@@ -207,29 +200,6 @@ func singleValue(v url.Values, key string) (string, error) {
 		return "", ErrDuplicateParameter
 	}
 	return values[0], nil
-}
-
-// singleEntry returns the single occurrence of a multi-valued parameter
-// that is permitted to appear at most once in [url.Values]. Repeated entries
-// are rejected with [ErrDuplicateParameter] (concatenating would mask the
-// case where a client legitimately needed to repeat the parameter, which
-// the spec does not require).
-func singleEntry(v url.Values, key string) (string, error) {
-	values, ok := v[key]
-	if !ok || len(values) == 0 {
-		return "", nil
-	}
-	if len(values) > 1 {
-		return "", ErrDuplicateParameter
-	}
-	return values[0], nil
-}
-
-// multiValue returns the single space-delimited string for a multi-valued
-// parameter. Like [singleEntry], it rejects repetition rather than
-// concatenating.
-func multiValue(v url.Values, key string) (string, error) {
-	return singleEntry(v, key)
 }
 
 // HasPARRequestURIPrefix reports whether raw begins with

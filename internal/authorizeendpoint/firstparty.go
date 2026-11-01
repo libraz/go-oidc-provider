@@ -3,6 +3,7 @@ package authorizeendpoint
 import (
 	"net/http"
 	"net/url"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -55,7 +56,7 @@ func firstPartyShouldSkipConsent(
 	if !firstPartyAutoGrantRequestTrusted(r, req.RedirectURI) {
 		return false
 	}
-	if containsString(req.Prompt, interaction.PromptConsent) {
+	if slices.Contains(req.Prompt, interaction.PromptConsent) {
 		return false
 	}
 	if oidcscope.ContainsOfflineAccess(req.Scope) {

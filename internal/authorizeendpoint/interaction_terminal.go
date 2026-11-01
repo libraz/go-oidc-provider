@@ -145,9 +145,9 @@ func claimTerminalInteraction(
 	deps resolved,
 	rec *store.Interaction,
 ) bool {
-	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
-	if !ok {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction store lacks compare-and-swap", "")
+	cas, err := interactionCAS(deps)
+	if err != nil {
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, err.Error(), "")
 		return false
 	}
 	if err := cas.DeleteIfUnchanged(r.Context(), rec); err != nil {

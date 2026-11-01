@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -22,7 +23,7 @@ func TestRenderBrowserError_FallsBackToJSON_WhenAcceptIsAbsent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
 	renderBrowserError(rec, req, interaction.HTMLDriver{}, http.StatusBadRequest, "invalid_request", "no Accept", "")
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+	if got := rec.Header().Get("Content-Type"); got != httpx.JSONContentType {
 		t.Errorf("Content-Type=%q want application/json (no Accept must default to JSON)", got)
 	}
 	if got := rec.Code; got != http.StatusBadRequest {
@@ -64,7 +65,7 @@ func TestRenderBrowserError_StaysJSON_WhenJSONHasHigherQ(t *testing.T) {
 	req.Header.Set("Accept", "application/json,text/html;q=0.5")
 	renderBrowserError(rec, req, interaction.HTMLDriver{}, http.StatusBadRequest, "invalid_request", "param missing", "")
 
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+	if got := rec.Header().Get("Content-Type"); got != httpx.JSONContentType {
 		t.Errorf("Content-Type=%q want application/json", got)
 	}
 }
@@ -82,7 +83,7 @@ func TestRenderBrowserError_FallsBackToJSON_WhenDriverLacksErrorRenderer(t *test
 	req.Header.Set("Accept", "text/html")
 
 	renderBrowserError(rec, req, legacyDriverNoErrorRenderer{}, http.StatusBadRequest, "invalid_request", "no", "")
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+	if got := rec.Header().Get("Content-Type"); got != httpx.JSONContentType {
 		t.Errorf("Content-Type=%q want application/json (legacy driver has no RenderError)", got)
 	}
 }
@@ -180,7 +181,7 @@ func TestRenderBrowserError_OverlayOverLegacyDriverStaysJSON(t *testing.T) {
 	req.Header.Set("Accept", "text/html")
 	renderBrowserError(rec, req, driver, http.StatusBadRequest, "invalid_request", "no", "")
 
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+	if got := rec.Header().Get("Content-Type"); got != httpx.JSONContentType {
 		t.Errorf("Content-Type=%q want application/json", got)
 	}
 }

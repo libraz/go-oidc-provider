@@ -560,16 +560,14 @@ func registerSPARoutes(mux *http.ServeMux, r resolved) {
 	mux.Handle("GET "+r.SPALoginMount+"/assets/{path...}", assets)
 }
 
-// containsString reports whether haystack contains needle. The helper is a
-// small readability win over slices.Contains in the request flow because
-// the prompt / scope arrays are typed as []string already.
-func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
+// requireFound maps a nil record returned alongside a nil error, which
+// violates the store contract, to [store.ErrNotFound]: a record the
+// backend cannot produce is not a registered one.
+func requireFound[T any](rec *T, err error) (*T, error) {
+	if err == nil && rec == nil {
+		err = store.ErrNotFound
 	}
-	return false
+	return rec, err
 }
 
 // clearCookie writes a Set-Cookie header that instructs the browser to

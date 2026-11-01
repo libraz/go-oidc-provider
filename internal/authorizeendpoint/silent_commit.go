@@ -154,10 +154,7 @@ func attemptSilentAuthorization(
 		return nil, false, fmt.Errorf("authorizeendpoint: begin silent transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	txDeps := deps
-	txDeps.PARs = tx.PushedAuthRequests()
-	txDeps.Codes = tx.AuthorizationCodes()
-	txDeps.Grants = tx.Grants()
+	txDeps := transactionalDeps(deps, tx)
 	durableGrant, err := resolveSilentGrant(ctx, txDeps, req, hint, reported)
 	if err != nil {
 		return nil, false, err
@@ -183,30 +180,17 @@ func attemptSilentAuthorization(
 		return nil, false, err
 	}
 	now := deps.now().UTC()
-	code := &store.AuthorizationCode{
-		ID:                  codeID,
-		ClientID:            client.ID,
-		Subject:             durableGrant.Subject,
-		GrantID:             durableGrant.ID,
-		RedirectURI:         req.RedirectURI,
-		Scope:               append([]string(nil), req.Scope...),
-		Resource:            req.Resource,
-		CodeChallenge:       req.CodeChallenge,
-		CodeChallengeMethod: req.CodeChallengeMethod,
-		Nonce:               req.Nonce,
-		State:               req.State,
-		DPoPJKT:             req.DPoPJKT,
-
-		AuthTime:              reported.AuthTime,
-		ACR:                   reported.ACR,
-		AMR:                   slices.Clone(reported.AMR),
-		AuthorizationDetails:  codeAuthorizationDetails(req, durableGrant),
-		Claims:                authorize.EncodeClaimsToGrant(req.Claims),
-		AuthorizationRecorded: true,
-
-		ExpiresAt: now.Add(deps.AuthCodeTTL),
-		CreatedAt: now,
+	binding := codeBinding{
+		ID:       codeID,
+		ClientID: client.ID,
+		Subject:  durableGrant.Subject,
+		GrantID:  durableGrant.ID,
+		Scope:    append([]string(nil), req.Scope...),
+		AuthTime: reported.AuthTime,
+		ACR:      reported.ACR,
+		AMR:      slices.Clone(reported.AMR),
 	}
+	code := newAuthorizationCode(req, binding, durableGrant, now, deps.AuthCodeTTL)
 	if err := consumePARIfNeeded(ctx, txDeps, req); err != nil {
 		return nil, true, err
 	}
@@ -218,7 +202,7 @@ func attemptSilentAuthorization(
 		// transaction handle before probing the outer store.
 		_ = tx.Rollback()
 		committedCode, findErr := deps.Codes.Find(ctx, codeID)
-		if findErr != nil || !silentAuthorizationCodeMatches(committedCode, code) {
+		if findErr != nil || !authorizationCodeMatches(committedCode, req, binding, true) {
 			return nil, false, fmt.Errorf("authorizeendpoint: commit silent transaction: %w", err)
 		}
 	}
@@ -288,22 +272,4 @@ func resolveSilentGrant(
 		}
 	}
 	return grant, nil
-}
-
-func silentAuthorizationCodeMatches(actual, expected *store.AuthorizationCode) bool {
-	if actual == nil || expected == nil {
-		return false
-	}
-	return actual.ID == expected.ID &&
-		actual.ClientID == expected.ClientID &&
-		actual.Subject == expected.Subject &&
-		actual.GrantID == expected.GrantID &&
-		actual.RedirectURI == expected.RedirectURI &&
-		slices.Equal(actual.Scope, expected.Scope) &&
-		actual.Resource == expected.Resource &&
-		actual.CodeChallenge == expected.CodeChallenge &&
-		actual.CodeChallengeMethod == expected.CodeChallengeMethod &&
-		actual.Nonce == expected.Nonce &&
-		actual.State == expected.State &&
-		actual.DPoPJKT == expected.DPoPJKT
 }

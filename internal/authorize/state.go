@@ -138,7 +138,7 @@ func SnapshotFrom(req *Request, now time.Time) RequestSnapshot {
 		DPoPJKT:               req.DPoPJKT,
 		PARRequestURI:         req.PARRequestURI,
 		Claims:                CloneClaimsRequest(req.Claims),
-		AuthorizationDetails:  cloneAuthorizationDetails(req.AuthorizationDetails),
+		AuthorizationDetails:  CloneAuthorizationDetails(req.AuthorizationDetails),
 		GrantManagementAction: req.GrantManagementAction,
 		GrantID:               req.GrantID,
 		CreatedUnix:           now.UTC().Unix(),
@@ -173,16 +173,17 @@ func (s RequestSnapshot) ToRequest() *Request {
 		DPoPJKT:               s.DPoPJKT,
 		PARRequestURI:         s.PARRequestURI,
 		Claims:                CloneClaimsRequest(s.Claims),
-		AuthorizationDetails:  cloneAuthorizationDetails(s.AuthorizationDetails),
+		AuthorizationDetails:  CloneAuthorizationDetails(s.AuthorizationDetails),
 		GrantManagementAction: s.GrantManagementAction,
 		GrantID:               s.GrantID,
 	}
 }
 
-// cloneAuthorizationDetails deep-copies the authorization_details slice so
-// the snapshot and the restored request do not alias the same maps. A nil
-// or empty slice round-trips as nil so the json:omitempty tag drops it.
-func cloneAuthorizationDetails(in []map[string]any) []map[string]any {
+// CloneAuthorizationDetails copies the authorization_details slice and each
+// element map so the copy and the original do not alias the same slice or
+// maps; map values are shared, not copied. A nil or empty slice yields nil
+// so the json:omitempty tag drops it.
+func CloneAuthorizationDetails(in []map[string]any) []map[string]any {
 	if len(in) == 0 {
 		return nil
 	}

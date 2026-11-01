@@ -156,9 +156,9 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 		resumeInteractionCompletion(w, r, deps, rec, state)
 		return
 	}
-	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
-	if !ok {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction store lacks compare-and-swap", "")
+	cas, err := interactionCAS(deps)
+	if err != nil {
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, err.Error(), "")
 		return
 	}
 	if err := cas.DeleteIfUnchanged(r.Context(), rec); err != nil {
@@ -273,7 +273,7 @@ func dispatchTick(
 		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not issue csrf token", "")
 		return
 	}
-	if err := setCSRFCookie(w, token, deps.InteractionTTL); err != nil {
+	if err := setCSRFCookie(w, token); err != nil {
 		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not set csrf cookie", "")
 		return
 	}
@@ -358,18 +358,7 @@ func persistFailedTick(
 	if err == nil {
 		return true
 	}
-	switch {
-	case errors.Is(err, store.ErrConflict):
-		if savedState.Completion != nil {
-			resumeInteractionCompletion(w, r, deps, savedRec, savedState)
-			return false
-		}
-		renderBrowserError(w, r, deps.Driver, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing", "")
-	case errors.Is(err, store.ErrNotFound):
-		http.NotFound(w, r)
-	default:
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not persist interaction", "")
-	}
+	renderPersistFailure(w, r, deps, savedRec, savedState, err)
 	return false
 }
 
@@ -424,11 +413,9 @@ func persistAuthnState(
 			"authorizeendpoint: marshal interaction state: %w", err,
 		)
 	}
-	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
-	if !ok {
-		return nil, authorize.RequestState{}, errors.New(
-			"authorizeendpoint: interaction store lacks compare-and-swap",
-		)
+	cas, err := interactionCAS(deps)
+	if err != nil {
+		return nil, authorize.RequestState{}, err
 	}
 	nextRec := *rec
 	nextRec.RawState = raw
@@ -619,8 +606,21 @@ func reauthenticateChooserPick(
 	return deps.Authn.Tick(r.Context(), authn.RequireReauth(st), authn.Input{Now: now})
 }
 
+// errInteractionNoCAS reports an interaction store that cannot serve the
+// compare-and-swap the interaction state machine depends on.
+var errInteractionNoCAS = errors.New("interaction store lacks compare-and-swap")
+
+// interactionCAS returns the compare-and-swap view of the interaction store.
+func interactionCAS(deps resolved) (store.InteractionStoreCAS, error) {
+	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
+	if !ok {
+		return nil, errInteractionNoCAS
+	}
+	return cas, nil
+}
+
 // setCSRFCookie writes the __Host-oidc_csrf cookie carrying token.
-func setCSRFCookie(w http.ResponseWriter, token string, _ time.Duration) error {
+func setCSRFCookie(w http.ResponseWriter, token string) error {
 	c, err := cookie.Build(cookie.CSRFProfile, token)
 	if err != nil {
 		return fmt.Errorf("authorizeendpoint: build csrf cookie: %w", err)

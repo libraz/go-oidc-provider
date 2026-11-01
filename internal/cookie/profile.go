@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
 // Profile describes a cookie's transport-level policy: name, lifetime, scope,
@@ -125,7 +127,7 @@ func (p Profile) validate() error {
 //nolint:gochecknoglobals // Predefined cookie profiles are configuration constants.
 var SessionProfile = Profile{
 	Name:       "__Host-oidc_session",
-	MaxAge:     14 * 24 * time.Hour,
+	MaxAge:     timex.SessionIdleTTLDefault,
 	SameSite:   http.SameSiteLaxMode,
 	HostPrefix: true,
 	Encrypted:  true,
