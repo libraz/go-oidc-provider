@@ -20,6 +20,15 @@ type schemaCandidate struct {
 	store any
 }
 
+// checkStoreState runs the construction-time reads of the store: the schema
+// check first, so the subject-mode gate never reads a table that is missing.
+func (c *config) checkStoreState(ctx context.Context) (commit func(context.Context) error, err error) {
+	if err := c.validateStoreSchema(ctx); err != nil {
+		return nil, err
+	}
+	return c.checkSubjectModeGate(ctx)
+}
+
 // validateStoreSchema asks every store the configuration uses, and that
 // implements [store.SchemaValidator], to check its persistent schema, and
 // joins the failures into one configuration error. It runs before the
