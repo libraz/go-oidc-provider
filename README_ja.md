@@ -53,6 +53,8 @@ log.Fatal(http.ListenAndServe(":8080", handler))
 
 `Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
 
+エンドポイントは `/oidc` の下にマウントされます（`op.WithMountPrefix` で変更できます）。discovery ドキュメントは issuer 直下の `/.well-known/openid-configuration` に置かれるので、最初はこの URL を取得してください。
+
 セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。
 
 ```go

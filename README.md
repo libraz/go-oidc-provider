@@ -82,6 +82,10 @@ whenever the `authorization_code` grant is enabled, which is the default.
 `op.New` returns an error rather than booting in an unsafe configuration, so an
 incomplete setup fails at construction time.
 
+The endpoints mount under `/oidc` (`op.WithMountPrefix` moves them), while
+the discovery document stays at `/.well-known/openid-configuration` under the
+issuer, so that is the first URL to fetch.
+
 A security profile is declared with one option, and the constructor refuses to
 start when the declared profile conflicts with the rest of the configuration:
 
