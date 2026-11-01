@@ -22,14 +22,17 @@ import (
 // router takes is already wrapped by the SSF decorator. The worker is
 // started separately, once [New] can no longer fail.
 func buildSharedSignals(cfg *config, keySet *keys.Set) error {
-	grants, err := cfg.validateSharedSignals()
-	if err != nil {
+	if err := cfg.validateSharedSignals(); err != nil {
 		return err
 	}
 	if !cfg.sharedSignals {
 		return nil
 	}
 	ss, err := cfg.sharedSignalsStore()
+	if err != nil {
+		return err
+	}
+	grants, err := cfg.sharedSignalsGrants()
 	if err != nil {
 		return err
 	}

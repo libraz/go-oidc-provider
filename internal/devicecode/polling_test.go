@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/pollinterval"
 )
 
 func TestDecidePoll_TTLGate(t *testing.T) {
@@ -110,7 +111,7 @@ func TestDecidePoll_SlowDownRaisesIntervalByIncrement(t *testing.T) {
 			}
 			if out.NextInterval != tc.wantNext {
 				t.Errorf("next interval: got %v, want %v (%v + %v)",
-					out.NextInterval, tc.wantNext, tc.current, devicecode.SlowDownIncrement)
+					out.NextInterval, tc.wantNext, tc.current, pollinterval.SlowDownIncrement)
 			}
 			if !out.CountThisAsViolation {
 				t.Error("slow_down should count as a poll violation")
@@ -182,7 +183,7 @@ func pollWalk(
 		case devicecode.PollDecisionSlowDown:
 			opInterval = decision.NextInterval
 			// The device applies the increase RFC 8628 §3.5 mandates.
-			deviceInterval += devicecode.SlowDownIncrement
+			deviceInterval += pollinterval.SlowDownIncrement
 		case devicecode.PollDecisionAuthorizationPending,
 			devicecode.PollDecisionEmit,
 			devicecode.PollDecisionInvalid:

@@ -80,36 +80,43 @@ func WithAllowInsecureSharedSignalsPushForDev() Option {
 // validateSharedSignals enforces the [WithSharedSignals] construction
 // contract. The ssf. scope prefix is refused only while the transmitter
 // is on, so a deployment that never enables it keeps its scope names.
-// It returns the grant lister the transmitter reads, nil while the
-// transmitter is off.
-func (c *config) validateSharedSignals() (store.GrantClientLister, error) {
+func (c *config) validateSharedSignals() error {
 	if c.allowInsecureSharedSignalsPushForDev && !isDevelopmentIssuer(c.issuer) {
-		return nil, newConfigurationError(
+		return newConfigurationError(
 			"WithAllowInsecureSharedSignalsPushForDev requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
 		)
 	}
 	if !c.sharedSignals {
-		return nil, nil
+		return nil
 	}
 	for _, s := range c.scopes {
 		if strings.HasPrefix(s.Name, ssfScopePrefix) {
-			return nil, newConfigurationError(
+			return newConfigurationError(
 				"WithScope: the "+ssfScopePrefix+" scope prefix is reserved for WithSharedSignals ("+s.Name+")", nil,
 			)
 		}
 	}
 	if _, err := c.sharedSignalsStore(); err != nil {
-		return nil, err
+		return err
 	}
+	if _, err := c.sharedSignalsGrants(); err != nil {
+		return err
+	}
+	if len(c.cookieKeys) == 0 {
+		return newConfigurationError(
+			"WithSharedSignals requires WithCookieKeys: push authorization headers are sealed under the cookie key ring", nil,
+		)
+	}
+	return nil
+}
+
+// sharedSignalsGrants returns the grant store as the client lister the
+// transmitter reads, or the configuration error naming what is missing.
+func (c *config) sharedSignalsGrants() (store.GrantClientLister, error) {
 	grants, ok := c.store.Grants().(store.GrantClientLister)
 	if !ok || nilcheck.IsNil(grants) {
 		return nil, newConfigurationError(
 			"WithSharedSignals requires Store.Grants() to implement store.GrantClientLister", nil,
-		)
-	}
-	if len(c.cookieKeys) == 0 {
-		return nil, newConfigurationError(
-			"WithSharedSignals requires WithCookieKeys: push authorization headers are sealed under the cookie key ring", nil,
 		)
 	}
 	return grants, nil

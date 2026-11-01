@@ -11,6 +11,8 @@ import (
 )
 
 func TestNewAccessTokenVerifierCopiesFields(t *testing.T) {
+	t.Parallel()
+
 	for _, strategy := range []store.AccessTokenRevocationStrategy{
 		store.RevocationStrategyGrantTombstone,
 		store.RevocationStrategyJTIRegistry,
@@ -29,6 +31,8 @@ func TestNewAccessTokenVerifierCopiesFields(t *testing.T) {
 }
 
 func TestOrderTokenBranches(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name                  string
 		refreshHinted, jwtish bool
@@ -41,6 +45,7 @@ func TestOrderTokenBranches(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := endpointsupport.OrderTokenBranches(tc.refreshHinted, tc.jwtish, "jwt", "opaque")
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %v, want %v", got, tc.want)

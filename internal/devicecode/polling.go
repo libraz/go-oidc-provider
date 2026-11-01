@@ -12,10 +12,6 @@ const (
 	// DefaultInterval is the seed value of the slow_down ladder.
 	DefaultInterval = pollinterval.DefaultInterval
 
-	// SlowDownIncrement is the amount the effective interval grows by
-	// on every slow_down.
-	SlowDownIncrement = pollinterval.SlowDownIncrement
-
 	// DefaultExpiresIn is the device_code lifetime advertised on the
 	// device-authorization response and stamped on the substore record.
 	DefaultExpiresIn = pollinterval.DefaultExpiresIn
@@ -50,7 +46,7 @@ const (
 	// PollDecisionSlowDown means the device polled inside the
 	// current interval and MUST back off. The wire form is
 	// slow_down per RFC 8628 §3.5; the token endpoint also raises
-	// the device's effective interval by [SlowDownIncrement] before
+	// the device's effective interval by [pollinterval.SlowDownIncrement] before
 	// the next poll, matching the increase the RFC asks the device
 	// to apply.
 	PollDecisionSlowDown

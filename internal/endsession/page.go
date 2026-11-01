@@ -85,7 +85,6 @@ func writeLoggedOutPage(w http.ResponseWriter, deps Deps, page loggedOutPage) {
 	// [i18n.Resolver.Message] documents as raw and unescaped — escaping
 	// it at the substitution site is exactly where that contract puts
 	// the responsibility.
-	//nolint:gosec // G705: every interpolated value is html-escaped in renderLoggedOutBody.
 	_, _ = w.Write([]byte(renderLoggedOutBody(page)))
 }
 
