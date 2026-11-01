@@ -233,8 +233,18 @@ func (s *Store) setRevoked(ctx context.Context, table, pk string) error {
 // buffering an unbounded number of deletes would push the transaction
 // past its action ceiling for no gain.
 func (s *Store) gcExpired(ctx context.Context, table string, cutoff time.Time, op string) (int, error) {
-	names := map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
 	values := map[string]types.AttributeValue{":never": avN(0), ":cutoff": avTime(cutoff)}
+	return s.gcWhere(ctx, table, op, expiredBeforeCondition, values, false)
+}
+
+// gcWhere is the sweep behind [Store.gcExpired]: it deletes every item
+// of table matching condition, re-asserting it on each delete. The
+// condition and values may reference #expires and the placeholders in
+// values; consistent selects a strongly consistent scan.
+func (s *Store) gcWhere(
+	ctx context.Context, table, op, condition string, values map[string]types.AttributeValue, consistent bool,
+) (int, error) {
+	names := map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
 	var (
 		deleted int
 		start   map[string]types.AttributeValue
@@ -242,11 +252,12 @@ func (s *Store) gcExpired(ctx context.Context, table string, cutoff time.Time, o
 	for {
 		page, err := s.api.Scan(ctx, &dynamodb.ScanInput{
 			TableName:                 aws.String(table),
-			FilterExpression:          aws.String(expiredBeforeCondition),
+			FilterExpression:          aws.String(condition),
 			ProjectionExpression:      aws.String("#pk"),
 			ExpressionAttributeNames:  names,
 			ExpressionAttributeValues: values,
 			ExclusiveStartKey:         start,
+			ConsistentRead:            aws.Bool(consistent),
 		})
 		if err != nil {
 			return deleted, wrapErr(op, err)
@@ -255,7 +266,7 @@ func (s *Store) gcExpired(ctx context.Context, table string, cutoff time.Time, o
 			_, err := s.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 				TableName:                 aws.String(table),
 				Key:                       key(readS(entry, attrPK)),
-				ConditionExpression:       aws.String("attribute_exists(#pk) AND " + expiredBeforeCondition),
+				ConditionExpression:       aws.String("attribute_exists(#pk) AND " + condition),
 				ExpressionAttributeNames:  names,
 				ExpressionAttributeValues: values,
 			})

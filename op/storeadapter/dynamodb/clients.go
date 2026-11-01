@@ -81,7 +81,7 @@ func (s *clientStore) UpdateClient(ctx context.Context, c *store.Client) error {
 	_, err = s.parent.api.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.parent.names.clients),
 		Item:                i,
-		ConditionExpression: aws.String("attribute_exists(" + attrPK + ")"),
+		ConditionExpression: aws.String(presentKeyCondition),
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
@@ -196,7 +196,7 @@ func (s *clientStore) staticClientInsert(
 		Put: &types.Put{
 			TableName:           aws.String(s.parent.names.clients),
 			Item:                i,
-			ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+			ConditionExpression: aws.String(absentKeyCondition),
 		},
 	}, nil
 }

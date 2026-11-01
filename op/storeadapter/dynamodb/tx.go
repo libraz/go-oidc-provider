@@ -448,13 +448,13 @@ func (o *txOp) action() types.TransactWriteItem {
 		return types.TransactWriteItem{Put: &types.Put{
 			TableName:           aws.String(o.table),
 			Item:                o.item,
-			ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+			ConditionExpression: aws.String(absentKeyCondition),
 		}}
 	case txPutIfPresent:
 		return types.TransactWriteItem{Put: &types.Put{
 			TableName:           aws.String(o.table),
 			Item:                o.item,
-			ConditionExpression: aws.String("attribute_exists(" + attrPK + ")"),
+			ConditionExpression: aws.String(presentKeyCondition),
 		}}
 	case txPutIfUnconsumed:
 		put := o.matchPut()

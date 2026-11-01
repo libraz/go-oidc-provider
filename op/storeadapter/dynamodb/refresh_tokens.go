@@ -144,7 +144,7 @@ func (s *refreshStore) rotationWrites(entry item, parentDigest, childDigest stri
 		{Put: &types.Put{
 			TableName:           aws.String(s.parent.names.refreshes),
 			Item:                entry,
-			ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+			ConditionExpression: aws.String(absentKeyCondition),
 		}},
 		{Update: &types.Update{
 			TableName:                 aws.String(s.parent.names.refreshes),

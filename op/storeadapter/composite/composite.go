@@ -382,6 +382,12 @@ type Store struct {
 	// authnLockouts is the [store.AuthnLockoutStore] exposed by the Users
 	// backend when it has an AuthnLockouts method. nil otherwise.
 	authnLockouts store.AuthnLockoutStore
+
+	// ssfStreams and ssfEvents are the substores of the backends routed for
+	// [SSFStreams] and [SSFEvents] when those implement
+	// [store.SharedSignalsStore]. nil otherwise.
+	ssfStreams store.SSFStreamStore
+	ssfEvents  store.SSFEventStore
 }
 
 // New builds a composite [Store] from the supplied options. The validation
@@ -429,6 +435,14 @@ func New(opts ...Option) (*Store, error) {
 	}); ok {
 		authnLockouts = p.AuthnLockouts()
 	}
+	var ssfStreams store.SSFStreamStore
+	if b, ok := routes[SSFStreams].(store.SharedSignalsStore); ok {
+		ssfStreams = b.SSFStreams()
+	}
+	var ssfEvents store.SSFEventStore
+	if b, ok := routes[SSFEvents].(store.SharedSignalsStore); ok {
+		ssfEvents = b.SSFEvents()
+	}
 	txAnchor, ok := anchor.(store.Transactional)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -442,6 +456,8 @@ func New(opts ...Option) (*Store, error) {
 		registry:         registry,
 		staticReconciler: staticReconciler,
 		authnLockouts:    authnLockouts,
+		ssfStreams:       ssfStreams,
+		ssfEvents:        ssfEvents,
 	}, nil
 }
 
@@ -749,20 +765,8 @@ var _ store.UserPasswordHashUpdater = (*Store)(nil)
 // [SSFStreams], or nil when that backend does not implement
 // [store.SharedSignalsStore]. op.New rejects nil when Shared Signals is
 // enabled.
-func (s *Store) SSFStreams() store.SSFStreamStore {
-	b, ok := s.routes[SSFStreams].(store.SharedSignalsStore)
-	if !ok {
-		return nil
-	}
-	return b.SSFStreams()
-}
+func (s *Store) SSFStreams() store.SSFStreamStore { return s.ssfStreams }
 
 // SSFEvents returns the event queue of the backend routed for [SSFEvents],
 // or nil when that backend does not implement [store.SharedSignalsStore].
-func (s *Store) SSFEvents() store.SSFEventStore {
-	b, ok := s.routes[SSFEvents].(store.SharedSignalsStore)
-	if !ok {
-		return nil
-	}
-	return b.SSFEvents()
-}
+func (s *Store) SSFEvents() store.SSFEventStore { return s.ssfEvents }

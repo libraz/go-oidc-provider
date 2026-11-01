@@ -223,7 +223,7 @@ type queries struct {
 	ssfEventLease           string
 	ssfEventReschedule      string
 	ssfEventExists          string
-	ssfEventAck             string
+	ssfEventAckPrefix       string // unbound head of the batched ack DELETE; the IN list is appended per call
 	ssfEventPending         string
 	ssfEventRetag           string
 	ssfEventPurgeKind       string
@@ -1179,7 +1179,7 @@ func addSSFQueries(q *queries, d Dialect, n nameMap) {
 	)
 	q.ssfEventReschedule = d.rebind("UPDATE " + n.ssfEvents + " SET next_attempt_at = ?, attempts = ? WHERE jti = ?")
 	q.ssfEventExists = d.rebind("SELECT 1 FROM " + n.ssfEvents + " WHERE jti = ?")
-	q.ssfEventAck = d.rebind("DELETE FROM " + n.ssfEvents + " WHERE stream_id = ? AND jti = ?")
+	q.ssfEventAckPrefix = "DELETE FROM " + n.ssfEvents + " WHERE stream_id = ? AND jti IN ("
 	q.ssfEventPending = d.rebind(
 		"SELECT " + eventCols + " FROM " + n.ssfEvents +
 			" WHERE stream_id = ? AND delivery_method = ? AND held = 0 ORDER BY jti LIMIT ?",

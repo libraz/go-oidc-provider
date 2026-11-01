@@ -14,6 +14,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // The authentication-factor substores. They sit outside [store.Store]
@@ -370,7 +371,7 @@ func (s *emailOTPStore) Consume(ctx context.Context, r *store.EmailOTPRecord) er
 		return err
 	}
 	now := s.parent.now()
-	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(now) {
+	if patterns.IsExpiredStrict(current.ExpiresAt, now) {
 		return store.ErrNotFound
 	}
 	if !current.ConsumedAt.IsZero() {
@@ -426,11 +427,7 @@ func emailOTPItem(r *store.EmailOTPRecord) (item, error) {
 	}
 	// The TTL tracks retention, not the code's own expiry: the counters
 	// have to outlive the code they were accumulated against.
-	horizon := r.RetainUntil
-	if horizon.IsZero() {
-		horizon = r.ExpiresAt
-	}
-	entry.expires(horizon)
+	entry.expires(emailOTPHorizon(r))
 	version, err := mfaVersionValue(r.Version)
 	if err != nil {
 		return nil, err
@@ -439,12 +436,17 @@ func emailOTPItem(r *store.EmailOTPRecord) (item, error) {
 	return entry, nil
 }
 
-func emailOTPRetentionElapsed(rec *store.EmailOTPRecord, now time.Time) bool {
-	horizon := rec.RetainUntil
-	if horizon.IsZero() {
-		horizon = rec.ExpiresAt
+// emailOTPHorizon is the instant a record stops being retained: its
+// RetainUntil, or its ExpiresAt when none was set.
+func emailOTPHorizon(rec *store.EmailOTPRecord) time.Time {
+	if rec.RetainUntil.IsZero() {
+		return rec.ExpiresAt
 	}
-	return !horizon.IsZero() && horizon.Before(now)
+	return rec.RetainUntil
+}
+
+func emailOTPRetentionElapsed(rec *store.EmailOTPRecord, now time.Time) bool {
+	return patterns.IsExpiredStrict(emailOTPHorizon(rec), now)
 }
 
 const mfaPutAttempts = 8

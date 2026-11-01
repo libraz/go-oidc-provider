@@ -4,10 +4,15 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// ssfAckBatch caps the JTIs bound into one Ack DELETE, well under every
+// supported driver's bind-parameter limit.
+const ssfAckBatch = 500
 
 // SSFStreams returns the [store.SSFStreamStore] backed by the ssf_streams
 // table. Deleting a stream also deletes its rows in ssf_events.
@@ -189,8 +194,14 @@ func (s *ssfEventStore) Reschedule(ctx context.Context, jti string, next time.Ti
 }
 
 func (s *ssfEventStore) Ack(ctx context.Context, streamID string, jtis []string) error {
-	for _, jti := range jtis {
-		if _, err := s.parent.db.ExecContext(ctx, s.parent.queries.ssfEventAck, streamID, jti); err != nil {
+	for chunk := range slices.Chunk(jtis, ssfAckBatch) {
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, streamID)
+		for _, jti := range chunk {
+			args = append(args, jti)
+		}
+		query := s.parent.dialect.rebind(s.parent.queries.ssfEventAckPrefix + placeholders(len(chunk)) + ")")
+		if _, err := s.parent.db.ExecContext(ctx, query, args...); err != nil {
 			return wrapErr("ssf_events.Ack", err)
 		}
 	}
@@ -317,9 +328,7 @@ func scanSSFStream(sc scanner) (*store.SSFStream, error) {
 	if st.EventsDelivered, err = decodeStrings(delivered); err != nil {
 		return nil, err
 	}
-	if sealed != nil {
-		st.Delivery.SealedAuthorizationHeader = append([]byte{}, sealed...)
-	}
+	st.Delivery.SealedAuthorizationHeader = sealed
 	st.Delivery.Method = store.SSFDeliveryMethod(method)
 	st.Status = store.SSFStreamStatus(status)
 	st.UpdatedAt = int64ToTime(updated)
@@ -351,7 +360,7 @@ func queryEvents(ctx context.Context, r runner, op, query string, args ...any) (
 		ev.Kind = store.SSFEventKind(kind)
 		ev.Delivery = store.SSFDeliveryMethod(delivery)
 		ev.Held = int64ToBool(held)
-		ev.Claims = append([]byte{}, claims...)
+		ev.Claims = claims
 		ev.Attempts = int(attempts)
 		ev.NextAttemptAt = int64ToTime(nextAttempt)
 		ev.ExpiresAt = int64ToTime(expiresAt)

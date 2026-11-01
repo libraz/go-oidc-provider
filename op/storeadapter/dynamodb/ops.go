@@ -147,6 +147,14 @@ func (s *Store) overwrite(ctx context.Context, table string, i item) error {
 // its key indefinitely.
 const freeKeyCondition = "attribute_not_exists(#pk) OR (#expires <> :never AND #expires < :now)"
 
+// absentKeyCondition and presentKeyCondition guard a write on whether the
+// primary key is unused or already stored, with the key attribute named
+// directly rather than through a #pk alias.
+const (
+	absentKeyCondition  = "attribute_not_exists(" + attrPK + ")"
+	presentKeyCondition = "attribute_exists(" + attrPK + ")"
+)
+
 // freeKeyAtExpiryCondition is [freeKeyCondition] under the inclusive
 // expiry bound [store.ConsumedJTIStore] pins for replay markers: a
 // record is free from its own expiry instant onwards rather than after
@@ -203,7 +211,7 @@ func (s *Store) putIfAbsent(ctx context.Context, table string, i item) (bool, er
 	_, err := s.api.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(table),
 		Item:                i,
-		ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+		ConditionExpression: aws.String(absentKeyCondition),
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {

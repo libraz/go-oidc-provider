@@ -84,7 +84,7 @@ func (s *ssfStreamStore) Create(ctx context.Context, in *store.SSFStream) error 
 	}
 	table := s.parent.names.ssfStreams
 	claim := newItem(ssfClientKey(in.ClientID)).set(attrStreamID, in.ID)
-	absent := aws.String("attribute_not_exists(" + attrPK + ")")
+	absent := aws.String(absentKeyCondition)
 	_, err = s.parent.api.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Put: &types.Put{TableName: aws.String(table), Item: entry, ConditionExpression: absent}},
@@ -163,18 +163,26 @@ func (s *ssfStreamStore) ListActive(ctx context.Context) ([]*store.SSFStream, er
 	return out, nil
 }
 
+// Update replaces the stream but keeps the client it was created for:
+// the client claim item is never rewritten, so the binding cannot move.
 func (s *ssfStreamStore) Update(ctx context.Context, in *store.SSFStream) error {
 	if in == nil {
 		return errors.New("oidcdynamo: nil ssf stream")
 	}
-	entry, err := ssfStreamItem(in)
+	cur, err := s.Get(ctx, in.ID)
+	if err != nil {
+		return err
+	}
+	keep := *in
+	keep.ClientID = cur.ClientID
+	entry, err := ssfStreamItem(&keep)
 	if err != nil {
 		return err
 	}
 	_, err = s.parent.api.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.parent.names.ssfStreams),
 		Item:                entry,
-		ConditionExpression: aws.String("attribute_exists(" + attrPK + ")"),
+		ConditionExpression: aws.String(presentKeyCondition),
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
@@ -321,7 +329,7 @@ func (s *ssfEventStore) enqueueVerification(ctx context.Context, in *store.SSFEv
 			{Put: &types.Put{
 				TableName:           aws.String(table),
 				Item:                entry,
-				ConditionExpression: aws.String("attribute_not_exists(" + attrPK + ")"),
+				ConditionExpression: aws.String(absentKeyCondition),
 			}},
 			{Put: pointer},
 		}
@@ -585,42 +593,10 @@ func (s *ssfEventStore) Purge(ctx context.Context, streamID string, includeContr
 // expiry condition, counting only the deletes that landed. Verification
 // pointers carry no expiry and never match.
 func (s *ssfEventStore) DeleteExpired(ctx context.Context, now time.Time) (int, error) {
-	names := map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
-	values := map[string]types.AttributeValue{":now": avTime(now)}
-	found, err := collectPages(0, func(start map[string]types.AttributeValue) ([]map[string]types.AttributeValue, map[string]types.AttributeValue, error) {
-		page, err := s.parent.api.Scan(ctx, &dynamodb.ScanInput{
-			TableName:                 aws.String(s.table()),
-			FilterExpression:          aws.String("#expires <= :now"),
-			ProjectionExpression:      aws.String("#pk"),
-			ExpressionAttributeNames:  names,
-			ExpressionAttributeValues: values,
-			ExclusiveStartKey:         start,
-			ConsistentRead:            aws.Bool(true),
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		return page.Items, page.LastEvaluatedKey, nil
-	})
-	if err != nil {
-		return 0, wrapErr("ssfEvents.DeleteExpired", err)
-	}
-	deleted := 0
-	for _, raw := range found {
-		_, err := s.parent.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-			TableName:                 aws.String(s.table()),
-			Key:                       key(readS(raw, attrPK)),
-			ConditionExpression:       aws.String("#expires <= :now"),
-			ExpressionAttributeNames:  map[string]string{"#expires": attrExpiresAt},
-			ExpressionAttributeValues: values,
-		})
-		if err != nil {
-			if isConditionalCheckFailed(err) {
-				continue
-			}
-			return deleted, wrapErr("ssfEvents.DeleteExpired", err)
-		}
-		deleted++
-	}
-	return deleted, nil
+	values := map[string]types.AttributeValue{":cutoff": avTime(now)}
+	return s.parent.gcWhere(ctx, s.table(), "ssfEvents.DeleteExpired", expiredAtOrBeforeCondition, values, true)
 }
+
+// expiredAtOrBeforeCondition holds for an item whose expiry is set and at
+// or before :cutoff; an item with no expiry attribute never matches.
+const expiredAtOrBeforeCondition = "#expires <= :cutoff"

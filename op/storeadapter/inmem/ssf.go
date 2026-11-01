@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,10 +96,13 @@ func (s *ssfStreamStore) Update(_ context.Context, in *store.SSFStream) error {
 	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	if _, ok := s.st.streams[in.ID]; !ok {
+	cur, ok := s.st.streams[in.ID]
+	if !ok {
 		return store.ErrNotFound
 	}
-	s.st.streams[in.ID] = cloneSSFStream(in)
+	next := cloneSSFStream(in)
+	next.ClientID = cur.ClientID
+	s.st.streams[in.ID] = next
 	return nil
 }
 
@@ -203,16 +207,19 @@ func (s *ssfEventStore) Pending(_ context.Context, streamID string, n int) ([]*s
 	}
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	var out []*store.SSFEvent
-	more := false
+	var queued []*store.SSFEvent
 	for _, ev := range s.st.events {
-		if ev.StreamID != streamID || ev.Delivery != store.SSFDeliveryPoll || ev.Held {
-			continue
+		if ev.StreamID == streamID && ev.Delivery == store.SSFDeliveryPoll && !ev.Held {
+			queued = append(queued, ev)
 		}
-		if len(out) == n {
-			more = true
-			break
-		}
+	}
+	slices.SortFunc(queued, func(a, b *store.SSFEvent) int { return strings.Compare(a.JTI, b.JTI) })
+	more := len(queued) > n
+	if more {
+		queued = queued[:n]
+	}
+	var out []*store.SSFEvent
+	for _, ev := range queued {
 		out = append(out, cloneSSFEvent(ev))
 	}
 	return out, more, nil

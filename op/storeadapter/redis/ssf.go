@@ -186,14 +186,14 @@ end
 return {removed, #jtis}
 `
 
-// ssfStreamCreateLua: KEYS = streams, stream-clients; ARGV[2..4] = stream
+// ssfStreamCreateLua: KEYS = streams, stream-clients; ARGV[1..3] = stream
 // ID, client ID, record. Returns 0 when either identifier is taken.
 const ssfStreamCreateLua = `
-if redis.call("HEXISTS", KEYS[1], ARGV[2]) == 1 or redis.call("HEXISTS", KEYS[2], ARGV[3]) == 1 then
+if redis.call("HEXISTS", KEYS[1], ARGV[1]) == 1 or redis.call("HEXISTS", KEYS[2], ARGV[2]) == 1 then
 	return 0
 end
-redis.call("HSET", KEYS[1], ARGV[2], ARGV[4])
-redis.call("HSET", KEYS[2], ARGV[3], ARGV[2])
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
+redis.call("HSET", KEYS[2], ARGV[2], ARGV[1])
 return 1
 `
 
@@ -329,7 +329,7 @@ func (s *ssfStreamStore) Create(ctx context.Context, in *store.SSFStream) error 
 	}
 	created, err := s.scripts.streamCreate.Run(ctx, s.parent.client,
 		[]string{s.parent.ssfStreamsKey(), s.parent.ssfStreamClientsKey()},
-		s.parent.prefix, in.ID, in.ClientID, payload,
+		in.ID, in.ClientID, payload,
 	).Int()
 	if err != nil {
 		return fmt.Errorf("oidcredis: create ssf stream: %w", err)
@@ -380,8 +380,19 @@ func (s *ssfStreamStore) ListActive(ctx context.Context) ([]*store.SSFStream, er
 	return out, nil
 }
 
+// Update replaces the record but keeps the client the stream was created
+// for: the client index maps client ID to stream ID and is never rewritten.
 func (s *ssfStreamStore) Update(ctx context.Context, in *store.SSFStream) error {
-	payload, err := s.encode(in)
+	if in == nil {
+		return errors.New("oidcredis: nil ssf stream")
+	}
+	cur, err := s.Get(ctx, in.ID)
+	if err != nil {
+		return err
+	}
+	keep := *in
+	keep.ClientID = cur.ClientID
+	payload, err := s.encode(&keep)
 	if err != nil {
 		return err
 	}
@@ -423,6 +434,9 @@ func ssfFlag(b bool) string {
 func (e *ssfEventStore) Enqueue(ctx context.Context, ev *store.SSFEvent) error {
 	if ev == nil {
 		return errors.New("oidcredis: nil ssf event")
+	}
+	if err := e.parent.checkPayloadSize("ssf event", ev.Claims); err != nil {
+		return err
 	}
 	recorded, err := e.scripts.enqueue.Run(ctx, e.parent.client, nil,
 		e.parent.prefix, ev.JTI, ev.StreamID, string(ev.Kind), string(ev.Delivery),

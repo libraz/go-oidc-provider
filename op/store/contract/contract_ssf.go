@@ -37,6 +37,7 @@ var ssfCases = []factorCase[SSFBackend]{
 	{"StreamCreateRejectsSecondStreamForClient", ssfStreamConflict},
 	{"StreamListActiveSkipsDisabled", ssfStreamListActive},
 	{"StreamUpdateReplaces", ssfStreamUpdate},
+	{"StreamUpdateKeepsClientID", ssfStreamUpdateKeepsClient},
 	{"StreamDeleteDropsQueuedEvents", ssfStreamDelete},
 	{"StreamDefensiveCopies", ssfStreamDefensiveCopies},
 	{"EnqueueRejectsDuplicateJTI", ssfEnqueueDuplicate},
@@ -185,6 +186,35 @@ func ssfStreamUpdate(t *testing.T, b SSFBackend) {
 		t.Fatalf("Get: %v", err)
 	}
 	assertSSFStreamEqual(t, got, next)
+}
+
+// ssfStreamUpdateKeepsClient pins that a stream's client binding is
+// fixed at Create: Update never rebinds it.
+func ssfStreamUpdateKeepsClient(t *testing.T, b SSFBackend) {
+	t.Helper()
+	ctx := context.Background()
+	seed := ssfStream("stream-1", "client-1", store.SSFStreamEnabled)
+	if err := b.Streams.Create(ctx, seed); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	next := ssfStream("stream-1", "client-other", store.SSFStreamPaused)
+	if err := b.Streams.Update(ctx, next); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := b.Streams.Get(ctx, seed.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ClientID != seed.ClientID {
+		t.Fatalf("Update rebound ClientID to %q, want %q", got.ClientID, seed.ClientID)
+	}
+	byClient, err := b.Streams.GetByClient(ctx, seed.ClientID)
+	if err != nil || byClient.ID != seed.ID {
+		t.Fatalf("GetByClient(%q) = %v, %v; want the stream", seed.ClientID, byClient, err)
+	}
+	if _, err := b.Streams.GetByClient(ctx, "client-other"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetByClient(client-other) = %v, want ErrNotFound", err)
+	}
 }
 
 func ssfStreamDelete(t *testing.T, b SSFBackend) {

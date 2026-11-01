@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/store/contract"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
@@ -122,7 +123,7 @@ func TestSQLite_RefreshReplayFromNonRootRevokesDescendants(t *testing.T) {
 	b := newSQLiteFactory(t)(t)
 	ctx := context.Background()
 	now := b.Now()
-	clk := func() time.Time { return now }
+	clk := timex.ClockFunc(func() time.Time { return now })
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: b.Store.RefreshTokens(),
 		Clock: clk,
