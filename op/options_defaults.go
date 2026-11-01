@@ -3,7 +3,6 @@ package op
 import (
 	"log/slog"
 	"slices"
-	"time"
 
 	internallog "github.com/libraz/go-oidc-provider/internal/log"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -19,7 +18,9 @@ import (
 // FAPI 2.0 §3.1.9 imposes on profile-enabled deployments, so a
 // caller who layers [WithProfile] on top of the defaults stays
 // inside spec without further tuning.
-const DefaultAccessTokenTTL = 5 * time.Minute
+//
+// The canonical value lives in [timex.AccessTokenTTLDefault].
+const DefaultAccessTokenTTL = timex.AccessTokenTTLDefault
 
 // DefaultRefreshTokenTTL is the lifetime applied to issued refresh
 // tokens when the embedder does not call [WithRefreshTokenTTL]. Thirty

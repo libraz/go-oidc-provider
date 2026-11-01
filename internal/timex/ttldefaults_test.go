@@ -19,6 +19,7 @@ func TestTTLDefaults_Values(t *testing.T) {
 		got  time.Duration
 		want time.Duration
 	}{
+		{"AccessTokenTTLDefault", timex.AccessTokenTTLDefault, 5 * time.Minute},
 		{"RefreshTokenTTLDefault", timex.RefreshTokenTTLDefault, 30 * 24 * time.Hour},
 		{"AccessTokenTTLMax", timex.AccessTokenTTLMax, 24 * time.Hour},
 		{"RegistrationIATTTLDefault", timex.RegistrationIATTTLDefault, 24 * time.Hour},

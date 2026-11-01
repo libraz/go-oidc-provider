@@ -14,6 +14,12 @@ import "time"
 // the boot log can map a TTL back to its source without consulting
 // the source tree.
 
+// AccessTokenTTLDefault is the lifetime applied to issued access tokens
+// when the embedder does not override it through [op.WithAccessTokenTTL].
+// Five minutes sits under the 10-minute FAPI 2.0 §3.1.9 bound, so layering
+// a FAPI profile on top of the defaults stays inside spec.
+const AccessTokenTTLDefault = 5 * time.Minute
+
 // RefreshTokenTTLDefault is the absolute lifetime applied to issued
 // refresh tokens when the embedder does not override the value through
 // [op.WithRefreshTokenTTL]. Thirty days mirrors the typical
