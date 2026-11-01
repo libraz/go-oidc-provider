@@ -175,8 +175,7 @@ type GrantRevocationStore interface {
 // at /revoke retires the grant's access tokens without ending its other
 // chains and codes.
 //
-// Backends that do not implement it keep the earlier behaviour: issuance
-// is refused through [GrantRevocationStore.IsRevoked], which counts every
+// Without it, issuance is refused through [GrantRevocationStore.IsRevoked], which counts every
 // tombstone, access-token-only ones included.
 type IssuanceRevocationChecker interface {
 	// IsIssuanceRevoked reports whether a credential issued under

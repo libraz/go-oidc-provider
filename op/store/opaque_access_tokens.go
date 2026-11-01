@@ -191,8 +191,7 @@ type OpaqueAccessTokenStore interface {
 // session of one subject on one client, so retiring by grant would end
 // the access tokens of the user's other sessions.
 //
-// Backends that do not implement it keep the earlier behaviour: the
-// rotation retires through [OpaqueAccessTokenStore.RevokeByGrant]. The OP
+// Without it, the rotation retires through [OpaqueAccessTokenStore.RevokeByGrant]. The OP
 // also falls back to the grant for a chain with no ChainID.
 type OpaqueAccessTokenChainRevoker interface {
 	// RevokeByChain marks every record whose GrantID equals grantID and

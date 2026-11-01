@@ -69,8 +69,9 @@ type EmailOTPRecord struct {
 	// returning the record — and its counters — while any window is
 	// live, while Verify / Consume still reject the expired code.
 	//
-	// A zero value means "retention defaults to ExpiresAt" so a backend
-	// or caller that predates this field keeps its previous behaviour.
+	// A zero value means retention defaults to ExpiresAt, so a backend or
+	// caller that leaves the field unset keeps the record only until the
+	// code expires.
 	RetainUntil time.Time
 
 	// FailedCount is the cumulative number of wrong codes the user has

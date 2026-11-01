@@ -9,10 +9,9 @@ import "context"
 // /register/{client_id} so a client deletion cascades through every
 // substore that owns records keyed on the client.
 //
-// Implementing the interface is optional: a substore that returns
-// nil from a probe leaves the cascade to the embedder's
-// [RegistrationOption.OnClientDeleted] hook (the historical
-// behaviour). Once an adapter implements it the library invokes the
+// Implementing the interface is optional: a substore that does not
+// implement it leaves the cascade to the embedder's
+// [RegistrationOption.OnClientDeleted] hook. Once an adapter implements it the library invokes the
 // cascade unconditionally; a missing client is not an error and the
 // implementation MUST treat the case as a no-op.
 //
