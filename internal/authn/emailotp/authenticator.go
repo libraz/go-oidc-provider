@@ -334,13 +334,8 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
-	if a.lockout != nil {
-		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
-			if errors.Is(err, lockout.ErrLocked) {
-				return interaction.Step{}, ErrLocked
-			}
-			return interaction.Step{}, fmt.Errorf("emailotp: lockout guard: %w", err)
-		}
+	if err := a.lockout.Guard(ctx, in.Subject, lockoutErrs); err != nil {
+		return interaction.Step{}, err
 	}
 	return interaction.Step{Prompt: a.sendPrompt()}, nil
 }
@@ -374,13 +369,8 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
-	if a.lockout != nil {
-		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
-			if errors.Is(err, lockout.ErrLocked) {
-				return interaction.Step{}, ErrLocked
-			}
-			return interaction.Step{}, fmt.Errorf("emailotp: lockout guard: %w", err)
-		}
+	if err := a.lockout.Guard(ctx, in.Subject, lockoutErrs); err != nil {
+		return interaction.Step{}, err
 	}
 	if len(in.Scratch) == 0 {
 		return a.handleSend(ctx, in)
@@ -454,7 +444,8 @@ func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueIn
 	// the code's ExpiresAt so an attacker pacing to the code TTL cannot
 	// reset the resend cap or the lockout progress. See recordRetention.
 	rec.RetainUntil = now.Add(recordRetention)
-	if constantTimeEqualEmails(email, bound) {
+	matched := constantTimeEqualEmails(email, bound)
+	if matched {
 		rec.SentAt = now
 	}
 	// Reserve the new challenge before invoking the mailer. A competing
@@ -466,7 +457,7 @@ func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueIn
 		}
 		return interaction.Step{}, fmt.Errorf("emailotp: reserve send: %w", err)
 	}
-	if constantTimeEqualEmails(email, bound) {
+	if matched {
 		if err := a.mailer.Send(ctx, Message{
 			To:        bound,
 			Code:      code,
@@ -578,7 +569,7 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 		return interaction.Step{}, ErrCodeMissing
 	}
 	for retries := 0; ; retries++ {
-		if retries == 16 {
+		if retries == authn.MaxPersistRetries {
 			return interaction.Step{}, ErrRetry
 		}
 		rec, err := a.store.Get(ctx, in.Subject)
@@ -621,28 +612,13 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 				}
 				return interaction.Step{}, fmt.Errorf("emailotp: consume record: %w", perr)
 			}
-			if a.lockout != nil {
-				if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
-					return interaction.Step{}, fmt.Errorf("emailotp: lockout reset: %w", rerr)
-				}
+			if rerr := a.lockout.ResetOnSuccess(ctx, in.Subject, lockoutErrs); rerr != nil {
+				return interaction.Step{}, rerr
 			}
 			return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 		case errors.Is(verr, ErrWrongCode):
-			if a.lockout != nil {
-				out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
-				if lerr != nil {
-					return interaction.Step{}, fmt.Errorf("emailotp: lockout record failure: %w", lerr)
-				}
-				if out.ResetRequired {
-					return interaction.Step{}, ErrResetRequired
-				}
-				// A non-zero stamp is a lock in force: the counter reports
-				// an expired one as zero, so no clock reading is needed
-				// here and none can disagree with the one the transition
-				// was evaluated against.
-				if !out.LockedUntil.IsZero() {
-					return interaction.Step{}, errLockEngaged
-				}
+			if lerr := a.lockout.RecordWrong(ctx, in.Subject, lockoutErrs); lerr != nil {
+				return interaction.Step{}, lerr
 			}
 			// Recoverable wrong guess: surface ErrRetry so the orchestrator
 			// records the failure and advances the brute-force counter. The

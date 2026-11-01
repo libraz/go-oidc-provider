@@ -286,7 +286,7 @@ func TestWorker_StatusClassification(t *testing.T) {
 			}
 
 			if tc.want == workerEventRetried {
-				e.assertRescheduled(t, testNow, workerBackoff()[0], 1)
+				e.assertRescheduled(t, testNow, workerBackoff[0], 1)
 				return
 			}
 			if evs := e.claimAt(t, testNow.Add(1000*time.Hour)); len(evs) != 0 {
@@ -317,12 +317,12 @@ func TestWorker_TransportFailureRetried(t *testing.T) {
 	if got[0].Extras["error"] == nil {
 		t.Errorf("error extra missing: %v", got[0].Extras)
 	}
-	e.assertRescheduled(t, testNow, workerBackoff()[0], 1)
+	e.assertRescheduled(t, testNow, workerBackoff[0], 1)
 }
 
 func TestWorker_BackoffSchedule(t *testing.T) {
 	t.Parallel()
-	for attempts, d := range workerBackoff() {
+	for attempts, d := range workerBackoff {
 		t.Run(d.String(), func(t *testing.T) {
 			t.Parallel()
 			e := newWorkerEnv(t)
@@ -342,7 +342,7 @@ func TestWorker_BackoffSchedule(t *testing.T) {
 
 func TestWorker_JitterBounds(t *testing.T) {
 	t.Parallel()
-	for _, d := range workerBackoff() {
+	for _, d := range workerBackoff {
 		lo, hi := d-d/10, d+d/10
 		seen := map[time.Duration]bool{}
 		for range 2000 {
@@ -689,5 +689,41 @@ func TestNewWorker_RequiresDeps(t *testing.T) {
 	}
 	if _, err := NewWorker(full); err != nil {
 		t.Fatalf("NewWorker(full) = %v", err)
+	}
+}
+
+// getCountingStreams counts Get calls on the wrapped stream store.
+type getCountingStreams struct {
+	store.SSFStreamStore
+	gets atomic.Int64
+}
+
+func (c *getCountingStreams) Get(ctx context.Context, id string) (*store.SSFStream, error) {
+	c.gets.Add(1)
+	return c.SSFStreamStore.Get(ctx, id)
+}
+
+func TestStreamMemo_LoadsEachStreamOncePerBatch(t *testing.T) {
+	t.Parallel()
+	e := newWorkerEnv(t)
+	s := e.pushStream(t, "rp", "http://127.0.0.1/push", "")
+	counting := &getCountingStreams{SSFStreamStore: e.st.SSFStreams()}
+	memo := newStreamMemo(counting)
+
+	var wg sync.WaitGroup
+	for range 6 {
+		wg.Go(func() {
+			got, err := memo.get(context.Background(), s.ID)
+			if err != nil || got == nil || got.ID != s.ID {
+				t.Errorf("get = %v, %v", got, err)
+			}
+		})
+	}
+	wg.Wait()
+	if _, err := memo.get(context.Background(), "missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("missing stream err = %v, want ErrNotFound", err)
+	}
+	if got := counting.gets.Load(); got != 2 {
+		t.Errorf("store Get calls = %d, want 2", got)
 	}
 }

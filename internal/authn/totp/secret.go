@@ -5,6 +5,7 @@ import (
 	"encoding/base32"
 	"fmt"
 	"net/url"
+	"strconv"
 )
 
 // secretLen is the byte length of a freshly minted TOTP shared secret.
@@ -58,7 +59,7 @@ func ProvisioningURI(issuer, account string, secret []byte) string {
 	q.Set("secret", EncodeBase32(secret))
 	q.Set("issuer", issuer)
 	q.Set("algorithm", "SHA1")
-	q.Set("digits", "6")
-	q.Set("period", "30")
+	q.Set("digits", strconv.Itoa(digits))
+	q.Set("period", strconv.Itoa(stepSeconds))
 	return "otpauth://totp/" + label + "?" + q.Encode()
 }

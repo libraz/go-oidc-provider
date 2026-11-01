@@ -1,5 +1,9 @@
 package authn
 
+// MaxPersistRetries bounds the re-read / re-verify loop a per-factor
+// verifier runs after losing a conditional write to a concurrent request.
+const MaxPersistRetries = 16
+
 // Factor records one successful authentication step contributed by a
 // per-method verifier (password adapter, [totp.Verifier],
 // [recovery.Consumer], [passkey.Asserter], ...). The orchestrator

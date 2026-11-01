@@ -10,10 +10,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// maxPersistRetries bounds the re-read / re-verify loop that follows a lost
-// conditional write.
-const maxPersistRetries = 16
-
 // VerifyAndRecord loads subject's record from st, checks code through v and
 // persists the outcome: a compare-and-swap for a wrong code or a reset, an
 // atomic Accept for a success. A lost write re-reads and re-verifies, so a
@@ -26,7 +22,7 @@ const maxPersistRetries = 16
 // and an exhausted retry budget is [ErrRetry]. Store faults are wrapped. The
 // cross-factor lockout is the caller's concern.
 func VerifyAndRecord(ctx context.Context, st store.TOTPStore, v *Verifier, subject, code string) (*Result, error) {
-	for range maxPersistRetries {
+	for range authn.MaxPersistRetries {
 		rec, err := st.Get(ctx, subject)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return nil, fmt.Errorf("totp: load record: %w", err)

@@ -21,12 +21,6 @@ const PromptType = "auth.totp"
 // reference the canonical key without a stringly-typed copy.
 const CodeFieldName = "code"
 
-// digitCount is the RFC 6238 default code length the verifier expects
-// (the same constant lives in the verifier internals as `digits`). The
-// adapter pins MinLen / MaxLen on its [interaction.FieldSpec] to that length so
-// a SPA cannot submit a partial code.
-const digitCount = 6
-
 // ErrSubjectRequired is returned by [Authenticator.Begin] /
 // [Authenticator.Continue] when the orchestrator passes an empty
 // [op.BeginInput.Subject] / [op.ContinueInput.Subject]. TOTP is always
@@ -128,13 +122,12 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
-	if a.lockout != nil {
-		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
-			if errors.Is(err, lockout.ErrLocked) {
-				return interaction.Step{}, ErrLocked
-			}
-			return interaction.Step{}, fmt.Errorf("totp: lockout guard: %w", err)
-		}
+	shared, err := a.lockout.Status(ctx, in.Subject)
+	if err != nil {
+		return interaction.Step{}, fmt.Errorf("totp: lockout guard: %w", err)
+	}
+	if shared.Locked {
+		return interaction.Step{}, ErrLocked
 	}
 	rec, err := a.store.Get(ctx, in.Subject)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -144,14 +137,10 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 		return interaction.Step{}, authn.ErrFactorNotEnrolled
 	}
 	now := a.verifier.clock().Now()
-	if !rec.ConfirmedAt.IsZero() && !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
+	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
 		return interaction.Step{}, ErrLocked
 	}
-	remaining, err := a.attemptsRemaining(ctx, in.Subject, rec, now)
-	if err != nil {
-		return interaction.Step{}, err
-	}
-	return interaction.Step{Prompt: a.prompt(remaining)}, nil
+	return interaction.Step{Prompt: a.prompt(attemptsRemaining(rec, shared.Remaining, now))}, nil
 }
 
 // Enrolled implements [authn.EnrollmentProber]: subject has a confirmed
@@ -167,24 +156,16 @@ func (a *Authenticator) Enrolled(ctx context.Context, subject string) (bool, err
 	return rec != nil && !rec.ConfirmedAt.IsZero(), nil
 }
 
-// attemptsRemaining is the number of wrong codes subject may still submit
-// before either counter that can lock this factor does: the record's own,
-// read with the same rolling window [Verifier.Verify] applies, and the
-// cross-factor counter when one is wired.
-func (a *Authenticator) attemptsRemaining(ctx context.Context, subject string, rec *store.TOTPRecord, now time.Time) (int, error) {
+// attemptsRemaining is the number of wrong codes the subject may still
+// submit before either counter that can lock this factor does: the
+// record's own, read with the same rolling window [Verifier.Verify]
+// applies, and the cross-factor budget in shared.
+func attemptsRemaining(rec *store.TOTPRecord, shared int, now time.Time) int {
 	spent := rec.FailedCount
 	if lockout.WindowExpired(rec.FirstFailureAt, now) {
 		spent = 0
 	}
-	remaining := max(lockout.ThresholdShort-spent, 0)
-	if a.lockout != nil {
-		shared, err := a.lockout.RemainingAttempts(ctx, subject)
-		if err != nil {
-			return 0, fmt.Errorf("totp: lockout budget: %w", err)
-		}
-		remaining = min(remaining, shared)
-	}
-	return remaining, nil
+	return min(max(lockout.ThresholdShort-spent, 0), shared)
 }
 
 // Continue implements [authn.Authenticator]. It reads the persisted
@@ -211,21 +192,14 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	if !ok || code == "" {
 		return interaction.Step{}, ErrCodeMissing
 	}
-	if a.lockout != nil {
-		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
-			if errors.Is(err, lockout.ErrLocked) {
-				return interaction.Step{}, ErrLocked
-			}
-			return interaction.Step{}, fmt.Errorf("totp: lockout guard: %w", err)
-		}
+	if err := a.lockout.Guard(ctx, in.Subject, lockoutErrs); err != nil {
+		return interaction.Step{}, err
 	}
 	_, verr := VerifyAndRecord(ctx, a.store, a.verifier, in.Subject, code)
 	switch {
 	case verr == nil:
-		if a.lockout != nil {
-			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
-				return interaction.Step{}, fmt.Errorf("totp: lockout reset: %w", rerr)
-			}
+		if rerr := a.lockout.ResetOnSuccess(ctx, in.Subject, lockoutErrs); rerr != nil {
+			return interaction.Step{}, rerr
 		}
 		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 	case errors.Is(verr, ErrReplayed):
@@ -239,21 +213,8 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 		// replay would be an audit blind spot.
 		return interaction.Step{}, ErrRetry
 	case errors.Is(verr, ErrWrongCode):
-		if a.lockout != nil {
-			out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
-			if lerr != nil {
-				return interaction.Step{}, fmt.Errorf("totp: lockout record failure: %w", lerr)
-			}
-			if out.ResetRequired {
-				return interaction.Step{}, ErrResetRequired
-			}
-			// A non-zero stamp is a lock in force: the counter reports
-			// an expired one as zero, so no clock reading is needed
-			// here and none can disagree with the one the transition
-			// was evaluated against.
-			if !out.LockedUntil.IsZero() {
-				return interaction.Step{}, errLockEngaged
-			}
+		if lerr := a.lockout.RecordWrong(ctx, in.Subject, lockoutErrs); lerr != nil {
+			return interaction.Step{}, lerr
 		}
 		// Recoverable wrong guess: surface ErrRetry so the orchestrator
 		// records the failure and re-issues the prompt via Begin (which
@@ -284,8 +245,8 @@ func (*Authenticator) prompt(remaining int) *interaction.Prompt {
 			Kind:     interaction.FieldOTPCode,
 			Label:    "auth.totp.code",
 			Required: true,
-			MinLen:   digitCount,
-			MaxLen:   digitCount,
+			MinLen:   digits,
+			MaxLen:   digits,
 		}},
 	}
 }

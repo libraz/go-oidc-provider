@@ -100,6 +100,15 @@ var (
 	ErrConsumed = fmt.Errorf("emailotp: code already consumed: %w", authn.ErrFactorAbort)
 )
 
+// lockoutErrs maps the cross-factor counter's verdicts onto this
+// package's sentinels.
+var lockoutErrs = lockout.FactorErrors{
+	Name:          "emailotp",
+	Locked:        ErrLocked,
+	ResetRequired: ErrResetRequired,
+	LockEngaged:   errLockEngaged,
+}
+
 // Result is the verdict bundle [Verifier.Verify] returns. The Record
 // pointer is the same pointer the caller supplied, mutated in place,
 // so the caller may pass it straight to [store.EmailOTPStore.Put].

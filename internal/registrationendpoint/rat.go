@@ -2,7 +2,6 @@ package registrationendpoint
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"net/http"
 
@@ -44,14 +43,7 @@ func verifyRAT(
 	client, err := deps.Clients.GetClient(ctx, clientID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			deps.logger().Warn("dcr.rat.invalid", "reason", "client_not_found", "client_id", clientID)
-			deps.audit().Emit(ctx, audit.Event{
-				Name:     auditDCRRATInvalid,
-				Level:    audit.LevelWarn,
-				Message:  "client not found",
-				ClientID: clientID,
-			})
-			writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
+			rejectRAT(ctx, w, deps, clientID, "client_not_found", "client not found")
 			return nil, nil, false
 		}
 		deps.logger().Error("dcr.client.lookup_failed", "err", err, "client_id", clientID)
@@ -59,45 +51,38 @@ func verifyRAT(
 		return nil, nil, false
 	}
 	if !sourceIsDynamic(client.Source) {
-		deps.logger().Warn("dcr.rat.invalid", "reason", "non_dynamic_client", "client_id", clientID)
-		deps.audit().Emit(ctx, audit.Event{
-			Name:     auditDCRRATInvalid,
-			Level:    audit.LevelWarn,
-			Message:  "client is not dynamically registered",
-			ClientID: clientID,
-		})
-		writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
+		rejectRAT(ctx, w, deps, clientID, "non_dynamic_client", "client is not dynamically registered")
 		return nil, nil, false
 	}
 	stored, err := deps.RegistrationAccessTokens.GetByClientID(ctx, clientID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			deps.logger().Warn("dcr.rat.invalid", "reason", "rat_missing", "client_id", clientID)
-			deps.audit().Emit(ctx, audit.Event{
-				Name:     auditDCRRATInvalid,
-				Level:    audit.LevelWarn,
-				Message:  "registration access token not on file",
-				ClientID: clientID,
-			})
-			writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
+			rejectRAT(ctx, w, deps, clientID, "rat_missing", "registration access token not on file")
 			return nil, nil, false
 		}
 		deps.logger().Error("dcr.rat.lookup_failed", "err", err, "client_id", clientID)
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return nil, nil, false
 	}
-	if subtle.ConstantTimeCompare([]byte(patterns.Digest(bearer)), []byte(stored.HashedValue)) != 1 {
-		deps.logger().Warn("dcr.rat.invalid", "reason", "hash_mismatch", "client_id", clientID)
-		deps.audit().Emit(ctx, audit.Event{
-			Name:     auditDCRRATInvalid,
-			Level:    audit.LevelWarn,
-			Message:  "registration access token hash mismatch",
-			ClientID: clientID,
-		})
-		writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
+	if !patterns.ConstantTimeKeyMatch(stored.HashedValue, patterns.Digest(bearer)) {
+		rejectRAT(ctx, w, deps, clientID, "hash_mismatch", "registration access token hash mismatch")
 		return nil, nil, false
 	}
 	return client, stored, true
+}
+
+// rejectRAT logs and audits a failed management authentication, then
+// writes the same invalid_token response for every reason so the wire
+// reveals nothing about which check failed.
+func rejectRAT(ctx context.Context, w http.ResponseWriter, deps Deps, clientID, reason, message string) {
+	deps.logger().Warn("dcr.rat.invalid", "reason", reason, "client_id", clientID)
+	deps.audit().Emit(ctx, audit.Event{
+		Name:     auditDCRRATInvalid,
+		Level:    audit.LevelWarn,
+		Message:  message,
+		ClientID: clientID,
+	})
+	writeInvalidToken(w, deps.Issuer, "registration access token is invalid")
 }
 
 // sourceIsDynamic reports whether the client was registered via RFC

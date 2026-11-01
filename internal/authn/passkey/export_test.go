@@ -107,6 +107,6 @@ func RequireVouchedAttestationForTest(attestationType string) error {
 // seam invokes the same helper [Verifier.FinishLogin] calls before
 // [webauthn.ValidateLogin], so a green test here means production
 // callers see the same verdict.
-func (v *Verifier) CheckAAGUIDOnAssertionForTest(credentials []Credential, rawID []byte) error {
-	return v.checkAAGUIDOnAssertion(credentials, rawID)
+func (v *Verifier) CheckAAGUIDOnAssertionForTest(stored Credential) error {
+	return v.checkAAGUIDOnAssertion(stored)
 }

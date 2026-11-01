@@ -47,9 +47,6 @@ func Verify(encoded []byte, candidate string) error {
 		return nil
 	case errors.Is(err, argon2id.ErrMismatch):
 		return ErrPasswordMismatch
-	case errors.Is(err, argon2id.ErrEncoding),
-		errors.Is(err, argon2id.ErrPolicy):
-		return ErrInvalidHash
 	default:
 		return ErrInvalidHash
 	}

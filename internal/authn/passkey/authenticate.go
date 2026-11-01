@@ -187,7 +187,7 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 	// AAGUID, and even if they did the registration- time value is the
 	// trust anchor — an attacker who somehow flipped the assertion's
 	// AAGUID still cannot satisfy the allowlist gate.
-	if rerr := v.checkAAGUIDOnAssertion(credentials, parsed.RawID); rerr != nil {
+	if rerr := v.checkAAGUIDOnAssertion(stored); rerr != nil {
 		return nil, rerr
 	}
 
@@ -276,7 +276,7 @@ func (v *Verifier) finishDiscoverableLogin(session *Session, lookup credentialLo
 	if err != nil {
 		return "", nil, ErrAssertionInvalid
 	}
-	if rerr := v.checkAAGUIDOnAssertion([]Credential{stored}, stored.ID); rerr != nil {
+	if rerr := v.checkAAGUIDOnAssertion(stored); rerr != nil {
 		return "", nil, rerr
 	}
 	out, err := assertedCredential(*wc, parsed, stored)
@@ -308,34 +308,19 @@ func assertedCredential(wc webauthn.Credential, parsed *protocol.ParsedCredentia
 	return &out, nil
 }
 
-// checkAAGUIDOnAssertion enforces the re-check gate against the
-// stored credential whose ID matches rawID. Returns
-// [ErrAAGUIDDisallowed] when the verifier's
-// [Config.AAGUIDReCheckOnAssertion] is true, the configured allowlist
-// is non-empty, and the matched credential's AAGUID is not in it. An
-// empty allowlist short-circuits to nil (every AAGUID is accepted),
-// mirroring the registration-time behaviour. A nil verifier or empty
-// credential list short-circuits to nil so the helper is safe to call
-// before the credential-not-registered check has run.
-func (v *Verifier) checkAAGUIDOnAssertion(credentials []Credential, rawID []byte) error {
-	if v == nil || !v.aaguidReCheckOnAssertion {
+// checkAAGUIDOnAssertion enforces the re-check gate against the stored
+// credential the assertion matched. Returns [ErrAAGUIDDisallowed] when
+// the verifier's [Config.AAGUIDReCheckOnAssertion] is true, the
+// configured allowlist is non-empty, and the credential's AAGUID is not
+// in it. An empty allowlist short-circuits to nil (every AAGUID is
+// accepted), mirroring the registration-time behaviour. A nil verifier
+// short-circuits to nil.
+func (v *Verifier) checkAAGUIDOnAssertion(stored Credential) error {
+	if v == nil || !v.aaguidReCheckOnAssertion || len(v.aaguidAllowlist) == 0 {
 		return nil
 	}
-	if len(v.aaguidAllowlist) == 0 {
-		return nil
+	if !v.AAGUIDAllowed(stored.Authenticator.AAGUID) {
+		return fmt.Errorf("%w: AAGUID %x not in allowlist", ErrAAGUIDDisallowed, stored.Authenticator.AAGUID)
 	}
-	for _, c := range credentials {
-		if !bytes.Equal(c.ID, rawID) {
-			continue
-		}
-		if !v.AAGUIDAllowed(c.Authenticator.AAGUID) {
-			return fmt.Errorf("%w: AAGUID %x not in allowlist", ErrAAGUIDDisallowed, c.Authenticator.AAGUID)
-		}
-		return nil
-	}
-	// No matched credential. The caller's earlier match check
-	// already rejects this case with [ErrCredentialNotRegistered],
-	// so reaching here means a programming bug; surface a generic
-	// disallowed-AAGUID rather than panic.
-	return ErrAAGUIDDisallowed
+	return nil
 }

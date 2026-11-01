@@ -61,6 +61,15 @@ var errLockEngaged = fmt.Errorf("%w: %w", ErrLocked, authn.ErrCredentialRejected
 // [authn.ErrCredentialRejected].
 var ErrResetRequired = fmt.Errorf("recovery: factor reset required: %w: %w", authn.ErrFactorAbort, authn.ErrCredentialRejected)
 
+// lockoutErrs maps the cross-factor counter's verdicts onto this
+// package's sentinels.
+var lockoutErrs = lockout.FactorErrors{
+	Name:          "recovery",
+	Locked:        ErrLocked,
+	ResetRequired: ErrResetRequired,
+	LockEngaged:   errLockEngaged,
+}
+
 // ErrRetry is returned by [Authenticator.Continue] on a recoverable
 // wrong-code submission. It wraps [authn.ErrFactorRetry] so the
 // orchestrator observes the failure through the
@@ -140,13 +149,12 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
-	if a.lockout != nil {
-		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
-			if errors.Is(err, lockout.ErrLocked) {
-				return interaction.Step{}, ErrLocked
-			}
-			return interaction.Step{}, fmt.Errorf("recovery: lockout guard: %w", err)
-		}
+	shared, err := a.lockout.Status(ctx, in.Subject)
+	if err != nil {
+		return interaction.Step{}, fmt.Errorf("recovery: lockout guard: %w", err)
+	}
+	if shared.Locked {
+		return interaction.Step{}, ErrLocked
 	}
 	batch, err := a.store.Get(ctx, in.Subject)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -159,10 +167,7 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	// count is known and zero is reported.
 	remaining := 0
 	if a.lockout != nil {
-		remaining, err = a.lockout.RemainingAttempts(ctx, in.Subject)
-		if err != nil {
-			return interaction.Step{}, fmt.Errorf("recovery: lockout budget: %w", err)
-		}
+		remaining = shared.Remaining
 	}
 	return interaction.Step{Prompt: a.prompt(remaining)}, nil
 }
@@ -203,13 +208,8 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	if !ok || code == "" {
 		return interaction.Step{}, ErrCodeMissing
 	}
-	if a.lockout != nil {
-		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
-			if errors.Is(err, lockout.ErrLocked) {
-				return interaction.Step{}, ErrLocked
-			}
-			return interaction.Step{}, fmt.Errorf("recovery: lockout guard: %w", err)
-		}
+	if err := a.lockout.Guard(ctx, in.Subject, lockoutErrs); err != nil {
+		return interaction.Step{}, err
 	}
 	batch, err := a.store.Get(ctx, in.Subject)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -234,28 +234,13 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 			}
 			return interaction.Step{}, fmt.Errorf("recovery: consume batch: %w", perr)
 		}
-		if a.lockout != nil {
-			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
-				return interaction.Step{}, fmt.Errorf("recovery: lockout reset: %w", rerr)
-			}
+		if rerr := a.lockout.ResetOnSuccess(ctx, in.Subject, lockoutErrs); rerr != nil {
+			return interaction.Step{}, rerr
 		}
 		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 	case errors.Is(verr, ErrCodeInvalid):
-		if a.lockout != nil {
-			out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
-			if lerr != nil {
-				return interaction.Step{}, fmt.Errorf("recovery: lockout record failure: %w", lerr)
-			}
-			if out.ResetRequired {
-				return interaction.Step{}, ErrResetRequired
-			}
-			// A non-zero stamp is a lock in force: the counter reports an
-			// expired one as zero, so no clock reading is needed here and
-			// none can disagree with the one the transition was evaluated
-			// against.
-			if !out.LockedUntil.IsZero() {
-				return interaction.Step{}, errLockEngaged
-			}
+		if lerr := a.lockout.RecordWrong(ctx, in.Subject, lockoutErrs); lerr != nil {
+			return interaction.Step{}, lerr
 		}
 		// Recoverable wrong guess: surface ErrRetry so the orchestrator
 		// records the failure and advances the brute-force counter, then

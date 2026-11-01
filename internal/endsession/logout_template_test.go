@@ -157,7 +157,7 @@ func TestLogoutTemplate_ExecuteFailure500(t *testing.T) {
 	}
 }
 
-func TestLogoutTemplate_CSPNormalizedAndFallback(t *testing.T) {
+func TestLogoutTemplate_DeclaredCSPOrDefault(t *testing.T) {
 	t.Parallel()
 
 	declared := "default-src 'none'; style-src 'self'"
@@ -170,9 +170,8 @@ func TestLogoutTemplate_CSPNormalizedAndFallback(t *testing.T) {
 		csp  string
 		want string
 	}{
-		{name: "declared", csp: declared, want: normalized},
+		{name: "declared", csp: normalized, want: normalized},
 		{name: "empty keeps strict default", csp: "", want: strictLogoutCSP},
-		{name: "rejected falls back to strict default", csp: "default-src 'none'; frame-ancestors *", want: strictLogoutCSP},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {

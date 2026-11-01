@@ -37,11 +37,9 @@ const (
 // workerMaxErrCodeLen bounds the RFC 8935 err code copied into audit.
 const workerMaxErrCodeLen = 64
 
-// workerBackoff returns the delay before retry n+1 after n failed pushes;
-// one entry per retry. Each delay is jittered by ±workerJitterPct%.
-func workerBackoff() [workerMaxRetries]time.Duration {
-	return [...]time.Duration{time.Minute, 5 * time.Minute, 25 * time.Minute, 2 * time.Hour}
-}
+// workerBackoff is the delay before retry n+1 after n failed pushes; one
+// entry per retry. Each delay is jittered by ±workerJitterPct%.
+var workerBackoff = [workerMaxRetries]time.Duration{time.Minute, 5 * time.Minute, 25 * time.Minute, 2 * time.Hour}
 
 // workerMaxRetries is the retry budget after the first push.
 const workerMaxRetries = 4
@@ -242,20 +240,10 @@ func (w *Worker) RunOnce(ctx context.Context, now time.Time) (int, error) {
 	if len(due) == 0 {
 		return 0, nil
 	}
-	jobs := make(chan *store.SSFEvent)
-	var wg sync.WaitGroup
-	for range min(workerConcurrency, len(due)) {
-		wg.Go(func() {
-			for ev := range jobs {
-				w.deliver(ctx, ev, now)
-			}
-		})
-	}
-	for _, ev := range due {
-		jobs <- ev
-	}
-	close(jobs)
-	wg.Wait()
+	streams := newStreamMemo(w.streams)
+	backchannel.EachBounded(workerConcurrency, due, func(ev *store.SSFEvent) {
+		w.deliver(ctx, streams, ev, now)
+	})
 	return len(due), nil
 }
 
@@ -269,11 +257,11 @@ type workerOutcome struct {
 // deliver pushes one claimed SET and settles it in the queue. A fault on
 // the OP side (store read, signing key) leaves the SET leased, so it is
 // retried after the lease without spending the receiver's budget.
-func (w *Worker) deliver(ctx context.Context, ev *store.SSFEvent, now time.Time) {
+func (w *Worker) deliver(ctx context.Context, streams *streamMemo, ev *store.SSFEvent, now time.Time) {
 	// Settling must survive Stop: a receiver that already accepted the
 	// SET must not get it again.
 	settle := context.WithoutCancel(ctx)
-	stream, err := w.streams.Get(ctx, ev.StreamID)
+	stream, err := streams.get(ctx, ev.StreamID)
 	if errors.Is(err, store.ErrNotFound) {
 		w.ack(settle, ev)
 		return
@@ -325,6 +313,36 @@ func (w *Worker) deliver(ctx context.Context, ev *store.SSFEvent, now time.Time)
 	}
 }
 
+// streamMemo loads each stream once per RunOnce batch, however many of
+// its SETs the batch holds.
+type streamMemo struct {
+	store   store.SSFStreamStore
+	mu      sync.Mutex
+	entries map[string]*streamEntry
+}
+
+type streamEntry struct {
+	once   sync.Once
+	stream *store.SSFStream
+	err    error
+}
+
+func newStreamMemo(s store.SSFStreamStore) *streamMemo {
+	return &streamMemo{store: s, entries: make(map[string]*streamEntry)}
+}
+
+func (m *streamMemo) get(ctx context.Context, id string) (*store.SSFStream, error) {
+	m.mu.Lock()
+	e, ok := m.entries[id]
+	if !ok {
+		e = &streamEntry{}
+		m.entries[id] = e
+	}
+	m.mu.Unlock()
+	e.once.Do(func() { e.stream, e.err = m.store.Get(ctx, id) })
+	return e.stream, e.err
+}
+
 // post sends set to endpoint and classifies the response.
 func (w *Worker) post(ctx context.Context, endpoint, authz, set string) workerOutcome {
 	req, err := w.fetch.NewRequest(ctx, http.MethodPost, endpoint, strings.NewReader(set))
@@ -370,7 +388,7 @@ func (w *Worker) retry(ctx context.Context, stream *store.SSFStream, ev *store.S
 		w.abandon(ctx, stream, ev, workerReasonAttempts, out)
 		return
 	}
-	next := now.Add(workerJitter(workerBackoff()[ev.Attempts]))
+	next := now.Add(workerJitter(workerBackoff[ev.Attempts]))
 	err := w.events.Reschedule(ctx, ev.JTI, next, ev.Attempts+1)
 	if errors.Is(err, store.ErrNotFound) {
 		// Acked or purged meanwhile; nothing left to retry.

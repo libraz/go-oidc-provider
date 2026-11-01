@@ -2,7 +2,6 @@ package registrationendpoint
 
 import (
 	"net/url"
-	"slices"
 	"strings"
 )
 
@@ -163,19 +162,19 @@ func validatePostLogoutRedirectURIs(uris []string, applicationType string, allow
 // helper stays well below the project caps.
 func validatePostLogoutRedirectURI(raw, applicationType string, allowLocalhostLoopback bool) error {
 	if raw == "" {
-		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry must not be empty (loopback http requires 127.0.0.1, [::1], or localhost when AllowLocalhostLoopback is set)")
+		return errInvalidClientMetadata("post_logout_redirect_uris entry must not be empty (loopback http requires 127.0.0.1, [::1], or localhost when AllowLocalhostLoopback is set)")
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry " + raw + " is not a valid URL (loopback http hosts must be 127.0.0.1, [::1], or localhost)")
+		return errInvalidClientMetadata("post_logout_redirect_uris entry " + raw + " is not a valid URL (loopback http hosts must be 127.0.0.1, [::1], or localhost)")
 	}
 	if !u.IsAbs() {
-		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry " + raw + " must be an absolute URL (loopback http requires the explicit scheme://host form)")
+		return errInvalidClientMetadata("post_logout_redirect_uris entry " + raw + " must be an absolute URL (loopback http requires the explicit scheme://host form)")
 	}
 	// See the matching note in [validateRedirectURI]: the delimiter is
 	// the check, so a bare trailing "#" is rejected too.
 	if strings.Contains(raw, "#") {
-		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry " + raw + " must not contain a fragment (loopback http URIs are compared byte-for-byte at /end_session)")
+		return errInvalidClientMetadata("post_logout_redirect_uris entry " + raw + " must not contain a fragment (loopback http URIs are compared byte-for-byte at /end_session)")
 	}
 	if applicationType == applicationTypeNative {
 		return validateNativePostLogoutScheme(u, allowLocalhostLoopback)
@@ -195,14 +194,14 @@ func validateNativePostLogoutScheme(u *url.URL, allowLocalhostLoopback bool) err
 	case "http":
 		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
 			if allowLocalhostLoopback {
-				return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris http scheme for native clients requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
+				return errInvalidClientMetadata("post_logout_redirect_uris http scheme for native clients requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
 			}
-			return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris http scheme for native clients requires a loopback IP literal (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
+			return errInvalidClientMetadata("post_logout_redirect_uris http scheme for native clients requires a loopback IP literal (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
 		}
 		return nil
 	default:
 		if err := validateNativeCustomScheme(u.Scheme); err != nil {
-			return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris " + u.String() + ": " + err.Error() + " (loopback http hosts: 127.0.0.1, [::1], localhost)")
+			return errInvalidClientMetadata("post_logout_redirect_uris " + u.String() + ": " + err.Error() + " (loopback http hosts: 127.0.0.1, [::1], localhost)")
 		}
 		return nil
 	}
@@ -220,13 +219,13 @@ func validateWebPostLogoutScheme(u *url.URL, allowLocalhostLoopback bool) error 
 	case "http":
 		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
 			if allowLocalhostLoopback {
-				return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
+				return errInvalidClientMetadata("post_logout_redirect_uris http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
 			}
-			return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
+			return errInvalidClientMetadata("post_logout_redirect_uris http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
 		}
 		return nil
 	default:
-		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris scheme must be https for web clients; loopback http (127.0.0.1, [::1], localhost) and custom URI schemes require application_type=native")
+		return errInvalidClientMetadata("post_logout_redirect_uris scheme must be https for web clients; loopback http (127.0.0.1, [::1], localhost) and custom URI schemes require application_type=native")
 	}
 }
 
@@ -235,34 +234,22 @@ func validateHTTPSRedirectAuthority(u *url.URL, field string) error {
 		if field == "redirect_uri" {
 			return errInvalidRedirectURI("redirect_uri https URL must include an authority")
 		}
-		return errInvalidPostLogoutRedirectURI(field + " https URL must include an authority (loopback http requires an explicit host)")
+		return errInvalidClientMetadata(field + " https URL must include an authority (loopback http requires an explicit host)")
 	}
 	if u.User != nil {
 		if field == "redirect_uri" {
 			return errInvalidRedirectURI("redirect_uri https URL must not contain userinfo")
 		}
-		return errInvalidPostLogoutRedirectURI(field + " https URL must not contain userinfo (loopback http requires an explicit host)")
+		return errInvalidClientMetadata(field + " https URL must not contain userinfo (loopback http requires an explicit host)")
 	}
 	return nil
-}
-
-// errInvalidPostLogoutRedirectURI constructs a [validationError] whose
-// description always names both "post_logout_redirect_uris" and
-// "loopback". Centralising the wording keeps the embedder-facing
-// contract — "if you see this error, the literal substrings tell you
-// which field and which carve-out applies" — encoded in one place.
-func errInvalidPostLogoutRedirectURI(desc string) error {
-	return errInvalidClientMetadata(desc)
 }
 
 // hasImplicitResponseType reports whether any response_type entry
 // contains an implicit-flow token (id_token or token without code).
 func hasImplicitResponseType(responseTypes []string) bool {
 	for _, rt := range responseTypes {
-		toks := strings.Fields(rt)
-		hasCode := slices.Contains(toks, "code")
-		hasToken := slices.Contains(toks, "token")
-		hasIDToken := slices.Contains(toks, "id_token")
+		hasCode, hasToken, hasIDToken := responseTypeTokens(rt)
 		if !hasCode && (hasToken || hasIDToken) {
 			return true
 		}

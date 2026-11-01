@@ -10,7 +10,15 @@ import (
 // can exercise the encoding directly without polluting the package's
 // public API.
 
-var HashCodeForTest = hashCode
+// HashCodeForTest derives the stored encoding of a single code under a
+// salt of its own.
+func HashCodeForTest(plain string) (string, error) {
+	out, err := hashCodes([]string{plain})
+	if err != nil {
+		return "", err
+	}
+	return out[0], nil
+}
 
 // VerifyCodeForTest checks presented against a single stored encoding by
 // driving the production [Verifier.Verify] path with a one-slot batch.

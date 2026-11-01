@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 )
@@ -119,12 +120,12 @@ func NewStateRefSigner(current []byte, previous ...[]byte) (*StateRefSigner, err
 		return nil, ErrStateRefKeyLength
 	}
 	keys := make([][]byte, 0, 1+len(previous))
-	keys = append(keys, cloneStateRefKey(current))
+	keys = append(keys, slices.Clone(current))
 	for _, key := range previous {
 		if len(key) != stateRefKeyLen {
 			return nil, ErrStateRefKeyLength
 		}
-		keys = append(keys, cloneStateRefKey(key))
+		keys = append(keys, slices.Clone(key))
 	}
 	return &StateRefSigner{keys: keys}, nil
 }
@@ -241,10 +242,4 @@ func validateStateRefPayload(p StateRefPayload) error {
 		return ErrStateRefMalformed
 	}
 	return nil
-}
-
-func cloneStateRefKey(key []byte) []byte {
-	cp := make([]byte, len(key))
-	copy(cp, key)
-	return cp
 }

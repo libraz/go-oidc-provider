@@ -173,6 +173,70 @@ func (c *Counter) WithEmitter(e audit.Emitter) *Counter {
 	return &next
 }
 
+// Status is a point-in-time reading of the cross-factor counter for one
+// subject, taken from a single store read.
+type Status struct {
+	// Locked reports whether the cross-factor lock is in force.
+	Locked bool
+
+	// LockedUntil is the lock expiry; zero when Locked is false.
+	LockedUntil time.Time
+
+	// Remaining is how many failed submissions are left before the short
+	// lock takes effect; zero while Locked.
+	Remaining int
+}
+
+// read loads subject's record for a read-only or reset path. It returns
+// nil without an error for an empty subject or a subject with no record;
+// a record that breaks the store contract surfaces as an error. version
+// reports whether the caller needs a usable CAS version.
+func (c *Counter) read(ctx context.Context, subject string, version bool) (*store.AuthnLockoutRecord, error) {
+	if subject == "" {
+		return nil, nil
+	}
+	rec, err := c.store.Get(ctx, subject)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if err := checkRecord(rec, subject, version); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+// Status reports the lock state and the remaining attempt budget of
+// subject from one store read. A nil receiver, an empty subject and a
+// missing record all report the full budget, unlocked: nothing has been
+// spent. A window that has rolled over reads as unspent for the same
+// reason the next failure would reset it. A record that breaks the store
+// contract surfaces as an error alongside the zero Status.
+func (c *Counter) Status(ctx context.Context, subject string) (Status, error) {
+	full := Status{Remaining: ThresholdShort}
+	if c == nil {
+		return full, nil
+	}
+	rec, err := c.read(ctx, subject, false)
+	if err != nil {
+		return Status{}, err
+	}
+	if rec == nil {
+		return full, nil
+	}
+	now := c.clock.Now()
+	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
+		return Status{Locked: true, LockedUntil: rec.LockedUntil}, nil
+	}
+	spent := rec.FailedCount
+	if WindowExpired(rec.FirstFailureAt, now) {
+		spent = 0
+	}
+	return Status{Remaining: max(ThresholdShort-spent, 0)}, nil
+}
+
 // GuardBegin returns [ErrLocked] when the cross-factor LockedUntil
 // stamp is in the future. The per-factor adapter calls it on every
 // Begin (and at the top of Continue) so a locked subject sees a
@@ -181,21 +245,11 @@ func (c *Counter) WithEmitter(e audit.Emitter) *Counter {
 // store contract surfaces as an error rather than as an implicit
 // "unlocked".
 func (c *Counter) GuardBegin(ctx context.Context, subject string) error {
-	if subject == "" {
-		return nil
-	}
-	rec, err := c.store.Get(ctx, subject)
+	locked, _, err := c.IsLocked(ctx, subject)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
 		return err
 	}
-	if err := checkRecord(rec, subject, false); err != nil {
-		return err
-	}
-	now := c.clock.Now()
-	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
+	if locked {
 		return ErrLocked
 	}
 	return nil
@@ -206,24 +260,11 @@ func (c *Counter) GuardBegin(ctx context.Context, subject string) error {
 // that breaks the store contract returns the error alongside the zero
 // verdict.
 func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time, error) {
-	if subject == "" {
-		return false, time.Time{}, nil
-	}
-	rec, err := c.store.Get(ctx, subject)
+	st, err := c.Status(ctx, subject)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return false, time.Time{}, nil
-		}
 		return false, time.Time{}, err
 	}
-	if err := checkRecord(rec, subject, false); err != nil {
-		return false, time.Time{}, err
-	}
-	now := c.clock.Now()
-	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
-		return true, rec.LockedUntil, nil
-	}
-	return false, time.Time{}, nil
+	return st.Locked, st.LockedUntil, nil
 }
 
 // RemainingAttempts reports how many failed submissions subject may
@@ -243,32 +284,8 @@ func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time
 // record that breaks the store contract surfaces the error rather than
 // an implicit full budget.
 func (c *Counter) RemainingAttempts(ctx context.Context, subject string) (int, error) {
-	if c == nil || subject == "" {
-		return ThresholdShort, nil
-	}
-	rec, err := c.store.Get(ctx, subject)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return ThresholdShort, nil
-		}
-		return 0, err
-	}
-	if err := checkRecord(rec, subject, false); err != nil {
-		return 0, err
-	}
-	now := c.clock.Now()
-	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
-		return 0, nil
-	}
-	spent := rec.FailedCount
-	if WindowExpired(rec.FirstFailureAt, now) {
-		spent = 0
-	}
-	remaining := ThresholdShort - spent
-	if remaining < 0 {
-		return 0, nil
-	}
-	return remaining, nil
+	st, err := c.Status(ctx, subject)
+	return st.Remaining, err
 }
 
 // RecordFailure advances the complete cross-factor lockout state with
@@ -376,17 +393,8 @@ func applyFailure(next *store.AuthnLockoutRecord, now time.Time) Outcome {
 // erasing that failure. Conversely, if Reset commits first, RecordFailure
 // retries against the cleared state.
 func (c *Counter) Reset(ctx context.Context, subject string) error {
-	if subject == "" {
-		return nil
-	}
-	rec, err := c.store.Get(ctx, subject)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		return err
-	}
-	if err := checkRecord(rec, subject, true); err != nil {
+	rec, err := c.read(ctx, subject, true)
+	if err != nil || rec == nil {
 		return err
 	}
 	if rec.FailedCount == 0 && rec.FirstFailureAt.IsZero() && rec.LockedUntil.IsZero() {

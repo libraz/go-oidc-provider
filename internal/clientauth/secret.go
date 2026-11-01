@@ -169,7 +169,7 @@ func (a *Argon2id) VerifyDummy(presented string) {
 // values that violate [argon2id.DefaultPolicy] (which encodes the
 // OWASP 2024 minima); otherwise it derives the candidate key and
 // compares it in constant time.
-func (a *Argon2id) verifyArgon2id(presented, stored string) error {
+func verifyArgon2id(presented, stored string) error {
 	// Every failure, mismatch or policy violation alike, collapses to one
 	// error so the wire reveals nothing about the stored record.
 	if err := argon2id.Verify([]byte(presented), stored, Argon2idPolicy()); err != nil {

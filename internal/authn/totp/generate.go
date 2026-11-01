@@ -20,6 +20,9 @@ const stepSeconds = 30
 // it requires updating both constants together.
 const digits = 6
 
+// Digits is the code length the verifiers in this package accept.
+const Digits = digits
+
 // pow10 caches 10^digits so the dynamic-truncation modulus is a
 // constant. With digits == 6 the value is 1_000_000; pre-computing it
 // avoids recomputing on every Code call and keeps the truncation

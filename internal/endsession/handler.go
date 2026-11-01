@@ -30,9 +30,7 @@ import (
 // revocation tombstone timestamps, and the Max-Age of a session cookie
 // rebound to a surviving chooser sibling — so a deployment or a test
 // pins all of them with one value.
-type Clock interface {
-	Now() time.Time
-}
+type Clock = timex.Clock
 
 // Deps bundles the runtime dependencies the handler needs. The HTTP
 // layer constructs a [Deps] once at startup and passes it to
@@ -180,8 +178,8 @@ type Deps struct {
 	SignedOutTemplate *template.Template
 
 	// LogoutCSP is the declared Content-Security-Policy for the two
-	// templated pages. It is re-normalized at render time; an empty or
-	// rejected value keeps the strict default.
+	// templated pages. It must already be normalized by
+	// [interaction.NormalizeCSP]; an empty value keeps the strict default.
 	LogoutCSP string
 
 	// OnOpaqueOrigin, when non-nil, is called after the confirmation

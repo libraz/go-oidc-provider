@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/sessions"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -332,5 +333,44 @@ func TestManager_LogoutAllSnapshot_IdempotentOnEmptyGroup(t *testing.T) {
 	}
 	if err := mgr.LogoutAllSnapshot(ctx, snapshot); err != nil {
 		t.Errorf("LogoutAllSnapshot empty: %v", err)
+	}
+}
+
+// nilRowStore returns a nil row ahead of the real ones from
+// ListByChooserGroup, the way a faulty backend adapter might.
+type nilRowStore struct{ store.SessionStore }
+
+func (s nilRowStore) ListByChooserGroup(ctx context.Context, id string) ([]*store.Session, error) {
+	rows, err := s.SessionStore.ListByChooserGroup(ctx, id)
+	return append([]*store.Session{nil}, rows...), err
+}
+
+func TestManager_Remove_SkipsNilRows(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return t0 }
+	mgr, err := sessions.NewManager(sessions.Config{
+		Codec: newSessionCodec(t),
+		Store: nilRowStore{newSessionStore(t, inmem.WithClock(clockFunc(clock)))},
+		Clock: clock,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	ctx := context.Background()
+
+	first := establishFresh(t, mgr, sessions.Login{Subject: "user-a", AuthTime: t0}, t0)
+	second := establishAddAccount(t, mgr, first.Cookie, sessions.Login{Subject: "user-b", AuthTime: t0}, t0)
+
+	rem, err := mgr.Remove(ctx, first.ChooserGroupID, second.SessionID, second.SessionID)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if rem.CurrentSessionID != first.SessionID {
+		t.Errorf("CurrentSessionID=%q want %q", rem.CurrentSessionID, first.SessionID)
+	}
+	if len(rem.Remaining) != 1 || rem.Remaining[0] != first.SessionID {
+		t.Errorf("Remaining=%v want [%s]", rem.Remaining, first.SessionID)
 	}
 }

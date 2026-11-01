@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -290,11 +291,7 @@ func (m *Manager) TouchAndReissue(ctx context.Context, active *Active) (TouchOut
 		return TouchOutcome{}, err
 	}
 	now := m.clock().UTC()
-	value, err := m.codec.Encode(Payload{
-		ChooserGroupID:   active.Payload.ChooserGroupID,
-		CurrentSessionID: active.Payload.CurrentSessionID,
-		IssuedAt:         now.Unix(),
-	})
+	value, err := m.seal(active.Payload.ChooserGroupID, active.Payload.CurrentSessionID, now.Unix())
 	if err != nil {
 		return TouchOutcome{}, err
 	}
@@ -345,7 +342,7 @@ func (m *Manager) Rotate(ctx context.Context, oldSessionID string) (Outcome, err
 		ID:             newID,
 		Subject:        sess.Subject,
 		AuthTime:       sess.AuthTime,
-		AMR:            append([]string(nil), sess.AMR...),
+		AMR:            slices.Clone(sess.AMR),
 		ACR:            sess.ACR,
 		ChooserGroupID: sess.ChooserGroupID,
 		ExpiresAt:      now.Add(m.idleTTL),
@@ -361,15 +358,21 @@ func (m *Manager) Rotate(ctx context.Context, oldSessionID string) (Outcome, err
 	if err := m.store.Delete(ctx, oldSessionID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return Outcome{}, fmt.Errorf("sessions: delete old: %w", err)
 	}
-	value, err := m.codec.Encode(Payload{
-		ChooserGroupID:   sess.ChooserGroupID,
-		CurrentSessionID: newID,
-		IssuedAt:         now.Unix(),
-	})
+	value, err := m.seal(sess.ChooserGroupID, newID, now.Unix())
 	if err != nil {
 		return Outcome{}, err
 	}
 	return Outcome{Cookie: value, ChooserGroupID: sess.ChooserGroupID, SessionID: newID}, nil
+}
+
+// seal encodes the chooser/current pair into a browser cookie value
+// stamped with issuedAt (Unix seconds).
+func (m *Manager) seal(chooserGroupID, currentSessionID string, issuedAt int64) (string, error) {
+	return m.codec.Encode(Payload{
+		ChooserGroupID:   chooserGroupID,
+		CurrentSessionID: currentSessionID,
+		IssuedAt:         issuedAt,
+	})
 }
 
 // Logout deletes the supplied session. It does not clear other accounts in
@@ -407,11 +410,7 @@ func (m *Manager) Switch(ctx context.Context, chooserGroupID, targetSessionID st
 		return Outcome{}, ErrCookieInvalid
 	}
 	now := m.clock().UTC()
-	value, err := m.codec.Encode(Payload{
-		ChooserGroupID:   chooserGroupID,
-		CurrentSessionID: targetSessionID,
-		IssuedAt:         now.Unix(),
-	})
+	value, err := m.seal(chooserGroupID, targetSessionID, now.Unix())
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -461,7 +460,7 @@ func (m *Manager) AuthContext(ctx context.Context, chooserGroupID, sessionID str
 	return SessionAuthContext{
 		Subject:  sess.Subject,
 		ACR:      sess.ACR,
-		AMR:      append([]string(nil), sess.AMR...),
+		AMR:      slices.Clone(sess.AMR),
 		AuthTime: sess.AuthTime,
 	}, nil
 }
@@ -560,6 +559,7 @@ func (m *Manager) Remove(ctx context.Context, chooserGroupID, currentSessionID, 
 	if err != nil {
 		return Removal{}, fmt.Errorf("sessions: list: %w", err)
 	}
+	remaining = slices.DeleteFunc(slices.Clone(remaining), func(s *store.Session) bool { return s == nil })
 	out := Removal{Remaining: remainingIDs(remaining)}
 	if removeID != currentSessionID || len(remaining) == 0 {
 		// Either the removed account was not current (no cookie rebind
@@ -568,11 +568,7 @@ func (m *Manager) Remove(ctx context.Context, chooserGroupID, currentSessionID, 
 	}
 	next := mostRecent(remaining)
 	now := m.clock().UTC()
-	value, err := m.codec.Encode(Payload{
-		ChooserGroupID:   chooserGroupID,
-		CurrentSessionID: next.ID,
-		IssuedAt:         now.Unix(),
-	})
+	value, err := m.seal(chooserGroupID, next.ID, now.Unix())
 	if err != nil {
 		return Removal{}, err
 	}

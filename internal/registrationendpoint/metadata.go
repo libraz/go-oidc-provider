@@ -8,8 +8,10 @@ import (
 	"io"
 	"slices"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // ClientMetadata is the internal-package mirror of op.ClientMetadata.
@@ -286,8 +288,8 @@ func cloneStrings(in []string) []string {
 // the public subject type unless pairwise subjects are enabled, and
 // ES256 is the only algorithm this OP signs ID Tokens with.
 const (
-	defaultAuthMethod      = "client_secret_basic"
-	defaultSubjectType     = "public"
+	defaultAuthMethod      = string(clientauth.MethodSecretBasic)
+	defaultSubjectType     = store.SubjectModePublic
 	defaultIDTokenAlg      = "ES256"
 	defaultApplicationType = "web"
 	applicationTypeNative  = "native"

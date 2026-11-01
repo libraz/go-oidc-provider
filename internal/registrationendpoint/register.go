@@ -341,7 +341,7 @@ func iatAllowedScopes(ver iatVerification) []string {
 // the public-client posture.
 func isConfidentialAuthMethod(m string) bool {
 	switch m {
-	case "client_secret_basic", "client_secret_post":
+	case string(clientauth.MethodSecretBasic), string(clientauth.MethodSecretPost):
 		return true
 	default:
 		return false
@@ -356,7 +356,7 @@ func isConfidentialAuthMethod(m string) bool {
 // [clientauth.methodAllowedForClient] would block the
 // assertion verifier path.
 func isPublicAuthMethod(m string) bool {
-	return m == "none"
+	return m == string(clientauth.MethodNone)
 }
 
 // newClientSecret returns a freshly generated client_secret and its

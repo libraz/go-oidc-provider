@@ -168,11 +168,7 @@ func (m *Manager) Establish(ctx context.Context, in Establishment) (Outcome, err
 	default:
 		return Outcome{}, errors.New("sessions: unsupported Establish mode")
 	}
-	value, err := m.codec.Encode(Payload{
-		ChooserGroupID:   in.Record.ChooserGroupID,
-		CurrentSessionID: in.Record.ID,
-		IssuedAt:         in.Record.UpdatedAt.UTC().Unix(),
-	})
+	value, err := m.seal(in.Record.ChooserGroupID, in.Record.ID, in.Record.UpdatedAt.UTC().Unix())
 	if err != nil {
 		return Outcome{}, err
 	}

@@ -57,7 +57,7 @@ type Target struct {
 	// static-client validators reject any non-https / userinfo-bearing
 	// / fragment-bearing URL at registration time, so production
 	// stores never hand a plaintext URL here. The deliverer's SSRF
-	// gate ([HTTPDeliverer.assertSafeURL]) remains as defence-in-depth
+	// gate ([HTTPDeliverer.Deliver]) remains as defence-in-depth
 	// for the loopback / private-network carve-outs and for stores
 	// populated by older builds.
 	URL string
@@ -144,7 +144,7 @@ type HTTPDeliverer struct {
 //
 // The dial-time hook in [netsec.NewHTTPClient] re-checks the
 // kernel-resolved address against the same deny-list that fires at
-// the URL gate so a DNS-rebinding peer cannot bypass [assertSafeURL]
+// the URL gate so a DNS-rebinding peer cannot bypass the URL gate
 // by handing out a public address at gate-time and a private one at
 // dial-time.
 func NewHTTPDeliverer(timeout time.Duration) *HTTPDeliverer {
@@ -184,8 +184,8 @@ func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
 // 3xx (because the deliverer refuses to follow redirects). The body
 // is drained to a small cap so the connection can be re-used.
 //
-// Before issuing the POST, Deliver runs an SSRF deny-list against
-// the parsed Target.URL: loopback, link-local, RFC 1918 / ULA, and
+// Before issuing the POST, request construction runs an SSRF deny-list
+// against Target.URL: loopback, link-local, RFC 1918 / ULA, and
 // IPv6 unique-local addresses are rejected unless AllowPrivateNetwork
 // is true (or, for the loopback block alone,
 // AllowLoopbackNetwork). The check is per-call (not cached) so a client that
@@ -196,9 +196,6 @@ func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
 func (d *HTTPDeliverer) Deliver(ctx context.Context, target Target, logoutToken string) error {
 	if target.URL == "" {
 		return errors.New("backchannel: empty Target.URL")
-	}
-	if err := d.assertSafeURL(ctx, target.URL); err != nil {
-		return err
 	}
 	client := d.resolveClient()
 	form := url.Values{"logout_token": {logoutToken}}
@@ -223,35 +220,6 @@ func (d *HTTPDeliverer) Deliver(ctx context.Context, target Target, logoutToken 
 // already routes any non-nil delivery error through the failure
 // audit, so most callers do not branch on the sentinel.
 var ErrPrivateNetworkBlocked = errors.New("backchannel: target resolves to a deny-listed network")
-
-// assertSafeURL implements the SSRF deny-list. The function returns
-// nil when the URL host resolves entirely to public addresses; any
-// rejection (unparseable URL, scheme outside http/https, missing
-// host, IP literal in a deny-listed range, hostname resolving to a
-// deny-listed address, or a cloud-metadata IP) wraps
-// [ErrPrivateNetworkBlocked] so callers can branch with [errors.Is].
-//
-// The check delegates to the shared [*securefetch.Client]; the same
-// envelope backs the JAR JWKS fetcher and the sector_identifier_uri
-// fetcher so the OP-side SSRF gates cannot drift apart. The
-// dial-time check installed by [netsec.NewHTTPClient]
-// re-runs the deny-list against the kernel-resolved address so a DNS
-// rebinding peer cannot pivot between gate and dial.
-//
-// Cloud-metadata IPs (169.254.169.254 et al) remain rejected even
-// when [HTTPDeliverer.AllowPrivateNetwork] is true, as does every
-// non-loopback private range when only
-// [HTTPDeliverer.AllowLoopbackNetwork] is set.
-func (d *HTTPDeliverer) assertSafeURL(ctx context.Context, raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("backchannel: parse Target.URL %q: %w", raw, err)
-	}
-	if err := d.resolveClient().AssertSafeURLParsed(ctx, u); err != nil {
-		return classifyNetsecError(raw, err)
-	}
-	return nil
-}
 
 // timeoutOrDefault returns the effective per-request timeout the
 // deliverer uses for both the SSRF gate and the HTTP round-trip.

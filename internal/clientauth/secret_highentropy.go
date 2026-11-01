@@ -173,7 +173,7 @@ func IsHighEntropyEncoding(stored string) bool {
 // to install the other verifier.
 func verifyStoredSecret(presented, stored string) error {
 	if !IsHighEntropyEncoding(stored) {
-		return (&Argon2id{}).verifyArgon2id(presented, stored)
+		return verifyArgon2id(presented, stored)
 	}
 	salt, want, err := decodeHighEntropy(stored)
 	if err != nil {

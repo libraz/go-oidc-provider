@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // profilePolicy carries the active profile's narrowing of the
@@ -388,22 +389,30 @@ func applyMetadataDefaults(m ClientMetadata, allowedResponseTypes []string) Clie
 // {"authorization_code", "refresh_token"}; the caller of this helper
 // always passes the resolved list from [Deps].
 func validateGrantTypes(requested, allowed []string) error {
-	for _, gt := range requested {
-		if !slices.Contains(allowed, gt) {
-			return errInvalidClientMetadata("grant_type " + gt + " is not allowed")
+	return validateAllowed("grant_type", requested, allowed)
+}
+
+// validateResponseTypes enforces the AllowedResponseTypes whitelist.
+func validateResponseTypes(requested, allowed []string) error {
+	return validateAllowed("response_type", requested, allowed)
+}
+
+// validateAllowed rejects the first requested value absent from allowed,
+// naming field in the error.
+func validateAllowed(field string, requested, allowed []string) error {
+	for _, v := range requested {
+		if !slices.Contains(allowed, v) {
+			return errInvalidClientMetadata(field + " " + v + " is not allowed")
 		}
 	}
 	return nil
 }
 
-// validateResponseTypes enforces the AllowedResponseTypes whitelist.
-func validateResponseTypes(requested, allowed []string) error {
-	for _, rt := range requested {
-		if !slices.Contains(allowed, rt) {
-			return errInvalidClientMetadata("response_type " + rt + " is not allowed")
-		}
-	}
-	return nil
+// responseTypeTokens splits a space-delimited response_type into the
+// presence of its code, token and id_token members.
+func responseTypeTokens(rt string) (hasCode, hasToken, hasIDToken bool) {
+	toks := strings.Fields(rt)
+	return slices.Contains(toks, "code"), slices.Contains(toks, "token"), slices.Contains(toks, "id_token")
 }
 
 // validateGrantResponseTypeConsistency enforces the OIDC Core coupling
@@ -413,18 +422,12 @@ func validateResponseTypes(requested, allowed []string) error {
 func validateGrantResponseTypeConsistency(grantTypes, responseTypes []string) error {
 	hasGrant := func(want string) bool { return slices.Contains(grantTypes, want) }
 	for _, rt := range responseTypes {
-		toks := strings.Fields(rt)
-		hasCode := slices.Contains(toks, "code")
-		hasToken := slices.Contains(toks, "token")
-		hasIDToken := slices.Contains(toks, "id_token")
+		hasCode, hasToken, hasIDToken := responseTypeTokens(rt)
 
 		if hasCode && !hasGrant("authorization_code") {
 			return errInvalidClientMetadata("response_type " + rt + " requires grant_type authorization_code")
 		}
-		if (hasToken || hasIDToken) && !hasCode && !hasGrant("implicit") {
-			return errInvalidClientMetadata("response_type " + rt + " requires grant_type implicit")
-		}
-		if hasCode && (hasToken || hasIDToken) && !hasGrant("implicit") {
+		if (hasToken || hasIDToken) && !hasGrant("implicit") {
 			return errInvalidClientMetadata("response_type " + rt + " requires grant_type implicit")
 		}
 	}
@@ -439,7 +442,7 @@ func validateGrantResponseTypeConsistency(grantTypes, responseTypes []string) er
 // client-authentication site enforces.
 func validateAuthMethod(m string, allowed []clientauth.Method) error {
 	switch m {
-	case "client_secret_basic", "client_secret_post", "private_key_jwt", "none":
+	case string(clientauth.MethodSecretBasic), string(clientauth.MethodSecretPost), string(clientauth.MethodPrivateKeyJWT), string(clientauth.MethodNone):
 		if len(allowed) > 0 && !slices.Contains(allowed, clientauth.Method(m)) {
 			return errInvalidClientMetadata("token_endpoint_auth_method " + m + " is not allowed by active profile")
 		}
@@ -471,9 +474,9 @@ func validateTokenEndpointAuthSigningAlg(alg string, allowed []internaljose.Algo
 // being false).
 func validateSubjectType(t string, pairwiseEnabled bool) error {
 	switch t {
-	case "public":
+	case store.SubjectModePublic:
 		return nil
-	case "pairwise":
+	case store.SubjectModePairwise:
 		if !pairwiseEnabled {
 			return errInvalidClientMetadata("subject_type pairwise requires WithPairwiseSubject")
 		}
@@ -685,7 +688,7 @@ func validateJWKSConfiguration(m ClientMetadata, jwePolicy internaljose.JWEPolic
 	hasInline := len(m.JWKs) > 0
 	hasURI := m.JWKsURI != ""
 	if hasInline == hasURI {
-		if m.TokenEndpointAuthMethod == "private_key_jwt" && len(requirements) == 1 {
+		if m.TokenEndpointAuthMethod == string(clientauth.MethodPrivateKeyJWT) && len(requirements) == 1 {
 			return errInvalidClientMetadata("private_key_jwt requires exactly one of jwks or jwks_uri")
 		}
 		return errInvalidClientMetadata("client key requirements need exactly one of jwks or jwks_uri")
@@ -726,7 +729,7 @@ type jwksRequirement struct {
 
 func jwksRequirements(m ClientMetadata) []jwksRequirement {
 	var out []jwksRequirement
-	if m.TokenEndpointAuthMethod == "private_key_jwt" {
+	if m.TokenEndpointAuthMethod == string(clientauth.MethodPrivateKeyJWT) {
 		out = append(out, jwksRequirement{
 			kind:  jwksSigningRequirement,
 			alg:   m.TokenEndpointAuthSigningAlg,
@@ -989,7 +992,7 @@ func validateJWEAlgEncPair(algField, encField, alg, enc string, policy internalj
 }
 
 func validatePairwiseMetadata(m ClientMetadata) error {
-	if m.SubjectType != "pairwise" || m.SectorIdentifierURI != "" {
+	if m.SubjectType != store.SubjectModePairwise || m.SectorIdentifierURI != "" {
 		return nil
 	}
 	host := ""

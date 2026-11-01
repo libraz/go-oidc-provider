@@ -129,8 +129,7 @@ func (p loggedOutPage) withDefaults() loggedOutPage {
 // writeTemplatedPage renders an embedder template into a buffer and
 // writes it with the static headers. Execution failure answers with the
 // fixed error page so no partial output is sent. A declared
-// Content-Security-Policy is re-normalized here and replaces the strict
-// default only when it passes; otherwise the default stays.
+// Content-Security-Policy replaces the strict default.
 func writeTemplatedPage(w http.ResponseWriter, deps Deps, tpl *template.Template, data any) {
 	var buf bytes.Buffer
 	if err := tpl.Execute(&buf, data); err != nil {
@@ -139,9 +138,7 @@ func writeTemplatedPage(w http.ResponseWriter, deps Deps, tpl *template.Template
 	}
 	stampStaticHeaders(w)
 	if deps.LogoutCSP != "" {
-		if policy, err := interaction.NormalizeCSP(deps.LogoutCSP); err == nil {
-			w.Header().Set("Content-Security-Policy", policy)
-		}
+		w.Header().Set("Content-Security-Policy", deps.LogoutCSP)
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = buf.WriteTo(w)

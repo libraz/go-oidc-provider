@@ -58,7 +58,7 @@ func TestAAGUIDRecheck_AllowedCredentialPassesThrough(t *testing.T) {
 			AAGUID: allowedAAGUIDBytes,
 		},
 	}}
-	if err := v.CheckAAGUIDOnAssertionForTest(creds, []byte{0x01, 0x02, 0x03}); err != nil {
+	if err := v.CheckAAGUIDOnAssertionForTest(creds[0]); err != nil {
 		t.Fatalf("CheckAAGUIDOnAssertion: %v", err)
 	}
 }
@@ -78,7 +78,7 @@ func TestAAGUIDRecheck_NarrowedAllowlistRejectsExistingCredential(t *testing.T) 
 			AAGUID: disallowedAAGUIDBytes,
 		},
 	}}
-	err := v.CheckAAGUIDOnAssertionForTest(creds, []byte{0x01, 0x02, 0x03})
+	err := v.CheckAAGUIDOnAssertionForTest(creds[0])
 	if !errors.Is(err, passkey.ErrAAGUIDDisallowed) {
 		t.Fatalf("err=%v want ErrAAGUIDDisallowed", err)
 	}
@@ -98,7 +98,7 @@ func TestAAGUIDRecheck_NoAllowlistShortCircuits(t *testing.T) {
 			AAGUID: disallowedAAGUIDBytes,
 		},
 	}}
-	if err := v.CheckAAGUIDOnAssertionForTest(creds, []byte{0x01, 0x02, 0x03}); err != nil {
+	if err := v.CheckAAGUIDOnAssertionForTest(creds[0]); err != nil {
 		t.Fatalf("CheckAAGUIDOnAssertion: %v", err)
 	}
 }
@@ -116,7 +116,7 @@ func TestAAGUIDRecheck_DisabledToggleAllowsExistingCredential(t *testing.T) {
 			AAGUID: disallowedAAGUIDBytes,
 		},
 	}}
-	if err := v.CheckAAGUIDOnAssertionForTest(creds, []byte{0x01, 0x02, 0x03}); err != nil {
+	if err := v.CheckAAGUIDOnAssertionForTest(creds[0]); err != nil {
 		t.Fatalf("CheckAAGUIDOnAssertion: %v", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestAAGUIDRecheck_ClockResolution(t *testing.T) {
 			AAGUID: allowedAAGUIDBytes,
 		},
 	}}
-	if err := v.CheckAAGUIDOnAssertionForTest(creds, []byte{0x01, 0x02, 0x03}); err != nil {
+	if err := v.CheckAAGUIDOnAssertionForTest(creds[0]); err != nil {
 		t.Fatalf("CheckAAGUIDOnAssertion: %v", err)
 	}
 }

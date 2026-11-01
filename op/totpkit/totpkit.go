@@ -1,7 +1,6 @@
 package totpkit
 
 import (
-	"crypto/subtle"
 	"errors"
 	"strings"
 	"time"
@@ -91,18 +90,6 @@ var (
 	// on an unsealed secret.
 	ErrCodecRequired = errors.New("totpkit: codec is required")
 )
-
-// totpDigits is the RFC 6238 default code length the verify path
-// pins. Re-stated here so the [Confirm] guard can reject blanks
-// before the cryptographic compare; the verify-side compare uses its
-// own copy of the same constant. The two are independent declarations
-// of one RFC default, not a shared one.
-const totpDigits = 6
-
-// totpStep is the RFC 6238 default time step. The constant is
-// re-stated so [Confirm] can compute candidate codes inline; the
-// verify-path uses the same value internally.
-const totpStep = 30 * time.Second
 
 // confirmSkew is the ±step window [Confirm] accepts. It matches what
 // the verify path accepts when the embedder configures no skew of its
@@ -231,8 +218,7 @@ func NewEnrolment(codec *Codec, subject, issuer, account string) (*Pending, erro
 // is accepted at enrolment time too.
 //
 // The now argument is supplied explicitly so tests can drive the
-// helper deterministically. Production callers SHOULD pass
-// [timex.SystemClock.Now] (the library's central wall-clock seam).
+// helper deterministically. Production callers pass the current time.
 //
 // Errors:
 //   - [ErrPendingNil] when pending is nil.
@@ -252,7 +238,7 @@ func Confirm(codec *Codec, pending *Pending, code string, now time.Time) (*store
 	if codec == nil {
 		return nil, ErrCodecRequired
 	}
-	if len(code) != totpDigits {
+	if len(code) != totp.Digits {
 		return nil, ErrCodeRejected
 	}
 
@@ -262,7 +248,7 @@ func Confirm(codec *Codec, pending *Pending, code string, now time.Time) (*store
 		return nil, err
 	}
 
-	matched, ok := matchStep(secret, code, now)
+	matched, ok := totp.MatchStep(secret, code, now, confirmSkew)
 	if !ok {
 		return nil, ErrCodeRejected
 	}
@@ -283,54 +269,4 @@ func Confirm(codec *Codec, pending *Pending, code string, now time.Time) (*store
 	rec.ConfirmedAt = now
 	rec.LastAcceptedStep = matched
 	return rec, nil
-}
-
-// matchStep reports whether code equals the TOTP value at any step
-// within ±confirmSkew of the step containing now, and returns the
-// matched step counter on success. The byte-wise compare is
-// constant-time per attempt; the loop short-circuits on success
-// (which leaks at most one bit of timing about which neighbouring
-// step matched, acceptable because the attacker already knows the
-// window size).
-func matchStep(secret []byte, code string, now time.Time) (int64, bool) {
-	codeBytes := []byte(code)
-	for i := -confirmSkew; i <= confirmSkew; i++ {
-		t := now.Add(time.Duration(i) * totpStep)
-		if equalCode(secret, codeBytes, t) {
-			return safeStep(stepCounter(t)), true
-		}
-	}
-	return 0, false
-}
-
-// stepCounter returns the RFC 6238 step counter (now / 30s) clamped
-// to non-negative values. A pre-1970 clock would otherwise wrap into
-// a huge unsigned counter; the library never reaches that branch in
-// practice but the clamp keeps the function total.
-func stepCounter(now time.Time) uint64 {
-	secs := now.Unix()
-	if secs < 0 {
-		return 0
-	}
-	return uint64(secs) / uint64(totpStep/time.Second)
-}
-
-// safeStep converts the unsigned step counter into the signed form
-// stored on [store.TOTPRecord.LastAcceptedStep]. The cast is safe
-// for any human-relevant horizon; the explicit clamp keeps the type
-// boundary obvious to readers.
-func safeStep(s uint64) int64 {
-	const cap63 = uint64(1) << 62
-	if s > cap63 {
-		return int64(cap63)
-	}
-	return int64(s)
-}
-
-// equalCode computes the TOTP value at t and reports whether it
-// equals candidate. The compare is constant-time so a partial match
-// cannot leak the matching prefix length through timing.
-func equalCode(secret, candidate []byte, t time.Time) bool {
-	expected := totp.Code(secret, t)
-	return subtle.ConstantTimeCompare(candidate, []byte(expected)) == 1
 }

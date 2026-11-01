@@ -3,6 +3,7 @@ package clientauth
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -174,12 +175,7 @@ func methodAllowedByPolicy(m Method, allowed []Method) bool {
 	if len(allowed) == 0 {
 		return true
 	}
-	for _, a := range allowed {
-		if a == m {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, m)
 }
 
 // verifySecret runs the configured SecretVerifier. The function returns
@@ -195,10 +191,9 @@ func verifySecret(opts VerifyOpts, presented, stored string) error {
 		burnSecretVerifyCost(opts.SecretVerifier, presented)
 		return ErrCredentialsInvalid
 	}
-	if err := opts.SecretVerifier.Verify(presented, stored); err != nil {
+	if opts.SecretVerifier.Verify(presented, stored) != nil {
 		// Collapse onto the public sentinel; never echo the wrapped
 		// implementation cause to the caller.
-		_ = err
 		return ErrCredentialsInvalid
 	}
 	return nil

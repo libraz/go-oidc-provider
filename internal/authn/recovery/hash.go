@@ -86,17 +86,6 @@ func hashCodes(plain []string) ([]string, error) {
 	return out, nil
 }
 
-// hashCode derives the stored encoding of a single code under a salt of
-// its own. It is the one-slot form of [hashCodes]; batch generation
-// goes through [hashCodes] so the slots share a salt.
-func hashCode(plain string) (string, error) {
-	out, err := hashCodes([]string{plain})
-	if err != nil {
-		return "", err
-	}
-	return out[0], nil
-}
-
 // newSalt reads a fresh salt from crypto/rand.
 func newSalt() ([]byte, error) {
 	salt := make([]byte, argon2idDefaults.SaltLength)

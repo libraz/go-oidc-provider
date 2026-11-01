@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sector"
 	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -23,9 +24,7 @@ import (
 // token / authorize / par endpoint posture: a structurally-typed
 // interface so a value satisfying [op.Clock] flows through without an
 // explicit adapter, and a nil falls back to the system clock.
-type Clock interface {
-	Now() time.Time
-}
+type Clock = timex.Clock
 
 // Audit event names. The strings here MUST agree with the public
 // op.AuditEvent constants in op/audit.go; the registrationendpoint_test
@@ -297,7 +296,7 @@ func Handler(deps Deps) http.Handler {
 // returned value is a fresh copy; the caller's [Deps] is not mutated.
 func resolveDeps(d Deps) Deps {
 	if len(d.AllowedGrantTypes) == 0 {
-		d.AllowedGrantTypes = []string{"authorization_code", "refresh_token"}
+		d.AllowedGrantTypes = []string{grant.AuthorizationCode.String(), grant.RefreshToken.String()}
 	}
 	if len(d.AllowedResponseTypes) == 0 {
 		d.AllowedResponseTypes = []string{"code"}

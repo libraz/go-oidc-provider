@@ -98,6 +98,15 @@ var (
 	ErrNotConfirmed = fmt.Errorf("totp: enrolment not confirmed: %w", authn.ErrFactorAbort)
 )
 
+// lockoutErrs maps the cross-factor counter's verdicts onto this
+// package's sentinels.
+var lockoutErrs = lockout.FactorErrors{
+	Name:          "totp",
+	Locked:        ErrLocked,
+	ResetRequired: ErrResetRequired,
+	LockEngaged:   errLockEngaged,
+}
+
 // Result is the verdict bundle [Verifier.Verify] returns. The Record
 // pointer is the same pointer the caller supplied, mutated in place, so
 // the caller may pass it straight to [store.TOTPStore.Put]. The
@@ -195,7 +204,7 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 		return nil, fmt.Errorf("totp: open secret: %w", err)
 	}
 
-	if matched, ok := v.matchStepValue(secret, code, now); ok {
+	if matched, ok := MatchStep(secret, code, now, v.skew()); ok {
 		// Reject a code whose step value has already been accepted by a
 		// prior successful verify. Without this guard a network-level
 		// replay (or a leaked code from the SPA buffer) could redeem twice
@@ -239,20 +248,18 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 	return &Result{Outcome: OutcomeWrongCode, Record: rec}, ErrWrongCode
 }
 
-// matchStepValue reports whether code equals the TOTP value at any
-// step within the configured skew window AND returns the matched step
-// counter. The step value is fed into
-// [store.TOTPRecord.LastAcceptedStep] so a subsequent verify against
-// the same step is rejected as a replay. The boolean is the success
-// flag; the int64 is meaningful only when the boolean is true.
+// MatchStep reports whether code equals the TOTP value at any step
+// within skew steps of the step containing now, and returns the matched
+// step counter in the signed form stored on
+// [store.TOTPRecord.LastAcceptedStep]. The int64 is meaningful only when
+// the boolean is true.
 //
 // The comparison is byte-wise constant-time per match attempt; the
 // loop itself short-circuits on success, which leaks at most one bit
 // of timing about which neighbouring step matched. That is
 // acceptable: the attacker already knows the window size, and the
 // bit does not narrow the secret search space.
-func (v *Verifier) matchStepValue(secret []byte, code string, now time.Time) (int64, bool) {
-	skew := v.skew()
+func MatchStep(secret []byte, code string, now time.Time, skew int) (int64, bool) {
 	if len(code) != digits {
 		return 0, false
 	}
@@ -260,13 +267,13 @@ func (v *Verifier) matchStepValue(secret []byte, code string, now time.Time) (in
 	current := step(now)
 	for i := range skew + 1 {
 		offset := uint64(i)
-		if v.matchStep(secret, codeBytes, current+offset) {
+		if matchStep(secret, codeBytes, current+offset) {
 			return safeStep(current + offset), true
 		}
 		if offset == 0 {
 			continue
 		}
-		if current >= offset && v.matchStep(secret, codeBytes, current-offset) {
+		if current >= offset && matchStep(secret, codeBytes, current-offset) {
 			return safeStep(current - offset), true
 		}
 	}
@@ -288,7 +295,7 @@ func safeStep(s uint64) int64 {
 // matchStep computes the TOTP at counter and reports whether it equals
 // code. The comparison is constant-time so a partial match cannot leak
 // the prefix length through timing.
-func (v *Verifier) matchStep(secret, code []byte, counter uint64) bool {
+func matchStep(secret, code []byte, counter uint64) bool {
 	candidate := codeAtStep(secret, counter)
 	return subtle.ConstantTimeCompare(code, []byte(candidate)) == 1
 }

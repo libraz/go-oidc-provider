@@ -51,7 +51,7 @@ const crockfordAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 // GenerateBatch returns ten freshly-minted plaintext recovery codes
 // formatted as XXXXX-XXXXX. The caller is expected to hash each code
-// through [hashCode] before persistence and to surface the plaintext
+// through [hashCodes] before persistence and to surface the plaintext
 // list to the user exactly once: the package's display-once invariant
 // (see the package godoc) lives at this boundary.
 //

@@ -1,6 +1,6 @@
 // Package backchannel: test file exercises unexported helpers
-// (assertSafeURL, ErrPrivateNetworkBlocked) so the SSRF deny-list can
-// be pinned without exporting internal types. The package decl is
+// (the request-build SSRF gate, ErrPrivateNetworkBlocked) so the
+// deny-list can be pinned without exporting internal types. The package decl is
 // intentionally aligned with the production package.
 //
 //nolint:testpackage // exercises unexported helpers
@@ -13,9 +13,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// requestGate runs the SSRF gate Deliver applies while building its
+// request, with the same error classification, without sending anything.
+func requestGate(d *HTTPDeliverer, rawURL string) error {
+	_, err := d.resolveClient().NewRequest(context.Background(), http.MethodPost, rawURL, nil)
+	if err != nil {
+		return classifyDeliverError(rawURL, err)
+	}
+	return nil
+}
 
 // TestHTTPDeliverer_SSRFDenyList exercises the H-PROTO-1 deny-list
 // matrix: a backchannel_logout_uri that points at a loopback /
@@ -52,15 +63,15 @@ func TestHTTPDeliverer_SSRFDenyList(t *testing.T) {
 				Client:  &http.Client{Timeout: time.Second},
 				Timeout: time.Second,
 			}
-			err := d.assertSafeURL(context.Background(), tc.url)
+			err := requestGate(d, tc.url)
 			if tc.wantBlocked {
 				if err == nil {
-					t.Fatalf("assertSafeURL(%q) = nil, want blocked", tc.url)
+					t.Fatalf("requestGate(%q) = nil, want blocked", tc.url)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("assertSafeURL(%q) unexpected error: %v", tc.url, err)
+				t.Fatalf("requestGate(%q) unexpected error: %v", tc.url, err)
 			}
 		})
 	}
@@ -78,7 +89,7 @@ func TestHTTPDeliverer_SSRFAllowPrivate(t *testing.T) {
 		Timeout:             time.Second,
 		AllowPrivateNetwork: true,
 	}
-	if err := d.assertSafeURL(context.Background(), "http://127.0.0.1/logout"); err != nil {
+	if err := requestGate(d, "http://127.0.0.1/logout"); err != nil {
 		t.Fatalf("AllowPrivateNetwork=true should permit loopback; got %v", err)
 	}
 }
@@ -134,8 +145,42 @@ func TestHTTPDeliverer_ResolverRebinding(t *testing.T) {
 	// The synthetic resolver fails the lookup outright; the gate
 	// surfaces the error rather than falling through to the
 	// transport layer.
-	err := d.assertSafeURL(context.Background(), "http://evil.example/logout")
+	err := requestGate(d, "http://evil.example/logout")
 	if err == nil {
 		t.Fatal("expected resolver lookup error")
+	}
+}
+
+// TestHTTPDeliverer_DeliverResolvesOnce pins that Deliver spends a
+// single DNS round trip on the SSRF gate, not one for a pre-check and
+// another while building the request.
+func TestHTTPDeliverer_DeliverResolvesOnce(t *testing.T) {
+	t.Parallel()
+
+	var dials atomic.Int64
+	d := &HTTPDeliverer{
+		Client:  &http.Client{Timeout: time.Second},
+		Timeout: time.Second,
+		Resolver: &net.Resolver{
+			PreferGo: true,
+			Dial: func(_ context.Context, _, _ string) (net.Conn, error) {
+				dials.Add(1)
+				return nil, errors.New("test: synthetic resolver in use")
+			},
+		},
+	}
+	const rawURL = "http://evil.example/logout"
+	if err := requestGate(d, rawURL); err == nil {
+		t.Fatal("expected resolver lookup error")
+	}
+	perGate := dials.Swap(0)
+	if perGate == 0 {
+		t.Skip("resolver was not consulted")
+	}
+	if err := d.Deliver(context.Background(), Target{URL: rawURL}, "x"); err == nil {
+		t.Fatal("expected resolver lookup error")
+	}
+	if got := dials.Load(); got >= 2*perGate {
+		t.Errorf("Deliver dialed the resolver %d times, one gate costs %d", got, perGate)
 	}
 }

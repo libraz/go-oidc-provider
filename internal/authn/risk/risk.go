@@ -100,55 +100,6 @@ type Assessor interface {
 	Assess(ctx context.Context, in Input) (Outcome, error)
 }
 
-// PreFactorResult is the output of the PreFactor consult helper.
-type PreFactorResult struct {
-	Required []string
-	// MinAAL is the minimum-assurance directive carried from the
-	// Require outcome. AAL0 means "no assurance floor"; the parent
-	// applies it as a filter on the eligible-authenticator set.
-	MinAAL AAL
-	Denied bool
-}
-
-// RunPreFactor consults assessor at PreFactor and returns the
-// required-factor filter and denied flag. assessor may be nil — the
-// helper returns the zero-result in that case so the parent does not
-// need a nil guard.
-func RunPreFactor(ctx context.Context, assessor Assessor, in Input) (PreFactorResult, error) {
-	if assessor == nil {
-		return PreFactorResult{}, nil
-	}
-	in.Stage = PreFactor
-	out, err := assessor.Assess(ctx, in)
-	if err != nil {
-		return PreFactorResult{}, err
-	}
-	switch out.Decision {
-	case Deny:
-		return PreFactorResult{Denied: true}, nil
-	case Require:
-		return PreFactorResult{Required: out.RequiredFactors, MinAAL: out.MinAAL}, nil
-	default:
-		return PreFactorResult{}, nil
-	}
-}
-
-// RunPostFactor consults assessor at PostFactor. The current contract
-// honours [Deny] only; [Require] at PostFactor is queued by the next
-// PreFactor pass (the orchestrator does not preempt the current
-// factor). Returns whether the chain is denied.
-func RunPostFactor(ctx context.Context, assessor Assessor, in Input) (bool, error) {
-	if assessor == nil {
-		return false, nil
-	}
-	in.Stage = PostFactor
-	out, err := assessor.Assess(ctx, in)
-	if err != nil {
-		return false, err
-	}
-	return out.Decision == Deny, nil
-}
-
 // LoginFlowResult is the output of the once-per-chain LoginFlow
 // consult.
 type LoginFlowResult struct {

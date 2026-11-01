@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -62,12 +63,12 @@ func NewSigner(current []byte, previous ...[]byte) (*Signer, error) {
 		return nil, ErrInvalidKey
 	}
 	keys := make([][]byte, 0, 1+len(previous))
-	keys = append(keys, cloneKey(current))
+	keys = append(keys, slices.Clone(current))
 	for _, key := range previous {
 		if len(key) != keyLen {
 			return nil, ErrInvalidKey
 		}
-		keys = append(keys, cloneKey(key))
+		keys = append(keys, slices.Clone(key))
 	}
 	return &Signer{keys: keys}, nil
 }
@@ -188,12 +189,6 @@ func (s *Signer) compute(key []byte, sessionID string, nonce []byte, iat int64, 
 	_, _ = h.Write(lenBuf[:])
 	_, _ = h.Write(bind)
 	return h.Sum(nil)
-}
-
-func cloneKey(key []byte) []byte {
-	cp := make([]byte, len(key))
-	copy(cp, key)
-	return cp
 }
 
 // NewRandomToken mints an opaque, cryptographically random double-submit

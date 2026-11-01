@@ -2,7 +2,6 @@ package risk_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/authn/risk"
@@ -16,89 +15,6 @@ type stubAssessor struct {
 
 func (s stubAssessor) Assess(_ context.Context, _ risk.Input) (risk.Outcome, error) {
 	return s.out, s.err
-}
-
-// TestRunPreFactorNilAssessor asserts the helper short-circuits when
-// the assessor is nil — the orchestrator does not need a nil guard
-// at the call site.
-func TestRunPreFactorNilAssessor(t *testing.T) {
-	t.Parallel()
-	res, err := risk.RunPreFactor(context.Background(), nil, risk.Input{})
-	if err != nil {
-		t.Fatalf("err = %v", err)
-	}
-	if res.Denied || len(res.Required) != 0 {
-		t.Errorf("res = %+v, want empty", res)
-	}
-}
-
-// TestRunPreFactorDenyShortCircuits asserts a Deny decision flips the
-// Denied flag and ignores any RequiredFactors that may have been set.
-func TestRunPreFactorDenyShortCircuits(t *testing.T) {
-	t.Parallel()
-	a := stubAssessor{out: risk.Outcome{Decision: risk.Deny}}
-	res, err := risk.RunPreFactor(context.Background(), a, risk.Input{})
-	if err != nil {
-		t.Fatalf("err = %v", err)
-	}
-	if !res.Denied {
-		t.Error("Denied should be true")
-	}
-}
-
-// TestRunPreFactorRequirePropagatesFactors asserts RequiredFactors and
-// the MinAAL floor are returned verbatim on a Require decision.
-func TestRunPreFactorRequirePropagatesFactors(t *testing.T) {
-	t.Parallel()
-	a := stubAssessor{out: risk.Outcome{
-		Decision:        risk.Require,
-		RequiredFactors: []string{"passkey"},
-		MinAAL:          risk.AAL2,
-	}}
-	res, err := risk.RunPreFactor(context.Background(), a, risk.Input{})
-	if err != nil {
-		t.Fatalf("err = %v", err)
-	}
-	if len(res.Required) != 1 || res.Required[0] != "passkey" {
-		t.Errorf("Required = %+v", res.Required)
-	}
-	if res.MinAAL != risk.AAL2 {
-		t.Errorf("MinAAL = %v, want AAL2", res.MinAAL)
-	}
-}
-
-// TestRunPreFactorMinAALWithoutRequiredFactors asserts the MinAAL floor
-// propagates even when RequiredFactors is empty — the "any factor that
-// meets MinAAL" directive the orchestrator applies as an assurance
-// filter on the whole registered chain.
-func TestRunPreFactorMinAALWithoutRequiredFactors(t *testing.T) {
-	t.Parallel()
-	a := stubAssessor{out: risk.Outcome{
-		Decision: risk.Require,
-		MinAAL:   risk.AAL2,
-	}}
-	res, err := risk.RunPreFactor(context.Background(), a, risk.Input{})
-	if err != nil {
-		t.Fatalf("err = %v", err)
-	}
-	if len(res.Required) != 0 {
-		t.Errorf("Required = %+v, want empty", res.Required)
-	}
-	if res.MinAAL != risk.AAL2 {
-		t.Errorf("MinAAL = %v, want AAL2", res.MinAAL)
-	}
-}
-
-// TestRunPostFactorErrorBubbles asserts an assessor error surfaces
-// without being swallowed.
-func TestRunPostFactorErrorBubbles(t *testing.T) {
-	t.Parallel()
-	wantErr := errors.New("backend down")
-	a := stubAssessor{err: wantErr}
-	_, err := risk.RunPostFactor(context.Background(), a, risk.Input{})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("err = %v, want %v", err, wantErr)
-	}
 }
 
 // TestRunOnceForLoginFlowDecisionMapping verifies the Decision-only

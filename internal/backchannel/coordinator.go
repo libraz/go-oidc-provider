@@ -405,19 +405,9 @@ func (c *Coordinator) NotifyClientDeleted(ctx context.Context, snapshot ClientDe
 			break
 		}
 		seen[rawSubject] = struct{}{}
-		subject := rawSubject
-		if c.subjectProjector != nil {
-			projected, err := c.subjectProjector(ctx, rawSubject, snapshot.Client)
-			if err != nil {
-				c.emitResolutionFailure(ctx, Notice{Subject: rawSubject}, snapshot.Client.ID, "subject_projection", err)
-				continue
-			}
-			if projected == "" {
-				err := errors.New("subject projector returned an empty subject")
-				c.emitResolutionFailure(ctx, Notice{Subject: rawSubject}, snapshot.Client.ID, "subject_projection", err)
-				continue
-			}
-			subject = projected
+		subject, err := c.projectSubject(ctx, Notice{Subject: rawSubject}, snapshot.Client.ID, snapshot.Client)
+		if err != nil {
+			continue
 		}
 		targets = append(targets, Target{
 			ClientID: snapshot.Client.ID,
@@ -430,6 +420,26 @@ func (c *Coordinator) NotifyClientDeleted(ctx context.Context, snapshot ClientDe
 	return c.dispatchTargets(bounded, targets, Notice{}), nil
 }
 
+// EachBounded calls fn for every item on at most workers goroutines and
+// returns once all calls have finished. A workers value below one runs
+// the items on a single goroutine.
+func EachBounded[T any](workers int, items []T, fn func(T)) {
+	jobs := make(chan T)
+	var wg sync.WaitGroup
+	for range max(1, min(workers, len(items))) {
+		wg.Go(func() {
+			for item := range jobs {
+				fn(item)
+			}
+		})
+	}
+	for _, item := range items {
+		jobs <- item
+	}
+	close(jobs)
+	wg.Wait()
+}
+
 func (c *Coordinator) dispatchTargets(ctx context.Context, targets []Target, notice Notice) int {
 	if len(targets) == 0 {
 		return 0
@@ -438,23 +448,9 @@ func (c *Coordinator) dispatchTargets(ctx context.Context, targets []Target, not
 	iat := now.Unix()
 	exp := now.Add(c.tokenTTL).Unix()
 
-	jobs := make(chan Target)
-	workers := min(c.maxConcurrent, len(targets))
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for target := range jobs {
-				c.dispatchOne(ctx, target, notice, iat, exp)
-			}
-		}()
-	}
-	for _, target := range targets {
-		jobs <- target
-	}
-	close(jobs)
-	wg.Wait()
+	EachBounded(c.maxConcurrent, targets, func(target Target) {
+		c.dispatchOne(ctx, target, notice, iat, exp)
+	})
 	return len(targets)
 }
 
@@ -637,22 +633,10 @@ func (c *Coordinator) resolveTargets(
 		if client.BackchannelLogoutSessionRequired {
 			continue
 		}
-		subject := notice.Subject
-		if c.subjectProjector != nil {
-			projected, err := c.subjectProjector(ctx, notice.Subject, client)
-			if err != nil {
-				fault := fmt.Errorf("project subject for client %q: %w", clientID, err)
-				faults = append(faults, fault)
-				c.emitResolutionFailure(ctx, notice, clientID, "subject_projection", fault)
-				continue
-			}
-			if projected == "" {
-				fault := fmt.Errorf("project subject for client %q: empty subject", clientID)
-				faults = append(faults, fault)
-				c.emitResolutionFailure(ctx, notice, clientID, "subject_projection", fault)
-				continue
-			}
-			subject = projected
+		subject, fault := c.projectSubject(ctx, notice, clientID, client)
+		if fault != nil {
+			faults = append(faults, fault)
+			continue
 		}
 		out = append(out, Target{
 			ClientID: clientID,
@@ -661,6 +645,26 @@ func (c *Coordinator) resolveTargets(
 		})
 	}
 	return out, errors.Join(faults...)
+}
+
+// projectSubject maps notice.Subject to the value client's logout token
+// carries. A projector failure or an empty projection is reported as a
+// resolution failure and returned as the fault; the caller skips the
+// target.
+func (c *Coordinator) projectSubject(ctx context.Context, notice Notice, clientID string, client *store.Client) (string, error) {
+	if c.subjectProjector == nil {
+		return notice.Subject, nil
+	}
+	projected, err := c.subjectProjector(ctx, notice.Subject, client)
+	if err == nil && projected == "" {
+		err = errors.New("empty subject")
+	}
+	if err != nil {
+		fault := fmt.Errorf("project subject for client %q: %w", clientID, err)
+		c.emitResolutionFailure(ctx, notice, clientID, "subject_projection", fault)
+		return "", fault
+	}
+	return projected, nil
 }
 
 func (c *Coordinator) emitResolutionFailure(
