@@ -378,7 +378,7 @@ func (c *Client) Do(req *http.Request) ([]byte, *http.Response, error) {
 
 	if len(c.policy.AcceptContentTypes) > 0 {
 		ct := resp.Header.Get("Content-Type")
-		if !contentTypeAllowed(ct, c.policy.AcceptContentTypes) {
+		if !ContentTypeAllowed(ct, c.policy.AcceptContentTypes) {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errorDrainBytes))
 			return nil, resp, fmt.Errorf("%w: %q", ErrUnexpectedContentType, ct)
 		}
@@ -432,11 +432,11 @@ func (c *Client) DoAndDiscard(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// contentTypeAllowed reports whether ct (the raw header value) matches
+// ContentTypeAllowed reports whether ct (the raw header value) matches
 // any entry in allowed. Matching is case-insensitive and ignores
 // parameters (e.g. "; charset=utf-8"); a "type/*+suffix" entry matches
 // any subtype ending in that suffix (see [suffixPatternMatch]).
-func contentTypeAllowed(ct string, allowed []string) bool {
+func ContentTypeAllowed(ct string, allowed []string) bool {
 	if ct == "" {
 		return false
 	}

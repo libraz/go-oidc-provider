@@ -18,12 +18,16 @@ import (
 // change to it by more than a day.
 const (
 	maxDocumentBytes = 5 * 1024
-	fetchTimeout     = 5 * time.Second
 	minDocumentTTL   = 60 * time.Second
 	maxDocumentTTL   = 24 * time.Hour
 	cacheMaxEntries  = 256
-	acceptHeader     = "application/json, application/*+json"
 )
+
+// acceptContentTypes is the media-type allow-list for a metadata document; the
+// request's Accept header is derived from it.
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var acceptContentTypes = []string{"application/json", "application/*+json"}
 
 // Closed set of cimd.fetch_failed reasons.
 const (
@@ -78,7 +82,7 @@ func fetchPolicy(allowPrivate bool, timeout time.Duration, lookup func(context.C
 		AllowLoopbackNetwork: allowPrivate,
 		AllowedSchemes:       schemes,
 		MaxBodyBytes:         maxDocumentBytes,
-		AcceptContentTypes:   []string{"application/json", "application/*+json"},
+		AcceptContentTypes:   acceptContentTypes,
 		Timeout:              timeout,
 		LookupHook:           lookup,
 		// MaxRedirects stays zero: a 3xx is returned as-is and fails the
@@ -93,7 +97,7 @@ func fetchDocument(ctx context.Context, client *securefetch.Client, id string) (
 	if err != nil {
 		return nil, nil, reasonNetwork
 	}
-	req.Header.Set("Accept", acceptHeader)
+	req.Header.Set("Accept", strings.Join(acceptContentTypes, ", "))
 	body, resp, err := client.Do(req) //nolint:bodyclose // securefetch.Do drains and closes the body internally.
 	if err != nil {
 		return nil, nil, classifyFetchError(err)

@@ -2,20 +2,17 @@ package parendpoint
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
-	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/jar"
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -126,9 +123,9 @@ func validateRequestExtensions(
 // RFC 9101 §6.1. A nil [Deps.JAR] means the OP has not enabled JAR; the
 // request is rejected with invalid_request_object.
 //
-// "request_uri" inside a /par body is forbidden by RFC 9126 §3 — the
-// downstream parser ([parseAuthorizeRequest]) enforces that rule, so
-// this function does not need to repeat it.
+// "request_uri" inside a /par body is forbidden by RFC 9126 §3; [serve]
+// rejects it before this function runs, and [jar.Merge] never carries
+// one onto the merged values.
 //
 // The returned bool is false when the function wrote the response; the
 // caller then stops processing.
@@ -183,29 +180,23 @@ func consumeJARRequestObject(
 // [jar.Description] so the two surfaces cannot disagree about the
 // wording either.
 func writeJARError(w http.ResponseWriter, err error) {
-	if errors.Is(err, jar.ErrKeySourceUnavailable) {
-		endpointsupport.WriteOAuthError(w, http.StatusServiceUnavailable, errServerError, jar.Description(err))
-		return
-	}
-	if errors.Is(err, jar.ErrClientIDMismatch) {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
-		return
-	}
-	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequestObject, jar.Description(err))
+	status, code := jar.WireError(err)
+	endpointsupport.WriteOAuthError(w, status, code, jar.Description(err))
 }
 
 // authenticateWithDPoP runs DPoP proof verification and client
-// authentication through the shared [dpop.Gate] and returns the
-// proof's RFC 7638 thumbprint ("" when no proof was presented)
-// alongside the authenticated client.
+// authentication through [endpointsupport.AuthenticateWithDPoP] and
+// returns the proof's RFC 7638 thumbprint ("" when no proof was
+// presented) alongside the authenticated client.
 //
-// The gate documents the verify → authenticate → commit ordering and
-// the reasons behind it; /par inherits it unchanged. Two /par-specific
-// consequences are worth naming: the RFC 9449 §8 nonce challenge fires
-// before JAR consumption as well as before client authentication, and
-// the deferred replay commit keeps an endpoint that is reachable
-// without a credential from turning an unauthenticated request rate
-// into storage cost.
+// Two /par-specific consequences of the shared gate's ordering are
+// worth naming: the RFC 9449 §8 nonce challenge fires before JAR
+// consumption as well as before client authentication, and the
+// deferred replay commit keeps an endpoint that is reachable without a
+// credential from turning an unauthenticated request rate into storage
+// cost. A nil [Deps.DPoP] admits every request without a proof, which
+// is what RFC 9449 §10.1 asks of /par: the header is optional there
+// even when the feature is wired.
 //
 // The §10 commitment check against the request's "dpop_jkt" parameter
 // (form or merged JAR claim) is separate: it lives in [applyDPoPJKT],
@@ -215,24 +206,18 @@ func writeJARError(w http.ResponseWriter, err error) {
 // The function writes the response on every failure path; the caller
 // only checks the bool.
 func authenticateWithDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (string, *store.Client, bool) {
-	var client *store.Client
-	checked, ok := dpopGate(deps).Authenticate(r.Context(), w, r, func() bool {
-		var authOK bool
-		client, _, authOK = authenticate(r.Context(), w, r, deps)
-		return authOK
-	})
-	if !ok {
-		return "", nil, false
-	}
-	return checked.Thumbprint(), client, true
-}
-
-// dpopGate projects [Deps] onto the shared proof lifecycle. A nil
-// [Deps.DPoP] yields a gate that admits every request without a proof,
-// which is what RFC 9449 §10.1 asks of /par: the header is optional
-// there even when the feature is wired.
-func dpopGate(deps Deps) dpop.Gate {
-	return dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces}
+	return endpointsupport.AuthenticateWithDPoP(w, r,
+		dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces},
+		endpointsupport.AuthenticateOpts{
+			Clients:           deps.Clients,
+			SecretVerifier:    deps.SecretVerifier,
+			AssertionVerifier: deps.AssertionVerifier,
+			AllowedMethods:    deps.AllowedClientAuthMethods,
+			Now:               deps.now(),
+			Audit:             deps.auditEmitter(),
+		},
+		"client authentication failed at PAR endpoint",
+	)
 }
 
 // applyDPoPJKT reconciles the proof's thumbprint (from
@@ -260,19 +245,9 @@ func applyDPoPJKT(w http.ResponseWriter, values url.Values, jkt string) (url.Val
 			"DPoP proof key does not match the dpop_jkt commitment")
 		return nil, false
 	}
-	out := cloneValues(values)
+	out := jar.CloneValues(values)
 	out.Set("dpop_jkt", jkt)
 	return out, true
-}
-
-// cloneValues returns a deep copy of in so [bindDPoPProof] can mutate
-// the returned value without aliasing the caller's slice headers.
-func cloneValues(in url.Values) url.Values {
-	out := make(url.Values, len(in))
-	for k, v := range in {
-		out[k] = append([]string(nil), v...)
-	}
-	return out
 }
 
 // stripAuthFields returns a copy of in with the credential-bearing keys
@@ -310,15 +285,6 @@ func stripAuthFields(in url.Values) url.Values {
 // authenticated client_id so downstream code does not need to repeat the
 // reconciliation.
 func parseAuthorizeRequest(w http.ResponseWriter, values url.Values, authenticatedID string) (*authorize.Request, bool) {
-	// RFC 9126 §2.3 forbids request_uri inside a /par body — the endpoint
-	// is the *issuer* of those URIs, so accepting one in the post body
-	// would invite recursive lookups. Reject before parsing so the error
-	// message stays specific.
-	if values.Get("request_uri") != "" {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"request_uri is not permitted in a /par request")
-		return nil, false
-	}
 	req, err := authorize.ParseValues(values)
 	if err != nil {
 		writeAuthorizeError(w, err)
@@ -411,44 +377,14 @@ func writeSuccess(w http.ResponseWriter, body successResponse) {
 	_ = httpx.WriteJSON(w, http.StatusCreated, body)
 }
 
-// authenticate resolves the client credentials carried by the request,
-// looks the client up in the registry, and verifies the credentials. The
-// helper delegates to a per-request [endpointsupport.AuthenticateClient] so
-// /par and /token share an identical authentication contract.
-//
-// The function emits its own response on every failure path so the caller
-// only checks the bool: false means "stop, response written". Each
-// failure path also raises a "client_authn.failure" audit event so SOC
-// tooling can spot probing for a known client_id even though RFC 6749
-// §5.2 mandates the wire response stays at the generic "invalid_client"
-// code.
-func authenticate(
-	ctx context.Context,
-	w http.ResponseWriter,
-	r *http.Request,
-	deps Deps,
-) (*store.Client, *clientauth.Credentials, bool) {
-	return endpointsupport.AuthenticateClient(ctx, w, r,
-		endpointsupport.AuthenticateOpts{
-			Clients:           deps.Clients,
-			SecretVerifier:    deps.SecretVerifier,
-			AssertionVerifier: deps.AssertionVerifier,
-			AllowedMethods:    deps.AllowedClientAuthMethods,
-			Now:               deps.now(),
-			Audit:             deps.auditEmitter(),
-		},
-		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), endpointsupport.EventClientAuthnFailure,
-			"client authentication failed at PAR endpoint"),
-	)
-}
-
-// newRequestURI returns a freshly generated PAR URI. The body is 32 bytes
-// of crypto/rand encoded in base64url-no-pad, giving 256 bits of entropy
-// (well above the §2.2 "guessing infeasible" requirement).
+// newRequestURI returns a freshly generated PAR URI. The body is
+// [uriByteLength] random bytes encoded in base64url-no-pad, giving 256
+// bits of entropy (well above the §2.2 "guessing infeasible"
+// requirement).
 func newRequestURI() (string, error) {
-	buf := make([]byte, uriByteLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("parendpoint: read random: %w", err)
+	id, err := keys.RandomBase64URL(uriByteLength)
+	if err != nil {
+		return "", err
 	}
-	return authorize.PARRequestURIPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
+	return authorize.PARRequestURIPrefix + id, nil
 }

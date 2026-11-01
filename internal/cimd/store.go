@@ -79,7 +79,7 @@ func New(cfg Config) *Store {
 	if emitter == nil {
 		emitter = audit.Discard()
 	}
-	timeout := fetchTimeout
+	timeout := securefetch.DefaultTimeout
 	if cfg.timeout > 0 {
 		timeout = cfg.timeout
 	}

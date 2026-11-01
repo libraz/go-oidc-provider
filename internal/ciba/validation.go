@@ -83,18 +83,12 @@ func ValidateScope(raw string) ([]string, error) {
 	return parts, nil
 }
 
-// ParseRequestedExpiry parses the requested_expiry parameter the
-// client sent on /bc-authorize. An empty input means "client did not
-// supply a value" and returns (0, nil); the caller substitutes
-// [DefaultExpiresIn] (or any embedder override). Otherwise the value
-// MUST parse as a positive base-10 integer interpreted as seconds;
+// ParseRequestedExpirySeconds parses the requested_expiry parameter the
+// client sent on /bc-authorize into whole seconds, without clamping. An
+// empty input means "client did not supply a value" and returns (0, nil).
+// Otherwise the value MUST parse as a positive base-10 integer;
 // non-positive or unparseable values yield [ErrInvalidRequestedExpiry].
-//
-// When upper is greater than zero and the parsed value exceeds it,
-// the function returns upper — matching CIBA Core §7.1's allowance
-// for the OP to clamp the lifetime down. A zero or negative upper
-// disables clamping.
-func ParseRequestedExpiry(raw string, upper time.Duration) (time.Duration, error) {
+func ParseRequestedExpirySeconds(raw string) (int64, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return 0, nil
@@ -103,11 +97,35 @@ func ParseRequestedExpiry(raw string, upper time.Duration) (time.Duration, error
 	if err != nil || n <= 0 {
 		return 0, ErrInvalidRequestedExpiry
 	}
-	d := time.Duration(n) * time.Second
-	if upper > 0 && d > upper {
-		return upper, nil
+	return n, nil
+}
+
+// ExpiryFromSeconds converts a [ParseRequestedExpirySeconds] result into
+// the auth_req_id lifetime. Zero stays zero so the caller substitutes
+// [DefaultExpiresIn] (or any embedder override). When upper is greater
+// than zero and the value exceeds it, upper is returned — matching CIBA
+// Core §7.1's allowance for the OP to clamp the lifetime down. A zero or
+// negative upper disables clamping.
+func ExpiryFromSeconds(seconds int64, upper time.Duration) time.Duration {
+	if seconds == 0 {
+		return 0
 	}
-	return d, nil
+	d := time.Duration(seconds) * time.Second
+	if upper > 0 && d > upper {
+		return upper
+	}
+	return d
+}
+
+// ParseRequestedExpiry parses the requested_expiry parameter the
+// client sent on /bc-authorize and clamps it to upper; see
+// [ParseRequestedExpirySeconds] and [ExpiryFromSeconds].
+func ParseRequestedExpiry(raw string, upper time.Duration) (time.Duration, error) {
+	n, err := ParseRequestedExpirySeconds(raw)
+	if err != nil {
+		return 0, err
+	}
+	return ExpiryFromSeconds(n, upper), nil
 }
 
 // HintKind is the closed sum returned by [ClassifyHint] naming

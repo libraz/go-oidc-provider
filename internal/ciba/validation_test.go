@@ -265,3 +265,45 @@ func TestHintKind_String(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRequestedExpirySeconds(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		raw     string
+		want    int64
+		wantErr bool
+	}{
+		{"", 0, false},
+		{"  ", 0, false},
+		{" 120 ", 120, false},
+		{"9999999999", 9999999999, false},
+		{"0", 0, true},
+		{"-5", 0, true},
+		{"abc", 0, true},
+		{"1.5", 0, true},
+	}
+	for _, tc := range cases {
+		got, err := ciba.ParseRequestedExpirySeconds(tc.raw)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("ParseRequestedExpirySeconds(%q) = (%d, %v), want (%d, err=%v)", tc.raw, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
+func TestExpiryFromSeconds(t *testing.T) {
+	t.Parallel()
+
+	if got := ciba.ExpiryFromSeconds(0, time.Minute); got != 0 {
+		t.Errorf("zero seconds = %v, want 0", got)
+	}
+	if got := ciba.ExpiryFromSeconds(30, time.Minute); got != 30*time.Second {
+		t.Errorf("under upper = %v, want 30s", got)
+	}
+	if got := ciba.ExpiryFromSeconds(300, time.Minute); got != time.Minute {
+		t.Errorf("over upper = %v, want clamp to 1m", got)
+	}
+	if got := ciba.ExpiryFromSeconds(300, 0); got != 300*time.Second {
+		t.Errorf("no upper = %v, want 300s", got)
+	}
+}

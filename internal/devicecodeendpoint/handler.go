@@ -18,7 +18,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
-	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -226,7 +225,6 @@ type successResponse struct {
 // cascade-revoke audit signal stay aligned with the library's
 // other surfaces.
 func Handler(deps Deps) http.Handler {
-	resolved := resolveDeps(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Defence in depth: op.New's validateDeviceCodeGrant
 		// rejects this configuration before the router mounts;
@@ -236,24 +234,14 @@ func Handler(deps Deps) http.Handler {
 		// means a misconfigured handler surfaces the
 		// configuration error on every probe rather than
 		// passing GET/HEAD through to the 405 path first.
-		if resolved.DeviceCodes == nil {
+		if deps.DeviceCodes == nil {
 			httpx.StampNoStore(w)
 			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError,
 				"device-authorization substore is not configured")
 			return
 		}
-		serve(w, r, resolved)
+		serve(w, r, deps)
 	})
-}
-
-// resolveDeps fills in defaults the caller chose to omit. The
-// returned value is a fresh copy; the caller's [Deps] is not
-// mutated.
-func resolveDeps(d Deps) Deps {
-	if d.SecretVerifier == nil {
-		d.SecretVerifier = &clientauth.Argon2id{}
-	}
-	return d
 }
 
 // serve is the request-scoped entry point. It validates the
@@ -297,7 +285,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	resource, ok := parseResource(w, r.PostForm, client)
+	resource, ok := endpointsupport.ParseSingleResource(w, r.PostForm, client, "device-authorization endpoint")
 	if !ok {
 		return
 	}
@@ -311,52 +299,13 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 }
 
 // authenticateWithDPoP runs DPoP proof verification and client
-// authentication through the shared [dpop.Gate] and returns the
-// proof's RFC 7638 thumbprint ("" when no proof was presented)
-// alongside the authenticated client.
-//
-// The gate documents the verify → authenticate → commit ordering and
-// the reasons behind it; /device_authorization inherits it unchanged.
-// The deferred replay commit matters here because the endpoint
-// requires a credential: a proof burned on a request that never
-// authenticated would make the legitimate retry look like a replay.
-//
-// The function writes the response on every failure path; the caller
-// only checks the bool.
+// authentication through [endpointsupport.AuthenticateWithDPoP] and
+// returns the proof's RFC 7638 thumbprint ("" when no proof was
+// presented) alongside the authenticated client. It writes the
+// response on every failure path; the caller only checks the bool.
 func authenticateWithDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (string, *store.Client, bool) {
-	var client *store.Client
-	checked, ok := dpopGate(deps).Authenticate(r.Context(), w, r, func() bool {
-		var authOK bool
-		client, _, authOK = authenticate(r.Context(), w, r, deps)
-		return authOK
-	})
-	if !ok {
-		return "", nil, false
-	}
-	return checked.Thumbprint(), client, true
-}
-
-// dpopGate projects [Deps] onto the shared proof lifecycle. A nil
-// [Deps.DPoP] yields a gate that admits every request without a proof;
-// the profile-level requirement that a proof be presented at all is a
-// separate gate ([enforceSenderConstraint]).
-func dpopGate(deps Deps) dpop.Gate {
-	return dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces}
-}
-
-// authenticate resolves the client credentials carried by the
-// request, looks the client up in the registry, and verifies the
-// credentials. The helper delegates to a per-request
-// [endpointsupport.AuthenticateClient] so the device-authorization
-// endpoint shares an identical authentication contract with the
-// token and PAR endpoints.
-func authenticate(
-	ctx context.Context,
-	w http.ResponseWriter,
-	r *http.Request,
-	deps Deps,
-) (*store.Client, *clientauth.Credentials, bool) {
-	return endpointsupport.AuthenticateClientAudited(ctx, w, r,
+	return endpointsupport.AuthenticateWithDPoP(w, r,
+		dpop.Gate{Verifier: deps.DPoP, Nonces: deps.DPoPNonces},
 		endpointsupport.AuthenticateOpts{
 			Clients:           deps.Clients,
 			SecretVerifier:    deps.SecretVerifier,
@@ -370,57 +319,33 @@ func authenticate(
 }
 
 // enforceSenderConstraint applies the FAPI 2.0 baseline rule that
-// no device-authorization request MAY produce a bearer token. When
-// [Deps.RequireSenderConstraint] is true and the request carries
-// neither DPoP nor mTLS, the function writes invalid_request and
-// returns false.
+// no device-authorization request MAY produce a bearer token when
+// [Deps.RequireSenderConstraint] is true.
 func enforceSenderConstraint(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
 	dpopJKT, mtlsThumbprint, clientID string,
 ) bool {
-	if !deps.RequireSenderConstraint {
-		return true
-	}
-	if dpopJKT != "" || mtlsThumbprint != "" {
-		return true
-	}
-	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:     devicecode.AuditAuthorizationUnboundRejected,
-		Level:    audit.LevelWarn,
-		Message:  "device-authorization rejected: unbound request under sender-constraint profile",
-		ClientID: clientID,
-		Extras: map[string]any{
-			"profile": "fapi2_baseline",
-			"reason":  "unbound_request",
+	return endpointsupport.EnforceSenderConstraint(ctx, w, deps.auditEmitter(),
+		deps.RequireSenderConstraint,
+		endpointsupport.SenderConstraintRejection{
+			Event:        devicecode.AuditAuthorizationUnboundRejected,
+			AuditMessage: "device-authorization rejected: unbound request under sender-constraint profile",
+			Description:  "device authorization requires DPoP or mTLS under the active profile",
 		},
-	})
-	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-		"device authorization requires DPoP or mTLS under the active profile")
-	return false
+		dpopJKT, mtlsThumbprint, clientID)
 }
 
 // verifyClientGrantTypeAllowed rejects clients whose registered
-// GrantTypes do not include the device_code URN. The check matches
-// the token-endpoint poll's gate so a misconfigured client cannot
-// even initiate a device flow.
+// GrantTypes do not include the device_code URN.
 func verifyClientGrantTypeAllowed(ctx context.Context, w http.ResponseWriter, deps Deps, client *store.Client) bool {
-	if slices.Contains(client.GrantTypes, grant.DeviceCode.String()) {
-		return true
-	}
-	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:     devicecode.AuditAuthorizationRejected,
-		Level:    audit.LevelWarn,
-		Message:  "device-authorization rejected: client not registered for grant",
-		ClientID: client.ID,
-		Extras: map[string]any{
-			"reason": "grant_type_not_permitted",
-		},
-	})
-	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnauthorizedClient,
-		"client is not authorized for the device_code grant")
-	return false
+	return endpointsupport.VerifyClientGrantType(ctx, w, deps.auditEmitter(), client, grant.DeviceCode.String(),
+		endpointsupport.GrantRejection{
+			Event:        devicecode.AuditAuthorizationRejected,
+			AuditMessage: "device-authorization rejected: client not registered for grant",
+			Description:  "client is not authorized for the device_code grant",
+		})
 }
 
 // parseScope extracts the requested scope from the form, validates
@@ -453,50 +378,6 @@ func filterScopeAllowedClients(w http.ResponseWriter, scope []string, clientID s
 		}
 	}
 	return scope, true
-}
-
-// parseResource extracts the RFC 8707 resource indicators from the
-// form. The function delegates parsing / validation / canonicalisation
-// to [resourceindicator.Canonicalize] so the device endpoint shares the
-// same policy as authorize / token / CIBA. Each surviving value MUST
-// appear in the client's registered Resources allowlist; the allowlist
-// match also goes through the shared helper
-// ([resourceindicator.Contains]) so historical registrations that
-// pre-date canonicalisation still match a canonical request. The
-// current issuance pipeline honours a single audience entry, so a
-// request carrying more than one non-empty resource is rejected with
-// invalid_target — the handler refuses to accept input the issuance
-// side would silently truncate.
-func parseResource(w http.ResponseWriter, form url.Values, client *store.Client) ([]string, bool) {
-	raw := form["resource"]
-	if len(raw) == 0 {
-		return nil, true
-	}
-	out := make([]string, 0, len(raw))
-	for _, r := range raw {
-		r = strings.TrimSpace(r)
-		if r == "" {
-			continue
-		}
-		canonical, err := resourceindicator.Canonicalize(r)
-		if err != nil {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
-				"resource parameter is not a valid absolute URI")
-			return nil, false
-		}
-		if !resourceindicator.Contains(client.Resources, canonical) {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
-				"resource is not registered for this client")
-			return nil, false
-		}
-		out = append(out, canonical)
-	}
-	if len(out) > 1 {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
-			"multiple resource indicators are not supported on the device-authorization endpoint")
-		return nil, false
-	}
-	return out, true
 }
 
 // persistInput bundles the parameters [persist] consumes. The
@@ -552,7 +433,7 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 			"resource":   in.Resource,
 			"expires_in": int64(deps.expiresIn().Seconds()),
 			"interval":   int64(interval.Seconds()),
-			"binding":    bindingLabel(in.DPoPJKT, in.MTLSThumbprint),
+			"binding":    endpointsupport.BindingLabel(in.DPoPJKT, in.MTLSThumbprint),
 		},
 	})
 	httpx.StampNoStore(w)
@@ -626,18 +507,4 @@ func saveWithUserCodeRetry(ctx context.Context, store store.DeviceCodeStore, rec
 // the package import surface.
 func errAlreadyExists() error {
 	return store.ErrAlreadyExists
-}
-
-// bindingLabel returns the audit-extras label naming which sender
-// constraint the issued record carries: "dpop", "mtls", or
-// "bearer".
-func bindingLabel(dpopJKT, mtlsThumbprint string) string {
-	switch {
-	case dpopJKT != "":
-		return "dpop"
-	case mtlsThumbprint != "":
-		return "mtls"
-	default:
-		return "bearer"
-	}
 }

@@ -699,7 +699,7 @@ func decodeVerifiedClaims(payload []byte) (map[string]any, error) {
 // hide an OP-side key-rotation bug.
 //
 // Either branch additionally requires the selected key to be usable for
-// signatures ([signingUsable]).
+// signatures ([rpjwks.SigningUsable]).
 func pickKey(keys *josev4.JSONWebKeySet, kid string) (*josev4.JSONWebKey, error) {
 	if kid != "" {
 		// JSONWebKeySet.Key returns every key whose kid matches; pick
@@ -707,32 +707,17 @@ func pickKey(keys *josev4.JSONWebKeySet, kid string) (*josev4.JSONWebKey, error)
 		// Multiple keys sharing a kid is a misconfiguration on the RP
 		// side.
 		for _, k := range keys.Key(kid) {
-			if signingUsable(k.Use) {
+			if rpjwks.SigningUsable(k.Use) {
 				return &k, nil
 			}
 		}
 		return nil, ErrNoMatchingJWK
 	}
-	if len(keys.Keys) == 1 && signingUsable(keys.Keys[0].Use) {
+	if len(keys.Keys) == 1 && rpjwks.SigningUsable(keys.Keys[0].Use) {
 		k := keys.Keys[0]
 		return &k, nil
 	}
 	return nil, ErrNoMatchingJWK
-}
-
-// signingUsable reports whether a JWK whose "use" member is declared as
-// use may verify a signature. RFC 7517 §4.2 makes the declaration
-// binding: a key published as "enc" is the RP's response-encryption key,
-// not a verification key, and an unrecognised value names a purpose this
-// OP cannot honour. An absent "use" leaves the key unrestricted, which
-// RFC 7517 permits and many RPs rely on.
-//
-// The predicate mirrors the one client registration applies when it
-// decides whether a JWKS carries a signing key. Without it here the
-// verifier is laxer than the registration gate, so a client could sign a
-// request object with a key the OP never accepted as a signing key.
-func signingUsable(use string) bool {
-	return use == "" || use == "sig"
 }
 
 // validateClaims runs the RFC 9101 §6.1 / FAPI 2.0 Message Signing

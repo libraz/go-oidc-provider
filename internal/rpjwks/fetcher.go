@@ -525,7 +525,7 @@ func VerifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) (
 	}
 	trials := 0
 	for i := range candidates {
-		if !signingUsable(candidates[i].Use) {
+		if !SigningUsable(candidates[i].Use) {
 			continue
 		}
 		if jose.AssertAlgKeyShape(alg, candidates[i].Key) != nil {
@@ -541,12 +541,6 @@ func VerifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) (
 		}
 	}
 	return nil, ErrSignatureInvalid
-}
-
-// signingUsable reports whether a JWK whose "use" member is use may verify a
-// signature (RFC 7517 §4.2): absent or "sig" only.
-func signingUsable(use string) bool {
-	return use == "" || use == "sig"
 }
 
 func (f *Fetcher) resolve(
@@ -652,7 +646,7 @@ func (f *Fetcher) doFetch(ctx context.Context, jwksURI string, cached *entry) (*
 	if resp.StatusCode/100 != 2 {
 		return nil, 0, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	if ct := resp.Header.Get("Content-Type"); !isJSONContentType(ct) {
+	if ct := resp.Header.Get("Content-Type"); !securefetch.ContentTypeAllowed(ct, jwksContentTypes) {
 		return nil, 0, fmt.Errorf("content-type %q is not JSON", ct)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, f.maxBody+1))
@@ -713,7 +707,7 @@ func (f *Fetcher) secureClient() *securefetch.Client {
 			MaxBodyBytes:        f.maxBody,
 			Timeout:             f.timeout,
 			BaseTransport:       f.baseTransport,
-			AcceptContentTypes:  []string{"application/json", "application/jwk-set+json"},
+			AcceptContentTypes:  jwksContentTypes,
 		})
 	})
 	return f.client

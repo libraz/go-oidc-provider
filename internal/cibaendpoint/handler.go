@@ -217,26 +217,15 @@ func (d *Deps) pollInterval() time.Duration {
 // circuits to 500 server_error before any request work, keeping
 // the bug visible without crashing the process.
 func Handler(deps Deps) http.Handler {
-	resolved := resolveDeps(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if resolved.CIBARequests == nil {
+		if deps.CIBARequests == nil {
 			httpx.StampNoStore(w)
 			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError,
 				"backchannel-authentication substore is not configured")
 			return
 		}
-		serve(w, r, resolved)
+		serve(w, r, deps)
 	})
-}
-
-// resolveDeps fills in defaults the caller chose to omit. The
-// returned value is a fresh copy; the caller's [Deps] is not
-// mutated.
-func resolveDeps(d Deps) Deps {
-	if d.SecretVerifier == nil {
-		d.SecretVerifier = &clientauth.Argon2id{}
-	}
-	return d
 }
 
 // serve is the request-scoped entry point. It validates the
@@ -284,7 +273,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	resource, ok := parseResource(w, merged, client)
+	resource, ok := endpointsupport.ParseSingleResource(w, merged, client, "backchannel-authentication endpoint")
 	if !ok {
 		return
 	}

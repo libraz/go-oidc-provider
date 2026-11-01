@@ -1,6 +1,9 @@
 package jar
 
-import "errors"
+import (
+	"errors"
+	"net/http"
+)
 
 // Sentinel errors returned by [Parse], [Verifier.Verify], and [Merge].
 // The HTTP layer maps these onto the OAuth wire codes
@@ -136,3 +139,32 @@ var (
 	// encryption keyset.
 	ErrDecryptFailed = errors.New("jar: request object decryption failed")
 )
+
+// OAuth wire codes [WireError] classifies request-object failures onto.
+const (
+	// CodeServerError marks a fault on the OP's side (key source down).
+	CodeServerError = "server_error"
+	// CodeInvalidRequest marks a request whose parameters disagree, such
+	// as a client_id that differs between the wire and the object.
+	CodeInvalidRequest = "invalid_request"
+	// CodeInvalidRequestObject marks a request object that failed
+	// parsing, signature or claim validation (RFC 9101 §6.2).
+	CodeInvalidRequestObject = "invalid_request_object"
+)
+
+// WireError maps a request-object failure onto the HTTP status and OAuth
+// error code every JAR-consuming endpoint answers with: a key-source
+// fault is 503 [CodeServerError], a client_id mismatch is 400
+// [CodeInvalidRequest], and everything else is 400
+// [CodeInvalidRequestObject]. Endpoints whose spec lacks a code
+// collapse it at the call site.
+func WireError(err error) (status int, code string) {
+	switch {
+	case errors.Is(err, ErrKeySourceUnavailable):
+		return http.StatusServiceUnavailable, CodeServerError
+	case errors.Is(err, ErrClientIDMismatch):
+		return http.StatusBadRequest, CodeInvalidRequest
+	default:
+		return http.StatusBadRequest, CodeInvalidRequestObject
+	}
+}

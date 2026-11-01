@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,21 +48,14 @@ func parseKeySet(body []byte, maxKeys int) (*josev4.JSONWebKeySet, error) {
 	return keys, nil
 }
 
-// isJSONContentType reports whether ct is a JSON-ish media type. JWKS servers
-// vary: some emit "application/json", some "application/jwk-set+json" (RFC 7517
-// §8.5). Both are accepted; anything else (text/html from a captive portal,
-// application/octet-stream) is rejected so a misrouted response cannot be
-// parsed as JSON by accident.
-func isJSONContentType(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	ct = strings.TrimSpace(strings.ToLower(ct))
-	return ct == "application/json" || ct == "application/jwk-set+json"
-}
+// jwksContentTypes is the response media-type allow-list for a fetched JWKS.
+// JWKS servers vary: some emit "application/json", some
+// "application/jwk-set+json" (RFC 7517 §8.5). Anything else (text/html from a
+// captive portal, application/octet-stream) is rejected so a misrouted
+// response cannot be parsed as JSON by accident.
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var jwksContentTypes = []string{"application/json", "application/jwk-set+json"}
 
 // ttlFromResponse extracts the freshness lifetime the upstream advertised,
 // bounded by ceiling. A zero return leaves the cache's configured TTL in force,
@@ -111,21 +105,23 @@ func parseMaxAge(cc string) (time.Duration, bool) {
 }
 
 // parseUnsignedSeconds decodes a non-negative decimal integer, returning an
-// error on any non-digit input. Used by [parseMaxAge] so the caller does not
-// depend on strconv directly.
+// error on any non-digit input or a value above 2^31.
 func parseUnsignedSeconds(s string) (int64, error) {
-	if s == "" {
-		return 0, errors.New("empty")
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, err
 	}
-	var out int64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("non-digit %q", c)
-		}
-		out = out*10 + int64(c-'0')
-		if out > 1<<31 {
-			return 0, errors.New("overflow")
-		}
+	if n > 1<<31 {
+		return 0, errors.New("overflow")
 	}
-	return out, nil
+	return int64(n), nil
+}
+
+// SigningUsable reports whether a JWK whose "use" member is use may verify a
+// signature (RFC 7517 §4.2): absent or "sig" only. The declaration is
+// binding: a key published as "enc" is the RP's response-encryption key, not a
+// verification key, and an unrecognised value names a purpose this OP cannot
+// honour.
+func SigningUsable(use string) bool {
+	return use == "" || use == "sig"
 }

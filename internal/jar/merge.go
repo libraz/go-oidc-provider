@@ -87,7 +87,7 @@ func Merge(wire url.Values, obj *Object, mode MergeMode) (url.Values, error) {
 	}
 	out := make(url.Values, len(obj.Claims))
 	if mode == MergeOverlay {
-		out = cloneValues(wire)
+		out = CloneValues(wire)
 		// "request" / "request_uri" on the wire are stripped; the merged
 		// values are presented to the authorize parser as if the request
 		// arrived in the clear.
@@ -160,9 +160,10 @@ func assertClientIDAgrees(wire url.Values, obj *Object) error {
 	return nil
 }
 
-// cloneValues returns a deep copy of in so [Merge] can mutate the
-// returned value without aliasing the caller's slice headers.
-func cloneValues(in url.Values) url.Values {
+// CloneValues returns a deep copy of in so callers can mutate the
+// returned value without aliasing the caller's slice headers. The result
+// is never nil.
+func CloneValues(in url.Values) url.Values {
 	out := make(url.Values, len(in))
 	for k, v := range in {
 		out[k] = append([]string(nil), v...)
@@ -219,12 +220,5 @@ func joinStringArray(values []any) (string, bool) {
 		}
 		parts = append(parts, s)
 	}
-	return joinSpace(parts), true
-}
-
-// joinSpace concatenates parts with single ASCII spaces. The helper
-// exists so the call site reads naturally; we delegate to
-// [strings.Join] for the actual concatenation.
-func joinSpace(parts []string) string {
-	return strings.Join(parts, " ")
+	return strings.Join(parts, " "), true
 }

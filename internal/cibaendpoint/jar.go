@@ -2,7 +2,6 @@ package cibaendpoint
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 
@@ -110,9 +109,9 @@ func consumeJARRequestObject(
 // fault on the OP's side is a 503 server_error, as on /authorize and
 // /par.
 func writeJARError(w http.ResponseWriter, err error) {
-	if errors.Is(err, jar.ErrKeySourceUnavailable) {
-		endpointsupport.WriteOAuthError(w, http.StatusServiceUnavailable, errServerError, jar.Description(err))
-		return
+	status, code := jar.WireError(err)
+	if code == jar.CodeInvalidRequestObject {
+		code = errInvalidRequest
 	}
-	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, jar.Description(err))
+	endpointsupport.WriteOAuthError(w, status, code, jar.Description(err))
 }

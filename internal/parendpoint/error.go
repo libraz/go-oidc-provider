@@ -11,8 +11,6 @@ package parendpoint
 // [validateRequestExtensions] renders verbatim.
 const (
 	errInvalidRequest       = "invalid_request"
-	errUnauthorizedClient   = "unauthorized_client"
-	errInvalidScope         = "invalid_scope"
 	errServerError          = "server_error"
 	errInvalidRequestObject = "invalid_request_object"
 )

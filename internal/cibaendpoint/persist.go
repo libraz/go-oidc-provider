@@ -94,7 +94,7 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 			"resource":   append([]string(nil), in.Resource...),
 			"expires_in": int64(in.ExpiresIn.Seconds()),
 			"interval":   int64(interval.Seconds()),
-			"binding":    bindingLabel(in.DPoPJKT, in.MTLSThumbprint),
+			"binding":    endpointsupport.BindingLabel(in.DPoPJKT, in.MTLSThumbprint),
 			"hint_kind":  in.HintKind.String(),
 		},
 	})
@@ -104,18 +104,4 @@ func persist(ctx context.Context, w http.ResponseWriter, deps Deps, in persistIn
 		ExpiresIn: int64(in.ExpiresIn.Seconds()),
 		Interval:  int64(interval.Seconds()),
 	})
-}
-
-// bindingLabel returns the audit-extras label naming which sender
-// constraint the issued record carries: "dpop", "mtls", or
-// "bearer".
-func bindingLabel(dpopJKT, mtlsThumbprint string) string {
-	switch {
-	case dpopJKT != "":
-		return "dpop"
-	case mtlsThumbprint != "":
-		return "mtls"
-	default:
-		return "bearer"
-	}
 }

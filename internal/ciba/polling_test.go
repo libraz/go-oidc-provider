@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/ciba"
+	"github.com/libraz/go-oidc-provider/internal/pollinterval"
 )
 
 func TestDecidePoll(t *testing.T) {
@@ -90,7 +91,7 @@ func TestDecidePoll(t *testing.T) {
 			},
 			want: ciba.PollOutput{
 				Decision:             ciba.PollDecisionSlowDown,
-				NextInterval:         time.Millisecond + ciba.SlowDownIncrement,
+				NextInterval:         time.Millisecond + pollinterval.SlowDownIncrement,
 				CountThisAsViolation: true,
 			},
 		},
@@ -292,7 +293,7 @@ func pollWalk(
 		case ciba.PollDecisionSlowDown:
 			opInterval = decision.NextInterval
 			// The client applies the increase CIBA Core §11 mandates.
-			clientInterval += ciba.SlowDownIncrement
+			clientInterval += pollinterval.SlowDownIncrement
 		case ciba.PollDecisionAuthorizationPending,
 			ciba.PollDecisionEmit,
 			ciba.PollDecisionAlreadyRedeemed,

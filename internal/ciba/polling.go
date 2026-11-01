@@ -12,21 +12,9 @@ const (
 	// DefaultInterval is the seed value of the slow_down ladder.
 	DefaultInterval = pollinterval.DefaultInterval
 
-	// SlowDownIncrement is the amount the effective interval grows by
-	// on every slow_down.
-	SlowDownIncrement = pollinterval.SlowDownIncrement
-
-	// IntervalTolerance is how far a poll may undershoot the effective
-	// interval without earning slow_down.
-	IntervalTolerance = pollinterval.IntervalTolerance
-
 	// DefaultExpiresIn is the auth_req_id lifetime advertised on the
 	// bc-authorize response and stamped on the substore record.
 	DefaultExpiresIn = pollinterval.DefaultExpiresIn
-
-	// FastPollFloor is the absolute minimum gap between two polls
-	// regardless of the slow_down ladder.
-	FastPollFloor = pollinterval.FastPollFloor
 
 	// MaxPollViolations is the default number of slow_down strikes
 	// tolerated before the record is locked with access_denied.
@@ -58,7 +46,7 @@ const (
 	// PollDecisionSlowDown means the client polled inside the
 	// current interval and MUST back off. The wire form is
 	// slow_down per CIBA Core §11; the token endpoint also raises
-	// the client's effective interval by [SlowDownIncrement] before
+	// the client's effective interval by [pollinterval.SlowDownIncrement] before
 	// the next poll, matching the increase the spec asks the client
 	// to apply.
 	PollDecisionSlowDown

@@ -16,17 +16,9 @@ const (
 	// on every slow_down.
 	SlowDownIncrement = pollinterval.SlowDownIncrement
 
-	// IntervalTolerance is how far a poll may undershoot the effective
-	// interval without earning slow_down.
-	IntervalTolerance = pollinterval.IntervalTolerance
-
 	// DefaultExpiresIn is the device_code lifetime advertised on the
 	// device-authorization response and stamped on the substore record.
 	DefaultExpiresIn = pollinterval.DefaultExpiresIn
-
-	// FastPollFloor is the absolute minimum gap between two polls
-	// regardless of the slow_down ladder.
-	FastPollFloor = pollinterval.FastPollFloor
 
 	// MaxPollViolations is the default number of slow_down strikes
 	// tolerated before the record is locked with access_denied.

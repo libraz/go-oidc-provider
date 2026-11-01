@@ -9,6 +9,8 @@ import (
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
+
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 )
 
 // unsupportedMemberJWK is a JWK the JOSE layer cannot turn into a key: an OKP
@@ -96,7 +98,7 @@ func TestParseKeySet_RejectsExcessiveKeyCount(t *testing.T) {
 	}
 }
 
-func TestIsJSONContentType(t *testing.T) {
+func TestJWKSContentTypes(t *testing.T) {
 	t.Parallel()
 
 	for _, ct := range []string{
@@ -104,12 +106,12 @@ func TestIsJSONContentType(t *testing.T) {
 		"application/json; charset=utf-8",
 		"application/jwk-set+json",
 	} {
-		if !isJSONContentType(ct) {
+		if !securefetch.ContentTypeAllowed(ct, jwksContentTypes) {
 			t.Errorf("rejected %q", ct)
 		}
 	}
 	for _, ct := range []string{"text/plain", "text/html", ""} {
-		if isJSONContentType(ct) {
+		if securefetch.ContentTypeAllowed(ct, jwksContentTypes) {
 			t.Errorf("accepted %q", ct)
 		}
 	}

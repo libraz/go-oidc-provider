@@ -6,14 +6,13 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
-	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -101,16 +100,12 @@ func parseScope(
 		}
 		return nil, false
 	}
-	allowed := make(map[string]struct{}, len(client.Scopes))
-	for _, s := range client.Scopes {
-		allowed[s] = struct{}{}
+	if !oidcscope.Subset(scope, client.Scopes) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
+			"requested scope is not permitted for this client")
+		return nil, false
 	}
 	for _, s := range scope {
-		if _, ok := allowed[s]; !ok {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-				"requested scope is not permitted for this client")
-			return nil, false
-		}
 		if !deps.Scopes.Allows(s, client.ID) {
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"scope is restricted to a different client")
@@ -118,50 +113,6 @@ func parseScope(
 		}
 	}
 	return slices.Clone(scope), true
-}
-
-// parseResource extracts the RFC 8707 resource indicators from the
-// form. The function delegates parsing / validation / canonicalisation
-// to [resourceindicator.Canonicalize] so the backchannel-authentication
-// endpoint shares the same policy as authorize / token / device. Each
-// surviving value MUST appear in the client's registered Resources
-// allowlist; the allowlist match also goes through the shared helper
-// ([resourceindicator.Contains]) so historical registrations that
-// pre-date canonicalisation still match a canonical request. The
-// current issuance pipeline honours a single audience entry, so a
-// request carrying more than one non-empty resource is rejected with
-// invalid_target — the handler refuses to accept input the issuance
-// side would silently truncate.
-func parseResource(w http.ResponseWriter, form url.Values, client *store.Client) ([]string, bool) {
-	raw := form["resource"]
-	if len(raw) == 0 {
-		return nil, true
-	}
-	out := make([]string, 0, len(raw))
-	for _, r := range raw {
-		r = strings.TrimSpace(r)
-		if r == "" {
-			continue
-		}
-		canonical, err := resourceindicator.Canonicalize(r)
-		if err != nil {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
-				"resource parameter is not a valid absolute URI")
-			return nil, false
-		}
-		if !resourceindicator.Contains(client.Resources, canonical) {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
-				"resource is not registered for this client")
-			return nil, false
-		}
-		out = append(out, canonical)
-	}
-	if len(out) > 1 {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidTarget,
-			"multiple resource indicators are not supported on the backchannel-authentication endpoint")
-		return nil, false
-	}
-	return out, true
 }
 
 // parseACRValues splits the acr_values parameter on ASCII whitespace
@@ -212,7 +163,7 @@ func parseBindingMessage(w http.ResponseWriter, raw string) (string, bool) {
 	return value, true
 }
 
-// parseRequestedExpiry dispatches to [ciba.ParseRequestedExpiry] and
+// parseRequestedExpiry dispatches to [ciba.ParseRequestedExpirySeconds] and
 // maps the sentinel onto the wire response. A zero return value means
 // the client did not supply requested_expiry; the caller substitutes
 // [Deps.effectiveExpiresIn].
@@ -229,23 +180,18 @@ func parseRequestedExpiry(
 	raw string,
 	deps Deps,
 ) (time.Duration, bool) {
-	if deps.FAPICIBAProfileActive {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed != "" {
-			n, err := strconv.ParseInt(trimmed, 10, 64)
-			if err == nil && n > int64(FAPICIBAMaxExpiry.Seconds()) {
-				endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-					"requested_expiry exceeds FAPI-CIBA 10-minute cap")
-				return 0, false
-			}
-		}
-	}
-	value, err := ciba.ParseRequestedExpiry(raw, deps.MaxExpiresIn)
+	seconds, err := ciba.ParseRequestedExpirySeconds(raw)
 	if err != nil {
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"requested_expiry must be a positive integer")
 		return 0, false
 	}
+	if deps.FAPICIBAProfileActive && seconds > int64(FAPICIBAMaxExpiry.Seconds()) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
+			"requested_expiry exceeds FAPI-CIBA 10-minute cap")
+		return 0, false
+	}
+	value := ciba.ExpiryFromSeconds(seconds, deps.MaxExpiresIn)
 	if value == 0 {
 		return deps.effectiveExpiresIn(), true
 	}

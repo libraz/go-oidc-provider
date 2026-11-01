@@ -214,9 +214,6 @@ func resolveDeps(d Deps) Deps {
 	if d.TTL <= 0 {
 		d.TTL = DefaultTTL
 	}
-	if d.SecretVerifier == nil {
-		d.SecretVerifier = &clientauth.Argon2id{}
-	}
 	return d
 }
 

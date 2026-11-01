@@ -10,9 +10,6 @@ package cibaendpoint
 const (
 	errInvalidRequest        = "invalid_request"
 	errInvalidScope          = "invalid_scope"
-	errInvalidTarget         = "invalid_target"
-	errUnauthorizedClient    = "unauthorized_client"
-	errAccessDenied          = "access_denied"
 	errServerError           = "server_error"
 	errUnknownUserID         = "unknown_user_id"
 	errInvalidBindingMessage = "invalid_binding_message"
