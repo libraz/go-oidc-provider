@@ -1,0 +1,14 @@
+ALTER TABLE oidc_authorization_codes ADD COLUMN auth_time INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_authorization_codes ADD COLUMN acr TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_authorization_codes ADD COLUMN amr TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE oidc_authorization_codes ADD COLUMN authorization_details TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_authorization_codes ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_authorization_codes ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_refresh_tokens ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_refresh_tokens ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_details TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_opaque_access_tokens ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
+ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE oidc_refresh_tokens ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_opaque_access_tokens ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE oidc_grant_revocations ADD COLUMN access_revoked_at INTEGER NOT NULL DEFAULT 0;

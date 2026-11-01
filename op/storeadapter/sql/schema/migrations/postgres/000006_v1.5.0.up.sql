@@ -1,0 +1,34 @@
+ALTER TABLE oidc_clients
+    ADD COLUMN previous_secret_hash TEXT NOT NULL DEFAULT '',
+    ADD COLUMN previous_secret_expires_at BIGINT NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS oidc_ssf_streams (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    delivery_method TEXT NOT NULL,
+    endpoint_url TEXT NOT NULL DEFAULT '',
+    sealed_authorization_header BYTEA,
+    events_requested JSONB NOT NULL DEFAULT '[]'::jsonb,
+    events_delivered JSONB NOT NULL DEFAULT '[]'::jsonb,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    status_reason TEXT NOT NULL DEFAULT '',
+    updated_at BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oidc_ssf_streams_client ON oidc_ssf_streams(client_id);
+
+CREATE TABLE IF NOT EXISTS oidc_ssf_events (
+    jti TEXT PRIMARY KEY,
+    stream_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    delivery_method TEXT NOT NULL,
+    held SMALLINT NOT NULL DEFAULT 0,
+    claims BYTEA NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at BIGINT NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_stream ON oidc_ssf_events(stream_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_next_attempt ON oidc_ssf_events(next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_expires ON oidc_ssf_events(expires_at);

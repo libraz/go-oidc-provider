@@ -128,41 +128,40 @@ func versionLess(a, b string) bool {
 	return slices.Compare(pa[:], pb[:]) < 0
 }
 
-// releaseSection returns the "## <version>" section of MIGRATIONS.md.
-func releaseSection(t *testing.T, doc []byte, version string) []byte {
+// releaseSection returns one release's migration file for a dialect.
+func releaseSection(t *testing.T, dialect string, r schemaRelease) []byte {
 	t.Helper()
 
-	start := bytes.Index(doc, []byte("\n## "+version+"\n"))
-	if start < 0 {
-		t.Fatalf("MIGRATIONS.md has no %q section", "## "+version)
-	}
-	rest := doc[start+1:]
-	if end := bytes.Index(rest[1:], []byte("\n## ")); end >= 0 {
-		rest = rest[:end+1]
-	}
-	return rest
+	return readMigration(t, dialect, r.migration)
 }
 
 // TestSchemaReleases_MigrationsSectionAddsEveryColumn binds the release
-// history to the document: an operator reading a release's section must
-// find an ADD COLUMN for each column that release added, under every
-// dialect, or ValidateSchema would send them to a section that cannot fix
-// the error it reports.
+// history to the migration files: a release's file must carry an ADD COLUMN
+// for each column that release added and a CREATE TABLE for each table it
+// created, under every dialect, or ValidateSchema would send an operator to
+// a migration that cannot fix the error it reports.
 func TestSchemaReleases_MigrationsSectionAddsEveryColumn(t *testing.T) {
 	t.Parallel()
 
-	doc := migrationsDoc(t)
 	names := defaultNames()
 	for _, r := range schemaReleases {
-		section := releaseSection(t, doc, r.version)
-		for _, heading := range dialectHeadings() {
-			added := addedColumns(bytes.Join(migrationsSections(t, section, heading), nil))
+		for dialect := range allDialects() {
+			sql := releaseSection(t, dialect, r)
+			added := addedColumns(sql)
 			for _, tc := range r.columns {
 				for _, c := range tc.columns {
 					if !added[names.byKey(tc.key)+"."+c] {
-						t.Errorf("the %s section of MIGRATIONS.md has no %s ADD COLUMN for %s.%s",
-							r.version, heading, tc.key, c)
+						t.Errorf("%s migration %s has no ADD COLUMN for %s.%s", dialect, r.migration, tc.key, c)
 					}
+				}
+			}
+			created := map[string]bool{}
+			for _, m := range createTableRE.FindAllSubmatch(sql, -1) {
+				created[string(m[1])] = true
+			}
+			for _, key := range r.tables {
+				if !created[names.byKey(key)] {
+					t.Errorf("%s migration %s has no CREATE TABLE for %s", dialect, r.migration, key)
 				}
 			}
 		}

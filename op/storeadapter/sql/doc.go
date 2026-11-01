@@ -37,9 +37,11 @@
 // control to the adapter, and to call [Store.ValidateSchema] at startup:
 // it checks that every table and required column exists without
 // creating anything.
-// Existing databases are not altered by Store.Migrate; schema/MIGRATIONS.md
-// has one section of per-dialect ALTER statements per release that changed
-// the schema. schema/TABLES.md lists what each table holds and when the OP
+// Existing databases are not altered by Store.Migrate. The upgrade path is
+// the migration files under schema/migrations/<dialect>, one per release in
+// golang-migrate form, which [Store.Migrations] returns with any
+// [WithNaming] overrides applied; schema/MIGRATIONS.md explains each
+// release. schema/TABLES.md lists what each table holds and when the OP
 // uses it; a table whose feature is not configured stays empty.
 //
 // # Naming overrides

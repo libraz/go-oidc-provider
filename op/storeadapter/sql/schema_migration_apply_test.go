@@ -1,6 +1,6 @@
 //go:build testcontainers
 
-//nolint:testpackage // reuses the unexported MIGRATIONS.md section parser and the embedded schema FS.
+//nolint:testpackage // reuses the unexported release history and the embedded schema FS.
 package oidcsql
 
 import (
@@ -9,79 +9,42 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"testing"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 	mysqlmod "github.com/testcontainers/testcontainers-go/modules/mysql"
 )
 
-// The static check in schema_migrations_test.go asks whether MIGRATIONS.md
-// names each index. That cannot tell whether the statements work: a wrong
-// column, a table renamed since, or an ALTER that MySQL rejects all read the
-// same to a name matcher. This file applies the document instead of parsing
+// The static check in schema_migrations_test.go asks whether the migration
+// files name each index. That cannot tell whether the statements work: a
+// wrong column, a table renamed since, or an ALTER that MySQL rejects all read
+// the same to a name matcher. This file applies the chain instead of parsing
 // it, and compares the result against a fresh install of the current schema.
 //
 // MySQL is the engine that needs it. SQLite and PostgreSQL declare indexes as
 // standalone CREATE INDEX IF NOT EXISTS statements that a later Store.Migrate
 // re-applies, so an existing database converges on its own. MySQL declares
 // them inline in CREATE TABLE, and CREATE TABLE IF NOT EXISTS does nothing to
-// a table that exists — the document is the entire upgrade path, and a defect
-// in it is invisible until a query plans badly in production.
+// a table that exists — the migrations are the entire upgrade path, and a
+// defect in them is invisible until a query plans badly in production.
 
 // mysqlMigrationImage pins the same engine version the contract harness uses.
 const mysqlMigrationImage = "mysql:8.4"
 
-// applyMySQLBaselineAndMigrations builds the "upgraded" database: the schema
-// as v1.0.0 shipped it, then exactly the statements an operator reading
-// MIGRATIONS.md would run.
-func applyMySQLBaselineAndMigrations(t *testing.T, db *databasesql.DB) {
+// applyMySQLMigrationChain builds the "upgraded" database: every migration
+// file from 000001 on, each sent as one multi-statement Exec the way
+// golang-migrate sends it.
+func applyMySQLMigrationChain(t *testing.T, db *databasesql.DB) {
 	t.Helper()
 
-	baseline, err := testdataFS.ReadFile("testdata/mysql_v1.0.0.sql")
-	if err != nil {
-		t.Fatalf("read frozen v1.0.0 MySQL schema: %v", err)
-	}
-	if _, err := db.ExecContext(t.Context(), string(baseline)); err != nil {
-		t.Fatalf("apply v1.0.0 schema: %v", err)
-	}
-	for _, stmt := range mysqlMigrationStatements(t) {
-		if _, err := db.ExecContext(t.Context(), stmt); err != nil {
-			t.Fatalf("apply MIGRATIONS.md statement %q: %v", stmt, err)
+	for _, stem := range migrationStems() {
+		if _, err := db.ExecContext(t.Context(), string(readMigration(t, "mysql", stem))); err != nil {
+			t.Fatalf("apply migration %s: %v", stem, err)
 		}
 	}
 }
 
-// mysqlMigrationStatements returns the statements inside every MySQL fenced
-// block of MIGRATIONS.md, in document order.
-func mysqlMigrationStatements(t *testing.T) []string {
-	t.Helper()
-
-	var out []string
-	for _, section := range migrationsSections(t, migrationsDoc(t), "MySQL/MariaDB") {
-		fence := strings.Index(string(section), "```sql")
-		if fence < 0 {
-			t.Fatal("a MySQL block of MIGRATIONS.md has no sql code fence")
-		}
-		body := string(section)[fence+len("```sql"):]
-		if end := strings.Index(body, "```"); end >= 0 {
-			body = body[:end]
-		}
-		for _, raw := range strings.Split(body, ";") {
-			stmt := strings.TrimSpace(raw)
-			if stmt == "" {
-				continue
-			}
-			out = append(out, stmt)
-		}
-	}
-	if len(out) == 0 {
-		t.Fatal("no statements parsed from the MySQL blocks; the document shape changed and this test stopped checking anything")
-	}
-	return out
-}
-
-// describeSchema reads the live index and column layout out of
+// describeSchema reads the live index, column and collation layout out of
 // information_schema, which is the engine's own account of what the DDL
 // produced rather than a re-reading of the DDL.
 func describeSchema(t *testing.T, db *databasesql.DB) (indexes, columns []string) {
@@ -92,7 +55,7 @@ func describeSchema(t *testing.T, db *databasesql.DB) (indexes, columns []string
 		FROM information_schema.STATISTICS
 		WHERE TABLE_SCHEMA = DATABASE()`)
 	columns = queryStrings(t, db, `
-		SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME)
+		SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME, ' ', IFNULL(COLLATION_NAME, '-'))
 		FROM information_schema.COLUMNS
 		WHERE TABLE_SCHEMA = DATABASE()`)
 	return indexes, columns
@@ -145,9 +108,9 @@ func diffSets(want, got []string) (missing, extra []string) {
 }
 
 // TestMySQL_MigrationsReachTheCurrentSchema is the acceptance the static
-// check cannot give: a database created by v1.0.0 and upgraded only by
-// MIGRATIONS.md has to end up with the same indexes and columns as a database
-// created fresh from the current v1.sql. Anything the document forgets, spells
+// check cannot give: an empty database taken through the migration chain has
+// to end up with the same indexes, columns and collations as a database
+// created fresh from the current v1.sql. Anything a migration forgets, spells
 // wrong, or points at the wrong table shows up here as a difference.
 func TestMySQL_MigrationsReachTheCurrentSchema(t *testing.T) {
 	t.Parallel()
@@ -195,7 +158,7 @@ func TestMySQL_MigrationsReachTheCurrentSchema(t *testing.T) {
 	}
 
 	upgraded := openDB("oidc_upgraded")
-	applyMySQLBaselineAndMigrations(t, upgraded)
+	applyMySQLMigrationChain(t, upgraded)
 
 	fresh := openDB("oidc_fresh")
 	store, err := New(fresh, MySQL())
@@ -211,12 +174,12 @@ func TestMySQL_MigrationsReachTheCurrentSchema(t *testing.T) {
 
 	if missing, extra := diffSets(wantIndexes, gotIndexes); len(missing) > 0 || len(extra) > 0 {
 		t.Errorf("an upgraded database does not carry the current index set\n"+
-			"missing (v1.sql has them, MIGRATIONS.md never creates them): %s\n"+
-			"unexpected (MIGRATIONS.md creates them, v1.sql does not): %s",
+			"missing (v1.sql has them, no migration creates them): %s\n"+
+			"unexpected (a migration creates them, v1.sql does not): %s",
 			formatList(missing), formatList(extra))
 	}
 	if missing, extra := diffSets(wantColumns, gotColumns); len(missing) > 0 || len(extra) > 0 {
-		t.Errorf("an upgraded database does not carry the current column set\n"+
+		t.Errorf("an upgraded database does not carry the current columns and collations\n"+
 			"missing: %s\nunexpected: %s", formatList(missing), formatList(extra))
 	}
 }

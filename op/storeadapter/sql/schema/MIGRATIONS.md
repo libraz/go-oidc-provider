@@ -1,30 +1,46 @@
 # SQL adapter schema migrations
 
-`schema/{sqlite,mysql,postgres}/v1.sql` is the complete shape for a new
-database; a new database needs nothing from this document. `TABLES.md` lists
-what each table holds and when the OP uses it.
+The SQL lives in `schema/migrations/{sqlite,mysql,postgres}/`, one file per
+release in golang-migrate's `NNNNNN_<version>.up.sql` form.
+`000001_v1.0.0.up.sql` creates the schema v1.0.0 shipped; each later file
+applies one release's changes. `Store.Migrations()` returns the configured
+dialect's files with the `WithNaming` table names applied, so a migration tool
+can read them directly; take the files from it rather than from the repository
+when the names differ from the defaults. `TABLES.md` lists what each table
+holds and when the OP uses it.
 
-An existing database needs the sections below for every release after the one
-that created it, applied in order. A database created by v1.2.0 that is moving
-to the current release applies v1.3.0, v1.4.0 and v1.5.0. Use the physical
-table names configured with `WithNaming` when they differ from the defaults.
+- **A new database** applies every file in order, or runs `Store.Schema()`
+  (`schema/<dialect>/v1.sql`) instead; both reach the same schema.
+- **An existing database** is first recorded at the last release it applied,
+  then takes only the later files. With golang-migrate that is
+  `migrate force <N>`: a database created by v1.2.0 runs `migrate force 3`,
+  after which `migrate up` applies v1.3.0 onwards. A database built from
+  `Store.Schema()` of the current release is recorded at the newest file.
+- golang-migrate's MySQL driver needs `multiStatements=true` in the DSN,
+  because each file holds several statements.
+- Atlas reads the directory with `format=golang-migrate` once
+  `atlas migrate hash` has written its `atlas.sum`.
 
-`Store.Migrate` does not do this for you. Its `CREATE TABLE IF NOT EXISTS`
-statements leave an existing table as it is, so no column is ever added that
-way. On SQLite and PostgreSQL the index statements are the same standalone
-`CREATE INDEX IF NOT EXISTS` statements `v1.sql` carries, so a `Store.Migrate`
-run does add a missing index; they are repeated here for deployments that never
-run `Migrate`. **On MySQL these sections are the only way to get the indexes.**
-MySQL has no `CREATE INDEX IF NOT EXISTS`, so `v1.sql` declares every index
-inline in its `CREATE TABLE`, which does nothing to a table that already exists.
+`Store.Migrate` does not upgrade an existing database. Its `CREATE TABLE IF
+NOT EXISTS` statements leave an existing table as it is, so no column is ever
+added that way. On SQLite and PostgreSQL the index statements are the same
+standalone `CREATE INDEX IF NOT EXISTS` statements `v1.sql` carries, so a
+`Store.Migrate` run does add a missing index. **On MySQL the migration files
+are the only way to get the indexes.** MySQL has no `CREATE INDEX IF NOT
+EXISTS`, so `v1.sql` declares every index inline in its `CREATE TABLE`, which
+does nothing to a table that already exists.
 
 After applying, call `Store.ValidateSchema` at startup (`Store.Migrate` runs it
-too). A missing column fails it with the name of the section that adds it, for
-example `oidcsql: schema for oidc_clients is missing required columns:
+too). A missing column fails it with the release that adds it, for example
+`oidcsql: schema for oidc_clients is missing required columns:
 previous_secret_hash, previous_secret_expires_at; apply the v1.5.0 section of
 schema/MIGRATIONS.md`. It does not check indexes or MySQL collations.
 
+The sections below explain what each release changes.
+
 ## v1.1.0
+
+File: `000002_v1.1.0.up.sql`.
 
 `allowed_scopes` holds the scope ceiling of a registration access token. It is
 nullable on purpose: `NULL` is an unrestricted ceiling, which is also how RATs
@@ -48,94 +64,9 @@ either composite. The `expires_at` indexes bound the retention sweep: a
 takes a lock per row it examines rather than per row it removes, so the cost
 grows with the data the sweep exists to bound.
 
-SQLite:
-
-```sql
-ALTER TABLE oidc_registration_access_tokens
-    ADD COLUMN allowed_scopes TEXT NULL;
-ALTER TABLE oidc_totp_secrets
-    ADD COLUMN row_version INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE oidc_email_otps
-    ADD COLUMN row_version INTEGER NOT NULL DEFAULT 1;
-CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
-    ON oidc_grants(client_id, subject, updated_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
-    ON oidc_grants(client_id);
-CREATE INDEX IF NOT EXISTS idx_oidc_authorization_codes_expires
-    ON oidc_authorization_codes(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_expires
-    ON oidc_refresh_tokens(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_expires
-    ON oidc_access_tokens(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_sessions_expires
-    ON oidc_sessions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_par_records_expires
-    ON oidc_par_records(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_interactions_expires
-    ON oidc_interactions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_consumed_jtis_expires
-    ON oidc_consumed_jtis(expires_at);
-```
-
-MySQL/MariaDB:
-
-```sql
-ALTER TABLE oidc_registration_access_tokens
-    ADD COLUMN allowed_scopes JSON NULL;
-ALTER TABLE oidc_totp_secrets
-    ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
-ALTER TABLE oidc_email_otps
-    ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
-ALTER TABLE oidc_grants
-    ADD INDEX idx_oidc_grants_client_subject (client_id, subject, updated_at);
-ALTER TABLE oidc_grants
-    ADD INDEX idx_oidc_grants_client (client_id);
-ALTER TABLE oidc_authorization_codes
-    ADD INDEX idx_oidc_authorization_codes_expires (expires_at);
-ALTER TABLE oidc_refresh_tokens
-    ADD INDEX idx_oidc_refresh_tokens_expires (expires_at);
-ALTER TABLE oidc_access_tokens
-    ADD INDEX idx_oidc_access_tokens_expires (expires_at);
-ALTER TABLE oidc_sessions
-    ADD INDEX idx_oidc_sessions_expires (expires_at);
-ALTER TABLE oidc_par_records
-    ADD INDEX idx_oidc_par_records_expires (expires_at);
-ALTER TABLE oidc_interactions
-    ADD INDEX idx_oidc_interactions_expires (expires_at);
-ALTER TABLE oidc_consumed_jtis
-    ADD INDEX idx_oidc_consumed_jtis_expires (expires_at);
-```
-
-PostgreSQL:
-
-```sql
-ALTER TABLE oidc_registration_access_tokens
-    ADD COLUMN allowed_scopes JSONB NULL;
-ALTER TABLE oidc_totp_secrets
-    ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
-ALTER TABLE oidc_email_otps
-    ADD COLUMN row_version BIGINT NOT NULL DEFAULT 1;
-CREATE INDEX IF NOT EXISTS idx_oidc_grants_client_subject
-    ON oidc_grants(client_id, subject, updated_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_grants_client
-    ON oidc_grants(client_id);
-CREATE INDEX IF NOT EXISTS idx_oidc_authorization_codes_expires
-    ON oidc_authorization_codes(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_expires
-    ON oidc_refresh_tokens(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_expires
-    ON oidc_access_tokens(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_sessions_expires
-    ON oidc_sessions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_par_records_expires
-    ON oidc_par_records(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_interactions_expires
-    ON oidc_interactions(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_consumed_jtis_expires
-    ON oidc_consumed_jtis(expires_at);
-```
-
 ## v1.2.0
+
+File: `000003_v1.2.0.up.sql`.
 
 The three `client_id` indexes on the token tables bound the rest of the
 client-deletion cascade. It revokes with an `UPDATE` rather than a `DELETE`,
@@ -146,44 +77,11 @@ every concurrent refresh and introspection until the client deletion commits.
 On MySQL the users table's `username` moves to a binary collation, for the
 reason given under v1.3.0.
 
-SQLite:
-
-```sql
-CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_client
-    ON oidc_refresh_tokens(client_id);
-CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_client
-    ON oidc_access_tokens(client_id);
-CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_client
-    ON oidc_opaque_access_tokens(client_id);
-```
-
-MySQL/MariaDB:
-
-```sql
-ALTER TABLE oidc_refresh_tokens
-    ADD INDEX idx_oidc_refresh_tokens_client (client_id);
-ALTER TABLE oidc_access_tokens
-    ADD INDEX idx_oidc_access_tokens_client (client_id);
-ALTER TABLE oidc_opaque_access_tokens
-    ADD INDEX idx_oidc_opaque_access_tokens_client (client_id);
-ALTER TABLE oidc_users
-    MODIFY username VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL;
-```
-
-PostgreSQL:
-
-```sql
-CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_client
-    ON oidc_refresh_tokens(client_id);
-CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_client
-    ON oidc_access_tokens(client_id);
-CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_client
-    ON oidc_opaque_access_tokens(client_id);
-```
-
 ## v1.3.0
 
-MySQL only; SQLite and PostgreSQL have nothing to apply.
+File: `000004_v1.3.0.up.sql`.
+
+MySQL only; the SQLite and PostgreSQL files change nothing.
 
 These changes make every `client_id` and `subject` column, plus
 `oidc_clients.id`, match bytes, which is what the adapter documents and what
@@ -200,62 +98,9 @@ client IDs that differ only in case or accents; on a database that already
 holds rows a `MODIFY` fails if two existing values collide under the binary
 collation, which names the rows that have to be reconciled first.
 
-MySQL/MariaDB:
-
-```sql
-ALTER TABLE oidc_clients
-    MODIFY id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_users
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_authorization_codes
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_authorization_codes
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_refresh_tokens
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_refresh_tokens
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_access_tokens
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_access_tokens
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';
-ALTER TABLE oidc_opaque_access_tokens
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_opaque_access_tokens
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';
-ALTER TABLE oidc_grants
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_grants
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_sessions
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_par_records
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_interactions
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_registration_access_tokens
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_device_codes
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_device_codes
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';
-ALTER TABLE oidc_ciba_requests
-    MODIFY client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_ciba_requests
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';
-ALTER TABLE oidc_totp_secrets
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_passkeys
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_recovery_codes
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_email_otps
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-ALTER TABLE oidc_authn_lockouts
-    MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;
-```
-
 ## v1.4.0
+
+File: `000005_v1.4.0.up.sql`.
 
 The authorization-code, refresh-token and opaque-access-token columns carry
 the auth_time, acr, amr, authorization_details and claims request of the
@@ -276,76 +121,9 @@ the grant's other refresh chains and codes still redeem.
 Old and new writers may run side by side once these columns exist; see
 [Deployment order and writer compatibility](#deployment-order-and-writer-compatibility).
 
-SQLite:
-
-```sql
-ALTER TABLE oidc_authorization_codes ADD COLUMN auth_time INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE oidc_authorization_codes ADD COLUMN acr TEXT NOT NULL DEFAULT '';
-ALTER TABLE oidc_authorization_codes ADD COLUMN amr TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE oidc_authorization_codes ADD COLUMN authorization_details TEXT NOT NULL DEFAULT 'null';
-ALTER TABLE oidc_authorization_codes ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
-ALTER TABLE oidc_authorization_codes ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE oidc_refresh_tokens ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
-ALTER TABLE oidc_refresh_tokens ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_details TEXT NOT NULL DEFAULT 'null';
-ALTER TABLE oidc_opaque_access_tokens ADD COLUMN claims TEXT NOT NULL DEFAULT 'null';
-ALTER TABLE oidc_opaque_access_tokens ADD COLUMN authorization_recorded INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE oidc_refresh_tokens ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE oidc_opaque_access_tokens ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE oidc_grant_revocations ADD COLUMN access_revoked_at INTEGER NOT NULL DEFAULT 0;
-```
-
-MySQL/MariaDB:
-
-```sql
-ALTER TABLE oidc_authorization_codes
-    ADD COLUMN auth_time BIGINT NOT NULL DEFAULT 0,
-    ADD COLUMN acr VARCHAR(255) NOT NULL DEFAULT '',
-    ADD COLUMN amr JSON NULL,
-    ADD COLUMN authorization_details JSON NULL,
-    ADD COLUMN claims JSON NULL,
-    ADD COLUMN authorization_recorded TINYINT(1) NOT NULL DEFAULT 0;
-ALTER TABLE oidc_refresh_tokens
-    ADD COLUMN claims JSON NULL,
-    ADD COLUMN authorization_recorded TINYINT(1) NOT NULL DEFAULT 0;
-ALTER TABLE oidc_opaque_access_tokens
-    ADD COLUMN authorization_details JSON NULL,
-    ADD COLUMN claims JSON NULL,
-    ADD COLUMN authorization_recorded TINYINT(1) NOT NULL DEFAULT 0;
-ALTER TABLE oidc_refresh_tokens
-    ADD COLUMN chain_id VARCHAR(64) NOT NULL DEFAULT '';
-ALTER TABLE oidc_opaque_access_tokens
-    ADD COLUMN chain_id VARCHAR(64) NOT NULL DEFAULT '';
-ALTER TABLE oidc_grant_revocations
-    ADD COLUMN access_revoked_at BIGINT NOT NULL DEFAULT 0;
-```
-
-PostgreSQL:
-
-```sql
-ALTER TABLE oidc_authorization_codes
-    ADD COLUMN auth_time BIGINT NOT NULL DEFAULT 0,
-    ADD COLUMN acr TEXT NOT NULL DEFAULT '',
-    ADD COLUMN amr JSONB NOT NULL DEFAULT '[]'::jsonb,
-    ADD COLUMN authorization_details JSONB NOT NULL DEFAULT 'null'::jsonb,
-    ADD COLUMN claims JSONB NOT NULL DEFAULT 'null'::jsonb,
-    ADD COLUMN authorization_recorded SMALLINT NOT NULL DEFAULT 0;
-ALTER TABLE oidc_refresh_tokens
-    ADD COLUMN claims JSONB NOT NULL DEFAULT 'null'::jsonb,
-    ADD COLUMN authorization_recorded SMALLINT NOT NULL DEFAULT 0;
-ALTER TABLE oidc_opaque_access_tokens
-    ADD COLUMN authorization_details JSONB NOT NULL DEFAULT 'null'::jsonb,
-    ADD COLUMN claims JSONB NOT NULL DEFAULT 'null'::jsonb,
-    ADD COLUMN authorization_recorded SMALLINT NOT NULL DEFAULT 0;
-ALTER TABLE oidc_refresh_tokens
-    ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE oidc_opaque_access_tokens
-    ADD COLUMN chain_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE oidc_grant_revocations
-    ADD COLUMN access_revoked_at BIGINT NOT NULL DEFAULT 0;
-```
-
 ## v1.5.0
+
+File: `000006_v1.5.0.up.sql`.
 
 `previous_secret_hash` and `previous_secret_expires_at` on the clients table
 hold the one previous client secret a rotation keeps valid until its expiry
@@ -358,123 +136,7 @@ Signals Framework transmitter's streams and its queue of Security Event Tokens.
 `Store.ValidateSchema` requires them whether or not `op.WithSharedSignals` is
 set, so every deployment creates them; they stay empty until it is. Being new,
 they are created by a `Store.Migrate` run as well, indexes included on every
-dialect; the statements are repeated here for deployments that never run it.
-
-SQLite:
-
-```sql
-ALTER TABLE oidc_clients ADD COLUMN previous_secret_hash TEXT NOT NULL DEFAULT '';
-ALTER TABLE oidc_clients ADD COLUMN previous_secret_expires_at INTEGER NOT NULL DEFAULT 0;
-
-CREATE TABLE IF NOT EXISTS oidc_ssf_streams (
-    id TEXT PRIMARY KEY,
-    client_id TEXT NOT NULL,
-    delivery_method TEXT NOT NULL,
-    endpoint_url TEXT NOT NULL DEFAULT '',
-    sealed_authorization_header BLOB,
-    events_requested TEXT NOT NULL DEFAULT '[]',
-    events_delivered TEXT NOT NULL DEFAULT '[]',
-    description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL,
-    status_reason TEXT NOT NULL DEFAULT '',
-    updated_at INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_oidc_ssf_streams_client ON oidc_ssf_streams(client_id);
-
-CREATE TABLE IF NOT EXISTS oidc_ssf_events (
-    jti TEXT PRIMARY KEY,
-    stream_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    delivery_method TEXT NOT NULL,
-    held INTEGER NOT NULL DEFAULT 0,
-    claims BLOB NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at INTEGER NOT NULL DEFAULT 0,
-    expires_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_stream ON oidc_ssf_events(stream_id);
-CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_next_attempt ON oidc_ssf_events(next_attempt_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_expires ON oidc_ssf_events(expires_at);
-```
-
-MySQL/MariaDB:
-
-```sql
-ALTER TABLE oidc_clients
-    ADD COLUMN previous_secret_hash TEXT NOT NULL,
-    ADD COLUMN previous_secret_expires_at BIGINT NOT NULL DEFAULT 0;
-
-CREATE TABLE IF NOT EXISTS oidc_ssf_streams (
-    id VARCHAR(255) NOT NULL PRIMARY KEY,
-    client_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
-    delivery_method VARCHAR(32) NOT NULL,
-    endpoint_url TEXT NOT NULL,
-    sealed_authorization_header VARBINARY(8192) NULL,
-    events_requested JSON NOT NULL,
-    events_delivered JSON NOT NULL,
-    description TEXT NOT NULL,
-    status VARCHAR(32) NOT NULL,
-    status_reason TEXT NOT NULL,
-    updated_at BIGINT NOT NULL DEFAULT 0,
-    created_at BIGINT NOT NULL DEFAULT 0,
-    UNIQUE KEY idx_oidc_ssf_streams_client (client_id)
-);
-
-CREATE TABLE IF NOT EXISTS oidc_ssf_events (
-    jti VARCHAR(255) NOT NULL PRIMARY KEY,
-    stream_id VARCHAR(255) NOT NULL,
-    kind VARCHAR(32) NOT NULL,
-    delivery_method VARCHAR(32) NOT NULL,
-    held TINYINT(1) NOT NULL DEFAULT 0,
-    claims MEDIUMBLOB NOT NULL,
-    attempts INT NOT NULL DEFAULT 0,
-    next_attempt_at BIGINT NOT NULL DEFAULT 0,
-    expires_at BIGINT NOT NULL DEFAULT 0,
-    INDEX idx_oidc_ssf_events_stream (stream_id),
-    INDEX idx_oidc_ssf_events_next_attempt (next_attempt_at),
-    INDEX idx_oidc_ssf_events_expires (expires_at)
-);
-```
-
-PostgreSQL:
-
-```sql
-ALTER TABLE oidc_clients
-    ADD COLUMN previous_secret_hash TEXT NOT NULL DEFAULT '',
-    ADD COLUMN previous_secret_expires_at BIGINT NOT NULL DEFAULT 0;
-
-CREATE TABLE IF NOT EXISTS oidc_ssf_streams (
-    id TEXT PRIMARY KEY,
-    client_id TEXT NOT NULL,
-    delivery_method TEXT NOT NULL,
-    endpoint_url TEXT NOT NULL DEFAULT '',
-    sealed_authorization_header BYTEA,
-    events_requested JSONB NOT NULL DEFAULT '[]'::jsonb,
-    events_delivered JSONB NOT NULL DEFAULT '[]'::jsonb,
-    description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL,
-    status_reason TEXT NOT NULL DEFAULT '',
-    updated_at BIGINT NOT NULL DEFAULT 0,
-    created_at BIGINT NOT NULL DEFAULT 0
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_oidc_ssf_streams_client ON oidc_ssf_streams(client_id);
-
-CREATE TABLE IF NOT EXISTS oidc_ssf_events (
-    jti TEXT PRIMARY KEY,
-    stream_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    delivery_method TEXT NOT NULL,
-    held SMALLINT NOT NULL DEFAULT 0,
-    claims BYTEA NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at BIGINT NOT NULL DEFAULT 0,
-    expires_at BIGINT NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_stream ON oidc_ssf_events(stream_id);
-CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_next_attempt ON oidc_ssf_events(next_attempt_at);
-CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_expires ON oidc_ssf_events(expires_at);
-```
+dialect; the file repeats the statements for deployments that never run it.
 
 ## Deployment order and writer compatibility
 

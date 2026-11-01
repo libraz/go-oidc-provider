@@ -135,31 +135,34 @@ type tableColumns struct {
 }
 
 // schemaRelease lists the tables a release created and the columns it
-// added to tables that already existed. Each entry has a matching
-// "## <version>" section in schema/MIGRATIONS.md, and
-// [Store.ValidateSchema] names that section when one of them is missing.
-// Releases that changed only indexes or collations have a section but no
-// entry.
+// added to tables that already existed. Every release after v1.0.0 that
+// changed the schema has an entry, including releases that changed only
+// indexes or collations, and a matching migration file per dialect under
+// schema/migrations; [Store.ValidateSchema] names the release when one of
+// its columns or tables is missing.
 type schemaRelease struct {
-	version string
-	columns []tableColumns
-	tables  []string // WithNaming keys
+	version   string
+	migration string // file stem under schema/migrations/<dialect>
+	columns   []tableColumns
+	tables    []string // WithNaming keys
 }
 
 //nolint:gochecknoglobals // schema history; read-only.
 var schemaReleases = []schemaRelease{
-	{"v1.1.0", []tableColumns{
+	{"v1.1.0", "000002_v1.1.0", []tableColumns{
 		{"registration_access_tokens", []string{"allowed_scopes"}},
 		{"totp_secrets", []string{"row_version"}},
 		{"email_otps", []string{"row_version"}},
 	}, nil},
-	{"v1.4.0", []tableColumns{
+	{"v1.2.0", "000003_v1.2.0", nil, nil},
+	{"v1.3.0", "000004_v1.3.0", nil, nil},
+	{"v1.4.0", "000005_v1.4.0", []tableColumns{
 		{"authorization_codes", []string{"auth_time", "acr", "amr", "authorization_details", "claims", "authorization_recorded"}},
 		{"refresh_tokens", []string{"claims", "authorization_recorded", "chain_id"}},
 		{"opaque_access_tokens", []string{"authorization_details", "claims", "authorization_recorded", "chain_id"}},
 		{"grant_revocations", []string{"access_revoked_at"}},
 	}, nil},
-	{"v1.5.0", []tableColumns{
+	{"v1.5.0", "000006_v1.5.0", []tableColumns{
 		{"clients", []string{"previous_secret_hash", "previous_secret_expires_at"}},
 	}, []string{"ssf_streams", "ssf_events"}},
 }

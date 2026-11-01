@@ -14,7 +14,7 @@ import (
 // testdataFS carries the frozen v1.0.0 index baseline. It is embedded rather
 // than read from disk so the test observes the same bytes wherever it runs.
 //
-//go:embed testdata/schema_v1.0.0_indexes.txt testdata/mysql_v1.0.0.sql
+//go:embed testdata/schema_v1.0.0_indexes.txt
 var testdataFS embed.FS
 
 // Store.Migrate is CREATE TABLE IF NOT EXISTS, so it does nothing to a table
@@ -25,15 +25,15 @@ var testdataFS embed.FS
 // created by an earlier release never acquires an index added afterwards.
 //
 // The only thing standing between that and a silently unindexed production
-// table is MIGRATIONS.md, which is prose: nothing fails when an index is added
-// to v1.sql and the document is not updated. This file is that missing check.
-// It is deliberately name-based — an index the document does not name cannot
-// be applied by an operator reading it, whatever the surrounding text says.
+// table is the migration files under schema/migrations: nothing fails when an
+// index is added to v1.sql and no file creates it. This file is that missing
+// check. It is deliberately name-based — an index no migration names cannot
+// reach an existing database, whatever the surrounding SQL does.
 
 var (
 	// standaloneIndexRE matches the SQLite / PostgreSQL spelling. The
 	// whitespace before ON is \s+ rather than a literal space because
-	// v1.sql writes the statement on one line while MIGRATIONS.md wraps
+	// v1.sql writes the statement on one line while some migrations wrap
 	// the target table onto the next — the same statement either way.
 	standaloneIndexRE = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+)\s+ON\s`)
 	// inlineIndexNameRE matches an index declared inside a CREATE TABLE
@@ -45,7 +45,7 @@ var (
 
 // declaredIndexNames returns every index name the DDL names, across the two
 // spellings the dialects use. Names are unique across the schema, so a set of
-// names is enough to compare a shipped schema against a document.
+// names is enough to compare a shipped schema against its migrations.
 func declaredIndexNames(ddl []byte) map[string]bool {
 	out := map[string]bool{}
 	for _, re := range []*regexp.Regexp{standaloneIndexRE, inlineIndexNameRE, alterAddIndexRE} {
@@ -56,61 +56,16 @@ func declaredIndexNames(ddl []byte) map[string]bool {
 	return out
 }
 
-// migrationsDoc returns MIGRATIONS.md from the same embedded FS the schemas
-// come from, so the test reads exactly what ships rather than a file that
-// happens to sit next to it on disk.
-func migrationsDoc(t *testing.T) []byte {
-	t.Helper()
-
-	raw, err := schemaFS.ReadFile("schema/MIGRATIONS.md")
-	if err != nil {
-		t.Fatalf("read embedded MIGRATIONS.md: %v", err)
-	}
-	return raw
-}
-
-// migrationsSections returns every block that follows the given dialect
-// heading in MIGRATIONS.md, one per release section, in document order.
-// Splitting by dialect matters because the statements are not
-// interchangeable: a reader following the MySQL blocks must find MySQL's own
-// ALTER TABLE ... ADD INDEX there, and finding the name under the SQLite
-// heading would not help them.
-func migrationsSections(t *testing.T, doc []byte, heading string) [][]byte {
+// laterMigrations joins every migration after the v1.0.0 baseline for one
+// dialect, which is what an operator upgrading from v1.0.0 applies.
+func laterMigrations(t *testing.T, dialect string) []byte {
 	t.Helper()
 
 	var out [][]byte
-	marker := []byte("\n" + heading + ":\n")
-	for offset := 0; ; {
-		start := bytes.Index(doc[offset:], marker)
-		if start < 0 {
-			break
-		}
-		start += offset
-		// A block runs to whichever comes first of the next dialect heading
-		// and the next markdown header. The search starts one byte in so the
-		// block's own heading cannot terminate it.
-		rest := doc[start+1:]
-		end := len(rest)
-		for _, next := range []string{"\nSQLite:\n", "\nMySQL/MariaDB:\n", "\nPostgreSQL:\n", "\n## "} {
-			if i := bytes.Index(rest[1:], []byte(next)); i >= 0 && i+1 < end {
-				end = i + 1
-			}
-		}
-		out = append(out, rest[:end])
-		offset = start + 1 + end
+	for _, r := range schemaReleases {
+		out = append(out, readMigration(t, dialect, r.migration))
 	}
-	if len(out) == 0 {
-		t.Fatalf("MIGRATIONS.md has no %q section; the document shape changed and this test stopped checking anything", heading)
-	}
-	return out
-}
-
-// migrationsSection joins every block for one dialect, which is what an
-// operator upgrading from v1.0.0 applies.
-func migrationsSection(t *testing.T, doc []byte, heading string) []byte {
-	t.Helper()
-
-	return bytes.Join(migrationsSections(t, doc, heading), nil)
+	return bytes.Join(out, []byte("\n"))
 }
 
 // baselineIndexNames reads the frozen v1.0.0 index set for one dialect.
@@ -154,24 +109,14 @@ func sortedKeys(set map[string]bool) []string {
 	return out
 }
 
-// dialectHeadings maps each dialect to its heading in MIGRATIONS.md.
-func dialectHeadings() map[string]string {
-	return map[string]string{
-		"sqlite":   "SQLite",
-		"mysql":    "MySQL/MariaDB",
-		"postgres": "PostgreSQL",
-	}
-}
-
-// TestSchema_IndexesAddedSinceV1AreDocumented is the check that makes the
-// prose binding. Every index the current schema declares that a v1.0.0
-// database does not already have has to be named in that dialect's
-// MIGRATIONS.md section, because an operator upgrading such a database has
-// nothing else to apply — and on MySQL, no automatic path at all.
+// TestSchema_IndexesAddedSinceV1AreDocumented requires every index the
+// current schema declares that a v1.0.0 database does not already have to be
+// created by one of that dialect's later migrations, because an operator
+// upgrading such a database has nothing else to apply — and on MySQL, no
+// automatic path at all.
 func TestSchema_IndexesAddedSinceV1AreDocumented(t *testing.T) {
 	t.Parallel()
 
-	doc := migrationsDoc(t)
 	for name, dialect := range allDialects() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -182,7 +127,7 @@ func TestSchema_IndexesAddedSinceV1AreDocumented(t *testing.T) {
 			// is a prefix of idx_oidc_grants_client_subject, so a
 			// contains-check would report the shorter one as documented on
 			// the strength of the longer one's statement.
-			documented := declaredIndexNames(migrationsSection(t, doc, dialectHeadings()[name]))
+			documented := declaredIndexNames(laterMigrations(t, name))
 
 			var undocumented []string
 			for _, index := range sortedKeys(current) {
@@ -192,31 +137,29 @@ func TestSchema_IndexesAddedSinceV1AreDocumented(t *testing.T) {
 				undocumented = append(undocumented, index)
 			}
 			if len(undocumented) > 0 {
-				t.Errorf("%s adds %d index(es) since v1.0.0 that the %s section of MIGRATIONS.md does not name: %v\n"+
+				t.Errorf("%s adds %d index(es) since v1.0.0 that no %s migration creates: %v\n"+
 					"an existing database never acquires them (on MySQL there is no self-healing path at all)",
-					name, len(undocumented), dialectHeadings()[name], undocumented)
+					name, len(undocumented), name, undocumented)
 			}
 		})
 	}
 }
 
 // TestSchema_MigrationsDocumentsNoUnknownIndex catches the drift in the other
-// direction: a statement left in the document after the index was renamed or
-// dropped from v1.sql sends an operator to create something the adapter will
-// never use.
+// direction: a statement left in a migration after the index was renamed or
+// dropped from v1.sql creates something the adapter will never use.
 func TestSchema_MigrationsDocumentsNoUnknownIndex(t *testing.T) {
 	t.Parallel()
 
-	doc := migrationsDoc(t)
 	for name, dialect := range allDialects() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			current := declaredIndexNames(dialect.schema)
-			documented := declaredIndexNames(migrationsSection(t, doc, dialectHeadings()[name]))
+			documented := declaredIndexNames(laterMigrations(t, name))
 			for _, index := range sortedKeys(documented) {
 				if !current[index] {
-					t.Errorf("MIGRATIONS.md tells a %s operator to create %s, which the shipped schema does not declare",
+					t.Errorf("a %s migration creates %s, which the shipped schema does not declare",
 						name, index)
 				}
 			}
@@ -238,7 +181,7 @@ func TestSchema_NoBaselineIndexWasSilentlyDropped(t *testing.T) {
 			current := declaredIndexNames(dialect.schema)
 			for _, index := range sortedKeys(baselineIndexNames(t, name)) {
 				if !current[index] {
-					t.Errorf("%s shipped %s at v1.0.0 and no longer declares it; a removal needs a DROP INDEX in MIGRATIONS.md",
+					t.Errorf("%s shipped %s at v1.0.0 and no longer declares it; a removal needs a DROP INDEX in a migration",
 						name, index)
 				}
 			}
