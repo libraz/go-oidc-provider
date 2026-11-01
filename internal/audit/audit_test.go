@@ -19,6 +19,19 @@ func TestDiscard_DoesNotPanic(t *testing.T) {
 	em.Emit(context.Background(), audit.Event{Name: "ignored"})
 }
 
+func TestOrDiscard(t *testing.T) {
+	t.Parallel()
+
+	if audit.OrDiscard(nil) == nil {
+		t.Fatal("OrDiscard(nil) returned nil")
+	}
+	audit.OrDiscard(nil).Emit(context.Background(), audit.Event{Name: "ignored"})
+	live := audit.Slog(slog.New(slog.DiscardHandler))
+	if got := audit.OrDiscard(live); got != live {
+		t.Fatalf("OrDiscard(live) = %v, want the given emitter", got)
+	}
+}
+
 func TestSlog_NilLoggerCollapsesToDiscard(t *testing.T) {
 	t.Parallel()
 

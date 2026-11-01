@@ -125,6 +125,16 @@ type Emitter interface {
 // right choice in unit tests that do not assert on audit output.
 func Discard() Emitter { return discardEmitter{} }
 
+// OrDiscard returns e, or [Discard] when e is nil. Packages whose
+// configuration carries an optional [Emitter] resolve it through this
+// helper so the nil fallback is written once.
+func OrDiscard(e Emitter) Emitter {
+	if e == nil {
+		return Discard()
+	}
+	return e
+}
+
 type discardEmitter struct{}
 
 // Emit implements [Emitter] as a no-op.
