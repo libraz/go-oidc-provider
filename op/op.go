@@ -183,6 +183,9 @@ func New(opts ...Option) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := cfg.validateStoreSchema(context.Background()); err != nil {
+		return nil, err
+	}
 	commitSubjectMode, err := cfg.checkSubjectModeGate(context.Background())
 	if err != nil {
 		return nil, err
