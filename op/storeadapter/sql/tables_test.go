@@ -22,26 +22,7 @@ var updateTablesDoc = flag.Bool("update", false, "regenerate schema/TABLES.md")
 func tableColumnsInDDL(t *testing.T, schema []byte) map[string][]string {
 	t.Helper()
 
-	out := map[string][]string{}
-	text := string(schema)
-	for _, loc := range createTableRE.FindAllStringSubmatchIndex(text, -1) {
-		table := text[loc[2]:loc[3]]
-		body := text[loc[1]:]
-		if end := strings.Index(body, "\n);"); end >= 0 {
-			body = body[:end]
-		}
-		for _, line := range strings.Split(body, "\n") {
-			fields := strings.Fields(line)
-			if len(fields) == 0 || strings.HasPrefix(fields[0], "--") {
-				continue
-			}
-			switch strings.ToUpper(fields[0]) {
-			case "PRIMARY", "UNIQUE", "INDEX", "KEY", "CONSTRAINT", "CHECK", "FOREIGN":
-				continue
-			}
-			out[table] = append(out[table], fields[0])
-		}
-	}
+	out := parseDDLColumns(schema)
 	if len(out) == 0 {
 		t.Fatal("no tables parsed from the DDL; the schema shape changed and this test stopped checking anything")
 	}
@@ -242,7 +223,8 @@ func renderTablesDoc(t *testing.T) []byte {
 		"default) needs these %d tables: %s.\n\n", len(defaults), strings.Join(defaults, ", "))
 	b.WriteString("Column types differ by dialect; `schema/<dialect>/v1.sql` is authoritative.\n")
 	b.WriteString("A column marked with a release was added to an existing table in that release;\n")
-	b.WriteString("an existing database applies the matching file under `migrations/<dialect>`.\n\n")
+	b.WriteString("an existing database applies the matching file under `migrations/<dialect>`.\n")
+	b.WriteString("op.New and `Store.ValidateSchema` check that every column listed here exists.\n\n")
 	b.WriteString("| Table | `WithNaming` key | Holds | Checked when | Rows appear when |\n")
 	b.WriteString("|---|---|---|---|---|\n")
 	for _, info := range tableCatalog {
@@ -367,5 +349,28 @@ func TestBinaryCollationColumns_MatchMySQLDDL(t *testing.T) {
 	}
 	if !reflect.DeepEqual(binaryCollationColumns, want) {
 		t.Fatalf("binaryCollationColumns = %v, want the MySQL DDL's %v", binaryCollationColumns, want)
+	}
+}
+
+func TestDDLColumns_ParsesEveryDialectForEveryKey(t *testing.T) {
+	t.Parallel()
+
+	for name, d := range allDialects() {
+		cols := ddlColumns(d)
+		for _, key := range knownNamingKeys {
+			if len(cols[key]) == 0 {
+				t.Errorf("%s: no columns parsed for %s", name, key)
+			}
+		}
+		if !slices.Contains(cols["refresh_tokens"], "retry_response") || !slices.Contains(cols["authn_lockouts"], "failed_count") {
+			t.Errorf("%s: expected columns missing from parsed DDL: %v", name, cols)
+		}
+		for key, list := range cols {
+			for _, c := range list {
+				if strings.ContainsAny(c, "(),`") {
+					t.Errorf("%s: %s has malformed column %q", name, key, c)
+				}
+			}
+		}
 	}
 }

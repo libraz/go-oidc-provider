@@ -21,6 +21,7 @@ default) needs these 13 tables: `oidc_clients`, `oidc_op_metadata`, `oidc_consum
 Column types differ by dialect; `schema/<dialect>/v1.sql` is authoritative.
 A column marked with a release was added to an existing table in that release;
 an existing database applies the matching file under `migrations/<dialect>`.
+op.New and `Store.ValidateSchema` check that every column listed here exists.
 
 | Table | `WithNaming` key | Holds | Checked when | Rows appear when |
 |---|---|---|---|---|

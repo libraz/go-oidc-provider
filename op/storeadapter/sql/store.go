@@ -238,7 +238,7 @@ func (s *Store) Schema() string {
 // does).
 //
 // After applying the DDL, Migrate runs [Store.ValidateSchema], which
-// fails when a table or a compatibility-sensitive column is absent. CREATE TABLE
+// fails when a table or a column of the reference DDL is absent. CREATE TABLE
 // IF NOT EXISTS deliberately does not alter an existing table; this check
 // therefore makes a forgotten explicit ALTER fail at startup rather than
 // surfacing as a less actionable query error later.
@@ -255,54 +255,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return s.ValidateSchema(ctx)
 }
 
-var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema invariant table; read-only.
-	"id",
-	"client_id",
-	"grant_id",
-	"parent_id",
-	"subject",
-	"subject_public",
-	"scope",
-	"resource",
-	"origin",
-	"auth_time",
-	"acr",
-	"amr",
-	"authorization_details",
-	"access_token_extra",
-	"claims",
-	"authorization_recorded",
-	"chain_id",
-	"dpop_jkt",
-	"mtls_cert_thumbprint",
-	"nonce",
-	"revoked",
-	"expires_at",
-	"consumed_at",
-	"created_at",
-	"retry_response",
-}
-
-// requiredColumns returns, by WithNaming key, the columns [Store.ValidateSchema]
-// checks: the full refresh-token layout, plus every column a release added
-// to an existing table.
-func requiredColumns() map[string][]string {
-	out := map[string][]string{"refresh_tokens": requiredRefreshTokenColumns}
-	for _, r := range schemaReleases {
-		for _, tc := range r.columns {
-			for _, c := range tc.columns {
-				if !slices.Contains(out[tc.key], c) {
-					out[tc.key] = append(out[tc.key], c)
-				}
-			}
-		}
-	}
-	return out
-}
-
 // ValidateSchema checks every table the adapter owns, whether or not the
-// configuration uses it: each table must exist, the tables whose shape has
-// changed across releases must carry their required columns, and on MySQL
+// configuration uses it: each table must exist and carry every column the
+// reference DDL declares (columns an embedder added are allowed; types are not
+// checked), and on MySQL
 // the identifier columns must use a binary collation. It reads the catalog
 // only: it never creates, alters or drops anything, so the connecting role
 // needs no CREATE privilege. It does not check indexes.
@@ -314,8 +270,9 @@ func requiredColumns() map[string][]string {
 //
 // A missing table is reported as "oidcsql: schema for <table> is missing";
 // a missing column as "oidcsql: schema for <table> is missing required
-// columns: <names>", followed by the migration under
-// schema/migrations/<dialect> that adds them. Every gap is reported in the
+// columns: <names>", followed, for a column a later release added, by the
+// migration under schema/migrations/<dialect> that adds it. When any table is
+// missing, one closing line says how to create it. Every gap is reported in the
 // one returned error, a line each, so a single run lists the whole
 // migration still to apply. [Store.Migrate] runs this check after applying
 // the DDL.
@@ -328,8 +285,9 @@ func (s *Store) ValidateSchema(ctx context.Context) error {
 // validateKeys runs the [Store.ValidateSchema] checks on the tables with
 // the given WithNaming keys only.
 func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
-	required := requiredColumns()
+	required := ddlColumns(s.dialect)
 	var problems []error
+	var tableMissing bool
 	for _, key := range keys {
 		table := s.names.byKey(key)
 		cols, err := s.columnSet(ctx, table)
@@ -337,6 +295,7 @@ func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 			return err
 		}
 		if len(cols) == 0 {
+			tableMissing = true
 			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing%s", table, tableMigrationHint(s.dialect.name, key)))
 			continue
 		}
@@ -356,7 +315,16 @@ func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 		}
 		problems = append(problems, collationProblems...)
 	}
+	if tableMissing {
+		problems = append(problems, errors.New(missingTableRemedy(s.dialect.name)))
+	}
 	return errors.Join(problems...)
+}
+
+// missingTableRemedy says how to create tables an empty database lacks.
+func missingTableRemedy(dialect string) string {
+	return "oidcsql: create the missing tables by applying Store.Migrations() with your migration tool, " +
+		"or with Store.Migrate in development; the reference DDL is schema/" + dialect + "/v1.sql"
 }
 
 // checkBinaryCollations reports each [binaryCollationColumns] column of

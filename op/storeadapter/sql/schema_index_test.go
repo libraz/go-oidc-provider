@@ -26,7 +26,6 @@ var (
 	// revoking UPDATEs unchecked.
 	clientCascadeRE = regexp.MustCompile(`(?:DELETE FROM|UPDATE) (\w+)(?: SET [^;]*?)? WHERE client_id = `)
 	createIndexRE   = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?\w+ ON (\w+)\s*\(\s*(\w+)`)
-	createTableRE   = regexp.MustCompile(`(?i)CREATE TABLE (?:IF NOT EXISTS )?(\w+)\s*\(`)
 	inlineIndexRE   = regexp.MustCompile(`(?i)^\s*(?:UNIQUE )?(?:INDEX|KEY) \w+ \(\s*(\w+)`)
 )
 
