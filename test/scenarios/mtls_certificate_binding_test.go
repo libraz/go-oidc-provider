@@ -18,7 +18,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
-	"encoding/json"
 	"io"
 	"math/big"
 	"net/http"
@@ -114,24 +113,6 @@ func mtlsServeWithCert(
 	rec := httptest.NewRecorder()
 	prov.OP.ServeHTTP(rec, req)
 	return rec.Result()
-}
-
-// mtlsDecodeJSON parses a response body as a JSON object; an empty
-// body decodes to an empty map.
-func mtlsDecodeJSON(tb testing.TB, resp *http.Response) map[string]any {
-	tb.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		tb.Fatalf("read body: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		tb.Fatalf("decode body %q: %v", string(raw), err)
-	}
-	return out
 }
 
 // mtlsAccessTokenCnf parses the access-token JWT and returns the cnf
@@ -285,7 +266,7 @@ func TestScenario_MTLS_001_DiscoveryAdvertisesCertBoundFlag(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("discovery status=%d want 200", resp.StatusCode)
 	}
-	doc := mtlsDecodeJSON(t, resp)
+	doc := scenariokit.DecodeJSON(t, resp)
 	got, ok := doc["tls_client_certificate_bound_access_tokens"].(bool)
 	if !ok {
 		t.Fatalf("tls_client_certificate_bound_access_tokens missing or not a bool (doc=%v)", doc["tls_client_certificate_bound_access_tokens"])
@@ -397,7 +378,7 @@ func TestScenario_MTLS_005_UserinfoSuccessWithBindingCert(t *testing.T) {
 		dump, _ := io.ReadAll(resp.Body)
 		t.Fatalf("/userinfo status=%d body=%s", resp.StatusCode, dump)
 	}
-	body := mtlsDecodeJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["sub"].(string); got != scenariokit.DefaultSubject {
 		t.Errorf("sub=%q want %q", got, scenariokit.DefaultSubject)
 	}
@@ -441,7 +422,7 @@ func TestScenario_MTLS_006_IntrospectionSurfacesCnfX5T(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("/introspect status=%d body=%s", resp.StatusCode, string(body))
 	}
-	body := mtlsDecodeJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if active, _ := body["active"].(bool); !active {
 		t.Fatalf("introspect active=false want true (body=%v)", body)
 	}
@@ -670,7 +651,7 @@ func TestScenario_MTLS_017_RefreshTokenRequiresMTLSConfidential(t *testing.T) {
 	if tokResp.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d want 200", tokResp.StatusCode)
 	}
-	body := mtlsDecodeJSON(t, tokResp)
+	body := scenariokit.DecodeJSON(t, tokResp)
 	rt, _ := body["refresh_token"].(string)
 	if rt == "" {
 		t.Fatal("refresh_token missing from /token response")
@@ -688,7 +669,7 @@ func TestScenario_MTLS_017_RefreshTokenRequiresMTLSConfidential(t *testing.T) {
 	if refResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("refresh no-cert status=%d want 400", refResp.StatusCode)
 	}
-	refBody := mtlsDecodeJSON(t, refResp)
+	refBody := scenariokit.DecodeJSON(t, refResp)
 	if got, _ := refBody["error"].(string); got != "invalid_grant" {
 		t.Errorf("error=%q want invalid_grant", got)
 	}
@@ -719,7 +700,7 @@ func TestScenario_MTLS_018_AuthCodeBindingPublic(t *testing.T) {
 		dump, _ := io.ReadAll(resp.Body)
 		t.Fatalf("/token status=%d body=%s", resp.StatusCode, dump)
 	}
-	body := mtlsDecodeJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	at, _ := body["access_token"].(string)
 	rt, _ := body["refresh_token"].(string)
 	if at == "" || rt == "" {
@@ -779,7 +760,7 @@ func TestScenario_MTLS_020_RefreshTokenBindingPublic(t *testing.T) {
 	if tokResp.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d want 200", tokResp.StatusCode)
 	}
-	body := mtlsDecodeJSON(t, tokResp)
+	body := scenariokit.DecodeJSON(t, tokResp)
 	rt, _ := body["refresh_token"].(string)
 	if rt == "" {
 		t.Fatal("refresh_token missing")
@@ -797,7 +778,7 @@ func TestScenario_MTLS_020_RefreshTokenBindingPublic(t *testing.T) {
 		dump, _ := io.ReadAll(refResp.Body)
 		t.Fatalf("refresh status=%d body=%s", refResp.StatusCode, dump)
 	}
-	refBody := mtlsDecodeJSON(t, refResp)
+	refBody := scenariokit.DecodeJSON(t, refResp)
 	rotated, _ := refBody["refresh_token"].(string)
 	if rotated == "" || rotated == rt {
 		t.Fatalf("RT did not rotate; rotated=%q (was %q)", rotated, rt)
@@ -838,7 +819,7 @@ func TestScenario_MTLS_021_RefreshTokenRequiresMTLSPublic(t *testing.T) {
 	}
 	tokResp := mtlsServeWithCert(t, f.tk, http.MethodPost, mtlsTokenURL(f.tk), tokForm, cert, nil)
 	defer tokResp.Body.Close()
-	body := mtlsDecodeJSON(t, tokResp)
+	body := scenariokit.DecodeJSON(t, tokResp)
 	rt, _ := body["refresh_token"].(string)
 	if rt == "" {
 		t.Fatal("refresh_token missing")
@@ -855,7 +836,7 @@ func TestScenario_MTLS_021_RefreshTokenRequiresMTLSPublic(t *testing.T) {
 	if refResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("refresh no-cert status=%d want 400", refResp.StatusCode)
 	}
-	refBody := mtlsDecodeJSON(t, refResp)
+	refBody := scenariokit.DecodeJSON(t, refResp)
 	if got, _ := refBody["error"].(string); got != "invalid_grant" {
 		t.Errorf("error=%q want invalid_grant", got)
 	}
@@ -883,7 +864,7 @@ func TestScenario_MTLS_022_RefreshTokenCertMismatchPublic(t *testing.T) {
 	}
 	tokResp := mtlsServeWithCert(t, f.tk, http.MethodPost, mtlsTokenURL(f.tk), tokForm, cert, nil)
 	defer tokResp.Body.Close()
-	body := mtlsDecodeJSON(t, tokResp)
+	body := scenariokit.DecodeJSON(t, tokResp)
 	rt, _ := body["refresh_token"].(string)
 	if rt == "" {
 		t.Fatal("refresh_token missing")
@@ -900,7 +881,7 @@ func TestScenario_MTLS_022_RefreshTokenCertMismatchPublic(t *testing.T) {
 	if refResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("refresh wrong-cert status=%d want 400", refResp.StatusCode)
 	}
-	refBody := mtlsDecodeJSON(t, refResp)
+	refBody := scenariokit.DecodeJSON(t, refResp)
 	if got, _ := refBody["error"].(string); got != "invalid_grant" {
 		t.Errorf("error=%q want invalid_grant", got)
 	}
@@ -930,7 +911,7 @@ func TestScenario_MTLS_023_ClientCredentialsBinding(t *testing.T) {
 		dump, _ := io.ReadAll(resp.Body)
 		t.Fatalf("/token client_credentials status=%d body=%s", resp.StatusCode, dump)
 	}
-	body := mtlsDecodeJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	at, _ := body["access_token"].(string)
 	if at == "" {
 		t.Fatal("access_token missing")
@@ -1048,7 +1029,7 @@ func (f *mtlsAsyncFixture) post(
 		}
 	})
 	defer resp.Body.Close()
-	return resp.StatusCode, mtlsDecodeJSON(t, resp)
+	return resp.StatusCode, scenariokit.DecodeJSON(t, resp)
 }
 
 // redeemDeviceCodeStatus drives /device_authorization with the
@@ -1211,7 +1192,7 @@ func mtlsIssueAuthCodeAccessToken(t *testing.T, f *mtlsConfidentialFixture, cert
 		dump, _ := io.ReadAll(resp.Body)
 		t.Fatalf("/token status=%d body=%s", resp.StatusCode, dump)
 	}
-	body := mtlsDecodeJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	at, _ := body["access_token"].(string)
 	if at == "" {
 		t.Fatal("access_token missing")

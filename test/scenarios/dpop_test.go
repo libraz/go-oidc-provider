@@ -375,7 +375,7 @@ func (f *dpopAsyncFixture) post(
 		t.Fatalf("POST %s: %v", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return resp.StatusCode, dpopJSON(t, resp)
+	return resp.StatusCode, scenariokit.DecodeJSON(t, resp)
 }
 
 // assertDPoPAsyncTokens verifies the access-token cnf claim and the
@@ -418,25 +418,6 @@ func (f *dpopAsyncFixture) assertDPoPAsyncTokens(
 	}
 }
 
-// dpopJSON parses resp.Body as a JSON object map. Mirrors the helpers
-// in par_test.go / userinfo_test.go so the DPoP scenarios stay
-// self-contained.
-func dpopJSON(t *testing.T, resp *http.Response) map[string]any {
-	t.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("dpopJSON: ReadAll: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("dpopJSON: Unmarshal %s: %v", raw, err)
-	}
-	return out
-}
-
 // expectTokenError asserts a 400 response with the supplied OAuth error
 // code on resp. The body is consumed so the caller does not need to
 // defer Close itself.
@@ -446,7 +427,7 @@ func expectTokenError(t *testing.T, resp *http.Response, wantCode string) map[st
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400 (%s)", resp.StatusCode, wantCode)
 	}
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != wantCode {
 		t.Errorf("error=%q want %q (body=%v)", got, wantCode, body)
 	}
@@ -829,7 +810,7 @@ func TestScenario_DPOP_014_ProofHtuMustMatchURI(t *testing.T) {
 				resp := f.postToken(t, form, proof)
 				defer func() { _ = resp.Body.Close() }()
 				if resp.StatusCode != http.StatusOK {
-					body := dpopJSON(t, resp)
+					body := scenariokit.DecodeJSON(t, resp)
 					t.Fatalf("status=%d want 200 (body=%v)", resp.StatusCode, body)
 				}
 			})
@@ -935,7 +916,7 @@ func TestScenario_DPOP_017_ProofReplayDetected(t *testing.T) {
 	}
 	resp1 := f.postToken(t, form, proof)
 	if resp1.StatusCode != http.StatusOK {
-		body := dpopJSON(t, resp1)
+		body := scenariokit.DecodeJSON(t, resp1)
 		resp1.Body.Close()
 		t.Fatalf("first redemption status=%d body=%v", resp1.StatusCode, body)
 	}
@@ -1129,7 +1110,7 @@ func TestScenario_DPOP_028_FreshNonceNotRotated(t *testing.T) {
 	resp := f.postToken(t, form, proof)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		body := dpopJSON(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		t.Fatalf("status=%d want 200 (body=%v)", resp.StatusCode, body)
 	}
 	if got := resp.Header.Get("DPoP-Nonce"); got != "" {
@@ -1339,10 +1320,10 @@ func TestScenario_DPOP_034_PARDpopJktMatch(t *testing.T) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		body := dpopJSON(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		t.Fatalf("status=%d want 201 (body=%v)", resp.StatusCode, body)
 	}
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if uri, _ := body["request_uri"].(string); !strings.HasPrefix(uri, "urn:ietf:params:oauth:request_uri:") {
 		t.Errorf("request_uri=%q want urn:ietf:params:oauth:request_uri: prefix", uri)
 	}
@@ -1396,7 +1377,7 @@ func TestScenario_DPOP_035_PARDpopJktMismatch(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
 	}
@@ -1455,7 +1436,7 @@ func TestScenario_DPOP_036_PARAutoBindsDpopJkt(t *testing.T) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		body := dpopJSON(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		t.Fatalf("status=%d want 201 (body=%v)", resp.StatusCode, body)
 	}
 }
@@ -1498,10 +1479,10 @@ func TestScenario_DPOP_038_CodeGrantWithoutDpopJkt(t *testing.T) {
 	resp := f.postToken(t, form, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body := dpopJSON(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		t.Fatalf("status=%d want 200 (body=%v)", resp.StatusCode, body)
 	}
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["token_type"].(string); got != "DPoP" {
 		t.Errorf("token_type=%q want DPoP", got)
 	}
@@ -1543,10 +1524,10 @@ func TestScenario_DPOP_039_CodeGrantWithDpopJktMatch(t *testing.T) {
 	resp := f.postToken(t, form, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body := dpopJSON(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		t.Fatalf("status=%d want 200 (body=%v)", resp.StatusCode, body)
 	}
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["token_type"].(string); got != "DPoP" {
 		t.Errorf("token_type=%q want DPoP", got)
 	}
@@ -1752,7 +1733,7 @@ func TestScenario_DPOP_042_RefreshTokenConfidential(t *testing.T) {
 		"code_verifier": {verifier},
 	}
 	resp := f.postToken(t, form, codeProof)
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/token (code) status=%d body=%v", resp.StatusCode, body)
@@ -1771,10 +1752,10 @@ func TestScenario_DPOP_042_RefreshTokenConfidential(t *testing.T) {
 	rresp := f.postRefresh(t, rt, refreshProof, false)
 	defer func() { _ = rresp.Body.Close() }()
 	if rresp.StatusCode != http.StatusOK {
-		body := dpopJSON(t, rresp)
+		body := scenariokit.DecodeJSON(t, rresp)
 		t.Fatalf("/token (refresh) status=%d body=%v", rresp.StatusCode, body)
 	}
-	rbody := dpopJSON(t, rresp)
+	rbody := scenariokit.DecodeJSON(t, rresp)
 	if got, _ := rbody["token_type"].(string); got != "DPoP" {
 		t.Errorf("refresh token_type=%q want DPoP", got)
 	}
@@ -1827,10 +1808,10 @@ func TestScenario_DPOP_043_CodeGrantPublicClient(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		body := dpopJSON(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		t.Fatalf("/token status=%d body=%v", resp.StatusCode, body)
 	}
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["token_type"].(string); got != "DPoP" {
 		t.Errorf("token_type=%q want DPoP", got)
 	}
@@ -1888,7 +1869,7 @@ func TestScenario_DPOP_044_RefreshTokenPublicClientSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do /token (code): %v", err)
 	}
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/token (code) status=%d body=%v", resp.StatusCode, body)
@@ -1907,10 +1888,10 @@ func TestScenario_DPOP_044_RefreshTokenPublicClientSuccess(t *testing.T) {
 	rresp := f.postRefresh(t, rt, refreshProof, true)
 	defer func() { _ = rresp.Body.Close() }()
 	if rresp.StatusCode != http.StatusOK {
-		body := dpopJSON(t, rresp)
+		body := scenariokit.DecodeJSON(t, rresp)
 		t.Fatalf("/token (refresh) status=%d body=%v", rresp.StatusCode, body)
 	}
-	rbody := dpopJSON(t, rresp)
+	rbody := scenariokit.DecodeJSON(t, rresp)
 	if got, _ := rbody["token_type"].(string); got != "DPoP" {
 		t.Errorf("refresh token_type=%q want DPoP", got)
 	}
@@ -1969,7 +1950,7 @@ func TestScenario_DPOP_045_RefreshTokenPublicClientKeyMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do /token (code): %v", err)
 	}
-	body := dpopJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/token (code) status=%d body=%v", resp.StatusCode, body)

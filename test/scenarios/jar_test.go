@@ -28,6 +28,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 // jarFixedClock pins the OP's notion of "now" so JAR claim windows
@@ -273,24 +274,6 @@ func (f *jarFixture) authorizeGet(t *testing.T, values url.Values) *http.Respons
 	return resp
 }
 
-// jarDecodeJSON parses resp.Body as a JSON object map. Mirrors the
-// helpers in par_test.go so the JAR scenarios stay self-contained.
-func jarDecodeJSON(t *testing.T, resp *http.Response) map[string]any {
-	t.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("Unmarshal %s: %v", raw, err)
-	}
-	return out
-}
-
 // expectJARError asserts a 400 response with the supplied error code
 // on resp. The body is consumed so the caller does not need to defer
 // Close itself.
@@ -300,7 +283,7 @@ func expectJARError(t *testing.T, resp *http.Response, wantCode string) map[stri
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400 (%s)", resp.StatusCode, wantCode)
 	}
-	body := jarDecodeJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != wantCode {
 		t.Errorf("error=%q want %q (body=%v)", got, wantCode, body)
 	}
@@ -351,7 +334,7 @@ func TestScenario_JAR_001_DiscoveryRequestParameterSupported(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
 	}
-	doc := jarDecodeJSON(t, resp)
+	doc := scenariokit.DecodeJSON(t, resp)
 	if got, _ := doc["request_parameter_supported"].(bool); !got {
 		t.Errorf("request_parameter_supported=%v want true", doc["request_parameter_supported"])
 	}

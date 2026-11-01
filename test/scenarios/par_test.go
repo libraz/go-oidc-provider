@@ -14,7 +14,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -117,23 +116,6 @@ func (f *parPlainFixture) publicClient(t *testing.T) *store.Client {
 		RedirectURIs: []string{"https://rp.testkit.invalid/callback"},
 		Scopes:       []string{"openid", "profile", "email"},
 	})
-}
-
-// decodeJSONResp parses resp.Body as a JSON object map.
-func decodeJSONResp(t *testing.T, resp *http.Response) map[string]any {
-	t.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshal %s: %v", raw, err)
-	}
-	return out
 }
 
 // parJARFixture extends [parPlainFixture] with a JAR-enabled provider and
@@ -451,7 +433,7 @@ func TestScenario_PAR_005_UnregisteredRedirectUriPublicRejected(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
 	}
@@ -479,7 +461,7 @@ func TestScenario_PAR_006_MalformedRedirectUriRejected(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
 	}
@@ -505,7 +487,7 @@ func TestScenario_PAR_007_RedirectUriFragmentRejected(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
 	}
@@ -535,7 +517,7 @@ func TestScenario_PAR_008_RequestParamRejectedInParOnly(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request_object" {
 		t.Errorf("error=%q want invalid_request_object (body=%v)", got, body)
 	}
@@ -573,7 +555,7 @@ func TestScenario_PAR_010_PlainPushSuccess(t *testing.T) {
 	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Errorf("Content-Type=%q want application/json", got)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	uri, _ := body["request_uri"].(string)
 	if !strings.HasPrefix(uri, "urn:ietf:params:oauth:request_uri:") {
 		t.Errorf("request_uri=%q does not match RFC 9126 §2.2 prefix", uri)
@@ -619,7 +601,7 @@ func TestScenario_PAR_011_RequestUriRejectedAtPAR(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
 	}
@@ -648,7 +630,7 @@ func TestScenario_PAR_012_UnknownRedirectUriRemapped(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
 	}
@@ -675,11 +657,11 @@ func TestScenario_PAR_014_RequestUriConsumedNoJAR(t *testing.T) {
 	form, pkce := f.happyForm()
 	resp := f.post(t, form, f.client.ID, f.secret)
 	if resp.StatusCode != http.StatusCreated {
-		body := decodeJSONResp(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		resp.Body.Close()
 		t.Fatalf("/par status=%d body=%v", resp.StatusCode, body)
 	}
-	parBody := decodeJSONResp(t, resp)
+	parBody := scenariokit.DecodeJSON(t, resp)
 	resp.Body.Close()
 	requestURI, _ := parBody["request_uri"].(string)
 	if requestURI == "" {
@@ -708,7 +690,7 @@ func TestScenario_PAR_014_RequestUriConsumedNoJAR(t *testing.T) {
 	if postResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("post-consume /authorize status=%d want 400", postResp.StatusCode)
 	}
-	body := decodeJSONResp(t, postResp)
+	body := scenariokit.DecodeJSON(t, postResp)
 	if got, _ := body["error"].(string); got != "invalid_request_uri" {
 		t.Errorf("error=%q want invalid_request_uri (body=%v)", got, body)
 	}
@@ -742,11 +724,11 @@ func TestScenario_PAR_015_RequestUriConsumedWhenJAROptional(t *testing.T) {
 	}
 	resp := f.post(t, form)
 	if resp.StatusCode != http.StatusCreated {
-		body := decodeJSONResp(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		resp.Body.Close()
 		t.Fatalf("/par status=%d body=%v", resp.StatusCode, body)
 	}
-	parBody := decodeJSONResp(t, resp)
+	parBody := scenariokit.DecodeJSON(t, resp)
 	resp.Body.Close()
 	requestURI, _ := parBody["request_uri"].(string)
 	if requestURI == "" {
@@ -768,7 +750,7 @@ func TestScenario_PAR_015_RequestUriConsumedWhenJAROptional(t *testing.T) {
 	if postResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("post-consume /authorize status=%d want 400", postResp.StatusCode)
 	}
-	body := decodeJSONResp(t, postResp)
+	body := scenariokit.DecodeJSON(t, postResp)
 	if got, _ := body["error"].(string); got != "invalid_request_uri" {
 		t.Errorf("error=%q want invalid_request_uri (body=%v)", got, body)
 	}
@@ -802,10 +784,10 @@ func TestScenario_PAR_017_JARPushSuccess(t *testing.T) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		body := decodeJSONResp(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		t.Fatalf("status=%d body=%v", resp.StatusCode, body)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	uri, _ := body["request_uri"].(string)
 	if !strings.HasPrefix(uri, "urn:ietf:params:oauth:request_uri:") {
 		t.Errorf("request_uri=%q want urn:ietf:params:oauth:request_uri: prefix", uri)
@@ -868,10 +850,10 @@ func TestScenario_PAR_021_JAROverridesOuterParams(t *testing.T) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		body := decodeJSONResp(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		t.Fatalf("status=%d body=%v", resp.StatusCode, body)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	uri, _ := body["request_uri"].(string)
 	if uri == "" {
 		t.Fatal("request_uri missing from /par response")
@@ -929,7 +911,7 @@ func TestScenario_PAR_022_PreregisteredAlgEnforced(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request_object" {
 		t.Errorf("error=%q want invalid_request_object (body=%v)", got, body)
 	}
@@ -967,7 +949,7 @@ func TestScenario_PAR_023_ClientIDConsistency(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
 	}
@@ -998,7 +980,7 @@ func TestScenario_PAR_024_RedirectUriRemapWithJAR(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
 	}
@@ -1028,11 +1010,11 @@ func TestScenario_PAR_026_RequestUriConsumedWithJAR(t *testing.T) {
 	}
 	resp := f.post(t, form)
 	if resp.StatusCode != http.StatusCreated {
-		body := decodeJSONResp(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		resp.Body.Close()
 		t.Fatalf("/par status=%d body=%v", resp.StatusCode, body)
 	}
-	parBody := decodeJSONResp(t, resp)
+	parBody := scenariokit.DecodeJSON(t, resp)
 	resp.Body.Close()
 	requestURI, _ := parBody["request_uri"].(string)
 	if requestURI == "" {
@@ -1054,7 +1036,7 @@ func TestScenario_PAR_026_RequestUriConsumedWithJAR(t *testing.T) {
 	if postResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("post-consume /authorize status=%d want 400", postResp.StatusCode)
 	}
-	body := decodeJSONResp(t, postResp)
+	body := scenariokit.DecodeJSON(t, postResp)
 	if got, _ := body["error"].(string); got != "invalid_request_uri" {
 		t.Errorf("error=%q want invalid_request_uri (body=%v)", got, body)
 	}
@@ -1085,7 +1067,7 @@ func TestScenario_PAR_027_RequestUriLifecycleErrors(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
-	body := decodeJSONResp(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request_uri" {
 		t.Errorf("error=%q want invalid_request_uri (body=%v)", got, body)
 	}

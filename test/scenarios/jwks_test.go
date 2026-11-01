@@ -536,24 +536,11 @@ func TestScenario_JWKS_042_RotationIssuesNewKid(t *testing.T) {
 		op.WithIssuer("https://op.testkit.invalid"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(op.Keyset{dupA, dupB}),
-		op.WithCookieKeys(newJWKSCookieKey(t)),
+		op.WithCookieKeys(testkit.NewCookieKey(t)),
 	)
 	if err == nil {
 		t.Fatal("op.New accepted a duplicate-kid Keyset; rotation MUST mint a fresh kid")
 	}
-}
-
-// newJWKSCookieKey returns a fresh 32-byte cookie key for op.WithCookieKeys.
-// The helper is local to the JWKS file because JWKS-042 is the only row
-// in the suite that constructs op.New without going through testkit,
-// and the BUS file already owns its own cookie-key helper.
-func newJWKSCookieKey(tb testing.TB) []byte {
-	tb.Helper()
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		tb.Fatalf("generate cookie key: %v", err)
-	}
-	return key
 }
 
 // TestScenario_JWKS_050_CacheControlAdvisedShortTTL verifies that the

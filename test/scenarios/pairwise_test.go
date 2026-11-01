@@ -300,10 +300,10 @@ func runPairwiseAuthorizeWithBrowser(
 	}
 	interactionURL := tk.Server.URL + loc.Path
 	stepResp := mustPairwiseGET(t, client, interactionURL)
-	step := decodePWJSON(t, stepResp)
+	step := scenariokit.DecodeJSON(t, stepResp)
 	_ = stepResp.Body.Close()
 	stateRef, _ := step["state_ref"].(string)
-	csrf := findPWCookie(stepResp.Cookies(), "__Host-oidc_csrf")
+	csrf := scenariokit.FindCookie(stepResp.Cookies(), "__Host-oidc_csrf")
 	if stateRef == "" || csrf == nil {
 		t.Fatalf("interaction prompt missing state_ref or csrf: %v", step)
 	}
@@ -374,22 +374,6 @@ func mustPairwiseGET(t *testing.T, client *http.Client, rawURL string) *http.Res
 	return resp
 }
 
-func decodePWJSON(t *testing.T, resp *http.Response) map[string]any {
-	t.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read JSON body: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("decode JSON body %s: %v", string(raw), err)
-	}
-	return out
-}
-
 func postPairwiseInteraction(
 	t *testing.T,
 	client *http.Client,
@@ -434,7 +418,7 @@ func completePairwiseConsentIfPrompted(
 	if stateRef == "" {
 		t.Fatal("consent prompt missing state_ref")
 	}
-	if rotated := findPWCookie(prior.Cookies(), "__Host-oidc_csrf"); rotated != nil {
+	if rotated := scenariokit.FindCookie(prior.Cookies(), "__Host-oidc_csrf"); rotated != nil {
 		csrf = rotated.Value
 	}
 	return testkit.PostConsentApproval(t, client, interactionURL, origin, csrf, stateRef, pairwiseApprovedScopes(env))
@@ -472,15 +456,6 @@ func pairwiseCaptureCallback(t *testing.T, redirectURI string, location *url.URL
 		ErrorDesc: q.Get("error_description"),
 		Location:  location,
 	}, true
-}
-
-func findPWCookie(cookies []*http.Cookie, name string) *http.Cookie {
-	for _, c := range cookies {
-		if c.Name == name {
-			return c
-		}
-	}
-	return nil
 }
 
 func pairwiseGetUserInfo(t *testing.T, tk *testkit.Provider, accessToken string) map[string]any {

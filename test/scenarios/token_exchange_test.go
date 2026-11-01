@@ -188,11 +188,8 @@ func (p *txProvider) defaultSubjectClaims(jti string) tokens.AccessTokenClaims {
 	}
 }
 
-// txClockNow returns the current wall-clock instant. It exists so the
-// test file can route every "now" through one helper, satisfying the
-// project's depguard rule against direct time.Now() calls in test
-// files (the rule forwards to internal/timex elsewhere; the test
-// suite's analog is this single helper).
+// txClockNow returns the current UTC instant, the "now" the fixtures here
+// derive iat / exp from; production tests pin no clock.
 func txClockNow() time.Time {
 	return time.Now().UTC()
 }

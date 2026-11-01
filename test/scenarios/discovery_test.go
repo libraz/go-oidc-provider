@@ -253,10 +253,7 @@ func TestScenario_DIS_004_EmbedderCannotOverrideOPControlledFields(t *testing.T)
 	if err != nil {
 		t.Fatalf("generate signing key: %v", err)
 	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		t.Fatalf("generate cookie key: %v", err)
-	}
+	cookieKey := testkit.NewCookieKey(t)
 
 	const offending = "authorization_endpoint"
 	_, err = op.New(

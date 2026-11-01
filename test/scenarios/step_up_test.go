@@ -216,7 +216,7 @@ func (e *supEnv) completeInteraction(t *testing.T, interactionURL string) string
 	stepResp := e.mustGet(t, interactionURL)
 	step := decodeStepUpJSON(t, stepResp)
 	stateRef, _ := step["state_ref"].(string)
-	csrf := findStepUpCookie(stepResp.Cookies(), "__Host-oidc_csrf")
+	csrf := scenariokit.FindCookie(stepResp.Cookies(), "__Host-oidc_csrf")
 	stepResp.Body.Close()
 	if stateRef == "" || csrf == nil {
 		t.Fatalf("interaction prompt missing state_ref/csrf: %v", step)
@@ -233,7 +233,7 @@ func (e *supEnv) completeInteraction(t *testing.T, interactionURL string) string
 		consentRef, _ := env["state_ref"].(string)
 		// The CSRF cookie rotates on every step boundary; pull the
 		// rotated value off the consent prompt response.
-		if rotated := findStepUpCookie(postResp.Cookies(), "__Host-oidc_csrf"); rotated != nil {
+		if rotated := scenariokit.FindCookie(postResp.Cookies(), "__Host-oidc_csrf"); rotated != nil {
 			csrf = rotated
 		}
 		finalResp = testkit.PostConsentApproval(t, e.client, interactionURL, e.tk.Issuer,
@@ -346,15 +346,6 @@ func decodeStepUpJSON(t *testing.T, resp *http.Response) map[string]any {
 		t.Fatalf("decode interaction prompt: %v", err)
 	}
 	return out
-}
-
-func findStepUpCookie(cookies []*http.Cookie, name string) *http.Cookie {
-	for _, c := range cookies {
-		if c.Name == name {
-			return c
-		}
-	}
-	return nil
 }
 
 func approvedStepUpScopes(env map[string]any) string {

@@ -29,6 +29,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1468,10 +1469,10 @@ func TestScenario_CIMD_DISC_01_FeatureFlagAdvertised(t *testing.T) {
 	if got := doc["client_id_metadata_document_supported"]; got != true {
 		t.Errorf("client_id_metadata_document_supported = %v, want true", got)
 	}
-	if methods := toStrings(doc["token_endpoint_auth_methods_supported"]); !cdContains(methods, "none") {
+	if methods := toStrings(doc["token_endpoint_auth_methods_supported"]); !slices.Contains(methods, "none") {
 		t.Errorf("token_endpoint_auth_methods_supported = %v, want none", methods)
 	}
-	if methods := toStrings(doc["code_challenge_methods_supported"]); !cdContains(methods, "S256") {
+	if methods := toStrings(doc["code_challenge_methods_supported"]); !slices.Contains(methods, "S256") {
 		t.Errorf("code_challenge_methods_supported = %v, want S256", methods)
 	}
 }
@@ -1514,15 +1515,6 @@ func cdDiscovery(t *testing.T, tk *testkit.Provider) map[string]any {
 		t.Fatalf("decode discovery: %v", err)
 	}
 	return doc
-}
-
-func cdContains(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestScenario_CIMD_CACHE_01_CacheKeyIsExactString(t *testing.T) {
@@ -2041,7 +2033,7 @@ func TestScenario_CIMD_FLOW_12_PairwiseAuthRouteResourceCache(t *testing.T) {
 			if row.resource && (len(aud) != 1 || aud[0] != cdResource) {
 				t.Errorf("aud = %v, want [%s]", aud, cdResource)
 			}
-			if !row.resource && cdContains(aud, cdResource) {
+			if !row.resource && slices.Contains(aud, cdResource) {
 				t.Errorf("aud = %v names a resource that was not requested", aud)
 			}
 			if got := srv.hits.Load(); got != wantFetches {

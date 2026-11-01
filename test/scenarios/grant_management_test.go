@@ -96,7 +96,7 @@ func (e *gmEnv) endpoint(t *testing.T, method, grantID, clientID, secret string)
 	defer func() { _ = resp.Body.Close() }()
 	body := map[string]any{}
 	if resp.StatusCode == http.StatusOK {
-		body = decodeJSONBody(t, resp)
+		body = scenariokit.DecodeJSON(t, resp)
 	}
 	return resp.StatusCode, body
 }

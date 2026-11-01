@@ -336,7 +336,7 @@ func (f *pcrFixture) authorize(r pcrAuthz) pcrAuthzOut {
 		resp := f.postForm("/oidc/par", params)
 		defer resp.Body.Close()
 		out.status = resp.StatusCode
-		out.body = pcrDecode(f.t, resp)
+		out.body = scenariokit.DecodeJSON(f.t, resp)
 		if resp.StatusCode != http.StatusCreated {
 			return out
 		}
@@ -371,7 +371,7 @@ func (f *pcrFixture) authorize(r pcrAuthz) pcrAuthzOut {
 	defer resp.Body.Close()
 	out.status = resp.StatusCode
 	if resp.StatusCode != http.StatusFound {
-		out.body = pcrDecode(f.t, resp)
+		out.body = scenariokit.DecodeJSON(f.t, resp)
 		return out
 	}
 	loc, err := resp.Location()
@@ -423,22 +423,6 @@ func pcrJTI(tb testing.TB) string {
 	return "pcr-jti-" + hex.EncodeToString(b[:])
 }
 
-func pcrDecode(tb testing.TB, resp *http.Response) map[string]any {
-	tb.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		tb.Fatalf("read body: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		tb.Fatalf("decode %q: %v", raw, err)
-	}
-	return out
-}
-
 // pcrWalk is what an interaction walk observed.
 type pcrWalk struct {
 	// redirect is the final RP redirect.
@@ -465,7 +449,7 @@ func (f *pcrFixture) walk(loc *url.URL, answers map[string][]string) pcrWalk {
 	var csrf string
 	advanced := false
 	for range 8 {
-		if c := pcrCookie(resp.Cookies(), "__Host-oidc_csrf"); c != nil {
+		if c := scenariokit.FindCookie(resp.Cookies(), "__Host-oidc_csrf"); c != nil {
 			csrf = c.Value
 		}
 		if resp.StatusCode == http.StatusFound {
@@ -482,7 +466,7 @@ func (f *pcrFixture) walk(loc *url.URL, answers map[string][]string) pcrWalk {
 			resp.Body.Close()
 			f.t.Fatalf("interaction status=%d body=%s (seen %v)", resp.StatusCode, body, w.seen)
 		}
-		env := pcrDecode(f.t, resp)
+		env := scenariokit.DecodeJSON(f.t, resp)
 		resp.Body.Close()
 		typ, _ := env["type"].(string)
 		stateRef, _ := env["state_ref"].(string)
@@ -584,15 +568,6 @@ func pcrGet(tb testing.TB, cl *http.Client, rawURL string) *http.Response {
 		tb.Fatalf("GET %s: %v", rawURL, err)
 	}
 	return resp
-}
-
-func pcrCookie(cookies []*http.Cookie, name string) *http.Cookie {
-	for _, c := range cookies {
-		if c.Name == name {
-			return c
-		}
-	}
-	return nil
 }
 
 // requireRPError asserts out is the invalid_request refusal with desc:

@@ -2,7 +2,6 @@ package scenarios_test
 
 import (
 	"context"
-	"crypto/rand"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -64,10 +63,7 @@ func TestStrictOfflineAccess_RefusesPreFlagTokenWithoutConsumingIt(t *testing.T)
 		t.Fatalf("lax exchange minted no refresh_token: status=%d body=%v", issued.StatusCode, issued.Raw)
 	}
 
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		t.Fatalf("rand.Read: %v", err)
-	}
+	cookieKey := testkit.NewCookieKey(t)
 	strictOP, err := op.New(
 		op.WithIssuer(lax.Issuer),
 		op.WithStore(lax.Store),

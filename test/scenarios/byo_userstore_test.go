@@ -191,16 +191,6 @@ func newBUSSigningKey(tb testing.TB) op.SigningKey {
 	return op.SigningKey{KeyID: "bus-sig-1", Signer: priv}
 }
 
-// newBUSCookieKey returns a fresh 32-byte cookie key for op.WithCookieKeys.
-func newBUSCookieKey(tb testing.TB) []byte {
-	tb.Helper()
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		tb.Fatalf("generate cookie key: %v", err)
-	}
-	return key
-}
-
 // claimsRequestExtra returns the url.Values carrying the supplied
 // OIDC Core §5.5 "claims" parameter as JSON. The function fails the
 // test on marshal error so each row stays free of boilerplate.
@@ -597,7 +587,7 @@ func TestScenario_BUS_010_PrimaryPasswordStoreIndependentOfUsers(t *testing.T) {
 	// which would replace the one under test. The construction
 	// outcome — not flow execution — is the BUS-010 contract.
 	signKey := newBUSSigningKey(t)
-	cookieKey := newBUSCookieKey(t)
+	cookieKey := testkit.NewCookieKey(t)
 	provider, err := op.New(
 		op.WithIssuer(testkit.DefaultIssuer),
 		op.WithStore(hybrid),

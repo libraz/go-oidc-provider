@@ -338,10 +338,7 @@ func TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate signing key: %v", err)
 	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		t.Fatalf("generate cookie key: %v", err)
-	}
+	cookieKey := testkit.NewCookieKey(t)
 
 	_, err = op.New(
 		op.WithIssuer("https://idp.testkit.invalid"),

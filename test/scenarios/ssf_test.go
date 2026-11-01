@@ -16,6 +16,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -393,7 +394,7 @@ func TestScenario_SSF_001_MetadataDocument(t *testing.T) {
 		}
 	}
 	methods := ssfStrings(doc["delivery_methods_supported"])
-	if !contains(methods, ssfPushMethod) || !contains(methods, "urn:ietf:rfc:8936") {
+	if !slices.Contains(methods, ssfPushMethod) || !slices.Contains(methods, "urn:ietf:rfc:8936") {
 		t.Errorf("delivery_methods_supported = %v, want push and poll", methods)
 	}
 	schemes, _ := doc["authorization_schemes"].([]any)
@@ -421,15 +422,6 @@ func ssfStrings(v any) []string {
 		}
 	}
 	return out
-}
-
-func contains(list []string, s string) bool {
-	for _, e := range list {
-		if e == s {
-			return true
-		}
-	}
-	return false
 }
 
 // TestScenario_SSF_002_MetadataPathIssuer pins the RFC 8414 form: the

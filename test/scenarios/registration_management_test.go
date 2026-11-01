@@ -75,7 +75,7 @@ func rmRegisterClient(t *testing.T, tk *testkit.Provider, body map[string]any) r
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST /oidc/register: status=%d want 201 body=%s", resp.StatusCode, raw)
 	}
-	got := rmDecodeBody(t, resp)
+	got := scenariokit.DecodeJSON(t, resp)
 	out := rmRegistered{body: got}
 	out.clientID, _ = got["client_id"].(string)
 	if issuedAt, ok := got["client_id_issued_at"].(float64); ok {
@@ -117,24 +117,6 @@ func rmManage(t *testing.T, tk *testkit.Provider, method, path, bearer string, b
 		t.Fatalf("Do %s %s: %v", method, path, err)
 	}
 	return resp
-}
-
-// rmDecodeBody unmarshals the response body as JSON. Empty bodies
-// return an empty map.
-func rmDecodeBody(t *testing.T, resp *http.Response) map[string]any {
-	t.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("Unmarshal(%s): %v", raw, err)
-	}
-	return out
 }
 
 // rmAssertNoStore checks the no-store / no-cache headers RFC 7591 §3.2
@@ -201,7 +183,7 @@ func TestScenario_RM_PUT_01_RequiresBearerRAT(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", got)
 	}
@@ -234,7 +216,7 @@ func TestScenario_RM_PUT_02_InvalidRATIs401(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", got)
 	}
@@ -297,7 +279,7 @@ func TestScenario_RM_PUT_04_ResponseBodyShape(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["client_id"].(string); got != created.clientID {
 		t.Errorf("client_id=%q want %q", got, created.clientID)
 	}
@@ -379,7 +361,7 @@ func rmAssertForbiddenField(t *testing.T, field string, value any, wantDescripti
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	got := rmDecodeBody(t, resp)
+	got := scenariokit.DecodeJSON(t, resp)
 	if e, _ := got["error"].(string); e != "invalid_request" {
 		t.Errorf("error=%q want invalid_request", e)
 	}
@@ -412,7 +394,7 @@ func TestScenario_RM_PUT_09_OmittedPropertyIsDeleted(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, ok := body["client_name"]; ok {
 		t.Errorf("client_name=%v want absent on omission", got)
 	}
@@ -445,7 +427,7 @@ func TestScenario_RM_PUT_10_NullSecretRejected(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	got := rmDecodeBody(t, resp)
+	got := scenariokit.DecodeJSON(t, resp)
 	if e, _ := got["error"].(string); e != "invalid_request" {
 		t.Errorf("error=%q want invalid_request", e)
 	}
@@ -483,7 +465,7 @@ func TestScenario_RM_PUT_11_AuthMethodSwitchMintsSecret(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	secret, _ := body["client_secret"].(string)
 	if secret == "" {
 		t.Error("PUT response must include a fresh client_secret on auth-method switch to confidential")
@@ -521,7 +503,7 @@ func TestScenario_RM_PUT_12_RATRotationDestroysOld(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("PUT status=%d want 200 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	newRAT, _ := body["registration_access_token"].(string)
 	if newRAT == "" {
 		t.Fatal("PUT response must include a fresh RAT")
@@ -612,7 +594,7 @@ func TestScenario_RM_PUT_15_StaticClientForbidden(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if e, _ := body["error"].(string); e != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", e)
 	}
@@ -645,7 +627,7 @@ func TestScenario_RM_PUT_16_ValidationFailsAsClientMetadata(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if e, _ := body["error"].(string); e != "invalid_client_metadata" {
 		t.Errorf("error=%q want invalid_client_metadata", e)
 	}
@@ -673,7 +655,7 @@ func TestScenario_RM_PUT_17_ClientIDMismatchRejected(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if e, _ := body["error"].(string); e != "invalid_request" {
 		t.Errorf("error=%q want invalid_request", e)
 	}
@@ -702,7 +684,7 @@ func TestScenario_RM_DEL_01_RequiresRAT(t *testing.T) {
 		raw, _ := io.ReadAll(noAuth.Body)
 		t.Fatalf("no-auth status=%d want 401 body=%s", noAuth.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, noAuth)
+	body := scenariokit.DecodeJSON(t, noAuth)
 	if e, _ := body["error"].(string); e != "invalid_token" {
 		t.Errorf("no-auth error=%q want invalid_token", e)
 	}
@@ -716,7 +698,7 @@ func TestScenario_RM_DEL_01_RequiresRAT(t *testing.T) {
 		raw, _ := io.ReadAll(bogus.Body)
 		t.Fatalf("bogus-rat status=%d want 401 body=%s", bogus.StatusCode, raw)
 	}
-	body = rmDecodeBody(t, bogus)
+	body = scenariokit.DecodeJSON(t, bogus)
 	if d, _ := body["error_description"].(string); d != "registration access token is invalid" {
 		t.Errorf("bogus-rat error_description=%q want %q", d, "registration access token is invalid")
 	}
@@ -849,7 +831,7 @@ func TestScenario_RM_DEL_05_StaticClientForbidden(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if e, _ := body["error"].(string); e != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", e)
 	}
@@ -982,7 +964,7 @@ func TestScenario_RM_RAT_01_CrossClientRATRejectedNotDestroyed(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("cross-client status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := rmDecodeBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if e, _ := body["error"].(string); e != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", e)
 	}

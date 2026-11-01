@@ -10,9 +10,7 @@ package scenarios_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -136,7 +134,7 @@ func postIntrospect(t *testing.T, tk *testkit.Provider, token, clientID, clientS
 		t.Fatalf("POST /introspect: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body := decodeJSONBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	return resp.StatusCode, body
 }
 
@@ -179,29 +177,9 @@ func getUserInfo(t *testing.T, tk *testkit.Provider, token string) (int, map[str
 	defer func() { _ = resp.Body.Close() }()
 	challenge := resp.Header.Get("WWW-Authenticate")
 	if resp.StatusCode == http.StatusOK {
-		return resp.StatusCode, decodeJSONBody(t, resp), challenge
+		return resp.StatusCode, scenariokit.DecodeJSON(t, resp), challenge
 	}
 	return resp.StatusCode, nil, challenge
-}
-
-// decodeJSONBody parses an HTTP response body as a JSON object,
-// returning an empty map for empty bodies so callers can write
-// uniform assertions against the absent / present cases (RFC 7009
-// §2.2 permits an empty 200 body on revocation).
-func decodeJSONBody(t *testing.T, resp *http.Response) map[string]any {
-	t.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshal body %q: %v", string(raw), err)
-	}
-	return out
 }
 
 // TestScenario_ATO_001_OpaqueAccessTokenIssuedAndPersisted exercises

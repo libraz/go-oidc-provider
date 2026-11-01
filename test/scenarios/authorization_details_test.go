@@ -249,7 +249,7 @@ func TestScenario_RAR_003_PushedThenReproducedAtAuthorize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /par: %v", err)
 	}
-	pushBody := decodeJSONResp(t, pushResp)
+	pushBody := scenariokit.DecodeJSON(t, pushResp)
 	pushResp.Body.Close()
 	requestURI, _ := pushBody["request_uri"].(string)
 	if requestURI == "" {
@@ -342,7 +342,7 @@ func rarRefresh(t *testing.T, tk *testkit.Provider, refreshToken string) map[str
 		t.Fatalf("POST refresh: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body := decodeJSONBody(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("refresh status=%d body=%v", resp.StatusCode, body)
 	}

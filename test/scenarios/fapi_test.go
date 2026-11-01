@@ -32,6 +32,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 // fapiClock pins the OP's notion of "now" so JAR claim windows
@@ -259,23 +260,6 @@ func (f *fapiFixture) fapiHappyForm() url.Values {
 	}
 }
 
-// fapiDecodeJSON parses resp.Body as a JSON object map.
-func fapiDecodeJSON(t *testing.T, resp *http.Response) map[string]any {
-	t.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("Unmarshal %s: %v", raw, err)
-	}
-	return out
-}
-
 // fapiExpectError asserts resp is a 400 with the supplied error code
 // and returns the decoded body for any further inspection.
 func fapiExpectError(t *testing.T, resp *http.Response, wantCode string) map[string]any {
@@ -284,7 +268,7 @@ func fapiExpectError(t *testing.T, resp *http.Response, wantCode string) map[str
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 (%s); body=%s", resp.StatusCode, wantCode, string(body))
 	}
-	body := fapiDecodeJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != wantCode {
 		t.Errorf("error=%q want %q (body=%v)", got, wantCode, body)
 	}
@@ -503,7 +487,7 @@ func TestScenario_FAPI_V2_025_CodePKCEProducesQueryRedirect(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 201 (body=%s)", resp.StatusCode, string(body))
 	}
-	body := fapiDecodeJSON(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	uri, _ := body["request_uri"].(string)
 	if !strings.HasPrefix(uri, "urn:ietf:params:oauth:request_uri:") {
 		t.Errorf("request_uri=%q does not match RFC 9126 §2.2 prefix", uri)

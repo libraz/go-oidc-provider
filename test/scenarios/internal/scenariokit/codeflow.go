@@ -264,12 +264,12 @@ func completeInteraction(tb testing.TB, client *http.Client, interactionURL, ori
 		tb.Fatalf("scenariokit: read interaction prompt: %v", err)
 	}
 	stepResp.Body = io.NopCloser(bytes.NewReader(raw))
-	step := decodeJSON(tb, stepResp)
+	step := DecodeJSON(tb, stepResp)
 	stateRef, _ := step["state_ref"].(string)
 	if stateRef == "" {
 		tb.Fatal("scenariokit: state_ref missing from interaction prompt")
 	}
-	csrfCookie := findCookie(stepResp.Cookies(), "__Host-oidc_csrf")
+	csrfCookie := FindCookie(stepResp.Cookies(), "__Host-oidc_csrf")
 	if csrfCookie == nil {
 		tb.Fatal("scenariokit: __Host-oidc_csrf cookie missing on interaction prompt")
 	}
@@ -466,7 +466,7 @@ func completeConsentIfPrompted(tb testing.TB, client *http.Client, interactionUR
 	// __Host-oidc_csrf cookie on every step boundary, so the value
 	// minted at the auth.* step does not verify against the consent.*
 	// step. Pull the rotated cookie off the prior response.
-	if rotated := findCookie(prior.Cookies(), "__Host-oidc_csrf"); rotated != nil {
+	if rotated := FindCookie(prior.Cookies(), "__Host-oidc_csrf"); rotated != nil {
 		csrf = rotated
 	}
 	approved := approvedScopesFromPrompt(env)
@@ -491,10 +491,10 @@ func approvedScopesFromPrompt(env map[string]any) string {
 	return strings.Join(out, " ")
 }
 
-// decodeJSON reads resp.Body as a JSON object map, failing the test on
+// DecodeJSON reads resp.Body as a JSON object map, failing the test on
 // transport / decode error. Empty bodies decode to an empty map so the
 // caller sees a stable zero value.
-func decodeJSON(tb testing.TB, resp *http.Response) map[string]any {
+func DecodeJSON(tb testing.TB, resp *http.Response) map[string]any {
 	tb.Helper()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -510,10 +510,10 @@ func decodeJSON(tb testing.TB, resp *http.Response) map[string]any {
 	return out
 }
 
-// findCookie returns the cookie matching name, or nil. Used to thread
+// FindCookie returns the cookie matching name, or nil. Used to thread
 // the OP's CSRF cookie between the GET /interaction prompt and the
 // matching POST submission.
-func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
+func FindCookie(cookies []*http.Cookie, name string) *http.Cookie {
 	for _, c := range cookies {
 		if c.Name == name {
 			return c

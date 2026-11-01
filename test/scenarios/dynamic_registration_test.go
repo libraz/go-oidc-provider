@@ -102,7 +102,7 @@ func (f *dcrFixture) register(t *testing.T, body map[string]any) (clientID, clie
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST /register: status=%d want 201 body=%s", resp.StatusCode, raw)
 	}
-	got := dcrDecode(t, resp)
+	got := scenariokit.DecodeJSON(t, resp)
 	cid, _ := got["client_id"].(string)
 	cs, _ := got["client_secret"].(string)
 	rt, _ := got["registration_access_token"].(string)
@@ -110,23 +110,6 @@ func (f *dcrFixture) register(t *testing.T, body map[string]any) (clientID, clie
 		t.Fatalf("response missing client_id: %+v", got)
 	}
 	return cid, cs, rt, got
-}
-
-// dcrDecode parses a JSON response body as a map.
-func dcrDecode(t *testing.T, resp *http.Response) map[string]any {
-	t.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshal %s: %v", raw, err)
-	}
-	return out
 }
 
 // TestScenario_DCR_EP_01_CreatedWithMetadataAndNoStore verifies that a
@@ -154,7 +137,7 @@ func TestScenario_DCR_EP_01_CreatedWithMetadataAndNoStore(t *testing.T) {
 	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Errorf("Content-Type=%q want application/json", got)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["client_name"].(string); got != "Created Client" {
 		t.Errorf("client_name=%q want %q", got, "Created Client")
 	}
@@ -180,7 +163,7 @@ func TestScenario_DCR_EP_02_OnlyJSONContentTypeAccepted(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_request" {
 		t.Errorf("error=%q want invalid_request", got)
 	}
@@ -203,7 +186,7 @@ func TestScenario_DCR_EP_03_RedirectURIsMandatory(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_redirect_uri" {
 		t.Errorf("error=%q want invalid_redirect_uri", got)
 	}
@@ -227,7 +210,7 @@ func TestScenario_DCR_EP_04_InvalidEnumRejectedAsClientMetadata(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_client_metadata" {
 		t.Errorf("error=%q want invalid_client_metadata", got)
 	}
@@ -404,7 +387,7 @@ func TestScenario_DCR_DEF_05_GrantTypesDefaultAuthCode(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 201 body=%s", resp.StatusCode, body)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	got, _ := body["grant_types"].([]any)
 	if len(got) != 1 {
 		t.Fatalf("grant_types=%v want one element", got)
@@ -662,7 +645,7 @@ func TestScenario_DCR_IAT_04_MissingOrInvalidIATIs401(t *testing.T) {
 		raw, _ := io.ReadAll(missing.Body)
 		t.Fatalf("missing IAT status=%d want 401 body=%s", missing.StatusCode, raw)
 	}
-	body := dcrDecode(t, missing)
+	body := scenariokit.DecodeJSON(t, missing)
 	if got, _ := body["error"].(string); got != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", got)
 	}
@@ -676,7 +659,7 @@ func TestScenario_DCR_IAT_04_MissingOrInvalidIATIs401(t *testing.T) {
 		raw, _ := io.ReadAll(bad.Body)
 		t.Fatalf("unknown IAT status=%d want 401 body=%s", bad.StatusCode, raw)
 	}
-	body2 := dcrDecode(t, bad)
+	body2 := scenariokit.DecodeJSON(t, bad)
 	if got, _ := body2["error"].(string); got != "invalid_token" {
 		t.Errorf("unknown IAT error=%q want invalid_token", got)
 	}
@@ -719,7 +702,7 @@ func TestScenario_DCR_IAT_06_PublicDCRSupportedButDiscouraged(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 201 (Open=true must admit no-bearer); body=%s", resp.StatusCode, raw)
 	}
-	out := dcrDecode(t, resp)
+	out := scenariokit.DecodeJSON(t, resp)
 	if cid, _ := out["client_id"].(string); cid == "" {
 		t.Errorf("client_id missing from open-DCR response: %+v", out)
 	}
@@ -753,7 +736,7 @@ func TestScenario_DCR_IAT_07_ManipulatedIATRejected(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", got)
 	}
@@ -824,7 +807,7 @@ func TestScenario_DCR_RAT_04_RATBoundToIssuingClient(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", got)
 	}
@@ -923,7 +906,7 @@ func TestScenario_DCR_STATIC_02_StaticClientsHaveNoRAT(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", got)
 	}
@@ -961,7 +944,7 @@ func TestScenario_DCR_GET_01_GetRequiresBearerRAT(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", got)
 	}
@@ -1000,7 +983,7 @@ func TestScenario_DCR_GET_02_GetReturnsNonSecretMetadata(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["client_id"].(string); got != cid {
 		t.Errorf("client_id=%q want %q", got, cid)
 	}
@@ -1079,7 +1062,7 @@ func TestScenario_DCR_GET_05_ManipulatedRATRejected(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_token" {
 		t.Errorf("error=%q want invalid_token", got)
 	}
@@ -1108,7 +1091,7 @@ func TestScenario_DCR_VAL_01_RedirectURIsArrayMinOne(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_redirect_uri" {
 		t.Errorf("error=%q want invalid_redirect_uri", got)
 	}
@@ -1134,7 +1117,7 @@ func TestScenario_DCR_VAL_02_ApplicationTypeURIScheme(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_redirect_uri" {
 		t.Errorf("error=%q want invalid_redirect_uri", got)
 	}
@@ -1162,7 +1145,7 @@ func TestScenario_DCR_VAL_03_GrantTypesMustBeSupported(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_client_metadata" {
 		t.Errorf("error=%q want invalid_client_metadata", got)
 	}
@@ -1194,7 +1177,7 @@ func TestScenario_DCR_VAL_05_JWKSAndJWKSURIExclusive(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_client_metadata" {
 		t.Errorf("error=%q want invalid_client_metadata", got)
 	}
@@ -1221,7 +1204,7 @@ func TestScenario_DCR_VAL_06_SectorIdentifierURIRules(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_client_metadata" {
 		t.Errorf("error=%q want invalid_client_metadata", got)
 	}
@@ -1277,7 +1260,7 @@ func TestScenario_DCR_VAL_07_PairwiseHostHomogeneityWithoutSector(t *testing.T) 
 			raw, _ := io.ReadAll(resp.Body)
 			t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 		}
-		body := dcrDecode(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		if got, _ := body["error"].(string); got != "invalid_client_metadata" {
 			t.Errorf("error=%q want invalid_client_metadata", got)
 		}
@@ -1298,7 +1281,7 @@ func TestScenario_DCR_VAL_07_PairwiseHostHomogeneityWithoutSector(t *testing.T) 
 			raw, _ := io.ReadAll(resp.Body)
 			t.Fatalf("status=%d want 201 body=%s", resp.StatusCode, raw)
 		}
-		body := dcrDecode(t, resp)
+		body := scenariokit.DecodeJSON(t, resp)
 		if got, _ := body["subject_type"].(string); got != "pairwise" {
 			t.Errorf("subject_type=%q want pairwise (body=%v)", got, body)
 		}
@@ -1334,7 +1317,7 @@ func TestScenario_DCR_VAL_10_DefaultMaxAgeNonNegative(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_client_metadata" {
 		t.Errorf("error=%q want invalid_client_metadata", got)
 	}
@@ -1361,7 +1344,7 @@ func TestScenario_DCR_VAL_11_RequestObjectAlgNoneRejected(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
-	body := dcrDecode(t, resp)
+	body := scenariokit.DecodeJSON(t, resp)
 	if got, _ := body["error"].(string); got != "invalid_client_metadata" {
 		t.Errorf("error=%q want invalid_client_metadata", got)
 	}
@@ -1430,7 +1413,7 @@ func TestScenario_DCR_ERR_01_ErrorCodesLimitedSet(t *testing.T) {
 			t.Parallel()
 			resp := f.post(t, tc.bearer, tc.contentType, tc.body)
 			defer func() { _ = resp.Body.Close() }()
-			body := dcrDecode(t, resp)
+			body := scenariokit.DecodeJSON(t, resp)
 			got, _ := body["error"].(string)
 			if got != tc.wantCode {
 				t.Errorf("error=%q want %q", got, tc.wantCode)
@@ -1526,7 +1509,7 @@ func TestScenario_DCR_ERR_03_NoInternalDetailLeak(t *testing.T) {
 			t.Parallel()
 			resp := f.post(t, tc.bearer, "", tc.body)
 			defer func() { _ = resp.Body.Close() }()
-			body := dcrDecode(t, resp)
+			body := scenariokit.DecodeJSON(t, resp)
 			desc, _ := body["error_description"].(string)
 			for _, needle := range leaks {
 				if strings.Contains(desc, needle) {
