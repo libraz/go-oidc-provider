@@ -1,6 +1,7 @@
 package testkit
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -112,7 +113,7 @@ func (p *Provider) RegisterClient(tb testing.TB, fix ClientFixture) *store.Clien
 // against the helper can poke at the defaults.
 func buildClient(fix ClientFixture) *store.Client {
 	out := &store.Client{
-		ID:                      coalesce(fix.ID, "client-test"),
+		ID:                      cmp.Or(fix.ID, "client-test"),
 		ClientIDIssuedAt:        0,
 		RedirectURIs:            slices.Clone(fix.RedirectURIs),
 		PostLogoutRedirectURIs:  slices.Clone(fix.PostLogoutRedirectURIs),
@@ -156,13 +157,4 @@ func buildClient(fix ClientFixture) *store.Client {
 		}
 	}
 	return out
-}
-
-// coalesce returns first when it is non-empty, otherwise fallback. It
-// keeps the [buildClient] body free of repetitive ternary expressions.
-func coalesce(first, fallback string) string {
-	if first != "" {
-		return first
-	}
-	return fallback
 }

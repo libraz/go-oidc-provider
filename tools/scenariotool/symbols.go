@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/libraz/go-oidc-provider/tools/internal/gatekit"
 )
@@ -360,7 +359,7 @@ func unresolvedInText(ix *symbolIndex, text string) []string {
 			continue // not a claim about this repository
 		case !qualified && !ix.knownName(pkg):
 			continue
-		case !qualified && !isExported(symbol):
+		case !qualified && !token.IsExported(symbol):
 			continue // audit event name, not a symbol reference
 		}
 		if !ix.resolve(pkg, symbol, member) {
@@ -377,14 +376,6 @@ func hasSkippedExt(token string) bool {
 		if strings.HasSuffix(token, ext) {
 			return true
 		}
-	}
-	return false
-}
-
-// isExported reports whether name begins with an upper-case letter.
-func isExported(name string) bool {
-	for _, r := range name {
-		return unicode.IsUpper(r)
 	}
 	return false
 }

@@ -83,6 +83,9 @@ import (
 // grace period would only mask hung handlers during conformance runs.
 const shutdownGrace = 5 * time.Second
 
+// cookieKeyLen is the AES-256 key length op.WithCookieKeys expects.
+const cookieKeyLen = 32
+
 const defaultListenAddr = "127.0.0.1:9090"
 
 // runConfig groups the demo's startup knobs so run() does not grow a
@@ -371,7 +374,7 @@ func buildProvider(ctx context.Context, cfg runConfig, logger *slog.Logger) (*op
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate signing key: %w", err)
 	}
-	cookieKey := make([]byte, 32)
+	cookieKey := make([]byte, cookieKeyLen)
 	if _, err := rand.Read(cookieKey); err != nil {
 		return nil, nil, fmt.Errorf("generate cookie key: %w", err)
 	}
@@ -722,32 +725,23 @@ func commonClientSeeds(cfg runConfig, postLogoutURIs []string) []op.ClientSeed {
 		// Three registrations cover the three auth-method
 		// variants OFCS exercises (basic / post, plus a distinct
 		// second basic client for the cross-client refresh test).
-		seeds = append(seeds,
-			op.ConfidentialClient{
-				ID:                     cfg.confClientID,
+		for _, c := range []struct {
+			suffix string
+			method op.AuthMethod
+		}{
+			{"", op.AuthClientSecretBasic},
+			{"-post", op.AuthClientSecretPost},
+			{"-2", op.AuthClientSecretBasic},
+		} {
+			seeds = append(seeds, op.ConfidentialClient{
+				ID:                     cfg.confClientID + c.suffix,
 				Secret:                 cfg.confClientSec,
-				AuthMethod:             op.AuthClientSecretBasic,
+				AuthMethod:             c.method,
 				RedirectURIs:           cfg.redirectURIs,
 				Scopes:                 scopeCatalog,
 				PostLogoutRedirectURIs: postLogoutURIs,
-			},
-			op.ConfidentialClient{
-				ID:                     cfg.confClientID + "-post",
-				Secret:                 cfg.confClientSec,
-				AuthMethod:             op.AuthClientSecretPost,
-				RedirectURIs:           cfg.redirectURIs,
-				Scopes:                 scopeCatalog,
-				PostLogoutRedirectURIs: postLogoutURIs,
-			},
-			op.ConfidentialClient{
-				ID:                     cfg.confClientID + "-2",
-				Secret:                 cfg.confClientSec,
-				AuthMethod:             op.AuthClientSecretBasic,
-				RedirectURIs:           cfg.redirectURIs,
-				Scopes:                 scopeCatalog,
-				PostLogoutRedirectURIs: postLogoutURIs,
-			},
-		)
+			})
+		}
 	}
 	return seeds
 }
@@ -823,6 +817,7 @@ const (
 // code and a dev-only seed has no need to participate in that
 // machinery — the value just feeds the "updated_at" claim, which OFCS
 // only checks for shape, not freshness.
+//
 // put writes the seed through whichever backend is live. A durable
 // backend re-seeds the same subject on every start, which is why the
 // closure is an upsert on both sides rather than an insert.
@@ -882,9 +877,8 @@ func loadCABundles(raw string) (*x509.CertPool, error) {
 	}
 	pool, err := x509.SystemCertPool()
 	if err != nil || pool == nil {
-		// SystemCertPool returns (nil, error) on Windows pre-Go 1.18;
-		// fall back to a fresh pool so the embedder's bundle is still
-		// honoured without crashing op-demo.
+		// Fall back to a fresh pool so the bundle is still honoured
+		// without crashing op-demo.
 		pool = x509.NewCertPool()
 	}
 	for _, path := range strings.Split(raw, ":") {

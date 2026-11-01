@@ -117,11 +117,7 @@ func resolveSector(c *store.Client) (string, error) {
 		}
 		return host, nil
 	}
-	hosts := uniqueHosts(c.RedirectURIs)
-	if len(hosts) == 1 {
-		return hosts[0], nil
-	}
-	return "", ErrSectorUnresolved
+	return singleRedirectHost(c.RedirectURIs)
 }
 
 // hostOf parses raw as an absolute URL and returns the lower-cased
@@ -140,29 +136,27 @@ func hostOf(raw string) (string, error) {
 	return strings.ToLower(u.Hostname()), nil
 }
 
-// uniqueHosts collapses redirectURIs to their distinct hostname
-// values (port stripped, matching [hostOf]), preserving order so the
-// function is deterministic for tests. Malformed URIs and entries
-// without a host are skipped silently; the caller decides how to
-// surface the empty result.
-func uniqueHosts(uris []string) []string {
-	if len(uris) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(uris))
-	out := make([]string, 0, len(uris))
+// singleRedirectHost returns the one hostname shared by every usable
+// redirect URI (port stripped, matching [hostOf]). Malformed URIs and
+// entries without a host are skipped; zero or two distinct hosts yield
+// [ErrSectorUnresolved], and the scan stops at the second.
+func singleRedirectHost(uris []string) (string, error) {
+	var sector string
 	for _, raw := range uris {
 		host, err := hostOf(raw)
 		if err != nil {
 			continue
 		}
-		if _, dup := seen[host]; dup {
-			continue
+		if sector == "" {
+			sector = host
+		} else if host != sector {
+			return "", ErrSectorUnresolved
 		}
-		seen[host] = struct{}{}
-		out = append(out, host)
 	}
-	return out
+	if sector == "" {
+		return "", ErrSectorUnresolved
+	}
+	return sector, nil
 }
 
 // invalidSaltGenerator surfaces a misconfigured salt at request time

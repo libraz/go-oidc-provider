@@ -170,8 +170,8 @@ func (d TemplateOverlayDriver) RenderError(w http.ResponseWriter, r *http.Reques
 	return renderer.RenderError(w, r, prompt)
 }
 
-// renderConsent stamps response headers and executes ConsentTemplate
-// against a [ConsentTemplateData] populated from the prompt.
+// renderConsent executes ConsentTemplate against a [ConsentTemplateData]
+// populated from the prompt.
 func (d TemplateOverlayDriver) renderConsent(w http.ResponseWriter, r *http.Request, p Prompt, data ConsentScopePromptData) error {
 	td := ConsentTemplateData{
 		Client:              data.Client,
@@ -179,21 +179,14 @@ func (d TemplateOverlayDriver) renderConsent(w http.ResponseWriter, r *http.Requ
 		StateRef:            p.StateRef,
 		CSRFToken:           p.CSRFToken,
 		ApprovedScopesField: ConsentApprovedScopesField,
-		SubmitMethod:        "POST",
+		SubmitMethod:        http.MethodPost,
 		SubmitAction:        r.URL.RequestURI(),
 	}
-	var body bytes.Buffer
-	if err := d.ConsentTemplate.Execute(&body, td); err != nil {
-		return fmt.Errorf("interaction: render consent template: %w", err)
-	}
-	if err := writeOverlayResponse(w, &body, d.ConsentCSP); err != nil {
-		return err
-	}
-	return nil
+	return executeOverlay(w, d.ConsentTemplate, td, d.ConsentCSP, "consent")
 }
 
-// renderChooser stamps response headers and executes ChooserTemplate
-// against a [ChooserTemplateData] populated from the prompt.
+// renderChooser executes ChooserTemplate against a [ChooserTemplateData]
+// populated from the prompt.
 func (d TemplateOverlayDriver) renderChooser(w http.ResponseWriter, r *http.Request, p Prompt, data ChooserPromptData) error {
 	td := ChooserTemplateData{
 		Accounts:       data.Accounts,
@@ -201,17 +194,21 @@ func (d TemplateOverlayDriver) renderChooser(w http.ResponseWriter, r *http.Requ
 		StateRef:       p.StateRef,
 		CSRFToken:      p.CSRFToken,
 		SessionIDField: ChooserSessionIDField,
-		SubmitMethod:   "POST",
+		SubmitMethod:   http.MethodPost,
 		SubmitAction:   r.URL.RequestURI(),
 	}
+	return executeOverlay(w, d.ChooserTemplate, td, d.ChooserCSP, "chooser")
+}
+
+// executeOverlay renders tmpl with data into a buffer, then commits it with
+// the overlay's response headers. Buffering keeps an execution error from
+// leaking a partial 200 response.
+func executeOverlay(w http.ResponseWriter, tmpl *template.Template, data any, csp, name string) error {
 	var body bytes.Buffer
-	if err := d.ChooserTemplate.Execute(&body, td); err != nil {
-		return fmt.Errorf("interaction: render chooser template: %w", err)
+	if err := tmpl.Execute(&body, data); err != nil {
+		return fmt.Errorf("interaction: render %s template: %w", name, err)
 	}
-	if err := writeOverlayResponse(w, &body, d.ChooserCSP); err != nil {
-		return err
-	}
-	return nil
+	return writeOverlayResponse(w, &body, csp)
 }
 
 // writeOverlayResponse commits a successfully rendered template body.

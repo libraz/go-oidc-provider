@@ -95,14 +95,10 @@ func RequiredGrants(p Profile) []grant.Type {
 // infrastructure prerequisite — embedders requiring mTLS opt in via
 // [feature.MTLS] explicitly so the default steps aside.
 func RequiredAnyOf(p Profile) [][]feature.Flag {
-	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	if IsFAPI(p) {
 		return [][]feature.Flag{{feature.DPoP, feature.MTLS}}
-	case Baseline, profileUnspecified:
-		return nil
-	default:
-		return nil
 	}
+	return nil
 }
 
 // MaxAccessTokenTTL returns the upper bound the profile imposes on
@@ -114,14 +110,10 @@ func RequiredAnyOf(p Profile) [][]feature.Flag {
 // minutes (FAPI 2.0 §3.1.9); FAPI-CIBA inherits the same cap by
 // reference (FAPI-CIBA-ID1 §5).
 func MaxAccessTokenTTL(p Profile) time.Duration {
-	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	if IsFAPI(p) {
 		return 10 * time.Minute
-	case Baseline, profileUnspecified:
-		return 0
-	default:
-		return 0
 	}
+	return 0
 }
 
 // MaxRequestObjectAge returns the upper bound p places on how old a
@@ -145,14 +137,10 @@ func MaxAccessTokenTTL(p Profile) time.Duration {
 //
 // Stable since v1.1.
 func MaxRequestObjectAge(p Profile) time.Duration {
-	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	if IsFAPI(p) {
 		return 60 * time.Minute
-	case Baseline, profileUnspecified:
-		return 0
-	default:
-		return 0
 	}
+	return 0
 }
 
 // PARLifetimeCeiling returns the exclusive upper bound p places on a
@@ -162,14 +150,10 @@ func MaxRequestObjectAge(p Profile) time.Duration {
 // inherits the bound; a configured lifetime must therefore be strictly
 // below the returned value.
 func PARLifetimeCeiling(p Profile) time.Duration {
-	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	if IsFAPI(p) {
 		return 600 * time.Second
-	case Baseline, profileUnspecified:
-		return 0
-	default:
-		return 0
 	}
+	return 0
 }
 
 // RequiresPKCE reports whether p mandates that every authorization-
@@ -318,14 +302,10 @@ func RequiresPAR(p Profile) bool {
 // The slice is freshly allocated on each call; callers may mutate
 // it freely.
 func AllowedClientAuthMethods(p Profile) []string {
-	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	if IsFAPI(p) {
 		return []string{"private_key_jwt"}
-	case Baseline, profileUnspecified:
-		return nil
-	default:
-		return nil
 	}
+	return nil
 }
 
 // AllowedClientSigningAlgs returns the JWS "alg" values the profile
@@ -342,12 +322,8 @@ func AllowedClientAuthMethods(p Profile) []string {
 // The slice is freshly allocated on each call; callers may mutate
 // it freely.
 func AllowedClientSigningAlgs(p Profile) []string {
-	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	if IsFAPI(p) {
 		return []string{"PS256", "ES256", "EdDSA"}
-	case Baseline, profileUnspecified:
-		return nil
-	default:
-		return nil
 	}
+	return nil
 }

@@ -9,6 +9,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 // ApproveAllScopes is the empty approved-scopes payload.
@@ -78,14 +82,14 @@ func IsConsentPrompt(resp *http.Response) (consent bool, envelope map[string]any
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return false, nil, fmt.Errorf("testkit: decode consent response: %w", err)
 	}
-	if t, _ := out["type"].(string); t != "consent.scope" {
+	if t, _ := out["type"].(string); t != interaction.PromptTypeConsentScope {
 		return false, out, nil
 	}
 	return true, out, nil
 }
 
 // PostConsentApproval submits the built-in consent screen's
-// approved_scopes form. csrf is the value of the __Host-oidc_csrf
+// approved_scopes form. csrfToken is the value of the __Host-oidc_csrf
 // cookie attached to the prior /interaction response; stateRef is the
 // state_ref the consent prompt embedded; origin is the Origin header
 // the OP's CSRF middleware expects (typically the issuer URL).
@@ -97,12 +101,12 @@ func IsConsentPrompt(resp *http.Response) (consent bool, envelope map[string]any
 func PostConsentApproval(
 	tb testing.TB,
 	client *http.Client,
-	interactionURL, origin, csrf, stateRef, approved string,
+	interactionURL, origin, csrfToken, stateRef, approved string,
 ) *http.Response {
 	tb.Helper()
 	body := map[string]any{
-		"state_ref": stateRef,
-		"values":    map[string]string{"approved_scopes": approved},
+		interaction.StateRefField: stateRef,
+		"values":                  map[string]string{interaction.ConsentApprovedScopesField: approved},
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -114,9 +118,9 @@ func PostConsentApproval(
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", origin)
-	req.Header.Set("X-CSRF-Token", csrf)
+	req.Header.Set(csrf.HeaderName, csrfToken)
 	//nolint:gosec // G124: AddCookie serialises name=value only; Set-Cookie attributes never travel on a request.
-	req.AddCookie(&http.Cookie{Name: "__Host-oidc_csrf", Value: csrf})
+	req.AddCookie(&http.Cookie{Name: cookie.CSRFProfile.Name, Value: csrfToken})
 	resp, err := client.Do(req)
 	if err != nil {
 		tb.Fatalf("testkit: POST consent: %v", err)

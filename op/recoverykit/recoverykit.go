@@ -40,7 +40,18 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/store"
+)
+
+var (
+	// ErrSubjectRequired is returned by [Generate] and [Kit.Generate] when
+	// the subject is empty.
+	ErrSubjectRequired = errors.New("recoverykit: subject is required")
+
+	// ErrStoreRequired is returned by [Replace] and [Kit.Replace] when the
+	// recovery store is nil, including a typed nil.
+	ErrStoreRequired = errors.New("recoverykit: store is required")
 )
 
 // Result is one freshly minted batch, split into the half that is
@@ -108,7 +119,7 @@ func Generate(ctx context.Context, subject string) (*Result, error) {
 // package-level [Generate] for when to prefer it over [Kit.Replace].
 func (k Kit) Generate(ctx context.Context, subject string) (*Result, error) {
 	if subject == "" {
-		return nil, errors.New("recoverykit: subject is required")
+		return nil, ErrSubjectRequired
 	}
 	res, err := k.verifier().Generate(ctx, subject)
 	if err != nil {
@@ -132,8 +143,8 @@ func Replace(ctx context.Context, recoveryStore store.RecoveryStore, subject str
 // [store.RecoveryBatch.GeneratedAt] from the Kit's clock. See the
 // package-level [Replace] for the ordering guarantee it carries.
 func (k Kit) Replace(ctx context.Context, recoveryStore store.RecoveryStore, subject string) (*Result, error) {
-	if recoveryStore == nil {
-		return nil, errors.New("recoverykit: store is required")
+	if nilcheck.IsNil(recoveryStore) {
+		return nil, ErrStoreRequired
 	}
 	res, err := k.verifier().Replace(ctx, recoveryStore, subject)
 	if err != nil {

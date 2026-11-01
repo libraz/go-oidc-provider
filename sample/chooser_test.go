@@ -18,6 +18,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -67,7 +68,7 @@ func TestSelectAccountRendersChooserAndCompletes(t *testing.T) {
 	if !strings.Contains(page, `name="session_id"`) {
 		t.Fatalf("the chooser rendered no control carrying session_id, so no row can be picked:\n%s", page)
 	}
-	for _, key := range []string{chooserPromptType, "chooser.session_id"} {
+	for _, key := range []string{interaction.PromptTypeChooser, "chooser.session_id"} {
 		if strings.Contains(page, key) {
 			t.Errorf("the rendered page shows the raw key %q:\n%s", key, page)
 		}

@@ -699,9 +699,9 @@ func (d HTMLDriver) titleFor(prompt Prompt) string {
 	key := prompt.Type
 	data := map[string]string(nil)
 	switch prompt.Type {
-	case "auth.password":
+	case PromptTypePassword:
 		key = "login.title"
-	case "consent.scope":
+	case PromptTypeConsentScope:
 		key = "consent.title"
 		if consent, ok := prompt.Data.(ConsentScopePromptData); ok {
 			clientName := consent.Client.Name
@@ -720,9 +720,9 @@ func (d HTMLDriver) titleFor(prompt Prompt) string {
 func (d HTMLDriver) buttonFor(prompt Prompt) string {
 	key := "interaction.button.continue"
 	switch prompt.Type {
-	case "auth.password":
+	case PromptTypePassword:
 		key = "login.button.submit"
-	case "consent.scope":
+	case PromptTypeConsentScope:
 		key = "consent.button.allow"
 	}
 	if message, ok := d.message(prompt.Locale, key, nil); ok {
@@ -745,23 +745,23 @@ func (d HTMLDriver) message(locale, key string, data map[string]string) (string,
 // heading.
 func htmlTitleFor(promptType string) string {
 	switch promptType {
-	case "auth.password":
+	case PromptTypePassword:
 		return "Sign in"
-	case "auth.totp":
+	case PromptTypeTOTP:
 		return "Two-factor code"
-	case "auth.email_otp.send":
+	case PromptTypeEmailOTPSend:
 		return "Send email code"
-	case "auth.email_otp.verify":
+	case PromptTypeEmailOTPVerify:
 		return "Email code"
-	case "auth.passkey":
+	case PromptTypePasskey:
 		return "Passkey"
-	case "auth.recovery_code":
+	case PromptTypeRecoveryCode:
 		return "Recovery code"
 	case "captcha":
 		return "Verify you are human"
-	case "consent.scope":
+	case PromptTypeConsentScope:
 		return "Authorize access"
-	case "interaction.chooser":
+	case PromptTypeChooser:
 		return "Choose an account"
 	case PromptTypeChooseFactor:
 		return "Choose how to sign in"

@@ -107,13 +107,7 @@ func (p Profile) IsValid() bool {
 // misconfiguration is caught at construction time so an operator never
 // serves a single token before the gate fires.
 func RequiresAccessTokenRevocation(p Profile) bool {
-	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
-		return true
-	case Baseline, profileUnspecified:
-		return false
-	}
-	return false
+	return IsFAPI(p)
 }
 
 // IsFAPI reports whether p belongs to the FAPI family: [FAPI2Baseline],

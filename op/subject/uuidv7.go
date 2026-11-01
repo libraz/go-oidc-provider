@@ -34,10 +34,11 @@ func UUIDv7() Generator { //nolint:ireturn,nolintlint // sealed-sum interface re
 type uuidv7Generator struct{}
 
 func (uuidv7Generator) Generate(_ context.Context, in GeneratorInput) (Subject, error) {
-	if in.InternalUserID == "" {
-		return "", ErrInputEmpty
+	userID, err := pickUserID(in)
+	if err != nil {
+		return "", err
 	}
-	return Subject(in.InternalUserID), nil
+	return Subject(userID), nil
 }
 
 // ErrInputEmpty signals that a [GeneratorInput] carried no

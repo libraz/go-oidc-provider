@@ -160,3 +160,24 @@ func TestRejectsMissingArguments(t *testing.T) {
 		t.Error("Replace accepted a nil store")
 	}
 }
+
+// TestRequiredArguments pins the sentinels for an empty subject and for nil
+// and typed-nil stores; none of them reaches the (expensive) hashing step.
+func TestRequiredArguments(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	if _, err := recoverykit.Generate(ctx, ""); !errors.Is(err, recoverykit.ErrSubjectRequired) {
+		t.Errorf("Generate empty subject: err = %v, want ErrSubjectRequired", err)
+	}
+	if _, err := recoverykit.Replace(ctx, nil, "sub"); !errors.Is(err, recoverykit.ErrStoreRequired) {
+		t.Errorf("Replace nil store: err = %v, want ErrStoreRequired", err)
+	}
+	if _, err := recoverykit.Replace(ctx, (*nilRecoveryStore)(nil), "sub"); !errors.Is(err, recoverykit.ErrStoreRequired) {
+		t.Errorf("Replace typed-nil store: err = %v, want ErrStoreRequired", err)
+	}
+}
+
+// nilRecoveryStore lets a nil pointer satisfy the interface; its methods are
+// never reached.
+type nilRecoveryStore struct{ store.RecoveryStore }

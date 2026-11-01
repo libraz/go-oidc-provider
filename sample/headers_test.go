@@ -68,7 +68,7 @@ func TestEveryHTMLSurfaceDeniesFraming(t *testing.T) {
 			serve: func(w http.ResponseWriter) {
 				req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/oidc/interaction/x", nil)
 				if err := driver.Render(w, req, interaction.Prompt{
-					Type:     "auth.password",
+					Type:     interaction.PromptTypePassword,
 					StateRef: "ref",
 					Inputs: []interaction.FieldSpec{
 						{Name: "username", Kind: interaction.FieldEmail, Label: "auth.password.username"},

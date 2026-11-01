@@ -404,3 +404,34 @@ func TestAsserts(t *testing.T) {
 		t.Error("a skip-only delegate is progress, not drift: the binding gate tolerates it")
 	}
 }
+
+// TestDiscoverSkipStubsIgnoresFixtureTrees pins that a scenario-shaped test
+// parked under testdata is a fixture, not part of the suite being judged.
+func TestDiscoverSkipStubsIgnoresFixtureTrees(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "pkg", "testdata")
+	if err := os.MkdirAll(fixture, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	const real = "package p\n\nimport \"testing\"\n\nfunc TestScenario_AAA_001_Real(t *testing.T) { t.Skip(\"pending\") }\n"
+	const decoy = "package p\n\nimport \"testing\"\n\nfunc TestScenario_BBB_001_Decoy(t *testing.T) { t.Skip(\"pending\") }\n"
+	for path, src := range map[string]string{
+		filepath.Join(dir, "pkg", "real_test.go"): real,
+		filepath.Join(fixture, "decoy_test.go"):   decoy,
+	} {
+		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	stubs, classified, err := discoverSkipStubs(dir)
+	if err != nil {
+		t.Fatalf("discoverSkipStubs: %v", err)
+	}
+	if _, ok := stubs["AAA-001"]; !ok || classified != 1 {
+		t.Errorf("stubs=%v classified=%d, want AAA-001 only", stubs, classified)
+	}
+	if _, ok := stubs["BBB-001"]; ok {
+		t.Error("testdata fixture was scanned")
+	}
+}

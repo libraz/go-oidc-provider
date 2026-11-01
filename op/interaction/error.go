@@ -81,6 +81,14 @@ var (
 	_ ErrorRenderer = HTMLDriver{}
 )
 
+// errorStatus returns the HTTP status for prompt, defaulting to 400.
+func errorStatus(prompt ErrorPrompt) int {
+	if prompt.Status > 0 {
+		return prompt.Status
+	}
+	return http.StatusBadRequest
+}
+
 // RenderError implements [ErrorRenderer] for JSONDriver. The output is
 // the canonical RFC 6749 §5.2 / OIDC Core 1.0 §3.1.2.6 envelope so
 // SPAs that fetched the URL via XHR get the same shape they would have
@@ -89,11 +97,7 @@ func (JSONDriver) RenderError(w http.ResponseWriter, _ *http.Request, prompt Err
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	if prompt.Status > 0 {
-		w.WriteHeader(prompt.Status)
-	} else {
-		w.WriteHeader(http.StatusBadRequest)
-	}
+	w.WriteHeader(errorStatus(prompt))
 	if err := json.NewEncoder(w).Encode(prompt); err != nil {
 		return fmt.Errorf("interaction: render json error: %w", err)
 	}
@@ -116,11 +120,7 @@ func (JSONDriver) RenderError(w http.ResponseWriter, _ *http.Request, prompt Err
 func (HTMLDriver) RenderError(w http.ResponseWriter, _ *http.Request, prompt ErrorPrompt) error {
 	body := buildErrorDocument(prompt)
 	stampHTMLHeaders(w)
-	if prompt.Status > 0 {
-		w.WriteHeader(prompt.Status)
-	} else {
-		w.WriteHeader(http.StatusBadRequest)
-	}
+	w.WriteHeader(errorStatus(prompt))
 	if _, err := io.WriteString(w, body); err != nil {
 		return fmt.Errorf("interaction: render html error: %w", err)
 	}

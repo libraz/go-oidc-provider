@@ -2,17 +2,20 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"iter"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/tools/internal/gatekit"
 )
 
 // testNameRE matches the Test_<PREFIX>(_<SUB>)*_<NNN>_<Slug> shape used by
@@ -293,7 +296,7 @@ func listScenarioIDs(ctx context.Context, pattern, cwd string) (map[string]struc
 		return nil, fmt.Errorf("go test -list %s: %w\n%s", pattern, err, string(out))
 	}
 	ids := map[string]struct{}{}
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	scanner := bufio.NewScanner(bytes.NewReader(out))
 	for scanner.Scan() {
 		id, ok := scenarioIDFromTestName(strings.TrimSpace(scanner.Text()))
 		if !ok {
@@ -391,6 +394,18 @@ func resolvePackageDelegations(ctx context.Context, pkg string, refs []delegatio
 	}
 }
 
+// topLevelFuncs yields the file's plain functions that have a body,
+// skipping methods and bodiless declarations.
+func topLevelFuncs(file *ast.File) iter.Seq[*ast.FuncDecl] {
+	return func(yield func(*ast.FuncDecl) bool) {
+		for _, decl := range file.Decls {
+			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Body != nil && !yield(fd) {
+				return
+			}
+		}
+	}
+}
+
 // declaredTestBodies parses the _test.go files directly under dir and
 // returns the body of every top-level function by name.
 func declaredTestBodies(dir string) (map[string]*ast.BlockStmt, error) {
@@ -405,10 +420,8 @@ func declaredTestBodies(dir string) (map[string]*ast.BlockStmt, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		for _, decl := range file.Decls {
-			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Body != nil {
-				bodies[fd.Name.Name] = fd.Body
-			}
+		for fd := range topLevelFuncs(file) {
+			bodies[fd.Name.Name] = fd.Body
 		}
 	}
 	return bodies, nil
@@ -438,7 +451,7 @@ func listTests(ctx context.Context, pattern, pkg, cwd string) (map[string]struct
 		return nil, fmt.Errorf("go test -list %s: %w", pkg, err)
 	}
 	names := map[string]struct{}{}
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	scanner := bufio.NewScanner(bytes.NewReader(out))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "Test") || strings.HasPrefix(line, "Fuzz") {
@@ -480,11 +493,8 @@ func discoverSkipStubs(testRoot string) (map[string]struct{}, int, error) {
 		return stubs, 0, nil
 	}
 	asserting := map[string]struct{}{}
-	err := filepath.WalkDir(testRoot, func(path string, d os.DirEntry, walkErr error) error {
-		switch {
-		case walkErr != nil:
-			return walkErr
-		case d.IsDir() || !strings.HasSuffix(path, "_test.go"):
+	err := gatekit.WalkGoFiles(testRoot, gatekit.SkipDirs("vendor"), true, func(path string) error {
+		if !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		return collectSkipStubs(path, stubs, asserting)
@@ -519,11 +529,7 @@ func collectSkipStubs(path string, stubs, asserting map[string]struct{}) error {
 	if err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Recv != nil || fd.Body == nil {
-			continue
-		}
+	for fd := range topLevelFuncs(file) {
 		id, ok := scenarioIDFromTestName(fd.Name.Name)
 		if !ok {
 			continue

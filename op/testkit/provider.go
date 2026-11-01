@@ -60,9 +60,7 @@ func ensureTrust(srv *httptest.Server) {
 	})
 }
 
-// cookieKeyLen is the AES-256-GCM key length the cookie codec expects. The
-// constant is duplicated here so the testkit need not import the internal
-// cookie package.
+// cookieKeyLen is the AES-256-GCM key length the cookie codec expects.
 const cookieKeyLen = 32
 
 // DefaultIssuer is the issuer URL the testkit advertises in the discovery
@@ -164,17 +162,25 @@ func WithOptions(opts ...op.Option) Option {
 // parallel tests do not share secret material.
 func MinimalOptions(tb testing.TB, extra ...op.Option) []op.Option {
 	tb.Helper()
-	signKey := generateSigningKey(tb, DefaultKeyID)
+	defaults := defaultOptions(tb, DefaultIssuer, inmem.New(), generateSigningKey(tb, DefaultKeyID), SubjectAuthenticator{})
 	out := make([]op.Option, 0, 1+len(extra))
-	out = append(out, op.WithDefaults(
-		op.WithIssuer(DefaultIssuer),
-		op.WithStore(inmem.New()),
+	out = append(out, op.WithDefaults(defaults...))
+	return append(out, extra...)
+}
+
+// defaultOptions is the required-field option list shared by
+// [MinimalOptions] and [NewProvider]; callers wrap it in [op.WithDefaults]
+// so a caller-supplied option replaces the matching one.
+func defaultOptions(tb testing.TB, issuer string, st *inmem.Store, signKey op.SigningKey, auth op.Authenticator) []op.Option {
+	tb.Helper()
+	return []op.Option{
+		op.WithIssuer(issuer),
+		op.WithStore(st),
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKeys(generateCookieKey(tb)),
 		op.WithInteractionDriver(AutoConsentDriver{}),
-		subjectLoginFlow(SubjectAuthenticator{}),
-	))
-	return append(out, extra...)
+		subjectLoginFlow(auth),
+	}
 }
 
 // subjectLoginFlow is the [op.WithLoginFlow] option whose only step is
@@ -211,14 +217,7 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 	}
 	store := inmem.New(storeOpts...)
 
-	defaults := []op.Option{
-		op.WithIssuer(cfg.issuer),
-		op.WithStore(store),
-		op.WithKeyset(op.Keyset{signKey}),
-		op.WithCookieKeys(generateCookieKey(tb)),
-		op.WithInteractionDriver(AutoConsentDriver{}),
-		subjectLoginFlow(seedingSubjectAuthenticator{users: store}),
-	}
+	defaults := defaultOptions(tb, cfg.issuer, store, signKey, seedingSubjectAuthenticator{users: store})
 	if cfg.clock != nil {
 		defaults = append(defaults, op.WithClock(cfg.clock))
 	}
@@ -267,9 +266,7 @@ func (p *Provider) HTTPClient(jar http.CookieJar) *http.Client {
 }
 
 // generateSigningKey returns a fresh ECDSA P-256 signer wrapped in
-// [op.SigningKey]. It exists so the testkit can stay in the public op/
-// namespace without importing crypto/rand directly (the linter restricts
-// crypto/rand to a small allow-list).
+// [op.SigningKey].
 func generateSigningKey(tb testing.TB, kid string) op.SigningKey {
 	tb.Helper()
 	entry, err := keys.GenerateES256(kid)

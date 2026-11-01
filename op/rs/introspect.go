@@ -39,23 +39,26 @@ func (v *Verifier) introspect(ctx context.Context, raw string) (*tokens.AccessTo
 		v.logFault("introspection request failed", err)
 		return nil, nil, unavailable("token introspection is unavailable")
 	}
-	var head struct {
-		Active bool `json:"active"`
-	}
-	if err := json.Unmarshal(body, &head); err != nil {
+	var all map[string]any
+	if err := json.Unmarshal(body, &all); err != nil {
 		v.logFault("introspection response is not JSON", err)
 		return nil, nil, unavailable("token introspection is unavailable")
 	}
-	if !head.Active {
+	// A missing or null "active" reads as false, as it did when decoded into a bool.
+	switch active := all["active"].(type) {
+	case nil:
 		return nil, nil, invalidToken("access token is not active")
+	case bool:
+		if !active {
+			return nil, nil, invalidToken("access token is not active")
+		}
+	default:
+		v.logFault("introspection response is malformed", errors.New("active is not a boolean"))
+		return nil, nil, unavailable("token introspection is unavailable")
 	}
 	claims, err := tokens.DecodeAccessTokenClaims(body)
 	if err != nil {
 		v.logFault("introspection response is malformed", err)
-		return nil, nil, unavailable("token introspection is unavailable")
-	}
-	var all map[string]any
-	if err := json.Unmarshal(body, &all); err != nil {
 		return nil, nil, unavailable("token introspection is unavailable")
 	}
 	return claims, all, nil
@@ -150,11 +153,14 @@ func (v *Verifier) discover(ctx context.Context) (*serverMetadata, error) {
 	if meta.Issuer != v.issuer {
 		return nil, errors.Join(errMetadata, errors.New("issuer does not match Config.Issuer"))
 	}
-	for name, raw := range map[string]string{"jwks_uri": meta.JWKSURI, "introspection_endpoint": meta.IntrospectionEndpoint} {
-		if raw == "" {
+	for _, ep := range [...]struct{ name, raw string }{
+		{"jwks_uri", meta.JWKSURI},
+		{"introspection_endpoint", meta.IntrospectionEndpoint},
+	} {
+		if ep.raw == "" {
 			continue
 		}
-		if err := v.rule.check(name, raw); err != nil {
+		if err := v.rule.check(ep.name, ep.raw); err != nil {
 			return nil, errors.Join(errMetadata, err)
 		}
 	}

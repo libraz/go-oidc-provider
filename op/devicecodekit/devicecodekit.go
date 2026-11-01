@@ -29,11 +29,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -292,6 +294,9 @@ type InMemoryAttemptLimiter struct {
 	ttl      time.Duration
 	clock    Clock
 	attempts map[string]attemptEntry
+	// nextExpiry is a lower bound on the earliest expiresAt in attempts; the
+	// zero value means no sweep is pending.
+	nextExpiry time.Time
 }
 
 type attemptEntry struct {
@@ -322,8 +327,8 @@ func NewAttemptLimiterWithOptions(limit int, options AttemptLimiterOptions) *InM
 	if limit <= 0 {
 		limit = int(MaxUserCodeStrikes)
 	}
-	if limit > 255 {
-		limit = 255
+	if limit > math.MaxUint8 {
+		limit = math.MaxUint8
 	}
 	ttl := options.TTL
 	if ttl <= 0 {
@@ -370,6 +375,9 @@ func (l *InMemoryAttemptLimiter) Allow(ctx context.Context, attemptKey string) (
 	}
 	if !exists {
 		entry.expiresAt = now.Add(l.ttl)
+		if l.nextExpiry.IsZero() || entry.expiresAt.Before(l.nextExpiry) {
+			l.nextExpiry = entry.expiresAt
+		}
 	}
 	entry.strikes++
 	l.attempts[attemptKey] = entry
@@ -411,10 +419,20 @@ func (l *InMemoryAttemptLimiter) now() time.Time {
 	return timex.OrSystem(l.clock).Now().UTC()
 }
 
+// evictExpiredLocked sweeps the map only once the earliest known expiry is
+// due, so steady-state calls skip the full scan.
 func (l *InMemoryAttemptLimiter) evictExpiredLocked(now time.Time) {
+	if l.nextExpiry.IsZero() || l.nextExpiry.After(now) {
+		return
+	}
+	l.nextExpiry = time.Time{}
 	for key, entry := range l.attempts {
 		if !entry.expiresAt.After(now) {
 			delete(l.attempts, key)
+			continue
+		}
+		if l.nextExpiry.IsZero() || entry.expiresAt.Before(l.nextExpiry) {
+			l.nextExpiry = entry.expiresAt
 		}
 	}
 }
@@ -513,7 +531,7 @@ func (d *Deps) now() time.Time {
 // first. Backends that violate the substore contract by losing
 // strikes break this guarantee.
 func VerifyUserCode(ctx context.Context, deps *Deps, deviceCodeID, submittedUserCode string) (matched bool, err error) {
-	if deps == nil || deps.DeviceCodes == nil {
+	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
 		return false, ErrInvalidArgument
 	}
 	if deviceCodeID == "" || submittedUserCode == "" {
@@ -530,22 +548,30 @@ func VerifyUserCode(ctx context.Context, deps *Deps, deviceCodeID, submittedUser
 		canonical = ""
 	}
 
-	rec, lookupErr := deps.DeviceCodes.FindByDeviceCode(ctx, deviceCodeID)
-	if lookupErr != nil {
-		if errors.Is(lookupErr, store.ErrNotFound) {
-			return false, ErrUnknownDeviceCode
-		}
-		return false, lookupErr
+	rec, err := pendingRecord(deps.DeviceCodes.FindByDeviceCode(ctx, deviceCodeID))
+	if err != nil {
+		return false, err
 	}
-	if rec.Status != store.DeviceCodeStatusPending {
-		return false, ErrAlreadyDecided
-	}
-
 	if canonical != "" && constantTimeStringEqual(canonical, rec.UserCode) {
 		return true, nil
 	}
 
 	return false, recordStrike(ctx, deps, deviceCodeID, rec.ClientID)
+}
+
+// pendingRecord maps a lookup result to the verification errors: an absent
+// record is [ErrUnknownDeviceCode], a decided one [ErrAlreadyDecided].
+func pendingRecord(rec *store.DeviceCode, lookupErr error) (*store.DeviceCode, error) {
+	if lookupErr != nil {
+		if errors.Is(lookupErr, store.ErrNotFound) {
+			return nil, ErrUnknownDeviceCode
+		}
+		return nil, lookupErr
+	}
+	if rec.Status != store.DeviceCodeStatusPending {
+		return nil, ErrAlreadyDecided
+	}
+	return rec, nil
 }
 
 // VerifyUserCodeByUserCode is the user_code-keyed variant of
@@ -554,7 +580,7 @@ func VerifyUserCode(ctx context.Context, deps *Deps, deviceCodeID, submittedUser
 // session-bound browser flow or QR-code URL) without ever receiving the
 // polling bearer device_code.
 func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, submittedUserCode string) (matched bool, err error) {
-	if deps == nil || deps.DeviceCodes == nil {
+	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
 		return false, ErrInvalidArgument
 	}
 	if recordUserCode == "" || submittedUserCode == "" {
@@ -568,15 +594,9 @@ func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, s
 	if err != nil {
 		submittedCanonical = ""
 	}
-	rec, lookupErr := deps.DeviceCodes.FindByUserCode(ctx, recordCanonical)
-	if lookupErr != nil {
-		if errors.Is(lookupErr, store.ErrNotFound) {
-			return false, ErrUnknownDeviceCode
-		}
-		return false, lookupErr
-	}
-	if rec.Status != store.DeviceCodeStatusPending {
-		return false, ErrAlreadyDecided
+	rec, err := pendingRecord(deps.DeviceCodes.FindByUserCode(ctx, recordCanonical))
+	if err != nil {
+		return false, err
 	}
 	if submittedCanonical != "" && constantTimeStringEqual(submittedCanonical, rec.UserCode) {
 		return true, nil
@@ -604,10 +624,11 @@ func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, s
 // [VerifyUserCode] and [VerifyUserCodeByUserCode] unchanged for flows that
 // already bind the attempt to a record.
 func VerifyUserCodeByAttemptKey(ctx context.Context, deps *Deps, attemptKey, submittedUserCode string) (matched bool, err error) {
-	if deps == nil || deps.DeviceCodes == nil || attemptKey == "" {
+	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) || attemptKey == "" {
 		return false, ErrInvalidArgument
 	}
-	allowed, err := deps.attemptLimiter().Allow(ctx, attemptKey)
+	limiter := deps.attemptLimiter()
+	allowed, err := limiter.Allow(ctx, attemptKey)
 	if err != nil {
 		return false, err
 	}
@@ -617,13 +638,13 @@ func VerifyUserCodeByAttemptKey(ctx context.Context, deps *Deps, attemptKey, sub
 
 	canonical, normalizeErr := devicecode.NormaliseUserCode(submittedUserCode)
 	if normalizeErr != nil {
-		emitManualAttemptMismatch(ctx, deps, deps.attemptLimiter(), attemptKey, "")
+		emitManualAttemptMismatch(ctx, deps, limiter, attemptKey, "")
 		return false, ErrUnknownDeviceCode
 	}
 	rec, lookupErr := deps.DeviceCodes.FindByUserCode(ctx, canonical)
 	if lookupErr != nil {
 		if errors.Is(lookupErr, store.ErrNotFound) {
-			emitManualAttemptMismatch(ctx, deps, deps.attemptLimiter(), attemptKey, "")
+			emitManualAttemptMismatch(ctx, deps, limiter, attemptKey, "")
 			return false, ErrUnknownDeviceCode
 		}
 		return false, lookupErr
@@ -635,7 +656,7 @@ func VerifyUserCodeByAttemptKey(ctx context.Context, deps *Deps, attemptKey, sub
 		// The lookup key normally equals rec.UserCode, but retain a
 		// defensive constant-time mismatch branch if a backend violates
 		// its key contract. The opaque attempt charge remains consumed.
-		emitManualAttemptMismatch(ctx, deps, deps.attemptLimiter(), attemptKey, rec.ClientID)
+		emitManualAttemptMismatch(ctx, deps, limiter, attemptKey, rec.ClientID)
 		return false, nil
 	}
 	return true, nil
@@ -680,7 +701,7 @@ func VerifyUserCodeWithAttemptKey(ctx context.Context, deps *Deps, attemptKey, s
 // carried in the URL: a user approving a phished user_code otherwise cannot
 // tell what they are authorizing (RFC 8628 §5.4).
 func ApproveUserCode(ctx context.Context, deps *Deps, userCode, subject string, authTime time.Time) error {
-	if deps == nil || deps.DeviceCodes == nil {
+	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
 		return ErrInvalidArgument
 	}
 	if userCode == "" || subject == "" {
@@ -691,14 +712,7 @@ func ApproveUserCode(ctx context.Context, deps *Deps, userCode, subject string, 
 		return ErrInvalidArgument
 	}
 	if err := deps.DeviceCodes.ApproveByUserCode(ctx, canonical, subject, authTime); err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return ErrUnknownDeviceCode
-		case errors.Is(err, store.ErrConflict):
-			return ErrAlreadyDecided
-		default:
-			return err
-		}
+		return mapStoreErr(err)
 	}
 	// Emitted only after the substore has accepted the transition, so
 	// the record says "approved" for every event in the log. The
@@ -714,10 +728,22 @@ func ApproveUserCode(ctx context.Context, deps *Deps, userCode, subject string, 
 	return nil
 }
 
+// mapStoreErr translates the substore's transition errors to the kit's.
+func mapStoreErr(err error) error {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return ErrUnknownDeviceCode
+	case errors.Is(err, store.ErrConflict):
+		return ErrAlreadyDecided
+	default:
+		return err
+	}
+}
+
 // DenyUserCode transitions a Pending device authorization to Denied
 // using only the human user_code as the record key.
 func DenyUserCode(ctx context.Context, deps *Deps, userCode, reason string) error {
-	if deps == nil || deps.DeviceCodes == nil {
+	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
 		return ErrInvalidArgument
 	}
 	if userCode == "" {
@@ -728,14 +754,7 @@ func DenyUserCode(ctx context.Context, deps *Deps, userCode, reason string) erro
 		return ErrInvalidArgument
 	}
 	if err := deps.DeviceCodes.DenyByUserCode(ctx, canonical, reason); err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return ErrUnknownDeviceCode
-		case errors.Is(err, store.ErrConflict):
-			return ErrAlreadyDecided
-		default:
-			return err
-		}
+		return mapStoreErr(err)
 	}
 	// The brute-force lockout raises the same event from recordStrike.
 	// Both are genuine denials of the same record and only one can win
@@ -757,7 +776,24 @@ func DenyUserCode(ctx context.Context, deps *Deps, userCode, reason string) erro
 // strike and [op.AuditDeviceCodeVerificationDenied] on the lockout
 // transition.
 func recordStrike(ctx context.Context, deps *Deps, deviceCodeID, clientID string) error {
-	strikes, err := deps.DeviceCodes.IncrementUserCodeStrike(ctx, deviceCodeID)
+	return recordStrikeWith(ctx, deps, clientID,
+		func() (uint8, error) { return deps.DeviceCodes.IncrementUserCodeStrike(ctx, deviceCodeID) },
+		func() error { return deps.DeviceCodes.Deny(ctx, deviceCodeID, DenyReasonUserCodeLockout) },
+	)
+}
+
+// recordStrikeByUserCode is [recordStrike] keyed by the canonical user_code.
+func recordStrikeByUserCode(ctx context.Context, deps *Deps, userCode, clientID string) error {
+	return recordStrikeWith(ctx, deps, clientID,
+		func() (uint8, error) { return deps.DeviceCodes.IncrementUserCodeStrikeByUserCode(ctx, userCode) },
+		func() error { return deps.DeviceCodes.DenyByUserCode(ctx, userCode, DenyReasonUserCodeLockout) },
+	)
+}
+
+// recordStrikeWith runs the strike/lockout sequence over the two
+// key-specific store operations.
+func recordStrikeWith(ctx context.Context, deps *Deps, clientID string, increment func() (uint8, error), deny func() error) error {
+	strikes, err := increment()
 	if err != nil {
 		// A substore fault on the strike path is treated as fatal:
 		// the verification page MUST NOT silently accept the next
@@ -784,46 +820,7 @@ func recordStrike(ctx context.Context, deps *Deps, deviceCodeID, clientID string
 	// (and the TTL-evicted row case) as a no-op because the lockout's
 	// observable side effect is in place either way and the per-strike
 	// audit signal already fired above.
-	if denyErr := deps.DeviceCodes.Deny(ctx, deviceCodeID, DenyReasonUserCodeLockout); denyErr != nil {
-		if !errors.Is(denyErr, store.ErrConflict) && !errors.Is(denyErr, store.ErrNotFound) {
-			return denyErr
-		}
-		// Sentinel-class race absorbed; audit already emitted, lockout observable.
-		return nil
-	}
-	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:     devicecode.AuditVerificationDenied,
-		Level:    audit.LevelWarn,
-		Message:  "device_code denied: user_code brute-force lockout",
-		ClientID: clientID,
-		Extras: map[string]any{
-			"reason":      DenyReasonUserCodeLockout,
-			"strikes":     int(strikes),
-			"max_strikes": int(MaxUserCodeStrikes),
-		},
-	})
-	return nil
-}
-
-func recordStrikeByUserCode(ctx context.Context, deps *Deps, userCode, clientID string) error {
-	strikes, err := deps.DeviceCodes.IncrementUserCodeStrikeByUserCode(ctx, userCode)
-	if err != nil {
-		return err
-	}
-	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:     devicecode.AuditUserCodeBruteForce,
-		Level:    audit.LevelWarn,
-		Message:  "user_code mismatch on verification page",
-		ClientID: clientID,
-		Extras: map[string]any{
-			"strikes":     int(strikes),
-			"max_strikes": int(MaxUserCodeStrikes),
-		},
-	})
-	if strikes < MaxUserCodeStrikes {
-		return nil
-	}
-	if denyErr := deps.DeviceCodes.DenyByUserCode(ctx, userCode, DenyReasonUserCodeLockout); denyErr != nil {
+	if denyErr := deny(); denyErr != nil {
 		if !errors.Is(denyErr, store.ErrConflict) && !errors.Is(denyErr, store.ErrNotFound) {
 			return denyErr
 		}
@@ -886,7 +883,7 @@ func recordStrikeByUserCode(ctx context.Context, deps *Deps, userCode, clientID 
 // constants for the canonical cases and a stable embedder-defined
 // string otherwise (the SOC dashboard groups by this field).
 func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error {
-	if deps == nil || deps.DeviceCodes == nil {
+	if deps == nil || nilcheck.IsNil(deps.DeviceCodes) {
 		return ErrInvalidArgument
 	}
 	if deviceCodeID == "" {
@@ -1118,8 +1115,5 @@ func fingerprintDeviceCode(deviceCodeID string) string {
 // timing — a partial match of the user_code is no different from a
 // full mismatch as far as the wire response is concerned.
 func constantTimeStringEqual(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }

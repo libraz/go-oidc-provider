@@ -33,11 +33,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // Floors below which a clean report means the scan is broken rather
@@ -148,7 +148,7 @@ func checkAll(root string, ix *index, al *allowlist) ([]finding, scanCounts, err
 // from a scan that found nothing to report on.
 func countSymbolCandidates(ix *index) (symbols, consulted int) {
 	for _, d := range ix.decls {
-		if !publicPkg(d.pkg) || !isExported(d.name) {
+		if !publicPkg(d.pkg) || !token.IsExported(d.name) {
 			continue
 		}
 		if symbolCandidate(d) {
@@ -165,7 +165,7 @@ func countSymbolCandidates(ix *index) (symbols, consulted int) {
 func countAuditEvents(ix *index) int {
 	n := 0
 	for _, d := range ix.declsIn(auditEventPkg) {
-		if d.kind == kindConst && d.typeName == "Name" && d.str != "" {
+		if isEventDecl(d) {
 			n++
 		}
 	}
@@ -177,7 +177,7 @@ func countAuditEvents(ix *index) int {
 func countDynamoIndexes(ix *index) int {
 	n := 0
 	for _, d := range ix.declsIn(dynamoPkg) {
-		if d.kind == kindConst && d.str != "" && strings.HasPrefix(d.name, "index") {
+		if isIndexDecl(d) {
 			n++
 		}
 	}

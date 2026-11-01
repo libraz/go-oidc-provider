@@ -507,6 +507,27 @@ type FieldSpec struct {
 // Stable since v1.5.
 const PromptTypeChooseFactor = "auth.choose_factor"
 
+// Prompt types of the built-in interactions. Each is the [Prompt.Type]
+// of the prompt whose data type is named alongside it.
+const (
+	// PromptTypePassword backs [PasswordPromptData].
+	PromptTypePassword = "auth.password"
+	// PromptTypeTOTP backs [TOTPPromptData].
+	PromptTypeTOTP = "auth.totp"
+	// PromptTypeEmailOTPSend backs [EmailOTPSendPromptData].
+	PromptTypeEmailOTPSend = "auth.email_otp.send"
+	// PromptTypeEmailOTPVerify backs [EmailOTPVerifyPromptData].
+	PromptTypeEmailOTPVerify = "auth.email_otp.verify"
+	// PromptTypePasskey backs [PasskeyPromptData].
+	PromptTypePasskey = "auth.passkey"
+	// PromptTypeRecoveryCode backs [RecoveryCodePromptData].
+	PromptTypeRecoveryCode = "auth.recovery_code"
+	// PromptTypeConsentScope backs [ConsentScopePromptData].
+	PromptTypeConsentScope = "consent.scope"
+	// PromptTypeChooser backs [ChooserPromptData].
+	PromptTypeChooser = "interaction.chooser"
+)
+
 // FactorChoiceField is the form field the factor-choice prompt submits
 // the chosen [FactorOption.Kind] under.
 //
@@ -556,23 +577,11 @@ type FactorOption struct {
 }
 
 // FactorLabelKey returns the [FactorOption.Label] for kind: the
-// catalogue key "auth.factor.<kind>". The built-in kinds are spelled out
-// so the catalogue entries they resolve stay discoverable in source.
+// catalogue key "auth.factor.<kind>". The built-in kinds ("password",
+// "passkey", "totp", "email_otp", "recovery_code") have catalogue
+// entries under the same names.
 //
 // Stable since v1.5.
 func FactorLabelKey(kind string) string {
-	switch kind {
-	case "password":
-		return "auth.factor.password"
-	case "passkey":
-		return "auth.factor.passkey"
-	case "totp":
-		return "auth.factor.totp"
-	case "email_otp":
-		return "auth.factor.email_otp"
-	case "recovery_code":
-		return "auth.factor.recovery_code"
-	default:
-		return "auth.factor." + kind
-	}
+	return "auth.factor." + kind
 }

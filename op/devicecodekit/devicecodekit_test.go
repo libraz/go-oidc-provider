@@ -969,3 +969,71 @@ func TestRevoke_ExplicitNoneSkipsJWTCascade(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyUserCode_TypedNilStoreReturnsInvalidArgument pins that a typed-nil
+// store is rejected up front instead of panicking on first use.
+func TestVerifyUserCode_TypedNilStoreReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	deps := &devicecodekit.Deps{DeviceCodes: (*nilDeviceCodeStore)(nil)}
+
+	if _, err := devicecodekit.VerifyUserCode(ctx, deps, "dev", "ABCDEFGH"); !errors.Is(err, devicecodekit.ErrInvalidArgument) {
+		t.Errorf("VerifyUserCode: err = %v, want ErrInvalidArgument", err)
+	}
+	if _, err := devicecodekit.VerifyUserCodeByAttemptKey(ctx, deps, "key", "ABCDEFGH"); !errors.Is(err, devicecodekit.ErrInvalidArgument) {
+		t.Errorf("VerifyUserCodeByAttemptKey: err = %v, want ErrInvalidArgument", err)
+	}
+	if err := devicecodekit.DenyUserCode(ctx, deps, "ABCDEFGH", "x"); !errors.Is(err, devicecodekit.ErrInvalidArgument) {
+		t.Errorf("DenyUserCode: err = %v, want ErrInvalidArgument", err)
+	}
+}
+
+// nilDeviceCodeStore lets a nil pointer satisfy the interface; its methods
+// are never reached.
+type nilDeviceCodeStore struct{ store.DeviceCodeStore }
+
+// TestInMemoryAttemptLimiterSweepsStaggeredExpiry pins that deferred sweeping
+// still frees expired keys and reclaims capacity as entries age out one by one.
+func TestInMemoryAttemptLimiterSweepsStaggeredExpiry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clock := &attemptLimiterClock{now: time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)}
+	limiter := devicecodekit.NewAttemptLimiterWithOptions(2, devicecodekit.AttemptLimiterOptions{
+		TTL:   time.Minute,
+		Clock: clock,
+	})
+
+	if _, err := limiter.Allow(ctx, "old"); err != nil {
+		t.Fatalf("old: %v", err)
+	}
+	clock.now = clock.now.Add(30 * time.Second)
+	for i := 0; i < devicecodekit.DefaultMaxAttemptKeys-1; i++ {
+		if allowed, err := limiter.Allow(ctx, "k"+strconv.Itoa(i)); err != nil || !allowed {
+			t.Fatalf("fill %d: allowed=%v err=%v", i, allowed, err)
+		}
+	}
+	if _, err := limiter.Allow(ctx, "over"); !errors.Is(err, devicecodekit.ErrAttemptLimiterSaturated) {
+		t.Fatalf("over cap: err=%v, want saturated", err)
+	}
+
+	// Only "old" has expired; its slot is reclaimed, the rest stay tracked.
+	clock.now = clock.now.Add(30 * time.Second)
+	if allowed, err := limiter.Allow(ctx, "fresh"); err != nil || !allowed {
+		t.Fatalf("fresh after old expiry: allowed=%v err=%v", allowed, err)
+	}
+	if n, err := limiter.Count(ctx, "k0"); err != nil || n != 1 {
+		t.Fatalf("k0 count=%d err=%v, want 1 (still live)", n, err)
+	}
+	if _, err := limiter.Allow(ctx, "over2"); !errors.Is(err, devicecodekit.ErrAttemptLimiterSaturated) {
+		t.Fatalf("over cap again: err=%v, want saturated", err)
+	}
+
+	// Everything else ages out together.
+	clock.now = clock.now.Add(time.Minute)
+	if n, err := limiter.Count(ctx, "k0"); err != nil || n != 0 {
+		t.Fatalf("k0 count=%d err=%v, want 0 after expiry", n, err)
+	}
+	if allowed, err := limiter.Allow(ctx, "over2"); err != nil || !allowed {
+		t.Fatalf("after full expiry: allowed=%v err=%v", allowed, err)
+	}
+}

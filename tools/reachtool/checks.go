@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -79,7 +80,7 @@ func publicPkg(pkg string) bool {
 func checkSymbols(ix *index, al *allowlist) []finding {
 	var out []finding
 	for _, d := range ix.decls {
-		if !publicPkg(d.pkg) || !isExported(d.name) || !symbolCandidate(d) {
+		if !publicPkg(d.pkg) || !token.IsExported(d.name) || !symbolCandidate(d) {
 			continue
 		}
 		if ix.usedIn(d.name, gatekit.LibraryFile) {
@@ -120,7 +121,7 @@ func checkSymbols(ix *index, al *allowlist) []finding {
 func checkConsulted(ix *index, al *allowlist) []finding {
 	var out []finding
 	for _, d := range ix.decls {
-		if !publicPkg(d.pkg) || !isExported(d.name) || !consultCandidate(d) {
+		if !publicPkg(d.pkg) || !token.IsExported(d.name) || !consultCandidate(d) {
 			continue
 		}
 		// A symbol nothing names at all is checkSymbols' finding; this
@@ -193,6 +194,16 @@ func isAuditEventConst(d decl) bool {
 	return false
 }
 
+// isEventDecl reports whether d is a catalogued audit event name.
+func isEventDecl(d decl) bool {
+	return d.kind == kindConst && d.typeName == "Name" && d.str != ""
+}
+
+// isIndexDecl reports whether d is a DynamoDB secondary-index name.
+func isIndexDecl(d decl) bool {
+	return d.kind == kindConst && d.str != "" && strings.HasPrefix(d.name, "index")
+}
+
 // checkEvents reports catalogued audit events whose documented
 // emission status does not match the tree.
 //
@@ -205,7 +216,7 @@ func checkEvents(ix *index, al *allowlist) []finding {
 	var out []finding
 	aliases := auditAliases(ix)
 	for _, d := range ix.declsIn(auditEventPkg) {
-		if d.kind != kindConst || d.typeName != "Name" || d.str == "" {
+		if !isEventDecl(d) {
 			continue
 		}
 		alias, ok := aliases[d.name]
@@ -326,7 +337,7 @@ func rendered(ix *index, key string) bool {
 func checkIndexes(ix *index, al *allowlist) []finding {
 	var out []finding
 	for _, d := range ix.declsIn(dynamoPkg) {
-		if d.kind != kindConst || d.str == "" || !strings.HasPrefix(d.name, "index") {
+		if !isIndexDecl(d) {
 			continue
 		}
 		queried := ix.usedIn(d.name, func(file string) bool { return file != d.file })

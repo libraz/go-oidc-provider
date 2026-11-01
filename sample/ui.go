@@ -27,13 +27,6 @@ const (
 	approvedScopesField = "approved_scopes"
 )
 
-// chooserPromptType is the account chooser's prompt type. It is the one
-// prompt a driver cannot decline to implement: op.New registers the
-// chooser on every Provider, so it is emitted whenever an authorization
-// request carries prompt=select_account, whether or not the application
-// configured anything for it.
-const chooserPromptType = "interaction.chooser"
-
 // appDriver renders the OP's prompts as this application's own pages.
 //
 // Replacing the bundled driver is the reason it exists. The library decides
@@ -129,17 +122,17 @@ func (d *appDriver) page(prompt interaction.Prompt) (pageData, string, error) {
 		Fields:    fieldViews(prompt.Inputs),
 	}
 	switch prompt.Type {
-	case "auth.password":
+	case interaction.PromptTypePassword:
 		page.Title = "Sign in"
 		page.Heading = "Sign in"
 		page.Lead = "Use the email address and password you signed up with."
 		return page, "form", nil
-	case "auth.totp":
+	case interaction.PromptTypeTOTP:
 		page.Title = "Two-factor code"
 		page.Heading = "Enter your authenticator code"
 		page.Lead = "Open your authenticator app and enter the current six-digit code."
 		return page, "form", nil
-	case "consent.scope":
+	case interaction.PromptTypeConsentScope:
 		data, ok := prompt.Data.(interaction.ConsentScopePromptData)
 		if !ok {
 			return pageData{}, "", fmt.Errorf("consent prompt carried %T", prompt.Data)
@@ -160,7 +153,7 @@ func (d *appDriver) page(prompt interaction.Prompt) (pageData, string, error) {
 			})
 		}
 		return page, "consent", nil
-	case chooserPromptType:
+	case interaction.PromptTypeChooser:
 		data, ok := prompt.Data.(interaction.ChooserPromptData)
 		if !ok {
 			return pageData{}, "", fmt.Errorf("chooser prompt carried %T", prompt.Data)

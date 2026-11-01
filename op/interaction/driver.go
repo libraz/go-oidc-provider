@@ -117,8 +117,8 @@ func (JSONDriver) ParseSubmission(r *http.Request) (FormSubmission, error) {
 	// Reject any trailing JSON document. Multiple objects in one
 	// body is a parser-confusion vector — a reverse proxy / WAF /
 	// audit sink that scans the full body sees a different shape
-	// than the OP consumed. Shares [httpx.AtEOF] with httpx.DecodeJSON
-	// and the DCR metadata parser.
+	// than the OP consumed. Uses [httpx.AtEOF], the same
+	// trailing-data check as the DCR metadata parser.
 	if !httpx.AtEOF(dec) {
 		return FormSubmission{}, ErrSubmissionMalformed
 	}

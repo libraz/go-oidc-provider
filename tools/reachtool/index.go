@@ -473,15 +473,6 @@ func (ix *index) declsIn(pkg string) []decl {
 	return out
 }
 
-// isExported reports whether name begins with an upper-case letter.
-func isExported(name string) bool {
-	if name == "" {
-		return false
-	}
-	c := name[0]
-	return c >= 'A' && c <= 'Z'
-}
-
 // hasSegment reports whether the slash-separated path contains segment.
 func hasSegment(path, segment string) bool {
 	if path == "" {
