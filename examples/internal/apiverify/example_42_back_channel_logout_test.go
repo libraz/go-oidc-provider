@@ -30,7 +30,7 @@ func TestExample42BackChannelLogout(t *testing.T) {
 	p := buildAndStart(t, "../../42-back-channel-logout")
 	defer p.kill()
 
-	doc := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	doc := waitDiscovery(t, p, baseURL)
 	authorize := discoveryEndpointPath(t, doc, "authorization_endpoint")
 	tokenPath := discoveryEndpointPath(t, doc, "token_endpoint")
 	endSession := discoveryEndpointPath(t, doc, "end_session_endpoint")

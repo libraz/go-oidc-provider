@@ -116,7 +116,7 @@ func TestScenario_CL_01_AbsentClaimsParameter(t *testing.T) {
 	if tok.IDToken == "" {
 		t.Fatal("id_token missing from /token response")
 	}
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	// With no claims parameter, the id_token must not carry the
 	// scope-derived "email" claim — Core §5.4 releases scoped claims
 	// at /userinfo, not in the id_token.
@@ -286,7 +286,7 @@ func TestScenario_CL_06_NullOrEmptySectionAccepted(t *testing.T) {
 	if tok.IDToken == "" {
 		t.Fatal("id_token missing — null/empty section must not block issuance")
 	}
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if v, ok := idClaims["email"]; ok {
 		t.Errorf("id_token leaked email=%v from an empty claims section", v)
 	}
@@ -311,7 +311,7 @@ func TestScenario_CL_07_UnknownTopLevelKeysIgnored(t *testing.T) {
 		`{"_claim_names":{"foo":"bar"},"id_token":{"email":{"essential":true}}}`,
 	}}
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com (recognised member must still project)", got)
 	}
@@ -361,7 +361,7 @@ func TestScenario_CL_20_NullClaimEntryAcceptedAsVoluntary(t *testing.T) {
 	if tok.IDToken == "" {
 		t.Fatal("id_token missing")
 	}
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com (voluntary request)", got)
 	}
@@ -387,7 +387,7 @@ func TestScenario_CL_21_EmptyObjectClaimEntryAcceptedAsVoluntary(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com (empty-object voluntary)", got)
 	}
@@ -420,7 +420,7 @@ func TestScenario_CL_22_EssentialMissingClaimOmitted(t *testing.T) {
 	if tok.IDToken == "" {
 		t.Fatal("id_token missing — essential request must not block issuance")
 	}
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if v, ok := idClaims["phone_number"]; ok {
 		t.Errorf("id_token leaked phone_number=%v despite missing source value", v)
 	}
@@ -445,7 +445,7 @@ func TestScenario_CL_23_ValueMismatchOmitsClaim(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if v, ok := idClaims["email"]; ok {
 		t.Errorf("id_token released email=%v despite value-constraint mismatch", v)
 	}
@@ -474,7 +474,7 @@ func TestScenario_CL_24_ValuesArrayMatchReleasesClaim(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com (values-array match)", got)
 	}
@@ -531,7 +531,7 @@ func TestScenario_CL_25_ValueComparisonUsesJSONEquality(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extraMatch)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com (string equality)", got)
 	}
@@ -565,7 +565,7 @@ func TestScenario_CL_25_ValueComparisonUsesJSONEquality(t *testing.T) {
 		},
 	})
 	_, tok2 := clRunCodeFlow(t, tk, rp2, secret2, "openid", extraMiss)
-	idClaims2 := decodeScenarioJWTClaims(t, tok2.IDToken)
+	idClaims2 := scenariokit.DecodeJWSClaims(t, tok2.IDToken)
 	if v, ok := idClaims2["email"]; ok {
 		t.Errorf("id_token leaked email=%v despite string-value mismatch", v)
 	}
@@ -615,7 +615,7 @@ func TestScenario_CL_27_LanguageTaggedKeysPreserved(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["name#ja-JP"]; got != "アリス・エグザンプル" {
 		t.Errorf("id_token[name#ja-JP]=%v want %q (language tag must be preserved verbatim)",
 			got, "アリス・エグザンプル")
@@ -641,7 +641,7 @@ func TestScenario_CL_30_IDTokenClaimEmbeddedDirectly(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com", got)
 	}
@@ -670,7 +670,7 @@ func TestScenario_CL_31_UserinfoClaimDoesNotLeakToIDToken(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if v, ok := idClaims["name"]; ok {
 		t.Errorf("id_token leaked name=%v from a userinfo-only claims request", v)
 	}
@@ -708,7 +708,7 @@ func TestScenario_CL_32_BothSectionsProjectedIndependently(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com", got)
 	}
@@ -747,7 +747,7 @@ func TestScenario_CL_33_ClaimsBypassScopeRelease(t *testing.T) {
 	// Bare "openid" — no "email" scope. A scope-only release would
 	// keep email out of the id_token.
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com (claims must bypass scope-only release)", got)
 	}
@@ -817,7 +817,7 @@ func TestScenario_CL_35_SubClaimNotOverwritten(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got, _ := idClaims["sub"].(string); got != scenariokit.DefaultSubject {
 		t.Errorf("id_token sub=%v want %q (sub must not be overwritten)",
 			idClaims["sub"], scenariokit.DefaultSubject)
@@ -864,7 +864,7 @@ func TestScenario_CL_36_RefreshGrantInheritsClaims(t *testing.T) {
 	if first.RefreshToken == "" {
 		t.Fatalf("first /token did not return refresh_token: raw=%v", first.Raw)
 	}
-	if got := decodeScenarioJWTClaims(t, first.IDToken)["email"]; got != "alice@example.com" {
+	if got := scenariokit.DecodeJWSClaims(t, first.IDToken)["email"]; got != "alice@example.com" {
 		t.Fatalf("first id_token email=%v want alice@example.com", got)
 	}
 
@@ -875,7 +875,7 @@ func TestScenario_CL_36_RefreshGrantInheritsClaims(t *testing.T) {
 	if refreshed.IDToken == "" {
 		t.Fatal("refresh did not return id_token")
 	}
-	refreshedClaims := decodeScenarioJWTClaims(t, refreshed.IDToken)
+	refreshedClaims := scenariokit.DecodeJWSClaims(t, refreshed.IDToken)
 	if got := refreshedClaims["email"]; got != "alice@example.com" {
 		t.Errorf("refreshed id_token email=%v want alice@example.com (claims request not inherited)", got)
 	}
@@ -910,7 +910,7 @@ func TestScenario_CL_37_AuthCodeGrantInheritsClaims(t *testing.T) {
 		},
 	})
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["name"]; got != "Alice Example" {
 		t.Errorf("id_token name=%v want Alice Example (grant must carry the claims request to /token)", got)
 	}
@@ -983,7 +983,7 @@ func TestScenario_CL_45_DefaultACRValuesBackfilled(t *testing.T) {
 	// No acr_values on the wire — the backfill is the only path that
 	// can populate the resulting id_token's acr claim.
 	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", nil)
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got, _ := idClaims["acr"].(string); got != "urn:test:cl-45:loa1" {
 		t.Errorf("id_token acr=%v want %q (default_acr_values must backfill)",
 			idClaims["acr"], "urn:test:cl-45:loa1")
@@ -1190,7 +1190,7 @@ func TestScenario_CL_80_ClaimsCarriedInJAR(t *testing.T) {
 	if tok.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := idClaims["email"]; got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com (JAR-carried claims must reach projector)", got)
 	}
@@ -1225,7 +1225,7 @@ func TestScenario_CL_82_GETAndPOSTParseIdentically(t *testing.T) {
 		},
 	})
 	_, getTok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
-	getClaims := decodeScenarioJWTClaims(t, getTok.IDToken)
+	getClaims := scenariokit.DecodeJWSClaims(t, getTok.IDToken)
 	if got := getClaims["email"]; got != "alice@example.com" {
 		t.Fatalf("GET id_token email=%v want alice@example.com", got)
 	}
@@ -1381,7 +1381,7 @@ func TestScenario_CL_90_ParameterOffSilencesAlreadyEstablishedGrant(t *testing.T
 	}
 
 	// Exit path 1 — the first code exchange.
-	if got, ok := decodeScenarioJWTClaims(t, tok.IDToken)["name"]; ok {
+	if got, ok := scenariokit.DecodeJWSClaims(t, tok.IDToken)["name"]; ok {
 		t.Errorf("code-exchange id_token released name=%v with the claims parameter disabled", got)
 	}
 
@@ -1407,7 +1407,7 @@ func TestScenario_CL_90_ParameterOffSilencesAlreadyEstablishedGrant(t *testing.T
 	if refreshed.IDToken == "" {
 		t.Fatal("refresh did not return id_token")
 	}
-	if got, ok := decodeScenarioJWTClaims(t, refreshed.IDToken)["name"]; ok {
+	if got, ok := scenariokit.DecodeJWSClaims(t, refreshed.IDToken)["name"]; ok {
 		t.Errorf("refresh-derived id_token released name=%v with the claims parameter disabled", got)
 	}
 

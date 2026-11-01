@@ -15,7 +15,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -103,26 +102,6 @@ func runGTMCodeFlow(t *testing.T, tk *testkit.Provider, rp *store.Client) scenar
 	return tok
 }
 
-// decodeGTMJWTClaims pulls the payload claims out of a JWS Compact
-// Serialisation. It is intentionally tolerant of unknown fields so
-// the gid claim surfaces as map[string]any.
-func decodeGTMJWTClaims(tb testing.TB, jws string) map[string]any {
-	tb.Helper()
-	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		tb.Fatalf("jwt parts=%d want 3 (value=%q)", len(parts), jws)
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		tb.Fatalf("decode payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		tb.Fatalf("unmarshal claims: %v", err)
-	}
-	return claims
-}
-
 // TestScenario_GTM_001_DefaultStrategyWritesNoRegistryRow pins the
 // reduction in management data the default strategy delivers: under
 // it a successful authorization_code exchange writes ZERO rows
@@ -142,7 +121,7 @@ func TestScenario_GTM_001_DefaultStrategyWritesNoRegistryRow(t *testing.T) {
 	// AccessTokenRegistry substore; under the default strategy the
 	// issuance path skips Register, so Find for the AT's JTI must
 	// return (nil, nil).
-	claims := decodeGTMJWTClaims(t, tok.AccessToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.AccessToken)
 	jti, _ := claims["jti"].(string)
 	if jti == "" {
 		t.Fatalf("AT missing jti claim: %v", claims)
@@ -166,7 +145,7 @@ func TestScenario_GTM_002_AccessTokenCarriesGidClaim(t *testing.T) {
 
 	tk, rp := newGTMProvider(t)
 	tok := runGTMCodeFlow(t, tk, rp)
-	claims := decodeGTMJWTClaims(t, tok.AccessToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.AccessToken)
 	gid, ok := claims["gid"].(string)
 	if !ok || gid == "" {
 		t.Fatalf("gid claim missing or empty under default strategy; claims=%v", claims)
@@ -208,7 +187,7 @@ func TestScenario_GTM_003_EndSessionTombstonesRevokeAccessToken(t *testing.T) {
 		t.Fatalf("userinfo before logout: status=%d want 200", status)
 	}
 
-	claims := decodeGTMJWTClaims(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	gid, _ := claims["gid"].(string)
 
 	// Manually exercise the cascade by writing a tombstone via the
@@ -331,7 +310,7 @@ func TestScenario_GTM_005_RevocationDenylistsSingleAT(t *testing.T) {
 
 	// The grant tombstone substore MUST NOT have a tombstone for
 	// the AT's gid — single-AT revoke does not coalesce.
-	claims := decodeGTMJWTClaims(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	gid, _ := claims["gid"].(string)
 	revoked, err := tk.Store.GrantRevocations().IsRevoked(
 		context.Background(),
@@ -406,7 +385,7 @@ func TestScenario_GTM_007_JTIRegistryStrategyKeepsPerTokenRows(t *testing.T) {
 		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry),
 	)
 	tok := runGTMCodeFlow(t, tk, rp)
-	claims := decodeGTMJWTClaims(t, tok.AccessToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.AccessToken)
 	jti, _ := claims["jti"].(string)
 	if jti == "" {
 		t.Fatalf("AT missing jti claim")

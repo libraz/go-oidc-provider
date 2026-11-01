@@ -74,7 +74,7 @@ func idtRunCodeFlow(t *testing.T, tk *testkit.Provider, rp *store.Client, secret
 	return tok, idtSpecHash{
 		IDToken: tok.IDToken,
 		Header:  idtDecodeJWTHeader(t, tok.IDToken),
-		Claims:  decodeScenarioJWTClaims(t, tok.IDToken),
+		Claims:  scenariokit.DecodeJWSClaims(t, tok.IDToken),
 	}
 }
 
@@ -511,7 +511,7 @@ func TestScenario_IDT_04_NonceMirroredFromRequest(t *testing.T) {
 	if tok.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	claims := decodeScenarioJWTClaims(t, tok.IDToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	got, _ := claims["nonce"].(string)
 	if got != wantNonce {
 		t.Errorf("id_token nonce=%q want %q (verbatim mirror)", got, wantNonce)
@@ -585,7 +585,7 @@ func TestScenario_IDT_06_AcrEmittedOnRequestOrDefault(t *testing.T) {
 	if tok.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	claims := decodeScenarioJWTClaims(t, tok.IDToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	got, _ := claims["acr"].(string)
 	if got != wantACR {
 		t.Errorf("id_token acr=%q want %q (first satisfied acr_values entry)", got, wantACR)
@@ -706,7 +706,7 @@ func TestScenario_IDT_14_ClaimsParameterAlwaysProjectedToIDToken(t *testing.T) {
 	if tok.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	claims := decodeScenarioJWTClaims(t, tok.IDToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got, _ := claims["email"].(string); got != "alice@example.com" {
 		t.Errorf("id_token email=%v want alice@example.com (claims.id_token override)", claims["email"])
 	}
@@ -763,13 +763,13 @@ func TestScenario_IDT_15_RefreshGrantUsesSameComposition(t *testing.T) {
 	if first.StatusCode != http.StatusOK || first.RefreshToken == "" {
 		t.Fatalf("first /token must return refresh_token: status=%d body=%v", first.StatusCode, first.Raw)
 	}
-	originalClaims := decodeScenarioJWTClaims(t, first.IDToken)
+	originalClaims := scenariokit.DecodeJWSClaims(t, first.IDToken)
 
 	rotated := postRefreshToken(t, tk, first.RefreshToken, rp.ID, secret)
 	if rotated.StatusCode != http.StatusOK || rotated.IDToken == "" {
 		t.Fatalf("/token (refresh) status=%d id_token=%q body=%v", rotated.StatusCode, rotated.IDToken, rotated.Raw)
 	}
-	rotatedClaims := decodeScenarioJWTClaims(t, rotated.IDToken)
+	rotatedClaims := scenariokit.DecodeJWSClaims(t, rotated.IDToken)
 
 	// Composition invariants: nonce preserved, sub preserved, no
 	// scope-derived claims on either side.
@@ -895,7 +895,7 @@ func TestScenario_IDT_23_CHashComputation(t *testing.T) {
 	if tok.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	claims := decodeScenarioJWTClaims(t, tok.IDToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	got, _ := claims["c_hash"].(string)
 	if got == "" {
 		t.Fatalf("c_hash missing from id_token claims=%v", claims)
@@ -995,7 +995,7 @@ func TestScenario_IDT_34_ResourceAudienceNotInIDToken(t *testing.T) {
 	if tok.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	claims := decodeScenarioJWTClaims(t, tok.IDToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if !idtAudContains(claims["aud"], rp.ID) {
 		t.Errorf("id_token aud=%v does not contain client_id=%q", claims["aud"], rp.ID)
 	}

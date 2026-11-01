@@ -11,7 +11,6 @@ package scenarios_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -102,7 +101,7 @@ func TestScenario_RI_021_AuthorizeAllowedResourceBindsAudience(t *testing.T) {
 	if tok.StatusCode != http.StatusOK {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	claims := decodeScenarioAccessTokenClaims(t, tok.AccessToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.AccessToken)
 	if got := claims["aud"]; got != "https://api.example.com" {
 		t.Fatalf("access_token aud=%v want https://api.example.com", got)
 	}
@@ -295,7 +294,7 @@ func TestScenario_RI_032_TokenExchangePropagatesCodeResource(t *testing.T) {
 	if tok.StatusCode != 200 {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	claims := decodeScenarioAccessTokenClaims(t, tok.AccessToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.AccessToken)
 	if got := claims["aud"]; got != "https://api.example.com" {
 		t.Fatalf("aud=%v want https://api.example.com", got)
 	}
@@ -332,7 +331,7 @@ func TestScenario_RI_033_RefreshPreservesResource(t *testing.T) {
 	if refreshed.StatusCode != 200 {
 		t.Fatalf("/token refresh status=%d body=%v", refreshed.StatusCode, refreshed.Raw)
 	}
-	claims := decodeScenarioAccessTokenClaims(t, refreshed.AccessToken)
+	claims := scenariokit.DecodeJWSClaims(t, refreshed.AccessToken)
 	if got := claims["aud"]; got != "https://api.example.com" {
 		t.Fatalf("aud=%v want https://api.example.com", got)
 	}
@@ -415,7 +414,7 @@ func TestScenario_RI_041_DeviceTokenBindsAudienceAndResource(t *testing.T) {
 	if at == "" {
 		t.Fatalf("access_token missing: %v", tok)
 	}
-	if got := decodeScenarioAccessTokenClaims(t, at)["aud"]; got != resource {
+	if got := scenariokit.DecodeJWSClaims(t, at)["aud"]; got != resource {
 		t.Errorf("device_code access_token aud=%v want %q", got, resource)
 	}
 
@@ -434,7 +433,7 @@ func TestScenario_RI_041_DeviceTokenBindsAudienceAndResource(t *testing.T) {
 	if refreshedAT == "" {
 		t.Fatalf("refreshed access_token missing: %v", refreshed)
 	}
-	if got := decodeScenarioAccessTokenClaims(t, refreshedAT)["aud"]; got != resource {
+	if got := scenariokit.DecodeJWSClaims(t, refreshedAT)["aud"]; got != resource {
 		t.Errorf("refreshed access_token aud=%v want %q; the refresh token did not preserve the resource", got, resource)
 	}
 }
@@ -560,7 +559,7 @@ func TestScenario_RI_060_ClientCredentialsBindsAudience(t *testing.T) {
 	if at == "" {
 		t.Fatalf("access_token missing on success path: %v", body)
 	}
-	claims := decodeScenarioAccessTokenClaims(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	if got := claims["aud"]; got != resource {
 		t.Fatalf("access_token aud=%v want %q", got, resource)
 	}
@@ -789,7 +788,7 @@ func TestScenario_RI_071_UserInfoRejectsResourceBoundTokens(t *testing.T) {
 	if tok.StatusCode != http.StatusOK || tok.AccessToken == "" {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	claims := decodeScenarioAccessTokenClaims(t, tok.AccessToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.AccessToken)
 	if got := claims["aud"]; got != "https://api.example.com" {
 		t.Fatalf("precondition: access_token aud=%v want https://api.example.com", got)
 	}
@@ -863,24 +862,6 @@ func runResourceAuthorizeError(t *testing.T, resource string) scenariokit.CodeFl
 			"resource": {resource},
 		},
 	})
-}
-
-func decodeScenarioAccessTokenClaims(t *testing.T, accessToken string) map[string]any {
-	t.Helper()
-
-	parts := strings.Split(accessToken, ".")
-	if len(parts) != 3 {
-		t.Fatalf("jwt has %d parts, want 3", len(parts))
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		t.Fatalf("unmarshal claims: %v", err)
-	}
-	return claims
 }
 
 func refreshScenarioToken(t *testing.T, tk *testkit.Provider, refreshToken, clientID, clientSecret string) scenariokit.TokenResponse {

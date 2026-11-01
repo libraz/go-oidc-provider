@@ -89,7 +89,7 @@ func runJARMCodeFlow(t *testing.T, tk *testkit.Provider, rp *store.Client, respo
 	if rawJWT == "" {
 		t.Fatalf("'response' parameter missing from callback: %s", flow.Location.String())
 	}
-	return decodeScenarioJWTClaims(t, rawJWT)
+	return scenariokit.DecodeJWSClaims(t, rawJWT)
 }
 
 // jarmAuthorizeQuery returns the canonical /authorize query parameters
@@ -261,7 +261,7 @@ func TestScenario_JARM_011_JwtModeQueryForCode(t *testing.T) {
 		t.Fatalf("'response' parameter missing from callback: %s", flow.Location.String())
 	}
 
-	claims := decodeScenarioJWTClaims(t, rawJWT)
+	claims := scenariokit.DecodeJWSClaims(t, rawJWT)
 
 	if got, _ := claims["code"].(string); got == "" {
 		t.Errorf("code claim missing or empty: %v", claims)
@@ -428,7 +428,7 @@ func TestScenario_JARM_050_QueryJwtErrorRedirect(t *testing.T) {
 	if loc.Fragment != "" || loc.RawFragment != "" {
 		t.Errorf("query.jwt error must NOT use fragment delivery: %s", loc.String())
 	}
-	claims := decodeScenarioJWTClaims(t, rawJWT)
+	claims := scenariokit.DecodeJWSClaims(t, rawJWT)
 	if got := claims["error"]; got != "login_required" {
 		t.Errorf("error=%v want login_required", got)
 	}
@@ -493,7 +493,7 @@ func TestScenario_JARM_051_FragmentJwtErrorRedirect(t *testing.T) {
 	if rawJWT == "" {
 		t.Fatalf("response missing in fragment %q", frag)
 	}
-	claims := decodeScenarioJWTClaims(t, rawJWT)
+	claims := scenariokit.DecodeJWSClaims(t, rawJWT)
 	if got := claims["error"]; got != "login_required" {
 		t.Errorf("error=%v want login_required", got)
 	}
@@ -541,7 +541,7 @@ func TestScenario_JARM_052_FormPostJwtErrorRendered(t *testing.T) {
 		t.Errorf("body missing form action=%q: %s", jarmTestRedirectURI, bodyStr)
 	}
 	rawJWT := extractFormResponseInput(t, bodyStr)
-	claims := decodeScenarioJWTClaims(t, rawJWT)
+	claims := scenariokit.DecodeJWSClaims(t, rawJWT)
 	if got := claims["error"]; got != "login_required" {
 		t.Errorf("error=%v want login_required", got)
 	}

@@ -54,7 +54,7 @@ func TestRefreshTokenIgnoresRequestSuppliedResource(t *testing.T) {
 		t.Fatalf("/token refresh status=%d body=%v", refreshed.StatusCode, refreshed.Raw)
 	}
 
-	claims := decodeScenarioAccessTokenClaims(t, refreshed.AccessToken)
+	claims := scenariokit.DecodeJWSClaims(t, refreshed.AccessToken)
 	if got := claims["aud"]; got != "https://api.example.com" {
 		t.Fatalf("aud=%v want https://api.example.com (request-supplied resource must be ignored)", got)
 	}

@@ -11,7 +11,6 @@ package scenarios_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -240,7 +239,7 @@ func runPairwiseFlow(t *testing.T, tk *testkit.Provider, c *store.Client, redire
 	if tok.IDToken == "" {
 		t.Fatalf("/token did not return id_token (raw=%v)", tok.Raw)
 	}
-	claims := decodePWJWTClaims(t, tok.IDToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	sub, _ := claims["sub"].(string)
 	if sub == "" {
 		t.Fatalf("id_token claims missing sub: %v", claims)
@@ -506,27 +505,6 @@ func pairwiseGetUserInfo(t *testing.T, tk *testkit.Provider, accessToken string)
 		t.Fatalf("decode /userinfo body %s: %v", string(body), err)
 	}
 	return out
-}
-
-// decodePWJWTClaims pulls the payload claims out of a JWS Compact
-// Serialisation without verifying the signature. The PW issuance
-// rows compare "sub" values across flows; verifying the signature
-// would re-test JWS framing, which the IDT-suite already covers.
-func decodePWJWTClaims(tb testing.TB, jws string) map[string]any {
-	tb.Helper()
-	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		tb.Fatalf("jwt parts=%d want 3 (value=%q)", len(parts), jws)
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		tb.Fatalf("decode payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		tb.Fatalf("unmarshal claims: %v", err)
-	}
-	return claims
 }
 
 // postPairwiseRegistration drives the public /oidc/register endpoint for
@@ -1026,7 +1004,7 @@ func TestScenario_PW_40_UserInfoLooksUpRawSubjectAndReturnsPairwiseSub(t *testin
 	if tok.AccessToken == "" || tok.IDToken == "" {
 		t.Fatalf("/token response missing access_token or id_token: %v", tok.Raw)
 	}
-	idClaims := decodePWJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	idSub, _ := idClaims["sub"].(string)
 	if idSub == "" || idSub == scenariokit.DefaultSubject {
 		t.Fatalf("id_token sub=%q, want non-empty pairwise value distinct from raw subject", idSub)
@@ -1056,8 +1034,8 @@ func TestScenario_PW_40_AccessTokenSubMatchesIDTokenSub(t *testing.T) {
 	if tok.AccessToken == "" || tok.IDToken == "" {
 		t.Fatalf("/token response missing access_token or id_token: %v", tok.Raw)
 	}
-	idClaims := decodePWJWTClaims(t, tok.IDToken)
-	atClaims := decodePWJWTClaims(t, tok.AccessToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
+	atClaims := scenariokit.DecodeJWSClaims(t, tok.AccessToken)
 	idSub, _ := idClaims["sub"].(string)
 	atSub, _ := atClaims["sub"].(string)
 	if idSub == "" {
@@ -1101,7 +1079,7 @@ func TestScenario_PW_40_IntrospectionReturnsProjectedSub(t *testing.T) {
 	if tok.RefreshToken == "" {
 		t.Fatalf("/token response missing refresh_token (raw=%v)", tok.Raw)
 	}
-	idClaims := decodePWJWTClaims(t, tok.IDToken)
+	idClaims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	idSub, _ := idClaims["sub"].(string)
 	if idSub == "" || idSub == scenariokit.DefaultSubject {
 		t.Fatalf("id_token sub=%q, want non-empty pairwise value", idSub)
@@ -1290,8 +1268,8 @@ func TestScenario_PW_51_UserinfoSubFollowsSubjectType(t *testing.T) {
 	pairwiseTok := runPairwiseTokenFlow(t, tk, pairwiseRP, "https://rp-pw-51-pairwise.example.com/cb", "openid")
 	publicTok := runPairwiseTokenFlow(t, tk, publicRP, "https://rp-pw-51-public.example.net/cb", "openid")
 
-	pairwiseID, _ := decodePWJWTClaims(t, pairwiseTok.IDToken)["sub"].(string)
-	publicID, _ := decodePWJWTClaims(t, publicTok.IDToken)["sub"].(string)
+	pairwiseID, _ := scenariokit.DecodeJWSClaims(t, pairwiseTok.IDToken)["sub"].(string)
+	publicID, _ := scenariokit.DecodeJWSClaims(t, publicTok.IDToken)["sub"].(string)
 
 	pairwiseUI, _ := pairwiseGetUserInfo(t, tk, pairwiseTok.AccessToken)["sub"].(string)
 	publicUI, _ := pairwiseGetUserInfo(t, tk, publicTok.AccessToken)["sub"].(string)
@@ -1347,7 +1325,7 @@ func TestScenario_PW_52_IntrospectionSubFollowsSubjectType(t *testing.T) {
 	publicTok := runPairwiseTokenFlow(t, tk, publicRP,
 		"https://rp-pw-52-public.example.net/cb", "openid offline_access")
 
-	pairwiseID, _ := decodePWJWTClaims(t, pairwiseTok.IDToken)["sub"].(string)
+	pairwiseID, _ := scenariokit.DecodeJWSClaims(t, pairwiseTok.IDToken)["sub"].(string)
 
 	pairwiseIntro := pairwiseIntrospect(t, tk, pairwiseRP.ID, pairwiseTok.RefreshToken)
 	if got, _ := pairwiseIntro["sub"].(string); got != pairwiseID {
@@ -1422,7 +1400,7 @@ func TestScenario_PW_53_HintSubComparedAgainstSubjectType(t *testing.T) {
 	if tok.StatusCode != http.StatusOK || tok.IDToken == "" {
 		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
 	}
-	pairwiseSub, _ := decodePWJWTClaims(t, tok.IDToken)["sub"].(string)
+	pairwiseSub, _ := scenariokit.DecodeJWSClaims(t, tok.IDToken)["sub"].(string)
 	if pairwiseSub == "" || pairwiseSub == hintSubject {
 		t.Fatalf("id_token sub=%q must be a pairwise value distinct from the raw subject", pairwiseSub)
 	}

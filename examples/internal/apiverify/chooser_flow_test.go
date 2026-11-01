@@ -259,7 +259,7 @@ func runChooserAddAccountFlow(t *testing.T, dir, baseURL string, params url.Valu
 	p := buildAndStart(t, dir)
 	defer p.kill()
 
-	doc := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	doc := waitDiscovery(t, p, baseURL)
 	authorize := discoveryEndpointPath(t, doc, "authorization_endpoint")
 
 	b := newBrowser(t, baseURL)

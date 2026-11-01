@@ -33,8 +33,8 @@ func TestExample00SecurityProfile(t *testing.T) {
 	p := buildAndStart(t, "../../00-security-profile")
 	defer p.kill()
 
-	pollHTTP(t, p, unprofiled+"/.well-known/openid-configuration", 20*time.Second)
-	pollHTTP(t, p, baseline+"/.well-known/openid-configuration", 20*time.Second)
+	waitDiscovery(t, p, unprofiled)
+	waitDiscovery(t, p, baseline)
 
 	// No profile: OIDC Core 1.0 admits the request, so the OP moves the
 	// browser on to its own login prompt rather than bouncing it back.

@@ -214,7 +214,7 @@ func TestScenario_ISS_017_JARMResponseEmbedsIssClaim(t *testing.T) {
 		t.Fatalf("'response' parameter missing from JARM callback: %s", flow.Location.String())
 	}
 
-	claims := decodeScenarioJWTClaims(t, rawJWT)
+	claims := scenariokit.DecodeJWSClaims(t, rawJWT)
 	iss, _ := claims["iss"].(string)
 	if iss == "" {
 		t.Fatalf("iss claim missing from JARM payload: %v", claims)
@@ -367,7 +367,7 @@ func TestScenario_ISS_022_JARMErrorQueryCarriesIss(t *testing.T) {
 		t.Fatalf("'response' parameter missing from JARM error callback: %s", flow.Location.String())
 	}
 
-	claims := decodeScenarioJWTClaims(t, rawJWT)
+	claims := scenariokit.DecodeJWSClaims(t, rawJWT)
 	iss, _ := claims["iss"].(string)
 	if iss == "" {
 		t.Fatalf("iss claim missing from JARM error payload: %v", claims)

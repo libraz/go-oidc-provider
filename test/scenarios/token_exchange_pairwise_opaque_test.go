@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/subject"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 // TestTokenExchange_OpaqueSubjectTokenCarriesPairwiseSubject drives an
@@ -73,7 +74,7 @@ func TestTokenExchange_OpaqueSubjectTokenCarriesPairwiseSubject(t *testing.T) {
 		t.Fatalf("status=%d want 200, body=%v", status, body)
 	}
 	at, _ := body["access_token"].(string)
-	got := decodeTXJWTClaims(t, at)["sub"]
+	got := scenariokit.DecodeJWSClaims(t, at)["sub"]
 	if got == rawSubject {
 		t.Fatalf("exchanged sub=%v leaks the OP-internal subject", got)
 	}

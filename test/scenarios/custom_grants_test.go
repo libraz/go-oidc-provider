@@ -9,7 +9,6 @@ package scenarios_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,6 +23,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 // cgClientSecret is the deterministic confidential-client secret the
@@ -474,7 +474,7 @@ func TestCustomGrant_IDTokenSigning_FromExtraClaims(t *testing.T) {
 	if idToken == "" {
 		t.Fatalf("id_token absent or empty: body=%v", body)
 	}
-	claims := decodeCGJWTClaims(t, idToken)
+	claims := scenariokit.DecodeJWSClaims(t, idToken)
 	if claims["iss"] != tk.Issuer {
 		t.Errorf("iss=%v want %q", claims["iss"], tk.Issuer)
 	}
@@ -548,24 +548,4 @@ func TestCustomGrant_IDTokenPassthrough(t *testing.T) {
 	if got := body["id_token"]; got != preset {
 		t.Errorf("id_token=%v want %q (verbatim passthrough)", got, preset)
 	}
-}
-
-// decodeCGJWTClaims pulls the payload claims out of a JWS Compact
-// Serialisation without verifying the signature. Verifying would
-// re-test JWS framing, which the IDT-suite already covers.
-func decodeCGJWTClaims(tb testing.TB, jws string) map[string]any {
-	tb.Helper()
-	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		tb.Fatalf("jwt parts=%d want 3 (value=%q)", len(parts), jws)
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		tb.Fatalf("decode payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		tb.Fatalf("unmarshal claims: %v", err)
-	}
-	return claims
 }

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -236,7 +235,7 @@ func stringConstants(files []*ast.File) map[string]string {
 					if i >= len(vs.Values) {
 						continue
 					}
-					if value, ok := basicStringLit(vs.Values[i]); ok {
+					if value, ok := literalString(vs.Values[i]); ok {
 						out[name.Name] = value
 					}
 				}
@@ -263,7 +262,7 @@ func mapEntry(lit *ast.CompositeLit, key string) (ast.Expr, bool) {
 		if !ok {
 			continue
 		}
-		name, ok := basicStringLit(kv.Key)
+		name, ok := literalString(kv.Key)
 		if ok && name == key {
 			return kv.Value, true
 		}
@@ -274,7 +273,7 @@ func mapEntry(lit *ast.CompositeLit, key string) (ast.Expr, bool) {
 // resolveString reduces expr to a string, following a package-level
 // constant by name.
 func resolveString(expr ast.Expr, consts map[string]string) (string, bool) {
-	if value, ok := basicStringLit(expr); ok {
+	if value, ok := literalString(expr); ok {
 		return value, true
 	}
 	ident, ok := expr.(*ast.Ident)
@@ -283,17 +282,4 @@ func resolveString(expr ast.Expr, consts map[string]string) (string, bool) {
 	}
 	value, ok := consts[ident.Name]
 	return value, ok
-}
-
-// basicStringLit unquotes expr when it is an untagged string literal.
-func basicStringLit(expr ast.Expr) (string, bool) {
-	lit, ok := expr.(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		return "", false
-	}
-	value, err := strconv.Unquote(lit.Value)
-	if err != nil {
-		return "", false
-	}
-	return value, true
 }

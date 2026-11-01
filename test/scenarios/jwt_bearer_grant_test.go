@@ -41,6 +41,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 const (
@@ -387,7 +388,7 @@ func (f *jbgFixture) expectOK(t *testing.T, resp jbgResp) map[string]any {
 		}
 	}
 	at, _ := resp.body["access_token"].(string)
-	return decodeJWTPayload(t, at)
+	return scenariokit.DecodeJWSClaims(t, at)
 }
 
 // jbgAudience normalises an aud claim to a slice.

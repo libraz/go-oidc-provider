@@ -86,7 +86,7 @@ func example53SignIn(t *testing.T, p *proc, baseURL string, user exampleUser) (s
 		secret      = "production-sql-demo-secret-rotate-me"
 		redirectURI = "http://127.0.0.1:8081/callback"
 	)
-	doc := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	doc := waitDiscovery(t, p, baseURL)
 	var jwks struct {
 		Keys []struct {
 			Kid string `json:"kid"`

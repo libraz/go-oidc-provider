@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -50,7 +51,7 @@ func TestSQLGCSweepsMatchStatsAndOverview(t *testing.T) {
 		}
 	}
 	for name := range fields {
-		if !containsString(counters, name) {
+		if !slices.Contains(counters, name) {
 			t.Errorf("%s.%s is reported to callers but no sweep in Store.GC ever fills it, so it always reads zero",
 				sqlGCStatsStruct, name)
 		}
@@ -313,14 +314,4 @@ func numberWord(tb testing.TB, n int) string {
 		tb.Fatalf("no spelling for %d; extend the table alongside the sweep that needed it", n)
 	}
 	return words[n]
-}
-
-// containsString reports whether haystack holds needle.
-func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }

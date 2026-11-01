@@ -14,7 +14,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -179,26 +178,6 @@ func callUserinfo(t *testing.T, tk *testkit.Provider, accessToken string) (int, 
 	return resp.StatusCode, resp.Header, out
 }
 
-// decodeBUSJWTClaims pulls the payload claims out of a JWS Compact
-// Serialisation. It is intentionally tolerant of unknown fields so the
-// id_token Extra claims surface as map[string]any entries.
-func decodeBUSJWTClaims(tb testing.TB, jws string) map[string]any {
-	tb.Helper()
-	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		tb.Fatalf("jwt parts=%d want 3 (value=%q)", len(parts), jws)
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		tb.Fatalf("decode payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		tb.Fatalf("unmarshal claims: %v", err)
-	}
-	return claims
-}
-
 // newBUSSigningKey returns a fresh ECDSA P-256 signer wrapped in
 // op.SigningKey. The helper is duplicated rather than borrowed from
 // testkit because BUS-010 builds its provider through op.New directly
@@ -302,7 +281,7 @@ func TestScenario_BUS_002_IDTokenAssemblyCallsStoreUsers(t *testing.T) {
 		t.Fatalf("recorder.calls did not advance during /token §5.5 projection (before=%d after=%d)",
 			before, after)
 	}
-	claims := decodeBUSJWTClaims(t, tok.IDToken)
+	claims := scenariokit.DecodeJWSClaims(t, tok.IDToken)
 	if got := claims["email"]; got != "alice@example.test" {
 		t.Errorf("id_token email=%v want alice@example.test", got)
 	}

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -139,7 +140,7 @@ func patternsCallers(tb testing.TB, root string, exported map[string]bool) map[s
 			if !ok || !exported[name] {
 				return true
 			}
-			if !containsString(out[name], rel) {
+			if !slices.Contains(out[name], rel) {
 				out[name] = append(out[name], rel)
 			}
 			return true

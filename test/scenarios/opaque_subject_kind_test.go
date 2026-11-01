@@ -230,14 +230,14 @@ func TestOpaqueAccessToken_CustomGrantChainKeepsItsSubject(t *testing.T) {
 	tk, _ := newOpaqueSubjectProvider(t)
 	root, rotated := osCustomGrantChain(t, tk)
 	rootAT := osString(root["access_token"])
-	if got := decodeTXJWTClaims(t, rootAT)["sub"]; got != osWireSubject {
+	if got := scenariokit.DecodeJWSClaims(t, rootAT)["sub"]; got != osWireSubject {
 		t.Fatalf("root JWT access token sub=%v want %q", got, osWireSubject)
 	}
-	if got := decodeTXJWTClaims(t, osString(root["id_token"]))["sub"]; got != osWireSubject {
+	if got := scenariokit.DecodeJWSClaims(t, osString(root["id_token"]))["sub"]; got != osWireSubject {
 		t.Fatalf("root id_token sub=%v want %q", got, osWireSubject)
 	}
 
-	if got := decodeTXJWTClaims(t, rotated)["sub"]; got != osWireSubject {
+	if got := scenariokit.DecodeJWSClaims(t, rotated)["sub"]; got != osWireSubject {
 		t.Fatalf("rotated JWT access token sub=%v want %q", got, osWireSubject)
 	}
 	intro := osPost(t, tk, "/oidc/introspect", url.Values{"token": {rotated}})
@@ -254,7 +254,7 @@ func TestOpaqueAccessToken_CustomGrantChainKeepsItsSubject(t *testing.T) {
 		"subject_token_type": {txTokenTypeAT},
 		"resource":           {txTargetAud},
 	})
-	if got := decodeTXJWTClaims(t, osString(exchanged["access_token"]))["sub"]; got != osWireSubject {
+	if got := scenariokit.DecodeJWSClaims(t, osString(exchanged["access_token"]))["sub"]; got != osWireSubject {
 		t.Errorf("token exchange sub=%v want the chain's %q", got, osWireSubject)
 	}
 }
@@ -292,7 +292,7 @@ func TestOpaqueAccessToken_SubjectsMatchUnderPairwise(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pairwise.Generate: %v", err)
 	}
-	if got := decodeTXJWTClaims(t, code.IDToken)["sub"]; got != string(want) {
+	if got := scenariokit.DecodeJWSClaims(t, code.IDToken)["sub"]; got != string(want) {
 		t.Fatalf("id_token sub=%v want pairwise %q", got, want)
 	}
 	intro = osPost(t, tk, "/oidc/introspect", url.Values{"token": {code.AccessToken}})
@@ -314,7 +314,7 @@ func TestOpaqueAccessToken_DeviceAndCIBASubjectsMatchIDToken(t *testing.T) {
 			"ciba":        osCIBATokens,
 		} {
 			tokens := issue(t, tk)
-			want := decodeTXJWTClaims(t, osString(tokens["id_token"]))["sub"]
+			want := scenariokit.DecodeJWSClaims(t, osString(tokens["id_token"]))["sub"]
 			at := osString(tokens["access_token"])
 			intro := osPost(t, tk, "/oidc/introspect", url.Values{"token": {at}})
 			if intro["sub"] != want {

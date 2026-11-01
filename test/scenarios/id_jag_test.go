@@ -165,7 +165,7 @@ func newIJGIdP(t *testing.T, cfg ijgIDPConfig) *ijgIDP {
 		})
 	}
 	idp.idToken = idp.idTokenFor(t, ijgIDPClient)
-	idp.idClaims = decodeJWTPayload(t, idp.idToken)
+	idp.idClaims = scenariokit.DecodeJWSClaims(t, idp.idToken)
 	return idp
 }
 
@@ -750,7 +750,7 @@ func TestScenario_IDJAG_010_IssuedAssertionClaims(t *testing.T) {
 	}
 	ijgVerifyAgainstJWKS(t, idp.tk, token)
 
-	c := decodeJWTPayload(t, token)
+	c := scenariokit.DecodeJWSClaims(t, token)
 	want := map[string]any{
 		"iss":       ijgIDPIssuer,
 		"sub":       idp.idClaims["sub"],
@@ -829,7 +829,7 @@ func TestScenario_IDJAG_011_ResponseShapeAndBinding(t *testing.T) {
 			}
 		}
 		token, _ := resp.body["access_token"].(string)
-		c := decodeJWTPayload(t, token)
+		c := scenariokit.DecodeJWSClaims(t, token)
 		cnf, _ := c["cnf"].(map[string]any)
 		if fmtJSON(cnf) != fmtJSON(tc.cnf) && (tc.cnf != nil || len(cnf) != 0) {
 			t.Errorf("%s: cnf = %v, want %v", tc.name, cnf, tc.cnf)
@@ -855,7 +855,7 @@ func TestScenario_IDJAG_012_LifetimeCappedAtFiveMinutes(t *testing.T) {
 		})
 		resp := idp.issue(t, ijgDefaultExchange())
 		token, _ := resp.body["access_token"].(string)
-		c := decodeJWTPayload(t, token)
+		c := scenariokit.DecodeJWSClaims(t, token)
 		iat, _ := c["iat"].(float64)
 		exp, _ := c["exp"].(float64)
 		if got := time.Duration(exp-iat) * time.Second; got != tc.want {
@@ -973,7 +973,7 @@ func TestScenario_IDJAG_015_RASNamespaceNeedsNoIdPRegistration(t *testing.T) {
 	x.resource = []string{ijgRASAPI, ijgRASAPITwo}
 	resp := idp.issue(t, x)
 	token, _ := resp.body["access_token"].(string)
-	c := decodeJWTPayload(t, token)
+	c := scenariokit.DecodeJWSClaims(t, token)
 
 	if c["scope"] != "chat.read chat.history" {
 		t.Errorf("scope = %v, want the requested RAS scope uncut", c["scope"])
@@ -1012,7 +1012,7 @@ func TestScenario_IDJAG_016_IdPToResourceASRoundTrip(t *testing.T) {
 			t.Errorf("redemption carries %s", absent)
 		}
 	}
-	at := decodeJWTPayload(t, redeemed.body["access_token"].(string))
+	at := scenariokit.DecodeJWSClaims(t, redeemed.body["access_token"].(string))
 	if at["sub"] != ijgRASSubject || at["iss"] != ijgRASIssuer || at["client_id"] != ijgRASClient || at["scope"] != "chat.read" {
 		t.Errorf("access token sub=%v iss=%v client_id=%v scope=%v, want %s / %s / %s / chat.read",
 			at["sub"], at["iss"], at["client_id"], at["scope"], ijgRASSubject, ijgRASIssuer, ijgRASClient)

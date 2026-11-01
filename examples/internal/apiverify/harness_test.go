@@ -160,7 +160,7 @@ func runDiscovery(t *testing.T, dir, baseURL string) {
 	p := buildAndStart(t, dir)
 	defer p.kill()
 
-	body := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	body := waitDiscovery(t, p, baseURL)
 	if !strings.Contains(body, `"issuer"`) {
 		t.Fatalf("discovery document missing issuer:\n%s", body)
 	}
@@ -175,7 +175,7 @@ func runDiscoveryAssert(t *testing.T, dir, baseURL string, want, notWant []strin
 	p := buildAndStart(t, dir)
 	defer p.kill()
 
-	body := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	body := waitDiscovery(t, p, baseURL)
 	for _, w := range want {
 		if !strings.Contains(body, w) {
 			t.Fatalf("discovery document missing %q:\n%s", w, body)
@@ -233,7 +233,7 @@ func runAuthorizeInteraction(t *testing.T, dir, baseURL string, params url.Value
 // about the same process.
 func driveAuthorizeInteraction(t *testing.T, p *proc, baseURL string, params url.Values, want []string) {
 	t.Helper()
-	doc := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	doc := waitDiscovery(t, p, baseURL)
 	authorize := discoveryEndpointPath(t, doc, "authorization_endpoint")
 
 	// The hand-off itself is the assertion, so redirects are inspected
@@ -326,7 +326,7 @@ func runCORSPreflight(t *testing.T, dir, baseURL string, allowed []string, denie
 	p := buildAndStart(t, dir)
 	defer p.kill()
 
-	pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	waitDiscovery(t, p, baseURL)
 
 	for _, origin := range allowed {
 		if got := preflightACAO(t, baseURL, origin); got != origin {
@@ -364,7 +364,7 @@ func runMetrics(t *testing.T, dir, baseURL string) {
 	p := buildAndStart(t, dir)
 	defer p.kill()
 
-	pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	waitDiscovery(t, p, baseURL)
 
 	// An unknown client at the token endpoint fails client authentication,
 	// which the metrics bridge counts — enough to surface an oidc_ series.
@@ -439,7 +439,7 @@ func runClientCredentials(t *testing.T, dir, baseURL, clientID, secret, scope st
 	defer p.kill()
 
 	// Discovery readiness implies the token endpoint is mounted too.
-	pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	waitDiscovery(t, p, baseURL)
 
 	form := url.Values{
 		"grant_type": {"client_credentials"},
@@ -483,6 +483,13 @@ func waitForLog(t *testing.T, p *proc, want string, within time.Duration) {
 		time.Sleep(150 * time.Millisecond)
 	}
 	t.Fatalf("timeout waiting for %q in the example log:\n%s", want, p.readLog())
+}
+
+// waitDiscovery polls base's OIDC discovery document until it answers 200
+// and returns the body.
+func waitDiscovery(t *testing.T, p *proc, base string) string {
+	t.Helper()
+	return pollHTTP(t, p, base+"/.well-known/openid-configuration", 20*time.Second)
 }
 
 // pollHTTP polls url until it answers 200 or the deadline passes, failing

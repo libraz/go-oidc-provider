@@ -25,7 +25,7 @@ func TestExample36ResourceServer(t *testing.T) {
 	p := buildAndStart(t, "../../36-resource-server")
 	defer p.kill()
 
-	pollHTTP(t, p, base+"/.well-known/openid-configuration", 20*time.Second)
+	waitDiscovery(t, p, base)
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// The application keeps its own routes, and its own 404.

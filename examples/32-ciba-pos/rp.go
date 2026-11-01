@@ -192,8 +192,7 @@ func decodeIDTokenClaims(idToken string) (sub, aud string, err error) {
 		// aud is either a single string or an array per RFC 7519 §4.1.3.
 		// CIBA poll mode issues a single-audience token; the example
 		// decodes the scalar shape and falls back to the array shape.
-		Aud  any `json:"aud"`
-		Auds []string
+		Aud any `json:"aud"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return "", "", fmt.Errorf("decode claims: %w", err)

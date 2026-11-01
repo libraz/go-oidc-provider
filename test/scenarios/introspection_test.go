@@ -10,7 +10,6 @@ package scenarios_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -1087,18 +1086,7 @@ func int015IDTokenSub(t *testing.T, idToken string) string {
 	if idToken == "" {
 		t.Fatal("id_token missing; cannot read the client's pseudonym")
 	}
-	parts := strings.Split(idToken, ".")
-	if len(parts) != 3 {
-		t.Fatalf("id_token is not a compact JWS: %q", idToken)
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("decode id_token payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		t.Fatalf("id_token payload is not JSON: %v", err)
-	}
+	claims := scenariokit.DecodeJWSClaims(t, idToken)
 	sub, _ := claims["sub"].(string)
 	if sub == "" {
 		t.Fatalf("id_token carries no sub: %v", claims)

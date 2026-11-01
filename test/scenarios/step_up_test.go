@@ -287,7 +287,7 @@ func (e *supEnv) exchange(t *testing.T, code string) map[string]any {
 	if idt == "" {
 		t.Fatalf("id_token missing: %v", out)
 	}
-	return decodeScenarioJWTClaims(t, idt)
+	return scenariokit.DecodeJWSClaims(t, idt)
 }
 
 func (e *supEnv) mustGet(t *testing.T, rawURL string) *http.Response {

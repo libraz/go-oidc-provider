@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/pollinterval"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/devicecodekit"
 	"github.com/libraz/go-oidc-provider/op/feature"
@@ -249,26 +250,6 @@ func fetchDevDiscovery(t *testing.T, base string) map[string]any {
 		t.Fatalf("unmarshal discovery: %v", err)
 	}
 	return doc
-}
-
-// devDecodeIDToken returns the decoded claims of a compact JWS
-// id_token. Mirrors decodeScenarioJWTClaims so the DEV suite stays
-// self-contained.
-func devDecodeIDToken(t *testing.T, jws string) map[string]any {
-	t.Helper()
-	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		t.Fatalf("id_token has %d parts, want 3", len(parts))
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("decode id_token payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		t.Fatalf("unmarshal id_token claims: %v (raw=%q)", err, raw)
-	}
-	return claims
 }
 
 // expectError asserts the body shape of an RFC 6749 §5.2 error
@@ -1043,7 +1024,7 @@ func TestScenario_DEV_091_DeviceCodeApprovedRedeemsTokens(t *testing.T) {
 	if idToken == "" {
 		t.Fatalf("id_token missing on openid grant: %v", body)
 	}
-	claims := devDecodeIDToken(t, idToken)
+	claims := scenariokit.DecodeJWSClaims(t, idToken)
 	if got, _ := claims["iss"].(string); got != p.tk.Issuer {
 		t.Errorf("iss=%q want %q", got, p.tk.Issuer)
 	}
@@ -1214,7 +1195,7 @@ func TestScenario_DEV_094_DeviceCodeIDTokenCarriesAtHash(t *testing.T) {
 	if at == "" {
 		t.Fatalf("access_token missing: %v", body)
 	}
-	claims := devDecodeIDToken(t, idToken)
+	claims := scenariokit.DecodeJWSClaims(t, idToken)
 	gotHash, _ := claims["at_hash"].(string)
 	if gotHash == "" {
 		t.Errorf("id_token at_hash missing: %v", claims)
@@ -1478,7 +1459,7 @@ func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindByDeviceCode after poll #2: %v", err)
 	}
-	wantAfter2 := seedInterval + devicecode.SlowDownIncrement
+	wantAfter2 := seedInterval + pollinterval.SlowDownIncrement
 	if rec.Interval != wantAfter2 {
 		t.Errorf("after poll #2 (slow_down #1): Interval = %v, want %v (seed %v plus one increment)",
 			rec.Interval, wantAfter2, seedInterval)
@@ -1504,7 +1485,7 @@ func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindByDeviceCode after poll #3: %v", err)
 	}
-	wantAfter3 := wantAfter2 + devicecode.SlowDownIncrement
+	wantAfter3 := wantAfter2 + pollinterval.SlowDownIncrement
 	if rec.Interval != wantAfter3 {
 		t.Errorf("after poll #3 (slow_down #2): Interval = %v, want %v (%v plus one increment)",
 			rec.Interval, wantAfter3, wantAfter2)

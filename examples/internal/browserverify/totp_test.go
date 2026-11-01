@@ -42,7 +42,7 @@ func scrapeTOTPSecret(t *testing.T, logPath string) string {
 }
 
 // totpCode computes the 6-digit RFC 6238 code for a base32 secret at time
-// t. It mirrors internal/authn/totp (HMAC-SHA-1, 30s step, 6 digits,
+// t. It mirrors internal/authn/totp (HMAC-SHA-1, totpStep, 6 digits,
 // T0 = epoch); that package is internal and cannot be imported here, so
 // the few lines of RFC 4226 §5.3 dynamic truncation are reproduced.
 func totpCode(secretBase32 string, t time.Time) (string, error) {
@@ -50,7 +50,7 @@ func totpCode(secretBase32 string, t time.Time) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decode base32 secret: %w", err)
 	}
-	counter := uint64(t.Unix() / 30)
+	counter := uint64(t.Unix() / int64(totpStep.Seconds()))
 
 	var ctr [8]byte
 	binary.BigEndian.PutUint64(ctr[:], counter)

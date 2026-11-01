@@ -809,7 +809,7 @@ func TestScenario_REF_013_RotationFirstRedemptionMintsNewToken(t *testing.T) {
 	if first.IDToken == "" {
 		t.Fatal("first exchange missing id_token")
 	}
-	firstClaims := decodeScenarioJWTClaims(t, first.IDToken)
+	firstClaims := scenariokit.DecodeJWSClaims(t, first.IDToken)
 	if got := firstClaims["nonce"]; got != nonce {
 		t.Fatalf("initial id_token nonce=%v want %q (precondition)", got, nonce)
 	}
@@ -833,7 +833,7 @@ func TestScenario_REF_013_RotationFirstRedemptionMintsNewToken(t *testing.T) {
 	if rotated.IDToken == "" {
 		t.Fatal("rotated response missing id_token")
 	}
-	rotatedClaims := decodeScenarioJWTClaims(t, rotated.IDToken)
+	rotatedClaims := scenariokit.DecodeJWSClaims(t, rotated.IDToken)
 	if got := rotatedClaims["nonce"]; got != nonce {
 		t.Fatalf("rotated id_token nonce=%v want %q (OIDC Core §12)", got, nonce)
 	}

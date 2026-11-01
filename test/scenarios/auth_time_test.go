@@ -21,7 +21,6 @@ package scenarios_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -187,7 +186,7 @@ func TestScenario_AT_007_DeviceCodeIDTokenCarriesAuthTime(t *testing.T) {
 	if idToken == "" {
 		t.Fatalf("id_token missing: %v", body)
 	}
-	claims := decodeScenarioJWTClaims(t, idToken)
+	claims := scenariokit.DecodeJWSClaims(t, idToken)
 	got, ok := claims["auth_time"].(float64)
 	if !ok {
 		t.Fatalf("auth_time absent or wrong type: %v", claims["auth_time"])
@@ -442,7 +441,7 @@ func (e *atEnv) authTime(t *testing.T, code string) atAuthTime {
 	if idt == "" {
 		t.Fatalf("id_token missing: %v", out)
 	}
-	claims := decodeScenarioJWTClaims(t, idt)
+	claims := scenariokit.DecodeJWSClaims(t, idt)
 	got, ok := claims["auth_time"].(float64)
 	if !ok {
 		t.Fatalf("auth_time absent or not numeric: %v (%T)", claims["auth_time"], claims["auth_time"])
@@ -497,21 +496,4 @@ func atCallbackCode(t *testing.T, loc *url.URL) string {
 		t.Fatalf("authorize error on callback: %s (%s)", errCode, loc.Query().Get("error_description"))
 	}
 	return loc.Query().Get("code")
-}
-
-func decodeScenarioJWTClaims(tb testing.TB, jws string) map[string]any {
-	tb.Helper()
-	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		tb.Fatalf("jwt has %d parts, want 3", len(parts))
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		tb.Fatalf("decode payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		tb.Fatalf("unmarshal claims: %v", err)
-	}
-	return claims
 }

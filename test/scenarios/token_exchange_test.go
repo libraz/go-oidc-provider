@@ -229,26 +229,6 @@ func (p *txProvider) postTokenExchange(t *testing.T, form url.Values) (int, map[
 	return resp.StatusCode, decoded
 }
 
-// decodeTXJWTClaims pulls the payload out of a compact JWS without
-// verifying the signature. Verification is the verifier's job; tests
-// inspecting issued tokens read claims directly.
-func decodeTXJWTClaims(t *testing.T, jws string) map[string]any {
-	t.Helper()
-	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		t.Fatalf("expected compact JWS, got %d parts", len(parts))
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		t.Fatalf("unmarshal claims: %v", err)
-	}
-	return claims
-}
-
 // signExternalSubjectToken mints an access-token-shape JWT against an
 // independent key with an issuer string that does NOT match the OP.
 // The token is structurally valid but should be rejected as external.
@@ -743,7 +723,7 @@ func TestScenario_TX_016_DelegationBuildsActChain(t *testing.T) {
 	if at == "" {
 		t.Fatalf("access_token absent")
 	}
-	claims := decodeTXJWTClaims(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	if claims["sub"] != "user-tx-016" {
 		t.Errorf("sub=%v want user-tx-016", claims["sub"])
 	}
@@ -779,7 +759,7 @@ func TestScenario_TX_016_DelegationKeepsSubjectTokenActors(t *testing.T) {
 		t.Fatalf("status=%d want 200, body=%v", status, body)
 	}
 	at, _ := body["access_token"].(string)
-	act, _ := decodeTXJWTClaims(t, at)["act"].(map[string]any)
+	act, _ := scenariokit.DecodeJWSClaims(t, at)["act"].(map[string]any)
 	if act == nil || act["sub"] != "actor-tx-016p" {
 		t.Fatalf("act=%v want outer sub actor-tx-016p", act)
 	}
@@ -829,7 +809,7 @@ func TestScenario_TX_017_ImpersonationNamesCallingClient(t *testing.T) {
 		t.Fatalf("status=%d want 200, body=%v", status, body)
 	}
 	at, _ := body["access_token"].(string)
-	claims := decodeTXJWTClaims(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	act, _ := claims["act"].(map[string]any)
 	if act == nil {
 		t.Fatalf("act claim absent on impersonation; claims=%v", claims)
@@ -855,7 +835,7 @@ func TestScenario_TX_018_SelfExchangeDoesNotAddActEntry(t *testing.T) {
 		t.Fatalf("status=%d want 200, body=%v", status, body)
 	}
 	at, _ := body["access_token"].(string)
-	claims := decodeTXJWTClaims(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	if _, present := claims["act"]; present {
 		t.Errorf("act claim present on self-exchange; should be absent: claims=%v", claims)
 	}
@@ -968,7 +948,7 @@ func TestScenario_TX_022_AudienceNormalisedPerRFC8707(t *testing.T) {
 		t.Fatalf("status=%d want 200, body=%v", status, body)
 	}
 	at, _ := body["access_token"].(string)
-	claims := decodeTXJWTClaims(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	// The aud claim should carry the lowercase host without a trailing
 	// slash — the canonical form RFC 8707 §2 prescribes.
 	const wantAud = "https://api.target.example"
@@ -1007,7 +987,7 @@ func TestScenario_TX_023_HandlerInjectedActClaimStripped(t *testing.T) {
 		t.Fatalf("status=%d want 200, body=%v", status, body)
 	}
 	at, _ := body["access_token"].(string)
-	claims := decodeTXJWTClaims(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	act, _ := claims["act"].(map[string]any)
 	if act == nil {
 		t.Fatalf("act claim absent on impersonation")
@@ -1046,7 +1026,7 @@ func TestTokenExchange_AccessTokenStandardExtrasDropped(t *testing.T) {
 				t.Fatalf("status=%d want 200, body=%v", status, body)
 			}
 			at, _ := body["access_token"].(string)
-			claims := decodeTXJWTClaims(t, at)
+			claims := scenariokit.DecodeJWSClaims(t, at)
 			if claims[key] == "forged" {
 				t.Errorf("%s=forged; the policy extra overwrote an OP-managed claim", key)
 			}
@@ -1094,12 +1074,12 @@ func TestScenario_TX_025_IDTokenCnfMirrorsAccessTokenBinding(t *testing.T) {
 		t.Fatalf("status=%d want 200, body=%v", status, body)
 	}
 	at, _ := body["access_token"].(string)
-	atClaims := decodeTXJWTClaims(t, at)
+	atClaims := scenariokit.DecodeJWSClaims(t, at)
 	idt, _ := body["id_token"].(string)
 	if idt == "" {
 		t.Fatalf("id_token absent: body=%v", body)
 	}
-	idClaims := decodeTXJWTClaims(t, idt)
+	idClaims := scenariokit.DecodeJWSClaims(t, idt)
 	atCnf, _ := atClaims["cnf"].(map[string]any)
 	idCnf, _ := idClaims["cnf"].(map[string]any)
 	if atCnf != nil {

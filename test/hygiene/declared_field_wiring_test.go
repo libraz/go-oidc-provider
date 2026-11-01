@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -74,10 +75,11 @@ var declaredFieldWatch = []watchedType{
 		declFile:  "internal/tokens/verify.go",
 		declName:  "AccessTokenVerifier",
 		literals:  []string{"AccessTokenVerifier", "tokens.AccessTokenVerifier"},
-		minSites:  4,
+		minSites:  2,
 		symmetric: false,
-		why: "every endpoint that accepts a JWT access token builds one; a setting left off one of " +
-			"them is a token that endpoint alone accepts",
+		why: "every endpoint that accepts a JWT access token builds one through " +
+			"endpointsupport.NewAccessTokenVerifier (the second site is the zero-value receiver in " +
+			"tokens/rs_export.go); a setting left off the builder is a token every endpoint accepts",
 	},
 	{
 		declFile:  "op/subject/subject.go",
@@ -331,20 +333,5 @@ func otherSite(sites []literalSite, exclude literalSite, field string) string {
 // fsetLine renders a position's line number.
 func fsetLine(fset *token.FileSet, pos token.Pos) string {
 	p := fset.Position(pos)
-	return itoa(p.Line)
-}
-
-// itoa avoids pulling strconv in for one call.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+	return strconv.Itoa(p.Line)
 }

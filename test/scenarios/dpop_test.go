@@ -395,7 +395,7 @@ func (f *dpopAsyncFixture) assertDPoPAsyncTokens(
 	if got, _ := body["token_type"].(string); got != "DPoP" {
 		t.Errorf("token_type=%q want DPoP", got)
 	}
-	claims := decodeJWTPayload(t, accessToken)
+	claims := scenariokit.DecodeJWSClaims(t, accessToken)
 	cnf, _ := claims["cnf"].(map[string]any)
 	if got, _ := cnf["jkt"].(string); got != f.key.jkt {
 		t.Errorf("access_token cnf.jkt=%q want %q", got, f.key.jkt)
@@ -465,27 +465,6 @@ func expectTokenErrorDetail(t *testing.T, resp *http.Response, wantCode, wantDes
 		t.Errorf("error_description=%q want %q (body=%v)", got, wantDesc, body)
 	}
 	return body
-}
-
-// decodeJWTPayload returns the parsed claims of a compact JWS. The DPoP
-// scenarios that need to inspect the issued access token's cnf claim
-// use this helper to stay on the public surface (no internal/tokens
-// import).
-func decodeJWTPayload(t *testing.T, token string) map[string]any {
-	t.Helper()
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		t.Fatalf("decodeJWTPayload: token does not have 3 segments: %q", token)
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("decodeJWTPayload: base64: %v", err)
-	}
-	out := map[string]any{}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("decodeJWTPayload: unmarshal: %v", err)
-	}
-	return out
 }
 
 // accessTokenHashB64 is the base64url-no-pad SHA-256 of token, the
@@ -1530,7 +1509,7 @@ func TestScenario_DPOP_038_CodeGrantWithoutDpopJkt(t *testing.T) {
 	if at == "" {
 		t.Fatal("access_token missing from /token response")
 	}
-	claims := decodeJWTPayload(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	cnf, _ := claims["cnf"].(map[string]any)
 	if got, _ := cnf["jkt"].(string); got != key.jkt {
 		t.Errorf("cnf.jkt=%q want %q (cnf=%v)", got, key.jkt, cnf)
@@ -1575,7 +1554,7 @@ func TestScenario_DPOP_039_CodeGrantWithDpopJktMatch(t *testing.T) {
 	if at == "" {
 		t.Fatal("access_token missing from /token response")
 	}
-	claims := decodeJWTPayload(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	cnf, _ := claims["cnf"].(map[string]any)
 	if got, _ := cnf["jkt"].(string); got != key.jkt {
 		t.Errorf("cnf.jkt=%q want %q", got, key.jkt)
@@ -1803,7 +1782,7 @@ func TestScenario_DPOP_042_RefreshTokenConfidential(t *testing.T) {
 	if at == "" {
 		t.Fatal("refresh response missing access_token")
 	}
-	claims := decodeJWTPayload(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	cnf, _ := claims["cnf"].(map[string]any)
 	if got, _ := cnf["jkt"].(string); got != key.jkt {
 		t.Errorf("refresh AT cnf.jkt=%q want %q", got, key.jkt)
@@ -1863,7 +1842,7 @@ func TestScenario_DPOP_043_CodeGrantPublicClient(t *testing.T) {
 	if rt == "" {
 		t.Fatal("response missing refresh_token (public-client + offline_access)")
 	}
-	atClaims := decodeJWTPayload(t, at)
+	atClaims := scenariokit.DecodeJWSClaims(t, at)
 	cnf, _ := atClaims["cnf"].(map[string]any)
 	if got, _ := cnf["jkt"].(string); got != key.jkt {
 		t.Errorf("access_token cnf.jkt=%q want %q", got, key.jkt)
@@ -1946,7 +1925,7 @@ func TestScenario_DPOP_044_RefreshTokenPublicClientSuccess(t *testing.T) {
 	if rotated == rt {
 		t.Errorf("refresh_token did not rotate (still %q)", rotated)
 	}
-	claims := decodeJWTPayload(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	cnf, _ := claims["cnf"].(map[string]any)
 	if got, _ := cnf["jkt"].(string); got != key.jkt {
 		t.Errorf("rotated AT cnf.jkt=%q want %q", got, key.jkt)
@@ -2080,7 +2059,7 @@ func TestScenario_DPOP_046_ClientCredentialsBinding(t *testing.T) {
 	if rt, _ := body["refresh_token"].(string); rt != "" {
 		t.Errorf("client_credentials response carried refresh_token=%q (must be empty)", rt)
 	}
-	claims := decodeJWTPayload(t, at)
+	claims := scenariokit.DecodeJWSClaims(t, at)
 	cnf, _ := claims["cnf"].(map[string]any)
 	if got, _ := cnf["jkt"].(string); got != key.jkt {
 		t.Errorf("cc AT cnf.jkt=%q want %q", got, key.jkt)
