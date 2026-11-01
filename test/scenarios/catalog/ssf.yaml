@@ -1,0 +1,177 @@
+# yaml-language-server: $schema=./schema.json
+feature: ssf
+prefix: SSF
+title: Shared Signals Framework transmitter (CAEP / RISC)
+specs:
+  - OpenID Shared Signals Framework 1.0
+  - OpenID CAEP 1.0 (session-revoked, credential-change)
+  - OpenID CAEP Interoperability Profile 1.0 (RS256 signing of §2.6 not supported; ES256 only)
+  - RFC 8417 (Security Event Token)
+  - RFC 8935 (SET push delivery)
+  - RFC 8936 (SET poll delivery)
+  - RFC 8414 (path-form well-known)
+  - RFC 6750 §3.1
+
+description: |
+  The OP as a Shared Signals transmitter. Receivers are OAuth clients of
+  the OP that manage one stream each with a client_credentials access
+  token carrying ssf.read or ssf.manage. Session revocation observed by
+  the OP and embedder-reported security events are delivered as Security
+  Event Tokens signed with the OP's JWKS key, by push or poll. Push
+  retry, SSRF and store-contract behaviour are asserted by the unit and
+  contract suites; these rows cover the wire contract.
+
+rows:
+  - id: SSF-001
+    severity: P0
+    spec: SSF 1.0 §7.1 / CAEP Interop §2.4.4
+    shape: value
+    behaviour: |
+      The transmitter metadata at `/.well-known/ssf-configuration` reports `spec_version` "1_0", `issuer` equal to the OP issuer, `jwks_uri`, `configuration_endpoint`, `status_endpoint` and `verification_endpoint` equal to the OP's mounted URLs, `default_subjects` "ALL", push and poll in `delivery_methods_supported`, and a single `urn:ietf:rfc:6749` authorization scheme. OIDC discovery advertises no SSF member.
+    status: active
+    cross_refs:
+      - ssf#SSF-002
+
+  - id: SSF-002
+    severity: P1
+    spec: SSF 1.0 §7.2.1 / RFC 8414 §3
+    shape: value
+    behaviour: |
+      When the issuer carries a path, the metadata is served at the well-known segment followed by the issuer path, reports that issuer, and the bare well-known path is not served.
+    status: active
+
+  - id: SSF-003
+    severity: P1
+    spec: SSF 1.0 (opt-in)
+    shape: presence
+    behaviour: |
+      Without op.WithSharedSignals no transmitter route exists: the metadata, stream, status, verify and poll paths all answer 404.
+    status: active
+
+  - id: SSF-010
+    severity: P0
+    spec: SSF 1.0 §8.1.1.1
+    shape: value
+    behaviour: |
+      Creating a stream answers 201 with a generated `stream_id`, `aud` equal to the receiver client_id, `iss` equal to the OP issuer, and `events_delivered` equal to the requested event types the transmitter supports. A second create by the same receiver answers 409. A configured push `authorization_header` is never returned by create or read.
+    status: active
+
+  - id: SSF-011
+    severity: P0
+    spec: SSF 1.0 §8.1.1 (receiver scoping)
+    shape: identity
+    behaviour: |
+      A receiver reading, polling, updating, replacing, deleting, changing the status of or requesting verification for another receiver's stream receives 404, the same answer as for a stream_id that does not exist. Listing without stream_id returns only the caller's own stream, or an empty array when it has none.
+    status: active
+
+  - id: SSF-012
+    severity: P0
+    spec: SSF 1.0 §8.1 / RFC 6750 §3.1
+    shape: value
+    behaviour: |
+      A request without a bearer token is 401 with a Bearer challenge. A token with only `ssf.read` can read its own stream and is refused with 403 on create, PATCH, PUT, delete, status change and verification, leaving the stream unchanged. A token carrying neither ssf scope is refused.
+    status: active
+
+  - id: SSF-013
+    severity: P1
+    spec: SSF 1.0 §8.1.1.3, §8.1.1.4
+    shape: value
+    behaviour: |
+      PATCH changes only the members it names; PUT drops the members it omits. A change to `events_requested` recomputes `events_delivered` as the supported intersection, and a list of unknown URIs alone is accepted and yields an empty `events_delivered`.
+    status: active
+
+  - id: SSF-014
+    severity: P1
+    spec: SSF 1.0 §8.1.1.3
+    shape: value
+    behaviour: |
+      An update that sets `events_delivered` to a value other than the current one, or tries to change `aud` or `iss`, is refused with 400 by both PATCH and PUT and leaves the stream unchanged.
+    status: active
+
+  - id: SSF-015
+    severity: P2
+    spec: SSF 1.0 §8.1.1.1
+    shape: value
+    behaviour: |
+      Stream creation rejects malformed JSON, trailing content, an unknown delivery method, a push stream without an endpoint, an http endpoint without the dev opt-in, an endpoint with userinfo, a fragment or a private IP literal, and an authorization header over 4 KiB, all with 400; a body over 64 KiB with 413. An empty body creates a poll stream. A description over 256 characters is truncated to 256, a non-ASCII description is kept as sent, and unknown members are ignored.
+    status: active
+
+  - id: SSF-016
+    severity: P1
+    spec: SSF 1.0 §8.1.1.5
+    shape: value
+    behaviour: |
+      Deleting a stream answers 204; the stream is then 404 for read and poll. A stream created afterwards has a new stream_id and a queue holding only its own creation verification.
+    status: active
+
+  - id: SSF-020
+    severity: P0
+    spec: CAEP 1.0 session-revoked / RFC 8935 / RFC 8417
+    shape: identity
+    behaviour: |
+      An RP-Initiated Logout pushes a session-revoked SET to the receiver holding a grant for the user. The SET is `typ` secevent+jwt, verifies against the OP JWKS, has `aud` equal to the receiver client_id, `sub_id` of format iss_sub with the user's subject, `initiating_entity` user and a non-empty `reason_admin`, and is delivered with the stream's configured authorization header.
+    status: active
+
+  - id: SSF-021
+    severity: P0
+    spec: CAEP 1.0 session-revoked
+    shape: order
+    behaviour: |
+      RevokeSubject delivers session-revoked to the receivers holding a grant for the subject before it removes those grants, with no `initiating_entity` and a non-empty `reason_admin`. An event emitted for that subject afterwards reaches no receiver.
+    status: active
+
+  - id: SSF-022
+    severity: P0
+    spec: RFC 8936 §2.4 / CAEP 1.0 credential-change
+    shape: order
+    behaviour: |
+      Provider.EmitSecurityEvent for a credential change appears on the receiver's poll stream as one SET with `sub_id` iss_sub of the subject, `aud` the receiver, a `txn`, an `event_timestamp`, the credential and change types, and a default `reason_admin` when none was given. An unacknowledged SET is returned again with the same jti; an acknowledged one is never returned again.
+    status: active
+
+  - id: SSF-023
+    severity: P0
+    spec: SSF 1.0 §8.1.1 (subject scope)
+    shape: identity
+    behaviour: |
+      An event reaches only the receivers whose client holds a grant for the subject and whose stream delivers that event type; other receivers' streams see nothing.
+    status: active
+
+  - id: SSF-024
+    severity: P1
+    spec: SSF 1.0 §8.1.5
+    shape: order
+    behaviour: |
+      While a stream is paused, ordinary events are held and not delivered, while the stream-updated notice for the transition (`sub_id` opaque with the stream id, status paused) is delivered. Enabling the stream delivers the held events and a stream-updated with status enabled.
+    status: active
+
+  - id: SSF-025
+    severity: P1
+    spec: SSF 1.0 §8.1.5
+    shape: order
+    behaviour: |
+      Disabling a stream discards its queued ordinary events and enqueues none afterwards, while the stream-updated notice with status disabled is still delivered by poll. The status read returns the disabled status and its reason; an unknown status value is refused with 400.
+    status: active
+
+  - id: SSF-026
+    severity: P1
+    spec: SSF 1.0 §8.1.4
+    shape: value
+    behaviour: |
+      The verification queued at stream creation carries no state. A verification request answers 204 and queues a verification SET echoing the request's state; a newer request replaces a pending one so only the latest state is delivered.
+    status: active
+
+  - id: SSF-027
+    severity: P1
+    spec: RFC 8936 §2.5
+    shape: order
+    behaviour: |
+      A poll with returnImmediately false and nothing pending stays open and answers with an event that arrives while it waits; with returnImmediately true an empty queue answers at once with no SETs.
+    status: active
+
+  - id: SSF-028
+    severity: P1
+    spec: RFC 8936 §2.2
+    shape: value
+    behaviour: |
+      maxEvents 0 consumes nothing and returns no SETs; maxEvents n returns at most n SETs with moreAvailable true while more remain; acknowledging unknown jtis is ignored; a negative, fractional or string maxEvents, a non-string ack element and a non-object setErrs value are refused with 400.
+    status: active

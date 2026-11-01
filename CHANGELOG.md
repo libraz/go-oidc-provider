@@ -602,6 +602,29 @@ issuer.
   multi-node deployment must share the store's `ConsumedJTIStore`, or an
   assertion can be replayed on another node until it expires.
 
+- Shared Signals transmitter (OpenID Shared Signals Framework 1.0, with CAEP
+  session-revoked and credential-change events), enabled with
+  `op.WithSharedSignals`. A receiver is an OAuth client of the OP that obtains
+  an access token with `ssf.read` or `ssf.manage` through client_credentials
+  and manages one stream through `/ssf/streams`, `/ssf/status` and
+  `/ssf/verify`; the metadata is served at `/.well-known/ssf-configuration`
+  (with the issuer path appended for an issuer that has one). Security Event
+  Tokens (RFC 8417) are signed with the OP's JWKS key and delivered by push
+  (RFC 8935) with retries at 1 minute, 5 minutes, 25 minutes and 2 hours, or by
+  poll (RFC 8936), including long poll. The OP reports RP-Initiated Logout as
+  session-revoked, and `Provider.EmitSecurityEvent` reports credential
+  changes and the other supported events; both go to the receivers whose client
+  holds a grant for the subject. `op.WithSharedSignalsAllowPrivateNetwork` and
+  `op.WithAllowInsecureSharedSignalsPushForDev` relax the push destination
+  checks. Persistence is the optional `store.SharedSignalsStore`, implemented
+  by the in-memory, composite, SQL, Redis and DynamoDB adapters and covered by
+  `contract.RunSSF`; `op.New` refuses the feature on a store without it. The
+  SQL adapter's v1.5.0 schema adds the `ssf_streams` and `ssf_events` tables,
+  which `ValidateSchema` requires whether or not the feature is on; see the
+  SQL migrations. `Provider.RevokeSubject` now emits session-revoked when the
+  feature is on. The CAEP Interoperability Profile's RS256 signing requirement
+  (section 2.6) is not supported: the OP signs with ES256 only.
+
 ### Experimental
 
 These follow an IETF draft whose wire format may still change, and are not
@@ -678,6 +701,11 @@ covered by the SemVer promise.
     addresses for development and tests only. `op.New` refuses the feature
     together with a FAPI profile.
 
+- RISC account events through `Provider.EmitSecurityEvent`:
+  `op.AccountDisabled`, `op.AccountEnabled`, `op.AccountPurged` and
+  `op.CredentialCompromise`. The public RISC text is still marked as a draft,
+  so these four event types are outside the SemVer promise.
+
 ### Fixed
 
 - When a refresh-token replay is detected but the store fails to return the
@@ -749,6 +777,9 @@ covered by the SemVer promise.
 
 - Example `27-durable-mfa-store` keeps its TOTP sealing key beside the
   database in durable mode, so a TOTP login works after a restart.
+
+- `Reloadable.Reload` shuts down a candidate provider it rejects because its
+  route set differs from the running one, instead of leaving it running.
 
 ### Deprecated
 

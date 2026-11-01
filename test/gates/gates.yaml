@@ -64,6 +64,11 @@ surfaces:
       - internal/endsession
       - internal/backchannel
 
+  - id: shared-signals
+    title: Shared Signals transmitter (SSF, CAEP, RISC)
+    paths:
+      - internal/ssf
+
   - id: registration
     title: Dynamic client registration
     paths:
@@ -230,6 +235,7 @@ gates:
         userinfo,
         introspection-revocation,
         end-session,
+        shared-signals,
         registration,
         par,
         device-code,
@@ -273,6 +279,7 @@ gates:
         userinfo,
         introspection-revocation,
         end-session,
+        shared-signals,
         registration,
         par,
         device-code,
@@ -316,6 +323,7 @@ gates:
         userinfo,
         introspection-revocation,
         end-session,
+        shared-signals,
         registration,
         par,
         device-code,
@@ -360,6 +368,7 @@ gates:
         userinfo,
         introspection-revocation,
         end-session,
+        shared-signals,
         registration,
         par,
         device-code,
@@ -400,6 +409,7 @@ gates:
         userinfo,
         introspection-revocation,
         end-session,
+        shared-signals,
         registration,
         par,
         device-code,
@@ -478,6 +488,7 @@ gates:
         userinfo,
         introspection-revocation,
         end-session,
+        shared-signals,
         registration,
         par,
         device-code,
@@ -540,6 +551,7 @@ gates:
         userinfo,
         introspection-revocation,
         end-session,
+        shared-signals,
         registration,
         par,
         device-code,
@@ -628,6 +640,7 @@ gates:
         userinfo,
         introspection-revocation,
         end-session,
+        shared-signals,
         registration,
         par,
         device-code,

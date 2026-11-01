@@ -175,6 +175,7 @@ A green result from the gate on the left says nothing about the classes on the r
 | UserInfo endpoint | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `failopen`, `conformance` |
 | Introspection and revocation | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `fuzz`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `failopen`, `conformance` |
 | End-session and back-channel logout | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `failopen`, `conformance` |
+| Shared Signals transmitter (SSF, CAEP, RISC) | unit | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-shape`, `failopen` |
 | Dynamic client registration | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `failopen`, `conformance` |
 | Pushed authorization requests | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `failopen`, `conformance` |
 | Device authorization grant | integration | `gofmt`, `vet`, `lint`, `test`, `test-race`, `scenario-validate`, `scenario-coverage`, `scenario-shape`, `failopen`, `apiverify`, `conformance` |
