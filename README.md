@@ -59,7 +59,7 @@ handler, err := op.New(
     op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
     op.WithCookieKeys(cookieKey), // 32 bytes, AES-256-GCM
     op.WithLoginFlow(op.LoginFlow{
-        Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+        Primary: op.PrimaryPassword{Store: users},
     }),
 )
 if err != nil {
@@ -67,6 +67,13 @@ if err != nil {
 }
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
+
+`st` holds the OP's own records (clients, codes, tokens, sessions); the SQL
+adapter's [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) lists its tables
+and when each is used. `users` is your existing users table behind
+`store.UserPasswordStore`: three read methods, and no new column when the
+table already has an identifier that is never reassigned. See
+[Bring your own user store](https://go-oidc-provider.libraz.net/use-cases/byo-userstore).
 
 `Issuer`, `Store` and `Keyset` are always required. `CookieKeys` is required
 whenever the `authorization_code` grant is enabled, which is the default.
