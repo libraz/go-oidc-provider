@@ -1,8 +1,10 @@
 package op
 
 import (
+	"errors"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,17 +40,63 @@ import (
 // defaults to `<issuer>/device`; embedders override it via
 // [WithDeviceVerificationURI].
 //
+// The grant's settings are passed as [DeviceCodeOption] values, the same
+// shape [WithCIBA] takes:
+//
+//	op.WithDeviceCodeGrant(
+//		op.WithDeviceCodeExpiry(15*time.Minute),
+//		op.WithDeviceCodePollInterval(5*time.Second),
+//	)
+//
+// WithDeviceCodeGrant itself may be supplied more than once; each
+// [DeviceCodeOption] is single-valued across all of them.
+//
 // Stable since v1.0.
-func WithDeviceCodeGrant() Option {
+func WithDeviceCodeGrant(opts ...DeviceCodeOption) Option {
 	return optionFunc(func(c *config) error {
 		// Only the opt-in bit is recorded here; the grant set is
 		// assembled in [config.applyDefaults] once every option has
 		// run, so the result cannot depend on whether this option or
 		// [WithGrants] was applied first.
 		c.deviceCodeGrantEnabled = true
+		for i, sub := range opts {
+			if nilcheck.IsNil(sub) {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithDeviceCodeGrant received nil DeviceCodeOption at position " + strconv.Itoa(i),
+				}
+			}
+			err := sub.applyDeviceCode(c)
+			if errors.Is(err, errShadowedDefault) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }
+
+// DeviceCodeOption configures the device-authorization grant beyond the
+// bare [WithDeviceCodeGrant] opt-in. Pass values produced by
+// [WithDeviceVerificationURI], [WithDeviceCodeExpiry] and
+// [WithDeviceCodePollInterval] to [WithDeviceCodeGrant].
+//
+// A DeviceCodeOption is also an [Option], so one passed straight to [New]
+// still applies. That form is deprecated: it sets the value without
+// enabling the grant, which reads as if it did.
+//
+// Stable since v1.5.
+type DeviceCodeOption interface {
+	Option
+	applyDeviceCode(c *config) error
+}
+
+type deviceCodeOptionFunc func(*config) error
+
+func (f deviceCodeOptionFunc) apply(c *config) error           { return f(c) }
+func (f deviceCodeOptionFunc) applyDeviceCode(c *config) error { return f(c) }
 
 // WithDeviceVerificationURI overrides the verification URI advertised
 // on the device's display in the §3.2 device-authorization response.
@@ -64,9 +112,11 @@ func WithDeviceCodeGrant() Option {
 // reachable; embedders SHOULD ensure their verification page is
 // served at the supplied URL before activating the option.
 //
+// Pass it to [WithDeviceCodeGrant].
+//
 // Stable since v1.0.
-func WithDeviceVerificationURI(uri string) Option {
-	return optionFunc(func(c *config) error {
+func WithDeviceVerificationURI(uri string) DeviceCodeOption {
+	return deviceCodeOptionFunc(func(c *config) error {
 		if err := c.claimOnce("WithDeviceVerificationURI"); err != nil {
 			return err
 		}
@@ -111,9 +161,11 @@ func WithDeviceVerificationURI(uri string) Option {
 //
 // A non-positive duration is rejected at the option site.
 //
+// Pass it to [WithDeviceCodeGrant].
+//
 // Stable since v1.0.
-func WithDeviceCodeExpiry(ttl time.Duration) Option {
-	return optionFunc(func(c *config) error {
+func WithDeviceCodeExpiry(ttl time.Duration) DeviceCodeOption {
+	return deviceCodeOptionFunc(func(c *config) error {
 		if err := c.claimOnce("WithDeviceCodeExpiry"); err != nil {
 			return err
 		}
@@ -137,9 +189,11 @@ func WithDeviceCodeExpiry(ttl time.Duration) Option {
 //
 // A non-positive duration is rejected at the option site.
 //
+// Pass it to [WithDeviceCodeGrant].
+//
 // Stable since v1.0.
-func WithDeviceCodePollInterval(interval time.Duration) Option {
-	return optionFunc(func(c *config) error {
+func WithDeviceCodePollInterval(interval time.Duration) DeviceCodeOption {
+	return deviceCodeOptionFunc(func(c *config) error {
 		if err := c.claimOnce("WithDeviceCodePollInterval"); err != nil {
 			return err
 		}

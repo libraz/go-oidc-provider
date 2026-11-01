@@ -926,7 +926,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 	// fixtures can POST a logout token at a stub RP bound to
 	// 127.0.0.1, matching both its own godoc and the registration
 	// validator's accept-set, while
-	// [WithBackchannelAllowPrivateNetwork] carries the wider
+	// [WithAllowPrivateNetworkBackchannel] carries the wider
 	// service-mesh meaning and is the only way to reach RFC 1918
 	// space.
 	deliverer.AllowLoopbackNetwork = cfg.allowInsecureBackchannelLogoutForDev

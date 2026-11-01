@@ -71,6 +71,34 @@ func TestWithGrants_DeviceCode_RejectsMissingSubstore(t *testing.T) {
 	}
 }
 
+// TestWithDeviceCodeGrant_RejectsNilOption pins the nil guard on the
+// nested settings, the same one [op.WithCIBA] applies.
+func TestWithDeviceCodeGrant_RejectsNilOption(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(time.Minute), nil),
+	)...)
+	if err == nil || !strings.Contains(err.Error(), "position 1") {
+		t.Fatalf("err = %v, want the nil DeviceCodeOption at position 1 named", err)
+	}
+}
+
+// TestDeviceCodeOption_SingleValuedAcrossForms pins that a setting passed
+// both nested and, in the deprecated form, straight to op.New is refused
+// as a duplicate rather than resolved by option order.
+func TestDeviceCodeOption_SingleValuedAcrossForms(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithDeviceCodeGrant(op.WithDeviceCodePollInterval(5*time.Second)),
+		op.WithDeviceCodePollInterval(10*time.Second),
+	)...)
+	if err == nil || !strings.Contains(err.Error(), "at most once") {
+		t.Fatalf("err = %v, want a duplicate-setting error", err)
+	}
+}
+
 // TestWithDeviceCodeExpiry_RejectsNonPositive pins the option-site
 // validation: zero and negative durations are rejected so a
 // misconfiguration surfaces at construction time.
@@ -79,8 +107,7 @@ func TestWithDeviceCodeExpiry_RejectsNonPositive(t *testing.T) {
 
 	for _, ttl := range []time.Duration{0, -1 * time.Second} {
 		_, err := op.New(append(validBaseOptsWithInmem(t),
-			op.WithDeviceCodeGrant(),
-			op.WithDeviceCodeExpiry(ttl),
+			op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(ttl)),
 		)...)
 		if err == nil {
 			t.Fatalf("WithDeviceCodeExpiry(%v): expected error", ttl)
@@ -96,8 +123,7 @@ func TestWithDeviceCodePollInterval_RejectsNonPositive(t *testing.T) {
 
 	for _, interval := range []time.Duration{0, -1 * time.Second} {
 		_, err := op.New(append(validBaseOptsWithInmem(t),
-			op.WithDeviceCodeGrant(),
-			op.WithDeviceCodePollInterval(interval),
+			op.WithDeviceCodeGrant(op.WithDeviceCodePollInterval(interval)),
 		)...)
 		if err == nil {
 			t.Fatalf("WithDeviceCodePollInterval(%v): expected error", interval)
@@ -143,9 +169,8 @@ func TestWithDeviceCodeExpiry_IndependentOfShortAccessTokenTTL(t *testing.T) {
 		op.WithKeyset(validKeyset(t)),
 		op.WithCookieKeys(newRandomCookieKey(t)),
 		fixtureAuthenticator(),
-		op.WithDeviceCodeGrant(),
+		op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(deviceCodeExpiry)),
 		op.WithAccessTokenTTL(shortAccessTokenTTL),
-		op.WithDeviceCodeExpiry(deviceCodeExpiry),
 	)
 	if err != nil {
 		t.Fatalf("op.New: %v", err)

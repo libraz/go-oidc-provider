@@ -35,6 +35,7 @@ var composeAdditive = map[string]string{
 	"WithTrustedProxies":           "additive",
 	"WithTrustedProxyHosts":        "additive",
 	"WithCIBA":                     "flag whose CIBAOptions claim their own settings",
+	"WithDeviceCodeGrant":          "flag whose DeviceCodeOptions claim their own settings",
 	"WithDefaults":                 "wrapper",
 	"WithSupportedEncryptionAlgs":  "claims one slot per half in applyAlgNarrowing / applyEncNarrowing",
 }

@@ -86,6 +86,7 @@ github.com/libraz/go-oidc-provider/op	CustomGrantResponse.IssueRefreshToken	v1.0
 github.com/libraz/go-oidc-provider/op	DPoPNonceSource	v1.0
 github.com/libraz/go-oidc-provider/op	DPoPProof	v1.0
 github.com/libraz/go-oidc-provider/op	DefaultACRPolicy	v1.0
+github.com/libraz/go-oidc-provider/op	DeviceCodeOption	v1.5
 github.com/libraz/go-oidc-provider/op	EncryptionKey	v1.0
 github.com/libraz/go-oidc-provider/op	EncryptionKeyset	v1.0
 github.com/libraz/go-oidc-provider/op	Endpoints.SSFConfiguration	v1.5
@@ -173,9 +174,11 @@ github.com/libraz/go-oidc-provider/op	WithAccessTokenTTL	v1.0
 github.com/libraz/go-oidc-provider/op	WithAllowInsecureBackchannelLogoutForDev	v1.0
 github.com/libraz/go-oidc-provider/op	WithAllowInsecureSharedSignalsPushForDev	v1.5
 github.com/libraz/go-oidc-provider/op	WithAllowLocalhostLoopback	v1.0
+github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkBackchannel	v1.5
 github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkJAR	v1.0
 github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkJWKS	v1.0
 github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkSector	v1.0
+github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkSharedSignals	v1.5
 github.com/libraz/go-oidc-provider/op	WithAuditLogger	v1.0
 github.com/libraz/go-oidc-provider/op	WithAuthnLockoutStore	v1.0
 github.com/libraz/go-oidc-provider/op	WithAuthorizationDetailTypes	v1.0
@@ -234,7 +237,6 @@ github.com/libraz/go-oidc-provider/op	WithRefreshTokenTTL	v1.0
 github.com/libraz/go-oidc-provider/op	WithScope	v1.0
 github.com/libraz/go-oidc-provider/op	WithSessionDurabilityPosture	v1.0
 github.com/libraz/go-oidc-provider/op	WithSharedSignals	v1.5
-github.com/libraz/go-oidc-provider/op	WithSharedSignalsAllowPrivateNetwork	v1.5
 github.com/libraz/go-oidc-provider/op	WithStaticClients	v1.0
 github.com/libraz/go-oidc-provider/op	WithStore	v1.0
 github.com/libraz/go-oidc-provider/op	WithStrictOfflineAccess	v1.0

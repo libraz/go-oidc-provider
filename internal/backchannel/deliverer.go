@@ -100,7 +100,7 @@ type HTTPDeliverer struct {
 	// rejects loopback / link-local / RFC 1918 hosts so an
 	// attacker-controlled backchannel_logout_uri cannot pivot the OP
 	// onto an internal service. Embedders fronting their RPs with
-	// private DNS opt in via op.WithBackchannelAllowPrivateNetwork.
+	// private DNS opt in via op.WithAllowPrivateNetworkBackchannel.
 	AllowPrivateNetwork bool
 
 	// AllowLoopbackNetwork is the narrow counterpart of

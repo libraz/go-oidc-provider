@@ -276,7 +276,7 @@ type config struct {
 	// RFC 1918 / IPv6 ULA destinations so a hostile RP cannot
 	// register a backchannel_logout_uri that aims the OP's signed
 	// logout_token at an internal service. Embedders opt in via
-	// [WithBackchannelAllowPrivateNetwork].
+	// [WithAllowPrivateNetworkBackchannel].
 	backchannelAllowPrivateNetwork bool
 
 	// allowLocalhostLoopback widens the RFC 8252 §7.3 loopback
@@ -523,7 +523,7 @@ type config struct {
 
 	// sharedSignals, sharedSignalsAllowPrivateNetwork and
 	// allowInsecureSharedSignalsPushForDev record [WithSharedSignals],
-	// [WithSharedSignalsAllowPrivateNetwork] and
+	// [WithAllowPrivateNetworkSharedSignals] and
 	// [WithAllowInsecureSharedSignalsPushForDev].
 	sharedSignals                        bool
 	sharedSignalsAllowPrivateNetwork     bool

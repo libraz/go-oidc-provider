@@ -614,7 +614,7 @@ issuer.
   poll (RFC 8936), including long poll. The OP reports RP-Initiated Logout as
   session-revoked, and `Provider.EmitSecurityEvent` reports credential
   changes and the other supported events; both go to the receivers whose client
-  holds a grant for the subject. `op.WithSharedSignalsAllowPrivateNetwork` and
+  holds a grant for the subject. `op.WithAllowPrivateNetworkSharedSignals` and
   `op.WithAllowInsecureSharedSignalsPushForDev` relax the push destination
   checks. Persistence is the optional `store.SharedSignalsStore`, implemented
   by the in-memory, composite, SQL, Redis and DynamoDB adapters and covered by
@@ -624,6 +624,19 @@ issuer.
   SQL migrations. `Provider.RevokeSubject` now emits session-revoked when the
   feature is on. The CAEP Interoperability Profile's RS256 signing requirement
   (section 2.6) is not supported: the OP signs with ES256 only.
+- `op.DeviceCodeOption`. `op.WithDeviceCodeGrant` now takes the device-code
+  settings the way `op.WithCIBA` takes its own:
+  `op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(d), op.WithDeviceCodePollInterval(i))`.
+  `op.WithDeviceVerificationURI`, `op.WithDeviceCodeExpiry` and
+  `op.WithDeviceCodePollInterval` return `op.DeviceCodeOption`, which is also an
+  `op.Option`, so existing calls compile unchanged.
+- `op.WithAllowPrivateNetworkBackchannel()`, named and shaped like the other
+  `op.WithAllowPrivateNetwork*` options.
+- When `op.WithLogger` is set, `op.New` logs one INFO line naming the optional
+  store capabilities the configuration would use and the store does not
+  implement, such as `store.IssuanceRevocationChecker` or, with dynamic
+  registration, `store.RevokeByClient`. Each has a fallback; the line makes a
+  capability hidden by a hand-written wrapper around a bundled store visible.
 
 ### Experimental
 
@@ -789,6 +802,13 @@ covered by the SemVer promise.
 - `RiskOutcome.MinAAL`. Its only consumer was the removed pre-factor
   consult.
 - `op.NewEmailOTPAuthenticator`. Use `op.StepEmailOTP` in a `LoginFlow`.
+- Passing `op.WithDeviceVerificationURI`, `op.WithDeviceCodeExpiry` or
+  `op.WithDeviceCodePollInterval` straight to `op.New`. Pass them to
+  `op.WithDeviceCodeGrant`; on their own they set a value without enabling the
+  grant.
+- `op.WithBackchannelAllowPrivateNetwork(bool)`. Use
+  `op.WithAllowPrivateNetworkBackchannel()`. Supplying both is refused as a
+  conflict.
 
 ### Removed
 

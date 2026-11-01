@@ -76,7 +76,7 @@
 //     URLs for backchannel_logout_uri at registration time and narrows the
 //     deliverer's SSRF gate to loopback so a stub RP on 127.0.0.1 can
 //     receive the logout token POST. Every other private range stays
-//     refused; reaching one is [WithBackchannelAllowPrivateNetwork].
+//     refused; reaching one is [WithAllowPrivateNetworkBackchannel].
 //
 // Production embedders leave both off and front their RPs over TLS.
 //

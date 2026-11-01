@@ -44,19 +44,19 @@ func WithSharedSignals() Option {
 	})
 }
 
-// WithSharedSignalsAllowPrivateNetwork admits RFC 1918 / IPv6 ULA push
+// WithAllowPrivateNetworkSharedSignals admits RFC 1918 / IPv6 ULA push
 // endpoints for SSF receivers, the counterpart of
-// [WithBackchannelAllowPrivateNetwork]. The default refuses them so a
+// [WithAllowPrivateNetworkBackchannel]. The default refuses them so a
 // receiver cannot aim signed SETs at an internal service. Cloud metadata
 // addresses stay refused whatever the value.
 //
 // Stable since v1.5.
-func WithSharedSignalsAllowPrivateNetwork(allow bool) Option {
+func WithAllowPrivateNetworkSharedSignals() Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithSharedSignalsAllowPrivateNetwork"); err != nil {
+		if err := c.claimOnce("WithAllowPrivateNetworkSharedSignals"); err != nil {
 			return err
 		}
-		c.sharedSignalsAllowPrivateNetwork = allow
+		c.sharedSignalsAllowPrivateNetwork = true
 		return nil
 	})
 }

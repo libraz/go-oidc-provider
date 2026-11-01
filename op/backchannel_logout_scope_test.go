@@ -243,7 +243,7 @@ func TestBackchannelPrivateOptIn_DeliversToLoopback(t *testing.T) {
 	t.Parallel()
 
 	sink := &auditSink{}
-	provider := newDeliveryScopeProvider(t, sink, WithBackchannelAllowPrivateNetwork(true))
+	provider := newDeliveryScopeProvider(t, sink, WithAllowPrivateNetworkBackchannel())
 	uri, hit := loopbackRP(t)
 
 	rec := deliverTo(t, provider, sink, uri)

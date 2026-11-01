@@ -3,8 +3,8 @@ package op
 import "time"
 
 // BackchannelAllowsPrivateNetwork reports whether
-// [WithBackchannelAllowPrivateNetwork] was invoked with a true
-// argument against this config. The wiring layer (op_builders.go) consults the
+// [WithAllowPrivateNetworkBackchannel] (or the deprecated
+// [WithBackchannelAllowPrivateNetwork] with true) was applied to this config. The wiring layer (op_builders.go) consults the
 // accessor when constructing the back-channel deliverer so the
 // per-config gate flows through to the SSRF check.
 //
@@ -18,35 +18,54 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 	return c.backchannelAllowPrivateNetwork
 }
 
-// WithBackchannelAllowPrivateNetwork suppresses the SSRF deny-list
+// WithAllowPrivateNetworkBackchannel suppresses the SSRF deny-list
 // the back-channel logout deliverer applies to RP-controlled
-// backchannel_logout_uri values. The default (option not invoked, or
-// invoked with false) rejects loopback / link-local / RFC 1918 / IPv6
-// ULA destinations so a hostile RP cannot register
-// backchannel_logout_uri = "http://127.0.0.1/..." or
-// "http://169.254.169.254/..." and have the OP POST a signed
-// logout_token at an internal service.
+// backchannel_logout_uri values. Without it the deliverer rejects
+// loopback / link-local / RFC 1918 / IPv6 ULA destinations, so a
+// hostile RP cannot register backchannel_logout_uri =
+// "http://127.0.0.1/..." or "http://169.254.169.254/..." and have the
+// OP POST a signed logout_token at an internal service.
 //
 // Embedders that front their RPs with private DNS — typical in
 // service-mesh deployments where the RP and the OP share a pod
-// network — opt in by passing true. The option flips the gate at
-// the deliverer level only; nothing else in the SSRF posture changes
-// (the JAR / JWKS fetcher is governed by the independent
-// [WithAllowPrivateNetworkJWKS] / [WithAllowPrivateNetworkJAR]
-// flags). The two surfaces are kept independent so an embedder can
-// grant private-network access for one fetcher without widening the
-// other.
+// network — opt in with this option. It flips the gate at the
+// deliverer level only; the other fetchers keep their own
+// WithAllowPrivateNetwork* flags ([WithAllowPrivateNetworkJWKS],
+// [WithAllowPrivateNetworkJAR], ...) so private-network access granted
+// to one never widens another.
+//
+// Stable since v1.5.
+func WithAllowPrivateNetworkBackchannel() Option {
+	return optionFunc(func(c *config) error {
+		if err := c.claimSlot(slotBackchannelAllowPrivateNetwork, "WithAllowPrivateNetworkBackchannel"); err != nil {
+			return err
+		}
+		c.backchannelAllowPrivateNetwork = true
+		return nil
+	})
+}
+
+// WithBackchannelAllowPrivateNetwork sets the gate
+// [WithAllowPrivateNetworkBackchannel] opens; false leaves it closed.
+//
+// Deprecated: use [WithAllowPrivateNetworkBackchannel], named like the
+// other WithAllowPrivateNetwork* options.
 //
 // Stable since v1.0.
 func WithBackchannelAllowPrivateNetwork(allow bool) Option {
 	return optionFunc(func(c *config) error {
-		if err := c.claimOnce("WithBackchannelAllowPrivateNetwork"); err != nil {
+		if err := c.claimSlot(slotBackchannelAllowPrivateNetwork, "WithBackchannelAllowPrivateNetwork"); err != nil {
 			return err
 		}
 		c.backchannelAllowPrivateNetwork = allow
 		return nil
 	})
 }
+
+// slotBackchannelAllowPrivateNetwork is the single-valued setting both
+// back-channel private-network options claim, so supplying both is
+// refused as a conflict.
+const slotBackchannelAllowPrivateNetwork = "backchannelAllowPrivateNetwork"
 
 // WithBackchannelFanOutBudget caps the total wall-clock time one
 // back-channel logout fan-out may occupy. The /end_session handler

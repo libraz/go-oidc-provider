@@ -484,7 +484,7 @@ func WithAllowLocalhostLoopback() Option {
 // "localhost" is admitted only while it resolves to a loopback
 // address, so a split-horizon resolver cannot widen the opt-in.
 // Reaching an RP on a private LAN is a different decision with a
-// different option: [WithBackchannelAllowPrivateNetwork]. [New]
+// different option: [WithAllowPrivateNetworkBackchannel]. [New]
 // records the opt-in on the audit stream, as
 // insecure_backchannel_logout_for_dev on the [AuditStartupProfile]
 // event, and logs a warning on the operational logger, so a

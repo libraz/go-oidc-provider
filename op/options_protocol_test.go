@@ -9,33 +9,48 @@ import (
 	"time"
 )
 
-// TestWithBackchannelAllowPrivateNetwork drives the new option
-// against a fresh config and confirms the accessor reads back the
-// value. The check guards the per-config wiring path independent of
-// the actual SSRF behaviour (which is exercised by
-// internal/backchannel/deliverer_ssrf_test.go).
-func TestWithBackchannelAllowPrivateNetwork(t *testing.T) {
+// TestWithAllowPrivateNetworkBackchannel drives the option and its
+// deprecated predecessor against a fresh config and confirms the accessor
+// reads back the value. The SSRF behaviour itself is exercised by
+// internal/backchannel/deliverer_ssrf_test.go.
+func TestWithAllowPrivateNetworkBackchannel(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name string
-		give bool
+		opt  Option
 		want bool
 	}{
-		{"default-deny", false, false},
-		{"explicit-true", true, true},
+		{"opt-in", WithAllowPrivateNetworkBackchannel(), true},
+		{"deprecated-false", WithBackchannelAllowPrivateNetwork(false), false},
+		{"deprecated-true", WithBackchannelAllowPrivateNetwork(true), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c := &config{}
-			if err := WithBackchannelAllowPrivateNetwork(tc.give).apply(c); err != nil {
+			if err := tc.opt.apply(c); err != nil {
 				t.Fatalf("apply: %v", err)
 			}
 			if got := c.BackchannelAllowsPrivateNetwork(); got != tc.want {
 				t.Errorf("BackchannelAllowsPrivateNetwork = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestWithAllowPrivateNetworkBackchannel_ConflictsWithDeprecated pins that
+// the two spellings claim one setting, so a configuration carrying both
+// is refused instead of resolved by option order.
+func TestWithAllowPrivateNetworkBackchannel_ConflictsWithDeprecated(t *testing.T) {
+	t.Parallel()
+
+	c := &config{}
+	if err := WithBackchannelAllowPrivateNetwork(false).apply(c); err != nil {
+		t.Fatalf("apply deprecated: %v", err)
+	}
+	if err := WithAllowPrivateNetworkBackchannel().apply(c); err == nil {
+		t.Fatal("expected a conflict error when both spellings are supplied")
 	}
 }
 
@@ -50,23 +65,20 @@ func TestBackchannelAllowsPrivateNetwork_Unconfigured(t *testing.T) {
 	}
 }
 
-// TestWithBackchannelAllowPrivateNetwork_PerConfig confirms the flag
+// TestWithAllowPrivateNetworkBackchannel_PerConfig confirms the flag
 // lives on the config it was applied to and nowhere else. The gate is
 // a plain config field rather than a package-level registry, so a
 // config that fails validation is collected with everything it
 // references — its keyset, ClientStore and substores included —
 // instead of being pinned for the process lifetime.
-func TestWithBackchannelAllowPrivateNetwork_PerConfig(t *testing.T) {
+func TestWithAllowPrivateNetworkBackchannel_PerConfig(t *testing.T) {
 	t.Parallel()
 
 	permissive := &config{}
-	if err := WithBackchannelAllowPrivateNetwork(true).apply(permissive); err != nil {
+	if err := WithAllowPrivateNetworkBackchannel().apply(permissive); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	strict := &config{}
-	if err := WithBackchannelAllowPrivateNetwork(false).apply(strict); err != nil {
-		t.Fatalf("apply: %v", err)
-	}
 
 	if !permissive.BackchannelAllowsPrivateNetwork() {
 		t.Error("permissive config lost its opt-in")
