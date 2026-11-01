@@ -107,7 +107,7 @@ func TestWriteAuthCodeExchangeError_CodeReplay_EmitsAudit(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 
-	writeAuthCodeExchangeError(context.Background(), w, deps, "code-1", &authcode.ReplayError{
+	writeAuthCodeExchangeError(context.Background(), w, deps, authCodeInputs{Code: "code-1"}, &authcode.ReplayError{
 		GrantID: "grant-replayed",
 	})
 

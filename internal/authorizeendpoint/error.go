@@ -2,6 +2,7 @@ package authorizeendpoint
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -50,6 +51,25 @@ const (
 	// RFC 9470 §4 for the step-up case.
 	errUnmetAuthenticationRequirements = "unmet_authentication_requirements"
 )
+
+// logServerError records the cause of a 500 on the embedder's logger. The
+// error never reaches the wire; desc is the description the client sees.
+func logServerError(r *http.Request, deps resolved, desc string, err error) {
+	logger := deps.Logger
+	if logger == nil {
+		return
+	}
+	logger.LogAttrs(r.Context(), slog.LevelError, "authorize endpoint server error",
+		slog.String("description", desc),
+		slog.Any("error", err),
+	)
+}
+
+// renderServerError logs err and answers 500 server_error with desc.
+func renderServerError(w http.ResponseWriter, r *http.Request, deps resolved, desc string, err error) {
+	logServerError(r, deps, desc, err)
+	renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, desc, "")
+}
 
 // renderJSONError writes an RFC 6749 §5.2-shaped envelope. It is the
 // terminal fallback of [renderBrowserError] — every failure path that

@@ -194,7 +194,7 @@ func resumeInteractionCompletion(
 		return
 	}
 	if err := refreshCompletionSession(w, r, deps, intent); err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not refresh session", "")
+		renderServerError(w, r, deps, "could not refresh session", err)
 		return
 	}
 	req := state.Library.ToRequest()
@@ -214,23 +214,23 @@ func resumeInteractionCompletion(
 			emitAuthorizeError(w, r, deps, req, errAccessDenied, "request_uri is no longer valid")
 			return
 		}
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "authorization completion unavailable", "")
+		renderServerError(w, r, deps, "authorization completion unavailable", err)
 		return
 	}
 	out, err := deps.Sessions.Establish(r.Context(), decodeCompletionSession(intent.Session))
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not establish session", "")
+		renderServerError(w, r, deps, "could not establish session", err)
 		return
 	}
 	if out.Cookie != "" {
 		if err := setSessionCookie(w, out.Cookie, intent.Session.ExpiresAt, deps.now()); err != nil {
-			renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not establish session", "")
+			renderServerError(w, r, deps, "could not establish session", err)
 			return
 		}
 	}
 	deleteErr := deleteCompletionAnchor(r.Context(), deps, rec)
 	if deleteErr != nil && !errors.Is(deleteErr, store.ErrNotFound) {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not finalize interaction", "")
+		renderServerError(w, r, deps, "could not finalize interaction", deleteErr)
 		return
 	}
 	// The conditional-delete winner owns completion audit emission. This

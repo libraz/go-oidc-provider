@@ -95,7 +95,7 @@ func resolvePARIfNeeded(
 			renderAuthorizeError(w, r, deps, authorize.ErrInvalidRequestURI)
 			return nil, true
 		}
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "PAR backend unavailable", "")
+		renderServerError(w, r, deps, "PAR backend unavailable", err)
 		return nil, true
 	}
 	if rec.ConsumedAt != nil {
@@ -110,7 +110,7 @@ func resolvePARIfNeeded(
 	}
 	var snap authorize.RequestSnapshot
 	if err := json.Unmarshal(rec.RawParams, &snap); err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "PAR record could not be decoded", "")
+		renderServerError(w, r, deps, "PAR record could not be decoded", err)
 		return nil, true
 	}
 	out := snap.ToRequest()

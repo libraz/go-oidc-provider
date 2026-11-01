@@ -2,6 +2,7 @@ package authorizeendpoint
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -413,6 +414,10 @@ type Deps struct {
 	// when the first-party skip applies. A nil value collapses
 	// every emit to a no-op, matching the rest of the code base.
 	Audit audit.Emitter
+
+	// Logger receives the cause of every 500 the endpoint answers. A nil
+	// Logger discards.
+	Logger *slog.Logger
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

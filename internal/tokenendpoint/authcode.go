@@ -181,7 +181,7 @@ func exchangeAuthCode(
 		Admit:        in.Admit,
 	})
 	if err != nil {
-		writeAuthCodeExchangeError(ctx, w, deps, in.Code, err)
+		writeAuthCodeExchangeError(ctx, w, deps, in, err)
 		return nil, false
 	}
 	deps.audit().Emit(ctx, audit.Event{
@@ -210,16 +210,26 @@ func writeAuthCodeExchangeError(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
-	code string,
+	in authCodeInputs,
 	err error,
 ) {
+	code := in.Code
 	switch {
 	case errors.Is(err, errRedemptionRefused):
 		// The gate has written the response.
 	case errors.Is(err, authcode.ErrCodeMissing),
 		errors.Is(err, authcode.ErrCodeExpired),
-		errors.Is(err, authcode.ErrClientMismatch),
-		errors.Is(err, authcode.ErrRedirectURIMismatch):
+		errors.Is(err, authcode.ErrClientMismatch):
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
+	case errors.Is(err, authcode.ErrRedirectURIMismatch):
+		// The wire answer stays generic; the audit stream names the cause.
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     auditRedirectURIMismatch,
+			Level:    audit.LevelWarn,
+			Message:  "redirect_uri does not match the authorization request",
+			ClientID: in.ClientID,
+			Extras:   map[string]any{"endpoint": "token", "redirect_uri": in.RedirectURI},
+		})
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
 	case errors.Is(err, authcode.ErrCodeReplayed):
 		// A replayed code is treated as evidence that the
@@ -231,9 +241,28 @@ func writeAuthCodeExchangeError(
 	case errors.Is(err, pkce.ErrChallengeMethodUnsupported),
 		errors.Is(err, pkce.ErrVerifierFormat),
 		errors.Is(err, pkce.ErrVerifierMismatch):
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     auditPKCEViolation,
+			Level:    audit.LevelWarn,
+			Message:  "PKCE verification failed",
+			ClientID: in.ClientID,
+			Extras:   map[string]any{"endpoint": "token", "reason": pkceViolationReason(err)},
+		})
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "PKCE verification failed")
 	default:
 		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+	}
+}
+
+// pkceViolationReason names a PKCE rejection without echoing the verifier.
+func pkceViolationReason(err error) string {
+	switch {
+	case errors.Is(err, pkce.ErrChallengeMethodUnsupported):
+		return "challenge_method_unsupported"
+	case errors.Is(err, pkce.ErrVerifierFormat):
+		return "verifier_format"
+	default:
+		return "verifier_mismatch"
 	}
 }
 

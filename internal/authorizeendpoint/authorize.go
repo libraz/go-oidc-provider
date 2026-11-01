@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
@@ -25,6 +26,7 @@ const (
 	opAuditConsentGranted          = string(auditevent.AuditConsentGranted)
 	opAuditSessionCreated          = string(auditevent.AuditSessionCreated)
 	opAuditInteractionRenderFailed = string(auditevent.AuditInteractionRenderFailed)
+	opAuditRedirectURIMismatch     = string(auditevent.AuditRedirectURIMismatch)
 )
 
 // serveAuthorize is the request-scoped entry point for /authorize. It runs
@@ -214,8 +216,21 @@ func writeAuthorizeParseError(w http.ResponseWriter, r *http.Request, deps resol
 func writeAuthorizeValidationError(w http.ResponseWriter, r *http.Request, req *authorize.Request, deps resolved, err error) {
 	var ae *authorize.Error
 	if !errors.As(err, &ae) {
+		logServerError(r, deps, "", err)
 		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "", req.State)
 		return
+	}
+	if errors.Is(err, authorize.ErrRedirectURIInvalid) {
+		deps.auditEmitter().Emit(r.Context(), audit.Event{
+			Name:     opAuditRedirectURIMismatch,
+			Level:    audit.LevelWarn,
+			Message:  "redirect_uri is not registered for this client",
+			ClientID: req.ClientID,
+			Extras: map[string]any{
+				"endpoint":     "authorize",
+				"redirect_uri": req.RedirectURI,
+			},
+		})
 	}
 	if !authorize.IsRedirectSafe(err) {
 		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, ae.Code, ae.Description, req.State)
@@ -282,5 +297,5 @@ func renderClientLookupError(w http.ResponseWriter, r *http.Request, deps resolv
 		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "client_id is not registered", state)
 		return
 	}
-	renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "client backend unavailable", "")
+	renderServerError(w, r, deps, "client backend unavailable", err)
 }

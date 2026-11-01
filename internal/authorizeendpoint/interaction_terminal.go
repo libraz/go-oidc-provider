@@ -84,7 +84,7 @@ func terminateInteraction(
 	}
 	rec, state, err = persistCompletionIntent(r.Context(), deps, rec, state, intent)
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not persist authorization completion", "")
+		renderServerError(w, r, deps, "could not persist authorization completion", err)
 		return
 	}
 	resumeInteractionCompletion(w, r, deps, rec, state)
@@ -147,7 +147,7 @@ func claimTerminalInteraction(
 ) bool {
 	cas, err := interactionCAS(deps)
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, err.Error(), "")
+		renderServerError(w, r, deps, err.Error(), err)
 		return false
 	}
 	if err := cas.DeleteIfUnchanged(r.Context(), rec); err != nil {
@@ -167,7 +167,7 @@ func claimTerminalInteraction(
 			renderBrowserError(w, r, deps.Driver, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing", "")
 			return false
 		}
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not claim interaction", "")
+		renderServerError(w, r, deps, "could not claim interaction", err)
 		return false
 	}
 	return true

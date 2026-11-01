@@ -158,7 +158,7 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 	}
 	cas, err := interactionCAS(deps)
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, err.Error(), "")
+		renderServerError(w, r, deps, err.Error(), err)
 		return
 	}
 	if err := cas.DeleteIfUnchanged(r.Context(), rec); err != nil {
@@ -178,7 +178,7 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 			http.NotFound(w, r)
 			return
 		}
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not cancel interaction", "")
+		renderServerError(w, r, deps, "could not cancel interaction", err)
 		return
 	}
 	clearCookie(w, cookie.InteractionProfile)
@@ -210,7 +210,7 @@ func renderPersistFailure(
 	case errors.Is(err, store.ErrNotFound):
 		http.NotFound(w, r)
 	default:
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not persist interaction", "")
+		renderServerError(w, r, deps, "could not persist interaction", err)
 	}
 }
 
@@ -270,11 +270,11 @@ func dispatchTick(
 	// vector inside a chain whose user-visible step changed.
 	token, err := deps.CSRF.IssueScoped(rec.ID, step.Prompt.Type, now)
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not issue csrf token", "")
+		renderServerError(w, r, deps, "could not issue csrf token", err)
 		return
 	}
 	if err := setCSRFCookie(w, token); err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not set csrf cookie", "")
+		renderServerError(w, r, deps, "could not set csrf cookie", err)
 		return
 	}
 	httpx.StampNoStore(w)
@@ -286,7 +286,7 @@ func dispatchTick(
 	// the driver's.
 	prompt.CSRFToken = token
 	if err := stampChooserAddAccountURL(deps, &prompt, next, state); err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not build chooser add-account URL", "")
+		renderServerError(w, r, deps, "could not build chooser add-account URL", err)
 		return
 	}
 	stampPromptLocale(r, deps, &prompt, next, state)
@@ -348,7 +348,7 @@ func persistFailedTick(
 ) bool {
 	encoded, err := encodeAuthnState(next)
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction state corrupted", "")
+		renderServerError(w, r, deps, "interaction state corrupted", err)
 		return false
 	}
 	if bytes.Equal(encoded, state.Authn) {
@@ -383,7 +383,7 @@ func writeAuthnError(w http.ResponseWriter, r *http.Request, deps resolved, stat
 		// the SPA / driver can tell it from a real server fault.
 		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "authentication factor cannot continue", "")
 	default:
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "orchestrator failed", "")
+		renderServerError(w, r, deps, "orchestrator failed", err)
 	}
 }
 
@@ -466,12 +466,12 @@ func loadInteraction(
 			http.NotFound(w, r)
 			return nil, authorize.RequestState{}, false
 		}
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction store unavailable", "")
+		renderServerError(w, r, deps, "interaction store unavailable", err)
 		return nil, authorize.RequestState{}, false
 	}
 	state, err := authorize.UnmarshalState(rec.RawState)
 	if err != nil {
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "interaction state corrupted", "")
+		renderServerError(w, r, deps, "interaction state corrupted", err)
 		return nil, authorize.RequestState{}, false
 	}
 	return rec, state, true

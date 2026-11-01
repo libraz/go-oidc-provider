@@ -56,7 +56,7 @@ func renderPrompt(w http.ResponseWriter, r *http.Request, deps resolved, clientI
 			"error":       err.Error(),
 		},
 	})
-	renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "could not render interaction prompt", "")
+	renderServerError(w, r, deps, "could not render interaction prompt", err)
 }
 
 // committingResponseWriter records whether the wrapped writer was

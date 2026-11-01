@@ -597,6 +597,7 @@ func mountAuthorizeHandlers(
 	spaLoginMount, spaStaticDir, spaCSP := spaWiringFor(cfg)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
 		Clients:                  cfg.clientStore(),
+		Logger:                   cfg.logger,
 		Codes:                    cfg.store.AuthorizationCodes(),
 		Grants:                   cfg.store.Grants(),
 		Transactions:             transactionalStore(cfg.store),

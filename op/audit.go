@@ -270,22 +270,25 @@ const (
 	AuditRateLimitExceeded = AuditEvent(auditevent.AuditRateLimitExceeded)
 	AuditRateLimitBypassed = AuditEvent(auditevent.AuditRateLimitBypassed)
 
-	// Reserved vocabulary: the library never emits AuditPKCEViolation,
-	// AuditRedirectURIMismatch or AuditAlgLegacyUsed. Each names a
-	// rejection the OP does perform — a code exchanged with the wrong
-	// verifier, a redirect_uri that is not the registered one, a
-	// request selecting a legacy algorithm —
-	// but the rejection is reported to the client on the wire and is
-	// not raised on the audit stream. An absent event here therefore
-	// means "not instrumented", not "did not happen"; the request log
-	// is where those rejections are currently visible.
-	//
-	// These three sit in this block because they are unemitted, not
-	// because they are the embedder's to raise like the two above.
-	// The distinction matters if you are deciding what to alert on.
-	AuditPKCEViolation       = AuditEvent(auditevent.AuditPKCEViolation)
+	// AuditPKCEViolation fires at the token endpoint when a code_verifier
+	// fails: Extras carry endpoint "token" and reason "verifier_mismatch",
+	// "verifier_format" or "challenge_method_unsupported", never the
+	// verifier itself.
+	AuditPKCEViolation = AuditEvent(auditevent.AuditPKCEViolation)
+
+	// AuditRedirectURIMismatch fires when /authorize receives a
+	// redirect_uri the client never registered, and when the token
+	// endpoint receives one that differs from the authorization request.
+	// Extras carry endpoint ("authorize" or "token") and the presented
+	// redirect_uri. The wire answer stays generic at the token endpoint,
+	// so this event is where the cause is visible.
 	AuditRedirectURIMismatch = AuditEvent(auditevent.AuditRedirectURIMismatch)
-	AuditAlgLegacyUsed       = AuditEvent(auditevent.AuditAlgLegacyUsed)
+
+	// Reserved vocabulary: the library never emits AuditAlgLegacyUsed. A
+	// request selecting a legacy algorithm is rejected on the wire and not
+	// raised on the audit stream, so an absent event means "not
+	// instrumented", not "did not happen".
+	AuditAlgLegacyUsed = AuditEvent(auditevent.AuditAlgLegacyUsed)
 
 	// AuditCORSPreflightAllowed fires every time the strict CORS layer
 	// admits a cross-origin OPTIONS preflight (Origin in allowlist,

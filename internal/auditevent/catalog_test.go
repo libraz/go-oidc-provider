@@ -223,8 +223,6 @@ var auditNamesNotYetWired = map[auditevent.Name]string{
 	auditevent.AuditConsentRevoked:         "consent withdrawal is recorded only as grant_management.revoked",
 	auditevent.AuditConsentSkippedExisting: "reuse of a stored consent is recorded nowhere",
 	auditevent.AuditLogoutRPInitiated:      "the end-session endpoint records session events but not the RP-initiated marker",
-	auditevent.AuditPKCEViolation:          "a failed code_verifier check returns a protocol error with no audit record",
-	auditevent.AuditRedirectURIMismatch:    "a rejected redirect_uri returns a protocol error with no audit record",
 	auditevent.AuditAlgLegacyUsed:          "no path reports admitting a legacy algorithm",
 }
 

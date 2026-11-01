@@ -37,6 +37,8 @@ const (
 	auditRefreshGrantRevokeFailed            = string(auditevent.AuditRefreshGrantRevokeFailed)
 	auditCodeConsumed                        = string(auditevent.AuditCodeConsumed)
 	auditCodeReplayDetected                  = string(auditevent.AuditCodeReplayDetected)
+	auditRedirectURIMismatch                 = string(auditevent.AuditRedirectURIMismatch)
+	auditPKCEViolation                       = string(auditevent.AuditPKCEViolation)
 	failureStagePriorAccessTokenRevoke       = "prior_access_token_revoke"
 )
 

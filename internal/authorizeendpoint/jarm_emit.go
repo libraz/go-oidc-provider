@@ -312,7 +312,7 @@ func emitPlainResponse(
 		// The redirect target is unparseable; render the failure in
 		// place so the user (and the operator reading the log) gets a
 		// useful diagnostic instead of a silent 302-to-nothing.
-		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "redirect target rejected", "")
+		renderServerError(w, r, deps, "redirect target rejected", err)
 		return
 	}
 	httpx.StampNoStore(w)
