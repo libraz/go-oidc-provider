@@ -42,6 +42,7 @@ handler, err := op.New(
     op.WithLoginFlow(op.LoginFlow{
         Primary: op.PrimaryPassword{Store: users},
     }),
+    op.WithProfile(profile.Baseline), // 認可コード要求すべてに PKCE を必須にする
 )
 if err != nil {
     log.Fatal(err)
@@ -55,7 +56,7 @@ log.Fatal(http.ListenAndServe(":8080", handler))
 
 エンドポイントは `/oidc` の下にマウントされます（`op.WithMountPrefix` で変更できます）。discovery ドキュメントは issuer 直下の `/.well-known/openid-configuration` に置かれるので、最初はこの URL を取得してください。
 
-セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。
+セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。プロファイルを宣言しないと OpenID Connect Core の形のままになり、confidential client は PKCE なしでコードを交換できます。その場合 `op.New` は警告をログに出します。
 
 ```go
 op.WithProfile(profile.Baseline)      // OAuth 2.1: code 要求すべてに PKCE 必須

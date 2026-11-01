@@ -296,6 +296,22 @@ func (c *config) emitPartialWiringWarnings() {
 	c.warnCaptchaOnScriptlessUI()
 	c.warnMTLSOptionsWithoutFeature()
 	c.warnEncryptionKidlessTrialCap()
+	c.warnPKCENotRequired()
+}
+
+// warnPKCENotRequired reports an authorization-code OP that declared no
+// profile requiring PKCE: a confidential client may then redeem a code
+// without one, the OpenID Connect Core 1.0 shape.
+func (c *config) warnPKCENotRequired() {
+	if c.requirePKCE() || !slices.Contains(c.grants, grant.AuthorizationCode) {
+		return
+	}
+	c.logger.Warn(
+		"no security profile requires PKCE, so a confidential client may "+
+			"redeem an authorization code without one; declare "+
+			"op.WithProfile(profile.Baseline) unless legacy clients need this",
+		"option", "WithProfile",
+	)
 }
 
 // warnSessionDurabilityMismatch reports an explicit Durable posture on a

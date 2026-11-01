@@ -338,3 +338,43 @@ func assertBool(t *testing.T, rec startupRecord, key string, want bool) {
 		t.Errorf("%s = %v, want %v", key, got, want)
 	}
 }
+
+// TestNew_WarnsWhenNoProfileRequiresPKCE pins the one start-up warning an
+// unprofiled authorization-code OP owes: a confidential client may redeem a
+// code without PKCE, and nothing else in the option list says so.
+func TestNew_WarnsWhenNoProfileRequiresPKCE(t *testing.T) {
+	t.Parallel()
+
+	const msg = "no security profile requires PKCE"
+	for _, tc := range []struct {
+		name string
+		opts []op.Option
+		want bool
+	}{
+		{"no profile", nil, true},
+		{"baseline", []op.Option{op.WithProfile(profile.Baseline)}, false},
+		{"client_credentials only", []op.Option{op.WithGrants(grant.ClientCredentials)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			opts := append(validBaseOptsWithInmem(t), op.WithLogger(slog.New(slog.NewJSONHandler(&buf, nil))))
+			if _, err := op.New(append(opts, tc.opts...)...); err != nil {
+				t.Fatalf("op.New: %v", err)
+			}
+			var found bool
+			for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+				var rec map[string]any
+				if json.Unmarshal(line, &rec) == nil && strings.Contains(rec["msg"].(string), msg) {
+					found = true
+					if rec["level"] != "WARN" {
+						t.Fatalf("level = %v, want WARN", rec["level"])
+					}
+				}
+			}
+			if found != tc.want {
+				t.Fatalf("warning present = %v, want %v; log:\n%s", found, tc.want, buf.String())
+			}
+		})
+	}
+}

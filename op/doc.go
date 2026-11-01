@@ -35,6 +35,7 @@
 //	    op.WithLoginFlow(op.LoginFlow{
 //	        Primary: op.PrimaryPassword{Store: myUserPasswordStore},
 //	    }),
+//	    op.WithProfile(profile.Baseline),
 //	)
 //	if err != nil {
 //	    log.Fatal(err)
@@ -72,7 +73,8 @@
 //   - [WithLoginFlow]: how a user signs in; [PrimaryPassword] reads your own
 //     users table, and the claims come from the same store.
 //   - [WithStaticClients]: the relying parties known at deploy time.
-//   - [WithProfile]: the security profile, checked against everything else.
+//   - [WithProfile]: the security profile, checked against everything else;
+//     without one, New warns that a confidential client may skip PKCE.
 //   - [WithLogger]: start-up and claim diagnostics, discarded without it.
 //   - [WithMountPrefix], [WithTrustedProxies]: where the OP mounts and which
 //     reverse proxies it trusts.

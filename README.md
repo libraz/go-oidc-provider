@@ -63,6 +63,7 @@ handler, err := op.New(
     op.WithLoginFlow(op.LoginFlow{
         Primary: op.PrimaryPassword{Store: users},
     }),
+    op.WithProfile(profile.Baseline), // PKCE on every authorization-code request
 )
 if err != nil {
     log.Fatal(err)
@@ -88,7 +89,9 @@ the discovery document stays at `/.well-known/openid-configuration` under the
 issuer, so that is the first URL to fetch.
 
 A security profile is declared with one option, and the constructor refuses to
-start when the declared profile conflicts with the rest of the configuration:
+start when the declared profile conflicts with the rest of the configuration.
+Without one the OP keeps the OpenID Connect Core shape, where a confidential
+client may redeem a code without PKCE, and `op.New` logs a warning saying so:
 
 ```go
 op.WithProfile(profile.Baseline)      // OAuth 2.1: PKCE on every code request
