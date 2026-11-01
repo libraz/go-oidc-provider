@@ -291,6 +291,7 @@ func (c *config) emitPartialWiringWarnings() {
 		)
 	}
 	c.warnUserStoreMismatch()
+	c.infoMissingStoreCapabilities()
 	c.warnSessionDurabilityMismatch()
 	c.warnCaptchaOnScriptlessUI()
 	c.warnMTLSOptionsWithoutFeature()
