@@ -202,6 +202,15 @@ issuer.
   at startup is no longer needed; `Store.ValidateSchema` still validates all
   tables and suits a deploy gate or CI.
 
+- **DynamoDB adapter: `op.New` checks the tables the configuration uses.**
+  Each must exist and be active, match the key schema in
+  `Store.TableDefinitions`, and carry every queried index in the active
+  state. A missing table or index, or one still being created, now fails
+  `op.New` by name instead of the first request that touches it. The check
+  calls `DescribeTable`, so the OP's IAM policy needs `dynamodb:DescribeTable`
+  on its tables. Tables the configuration does not use may stay
+  unprovisioned.
+
 - `Store.ValidateSchema` and the substores' `ValidateSchema` on MySQL fail
   when an identifier column's collation is not `utf8mb4_bin` or
   `utf8mb4_0900_bin`, naming the column and the migration file to apply. Its
@@ -396,6 +405,11 @@ issuer.
   check its own schema. `op.New` calls it on every store the configuration
   uses, so a bring-your-own store that implements it gets the same
   construction-time check as the SQL adapter.
+
+- `oidcdynamo.Store.ValidateSchema` checks every table in
+  `Store.TableDefinitions` (presence, status, key schema, secondary indexes)
+  for a deploy gate or CI, and each DynamoDB substore implements
+  `store.SchemaValidator` for its own tables.
 
 - `(*oidcsql.Store).Migrations()` returns the configured dialect's
   per-release migration files as an `fs.FS` with any `WithNaming` overrides

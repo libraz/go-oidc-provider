@@ -20,6 +20,12 @@
 // same definitions so they can be translated into CloudFormation, CDK,
 // or Terraform without guessing at key schemas.
 //
+// op.New checks the tables its configuration uses through each
+// substore's ValidateSchema and fails naming any table or index that is
+// missing, not yet active, or keyed differently from
+// [Store.TableDefinitions]; [Store.ValidateSchema] checks every table.
+// Both call DescribeTable, which the OP's IAM policy must allow.
+//
 // # Item layout
 //
 // Each substore owns one table. An item carries its key attributes, the

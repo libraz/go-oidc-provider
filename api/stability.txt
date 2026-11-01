@@ -322,6 +322,7 @@ github.com/libraz/go-oidc-provider/op/store	StaticClientDifferences	v1.5
 github.com/libraz/go-oidc-provider/op/store	UserPasswordHashUpdater	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb	*	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb	Store	v1.5
+github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb	Store.ValidateSchema	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/sql	Store.Migrations	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/sql	Store.RunGC	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/sql	Store.ValidateSchema	v1.5
