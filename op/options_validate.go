@@ -3,13 +3,13 @@ package op
 import (
 	"net"
 	"net/url"
-	"reflect"
 	"strconv"
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -99,7 +99,7 @@ func (c *config) validateRequired() error {
 			"WithAllowInsecureBackchannelLogoutForDev requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
 		)
 	}
-	if isNilLike(c.store) {
+	if nilcheck.IsNil(c.store) {
 		return ErrStoreRequired
 	}
 	if len(c.keyset) == 0 {
@@ -203,7 +203,7 @@ func (c *config) validateAccessTokenFormat() error {
 	if !needsOpaque {
 		return nil
 	}
-	if isNilLike(c.store.OpaqueAccessTokens()) {
+	if nilcheck.IsNil(c.store.OpaqueAccessTokens()) {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "op.WithAccessTokenFormat(AccessTokenFormatOpaque) " +
@@ -238,7 +238,7 @@ func (c *config) validateAccessTokenRevocation() error {
 	}
 	if c.atRevocation != store.RevocationStrategyNone {
 		if c.atRevocation == store.RevocationStrategyGrantTombstone &&
-			isNilLike(c.store.GrantRevocations()) {
+			nilcheck.IsNil(c.store.GrantRevocations()) {
 			return &Error{
 				Code: codeConfiguration,
 				Description: "RevocationStrategyGrantTombstone requires " +
@@ -246,7 +246,7 @@ func (c *config) validateAccessTokenRevocation() error {
 			}
 		}
 		if c.atRevocation == store.RevocationStrategyJTIRegistry &&
-			isNilLike(c.store.AccessTokens()) {
+			nilcheck.IsNil(c.store.AccessTokens()) {
 			return &Error{
 				Code: codeConfiguration,
 				Description: "RevocationStrategyJTIRegistry requires " +
@@ -329,7 +329,7 @@ func validateLoginFlowKinds(flow LoginFlow) error {
 // A Rule whose Then carries it is refused by [WithLoginFlow].
 func checkRegistrationKindUnique(flow LoginFlow, kind StepKind) error {
 	clash := func(where string, step Step) error {
-		if isNilLike(step) || step.Kind() != kind {
+		if nilcheck.IsNil(step) || step.Kind() != kind {
 			return nil
 		}
 		return newConfigurationError("WithLoginFlow: Registration.KindLabel "+kind.String()+
@@ -366,7 +366,7 @@ func checkRegistrationKindUnique(flow LoginFlow, kind StepKind) error {
 // inlined into the error message so the embedder can locate the
 // offending entry.
 func checkExternalStepKind(where string, ext ExternalStep) error {
-	if isNilLike(ext.Authenticator) {
+	if nilcheck.IsNil(ext.Authenticator) {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "WithLoginFlow: " + where + ".Authenticator must not be nil",
@@ -457,7 +457,7 @@ func (c *config) validateInteractions() error {
 	}
 	seen := make(map[string]struct{}, len(c.interactions))
 	for i, ix := range c.interactions {
-		if isNilLike(ix) {
+		if nilcheck.IsNil(ix) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithInteractions received nil Interaction at position " + strconv.Itoa(i),
@@ -518,13 +518,13 @@ func (c *config) validateRegistration() error {
 			Description: "feature.DynamicRegistration was enabled more than once",
 		}
 	}
-	if isNilLike(c.store.InitialAccessTokens()) {
+	if nilcheck.IsNil(c.store.InitialAccessTokens()) {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "InitialAccessTokens not implemented by store backend",
 		}
 	}
-	if isNilLike(c.store.RegistrationAccessTokens()) {
+	if nilcheck.IsNil(c.store.RegistrationAccessTokens()) {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "RegistrationAccessTokens not implemented by store backend",
@@ -616,22 +616,4 @@ func (c *config) validateScopes() error {
 		c.scopeIndex[s.Name] = s
 	}
 	return nil
-}
-
-// isNilLike reports whether v is nil or an interface carrying a nil-able
-// concrete value whose value is nil. Public dependencies cross interface
-// boundaries throughout the option surface; a direct `== nil` comparison
-// misses typed-nil pointers and functions and can defer a configuration
-// mistake until the first method call.
-func isNilLike(v any) bool {
-	if v == nil {
-		return true
-	}
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
-		return rv.IsNil()
-	default:
-		return false
-	}
 }

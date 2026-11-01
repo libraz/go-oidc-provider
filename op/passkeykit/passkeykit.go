@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -166,7 +166,7 @@ type Registrar struct {
 // accept, so a misconfiguration surfaces once, at startup, from
 // whichever call the embedder makes first.
 func New(step op.PrimaryPasskey) (*Registrar, error) {
-	if isNilStore(step.Store) {
+	if nilcheck.IsNil(step.Store) {
 		return nil, ErrStoreRequired
 	}
 	v, err := passkey.New(passkey.ConfigFrom(passkey.StepPolicy{
@@ -285,22 +285,6 @@ func (r *Registrar) Register(ctx context.Context, session *Session, user User, r
 		return nil, fmt.Errorf("passkeykit: persist credential: %w", err)
 	}
 	return rec, nil
-}
-
-// isNilStore reports whether the step's store is unusable, catching the
-// typed-nil case a plain `== nil` misses: a nil *myStore assigned to the
-// interface field is non-nil as an interface and panics on first call.
-func isNilStore(s store.PasskeyStore) bool {
-	if s == nil {
-		return true
-	}
-	rv := reflect.ValueOf(s)
-	switch rv.Kind() {
-	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
-		return rv.IsNil()
-	default:
-		return false
-	}
 }
 
 // existingCredentials reads the subject's registered passkeys and

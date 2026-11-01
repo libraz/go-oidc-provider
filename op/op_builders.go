@@ -27,6 +27,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
@@ -383,7 +384,7 @@ func authorizeRequestPolicy(cfg *config) authorize.Policy {
 // [buildDiscoveryInput] both read it, so the value discovery advertises
 // and the value /authorize accepts cannot diverge.
 func (c *config) promptCreateEnabled() bool {
-	return !isNilLike(c.loginFlow.Registration)
+	return !nilcheck.IsNil(c.loginFlow.Registration)
 }
 
 // authorizeExtensionPolicy renders the gates that run once a request has
@@ -935,7 +936,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		Signing:                  backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
 		Clients:                  cfg.clientStore(),
 		Grants:                   grants,
-		SubjectProjector:         backchannelSubjectProjector(cfg),
+		SubjectProjector:         subjectProjectorFor(cfg),
 		Deliverer:                deliverer,
 		Emitter:                  cfg.effectiveAuditEmitter(),
 		Clock:                    cfg.clock,
@@ -956,7 +957,9 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 	return coord, nil
 }
 
-func backchannelSubjectProjector(cfg *config) func(ctx context.Context, raw string, client *store.Client) (string, error) {
+// subjectProjectorFor returns the configured subject projector, or nil
+// when no subject generator is registered.
+func subjectProjectorFor(cfg *config) func(ctx context.Context, raw string, client *store.Client) (string, error) {
 	if cfg.subjectGeneratorSource == "" {
 		return nil
 	}

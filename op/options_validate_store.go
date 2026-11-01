@@ -3,6 +3,7 @@ package op
 import (
 	"slices"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -100,7 +101,7 @@ func (c *config) validateStoreCapabilities() error {
 		if !check.need {
 			continue
 		}
-		if isNilLike(check.got) {
+		if nilcheck.IsNil(check.got) {
 			return &Error{
 				Code: codeConfiguration,
 				Description: "Store." + check.desc + "() returned nil but " +
@@ -129,7 +130,7 @@ func (c *config) validateRefreshRetryStoreCapability() error {
 		return nil
 	}
 	refreshTokens := c.store.RefreshTokens()
-	if isNilLike(refreshTokens) {
+	if nilcheck.IsNil(refreshTokens) {
 		return nil
 	}
 	if _, ok := refreshTokens.(store.RefreshRetryResponseStore); !ok {
@@ -150,14 +151,14 @@ func (c *config) validateRefreshRetryStoreCapability() error {
 // substore must implement [store.InteractionStoreCAS], and its grant substore
 // must implement [store.GrantClientLister].
 func (c *config) validateAuthorizeEndpointStoreCapabilities() error {
-	if tx := transactionalStore(c.store); isNilLike(tx) {
+	if tx := transactionalStore(c.store); nilcheck.IsNil(tx) {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "Store must implement store.Transactional because " +
 				"a grant that mounts the browser authorize endpoint is enabled",
 		}
 	}
-	if interactions := c.store.Interactions(); !isNilLike(interactions) {
+	if interactions := c.store.Interactions(); !nilcheck.IsNil(interactions) {
 		if _, ok := interactions.(store.InteractionStoreCAS); !ok {
 			return &Error{
 				Code: codeConfiguration,
@@ -167,7 +168,7 @@ func (c *config) validateAuthorizeEndpointStoreCapabilities() error {
 			}
 		}
 	}
-	if grants := c.store.Grants(); !isNilLike(grants) {
+	if grants := c.store.Grants(); !nilcheck.IsNil(grants) {
 		if _, ok := grants.(store.GrantClientLister); !ok {
 			return &Error{
 				Code: codeConfiguration,

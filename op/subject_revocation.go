@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/ssf"
 )
@@ -48,7 +49,7 @@ func (p *Provider) RevokeSubject(ctx context.Context, subject string) error {
 		}
 	}
 	grants := p.cfg.store.Grants()
-	if isNilLike(grants) {
+	if nilcheck.IsNil(grants) {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "RevokeSubject: the store has no GrantStore",

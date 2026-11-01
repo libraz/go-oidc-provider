@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 )
 
 // compileLoginFlow projects the public [LoginFlow] onto the internal
@@ -64,10 +65,10 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 		}
 		spec.Registration = registration
 	}
-	if !isNilLike(flow.Risk) {
+	if !nilcheck.IsNil(flow.Risk) {
 		spec.Risk = flow.Risk
 	}
-	if !isNilLike(flow.Decider) {
+	if !nilcheck.IsNil(flow.Decider) {
 		spec.Decider = &deciderAdapter{inner: flow.Decider}
 	}
 	return authn.CompileLoginFlow(spec)
@@ -102,7 +103,7 @@ func projectStepToFlow(where string, s Step, cfg *config) (authn.LoginFlowStep, 
 // placed there, where no subject is bound yet. A [PrimaryPasskey] in that
 // position runs the discoverable ceremony.
 func projectStepAt(where string, s Step, cfg *config, primary bool) (authn.LoginFlowStep, error) {
-	if isNilLike(s) {
+	if nilcheck.IsNil(s) {
 		return authn.LoginFlowStep{}, &Error{
 			Code:        codeConfiguration,
 			Description: "WithLoginFlow: " + where + " must not be nil",
@@ -144,7 +145,7 @@ func projectOneOfStep(where string, s StepOneOf, cfg *config, primary bool) (aut
 // [ExternalStep]: validate the wrapped authenticator and forward it,
 // gated by the cross-factor lockout counter when CountFailures is set.
 func projectExternalStep(where string, ext ExternalStep, cfg *config) (authn.LoginFlowStep, error) {
-	if isNilLike(ext.Authenticator) {
+	if nilcheck.IsNil(ext.Authenticator) {
 		return authn.LoginFlowStep{}, &Error{
 			Code:        codeConfiguration,
 			Description: "WithLoginFlow: " + where + " ExternalStep.Authenticator must not be nil",
@@ -357,7 +358,7 @@ func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) 
 // their value forms, so *Deny means Deny rather than an unknown shape.
 // A nil pointer comes back as nil.
 func derefDecision(d Decision) Decision { //nolint:ireturn // Decision is a sealed sum type.
-	if isNilLike(d) {
+	if nilcheck.IsNil(d) {
 		return nil
 	}
 	switch v := d.(type) {

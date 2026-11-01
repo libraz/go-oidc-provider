@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
@@ -194,7 +195,7 @@ func (c *config) validateDeviceCodeGrant() error {
 		// substore-nil branch does not panic on the nil store.
 		return nil
 	}
-	if isNilLike(c.store.DeviceCodes()) {
+	if nilcheck.IsNil(c.store.DeviceCodes()) {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "the device_code grant requires the configured Store to provide " +
@@ -216,18 +217,6 @@ func (c *config) deviceCodeGrantConfiguredOrEnabled() bool {
 		return true
 	}
 	return slices.Contains(c.grants, grant.DeviceCode)
-}
-
-// effectiveDeviceVerificationURI returns the URI the
-// /device_authorization handler stamps on the device-display response.
-// An embedder-supplied override wins; otherwise the library
-// synthesises `<issuer>/device` so a default boot has a sensible
-// fallback.
-func (c *config) effectiveDeviceVerificationURI() string {
-	if c.deviceVerificationURI != "" {
-		return c.deviceVerificationURI
-	}
-	return strings.TrimRight(c.issuer, "/") + "/device"
 }
 
 // deviceCodeGrantConfigured reports whether the OP should mount the

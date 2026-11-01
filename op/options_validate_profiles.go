@@ -37,7 +37,7 @@ func (c *config) validateClientIDMetadataDocuments() error {
 		return nil
 	}
 	for _, p := range c.profiles {
-		if isFAPIProfile(p) {
+		if profile.IsFAPI(p) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithClientIDMetadataDocuments is incompatible with FAPI profile " + p.String(),
@@ -52,12 +52,6 @@ func (c *config) validateClientIDMetadataDocuments() error {
 		}
 	}
 	return nil
-}
-
-// isFAPIProfile reports whether p belongs to the FAPI family, FAPI-CIBA
-// included.
-func isFAPIProfile(p profile.Profile) bool {
-	return isFAPI2Profile(p) || p == profile.FAPICIBA
 }
 
 // profileWithoutNoneAuth returns the first profile whose client

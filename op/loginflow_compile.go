@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn/password"
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -66,10 +67,10 @@ func validateLoginFlowDependencies(flow LoginFlow) error {
 	if err := validatePrimaryPosition(flow.Primary); err != nil {
 		return err
 	}
-	if flow.Decider != nil && isNilLike(flow.Decider) {
+	if flow.Decider != nil && nilcheck.IsNil(flow.Decider) {
 		return loginFlowDependencyError("LoginFlow.Decider")
 	}
-	if flow.Risk != nil && isNilLike(flow.Risk) {
+	if flow.Risk != nil && nilcheck.IsNil(flow.Risk) {
 		return loginFlowDependencyError("LoginFlow.Risk")
 	}
 	if err := validateStepDependencies("Primary", flow.Primary); err != nil {
@@ -105,7 +106,7 @@ func validatePrimaryPosition(step Step) error {
 			"no subject is bound yet, so there is no enrollment to check", nil)
 	}
 	for i, inner := range oneOf.Steps {
-		if isNilLike(inner) {
+		if nilcheck.IsNil(inner) {
 			continue
 		}
 		if err := validatePrimaryCapable("Primary.StepOneOf.Steps["+strconv.Itoa(i)+"]", inner, true); err != nil {
@@ -182,7 +183,7 @@ func subjectBoundStepName(step Step) string {
 // interface from an explicitly supplied typed nil: absence keeps the documented
 // default, while typed nil is a configuration mistake.
 func validateStepDependencies(where string, step Step) error {
-	if isNilLike(step) {
+	if nilcheck.IsNil(step) {
 		return loginFlowDependencyError(where)
 	}
 	switch s := step.(type) {
@@ -228,11 +229,11 @@ func validateOneOfDependencies(where string, step StepOneOf) error {
 }
 
 func validatePrimaryPasswordDependencies(where string, step PrimaryPassword) error {
-	if isNilLike(step.Store) {
+	if nilcheck.IsNil(step.Store) {
 		return loginFlowDependencyError(where + ".PrimaryPassword.Store")
 	}
 	for i, scheme := range step.LegacySchemes {
-		if isNilLike(scheme) {
+		if nilcheck.IsNil(scheme) {
 			return loginFlowDependencyError(where + ".PrimaryPassword.LegacySchemes[" + strconv.Itoa(i) + "]")
 		}
 	}
@@ -240,10 +241,10 @@ func validatePrimaryPasswordDependencies(where string, step PrimaryPassword) err
 }
 
 func validatePrimaryPasskeyDependencies(where string, step PrimaryPasskey) error {
-	if isNilLike(step.Store) {
+	if nilcheck.IsNil(step.Store) {
 		return loginFlowDependencyError(where + ".PrimaryPasskey.Store")
 	}
-	if step.CloneDetectionHandler != nil && isNilLike(step.CloneDetectionHandler) {
+	if step.CloneDetectionHandler != nil && nilcheck.IsNil(step.CloneDetectionHandler) {
 		return loginFlowDependencyError(where + ".PrimaryPasskey.CloneDetectionHandler")
 	}
 	for i, root := range step.AttestationRoots {
@@ -261,41 +262,41 @@ func validatePrimaryPasskeyDependencies(where string, step PrimaryPasskey) error
 }
 
 func validateTOTPDependencies(where string, step StepTOTP) error {
-	if isNilLike(step.Store) {
+	if nilcheck.IsNil(step.Store) {
 		return loginFlowDependencyError(where + ".StepTOTP.Store")
 	}
 	return nil
 }
 
 func validateEmailOTPDependencies(where string, step StepEmailOTP) error {
-	if isNilLike(step.Store) {
+	if nilcheck.IsNil(step.Store) {
 		return loginFlowDependencyError(where + ".StepEmailOTP.Store")
 	}
-	if isNilLike(step.Sender) {
+	if nilcheck.IsNil(step.Sender) {
 		return loginFlowDependencyError(where + ".StepEmailOTP.Sender")
 	}
-	if isNilLike(step.Users) {
+	if nilcheck.IsNil(step.Users) {
 		return loginFlowDependencyError(where + ".StepEmailOTP.Users")
 	}
 	return nil
 }
 
 func validateRecoveryCodeDependencies(where string, step StepRecoveryCode) error {
-	if isNilLike(step.Store) {
+	if nilcheck.IsNil(step.Store) {
 		return loginFlowDependencyError(where + ".StepRecoveryCode.Store")
 	}
 	return nil
 }
 
 func validateCaptchaDependencies(where string, step StepCaptcha) error {
-	if isNilLike(step.Verifier) {
+	if nilcheck.IsNil(step.Verifier) {
 		return loginFlowDependencyError(where + ".StepCaptcha.Verifier")
 	}
 	return nil
 }
 
 func validateExternalStepDependencies(where string, step ExternalStep) error {
-	if isNilLike(step.Authenticator) {
+	if nilcheck.IsNil(step.Authenticator) {
 		return loginFlowDependencyError(where + ".ExternalStep.Authenticator")
 	}
 	return nil
@@ -370,7 +371,7 @@ func (a captchaStepAdapter) Begin(_ context.Context, _ authn.BeginInput) (intera
 // wrapped error for the log; the SPA only sees a fresh challenge, so it
 // cannot enumerate provider-side rejection codes.
 func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
-	if isNilLike(a.verifier) {
+	if nilcheck.IsNil(a.verifier) {
 		return interaction.Step{}, errCaptchaVerifierNil
 	}
 	token, ok := in.Submission.Values[CaptchaSubmissionFieldName]
@@ -396,7 +397,7 @@ func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput
 // The legacy schemes, the store's optional hash updater and the provider
 // logger ride the authenticator's config.
 func buildPrimaryPassword(s PrimaryPassword, cfg *config) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-	if isNilLike(s.Store) {
+	if nilcheck.IsNil(s.Store) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "PrimaryPassword.Store is nil",
@@ -424,7 +425,7 @@ func buildPrimaryPassword(s PrimaryPassword, cfg *config) (authn.Authenticator, 
 // authorize request. discoverable enables the passwordless ceremony the
 // Primary position runs.
 func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock, discoverable bool) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-	if isNilLike(s.Store) {
+	if nilcheck.IsNil(s.Store) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "PrimaryPasskey.Store is nil",
@@ -465,7 +466,7 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock, discoverable bool)
 	if err != nil {
 		return nil, err
 	}
-	if s.CloneDetectionHandler != nil && isNilLike(s.CloneDetectionHandler) {
+	if s.CloneDetectionHandler != nil && nilcheck.IsNil(s.CloneDetectionHandler) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "PrimaryPasskey.CloneDetectionHandler is nil",
@@ -502,7 +503,7 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock, discoverable bool)
 // builder so the function signature remains stable across deployments
 // that opt out of the cross-factor defence.
 func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, clock timex.Clock) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-	if isNilLike(s.Store) {
+	if nilcheck.IsNil(s.Store) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "StepTOTP.Store is nil",
@@ -590,13 +591,13 @@ func resolveAuthnLockoutStore(c *config) store.AuthnLockoutStore { //nolint:iret
 	if c == nil {
 		return nil
 	}
-	if !isNilLike(c.authnLockoutStore) {
+	if !nilcheck.IsNil(c.authnLockoutStore) {
 		return c.authnLockoutStore
 	}
 	if p, ok := c.store.(interface {
 		AuthnLockouts() store.AuthnLockoutStore
 	}); ok {
-		if s := p.AuthnLockouts(); !isNilLike(s) {
+		if s := p.AuthnLockouts(); !nilcheck.IsNil(s) {
 			return s
 		}
 	}
@@ -649,7 +650,7 @@ type clockShim struct {
 }
 
 func (s clockShim) Now() time.Time {
-	if isNilLike(s.inner) {
+	if nilcheck.IsNil(s.inner) {
 		return time.Time{}
 	}
 	return s.inner.Now()
@@ -660,7 +661,7 @@ func (s clockShim) Now() time.Time {
 // to [timex.SystemClock] on a nil clock so production code paths that
 // did not configure [WithClock] still see a valid wall-clock reading.
 func clockShimOrNil(c Clock) timex.Clock { //nolint:ireturn,nolintlint // timex.Clock is the helper's contract; nil is the documented "use SystemClock" signal.
-	if isNilLike(c) {
+	if nilcheck.IsNil(c) {
 		return nil
 	}
 	return clockShim{inner: c}
@@ -691,19 +692,19 @@ func selectTOTPKeys(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepEmailOTP(s StepEmailOTP, clock timex.Clock) (authn.Authenticator, error) {
-	if isNilLike(s.Store) {
+	if nilcheck.IsNil(s.Store) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "StepEmailOTP.Store is nil",
 		}
 	}
-	if isNilLike(s.Sender) {
+	if nilcheck.IsNil(s.Sender) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "StepEmailOTP.Sender is nil",
 		}
 	}
-	if isNilLike(s.Users) {
+	if nilcheck.IsNil(s.Users) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "StepEmailOTP.Users is nil",
@@ -734,7 +735,7 @@ func buildStepEmailOTP(s StepEmailOTP, clock timex.Clock) (authn.Authenticator, 
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepRecoveryCode(s StepRecoveryCode, clock timex.Clock) (authn.Authenticator, error) {
-	if isNilLike(s.Store) {
+	if nilcheck.IsNil(s.Store) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "StepRecoveryCode.Store is nil",
@@ -754,7 +755,7 @@ func buildStepRecoveryCode(s StepRecoveryCode, clock timex.Clock) (authn.Authent
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepCaptcha(s StepCaptcha) (authn.Authenticator, error) {
-	if isNilLike(s.Verifier) {
+	if nilcheck.IsNil(s.Verifier) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "StepCaptcha.Verifier is nil",

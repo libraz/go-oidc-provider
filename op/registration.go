@@ -2,17 +2,15 @@ package op
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"slices"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // defaultIATUses is the consumption ceiling applied to an Initial
@@ -617,7 +615,7 @@ func (p *Provider) IssueInitialAccessToken(ctx context.Context, spec InitialAcce
 	if maxUses == 0 {
 		maxUses = p.cfg.dcr.IATUses
 	}
-	id, err := newOpaqueID(iatIDBytes)
+	id, err := keys.RandomBase64URL(iatIDBytes)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeServerError,
@@ -625,7 +623,7 @@ func (p *Provider) IssueInitialAccessToken(ctx context.Context, spec InitialAcce
 			Cause:       err,
 		}
 	}
-	secret, err := newOpaqueID(iatSecretBytes)
+	secret, err := keys.RandomBase64URL(iatSecretBytes)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeServerError,
@@ -636,7 +634,7 @@ func (p *Provider) IssueInitialAccessToken(ctx context.Context, spec InitialAcce
 	now := p.cfg.clock.Now().UTC()
 	rec := &store.InitialAccessToken{
 		ID:            id,
-		HashedValue:   hashIATSecret(secret),
+		HashedValue:   patterns.Digest(secret),
 		MaxUses:       maxUses,
 		Uses:          0,
 		AllowedScopes: slices.Clone(spec.AllowedScopes),
@@ -699,26 +697,4 @@ func (p *Provider) RevokeInitialAccessToken(ctx context.Context, id string) erro
 		}
 	}
 	return nil
-}
-
-// hashIATSecret returns the lowercase hex-encoded SHA-256 digest of
-// secret. The digest format matches the contract documented on
-// [store.InitialAccessToken.HashedValue]; backends compare digests
-// in constant time.
-func hashIATSecret(secret string) string {
-	sum := sha256.Sum256([]byte(secret))
-	return hex.EncodeToString(sum[:])
-}
-
-// newOpaqueID returns a base64url (no padding) string carrying n bytes
-// of cryptographically random data. The function is the single
-// permitted call site for [crypto/rand.Read] inside the op package;
-// existing token-issuance code paths in internal/* use the same
-// pattern with their own private helper.
-func newOpaqueID(n int) (string, error) {
-	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }

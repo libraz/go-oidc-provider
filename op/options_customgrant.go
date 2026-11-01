@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
@@ -126,7 +127,7 @@ func WithCustomGrant(g CustomGrantHandler) Option {
 // non-empty Name, and does not collide with a built-in grant_type
 // wire. The returned name is the one the dispatcher will index by.
 func validateCustomGrantIdentity(g CustomGrantHandler) (string, error) {
-	if isNilLike(g) {
+	if nilcheck.IsNil(g) {
 		return "", ErrCustomGrantNil
 	}
 	name := g.Name()
@@ -199,7 +200,7 @@ func RegisterTokenExchange(policy TokenExchangePolicy) Option {
 			}
 			return ErrTokenExchangeDuplicate
 		}
-		if isNilLike(policy) {
+		if nilcheck.IsNil(policy) {
 			return ErrTokenExchangePolicyNil
 		}
 		c.tokenExchangePolicy = policy

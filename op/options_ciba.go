@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/cibaendpoint"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
@@ -131,7 +132,7 @@ func WithCIBAHintResolver(r HintResolver) CIBAOption {
 		if err := c.claimOnce("WithCIBAHintResolver"); err != nil {
 			return err
 		}
-		if isNilLike(r) {
+		if nilcheck.IsNil(r) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithCIBAHintResolver requires a non-nil HintResolver",
@@ -294,7 +295,7 @@ func WithCIBA(opts ...CIBAOption) Option {
 		// [WithGrants] was applied first.
 		c.cibaGrantEnabled = true
 		for i, sub := range opts {
-			if isNilLike(sub) {
+			if nilcheck.IsNil(sub) {
 				return &Error{
 					Code:        codeConfiguration,
 					Description: "WithCIBA received nil CIBAOption at position " + strconv.Itoa(i),
@@ -326,12 +327,12 @@ func (c *config) validateCIBAGrant() error {
 	if !c.cibaGrantConfiguredOrEnabled() {
 		return nil
 	}
-	if isNilLike(c.store) {
+	if nilcheck.IsNil(c.store) {
 		// validateRequired has already failed; bail out so the
 		// substore-nil branch does not panic on the nil store.
 		return nil
 	}
-	if isNilLike(c.store.CIBARequests()) {
+	if nilcheck.IsNil(c.store.CIBARequests()) {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "the CIBA grant requires the configured Store to provide " +
@@ -339,7 +340,7 @@ func (c *config) validateCIBAGrant() error {
 				"SQL / Redis adapters require an explicit implementation)",
 		}
 	}
-	if isNilLike(c.cibaHintResolver) {
+	if nilcheck.IsNil(c.cibaHintResolver) {
 		return &Error{
 			Code: codeConfiguration,
 			Description: "the CIBA grant requires a HintResolver; supply one through " +

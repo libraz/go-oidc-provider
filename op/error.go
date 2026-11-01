@@ -1,9 +1,10 @@
 package op
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // Error is the canonical error type returned by [Provider]-related code paths
@@ -102,18 +103,7 @@ func (e *Error) WriteOAuthError(w http.ResponseWriter) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(httpStatusFor(e.Code))
-	body := struct {
-		Error            string `json:"error"`
-		ErrorDescription string `json:"error_description,omitempty"`
-	}{
-		Error:            e.Code,
-		ErrorDescription: e.Description,
-	}
-	_ = json.NewEncoder(w).Encode(body)
+	_ = httpx.WriteError(w, httpStatusFor(e.Code), e.Code, e.Description)
 }
 
 // httpStatusFor maps an OAuth error code onto the HTTP status code

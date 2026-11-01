@@ -270,9 +270,7 @@ func (d HTMLDriver) writeChooserBody(b *strings.Builder, prompt Prompt, data Cho
 		// No form at all: there is nothing to submit, and an empty one
 		// would render a dead control on a page whose only remaining
 		// affordance is the link below.
-		b.WriteString(`<p>`)
-		b.WriteString(html.EscapeString(d.messageOr(prompt.Locale, "chooser.no_accounts", nil, chooserNoAccountsFallback)))
-		b.WriteString(`</p>`)
+		writeParagraph(b, d.messageOr(prompt.Locale, "chooser.no_accounts", nil, chooserNoAccountsFallback))
 	} else {
 		writeFormOpen(b, prompt)
 		for _, account := range data.Accounts {
@@ -527,7 +525,7 @@ func writeConsentApprovedField(b *strings.Builder, data ConsentScopePromptData) 
 	for _, s := range data.Scopes {
 		names = append(names, s.Name)
 	}
-	writeHiddenInput(b, "approved_scopes", strings.Join(names, " "))
+	writeHiddenInput(b, ConsentApprovedScopesField, strings.Join(names, " "))
 }
 
 // writeFieldInputs renders one labelled <input> per [FieldSpec]. The

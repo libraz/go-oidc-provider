@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -144,7 +145,7 @@ func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
 		if err := c.claimOnce("WithPreferredLocaleStore"); err != nil {
 			return err
 		}
-		if isNilLike(store) {
+		if nilcheck.IsNil(store) {
 			return newConfigurationError("WithPreferredLocaleStore requires a non-nil store", nil)
 		}
 		c.preferredLocaleStore = store

@@ -24,6 +24,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
 	"github.com/libraz/go-oidc-provider/internal/protectedresource"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
@@ -114,10 +115,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	ceremonyCORS := cors.NewStrict(interactionOrigins, cfg.effectiveAuditEmitter())
 	encResolver := buildClientEncryptionResolver(cfg)
 	claimUsers := newClaimTypeGuard(cfg.effectiveUserStore(), cfg.logger)
-	var subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
-	if cfg.subjectGeneratorSource != "" {
-		subjectProjector = buildSubjectProjector(cfg)
-	}
+	subjectProjector := subjectProjectorFor(cfg)
 	if err := mountDiscovery(mux, cfg, publicCORS, discHandler); err != nil {
 		return nil, err
 	}
@@ -239,7 +237,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	grants := cfg.store.Grants()
 	_, hasGrantClients := grants.(store.GrantClientLister)
 	_, hasGrantSubjects := grants.(store.GrantSubjectLister)
-	needsDCRDeletionBCL := cfg.dcr != nil && !isNilLike(grants) && hasGrantClients && hasGrantSubjects
+	needsDCRDeletionBCL := cfg.dcr != nil && !nilcheck.IsNil(grants) && hasGrantClients && hasGrantSubjects
 	if sessMgr != nil || needsDCRDeletionBCL {
 		bcc, err = buildBackchannelCoordinator(cfg, keySet)
 		if err != nil {
@@ -742,7 +740,7 @@ func mountDeviceAuthorizationEndpoint(
 		protocolEndpointPath(cfg, cfg.endpoints.DeviceAuthorization),
 		strictCORS.Handler(devicecodeendpoint.Handler(devicecodeendpoint.Deps{
 			Issuer:                   cfg.issuer,
-			VerificationURI:          cfg.effectiveDeviceVerificationURI(),
+			VerificationURI:          cfg.deviceVerificationURI,
 			Clients:                  cfg.clientStore(),
 			DeviceCodes:              deviceCodesFor(cfg),
 			Scopes:                   scopes,

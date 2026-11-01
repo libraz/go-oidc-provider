@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
@@ -981,7 +982,7 @@ func WithStore(s store.Store) Option {
 		if err := c.claimOnce("WithStore"); err != nil {
 			return err
 		}
-		if isNilLike(s) {
+		if nilcheck.IsNil(s) {
 			return ErrStoreRequired
 		}
 		c.store = s
@@ -1023,7 +1024,7 @@ func WithUserStore(s store.UserStore) Option {
 		if err := c.claimOnce("WithUserStore"); err != nil {
 			return err
 		}
-		if isNilLike(s) {
+		if nilcheck.IsNil(s) {
 			return ErrUserStoreRequired
 		}
 		c.userStore = s
@@ -1068,7 +1069,7 @@ func WithClock(clock Clock) Option {
 		if err := c.claimOnce("WithClock"); err != nil {
 			return err
 		}
-		if isNilLike(clock) {
+		if nilcheck.IsNil(clock) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithClock received nil Clock",

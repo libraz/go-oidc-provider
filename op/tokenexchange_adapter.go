@@ -39,7 +39,7 @@ func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispat
 			// An opaque subject_token records the OP-internal subject;
 			// the exchanged token must carry the per-client public one a
 			// JWT subject_token already does.
-			SubjectProjector: backchannelSubjectProjector(cfg),
+			SubjectProjector: subjectProjectorFor(cfg),
 			Audit:            cfg.effectiveAuditEmitter(),
 			Clock:            clock,
 			MaxAccessTTL:     cfg.accessTokenTTL,

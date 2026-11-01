@@ -308,12 +308,11 @@ func matchStep(secret []byte, code string, now time.Time) (int64, bool) {
 // a huge unsigned counter; the library never reaches that branch in
 // practice but the clamp keeps the function total.
 func stepCounter(now time.Time) uint64 {
-	const stepSeconds = 30
 	secs := now.Unix()
 	if secs < 0 {
 		return 0
 	}
-	return uint64(secs) / stepSeconds
+	return uint64(secs) / uint64(totpStep/time.Second)
 }
 
 // safeStep converts the unsigned step counter into the signed form

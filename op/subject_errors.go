@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/subject"
 )
 
@@ -95,7 +96,7 @@ func (c *config) catalogSubjectGenerator() SubjectGenerator { //nolint:ireturn,n
 	if c.subjectGeneratorSource == "WithSubjectGenerator" {
 		return gen
 	}
-	if isNilLike(gen) {
+	if nilcheck.IsNil(gen) {
 		return gen
 	}
 	return bridgedSubjectGenerator{inner: gen}

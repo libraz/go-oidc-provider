@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -575,7 +576,7 @@ type ExternalStep struct {
 // [Authenticator.Begin]. The wrapper performs no transformation: the
 // returned [interaction.Step] is the embedder's value unchanged.
 func (e ExternalStep) Begin(ctx context.Context, in BeginInput) (interaction.Step, error) {
-	if isNilLike(e.Authenticator) {
+	if nilcheck.IsNil(e.Authenticator) {
 		return interaction.Step{}, errExternalStepAuthenticatorNil
 	}
 	return e.Authenticator.Begin(ctx, in)
@@ -585,7 +586,7 @@ func (e ExternalStep) Begin(ctx context.Context, in BeginInput) (interaction.Ste
 // [Authenticator.Continue]. The wrapper performs no transformation:
 // the returned [interaction.Step] is the embedder's value unchanged.
 func (e ExternalStep) Continue(ctx context.Context, in ContinueInput) (interaction.Step, error) {
-	if isNilLike(e.Authenticator) {
+	if nilcheck.IsNil(e.Authenticator) {
 		return interaction.Step{}, errExternalStepAuthenticatorNil
 	}
 	return e.Authenticator.Continue(ctx, in)
@@ -664,7 +665,7 @@ func (StepOneOf) Continue(_ context.Context, _ ContinueInput) (interaction.Step,
 func (s StepOneOf) Kind() StepKind {
 	kinds := make([]string, 0, len(s.Steps))
 	for _, step := range s.Steps {
-		if isNilLike(step) {
+		if nilcheck.IsNil(step) {
 			kinds = append(kinds, "")
 			continue
 		}

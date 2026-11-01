@@ -22,7 +22,8 @@ import (
 // router takes is already wrapped by the SSF decorator. The worker is
 // started separately, once [New] can no longer fail.
 func buildSharedSignals(cfg *config, keySet *keys.Set) error {
-	if err := cfg.validateSharedSignals(); err != nil {
+	grants, err := cfg.validateSharedSignals()
+	if err != nil {
 		return err
 	}
 	if !cfg.sharedSignals {
@@ -31,10 +32,6 @@ func buildSharedSignals(cfg *config, keySet *keys.Set) error {
 	ss, err := cfg.sharedSignalsStore()
 	if err != nil {
 		return err
-	}
-	grants, ok := cfg.store.Grants().(store.GrantClientLister)
-	if !ok {
-		return newConfigurationError("WithSharedSignals requires Store.Grants() to implement store.GrantClientLister", nil)
 	}
 	current, previous := deriveSSFSealKeys(cfg.cookieKeys)
 	sealer, err := ssf.NewSealer(current, previous...)
@@ -50,7 +47,7 @@ func buildSharedSignals(cfg *config, keySet *keys.Set) error {
 		Events:           ss.SSFEvents(),
 		Grants:           grants,
 		Clients:          cfg.clientStore(),
-		SubjectProjector: backchannelSubjectProjector(cfg),
+		SubjectProjector: subjectProjectorFor(cfg),
 		Audit:            base,
 		Clock:            cfg.clock,
 	})

@@ -35,6 +35,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/internal/redact"
+	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -407,10 +408,7 @@ func (l *InMemoryAttemptLimiter) Count(ctx context.Context, attemptKey string) (
 }
 
 func (l *InMemoryAttemptLimiter) now() time.Time {
-	if l.clock != nil {
-		return l.clock.Now().UTC()
-	}
-	return timex.SystemClock.Now().UTC()
+	return timex.OrSystem(l.clock).Now().UTC()
 }
 
 func (l *InMemoryAttemptLimiter) evictExpiredLocked(now time.Time) {
@@ -468,10 +466,10 @@ func (d *Deps) attemptLimiter() AttemptLimiter {
 }
 
 func (d *Deps) now() time.Time {
-	if d != nil && d.Clock != nil {
-		return d.Clock.Now().UTC()
+	if d == nil {
+		return timex.SystemClock.Now().UTC()
 	}
-	return timex.SystemClock.Now().UTC()
+	return timex.OrSystem(d.Clock).Now().UTC()
 }
 
 // VerifyUserCode runs the brute-force-protected user_code lookup
@@ -1058,12 +1056,12 @@ func revokeJWTTombstoneCredentials(
 	now := deps.now()
 	ttl := deps.AccessTokenTTL
 	if ttl <= 0 {
-		ttl = 5 * time.Minute
+		ttl = timex.AccessTokenTTLDefault
 	}
 	err := deps.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
 		GrantID:   grantID,
 		RevokedAt: now,
-		ExpiresAt: now.Add(ttl + 5*time.Minute),
+		ExpiresAt: now.Add(ttl + revocation.ClockSkewAllowance),
 		Reason:    reason,
 	})
 	result.grantTombstoneWritten = err == nil

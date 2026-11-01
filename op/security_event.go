@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/ssf"
 )
 
@@ -282,7 +283,7 @@ func errSecurityEvent(description string) *Error {
 //
 // Stable since v1.5.
 func (p *Provider) EmitSecurityEvent(ctx context.Context, ev SecurityEvent) error {
-	if isNilLike(ev) {
+	if nilcheck.IsNil(ev) {
 		return errSecurityEvent("event must not be nil")
 	}
 	et, subject, fields, err := ev.securityEvent()

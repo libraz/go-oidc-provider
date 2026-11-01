@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -304,7 +305,7 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 		if err := c.claimOnce("WithDPoPNonceSource"); err != nil {
 			return err
 		}
-		if isNilLike(source) {
+		if nilcheck.IsNil(source) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithDPoPNonceSource received nil DPoPNonceSource",
@@ -543,7 +544,7 @@ func WithJWKSHTTPTransport(rt http.RoundTripper) Option {
 		if err := c.claimOnce("WithJWKSHTTPTransport"); err != nil {
 			return err
 		}
-		if isNilLike(rt) {
+		if nilcheck.IsNil(rt) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithJWKSHTTPTransport received nil http.RoundTripper",

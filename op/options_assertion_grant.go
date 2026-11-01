@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
@@ -74,7 +75,7 @@ func WithIDJAGIssuance(p IDJAGIssuancePolicy) Option {
 		if err := c.claimOnce("WithIDJAGIssuance"); err != nil {
 			return err
 		}
-		if isNilLike(p) {
+		if nilcheck.IsNil(p) {
 			return newConfigurationError("WithIDJAGIssuance requires a non-nil IDJAGIssuancePolicy", nil)
 		}
 		c.idjagIssuancePolicy = p
@@ -116,11 +117,11 @@ func (c *config) validateJWTBearerGrant() error {
 		}
 		seen[iss.Issuer] = struct{}{}
 	}
-	if isNilLike(c.store) {
+	if nilcheck.IsNil(c.store) {
 		// validateRequired has already failed; avoid dereferencing a nil store.
 		return nil
 	}
-	if isNilLike(c.effectiveUserStore()) {
+	if nilcheck.IsNil(c.effectiveUserStore()) {
 		return newConfigurationError(
 			"WithJWTBearerGrant requires a UserStore: every subject ResolveSubject "+
 				"returns is confirmed through it before a token is issued", nil,

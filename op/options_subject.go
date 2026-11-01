@@ -1,5 +1,7 @@
 package op
 
+import "github.com/libraz/go-oidc-provider/internal/nilcheck"
+
 // WithSubjectGenerator registers the [SubjectGenerator] the OP
 // consults to compute the "sub" claim of issued ID tokens and JWT
 // access tokens. The library ships two reference generators in the
@@ -30,7 +32,7 @@ func WithSubjectGenerator(g SubjectGenerator) Option {
 		if err := c.claimSlot("subject generator", "WithSubjectGenerator"); err != nil {
 			return err
 		}
-		if isNilLike(g) {
+		if nilcheck.IsNil(g) {
 			return ErrSubjectGeneratorRequired
 		}
 		c.subjectGenerator = g

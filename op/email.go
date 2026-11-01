@@ -6,6 +6,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -164,13 +165,13 @@ func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nol
 	// wraps it. Check every dependency here, returning the sentinel an
 	// internal-side miss would produce.
 	switch {
-	case isNilLike(cfg.Mailer):
+	case nilcheck.IsNil(cfg.Mailer):
 		return nil, emailotp.ErrMailerRequired
-	case isNilLike(cfg.Store):
+	case nilcheck.IsNil(cfg.Store):
 		return nil, emailotp.ErrStoreRequired
-	case isNilLike(cfg.Users):
+	case nilcheck.IsNil(cfg.Users):
 		return nil, emailotp.ErrUsersRequired
-	case cfg.Clock != nil && isNilLike(cfg.Clock):
+	case cfg.Clock != nil && nilcheck.IsNil(cfg.Clock):
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "EmailOTPConfig.Clock holds a typed-nil Clock",
@@ -212,7 +213,7 @@ func emailOTPLockout(lockoutStore store.AuthnLockoutStore, clk timex.Clock) (*lo
 	if lockoutStore == nil {
 		return nil, nil //nolint:nilnil // documented "no cross-factor counter" signal
 	}
-	if isNilLike(lockoutStore) {
+	if nilcheck.IsNil(lockoutStore) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "EmailOTPConfig.LockoutStore holds a typed-nil AuthnLockoutStore",

@@ -4,6 +4,7 @@ import (
 	"maps"
 	"strconv"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -98,7 +99,7 @@ func WithHighEntropyClientSecrets() Option {
 func collectStaticClientSeeds(seeds []ClientSeed) (records []store.Client, plaintexts map[string]staticSeedSecrets, err error) {
 	records = make([]store.Client, 0, len(seeds))
 	for i, seed := range seeds {
-		if isNilLike(seed) {
+		if nilcheck.IsNil(seed) {
 			return nil, nil, &Error{
 				Code:        codeConfiguration,
 				Description: "WithStaticClients[" + strconv.Itoa(i) + "]: nil ClientSeed",

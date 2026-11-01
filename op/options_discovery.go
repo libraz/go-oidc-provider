@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/libraz/go-oidc-provider/internal/discovery"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/profile"
 )
 
@@ -443,7 +444,7 @@ func WithACRPolicy(p ACRPolicy) Option {
 		if err := c.claimOnce("WithACRPolicy"); err != nil {
 			return err
 		}
-		if isNilLike(p) {
+		if nilcheck.IsNil(p) {
 			p = nil
 		}
 		c.acrPolicy = p

@@ -3,6 +3,7 @@ package op
 import (
 	"reflect"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -24,7 +25,7 @@ import (
 // twice; a deployment that wants them apart says so with
 // [WithUserStore].
 func (c *config) effectiveUserStore() store.UserStore { //nolint:ireturn,nolintlint // store.UserStore is the substore contract.
-	if !isNilLike(c.userStore) {
+	if !nilcheck.IsNil(c.userStore) {
 		return c.userStore
 	}
 	if inferred := c.inferredUserStore(); inferred != nil {
@@ -47,7 +48,7 @@ func (c *config) inferredUserStore() store.UserStore { //nolint:ireturn,nolintli
 	}
 	for _, s := range candidates {
 		pw, ok := s.(PrimaryPassword)
-		if !ok || isNilLike(pw.Store) {
+		if !ok || nilcheck.IsNil(pw.Store) {
 			continue
 		}
 		return pw.Store
@@ -75,13 +76,13 @@ func (c *config) inferredUserStore() store.UserStore { //nolint:ireturn,nolintli
 // is the answer to "which records does the ID Token come from".
 func (c *config) warnUserStoreMismatch() {
 	claims := c.effectiveUserStore()
-	if isNilLike(claims) {
+	if nilcheck.IsNil(claims) {
 		return
 	}
 	c.infoClaimSource(claims)
 	for _, step := range c.loginFlowSteps() {
 		authn, field := stepUserStore(step)
-		if isNilLike(authn) || !comparableStores(authn, claims) {
+		if nilcheck.IsNil(authn) || !comparableStores(authn, claims) {
 			continue
 		}
 		if any(authn) == any(claims) {
@@ -106,7 +107,7 @@ func (c *config) warnUserStoreMismatch() {
 // does not read as missing data.
 func (c *config) infoClaimSource(claims store.UserStore) {
 	attrs := []any{"claim_source", claimSourceOption(c)}
-	if backend := c.store.Users(); !isNilLike(backend) && comparableStores(claims, backend) && any(claims) != any(backend) {
+	if backend := c.store.Users(); !nilcheck.IsNil(backend) && comparableStores(claims, backend) && any(claims) != any(backend) {
 		attrs = append(attrs, "store_users", "not read")
 	}
 	c.logger.Info("ID Token and /userinfo claims are read from claim_source", attrs...)
@@ -163,7 +164,7 @@ func comparableStores(a, b store.UserStore) bool {
 // claimSourceOption names the option the claim side came from, so the
 // warning points at the wiring to fix rather than at an address.
 func claimSourceOption(c *config) string {
-	if !isNilLike(c.userStore) {
+	if !nilcheck.IsNil(c.userStore) {
 		return "WithUserStore"
 	}
 	if c.inferredUserStore() != nil {

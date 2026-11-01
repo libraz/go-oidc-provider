@@ -6,10 +6,11 @@ import (
 	"crypto/elliptic"
 	"errors"
 	"fmt"
-	"reflect"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 )
 
 // SignedJWT serialises an arbitrary claims value as an ES256 compact JWS
@@ -81,7 +82,7 @@ func signWith(signer crypto.Signer, kid string, claims any) (string, error) {
 // go-jose so an RSA or Ed25519 key surfaces the documented sentinel instead
 // of a wrapped ErrUnsupportedKeyType.
 func requireES256Signer(signer crypto.Signer) error {
-	if isNilSigner(signer) {
+	if nilcheck.IsNil(signer) {
 		return ErrSignerMismatch
 	}
 	pub, ok := signer.Public().(*ecdsa.PublicKey)
@@ -89,20 +90,4 @@ func requireES256Signer(signer crypto.Signer) error {
 		return ErrSignerMismatch
 	}
 	return nil
-}
-
-// isNilSigner reports whether signer is nil or a typed nil pointer. A
-// typed nil would panic inside Public(), so the guard has to look past the
-// interface header.
-func isNilSigner(signer crypto.Signer) bool {
-	if signer == nil {
-		return true
-	}
-	rv := reflect.ValueOf(signer)
-	switch rv.Kind() {
-	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
-		return rv.IsNil()
-	default:
-		return false
-	}
 }

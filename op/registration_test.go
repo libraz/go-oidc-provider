@@ -22,7 +22,7 @@ import (
 
 // hashIATValueForTest mirrors the SHA-256 hex digest the library
 // computes from an IAT bearer secret before persisting it. The helper
-// lives here because op/registration.go's hashIATSecret is unexported;
+// lives here because op/registration.go computes it inline;
 // the formula is part of the contract documented on
 // store.InitialAccessToken.HashedValue.
 func hashIATValueForTest(tb testing.TB, secret string) string {

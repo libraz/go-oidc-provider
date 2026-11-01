@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -148,7 +149,7 @@ func (c *config) checkAbsentMarkerGate(ctx context.Context, meta store.MetadataS
 // dereferencing the missing substore.
 func (c *config) storeHasAnyGrant(ctx context.Context) (bool, *Error) {
 	grants := c.store.Grants()
-	if isNilLike(grants) {
+	if nilcheck.IsNil(grants) {
 		return false, nil
 	}
 	has, err := grants.HasAny(ctx)

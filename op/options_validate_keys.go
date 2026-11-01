@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
@@ -66,7 +67,7 @@ func validateKeyset(ks Keyset) error {
 			}
 		}
 		seen[k.KeyID] = struct{}{}
-		if isNilLike(k.Signer) {
+		if nilcheck.IsNil(k.Signer) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "keyset entry " + k.KeyID + " has nil Signer",

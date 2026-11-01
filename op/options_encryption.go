@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 )
 
 // SupportedEncryptionAlgs returns the closed list of JWE `alg`
@@ -398,7 +399,7 @@ func (c *config) validateEncryptionKeyset() error {
 		signingKids[k.KeyID] = struct{}{}
 	}
 	for i, k := range c.encryptionKeyset {
-		if isNilLike(k.PrivateKey) {
+		if nilcheck.IsNil(k.PrivateKey) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithEncryptionKeyset: entry " + strconv.Itoa(i) + " PrivateKey is nil",

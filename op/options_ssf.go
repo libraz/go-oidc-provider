@@ -3,6 +3,7 @@ package op
 import (
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/internal/ssf"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -79,37 +80,39 @@ func WithAllowInsecureSharedSignalsPushForDev() Option {
 // validateSharedSignals enforces the [WithSharedSignals] construction
 // contract. The ssf. scope prefix is refused only while the transmitter
 // is on, so a deployment that never enables it keeps its scope names.
-func (c *config) validateSharedSignals() error {
+// It returns the grant lister the transmitter reads, nil while the
+// transmitter is off.
+func (c *config) validateSharedSignals() (store.GrantClientLister, error) {
 	if c.allowInsecureSharedSignalsPushForDev && !isDevelopmentIssuer(c.issuer) {
-		return newConfigurationError(
+		return nil, newConfigurationError(
 			"WithAllowInsecureSharedSignalsPushForDev requires a development issuer (loopback, localhost, or a .localhost/.test/.invalid/.example host)", nil,
 		)
 	}
 	if !c.sharedSignals {
-		return nil
+		return nil, nil
 	}
 	for _, s := range c.scopes {
 		if strings.HasPrefix(s.Name, ssfScopePrefix) {
-			return newConfigurationError(
+			return nil, newConfigurationError(
 				"WithScope: the "+ssfScopePrefix+" scope prefix is reserved for WithSharedSignals ("+s.Name+")", nil,
 			)
 		}
 	}
 	if _, err := c.sharedSignalsStore(); err != nil {
-		return err
+		return nil, err
 	}
-	grants := c.store.Grants()
-	if _, ok := grants.(store.GrantClientLister); !ok || isNilLike(grants) {
-		return newConfigurationError(
+	grants, ok := c.store.Grants().(store.GrantClientLister)
+	if !ok || nilcheck.IsNil(grants) {
+		return nil, newConfigurationError(
 			"WithSharedSignals requires Store.Grants() to implement store.GrantClientLister", nil,
 		)
 	}
 	if len(c.cookieKeys) == 0 {
-		return newConfigurationError(
+		return nil, newConfigurationError(
 			"WithSharedSignals requires WithCookieKeys: push authorization headers are sealed under the cookie key ring", nil,
 		)
 	}
-	return nil
+	return grants, nil
 }
 
 // sharedSignalsStore returns the store's SSF substores, or the
@@ -121,7 +124,7 @@ func (c *config) sharedSignalsStore() (store.SharedSignalsStore, error) {
 			"WithSharedSignals requires the store to implement store.SharedSignalsStore", nil,
 		)
 	}
-	if isNilLike(ss.SSFStreams()) || isNilLike(ss.SSFEvents()) {
+	if nilcheck.IsNil(ss.SSFStreams()) || nilcheck.IsNil(ss.SSFEvents()) {
 		return nil, newConfigurationError(
 			"WithSharedSignals requires non-nil SSFStreams() and SSFEvents() substores", nil,
 		)

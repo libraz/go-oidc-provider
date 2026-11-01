@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -22,7 +23,7 @@ func WithInteractionDriver(d interaction.Driver) Option {
 		if err := c.claimOnce("WithInteractionDriver"); err != nil {
 			return err
 		}
-		if isNilLike(d) {
+		if nilcheck.IsNil(d) {
 			return newConfigurationError("WithInteractionDriver received nil Driver", nil)
 		}
 		c.interactionD = d
@@ -173,7 +174,7 @@ func WithAuthnLockoutStore(s store.AuthnLockoutStore) Option {
 		if err := c.claimOnce("WithAuthnLockoutStore"); err != nil {
 			return err
 		}
-		if isNilLike(s) {
+		if nilcheck.IsNil(s) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithAuthnLockoutStore received nil AuthnLockoutStore",
@@ -220,7 +221,7 @@ func WithScope(s Scope) Option {
 // Stable since v1.5.
 func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 	return optionFunc(func(c *config) error {
-		if isNilLike(o) {
+		if nilcheck.IsNil(o) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithLoginAttemptObserver received nil LoginAttemptObserver",
@@ -252,7 +253,7 @@ func WithInteractions(i ...Interaction) Option {
 			}
 		}
 		for idx, item := range i {
-			if isNilLike(item) {
+			if nilcheck.IsNil(item) {
 				return &Error{
 					Code:        codeConfiguration,
 					Description: "WithInteractions received nil Interaction at position " + strconv.Itoa(idx),
@@ -470,7 +471,7 @@ func WithLoginFlow(flow LoginFlow) Option {
 		if err := c.claimOnce("WithLoginFlow"); err != nil {
 			return err
 		}
-		if isNilLike(flow.Primary) {
+		if nilcheck.IsNil(flow.Primary) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithLoginFlow: LoginFlow.Primary must not be nil",
@@ -490,11 +491,11 @@ func WithLoginFlow(flow LoginFlow) Option {
 func checkLoginFlowRuleKinds(flow LoginFlow) error {
 	seen := make(map[StepKind]struct{}, len(flow.Rules))
 	var registration StepKind
-	if !isNilLike(flow.Registration) {
+	if !nilcheck.IsNil(flow.Registration) {
 		registration = flow.Registration.Kind()
 	}
 	for i, r := range flow.Rules {
-		if isNilLike(r.Then) {
+		if nilcheck.IsNil(r.Then) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not be nil",
