@@ -85,10 +85,10 @@ var declaredFieldWatch = []watchedType{
 		declFile:  "op/subject/subject.go",
 		declName:  "GeneratorInput",
 		literals:  []string{"GeneratorInput", "SubjectGeneratorInput", "subject.GeneratorInput"},
-		minSites:  2,
+		minSites:  1,
 		symmetric: true,
-		why: "the pairwise and passthrough projector arms hand the same input type to the embedder's " +
-			"Generator",
+		why: "the pairwise and passthrough projector arms share one construction site that hands " +
+			"this input to the embedder's Generator",
 	},
 }
 
