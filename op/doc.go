@@ -62,6 +62,27 @@
 // exists to exclude. [PrimaryPassword] is the usual starting point; further
 // factors attach as [Rule] entries.
 //
+// # Where to start
+//
+// Most options in this package serve one feature each. A typical deployment
+// sets these and leaves the rest at their defaults:
+//
+//   - [WithIssuer], [WithStore], [WithKeyset]: always required.
+//   - [WithCookieKeys]: required while the authorization_code grant is enabled.
+//   - [WithLoginFlow]: how a user signs in; [PrimaryPassword] reads your own
+//     users table, and the claims come from the same store.
+//   - [WithStaticClients]: the relying parties known at deploy time.
+//   - [WithProfile]: the security profile, checked against everything else.
+//   - [WithLogger]: start-up and claim diagnostics, discarded without it.
+//   - [WithMountPrefix], [WithTrustedProxies]: where the OP mounts and which
+//     reverse proxies it trusts.
+//   - [WithSPAUI] or [WithConsentUI]: your own login and consent pages in
+//     place of the built-in ones.
+//
+// [WithUserStore] is needed only when claims come from records other than
+// the ones [PrimaryPassword] authenticates against. [NewReloadable] replaces
+// [New] when keys or options change without a restart.
+//
 // # Local development
 //
 // The defaults are tuned for production (https-only, public-network-only).
