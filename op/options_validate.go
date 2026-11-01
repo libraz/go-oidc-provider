@@ -81,6 +81,13 @@ func isDevelopmentIssuer(issuer string) bool {
 	return false
 }
 
+// issuerInvalid names the rule raw broke and quotes it, keeping
+// [ErrIssuerInvalid] reachable through errors.Is.
+func issuerInvalid(raw string, err error) error {
+	reason := strings.TrimPrefix(err.Error(), discovery.ErrIssuerInvalid.Error()+": ")
+	return newConfigurationError("issuer "+strconv.Quote(raw)+": "+reason, ErrIssuerInvalid)
+}
+
 // validateRequired enforces the four-argument boot contract (Issuer +
 // Store + Keyset + cookie keys) plus keyset shape. Split out so
 // [validate] stays under the gocognit ceiling and so a future "what
@@ -92,7 +99,7 @@ func (c *config) validateRequired() error {
 	// Deferred from WithIssuer: the localhost carve-out depends on an
 	// opt-in that may have been registered by a later option.
 	if err := discovery.ValidateIssuerWithLocalhostName(c.issuer, c.allowLocalhostLoopback); err != nil {
-		return ErrIssuerInvalid
+		return issuerInvalid(c.issuer, err)
 	}
 	if c.allowInsecureBackchannelLogoutForDev && !isDevelopmentIssuer(c.issuer) {
 		return newConfigurationError(

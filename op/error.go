@@ -221,6 +221,9 @@ var ErrUserStoreRequired = &Error{
 // [WithAllowLocalhostLoopback] has been supplied, the textual host
 // "localhost". The textual host needs the opt-in because its resolution can be
 // hijacked (RFC 8252 §7.3) while an IP literal's cannot.
+//
+// New returns a configuration error that quotes the value and names the rule
+// it broke, with ErrIssuerInvalid as its cause; match it with [errors.Is].
 var ErrIssuerInvalid = &Error{
 	Code:        codeConfiguration,
 	Description: "issuer must be an absolute URL with no trailing slash, query, or fragment (https; http permitted only for loopback IP literals; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host)",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -666,6 +667,35 @@ func TestWithIssuer_RejectsMalformedURL(t *testing.T) {
 			_, err := op.New(op.WithIssuer(tc.issuer), op.WithStore(stubStore{}))
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("op.New(%q): want %v, got %v", tc.issuer, tc.want, err)
+			}
+		})
+	}
+}
+
+// TestWithIssuer_RejectionNamesTheRuleAndTheValue pins that each refusal
+// says which rule failed and quotes the configured value.
+func TestWithIssuer_RejectionNamesTheRuleAndTheValue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ issuer, reason string }{
+		{"http://idp.example.com", "http scheme is permitted only for loopback IP literals"},
+		{"https://idp.example.com/", "must not end with a trailing slash"},
+		{"https://idp.example.com?x=1", "must not carry a query"},
+		{"https://IDP.example.com", "host must be lowercase"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.issuer, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(op.WithIssuer(tc.issuer), op.WithStore(stubStore{}))
+			if !errors.Is(err, op.ErrIssuerInvalid) {
+				t.Fatalf("op.New(%q): want ErrIssuerInvalid, got %v", tc.issuer, err)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, strconv.Quote(tc.issuer)) || !strings.Contains(msg, tc.reason) {
+				t.Fatalf("op.New(%q) = %q, want the quoted value and %q", tc.issuer, msg, tc.reason)
+			}
+			if strings.Contains(msg, "discovery:") {
+				t.Fatalf("op.New(%q) = %q, leaks the internal package prefix", tc.issuer, msg)
 			}
 		})
 	}
