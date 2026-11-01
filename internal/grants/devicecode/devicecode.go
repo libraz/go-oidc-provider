@@ -5,14 +5,15 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/grants/pollgrant"
-	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// grantTypeWire is the RFC 8628 §3.4 grant_type wire string.
-//
-//nolint:gochecknoglobals // derived once from op/grant, the single source of the wire form.
-var grantTypeWire = grant.DeviceCode.String()
+// grantTypeWire is the RFC 8628 §3.4 grant_type wire string. It is
+// duplicated here (rather than imported from op/grant) so the
+// authorization layer stays free of the public op/ namespace; the
+// constant matches op/grant.DeviceCode.String() by construction
+// and is covered by a compile-time assertion in the test suite.
+const grantTypeWire = "urn:ietf:params:oauth:grant-type:device_code"
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
 //

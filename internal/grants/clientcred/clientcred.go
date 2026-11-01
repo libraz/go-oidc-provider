@@ -5,14 +5,15 @@ import (
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
-	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// grantTypeWire is the RFC 6749 §4.4 grant_type wire string.
-//
-//nolint:gochecknoglobals // derived once from op/grant, the single source of the wire form.
-var grantTypeWire = grant.ClientCredentials.String()
+// grantTypeWire is the RFC 6749 §4.4 grant_type wire string. It is
+// duplicated here (rather than imported from op/grant) so the
+// authorization layer stays free of the public op/ namespace; the
+// constant matches op/grant.ClientCredentials.String() by construction
+// and is covered by a compile-time assertion in the test suite.
+const grantTypeWire = "client_credentials"
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
 //

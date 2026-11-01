@@ -23,7 +23,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
-	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -69,19 +68,17 @@ const (
 )
 
 // The wire grant_type values the built-in handlers implement. They are
-// named values because three separate gates key on them — dispatch,
+// named constants because three separate gates key on them — dispatch,
 // the Provider-level enabled-grant set, and the per-client
 // [store.Client.GrantTypes] check — and a literal that drifts in one of
 // them fails open rather than loudly.
-//
-//nolint:gochecknoglobals // derived once from op/grant, the single source of the wire form.
-var (
-	grantTypeAuthorizationCode = grant.AuthorizationCode.String()
-	grantTypeRefreshToken      = grant.RefreshToken.String()
-	grantTypeClientCredentials = grant.ClientCredentials.String()
-	grantTypeDeviceCode        = grant.DeviceCode.String()
-	grantTypeCIBA              = grant.CIBA.String()
-	grantTypeJWTBearer         = grant.JWTBearer.String()
+const (
+	grantTypeAuthorizationCode = "authorization_code"
+	grantTypeRefreshToken      = "refresh_token"
+	grantTypeClientCredentials = "client_credentials"
+	grantTypeDeviceCode        = "urn:ietf:params:oauth:grant-type:device_code"
+	grantTypeCIBA              = "urn:openid:params:grant-type:ciba"
+	grantTypeJWTBearer         = "urn:ietf:params:oauth:grant-type:jwt-bearer" //nolint:gosec // G101: grant type URN, not a credential.
 )
 
 // grantEnabled reports whether the Provider accepts grantType. A nil

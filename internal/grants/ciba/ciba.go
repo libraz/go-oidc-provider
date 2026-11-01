@@ -5,14 +5,15 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/grants/pollgrant"
-	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// grantTypeWire is the CIBA Core §11 grant_type wire string.
-//
-//nolint:gochecknoglobals // derived once from op/grant, the single source of the wire form.
-var grantTypeWire = grant.CIBA.String()
+// grantTypeWire is the CIBA Core §11 grant_type wire string. It is
+// duplicated here (rather than imported from op/grant) so the
+// authorization layer stays free of the public op/ namespace; the
+// constant matches op/grant.CIBA.String() by construction and is
+// covered by a compile-time assertion in the test suite.
+const grantTypeWire = "urn:openid:params:grant-type:ciba"
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
 //
