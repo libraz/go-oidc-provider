@@ -3,7 +3,8 @@
 // [github.com/libraz/go-oidc-provider/op/store] against a [database/sql]
 // handle, supports SQLite, MySQL 8.0+ and PostgreSQL 14+, and is
 // published as a sub-module so its driver dependencies do not bleed
-// into the host module's go.sum.
+// into the host module's go.sum. The package is named oidcsql rather
+// than after its directory so it does not shadow [database/sql].
 //
 // # Backends
 //
@@ -42,8 +43,10 @@
 // the migration files under schema/migrations/<dialect>, one per release in
 // golang-migrate form, which [Store.Migrations] returns with any
 // [WithNaming] overrides applied; schema/MIGRATIONS.md explains each
-// release. schema/TABLES.md lists what each table holds and when the OP
-// uses it; a table whose feature is not configured stays empty.
+// release. schema/TABLES.md lists what each table holds, when op.New checks
+// it, and why a few tables must exist even while they stay empty. Run
+// against an empty database, op.New names every table the configuration
+// needs in one error.
 //
 // # Naming overrides
 //

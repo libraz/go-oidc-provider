@@ -3,14 +3,16 @@
 <!-- Generated from tables.go by TestTablesDoc; regenerate with `go test -run TestTablesDoc -update .` in op/storeadapter/sql. -->
 
 `op.New` checks, at construction, the tables the configuration uses (the
-"Checked when" column) and names any that are missing. `Store.ValidateSchema`
-checks every table, for a deploy gate. A table whose condition your
-configuration does not meet need not exist. `WithNaming` renames a table
-through its key; the columns are fixed. Your own users table needs no new
-column when it already has an opaque identifier that is assigned once and never
-reused: the OP only needs that subject from it, through a `store.UserStore`. A
-table keyed only by an auto-increment id or an email address adds one such
-column.
+"Checked when" column) and names any that are missing. Run against an empty
+database, its error lists every table your configuration needs in one pass.
+`Store.ValidateSchema` checks every table, for a deploy gate. A table whose
+condition your configuration does not meet need not exist. A table checked
+always must exist even while it stays empty; its row says what reaches it.
+`WithNaming` renames a table through its key; the columns are fixed. Your own
+users table needs no new column when it already has an opaque identifier that
+is assigned once and never reused: the OP only needs that subject from it,
+through a `store.UserStore`. A table keyed only by an auto-increment id or an
+email address adds one such column.
 
 The default configuration (the `authorization_code` and `refresh_token`
 grants, password login against your own user store, every other option at its
@@ -25,19 +27,19 @@ an existing database applies the matching file under `migrations/<dialect>`.
 | `oidc_clients` | `clients` | Client registrations and their secret hashes. | Always. | Always read. Written by `op.WithStaticClients`, dynamic registration, and your own client management. |
 | `oidc_authorization_codes` | `authorization_codes` | Authorization codes awaiting redemption, with the authentication context they were issued under. | The `authorization_code` grant is enabled. | The `authorization_code` grant is enabled. |
 | `oidc_refresh_tokens` | `refresh_tokens` | Refresh-token rotation chains and the response a retried rotation replays. | The `refresh_token` grant is enabled. | The `refresh_token` grant is enabled. |
-| `oidc_access_tokens` | `access_tokens` | JTI registry of issued JWT access tokens. | Always. | `op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry)`. |
-| `oidc_opaque_access_tokens` | `opaque_access_tokens` | Opaque access tokens and the claims introspection returns for them. | Always. | An opaque format is configured through `op.WithAccessTokenFormat` or `op.WithAccessTokenFormatPerAudience`. |
-| `oidc_grant_revocations` | `grant_revocations` | Grant tombstones that invalidate a revoked grant's JWT access tokens. | Always. | The default `RevocationStrategyGrantTombstone`, when a grant or its access tokens are revoked. |
-| `oidc_revoked_jtis` | `revoked_jtis` | Individually revoked JWT access-token identifiers. | Always. | The default `RevocationStrategyGrantTombstone`, when `/revocation` revokes a JWT access token. |
-| `oidc_grants` | `grants` | The consented grant (client, subject, scopes) that codes and refresh tokens hang off. | Always. | Any grant other than `client_credentials`. |
+| `oidc_access_tokens` | `access_tokens` | JTI registry of issued JWT access tokens. | Always: verifying a JWT access token issued without a grant, such as a `client_credentials` one, reads it, and deleting a client clears it. | `op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry)`. |
+| `oidc_opaque_access_tokens` | `opaque_access_tokens` | Opaque access tokens and the claims introspection returns for them. | Always: `/revocation` looks every presented token up in it and the revocation cascade clears it, so tokens issued before a format change stay revocable. | An opaque format is configured through `op.WithAccessTokenFormat` or `op.WithAccessTokenFormatPerAudience`. |
+| `oidc_grant_revocations` | `grant_revocations` | Grant tombstones that invalidate a revoked grant's JWT access tokens. | Always: under the default revocation strategy, every authorization-code and refresh-token redemption and every JWT access-token check reads it. | The default `RevocationStrategyGrantTombstone`, when a grant or its access tokens are revoked. |
+| `oidc_revoked_jtis` | `revoked_jtis` | Individually revoked JWT access-token identifiers. | Always: under the default revocation strategy, every JWT access-token check reads it. | The default `RevocationStrategyGrantTombstone`, when `/revocation` revokes a JWT access token. |
+| `oidc_grants` | `grants` | The consented grant (client, subject, scopes) that codes and refresh tokens hang off. | Always: `op.New` reads it at construction. | Any grant other than `client_credentials`. |
 | `oidc_sessions` | `sessions` | Browser login sessions and their chooser groups. | The `authorization_code` grant is enabled, so logins run through `/auth`. | A browser login runs through `/auth`. |
 | `oidc_par_records` | `par_records` | Pushed authorization requests until their `request_uri` is redeemed. | `feature.PAR` is enabled. | `feature.PAR` is enabled. |
 | `oidc_interactions` | `interactions` | In-progress login and consent interactions. | The `authorization_code` grant is enabled, so logins run through `/auth`. | A browser login runs through `/auth`. |
-| `oidc_consumed_jtis` | `consumed_jtis` | Replay markers for request objects, client assertions and DPoP proofs. | Always. | A client sends a JAR request object, a `private_key_jwt` assertion, or a DPoP proof. |
+| `oidc_consumed_jtis` | `consumed_jtis` | Replay markers for request objects, client assertions and DPoP proofs. | Always: whether a client sends a request object, a `private_key_jwt` assertion or a DPoP proof is the client's choice, not the configuration's. | A client sends a JAR request object, a `private_key_jwt` assertion, or a DPoP proof. |
 | `oidc_users` | `users` | The adapter's own user records: subject, claims, optional username and password hash. | The user store is this adapter's: neither `op.WithUserStore` nor `PrimaryPassword.Store` names another. | Read only when neither `op.WithUserStore` nor `PrimaryPassword.Store` supplies another user store; with your own user store it stays empty. The OP writes it only to rehash a legacy password when it is `PrimaryPassword.Store`. |
 | `oidc_initial_access_tokens` | `initial_access_tokens` | Initial access tokens that authorize dynamic client registration. | `op.WithDynamicRegistration` is set. | `op.WithDynamicRegistration`. |
 | `oidc_registration_access_tokens` | `registration_access_tokens` | Registration access tokens for RFC 7592 client management. | `op.WithDynamicRegistration` is set. | `op.WithDynamicRegistration`. |
-| `oidc_op_metadata` | `op_metadata` | OP-internal markers, such as the subject mode the pairwise gate pins. | Always. | Always: `op.New` reads and writes it at construction. |
+| `oidc_op_metadata` | `op_metadata` | OP-internal markers, such as the subject mode the pairwise gate pins. | Always: `op.New` reads it at construction. | `op.New` reads and writes it at construction. |
 | `oidc_device_codes` | `device_codes` | RFC 8628 device authorization records. | The `device_code` grant is enabled or `op.WithDeviceCodeGrant` is set. | The `device_code` grant is enabled. |
 | `oidc_ciba_requests` | `ciba_requests` | CIBA backchannel authentication requests. | The CIBA grant is enabled or `op.WithCIBA` is set. | `op.WithCIBA`. |
 | `oidc_totp_secrets` | `totp_secrets` | Encrypted TOTP secrets. | The login flow has an `op.StepTOTP` backed by `Store.TOTPs()`. | `Store.TOTPs()` is passed to `op.StepTOTP`. |

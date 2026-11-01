@@ -17,6 +17,12 @@ type tableInfo struct {
 //nolint:gochecknoglobals,gosec // documentation table; read-only. G101: grant names, not credentials.
 var checkedWhen = map[string]string{
 	"always":                   "Always",
+	"always:construction":      "Always: `op.New` reads it at construction",
+	"always:jti-registry":      "Always: verifying a JWT access token issued without a grant, such as a `client_credentials` one, reads it, and deleting a client clears it",
+	"always:opaque":            "Always: `/revocation` looks every presented token up in it and the revocation cascade clears it, so tokens issued before a format change stay revocable",
+	"always:tombstone":         "Always: under the default revocation strategy, every authorization-code and refresh-token redemption and every JWT access-token check reads it",
+	"always:denylist":          "Always: under the default revocation strategy, every JWT access-token check reads it",
+	"always:client-jti":        "Always: whether a client sends a request object, a `private_key_jwt` assertion or a DPoP proof is the client's choice, not the configuration's",
 	"grant:authorization_code": "The `authorization_code` grant is enabled",
 	"grant:refresh_token":      "The `refresh_token` grant is enabled",
 	"authorize":                "The `authorization_code` grant is enabled, so logins run through `/auth`",
@@ -91,23 +97,23 @@ var tableCatalog = []tableInfo{
 	},
 	{
 		"access_tokens", "AccessTokens", "JTI registry of issued JWT access tokens.",
-		"`op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry)`.", "always",
+		"`op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry)`.", "always:jti-registry",
 	},
 	{
 		"opaque_access_tokens", "OpaqueAccessTokens", "Opaque access tokens and the claims introspection returns for them.",
-		"An opaque format is configured through `op.WithAccessTokenFormat` or `op.WithAccessTokenFormatPerAudience`.", "always",
+		"An opaque format is configured through `op.WithAccessTokenFormat` or `op.WithAccessTokenFormatPerAudience`.", "always:opaque",
 	},
 	{
 		"grant_revocations", "GrantRevocations", "Grant tombstones that invalidate a revoked grant's JWT access tokens.",
-		"The default `RevocationStrategyGrantTombstone`, when a grant or its access tokens are revoked.", "always",
+		"The default `RevocationStrategyGrantTombstone`, when a grant or its access tokens are revoked.", "always:tombstone",
 	},
 	{
 		"revoked_jtis", "GrantRevocations", "Individually revoked JWT access-token identifiers.",
-		"The default `RevocationStrategyGrantTombstone`, when `/revocation` revokes a JWT access token.", "always",
+		"The default `RevocationStrategyGrantTombstone`, when `/revocation` revokes a JWT access token.", "always:denylist",
 	},
 	{
 		"grants", "Grants", "The consented grant (client, subject, scopes) that codes and refresh tokens hang off.",
-		"Any grant other than `client_credentials`.", "always",
+		"Any grant other than `client_credentials`.", "always:construction",
 	},
 	{
 		"sessions", "Sessions", "Browser login sessions and their chooser groups.",
@@ -123,7 +129,7 @@ var tableCatalog = []tableInfo{
 	},
 	{
 		"consumed_jtis", "ConsumedJTIs", "Replay markers for request objects, client assertions and DPoP proofs.",
-		"A client sends a JAR request object, a `private_key_jwt` assertion, or a DPoP proof.", "always",
+		"A client sends a JAR request object, a `private_key_jwt` assertion, or a DPoP proof.", "always:client-jti",
 	},
 	{
 		"users", "Users", "The adapter's own user records: subject, claims, optional username and password hash.",
@@ -139,7 +145,7 @@ var tableCatalog = []tableInfo{
 	},
 	{
 		"op_metadata", "Metadata", "OP-internal markers, such as the subject mode the pairwise gate pins.",
-		"Always: `op.New` reads and writes it at construction.", "always",
+		"`op.New` reads and writes it at construction.", "always:construction",
 	},
 	{
 		"device_codes", "DeviceCodes", "RFC 8628 device authorization records.",
