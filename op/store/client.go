@@ -462,9 +462,28 @@ func StaticClientEquivalent(a, b *Client) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	left := normalizedStaticClient(*a)
-	right := normalizedStaticClient(*b)
-	return reflect.DeepEqual(left, right)
+	return len(StaticClientDifferences(a, b)) == 0
+}
+
+// StaticClientDifferences names, in [Client] declaration order, the fields
+// in which two non-nil static-client records differ under the comparison
+// [StaticClientEquivalent] applies. It returns nil when they are equivalent
+// and when either record is nil.
+//
+// Stable since v1.5.
+func StaticClientDifferences(a, b *Client) []string {
+	if a == nil || b == nil {
+		return nil
+	}
+	left := reflect.ValueOf(normalizedStaticClient(*a))
+	right := reflect.ValueOf(normalizedStaticClient(*b))
+	var fields []string
+	for i := range left.NumField() {
+		if !reflect.DeepEqual(left.Field(i).Interface(), right.Field(i).Interface()) {
+			fields = append(fields, left.Type().Field(i).Name)
+		}
+	}
+	return fields
 }
 
 func normalizedStaticClient(client Client) Client {

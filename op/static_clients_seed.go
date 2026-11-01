@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -59,7 +60,8 @@ func normalizeStaticClientSeed(
 		}
 	}
 	if existing.Source != "" && existing.Source != store.ClientSourceStatic {
-		return nil, staticClientConflict(desired.ID)
+		return nil, staticClientConflict(desired.ID, "is stored as a "+string(existing.Source)+
+			" client, which a static seed never replaces; seed a different client ID")
 	}
 	if existing.Source == "" {
 		desired.Source = ""
@@ -67,7 +69,8 @@ func normalizeStaticClientSeed(
 	secrets := cfg.staticClientSecrets[desired.ID]
 	if plaintext := secrets.current; plaintext != "" {
 		if err := (&clientauth.Argon2id{}).Verify(plaintext, existing.SecretHash); err != nil {
-			return nil, staticClientConflict(desired.ID)
+			return nil, staticClientConflict(desired.ID, "has a stored secret hash that the seeded Secret does not verify against; "+
+				"apply the new secret with op.SyncStaticClients before starting")
 		}
 		desired.SecretHash = existing.SecretHash
 	}
@@ -76,16 +79,19 @@ func normalizeStaticClientSeed(
 			desired.PreviousSecretHash = hash
 		}
 	}
-	if !store.StaticClientEquivalent(existing, &desired) {
-		return nil, staticClientConflict(desired.ID)
+	if diff := store.StaticClientDifferences(existing, &desired); len(diff) > 0 {
+		return nil, staticClientConflict(desired.ID, "differs from its static seed in "+strings.Join(diff, ", ")+
+			"; apply the change with op.SyncStaticClients before starting")
 	}
 	return &desired, nil
 }
 
-func staticClientConflict(id string) error {
+// staticClientConflict reports a stored client the seed cannot take over;
+// reason states the cause and the remedy.
+func staticClientConflict(id, reason string) error {
 	return &Error{
 		Code:        codeConfiguration,
-		Description: "WithStaticClients: stored client " + id + " differs from the configured static seed",
+		Description: "WithStaticClients: stored client " + id + " " + reason,
 		Cause:       store.ErrConflict,
 	}
 }

@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -46,4 +47,21 @@ func TestStaticClientEquivalent_PreviousSecretExpiryNormalized(t *testing.T) {
 			t.Fatal("clients with different previous hashes compared equal")
 		}
 	})
+}
+
+func TestStaticClientDifferences_NamesChangedFieldsInOrder(t *testing.T) {
+	t.Parallel()
+
+	stored := &store.Client{ID: "c", RedirectURIs: []string{"https://a/cb"}, Scopes: []string{"openid"}}
+	seed := &store.Client{ID: "c", RedirectURIs: []string{"https://b/cb"}, Scopes: []string{"openid", "email"}, Contacts: []string{}}
+	got := store.StaticClientDifferences(stored, seed)
+	if want := []string{"RedirectURIs", "Scopes"}; !slices.Equal(got, want) {
+		t.Fatalf("differences=%v want %v (an empty Contacts slice must equal nil)", got, want)
+	}
+	if diff := store.StaticClientDifferences(stored, stored.Clone()); diff != nil {
+		t.Errorf("identical records differ in %v", diff)
+	}
+	if diff := store.StaticClientDifferences(nil, seed); diff != nil {
+		t.Errorf("nil record differences=%v want nil", diff)
+	}
 }

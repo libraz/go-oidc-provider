@@ -544,7 +544,10 @@ issuer.
 
 - `op.SyncStaticClients` inserts or updates static clients in a store from
   a list of seeds, for use from a deploy job or an admin command. It never
-  deletes a client and never touches one that is not static.
+  deletes a client and never touches one that is not static. When `op.New`
+  refuses a static seed that differs from the stored client, the error names
+  the differing fields and points at `op.SyncStaticClients`;
+  `store.StaticClientDifferences` lists those fields for a custom backend.
 
 - `cmd/op-client-secret` generates a client secret and its stored hash, or
   an Argon2id hash for a plaintext read from standard input.

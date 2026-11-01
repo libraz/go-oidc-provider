@@ -3,6 +3,7 @@ package op_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -77,6 +78,7 @@ func TestWithStaticClients_DifferentStoredRecordConflicts(t *testing.T) {
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("changed static seed error=%v want ErrConflict", err)
 	}
+	assertErrorMentions(t, err, "differs from its static seed in Scopes;", "op.SyncStaticClients")
 	got, err := st.GetClient(context.Background(), "stable-client")
 	if err != nil {
 		t.Fatalf("GetClient: %v", err)
@@ -118,6 +120,7 @@ func TestWithStaticClients_NonStaticStoredRecordConflicts(t *testing.T) {
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("static seed over dynamic record error=%v want ErrConflict", err)
 	}
+	assertErrorMentions(t, err, "is stored as a dynamic client")
 	got, err := st.GetClient(context.Background(), existing.ID)
 	if err != nil {
 		t.Fatalf("GetClient: %v", err)
@@ -154,9 +157,11 @@ func TestWithStaticClients_DifferentSecretConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetClient before conflict: %v", err)
 	}
-	if err := build("rotated-secret"); !errors.Is(err, store.ErrConflict) {
+	err = build("rotated-secret")
+	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("rotated secret error=%v want ErrConflict", err)
 	}
+	assertErrorMentions(t, err, "does not verify", "op.SyncStaticClients")
 	after, err := st.GetClient(context.Background(), "secret-client")
 	if err != nil {
 		t.Fatalf("GetClient after conflict: %v", err)
@@ -364,3 +369,13 @@ func (s *nthFailureStaticClientStore) ReconcileStaticClients(
 }
 
 var _ store.StaticClientReconciler = (*nthFailureStaticClientStore)(nil)
+
+// assertErrorMentions fails unless err's message carries every fragment.
+func assertErrorMentions(t *testing.T, err error, fragments ...string) {
+	t.Helper()
+	for _, f := range fragments {
+		if !strings.Contains(err.Error(), f) {
+			t.Errorf("error %q does not mention %q", err, f)
+		}
+	}
+}
