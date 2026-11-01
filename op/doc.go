@@ -18,10 +18,12 @@
 // complete set is generated from those markers into api/experimental.txt and
 // diffed by the build, so the exemption cannot grow without the diff showing
 // it. Everything absent from that file is stable. The exempt surface today is
-// Grant Management ([GrantManagementAction] and [WithGrantManagement]) and the
-// ID-JAG profile of the JWT bearer grant together with ID-JAG issuance through
-// token exchange: each tracks an external IETF draft whose wire shape may
-// still change, so its stability is not this library's to promise.
+// Grant Management ([GrantManagementAction] and [WithGrantManagement]), Client
+// ID Metadata Documents ([WithClientIDMetadataDocuments]), the ID-JAG profile
+// of the JWT bearer grant together with ID-JAG issuance through token
+// exchange, and the RISC event types ([AccountDisabled] and its siblings)
+// delivered through Shared Signals: each tracks an external draft whose wire
+// shape may still change, so its stability is not this library's to promise.
 //
 // # Quickstart
 //
