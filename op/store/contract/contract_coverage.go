@@ -70,6 +70,7 @@ var allStoreInterfaces = []reflect.Type{
 	typeOf[store.RefreshTokenStore](),
 	typeOf[store.RegistrationAccessTokenStore](),
 	typeOf[store.RevokeByClient](),
+	typeOf[store.SchemaValidator](),
 	typeOf[store.SessionDurabilityReporter](),
 	typeOf[store.SessionStore](),
 	typeOf[store.SharedSignalsStore](),
