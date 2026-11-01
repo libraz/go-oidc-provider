@@ -190,6 +190,23 @@ issuer.
 
 ### Changed
 
+- The SQL adapter's schema check, at `op.New` and in `Store.ValidateSchema`,
+  now requires every column the reference DDL declares on every table it
+  checks. It used to check only the refresh-token table in full and, on the
+  others, the columns a later release added, so a hand-made table missing an
+  original column started and then failed its first request with a 500.
+  Columns an embedder added are still allowed. When a table is missing, the
+  error ends with one line saying how to create it.
+
+- An authorization-code OP that declares no profile requiring PKCE logs one
+  warning at `op.New`: a confidential client may then redeem a code without
+  PKCE. `op.WithProfile(profile.Baseline)` silences it; behaviour is
+  unchanged.
+
+- An invalid issuer is reported with the value and the rule it broke, such as
+  `issuer "https://idp.example.com/": must not end with a trailing slash`.
+  `errors.Is(err, op.ErrIssuerInvalid)` still matches.
+
 - `op.New` checks, at construction, the schema of every store the
   configuration uses and fails naming the missing table. With the SQL
   adapter only the tables the configuration uses must exist: 13 for the
@@ -400,6 +417,13 @@ issuer.
   subject mapping to `op.WithJWTBearerGrant`.
 
 ### Added
+
+- `op.AuditRedirectURIMismatch` is emitted when `/authorize` receives an
+  unregistered `redirect_uri` and when the token endpoint receives one that
+  differs from the authorization request, with `endpoint` and the presented
+  `redirect_uri` in its extras. `op.AuditPKCEViolation` is emitted when a
+  `code_verifier` fails at the token endpoint, with a `reason`. Both were
+  reserved vocabulary the OP never emitted. The wire responses are unchanged.
 
 - `store.SchemaValidator` is an optional interface for a store that can
   check its own schema. `op.New` calls it on every store the configuration
@@ -777,6 +801,11 @@ covered by the SemVer promise.
   so these four event types are outside the SemVer promise.
 
 ### Fixed
+
+- A 500 from the authorization or interaction endpoint, for example a store
+  error during login, now logs its cause at ERROR on the `op.WithLogger`
+  logger. The cause used to be discarded, leaving a `server_error` with
+  nothing to trace it by. The wire response is unchanged.
 
 - When a refresh-token replay is detected but the store fails to return the
   replayed record, the `refresh.chain_revoke_failed` audit event carries the
