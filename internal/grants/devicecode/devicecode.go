@@ -10,6 +10,8 @@ import (
 )
 
 // grantTypeWire is the RFC 8628 §3.4 grant_type wire string.
+//
+//nolint:gochecknoglobals // derived once from op/grant, the single source of the wire form.
 var grantTypeWire = grant.DeviceCode.String()
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:

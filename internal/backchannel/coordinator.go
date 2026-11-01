@@ -380,8 +380,6 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 // open for DefaultMaxTargets / DefaultMaxConcurrentDeliveries waves of the
 // per-RP timeout. Targets still pending when the budget elapses fail with
 // the context error and are audited as failures.
-//
-//nolint:gocognit // This linear target build retains every skip and audit reason beside its condition.
 func (c *Coordinator) NotifyClientDeleted(ctx context.Context, snapshot ClientDeletionSnapshot) (int, error) {
 	if snapshot.Client == nil {
 		return 0, errors.New("backchannel: ClientDeletionSnapshot.Client is nil")
@@ -601,8 +599,6 @@ func (c *Coordinator) emitOverflow(ctx context.Context, notice Notice, nextCurso
 //   - BackchannelLogoutSessionRequired is false. New registrations with
 //     true are rejected; skipping legacy rows avoids issuing a sub-only
 //     token to a client that explicitly requires sid.
-//
-//nolint:gocognit // Target resolution is intentionally linear to keep skip reasons local.
 func (c *Coordinator) resolveTargets(
 	ctx context.Context,
 	clientIDs []string,

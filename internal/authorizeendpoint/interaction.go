@@ -152,8 +152,6 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 // the access_denied redirect when a redirect target is available;
 // otherwise it returns 204 so the SPA can treat the call as a
 // best-effort cancel.
-//
-//nolint:gocognit // The validation and conflict branches preserve the protocol's response distinctions.
 func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
 	rec, state, ok := admitInteractionWrite(w, r, deps, uid)
 	if !ok {

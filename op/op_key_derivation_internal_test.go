@@ -14,6 +14,7 @@ func hmacLabel(label string, key []byte) []byte {
 }
 
 func TestKeyDerivationMatchesHMACOfLabel(t *testing.T) {
+	t.Parallel()
 	cur := bytes.Repeat([]byte{1}, 32)
 	prev := bytes.Repeat([]byte{2}, 32)
 	rings := []struct {

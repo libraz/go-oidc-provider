@@ -188,6 +188,8 @@ func pollWalk(
 			devicecode.PollDecisionEmit,
 			devicecode.PollDecisionInvalid:
 			// The bar is unchanged; the device keeps its current timer.
+		case pollinterval.OutcomeConsumed:
+			panic("device-code poll reported the CIBA-only consumed outcome")
 		}
 		if decision.CountThisAsViolation {
 			out.violations++

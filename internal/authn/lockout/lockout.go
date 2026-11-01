@@ -193,12 +193,12 @@ type Status struct {
 // reports whether the caller needs a usable CAS version.
 func (c *Counter) read(ctx context.Context, subject string, version bool) (*store.AuthnLockoutRecord, error) {
 	if subject == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // no subject means no record, which is a valid state.
 	}
 	rec, err := c.store.Get(ctx, subject)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // an absent record is a valid state.
 		}
 		return nil, err
 	}

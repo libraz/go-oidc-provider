@@ -465,25 +465,27 @@ const (
 
 // CIBA events. Fire from the /bc-authorize endpoint, the embedder's
 // authentication-device interaction, and the token-endpoint CIBA grant.
-//
-// AuditCIBAAuthDeviceApproved and AuditCIBAAuthDeviceDenied are the
-// exception: the OP never emits them. The approval and denial
-// transitions are made by the embedder calling
-// store.CIBARequestStore.Approve / Deny directly, and no library code
-// path sits between that call and the store, so there is nowhere for
-// the OP to observe the decision. The names are reserved so a
-// deployment raising them from its own authentication device lands in
-// the same vocabulary as the events the OP does raise for the request.
 const (
 	AuditCIBAAuthorizationIssued          = AuditEvent(auditevent.AuditCIBAAuthorizationIssued)
 	AuditCIBAAuthorizationRejected        = AuditEvent(auditevent.AuditCIBAAuthorizationRejected)
 	AuditCIBAAuthorizationUnboundRejected = AuditEvent(auditevent.AuditCIBAAuthorizationUnboundRejected)
-	AuditCIBAAuthDeviceApproved           = AuditEvent(auditevent.AuditCIBAAuthDeviceApproved)
-	AuditCIBAAuthDeviceDenied             = AuditEvent(auditevent.AuditCIBAAuthDeviceDenied)
-	AuditCIBAPollAbuseLockout             = AuditEvent(auditevent.AuditCIBAPollAbuseLockout)
-	AuditCIBATokenIssued                  = AuditEvent(auditevent.AuditCIBATokenIssued)
-	AuditCIBATokenRejected                = AuditEvent(auditevent.AuditCIBATokenRejected)
-	AuditCIBATokenSlowDown                = AuditEvent(auditevent.AuditCIBATokenSlowDown)
+
+	// Reserved vocabulary: the library never emits
+	// AuditCIBAAuthDeviceApproved or AuditCIBAAuthDeviceDenied. The
+	// approval and denial transitions are made by the embedder calling
+	// store.CIBARequestStore.Approve / Deny directly, and no library code
+	// path sits between that call and the store, so there is nowhere for
+	// the OP to observe the decision. The names are reserved so a
+	// deployment raising them from its own authentication device lands in
+	// the same vocabulary as the events the OP does raise for the request.
+	AuditCIBAAuthDeviceApproved = AuditEvent(auditevent.AuditCIBAAuthDeviceApproved)
+	AuditCIBAAuthDeviceDenied   = AuditEvent(auditevent.AuditCIBAAuthDeviceDenied)
+
+	// Token-endpoint CIBA grant outcomes.
+	AuditCIBAPollAbuseLockout = AuditEvent(auditevent.AuditCIBAPollAbuseLockout)
+	AuditCIBATokenIssued      = AuditEvent(auditevent.AuditCIBATokenIssued)
+	AuditCIBATokenRejected    = AuditEvent(auditevent.AuditCIBATokenRejected)
+	AuditCIBATokenSlowDown    = AuditEvent(auditevent.AuditCIBATokenSlowDown)
 
 	// AuditCIBAPollObservationFailed fires when the token-endpoint
 	// CIBA grant observed a substore fault while persisting the

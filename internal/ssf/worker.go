@@ -39,6 +39,8 @@ const workerMaxErrCodeLen = 64
 
 // workerBackoff is the delay before retry n+1 after n failed pushes; one
 // entry per retry. Each delay is jittered by ±workerJitterPct%.
+//
+//nolint:gochecknoglobals // immutable retry schedule.
 var workerBackoff = [workerMaxRetries]time.Duration{time.Minute, 5 * time.Minute, 25 * time.Minute, 2 * time.Hour}
 
 // workerMaxRetries is the retry budget after the first push.

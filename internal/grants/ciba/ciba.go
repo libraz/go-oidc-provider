@@ -10,6 +10,8 @@ import (
 )
 
 // grantTypeWire is the CIBA Core §11 grant_type wire string.
+//
+//nolint:gochecknoglobals // derived once from op/grant, the single source of the wire form.
 var grantTypeWire = grant.CIBA.String()
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:

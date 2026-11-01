@@ -414,10 +414,10 @@ func TestDiscoverSkipStubsIgnoresFixtureTrees(t *testing.T) {
 	if err := os.MkdirAll(fixture, 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	const real = "package p\n\nimport \"testing\"\n\nfunc TestScenario_AAA_001_Real(t *testing.T) { t.Skip(\"pending\") }\n"
+	const inSuite = "package p\n\nimport \"testing\"\n\nfunc TestScenario_AAA_001_Real(t *testing.T) { t.Skip(\"pending\") }\n"
 	const decoy = "package p\n\nimport \"testing\"\n\nfunc TestScenario_BBB_001_Decoy(t *testing.T) { t.Skip(\"pending\") }\n"
 	for path, src := range map[string]string{
-		filepath.Join(dir, "pkg", "real_test.go"): real,
+		filepath.Join(dir, "pkg", "real_test.go"): inSuite,
 		filepath.Join(fixture, "decoy_test.go"):   decoy,
 	} {
 		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {

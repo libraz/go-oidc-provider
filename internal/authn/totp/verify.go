@@ -100,6 +100,8 @@ var (
 
 // lockoutErrs maps the cross-factor counter's verdicts onto this
 // package's sentinels.
+//
+//nolint:gochecknoglobals // immutable sentinel mapping.
 var lockoutErrs = lockout.FactorErrors{
 	Name:          "totp",
 	Locked:        ErrLocked,

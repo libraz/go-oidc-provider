@@ -73,6 +73,8 @@ const (
 // the Provider-level enabled-grant set, and the per-client
 // [store.Client.GrantTypes] check — and a literal that drifts in one of
 // them fails open rather than loudly.
+//
+//nolint:gochecknoglobals // derived once from op/grant, the single source of the wire form.
 var (
 	grantTypeAuthorizationCode = grant.AuthorizationCode.String()
 	grantTypeRefreshToken      = grant.RefreshToken.String()

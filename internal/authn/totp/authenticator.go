@@ -182,8 +182,6 @@ func attemptsRemaining(rec *store.TOTPRecord, shared int, now time.Time) int {
 //   - On [OutcomeLocked] / [OutcomeResetRequired]: the matching error
 //     is returned so the orchestrator stops the chain. The persisted
 //     record carries the lockout stamp.
-//
-//nolint:gocognit,cyclop // verify path enumerates lockout / replay / window branches in flat shape; refactor would obscure spec mapping.
 func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired

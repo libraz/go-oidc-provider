@@ -166,10 +166,7 @@ func preparePolledResponse(
 	var accessToken, idToken, refreshToken string
 	defer func() {
 		if err != nil {
-			cleanupPreparedCredentials(ctx, deps, accessToken, refreshToken, format == store.AccessTokenFormatOpaque)
-			if opt.DiscardGrantOnFailure {
-				discardGrant(ctx, deps, grantID)
-			}
+			rollbackPolledResponse(ctx, deps, opt, grantID, accessToken, refreshToken, format)
 		}
 	}()
 	// A zero auth_time means the substore kept none; the id_token then omits
@@ -306,4 +303,20 @@ func derefTime(t *time.Time) time.Time {
 		return time.Time{}
 	}
 	return *t
+}
+
+// rollbackPolledResponse undoes the credentials a failed
+// [preparePolledResponse] already minted and, when opt asks for it, the
+// grant it wrote.
+func rollbackPolledResponse(
+	ctx context.Context,
+	deps Deps,
+	opt polledIssuance,
+	grantID, accessToken, refreshToken string,
+	format store.AccessTokenFormat,
+) {
+	cleanupPreparedCredentials(ctx, deps, accessToken, refreshToken, format == store.AccessTokenFormatOpaque)
+	if opt.DiscardGrantOnFailure {
+		discardGrant(ctx, deps, grantID)
+	}
 }

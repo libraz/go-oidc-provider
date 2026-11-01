@@ -11,10 +11,11 @@ import (
 type denyAllExchange struct{}
 
 func (denyAllExchange) Allow(context.Context, TokenExchangeRequest) (*TokenExchangeDecision, error) {
-	return nil, nil
+	return nil, errors.New("denied")
 }
 
 func TestBuildExtensionDispatcherSurfacesHandlerConstructionError(t *testing.T) {
+	t.Parallel()
 	cfg := &config{issuer: "https://op.example.com", store: inmem.New(), tokenExchangePolicy: denyAllExchange{}}
 	d, err := buildExtensionDispatcher(cfg, nil, cfg.effectiveAuditEmitter())
 	if err == nil {

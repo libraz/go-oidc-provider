@@ -278,7 +278,7 @@ func (a *Authenticator) verifyCandidate(ctx context.Context, hash []byte, candid
 }
 
 // argon2idPrefix opens every argon2id PHC string.
-var argon2idPrefix = []byte("$argon2id$")
+const argon2idPrefix = "$argon2id$"
 
 // verifyOutcome is a candidate check's result: the legacy scheme that
 // verified (nil on the argon2id path) and the mismatch or invalid-hash
@@ -291,7 +291,7 @@ type verifyOutcome struct {
 // legacySchemeFor returns the first configured scheme that recognizes
 // hash, or nil when hash is an argon2id PHC or no scheme claims it.
 func (a *Authenticator) legacySchemeFor(hash []byte) LegacyScheme { //nolint:ireturn // the scheme is the embedder-supplied interface value.
-	if bytes.HasPrefix(hash, argon2idPrefix) {
+	if bytes.HasPrefix(hash, []byte(argon2idPrefix)) {
 		return nil
 	}
 	for _, s := range a.legacy {

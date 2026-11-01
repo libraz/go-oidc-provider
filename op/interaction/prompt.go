@@ -519,7 +519,7 @@ const (
 	// PromptTypeEmailOTPVerify backs [EmailOTPVerifyPromptData].
 	PromptTypeEmailOTPVerify = "auth.email_otp.verify"
 	// PromptTypePasskey backs [PasskeyPromptData].
-	PromptTypePasskey = "auth.passkey"
+	PromptTypePasskey = "auth.passkey" //nolint:gosec // a prompt type name, not a credential.
 	// PromptTypeRecoveryCode backs [RecoveryCodePromptData].
 	PromptTypeRecoveryCode = "auth.recovery_code"
 	// PromptTypeConsentScope backs [ConsentScopePromptData].

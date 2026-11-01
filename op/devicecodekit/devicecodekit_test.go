@@ -1007,7 +1007,7 @@ func TestInMemoryAttemptLimiterSweepsStaggeredExpiry(t *testing.T) {
 		t.Fatalf("old: %v", err)
 	}
 	clock.now = clock.now.Add(30 * time.Second)
-	for i := 0; i < devicecodekit.DefaultMaxAttemptKeys-1; i++ {
+	for i := range devicecodekit.DefaultMaxAttemptKeys - 1 {
 		if allowed, err := limiter.Allow(ctx, "k"+strconv.Itoa(i)); err != nil || !allowed {
 			t.Fatalf("fill %d: allowed=%v err=%v", i, allowed, err)
 		}
