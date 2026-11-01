@@ -102,8 +102,8 @@ var demoUsers = []struct{ email, name, password string }{
 // and its rows. INSERT OR IGNORE is SQLite (MySQL spells it INSERT
 // IGNORE), and it keeps a hash a previous login already rewrote.
 // A table without an opaque immutable identifier adds the subject column
-// and backfills it once; the random default here is SQLite's spelling
-// (MySQL 8.0.13+ writes DEFAULT (UUID())).
+// and backfills it once; the bring-your-own user store page gives the
+// ALTER for each engine. The random default here is SQLite's spelling.
 func createDemoUsers(ctx context.Context, db *databasesql.DB) error {
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS app_users (
 		id INTEGER PRIMARY KEY,
