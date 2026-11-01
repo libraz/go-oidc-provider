@@ -30,17 +30,7 @@ type successResponse struct {
 // PAR record. Decomposing the body keeps the function under cyclop's
 // max-complexity gate while remaining readable.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
-	if !httpx.EnforceMethod(w, r, http.MethodPost) {
-		return
-	}
-	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"content-type must be application/x-www-form-urlencoded")
-		return
-	}
-	endpointsupport.LimitFormBody(w, r)
-	if err := r.ParseForm(); err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+	if !endpointsupport.ParseFormRequest(w, r, nil) {
 		return
 	}
 	dpopJKT, client, ok := authenticateWithDPoP(w, r, deps)

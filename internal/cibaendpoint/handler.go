@@ -1,8 +1,8 @@
 package cibaendpoint
 
 import (
+	"context"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -19,13 +19,9 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Clock is the package-local view of the wall clock. It mirrors
-// the device-authorization endpoint posture: a structurally-typed
-// interface so a value satisfying [op.Clock] flows through without
-// an explicit adapter, and a nil falls back to the system clock.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the package-local name for the shared wall-clock interface; a nil
+// Clock falls back to the system clock.
+type Clock = timex.Clock
 
 // Deps bundles the runtime dependencies the /bc-authorize handler
 // needs. The HTTP layer constructs a [Deps] once at startup and
@@ -175,10 +171,7 @@ type Deps struct {
 // [audit.Discard] emitter so call sites can invoke Emit
 // unconditionally.
 func (d *Deps) auditEmitter() audit.Emitter {
-	if d.Audit == nil {
-		return audit.Discard()
-	}
-	return d.Audit
+	return audit.OrDiscard(d.Audit)
 }
 
 // now returns the wall-clock reading for this request, falling
@@ -297,31 +290,11 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 }
 
 // parseAndValidateForm runs the request-shape gates that must clear
-// before any cryptographic or business work: HTTP method, content
-// type, body size, body parse, and the RFC 6749 §3.2 single-valued
-// duplicate-parameter rejection (CIBA Core §7.1 inherits §3.2). On
-// any failure the function writes the wire envelope and returns
-// false. On success r.PostForm is populated and the caller proceeds.
+// before any cryptographic or business work (CIBA Core §7.1 inherits
+// the RFC 6749 §3.2 single-valued rule). On failure the wire envelope is
+// already written and the function returns false.
 func parseAndValidateForm(w http.ResponseWriter, r *http.Request) bool {
-	if !httpx.EnforceMethod(w, r, http.MethodPost) {
-		return false
-	}
-	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"content-type must be application/x-www-form-urlencoded")
-		return false
-	}
-	endpointsupport.LimitFormBody(w, r)
-	if err := r.ParseForm(); err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
-		return false
-	}
-	if name, ok := firstDuplicateParameter(r.PostForm); !ok {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"parameter "+name+" must not be repeated")
-		return false
-	}
-	return true
+	return endpointsupport.ParseFormRequest(w, r, cibaSingleValuedParams)
 }
 
 // cibaSingleValuedParams is the closed list of /bc-authorize form
@@ -345,10 +318,16 @@ var cibaSingleValuedParams = []string{
 	"client_notification_token",
 }
 
-// firstDuplicateParameter wraps [httpx.FirstDuplicateParameter] with
-// the CIBA-specific [cibaSingleValuedParams] list. The helper is
-// retained as a thin local alias so the call site reads at the same
-// abstraction level as the rest of /bc-authorize.
-func firstDuplicateParameter(values url.Values) (string, bool) {
-	return httpx.FirstDuplicateParameter(values, cibaSingleValuedParams)
+// emitRejected records a /bc-authorize rejection on the audit stream.
+// detail completes the event message and reason is a stable code
+// string; the wire response carries less detail on purpose, so the
+// audit event is where an operator learns which gate closed.
+func emitRejected(ctx context.Context, deps Deps, clientID, detail, reason string) {
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:     ciba.AuditAuthorizationRejected,
+		Level:    audit.LevelWarn,
+		Message:  "backchannel-authentication rejected: " + detail,
+		ClientID: clientID,
+		Extras:   map[string]any{"reason": reason},
+	})
 }

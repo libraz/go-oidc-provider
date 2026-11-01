@@ -401,7 +401,6 @@ func parseSectorDocument(body []byte) ([]string, error) {
 	}
 	var uris []string
 	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields() // catches object-shaped bodies at the top level.
 	if err := dec.Decode(&uris); err != nil {
 		return nil, fmt.Errorf("%w: %w (%w)", ErrSectorFetch, ErrSectorMalformed, err)
 	}

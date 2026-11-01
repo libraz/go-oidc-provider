@@ -11,27 +11,12 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
-	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// introspectSingleValuedParams is the closed list of RFC 7662 §2.1
-// request parameters and shared client-authentication credentials that
-// must not appear more than once.
-//
-//nolint:gochecknoglobals // closed allow-list, intentional package state.
-var introspectSingleValuedParams = []string{
-	"token",
-	"token_type_hint",
-	"client_id",
-	"client_secret",
-	"client_assertion_type",
-	"client_assertion",
-}
 
 // Audit event names sourced from the typed registry that backs the public
 // op.AuditEvent catalog.
@@ -54,21 +39,11 @@ const (
 	// binding surfaces through "cnf.jkt" — so v1.0 always emits
 	// "Bearer".
 	tokenTypeBearer = "Bearer"
-
-	// hintRefreshToken is the "token_type_hint" (RFC 7662 §2.1) that moves
-	// the opaque lookup ahead of JWT verification. Any other hint falls
-	// through in the default order.
-	hintRefreshToken = "refresh_token"
 )
 
-// Clock is the package-local view of the wall clock. It mirrors the
-// posture of the sibling endpoints: a structurally-typed interface so a
-// value satisfying [github.com/libraz/go-oidc-provider/op.Clock] flows
-// through without an explicit adapter, and a nil falls back to the
-// system clock.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the package-local name for the shared wall-clock interface; a nil
+// Clock falls back to the system clock.
+type Clock = timex.Clock
 
 // Deps bundles the runtime dependencies the introspection endpoint
 // needs. The HTTP layer constructs a [Deps] once at startup and passes
@@ -268,22 +243,7 @@ func (d *Deps) now() time.Time {
 // response. Decomposing the body keeps the function under cyclop's
 // max-complexity gate while remaining readable.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.AccessTokenVerifier) {
-	if !httpx.EnforceMethod(w, r, http.MethodPost) {
-		return
-	}
-	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"content-type must be application/x-www-form-urlencoded")
-		return
-	}
-	endpointsupport.LimitFormBody(w, r)
-	if err := r.ParseForm(); err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
-		return
-	}
-	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, introspectSingleValuedParams); !ok {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"parameter "+name+" must not be repeated")
+	if !endpointsupport.ParseFormRequest(w, r, endpointsupport.TokenLookupSingleValuedParams) {
 		return
 	}
 	client, _, ok := authenticate(r.Context(), w, r, deps)
@@ -344,24 +304,13 @@ func authenticate(
 			Now:               deps.now(),
 			Audit:             deps.auditEmitter(),
 		},
-		func(creds *clientauth.Credentials, err error) {
-			clientID := ""
-			if creds != nil {
-				clientID = creds.ClientID
-			}
-			endpointsupport.EmitAuthnFailure(ctx, deps.auditEmitter(),
-				auditIntrospectionError,
-				"introspection client authentication failed",
-				clientID, err)
-		},
+		endpointsupport.AuditAuthnFailure(ctx, deps.auditEmitter(), auditIntrospectionError,
+			"introspection client authentication failed"),
 	)
 }
 
 // auditEmitter returns the configured audit sink, or a [audit.Discard]
 // emitter so call sites can invoke Emit unconditionally.
 func (d *Deps) auditEmitter() audit.Emitter {
-	if d.Audit == nil {
-		return audit.Discard()
-	}
-	return d.Audit
+	return audit.OrDiscard(d.Audit)
 }

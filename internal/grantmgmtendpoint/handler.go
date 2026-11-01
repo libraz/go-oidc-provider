@@ -41,10 +41,9 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Clock is the structural wall-clock dependency.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the package-local name for the shared wall-clock interface; a nil
+// Clock falls back to the system clock.
+type Clock = timex.Clock
 
 // Deps is the grant management endpoint's dependency set.
 type Deps struct {
@@ -106,10 +105,7 @@ func (d *Deps) now() time.Time {
 }
 
 func (d *Deps) audit() audit.Emitter {
-	if d.Audit != nil {
-		return d.Audit
-	}
-	return audit.Discard()
+	return audit.OrDiscard(d.Audit)
 }
 
 // queryResponse is the Grant Management draft query body. scopes is an

@@ -38,14 +38,20 @@ func WriteJSON(w http.ResponseWriter, status int, body any) error {
 		writeServerError(w)
 		return err
 	}
+	setJSONHeaders(w, len(encoded))
+	w.WriteHeader(status)
+	_, werr := w.Write(encoded)
+	return werr
+}
+
+// setJSONHeaders stamps the no-store JSON response headers for a body of
+// length n.
+func setJSONHeaders(w http.ResponseWriter, n int) {
 	h := w.Header()
 	h.Set("Content-Type", JSONContentType)
 	h.Set("Cache-Control", noStoreCacheControl)
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Content-Length", strconv.Itoa(len(encoded)))
-	w.WriteHeader(status)
-	_, werr := w.Write(encoded)
-	return werr
+	h.Set("Content-Length", strconv.Itoa(n))
 }
 
 // writeServerError writes a minimal "server_error" JSON body. The function
@@ -53,11 +59,7 @@ func WriteJSON(w http.ResponseWriter, status int, body any) error {
 // fallback body itself fails to marshal (it never does — it is a constant).
 func writeServerError(w http.ResponseWriter) {
 	const fallback = `{"error":"server_error"}`
-	h := w.Header()
-	h.Set("Content-Type", JSONContentType)
-	h.Set("Cache-Control", noStoreCacheControl)
-	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Content-Length", strconv.Itoa(len(fallback)))
+	setJSONHeaders(w, len(fallback))
 	w.WriteHeader(http.StatusInternalServerError)
 	_, _ = w.Write([]byte(fallback))
 }

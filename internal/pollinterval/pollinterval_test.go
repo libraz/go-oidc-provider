@@ -62,3 +62,17 @@ func TestSlowDownLadder(t *testing.T) {
 		t.Errorf("IntervalBar(5s) = %v, want 4s", got)
 	}
 }
+
+func TestDecideAs_RemapsOnlyConsumed(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(1_700_000_000, 0)
+	consumed := pollinterval.DecideAs(pollinterval.Input{Now: now, Consumed: true}, pollinterval.OutcomeExpired)
+	if consumed.Decision != pollinterval.OutcomeExpired {
+		t.Errorf("consumed decision = %v, want %v", consumed.Decision, pollinterval.OutcomeExpired)
+	}
+	pending := pollinterval.DecideAs(pollinterval.Input{Now: now}, pollinterval.OutcomeExpired)
+	if pending.Decision != pollinterval.OutcomePending {
+		t.Errorf("pending decision = %v, want %v", pending.Decision, pollinterval.OutcomePending)
+	}
+}

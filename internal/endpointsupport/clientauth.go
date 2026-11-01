@@ -118,9 +118,7 @@ func AuthenticateClient(
 // previous secret, so operators can see which clients still have to
 // switch before the window closes. The secret itself is never attached.
 func emitPreviousSecretUsed(ctx context.Context, emitter audit.Emitter, clientID string, method clientauth.Method) {
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter = audit.OrDiscard(emitter)
 	emitter.Emit(ctx, audit.Event{
 		Name:     string(auditevent.AuditClientAuthnPreviousSecret),
 		Level:    audit.LevelWarn,
@@ -274,9 +272,7 @@ func EmitAuthnFailure(
 	err error,
 	method ...string,
 ) {
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter = audit.OrDiscard(emitter)
 	extras := map[string]any{"reason": ReasonForAuthnError(err)}
 	if len(method) > 0 && method[0] != "" {
 		extras["method"] = method[0]

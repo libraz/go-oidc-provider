@@ -254,6 +254,12 @@ func NewUseDPoPNonceError(nonces dpop.NonceIssuer) *BearerError {
 	return e
 }
 
+// NewInvalidTokenError builds the generic invalid_token rejection, which
+// names no sub-cause (RFC 6750 §3.1).
+func NewInvalidTokenError() *BearerError {
+	return invalidBearer(bearerDescInvalid)
+}
+
 func bearerReject(scheme, code, description string) *BearerError {
 	return &BearerError{Status: http.StatusUnauthorized, Scheme: scheme, Code: code, Description: description}
 }

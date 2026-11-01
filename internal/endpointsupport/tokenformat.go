@@ -1,6 +1,7 @@
 package endpointsupport
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -29,9 +30,20 @@ func LooksLikeJWT(token string) bool {
 	if err != nil {
 		return false
 	}
-	var header map[string]any
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
+	return isNonEmptyJSONObject(headerBytes)
+}
+
+// isNonEmptyJSONObject reports whether b is one well-formed JSON object
+// with at least one member. It scans instead of decoding so the
+// per-request classification allocates nothing.
+func isNonEmptyJSONObject(b []byte) bool {
+	if !json.Valid(b) {
 		return false
 	}
-	return len(header) > 0
+	b = bytes.TrimLeft(b, " \t\r\n")
+	if len(b) == 0 || b[0] != '{' {
+		return false
+	}
+	b = bytes.TrimLeft(b[1:], " \t\r\n")
+	return len(b) > 0 && b[0] != '}'
 }

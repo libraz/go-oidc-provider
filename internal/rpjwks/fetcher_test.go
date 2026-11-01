@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -319,8 +321,39 @@ func TestFetch_RejectsNonJSONAndNon2xx(t *testing.T) {
 		t.Fatalf("non-JSON err=%v want a content-type refusal", err)
 	}
 	if _, err := f.Fetch(context.Background(), broken.URL); !errors.Is(err, errSentinel) ||
-		!strings.Contains(err.Error(), "status 500") {
+		!errors.Is(err, securefetch.ErrUnexpectedStatus) {
 		t.Fatalf("non-2xx err=%v want a status refusal", err)
+	}
+}
+
+// TestFetch_Non2xxIsTypedAndDrained pins that a rejected status surfaces the
+// shared securefetch sentinel and that its body is drained, so consecutive
+// failures to one host reuse a single connection.
+func TestFetch_Non2xxIsTypedAndDrained(t *testing.T) {
+	t.Parallel()
+
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(strings.Repeat("x", 1024)))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	f := newTestFetcher(t, Config{})
+	for _, path := range []string{"/a", "/b"} {
+		_, err := f.Fetch(context.Background(), srv.URL+path)
+		if !errors.Is(err, errSentinel) || !errors.Is(err, securefetch.ErrUnexpectedStatus) {
+			t.Fatalf("Fetch(%s) err=%v want the fetch sentinel wrapping securefetch.ErrUnexpectedStatus", path, err)
+		}
+	}
+	if got := conns.Load(); got != 1 {
+		t.Fatalf("connections = %d, want 1 (rejected bodies must be drained for reuse)", got)
 	}
 }
 

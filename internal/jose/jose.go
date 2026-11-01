@@ -79,7 +79,7 @@ var ErrCriticalHeader = errors.New("jose: unsupported critical header")
 // downgrade" attack surfaces structurally — by the time a verifier is
 // invoked, the algorithm is already known to be in the allow-list.
 func ParseSigned(raw string) (*josev4.JSONWebSignature, Algorithm, error) {
-	allowed := allowedV4Algorithms()
+	allowed := allowedV4Algorithms
 
 	jws, err := josev4.ParseSignedCompact(raw, allowed)
 	if err != nil {
@@ -140,14 +140,14 @@ func assertNoCriticalHeader(sig josev4.Signature) error {
 	}
 }
 
-// allowedV4Algorithms returns the slice of go-jose v4 algorithm constants
-// matching this package's [Algorithm] allow-list. Keeping the mapping in
-// one place lets us audit it alongside [Algorithm.IsAllowed].
-func allowedV4Algorithms() []josev4.SignatureAlgorithm {
-	return []josev4.SignatureAlgorithm{
-		josev4.RS256,
-		josev4.PS256,
-		josev4.ES256,
-		josev4.EdDSA,
-	}
+// allowedV4Algorithms is the go-jose v4 form of the [Algorithm] allow-list.
+// Keeping the mapping in one place lets us audit it alongside
+// [Algorithm.IsAllowed]. go-jose only reads the slice; it is shared.
+//
+//nolint:gochecknoglobals // immutable allow-list handed to go-jose read-only.
+var allowedV4Algorithms = []josev4.SignatureAlgorithm{
+	josev4.RS256,
+	josev4.PS256,
+	josev4.ES256,
+	josev4.EdDSA,
 }

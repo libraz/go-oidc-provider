@@ -46,9 +46,7 @@ type Bridge struct {
 // [audit.Discard] so [Bridge.Emit] can forward unconditionally without
 // a per-call nil guard.
 func NewBridge(c *Collector, next audit.Emitter) *Bridge {
-	if next == nil {
-		next = audit.Discard()
-	}
+	next = audit.OrDiscard(next)
 	return &Bridge{c: c, next: next}
 }
 

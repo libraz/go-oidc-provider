@@ -402,13 +402,15 @@ func (v *Verifier) verifyForUse(ctx context.Context, raw, expectedClientID strin
 	if err != nil {
 		return nil, err
 	}
-	// Re-decode against the verified payload bytes so the verifier
-	// never trusts [Object.Claims] from before the signature check.
-	verifiedClaims, err := decodeVerifiedClaims(payload)
-	if err != nil {
-		return nil, err
+	// Claims decoded before the signature check are trusted only when
+	// they came from exactly the verified bytes; otherwise decode again.
+	if !bytes.Equal(payload, parsed.jws.UnsafePayloadWithoutVerification()) {
+		verifiedClaims, err := decodeClaims(payload)
+		if err != nil {
+			return nil, err
+		}
+		parsed.Claims = verifiedClaims
 	}
-	parsed.Claims = verifiedClaims
 	if err := v.validateClaims(parsed, expectedClientID); err != nil {
 		return nil, err
 	}
@@ -434,7 +436,7 @@ func (v *Verifier) verifySignature(ctx context.Context, parsed *Object, client *
 	}
 	jwk, err := pickKey(keys, parsed.KeyID)
 	if err != nil {
-		jwk, err = v.pickFromRefreshedKeys(ctx, parsed, client, err)
+		jwk, err = v.pickFromRefreshedKeys(ctx, parsed, client, keys, err)
 		if err != nil {
 			return nil, err
 		}
@@ -455,34 +457,38 @@ func (v *Verifier) verifySignature(ctx context.Context, parsed *Object, client *
 }
 
 // pickFromRefreshedKeys performs the key-rotation-recovery retry when the
-// initial key selection missed. It applies only to a jwks_uri client (an
-// inline-JWKs client cannot rotate out-of-band) whose resolver supports a
-// cache-bypassing refetch; in every other case, or when the refreshed set
-// still lacks the key, it returns the original miss unchanged so the wire
-// response and error precedence are preserved. The forced refetch is
-// throttled per URL by the fetcher ([rpjwks.ForcedRefreshInterval]), so a bogus
-// kid cannot be used to hammer the RP's jwks_uri endpoint.
+// initial key selection missed. The rotation rule itself lives in
+// [rpjwks.RefreshOnKIDMiss]; a miss it does not accept, a resolver without a
+// cache-bypassing refetch, or a refreshed set still lacking the key returns
+// the original miss unchanged so the wire response and error precedence are
+// preserved. The forced refetch is throttled per URL by the fetcher
+// ([rpjwks.ForcedRefreshInterval]), so a bogus kid cannot be used to hammer
+// the RP's jwks_uri endpoint.
 func (v *Verifier) pickFromRefreshedKeys(
 	ctx context.Context,
 	parsed *Object,
 	client *store.Client,
+	tried *josev4.JSONWebKeySet,
 	miss error,
 ) (*josev4.JSONWebKey, error) {
+	// An inline-JWKs client cannot rotate out of band, so skip the refetch.
 	if !errors.Is(miss, ErrNoMatchingJWK) || client.JWKsURI == "" || len(client.JWKs) != 0 {
 		return nil, miss
 	}
-	fresh, ok := v.resolver.(freshJWKSResolver)
+	resolver, ok := v.resolver.(freshJWKSResolver)
 	if !ok {
 		return nil, miss
 	}
-	keys, err := fresh.ResolveFresh(ctx, client)
+	fresh, ok, err := rpjwks.RefreshOnKIDMiss(ctx, parsed.jws, tried, func(ctx context.Context) (*josev4.JSONWebKeySet, error) {
+		return resolver.ResolveFresh(ctx, client)
+	})
 	if err != nil && rpjwks.IsKeySourceUnavailable(err) {
 		return nil, classifyKeyResolution(err)
 	}
-	if err != nil || keys == nil || len(keys.Keys) == 0 {
+	if err != nil || !ok {
 		return nil, miss
 	}
-	jwk, err := pickKey(keys, parsed.KeyID)
+	jwk, err := pickKey(fresh, parsed.KeyID)
 	if err != nil {
 		return nil, miss
 	}
@@ -532,8 +538,7 @@ func (v *Verifier) pickFromRefreshedKeys(
 // that presented it. [jose.DecryptChain] itself takes no context: the
 // JOSE layer does no I/O and has nothing to cancel.
 func (v *Verifier) maybeDecrypt(ctx context.Context, raw string) (string, error) {
-	dotCount := strings.Count(raw, ".")
-	if dotCount != 4 {
+	if !jose.LooksLikeJWE(raw) {
 		return raw, nil
 	}
 	if v.decrypter == nil {
@@ -665,20 +670,6 @@ func jtiExpiry(claims map[string]any, now time.Time, maxAge, skew, maxLifetime t
 		retainUntil = ceiling
 	}
 	return retainUntil.Add(skew), true
-}
-
-// decodeVerifiedClaims is the post-signature variant of
-// [decodeUnverifiedPayload]. It is split out so the call site reads as
-// a single line and so a future security review can audit the
-// distinction between the two decode paths in one place.
-func decodeVerifiedClaims(payload []byte) (map[string]any, error) {
-	out := map[string]any{}
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	dec.UseNumber()
-	if err := dec.Decode(&out); err != nil {
-		return nil, fmt.Errorf("%w: decode verified payload: %w", ErrParse, err)
-	}
-	return out, nil
 }
 
 // pickKey selects the verifying JWK from keys. When the request
@@ -920,13 +911,6 @@ func claimSeconds(claims map[string]any, key string) (int64, bool) {
 	return 0, false
 }
 
-// defaultResolver is the production [JWKSResolver]: the client's inline
-// JWKs or its JWKsURI, whichever is the one registered; neither or both
-// surfaces [ErrJWKSConfigured].
-type defaultResolver struct {
-	fetcher *Fetcher
-}
-
 // NewDefaultResolver returns a resolver suitable for production. It
 // uses an in-process JWKS cache keyed by URL with a 5-minute default
 // TTL and applies the SSRF / body-cap / content-type protections in
@@ -940,7 +924,7 @@ func NewDefaultResolver(clock timex.Clock, opts ...ResolverOption) *DefaultResol
 			opt(fetcher)
 		}
 	}
-	return &DefaultResolver{inner: &defaultResolver{fetcher: fetcher}}
+	return &DefaultResolver{fetcher: fetcher}
 }
 
 // ResolverOption customises a [DefaultResolver] at construction.
@@ -966,36 +950,25 @@ func WithBaseTransport(rt http.RoundTripper) ResolverOption {
 	return func(f *Fetcher) { f.SetBaseTransport(rt) }
 }
 
-// DefaultResolver is the exported wrapper around the package-private
-// production resolver. The concrete type exists so the constructor
-// satisfies the project ireturn allow-list while the underlying
-// implementation remains unexported.
+// DefaultResolver is the production [JWKSResolver]: the client's inline
+// JWKs or its JWKsURI, whichever is the one registered; neither or both
+// surfaces [ErrJWKSConfigured].
 type DefaultResolver struct {
-	inner *defaultResolver
-}
-
-// Resolve implements [JWKSResolver].
-func (r *DefaultResolver) Resolve(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
-	return r.inner.Resolve(ctx, c)
-}
-
-// ResolveFresh implements the optional [freshJWKSResolver] key-rotation
-// recovery seam so a request object signed with a freshly rotated RP key
-// verifies without waiting out the JWKS cache TTL.
-func (r *DefaultResolver) ResolveFresh(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
-	return r.inner.ResolveFresh(ctx, c)
+	fetcher *Fetcher
 }
 
 // Resolve implements [JWKSResolver] under the exactly-one-source rule of
 // [rpjwks.Fetcher.Resolve]: inline JWKs or JWKsURI, never both.
-func (r *defaultResolver) Resolve(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
+func (r *DefaultResolver) Resolve(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
 	return keySourceResult(r.fetcher.Resolve(ctx, c.JWKs, c.JWKsURI))
 }
 
-// ResolveFresh mirrors [defaultResolver.Resolve] but forces a
-// cache-bypassing refetch for a jwks_uri client. Inline-JWKs clients
+// ResolveFresh implements the optional [freshJWKSResolver] key-rotation
+// recovery seam so a request object signed with a freshly rotated RP key
+// verifies without waiting out the JWKS cache TTL. It forces a
+// cache-bypassing refetch for a jwks_uri client; inline-JWKs clients
 // cannot rotate out-of-band, so their keyset is returned unchanged.
-func (r *defaultResolver) ResolveFresh(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
+func (r *DefaultResolver) ResolveFresh(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
 	return keySourceResult(r.fetcher.ResolveFresh(ctx, c.JWKs, c.JWKsURI))
 }
 

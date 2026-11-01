@@ -74,7 +74,7 @@ func Parse(raw string) (*Object, error) {
 		return nil, fmt.Errorf("%w: request object must carry exactly one signature", ErrParse)
 	}
 	hdr := jws.Signatures[0].Header
-	claims, err := decodeUnverifiedPayload(jws)
+	claims, err := decodeClaims(jws.UnsafePayloadWithoutVerification())
 	if err != nil {
 		return nil, err
 	}
@@ -99,16 +99,12 @@ func headerString(v any) string {
 	}
 }
 
-// decodeUnverifiedPayload extracts the JSON object body from the JWS
-// without verifying the signature. The caller MUST NOT trust the values
-// in the returned map until [Verifier.Verify] confirms the signature.
-//
-// The function is split out so [Parse] can populate [Object.Claims]
-// before signature verification — the keyset lookup needs the "kid"
-// header, and presenting attacker-supplied header values is preferable
-// to letting the verifier touch unverified payload bytes elsewhere.
-func decodeUnverifiedPayload(jws *josev4.JSONWebSignature) (map[string]any, error) {
-	payload := jws.UnsafePayloadWithoutVerification()
+// decodeClaims decodes payload, the JSON object body of a JWS, into a
+// claim map. [Parse] calls it on the unverified payload so [Object.Claims]
+// is populated before signature verification (the keyset lookup needs the
+// header, not the claims); the caller MUST NOT trust the values until
+// [Verifier.Verify] confirms the signature.
+func decodeClaims(payload []byte) (map[string]any, error) {
 	out := map[string]any{}
 	dec := json.NewDecoder(bytes.NewReader(payload))
 	dec.UseNumber()

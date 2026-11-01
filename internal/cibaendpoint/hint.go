@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -62,15 +61,7 @@ func classifyHint(
 		form.Get("login_hint_token"),
 	)
 	if err != nil {
-		deps.auditEmitter().Emit(ctx, audit.Event{
-			Name:     ciba.AuditAuthorizationRejected,
-			Level:    audit.LevelWarn,
-			Message:  "backchannel-authentication rejected: hint combination invalid",
-			ClientID: clientID,
-			Extras: map[string]any{
-				"reason": "hint_combination_invalid",
-			},
-		})
+		emitRejected(ctx, deps, clientID, "hint combination invalid", "hint_combination_invalid")
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"exactly one of login_hint, id_token_hint, or login_hint_token is required")
 		return ciba.HintNone, "", false
@@ -120,7 +111,7 @@ func verifyIDTokenHint(
 		return value, true
 	}
 	if client.SubjectType == pairwiseSubjectType {
-		emitHintRejected(ctx, deps, client.ID, "id_token_hint_pairwise_unsupported")
+		emitRejected(ctx, deps, client.ID, "id_token_hint not accepted", "id_token_hint_pairwise_unsupported")
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"id_token_hint is not accepted from a client using pairwise subject identifiers; "+
 				"use login_hint or login_hint_token")
@@ -129,7 +120,7 @@ func verifyIDTokenHint(
 	subject, err := ciba.VerifyIDTokenHint(ctx, deps.Keys, deps.Issuer, client.ID, value)
 	if err != nil {
 		if errors.Is(err, ciba.ErrIDTokenHintUnverifiable) {
-			emitHintRejected(ctx, deps, client.ID, "id_token_hint_unverifiable")
+			emitRejected(ctx, deps, client.ID, "id_token_hint not accepted", "id_token_hint_unverifiable")
 			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError,
 				"id_token_hint verification is not configured")
 			return "", false
@@ -137,28 +128,12 @@ func verifyIDTokenHint(
 		// Every client-facing cause collapses onto one code and one
 		// description so the wire surface cannot be probed to learn
 		// which check rejected the token.
-		emitHintRejected(ctx, deps, client.ID, "id_token_hint_invalid")
+		emitRejected(ctx, deps, client.ID, "id_token_hint not accepted", "id_token_hint_invalid")
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"id_token_hint is not an id_token this OP issued to this client")
 		return "", false
 	}
 	return subject, true
-}
-
-// emitHintRejected records a hint-verification rejection on the audit
-// stream. reason is a stable code string; the wire response carries
-// less detail on purpose, so the audit event is where an operator
-// learns which gate closed.
-func emitHintRejected(ctx context.Context, deps Deps, clientID, reason string) {
-	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:     ciba.AuditAuthorizationRejected,
-		Level:    audit.LevelWarn,
-		Message:  "backchannel-authentication rejected: id_token_hint not accepted",
-		ClientID: clientID,
-		Extras: map[string]any{
-			"reason": reason,
-		},
-	})
 }
 
 // resolveHint runs the OP-side id_token_hint verification and then
@@ -185,15 +160,7 @@ func resolveHint(
 		return "", false
 	}
 	if deps.HintResolver == nil {
-		deps.auditEmitter().Emit(ctx, audit.Event{
-			Name:     ciba.AuditAuthorizationRejected,
-			Level:    audit.LevelWarn,
-			Message:  "backchannel-authentication rejected: no hint resolver configured",
-			ClientID: clientID,
-			Extras: map[string]any{
-				"reason": "hint_resolution_failed",
-			},
-		})
+		emitRejected(ctx, deps, clientID, "no hint resolver configured", "hint_resolution_failed")
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errLoginRequired,
 			"end-user authentication is required to resolve the hint")
 		return "", false
@@ -201,42 +168,18 @@ func resolveHint(
 	subject, err := deps.HintResolver.Resolve(ctx, kind, value)
 	if err != nil {
 		if errors.Is(err, ErrUnknownUser) {
-			deps.auditEmitter().Emit(ctx, audit.Event{
-				Name:     ciba.AuditAuthorizationRejected,
-				Level:    audit.LevelWarn,
-				Message:  "backchannel-authentication rejected: unknown user",
-				ClientID: clientID,
-				Extras: map[string]any{
-					"reason": "unknown_user_id",
-				},
-			})
+			emitRejected(ctx, deps, clientID, "unknown user", "unknown_user_id")
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errUnknownUserID,
 				"the hint did not resolve to a known end-user")
 			return "", false
 		}
-		deps.auditEmitter().Emit(ctx, audit.Event{
-			Name:     ciba.AuditAuthorizationRejected,
-			Level:    audit.LevelWarn,
-			Message:  "backchannel-authentication rejected: hint resolution failed",
-			ClientID: clientID,
-			Extras: map[string]any{
-				"reason": "hint_resolution_failed",
-			},
-		})
+		emitRejected(ctx, deps, clientID, "hint resolution failed", "hint_resolution_failed")
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errLoginRequired,
 			"end-user authentication is required to resolve the hint")
 		return "", false
 	}
 	if subject == "" {
-		deps.auditEmitter().Emit(ctx, audit.Event{
-			Name:     ciba.AuditAuthorizationRejected,
-			Level:    audit.LevelWarn,
-			Message:  "backchannel-authentication rejected: resolver returned empty subject",
-			ClientID: clientID,
-			Extras: map[string]any{
-				"reason": "hint_resolution_failed",
-			},
-		})
+		emitRejected(ctx, deps, clientID, "resolver returned empty subject", "hint_resolution_failed")
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errLoginRequired,
 			"end-user authentication is required to resolve the hint")
 		return "", false

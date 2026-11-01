@@ -369,17 +369,14 @@ func (c *Client) Do(req *http.Request) ([]byte, *http.Response, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode/100 != 2 {
-		// Drain a small bounded prefix so the connection is reusable
-		// even on the error path. We do not surface the drained bytes;
-		// the status alone is enough for the caller's error envelope.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errorDrainBytes))
+		DrainErrorBody(resp.Body)
 		return nil, resp, fmt.Errorf("%w: %d", ErrUnexpectedStatus, resp.StatusCode)
 	}
 
 	if len(c.policy.AcceptContentTypes) > 0 {
 		ct := resp.Header.Get("Content-Type")
 		if !ContentTypeAllowed(ct, c.policy.AcceptContentTypes) {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errorDrainBytes))
+			DrainErrorBody(resp.Body)
 			return nil, resp, fmt.Errorf("%w: %q", ErrUnexpectedContentType, ct)
 		}
 	}
@@ -393,6 +390,13 @@ func (c *Client) Do(req *http.Request) ([]byte, *http.Response, error) {
 		return nil, resp, fmt.Errorf("%w: %d bytes", ErrBodyTooLarge, limit)
 	}
 	return body, resp, nil
+}
+
+// DrainErrorBody discards a small bounded prefix of a rejected response body
+// so the connection stays reusable on the error path. The drained bytes are
+// not surfaced; the status alone is enough for the caller's error envelope.
+func DrainErrorBody(body io.Reader) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, errorDrainBytes))
 }
 
 // DoRaw executes req through the hardened [*http.Client] without

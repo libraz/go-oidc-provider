@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -83,15 +82,7 @@ func parseScope(
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 				"scope parameter is required")
 		case errors.Is(err, ciba.ErrScopeMissingOpenID):
-			deps.auditEmitter().Emit(ctx, audit.Event{
-				Name:     ciba.AuditAuthorizationRejected,
-				Level:    audit.LevelWarn,
-				Message:  "backchannel-authentication rejected: scope missing openid",
-				ClientID: client.ID,
-				Extras: map[string]any{
-					"reason": "scope_missing_openid",
-				},
-			})
+			emitRejected(ctx, deps, client.ID, "scope missing openid", "scope_missing_openid")
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 				"the openid scope value is required for ciba")
 		default:

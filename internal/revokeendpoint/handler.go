@@ -16,20 +16,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// revokeSingleValuedParams is the closed list of RFC 7009 §2.1 request
-// parameters and shared client-authentication credentials that must not
-// appear more than once.
-//
-//nolint:gochecknoglobals // closed allow-list, intentional package state.
-var revokeSingleValuedParams = []string{
-	"token",
-	"token_type_hint",
-	"client_id",
-	"client_secret",
-	"client_assertion_type",
-	"client_assertion",
-}
-
 // Defaults the handler applies when [Deps] omits the corresponding
 // field.
 const (
@@ -41,21 +27,11 @@ const (
 	// and a restated literal agrees only until someone edits one of
 	// them.
 	defaultLeeway = tokens.DefaultLeeway
-
-	// hintRefreshToken is the "token_type_hint" (RFC 7009 §2.1) that moves
-	// the opaque lookup ahead of JWT verification. Any other hint falls
-	// through in the default order.
-	hintRefreshToken = "refresh_token"
 )
 
-// Clock is the package-local view of the wall clock. It mirrors the
-// posture of the sibling endpoints: a structurally-typed interface so
-// a value satisfying [github.com/libraz/go-oidc-provider/op.Clock]
-// flows through without an explicit adapter, and a nil falls back to
-// the system clock.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the package-local name for the shared wall-clock interface; a nil
+// Clock falls back to the system clock.
+type Clock = timex.Clock
 
 // Deps bundles the runtime dependencies the revocation endpoint needs.
 // The HTTP layer constructs a [Deps] once at startup and passes it to
@@ -171,10 +147,7 @@ type Deps struct {
 // audit returns the configured audit sink, or a [audit.Discard]
 // emitter so call sites can invoke Emit unconditionally.
 func (d *Deps) audit() audit.Emitter {
-	if d.Audit == nil {
-		return audit.Discard()
-	}
-	return d.Audit
+	return audit.OrDiscard(d.Audit)
 }
 
 // Handler returns the HTTP handler the OP mounts at its revocation
@@ -209,22 +182,7 @@ func newAccessTokenVerifier(d Deps) *tokens.AccessTokenVerifier {
 // writes the response. Decomposing the body keeps the function under
 // gocognit's max-complexity gate while remaining readable.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.AccessTokenVerifier) {
-	if !httpx.EnforceMethod(w, r, http.MethodPost) {
-		return
-	}
-	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"content-type must be application/x-www-form-urlencoded")
-		return
-	}
-	endpointsupport.LimitFormBody(w, r)
-	if err := r.ParseForm(); err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
-		return
-	}
-	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, revokeSingleValuedParams); !ok {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"parameter "+name+" must not be repeated")
+	if !endpointsupport.ParseFormRequest(w, r, endpointsupport.TokenLookupSingleValuedParams) {
 		return
 	}
 	client, _, ok := authenticate(r.Context(), w, r, deps)

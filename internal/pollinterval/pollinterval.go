@@ -63,6 +63,29 @@ const (
 	OutcomeConsumed
 )
 
+// String returns the wire-friendly mnemonic for o, suitable for audit and
+// log output. Unknown values surface as "invalid".
+func (o Outcome) String() string {
+	switch o {
+	case OutcomeEmit:
+		return "emit"
+	case OutcomePending:
+		return "authorization_pending"
+	case OutcomeSlowDown:
+		return "slow_down"
+	case OutcomeDenied:
+		return "access_denied"
+	case OutcomeExpired:
+		return "expired_token"
+	case OutcomeConsumed:
+		return "invalid_grant"
+	case OutcomeInvalid:
+		return "invalid"
+	default:
+		return "invalid"
+	}
+}
+
 // Input is the parameter bundle [Decide] consumes.
 type Input struct {
 	// Now is the clock reading the gate is anchored against.
@@ -129,6 +152,31 @@ func Decide(in Input) Result {
 		return Result{Outcome: OutcomeEmit}
 	}
 	return Result{Outcome: OutcomePending}
+}
+
+// Output is [Result] under the field names the token endpoint consumes.
+type Output struct {
+	Decision Outcome
+	// NextInterval is meaningful only for [OutcomeSlowDown].
+	NextInterval time.Duration
+	// CountThisAsViolation is true exactly when slow_down fires; the
+	// caller increments the substore's poll-violation counter only then.
+	CountThisAsViolation bool
+}
+
+// DecideAs applies [Decide] and reports a consumed record as consumedAs,
+// for flows whose wire form for "already redeemed" is another outcome.
+func DecideAs(in Input, consumedAs Outcome) Output {
+	res := Decide(in)
+	out := Output{
+		Decision:             res.Outcome,
+		NextInterval:         res.NextInterval,
+		CountThisAsViolation: res.CountThisAsViolation,
+	}
+	if res.Outcome == OutcomeConsumed {
+		out.Decision = consumedAs
+	}
+	return out
 }
 
 // NextInterval raises current by [SlowDownIncrement]. A zero or negative

@@ -51,13 +51,9 @@ var deviceAuthSingleValuedParams = []string{
 	"scope",
 }
 
-// Clock is the package-local view of the wall clock. It mirrors
-// the token / par endpoint posture: a structurally-typed interface
-// so a value satisfying [op.Clock] flows through without an
-// explicit adapter, and a nil falls back to the system clock.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the package-local name for the shared wall-clock interface; a nil
+// Clock falls back to the system clock.
+type Clock = timex.Clock
 
 // Deps bundles the runtime dependencies the
 // /device_authorization handler needs. The HTTP layer constructs
@@ -154,10 +150,7 @@ type Deps struct {
 // [audit.Discard] emitter so call sites can invoke Emit
 // unconditionally.
 func (d *Deps) auditEmitter() audit.Emitter {
-	if d.Audit == nil {
-		return audit.Discard()
-	}
-	return d.Audit
+	return audit.OrDiscard(d.Audit)
 }
 
 // now returns the wall-clock reading for this request, falling
@@ -249,22 +242,7 @@ func Handler(deps Deps) http.Handler {
 // parameters, mints the credential pair, and persists the
 // resulting record.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
-	if !httpx.EnforceMethod(w, r, http.MethodPost) {
-		return
-	}
-	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"content-type must be application/x-www-form-urlencoded")
-		return
-	}
-	endpointsupport.LimitFormBody(w, r)
-	if err := r.ParseForm(); err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
-		return
-	}
-	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, deviceAuthSingleValuedParams); !ok {
-		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
-			"parameter "+name+" must not be repeated")
+	if !endpointsupport.ParseFormRequest(w, r, deviceAuthSingleValuedParams) {
 		return
 	}
 	dpopJKT, client, ok := authenticateWithDPoP(w, r, deps)

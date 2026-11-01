@@ -1,5 +1,7 @@
 package cibaendpoint
 
+import "github.com/libraz/go-oidc-provider/internal/endpointsupport"
+
 // Wire codes the handler emits. RFC 6749 §5.2 defines the OAuth
 // catalogue; CIBA Core §13 introduces three additional values
 // ("unknown_user_id", "invalid_binding_message", and the OIDC Core
@@ -8,9 +10,9 @@ package cibaendpoint
 // internal/endpointsupport so the constant lives there
 // and is omitted from this list.
 const (
-	errInvalidRequest        = "invalid_request"
+	errInvalidRequest        = endpointsupport.ErrInvalidRequest
 	errInvalidScope          = "invalid_scope"
-	errServerError           = "server_error"
+	errServerError           = endpointsupport.ErrServerError
 	errUnknownUserID         = "unknown_user_id"
 	errInvalidBindingMessage = "invalid_binding_message"
 	errLoginRequired         = "login_required"

@@ -74,9 +74,7 @@ type Strict struct {
 // with [audit.Discard] so the wrapper still works in unit tests that
 // do not assert on audit output.
 func NewStrict(allow *csrf.Allowlist, emitter audit.Emitter) *Strict {
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter = audit.OrDiscard(emitter)
 	return &Strict{allow: allow, emitter: emitter}
 }
 

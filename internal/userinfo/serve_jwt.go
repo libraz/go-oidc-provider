@@ -61,6 +61,7 @@ func writeUserInfoJWT(
 	w http.ResponseWriter,
 	deps HandlerDeps,
 	clientID string,
+	client *store.Client,
 	body map[string]any,
 ) {
 	// Stamp iss / aud on the signed body. The handler does not overwrite
@@ -76,12 +77,12 @@ func writeUserInfoJWT(
 
 	signed, err := signUserInfoJWT(deps.Keys, body)
 	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return
 	}
-	out, err := maybeEncryptUserInfo(ctx, deps, clientID, signed)
+	out, err := maybeEncryptUserInfo(ctx, deps, client, signed)
 	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return
 	}
 	w.Header().Set("Content-Type", userInfoJWTContentType)
@@ -135,12 +136,9 @@ func signUserInfoJWT(set *keys.Set, body map[string]any) (string, error) {
 //
 // Resolution proceeds:
 //
-//  1. If [HandlerDeps.ClientEncJWKs] is nil OR clientID is empty OR
-//     the client lookup fails, the function treats the request as
-//     "no encryption configured" (the embedder did not wire
-//     outbound encryption, or the AT carried no client_id we could
-//     resolve, or the client was deleted between issuance and the
-//     userinfo call).
+//  1. If [HandlerDeps.ClientEncJWKs] is nil OR client is nil (no client
+//     store wired, or the AT carried no client_id), the function treats
+//     the request as "no encryption configured".
 //  2. Otherwise the resolver is consulted with the client's
 //     registered (alg, enc) pair. An empty (alg, enc) — the client
 //     did not register encryption — collapses onto
@@ -149,27 +147,16 @@ func signUserInfoJWT(set *keys.Set, body map[string]any) (string, error) {
 //  3. A successful resolution is encrypted by
 //     [clientencjwks.Resolver.EncryptNested], which produces the
 //     5-segment JWE with `cty=JWT` per RFC 7519 §5.2.
+//
+// client is the AT-bound client the dispatcher already resolved.
 func maybeEncryptUserInfo(
 	ctx context.Context,
 	deps HandlerDeps,
-	clientID, signedJWT string,
+	client *store.Client,
+	signedJWT string,
 ) (string, error) {
-	if deps.ClientEncJWKs == nil || clientID == "" || deps.Clients == nil {
+	if deps.ClientEncJWKs == nil || client == nil {
 		return signedJWT, nil
-	}
-	client, err := deps.Clients.GetClient(ctx, clientID)
-	if err == nil && client == nil {
-		// A nil client alongside a nil error violates the store contract;
-		// there is no recipient to resolve encryption keys against.
-		err = store.ErrNotFound
-	}
-	if err != nil {
-		// Client deleted between AT issuance and the userinfo call: the
-		// caller maps this onto invalid_token via the bearer challenge,
-		// but at this point we only have the signed body to return. The
-		// JWT-shape entry point checks the client lookup before calling
-		// this helper so this branch is defensive.
-		return "", fmt.Errorf("userinfo: client lookup failed: %w", err)
 	}
 	out, err := deps.ClientEncJWKs.EncryptNested(
 		ctx,

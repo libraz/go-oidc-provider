@@ -736,7 +736,7 @@ advisories:
       a well-shaped compact JWS whose middle segment alone exceeds the
       cap, and requires a 4xx rather than a 5xx (a 5xx would mean the OP
       tried and fell over, which is the outcome the bound exists to
-      prevent). TestDecodeForm_RejectsOversizeBody pins the shared
+      prevent). TestLimitFormBody_RejectsOversize pins the shared
       primitive.
   - id: CVE-2025-61920
     severity: P2

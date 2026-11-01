@@ -15,20 +15,15 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/internal/userclaims"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Clock is the package-local view of the wall clock. It is duplicated
-// here (rather than imported from internal/timex) so this package keeps
-// the same boundary discipline as internal/tokens: the public op/
-// namespace forwards its [op.Clock] without an explicit adapter because
-// Go interface satisfaction is structural. A nil [HandlerDeps.Clock]
-// falls back to the verifier's own system-clock default.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the package-local name for the shared wall-clock interface; a nil
+// Clock falls back to the system clock.
+type Clock = timex.Clock
 
 // HandlerDeps bundles the runtime dependencies the /userinfo handler
 // needs. The HTTP layer constructs a HandlerDeps once at startup and
@@ -240,7 +235,7 @@ func bearerDeps(deps HandlerDeps) endpointsupport.BearerDeps {
 func respondBearerRejected(w http.ResponseWriter, err error) {
 	var be *endpointsupport.BearerError
 	if !errors.As(err, &be) {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return
 	}
 	be.WriteResponse(w)
@@ -279,7 +274,7 @@ func dispatchUserInfoResponse(
 		if client, ok, err = resolveClient(r.Context(), deps, clientID); err != nil {
 			// Serving JSON here would hand plaintext claims to a client
 			// that may have registered userinfo encryption.
-			http.Error(w, "internal server error", http.StatusInternalServerError)
+			writeInternalError(w)
 			return
 		}
 	}
@@ -299,13 +294,7 @@ func dispatchUserInfoResponse(
 	// nil-store / empty-client_id case collapses onto signed-only
 	// (maybeEncryptUserInfo will short-circuit on
 	// ErrNoEncryptionConfigured).
-	writeUserInfoJWT(r.Context(), w, deps, clientID, body)
-}
-
-// respondUseDPoPNonce writes the RFC 9449 §9 use_dpop_nonce challenge,
-// issuing a fresh DPoP-Nonce from [HandlerDeps.DPoPNonces].
-func respondUseDPoPNonce(w http.ResponseWriter, deps HandlerDeps) {
-	endpointsupport.NewUseDPoPNonceError(deps.DPoPNonces).WriteResponse(w)
+	writeUserInfoJWT(r.Context(), w, deps, clientID, client, body)
 }
 
 // methodAllowed reports whether method is one of the two verbs the
@@ -348,7 +337,7 @@ func (e *bearerError) Error() string { return e.desc }
 // install the [http.MaxBytesReader] cap before invoking ParseForm; the
 // header-only path never touches the response writer.
 func extractBearer(w http.ResponseWriter, r *http.Request) (string, error) {
-	header := bearerFromHeader(r.Header.Get("Authorization"))
+	header, _ := endpointsupport.BearerFromHeader(r.Header.Get("Authorization"))
 	body, bodyPresent, err := bearerFromBody(w, r)
 	if err != nil {
 		return "", err
@@ -363,22 +352,6 @@ func extractBearer(w http.ResponseWriter, r *http.Request) (string, error) {
 		return body, nil
 	}
 	return "", &bearerError{missing: true, desc: "missing access token"}
-}
-
-// bearerFromHeader extracts the token from the Authorization header,
-// case-insensitively matching either the "Bearer" scheme (RFC 6750
-// §2.1) or the "DPoP" scheme (RFC 9449 §7.1). The "DPoP" prefix is
-// what a client signals when presenting a DPoP-bound access token at
-// a protected resource: the value is the same access token, but the
-// scheme name tells the resource server that a "DPoP" proof header
-// is also present. Returns "" when the header is empty or does not
-// carry a recognised credential.
-//
-// Delegates to [endpointsupport.BearerFromHeader] so the scheme list
-// stays in lockstep with the sibling endpoints.
-func bearerFromHeader(value string) string {
-	tok, _ := endpointsupport.BearerFromHeader(value)
-	return tok
 }
 
 // bearerFromBody extracts the token from a POST application/x-www-form-
@@ -445,7 +418,7 @@ func respondBearerExtractError(w http.ResponseWriter, err error) {
 }
 
 // buildBearerChallenge composes the WWW-Authenticate value for an
-// RFC 6750 §3.1 invalid_request / invalid_token challenge,
+// RFC 6750 §3.1 invalid_request challenge,
 // running the description through [endpointsupport.SanitizeChallengeValue]
 // so a CR/LF/quote/backslash byte cannot inject a header break or
 // terminate the auth-param prematurely. See [endpointsupport.SanitizeChallengeValue]
@@ -457,11 +430,16 @@ func buildBearerChallenge(code, description string) string {
 	)
 }
 
-const invalidTokenDescription = "The access token is invalid"
-
+// respondGenericInvalidToken writes the invalid_token challenge, which
+// names no sub-cause.
 func respondGenericInvalidToken(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", invalidTokenDescription))
-	w.WriteHeader(http.StatusUnauthorized)
+	endpointsupport.NewInvalidTokenError().WriteResponse(w)
+}
+
+// writeInternalError writes the opaque 500 every unanswerable store or
+// signing fault collapses onto.
+func writeInternalError(w http.ResponseWriter) {
+	http.Error(w, "internal server error", http.StatusInternalServerError)
 }
 
 // assembleClaims looks the subject up in the user store, projects the
@@ -507,7 +485,7 @@ func assembleClaims(
 		// The grant store did not answer. Serving the request anyway
 		// would fall back to scope-derived claim release and project a
 		// set the grant never authorised.
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return nil, nil, false
 	}
 	rawSubject, ok := resolveRawSubject(w, deps, claims, grant)
@@ -526,7 +504,7 @@ func assembleClaims(
 			respondGenericInvalidToken(w)
 			return nil, nil, false
 		}
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return nil, nil, false
 	}
 	source := userclaims.Source(user)
@@ -542,7 +520,7 @@ func assembleClaims(
 		Claims:            tokenClaimsRequest(deps, claims, claimsRecorded, grant),
 	})
 	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return nil, nil, false
 	}
 	return out, client, true
@@ -624,7 +602,7 @@ func resolveRawSubject(
 		return "", false
 	}
 	if grant.Subject == "" {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return "", false
 	}
 	return grant.Subject, true
@@ -648,7 +626,7 @@ func projectResponseSubject(
 	}
 	client, ok, err := resolveClient(ctx, deps, clientID)
 	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return "", nil, false
 	}
 	if !ok {
@@ -657,7 +635,7 @@ func projectResponseSubject(
 	}
 	projected, err := deps.SubjectProjector(ctx, rawSubject, client)
 	if err != nil || projected == "" {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return "", nil, false
 	}
 	return projected, client, true
@@ -698,7 +676,7 @@ func tokenClaimsRequest(deps HandlerDeps, claims *tokens.AccessTokenClaims, reco
 func writeJSON(w http.ResponseWriter, body map[string]any) {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		writeInternalError(w)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

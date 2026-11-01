@@ -27,7 +27,9 @@ const (
 	// delaying recovery for more than a few seconds.
 	DefaultNegativeTTL = 5 * time.Second
 
-	defaultTTL = 5 * time.Minute
+	// DefaultTTL is the positive-entry lifetime when the configuration names
+	// none.
+	DefaultTTL = 5 * time.Minute
 
 	// refreshFlightSuffix separates a forced refresh's singleflight key from
 	// the plain load's. The NUL byte cannot occur in a URL, so no key can
@@ -116,7 +118,7 @@ type staleResult[V any] struct {
 func New[V any](cfg Config) *Cache[V] {
 	cfg.Clock = timex.OrSystem(cfg.Clock)
 	if cfg.TTL <= 0 {
-		cfg.TTL = defaultTTL
+		cfg.TTL = DefaultTTL
 	}
 	if cfg.NegativeTTL <= 0 {
 		cfg.NegativeTTL = DefaultNegativeTTL

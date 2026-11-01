@@ -197,7 +197,7 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 	// Reject any trailing JSON document. Multiple objects in one
 	// body is a parser-confusion vector — a reverse proxy / WAF /
 	// audit sink that scans the full body sees a different shape
-	// than the OP consumed. Shares [httpx.AtEOF] with httpx.DecodeJSON.
+	// than the OP consumed.
 	if !httpx.AtEOF(dec) {
 		return ClientMetadata{}, metadataExtras{}, errors.New("registrationendpoint: decode metadata: trailing JSON document")
 	}

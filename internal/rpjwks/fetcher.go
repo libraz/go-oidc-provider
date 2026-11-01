@@ -35,7 +35,7 @@ const (
 	// without operator intervention, long enough that the common case costs no
 	// network round-trip. A response advertising a shorter Cache-Control
 	// max-age is cached for that shorter time; a longer one is clamped here.
-	DefaultTTL = 5 * time.Minute
+	DefaultTTL = remotecache.DefaultTTL
 
 	// DefaultNegativeTTL caps how long a fetch failure is cached against a URL.
 	// The negative cache defeats amplification: a peer replaying a request that
@@ -644,7 +644,8 @@ func (f *Fetcher) doFetch(ctx context.Context, jwksURI string, cached *entry) (*
 		return cached, ttlFromResponse(resp, f.ttl), nil
 	}
 	if resp.StatusCode/100 != 2 {
-		return nil, 0, fmt.Errorf("status %d", resp.StatusCode)
+		securefetch.DrainErrorBody(resp.Body)
+		return nil, 0, fmt.Errorf("%w: %d", securefetch.ErrUnexpectedStatus, resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); !securefetch.ContentTypeAllowed(ct, jwksContentTypes) {
 		return nil, 0, fmt.Errorf("content-type %q is not JSON", ct)

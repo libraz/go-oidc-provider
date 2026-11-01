@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/libraz/go-oidc-provider/internal/audit"
-	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -37,15 +35,7 @@ func consumeJARRequestObject(
 	raw := values.Get("request")
 	if raw == "" {
 		if deps.RequireSignedAuthRequest {
-			deps.auditEmitter().Emit(ctx, audit.Event{
-				Name:     ciba.AuditAuthorizationRejected,
-				Level:    audit.LevelWarn,
-				Message:  "backchannel-authentication rejected: signed request object required",
-				ClientID: client.ID,
-				Extras: map[string]any{
-					"reason": "request_object_required",
-				},
-			})
+			emitRejected(ctx, deps, client.ID, "signed request object required", "request_object_required")
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 				"request object is required by the active profile")
 			return nil, false
@@ -53,45 +43,21 @@ func consumeJARRequestObject(
 		return values, true
 	}
 	if deps.JAR == nil {
-		deps.auditEmitter().Emit(ctx, audit.Event{
-			Name:     ciba.AuditAuthorizationRejected,
-			Level:    audit.LevelWarn,
-			Message:  "backchannel-authentication rejected: request object not supported",
-			ClientID: client.ID,
-			Extras: map[string]any{
-				"reason": "request_object_invalid",
-			},
-		})
+		emitRejected(ctx, deps, client.ID, "request object not supported", "request_object_invalid")
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidRequest,
 			"request is not supported by this OP")
 		return nil, false
 	}
 	obj, err := deps.JAR.VerifyCIBA(ctx, raw, client.ID, client)
 	if err != nil {
-		deps.auditEmitter().Emit(ctx, audit.Event{
-			Name:     ciba.AuditAuthorizationRejected,
-			Level:    audit.LevelWarn,
-			Message:  "backchannel-authentication rejected: request object verification failed",
-			ClientID: client.ID,
-			Extras: map[string]any{
-				"reason": "request_object_invalid",
-			},
-		})
+		emitRejected(ctx, deps, client.ID, "request object verification failed", "request_object_invalid")
 		writeJARError(w, err)
 		return nil, false
 	}
 	// RFC 9101 §6.3: only the signed object's parameters are used here.
 	merged, err := jar.Merge(values, obj, jar.MergeObjectOnly)
 	if err != nil {
-		deps.auditEmitter().Emit(ctx, audit.Event{
-			Name:     ciba.AuditAuthorizationRejected,
-			Level:    audit.LevelWarn,
-			Message:  "backchannel-authentication rejected: request object merge failed",
-			ClientID: client.ID,
-			Extras: map[string]any{
-				"reason": "request_object_invalid",
-			},
-		})
+		emitRejected(ctx, deps, client.ID, "request object merge failed", "request_object_invalid")
 		writeJARError(w, err)
 		return nil, false
 	}

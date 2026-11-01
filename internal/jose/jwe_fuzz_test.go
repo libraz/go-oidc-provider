@@ -65,7 +65,7 @@ func FuzzJWENested(f *testing.F) {
 		f.Add(payload)
 	}
 	// Add a few non-JWE shapes so the engine explores the
-	// looksLikeJWE = false branch as well.
+	// LooksLikeJWE = false branch as well.
 	f.Add("")
 	f.Add("not.a.jwe")
 	f.Add("a.b.c.d.e") // 5-segment but malformed JWE

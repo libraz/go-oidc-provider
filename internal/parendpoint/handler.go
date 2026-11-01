@@ -34,14 +34,9 @@ const (
 	uriByteLength = 32
 )
 
-// Clock is the package-local view of the wall clock. It mirrors the
-// token / authorize endpoint posture: a structurally-typed interface so a
-// value satisfying [github.com/libraz/go-oidc-provider/op.Clock] flows
-// through without an explicit adapter, and a nil falls back to the system
-// clock.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the package-local name for the shared wall-clock interface; a nil
+// Clock falls back to the system clock.
+type Clock = timex.Clock
 
 // Deps bundles the runtime dependencies the PAR endpoint needs. The HTTP
 // layer constructs a [Deps] once at startup and passes it to [Handler];
@@ -192,10 +187,7 @@ type Deps struct {
 // auditEmitter returns the configured audit sink, or a [audit.Discard]
 // emitter so call sites can invoke Emit unconditionally.
 func (d *Deps) auditEmitter() audit.Emitter {
-	if d.Audit == nil {
-		return audit.Discard()
-	}
-	return d.Audit
+	return audit.OrDiscard(d.Audit)
 }
 
 // Handler returns the HTTP handler the OP mounts at its PAR endpoint. The

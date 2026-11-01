@@ -277,7 +277,7 @@ func Decrypt(raw string, resolver EncryptionKeyResolver) (DecryptedJWE, error) {
 		return DecryptedJWE{}, fmt.Errorf("%w: %q", ErrJWEEncNotAllowed, hdr.Enc)
 	}
 
-	obj, err := josev4.ParseEncryptedCompact(raw, allowedV4KeyAlgorithms(), allowedV4ContentEncryptions())
+	obj, err := josev4.ParseEncryptedCompact(raw, allowedV4KeyAlgorithms, allowedV4ContentEncryptions)
 	if err != nil {
 		return DecryptedJWE{}, fmt.Errorf("%w: %w", ErrJWEMalformed, err)
 	}
@@ -451,7 +451,7 @@ func DecryptChain(raw string, resolver EncryptionKeyResolver, budget int) (Neste
 	current := raw
 	layers := 0
 	for {
-		if !looksLikeJWE(current) {
+		if !LooksLikeJWE(current) {
 			return NestedDecryption{
 				Plaintext: []byte(current),
 				JWELayers: layers,
@@ -475,32 +475,32 @@ func DecryptChain(raw string, resolver EncryptionKeyResolver, budget int) (Neste
 	}
 }
 
-// looksLikeJWE reports whether s is shaped like a compact-serialised
+// LooksLikeJWE reports whether s is shaped like a compact-serialised
 // JWE (RFC 7516 §3.1: five base64url segments separated by "."). The
 // check is purely structural — a real JWE parse happens inside
 // [Decrypt]. Used by [DecryptChain] to decide whether to peel another
 // layer.
-func looksLikeJWE(s string) bool {
+func LooksLikeJWE(s string) bool {
 	return strings.Count(s, ".") == 4
 }
 
-// allowedV4KeyAlgorithms returns the slice of go-jose v4
-// [josev4.KeyAlgorithm] constants matching [AllowedJWEAlgs]. Keeping
-// the mapping in one place lets us audit it alongside [JWEAlg.IsAllowed].
-func allowedV4KeyAlgorithms() []josev4.KeyAlgorithm {
-	return []josev4.KeyAlgorithm{
-		josev4.RSA_OAEP_256,
-		josev4.ECDH_ES,
-		josev4.ECDH_ES_A128KW,
-		josev4.ECDH_ES_A256KW,
-	}
+// allowedV4KeyAlgorithms is the go-jose v4 [josev4.KeyAlgorithm] form of
+// [AllowedJWEAlgs]. Keeping the mapping in one place lets us audit it
+// alongside [JWEAlg.IsAllowed]. go-jose only reads the slice; it is shared.
+//
+//nolint:gochecknoglobals // immutable allow-list handed to go-jose read-only.
+var allowedV4KeyAlgorithms = []josev4.KeyAlgorithm{
+	josev4.RSA_OAEP_256,
+	josev4.ECDH_ES,
+	josev4.ECDH_ES_A128KW,
+	josev4.ECDH_ES_A256KW,
 }
 
-// allowedV4ContentEncryptions returns the slice of go-jose v4
-// [josev4.ContentEncryption] constants matching [AllowedJWEEncs].
-func allowedV4ContentEncryptions() []josev4.ContentEncryption {
-	return []josev4.ContentEncryption{
-		josev4.A128GCM,
-		josev4.A256GCM,
-	}
+// allowedV4ContentEncryptions is the go-jose v4 [josev4.ContentEncryption]
+// form of [AllowedJWEEncs], shared read-only like [allowedV4KeyAlgorithms].
+//
+//nolint:gochecknoglobals // immutable allow-list handed to go-jose read-only.
+var allowedV4ContentEncryptions = []josev4.ContentEncryption{
+	josev4.A128GCM,
+	josev4.A256GCM,
 }

@@ -70,7 +70,7 @@ func branchOrder(hint string, jwtShaped bool) []branchFn {
 	opaque := func(ctx context.Context, deps Deps, _ *tokens.AccessTokenVerifier, c, t string) bool {
 		return revokeOpaque(ctx, deps, c, t)
 	}
-	return endpointsupport.OrderTokenBranches[branchFn](hint == hintRefreshToken, jwtShaped, revokeJWT, opaque)
+	return endpointsupport.OrderTokenBranches[branchFn](hint == endpointsupport.HintRefreshToken, jwtShaped, revokeJWT, opaque)
 }
 
 // revokeJWT verifies token as a JWT-formatted access token and, when

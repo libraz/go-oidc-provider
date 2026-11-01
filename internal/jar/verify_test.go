@@ -189,6 +189,39 @@ func TestVerify_JWKSRotationRecovery_SkippedForInlineClient(t *testing.T) {
 	}
 }
 
+// TestVerify_JWKSRotationRecovery_SkippedWhenKIDPresent pins the shared
+// rotation rule: a kid that is present in the cached set (here as an
+// encryption-only key) is not a rotated-out key, so no refetch is forced.
+func TestVerify_JWKSRotationRecovery_SkippedWhenKIDPresent(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, jwk, _ := signedRequestObject(t, happyClaims(now), "kid-rotated")
+	encOnly := *jwk
+	encOnly.Use = "enc"
+	stale := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{encOnly}}
+	fresh := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{*jwk}}
+
+	res := &rotatingResolver{stale: stale, fresh: fresh}
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:          testIssuer,
+		Resolver:        res,
+		Clock:           fakeClock{now: now},
+		AllowMissingNbf: true,
+		AllowMissingJTI: true,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	client := &store.Client{ID: testClientID, JWKsURI: "https://rp.example.com/jwks"}
+	if _, err := v.Verify(context.Background(), raw, testClientID, client); !errors.Is(err, jar.ErrNoMatchingJWK) {
+		t.Fatalf("err=%v want ErrNoMatchingJWK", err)
+	}
+	if res.freshCalls != 0 {
+		t.Errorf("freshCalls=%d want 0 (kid present in the cached set)", res.freshCalls)
+	}
+}
+
 func TestVerify_HappyPath(t *testing.T) {
 	t.Parallel()
 

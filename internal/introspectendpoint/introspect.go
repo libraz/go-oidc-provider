@@ -3,6 +3,7 @@ package introspectendpoint
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -143,7 +144,7 @@ func branchOrder(hint string, jwtShaped bool) []branchFn {
 	opaque := func(ctx context.Context, deps Deps, _ *tokens.AccessTokenVerifier, c, t string) (response, bool) {
 		return resolveOpaque(ctx, deps, c, t)
 	}
-	return endpointsupport.OrderTokenBranches[branchFn](hint == hintRefreshToken, jwtShaped, resolveJWT, opaque)
+	return endpointsupport.OrderTokenBranches[branchFn](hint == endpointsupport.HintRefreshToken, jwtShaped, resolveJWT, opaque)
 }
 
 // resolveJWT verifies token as a JWT-formatted access token and
@@ -221,7 +222,7 @@ func projectAccessTokenClaims(c *tokens.AccessTokenClaims) response {
 		out.AMR = append([]string(nil), c.AMR...)
 	}
 	if len(c.Confirmation) > 0 {
-		out.Cnf = cloneStringMap(c.Confirmation)
+		out.Cnf = maps.Clone(c.Confirmation)
 	}
 	if len(c.AuthorizationDetails) > 0 {
 		out.AuthorizationDetails = c.AuthorizationDetails
@@ -497,19 +498,6 @@ func refreshTokenCnf(rec *store.RefreshToken) map[string]string {
 		cnf[tokens.CnfX5tS256] = rec.MTLSCertThumbprint
 	}
 	return cnf
-}
-
-// cloneStringMap returns a defensive copy of in. The introspection
-// response shares a borrowed reference with [tokens.AccessTokenClaims];
-// without the copy a caller mutating the returned map would corrupt
-// the verifier's decoded claims, which the library treats as
-// read-only.
-func cloneStringMap(in map[string]string) map[string]string {
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 // emitLookupFault reports a token lookup that could not be answered,

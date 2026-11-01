@@ -1,8 +1,6 @@
 package devicecode
 
 import (
-	"time"
-
 	"github.com/libraz/go-oidc-provider/internal/pollinterval"
 )
 
@@ -21,109 +19,48 @@ const (
 	MaxPollViolations = pollinterval.MaxPollViolations
 )
 
-// PollDecision is the closed sum returned by [DecidePoll] naming
-// the response the token endpoint should write for this poll. The
-// type is closed: callers exhaustively switch on it and the
-// linter flags any new case the caller forgets to handle.
-type PollDecision uint8
+// PollDecision names the response the token endpoint should write for
+// a poll. Callers switch on it exhaustively.
+type PollDecision = pollinterval.Outcome
 
+// Wire decisions of the device-code poll (RFC 8628 §3.5).
 const (
-	// PollDecisionInvalid is the zero value. It is not a legitimate
-	// decision; callers that observe it have a bug in their
-	// dispatch.
-	PollDecisionInvalid PollDecision = iota
+	// PollDecisionInvalid is the zero value; observing it is a dispatch bug.
+	PollDecisionInvalid = pollinterval.OutcomeInvalid
 
-	// PollDecisionEmit means the device passed every gate and the
-	// token endpoint may proceed to consume the device_code and
-	// emit credentials.
-	PollDecisionEmit
+	// PollDecisionEmit means every gate passed and the token endpoint
+	// may consume the device_code and emit credentials.
+	PollDecisionEmit = pollinterval.OutcomeEmit
 
 	// PollDecisionAuthorizationPending means the user has not yet
-	// completed the verification ceremony. The wire form is
-	// authorization_pending per RFC 8628 §3.5.
-	PollDecisionAuthorizationPending
+	// completed the verification ceremony.
+	PollDecisionAuthorizationPending = pollinterval.OutcomePending
 
-	// PollDecisionSlowDown means the device polled inside the
-	// current interval and MUST back off. The wire form is
-	// slow_down per RFC 8628 §3.5; the token endpoint also raises
-	// the device's effective interval by [pollinterval.SlowDownIncrement] before
-	// the next poll, matching the increase the RFC asks the device
-	// to apply.
-	PollDecisionSlowDown
+	// PollDecisionSlowDown means the device polled inside the current
+	// interval and MUST back off; the endpoint also raises the stored
+	// interval by [pollinterval.SlowDownIncrement].
+	PollDecisionSlowDown = pollinterval.OutcomeSlowDown
 
-	// PollDecisionAccessDenied means the user explicitly rejected
-	// the request, or the user_code brute-force gate terminated
-	// the record. The wire form is access_denied per RFC 8628 §3.5.
-	PollDecisionAccessDenied
+	// PollDecisionAccessDenied means the user rejected the request or
+	// the user_code brute-force gate terminated the record.
+	PollDecisionAccessDenied = pollinterval.OutcomeDenied
 
-	// PollDecisionExpiredToken means the device_code's TTL has
-	// elapsed, the record has already been consumed by a previous
-	// successful poll, or the record disappeared from the
-	// substore. The wire form is expired_token per RFC 8628 §3.5.
-	PollDecisionExpiredToken
+	// PollDecisionExpiredToken means the device_code's TTL has elapsed,
+	// a previous poll already consumed it, or the record disappeared
+	// from the substore.
+	PollDecisionExpiredToken = pollinterval.OutcomeExpired
 )
 
-// String returns the wire-friendly mnemonic for d, suitable for
-// audit and log output. Unknown values surface as "invalid".
-func (d PollDecision) String() string {
-	switch d {
-	case PollDecisionEmit:
-		return "emit"
-	case PollDecisionAuthorizationPending:
-		return "authorization_pending"
-	case PollDecisionSlowDown:
-		return "slow_down"
-	case PollDecisionAccessDenied:
-		return "access_denied"
-	case PollDecisionExpiredToken:
-		return "expired_token"
-	case PollDecisionInvalid:
-		return "invalid"
-	default:
-		return "invalid"
-	}
-}
-
-// PollInput is the parameter bundle [DecidePoll] consumes. The caller
-// resolves the substore record, then projects only the fields the
-// discipline cares about; see [pollinterval.Input] for each field.
+// PollInput is the parameter bundle [DecidePoll] consumes; see
+// [pollinterval.Input] for each field.
 type PollInput = pollinterval.Input
 
-// PollOutput captures the decision plus the next-interval the token
-// endpoint stamps on the record before responding to the device.
-// NextInterval is meaningful only when Decision is
-// [PollDecisionSlowDown]; it is the raised value the next poll's
-// gate compares against.
-type PollOutput struct {
-	Decision             PollDecision
-	NextInterval         time.Duration
-	CountThisAsViolation bool
-}
+// PollOutput is the decision plus the next interval and the
+// should-count-as-violation flag; see [pollinterval.Output].
+type PollOutput = pollinterval.Output
 
 // DecidePoll applies the shared polling discipline ([pollinterval.Decide])
-// and maps the outcome onto this flow's wire decisions. A consumed record
-// maps to [PollDecisionExpiredToken].
+// and maps a consumed record to [PollDecisionExpiredToken].
 func DecidePoll(in PollInput) PollOutput {
-	res := pollinterval.Decide(in)
-	out := PollOutput{
-		NextInterval:         res.NextInterval,
-		CountThisAsViolation: res.CountThisAsViolation,
-	}
-	switch res.Outcome {
-	case pollinterval.OutcomeEmit:
-		out.Decision = PollDecisionEmit
-	case pollinterval.OutcomePending:
-		out.Decision = PollDecisionAuthorizationPending
-	case pollinterval.OutcomeSlowDown:
-		out.Decision = PollDecisionSlowDown
-	case pollinterval.OutcomeDenied:
-		out.Decision = PollDecisionAccessDenied
-	case pollinterval.OutcomeExpired:
-		out.Decision = PollDecisionExpiredToken
-	case pollinterval.OutcomeConsumed:
-		out.Decision = PollDecisionExpiredToken
-	case pollinterval.OutcomeInvalid:
-		out.Decision = PollDecisionInvalid
-	}
-	return out
+	return pollinterval.DecideAs(in, PollDecisionExpiredToken)
 }

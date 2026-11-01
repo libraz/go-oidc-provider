@@ -33,13 +33,9 @@ const AuditEventLooseMethodCaseAdmitted = string(auditevent.AuditDPoPLooseMethod
 // configured independently, which keeps the two from drifting apart.
 const DefaultIatWindow = 60 * time.Second
 
-// Clock is the package-local view of the wall clock. It mirrors the
-// verifier-shaped Clock used in internal/tokens so an [op.Clock]
-// value satisfies it without an explicit adapter, and a nil falls
-// back to the system clock.
-type Clock interface {
-	Now() time.Time
-}
+// Clock is the package-local name for the shared wall-clock interface; a nil
+// Clock falls back to the system clock.
+type Clock = timex.Clock
 
 // NonceVerifier is the contract the [Verifier] consults when the
 // deployment opts into the RFC 9449 §8 / §9 server-supplied nonce
@@ -180,10 +176,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if window <= 0 {
 		window = DefaultIatWindow
 	}
-	emitter := cfg.Emitter
-	if emitter == nil {
-		emitter = audit.Discard()
-	}
+	emitter := audit.OrDiscard(cfg.Emitter)
 	return &Verifier{
 		clock:     clock,
 		jtis:      cfg.JTIs,
@@ -384,9 +377,6 @@ func (v *Verifier) Check(ctx context.Context, in VerifyInput) (*Checked, error) 
 	}
 
 	if in.AccessToken != "" {
-		if parsed.claims.ATH == "" {
-			return nil, ErrProofATHMismatch
-		}
 		if parsed.claims.ATH != AccessTokenHash(in.AccessToken) {
 			return nil, ErrProofATHMismatch
 		}

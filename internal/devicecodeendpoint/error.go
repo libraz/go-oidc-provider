@@ -1,5 +1,7 @@
 package devicecodeendpoint
 
+import "github.com/libraz/go-oidc-provider/internal/endpointsupport"
+
 // RFC 6749 §5.2 wire codes the handler emits. The list is closed;
 // "invalid_client" is emitted from
 // internal/endpointsupport so the constant lives there
@@ -8,7 +10,7 @@ package devicecodeendpoint
 // (its codes apply to the token endpoint poll); the issuance
 // handler reuses the §5.2 catalogue.
 const (
-	errInvalidRequest = "invalid_request"
+	errInvalidRequest = endpointsupport.ErrInvalidRequest
 	errInvalidScope   = "invalid_scope"
-	errServerError    = "server_error"
+	errServerError    = endpointsupport.ErrServerError
 )
