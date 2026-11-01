@@ -323,10 +323,7 @@ func (s *grantRevocationStore) GC(ctx context.Context, cutoff time.Time) (int, e
 }
 
 func (s *grantRevocationStore) read(ctx context.Context, pk string) (item, error) {
-	if s.tx != nil {
-		return s.tx.get(ctx, s.parent.names.grantTombstones, pk)
-	}
-	return s.parent.get(ctx, s.parent.names.grantTombstones, pk)
+	return s.parent.getVia(ctx, s.tx, s.parent.names.grantTombstones, pk)
 }
 
 var (

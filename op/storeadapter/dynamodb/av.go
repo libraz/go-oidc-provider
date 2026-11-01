@@ -47,7 +47,7 @@ func avN(n int64) types.AttributeValue {
 func avB(b []byte) types.AttributeValue {
 	// DynamoDB rejects an empty binary value for a key attribute and
 	// round-trips it inconsistently elsewhere, so an empty slice is
-	// stored as the empty string marker instead.
+	// stored as a NULL value instead.
 	if len(b) == 0 {
 		return &types.AttributeValueMemberNULL{Value: true}
 	}

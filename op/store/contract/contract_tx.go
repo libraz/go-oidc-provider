@@ -96,11 +96,7 @@ func seedRefreshTokens(t *testing.T, s store.Store, ctx context.Context, tokens 
 // operation is required not to expose the interface.
 func requireRetryResponses(t *testing.T, s store.Store) store.RefreshRetryResponseStore {
 	t.Helper()
-	retry, ok := s.RefreshTokens().(store.RefreshRetryResponseStore)
-	if !ok {
-		t.Skipf("backend %T does not implement store.RefreshRetryResponseStore", s.RefreshTokens())
-	}
-	return retry
+	return requireCapability[store.RefreshRetryResponseStore](t, s.RefreshTokens())
 }
 
 // requireTxRetryResponses is [requireRetryResponses] for the substore handle
@@ -110,11 +106,7 @@ func requireRetryResponses(t *testing.T, s store.Store) store.RefreshRetryRespon
 // leave the token endpoint no atomic path at all.
 func requireTxRetryResponses(t *testing.T, tx store.Tx) store.RefreshRetryResponseStore {
 	t.Helper()
-	retry, ok := tx.RefreshTokens().(store.RefreshRetryResponseStore)
-	if !ok {
-		t.Skipf("backend %T does not implement store.RefreshRetryResponseStore", tx.RefreshTokens())
-	}
-	return retry
+	return requireCapability[store.RefreshRetryResponseStore](t, tx.RefreshTokens())
 }
 
 // requireTxAccessTokens fetches the transaction's JWT access-token registry,
@@ -122,33 +114,21 @@ func requireTxRetryResponses(t *testing.T, tx store.Tx) store.RefreshRetryRespon
 // [requireAccessTokens] makes for the aggregate.
 func requireTxAccessTokens(t *testing.T, tx store.Tx) store.AccessTokenRegistry {
 	t.Helper()
-	registry := tx.AccessTokens()
-	if registry == nil {
-		t.Skipf("backend %T returns nil from Tx.AccessTokens()", tx)
-	}
-	return registry
+	return requireSubstore(t, tx, tx.AccessTokens(), "Tx.AccessTokens()")
 }
 
 // requireTxOpaqueAccessTokens fetches the transaction's opaque access-token
 // substore, skipping when the backend returns nil.
 func requireTxOpaqueAccessTokens(t *testing.T, tx store.Tx) store.OpaqueAccessTokenStore {
 	t.Helper()
-	at := tx.OpaqueAccessTokens()
-	if at == nil {
-		t.Skipf("backend %T returns nil from Tx.OpaqueAccessTokens()", tx)
-	}
-	return at
+	return requireSubstore(t, tx, tx.OpaqueAccessTokens(), "Tx.OpaqueAccessTokens()")
 }
 
 // requireTxGrantRevocations fetches the transaction's grant-revocation
 // substore, skipping when the backend returns nil.
 func requireTxGrantRevocations(t *testing.T, tx store.Tx) store.GrantRevocationStore {
 	t.Helper()
-	gr := tx.GrantRevocations()
-	if gr == nil {
-		t.Skipf("backend %T returns nil from Tx.GrantRevocations()", tx)
-	}
-	return gr
+	return requireSubstore(t, tx, tx.GrantRevocations(), "Tx.GrantRevocations()")
 }
 
 // --- transaction lifecycle ---------------------------------------------------

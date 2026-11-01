@@ -111,7 +111,7 @@ func (s *sessionStore) ListByChooserGroup(ctx context.Context, groupID string) (
 	defer rows.Close() //nolint:errcheck // best-effort close; the explicit error path inside the loop already handles failure.
 	var out []*store.Session
 	for rows.Next() {
-		rec, err := s.scan(rowProxy{rows})
+		rec, err := s.scan(rows)
 		if err != nil {
 			return nil, wrapErr("sessions.ListByChooserGroup.scan", err)
 		}

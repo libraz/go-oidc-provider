@@ -48,11 +48,7 @@ var opaqueAccessTokenCases = []subtest{
 // every backend that does ship the substore.
 func requireOpaqueAccessTokens(t *testing.T, s store.Store) store.OpaqueAccessTokenStore {
 	t.Helper()
-	at := s.OpaqueAccessTokens()
-	if at == nil {
-		t.Skipf("backend %T returns nil from OpaqueAccessTokens()", s)
-	}
-	return at
+	return requireSubstore(t, s, s.OpaqueAccessTokens(), "OpaqueAccessTokens()")
 }
 
 func newOpaqueAT(now time.Time, id, grantID string) *store.OpaqueAccessToken {
@@ -184,6 +180,12 @@ func opaqueATRevokeByGrant(t *testing.T, f Factory) {
 	}
 	if n != 3 {
 		t.Fatalf("RevokeByGrant count = %d, want 3", n)
+	}
+	if n, err = at.RevokeByGrant(ctx, "grant-shared"); err != nil {
+		t.Fatalf("RevokeByGrant (repeat): %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("RevokeByGrant (repeat) count = %d, want 0", n)
 	}
 	other, err := at.Find(ctx, "oat-other")
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // cibaRequestStore is the in-memory implementation of
@@ -21,13 +22,6 @@ type cibaRequestStore struct {
 	m            map[string]*store.CIBARequest // key: hashKey(auth_req_id)
 	savesSinceGC uint32
 }
-
-// cibaFullGCSaveInterval is how many Save calls pass between full
-// sweeps of the CIBA map. Save additionally evicts the exact key it is
-// about to write whenever that key holds an expired record, so a
-// colliding auth_req_id is reclaimed immediately rather than waiting
-// for the sweep.
-const cibaFullGCSaveInterval uint32 = 64
 
 func newCIBARequestStore(c Clock) *cibaRequestStore {
 	return &cibaRequestStore{
@@ -62,19 +56,19 @@ func (s *cibaRequestStore) Save(_ context.Context, req *store.CIBARequest) error
 
 func (s *cibaRequestStore) gcLocked(now time.Time) {
 	for key, rec := range s.m {
-		if isExpiredAtStrict(rec.ExpiresAt, now) {
+		if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
 			delete(s.m, key)
 		}
 	}
 	s.savesSinceGC = 0
 }
 
-// maybeGCLocked runs a full sweep once every [cibaFullGCSaveInterval]
+// maybeGCLocked runs a full sweep once every [fullGCInterval]
 // saves, amortising the sweep over the saves that made it necessary
 // instead of paying O(total requests) on each one.
 func (s *cibaRequestStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, cibaFullGCSaveInterval, len(s.m)) {
+	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)
@@ -84,13 +78,13 @@ func (s *cibaRequestStore) maybeGCLocked(now time.Time) {
 // expired. Save calls it so an incoming auth_req_id that collides with
 // a dead record is accepted rather than rejected as a duplicate; the
 // amortised sweep alone would leave that collision standing for up to
-// [cibaFullGCSaveInterval] saves.
+// [fullGCInterval] saves.
 func (s *cibaRequestStore) deleteExpiredKeyLocked(key string, now time.Time) {
 	rec, ok := s.m[key]
 	if !ok {
 		return
 	}
-	if isExpiredAtStrict(rec.ExpiresAt, now) {
+	if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
 		delete(s.m, key)
 	}
 }

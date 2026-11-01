@@ -275,22 +275,14 @@ func ratDeleteMissing(t *testing.T, f Factory) {
 // [store.Transactional]'s.
 func requireIATStore(t *testing.T, s store.Store) store.InitialAccessTokenStore {
 	t.Helper()
-	iats := s.InitialAccessTokens()
-	if iats == nil {
-		t.Skipf("backend %T does not expose InitialAccessTokenStore", s)
-	}
-	return iats
+	return requireSubstore(t, s, s.InitialAccessTokens(), "InitialAccessTokens()")
 }
 
 // requireRATStore is the [store.RegistrationAccessTokenStore] analogue of
 // [requireIATStore].
 func requireRATStore(t *testing.T, s store.Store) store.RegistrationAccessTokenStore {
 	t.Helper()
-	rats := s.RegistrationAccessTokens()
-	if rats == nil {
-		t.Skipf("backend %T does not expose RegistrationAccessTokenStore", s)
-	}
-	return rats
+	return requireSubstore(t, s, s.RegistrationAccessTokens(), "RegistrationAccessTokens()")
 }
 
 func newIAT(now time.Time, id, hash string) *store.InitialAccessToken {

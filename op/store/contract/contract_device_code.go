@@ -20,11 +20,7 @@ import (
 // harness treats the substore as out of scope rather than panicking.
 func requireDeviceCodes(t *testing.T, s store.Store) store.DeviceCodeStore {
 	t.Helper()
-	dc := s.DeviceCodes()
-	if dc == nil {
-		t.Skipf("backend %T does not provide a DeviceCodeStore", s)
-	}
-	return dc
+	return requireSubstore(t, s, s.DeviceCodes(), "DeviceCodes()")
 }
 
 func newDeviceCode(now time.Time, id, userCode string) *store.DeviceCode {

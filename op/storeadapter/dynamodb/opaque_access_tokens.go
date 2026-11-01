@@ -62,10 +62,7 @@ func (s *opaqueAccessTokenStore) Find(ctx context.Context, id string) (*store.Op
 }
 
 func (s *opaqueAccessTokenStore) read(ctx context.Context, pk string) (item, error) {
-	if s.tx != nil {
-		return s.tx.get(ctx, s.parent.names.opaqueAccessTokens, pk)
-	}
-	return s.parent.get(ctx, s.parent.names.opaqueAccessTokens, pk)
+	return s.parent.getVia(ctx, s.tx, s.parent.names.opaqueAccessTokens, pk)
 }
 
 // RevokeByID marks one token revoked. Revoking a token that is not
@@ -94,7 +91,7 @@ func (s *opaqueAccessTokenStore) retire(ctx context.Context, pk string) error {
 }
 
 // RevokeByGrant retires every token of a grant and reports how many it
-// touched. Inside a transaction the enumeration reads the index while
+// newly revoked. Inside a transaction the enumeration reads the index while
 // each retirement is buffered, so the cascade covers the committed set
 // and costs one of the transaction's actions per token. The enumeration
 // is outside the buffer, so the settled-handle guard is explicit: a
@@ -116,13 +113,13 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID stri
 		if pk == "" {
 			continue
 		}
-		if err := s.retire(ctx, pk); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				continue
-			}
+		flipped, err := s.parent.flipRevoked(ctx, s.tx, s.parent.names.opaqueAccessTokens, pk)
+		if err != nil {
 			return count, wrapErr("opaqueAccessTokens.RevokeByGrant", err)
 		}
-		count++
+		if flipped {
+			count++
+		}
 	}
 	return count, nil
 }

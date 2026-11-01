@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -80,10 +76,7 @@ func (s *authCodeStore) find(ctx context.Context, id string) (*store.Authorizati
 }
 
 func (s *authCodeStore) read(ctx context.Context, table, pk string) (item, error) {
-	if s.tx != nil {
-		return s.tx.get(ctx, table, pk)
-	}
-	return s.parent.get(ctx, table, pk)
+	return s.parent.getVia(ctx, s.tx, table, pk)
 }
 
 func (s *authCodeStore) Consume(ctx context.Context, id string) (*store.AuthorizationCode, error) {
@@ -108,20 +101,7 @@ func (s *authCodeStore) Consume(ctx context.Context, id string) (*store.Authoriz
 		return rec, nil
 	}
 
-	_, err = s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:           aws.String(s.parent.names.authCodes),
-		Key:                 key(digest),
-		UpdateExpression:    aws.String("SET #consumed = :now"),
-		ConditionExpression: aws.String("attribute_exists(#pk) AND #consumed = :zero"),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":       attrPK,
-			"#consumed": attrConsumedAt,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":now":  avTime(now),
-			":zero": avN(0),
-		},
-	})
+	_, err = s.parent.api.UpdateItem(ctx, stampConsumedInput(s.parent.names.authCodes, digest, now))
 	if err != nil {
 		if isConditionalCheckFailed(err) {
 			return rejectedConsume(ctx, func(ctx context.Context) (*store.AuthorizationCode, error) {

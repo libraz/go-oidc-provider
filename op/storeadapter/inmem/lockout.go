@@ -28,12 +28,6 @@ type authnLockoutStore struct {
 }
 
 const (
-	// authnLockoutFullGCSwapInterval is how many successful swaps pass
-	// between full sweeps of the counter map. The map is keyed by
-	// subject, and an attacker probing a large list of guessed
-	// usernames mints one row per guess, so it needs reclamation.
-	authnLockoutFullGCSwapInterval uint32 = 64
-
 	// authnLockoutRetention is how long a counter is kept after it has
 	// stopped influencing any authentication decision. A record is
 	// reclaimable once its LockedUntil stamp has passed and its
@@ -100,13 +94,13 @@ func (s *authnLockoutStore) CompareAndSwap(ctx context.Context, expectedVersion 
 }
 
 // maybeGCLocked runs a full sweep once every
-// [authnLockoutFullGCSwapInterval] successful swaps. It runs after the
+// [fullGCInterval] successful swaps. It runs after the
 // swap has been applied and skips the subject just written so a
 // caller's own transition can never be undone by the sweep it
 // triggered; every other reclaimable row is dropped.
 func (s *authnLockoutStore) maybeGCLocked(now time.Time, keep string) {
 	s.swapsSinceGC++
-	if !sweepDue(s.swapsSinceGC, authnLockoutFullGCSwapInterval, len(s.m)) {
+	if !sweepDue(s.swapsSinceGC, fullGCInterval, len(s.m)) {
 		return
 	}
 	s.swapsSinceGC = 0

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync/atomic"
 	"time"
 
@@ -32,9 +33,18 @@ type tx struct {
 	rtStaging  *refreshStaging
 	grStaging  *grantStaging
 	parStaging *parStaging
-	atStaging  *accessTokenStaging
-	oatStaging *opaqueAccessTokenStaging
+	atStaging  *overlay[*store.AccessTokenRecord]
+	oatStaging *overlay[*store.OpaqueAccessToken]
 	grvStaging *grantRevocationStaging
+}
+
+// guard reports the error a substore call must return before touching
+// staging: the closed-handle sentinel, or the context's own error.
+func (t *tx) guard(ctx context.Context) error {
+	if t.closed.Load() {
+		return errTxClosed
+	}
+	return ctx.Err()
 }
 
 // AuthorizationCodes returns the transactional authorization-code substore.
@@ -158,12 +168,8 @@ type authCodeStaging struct {
 }
 
 func (s *authCodeStaging) flushLocked() {
-	for id, rec := range s.added {
-		s.parent.m[id] = rec
-	}
-	for id, rec := range s.updated {
-		s.parent.m[id] = rec
-	}
+	maps.Copy(s.parent.m, s.added)
+	maps.Copy(s.parent.m, s.updated)
 	// The browser authorization-code flow persists every code inside a
 	// transaction, so the amortised sweep has to be driven from here as
 	// well: counting only the direct Save path would leave the map
@@ -176,10 +182,7 @@ func (s *authCodeStaging) flushLocked() {
 type txAuthCodes struct{ tx *tx }
 
 func (a *txAuthCodes) Save(ctx context.Context, code *store.AuthorizationCode) error {
-	if a.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := a.tx.guard(ctx); err != nil {
 		return err
 	}
 	if code == nil {
@@ -201,10 +204,7 @@ func (a *txAuthCodes) Save(ctx context.Context, code *store.AuthorizationCode) e
 }
 
 func (a *txAuthCodes) Find(ctx context.Context, id string) (*store.AuthorizationCode, error) {
-	if a.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := a.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	rec := a.tx.acStaging.lookup(hashKey(id))
@@ -220,10 +220,7 @@ func (a *txAuthCodes) Find(ctx context.Context, id string) (*store.Authorization
 }
 
 func (a *txAuthCodes) Consume(ctx context.Context, id string) (*store.AuthorizationCode, error) {
-	if a.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := a.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	st := a.tx.acStaging
@@ -250,17 +247,24 @@ func (a *txAuthCodes) Consume(ctx context.Context, id string) (*store.Authorizat
 	return out, nil
 }
 
+// lookup returns a snapshot, so a later mutation via Consume is confined
+// to staging.
 func (s *authCodeStaging) lookup(key string) *store.AuthorizationCode {
-	if rec, ok := s.updated[key]; ok {
+	return stagedLookup(key, s.updated, s.added, s.parent.m, cloneAuthCode)
+}
+
+// stagedLookup resolves key against the updated overlay, then the added
+// one, then a clone of the committed record; it returns nil when none
+// holds it.
+func stagedLookup[V *T, T any](key string, updated, added, base map[string]V, clone func(V) V) V {
+	if rec, ok := updated[key]; ok {
 		return rec
 	}
-	if rec, ok := s.added[key]; ok {
+	if rec, ok := added[key]; ok {
 		return rec
 	}
-	if rec, ok := s.parent.m[key]; ok {
-		// Return a snapshot so subsequent mutations via Consume are
-		// confined to staging.
-		return cloneAuthCode(rec)
+	if rec, ok := base[key]; ok {
+		return clone(rec)
 	}
 	return nil
 }
@@ -312,10 +316,7 @@ func (s *refreshStaging) flushLocked() {
 type txRefreshes struct{ tx *tx }
 
 func (r *txRefreshes) Save(ctx context.Context, token *store.RefreshToken) error {
-	if r.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := r.tx.guard(ctx); err != nil {
 		return err
 	}
 	if token == nil {
@@ -371,10 +372,7 @@ func (r *txRefreshes) SaveRotationWithRetry(ctx context.Context, token *store.Re
 // to the same retention bound as the non-transactional read: past the
 // predecessor's own expiry the entry reads as absent.
 func (r *txRefreshes) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
-	if r.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := r.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	key := hashKey(predecessorID)
@@ -389,10 +387,7 @@ func (r *txRefreshes) LoadRetryResponse(ctx context.Context, predecessorID strin
 }
 
 func (r *txRefreshes) Find(ctx context.Context, id string) (*store.RefreshToken, error) {
-	if r.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := r.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	rec := r.tx.rtStaging.lookup(hashKey(id))
@@ -408,10 +403,7 @@ func (r *txRefreshes) Find(ctx context.Context, id string) (*store.RefreshToken,
 }
 
 func (r *txRefreshes) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
-	if r.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := r.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	st := r.tx.rtStaging
@@ -442,10 +434,7 @@ func (r *txRefreshes) Consume(ctx context.Context, id string) (*store.RefreshTok
 }
 
 func (r *txRefreshes) RevokeChain(ctx context.Context, rootID string) error {
-	if r.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := r.tx.guard(ctx); err != nil {
 		return err
 	}
 	st := r.tx.rtStaging
@@ -473,10 +462,7 @@ func (r *txRefreshes) RevokeChain(ctx context.Context, rootID string) error {
 }
 
 func (r *txRefreshes) RevokeByGrant(ctx context.Context, grantID string) error {
-	if r.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := r.tx.guard(ctx); err != nil {
 		return err
 	}
 	if grantID == "" {
@@ -569,16 +555,7 @@ func (s *refreshStaging) iter(fn func(string, *store.RefreshToken)) {
 }
 
 func (s *refreshStaging) lookup(id string) *store.RefreshToken {
-	if rec, ok := s.updated[id]; ok {
-		return rec
-	}
-	if rec, ok := s.added[id]; ok {
-		return rec
-	}
-	if rec, ok := s.parent.m[id]; ok {
-		return cloneRefresh(rec)
-	}
-	return nil
+	return stagedLookup(id, s.updated, s.added, s.parent.m, cloneRefresh)
 }
 
 // --- staging: grants ---------------------------------------------------------
@@ -601,10 +578,7 @@ func (s *grantStaging) flushLocked() {
 type txGrants struct{ tx *tx }
 
 func (g *txGrants) Save(ctx context.Context, gr *store.Grant) error {
-	if g.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := g.tx.guard(ctx); err != nil {
 		return err
 	}
 	if gr == nil {
@@ -617,10 +591,7 @@ func (g *txGrants) Save(ctx context.Context, gr *store.Grant) error {
 }
 
 func (g *txGrants) Find(ctx context.Context, id string) (*store.Grant, error) {
-	if g.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := g.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	st := g.tx.grStaging
@@ -637,10 +608,7 @@ func (g *txGrants) Find(ctx context.Context, id string) (*store.Grant, error) {
 }
 
 func (g *txGrants) FindBySubjectClient(ctx context.Context, subject, clientID string) (*store.Grant, error) {
-	if g.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := g.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	best := g.tx.grStaging.findLatestMatching(subject, clientID)
@@ -686,10 +654,7 @@ func (s *grantStaging) findLatestMatching(subject, clientID string) *store.Grant
 // view: it walks the parent map plus the per-tx added / deleted
 // overlay and returns every active grant for the subject.
 func (g *txGrants) ListBySubject(ctx context.Context, subject string) ([]*store.Grant, error) {
-	if g.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := g.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	grants := g.tx.grStaging.collectBySubject(subject)
@@ -705,10 +670,7 @@ func (g *txGrants) ListClientIDsBySubject(
 	subject, cursor string,
 	limit int,
 ) (store.GrantClientPage, error) {
-	if g.tx.closed.Load() {
-		return store.GrantClientPage{}, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := g.tx.guard(ctx); err != nil {
 		return store.GrantClientPage{}, err
 	}
 	if limit <= 0 {
@@ -724,10 +686,7 @@ func (g *txGrants) ListSubjectsByClient(
 	clientID, cursor string,
 	limit int,
 ) (store.GrantSubjectPage, error) {
-	if g.tx.closed.Load() {
-		return store.GrantSubjectPage{}, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := g.tx.guard(ctx); err != nil {
 		return store.GrantSubjectPage{}, err
 	}
 	if limit <= 0 {
@@ -821,10 +780,7 @@ func (s *grantStaging) addSubjectsByClient(
 }
 
 func (g *txGrants) Delete(ctx context.Context, id string) error {
-	if g.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := g.tx.guard(ctx); err != nil {
 		return err
 	}
 	st := g.tx.grStaging
@@ -842,10 +798,7 @@ func (g *txGrants) Delete(ctx context.Context, id string) error {
 // staged add counts even before commit, and a staged delete is
 // honoured for parent rows that have not yet been flushed.
 func (g *txGrants) HasAny(ctx context.Context) (bool, error) {
-	if g.tx.closed.Load() {
-		return false, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := g.tx.guard(ctx); err != nil {
 		return false, err
 	}
 	st := g.tx.grStaging
@@ -870,21 +823,14 @@ type parStaging struct {
 }
 
 func (s *parStaging) flushLocked() {
-	for uri, rec := range s.added {
-		s.parent.m[uri] = rec
-	}
-	for uri, rec := range s.updated {
-		s.parent.m[uri] = rec
-	}
+	maps.Copy(s.parent.m, s.added)
+	maps.Copy(s.parent.m, s.updated)
 }
 
 type txPARs struct{ tx *tx }
 
 func (p *txPARs) Save(ctx context.Context, par *store.PushedAuthRequest) error {
-	if p.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := p.tx.guard(ctx); err != nil {
 		return err
 	}
 	if par == nil {
@@ -912,10 +858,7 @@ func (p *txPARs) Save(ctx context.Context, par *store.PushedAuthRequest) error {
 }
 
 func (p *txPARs) Find(ctx context.Context, uri string) (*store.PushedAuthRequest, error) {
-	if p.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := p.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	rec := p.tx.parStaging.lookup(hashKey(uri))
@@ -931,10 +874,7 @@ func (p *txPARs) Find(ctx context.Context, uri string) (*store.PushedAuthRequest
 }
 
 func (p *txPARs) Consume(ctx context.Context, uri string) (*store.PushedAuthRequest, error) {
-	if p.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := p.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	st := p.tx.parStaging
@@ -961,14 +901,5 @@ func (p *txPARs) Consume(ctx context.Context, uri string) (*store.PushedAuthRequ
 }
 
 func (s *parStaging) lookup(key string) *store.PushedAuthRequest {
-	if rec, ok := s.updated[key]; ok {
-		return rec
-	}
-	if rec, ok := s.added[key]; ok {
-		return rec
-	}
-	if rec, ok := s.parent.m[key]; ok {
-		return clonePAR(rec)
-	}
-	return nil
+	return stagedLookup(key, s.updated, s.added, s.parent.m, clonePAR)
 }

@@ -3,6 +3,7 @@ package oidcredis
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -208,6 +209,7 @@ type Store struct {
 	interactionsImpl *interactionStore
 	jtisImpl         *jtiStore
 	sessionsImpl     *sessionStore
+	metadataImpl     *metadataStore
 	ssfStreamsImpl   *ssfStreamStore
 	ssfEventsImpl    *ssfEventStore
 }
@@ -251,6 +253,7 @@ func New(ctx context.Context, opts ...Option) (*Store, error) {
 	s.interactionsImpl = newInteractionStore(s)
 	s.jtisImpl = newJTIStore(s)
 	s.sessionsImpl = newSessionStore(s)
+	s.metadataImpl = newMetadataStore(s)
 	ssfScripts := newSSFScripts()
 	s.ssfStreamsImpl = &ssfStreamStore{parent: s, scripts: ssfScripts}
 	s.ssfEventsImpl = &ssfEventStore{parent: s, scripts: ssfScripts}
@@ -454,7 +457,7 @@ func (s *Store) Grants() store.GrantStore { return nil }
 // ConsumedJTIs keyspace, whose TTL keys a volatile-* policy WILL evict
 // under memory pressure. An instance hosting both substores needs
 // noeviction, not volatile-*; see [Store.ConsumedJTIs].
-func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s) }
+func (s *Store) Metadata() store.MetadataStore { return s.metadataImpl }
 
 // DeviceCodes implements [store.Store]; out-of-scope on Redis.
 // Returns nil; op.New rejects the config when
@@ -545,4 +548,22 @@ func (s *Store) checkPayloadSize(kind string, payload []byte) error {
 			kind, len(payload), s.maxValueBytes)
 	}
 	return nil
+}
+
+// getJSON reads key and decodes it into a T, returning the stored bytes
+// alongside. An absent key reports [store.ErrNotFound]; kind names the
+// record in wrapped errors.
+func getJSON[T any](ctx context.Context, client *redis.Client, key, kind string) (*T, []byte, error) {
+	raw, err := client.Get(ctx, key).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil, store.ErrNotFound
+		}
+		return nil, nil, fmt.Errorf("oidcredis: GET %s: %w", kind, err)
+	}
+	var rec T
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return nil, nil, fmt.Errorf("oidcredis: unmarshal %s: %w", kind, err)
+	}
+	return &rec, raw, nil
 }

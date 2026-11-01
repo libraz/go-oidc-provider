@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // --- PushedAuthRequestStore --------------------------------------------------
@@ -20,13 +21,6 @@ type parStore struct {
 }
 
 const (
-	// parFullGCSaveInterval is how many Save calls pass between full
-	// sweeps of the PAR map. A push mints a row before any user has
-	// interacted with it and most rows are never redeemed, so the map
-	// needs reclamation; sweeping on every push would make each one
-	// cost O(total records).
-	parFullGCSaveInterval uint32 = 64
-
 	// parRetention is how long a PAR record stays in the map past its
 	// own ExpiresAt. Consume enforces single-use only — expiry is
 	// gated at presentation by Find — so a request_uri whose lifetime
@@ -56,7 +50,7 @@ func parReclaimable(rec *store.PushedAuthRequest, now time.Time) bool {
 	if rec.ExpiresAt.IsZero() {
 		return false
 	}
-	return isExpiredAtStrict(rec.ExpiresAt.Add(parRetention), now)
+	return patterns.IsExpiredStrict(rec.ExpiresAt.Add(parRetention), now)
 }
 
 func newPARStore(c Clock) *parStore {
@@ -153,7 +147,7 @@ func (s *parStore) gcLocked(now time.Time) {
 
 func (s *parStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, parFullGCSaveInterval, len(s.m)) {
+	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)

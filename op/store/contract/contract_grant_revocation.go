@@ -53,11 +53,7 @@ var grantRevocationCases = []subtest{
 // every backend that does ship the substore.
 func requireGrantRevocations(t *testing.T, s store.Store) store.GrantRevocationStore {
 	t.Helper()
-	gr := s.GrantRevocations()
-	if gr == nil {
-		t.Skipf("backend %T returns nil from GrantRevocations()", s)
-	}
-	return gr
+	return requireSubstore(t, s, s.GrantRevocations(), "GrantRevocations()")
 }
 
 func grantRevSaveLookup(t *testing.T, f Factory) {

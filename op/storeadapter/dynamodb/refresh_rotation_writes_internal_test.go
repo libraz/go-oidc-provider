@@ -50,7 +50,7 @@ func TestStampConsumedInput_GuardsOnUnsetConsumedAt(t *testing.T) {
 	t.Parallel()
 
 	rs := &refreshStore{parent: &Store{names: defaultNames("t_")}}
-	in := rs.stampConsumedInput("pk", time.Unix(1, 0))
+	in := stampConsumedInput(rs.parent.names.refreshes, "pk", time.Unix(1, 0))
 	if got := aws.ToString(in.ConditionExpression); got != "attribute_exists(#pk) AND #consumed = :zero" {
 		t.Fatalf("condition = %q", got)
 	}

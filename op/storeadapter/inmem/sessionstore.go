@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // --- SessionStore ------------------------------------------------------------
@@ -19,13 +20,6 @@ type sessionStore struct {
 	byGroup      map[string]map[string]struct{} // ChooserGroupID -> session ids
 	savesSinceGC uint32
 }
-
-// sessionFullGCSaveInterval is how many Save calls pass between full
-// sweeps of the session map. Every unauthenticated login attempt that
-// reaches the session step can create a row, so the map needs
-// reclamation; sweeping on each Save would make every login cost
-// O(total sessions).
-const sessionFullGCSaveInterval uint32 = 64
 
 func newSessionStore(c Clock) *sessionStore {
 	return &sessionStore{
@@ -76,7 +70,7 @@ func (s *sessionStore) dropLocked(id string) {
 // path.
 func (s *sessionStore) gcLocked(now time.Time) {
 	for id, rec := range s.m {
-		if isExpiredAtStrict(rec.ExpiresAt, now) {
+		if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
 			s.dropLocked(id)
 		}
 	}
@@ -85,7 +79,7 @@ func (s *sessionStore) gcLocked(now time.Time) {
 
 func (s *sessionStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, sessionFullGCSaveInterval, len(s.m)) {
+	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)

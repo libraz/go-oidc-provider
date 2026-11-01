@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // --- InteractionStore --------------------------------------------------------
@@ -18,13 +19,6 @@ type interactionStore struct {
 	m            map[string]*store.Interaction
 	savesSinceGC uint32
 }
-
-// interactionFullGCSaveInterval is how many Save calls pass between
-// full sweeps of the interaction map. An interaction is created by an
-// unauthenticated /authorize request and abandoned whenever the user
-// walks away, so abandoned rows are the common case rather than the
-// exception.
-const interactionFullGCSaveInterval uint32 = 64
 
 func newInteractionStore(c Clock) *interactionStore {
 	return &interactionStore{clock: c, m: make(map[string]*store.Interaction)}
@@ -47,7 +41,7 @@ func (s *interactionStore) Save(_ context.Context, i *store.Interaction) error {
 // swept row is indistinguishable from one that was left in place.
 func (s *interactionStore) gcLocked(now time.Time) {
 	for id, rec := range s.m {
-		if isExpiredAtStrict(rec.ExpiresAt, now) {
+		if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
 			delete(s.m, id)
 		}
 	}
@@ -56,7 +50,7 @@ func (s *interactionStore) gcLocked(now time.Time) {
 
 func (s *interactionStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, interactionFullGCSaveInterval, len(s.m)) {
+	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)

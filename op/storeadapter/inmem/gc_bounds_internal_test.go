@@ -19,7 +19,7 @@ import (
 // churn is how many records each bound test drives through a substore.
 // It is a multiple of the sweep interval so the assertion sees several
 // sweeps rather than a single boundary crossing.
-const churn = 4 * int(authCodeFullGCSaveInterval)
+const churn = 4 * int(fullGCInterval)
 
 func TestAuthCodeStore_DirectSaveStaysBounded(t *testing.T) {
 	t.Parallel()
@@ -40,7 +40,7 @@ func TestAuthCodeStore_DirectSaveStaysBounded(t *testing.T) {
 		}
 	}
 
-	if got := len(s.authCodes.m); got >= int(authCodeFullGCSaveInterval) {
+	if got := len(s.authCodes.m); got >= int(fullGCInterval) {
 		t.Fatalf("authorization-code map holds %d records after %d expired saves; "+
 			"an unauthenticated /authorize loop must not grow it without bound", got, churn)
 	}
@@ -74,7 +74,7 @@ func TestAuthCodeStore_TransactionalSaveStaysBounded(t *testing.T) {
 		}
 	}
 
-	if got := len(s.authCodes.m); got >= int(authCodeFullGCSaveInterval) {
+	if got := len(s.authCodes.m); got >= int(fullGCInterval) {
 		t.Fatalf("authorization-code map holds %d records after %d committed expired saves", got, churn)
 	}
 }
@@ -140,7 +140,7 @@ func TestSessionStore_SaveStaysBounded(t *testing.T) {
 		}
 	}
 
-	if got := len(s.sessions.m); got >= int(sessionFullGCSaveInterval) {
+	if got := len(s.sessions.m); got >= int(fullGCInterval) {
 		t.Fatalf("session map holds %d records after %d expired saves", got, churn)
 	}
 	if _, err := s.sessions.Find(ctx, "live-session"); err != nil {
@@ -176,7 +176,7 @@ func TestInteractionStore_SaveStaysBounded(t *testing.T) {
 		}
 	}
 
-	if got := len(s.interactions.m); got >= int(interactionFullGCSaveInterval) {
+	if got := len(s.interactions.m); got >= int(fullGCInterval) {
 		t.Fatalf("interaction map holds %d records after %d expired saves", got, churn)
 	}
 	if _, err := s.interactions.Find(ctx, "live-interaction"); err != nil {
@@ -202,7 +202,7 @@ func TestRefreshStore_RetryResponsesStayBounded(t *testing.T) {
 		seedRetryRotation(t, s, clk, "lapsed-"+strconv.Itoa(i), clk.now.Add(-time.Second))
 	}
 
-	if got := len(s.refreshes.retries); got >= int(retryResponseFullGCSaveInterval) {
+	if got := len(s.refreshes.retries); got >= int(fullGCInterval) {
 		t.Fatalf("retry map holds %d sealed responses after %d rotations past their predecessor's expiry; "+
 			"an authenticated refresh loop must not grow it without bound", got, churn)
 	}
@@ -246,7 +246,7 @@ func TestRefreshStore_TransactionalRetryResponsesStayBounded(t *testing.T) {
 		}
 	}
 
-	if got := len(s.refreshes.retries); got >= int(retryResponseFullGCSaveInterval) {
+	if got := len(s.refreshes.retries); got >= int(fullGCInterval) {
 		t.Fatalf("retry map holds %d sealed responses after %d committed rotations past their predecessor's expiry",
 			got, churn)
 	}
@@ -320,7 +320,7 @@ func TestAuthnLockoutStore_SwapStaysBounded(t *testing.T) {
 		}
 	}
 
-	if got := len(ls.m); got >= int(authnLockoutFullGCSwapInterval) {
+	if got := len(ls.m); got >= int(fullGCInterval) {
 		t.Fatalf("lockout map holds %d records after %d stale swaps", got, churn)
 	}
 	if _, err := ls.Get(ctx, "locked-subject"); err != nil {
@@ -352,7 +352,7 @@ func TestDeviceCodeStore_SaveAmortisesSweep(t *testing.T) {
 		t.Fatalf("after first save len=%d want 1", len(ds.m))
 	}
 
-	for i := uint32(1); i < deviceCodeFullGCSaveInterval; i++ {
+	for i := uint32(1); i < fullGCInterval; i++ {
 		n := strconv.Itoa(int(i))
 		if err := ds.Save(ctx, &store.DeviceCode{
 			ID: "fresh-" + n, ClientID: "client-1", UserCode: "FRSH-" + n,
@@ -426,7 +426,7 @@ func TestCIBARequestStore_SaveAmortisesSweep(t *testing.T) {
 		t.Fatalf("after first save len=%d want 1", len(cs.m))
 	}
 
-	for i := uint32(1); i < cibaFullGCSaveInterval; i++ {
+	for i := uint32(1); i < fullGCInterval; i++ {
 		n := strconv.Itoa(int(i))
 		if err := cs.Save(ctx, &store.CIBARequest{
 			ID: "fresh-" + n, ClientID: "client-1", Subject: "subject-1",
@@ -469,8 +469,8 @@ func TestBeginTx_StagingIsEmptyRegardlessOfStoreSize(t *testing.T) {
 		}
 		staged := len(inner.atStaging.written) + len(inner.atStaging.deleted) +
 			len(inner.oatStaging.written) + len(inner.oatStaging.deleted) +
-			len(inner.grvStaging.tombstonesWritten) + len(inner.grvStaging.tombstonesDeleted) +
-			len(inner.grvStaging.denylistWritten) + len(inner.grvStaging.denylistDeleted)
+			len(inner.grvStaging.tombstones.written) + len(inner.grvStaging.tombstones.deleted) +
+			len(inner.grvStaging.denylist.written) + len(inner.grvStaging.denylist.deleted)
 		if staged != 0 {
 			t.Errorf("BeginTx materialised %d staged entries for a store of %d records; "+
 				"the cost of starting a transaction must not scale with the store", staged, records)

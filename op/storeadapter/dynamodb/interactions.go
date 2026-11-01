@@ -79,18 +79,12 @@ func (s *interactionStore) CompareAndSwap(ctx context.Context, previous, next *s
 		TableName: aws.String(s.parent.names.interactions),
 		Item:      entry,
 		ConditionExpression: aws.String(
-			"attribute_exists(#pk) AND #state = :state AND (#exp = :zero OR #exp >= :now)",
+			"attribute_exists(#pk) AND #state = :state AND " + liveExpiryCondition,
 		),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":    attrPK,
-			"#state": attrRawState,
-			"#exp":   attrExpiresAt,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
+		ExpressionAttributeNames: expiryNames(map[string]string{"#state": attrRawState}),
+		ExpressionAttributeValues: s.parent.expiryValues(map[string]types.AttributeValue{
 			":state": avB(previous.RawState),
-			":zero":  avN(0),
-			":now":   avTime(s.parent.now()),
-		},
+		}),
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
@@ -110,18 +104,12 @@ func (s *interactionStore) DeleteIfUnchanged(ctx context.Context, previous *stor
 		TableName: aws.String(s.parent.names.interactions),
 		Key:       key(previous.ID),
 		ConditionExpression: aws.String(
-			"attribute_exists(#pk) AND #state = :state AND (#exp = :zero OR #exp >= :now)",
+			"attribute_exists(#pk) AND #state = :state AND " + liveExpiryCondition,
 		),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":    attrPK,
-			"#state": attrRawState,
-			"#exp":   attrExpiresAt,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
+		ExpressionAttributeNames: expiryNames(map[string]string{"#state": attrRawState}),
+		ExpressionAttributeValues: s.parent.expiryValues(map[string]types.AttributeValue{
 			":state": avB(previous.RawState),
-			":zero":  avN(0),
-			":now":   avTime(s.parent.now()),
-		},
+		}),
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {

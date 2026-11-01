@@ -104,18 +104,12 @@ func (s *sessionStore) touchOnce(ctx context.Context, id string, expiresAt, upda
 		TableName: aws.String(s.parent.names.sessions),
 		Item:      entry,
 		ConditionExpression: aws.String(
-			"attribute_exists(#pk) AND (#exp = :zero OR #exp >= :now) AND #doc = :expected",
+			"attribute_exists(#pk) AND " + liveExpiryCondition + " AND #doc = :expected",
 		),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":  attrPK,
-			"#exp": attrExpiresAt,
-			"#doc": attrDoc,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":zero":     avN(0),
-			":now":      avTime(s.parent.now()),
+		ExpressionAttributeNames: expiryNames(map[string]string{"#doc": attrDoc}),
+		ExpressionAttributeValues: s.parent.expiryValues(map[string]types.AttributeValue{
 			":expected": found[attrDoc],
-		},
+		}),
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {

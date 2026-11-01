@@ -229,18 +229,8 @@ func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interact
 // when Redis reports the key as absent. Callers MUST re-check expiry
 // with [interactionStore.expired] before treating the record as live.
 func (s *interactionStore) fetch(ctx context.Context, id string) (*interactionRecord, error) {
-	raw, err := s.parent.client.Get(ctx, s.interactionKey(id)).Bytes()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("oidcredis: GET interaction: %w", err)
-	}
-	var rec interactionRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return nil, fmt.Errorf("oidcredis: unmarshal interaction: %w", err)
-	}
-	return &rec, nil
+	rec, _, err := getJSON[interactionRecord](ctx, s.parent.client, s.interactionKey(id), "interaction")
+	return rec, err
 }
 
 // expired is defence in depth against clock skew between the adapter

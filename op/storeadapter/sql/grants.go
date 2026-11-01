@@ -90,7 +90,7 @@ func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*stor
 	defer rows.Close() //nolint:errcheck // best-effort close; the explicit error path inside the loop already handles failure.
 	var out []*store.Grant
 	for rows.Next() {
-		rec, err := s.scan(rowProxy{rows})
+		rec, err := s.scan(rows)
 		if err != nil {
 			return nil, wrapErr("grants.ListBySubject.scan", err)
 		}
@@ -207,15 +207,6 @@ func (s *grantStore) RevokeByClient(ctx context.Context, clientID string) error 
 type scanner interface {
 	Scan(dest ...any) error
 }
-
-// rowProxy adapts *sql.Rows to the scanner interface (Rows.Scan
-// already matches the signature, but the named type makes the
-// adaptation explicit).
-type rowProxy struct {
-	rows *databasesql.Rows
-}
-
-func (r rowProxy) Scan(dest ...any) error { return r.rows.Scan(dest...) }
 
 func (s *grantStore) scan(sc scanner) (*store.Grant, error) {
 	var (

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // deviceCodeStore is the in-memory implementation of
@@ -23,13 +24,6 @@ type deviceCodeStore struct {
 	userCodeIndex map[string]string            // key: canonical user_code, value: hashKey(deviceCode)
 	savesSinceGC  uint32
 }
-
-// deviceCodeFullGCSaveInterval is how many Save calls pass between full
-// sweeps of the device-code map. Save additionally evicts the exact
-// device_code and user_code it is about to claim whenever those hold an
-// expired record, so a collision on either key is reclaimed immediately
-// rather than waiting for the sweep.
-const deviceCodeFullGCSaveInterval uint32 = 64
 
 func newDeviceCodeStore(c Clock) *deviceCodeStore {
 	return &deviceCodeStore{
@@ -70,7 +64,7 @@ func (s *deviceCodeStore) Save(_ context.Context, code *store.DeviceCode) error 
 
 func (s *deviceCodeStore) gcLocked(now time.Time) {
 	for key, rec := range s.m {
-		if !isExpiredAtStrict(rec.ExpiresAt, now) {
+		if !patterns.IsExpiredStrict(rec.ExpiresAt, now) {
 			continue
 		}
 		s.dropLocked(key, rec)
@@ -79,12 +73,12 @@ func (s *deviceCodeStore) gcLocked(now time.Time) {
 }
 
 // maybeGCLocked runs a full sweep once every
-// [deviceCodeFullGCSaveInterval] saves, amortising the sweep over the
+// [fullGCInterval] saves, amortising the sweep over the
 // saves that made it necessary instead of paying O(total codes) on
 // each one.
 func (s *deviceCodeStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, deviceCodeFullGCSaveInterval, len(s.m)) {
+	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)
@@ -99,7 +93,7 @@ func (s *deviceCodeStore) deleteExpiredKeyLocked(key string, now time.Time) {
 	if !ok {
 		return
 	}
-	if isExpiredAtStrict(rec.ExpiresAt, now) {
+	if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
 		s.dropLocked(key, rec)
 	}
 }
@@ -118,7 +112,7 @@ func (s *deviceCodeStore) deleteExpiredUserCodeLocked(userCode string, now time.
 		delete(s.userCodeIndex, userCode)
 		return
 	}
-	if isExpiredAtStrict(rec.ExpiresAt, now) {
+	if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
 		s.dropLocked(key, rec)
 	}
 }

@@ -170,7 +170,8 @@ type OpaqueAccessTokenStore interface {
 
 	// RevokeByGrant marks every record whose
 	// [OpaqueAccessToken.GrantID] equals grantID as revoked, returning
-	// the number of rows the call flipped. Used by the code-replay
+	// the number of rows newly revoked by the call (a record already
+	// revoked is not counted). Used by the code-replay
 	// cascade (RFC 6749 §4.1.2) and by refresh-rotation cleanup. A
 	// missing grant is not an error (returning (0, nil) is appropriate
 	// when no rows match).

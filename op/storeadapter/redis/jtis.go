@@ -133,7 +133,7 @@ func (j *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 	value := persistentJTIValue
 	var ttlMillis int64
 	if !expiresAt.IsZero() {
-		ttl := jtiTTL(now, expiresAt)
+		ttl := expiresAt.Sub(now)
 		if ttl <= 0 {
 			// Past-dated marker: nothing to record, since any subsequent
 			// Has call would treat the entry as absent anyway.
@@ -159,10 +159,6 @@ func (j *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 		return store.ErrAlreadyConsumed
 	}
 	return nil
-}
-
-func jtiTTL(now, expiresAt time.Time) time.Duration {
-	return expiresAt.Sub(now)
 }
 
 // ceilMillis converts a positive TTL to whole milliseconds, rounding up

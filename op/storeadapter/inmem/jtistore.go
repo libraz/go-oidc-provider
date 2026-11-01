@@ -18,8 +18,6 @@ type jtiStore struct {
 	marksSinceGC uint32
 }
 
-const jtiFullGCMarkInterval uint32 = 64
-
 func newJTIStore(c Clock) *jtiStore {
 	return &jtiStore{clock: c, m: make(map[string]time.Time)}
 }
@@ -37,7 +35,7 @@ func (s *jtiStore) Mark(_ context.Context, jti string, expiresAt time.Time) erro
 	now := s.clock.Now()
 	if existing, ok := s.m[digest]; ok {
 		// Treat expired entries as absent so a fresh mark may succeed.
-		if !isExpiredAt(existing, now) {
+		if !patterns.IsExpiredInclusive(existing, now) {
 			return store.ErrAlreadyConsumed
 		}
 		delete(s.m, digest)
@@ -59,7 +57,7 @@ func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	if isExpiredAt(expiresAt, s.clock.Now()) {
+	if patterns.IsExpiredInclusive(expiresAt, s.clock.Now()) {
 		return false, nil
 	}
 	return true, nil
@@ -67,23 +65,13 @@ func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 
 func (s *jtiStore) maybeGCJTILocked(now time.Time) {
 	s.marksSinceGC++
-	if !sweepDue(s.marksSinceGC, jtiFullGCMarkInterval, len(s.m)) {
+	if !sweepDue(s.marksSinceGC, fullGCInterval, len(s.m)) {
 		return
 	}
 	for digest, expiresAt := range s.m {
-		if isExpiredAt(expiresAt, now) {
+		if patterns.IsExpiredInclusive(expiresAt, now) {
 			delete(s.m, digest)
 		}
 	}
 	s.marksSinceGC = 0
-}
-
-// isExpiredAt is the inclusive expiry bound the consumed-JTI substore
-// uses: a marker is expired from expiresAt onwards, and a zero expiresAt
-// never expires. It is deliberately stricter than [isExpired], which
-// keeps a record alive at its own expiry instant, because
-// [store.ConsumedJTIStore] pins the inclusive boundary for both Mark and
-// Has.
-func isExpiredAt(expiresAt, now time.Time) bool {
-	return patterns.IsExpiredInclusive(expiresAt, now)
 }

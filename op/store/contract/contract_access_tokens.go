@@ -42,11 +42,7 @@ var accessTokenRegistryCases = []subtest{
 
 func requireAccessTokens(t *testing.T, s store.Store) store.AccessTokenRegistry {
 	t.Helper()
-	registry := s.AccessTokens()
-	if registry == nil {
-		t.Skipf("backend %T returns nil from AccessTokens()", s)
-	}
-	return registry
+	return requireSubstore(t, s, s.AccessTokens(), "AccessTokens()")
 }
 
 // findAccessToken normalises the two permitted spellings of "absent" so
@@ -218,6 +214,14 @@ func accessTokenRevokeByGrant(t *testing.T, f Factory) {
 		if !got.Revoked {
 			t.Fatalf("%s survived the cascade: %+v", jti, got)
 		}
+	}
+	// A repeated cascade finds nothing left to revoke.
+	n, err = registry.RevokeByGrant(ctx, "grant-shared")
+	if err != nil {
+		t.Fatalf("RevokeByGrant (repeat): %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("RevokeByGrant (repeat) count = %d, want 0", n)
 	}
 	// The cascade is scoped to one grant.
 	got, ok := findAccessToken(t, registry, other.JTI)

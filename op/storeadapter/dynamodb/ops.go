@@ -101,6 +101,16 @@ func (s *Store) get(ctx context.Context, table, pk string) (item, error) {
 	return out.Item, nil
 }
 
+// getVia reads through the transaction buffer when one is open, so the
+// read observes the transaction's own staged writes, and straight from
+// the table otherwise.
+func (s *Store) getVia(ctx context.Context, tx *txBuffer, table, pk string) (item, error) {
+	if tx != nil {
+		return tx.get(ctx, table, pk)
+	}
+	return s.get(ctx, table, pk)
+}
+
 // getLive reads one item and reports [store.ErrNotFound] when its
 // expiry has passed. DynamoDB's TTL deletion is asynchronous and
 // documented as taking up to 48 hours, so expiry has to be enforced
@@ -145,7 +155,16 @@ func (s *Store) overwrite(ctx context.Context, table string, i item) error {
 // states that as one condition: nothing is stored under the key, or what
 // is stored has already expired. A record with no expiry at all holds
 // its key indefinitely.
-const freeKeyCondition = "attribute_not_exists(#pk) OR (#expires <> :never AND #expires < :now)"
+const freeKeyCondition = "attribute_not_exists(#pk) OR (" + hasExpiryCondition + " AND #expires < :now)"
+
+// hasExpiryCondition holds for an item that carries an expiry (a zero
+// expiry means the item never expires); liveExpiryCondition holds for an
+// item that has none or whose expiry has not yet passed. Both use the
+// aliases from [expiryNames] and [Store.expiryValues].
+const (
+	hasExpiryCondition  = "#expires <> :never"
+	liveExpiryCondition = "(#expires = :never OR #expires >= :now)"
+)
 
 // absentKeyCondition and presentKeyCondition guard a write on whether the
 // primary key is unused or already stored, with the key attribute named
@@ -162,14 +181,20 @@ const (
 // reads report a marker as expired there has to let a write take the
 // key there too — otherwise a caller is told the jti is free and is
 // still refused as a replay.
-const freeKeyAtExpiryCondition = "attribute_not_exists(#pk) OR (#expires <> :never AND #expires <= :now)"
+const freeKeyAtExpiryCondition = "attribute_not_exists(#pk) OR (" + hasExpiryCondition + " AND #expires <= :now)"
 
-func freeKeyNames() map[string]string {
-	return map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
+// expiryNames returns the #pk and #expires aliases, plus extra.
+func expiryNames(extra map[string]string) map[string]string {
+	names := map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
+	maps.Copy(names, extra)
+	return names
 }
 
-func (s *Store) freeKeyValues() map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{":never": avN(0), ":now": avTime(s.now())}
+// expiryValues returns the :never and :now placeholders, plus extra.
+func (s *Store) expiryValues(extra map[string]types.AttributeValue) map[string]types.AttributeValue {
+	values := map[string]types.AttributeValue{":never": avN(0), ":now": avTime(s.now())}
+	maps.Copy(values, extra)
+	return values
 }
 
 // putIfKeyFree writes an item onto a key nothing live holds, reporting
@@ -193,8 +218,8 @@ func (s *Store) putUnderFreeKey(ctx context.Context, table string, i item, condi
 		TableName:                 aws.String(table),
 		Item:                      i,
 		ConditionExpression:       aws.String(condition),
-		ExpressionAttributeNames:  freeKeyNames(),
-		ExpressionAttributeValues: s.freeKeyValues(),
+		ExpressionAttributeNames:  expiryNames(nil),
+		ExpressionAttributeValues: s.expiryValues(nil),
 	})
 	if err != nil {
 		if isConditionalCheckFailed(err) {
@@ -313,20 +338,14 @@ func (s *Store) incrementCounter(ctx context.Context, op, table, pk, attr string
 		Key:              key(pk),
 		UpdateExpression: aws.String("ADD #counter :one"),
 		ConditionExpression: aws.String(
-			"attribute_exists(#pk) AND (#expires = :never OR #expires >= :now) " +
+			"attribute_exists(#pk) AND " + liveExpiryCondition + " " +
 				"AND (attribute_not_exists(#counter) OR #counter < :max)",
 		),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":      attrPK,
-			"#expires": attrExpiresAt,
-			"#counter": attr,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":one":   avN(1),
-			":never": avN(0),
-			":now":   avTime(s.now()),
-			":max":   avN(maxCounter8),
-		},
+		ExpressionAttributeNames: expiryNames(map[string]string{"#counter": attr}),
+		ExpressionAttributeValues: s.expiryValues(map[string]types.AttributeValue{
+			":one": avN(1),
+			":max": avN(maxCounter8),
+		}),
 		ReturnValues: types.ReturnValueUpdatedNew,
 	})
 	if err != nil {
@@ -372,15 +391,22 @@ func rejectedConsume[T any](ctx context.Context, reread func(context.Context) (T
 // return values are what make the distinction possible; DeleteItem is
 // otherwise idempotent and silent.
 func (s *Store) deleteKey(ctx context.Context, table, pk string) (bool, error) {
+	old, err := s.deleteReturningOld(ctx, table, pk)
+	return old != nil, err
+}
+
+// deleteReturningOld removes one item and returns what it held, or nil
+// when there was nothing to remove.
+func (s *Store) deleteReturningOld(ctx context.Context, table, pk string) (map[string]types.AttributeValue, error) {
 	out, err := s.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName:    aws.String(table),
 		Key:          key(pk),
 		ReturnValues: types.ReturnValueAllOld,
 	})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return out.Attributes != nil, nil
+	return out.Attributes, nil
 }
 
 // deleteLiveKey removes one item and reports whether what it removed
@@ -391,18 +417,11 @@ func (s *Store) deleteKey(ctx context.Context, table, pk string) (bool, error) {
 // needs the second one. ALL_OLD gives it in the same round trip the
 // delete already costs; the item is reclaimed either way.
 func (s *Store) deleteLiveKey(ctx context.Context, table, pk string) (bool, error) {
-	out, err := s.api.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName:    aws.String(table),
-		Key:          key(pk),
-		ReturnValues: types.ReturnValueAllOld,
-	})
-	if err != nil {
+	old, err := s.deleteReturningOld(ctx, table, pk)
+	if err != nil || old == nil {
 		return false, err
 	}
-	if out.Attributes == nil {
-		return false, nil
-	}
-	return !s.expired(out.Attributes), nil
+	return !s.expired(old), nil
 }
 
 // collectPages drives the LastEvaluatedKey pagination loop shared by
@@ -517,4 +536,24 @@ func (s *Store) scanMatching(ctx context.Context, table, attr, value string) ([]
 		}
 		return page.Items, page.LastEvaluatedKey, nil
 	})
+}
+
+// stampConsumedInput builds the update that sets consumed_at on pk only
+// while it is still zero, so a later consume or revocation never
+// overwrites the instant an earlier one recorded.
+func stampConsumedInput(table, pk string, now time.Time) *dynamodb.UpdateItemInput {
+	return &dynamodb.UpdateItemInput{
+		TableName:           aws.String(table),
+		Key:                 key(pk),
+		UpdateExpression:    aws.String("SET #consumed = :now"),
+		ConditionExpression: aws.String("attribute_exists(#pk) AND #consumed = :zero"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":       attrPK,
+			"#consumed": attrConsumedAt,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now":  avTime(now),
+			":zero": avN(0),
+		},
+	}
 }

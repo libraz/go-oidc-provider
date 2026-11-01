@@ -103,8 +103,9 @@ type AccessTokenRegistry interface {
 	RevokeByJTI(ctx context.Context, jti string) error
 
 	// RevokeByGrant marks every record whose [AccessTokenRecord.GrantID]
-	// equals grantID as revoked, returning the number of rows touched;
-	// it MUST NOT remove the rows (see the interface doc). Used by the
+	// equals grantID as revoked, returning the number of rows newly
+	// revoked (a record already revoked is not counted); it MUST NOT
+	// remove the rows (see the interface doc). Used by the
 	// code-replay cascade (RFC 6749 §4.1.2): when the OP detects a
 	// replayed authorization code it revokes every access token derived
 	// from the same grant alongside the refresh-token chain. A missing

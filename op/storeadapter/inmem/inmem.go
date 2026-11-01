@@ -444,8 +444,8 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			added:   make(map[string]*store.PushedAuthRequest),
 			updated: make(map[string]*store.PushedAuthRequest),
 		},
-		atStaging:  newAccessTokenStaging(s.accessTokens),
-		oatStaging: newOpaqueAccessTokenStaging(s.opaqueAccessTokens),
+		atStaging:  newOverlay(s.accessTokens.m, cloneAccessToken),
+		oatStaging: newOverlay(s.opaqueAccessTokens.m, cloneOpaqueAccessToken),
 		grvStaging: newGrantRevocationStaging(s.grantRevocations),
 	}
 	return t, nil
@@ -476,6 +476,12 @@ func (s *Store) unlockTxCluster() {
 	s.refreshes.mu.Unlock()
 	s.authCodes.mu.Unlock()
 }
+
+// fullGCInterval is the minimum number of writes between full sweeps of a
+// substore's map. Entries are minted by unauthenticated requests, so an
+// unswept map is a remotely reachable memory leak; sweeping on every write
+// would make each request cost O(total entries).
+const fullGCInterval uint32 = 64
 
 // sweepDue reports whether a substore has accumulated enough writes for a
 // full sweep. The threshold grows with half the current map size so the sweep

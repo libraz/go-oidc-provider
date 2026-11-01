@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 type authCodeStore struct {
@@ -16,13 +17,6 @@ type authCodeStore struct {
 	m            map[string]*store.AuthorizationCode
 	savesSinceGC uint32
 }
-
-// authCodeFullGCSaveInterval is how many inserts pass between full
-// sweeps of the authorization-code map. Codes are written by an
-// unauthenticated /authorize round trip, so an unswept map is a
-// remotely reachable memory leak; sweeping on every insert would make
-// each request cost O(total codes) instead.
-const authCodeFullGCSaveInterval uint32 = 64
 
 func newAuthCodeStore(c Clock) *authCodeStore {
 	return &authCodeStore{clock: c, m: make(map[string]*store.AuthorizationCode)}
@@ -104,7 +98,7 @@ func (s *authCodeStore) Consume(_ context.Context, id string) (*store.Authorizat
 // observes.
 func (s *authCodeStore) gcLocked(now time.Time) {
 	for key, rec := range s.m {
-		if isExpiredAtStrict(rec.ExpiresAt, now) {
+		if patterns.IsExpiredStrict(rec.ExpiresAt, now) {
 			delete(s.m, key)
 		}
 	}
@@ -112,14 +106,14 @@ func (s *authCodeStore) gcLocked(now time.Time) {
 }
 
 // maybeGCLocked runs a full sweep once every
-// [authCodeFullGCSaveInterval] inserts, amortising the sweep cost over
+// [fullGCInterval] inserts, amortising the sweep cost over
 // the inserts that made it necessary. It is called from both write
 // paths: the direct Save and the transactional flush, because the
 // browser authorization-code flow persists codes inside a transaction
 // and would otherwise never reach a sweep.
 func (s *authCodeStore) maybeGCLocked(now time.Time) {
 	s.savesSinceGC++
-	if !sweepDue(s.savesSinceGC, authCodeFullGCSaveInterval, len(s.m)) {
+	if !sweepDue(s.savesSinceGC, fullGCInterval, len(s.m)) {
 		return
 	}
 	s.gcLocked(now)
@@ -131,7 +125,6 @@ func cloneAuthCode(c *store.AuthorizationCode) *store.AuthorizationCode {
 	}
 	out := *c
 	out.Scope = slices.Clone(c.Scope)
-	out.Resource = c.Resource
 	out.AMR = slices.Clone(c.AMR)
 	out.AuthorizationDetails = cloneObjectArray(c.AuthorizationDetails)
 	out.Claims = cloneMap(c.Claims)

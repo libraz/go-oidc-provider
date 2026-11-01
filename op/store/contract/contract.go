@@ -12,6 +12,7 @@
 package contract
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -201,9 +202,28 @@ func runGroup(t *testing.T, f Factory, cases []subtest) {
 // implement [store.Transactional].
 func requireTransactional(t *testing.T, s store.Store) store.Transactional {
 	t.Helper()
-	tx, ok := s.(store.Transactional)
-	if !ok {
-		t.Skipf("backend %T does not implement store.Transactional", s)
+	return requireCapability[store.Transactional](t, s)
+}
+
+// requireSubstore returns sub, skipping the current test when the backend
+// opts out of the substore by returning nil. name labels the accessor in
+// the skip message; owner is the backend (or transaction) it was read from.
+func requireSubstore[T comparable](t *testing.T, owner any, sub T, name string) T {
+	t.Helper()
+	var none T
+	if sub == none {
+		t.Skipf("backend %T returns nil from %s", owner, name)
 	}
-	return tx
+	return sub
+}
+
+// requireCapability returns v as a T, skipping the current test when the
+// backend does not implement the optional interface T.
+func requireCapability[T any](t *testing.T, v any) T {
+	t.Helper()
+	capability, ok := v.(T)
+	if !ok {
+		t.Skipf("backend %T does not implement %s", v, reflect.TypeFor[T]())
+	}
+	return capability
 }

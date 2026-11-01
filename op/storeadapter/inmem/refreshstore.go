@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // --- RefreshTokenStore -------------------------------------------------------
@@ -34,13 +35,6 @@ type retryResponse struct {
 	expiresAt time.Time
 }
 
-// retryResponseFullGCSaveInterval is how many retryable rotations pass
-// between full sweeps of the retry map. Every rotation adds an entry and
-// none of them is ever read more than once, so the map needs reclamation;
-// sweeping on each rotation would make every refresh cost O(total
-// entries).
-const retryResponseFullGCSaveInterval uint32 = 64
-
 // retryReclaimable reports whether a sealed retry response may be dropped.
 // Both paths that decide retention — the read that serves a retry and the
 // amortised sweep — consult this one predicate, so the store can never
@@ -48,7 +42,7 @@ const retryResponseFullGCSaveInterval uint32 = 64
 // would return. A predecessor that carried no expiry (zero) opts out of
 // expiry exactly as its own record does under Find.
 func retryReclaimable(rec retryResponse, now time.Time) bool {
-	return isExpiredAtStrict(rec.expiresAt, now)
+	return patterns.IsExpiredStrict(rec.expiresAt, now)
 }
 
 func newRefreshStore(c Clock) *refreshStore {
@@ -151,7 +145,7 @@ func (s *refreshStore) gcRetriesLocked(now time.Time) {
 
 func (s *refreshStore) maybeGCRetriesLocked(now time.Time) {
 	s.retriesSinceGC++
-	if !sweepDue(s.retriesSinceGC, retryResponseFullGCSaveInterval, len(s.retries)) {
+	if !sweepDue(s.retriesSinceGC, fullGCInterval, len(s.retries)) {
 		return
 	}
 	s.gcRetriesLocked(now)

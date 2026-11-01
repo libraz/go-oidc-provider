@@ -533,10 +533,7 @@ func (s *refreshStore) load(ctx context.Context, pk string) (*store.RefreshToken
 }
 
 func (s *refreshStore) read(ctx context.Context, pk string) (item, error) {
-	if s.tx != nil {
-		return s.tx.get(ctx, s.parent.names.refreshes, pk)
-	}
-	return s.parent.get(ctx, s.parent.names.refreshes, pk)
+	return s.parent.getVia(ctx, s.tx, s.parent.names.refreshes, pk)
 }
 
 func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
@@ -561,7 +558,7 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 		return rec, nil
 	}
 
-	_, err = s.parent.api.UpdateItem(ctx, s.stampConsumedInput(digest, now))
+	_, err = s.parent.api.UpdateItem(ctx, stampConsumedInput(s.parent.names.refreshes, digest, now))
 	if err != nil {
 		if isConditionalCheckFailed(err) {
 			return rejectedConsume(ctx, func(ctx context.Context) (*store.RefreshToken, error) {
@@ -762,31 +759,11 @@ func (s *refreshStore) revokeOneStaged(ctx context.Context, pk, grantID string, 
 	return children, nil
 }
 
-// stampConsumedInput builds the update that sets consumed_at on pk only
-// while it is still zero, so neither a rotation nor a revocation
-// overwrites the instant an earlier one recorded.
-func (s *refreshStore) stampConsumedInput(pk string, now time.Time) *dynamodb.UpdateItemInput {
-	return &dynamodb.UpdateItemInput{
-		TableName:           aws.String(s.parent.names.refreshes),
-		Key:                 key(pk),
-		UpdateExpression:    aws.String("SET #consumed = :now"),
-		ConditionExpression: aws.String("attribute_exists(#pk) AND #consumed = :zero"),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":       attrPK,
-			"#consumed": attrConsumedAt,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":now":  avTime(now),
-			":zero": avN(0),
-		},
-	}
-}
-
 // stampConsumedIfUnset sets consumed_at only when it is still zero, so
 // a revocation does not overwrite the instant a legitimate rotation
 // consumed the token.
 func (s *refreshStore) stampConsumedIfUnset(ctx context.Context, pk string, now time.Time) error {
-	_, err := s.parent.api.UpdateItem(ctx, s.stampConsumedInput(pk, now))
+	_, err := s.parent.api.UpdateItem(ctx, stampConsumedInput(s.parent.names.refreshes, pk, now))
 	if err != nil && !isConditionalCheckFailed(err) {
 		return wrapErr("refreshes.revoke.consume", err)
 	}

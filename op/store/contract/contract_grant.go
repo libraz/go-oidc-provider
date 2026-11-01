@@ -152,11 +152,7 @@ func grantListBySubjectEmpty(t *testing.T, f Factory) {
 // does not implement the optional [store.GrantClientLister] extension.
 func requireGrantClientLister(t *testing.T, s store.Store) store.GrantClientLister {
 	t.Helper()
-	lister, ok := s.Grants().(store.GrantClientLister)
-	if !ok {
-		t.Skipf("backend %T does not implement store.GrantClientLister", s.Grants())
-	}
-	return lister
+	return requireCapability[store.GrantClientLister](t, s.Grants())
 }
 
 func grantListClientIDsBySubject(t *testing.T, f Factory) {
@@ -224,11 +220,7 @@ func grantListClientIDsRejectsInvalidLimit(t *testing.T, f Factory) {
 
 func requireGrantSubjectLister(t *testing.T, s store.Store) store.GrantSubjectLister {
 	t.Helper()
-	lister, ok := s.Grants().(store.GrantSubjectLister)
-	if !ok {
-		t.Skipf("backend %T does not implement store.GrantSubjectLister", s.Grants())
-	}
-	return lister
+	return requireCapability[store.GrantSubjectLister](t, s.Grants())
 }
 
 func grantListSubjectsByClient(t *testing.T, f Factory) {

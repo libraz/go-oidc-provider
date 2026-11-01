@@ -58,10 +58,7 @@ func (s *grantStore) Find(ctx context.Context, id string) (*store.Grant, error) 
 }
 
 func (s *grantStore) read(ctx context.Context, pk string) (item, error) {
-	if s.tx != nil {
-		return s.tx.get(ctx, s.parent.names.grants, pk)
-	}
-	return s.parent.get(ctx, s.parent.names.grants, pk)
+	return s.parent.getVia(ctx, s.tx, s.parent.names.grants, pk)
 }
 
 // assertTxOpen refuses a call made through a handle whose transaction

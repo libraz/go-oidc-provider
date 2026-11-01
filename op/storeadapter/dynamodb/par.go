@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -73,10 +69,7 @@ func (s *parStore) find(ctx context.Context, uri string) (*store.PushedAuthReque
 }
 
 func (s *parStore) read(ctx context.Context, pk string) (item, error) {
-	if s.tx != nil {
-		return s.tx.get(ctx, s.parent.names.pars, pk)
-	}
-	return s.parent.get(ctx, s.parent.names.pars, pk)
+	return s.parent.getVia(ctx, s.tx, s.parent.names.pars, pk)
 }
 
 // Consume redeems a request_uri exactly once. Expiry is deliberately
@@ -105,20 +98,7 @@ func (s *parStore) Consume(ctx context.Context, uri string) (*store.PushedAuthRe
 		return rec, nil
 	}
 
-	_, err = s.parent.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:           aws.String(s.parent.names.pars),
-		Key:                 key(digest),
-		UpdateExpression:    aws.String("SET #consumed = :now"),
-		ConditionExpression: aws.String("attribute_exists(#pk) AND #consumed = :zero"),
-		ExpressionAttributeNames: map[string]string{
-			"#pk":       attrPK,
-			"#consumed": attrConsumedAt,
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":now":  avTime(now),
-			":zero": avN(0),
-		},
-	})
+	_, err = s.parent.api.UpdateItem(ctx, stampConsumedInput(s.parent.names.pars, digest, now))
 	if err != nil {
 		if isConditionalCheckFailed(err) {
 			// The record is withheld on replay, as on entry.

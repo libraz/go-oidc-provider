@@ -267,7 +267,7 @@ func (b *txBuffer) stampConsumed(ctx context.Context, table, pk string, at time.
 	if err != nil {
 		return err
 	}
-	next := cloneItem(base)
+	next := maps.Clone(base)
 	next.setTime(attrConsumedAt, at)
 	op := &txOp{kind: txPutIfUnconsumed, table: table, pk: pk, item: next, consumedAtGuard: true}
 	if prior, ok := b.ops[bufferKey(table, pk)]; ok {
@@ -301,7 +301,7 @@ func (b *txBuffer) attach(ctx context.Context, table, pk, attr string, value typ
 	if err != nil {
 		return err
 	}
-	next := cloneItem(base)
+	next := maps.Clone(base)
 	next[attr] = value
 	return b.record(&txOp{kind: txPutIfPresent, table: table, pk: pk, item: next})
 }
@@ -339,7 +339,7 @@ func (b *txBuffer) attachGuarded(
 		if base == nil {
 			return store.ErrNotFound
 		}
-		op = &txOp{kind: txPutIfMatch, table: table, pk: pk, item: cloneItem(base)}
+		op = &txOp{kind: txPutIfMatch, table: table, pk: pk, item: maps.Clone(base)}
 		if err := b.record(op); err != nil {
 			return err
 		}
@@ -392,14 +392,6 @@ func (b *txBuffer) get(ctx context.Context, table, pk string) (item, error) {
 		return nil, store.ErrNotFound
 	}
 	return base, nil
-}
-
-func cloneItem(src item) item {
-	out := make(item, len(src))
-	for k, v := range src {
-		out[k] = v
-	}
-	return out
 }
 
 func (b *txBuffer) commit(ctx context.Context) error {

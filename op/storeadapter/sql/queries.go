@@ -3,7 +3,9 @@ package oidcsql
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -330,34 +332,15 @@ func versionedUpsertSet(d Dialect, cols []string) string {
 	return assignExcluded(d, cols) + ", row_version = " + d.excludedRef("row_version")
 }
 
-// assignPlaceholders renders the "col = ?" assignment list an UPDATE
-// applies.
-func assignPlaceholders(cols []string) string {
-	parts := make([]string, len(cols))
-	for i, col := range cols {
-		parts[i] = col + " = ?"
-	}
-	return strings.Join(parts, ", ")
-}
-
-// matchPlaceholders renders the "col = ? AND ..." predicate a
+// eqPlaceholders renders "col = ?" for each column joined by sep: ", "
+// gives the assignment list an UPDATE applies, " AND " the predicate a
 // full-tuple compare-and-swap matches the stored row against.
-func matchPlaceholders(cols []string) string {
+func eqPlaceholders(cols []string, sep string) string {
 	parts := make([]string, len(cols))
 	for i, col := range cols {
 		parts[i] = col + " = ?"
 	}
-	return strings.Join(parts, " AND ")
-}
-
-// bindPlaceholders renders the "?, ?, ..." VALUES tail for cols plus
-// the leading key column.
-func bindPlaceholders(n int) string {
-	parts := make([]string, n)
-	for i := range parts {
-		parts[i] = "?"
-	}
-	return strings.Join(parts, ", ")
+	return strings.Join(parts, sep)
 }
 
 // buildQueries assembles every SQL template the adapter needs for the
@@ -381,6 +364,11 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 	clientPlaceholders := placeholders(len(clientColumns))
 	clientUpdateSets := updateSetList(clientColumns, "id")
 
+	// counterCeiling is the largest value the uint8 strike and violation
+	// counters hold; the increments stop there.
+	counterCeiling := strconv.Itoa(math.MaxUint8)
+	const grantCols = "id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at"
+	const sessionCols = "id, subject, auth_time, amr, acr, chooser_group_id, expires_at, created_at, updated_at"
 	const deviceCodeCols = "id, client_id, user_code, subject, scope, resource, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, user_code_strikes, poll_violations, last_polled_at, expires_at, issued_at"
 	// liveGuard keeps a row whose expires_at has not passed; zero opts out
 	// of expiry. sweepGuard is its complement and selects the rows a GC
@@ -627,7 +615,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// grants (upsert keyed on id)
 		grantSave: d.rebind(
 			"INSERT INTO " + n.grants +
-				" (id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at)" +
+				" (" + grantCols + ")" +
 				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("id",
 					"subject="+d.excludedRef("subject")+
@@ -641,25 +629,25 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 						", updated_at="+d.excludedRef("updated_at")),
 		),
 		grantFind: d.rebind(
-			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
+			"SELECT " + grantCols +
 				" FROM " + n.grants + " WHERE id = ?",
 		),
 		grantFindForUpdate: d.rebind(
-			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
+			"SELECT " + grantCols +
 				" FROM " + n.grants + " WHERE id = ?" + d.forUpdate(),
 		),
 		grantFindBySubjectClient: d.rebind(
-			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
+			"SELECT " + grantCols +
 				" FROM " + n.grants +
 				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1",
 		),
 		grantFindBySubjectClientForUpdate: d.rebind(
-			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
+			"SELECT " + grantCols +
 				" FROM " + n.grants +
 				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1" + d.forUpdate(),
 		),
 		grantListBySubject: d.rebind(
-			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
+			"SELECT " + grantCols +
 				" FROM " + n.grants + " WHERE subject = ?",
 		),
 		grantListClientIDs: d.rebind(
@@ -678,7 +666,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// sessions (upsert keyed on id)
 		sessionSave: d.rebind(
 			"INSERT INTO " + n.sessions +
-				" (id, subject, auth_time, amr, acr, chooser_group_id, expires_at, created_at, updated_at)" +
+				" (" + sessionCols + ")" +
 				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("id",
 					"subject="+d.excludedRef("subject")+
@@ -690,7 +678,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 						", updated_at="+d.excludedRef("updated_at")),
 		),
 		sessionFind: d.rebind(
-			"SELECT id, subject, auth_time, amr, acr, chooser_group_id, expires_at, created_at, updated_at" +
+			"SELECT " + sessionCols +
 				" FROM " + n.sessions + " WHERE id = ?",
 		),
 		sessionTouch: d.rebind(
@@ -700,7 +688,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"DELETE FROM " + n.sessions + " WHERE id = ?",
 		),
 		sessionListByChooserGroup: d.rebind(
-			"SELECT id, subject, auth_time, amr, acr, chooser_group_id, expires_at, created_at, updated_at" +
+			"SELECT " + sessionCols +
 				" FROM " + n.sessions + " WHERE chooser_group_id = ?",
 		),
 		sessionGC: d.rebind(
@@ -888,11 +876,11 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		),
 		deviceCodeStrikeIncrement: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET user_code_strikes = user_code_strikes + 1" +
-				" WHERE id = ? AND user_code_strikes < 255" + notExpiredGuard,
+				" WHERE id = ? AND user_code_strikes < " + counterCeiling + notExpiredGuard,
 		),
 		deviceCodeStrikeIncrUser: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET user_code_strikes = user_code_strikes + 1" +
-				" WHERE user_code = ? AND user_code_strikes < 255" + notExpiredGuard,
+				" WHERE user_code = ? AND user_code_strikes < " + counterCeiling + notExpiredGuard,
 		),
 		deviceCodeStrikeRead: d.rebind(
 			"SELECT user_code_strikes FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard,
@@ -902,7 +890,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		),
 		deviceCodeViolationIncr: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET poll_violations = poll_violations + 1" +
-				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard,
+				" WHERE id = ? AND poll_violations < " + counterCeiling + notExpiredGuard,
 		),
 		deviceCodeViolationRead: d.rebind(
 			"SELECT poll_violations FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard,
@@ -942,7 +930,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		),
 		cibaViolationIncr: d.rebind(
 			"UPDATE " + n.cibaRequests + " SET poll_violations = poll_violations + 1" +
-				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard,
+				" WHERE id = ? AND poll_violations < " + counterCeiling + notExpiredGuard,
 		),
 		cibaViolationRead: d.rebind(
 			"SELECT poll_violations FROM " + n.cibaRequests + " WHERE id = ?" + notExpiredGuard,
@@ -959,7 +947,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		totpPut: d.rebind(
 			"INSERT INTO " + n.totpSecrets +
 				" (subject, row_version, " + joinColumns(totpValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(2+len(totpValueColumns)) + ")" + d.upsertAlias() +
+				" VALUES (" + placeholders(2+len(totpValueColumns)) + ")" + d.upsertAlias() +
 				d.upsertOnConflict("subject", versionedUpsertSet(d, totpValueColumns)),
 		),
 		// row_version is the SQL representation of the public opaque Version
@@ -967,8 +955,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// identical stale records still have exactly one successful writer.
 		totpCompareAndSwap: d.rebind(
 			"UPDATE " + n.totpSecrets +
-				" SET " + assignPlaceholders(totpValueColumns) + ", row_version = ?" +
-				" WHERE subject = ? AND row_version = ? AND " + matchPlaceholders(totpValueColumns),
+				" SET " + eqPlaceholders(totpValueColumns, ", ") + ", row_version = ?" +
+				" WHERE subject = ? AND row_version = ? AND " + eqPlaceholders(totpValueColumns, " AND "),
 		),
 		// Accept is the single-use success transition: it only applies
 		// when the stored step is strictly behind the one being redeemed,
@@ -978,7 +966,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// secret after a newer Put.
 		totpAccept: d.rebind(
 			"UPDATE " + n.totpSecrets +
-				" SET " + assignPlaceholders(totpValueColumns) + ", row_version = ?" +
+				" SET " + eqPlaceholders(totpValueColumns, ", ") + ", row_version = ?" +
 				" WHERE subject = ? AND last_accepted_step < ?" +
 				" AND secret_ciphertext = ? AND confirmed_at = ? AND row_version = ?",
 		),
@@ -1002,13 +990,13 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		passkeyInsert: d.rebind(
 			"INSERT INTO " + n.passkeys +
 				" (credential_id, " + joinColumns(passkeyValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(1+len(passkeyValueColumns)) + ")",
+				" VALUES (" + placeholders(1+len(passkeyValueColumns)) + ")",
 		),
 		// The subject is the predicate, not an assignment: a rewrite
 		// lands only on a row its own subject already holds.
 		passkeyRewriteOwn: d.rebind(
 			"UPDATE " + n.passkeys +
-				" SET " + assignPlaceholders(passkeyValueColumns[1:]) +
+				" SET " + eqPlaceholders(passkeyValueColumns[1:], ", ") +
 				" WHERE credential_id = ? AND subject = ?",
 		),
 		// Only the assertion-mutable fields are written; registration
@@ -1054,7 +1042,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		emailOTPPut: d.rebind(
 			"INSERT INTO " + n.emailOTPs +
 				" (subject, row_version, " + joinColumns(emailOTPValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(2+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
+				" VALUES (" + placeholders(2+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
 				d.upsertOnConflict("subject", versionedUpsertSet(d, emailOTPValueColumns)),
 		),
 		// The nil-previous form of the compare-and-swap reserves the
@@ -1074,7 +1062,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		emailOTPInsertIfAbsent: d.rebind(
 			"INSERT INTO " + n.emailOTPs +
 				" (subject, row_version, " + joinColumns(emailOTPValueColumns) + ")" +
-				" VALUES (" + bindPlaceholders(2+len(emailOTPValueColumns)) + ")",
+				" VALUES (" + placeholders(2+len(emailOTPValueColumns)) + ")",
 		),
 		// A row past its retention horizon no longer holds the key. The
 		// predicate is evaluated against the current row version, so of
@@ -1082,22 +1070,22 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// row another racer has just refreshed reads as live.
 		emailOTPReplaceStale: d.rebind(
 			"UPDATE " + n.emailOTPs +
-				" SET row_version = ?, " + assignPlaceholders(emailOTPValueColumns) +
+				" SET row_version = ?, " + eqPlaceholders(emailOTPValueColumns, ", ") +
 				" WHERE subject = ?" +
 				" AND ((retain_until > 0 AND retain_until < ?)" +
 				" OR (retain_until = 0 AND " + sweepGuard + "))",
 		),
 		emailOTPCompareAndSwap: d.rebind(
 			"UPDATE " + n.emailOTPs +
-				" SET " + assignPlaceholders(emailOTPValueColumns) + ", row_version = ?" +
-				" WHERE subject = ? AND row_version = ? AND " + matchPlaceholders(emailOTPValueColumns),
+				" SET " + eqPlaceholders(emailOTPValueColumns, ", ") + ", row_version = ?" +
+				" WHERE subject = ? AND row_version = ? AND " + eqPlaceholders(emailOTPValueColumns, " AND "),
 		),
 		// Consume matches on the code material and on the record still
 		// being unconsumed and unexpired, so a stale success cannot
 		// redeem the challenge that replaced it.
 		emailOTPConsume: d.rebind(
 			"UPDATE " + n.emailOTPs +
-				" SET " + assignPlaceholders(emailOTPValueColumns) + ", row_version = ?" +
+				" SET " + eqPlaceholders(emailOTPValueColumns, ", ") + ", row_version = ?" +
 				" WHERE subject = ? AND code_salt = ? AND code_hash = ? AND consumed_at = 0" +
 				" AND row_version = ? AND " + liveGuard,
 		),

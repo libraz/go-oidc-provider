@@ -21,11 +21,7 @@ import (
 // than panicking.
 func requireCIBA(t *testing.T, s store.Store) store.CIBARequestStore {
 	t.Helper()
-	cr := s.CIBARequests()
-	if cr == nil {
-		t.Skipf("backend %T does not provide a CIBARequestStore", s)
-	}
-	return cr
+	return requireSubstore(t, s, s.CIBARequests(), "CIBARequests()")
 }
 
 func newCIBARequest(now time.Time, id string) *store.CIBARequest {

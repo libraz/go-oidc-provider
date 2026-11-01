@@ -3,6 +3,7 @@ package inmem
 import (
 	"context"
 	"errors"
+	"maps"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -27,86 +28,87 @@ import (
 // cloned on the way into the overlay so a staged mutation cannot reach
 // a record a rollback is about to abandon.
 
-// --- staging: JWT access-token registry --------------------------------------
-
-type accessTokenStaging struct {
-	parent  *accessTokenStore
-	written map[string]*store.AccessTokenRecord
+// overlay is the staged view of one parent map: records written in the
+// transaction, plus keys deleted in it. Parent records are cloned on the
+// way into a lookup so a staged mutation cannot write through to the
+// committed map.
+type overlay[V any] struct {
+	base    map[string]V
+	clone   func(V) V
+	written map[string]V
 	deleted map[string]struct{}
 }
 
-func newAccessTokenStaging(parent *accessTokenStore) *accessTokenStaging {
-	return &accessTokenStaging{
-		parent:  parent,
-		written: make(map[string]*store.AccessTokenRecord),
+func newOverlay[V any](base map[string]V, clone func(V) V) *overlay[V] {
+	return &overlay[V]{
+		base:    base,
+		clone:   clone,
+		written: make(map[string]V),
 		deleted: make(map[string]struct{}),
 	}
 }
 
-// lookup returns the record visible to this transaction, or nil. Parent
-// records are cloned so a caller that stages a mutation on the result
-// cannot write through to the committed map.
-func (s *accessTokenStaging) lookup(jti string) *store.AccessTokenRecord {
-	if rec, ok := s.written[jti]; ok {
+// lookup returns the record visible to this transaction, or the zero
+// value (nil for the pointer records staged here).
+func (s *overlay[V]) lookup(key string) V {
+	var none V
+	if rec, ok := s.written[key]; ok {
 		return rec
 	}
-	if _, gone := s.deleted[jti]; gone {
-		return nil
+	if _, gone := s.deleted[key]; gone {
+		return none
 	}
-	if rec, ok := s.parent.m[jti]; ok {
-		return cloneAccessToken(rec)
+	if rec, ok := s.base[key]; ok {
+		return s.clone(rec)
 	}
-	return nil
+	return none
 }
 
-func (s *accessTokenStaging) stage(jti string, rec *store.AccessTokenRecord) {
-	delete(s.deleted, jti)
-	s.written[jti] = rec
+func (s *overlay[V]) stage(key string, rec V) {
+	delete(s.deleted, key)
+	s.written[key] = rec
 }
 
-func (s *accessTokenStaging) drop(jti string) {
-	delete(s.written, jti)
-	s.deleted[jti] = struct{}{}
+func (s *overlay[V]) drop(key string) {
+	delete(s.written, key)
+	s.deleted[key] = struct{}{}
 }
 
 // iter calls fn for every record visible to this transaction, with the
 // staged view taking precedence over the parent map.
-func (s *accessTokenStaging) iter(fn func(string, *store.AccessTokenRecord)) {
-	for jti, rec := range s.written {
-		fn(jti, rec)
+func (s *overlay[V]) iter(fn func(string, V)) {
+	for key, rec := range s.written {
+		fn(key, rec)
 	}
-	for jti, rec := range s.parent.m {
-		if _, staged := s.written[jti]; staged {
+	for key, rec := range s.base {
+		if _, staged := s.written[key]; staged {
 			continue
 		}
-		if _, gone := s.deleted[jti]; gone {
+		if _, gone := s.deleted[key]; gone {
 			continue
 		}
-		fn(jti, rec)
+		fn(key, rec)
 	}
 }
 
-func (s *accessTokenStaging) flushLocked() {
-	for jti := range s.deleted {
-		delete(s.parent.m, jti)
+func (s *overlay[V]) flushLocked() {
+	for key := range s.deleted {
+		delete(s.base, key)
 	}
-	for jti, rec := range s.written {
-		s.parent.m[jti] = rec
-	}
+	maps.Copy(s.base, s.written)
 }
 
-func (s *accessTokenStaging) clear() {
+func (s *overlay[V]) clear() {
 	clear(s.written)
 	clear(s.deleted)
 }
 
+// --- staging: JWT access-token registry --------------------------------------
+
 type txAccessTokens struct{ tx *tx }
 
 func (s txAccessTokens) Register(ctx context.Context, rec store.AccessTokenRecord) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return err
 	}
 	if rec.JTI == "" {
@@ -121,10 +123,7 @@ func (s txAccessTokens) Register(ctx context.Context, rec store.AccessTokenRecor
 }
 
 func (s txAccessTokens) Find(ctx context.Context, jti string) (*store.AccessTokenRecord, error) {
-	if s.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	if jti == "" {
@@ -138,10 +137,7 @@ func (s txAccessTokens) Find(ctx context.Context, jti string) (*store.AccessToke
 }
 
 func (s txAccessTokens) RevokeByJTI(ctx context.Context, jti string) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return err
 	}
 	if jti == "" {
@@ -159,10 +155,7 @@ func (s txAccessTokens) RevokeByJTI(ctx context.Context, jti string) error {
 }
 
 func (s txAccessTokens) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return 0, err
 	}
 	if grantID == "" {
@@ -183,10 +176,7 @@ func (s txAccessTokens) RevokeByGrant(ctx context.Context, grantID string) (int,
 }
 
 func (s txAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return 0, err
 	}
 	st := s.tx.atStaging
@@ -203,81 +193,10 @@ func (s txAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
 
 // --- staging: opaque access tokens -------------------------------------------
 
-type opaqueAccessTokenStaging struct {
-	parent  *opaqueAccessTokenStore
-	written map[string]*store.OpaqueAccessToken
-	deleted map[string]struct{}
-}
-
-func newOpaqueAccessTokenStaging(parent *opaqueAccessTokenStore) *opaqueAccessTokenStaging {
-	return &opaqueAccessTokenStaging{
-		parent:  parent,
-		written: make(map[string]*store.OpaqueAccessToken),
-		deleted: make(map[string]struct{}),
-	}
-}
-
-// lookup takes the SHA-256 digest of the raw bearer id, matching the
-// key discipline of the non-transactional substore.
-func (s *opaqueAccessTokenStaging) lookup(key string) *store.OpaqueAccessToken {
-	if rec, ok := s.written[key]; ok {
-		return rec
-	}
-	if _, gone := s.deleted[key]; gone {
-		return nil
-	}
-	if rec, ok := s.parent.m[key]; ok {
-		return cloneOpaqueAccessToken(rec)
-	}
-	return nil
-}
-
-func (s *opaqueAccessTokenStaging) stage(key string, rec *store.OpaqueAccessToken) {
-	delete(s.deleted, key)
-	s.written[key] = rec
-}
-
-func (s *opaqueAccessTokenStaging) drop(key string) {
-	delete(s.written, key)
-	s.deleted[key] = struct{}{}
-}
-
-func (s *opaqueAccessTokenStaging) iter(fn func(string, *store.OpaqueAccessToken)) {
-	for key, rec := range s.written {
-		fn(key, rec)
-	}
-	for key, rec := range s.parent.m {
-		if _, staged := s.written[key]; staged {
-			continue
-		}
-		if _, gone := s.deleted[key]; gone {
-			continue
-		}
-		fn(key, rec)
-	}
-}
-
-func (s *opaqueAccessTokenStaging) flushLocked() {
-	for key := range s.deleted {
-		delete(s.parent.m, key)
-	}
-	for key, rec := range s.written {
-		s.parent.m[key] = rec
-	}
-}
-
-func (s *opaqueAccessTokenStaging) clear() {
-	clear(s.written)
-	clear(s.deleted)
-}
-
 type txOpaqueAccessTokens struct{ tx *tx }
 
 func (s txOpaqueAccessTokens) Save(ctx context.Context, tok *store.OpaqueAccessToken) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return err
 	}
 	if tok == nil {
@@ -300,10 +219,7 @@ func (s txOpaqueAccessTokens) Save(ctx context.Context, tok *store.OpaqueAccessT
 }
 
 func (s txOpaqueAccessTokens) Find(ctx context.Context, id string) (*store.OpaqueAccessToken, error) {
-	if s.tx.closed.Load() {
-		return nil, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return nil, err
 	}
 	if id == "" {
@@ -323,10 +239,7 @@ func (s txOpaqueAccessTokens) Find(ctx context.Context, id string) (*store.Opaqu
 }
 
 func (s txOpaqueAccessTokens) RevokeByID(ctx context.Context, id string) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return err
 	}
 	if id == "" {
@@ -345,10 +258,7 @@ func (s txOpaqueAccessTokens) RevokeByID(ctx context.Context, id string) error {
 }
 
 func (s txOpaqueAccessTokens) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return 0, err
 	}
 	if grantID == "" {
@@ -371,10 +281,7 @@ func (s txOpaqueAccessTokens) RevokeByGrant(ctx context.Context, grantID string)
 // RevokeByChain implements [store.OpaqueAccessTokenChainRevoker] through
 // the overlay.
 func (s txOpaqueAccessTokens) RevokeByChain(ctx context.Context, grantID, chainID string) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return 0, err
 	}
 	if grantID == "" || chainID == "" {
@@ -395,10 +302,7 @@ func (s txOpaqueAccessTokens) RevokeByChain(ctx context.Context, grantID, chainI
 }
 
 func (s txOpaqueAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return 0, err
 	}
 	st := s.tx.oatStaging
@@ -420,103 +324,31 @@ func (s txOpaqueAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, er
 // transaction that only writes a JTI denylist row leaves the tombstone
 // overlay empty and pays nothing for it.
 type grantRevocationStaging struct {
-	parent *grantRevocationStore
-
-	tombstonesWritten map[string]*tombstoneRow
-	tombstonesDeleted map[string]struct{}
-
-	denylistWritten map[string]*store.RevokedJTI
-	denylistDeleted map[string]struct{}
+	tombstones *overlay[*tombstoneRow]
+	denylist   *overlay[*store.RevokedJTI]
 }
 
 func newGrantRevocationStaging(parent *grantRevocationStore) *grantRevocationStaging {
 	return &grantRevocationStaging{
-		parent:            parent,
-		tombstonesWritten: make(map[string]*tombstoneRow),
-		tombstonesDeleted: make(map[string]struct{}),
-		denylistWritten:   make(map[string]*store.RevokedJTI),
-		denylistDeleted:   make(map[string]struct{}),
-	}
-}
-
-func (s *grantRevocationStaging) lookupTombstone(grantID string) *tombstoneRow {
-	if rec, ok := s.tombstonesWritten[grantID]; ok {
-		return rec
-	}
-	if _, gone := s.tombstonesDeleted[grantID]; gone {
-		return nil
-	}
-	if rec, ok := s.parent.tombstones[grantID]; ok {
-		out := *rec
-		return &out
-	}
-	return nil
-}
-
-func (s *grantRevocationStaging) lookupDenylist(jti string) *store.RevokedJTI {
-	if rec, ok := s.denylistWritten[jti]; ok {
-		return rec
-	}
-	if _, gone := s.denylistDeleted[jti]; gone {
-		return nil
-	}
-	if rec, ok := s.parent.denylist[jti]; ok {
-		out := *rec
-		return &out
-	}
-	return nil
-}
-
-func (s *grantRevocationStaging) iterTombstones(fn func(string, *tombstoneRow)) {
-	for id, rec := range s.tombstonesWritten {
-		fn(id, rec)
-	}
-	for id, rec := range s.parent.tombstones {
-		if _, staged := s.tombstonesWritten[id]; staged {
-			continue
-		}
-		if _, gone := s.tombstonesDeleted[id]; gone {
-			continue
-		}
-		fn(id, rec)
-	}
-}
-
-func (s *grantRevocationStaging) iterDenylist(fn func(string, *store.RevokedJTI)) {
-	for jti, rec := range s.denylistWritten {
-		fn(jti, rec)
-	}
-	for jti, rec := range s.parent.denylist {
-		if _, staged := s.denylistWritten[jti]; staged {
-			continue
-		}
-		if _, gone := s.denylistDeleted[jti]; gone {
-			continue
-		}
-		fn(jti, rec)
+		tombstones: newOverlay(parent.tombstones, func(r *tombstoneRow) *tombstoneRow {
+			out := *r
+			return &out
+		}),
+		denylist: newOverlay(parent.denylist, func(r *store.RevokedJTI) *store.RevokedJTI {
+			out := *r
+			return &out
+		}),
 	}
 }
 
 func (s *grantRevocationStaging) flushLocked() {
-	for id := range s.tombstonesDeleted {
-		delete(s.parent.tombstones, id)
-	}
-	for id, rec := range s.tombstonesWritten {
-		s.parent.tombstones[id] = rec
-	}
-	for jti := range s.denylistDeleted {
-		delete(s.parent.denylist, jti)
-	}
-	for jti, rec := range s.denylistWritten {
-		s.parent.denylist[jti] = rec
-	}
+	s.tombstones.flushLocked()
+	s.denylist.flushLocked()
 }
 
 func (s *grantRevocationStaging) clear() {
-	clear(s.tombstonesWritten)
-	clear(s.tombstonesDeleted)
-	clear(s.denylistWritten)
-	clear(s.denylistDeleted)
+	s.tombstones.clear()
+	s.denylist.clear()
 }
 
 type txGrantRevocations struct{ tx *tx }
@@ -528,24 +360,20 @@ type txGrantRevocations struct{ tx *tx }
 // through the overlay, so two calls inside one transaction compose
 // exactly as two committed calls would.
 func (s txGrantRevocations) RevokeGrant(ctx context.Context, t store.GrantTombstone) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return err
 	}
 	if t.GrantID == "" {
 		return nil
 	}
 	st := s.tx.grvStaging
-	merged := st.lookupTombstone(t.GrantID)
+	merged := st.tombstones.lookup(t.GrantID)
 	if merged == nil {
 		merged = newTombstoneRow(t)
 	} else {
 		merged.merge(t)
 	}
-	delete(st.tombstonesDeleted, t.GrantID)
-	st.tombstonesWritten[t.GrantID] = merged
+	st.tombstones.stage(t.GrantID, merged)
 	return nil
 }
 
@@ -553,82 +381,67 @@ func (s txGrantRevocations) RevokeGrant(ctx context.Context, t store.GrantTombst
 // is a no-op so the audit trail keeps the instant the row was first
 // written.
 func (s txGrantRevocations) RevokeJTI(ctx context.Context, r store.RevokedJTI) error {
-	if s.tx.closed.Load() {
-		return errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return err
 	}
 	if r.JTI == "" {
 		return nil
 	}
 	st := s.tx.grvStaging
-	if st.lookupDenylist(r.JTI) != nil {
+	if st.denylist.lookup(r.JTI) != nil {
 		return nil
 	}
 	clone := r
-	delete(st.denylistDeleted, r.JTI)
-	st.denylistWritten[r.JTI] = &clone
+	st.denylist.stage(r.JTI, &clone)
 	return nil
 }
 
 func (s txGrantRevocations) IsRevoked(ctx context.Context, grantID, jti string, iat time.Time) (bool, error) {
-	if s.tx.closed.Load() {
-		return false, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return false, err
 	}
 	st := s.tx.grvStaging
-	if jti != "" && st.lookupDenylist(jti) != nil {
+	if jti != "" && st.denylist.lookup(jti) != nil {
 		return true, nil
 	}
 	if grantID == "" {
 		return false, nil
 	}
-	tomb := st.lookupTombstone(grantID)
+	tomb := st.tombstones.lookup(grantID)
 	return tomb != nil && tomb.revokes(iat), nil
 }
 
 // IsIssuanceRevoked implements [store.IssuanceRevocationChecker] through
 // the overlay.
 func (s txGrantRevocations) IsIssuanceRevoked(ctx context.Context, grantID string, issuedAt time.Time) (bool, error) {
-	if s.tx.closed.Load() {
-		return false, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return false, err
 	}
 	if grantID == "" {
 		return false, nil
 	}
-	tomb := s.tx.grvStaging.lookupTombstone(grantID)
+	tomb := s.tx.grvStaging.tombstones.lookup(grantID)
 	return tomb != nil && tomb.refusesIssuance(issuedAt), nil
 }
 
 func (s txGrantRevocations) GC(ctx context.Context, cutoff time.Time) (int, error) {
-	if s.tx.closed.Load() {
-		return 0, errTxClosed
-	}
-	if err := ctx.Err(); err != nil {
+	if err := s.tx.guard(ctx); err != nil {
 		return 0, err
 	}
 	st := s.tx.grvStaging
 	n := 0
-	st.iterTombstones(func(id string, rec *tombstoneRow) {
+	st.tombstones.iter(func(id string, rec *tombstoneRow) {
 		if rec.expiresAt.IsZero() || !rec.expiresAt.Before(cutoff) {
 			return
 		}
-		delete(st.tombstonesWritten, id)
-		st.tombstonesDeleted[id] = struct{}{}
+		st.tombstones.drop(id)
 		n++
 	})
-	st.iterDenylist(func(jti string, rec *store.RevokedJTI) {
+	st.denylist.iter(func(jti string, rec *store.RevokedJTI) {
 		if rec.ExpiresAt.IsZero() || !rec.ExpiresAt.Before(cutoff) {
 			return
 		}
-		delete(st.denylistWritten, jti)
-		st.denylistDeleted[jti] = struct{}{}
+		st.denylist.drop(jti)
 		n++
 	})
 	return n, nil

@@ -15,11 +15,7 @@ import (
 // nil per its godoc).
 func requireMetadata(t *testing.T, s store.Store) store.MetadataStore {
 	t.Helper()
-	meta := s.Metadata()
-	if meta == nil {
-		t.Skip("backend does not provision store.MetadataStore")
-	}
-	return meta
+	return requireSubstore(t, s, s.Metadata(), "Metadata()")
 }
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.

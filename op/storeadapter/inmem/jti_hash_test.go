@@ -87,7 +87,7 @@ func TestConsumedJTIs_MarkAmortizesExpiredSweep(t *testing.T) {
 	if len(s.jtis.m) != 1 {
 		t.Fatalf("after first Mark len=%d want 1", len(s.jtis.m))
 	}
-	for i := uint32(1); i < jtiFullGCMarkInterval; i++ {
+	for i := uint32(1); i < fullGCInterval; i++ {
 		if err := s.ConsumedJTIs().Mark(ctx, "fresh-jti-"+strconv.Itoa(int(i)), now.Add(time.Minute)); err != nil {
 			t.Fatalf("Mark fresh #%d: %v", i, err)
 		}

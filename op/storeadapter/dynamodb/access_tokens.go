@@ -64,10 +64,7 @@ func (s *accessTokenStore) Find(ctx context.Context, jti string) (*store.AccessT
 }
 
 func (s *accessTokenStore) read(ctx context.Context, pk string) (item, error) {
-	if s.tx != nil {
-		return s.tx.get(ctx, s.parent.names.accessTokens, pk)
-	}
-	return s.parent.get(ctx, s.parent.names.accessTokens, pk)
+	return s.parent.getVia(ctx, s.tx, s.parent.names.accessTokens, pk)
 }
 
 // RevokeByJTI retires one token. It is idempotent and silent about a
@@ -100,8 +97,7 @@ func (s *accessTokenStore) retire(ctx context.Context, pk string) error {
 }
 
 // RevokeByGrant marks every access token of a grant revoked and reports
-// how many it touched. A token already revoked is still counted: the
-// caller uses the number for audit, not for control flow.
+// how many it newly revoked. A token already revoked is not counted.
 //
 // Inside a transaction the enumeration reads the index while each
 // retirement is buffered, so the cascade covers the committed set and
@@ -125,13 +121,13 @@ func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (i
 		if pk == "" {
 			continue
 		}
-		if err := s.retire(ctx, pk); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				continue
-			}
+		flipped, err := s.parent.flipRevoked(ctx, s.tx, s.parent.names.accessTokens, pk)
+		if err != nil {
 			return count, wrapErr("accessTokens.RevokeByGrant", err)
 		}
-		count++
+		if flipped {
+			count++
+		}
 	}
 	return count, nil
 }
@@ -212,6 +208,45 @@ func (s *Store) setRevoked(ctx context.Context, table, pk string) error {
 	return nil
 }
 
+// flipRevoked marks one item revoked only while it is still live,
+// reporting whether this call flipped it. A missing or already revoked
+// item reports false, so a count of flips is not inflated by a repeated
+// cascade. A non-nil tx buffers the write and re-asserts the guard at
+// commit.
+func (s *Store) flipRevoked(ctx context.Context, tx *txBuffer, table, pk string) (bool, error) {
+	if tx != nil {
+		found, err := tx.get(ctx, table, pk)
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if readBool(found, attrRevoked) {
+			return false, nil
+		}
+		return true, tx.attachGuarded(ctx, table, pk, attrRevoked, avBool(true), attrRevoked)
+	}
+	_, err := s.api.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(table),
+		Key:                 key(pk),
+		UpdateExpression:    aws.String("SET #revoked = :true"),
+		ConditionExpression: aws.String("attribute_exists(#pk) AND #revoked = :false"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk":      attrPK,
+			"#revoked": attrRevoked,
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":true":  avBool(true),
+			":false": avBool(false),
+		},
+	})
+	if isConditionalCheckFailed(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // gcExpired deletes every item in table whose expiry is strictly
 // before cutoff, returning the count. The boundary matters: a record
 // expiring exactly at the sweep instant is still inside its lifetime,
@@ -244,7 +279,7 @@ func (s *Store) gcExpired(ctx context.Context, table string, cutoff time.Time, o
 func (s *Store) gcWhere(
 	ctx context.Context, table, op, condition string, values map[string]types.AttributeValue, consistent bool,
 ) (int, error) {
-	names := map[string]string{"#pk": attrPK, "#expires": attrExpiresAt}
+	names := expiryNames(nil)
 	var (
 		deleted int
 		start   map[string]types.AttributeValue
@@ -287,7 +322,7 @@ func (s *Store) gcWhere(
 
 // expiredBeforeCondition holds for an item whose expiry is set and
 // strictly before :cutoff (see [Store.gcExpired]).
-const expiredBeforeCondition = "#expires <> :never AND #expires < :cutoff"
+const expiredBeforeCondition = hasExpiryCondition + " AND #expires < :cutoff"
 
 var (
 	_ store.AccessTokenRegistry = (*accessTokenStore)(nil)

@@ -70,7 +70,7 @@ func (s *deviceCodeStore) saveWithUserCode(ctx context.Context, entry item, code
 	reservation := newItem(userCodeKey(code.UserCode)).set(attrReservedFor, readS(entry, attrPK))
 	reservation.expires(code.ExpiresAt)
 
-	names, values := freeKeyNames(), s.parent.freeKeyValues()
+	names, values := expiryNames(nil), s.parent.expiryValues(nil)
 	claim := func(i item) types.TransactWriteItem {
 		return types.TransactWriteItem{Put: &types.Put{
 			TableName:                 aws.String(s.parent.names.deviceCodes),
@@ -322,8 +322,6 @@ func (s *deviceCodeStore) Consume(ctx context.Context, deviceCode string) (*stor
 	case store.DeviceCodeStatusConsumed:
 		return nil, store.ErrAlreadyConsumed
 	case store.DeviceCodeStatusApproved:
-	case store.DeviceCodeStatusPending, store.DeviceCodeStatusDenied:
-		return nil, store.ErrConflict
 	default:
 		return nil, store.ErrConflict
 	}

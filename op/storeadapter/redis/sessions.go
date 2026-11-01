@@ -435,18 +435,7 @@ func (s *sessionStore) fetch(ctx context.Context, id string) (*sessionRecord, er
 // its replacement from, and the exact bytes to condition the write on so
 // a snapshot that went stale is refused rather than written back.
 func (s *sessionStore) fetchRaw(ctx context.Context, id string) (*sessionRecord, []byte, error) {
-	raw, err := s.parent.client.Get(ctx, s.sessionKey(id)).Bytes()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, nil, store.ErrNotFound
-		}
-		return nil, nil, fmt.Errorf("oidcredis: GET session: %w", err)
-	}
-	var rec sessionRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return nil, nil, fmt.Errorf("oidcredis: unmarshal session: %w", err)
-	}
-	return &rec, raw, nil
+	return getJSON[sessionRecord](ctx, s.parent.client, s.sessionKey(id), "session")
 }
 
 func (s *sessionStore) encode(sess *store.Session) ([]byte, error) {

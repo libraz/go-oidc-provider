@@ -77,11 +77,7 @@ func userStoreFindBySubject(t *testing.T, f Factory) {
 
 func requireUserPasswords(t *testing.T, s store.Store) store.UserPasswordStore {
 	t.Helper()
-	passwords, ok := s.Users().(store.UserPasswordStore)
-	if !ok {
-		t.Skipf("backend %T does not implement store.UserPasswordStore", s.Users())
-	}
-	return passwords
+	return requireCapability[store.UserPasswordStore](t, s.Users())
 }
 
 // userPasswordFindByUsername pins the invariant that matters most in
@@ -198,11 +194,7 @@ func userPasswordReadHashMissing(t *testing.T, f Factory) {
 // does not implement [store.UserPasswordHashUpdater].
 func requirePasswordHashUpdater(t *testing.T, s store.Store) store.UserPasswordHashUpdater {
 	t.Helper()
-	updater, ok := s.Users().(store.UserPasswordHashUpdater)
-	if !ok {
-		t.Skipf("backend %T does not implement store.UserPasswordHashUpdater", s.Users())
-	}
-	return updater
+	return requireCapability[store.UserPasswordHashUpdater](t, s.Users())
 }
 
 // rehashedPassword is the replacement hash the updater cases write.

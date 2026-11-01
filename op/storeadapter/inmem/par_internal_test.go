@@ -36,7 +36,7 @@ func TestPARSaveAmortizesFullSweep(t *testing.T) {
 		t.Fatalf("after first save len=%d want 1 (expired record retained until amortized sweep)", len(ps.m))
 	}
 
-	for i := uint32(1); i < parFullGCSaveInterval; i++ {
+	for i := uint32(1); i < fullGCInterval; i++ {
 		if err := ps.Save(ctx, &store.PushedAuthRequest{
 			URI:       "urn:ietf:params:oauth:request_uri:fresh-" + strconv.Itoa(int(i)),
 			ClientID:  "client-1",
@@ -169,7 +169,7 @@ func TestPARSweepKeepsUnconsumedRecordRedeemable(t *testing.T) {
 
 	// Other clients keep pushing while that login is in progress,
 	// crossing the sweep threshold several times over.
-	for i := range 4 * int(parFullGCSaveInterval) {
+	for i := range 4 * int(fullGCInterval) {
 		if err := ps.Save(ctx, &store.PushedAuthRequest{
 			URI:       "urn:ietf:params:oauth:request_uri:other-" + strconv.Itoa(i),
 			ClientID:  "client-2",

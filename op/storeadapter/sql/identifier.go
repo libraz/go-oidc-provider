@@ -325,32 +325,13 @@ var knownNamingKeys = []string{
 // name that is a substring of another at the same start position.
 func rewriteSchema(raw []byte, n nameMap) string {
 	defaults := defaultNames()
-	replacements := map[string]string{
-		defaults.clients:            n.clients,
-		defaults.authCodes:          n.authCodes,
-		defaults.refreshes:          n.refreshes,
-		defaults.accessTokens:       n.accessTokens,
-		defaults.opaqueAccessTokens: n.opaqueAccessTokens,
-		defaults.grantTombstones:    n.grantTombstones,
-		defaults.revokedJTIs:        n.revokedJTIs,
-		defaults.grants:             n.grants,
-		defaults.sessions:           n.sessions,
-		defaults.pars:               n.pars,
-		defaults.interactions:       n.interactions,
-		defaults.jtis:               n.jtis,
-		defaults.users:              n.users,
-		defaults.iats:               n.iats,
-		defaults.rats:               n.rats,
-		defaults.metadata:           n.metadata,
-		defaults.deviceCodes:        n.deviceCodes,
-		defaults.cibaRequests:       n.cibaRequests,
-		defaults.totpSecrets:        n.totpSecrets,
-		defaults.passkeys:           n.passkeys,
-		defaults.recoveryCodes:      n.recoveryCodes,
-		defaults.emailOTPs:          n.emailOTPs,
-		defaults.authnLockouts:      n.authnLockouts,
-		defaults.ssfStreams:         n.ssfStreams,
-		defaults.ssfEvents:          n.ssfEvents,
+	if n == defaults {
+		return string(raw)
+	}
+	from, to := defaults.all(), n.all()
+	replacements := make(map[string]string, len(from))
+	for i, name := range from {
+		replacements[name] = to[i]
 	}
 	names := make([]string, 0, len(replacements))
 	for from := range replacements {
