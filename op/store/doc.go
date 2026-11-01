@@ -77,6 +77,9 @@
 //	IssuanceRevocation-      Store.GrantRevo-       an access-token-only tombstone also
 //	Checker                  cations()              refuses the grant's refresh and
 //	                                                code redemptions
+//	SchemaValidator          each store the         a missing table or column surfaces
+//	                         configuration uses     at the first request that touches it
+//	                                                rather than at op.New
 //
 // RevokeByClient is the one extension that is all-or-nothing across the
 // substores it applies to. [RevokeByClient] lists them; a backend that

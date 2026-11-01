@@ -304,6 +304,7 @@ github.com/libraz/go-oidc-provider/op/store	SSFStreamEnabled	v1.5
 github.com/libraz/go-oidc-provider/op/store	SSFStreamPaused	v1.5
 github.com/libraz/go-oidc-provider/op/store	SSFStreamStatus	v1.5
 github.com/libraz/go-oidc-provider/op/store	SSFStreamStore	v1.5
+github.com/libraz/go-oidc-provider/op/store	SchemaValidator	v1.5
 github.com/libraz/go-oidc-provider/op/store	SessionDurabilityReporter	v1.5
 github.com/libraz/go-oidc-provider/op/store	SharedSignalsStore	v1.5
 github.com/libraz/go-oidc-provider/op/store	StandardClaims	v1.5
