@@ -128,9 +128,6 @@ type scopeEntry struct {
 // expects to be mounted at a pattern carrying a "{grant_id}" path value
 // (for example "/oidc/grant_management/{grant_id}").
 func Handler(deps Deps) http.Handler {
-	if deps.SecretVerifier == nil {
-		deps.SecretVerifier = &clientauth.Argon2id{}
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

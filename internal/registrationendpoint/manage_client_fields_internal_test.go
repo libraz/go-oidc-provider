@@ -12,6 +12,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // putDisposition records what PUT /register/{client_id} does with a
@@ -187,7 +188,7 @@ func TestUpdateKeepsConfigurationTheMetadataCannotExpress(t *testing.T) {
 		Issuer:                   "https://op.test.invalid",
 		RegisterPath:             "/register",
 		Clients:                  registry,
-		RegistrationAccessTokens: fieldProbeRATStore{hashedRAT: hashSecret(rawRAT)},
+		RegistrationAccessTokens: fieldProbeRATStore{hashedRAT: patterns.Digest(rawRAT)},
 		// A populated catalog is what makes the probe able to fail: with
 		// no registered scopes there is nothing for a scope default to
 		// widen to.

@@ -104,11 +104,13 @@ type loggedOutPage struct {
 // [i18n.Resolver.Message] documents its return as raw, unescaped.
 func renderLoggedOutBody(page loggedOutPage) string {
 	page = page.withDefaults()
-	out := replaceFirst(loggedOutTemplate, "{LANG}", html.EscapeString(page.locale))
-	// The title appears twice — <title> and <h1> — so the substitution
-	// runs until no placeholder is left rather than exactly once.
-	out = strings.ReplaceAll(out, "{TITLE}", html.EscapeString(page.title))
-	return replaceFirst(out, "{BODY}", html.EscapeString(page.body))
+	// One pass: a substituted value that spells another placeholder must
+	// not be rewritten by a later substitution.
+	return strings.NewReplacer(
+		"{LANG}", html.EscapeString(page.locale),
+		"{TITLE}", html.EscapeString(page.title),
+		"{BODY}", html.EscapeString(page.body),
+	).Replace(loggedOutTemplate)
 }
 
 // withDefaults fills every empty field with its built-in English value.
@@ -166,7 +168,7 @@ func writeLogoutError(w http.ResponseWriter, status int, description string) {
 // template. The function is split out so a future regression that
 // changes the substitution rules is easy to test in isolation.
 func renderErrorBody(description string) string {
-	return replaceFirst(errorBodyTemplate, "{DESC}", htmlEscapeASCII(description))
+	return strings.Replace(errorBodyTemplate, "{DESC}", html.EscapeString(description), 1)
 }
 
 // stampStaticHeaders writes the response headers shared by the
@@ -195,56 +197,4 @@ func stampStaticHeaders(w http.ResponseWriter) {
 	httpx.StampNoStore(w)
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-}
-
-// replaceFirst returns s with the first occurrence of old replaced by
-// new. The helper intentionally avoids strings.Replace's count
-// parameter so the call site reads as "exactly one substitution".
-func replaceFirst(s, old, replacement string) string {
-	i := indexOf(s, old)
-	if i < 0 {
-		return s
-	}
-	return s[:i] + replacement + s[i+len(old):]
-}
-
-// indexOf is a tiny substring search that avoids importing strings for
-// the single call in this file. Keeping the helper local also keeps
-// the cyclop budget for the page renderer at zero.
-func indexOf(haystack, needle string) int {
-	if len(needle) == 0 || len(needle) > len(haystack) {
-		return -1
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
-}
-
-// htmlEscapeASCII escapes the five HTML metacharacters in s. The
-// closed-list descriptions in error.go are pure ASCII without any of
-// these characters today, but we run the escape unconditionally so an
-// accidental future addition (an apostrophe in a description, say)
-// cannot escape the static body context.
-func htmlEscapeASCII(s string) string {
-	out := make([]byte, 0, len(s))
-	for i := range len(s) {
-		switch s[i] {
-		case '&':
-			out = append(out, []byte("&amp;")...)
-		case '<':
-			out = append(out, []byte("&lt;")...)
-		case '>':
-			out = append(out, []byte("&gt;")...)
-		case '"':
-			out = append(out, []byte("&quot;")...)
-		case '\'':
-			out = append(out, []byte("&#39;")...)
-		default:
-			out = append(out, s[i])
-		}
-	}
-	return string(out)
 }

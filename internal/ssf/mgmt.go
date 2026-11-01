@@ -568,12 +568,18 @@ func mgmtDecodeObject(w http.ResponseWriter, r *http.Request) (mgmtObject, error
 	if obj == nil {
 		return nil, mgmtBadRequest("request body must be a JSON object")
 	}
+	dropNullMembers(obj)
+	return obj, nil
+}
+
+// dropNullMembers removes members whose value is JSON null: an explicit
+// null means "absent" for every management member.
+func dropNullMembers(obj mgmtObject) {
 	for k, v := range obj {
 		if string(v) == "null" {
 			delete(obj, k)
 		}
 	}
-	return obj, nil
 }
 
 // mgmtString decodes member name as a string, reporting whether it was
@@ -727,11 +733,7 @@ func mgmtDecodeDelivery(raw json.RawMessage) (mgmtDeliveryInput, error) {
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
 		return mgmtDeliveryInput{}, mgmtBadRequest("delivery must be an object")
 	}
-	for k, v := range obj {
-		if string(v) == "null" {
-			delete(obj, k)
-		}
-	}
+	dropNullMembers(obj)
 	var in mgmtDeliveryInput
 	method, ok, err := mgmtString(obj, "method")
 	if err != nil {

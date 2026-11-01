@@ -1,10 +1,5 @@
 package registrationendpoint
 
-import (
-	"crypto/sha256"
-	"encoding/hex"
-)
-
 // Token / identifier byte lengths the handler uses. The values mirror
 // the public op.IssueInitialAccessToken posture so DCR-issued
 // credentials carry the same entropy as IAT-issued ones.
@@ -27,13 +22,3 @@ const (
 	// PAR request_uri entropy.
 	ratBytes = 32
 )
-
-// hashSecret returns the lowercase hex SHA-256 digest of the bearer
-// secret. The format matches the contract documented on
-// store.InitialAccessToken.HashedValue and
-// store.RegistrationAccessToken.HashedValue; backends compare digests
-// in constant time.
-func hashSecret(secret string) string {
-	sum := sha256.Sum256([]byte(secret))
-	return hex.EncodeToString(sum[:])
-}

@@ -18,6 +18,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // handleRead implements GET /register/{client_id} (RFC 7592 §2.1). On
@@ -60,7 +61,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		return
 	}
 	if !endpointsupport.IsJSONContent(r.Header.Get("Content-Type")) {
-		writeRegistrationError(w, http.StatusBadRequest, codeInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, endpointsupport.ErrInvalidRequest,
 			"content-type must be application/json")
 		return
 	}
@@ -71,16 +72,16 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	endpointsupport.LimitFormBody(w, r)
 	metadata, extras, err := parseClientMetadataWithExtras(r.Body)
 	if err != nil {
-		writeRegistrationError(w, http.StatusBadRequest, codeInvalidClientMetadata, "malformed JSON")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, codeInvalidClientMetadata, "malformed JSON")
 		return
 	}
 	if extras.SoftwareStatement != "" {
-		writeRegistrationError(w, http.StatusBadRequest, codeInvalidSoftwareStmt,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, codeInvalidSoftwareStmt,
 			"software_statement is not supported in v1.0")
 		return
 	}
 	if err := validateManageUpdateRequest(existing, clientID, extras); err != nil {
-		writeRegistrationError(w, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, endpointsupport.ErrInvalidRequest, err.Error())
 		return
 	}
 	if err := validateUnpersistedMetadata(metadata, extras); err != nil {
@@ -151,14 +152,14 @@ func rotateAndUpdate(
 	rawRAT, err := keys.RandomBase64URL(ratBytes)
 	if err != nil {
 		deps.logger().Error("dcr.rat.generate_failed", "err", err, "client_id", existing.ID)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return rotatedRegistration{}, false
 	}
 	confidential := isConfidentialAuthMethod(m.TokenEndpointAuthMethod)
 	rawSecret, secretHash, err := secretMaterialForUpdate(existing, confidential, deps.HighEntropyClientSecrets)
 	if err != nil {
 		deps.logger().Error("dcr.client_secret.generate_failed", "err", err, "client_id", existing.ID)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return rotatedRegistration{}, false
 	}
 	updated := applyMetadataToClient(existing, m, secretHash)
@@ -172,13 +173,13 @@ func rotateAndUpdate(
 			return rotatedRegistration{}, false
 		}
 		deps.logger().Error("dcr.client.update_failed", "err", err, "client_id", existing.ID)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return rotatedRegistration{}, false
 	}
 	now := deps.now().UTC()
 	ratRec := &store.RegistrationAccessToken{
 		ClientID:      existing.ID,
-		HashedValue:   hashSecret(rawRAT),
+		HashedValue:   patterns.Digest(rawRAT),
 		AllowedScopes: slices.Clone(allowedScopes),
 		CreatedAt:     now,
 	}
@@ -197,7 +198,7 @@ func rotateAndUpdate(
 			deps.logger().Error("dcr.client.update_rollback_failed",
 				"err", rollbackErr, "client_id", existing.ID)
 		}
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return rotatedRegistration{}, false
 	}
 	return rotatedRegistration{client: updated, rawRAT: rawRAT, rawSecret: rawSecret}, true
@@ -387,7 +388,7 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	//                             operator garbage-collects on schedule.
 	if err := deps.Clients.DeleteClient(ctx, clientID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		deps.logger().Error("dcr.client.delete_failed", "err", err, "client_id", clientID)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return
 	}
 	if err := deps.RegistrationAccessTokens.Delete(ctx, clientID); err != nil && !errors.Is(err, store.ErrNotFound) {

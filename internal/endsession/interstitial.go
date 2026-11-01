@@ -1,6 +1,7 @@
 package endsession
 
 import (
+	"html"
 	"net/http"
 	"strings"
 
@@ -69,7 +70,7 @@ func renderLogoutConfirmation(w http.ResponseWriter, r *http.Request, deps Deps,
 	stampStaticHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	// buildConfirmationBody passes every interpolated value through
-	// htmlEscapeASCII; the static template carries no script tags and
+	// html.EscapeString; the static template carries no script tags and
 	// no caller-controlled URLs.
 	_, _ = w.Write([]byte(buildConfirmationBody(token, form)))
 }
@@ -283,7 +284,7 @@ func clearConfirmCookie(w http.ResponseWriter) {
 // confirmation page renders. The page is self-contained: no scripts,
 // no external resources, and the only caller-controlled values
 // (client_id, state, post_logout_redirect_uri, ui_locales) are flowed
-// through htmlEscapeASCII before substitution. A submit button labelled "Sign
+// through html.EscapeString before substitution. A submit button labelled "Sign
 // out" doubles as the explicit user gesture the CSRF gate requires.
 //
 // {TOKEN} carries the opaque CSRF token; {CLIENT_ID}, {STATE} and
@@ -327,37 +328,37 @@ const confirmationBodyTemplate = `<!DOCTYPE html>
 
 // buildConfirmationBody substitutes the dynamic values into
 // [confirmationBodyTemplate]. Every interpolated string is escaped
-// with [htmlEscapeASCII] so a hostile state / post_logout_redirect_uri
+// with [html.EscapeString] so a hostile state / post_logout_redirect_uri
 // cannot break out of the attribute context. The template is a pure
 // string replace because the input domain is small and predictable;
 // pulling html/template would complicate init-time loading without
 // adding security at this scope.
 func buildConfirmationBody(token string, form confirmationForm) string {
-	body := confirmationBodyTemplate
 	locale := form.page.locale
 	if locale == "" {
 		locale = "en"
 	}
-	body = replaceFirst(body, "{LANG}", htmlEscapeASCII(locale))
-	// The title appears twice — <title> and <h1> — so this one
-	// substitution runs until no placeholder is left.
-	body = strings.ReplaceAll(body, "{TITLE}", htmlEscapeASCII(form.page.title))
-	body = replaceFirst(body, "{BUTTON}", htmlEscapeASCII(form.page.button))
-	body = replaceFirst(body, "{ACTION}", htmlEscapeASCII(form.action))
-	body = replaceFirst(body, "{TOKEN}", htmlEscapeASCII(token))
-	body = replaceFirst(body, "{CLIENT_ID}", htmlEscapeASCII(form.clientID))
-	body = replaceFirst(body, "{STATE}", htmlEscapeASCII(form.state))
-	body = replaceFirst(body, "{POST_LOGOUT}", htmlEscapeASCII(form.postLogout))
-	body = replaceFirst(body, "{UI_LOCALES}", htmlEscapeASCII(form.uiLocales))
-	body = replaceFirst(body, "{SCOPE_MESSAGE}", htmlEscapeASCII(form.page.body))
 	scopeField := ""
 	if form.logoutScope == logoutScopeCurrent {
-		scopeField = `<input type="hidden" name="logout_scope" value="` + htmlEscapeASCII(form.logoutScope) + `">`
+		scopeField = `<input type="hidden" name="logout_scope" value="` + html.EscapeString(form.logoutScope) + `">`
 	}
-	body = replaceFirst(body, "{LOGOUT_SCOPE_FIELD}", scopeField)
-	body = replaceFirst(body, "{LOGOUT_SCOPE_FINGERPRINT}", htmlEscapeASCII(form.scopeFingerprint))
-	body = replaceFirst(body, "{CHOOSER_GROUP_ID}", htmlEscapeASCII(form.chooserGroupID))
-	return body
+	// One pass: a substituted value that spells another placeholder must
+	// not be rewritten by a later substitution.
+	return strings.NewReplacer(
+		"{LANG}", html.EscapeString(locale),
+		"{TITLE}", html.EscapeString(form.page.title),
+		"{BUTTON}", html.EscapeString(form.page.button),
+		"{ACTION}", html.EscapeString(form.action),
+		"{TOKEN}", html.EscapeString(token),
+		"{CLIENT_ID}", html.EscapeString(form.clientID),
+		"{STATE}", html.EscapeString(form.state),
+		"{POST_LOGOUT}", html.EscapeString(form.postLogout),
+		"{UI_LOCALES}", html.EscapeString(form.uiLocales),
+		"{SCOPE_MESSAGE}", html.EscapeString(form.page.body),
+		"{LOGOUT_SCOPE_FIELD}", scopeField,
+		"{LOGOUT_SCOPE_FINGERPRINT}", html.EscapeString(form.scopeFingerprint),
+		"{CHOOSER_GROUP_ID}", html.EscapeString(form.chooserGroupID),
+	).Replace(confirmationBodyTemplate)
 }
 
 // validateOriginOrReferer reports whether the request's provenance

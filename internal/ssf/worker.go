@@ -15,6 +15,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -32,9 +33,6 @@ const (
 	workerInterval       = 5 * time.Second
 	workerExpiryInterval = time.Hour
 )
-
-// workerMaxResponseBytes caps the receiver response body read per push.
-const workerMaxResponseBytes = 8 * 1024
 
 // workerMaxErrCodeLen bounds the RFC 8935 err code copied into audit.
 const workerMaxErrCodeLen = 64
@@ -159,7 +157,7 @@ func workerFetchClient(allowPrivate, insecureDev bool, timeout time.Duration) *s
 		AllowPrivateNetwork:  allowPrivate,
 		AllowLoopbackNetwork: insecureDev,
 		AllowedSchemes:       schemes,
-		MaxBodyBytes:         workerMaxResponseBytes,
+		MaxBodyBytes:         backchannel.MaxResponseBytes,
 		Timeout:              timeout,
 	})
 }
@@ -343,7 +341,7 @@ func (w *Worker) post(ctx context.Context, endpoint, authz, set string) workerOu
 		return workerOutcome{cause: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, workerMaxResponseBytes))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, backchannel.MaxResponseBytes))
 	out := workerOutcome{status: resp.StatusCode}
 	if resp.StatusCode == http.StatusBadRequest {
 		out.errCode = workerErrCode(body)

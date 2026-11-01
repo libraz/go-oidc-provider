@@ -21,11 +21,11 @@ import (
 // does not hold the OP's logout flow open beyond the user's patience.
 const DefaultTimeout = securefetch.DefaultTimeout
 
-// maxResponseBytes caps the response body the deliverer reads.
-// Logout-token responses are RFC 7807 problem documents at most; a
-// few KiB is plenty. The cap defends against a misbehaving RP that
-// streams an unbounded body in response to a POST.
-const maxResponseBytes = 8 * 1024
+// MaxResponseBytes caps the response body read from a receiver after an
+// outbound push (logout token or security event). Receiver responses are
+// RFC 7807 problem documents at most; a few KiB is plenty. The cap
+// defends against a misbehaving receiver that streams an unbounded body.
+const MaxResponseBytes = 8 * 1024
 
 // Deliverer is the transport seam the [Coordinator] uses to ship a
 // signed Logout Token to one RP. Implementations MUST be safe for
@@ -167,7 +167,7 @@ func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
 			AllowPrivateNetwork:  d.AllowPrivateNetwork,
 			AllowLoopbackNetwork: d.AllowLoopbackNetwork,
 			AllowedSchemes:       []string{"http", "https"},
-			MaxBodyBytes:         maxResponseBytes,
+			MaxBodyBytes:         MaxResponseBytes,
 			Timeout:              d.timeoutOrDefault(),
 			Resolver:             d.Resolver,
 		}

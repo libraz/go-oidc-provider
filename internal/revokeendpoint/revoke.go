@@ -65,43 +65,12 @@ type branchFn func(
 ) bool
 
 // branchOrder returns the branches to try, in the order dictated by
-// token_type_hint and the JWT-shape probe. An unrecognised or absent
-// hint prefers JWT first when the shape matches, then opaque, per
-// the RFC 7009 §2.1 fallthrough rule.
+// token_type_hint and the JWT-shape probe.
 func branchOrder(hint string, jwtShaped bool) []branchFn {
-	jwt := func() branchFn {
-		if !jwtShaped {
-			return nil
-		}
-		return revokeJWT
+	opaque := func(ctx context.Context, deps Deps, _ *tokens.AccessTokenVerifier, c, t string) bool {
+		return revokeOpaque(ctx, deps, c, t)
 	}
-	opq := func() branchFn {
-		return func(ctx context.Context, deps Deps, _ *tokens.AccessTokenVerifier, c, t string) bool {
-			return revokeOpaque(ctx, deps, c, t)
-		}
-	}
-	switch hint {
-	case hintRefreshToken:
-		return appendNonNil(opq(), jwt())
-	case hintAccessToken, "":
-		return appendNonNil(jwt(), opq())
-	default:
-		return appendNonNil(jwt(), opq())
-	}
-}
-
-// appendNonNil returns a slice containing only the non-nil branches.
-// A nil entry means the JWT branch is disabled because the token
-// does not look like a JWS; collapsing it out keeps [revokeToken]'s
-// loop free of per-iteration nilness checks.
-func appendNonNil(branches ...branchFn) []branchFn {
-	out := make([]branchFn, 0, len(branches))
-	for _, b := range branches {
-		if b != nil {
-			out = append(out, b)
-		}
-	}
-	return out
+	return endpointsupport.OrderTokenBranches[branchFn](hint == hintRefreshToken, jwtShaped, revokeJWT, opaque)
 }
 
 // revokeJWT verifies token as a JWT-formatted access token and, when

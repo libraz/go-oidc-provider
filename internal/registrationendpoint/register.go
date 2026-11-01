@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // registrationResponse is the RFC 7591 §3.2.1 response body. Optional
@@ -80,7 +81,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	if !endpointsupport.IsJSONContent(r.Header.Get("Content-Type")) {
-		writeRegistrationError(w, http.StatusBadRequest, codeInvalidRequest,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, endpointsupport.ErrInvalidRequest,
 			"content-type must be application/json")
 		return
 	}
@@ -91,11 +92,11 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 	endpointsupport.LimitFormBody(w, r)
 	metadata, extras, err := parseClientMetadataWithExtras(r.Body)
 	if err != nil {
-		writeRegistrationError(w, http.StatusBadRequest, codeInvalidClientMetadata, "malformed JSON")
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, codeInvalidClientMetadata, "malformed JSON")
 		return
 	}
 	if extras.SoftwareStatement != "" {
-		writeRegistrationError(w, http.StatusBadRequest, codeInvalidSoftwareStmt,
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, codeInvalidSoftwareStmt,
 			"software_statement is not supported in v1.0")
 		return
 	}
@@ -156,7 +157,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 	clientID, err := keys.RandomBase64URL(clientIDBytes)
 	if err != nil {
 		deps.logger().Error("dcr.client_id.generate_failed", "err", err)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return
 	}
 	confidential := isConfidentialAuthMethod(m.TokenEndpointAuthMethod)
@@ -165,14 +166,14 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		rawSecret, secretHash, err = newClientSecret(deps.HighEntropyClientSecrets)
 		if err != nil {
 			deps.logger().Error("dcr.client_secret.generate_failed", "err", err)
-			writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 			return
 		}
 	}
 	rat, err := keys.RandomBase64URL(ratBytes)
 	if err != nil {
 		deps.logger().Error("dcr.rat.generate_failed", "err", err)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return
 	}
 	now := deps.now().UTC()
@@ -181,12 +182,12 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 	client.Source = store.ClientSourceDynamic
 	if err := deps.Clients.RegisterClient(ctx, client); err != nil {
 		deps.logger().Error("dcr.client.register_failed", "err", err, "client_id", clientID)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return
 	}
 	ratRec := &store.RegistrationAccessToken{
 		ClientID:      clientID,
-		HashedValue:   hashSecret(rat),
+		HashedValue:   patterns.Digest(rat),
 		AllowedScopes: slices.Clone(iatAllowedScopes(ver)),
 		CreatedAt:     now,
 	}
@@ -199,7 +200,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		if delErr := deps.Clients.DeleteClient(ctx, clientID); delErr != nil {
 			deps.logger().Error("dcr.client.rollback_failed", "err", delErr, "client_id", clientID)
 		}
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return
 	}
 	// IAT consumption fires last, after the client and RAT have
@@ -419,10 +420,10 @@ func writeMetadataValidationError(
 		ClientID: auditEventClientID,
 	})
 	if ve, ok := asValidationError(err); ok {
-		writeRegistrationError(w, http.StatusBadRequest, ve.code, ve.description)
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, ve.code, ve.description)
 		return
 	}
 	// Hook-supplied error: sanitise the message before exposing it.
 	desc := sanitizeDescription(err.Error())
-	writeRegistrationError(w, http.StatusBadRequest, codeInvalidClientMetadata, desc)
+	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, codeInvalidClientMetadata, desc)
 }

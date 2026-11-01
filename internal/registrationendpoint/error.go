@@ -5,37 +5,17 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
-	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
-// RFC 7591 §3.2.2 / RFC 6749 §5.2 wire codes the handler emits. The
-// list is closed; ad-hoc codes are forbidden so the discoverable error
-// surface stays auditable.
+// RFC 7591 §3.2.2 / RFC 6750 §3.1 wire codes the handler emits beyond
+// the RFC 6749 §5.2 set in endpointsupport. The list is closed; ad-hoc
+// codes are forbidden so the discoverable error surface stays auditable.
 const (
-	codeInvalidRequest        = "invalid_request"
 	codeInvalidToken          = "invalid_token"
 	codeInvalidClientMetadata = "invalid_client_metadata"
 	codeInvalidRedirectURI    = "invalid_redirect_uri"
 	codeInvalidSoftwareStmt   = "invalid_software_statement"
-	codeServerError           = "server_error"
 )
-
-// errorResponse is the JSON envelope every failure path returns. The
-// shape mirrors the token / PAR endpoint envelopes so embedders see a
-// single error surface across the library.
-type errorResponse struct {
-	Error            string `json:"error"`
-	ErrorDescription string `json:"error_description,omitempty"`
-}
-
-// writeRegistrationError emits the §3.2.2 envelope with the supplied
-// status, code, and description. Cache-Control: no-store is stamped
-// here so every registration failure response is uncacheable without
-// each call site repeating the header; callers MUST NOT re-stamp it.
-func writeRegistrationError(w http.ResponseWriter, status int, code, description string) {
-	httpx.StampNoStore(w)
-	_ = httpx.WriteJSON(w, status, errorResponse{Error: code, ErrorDescription: description})
-}
 
 // writeInvalidToken is the dedicated 401 path for the "invalid_token"
 // code. RFC 6750 §3 mandates a WWW-Authenticate Bearer challenge so
@@ -49,7 +29,7 @@ func writeInvalidToken(w http.ResponseWriter, issuer, description string) {
 		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeError, Value: codeInvalidToken},
 		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeErrorDescription, Value: sanitizeDescription(description)},
 	))
-	writeRegistrationError(w, http.StatusUnauthorized, codeInvalidToken, description)
+	endpointsupport.WriteOAuthError(w, http.StatusUnauthorized, codeInvalidToken, description)
 }
 
 // sanitizeDescription scrubs an embedder-supplied error string so it is

@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -86,8 +85,7 @@ func writeUserInfoJWT(
 		return
 	}
 	w.Header().Set("Content-Type", userInfoJWTContentType)
-	w.Header().Set("Cache-Control", "no-store, private")
-	w.Header().Set("Pragma", "no-cache")
+	stampUncacheable(w)
 	// out is a compact JWS or JWE produced by the OP's own JOSE
 	// pipeline (sign + optional nested JWE wrap). Content-Type pins
 	// it as application/jwt; the taint gosec sees through client.*
@@ -148,8 +146,9 @@ func signUserInfoJWT(set *keys.Set, body map[string]any) (string, error) {
 //     did not register encryption — collapses onto
 //     [clientencjwks.ErrNoEncryptionConfigured] and the signed JWS
 //     is returned verbatim.
-//  3. A successful resolution feeds [jose.EncryptNestedJWT] which
-//     produces the 5-segment JWE with `cty=JWT` per RFC 7519 §5.2.
+//  3. A successful resolution is encrypted by
+//     [clientencjwks.Resolver.EncryptNested], which produces the
+//     5-segment JWE with `cty=JWT` per RFC 7519 §5.2.
 func maybeEncryptUserInfo(
 	ctx context.Context,
 	deps HandlerDeps,
@@ -172,23 +171,17 @@ func maybeEncryptUserInfo(
 		// this helper so this branch is defensive.
 		return "", fmt.Errorf("userinfo: client lookup failed: %w", err)
 	}
-	rcpt, err := deps.ClientEncJWKs.ResolveRecipient(
+	out, err := deps.ClientEncJWKs.EncryptNested(
 		ctx,
 		client,
 		client.UserInfoEncryptedResponseAlg,
 		client.UserInfoEncryptedResponseEnc,
+		signedJWT,
 	)
-	if err != nil {
-		if errors.Is(err, clientencjwks.ErrNoEncryptionConfigured) {
-			return signedJWT, nil
-		}
-		return "", err
-	}
-	jwe, err := jose.EncryptNestedJWT(signedJWT, rcpt)
 	if err != nil {
 		return "", fmt.Errorf("userinfo: encrypt: %w", err)
 	}
-	return jwe, nil
+	return out, nil
 }
 
 // resolveClient fetches the AT-bound client when the JWT-shape branch

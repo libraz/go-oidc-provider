@@ -174,6 +174,31 @@ func (r *Resolver) ResolveRecipient(
 	}, nil
 }
 
+// EncryptNested wraps signed in a JWE addressed to client's registered
+// recipient key, using the (alg, enc) pair the caller selects from the
+// client's per-response-path metadata. A client that registered no
+// encryption for the path ([ErrNoEncryptionConfigured]) gets signed back
+// unchanged; every other resolution failure is returned as-is so callers
+// can match its sentinel.
+func (r *Resolver) EncryptNested(
+	ctx context.Context,
+	client *store.Client,
+	alg, enc, signed string,
+) (string, error) {
+	recipient, err := r.ResolveRecipient(ctx, client, alg, enc)
+	if errors.Is(err, ErrNoEncryptionConfigured) {
+		return signed, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	out, err := jose.EncryptNestedJWT(signed, recipient)
+	if err != nil {
+		return "", fmt.Errorf("clientencjwks: encrypt nested jwt: %w", err)
+	}
+	return out, nil
+}
+
 // resolveJWKS returns the parsed JWKS for client under the
 // exactly-one-source rule of [rpjwks.Fetcher.Resolve]; neither or both
 // surfaces [ErrJWKSConfigured]. Remote fetches go through the TTL cache

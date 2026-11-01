@@ -274,8 +274,6 @@ type Deps struct {
 	HighEntropyClientSecrets bool
 }
 
-const defaultMaxDeleteSubjects = 256
-
 // Handler returns the HTTP handler the OP mounts at /register and
 // /register/{client_id}. The returned handler is safe for concurrent
 // use; deps MUST NOT be mutated after the call.
@@ -304,8 +302,8 @@ func resolveDeps(d Deps) Deps {
 	if len(d.AllowedResponseTypes) == 0 {
 		d.AllowedResponseTypes = []string{"code"}
 	}
-	if d.MaxDeleteSubjects <= 0 || d.MaxDeleteSubjects > defaultMaxDeleteSubjects {
-		d.MaxDeleteSubjects = defaultMaxDeleteSubjects
+	if d.MaxDeleteSubjects <= 0 || d.MaxDeleteSubjects > backchannel.DefaultMaxTargets {
+		d.MaxDeleteSubjects = backchannel.DefaultMaxTargets
 	}
 	return d
 }

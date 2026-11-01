@@ -9,13 +9,15 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // maxFanOut caps the receivers one Publish resolves (one grant page), so
-// the synchronous logout path stays bounded.
-const maxFanOut = 256
+// the synchronous logout path stays bounded. It is the same per-event
+// audience cap the back-channel logout fan-out applies.
+const maxFanOut = backchannel.DefaultMaxTargets
 
 // eventTTL is how long a queued SET waits before DeleteExpired drops it.
 const eventTTL = 7 * 24 * time.Hour

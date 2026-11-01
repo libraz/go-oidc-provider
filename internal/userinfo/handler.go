@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -192,8 +193,7 @@ func Handler(deps HandlerDeps) http.Handler {
 // takes the OP's own access tokens.
 func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps) {
 	if !methodAllowed(r.Method) {
-		w.Header().Set("Allow", "GET, HEAD, POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		httpx.MethodNotAllowed(w, "GET, HEAD, POST")
 		return
 	}
 	raw, err := extractBearer(w, r)
@@ -702,7 +702,18 @@ func writeJSON(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store, private")
-	w.Header().Set("Pragma", "no-cache")
+	stampUncacheable(w)
 	_, _ = w.Write(payload)
+}
+
+// userInfoCacheControl is the Cache-Control value every successful
+// response carries: no-store per RFC 6749 §5.1, with "private" kept for
+// downstream caches that honour the OIDC Core hint.
+const userInfoCacheControl = "no-store, private"
+
+// stampUncacheable sets [userInfoCacheControl] plus the HTTP/1.0
+// "Pragma: no-cache" companion RFC 6749 §5.1 also requires.
+func stampUncacheable(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", userInfoCacheControl)
+	w.Header().Set("Pragma", "no-cache")
 }

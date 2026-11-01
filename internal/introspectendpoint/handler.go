@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/revocation"
-
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
@@ -57,10 +55,9 @@ const (
 	// "Bearer".
 	tokenTypeBearer = "Bearer"
 
-	// hintAccessToken / hintRefreshToken are the two values RFC 7662
-	// §2.1 defines for "token_type_hint". The handler honours them to
-	// skip a lookup but always falls through on miss.
-	hintAccessToken  = "access_token"
+	// hintRefreshToken is the "token_type_hint" (RFC 7662 §2.1) that moves
+	// the opaque lookup ahead of JWT verification. Any other hint falls
+	// through in the default order.
 	hintRefreshToken = "refresh_token"
 )
 
@@ -250,9 +247,6 @@ func resolveDeps(d Deps) Deps {
 	if d.Leeway <= 0 {
 		d.Leeway = defaultLeeway
 	}
-	if d.SecretVerifier == nil {
-		d.SecretVerifier = &clientauth.Argon2id{}
-	}
 	return d
 }
 
@@ -260,17 +254,7 @@ func resolveDeps(d Deps) Deps {
 // branch consults. The verifier is constructed once at startup and
 // reused across requests; it holds no per-request state.
 func newAccessTokenVerifier(d Deps) *tokens.AccessTokenVerifier {
-	var verifierClock tokens.Clock
-	if d.Clock != nil {
-		verifierClock = d.Clock
-	}
-	return &tokens.AccessTokenVerifier{
-		Keys:       d.Keys,
-		Issuer:     d.Issuer,
-		Clock:      verifierClock,
-		Leeway:     d.Leeway,
-		RequireJTI: revocation.RequireJTIFor(d.RevocationStrategy),
-	}
+	return endpointsupport.NewAccessTokenVerifier(d.Keys, d.Issuer, d.Clock, d.Leeway, d.RevocationStrategy)
 }
 
 // now returns the wall-clock reading for this request, falling back to

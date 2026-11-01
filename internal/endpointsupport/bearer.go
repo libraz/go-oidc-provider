@@ -304,13 +304,7 @@ func AcceptBearerToken(r *http.Request, raw string, deps BearerDeps) (*BearerAcc
 }
 
 func acceptJWTBearer(r *http.Request, raw string, deps BearerDeps) (*BearerAccess, error) {
-	verifier := &tokens.AccessTokenVerifier{
-		Keys:       deps.Keys,
-		Issuer:     deps.Issuer,
-		Clock:      deps.Clock,
-		Leeway:     deps.Leeway,
-		RequireJTI: revocation.RequireJTIFor(deps.RevocationStrategy),
-	}
+	verifier := NewAccessTokenVerifier(deps.Keys, deps.Issuer, deps.Clock, deps.Leeway, deps.RevocationStrategy)
 	claims, _, err := verifier.Verify(r.Context(), raw)
 	if err != nil {
 		if errors.Is(err, tokens.ErrAccessTokenExpired) {

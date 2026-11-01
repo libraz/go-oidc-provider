@@ -18,8 +18,9 @@ const (
 	ScopeManage = "ssf.manage"
 )
 
-// mgmtMaxBody caps every management and poll request body.
-const mgmtMaxBody = httpx.MaxFormBytes
+// mgmtMaxBody caps every management and poll request body; it is the cap
+// [endpointsupport.LimitFormBody] enforces.
+const mgmtMaxBody = endpointsupport.MaxFormBytes
 
 // authLevel is the scope an endpoint operation requires.
 type authLevel int
@@ -106,7 +107,8 @@ func mgmtReadBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	if r.Body == nil {
 		return nil, nil
 	}
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, mgmtMaxBody))
+	endpointsupport.LimitFormBody(w, r)
+	b, err := io.ReadAll(r.Body)
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {

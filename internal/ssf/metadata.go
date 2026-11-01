@@ -70,12 +70,7 @@ func NewMetadataHandler(d MetadataDeps) (http.Handler, error) {
 		// Every subject the receiver holds a grant relationship with.
 		DefaultSubjects: "ALL",
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !httpx.EnforceMethod(w, r, http.MethodGet) {
-			return
-		}
-		_ = httpx.WriteJSON(w, http.StatusOK, doc)
-	}), nil
+	return httpx.StaticJSONHandler(doc, httpx.StaticDocumentCacheControl)
 }
 
 // WellKnownPath returns the metadata path for issuer: the well-known

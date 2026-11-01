@@ -7,7 +7,9 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // verifyRAT authenticates an RFC 7592 management request. It extracts
@@ -53,7 +55,7 @@ func verifyRAT(
 			return nil, nil, false
 		}
 		deps.logger().Error("dcr.client.lookup_failed", "err", err, "client_id", clientID)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return nil, nil, false
 	}
 	if !sourceIsDynamic(client.Source) {
@@ -81,10 +83,10 @@ func verifyRAT(
 			return nil, nil, false
 		}
 		deps.logger().Error("dcr.rat.lookup_failed", "err", err, "client_id", clientID)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return nil, nil, false
 	}
-	if subtle.ConstantTimeCompare([]byte(hashSecret(bearer)), []byte(stored.HashedValue)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(patterns.Digest(bearer)), []byte(stored.HashedValue)) != 1 {
 		deps.logger().Warn("dcr.rat.invalid", "reason", "hash_mismatch", "client_id", clientID)
 		deps.audit().Emit(ctx, audit.Event{
 			Name:     auditDCRRATInvalid,

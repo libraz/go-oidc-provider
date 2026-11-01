@@ -2,11 +2,8 @@ package introspectendpoint
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
-	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -26,7 +23,7 @@ import (
 // response in that case is a confidentiality downgrade. See RFC 9701
 // §5 — encryption is opt-in but, once opted in, mandatory.
 //
-// Successful resolution feeds [jose.EncryptNestedJWT], which stamps
+// Successful resolution feeds `Resolver.EncryptNested`, which stamps
 // `cty=JWT` so a recipient that decrypts the outer JWE knows to verify
 // the inner JWS. The wire content-type stays
 // "application/token-introspection+jwt" per RFC 9701 §5: the JWE is
@@ -43,21 +40,15 @@ func maybeEncryptIntrospection(
 	if client == nil {
 		return signed, nil
 	}
-	recipient, err := deps.ClientEncJWKs.ResolveRecipient(
+	out, err := deps.ClientEncJWKs.EncryptNested(
 		ctx,
 		client,
 		client.IntrospectionEncryptedResponseAlg,
 		client.IntrospectionEncryptedResponseEnc,
+		signed,
 	)
-	if errors.Is(err, clientencjwks.ErrNoEncryptionConfigured) {
-		return signed, nil
-	}
 	if err != nil {
-		return "", fmt.Errorf("introspect: resolve encryption recipient: %w", err)
-	}
-	out, err := jose.EncryptNestedJWT(signed, recipient)
-	if err != nil {
-		return "", fmt.Errorf("introspect: encrypt nested jwt: %w", err)
+		return "", fmt.Errorf("introspect: encrypt: %w", err)
 	}
 	return out, nil
 }

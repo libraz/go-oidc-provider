@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // iatVerification is the result of a successful IAT verification. The
@@ -55,7 +56,7 @@ func verifyIAT(
 		writeInvalidToken(w, deps.Issuer, "Initial Access Token is required")
 		return iatVerification{}, false
 	}
-	rec, err := deps.InitialAccessTokens.GetByHash(ctx, hashSecret(bearer))
+	rec, err := deps.InitialAccessTokens.GetByHash(ctx, patterns.Digest(bearer))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			deps.logger().Warn("dcr.iat.invalid", "reason", "not_found")
@@ -68,7 +69,7 @@ func verifyIAT(
 			return iatVerification{}, false
 		}
 		deps.logger().Error("dcr.iat.lookup_failed", "err", err)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return iatVerification{}, false
 	}
 	if expired := rec.ExpiresAt.Before(deps.now()); expired {
@@ -116,7 +117,7 @@ func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVe
 		return true
 	}
 	if ver.Token == nil {
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		return false
 	}
 	if _, err := deps.InitialAccessTokens.IncrementUses(ctx, ver.Token.ID); err != nil {
@@ -134,7 +135,7 @@ func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVe
 			writeInvalidToken(w, deps.Issuer, "Initial Access Token revoked")
 		default:
 			deps.logger().Error("dcr.iat.increment_failed", "err", err)
-			writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, endpointsupport.ErrServerError, "")
 		}
 		return false
 	}
@@ -142,22 +143,12 @@ func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVe
 }
 
 // bearerFromHeader extracts the Bearer credential from the
-// Authorization header value, case-insensitively matching the scheme
-// per RFC 6750 §2.1. The second return reports whether a Bearer
-// credential was present at all. The registration endpoint accepts
-// only the "Bearer" scheme — IAT and RAT credentials never carry the
-// DPoP binding the userinfo path uses — so this helper deliberately
-// stays narrower than [endpointsupport.BearerFromHeader].
+// Authorization header value. The registration endpoint accepts only
+// the "Bearer" scheme — IAT and RAT credentials never carry the DPoP
+// binding the userinfo path uses — so a DPoP credential reports false.
 func bearerFromHeader(value string) (string, bool) {
-	const prefix = "Bearer "
-	if len(value) <= len(prefix) {
-		return "", false
-	}
-	if !strings.EqualFold(value[:len(prefix)], prefix) {
-		return "", false
-	}
-	tok := strings.TrimSpace(value[len(prefix):])
-	if tok == "" {
+	tok, scheme, ok := endpointsupport.BearerCredentialFromHeader(value)
+	if !ok || scheme != endpointsupport.BearerSchemeBearer {
 		return "", false
 	}
 	return tok, true
