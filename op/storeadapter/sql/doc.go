@@ -46,7 +46,16 @@
 // release. schema/TABLES.md lists what each table holds, when op.New checks
 // it, and why a few tables must exist even while they stay empty. Run
 // against an empty database, op.New names every table the configuration
-// needs in one error.
+// needs in one error. The reference DDL creates every table, including
+// those a configuration never reaches; such a table stays empty.
+//
+// # Users
+//
+// An application with its own users table keeps it: it passes its own
+// store.UserPasswordStore to op.PrimaryPassword, the OP reads claims from
+// that store, and oidc_users stays empty. oidc_users, [Store.PutUser],
+// [Store.PutUserWithPassword] and [Store.UserPasswords] serve a deployment
+// with no users table of its own.
 //
 // # Naming overrides
 //

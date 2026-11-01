@@ -104,7 +104,8 @@ func (s *userStore) scanUser(ctx context.Context, query, arg string) (*store.Use
 // [store.UserStore] interface; it is exported on the concrete *Store
 // path so embedders that use the SQL adapter for their entire users
 // table can seed records without writing to it directly. Backends
-// that perform upsert treat PutUser as idempotent.
+// that perform upsert treat PutUser as idempotent. An application with
+// its own users table does not copy users here; see the package doc.
 func (s *Store) PutUser(ctx context.Context, u *store.User) error {
 	claims, err := encodeMap(u.Claims)
 	if err != nil {
@@ -125,7 +126,8 @@ func (s *Store) PutUser(ctx context.Context, u *store.User) error {
 // for hash encoding (typically [op.HashPassword]). The helper is the
 // SQL counterpart of [inmem.Store.PutUserWithPassword] and is exposed
 // on the concrete *Store path so embedders seed accounts without
-// touching the schema directly.
+// touching the schema directly. Like [Store.PutUser], it is for a
+// deployment with no users table of its own.
 func (s *Store) PutUserWithPassword(ctx context.Context, u *store.User, username string, passwordHash []byte) error {
 	if u == nil {
 		return errors.New("oidcsql: PutUserWithPassword: user is nil")
@@ -156,7 +158,8 @@ func (s *Store) PutUserWithPassword(ctx context.Context, u *store.User, username
 // [store.UserPasswordStore]. The returned value is the same underlying
 // handle as [Store.Users] (a *userStore satisfies both interfaces); the
 // split mirrors the inmem reference adapter so the LoginFlow compiler
-// accepts it directly.
+// accepts it directly. With an existing users table, pass your own
+// [store.UserPasswordStore] to op.PrimaryPassword instead.
 func (s *Store) UserPasswords() store.UserPasswordStore {
 	return s.usersImpl
 }
