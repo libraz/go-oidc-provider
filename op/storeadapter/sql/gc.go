@@ -107,6 +107,10 @@ func (s GCStats) Total() int64 {
 // Store was constructed with, so scheduling it needs no second
 // connection pool and no second Store.
 //
+// The PAR sweep is skipped when the par_records table does not exist, since
+// a deployment without `feature.PAR` need not create it; any other missing
+// table fails the sweep.
+//
 // GC stops at the first failing table and returns the counts collected
 // so far alongside the error, so a caller that publishes the stats
 // records the work that did land. A partial sweep is safe to repeat:
@@ -137,13 +141,20 @@ func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 			return int64(n), err
 		}
 	}
+	parSweep := func(ctx context.Context, _ time.Time) (int64, error) {
+		cols, err := s.columnSet(ctx, s.names.pars)
+		if err != nil || len(cols) == 0 {
+			return 0, err
+		}
+		return s.sweep(ctx, s.queries.parGC, []any{cut})
+	}
 	sweeps := []struct {
 		name  string
 		run   func(ctx context.Context, cutoff time.Time) (int64, error)
 		count *int64
 	}{
 		{"authorizationCodes", query(s.queries.authCodeGC, cut), &stats.AuthorizationCodes},
-		{"pushedAuthRequests", query(s.queries.parGC, cut), &stats.PushedAuthRequests},
+		{"pushedAuthRequests", parSweep, &stats.PushedAuthRequests},
 		{"interactions", query(s.queries.interactionGC, cut), &stats.Interactions},
 		{"sessions", query(s.queries.sessionGC, cut), &stats.Sessions},
 		{"refreshTokens", query(s.queries.refreshGC, cut, cut), &stats.RefreshTokens},

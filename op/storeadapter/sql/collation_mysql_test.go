@@ -8,6 +8,7 @@ import (
 	databasesql "database/sql"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -341,6 +342,34 @@ func TestMySQL_IdentifierCollation(t *testing.T) {
 		}
 		if len(upper.RedirectURIs) != 1 || upper.RedirectURIs[0] != "https://rp.example.com/cb" {
 			t.Fatalf("GetClient(MyApp) redirect_uris = %v, want its own record", upper.RedirectURIs)
+		}
+	})
+
+	// Detection half: a database that skipped the collation migration fails
+	// the full check and the owning substore's check alike. Runs last
+	// because it leaves oidc_sessions.subject case-folding.
+	t.Run("ValidateSchemaRejectsFoldingCollation", func(t *testing.T) {
+		if _, err := db.ExecContext(ctx,
+			"ALTER TABLE oidc_sessions MODIFY subject VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL"); err != nil {
+			t.Fatalf("MODIFY oidc_sessions.subject: %v", err)
+		}
+		const want = "column subject of oidc_sessions has collation utf8mb4_general_ci, not utf8mb4_bin; apply migration 000004_v1.3.0"
+		if err := s.ValidateSchema(ctx); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("ValidateSchema error = %v, want it to contain %q", err, want)
+		}
+		sessions, ok := s.Sessions().(store.SchemaValidator)
+		if !ok {
+			t.Fatal("Sessions() does not implement store.SchemaValidator")
+		}
+		if err := sessions.ValidateSchema(ctx); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Sessions().ValidateSchema error = %v, want it to contain %q", err, want)
+		}
+		clients, ok := s.Clients().(store.SchemaValidator)
+		if !ok {
+			t.Fatal("Clients() does not implement store.SchemaValidator")
+		}
+		if err := clients.ValidateSchema(ctx); err != nil {
+			t.Fatalf("Clients().ValidateSchema with only oidc_sessions folding: %v", err)
 		}
 	})
 }

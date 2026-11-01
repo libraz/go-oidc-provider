@@ -30,7 +30,7 @@ func TestSQLite_SSF(t *testing.T) {
 }
 
 // A database created before the SSF tables existed fails ValidateSchema
-// with the release section that creates them.
+// with the migration that creates them.
 func TestValidateSchema_MissingSSFTableNamesItsRelease(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -45,7 +45,7 @@ func TestValidateSchema_MissingSSFTableNamesItsRelease(t *testing.T) {
 	if err == nil {
 		t.Fatal("ValidateSchema succeeded with oidc_ssf_events missing")
 	}
-	if want := "schema for oidc_ssf_events is missing; apply the v1.5.0 section of schema/MIGRATIONS.md"; !strings.Contains(err.Error(), want) {
+	if want := "schema for oidc_ssf_events is missing; apply migration 000006_v1.5.0 (schema/migrations/sqlite/000006_v1.5.0.up.sql)"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q does not contain %q", err, want)
 	}
 }

@@ -34,9 +34,10 @@
 // out to psql/mysql; [Store.Migrate] applies it to the live connection
 // for development convenience. Production deployments are expected to
 // run migrations through their existing tooling rather than hand
-// control to the adapter, and to call [Store.ValidateSchema] at startup:
-// it checks that every table and required column exists without
-// creating anything.
+// control to the adapter. op.New checks at construction, without creating
+// anything, that the tables and required columns the configuration uses
+// exist; [Store.ValidateSchema] checks every table, for a CI or deploy
+// gate.
 // Existing databases are not altered by Store.Migrate. The upgrade path is
 // the migration files under schema/migrations/<dialect>, one per release in
 // golang-migrate form, which [Store.Migrations] returns with any

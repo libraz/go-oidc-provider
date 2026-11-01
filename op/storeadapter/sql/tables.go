@@ -7,19 +7,70 @@ type tableInfo struct {
 	key      string // WithNaming logical key
 	accessor string // *Store method returning the substore
 	holds    string
-	used     string // when the OP reads or writes the table
+	used     string // when rows appear in the table
+	checked  string // when op.New checks the table; a key of [checkedWhen]
 }
 
-// minimalTables are the keys of the tables a minimal deployment writes
-// rows to: the default authorization_code and refresh_token grants,
-// password login against the embedder's own user store, and every other
-// option at its default. schema/TABLES.md lists them so the reader can
-// tell the tables that fill from the ones created only to exist.
+// checkedWhen describes, by tag, the configuration under which op.New
+// checks a table at construction.
 //
 //nolint:gochecknoglobals // documentation table; read-only.
-var minimalTables = []string{
-	"clients", "authorization_codes", "refresh_tokens", "grants",
-	"sessions", "interactions", "op_metadata", "authn_lockouts",
+var checkedWhen = map[string]string{
+	"always":                   "Always",
+	"grant:authorization_code": "The `authorization_code` grant is enabled",
+	"grant:refresh_token":      "The `refresh_token` grant is enabled",
+	"authorize":                "The `authorization_code` grant is enabled, so logins run through `/auth`",
+	"feature:par":              "`feature.PAR` is enabled",
+	"dcr":                      "`op.WithDynamicRegistration` is set",
+	"grant:device_code":        "The `device_code` grant is enabled or `op.WithDeviceCodeGrant` is set",
+	"grant:ciba":               "The CIBA grant is enabled or `op.WithCIBA` is set",
+	"ssf":                      "`op.WithSharedSignals` is set",
+	"userstore-fallback":       "The user store is this adapter's: neither `op.WithUserStore` nor `PrimaryPassword.Store` names another",
+	"factor:totp":              "The login flow has an `op.StepTOTP` backed by `Store.TOTPs()`",
+	"factor:passkey":           "The login flow has a passkey step backed by `Store.Passkeys()`",
+	"factor:recovery":          "The login flow has an `op.StepRecoveryCode` backed by `Store.RecoveryCodes()`",
+	"factor:email_otp":         "The login flow has an `op.StepEmailOTP` backed by `Store.EmailOTPs()`",
+	"lockout":                  "The login flow has a step that counts failures and `op.WithAuthnLockoutStore` names no other store",
+}
+
+// defaultConfigTables are the keys of the tables op.New checks under the
+// default configuration: the `authorization_code` and `refresh_token`
+// grants, password login against the embedder's own user store, and every
+// other option at its default.
+//
+//nolint:gochecknoglobals // documentation table; read-only.
+var defaultConfigTables = []string{
+	"clients", "op_metadata", "consumed_jtis", "access_tokens", "opaque_access_tokens",
+	"grant_revocations", "revoked_jtis", "grants", "authorization_codes", "refresh_tokens",
+	"sessions", "interactions", "authn_lockouts",
+}
+
+// binaryCollationColumns lists, by WithNaming key, the identifier columns
+// the MySQL DDL pins to utf8mb4_bin. [Store.ValidateSchema] rejects any
+// other collation on them, since a case- or accent-folding one lets two
+// distinct identifiers resolve to one row.
+//
+//nolint:gochecknoglobals // schema invariant table; read-only.
+var binaryCollationColumns = map[string][]string{
+	"clients":                    {"id"},
+	"authorization_codes":        {"client_id", "subject"},
+	"refresh_tokens":             {"client_id", "subject"},
+	"access_tokens":              {"client_id", "subject"},
+	"opaque_access_tokens":       {"subject", "client_id"},
+	"grants":                     {"client_id", "subject"},
+	"sessions":                   {"subject"},
+	"par_records":                {"client_id"},
+	"interactions":               {"client_id"},
+	"users":                      {"subject", "username"},
+	"registration_access_tokens": {"client_id"},
+	"device_codes":               {"client_id", "subject"},
+	"ciba_requests":              {"client_id", "subject"},
+	"totp_secrets":               {"subject"},
+	"passkeys":                   {"subject"},
+	"recovery_codes":             {"subject"},
+	"email_otps":                 {"subject"},
+	"authn_lockouts":             {"subject"},
+	"ssf_streams":                {"client_id"},
 }
 
 // tableCatalog lists every table in [knownNamingKeys] order.
@@ -28,103 +79,103 @@ var minimalTables = []string{
 var tableCatalog = []tableInfo{
 	{
 		"clients", "Clients", "Client registrations and their secret hashes.",
-		"Always read. Written by `op.WithStaticClients`, dynamic registration, and your own client management.",
+		"Always read. Written by `op.WithStaticClients`, dynamic registration, and your own client management.", "always",
 	},
 	{
 		"authorization_codes", "AuthorizationCodes", "Authorization codes awaiting redemption, with the authentication context they were issued under.",
-		"The `authorization_code` grant is enabled.",
+		"The `authorization_code` grant is enabled.", "grant:authorization_code",
 	},
 	{
 		"refresh_tokens", "RefreshTokens", "Refresh-token rotation chains and the response a retried rotation replays.",
-		"The `refresh_token` grant is enabled.",
+		"The `refresh_token` grant is enabled.", "grant:refresh_token",
 	},
 	{
 		"access_tokens", "AccessTokens", "JTI registry of issued JWT access tokens.",
-		"`op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry)`.",
+		"`op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry)`.", "always",
 	},
 	{
 		"opaque_access_tokens", "OpaqueAccessTokens", "Opaque access tokens and the claims introspection returns for them.",
-		"An opaque format is configured through `op.WithAccessTokenFormat` or `op.WithAccessTokenFormatPerAudience`.",
+		"An opaque format is configured through `op.WithAccessTokenFormat` or `op.WithAccessTokenFormatPerAudience`.", "always",
 	},
 	{
 		"grant_revocations", "GrantRevocations", "Grant tombstones that invalidate a revoked grant's JWT access tokens.",
-		"The default `RevocationStrategyGrantTombstone`, when a grant or its access tokens are revoked.",
+		"The default `RevocationStrategyGrantTombstone`, when a grant or its access tokens are revoked.", "always",
 	},
 	{
 		"revoked_jtis", "GrantRevocations", "Individually revoked JWT access-token identifiers.",
-		"The default `RevocationStrategyGrantTombstone`, when `/revocation` revokes a JWT access token.",
+		"The default `RevocationStrategyGrantTombstone`, when `/revocation` revokes a JWT access token.", "always",
 	},
 	{
 		"grants", "Grants", "The consented grant (client, subject, scopes) that codes and refresh tokens hang off.",
-		"Any grant other than `client_credentials`.",
+		"Any grant other than `client_credentials`.", "always",
 	},
 	{
 		"sessions", "Sessions", "Browser login sessions and their chooser groups.",
-		"A browser login runs through `/auth`.",
+		"A browser login runs through `/auth`.", "authorize",
 	},
 	{
 		"par_records", "PushedAuthRequests", "Pushed authorization requests until their `request_uri` is redeemed.",
-		"`feature.PAR` is enabled.",
+		"`feature.PAR` is enabled.", "feature:par",
 	},
 	{
 		"interactions", "Interactions", "In-progress login and consent interactions.",
-		"A browser login runs through `/auth`.",
+		"A browser login runs through `/auth`.", "authorize",
 	},
 	{
 		"consumed_jtis", "ConsumedJTIs", "Replay markers for request objects, client assertions and DPoP proofs.",
-		"A client sends a JAR request object, a `private_key_jwt` assertion, or a DPoP proof.",
+		"A client sends a JAR request object, a `private_key_jwt` assertion, or a DPoP proof.", "always",
 	},
 	{
 		"users", "Users", "The adapter's own user records: subject, claims, optional username and password hash.",
-		"Read only when neither `op.WithUserStore` nor `PrimaryPassword.Store` supplies another user store; with your own user store it stays empty. The OP writes it only to rehash a legacy password when it is `PrimaryPassword.Store`.",
+		"Read only when neither `op.WithUserStore` nor `PrimaryPassword.Store` supplies another user store; with your own user store it stays empty. The OP writes it only to rehash a legacy password when it is `PrimaryPassword.Store`.", "userstore-fallback",
 	},
 	{
 		"initial_access_tokens", "InitialAccessTokens", "Initial access tokens that authorize dynamic client registration.",
-		"`op.WithDynamicRegistration`.",
+		"`op.WithDynamicRegistration`.", "dcr",
 	},
 	{
 		"registration_access_tokens", "RegistrationAccessTokens", "Registration access tokens for RFC 7592 client management.",
-		"`op.WithDynamicRegistration`.",
+		"`op.WithDynamicRegistration`.", "dcr",
 	},
 	{
 		"op_metadata", "Metadata", "OP-internal markers, such as the subject mode the pairwise gate pins.",
-		"Always: `op.New` reads and writes it at construction.",
+		"Always: `op.New` reads and writes it at construction.", "always",
 	},
 	{
 		"device_codes", "DeviceCodes", "RFC 8628 device authorization records.",
-		"The `device_code` grant is enabled.",
+		"The `device_code` grant is enabled.", "grant:device_code",
 	},
 	{
 		"ciba_requests", "CIBARequests", "CIBA backchannel authentication requests.",
-		"`op.WithCIBA`.",
+		"`op.WithCIBA`.", "grant:ciba",
 	},
 	{
 		"totp_secrets", "TOTPs", "Encrypted TOTP secrets.",
-		"`Store.TOTPs()` is passed to `op.StepTOTP`.",
+		"`Store.TOTPs()` is passed to `op.StepTOTP`.", "factor:totp",
 	},
 	{
 		"passkeys", "Passkeys", "Registered WebAuthn credentials.",
-		"`Store.Passkeys()` is passed to `op.PrimaryPasskey` or `op/passkeykit`.",
+		"`Store.Passkeys()` is passed to `op.PrimaryPasskey` or `op/passkeykit`.", "factor:passkey",
 	},
 	{
 		"recovery_codes", "RecoveryCodes", "Hashed single-use recovery codes.",
-		"`Store.RecoveryCodes()` is passed to `op.StepRecoveryCode` or `op/recoverykit`.",
+		"`Store.RecoveryCodes()` is passed to `op.StepRecoveryCode` or `op/recoverykit`.", "factor:recovery",
 	},
 	{
 		"email_otps", "EmailOTPs", "Pending email one-time codes.",
-		"`Store.EmailOTPs()` is passed to `op.StepEmailOTP`.",
+		"`Store.EmailOTPs()` is passed to `op.StepEmailOTP`.", "factor:email_otp",
 	},
 	{
 		"authn_lockouts", "AuthnLockouts", "Per-subject failure counters of the brute-force gate.",
-		"The login flow has a password or second-factor step and `op.WithAuthnLockoutStore` names no other store.",
+		"The login flow has a password or second-factor step and `op.WithAuthnLockoutStore` names no other store.", "lockout",
 	},
 	{
 		"ssf_streams", "SSFStreams", "Shared Signals Framework streams, one per receiving client.",
-		"`op.WithSharedSignals`.",
+		"`op.WithSharedSignals`.", "ssf",
 	},
 	{
 		"ssf_events", "SSFEvents", "Security Event Tokens queued for delivery to a stream, as unsigned claims.",
-		"`op.WithSharedSignals`.",
+		"`op.WithSharedSignals`.", "ssf",
 	},
 }
 

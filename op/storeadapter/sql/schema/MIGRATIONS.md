@@ -30,11 +30,14 @@ are the only way to get the indexes.** MySQL has no `CREATE INDEX IF NOT
 EXISTS`, so `v1.sql` declares every index inline in its `CREATE TABLE`, which
 does nothing to a table that already exists.
 
-After applying, call `Store.ValidateSchema` at startup (`Store.Migrate` runs it
-too). A missing column fails it with the release that adds it, for example
+After applying, `op.New` checks at construction the tables the configuration
+uses and fails naming any that is missing. `Store.ValidateSchema` checks every
+table, for a CI or deploy gate (`Store.Migrate` runs it too). A missing column
+fails either check with the migration that adds it, for example
 `oidcsql: schema for oidc_clients is missing required columns:
-previous_secret_hash, previous_secret_expires_at; apply the v1.5.0 section of
-schema/MIGRATIONS.md`. It does not check indexes or MySQL collations.
+previous_secret_hash, previous_secret_expires_at; apply migration 000006_v1.5.0
+(schema/migrations/mysql/000006_v1.5.0.up.sql)`. On MySQL both also check that
+the identifier columns use a binary collation. Neither checks indexes.
 
 The sections below explain what each release changes.
 
@@ -133,8 +136,9 @@ empty string, which reads as no previous secret.
 
 `oidc_ssf_streams` and `oidc_ssf_events` are new tables holding the Shared
 Signals Framework transmitter's streams and its queue of Security Event Tokens.
-`Store.ValidateSchema` requires them whether or not `op.WithSharedSignals` is
-set, so every deployment creates them; they stay empty until it is. Being new,
+`op.New` requires them only when `op.WithSharedSignals` is set, and
+`Store.ValidateSchema`, which checks every table, always does; they stay empty
+until Shared Signals is enabled. Being new,
 they are created by a `Store.Migrate` run as well, indexes included on every
 dialect; the file repeats the statements for deployments that never run it.
 

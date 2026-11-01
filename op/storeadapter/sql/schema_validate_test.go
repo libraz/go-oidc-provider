@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/op/store"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
 
@@ -98,7 +99,7 @@ func TestValidateSchema_MissingPreviousSecretColumns(t *testing.T) {
 	}
 	for _, want := range []string{
 		"oidc_clients", "previous_secret_hash", "previous_secret_expires_at",
-		"apply the v1.5.0 section of schema/MIGRATIONS.md",
+		"apply migration 000006_v1.5.0 (schema/migrations/sqlite/000006_v1.5.0.up.sql)",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
@@ -174,5 +175,34 @@ func TestValidateSchema_WithNaming(t *testing.T) {
 	}
 	if err := s.ValidateSchema(ctx); err == nil || !strings.Contains(err.Error(), "acme_sessions") {
 		t.Fatalf("error %v does not name the renamed table", err)
+	}
+}
+
+// A substore checks only its own tables, so a deployment that leaves out a
+// feature's table still passes for every substore it uses.
+func TestSubstoreValidateSchema_ChecksOnlyItsTables(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, db := newValidateStore(t)
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, "DROP TABLE oidc_par_records"); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	clients, ok := s.Clients().(store.SchemaValidator)
+	if !ok {
+		t.Fatal("Clients() does not implement store.SchemaValidator")
+	}
+	if err := clients.ValidateSchema(ctx); err != nil {
+		t.Fatalf("Clients().ValidateSchema with oidc_par_records missing: %v", err)
+	}
+	pars, ok := s.PushedAuthRequests().(store.SchemaValidator)
+	if !ok {
+		t.Fatal("PushedAuthRequests() does not implement store.SchemaValidator")
+	}
+	err := pars.ValidateSchema(ctx)
+	if err == nil || !strings.Contains(err.Error(), "schema for oidc_par_records is missing") {
+		t.Fatalf("PushedAuthRequests().ValidateSchema error = %v, want it to name oidc_par_records", err)
 	}
 }

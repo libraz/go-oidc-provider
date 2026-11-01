@@ -300,35 +300,44 @@ func requiredColumns() map[string][]string {
 	return out
 }
 
-// ValidateSchema checks that the connected database carries every table
-// the adapter uses and that the tables whose shape has changed across
-// releases carry their required columns. It reads the catalog only: it
-// never creates, alters or drops anything, so the connecting role needs
-// no CREATE privilege.
+// ValidateSchema checks every table the adapter owns, whether or not the
+// configuration uses it: each table must exist, the tables whose shape has
+// changed across releases must carry their required columns, and on MySQL
+// the identifier columns must use a binary collation. It reads the catalog
+// only: it never creates, alters or drops anything, so the connecting role
+// needs no CREATE privilege. It does not check indexes.
 //
-// Production deployments should apply the DDL through their own migration
-// tool — schema/<dialect>/v1.sql, or [Store.Schema] when [WithNaming] is
-// in use — and call only ValidateSchema at startup, so a missing table or
-// column fails fast instead of surfacing as a query error under load. A
-// missing table is reported as "oidcsql: schema for <table> is missing";
+// op.New already checks, at construction, the tables the configuration
+// uses, through each substore's own ValidateSchema. Call this full check
+// from CI or a deploy gate, where a table a later configuration change
+// would need should fail before the change ships.
+//
+// A missing table is reported as "oidcsql: schema for <table> is missing";
 // a missing column as "oidcsql: schema for <table> is missing required
-// columns: <names>", followed by the schema/MIGRATIONS.md sections that
-// add them. Every gap is reported in the one returned error, a line
-// each, so a single run lists the whole migration still to apply.
-// [Store.Migrate] runs this check after applying the DDL.
+// columns: <names>", followed by the migration under
+// schema/migrations/<dialect> that adds them. Every gap is reported in the
+// one returned error, a line each, so a single run lists the whole
+// migration still to apply. [Store.Migrate] runs this check after applying
+// the DDL.
 //
 // Stable since v1.5.
 func (s *Store) ValidateSchema(ctx context.Context) error {
+	return s.validateKeys(ctx, knownNamingKeys...)
+}
+
+// validateKeys runs the [Store.ValidateSchema] checks on the tables with
+// the given WithNaming keys only.
+func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 	required := requiredColumns()
 	var problems []error
-	for i, table := range s.names.all() {
+	for _, key := range keys {
+		table := s.names.byKey(key)
 		cols, err := s.columnSet(ctx, table)
 		if err != nil {
 			return err
 		}
-		key := knownNamingKeys[i]
 		if len(cols) == 0 {
-			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing%s", table, tableMigrationHint(key)))
+			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing%s", table, tableMigrationHint(s.dialect.name, key)))
 			continue
 		}
 		var missing []string
@@ -339,40 +348,104 @@ func (s *Store) ValidateSchema(ctx context.Context) error {
 		}
 		if len(missing) > 0 {
 			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing required columns: %s%s",
-				table, strings.Join(missing, ", "), migrationHint(key, missing)))
+				table, strings.Join(missing, ", "), migrationHint(s.dialect.name, key, missing)))
+		}
+		if s.dialect.name == "mysql" && len(binaryCollationColumns[key]) > 0 {
+			collationProblems, err := s.checkBinaryCollations(ctx, key, table)
+			if err != nil {
+				return err
+			}
+			problems = append(problems, collationProblems...)
 		}
 	}
 	return errors.Join(problems...)
 }
 
-// tableMigrationHint names the schema/MIGRATIONS.md section that creates
-// the table, or returns "" when it predates them.
-func tableMigrationHint(key string) string {
+// checkBinaryCollations reports each [binaryCollationColumns] column of
+// table whose MySQL collation compares case- or accent-insensitively.
+func (s *Store) checkBinaryCollations(ctx context.Context, key, table string) ([]error, error) {
+	rows, err := s.db.QueryContext(ctx, mysqlCollationQuery, s.catalogTableName(table))
+	if err != nil {
+		return nil, fmt.Errorf("oidcsql: inspect collations for %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	collations := map[string]string{}
+	for rows.Next() {
+		var name string
+		var collation databasesql.NullString
+		if err := rows.Scan(&name, &collation); err != nil {
+			return nil, fmt.Errorf("oidcsql: scan collations for %s: %w", table, err)
+		}
+		collations[name] = collation.String
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("oidcsql: iterate collations for %s: %w", table, err)
+	}
+	var problems []error
+	for _, col := range binaryCollationColumns[key] {
+		c, ok := collations[col]
+		if !ok || c == "utf8mb4_bin" || c == "utf8mb4_0900_bin" {
+			continue
+		}
+		problems = append(problems, fmt.Errorf("oidcsql: column %s of %s has collation %s, not utf8mb4_bin; apply migration %s",
+			col, table, c, collationMigration(key)))
+	}
+	return problems, nil
+}
+
+// collationPinRelease is the release whose migration pins utf8mb4_bin on the
+// identifier columns of every table that existed before it.
+const collationPinRelease = "v1.3.0"
+
+// collationMigration names the migration that pins the binary collation on
+// the table's identifier columns: the one that created the table, or
+// [collationPinRelease]'s for a table created before it.
+func collationMigration(key string) string {
+	i := releaseIndex(collationPinRelease)
+	if j := releaseIndex(tableAddedIn(key)); j > i {
+		i = j
+	}
+	return schemaReleases[i].migration
+}
+
+// releaseIndex returns the position of a release in [schemaReleases], or -1.
+func releaseIndex(version string) int {
+	return slices.IndexFunc(schemaReleases, func(r schemaRelease) bool { return r.version == version })
+}
+
+// tableMigrationHint names the migration that creates the table, or
+// returns "" when it predates them.
+func tableMigrationHint(dialect, key string) string {
 	if v := tableAddedIn(key); v != "" {
-		return "; apply the " + v + " section of schema/MIGRATIONS.md"
+		return migrationsHint(dialect, []string{schemaReleases[releaseIndex(v)].migration})
 	}
 	return ""
 }
 
-// migrationHint names the schema/MIGRATIONS.md sections that add the
-// missing columns, or returns "" when every one predates them.
-func migrationHint(key string, missing []string) string {
-	var versions []string
+// migrationHint names the migrations that add the missing columns, or
+// returns "" when every one predates them.
+func migrationHint(dialect, key string, missing []string) string {
+	var stems []string
 	for _, r := range schemaReleases {
 		for _, c := range missing {
 			if columnAddedIn(key, c) == r.version {
-				versions = append(versions, r.version)
+				stems = append(stems, r.migration)
 				break
 			}
 		}
 	}
-	switch len(versions) {
+	return migrationsHint(dialect, stems)
+}
+
+// migrationsHint renders the error suffix that points at migration files.
+func migrationsHint(dialect string, stems []string) string {
+	switch len(stems) {
 	case 0:
 		return ""
 	case 1:
-		return "; apply the " + versions[0] + " section of schema/MIGRATIONS.md"
+		return "; apply migration " + stems[0] + " (schema/migrations/" + dialect + "/" + stems[0] + ".up.sql)"
 	default:
-		return "; apply the " + strings.Join(versions, ", ") + " sections of schema/MIGRATIONS.md"
+		return "; apply migrations " + strings.Join(stems, ", ") + " (schema/migrations/" + dialect + "/)"
 	}
 }
 
@@ -408,6 +481,9 @@ func (s *Store) columnListQuery() string {
 		return ""
 	}
 }
+
+// mysqlCollationQuery reads the collation of each column of one MySQL table.
+const mysqlCollationQuery = "SELECT column_name, collation_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?"
 
 // catalogTableName returns the name the catalog records for table. The
 // adapter never quotes identifiers, so PostgreSQL folds a mixed-case

@@ -65,6 +65,9 @@ func TestTableCatalog_CoversEveryNamingKey(t *testing.T) {
 		if info.holds == "" || info.used == "" {
 			t.Errorf("%s has an empty description", info.key)
 		}
+		if _, ok := checkedWhen[info.checked]; !ok {
+			t.Errorf("%s has unknown checked tag %q", info.key, info.checked)
+		}
 	}
 }
 
@@ -215,33 +218,37 @@ func renderTablesDoc(t *testing.T) []byte {
 	var b strings.Builder
 	b.WriteString("# SQL adapter tables\n\n")
 	b.WriteString("<!-- Generated from tables.go by TestTablesDoc; regenerate with `go test -run TestTablesDoc -update .` in op/storeadapter/sql. -->\n\n")
-	b.WriteString("Every table below must exist: `Store.ValidateSchema` checks all of them at\n")
-	b.WriteString("startup. A table whose \"Used when\" condition your configuration does not meet\n")
-	b.WriteString("stays empty, so create it and leave it. `WithNaming` renames a table through\n")
-	b.WriteString("its key; the columns are fixed. Your own users table needs no new column when\n")
-	b.WriteString("it already has an opaque identifier that is assigned once and never reused: the\n")
-	b.WriteString("OP only needs that subject from it, through a `store.UserStore`. A table keyed\n")
-	b.WriteString("only by an auto-increment id or an email address adds one such column.\n\n")
-	minimal := make([]string, 0, len(minimalTables))
-	for _, key := range minimalTables {
+	b.WriteString("`op.New` checks, at construction, the tables the configuration uses (the\n")
+	b.WriteString("\"Checked when\" column) and names any that are missing. `Store.ValidateSchema`\n")
+	b.WriteString("checks every table, for a deploy gate. A table whose condition your\n")
+	b.WriteString("configuration does not meet need not exist. `WithNaming` renames a table\n")
+	b.WriteString("through its key; the columns are fixed. Your own users table needs no new\n")
+	b.WriteString("column when it already has an opaque identifier that is assigned once and never\n")
+	b.WriteString("reused: the OP only needs that subject from it, through a `store.UserStore`. A\n")
+	b.WriteString("table keyed only by an auto-increment id or an email address adds one such\n")
+	b.WriteString("column.\n\n")
+	defaults := make([]string, 0, len(defaultConfigTables))
+	for _, key := range defaultConfigTables {
 		name := names.byKey(key)
 		if name == "" {
-			t.Fatalf("minimalTables names unknown key %q", key)
+			t.Fatalf("defaultConfigTables names unknown key %q", key)
 		}
-		minimal = append(minimal, "`"+name+"`")
+		defaults = append(defaults, "`"+name+"`")
 	}
-	b.WriteString("A minimal deployment (the default `authorization_code` and `refresh_token`\n")
-	b.WriteString("grants, password login against your own user store, every other option at its\n")
-	b.WriteString("default) writes rows to " + strings.Join(minimal, ", ") + ".\n")
-	b.WriteString("`oidc_authn_lockouts` fills only on failed logins. The other tables stay empty\n")
-	b.WriteString("until the option in their \"Used when\" column is set.\n\n")
+	fmt.Fprintf(&b, "The default configuration (the `authorization_code` and `refresh_token`\n"+
+		"grants, password login against your own user store, every other option at its\n"+
+		"default) needs these %d tables: %s.\n\n", len(defaults), strings.Join(defaults, ", "))
 	b.WriteString("Column types differ by dialect; `schema/<dialect>/v1.sql` is authoritative.\n")
 	b.WriteString("A column marked with a release was added to an existing table in that release;\n")
-	b.WriteString("an existing database applies the matching section of `MIGRATIONS.md`.\n\n")
-	b.WriteString("| Table | `WithNaming` key | Holds | Used when |\n")
-	b.WriteString("|---|---|---|---|\n")
+	b.WriteString("an existing database applies the matching file under `migrations/<dialect>`.\n\n")
+	b.WriteString("| Table | `WithNaming` key | Holds | Checked when | Rows appear when |\n")
+	b.WriteString("|---|---|---|---|---|\n")
 	for _, info := range tableCatalog {
-		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s |\n", names.byKey(info.key), info.key, info.holds, info.used)
+		checked, ok := checkedWhen[info.checked]
+		if !ok {
+			t.Fatalf("%s has unknown checked tag %q", info.key, info.checked)
+		}
+		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s. | %s |\n", names.byKey(info.key), info.key, info.holds, checked, info.used)
 	}
 	b.WriteString("\n## Columns\n")
 	for _, info := range tableCatalog {
@@ -290,14 +297,73 @@ func TestMigrationHint(t *testing.T) {
 		missing []string
 		want    string
 	}{
-		{"clients", []string{"previous_secret_hash"}, "; apply the v1.5.0 section of schema/MIGRATIONS.md"},
-		{"refresh_tokens", []string{"chain_id", "claims"}, "; apply the v1.4.0 section of schema/MIGRATIONS.md"},
+		{"clients", []string{"previous_secret_hash"}, "; apply migration 000006_v1.5.0 (schema/migrations/sqlite/000006_v1.5.0.up.sql)"},
+		{"refresh_tokens", []string{"chain_id", "claims"}, "; apply migration 000005_v1.4.0 (schema/migrations/sqlite/000005_v1.4.0.up.sql)"},
 		{"refresh_tokens", []string{"subject_public"}, ""},
-		{"refresh_tokens", []string{"subject_public", "chain_id"}, "; apply the v1.4.0 section of schema/MIGRATIONS.md"},
+		{"refresh_tokens", []string{"subject_public", "chain_id"}, "; apply migration 000005_v1.4.0 (schema/migrations/sqlite/000005_v1.4.0.up.sql)"},
+		{"totp_secrets", []string{"row_version"}, "; apply migration 000002_v1.1.0 (schema/migrations/sqlite/000002_v1.1.0.up.sql)"},
 	}
 	for _, tc := range cases {
-		if got := migrationHint(tc.key, tc.missing); got != tc.want {
+		if got := migrationHint("sqlite", tc.key, tc.missing); got != tc.want {
 			t.Errorf("migrationHint(%s, %v) = %q, want %q", tc.key, tc.missing, got, tc.want)
 		}
+	}
+	got := migrationsHint("mysql", []string{"000005_v1.4.0", "000006_v1.5.0"})
+	if want := "; apply migrations 000005_v1.4.0, 000006_v1.5.0 (schema/migrations/mysql/)"; got != want {
+		t.Errorf("migrationsHint = %q, want %q", got, want)
+	}
+}
+
+func TestCollationMigration(t *testing.T) {
+	t.Parallel()
+
+	for key, want := range map[string]string{
+		"clients":     "000004_v1.3.0",
+		"users":       "000004_v1.3.0",
+		"ssf_streams": "000006_v1.5.0",
+	} {
+		if got := collationMigration(key); got != want {
+			t.Errorf("collationMigration(%s) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// TestBinaryCollationColumns_MatchMySQLDDL binds binaryCollationColumns to
+// the columns the MySQL DDL declares COLLATE utf8mb4_bin, so ValidateSchema
+// checks exactly the columns the schema pins.
+func TestBinaryCollationColumns_MatchMySQLDDL(t *testing.T) {
+	t.Parallel()
+
+	names := defaultNames()
+	want := map[string][]string{}
+	text := string(MySQL().schema)
+	for _, loc := range createTableRE.FindAllStringSubmatchIndex(text, -1) {
+		table := text[loc[2]:loc[3]]
+		body := text[loc[1]:]
+		if end := strings.Index(body, "\n);"); end >= 0 {
+			body = body[:end]
+		}
+		key := ""
+		for i, name := range names.all() {
+			if name == table {
+				key = knownNamingKeys[i]
+			}
+		}
+		if key == "" {
+			t.Fatalf("MySQL DDL declares %s, which no WithNaming key names", table)
+		}
+		for _, line := range strings.Split(body, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 0 || strings.HasPrefix(fields[0], "--") || !strings.Contains(line, "COLLATE utf8mb4_bin") {
+				continue
+			}
+			want[key] = append(want[key], fields[0])
+		}
+	}
+	if len(want) == 0 {
+		t.Fatal("no COLLATE utf8mb4_bin columns parsed from the MySQL DDL; the schema shape changed and this test stopped checking anything")
+	}
+	if !reflect.DeepEqual(binaryCollationColumns, want) {
+		t.Fatalf("binaryCollationColumns = %v, want the MySQL DDL's %v", binaryCollationColumns, want)
 	}
 }
