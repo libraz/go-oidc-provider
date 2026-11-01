@@ -204,7 +204,11 @@ func ssfVerifySET(t *testing.T, tk *testkit.Provider, set string) map[string]any
 	if typ, _ := jws.Signatures[0].Protected.ExtraHeaders["typ"].(string); typ != "secevent+jwt" {
 		t.Fatalf("SET typ = %q, want secevent+jwt", typ)
 	}
-	resp, err := tk.HTTPClient(nil).Get(tk.Server.URL + "/oidc/jwks")
+	jwksReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tk.Server.URL+"/oidc/jwks", nil)
+	if err != nil {
+		t.Fatalf("build jwks request: %v", err)
+	}
+	resp, err := tk.HTTPClient(nil).Do(jwksReq)
 	if err != nil {
 		t.Fatalf("GET jwks: %v", err)
 	}
@@ -306,8 +310,6 @@ func ssfEmitCredentialChange(t *testing.T, tk *testkit.Provider, subject string)
 		t.Fatalf("EmitSecurityEvent: %v", err)
 	}
 }
-
-func ssfBearer(s string) *string { return &s }
 
 // ssfPushReceiver is an RFC 8935 receiver recording every SET and the
 // Authorization header it arrived with, answering 202.

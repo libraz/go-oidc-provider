@@ -464,7 +464,7 @@ func (f *pcrFixture) walk(loc *url.URL, answers map[string][]string) pcrWalk {
 	resp := pcrGet(f.t, f.cl, f.tk.Server.URL+path)
 	var csrf string
 	advanced := false
-	for step := 0; step < 8; step++ {
+	for range 8 {
 		if c := pcrCookie(resp.Cookies(), "__Host-oidc_csrf"); c != nil {
 			csrf = c.Value
 		}
@@ -521,7 +521,6 @@ func (f *pcrFixture) submit(path, csrf, stateRef string, values map[string]strin
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", f.tk.Issuer)
 	req.Header.Set("X-CSRF-Token", csrf)
-	//nolint:gosec // G124: AddCookie serialises name=value only.
 	req.AddCookie(&http.Cookie{Name: "__Host-oidc_csrf", Value: csrf})
 	resp, err := f.cl.Do(req)
 	if err != nil {
@@ -1084,14 +1083,14 @@ func TestScenario_PCR_010_PairwiseMatrixCoversAllPairs(t *testing.T) {
 	covered := map[string]bool{}
 	for _, r := range pcrMatrix {
 		v := []string{reg[r.registration], r.prompt, r.route.String(), r.session.String()}
-		for i := 0; i < len(v); i++ {
+		for i := range v {
 			for j := i + 1; j < len(v); j++ {
 				covered[fmt.Sprintf("%d=%s|%d=%s", i, v[i], j, v[j])] = true
 			}
 		}
 	}
 	want := 0
-	for i := 0; i < len(levels); i++ {
+	for i := range levels {
 		for j := i + 1; j < len(levels); j++ {
 			for _, a := range levels[i] {
 				for _, b := range levels[j] {

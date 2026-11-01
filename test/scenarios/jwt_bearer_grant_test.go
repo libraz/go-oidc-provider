@@ -44,7 +44,7 @@ import (
 )
 
 const (
-	jbgGrantType = "urn:ietf:params:oauth:grant-type:jwt-bearer" //nolint:gosec // G101: grant type URN, not a credential.
+	jbgGrantType = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 	jbgPlainIss  = "https://idp-plain.example.com"
 	jbgJAGIss    = "https://idp-jag.example.com"
 	jbgKID       = "jbg-issuer-key"
@@ -92,8 +92,9 @@ func (s *jbgAuditSink) records(event string) []map[string]any {
 
 // rejectedReasons lists the reason of every jwt_bearer.rejected record.
 func (s *jbgAuditSink) rejectedReasons() []string {
-	var out []string
-	for _, rec := range s.records("jwt_bearer.rejected") {
+	recs := s.records("jwt_bearer.rejected")
+	out := make([]string, 0, len(recs))
+	for _, rec := range recs {
 		extras, _ := rec["extras"].(map[string]any)
 		reason, _ := extras["reason"].(string)
 		out = append(out, reason)
@@ -654,7 +655,7 @@ func TestScenario_JBG_007_InvalidAssertionRefusedPerStage(t *testing.T) {
 		out, _ := obj.CompactSerialize()
 		return out
 	}
-	algNone := func(t *testing.T, f *jbgFixture) string {
+	algNone := func(_ *testing.T, f *jbgFixture) string {
 		payload, _ := json.Marshal(f.plainClaims("alice"))
 		enc := base64.RawURLEncoding
 		return enc.EncodeToString([]byte(`{"alg":"none"}`)) + "." + enc.EncodeToString(payload) + "."
@@ -1069,6 +1070,7 @@ func (c jbgCombo) run(t *testing.T) {
 	case jbgBindMTLS:
 		req.cert = mtlsCert(t)
 		wantCnf = map[string]any{"x5t#S256": mtlsThumbprint(req.cert)}
+	case jbgBindNone:
 	}
 	switch c.cnf {
 	case jbgCnfMatch:
@@ -1083,6 +1085,7 @@ func (c jbgCombo) run(t *testing.T) {
 		if c.binding == jbgBindMTLS {
 			claims["cnf"] = map[string]any{"x5t#S256": "thumbprint-of-another-certificate"}
 		}
+	case jbgCnfNone:
 	}
 	req.assertion = f.sign(t, claims, typ)
 

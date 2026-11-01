@@ -44,19 +44,19 @@ import (
 
 const (
 	ijgIDJAGType  = "urn:ietf:params:oauth:token-type:id-jag"
-	ijgIDTokType  = "urn:ietf:params:oauth:token-type:id_token"     //nolint:gosec // G101: token type URN, not a credential.
-	ijgATTokType  = "urn:ietf:params:oauth:token-type:access_token" //nolint:gosec // G101: token type URN, not a credential.
+	ijgIDTokType  = "urn:ietf:params:oauth:token-type:id_token"
+	ijgATTokType  = "urn:ietf:params:oauth:token-type:access_token"
 	ijgProfile    = "urn:ietf:params:oauth:grant-profile:id-jag"
-	ijgIdPIssuer  = "https://idp.testkit.invalid"
+	ijgIDPIssuer  = "https://idp.testkit.invalid"
 	ijgRASIssuer  = "https://ras.testkit.invalid"
 	ijgRASPlain   = "https://ras-plain.testkit.invalid"
 	ijgRASClient  = "ras-client"
 	ijgRASSecret  = "ras-client-secret" //nolint:gosec // G101: a test-only client secret.
-	ijgIdPClient  = "idp-rp"
-	ijgIdPOther   = "idp-other-rp"
-	ijgIdPPublic  = "idp-public-rp"
-	ijgIdPPair    = "idp-pairwise-rp"
-	ijgIdPSecret  = "idp-rp-secret" //nolint:gosec // G101: a test-only client secret.
+	ijgIDPClient  = "idp-rp"
+	ijgIDPOther   = "idp-other-rp"
+	ijgIDPPublic  = "idp-public-rp"
+	ijgIDPPair    = "idp-pairwise-rp"
+	ijgIDPSecret  = "idp-rp-secret" //nolint:gosec // G101: a test-only client secret.
 	ijgRASAPI     = "https://ras.example.com/api"
 	ijgRASAPITwo  = "https://ras.example.com/api2"
 	ijgRASSubject = "ras-user-1"
@@ -101,17 +101,17 @@ func (p *ijgPolicy) set(fn func(op.IDJAGRequest) (*op.IDJAGDecision, error)) {
 	p.mu.Unlock()
 }
 
-// ijgIdPConfig varies the IdP a fixture builds.
-type ijgIdPConfig struct {
+// ijgIDPConfig varies the IdP a fixture builds.
+type ijgIDPConfig struct {
 	// accessTokenExchangeOnly configures the stable token-exchange policy
 	// instead of ID-JAG issuance.
 	accessTokenExchangeOnly bool
 	pairwise                bool
 }
 
-// ijgIdP is a provider that issues ID-JAGs, plus an ID token its client
+// ijgIDP is a provider that issues ID-JAGs, plus an ID token its client
 // obtained through the code flow.
-type ijgIdP struct {
+type ijgIDP struct {
 	tk       *testkit.Provider
 	audit    *jbgAuditSink
 	policy   *ijgPolicy
@@ -119,9 +119,9 @@ type ijgIdP struct {
 	idClaims map[string]any
 }
 
-func newIJGIdP(t *testing.T, cfg ijgIdPConfig) *ijgIdP {
+func newIJGIdP(t *testing.T, cfg ijgIDPConfig) *ijgIDP {
 	t.Helper()
-	idp := &ijgIdP{audit: &jbgAuditSink{}, policy: &ijgPolicy{}}
+	idp := &ijgIDP{audit: &jbgAuditSink{}, policy: &ijgPolicy{}}
 	opts := []op.Option{
 		op.WithFeature(feature.DPoP),
 		op.WithFeature(feature.MTLS),
@@ -136,15 +136,15 @@ func newIJGIdP(t *testing.T, cfg ijgIdPConfig) *ijgIdP {
 		opts = append(opts, op.WithPairwiseSubject([]byte("idjag-pairwise-salt-32-bytes-long")))
 	}
 	idp.tk = testkit.NewProvider(t,
-		testkit.WithIssuer(ijgIdPIssuer),
+		testkit.WithIssuer(ijgIDPIssuer),
 		testkit.WithClock(dpopFixedClock{t: jbgNow}),
 		testkit.WithOptions(opts...),
 	)
-	hash, err := op.HashClientSecret(ijgIdPSecret)
+	hash, err := op.HashClientSecret(ijgIDPSecret)
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
-	for _, id := range []string{ijgIdPClient, ijgIdPOther} {
+	for _, id := range []string{ijgIDPClient, ijgIDPOther} {
 		idp.tk.RegisterClient(t, testkit.ClientFixture{
 			ID: id, SecretHash: hash, TokenEndpointAuthMethod: "client_secret_basic",
 			GrantTypes: []string{"authorization_code", op.TokenExchangeGrantType},
@@ -152,25 +152,25 @@ func newIJGIdP(t *testing.T, cfg ijgIdPConfig) *ijgIdP {
 		})
 	}
 	idp.tk.RegisterClient(t, testkit.ClientFixture{
-		ID: ijgIdPPublic, PublicClient: true, TokenEndpointAuthMethod: "none",
+		ID: ijgIDPPublic, PublicClient: true, TokenEndpointAuthMethod: "none",
 		GrantTypes: []string{"authorization_code", op.TokenExchangeGrantType},
 		Scopes:     []string{"openid", "profile"},
 	})
 	if cfg.pairwise {
 		idp.tk.RegisterClient(t, testkit.ClientFixture{
-			ID: ijgIdPPair, SecretHash: hash, TokenEndpointAuthMethod: "client_secret_basic",
+			ID: ijgIDPPair, SecretHash: hash, TokenEndpointAuthMethod: "client_secret_basic",
 			SubjectType: "pairwise",
 			GrantTypes:  []string{"authorization_code", op.TokenExchangeGrantType},
 			Scopes:      []string{"openid", "profile"},
 		})
 	}
-	idp.idToken = idp.idTokenFor(t, ijgIdPClient)
+	idp.idToken = idp.idTokenFor(t, ijgIDPClient)
 	idp.idClaims = decodeJWTPayload(t, idp.idToken)
 	return idp
 }
 
 // idTokenFor runs the code flow for clientID and returns its ID token.
-func (i *ijgIdP) idTokenFor(t *testing.T, clientID string) string {
+func (i *ijgIDP) idTokenFor(t *testing.T, clientID string) string {
 	t.Helper()
 	pkce := scenariokit.NewPKCEPair("")
 	res := scenariokit.RunCodeFlow(t, i.tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
@@ -181,7 +181,7 @@ func (i *ijgIdP) idTokenFor(t *testing.T, clientID string) string {
 	}
 	tok := scenariokit.ExchangeCode(t, i.tk, scenariokit.ExchangeCodeRequest{
 		Code: res.Code, RedirectURI: ijgRedirect, Verifier: pkce.Verifier,
-		ClientID: clientID, ClientSecret: ijgIdPSecret,
+		ClientID: clientID, ClientSecret: ijgIDPSecret,
 	})
 	if tok.StatusCode != http.StatusOK || tok.IDToken == "" {
 		t.Fatalf("code redemption for %s: status=%d body=%v", clientID, tok.StatusCode, tok.Raw)
@@ -191,7 +191,7 @@ func (i *ijgIdP) idTokenFor(t *testing.T, clientID string) string {
 
 // ijgExchange describes one token-exchange request to the IdP.
 type ijgExchange struct {
-	client       string // empty means ijgIdPClient
+	client       string // empty means ijgIDPClient
 	subjectToken string // empty means the fixture's ID token
 	subjectType  string // empty means id_token
 	requested    []string
@@ -237,17 +237,17 @@ func (x ijgExchange) form(idToken string) url.Values {
 	return form
 }
 
-func (i *ijgIdP) exchange(t *testing.T, x ijgExchange) jbgResp {
+func (i *ijgIDP) exchange(t *testing.T, x ijgExchange) jbgResp {
 	t.Helper()
 	client := x.client
 	if client == "" {
-		client = ijgIdPClient
+		client = ijgIDPClient
 	}
-	return ijgPost(t, i.tk, x.form(i.idToken), client, ijgIdPSecret, x.dpop, x.cert)
+	return ijgPost(t, i.tk, x.form(i.idToken), client, ijgIDPSecret, x.dpop, x.cert)
 }
 
 // issue exchanges and requires a 200, returning the response.
-func (i *ijgIdP) issue(t *testing.T, x ijgExchange) jbgResp {
+func (i *ijgIDP) issue(t *testing.T, x ijgExchange) jbgResp {
 	t.Helper()
 	resp := i.exchange(t, x)
 	if resp.status != http.StatusOK {
@@ -263,7 +263,7 @@ func ijgPost(t *testing.T, tk *testkit.Provider, form url.Values, clientID, secr
 	tokenURL := tk.Issuer + "/oidc/token"
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, tokenURL, strings.NewReader(ijgFormWithClient(form, clientID)))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if clientID != ijgIdPPublic {
+	if clientID != ijgIDPPublic {
 		req.SetBasicAuth(url.QueryEscape(clientID), url.QueryEscape(secret))
 	}
 	if key != nil {
@@ -290,7 +290,7 @@ func ijgPost(t *testing.T, tk *testkit.Provider, form url.Values, clientID, secr
 // ijgFormWithClient adds client_id for the public client, which has no
 // other way to identify itself.
 func ijgFormWithClient(form url.Values, clientID string) string {
-	if clientID == ijgIdPPublic {
+	if clientID == ijgIDPPublic {
 		form = cloneURLValues(form)
 		form.Set("client_id", clientID)
 	}
@@ -340,7 +340,7 @@ func ijgVerifyAgainstJWKS(t *testing.T, tk *testkit.Provider, token string) {
 	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
 		t.Fatalf("decode jwks: %v", err)
 	}
-	jws, err := josev4.ParseSigned(token, []josev4.SignatureAlgorithm{josev4.ES256})
+	jws, err := josev4.ParseSignedCompact(token, []josev4.SignatureAlgorithm{josev4.ES256})
 	if err != nil {
 		t.Fatalf("ParseSigned: %v", err)
 	}
@@ -362,7 +362,7 @@ type ijgRAS struct {
 	resolved []op.AssertionSubject
 }
 
-func newIJGRAS(t *testing.T, idp *ijgIdP, issuer string, profile op.AssertionProfile) *ijgRAS {
+func newIJGRAS(t *testing.T, idp *ijgIDP, issuer string, profile op.AssertionProfile) *ijgRAS {
 	t.Helper()
 	ras := &ijgRAS{audit: &jbgAuditSink{}}
 	jwks := jbgFetchBody(t, idp.tk, "/oidc/jwks")
@@ -373,13 +373,13 @@ func newIJGRAS(t *testing.T, idp *ijgIdP, issuer string, profile op.AssertionPro
 			op.WithAuditLogger(jbgAuditLogger(ras.audit)),
 			op.WithJWTBearerGrant(op.JWTBearerGrant{
 				Issuers: []op.AssertionIssuer{{
-					Issuer: ijgIdPIssuer, JWKS: jwks, AllowedClients: []string{ijgRASClient}, Profile: profile,
+					Issuer: ijgIDPIssuer, JWKS: jwks, AllowedClients: []string{ijgRASClient}, Profile: profile,
 				}},
 				ResolveSubject: func(_ context.Context, a op.AssertionSubject) (string, error) {
 					ras.mu.Lock()
 					ras.resolved = append(ras.resolved, a)
 					ras.mu.Unlock()
-					if a.Issuer != ijgIdPIssuer || a.Subject != idp.idClaims["sub"] || a.ClientID != ijgRASClient {
+					if a.Issuer != ijgIDPIssuer || a.Subject != idp.idClaims["sub"] || a.ClientID != ijgRASClient {
 						return "", op.ErrUnknownAssertionSubject
 					}
 					return ijgRASSubject, nil
@@ -736,7 +736,7 @@ func TestScenario_IDJAG_009_UnauthenticatedClientRefused(t *testing.T) {
 
 func TestScenario_IDJAG_010_IssuedAssertionClaims(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{})
+	idp := newIJGIdP(t, ijgIDPConfig{})
 
 	x := ijgDefaultExchange()
 	x.scope = "chat.read chat.history"
@@ -752,7 +752,7 @@ func TestScenario_IDJAG_010_IssuedAssertionClaims(t *testing.T) {
 
 	c := decodeJWTPayload(t, token)
 	want := map[string]any{
-		"iss":       ijgIdPIssuer,
+		"iss":       ijgIDPIssuer,
 		"sub":       idp.idClaims["sub"],
 		"aud":       ijgRASIssuer,
 		"client_id": ijgRASClient,
@@ -794,7 +794,7 @@ func fmtJSON(v any) string {
 
 func TestScenario_IDJAG_011_ResponseShapeAndBinding(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{})
+	idp := newIJGIdP(t, ijgIDPConfig{})
 	key := newDPoPKey(t)
 	cert := mtlsCert(t)
 
@@ -831,7 +831,7 @@ func TestScenario_IDJAG_011_ResponseShapeAndBinding(t *testing.T) {
 		token, _ := resp.body["access_token"].(string)
 		c := decodeJWTPayload(t, token)
 		cnf, _ := c["cnf"].(map[string]any)
-		if fmtJSON(cnf) != fmtJSON(tc.cnf) && !(tc.cnf == nil && len(cnf) == 0) {
+		if fmtJSON(cnf) != fmtJSON(tc.cnf) && (tc.cnf != nil || len(cnf) != 0) {
 			t.Errorf("%s: cnf = %v, want %v", tc.name, cnf, tc.cnf)
 		}
 	}
@@ -839,7 +839,7 @@ func TestScenario_IDJAG_011_ResponseShapeAndBinding(t *testing.T) {
 
 func TestScenario_IDJAG_012_LifetimeCappedAtFiveMinutes(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{})
+	idp := newIJGIdP(t, ijgIDPConfig{})
 
 	cases := []struct {
 		stated time.Duration
@@ -869,8 +869,8 @@ func TestScenario_IDJAG_012_LifetimeCappedAtFiveMinutes(t *testing.T) {
 
 func TestScenario_IDJAG_013_IssuanceRequestRefused(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{})
-	other := idp.idTokenFor(t, ijgIdPOther)
+	idp := newIJGIdP(t, ijgIDPConfig{})
+	other := idp.idTokenFor(t, ijgIDPOther)
 
 	cases := []struct {
 		name   string
@@ -887,7 +887,7 @@ func TestScenario_IDJAG_013_IssuanceRequestRefused(t *testing.T) {
 		}, http.StatusBadRequest, "invalid_request"},
 		{"subject_token_type access_token", func(x *ijgExchange) { x.subjectType = ijgATTokType }, http.StatusBadRequest, "invalid_request"},
 		{"id_token issued to another client", func(x *ijgExchange) { x.subjectToken = other }, http.StatusBadRequest, "invalid_grant"},
-		{"public client", func(x *ijgExchange) { x.client = ijgIdPPublic }, http.StatusUnauthorized, "invalid_client"},
+		{"public client", func(x *ijgExchange) { x.client = ijgIDPPublic }, http.StatusUnauthorized, "invalid_client"},
 	}
 	for _, tc := range cases {
 		before := idp.policy.calls()
@@ -903,6 +903,7 @@ func TestScenario_IDJAG_013_IssuanceRequestRefused(t *testing.T) {
 	}
 
 	t.Run("an ID-JAG is not accepted back as an id_token", func(t *testing.T) {
+		t.Parallel()
 		resp := idp.issue(t, ijgDefaultExchange())
 		idjag, _ := resp.body["access_token"].(string)
 		x := ijgDefaultExchange()
@@ -916,7 +917,7 @@ func TestScenario_IDJAG_013_IssuanceRequestRefused(t *testing.T) {
 
 func TestScenario_IDJAG_014_PolicyOutcomesMapToErrors(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{})
+	idp := newIJGIdP(t, ijgIDPConfig{})
 
 	cases := []struct {
 		name     string
@@ -963,7 +964,7 @@ func TestScenario_IDJAG_014_PolicyOutcomesMapToErrors(t *testing.T) {
 
 func TestScenario_IDJAG_015_RASNamespaceNeedsNoIdPRegistration(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{})
+	idp := newIJGIdP(t, ijgIDPConfig{})
 
 	// idp-rp is registered for openid and profile only; the scope and the
 	// resources below exist solely at the resource AS.
@@ -986,14 +987,14 @@ func TestScenario_IDJAG_015_RASNamespaceNeedsNoIdPRegistration(t *testing.T) {
 	if !slices.Equal(seen.Scope, []string{"chat.read", "chat.history"}) || !slices.Equal(seen.Resource, []string{ijgRASAPI, ijgRASAPITwo}) {
 		t.Errorf("policy saw scope=%v resource=%v, want the request uncut", seen.Scope, seen.Resource)
 	}
-	if seen.Audience != ijgRASIssuer || seen.Client == nil || seen.Client.ID != ijgIdPClient {
-		t.Errorf("policy saw audience=%q client=%v, want %s / %s", seen.Audience, seen.Client, ijgRASIssuer, ijgIdPClient)
+	if seen.Audience != ijgRASIssuer || seen.Client == nil || seen.Client.ID != ijgIDPClient {
+		t.Errorf("policy saw audience=%q client=%v, want %s / %s", seen.Audience, seen.Client, ijgRASIssuer, ijgIDPClient)
 	}
 }
 
 func TestScenario_IDJAG_016_IdPToResourceASRoundTrip(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{})
+	idp := newIJGIdP(t, ijgIDPConfig{})
 	ras := newIJGRAS(t, idp, ijgRASIssuer, op.AssertionProfileIDJAG)
 
 	x := ijgDefaultExchange()
@@ -1022,7 +1023,7 @@ func TestScenario_IDJAG_016_IdPToResourceASRoundTrip(t *testing.T) {
 	ras.mu.Lock()
 	got := ras.resolved[len(ras.resolved)-1]
 	ras.mu.Unlock()
-	if got.Issuer != ijgIdPIssuer || got.Subject != idp.idClaims["sub"] || got.Claims["email"] != ijgEmail {
+	if got.Issuer != ijgIDPIssuer || got.Subject != idp.idClaims["sub"] || got.Claims["email"] != ijgEmail {
 		t.Errorf("AssertionSubject = {%s %s} email=%v, want the IdP's issuer, the ID token sub and %s", got.Issuer, got.Subject, got.Claims["email"], ijgEmail)
 	}
 
@@ -1032,6 +1033,7 @@ func TestScenario_IDJAG_016_IdPToResourceASRoundTrip(t *testing.T) {
 	}
 
 	t.Run("a plain-profile AS refuses it on type", func(t *testing.T) {
+		t.Parallel()
 		plain := newIJGRAS(t, idp, ijgRASPlain, op.AssertionProfileJWT)
 		fresh, _ := idp.issue(t, ijgDefaultExchange()).body["access_token"].(string)
 		// The plain AS's issuer differs from the ID-JAG's audience, so the
@@ -1046,6 +1048,7 @@ func TestScenario_IDJAG_016_IdPToResourceASRoundTrip(t *testing.T) {
 	})
 
 	t.Run("an ID token is not a grant at the ID-JAG AS", func(t *testing.T) {
+		t.Parallel()
 		other := newIJGRAS(t, idp, "https://ras-third.testkit.invalid", op.AssertionProfileIDJAG)
 		got := other.redeem(t, idp.idToken, nil)
 		if got.status != http.StatusBadRequest || got.errCode() != "invalid_grant" {
@@ -1059,13 +1062,13 @@ func TestScenario_IDJAG_016_IdPToResourceASRoundTrip(t *testing.T) {
 
 func TestScenario_IDJAG_017_PairwiseSubjectIsNotVouchedFor(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{pairwise: true})
-	pairwiseToken := idp.idTokenFor(t, ijgIdPPair)
+	idp := newIJGIdP(t, ijgIDPConfig{pairwise: true})
+	pairwiseToken := idp.idTokenFor(t, ijgIDPPair)
 
 	// The pairwise id_token names a sub the IdP's grant records do not hold,
 	// so the exchange fails instead of handing the RAS an ID-JAG sub.
 	x := ijgDefaultExchange()
-	x.client, x.subjectToken = ijgIdPPair, pairwiseToken
+	x.client, x.subjectToken = ijgIDPPair, pairwiseToken
 	resp := idp.exchange(t, x)
 	if resp.status != http.StatusBadRequest || resp.errCode() != "invalid_grant" {
 		t.Fatalf("status=%d body=%v, want 400 invalid_grant", resp.status, resp.body)
@@ -1083,7 +1086,7 @@ func TestScenario_IDJAG_018_DiscoveryAdvertisement(t *testing.T) {
 
 	t.Run("issuance configured", func(t *testing.T) {
 		t.Parallel()
-		idp := newIJGIdP(t, ijgIdPConfig{})
+		idp := newIJGIdP(t, ijgIDPConfig{})
 		doc := jbgDiscovery(t, idp.tk)
 		if !jbgListed(doc, "identity_chaining_requested_token_types_supported", ijgIDJAGType) {
 			t.Errorf("identity_chaining_requested_token_types_supported = %v, want %s", doc["identity_chaining_requested_token_types_supported"], ijgIDJAGType)
@@ -1098,7 +1101,7 @@ func TestScenario_IDJAG_018_DiscoveryAdvertisement(t *testing.T) {
 
 	t.Run("issuance not configured", func(t *testing.T) {
 		t.Parallel()
-		idp := newIJGIdP(t, ijgIdPConfig{accessTokenExchangeOnly: true})
+		idp := newIJGIdP(t, ijgIDPConfig{accessTokenExchangeOnly: true})
 		doc := jbgDiscovery(t, idp.tk)
 		if _, has := doc["identity_chaining_requested_token_types_supported"]; has {
 			t.Errorf("identity_chaining_requested_token_types_supported = %v, want absent", doc["identity_chaining_requested_token_types_supported"])
@@ -1107,7 +1110,7 @@ func TestScenario_IDJAG_018_DiscoveryAdvertisement(t *testing.T) {
 
 	t.Run("resource AS: profile advertised only with an ID-JAG issuer", func(t *testing.T) {
 		t.Parallel()
-		idp := newIJGIdP(t, ijgIdPConfig{})
+		idp := newIJGIdP(t, ijgIDPConfig{})
 		withJAG := newIJGRAS(t, idp, ijgRASIssuer, op.AssertionProfileIDJAG)
 		if !jbgListed(jbgDiscovery(t, withJAG.tk), "authorization_grant_profiles_supported", ijgProfile) {
 			t.Error("authorization_grant_profiles_supported lacks the id-jag profile")
@@ -1121,7 +1124,7 @@ func TestScenario_IDJAG_018_DiscoveryAdvertisement(t *testing.T) {
 
 func TestScenario_IDJAG_019_RequestWithoutIssuanceKeepsRFC8693Behaviour(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{accessTokenExchangeOnly: true})
+	idp := newIJGIdP(t, ijgIDPConfig{accessTokenExchangeOnly: true})
 
 	resp := idp.exchange(t, ijgDefaultExchange())
 	if resp.status != http.StatusBadRequest || resp.errCode() != "invalid_request" {
@@ -1134,7 +1137,7 @@ func TestScenario_IDJAG_019_RequestWithoutIssuanceKeepsRFC8693Behaviour(t *testi
 
 func TestScenario_IDJAG_020_IssuanceAudit(t *testing.T) {
 	t.Parallel()
-	idp := newIJGIdP(t, ijgIdPConfig{})
+	idp := newIJGIdP(t, ijgIDPConfig{})
 
 	x := ijgDefaultExchange()
 	x.audience = []string{"https://unknown-ras.testkit.invalid"}
@@ -1150,8 +1153,8 @@ func TestScenario_IDJAG_020_IssuanceAudit(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("token_exchange.idjag_issued records = %d, want 1", len(got))
 	}
-	if got[0]["client_id"] != ijgIdPClient {
-		t.Errorf("client_id = %v, want %s", got[0]["client_id"], ijgIdPClient)
+	if got[0]["client_id"] != ijgIDPClient {
+		t.Errorf("client_id = %v, want %s", got[0]["client_id"], ijgIDPClient)
 	}
 }
 

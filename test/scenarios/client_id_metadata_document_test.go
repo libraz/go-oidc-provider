@@ -209,7 +209,7 @@ func newCDEnv(t *testing.T, cfg cdCfg) *cdEnv {
 		opts = append(opts, op.WithAllowPrivateNetworkClientIDMetadata())
 	}
 	if len(cfg.resources) > 0 {
-		var rs []op.ProtectedResource
+		rs := make([]op.ProtectedResource, 0, len(cfg.resources))
 		for _, r := range cfg.resources {
 			rs = append(rs, op.ProtectedResource{Resource: r})
 		}
@@ -277,8 +277,9 @@ func (e *cdEnv) requireFetched(t *testing.T, clientID string) {
 
 // failureReasons lists the reason of every cimd.fetch_failed for clientID.
 func (e *cdEnv) failureReasons(clientID string) []string {
-	var out []string
-	for _, ev := range e.eventsFor(cdFailed, clientID) {
+	evs := e.eventsFor(cdFailed, clientID)
+	out := make([]string, 0, len(evs))
+	for _, ev := range evs {
 		out = append(out, auditValue(ev, "reason"))
 	}
 	return out
@@ -1208,7 +1209,7 @@ func TestScenario_CIMD_META_02_AuthMethodLimitedToNoneAndPrivateKeyJWT(t *testin
 	jwks := kp.PublicJWKSet(t)
 	method := func(m string, extra map[string]any) func(string) map[string]any {
 		return func(string) map[string]any {
-			out := map[string]any{"token_endpoint_auth_method": m} //nolint:gosec // G101: auth method name, not a credential.
+			out := map[string]any{"token_endpoint_auth_method": m}
 			for k, v := range extra {
 				out[k] = v
 			}
@@ -1239,7 +1240,7 @@ func TestScenario_CIMD_META_02_AuthMethodLimitedToNoneAndPrivateKeyJWT(t *testin
 func TestScenario_CIMD_META_03_ClientSecretFieldRejected(t *testing.T) {
 	t.Parallel()
 	runDocCases(t, []cdDocCase{
-		{"client_secret", func(string) map[string]any { return map[string]any{"client_secret": "s3cr3t"} }, cdInvalidMetadata, ""}, //nolint:gosec // G101: fixture value.
+		{"client_secret", func(string) map[string]any { return map[string]any{"client_secret": "s3cr3t"} }, cdInvalidMetadata, ""},
 		{"client_secret_expires_at", func(string) map[string]any { return map[string]any{"client_secret_expires_at": 0} }, cdInvalidMetadata, ""},
 		{"empty client_secret", func(string) map[string]any { return map[string]any{"client_secret": ""} }, cdInvalidMetadata, ""},
 	})
@@ -1262,7 +1263,7 @@ func TestScenario_CIMD_META_04_URIFieldsRequireHTTPS(t *testing.T) {
 		{"tos_uri over http", uri("tos_uri", "http://mcp.example.com/tos"), cdInvalidMetadata, ""},
 		{"policy_uri over http", uri("policy_uri", "http://mcp.example.com/policy"), cdInvalidMetadata, ""},
 		{"jwks_uri over http", func(string) map[string]any {
-			return map[string]any{"token_endpoint_auth_method": "private_key_jwt", "jwks_uri": "http://mcp.example.com/jwks.json"}
+			return map[string]any{"token_endpoint_auth_method": "private_key_jwt", "jwks_uri": "http://mcp.example.com/jwks.json"} //nolint:gosec // G101: auth method name, not a credential.
 		}, cdInvalidMetadata, ""},
 		{"logo_uri is not a URL", uri("logo_uri", "javascript:alert(1)"), cdInvalidMetadata, ""},
 	})
@@ -1365,10 +1366,10 @@ func TestScenario_CIMD_META_10_JWKSAndJWKSURIExclusive(t *testing.T) {
 	jwks := json.RawMessage(kp.PublicJWKSet(t))
 	runDocCases(t, []cdDocCase{
 		{"jwks alone", func(string) map[string]any {
-			return map[string]any{"token_endpoint_auth_method": "private_key_jwt", "jwks": jwks}
+			return map[string]any{"token_endpoint_auth_method": "private_key_jwt", "jwks": jwks} //nolint:gosec // G101: auth method name, not a credential.
 		}, "", ""},
 		{"jwks and jwks_uri", func(string) map[string]any {
-			return map[string]any{
+			return map[string]any{ //nolint:gosec // G101: auth method name, not a credential.
 				"token_endpoint_auth_method": "private_key_jwt", "jwks": jwks,
 				"jwks_uri": "https://mcp.example.com/jwks.json",
 			}
