@@ -130,7 +130,8 @@ func (h *serviceTokenExchange) Handle(_ context.Context, req op.CustomGrantReque
 // alg=ES256 header, verifies the signature against pub, and returns
 // the "sub" claim. The demo intentionally skips exp / nbf / aud
 // enforcement to keep the verifier surface small; a production handler
-// MUST validate every standard claim.
+// MUST validate every standard claim. When the service token is an
+// RFC 7523 JWT assertion, op.WithJWTBearerGrant already does that.
 func verifyServiceToken(pub *ecdsa.PublicKey, raw string) (string, error) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
