@@ -350,20 +350,22 @@ func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing required columns: %s%s",
 				table, strings.Join(missing, ", "), migrationHint(s.dialect.name, key, missing)))
 		}
-		if s.dialect.name == "mysql" && len(binaryCollationColumns[key]) > 0 {
-			collationProblems, err := s.checkBinaryCollations(ctx, key, table)
-			if err != nil {
-				return err
-			}
-			problems = append(problems, collationProblems...)
+		collationProblems, err := s.checkBinaryCollations(ctx, key, table)
+		if err != nil {
+			return err
 		}
+		problems = append(problems, collationProblems...)
 	}
 	return errors.Join(problems...)
 }
 
 // checkBinaryCollations reports each [binaryCollationColumns] column of
 // table whose MySQL collation compares case- or accent-insensitively.
+// It checks nothing outside MySQL, where every comparison is byte-wise.
 func (s *Store) checkBinaryCollations(ctx context.Context, key, table string) ([]error, error) {
+	if s.dialect.name != "mysql" || len(binaryCollationColumns[key]) == 0 {
+		return nil, nil
+	}
 	rows, err := s.db.QueryContext(ctx, mysqlCollationQuery, s.catalogTableName(table))
 	if err != nil {
 		return nil, fmt.Errorf("oidcsql: inspect collations for %s: %w", table, err)

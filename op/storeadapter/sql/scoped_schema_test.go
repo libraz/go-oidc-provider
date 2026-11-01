@@ -30,7 +30,7 @@ import (
 
 const (
 	scopedClientID     = "scoped-rp"
-	scopedClientSecret = "scoped-rp-secret-0123456789abcdefghijklmnop"
+	scopedClientSecret = "scoped-rp-secret-0123456789abcdefghijklmnop" //nolint:gosec // G101: test fixture, not a real credential.
 	scopedRedirectURI  = "https://rp.example.com/callback"
 	scopedSubject      = "scoped-user"
 	scopedUsername     = "scoped@example.com"

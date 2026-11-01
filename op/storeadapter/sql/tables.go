@@ -14,7 +14,7 @@ type tableInfo struct {
 // checkedWhen describes, by tag, the configuration under which op.New
 // checks a table at construction.
 //
-//nolint:gochecknoglobals // documentation table; read-only.
+//nolint:gochecknoglobals,gosec // documentation table; read-only. G101: grant names, not credentials.
 var checkedWhen = map[string]string{
 	"always":                   "Always",
 	"grant:authorization_code": "The `authorization_code` grant is enabled",

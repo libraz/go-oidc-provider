@@ -20,7 +20,8 @@ const baselineMigration = "000001_v1.0.0"
 
 // migrationStems lists every migration file stem in apply order.
 func migrationStems() []string {
-	out := []string{baselineMigration}
+	out := make([]string, 0, 1+len(schemaReleases))
+	out = append(out, baselineMigration)
 	for _, r := range schemaReleases {
 		out = append(out, r.migration)
 	}
@@ -55,7 +56,7 @@ func TestMigrations_EveryReleaseHasEveryDialect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migrations directory: %v", err)
 	}
-	var got []string
+	got := make([]string, 0, len(dirs))
 	for _, d := range dirs {
 		got = append(got, d.Name())
 	}
@@ -179,8 +180,9 @@ func TestMigrations_ChainEqualsMigrateSQLite(t *testing.T) {
 	}
 	want := sqliteSchemaShape(t, fresh)
 
-	var catalog []string
-	for _, table := range defaultNames().all() {
+	tableNames := defaultNames().all()
+	catalog := make([]string, 0, len(tableNames))
+	for _, table := range tableNames {
 		catalog = append(catalog, "table "+table)
 	}
 	slices.Sort(catalog)
@@ -240,8 +242,9 @@ func TestMigrations_FSAppliesNaming(t *testing.T) {
 	}
 	fsys := s.Migrations()
 
-	var files []string
-	for _, stem := range migrationStems() {
+	stems := migrationStems()
+	files := make([]string, 0, len(stems))
+	for _, stem := range stems {
 		files = append(files, stem+".up.sql")
 	}
 	if err := fstest.TestFS(fsys, files...); err != nil {

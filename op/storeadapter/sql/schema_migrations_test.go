@@ -61,7 +61,7 @@ func declaredIndexNames(ddl []byte) map[string]bool {
 func laterMigrations(t *testing.T, dialect string) []byte {
 	t.Helper()
 
-	var out [][]byte
+	out := make([][]byte, 0, len(schemaReleases))
 	for _, r := range schemaReleases {
 		out = append(out, readMigration(t, dialect, r.migration))
 	}
