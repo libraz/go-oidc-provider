@@ -376,3 +376,30 @@ func TestStoreSchema_SameValueCheckedOnce(t *testing.T) {
 	want := slices.Concat([]string{"Clients", "Metadata+ConsumedJTIs"}, schemaAlways[3:], schemaDefaultGrant, []string{"user store", "AuthnLockouts"})
 	assertSchemaLog(t, f, want)
 }
+
+func TestStoreSchema_SharedRemedyLineReportedOnce(t *testing.T) {
+	t.Parallel()
+
+	const remedy = "create the missing tables with the shipped migrations"
+	f := newSchemaFakeStore()
+	grantsErr := errors.Join(errors.New("grants table missing"), errors.New(remedy))
+	clientsErr := errors.Join(errors.New("clients table missing"), errors.New(remedy))
+	f.probes["Grants"].err = grantsErr
+	f.probes["Clients"].err = clientsErr
+
+	err := runStoreSchema(t, f, schemaDefaultFlow(f))
+	if got := strings.Count(err.Error(), remedy); got != 1 {
+		t.Fatalf("remedy appears %d times in %q, want once", got, err)
+	}
+	if !strings.HasSuffix(err.Error(), remedy) {
+		t.Fatalf("err = %q, want the shared line last", err)
+	}
+	for _, want := range []string{"Clients: clients table missing", "Grants: grants table missing"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %q, want it to contain %q", err, want)
+		}
+	}
+	if !errors.Is(err, grantsErr) || !errors.Is(err, clientsErr) {
+		t.Fatalf("err = %v, want both causes reachable through errors.Is", err)
+	}
+}

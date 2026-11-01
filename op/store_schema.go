@@ -2,10 +2,10 @@ package op
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/feature"
@@ -56,8 +56,39 @@ func (c *config) validateStoreSchema(ctx context.Context) error {
 	if len(errs) == 0 {
 		return nil
 	}
-	return newConfigurationError("store schema does not match this configuration", errors.Join(errs...))
+	return newConfigurationError("store schema does not match this configuration", schemaErrors(errs))
 }
+
+// schemaErrors joins per-store schema failures one line each, like
+// [errors.Join], except that a line several stores report — a shared
+// remedy such as how to create missing tables — is printed once, last.
+type schemaErrors []error
+
+func (e schemaErrors) Error() string {
+	reports := make([][]string, len(e))
+	seen := map[string]int{}
+	for i, err := range e {
+		reports[i] = strings.Split(err.Error(), "\n")
+		for _, line := range slices.Compact(slices.Sorted(slices.Values(reports[i][1:]))) {
+			seen[line]++
+		}
+	}
+	var out, shared []string
+	for _, lines := range reports {
+		out = append(out, lines[0])
+		for _, line := range lines[1:] {
+			switch {
+			case seen[line] < 2:
+				out = append(out, line)
+			case !slices.Contains(shared, line):
+				shared = append(shared, line)
+			}
+		}
+	}
+	return strings.Join(append(out, shared...), "\n")
+}
+
+func (e schemaErrors) Unwrap() []error { return e }
 
 // schemaCandidates lists the stores the configuration uses, in report
 // order. Nil entries are left for the caller to skip.
