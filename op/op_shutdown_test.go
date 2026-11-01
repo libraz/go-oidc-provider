@@ -320,3 +320,54 @@ func TestNew_RecordsBackchannelCoordinatorForDCRDeletion(t *testing.T) {
 		t.Fatalf("Shutdown on an idle Provider: %v", err)
 	}
 }
+
+// TestProviderShutdown_StopsSharedSignalsWorker pins the SSF half of
+// Shutdown: op.New records and starts the push worker, and Shutdown
+// stops it and waits for the loop to exit even when a back-channel
+// coordinator is also present, so neither drain short-circuits the
+// other.
+func TestProviderShutdown_StopsSharedSignalsWorker(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	cookieKey := make([]byte, 32)
+	if _, err := rand.Read(cookieKey); err != nil {
+		t.Fatalf("generate cookie key: %v", err)
+	}
+	provider, err := New(
+		WithIssuer(shutdownFixtureIssuer),
+		WithStore(inmem.New()),
+		WithKeyset(Keyset{SigningKey{KeyID: "sig-1", Signer: priv}}),
+		WithCookieKeys(cookieKey),
+		WithLoginFlow(LoginFlow{Primary: ExternalStep{
+			Authenticator: shutdownFixtureAuthenticator{},
+			KindLabel:     "fixture.primary",
+		}}),
+		WithSharedSignals(),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if provider.cfg.ssfWorker == nil || provider.cfg.ssfTransmitter == nil {
+		t.Fatal("op.New did not record the SSF worker and transmitter; Provider.Shutdown would never stop them")
+	}
+	if provider.cfg.backchannelCoordinator == nil {
+		t.Fatal("fixture lost its back-channel coordinator; the combined drain is not exercised")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	// Drain answers nil only once the loop goroutine has closed its done
+	// channel, so this proves no worker goroutine outlives Shutdown.
+	if err := provider.cfg.ssfWorker.Drain(ctx); err != nil {
+		t.Fatalf("worker still running after Shutdown: %v", err)
+	}
+	if err := provider.Shutdown(ctx); err != nil {
+		t.Fatalf("second Shutdown: %v", err)
+	}
+}

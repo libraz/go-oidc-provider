@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/protectedresource"
+	"github.com/libraz/go-oidc-provider/internal/ssf"
 	"github.com/libraz/go-oidc-provider/op/feature"
 )
 
@@ -87,6 +88,10 @@ func (c *config) configuredEndpoints() []configuredEndpoint {
 		{name: "DeviceAuthorization", value: c.endpoints.DeviceAuthorization},
 		{name: "Backchannel", value: c.endpoints.Backchannel},
 		{name: "GrantManagement", value: c.endpoints.GrantManagement},
+		{name: "SSFConfiguration", value: c.endpoints.SSFConfiguration},
+		{name: "SSFStatus", value: c.endpoints.SSFStatus},
+		{name: "SSFVerify", value: c.endpoints.SSFVerify},
+		{name: "SSFPoll", value: c.endpoints.SSFPoll},
 	}
 }
 
@@ -161,6 +166,19 @@ func (c *config) activeRouteReservations() []routeReservation {
 	}
 	if c.grantManagementEnabled {
 		routes = append(routes, routeReservation{name: "WithEndpoints.GrantManagement", path: protocolEndpointPath(c, c.endpoints.GrantManagement), prefix: true})
+	}
+	if c.sharedSignals {
+		routes = append(routes,
+			routeReservation{name: "WithEndpoints.SSFConfiguration", path: protocolEndpointPath(c, c.endpoints.SSFConfiguration)},
+			routeReservation{name: "WithEndpoints.SSFStatus", path: protocolEndpointPath(c, c.endpoints.SSFStatus)},
+			routeReservation{name: "WithEndpoints.SSFVerify", path: protocolEndpointPath(c, c.endpoints.SSFVerify)},
+			routeReservation{name: "WithEndpoints.SSFPoll", path: protocolEndpointPath(c, c.endpoints.SSFPoll), prefix: true},
+		)
+		// The metadata sits at the host root like RFC 9728's, so it is
+		// reserved by absolute path. The issuer has already been validated.
+		if wellKnown, err := ssf.WellKnownPath(c.issuer); err == nil {
+			routes = append(routes, routeReservation{name: "WithSharedSignals metadata", path: wellKnown})
+		}
 	}
 	for i := range c.protectedResources {
 		routes = append(routes, routeReservation{

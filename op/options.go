@@ -17,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/rpjwks"
+	"github.com/libraz/go-oidc-provider/internal/ssf"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -518,6 +519,23 @@ type config struct {
 	// reach the same instance the handler uses without the router
 	// growing a second return value.
 	backchannelCoordinator *backchannel.Coordinator
+
+	// sharedSignals, sharedSignalsAllowPrivateNetwork and
+	// allowInsecureSharedSignalsPushForDev record [WithSharedSignals],
+	// [WithSharedSignalsAllowPrivateNetwork] and
+	// [WithAllowInsecureSharedSignalsPushForDev].
+	sharedSignals                        bool
+	sharedSignalsAllowPrivateNetwork     bool
+	allowInsecureSharedSignalsPushForDev bool
+
+	// ssfTransmitter, ssfSealer and ssfWorker are the SSF transmitter
+	// built once by [op.New] before the router, so every audit emitter
+	// the router hands out is wrapped by the SSF decorator and
+	// [Provider.Shutdown] stops the worker the handlers feed. Nil when
+	// [WithSharedSignals] is not set.
+	ssfTransmitter *ssf.Transmitter
+	ssfSealer      *ssf.Sealer
+	ssfWorker      *ssf.Worker
 
 	// accessTokenFormat selects the wire encoding the OP applies to
 	// access tokens issued by every grant type. Default
@@ -1116,7 +1134,18 @@ func (c *config) effectiveAuditLogger() *slog.Logger {
 //
 // The configured clock is threaded in so audit records and the tokens
 // they describe are stamped from one timeline; see [WithClock].
+//
+// Under [WithSharedSignals] the chain is wrapped by the SSF decorator,
+// which turns session.destroyed into a CAEP session-revoked SET. Only
+// emitters taken after [op.New] built the transmitter carry it.
 func (c *config) effectiveAuditEmitter() audit.Emitter {
+	return c.wrapSharedSignals(c.baseAuditEmitter())
+}
+
+// baseAuditEmitter is [config.effectiveAuditEmitter] without the SSF
+// decorator: the sink the SSF transmitter itself reports to, so its own
+// events never re-enter it.
+func (c *config) baseAuditEmitter() audit.Emitter {
 	base := audit.SlogClock(c.effectiveAuditLogger(), c.clock)
 	if c.metricsCollector == nil {
 		return base

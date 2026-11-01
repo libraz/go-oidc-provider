@@ -77,3 +77,28 @@ func deriveCompletionKey(cookieKey []byte) []byte {
 	_, _ = h.Write([]byte(completionDerivationLabel))
 	return h.Sum(nil)
 }
+
+// ssfSealDerivationLabel namespaces the key that seals an SSF push
+// stream's authorization_header from every other cookie-key derivation.
+const ssfSealDerivationLabel = "oidc-ssf-seal-v1"
+
+func deriveSSFSealKey(cookieKey []byte) []byte {
+	h := hmac.New(sha256.New, cookieKey)
+	_, _ = h.Write([]byte(ssfSealDerivationLabel))
+	return h.Sum(nil)
+}
+
+// deriveSSFSealKeys derives the seal ring from the cookie key ring:
+// sealing uses the current key, unsealing also tries the previous ones,
+// so a cookie-key rotation keeps stored push credentials readable.
+func deriveSSFSealKeys(cookieKeys [][]byte) ([]byte, [][]byte) {
+	if len(cookieKeys) == 0 {
+		return nil, nil
+	}
+	current := deriveSSFSealKey(cookieKeys[0])
+	previous := make([][]byte, 0, len(cookieKeys)-1)
+	for _, key := range cookieKeys[1:] {
+		previous = append(previous, deriveSSFSealKey(key))
+	}
+	return current, previous
+}

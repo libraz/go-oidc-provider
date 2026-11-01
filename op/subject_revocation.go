@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/libraz/go-oidc-provider/internal/revocation"
+	"github.com/libraz/go-oidc-provider/internal/ssf"
 )
 
 // RevokeSubject revokes every grant the subject holds, for an embedder
@@ -33,6 +34,12 @@ import (
 // index. A session left behind cannot mint tokens once its grants are
 // gone, and after the user record is removed the next /authorize
 // re-authenticates.
+//
+// Under [WithSharedSignals] a CAEP session-revoked SET is queued for
+// every receiver the subject holds a grant with, before the grants are
+// torn down, since the grants are what name the receivers. A failure to
+// queue it is audited as ssf.enqueue_failed and does not stop the
+// revocation.
 func (p *Provider) RevokeSubject(ctx context.Context, subject string) error {
 	if subject == "" {
 		return &Error{
@@ -54,6 +61,10 @@ func (p *Provider) RevokeSubject(ctx context.Context, subject string) error {
 			Description: "RevokeSubject: store rejected ListBySubject",
 			Cause:       err,
 		}
+	}
+	if p.cfg.ssfTransmitter != nil {
+		// Audited by the transmitter; the revocation proceeds regardless.
+		_, _ = p.cfg.ssfTransmitter.Publish(ctx, ssf.EventSessionRevoked, subject, ssf.Fields{})
 	}
 	revoker := revocation.Revoker{
 		RefreshTokens:      p.cfg.store.RefreshTokens(),

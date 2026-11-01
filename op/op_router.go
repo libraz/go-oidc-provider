@@ -224,6 +224,9 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
 	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifiers.Revoke, strictCORS)
 	mountGrantManagementEndpoint(mux, cfg, assertionVerifiers.Revoke, strictCORS)
+	if err := mountSharedSignals(mux, cfg, keySet, dpopVerifier, mtlsVerifier, subjectProjector, publicCORS, strictCORS); err != nil {
+		return nil, err
+	}
 	// The back-channel coordinator is normally reached through /end_session,
 	// which mountEndSessionEndpoint skips when the session manager is nil.
 	// DCR deletion has a second, independent path: it sends a direct Logout

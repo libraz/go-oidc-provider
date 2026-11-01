@@ -280,6 +280,15 @@ func (c *config) emitPartialWiringWarnings() {
 			"option", "WithAllowInsecureBackchannelLogoutForDev",
 		)
 	}
+	if c.allowInsecureSharedSignalsPushForDev {
+		c.logger.Warn(
+			"WithAllowInsecureSharedSignalsPushForDev admits plain-http "+
+				"and loopback push endpoints for shared-signals streams and "+
+				"lets the push worker POST security event tokens there; "+
+				"never enable this in production",
+			"option", "WithAllowInsecureSharedSignalsPushForDev",
+		)
+	}
 	c.warnUserStoreMismatch()
 	c.warnSessionDurabilityMismatch()
 	c.warnCaptchaOnScriptlessUI()

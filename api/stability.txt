@@ -61,6 +61,22 @@ github.com/libraz/go-oidc-provider/op	ConfidentialClient.PreviousSecretHash	v1.5
 github.com/libraz/go-oidc-provider/op	ConfidentialClient.RequireAuthTime	v1.5
 github.com/libraz/go-oidc-provider/op	ConfirmationProof	v1.0
 github.com/libraz/go-oidc-provider/op	ConsentUI	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialChange	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialChangeCreate	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialChangeDelete	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialChangeRevoke	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialChangeType	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialChangeUpdate	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialType	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypeApp	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypeFIDO2Platform	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypeFIDO2Roaming	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypeFIDOU2F	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypePIN	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypePassword	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypePhoneSMS	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypePhoneVoice	v1.5
+github.com/libraz/go-oidc-provider/op	CredentialTypeX509	v1.5
 github.com/libraz/go-oidc-provider/op	CustomGrantDupCap	v1.0
 github.com/libraz/go-oidc-provider/op	CustomGrantHandler	v1.0
 github.com/libraz/go-oidc-provider/op	CustomGrantRequest	v1.0
@@ -72,6 +88,10 @@ github.com/libraz/go-oidc-provider/op	DPoPProof	v1.0
 github.com/libraz/go-oidc-provider/op	DefaultACRPolicy	v1.0
 github.com/libraz/go-oidc-provider/op	EncryptionKey	v1.0
 github.com/libraz/go-oidc-provider/op	EncryptionKeyset	v1.0
+github.com/libraz/go-oidc-provider/op	Endpoints.SSFConfiguration	v1.5
+github.com/libraz/go-oidc-provider/op	Endpoints.SSFPoll	v1.5
+github.com/libraz/go-oidc-provider/op	Endpoints.SSFStatus	v1.5
+github.com/libraz/go-oidc-provider/op	Endpoints.SSFVerify	v1.5
 github.com/libraz/go-oidc-provider/op	EnrollmentChecker	v1.5
 github.com/libraz/go-oidc-provider/op	ErrFactorAbort	v1.5
 github.com/libraz/go-oidc-provider/op	ErrFactorRetry	v1.5
@@ -105,6 +125,7 @@ github.com/libraz/go-oidc-provider/op	PrivateKeyJWTClient.RequireAuthTime	v1.5
 github.com/libraz/go-oidc-provider/op	ProtectedResource	v1.0
 github.com/libraz/go-oidc-provider/op	ProtectedResource.IntrospectionClients	v1.1
 github.com/libraz/go-oidc-provider/op	Provider.ClearLocaleCookie	v1.1
+github.com/libraz/go-oidc-provider/op	Provider.EmitSecurityEvent	v1.5
 github.com/libraz/go-oidc-provider/op	Provider.LocaleResolver	v1.0
 github.com/libraz/go-oidc-provider/op	Provider.Routes	v1.5
 github.com/libraz/go-oidc-provider/op	Provider.SetLocaleCookie	v1.1
@@ -122,6 +143,8 @@ github.com/libraz/go-oidc-provider/op	Reloadable.Routes	v1.5
 github.com/libraz/go-oidc-provider/op	Reloadable.ServeHTTP	v1.5
 github.com/libraz/go-oidc-provider/op	Reloadable.Shutdown	v1.5
 github.com/libraz/go-oidc-provider/op	SPAUI	v1.5
+github.com/libraz/go-oidc-provider/op	SecurityEvent	v1.5
+github.com/libraz/go-oidc-provider/op	SessionRevoked	v1.5
 github.com/libraz/go-oidc-provider/op	SigningKey.NotAfter	v1.0
 github.com/libraz/go-oidc-provider/op	StaticClientInserted	v1.5
 github.com/libraz/go-oidc-provider/op	StaticClientSyncAction	v1.5
@@ -148,6 +171,7 @@ github.com/libraz/go-oidc-provider/op	WithAccessTokenFormatPerAudience	v1.0
 github.com/libraz/go-oidc-provider/op	WithAccessTokenRevocationStrategy	v1.0
 github.com/libraz/go-oidc-provider/op	WithAccessTokenTTL	v1.0
 github.com/libraz/go-oidc-provider/op	WithAllowInsecureBackchannelLogoutForDev	v1.0
+github.com/libraz/go-oidc-provider/op	WithAllowInsecureSharedSignalsPushForDev	v1.5
 github.com/libraz/go-oidc-provider/op	WithAllowLocalhostLoopback	v1.0
 github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkJAR	v1.0
 github.com/libraz/go-oidc-provider/op	WithAllowPrivateNetworkJWKS	v1.0
@@ -209,6 +233,8 @@ github.com/libraz/go-oidc-provider/op	WithRefreshTokenOfflineTTL	v1.0
 github.com/libraz/go-oidc-provider/op	WithRefreshTokenTTL	v1.0
 github.com/libraz/go-oidc-provider/op	WithScope	v1.0
 github.com/libraz/go-oidc-provider/op	WithSessionDurabilityPosture	v1.0
+github.com/libraz/go-oidc-provider/op	WithSharedSignals	v1.5
+github.com/libraz/go-oidc-provider/op	WithSharedSignalsAllowPrivateNetwork	v1.5
 github.com/libraz/go-oidc-provider/op	WithStaticClients	v1.0
 github.com/libraz/go-oidc-provider/op	WithStore	v1.0
 github.com/libraz/go-oidc-provider/op	WithStrictOfflineAccess	v1.0

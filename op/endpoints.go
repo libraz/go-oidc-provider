@@ -91,6 +91,36 @@ type Endpoints struct {
 	// document advertises "grant_management_endpoint" with the same
 	// gating.
 	GrantManagement string
+
+	// SSFConfiguration overrides the Shared Signals Framework 1.0 §8.1.1
+	// stream configuration endpoint. Default: "/ssf/streams". Only
+	// mounted when [WithSharedSignals] is set; the transmitter metadata
+	// at /.well-known/ssf-configuration advertises it with the same
+	// gating.
+	//
+	// Stable since v1.5.
+	SSFConfiguration string
+
+	// SSFStatus overrides the SSF 1.0 §8.1.2 stream status endpoint.
+	// Default: "/ssf/status". Only mounted when [WithSharedSignals] is
+	// set.
+	//
+	// Stable since v1.5.
+	SSFStatus string
+
+	// SSFVerify overrides the SSF 1.0 §8.1.4.2 verification endpoint.
+	// Default: "/ssf/verify". Only mounted when [WithSharedSignals] is
+	// set.
+	//
+	// Stable since v1.5.
+	SSFVerify string
+
+	// SSFPoll overrides the RFC 8936 poll endpoint prefix. The library
+	// appends /{stream_id}, and the whole prefix is reserved. Default:
+	// "/ssf/poll". Only mounted when [WithSharedSignals] is set.
+	//
+	// Stable since v1.5.
+	SSFPoll string
 }
 
 // defaultEndpoints returns the endpoint paths the [Provider] uses when the
@@ -113,6 +143,10 @@ func defaultEndpoints() Endpoints {
 		DeviceAuthorization: "/device_authorization",
 		Backchannel:         "/bc-authorize",
 		GrantManagement:     "/grant_management",
+		SSFConfiguration:    "/ssf/streams",
+		SSFStatus:           "/ssf/status",
+		SSFVerify:           "/ssf/verify",
+		SSFPoll:             "/ssf/poll",
 	}
 }
 
@@ -135,6 +169,10 @@ func (e Endpoints) merge(override Endpoints) Endpoints {
 		DeviceAuthorization: pickEndpoint(override.DeviceAuthorization, e.DeviceAuthorization),
 		Backchannel:         pickEndpoint(override.Backchannel, e.Backchannel),
 		GrantManagement:     pickEndpoint(override.GrantManagement, e.GrantManagement),
+		SSFConfiguration:    pickEndpoint(override.SSFConfiguration, e.SSFConfiguration),
+		SSFStatus:           pickEndpoint(override.SSFStatus, e.SSFStatus),
+		SSFVerify:           pickEndpoint(override.SSFVerify, e.SSFVerify),
+		SSFPoll:             pickEndpoint(override.SSFPoll, e.SSFPoll),
 	}
 }
 
@@ -162,6 +200,10 @@ func (e *Endpoints) fields() []endpointField {
 		{"DeviceAuthorization", &e.DeviceAuthorization},
 		{"Backchannel", &e.Backchannel},
 		{"GrantManagement", &e.GrantManagement},
+		{"SSFConfiguration", &e.SSFConfiguration},
+		{"SSFStatus", &e.SSFStatus},
+		{"SSFVerify", &e.SSFVerify},
+		{"SSFPoll", &e.SSFPoll},
 	}
 }
 

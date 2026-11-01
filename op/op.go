@@ -96,7 +96,8 @@ func (p *Provider) LocaleResolver() *Resolver {
 }
 
 // Shutdown blocks until every back-channel logout fan-out already in
-// flight has finished, or until ctx expires. It returns nil on a
+// flight has finished and, under [WithSharedSignals], until the SSF push
+// worker has stopped, or until ctx expires. It returns nil on a
 // complete drain and ctx's error otherwise, so a caller can
 // distinguish the two with [errors.Is] against
 // [context.DeadlineExceeded] / [context.Canceled].
@@ -108,23 +109,27 @@ func (p *Provider) LocaleResolver() *Resolver {
 // process while signed Logout Tokens were still queued, and the RPs
 // would never learn the session ended.
 //
-// Three behaviours embedders wire this into a signal handler need to
-// be able to rely on:
+// Behaviours embedders wire this into a signal handler need to be able
+// to rely on:
 //
-//   - Shutdown is a no-op returning nil on a Provider with no
-//     back-channel logout coordinator — a machine-to-machine
-//     configuration that never mounts /end_session, or a nil
-//     receiver. Call it unconditionally.
+//   - Shutdown is a no-op returning nil on a Provider with neither a
+//     back-channel logout coordinator nor an SSF worker — a
+//     machine-to-machine configuration that never mounts
+//     /end_session, or a nil receiver. Call it unconditionally.
 //   - Shutdown may be called any number of times, from any number of
-//     goroutines. It holds no closed state: each call waits for
-//     whatever is in flight when it runs, and a second call on a
-//     quiet Provider returns nil immediately.
+//     goroutines. It holds no closed state for back-channel logout:
+//     each call waits for whatever is in flight when it runs, and a
+//     second call on a quiet Provider returns nil immediately.
 //   - Shutdown does not seal the Provider. [Provider.ServeHTTP] keeps
 //     serving afterwards, and a /end_session request that arrives
 //     after the drain starts its own fan-out, which that call will
 //     not wait for. Stop accepting requests first — typically
 //     [net/http.Server.Shutdown] — and drain second, so the set of
 //     in-flight fan-outs can only shrink.
+//   - The SSF push worker does not restart. SETs queued afterwards stay
+//     in the store, where another replica's worker — or this
+//     deployment's next process — delivers them; a push cut short keeps
+//     its lease and is retried once the lease ends.
 //
 // Each fan-out is independently bounded by
 // [WithBackchannelFanOutBudget], so a Provider left unattended still
@@ -133,10 +138,23 @@ func (p *Provider) LocaleResolver() *Resolver {
 //
 // Stable since v1.1.
 func (p *Provider) Shutdown(ctx context.Context) error {
-	if p == nil || p.cfg == nil || p.cfg.backchannelCoordinator == nil {
+	if p == nil || p.cfg == nil {
 		return nil
 	}
-	return p.cfg.backchannelCoordinator.Drain(ctx)
+	if w := p.cfg.ssfWorker; w != nil {
+		w.Stop()
+	}
+	// Both drains wait on the same ctx, so the first failure is ctx's
+	// error and the second would only repeat it.
+	if c := p.cfg.backchannelCoordinator; c != nil {
+		if err := c.Drain(ctx); err != nil {
+			return err
+		}
+	}
+	if w := p.cfg.ssfWorker; w != nil {
+		return w.Drain(ctx)
+	}
+	return nil
 }
 
 // New constructs a [Provider] from the supplied options. It validates that
@@ -146,6 +164,8 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 // Stable since v1.0. New returns a non-nil error if construction fails; the
 // returned Provider is nil in that case. Callers must treat construction
 // failure as fatal during program start-up.
+//
+//nolint:gocognit // A linear sequence of fallible construction stages; splitting it would hide their order.
 func New(opts ...Option) (*Provider, error) {
 	cfg, err := newConfig(opts)
 	if err != nil {
@@ -199,6 +219,12 @@ func New(opts ...Option) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Built before the scope registry and the router: it registers the
+	// receiver scopes, and every audit emitter the router takes must
+	// carry the SSF decorator.
+	if err := buildSharedSignals(cfg, keySet); err != nil {
+		return nil, err
+	}
 	scopes := scoperegistry.New(toScopeEntries(cfg.scopes))
 	locales, err := buildLocaleResolver(cfg)
 	if err != nil {
@@ -233,6 +259,7 @@ func New(opts ...Option) (*Provider, error) {
 	// no record at all.
 	cfg.emitStartupProfile(context.Background())
 	metricsCommitted = true
+	startSharedSignals(cfg)
 	return provider, nil
 }
 
