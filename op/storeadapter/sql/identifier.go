@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// maxIdentifierBytes is the longest table or index name the adapter accepts.
+const maxIdentifierBytes = 63
+
 // validateIdentifier accepts ASCII letters, ASCII digits (except as the
 // first byte), and underscore; up to 63 bytes total. The 63-byte ceiling
 // matches PostgreSQL's NAMEDATALEN-1 default and stays inside MySQL's
@@ -25,8 +28,8 @@ func validateIdentifier(name string) error {
 	if name == "" {
 		return errors.New("oidcsql: identifier is empty")
 	}
-	if len(name) > 63 {
-		return fmt.Errorf("oidcsql: identifier %q exceeds 63 bytes", name)
+	if len(name) > maxIdentifierBytes {
+		return fmt.Errorf("oidcsql: identifier %q exceeds %d bytes", name, maxIdentifierBytes)
 	}
 	for i := range len(name) {
 		b := name[i]

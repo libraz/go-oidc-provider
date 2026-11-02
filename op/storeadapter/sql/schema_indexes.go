@@ -120,8 +120,8 @@ func (s *Store) checkIndexes(ctx context.Context, key, table string) ([]error, e
 	if s.dialect.name == "mysql" {
 		hint = "; Store.Migrate cannot add indexes to an existing table, see schema/MIGRATIONS.md"
 	}
-	return []error{fmt.Errorf("oidcsql: %s has no index on %s; create it from schema/%s/v1.sql%s",
-		table, strings.Join(missing, ", "), s.dialect.name, hint)}, nil
+	return []error{fmt.Errorf("oidcsql: %s has no index on %s; create it from %s%s",
+		table, strings.Join(missing, ", "), s.ddlReference(), hint)}, nil
 }
 
 // indexLeadColumns returns the columns that lead an index on the physical
@@ -166,7 +166,7 @@ func (s *Store) indexLeadQuery() string {
 		return "SELECT column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND seq_in_index = 1"
 	case "postgres":
 		return "SELECT a.attname FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace " +
-			"JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = i.indkey[0] WHERE n.nspname = current_schema() AND c.relname = $1"
+			"JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = i.indkey[0] WHERE n.nspname = " + postgresResolvedSchema + " AND c.relname = $1::text"
 	default:
 		return ""
 	}

@@ -36,9 +36,6 @@ var (
 	// v1.sql writes the statement on one line while some migrations wrap
 	// the target table onto the next — the same statement either way.
 	standaloneIndexRE = regexp.MustCompile(`(?i)CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+)\s+ON\s`)
-	// inlineIndexNameRE matches an index declared inside a CREATE TABLE
-	// body, which is how MySQL's v1.sql spells all of them.
-	inlineIndexNameRE = regexp.MustCompile(`(?im)^\s*(?:UNIQUE )?(?:INDEX|KEY) (\w+) *\(`)
 	// alterAddIndexRE matches the MySQL migration form.
 	alterAddIndexRE = regexp.MustCompile(`(?i)ADD (?:UNIQUE )?INDEX (\w+) *\(`)
 )

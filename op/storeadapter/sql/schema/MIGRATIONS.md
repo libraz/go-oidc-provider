@@ -19,8 +19,14 @@ holds and when the OP uses it.
   after which `migrate up` applies v1.3.0 onwards. Run it against the OP's own
   version table (see [Coexisting with your application's
   migrations](#coexisting-with-your-applications-migrations)), never the
-  application's. A database built from
-  `Store.Schema()` of the current release is recorded at the newest file.
+  application's.
+- **A database created from `v1.sql`**, `Store.Schema()` or `Store.Migrate`
+  and later handed to a migration tool is not recorded at any version. Record
+  it at the newest migration first (`migrate force N`, N being the number of
+  the newest file, against the OP's own version table), or the tool replays
+  every file against tables that already exist. A deployment that will use a
+  migration tool from the start should create the database from
+  `Store.Migrations()` instead of `v1.sql`.
 - golang-migrate's MySQL driver needs `multiStatements=true` in the DSN,
   because each file holds several statements.
 - Atlas reads the directory with `format=golang-migrate` once
@@ -61,10 +67,19 @@ there are no down files.
 - **Atlas and others**: apply the files in numeric order.
 
 On PostgreSQL in a schema other than `public`, the adapter resolves tables
-through the connection's `search_path` (the schema check uses
-`current_schema()`), so set `search_path` on the DSN or connection. Table names
-passed to `WithNaming`, and the prefix passed to `WithTablePrefix`, are plain
-identifiers, never schema-qualified.
+through the connection's `search_path`, so set `search_path` on the DSN or
+connection. The schema check locates each table the way an unqualified
+statement does, in the first `search_path` schema that holds it, and a missing
+table is reported with the schemas it looked in (on MySQL, the database name).
+Table names passed to `WithNaming`, and the prefix passed to `WithTablePrefix`,
+are plain identifiers, never schema-qualified.
+
+`WithTablePrefix` and `WithNaming` rename the DDL by replacing each default
+`oidc_` table name, longest first, wherever it occurs as a substring; that is
+how an index name such as `idx_oidc_sessions_expires` follows its table. `New`
+fails when a table or index name that results exceeds 63 bytes, naming the
+index and its table key. A missing-index error points at `Store.Schema()`
+rather than `v1.sql` when the names are not the defaults.
 
 ## Coexisting with your application's migrations
 

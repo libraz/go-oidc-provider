@@ -167,6 +167,9 @@ func New(db *databasesql.DB, dialect Dialect, opts ...Option) (*Store, error) {
 	if err := cfg.naming.applyOverrides(cfg.overrides); err != nil {
 		return nil, err
 	}
+	if err := cfg.naming.validateIndexNames(dialect); err != nil {
+		return nil, err
+	}
 	q, err := buildQueries(dialect, cfg.naming)
 	if err != nil {
 		return nil, err
@@ -333,6 +336,7 @@ func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 	required := ddlColumns(s.dialect)
 	var problems []error
 	var tableMissing, tableFound bool
+	var scope string
 	var gap releaseGap
 	for _, key := range keys {
 		table := s.names.byKey(key)
@@ -341,28 +345,23 @@ func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 			return err
 		}
 		if len(cols) == 0 {
+			if !tableMissing {
+				scope = s.lookupScope(ctx)
+			}
 			tableMissing = true
 			gap.add(tableAddedIn(key))
-			problems = append(problems, fmt.Errorf("oidcsql: schema for %s is missing%s", table, tableMigrationHint(s.dialect.name, key)))
+			problems = append(problems, missingTableError(table, scope, tableMigrationHint(s.dialect.name, key)))
 			continue
 		}
 		tableFound = true
-		if err := s.checkColumns(key, table, cols, required[key], &gap); err != nil {
-			problems = append(problems, err)
-		}
-		collationProblems, err := s.checkBinaryCollations(ctx, key, table)
+		found, err := s.checkExistingTable(ctx, key, table, cols, required[key], &gap)
 		if err != nil {
 			return err
 		}
-		problems = append(problems, collationProblems...)
-		indexProblems, err := s.checkIndexes(ctx, key, table)
-		if err != nil {
-			return err
-		}
-		problems = append(problems, indexProblems...)
+		problems = append(problems, found...)
 	}
 	if tableMissing {
-		problems = append(problems, errors.New(missingTableRemedy(s.dialect.name)))
+		problems = append(problems, errors.New(s.missingTableRemedy()))
 	}
 	if hint := gap.hint(); tableFound && hint != nil {
 		problems = append(problems, hint)
@@ -370,10 +369,39 @@ func (s *Store) validateKeys(ctx context.Context, keys ...string) error {
 	return errors.Join(problems...)
 }
 
-// missingTableRemedy says how to create tables an empty database lacks.
-func missingTableRemedy(dialect string) string {
+// checkExistingTable runs the column, collation and index checks on a table
+// that exists.
+func (s *Store) checkExistingTable(ctx context.Context, key, table string, cols map[string]bool, required []string, gap *releaseGap) ([]error, error) {
+	var problems []error
+	if err := s.checkColumns(key, table, cols, required, gap); err != nil {
+		problems = append(problems, err)
+	}
+	collationProblems, err := s.checkBinaryCollations(ctx, key, table)
+	if err != nil {
+		return nil, err
+	}
+	indexProblems, err := s.checkIndexes(ctx, key, table)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(problems, collationProblems...), indexProblems...), nil
+}
+
+// missingTableRemedy says how to create tables an empty database lacks. The
+// reference DDL file names the default table names, so it is pointed at only
+// when the store uses them.
+func (s *Store) missingTableRemedy() string {
 	return "oidcsql: create the missing tables by applying Store.Migrations() with your migration tool, " +
-		"or with Store.Migrate in development; the reference DDL is schema/" + dialect + "/v1.sql"
+		"or with Store.Migrate in development; the reference DDL is " + s.ddlReference()
+}
+
+// ddlReference names where the DDL for this store's table names lives:
+// the embedded file for the default names, [Store.Schema] otherwise.
+func (s *Store) ddlReference() string {
+	if s.names == defaultNames() {
+		return "schema/" + s.dialect.name + "/v1.sql"
+	}
+	return "Store.Schema(), which carries the configured table names"
 }
 
 // checkBinaryCollations reports each [binaryCollationColumns] column of
@@ -495,10 +523,44 @@ func (s *Store) columnListQuery() string {
 	case "mysql":
 		return "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?"
 	case "postgres":
-		return "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1"
+		return "SELECT column_name FROM information_schema.columns WHERE table_schema = " + postgresResolvedSchema + " AND table_name = $1::text"
 	default:
 		return ""
 	}
+}
+
+// postgresResolvedSchema is a scalar subquery, taking the table name as $1,
+// that yields the first schema of the search_path holding the table: the one
+// an unqualified statement resolves to.
+const postgresResolvedSchema = "(SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +
+	"WHERE c.relname = $1::text AND c.relkind IN ('r', 'p') AND n.nspname = ANY (current_schemas(false)) " +
+	"ORDER BY array_position(current_schemas(false), n.nspname::name) LIMIT 1)"
+
+// lookupScope names where the schema checks look for a table: the
+// search_path schemas on PostgreSQL, the database on MySQL.
+func (s *Store) lookupScope(ctx context.Context) string {
+	var query, format string
+	switch s.dialect.name {
+	case "postgres":
+		query, format = "SELECT array_to_string(current_schemas(false), ', ')", "in search_path schemas (%s)"
+	case "mysql":
+		query, format = "SELECT DATABASE()", "in database %s"
+	default:
+		return ""
+	}
+	var scope databasesql.NullString
+	if err := s.db.QueryRowContext(ctx, query).Scan(&scope); err != nil || !scope.Valid {
+		return ""
+	}
+	return fmt.Sprintf(format, scope.String)
+}
+
+// missingTableError reports a table absent from the scope the checks searched.
+func missingTableError(table, scope, hint string) error {
+	if scope != "" {
+		scope = " " + scope
+	}
+	return fmt.Errorf("oidcsql: schema for %s is missing%s%s", table, scope, hint)
 }
 
 // mysqlCollationQuery reads the collation of each column of one MySQL table.

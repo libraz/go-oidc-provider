@@ -43,7 +43,12 @@
 // the migration files under schema/migrations/<dialect>, one per release in
 // golang-migrate form, which [Store.Migrations] returns with any
 // [WithTablePrefix] and [WithNaming] applied; schema/MIGRATIONS.md explains each
-// release. schema/TABLES.md lists what each table holds, when op.New checks
+// release. A database created from v1.sql, [Store.Schema] or [Store.Migrate]
+// and later handed to a migration tool must first be recorded at the newest
+// migration (golang-migrate: "migrate force N" against the OP's own version
+// table, N being the number of the newest file); a deployment that will use
+// a migration tool from the start should create the database from
+// [Store.Migrations] instead of v1.sql. schema/TABLES.md lists what each table holds, when op.New checks
 // it, and why a few tables must exist even while they stay empty. Run
 // against an empty database, op.New names every table the configuration
 // needs in one error. Create every table from the reference DDL, including
@@ -73,8 +78,11 @@
 // outright, so embedders that already own a "clients" table can graft
 // the OP onto a different name without forking the schema. The prefix
 // and the overrides reach the same places: queries, [Store.Schema],
-// [Store.Migrations], [Store.Migrate], the schema checks and [Store.GC],
-// with the DDL's index names following the table names. Identifiers
+// [Store.Migrations], [Store.Migrate], the schema checks and [Store.GC].
+// The DDL is renamed by replacing each default "oidc_" table name, longest
+// first, wherever it occurs as a substring; that is how an index name such as
+// idx_oidc_sessions_expires follows its table. New rejects a configuration
+// under which a table or an index name exceeds 63 bytes. Identifiers
 // are plain identifiers, never schema-qualified (on PostgreSQL, select a
 // non-public schema through the connection's search_path), and are
 // validated against the SQL standard regular identifier grammar
@@ -135,7 +143,9 @@
 //
 // Running GC on one replica is sufficient. Sweeps running concurrently on
 // several replicas are safe, because the DELETEs are idempotent; they only
-// repeat each other's work.
+// repeat each other's work. Each sweep deletes all expired rows of a table in
+// a single statement, so a first sweep over a large backlog is best run
+// off-peak.
 //
 // The nine sweeps do not cost the same. Eight are range scans on
 // expires_at; the refresh-token one is a per-grant anti-join, because a
@@ -144,9 +154,9 @@
 // against that sweep rather than against the row counts.
 //
 // The access-token, opaque access-token and grant-revocation substores
-// also expose a GC method of their own, for a caller that wants to
-// reclaim one table on a separate schedule; Store.GC already covers
-// them, so a schedule need not add them twice. The consumed-JTI GC is
+// (three of the nine sweeps) also expose a GC method of their own, for a
+// caller that wants to reclaim one table on a separate schedule; Store.GC
+// already covers them, so a schedule need not add them twice. The consumed-JTI GC is
 // reachable only through Store.GC. Device codes and CIBA requests evict
 // expired rows on their own insert path.
 //

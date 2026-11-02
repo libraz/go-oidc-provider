@@ -37,6 +37,52 @@ func TestPostgres_ValidateSchema_MissingIndex(t *testing.T) {
 	}
 }
 
+// TestPostgres_ValidateSchema_SearchPathResolution pins that the schema checks
+// find a table the way an unqualified statement does: in the first search_path
+// schema that holds it, not only the first schema of the path.
+func TestPostgres_ValidateSchema_SearchPathResolution(t *testing.T) {
+	t.Parallel()
+	db := newPostgresDBFactory(t)(t)
+	// One connection, so the session search_path set below applies to every statement.
+	db.SetMaxOpenConns(1)
+	run := func(stmt string) {
+		t.Helper()
+		if _, err := db.ExecContext(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	run("CREATE SCHEMA app")
+	run("CREATE SCHEMA oidc")
+	run("SET search_path = oidc")
+	s, err := oidcsql.New(db, oidcsql.Postgres())
+	if err != nil {
+		t.Fatalf("oidcsql.New: %v", err)
+	}
+	if err := s.Migrate(t.Context()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	run("SET search_path = app, oidc")
+	if err := s.ValidateSchema(t.Context()); err != nil {
+		t.Fatalf("tables in a later search_path schema must be found: %v", err)
+	}
+
+	run("SET search_path = app")
+	err = s.ValidateSchema(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "schema for oidc_clients is missing in search_path schemas (app)") {
+		t.Fatalf("a missing table must name the search_path schemas it looked in, got: %v", err)
+	}
+
+	// A table of the same name earlier on the path shadows the OP's, as it
+	// would for the adapter's own queries.
+	run("CREATE TABLE app.oidc_clients (id text)")
+	run("SET search_path = app, oidc")
+	err = s.ValidateSchema(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "schema for oidc_clients is missing required columns") {
+		t.Fatalf("the first schema on the path holding the table must be checked, got: %v", err)
+	}
+}
+
 // TestPostgres_ValidateSchema_MixedCaseNaming pins that a mixed-case
 // WithNaming value validates: PostgreSQL folds the unquoted identifier
 // to lower case, so the catalog never records the name as written.

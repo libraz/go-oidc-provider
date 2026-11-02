@@ -117,12 +117,15 @@ func (s GCStats) Total() int64 {
 // safe to repeat: every statement is an unconditional DELETE of
 // already-dead rows.
 //
-// The substores behind the three sweeps before the last also expose their own GC
-// method, reachable through the matching accessor, for a caller that
-// wants to reclaim one table on its own schedule; [store.ConsumedJTIStore]
-// does not declare GC on its interface, so that one is reachable only
-// through this method. Device codes and CIBA requests need no scheduling
-// at all: their substores evict expired rows on the insert path.
+// Each sweep deletes all expired rows of a table in a single statement, so a
+// first sweep over a large backlog is best run off-peak.
+//
+// The access-token, opaque access-token and grant-revocation substores also
+// expose their own GC method, reachable through the matching accessor, for a
+// caller that wants to reclaim one table on its own schedule;
+// [store.ConsumedJTIStore] does not declare GC on its interface, so that one
+// is reachable only through this method. Device codes and CIBA requests need
+// no scheduling at all: their substores evict expired rows on the insert path.
 //
 // GC must not be reachable from an HTTP route; run it from the
 // embedder's scheduler.
@@ -199,10 +202,6 @@ func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 //			log.Print(err)
 //		}
 //	}()
-//
-// Running it on one replica is sufficient. Sweeps running concurrently on
-// several replicas are safe, because the DELETEs are idempotent; they only
-// repeat each other's work.
 //
 // Stable since v1.5.
 func (s *Store) RunGC(ctx context.Context, interval time.Duration, report func(GCStats, error)) error {
