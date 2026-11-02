@@ -350,11 +350,12 @@ cmd_op_up() {
     store_flags+=(-redis-dsn "${OP_REDIS_DSN}")
   fi
 
-  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic}, dcr=${OP_ENABLE_DCR:-1}, store=${OP_STORE:-inmem})"
+  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic}, signing-alg=${OP_SIGNING_ALG:-ES256}, dcr=${OP_ENABLE_DCR:-1}, store=${OP_STORE:-inmem})"
   "${BINFILE}" \
     -listen "${LISTEN}" \
     -issuer "${ISSUER}" \
     -mount "${MOUNT}" \
+    -signing-alg "${OP_SIGNING_ALG:-ES256}" \
     -client-id "${CLIENT_ID}" \
     -redirect-uri "${REDIRECT_URIS}" \
     -tls-cert "${CERT_FILE}" \

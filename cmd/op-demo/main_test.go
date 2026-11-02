@@ -16,6 +16,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -304,6 +305,45 @@ func TestProfileOptions_AcceptsFAPICIBA(t *testing.T) {
 	}
 	if !isFAPIProfile(profileNameFAPICIBA) {
 		t.Error("isFAPIProfile(fapi-ciba) = false, want true")
+	}
+}
+
+// TestBuildOptions_SigningAlgRS256 builds the provider with an RSA key
+// and RS256 and asserts discovery advertises RS256 only.
+func TestBuildOptions_SigningAlgRS256(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := baseTestConfig("127.0.0.1:0")
+	cfg.signingAlg = algRS256
+
+	priv, err := generateSigningKey(cfg.signingAlg)
+	if err != nil {
+		t.Fatalf("generateSigningKey: %v", err)
+	}
+	backend, err := openBackend(t.Context(), cfg, logger)
+	if err != nil {
+		t.Fatalf("openBackend: %v", err)
+	}
+	t.Cleanup(backend.close)
+	provider, err := buildProviderOn(t.Context(), cfg, backend, priv, make([]byte, cookieKeyLen), logger)
+	if err != nil {
+		t.Fatalf("buildProviderOn: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	provider.ServeHTTP(rec, newRequest(t, http.MethodGet, cfg.issuer+"/.well-known/openid-configuration", http.NoBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("discovery status = %d, want 200", rec.Code)
+	}
+	var doc struct {
+		Algs []string `json:"id_token_signing_alg_values_supported"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode discovery: %v", err)
+	}
+	if len(doc.Algs) != 1 || doc.Algs[0] != "RS256" {
+		t.Errorf("id_token_signing_alg_values_supported = %v, want [RS256]", doc.Algs)
 	}
 }
 

@@ -32,6 +32,14 @@ _PLAN_PROFILE: dict[str, str] = {
     "fapi-ciba-id1-test-plan": "fapi-ciba",
 }
 
+# Plans run against an RS256 OP so both algorithms are exercised; every
+# other plan keeps ES256.
+_PLAN_SIGNING_ALG: dict[str, str] = {
+    "oidcc-config-certification-test-plan": "RS256",
+    "oidcc-dynamic-certification-test-plan": "RS256",
+}
+_DEFAULT_SIGNING_ALG = "ES256"
+
 _DISCOVERY_URL = "https://127.0.0.1:9443/.well-known/openid-configuration"
 _BASELINE_SCHEMA = "go-oidc-provider/baseline/v1"
 _EXCLUSIONS_SCHEMA = "go-oidc-provider/conformance-exclusions/v2"
@@ -79,17 +87,17 @@ def _wait_discovery(timeout: float = 30.0) -> bool:
     return False
 
 
-def _restart_op(profile: str) -> None:
-    """Stop the OP and bring it up again under the given profile.
+def _restart_op(profile: str, alg: str) -> None:
+    """Stop the OP and bring it up again under the given profile and signing algorithm.
 
     Profiles are mapped in _PLAN_PROFILE; an empty string drops back to
     OIDC Core (no PAR / JARM). Discovery is polled to make sure the new
     listener is serving before the plan resumes.
     """
-    sys.stdout.write(f"[baseline] restarting OP with profile={profile or 'basic'}\n")
+    sys.stdout.write(f"[baseline] restarting OP with profile={profile or 'basic'} alg={alg}\n")
     script = str(ROOT / "scripts" / "conformance.sh")
     subprocess.run(["bash", script, "op-down"], check=False)
-    env = {**os.environ, "OP_PROFILE": profile}
+    env = {**os.environ, "OP_PROFILE": profile, "OP_SIGNING_ALG": alg}
     subprocess.run(["bash", script, "op-up"], check=True, env=env)
     if not _wait_discovery():
         raise RuntimeError("OP discovery did not become reachable after restart")
@@ -123,9 +131,10 @@ def cmd_baseline(label: str = "snapshot") -> int:
             continue
         plan_id = plan_ids[plan_name]["id"]
         sys.stdout.write(f"\n==== plan {plan_name} (id={plan_id}) ====\n")
+        # With BASELINE_NO_RESTART=1 the manually started OP must already run the plan's alg.
         if not skip_restart:
             profile = _PLAN_PROFILE.get(plan_name, "")
-            _restart_op(profile)
+            _restart_op(profile, _PLAN_SIGNING_ALG.get(plan_name, _DEFAULT_SIGNING_ALG))
         modules = ofcs.plan_modules(plan_id)
         if module_filter:
             modules = [m for m in modules if re.search(module_filter, m)]

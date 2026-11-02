@@ -54,9 +54,11 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -87,6 +89,12 @@ const shutdownGrace = 5 * time.Second
 const cookieKeyLen = 32
 
 const defaultListenAddr = "127.0.0.1:9090"
+
+// Accepted -signing-alg values.
+const (
+	algES256 = "ES256"
+	algRS256 = "RS256"
+)
 
 // runConfig groups the demo's startup knobs so run() does not grow a
 // long positional signature as flags accumulate.
@@ -130,6 +138,9 @@ type runConfig struct {
 	// lives on the flag declaration; repeating it here would be a
 	// second place to keep in step.
 	cibaAutoApproveDelay time.Duration
+	// signingAlg is the OP's issuing algorithm, "ES256" or "RS256";
+	// empty means ES256.
+	signingAlg string
 	// storeBackend selects the storage the OP runs on: "inmem" (the
 	// default) or "composite" (durable substores on MySQL, volatile ones
 	// on Redis). The flag exists so a conformance run can be captured
@@ -203,6 +214,7 @@ func mainErr() error {
 		// default needs nothing running alongside the binary; the
 		// composite backend exists so a conformance run can be captured
 		// against the MySQL + Redis split a deployment actually runs.
+		signingAlg   = flag.String("signing-alg", algES256, "ID token and JWT signing algorithm: \"ES256\" (ECDSA P-256 key) or \"RS256\" (RSA 2048 key).")
 		storeBackend = flag.String("store", storeInmem, "storage backend: \"inmem\" (in-process, nothing to run alongside) or \"composite\" (durable substores on MySQL, volatile ones on Redis). The composite backend exists so a conformance run can be captured against deployment-shaped storage; it consults -mysql-dsn and -redis-dsn.")
 		mysqlDSN     = flag.String("mysql-dsn", "opdemo:opdemo@tcp(127.0.0.1:3306)/opdemo?parseTime=true&charset=utf8mb4&loc=UTC", "MySQL DSN for -store=composite. Only consulted when -store=composite.")
 		redisDSN     = flag.String("redis-dsn", "redis://127.0.0.1:6379/0", "Redis DSN for -store=composite. Only consulted when -store=composite. A plaintext redis:// DSN is admitted only for a loopback engine, which is the development arrangement this binary is for; anything further away must use rediss://.")
@@ -235,6 +247,7 @@ func mainErr() error {
 		fapiClient2JWKS:      *fapiClient2JWKS,
 		enableDCR:            *enableDCR,
 		cibaAutoApproveDelay: *cibaAutoApproveDelay,
+		signingAlg:           *signingAlg,
 		storeBackend:         *storeBackend,
 		mysqlDSN:             *mysqlDSN,
 		redisDSN:             *redisDSN,
@@ -338,6 +351,11 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 // The Provider validates the issuer's full OIDC shape later; this check owns
 // only the demo server's TLS/listener coherence.
 func validateRunConfig(cfg runConfig) error {
+	switch cfg.signingAlg {
+	case "", algES256, algRS256:
+	default:
+		return fmt.Errorf("op-demo: -signing-alg must be %s or %s, got %q", algES256, algRS256, cfg.signingAlg)
+	}
 	if (cfg.tlsCert == "") != (cfg.tlsKey == "") {
 		return errors.New("op-demo: -tls-cert and -tls-key must be provided together")
 	}
@@ -370,7 +388,7 @@ func validateRunConfig(cfg runConfig) error {
 // connections under -store=composite, so the caller defers it without
 // having to know which backend it got.
 func buildProvider(ctx context.Context, cfg runConfig, logger *slog.Logger) (*op.Provider, func(), error) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	priv, err := generateSigningKey(cfg.signingAlg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate signing key: %w", err)
 	}
@@ -391,6 +409,23 @@ func buildProvider(ctx context.Context, cfg runConfig, logger *slog.Logger) (*op
 	return provider, backend.close, nil
 }
 
+// generateSigningKey returns a fresh key for alg: RSA 2048 for RS256,
+// ECDSA P-256 otherwise.
+func generateSigningKey(alg string) (crypto.Signer, error) {
+	if alg == algRS256 {
+		return rsa.GenerateKey(rand.Reader, 2048)
+	}
+	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+}
+
+// signingAlgorithm maps the -signing-alg value to the op option value.
+func signingAlgorithm(alg string) op.SigningAlgorithm {
+	if alg == algRS256 {
+		return op.AlgRS256
+	}
+	return op.AlgES256
+}
+
 // buildProviderOn is the part of construction that runs once storage is
 // live. It is separate so buildProvider owns the backend's lifetime and
 // this half can return an error without repeating the teardown.
@@ -398,7 +433,7 @@ func buildProviderOn(
 	ctx context.Context,
 	cfg runConfig,
 	backend demoBackend,
-	priv *ecdsa.PrivateKey,
+	priv crypto.Signer,
 	cookieKey []byte,
 	logger *slog.Logger,
 ) (*op.Provider, error) {
@@ -438,7 +473,7 @@ func buildProviderOn(
 // -profile=fapi-ciba is active. users is carried alongside it because
 // [op.PrimaryPassword] needs a [store.UserPasswordStore] and that
 // accessor is deliberately absent from the store.Store interface.
-func buildOptions(ctx context.Context, cfg runConfig, users store.UserPasswordStore, opStore store.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger) ([]op.Option, error) {
+func buildOptions(ctx context.Context, cfg runConfig, users store.UserPasswordStore, opStore store.Store, priv crypto.Signer, cookieKey []byte, logger *slog.Logger) ([]op.Option, error) {
 	seeds, err := buildClientSeeds(cfg)
 	if err != nil {
 		return nil, err
@@ -486,11 +521,12 @@ func buildOptions(ctx context.Context, cfg runConfig, users store.UserPasswordSt
 // client seeds, the LoginFlow with PrimaryPassword, JAR, and the
 // claims_supported list. Profile-specific options are appended on top
 // in [buildOptions].
-func commonOptions(cfg runConfig, opStore store.Store, users store.UserPasswordStore, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger, seeds []op.ClientSeed) []op.Option {
+func commonOptions(cfg runConfig, opStore store.Store, users store.UserPasswordStore, priv crypto.Signer, cookieKey []byte, logger *slog.Logger, seeds []op.ClientSeed) []op.Option {
 	opts := []op.Option{
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(opStore),
 		op.WithKeyset(op.Keyset{{KeyID: "op-demo-1", Signer: priv}}),
+		op.WithSigningAlgorithm(signingAlgorithm(cfg.signingAlg)),
 		op.WithCookieKeys(cookieKey),
 		op.WithMountPrefix(cfg.mount),
 		op.WithLogger(logger),
