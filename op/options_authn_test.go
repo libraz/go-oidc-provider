@@ -13,6 +13,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 type recordingDriver struct{ called bool }
@@ -728,6 +729,23 @@ func TestNew_SPAUIWithInteractionDriver(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNew_SPAUIHTMLDriverErrorWinsOverPasskeyCapability pins that the SPA /
+// driver conflict is reported ahead of the passkey capability error, whose
+// advice (configure WithSPAUI) would be misleading when WithSPAUI is set.
+func TestNew_SPAUIHTMLDriverErrorWinsOverPasskeyCapability(t *testing.T) {
+	t.Parallel()
+
+	st := inmem.New()
+	flow := op.LoginFlow{Primary: compilePasskeyStep(st, true)}
+	opts := append(validBaseOptsWithStoreNoAuthn(t, st),
+		op.WithLoginFlow(flow),
+		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
+		op.WithInteractionDriver(interaction.HTMLDriver{}),
+	)
+	_, err := op.New(opts...)
+	wantConfigurationError(t, err, "drop WithInteractionDriver, or use a driver that emits the JSON prompt envelope")
 }
 
 func TestNew_WithSPAUISuppressesDefaultDriver(t *testing.T) {

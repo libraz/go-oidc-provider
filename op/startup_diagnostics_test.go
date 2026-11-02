@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
 // startupOutput builds a Provider on the in-memory store with a capturing
@@ -105,6 +106,46 @@ func TestNew_WarnsOncePerUnenabledSeedGrant(t *testing.T) {
 	}
 }
 
+// TestNew_SeedGrantWarningNamesDefaultedGrants pins that a seed which left
+// GrantTypes empty is told its defaults include the unenabled grant, while
+// an explicit list keeps the "lists grant_type" wording.
+func TestNew_SeedGrantWarningNamesDefaultedGrants(t *testing.T) {
+	t.Parallel()
+
+	const marker = "static client seed-app"
+	t.Run("defaulted", func(t *testing.T) {
+		t.Parallel()
+
+		lines := linesContaining(startupOutput(t, op.WithGrants(grant.AuthorizationCode), seedWithGrants()), marker)
+		if len(lines) != 1 {
+			t.Fatalf("lines = %d, want 1:\n%s", len(lines), strings.Join(lines, "\n"))
+		}
+		for _, want := range []string{
+			"level=WARN", "left GrantTypes empty", "default grant types include refresh_token",
+			"WithGrants(..., grant.RefreshToken)", "set GrantTypes explicitly",
+		} {
+			if !strings.Contains(lines[0], want) {
+				t.Errorf("line does not contain %q:\n%s", want, lines[0])
+			}
+		}
+		if strings.Contains(lines[0], "lists grant_type") {
+			t.Errorf("defaulted seed reported as listing the grant:\n%s", lines[0])
+		}
+	})
+	t.Run("explicit", func(t *testing.T) {
+		t.Parallel()
+
+		lines := linesContaining(startupOutput(t,
+			op.WithGrants(grant.AuthorizationCode), seedWithGrants("authorization_code", "refresh_token")), marker)
+		if len(lines) != 1 || !strings.Contains(lines[0], "lists grant_type refresh_token") {
+			t.Fatalf("want one \"lists grant_type\" line:\n%s", strings.Join(lines, "\n"))
+		}
+		if strings.Contains(lines[0], "set GrantTypes explicitly") {
+			t.Errorf("explicit seed told to set GrantTypes:\n%s", lines[0])
+		}
+	})
+}
+
 const noLoggerMarker = "request-time operational logs and audit records are discarded"
 
 // TestNew_WarnsWhenNoLoggerConfigured pins the warning that request-time
@@ -194,7 +235,16 @@ func TestNew_LogsPrivateNetworkReach(t *testing.T) {
 		},
 		{
 			name: "Backchannel with open registration", option: "WithAllowPrivateNetworkBackchannel",
-			reach: op.WithAllowPrivateNetworkBackchannel(), others: []op.Option{openDCR}, level: "INFO",
+			reach: op.WithAllowPrivateNetworkBackchannel(), others: []op.Option{openDCR}, level: "WARN",
+			wantMsg: "open dynamic registration",
+		},
+		{
+			name: "Backchannel with IAT-gated registration", option: "WithAllowPrivateNetworkBackchannel",
+			reach: op.WithAllowPrivateNetworkBackchannel(), others: []op.Option{iatDCR}, level: "INFO",
+		},
+		{
+			name: "SharedSignals with open registration", option: "WithAllowPrivateNetworkSharedSignals",
+			reach: op.WithAllowPrivateNetworkSharedSignals(), others: []op.Option{openDCR}, level: "INFO",
 		},
 	}
 	for _, tc := range cases {

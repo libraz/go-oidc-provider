@@ -31,7 +31,10 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 // network — opt in with this option. This is network reach for
 // deployments whose relying parties live on a private network; it is
 // legitimate in production, not a development-only option, and [New] logs
-// one INFO line naming what it widens. It flips the gate at the
+// one line naming what it widens: INFO, or WARN when open dynamic
+// registration or Client ID Metadata Documents is enabled too, since an
+// unauthenticated caller can then supply a backchannel_logout_uri of its
+// choosing (SSRF exposure). It flips the gate at the
 // deliverer level only; the other fetchers keep their own
 // WithAllowPrivateNetwork* flags ([WithAllowPrivateNetworkJWKS],
 // [WithAllowPrivateNetworkJAR], ...) so private-network access granted

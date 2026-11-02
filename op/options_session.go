@@ -403,10 +403,10 @@ func (c *config) effectiveRefreshGrace() time.Duration {
 //
 // This is network reach for deployments whose relying parties live on a
 // private network (on-prem, service mesh, internal RPs); it is legitimate
-// in production, not a development-only option. [New] logs one INFO line
-// naming what it widens, and a WARN when open dynamic registration or
-// Client ID Metadata Documents is enabled too, since an unauthenticated
-// caller can then aim the fetch at internal services (SSRF exposure). The
+// in production, not a development-only option. [New] logs one line naming
+// what it widens: INFO, or WARN when open dynamic registration or Client
+// ID Metadata Documents is enabled too, since an unauthenticated caller
+// can then aim the fetch at internal services (SSRF exposure). The
 // opt-in is JWKS-specific so the analogous JAR request_uri fetcher
 // remains independently gated by [WithAllowPrivateNetworkJAR].
 // Stable since v1.0.
@@ -426,7 +426,7 @@ func WithAllowPrivateNetworkJWKS() Option {
 //
 // This is network reach for deployments whose relying parties live on a
 // private network; it is legitimate in production, not a development-only
-// option. [New] logs one INFO line naming what it widens, and a WARN when
+// option. [New] logs one line naming what it widens: INFO, or WARN when
 // open dynamic registration or Client ID Metadata Documents is enabled
 // too (SSRF exposure).
 // Stable since v1.0.
@@ -447,7 +447,7 @@ func WithAllowPrivateNetworkJAR() Option {
 //
 // This is network reach for deployments whose relying parties live on a
 // private network; it is legitimate in production, not a development-only
-// option. [New] logs one INFO line naming what it widens, and a WARN when
+// option. [New] logs one line naming what it widens: INFO, or WARN when
 // open dynamic registration or Client ID Metadata Documents is enabled
 // too (SSRF exposure).
 // Stable since v1.0.

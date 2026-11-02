@@ -255,8 +255,12 @@ func grantActivationOption(g grant.Type) string {
 		return "WithDeviceCodeGrant()"
 	case grant.JWTBearer:
 		return "WithJWTBearerGrant(...)"
-	case grant.AuthorizationCode, grant.ClientCredentials, grant.RefreshToken:
-		return "WithGrants(..., grant." + g.String() + ")"
+	case grant.AuthorizationCode:
+		return "WithGrants(..., grant.AuthorizationCode)"
+	case grant.ClientCredentials:
+		return "WithGrants(..., grant.ClientCredentials)"
+	case grant.RefreshToken:
+		return "WithGrants(..., grant.RefreshToken)"
 	}
 	return "WithGrants"
 }

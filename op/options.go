@@ -396,6 +396,10 @@ type config struct {
 	// input; the option layer only validates seeds and aggregates.
 	staticClients []store.Client
 
+	// staticClientDefaultedGrants holds the client_id of every static seed
+	// whose GrantTypes was left empty, so the default grant set was applied.
+	staticClientDefaultedGrants map[string]struct{}
+
 	// staticClientSecrets temporarily retains the plaintext supplied by
 	// ConfidentialClient seeds so startup reconciliation can compare a
 	// freshly salted desired hash with an existing hash semantically. New

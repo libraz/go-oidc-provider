@@ -35,6 +35,7 @@ func WithStaticClients(seeds ...ClientSeed) Option {
 			return err
 		}
 		c.staticClients = append(c.staticClients, records...)
+		c.recordDefaultedSeedGrants(seeds, records)
 		if len(plaintexts) > 0 && c.staticClientSecrets == nil {
 			c.staticClientSecrets = make(map[string]staticSeedSecrets, len(plaintexts))
 		}
@@ -124,6 +125,41 @@ func collectStaticClientSeeds(seeds []ClientSeed) (records []store.Client, plain
 		seen[records[i].ID] = struct{}{}
 	}
 	return records, plaintexts, nil
+}
+
+// recordDefaultedSeedGrants notes the client_id of every seed that left
+// GrantTypes empty; records[i] is the projection of seeds[i].
+func (c *config) recordDefaultedSeedGrants(seeds []ClientSeed, records []store.Client) {
+	for i, seed := range seeds {
+		if !seedGrantTypesEmpty(seed) {
+			continue
+		}
+		if c.staticClientDefaultedGrants == nil {
+			c.staticClientDefaultedGrants = make(map[string]struct{})
+		}
+		c.staticClientDefaultedGrants[records[i].ID] = struct{}{}
+	}
+}
+
+// seedGrantTypesEmpty reports whether seed left GrantTypes empty, so the
+// builder applied its default grant set.
+func seedGrantTypesEmpty(seed ClientSeed) bool {
+	switch value := seed.(type) {
+	case PublicClient:
+		return len(value.GrantTypes) == 0
+	case *PublicClient:
+		return len(value.GrantTypes) == 0
+	case ConfidentialClient:
+		return len(value.GrantTypes) == 0
+	case *ConfidentialClient:
+		return len(value.GrantTypes) == 0
+	case PrivateKeyJWTClient:
+		return len(value.GrantTypes) == 0
+	case *PrivateKeyJWTClient:
+		return len(value.GrantTypes) == 0
+	default:
+		return false
+	}
 }
 
 // staticClientPlaintext extracts the plaintext a seed carried, if it

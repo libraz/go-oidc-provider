@@ -30,11 +30,17 @@ func (c *config) warnUnenabledSeedGrants() {
 	enabled := c.enabledGrantWires()
 	for i := range c.staticClients {
 		seed := &c.staticClients[i]
+		_, defaulted := c.staticClientDefaultedGrants[seed.ID]
 		for _, wire := range unenabledSeedGrants(seed, enabled) {
+			lead := "static client " + seed.ID + " lists grant_type " + wire
+			tail := "enable it with " + seedGrantActivation(wire)
+			if defaulted {
+				lead = "static client " + seed.ID + " left GrantTypes empty, so its default grant types include " + wire
+				tail += ", or set GrantTypes explicitly"
+			}
 			c.startupLog().Warn(
-				"static client "+seed.ID+" lists grant_type "+wire+
-					" but the OP has not enabled that grant, so token requests using it are "+
-					"refused with unsupported_grant_type; enable it with "+seedGrantActivation(wire),
+				lead+" but the OP has not enabled that grant, so token requests using it are "+
+					"refused with unsupported_grant_type; "+tail,
 				"client_id", seed.ID,
 				"grant_type", wire,
 			)
@@ -97,7 +103,8 @@ type privateNetworkReach struct {
 	option  string
 	widens  string
 	// callerDriven is true when an unauthenticated caller can choose the
-	// URL the fetch targets.
+	// URL the outbound request targets, through a registered or fetched
+	// client document.
 	callerDriven bool
 }
 
@@ -113,7 +120,7 @@ func (c *config) privateNetworkReaches() []privateNetworkReach {
 		},
 		{
 			c.backchannelAllowPrivateNetwork, "WithAllowPrivateNetworkBackchannel",
-			"back-channel logout delivery to a relying party's backchannel_logout_uri", false,
+			"back-channel logout delivery to a relying party's backchannel_logout_uri", true,
 		},
 		{
 			c.sharedSignalsAllowPrivateNetwork, "WithAllowPrivateNetworkSharedSignals",

@@ -51,7 +51,7 @@ func WithClientIDMetadataDocuments(c ClientIDMetadataDocuments) Option {
 //
 // This is network reach for deployments whose relying parties live on a
 // private network; it is legitimate in production, not a development-only
-// option. [New] logs one INFO line naming what it widens, and a WARN when
+// option. [New] logs one line naming what it widens: INFO, or WARN when
 // Client ID Metadata Documents or open dynamic registration is enabled,
 // since an unauthenticated caller can then aim the fetch at internal
 // services (SSRF exposure).
