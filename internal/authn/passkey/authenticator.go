@@ -176,9 +176,10 @@ func (*Authenticator) Prompts() []string { return []string{PromptType} }
 // An empty subject runs a discoverable ceremony when the verifier has
 // [Config.AllowDiscoverable] and returns [ErrSubjectRequired] otherwise.
 // A subject with no registered credentials returns
-// [ErrCredentialNotRegistered] wrapped in [authn.ErrFactorAbort] — the
-// chain ends with a 4xx rather than treating "no passkey" as "skip this
-// factor".
+// [ErrCredentialNotRegistered], and one whose every credential fails the
+// AAGUID re-check [ErrAAGUIDDisallowed], wrapped in [authn.ErrFactorAbort]
+// — the chain ends with a 4xx rather than treating "no passkey" as "skip
+// this factor".
 func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		if !a.verifier.allowDiscoverable {
@@ -194,6 +195,9 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 		return interaction.Step{}, fmt.Errorf("%w: %w", ErrCredentialNotRegistered, authn.ErrFactorAbort)
 	}
 	_, session, err := a.verifier.BeginLogin(ctx, in.Subject, in.Subject, creds)
+	if errors.Is(err, ErrAAGUIDDisallowed) || errors.Is(err, ErrCredentialNotRegistered) {
+		return interaction.Step{}, fmt.Errorf("%w: %w", err, authn.ErrFactorAbort)
+	}
 	if err != nil {
 		return interaction.Step{}, err
 	}
@@ -289,13 +293,14 @@ func (a *Authenticator) continueDiscoverable(ctx context.Context, authTime time.
 	return step, classifyContinueError(err)
 }
 
-// Enrolled reports whether subject has at least one registered passkey.
+// Enrolled reports whether subject has at least one registered passkey
+// an assertion may use, so it is true exactly when Begin can prompt.
 func (a *Authenticator) Enrolled(ctx context.Context, subject string) (bool, error) {
 	creds, err := a.loadCredentials(ctx, subject)
 	if err != nil {
 		return false, err
 	}
-	return len(creds) > 0, nil
+	return len(a.verifier.assertableCredentials(creds)) > 0, nil
 }
 
 // classifyContinueError stamps the orchestrator-facing failure class on
@@ -370,15 +375,24 @@ func (a *Authenticator) parseContinueInput(in authn.ContinueInput) ([]byte, *Ses
 }
 
 // continueResult dispatches the [Verifier.FinishLogin] outcome. A nil
-// error persists the rotated credential and returns Result; an
-// [ErrCloneDetected] error still persists (so the clone-warning bit
-// survives) but surfaces verbatim so the orchestrator can stop the
-// chain; any other error flows through unchanged.
+// error persists the rotated credential and returns Result, unless the
+// persisted counter shows a concurrent assertion already went past this
+// one's; that, like an [ErrCloneDetected] error, persists the
+// clone-warning bit and surfaces [ErrCloneDetected] so the orchestrator
+// can stop the chain; any other error flows through unchanged.
 func (a *Authenticator) continueResult(ctx context.Context, subject string, authTime time.Time, cred *Credential, ferr error) (interaction.Step, error) {
 	switch {
 	case ferr == nil:
-		if _, perr := a.persistCredential(ctx, cred); perr != nil {
+		persisted, perr := a.persistCredential(ctx, cred)
+		if perr != nil {
 			return interaction.Step{}, perr
+		}
+		if cred != nil && cred.Authenticator.SignCount != 0 && persisted.Authenticator.SignCount > cred.Authenticator.SignCount {
+			cred.Authenticator.CloneWarning = true
+			return a.reportClone(ctx, subject, cred, fmt.Errorf(
+				"%w: sign count %d is below the stored %d", ErrCloneDetected,
+				cred.Authenticator.SignCount, persisted.Authenticator.SignCount,
+			))
 		}
 		// Stamp the UV bit on the Result so the orchestrator's
 		// appendFactor can pick the RFC 8176 "hwk" vs "swk" token
@@ -395,25 +409,27 @@ func (a *Authenticator) continueResult(ctx context.Context, subject string, auth
 			UserVerified: uv,
 		}}, nil
 	case errors.Is(ferr, ErrCloneDetected):
-		if cred != nil {
-			persisted, perr := a.persistCredential(ctx, cred)
-			if perr != nil {
-				return interaction.Step{}, perr
-			}
-			// Notify the embedder so it can disable the affected
-			// credential. The hook is best-effort: a hook
-			// error does not change the response the SPA sees, but
-			// it MUST NOT stop the [ErrCloneDetected] surfacing —
-			// embedders that want to observe failures should log
-			// internally.
-			if a.driver != nil {
-				_ = a.driver.HandleCloneDetected(ctx, subject, persisted)
-			}
-		}
-		return interaction.Step{}, ferr
+		return a.reportClone(ctx, subject, cred, ferr)
 	default:
 		return interaction.Step{}, ferr
 	}
+}
+
+// reportClone persists cred, which carries the clone-warning bit, so the
+// bit survives, notifies the embedder, and surfaces cause.
+func (a *Authenticator) reportClone(ctx context.Context, subject string, cred *Credential, cause error) (interaction.Step, error) {
+	if cred != nil {
+		persisted, perr := a.persistCredential(ctx, cred)
+		if perr != nil {
+			return interaction.Step{}, perr
+		}
+		// The hook is best-effort: its error does not change the
+		// response and MUST NOT stop [ErrCloneDetected] surfacing.
+		if a.driver != nil {
+			_ = a.driver.HandleCloneDetected(ctx, subject, persisted)
+		}
+	}
+	return interaction.Step{}, cause
 }
 
 // loadCredentials reads the subject's registered passkeys and projects

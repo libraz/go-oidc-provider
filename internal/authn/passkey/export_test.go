@@ -53,6 +53,12 @@ func (a *Authenticator) ContinueResultForTest(ctx context.Context, subject strin
 	return step
 }
 
+// ContinueResultErrForTest is [Authenticator.ContinueResultForTest]
+// with the error continueResult returned.
+func (a *Authenticator) ContinueResultErrForTest(ctx context.Context, subject string, authTime time.Time, cred *Credential) (interaction.Step, error) {
+	return a.continueResult(ctx, subject, authTime, cred, nil)
+}
+
 // SetExpectedSignCountForTest stamps the persistence snapshot normally
 // carried from FinishLogin to persistCredential. It lets concurrency
 // tests build verifier results without minting a WebAuthn signature.

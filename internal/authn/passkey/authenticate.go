@@ -61,6 +61,24 @@ var (
 	ErrAAGUIDDisallowed = errors.New("passkey: AAGUID not in allowlist")
 )
 
+// assertableCredentials returns the credentials an assertion may use:
+// all of them, unless [Verifier.AAGUIDReCheckOnAssertion] is on with a
+// non-empty allowlist, in which case those whose AAGUID has fallen out
+// of it are dropped. The toggle defaults off so embedders that have not
+// opted in see no behaviour change.
+func (v *Verifier) assertableCredentials(credentials []Credential) []Credential {
+	if !v.aaguidReCheckOnAssertion || len(v.aaguidAllowlist) == 0 {
+		return credentials
+	}
+	filtered := make([]Credential, 0, len(credentials))
+	for _, c := range credentials {
+		if v.AAGUIDAllowed(c.Authenticator.AAGUID) {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
+
 // BeginLogin starts an assertion ceremony for the user identified by
 // subject. The returned [AssertionChallenge] is the JSON the SPA hands
 // to navigator.credentials.get(); the returned [Session] MUST be
@@ -83,23 +101,11 @@ func (v *Verifier) BeginLogin(_ context.Context, subject, name string, credentia
 		return nil, nil, fmt.Errorf("%w: subject has no registered credentials", ErrCredentialNotRegistered)
 	}
 
-	// AAGUID re-check at the start of the assertion ceremony. Filter the
-	// credential list so the upstream library's allowCredentials
-	// projection cannot surface a credential whose authenticator model
-	// has fallen out of policy. An empty allowlist short-circuits the
-	// filter (every AAGUID is accepted); the toggle defaults off so
-	// embedders that have not opted in see no behaviour change.
-	if v.aaguidReCheckOnAssertion && len(v.aaguidAllowlist) > 0 {
-		filtered := make([]Credential, 0, len(credentials))
-		for _, c := range credentials {
-			if v.AAGUIDAllowed(c.Authenticator.AAGUID) {
-				filtered = append(filtered, c)
-			}
-		}
-		if len(filtered) == 0 {
-			return nil, nil, fmt.Errorf("%w: every registered credential is in a now-disallowed AAGUID", ErrAAGUIDDisallowed)
-		}
-		credentials = filtered
+	// The upstream allowCredentials projection must not surface a
+	// credential whose authenticator model has fallen out of policy.
+	credentials = v.assertableCredentials(credentials)
+	if len(credentials) == 0 {
+		return nil, nil, fmt.Errorf("%w: every registered credential is in a now-disallowed AAGUID", ErrAAGUIDDisallowed)
 	}
 
 	// displayName is unused by BeginLogin (the user agent shows the

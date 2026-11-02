@@ -1,13 +1,18 @@
 package passkey_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // allowedAAGUID is a canonical UUID the tests use to seed allowlists.
@@ -136,5 +141,46 @@ func TestAAGUIDRecheck_ClockResolution(t *testing.T) {
 	}}
 	if err := v.CheckAAGUIDOnAssertionForTest(creds[0]); err != nil {
 		t.Fatalf("CheckAAGUIDOnAssertion: %v", err)
+	}
+}
+
+// TestAAGUIDRecheck_AllCredentialsDisallowedIsNotEnrolled pins that a
+// subject whose every passkey fails the re-check is not enrolled, so a
+// one-of step falls back to another factor, and that Begin refuses it as
+// a factor abort rather than a server fault. With the re-check off the
+// same subject is enrolled.
+func TestAAGUIDRecheck_AllCredentialsDisallowedIsNotEnrolled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, recheck := range []bool{true, false} {
+		pkstore := inmem.New().Passkeys()
+		if err := pkstore.Put(ctx, &store.PasskeyRecord{
+			CredentialID:    []byte{0x01, 0x02, 0x03},
+			Subject:         "user-narrowed",
+			PublicKey:       []byte{0xaa, 0xbb, 0xcc},
+			AAGUID:          disallowedAAGUIDBytes,
+			SignCount:       1,
+			AttestationType: "none",
+		}); err != nil {
+			t.Fatalf("seed passkey: %v", err)
+		}
+		adapter, err := passkey.NewAuthenticator(newVerifierWithRecheck(t, []string{allowedAAGUIDStr}, recheck), pkstore)
+		if err != nil {
+			t.Fatalf("NewAuthenticator: %v", err)
+		}
+		enrolled, err := adapter.Enrolled(ctx, "user-narrowed")
+		if err != nil {
+			t.Fatalf("Enrolled: %v", err)
+		}
+		if enrolled == recheck {
+			t.Errorf("recheck=%v: Enrolled=%v, want %v", recheck, enrolled, !recheck)
+		}
+		if !recheck {
+			continue
+		}
+		_, err = adapter.Begin(ctx, op.BeginInput{Subject: "user-narrowed"})
+		if !errors.Is(err, passkey.ErrAAGUIDDisallowed) || !errors.Is(err, authn.ErrFactorAbort) {
+			t.Errorf("Begin err=%v, want ErrAAGUIDDisallowed wrapped in ErrFactorAbort", err)
+		}
 	}
 }
