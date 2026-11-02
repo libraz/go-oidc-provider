@@ -9,13 +9,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-)
 
-// htmlSubmissionContentType is the only request Content-Type the
-// [HTMLDriver.ParseSubmission] method accepts. The check is performed
-// case-insensitively against the type/subtype portion only; charset
-// and other parameters are ignored.
-const htmlSubmissionContentType = "application/x-www-form-urlencoded"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+)
 
 // HTMLDriver is a default [Driver] implementation that renders prompts
 // as a minimal, self-contained HTML form and parses
@@ -152,7 +148,7 @@ func stampHTMLHeaders(w http.ResponseWriter) {
 // and submissions missing the hidden state_ref field with
 // [ErrMissingStateRef].
 func (HTMLDriver) ParseSubmission(r *http.Request) (FormSubmission, error) {
-	if !isFormURLEncoded(r.Header.Get("Content-Type")) {
+	if !endpointsupport.IsFormContent(r.Header.Get("Content-Type")) {
 		return FormSubmission{}, ErrUnsupportedContentType
 	}
 	r.Body = http.MaxBytesReader(nil, r.Body, maxSubmissionBytes)
@@ -173,19 +169,6 @@ func (HTMLDriver) ParseSubmission(r *http.Request) (FormSubmission, error) {
 		}
 	}
 	return FormSubmission{StateRef: stateRef, Values: values}, nil
-}
-
-// isFormURLEncoded reports whether ct declares form-urlencoded. The
-// match is case-insensitive on the type/subtype portion and tolerant
-// of trailing parameters (e.g., "; charset=UTF-8").
-func isFormURLEncoded(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.EqualFold(strings.TrimSpace(ct), htmlSubmissionContentType)
 }
 
 // buildHTMLDocument renders prompt as a self-contained HTML document.

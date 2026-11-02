@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // ErrorPrompt is the terminal-error counterpart to [Prompt]. The HTTP
@@ -95,8 +97,7 @@ func errorStatus(prompt ErrorPrompt) int {
 // seen from the legacy free-function path.
 func (JSONDriver) RenderError(w http.ResponseWriter, _ *http.Request, prompt ErrorPrompt) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
+	httpx.StampNoStore(w)
 	w.WriteHeader(errorStatus(prompt))
 	if err := json.NewEncoder(w).Encode(prompt); err != nil {
 		return fmt.Errorf("interaction: render json error: %w", err)

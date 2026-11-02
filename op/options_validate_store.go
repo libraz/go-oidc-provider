@@ -4,10 +4,26 @@ import (
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
-	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// storeCapabilityReasons names the accessor and the cause reported when a
+// [storeTableManifest] substore the configuration needs is nil. DeviceCodes
+// and CIBARequests are absent: their grant validators report the gap first.
+//
+//nolint:gochecknoglobals // lookup table; declared once and read-only.
+var storeCapabilityReasons = map[string]struct{ desc, because string }{
+	"Clients": {"ClientStore", "every client lookup at the authorize / token endpoints requires it"},
+	"ConsumedJTIs": {
+		"ConsumedJTIStore",
+		"every client-authenticating endpoint's private_key_jwt verifier, and the JAR and DPoP replay gates, consume it",
+	},
+	"AuthorizationCodes": {"AuthorizationCodeStore", "grant.AuthorizationCode is enabled"},
+	"Sessions":           {"SessionStore", "a grant that mounts the browser authorize endpoint is enabled"},
+	"Interactions":       {"InteractionStore", "a grant that mounts the browser authorize endpoint is enabled"},
+	"PushedAuthRequests": {"PushedAuthRequestStore", "feature.PAR is enabled"},
+}
 
 // validateStoreCapabilities enforces fail-fast detection of substores
 // the configured store does not implement. Single-backend adapters
@@ -25,6 +41,16 @@ import (
 // RefreshTokens, Grants) and the grant-gated specialty substores
 // (DeviceCodes, CIBARequests, PushedAuthRequests).
 func (c *config) validateStoreCapabilities() error {
+	for _, row := range storeTableManifest {
+		reason, ok := storeCapabilityReasons[row.label]
+		if !ok || (row.when != nil && !row.when(c)) {
+			continue
+		}
+		if nilcheck.IsNil(row.store(c.store)) {
+			return newConfigurationError("Store."+reason.desc+"() returned nil but "+
+				reason.because, nil)
+		}
+	}
 	for _, check := range []struct {
 		need    bool
 		got     any
@@ -33,30 +59,12 @@ func (c *config) validateStoreCapabilities() error {
 	}{
 		{
 			need:    true,
-			got:     c.store.Clients(),
-			desc:    "ClientStore",
-			because: "every client lookup at the authorize / token endpoints requires it",
-		},
-		{
-			need:    true,
-			got:     c.store.ConsumedJTIs(),
-			desc:    "ConsumedJTIStore",
-			because: "every client-authenticating endpoint's private_key_jwt verifier, and the JAR and DPoP replay gates, consume it",
-		},
-		{
-			need:    true,
 			got:     c.effectiveUserStore(),
 			desc:    "UserStore",
 			because: "the always-mounted /userinfo endpoint resolves every subject through it (supply WithUserStore to source users elsewhere)",
 		},
 		{
-			need:    slices.Contains(c.grants, grant.AuthorizationCode),
-			got:     c.store.AuthorizationCodes(),
-			desc:    "AuthorizationCodeStore",
-			because: "grant.AuthorizationCode is enabled",
-		},
-		{
-			need:    slices.Contains(c.grants, grant.RefreshToken),
+			need:    c.grantEnabled(grant.RefreshToken),
 			got:     c.store.RefreshTokens(),
 			desc:    "RefreshTokenStore",
 			because: "grant.RefreshToken is enabled",
@@ -66,36 +74,6 @@ func (c *config) validateStoreCapabilities() error {
 			got:     c.store.Grants(),
 			desc:    "GrantStore",
 			because: "an interactive grant that issues consent records is enabled",
-		},
-		{
-			need:    grantsRequireAuthorizeEndpoint(c.grants),
-			got:     c.store.Sessions(),
-			desc:    "SessionStore",
-			because: "a grant that mounts the browser authorize endpoint is enabled",
-		},
-		{
-			need:    grantsRequireAuthorizeEndpoint(c.grants),
-			got:     c.store.Interactions(),
-			desc:    "InteractionStore",
-			because: "a grant that mounts the browser authorize endpoint is enabled",
-		},
-		{
-			need:    slices.Contains(c.grants, grant.DeviceCode),
-			got:     c.store.DeviceCodes(),
-			desc:    "DeviceCodeStore",
-			because: "grant.DeviceCode is enabled",
-		},
-		{
-			need:    slices.Contains(c.grants, grant.CIBA),
-			got:     c.store.CIBARequests(),
-			desc:    "CIBARequestStore",
-			because: "grant.CIBA is enabled",
-		},
-		{
-			need:    slices.Contains(c.features, feature.PAR),
-			got:     c.store.PushedAuthRequests(),
-			desc:    "PushedAuthRequestStore",
-			because: "feature.PAR is enabled",
 		},
 	} {
 		if !check.need {

@@ -9,6 +9,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/protectedresource"
 	"github.com/libraz/go-oidc-provider/internal/ssf"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
 type configuredEndpoint struct {
@@ -155,10 +156,10 @@ func (c *config) activeRouteReservations() []routeReservation {
 	if c.dcr != nil {
 		routes = append(routes, routeReservation{name: "WithEndpoints.Register", path: protocolEndpointPath(c, c.endpoints.Register), prefix: true})
 	}
-	if c.deviceCodeGrantConfigured() {
+	if c.grantEnabled(grant.DeviceCode) {
 		routes = append(routes, routeReservation{name: "WithEndpoints.DeviceAuthorization", path: protocolEndpointPath(c, c.endpoints.DeviceAuthorization)})
 	}
-	if c.cibaGrantConfigured() {
+	if c.grantEnabled(grant.CIBA) {
 		routes = append(routes, routeReservation{name: "WithEndpoints.Backchannel", path: protocolEndpointPath(c, c.endpoints.Backchannel)})
 	}
 	if c.grantManagementEnabled {

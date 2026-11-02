@@ -3,7 +3,6 @@ package op
 import (
 	"context"
 	"errors"
-	"slices"
 	"strconv"
 	"time"
 
@@ -319,7 +318,7 @@ func WithCIBA(opts ...CIBAOption) Option {
 // surface login_required. Surfacing the gap at construction time
 // is the same posture the rest of the options take.
 func (c *config) validateCIBAGrant() error {
-	if !c.cibaGrantConfiguredOrEnabled() {
+	if !c.grantEnabled(grant.CIBA) {
 		return nil
 	}
 	if nilcheck.IsNil(c.store) {
@@ -350,32 +349,6 @@ func (c *config) validateCIBAGrant() error {
 			"would otherwise outlive the value a client may ask for", nil)
 	}
 	return nil
-}
-
-// cibaGrantConfiguredOrEnabled reports whether the embedder
-// activated the CIBA grant through any supported entry point (the
-// dedicated [WithCIBA] option or [WithGrants] with [grant.CIBA]).
-// The validator and the router both key on this helper so the
-// substore-presence invariant cannot drift between the "explicit
-// opt-in" and "grant set" paths.
-func (c *config) cibaGrantConfiguredOrEnabled() bool {
-	if c.cibaGrantEnabled {
-		return true
-	}
-	return slices.Contains(c.grants, grant.CIBA)
-}
-
-// cibaGrantConfigured reports whether the OP should mount the
-// /bc-authorize endpoint and advertise it in discovery. A grant is
-// "configured" when the embedder activated it (via the dedicated
-// [WithCIBA] option OR by listing [grant.CIBA] in [WithGrants]).
-// The substore-presence invariant is enforced ahead of this helper
-// by [validateCIBAGrant], so once the helper returns true the
-// router can rely on the [store.CIBARequestStore] substore being
-// non-nil — there is no longer a configured-without-substore path
-// that the runtime needs to fall back from.
-func (c *config) cibaGrantConfigured() bool {
-	return c.cibaGrantConfiguredOrEnabled()
 }
 
 // effectiveCIBADefaultExpiresIn returns the auth_req_id lifetime

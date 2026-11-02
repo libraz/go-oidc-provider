@@ -173,10 +173,7 @@ func New(cfg Config) (*Verifier, error) {
 	if err := cfg.validate(rule); err != nil {
 		return nil, err
 	}
-	clock := timex.SystemClock
-	if cfg.Clock != nil {
-		clock = cfg.Clock
-	}
+	clock := timex.OrSystem(cfg.Clock)
 	replay := cfg.DPoPReplay
 	if replay == nil {
 		replay = inmem.New(inmem.WithClock(clock)).ConsumedJTIs()

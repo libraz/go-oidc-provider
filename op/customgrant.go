@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"crypto/x509"
+	"maps"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -493,18 +494,14 @@ func (a customGrantAdapter) Handle(ctx context.Context, req customgrant.Request)
 	return out, nil
 }
 
-// cloneClaims returns a defensive copy of m or nil when m is nil.
+// cloneClaims returns a defensive copy of m or nil when m is empty.
 // The dispatcher persists the result; a shared map would let a
 // handler observe (and confuse) the OP's own bookkeeping reads.
 func cloneClaims(m map[string]any) map[string]any {
 	if len(m) == 0 {
 		return nil
 	}
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(m)
 }
 
 // customGrantNamesFor returns the registered handler names in

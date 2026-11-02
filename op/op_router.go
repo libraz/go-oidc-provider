@@ -38,6 +38,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/internal/userinfo"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -193,8 +194,8 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Audit:                          auditEmitter,
 			CustomGrants:                   customGrants,
 			EnabledGrants:                  enabledGrantWireNames(cfg),
-			DeviceCodes:                    deviceCodesFor(cfg),
-			CIBARequests:                   cibaRequestsFor(cfg),
+			DeviceCodes:                    cfg.store.DeviceCodes(),
+			CIBARequests:                   cfg.store.CIBARequests(),
 			CIBAMaxPollViolations:          cfg.cibaMaxPollViolations,
 			ClientEncJWKs:                  encResolver,
 			JWTBearer:                      jwtBearer.Verifier,
@@ -214,9 +215,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, auditEmitter, scopes, jarVerifiers.Authorize, assertionVerifiers.PAR, dpopVerifier, strictCORS); err != nil {
-		return nil, err
-	}
+	mountPAREndpoint(mux, cfg, auditEmitter, scopes, jarVerifiers.Authorize, assertionVerifiers.PAR, dpopVerifier, strictCORS)
 	mountIntrospectionEndpoint(mux, cfg, auditEmitter, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
 	mountRevocationEndpoint(mux, cfg, auditEmitter, keySet, assertionVerifiers.Revoke, strictCORS)
 	mountGrantManagementEndpoint(mux, cfg, auditEmitter, assertionVerifiers.Revoke, strictCORS)
@@ -427,9 +426,9 @@ func mountPAREndpoint(
 	assertionVerifier clientauth.AssertionVerifier,
 	dpopVerifier *dpop.Verifier,
 	strictCORS *cors.Strict,
-) error {
+) {
 	if !featureEnabled(cfg.features, feature.PAR) {
-		return nil
+		return
 	}
 	mux.Handle(
 		protocolEndpointPath(cfg, cfg.endpoints.PAR),
@@ -454,7 +453,6 @@ func mountPAREndpoint(
 			Audit:                      auditEmitter,
 		})),
 	)
-	return nil
 }
 
 // mountIntrospectionEndpoint registers the /introspect handler when the
@@ -713,7 +711,7 @@ func mountEndSessionEndpoint(
 // the endpoint with the same gating, so the OP cannot tell clients the
 // endpoint exists while quietly serving 404.
 //
-// The substore is reached through [deviceCodesFor];
+// The substore is reached through [store.Store.DeviceCodes];
 // [validateDeviceCodeGrant] runs ahead of the router so a
 // configured grant without a wired substore is rejected at
 // construction time. The handler retains a defensive nil guard so
@@ -729,7 +727,7 @@ func mountDeviceAuthorizationEndpoint(
 	assertionVerifier clientauth.AssertionVerifier,
 	strictCORS *cors.Strict,
 ) {
-	if !cfg.deviceCodeGrantConfigured() {
+	if !cfg.grantEnabled(grant.DeviceCode) {
 		return
 	}
 	mux.Handle(
@@ -738,7 +736,7 @@ func mountDeviceAuthorizationEndpoint(
 			Issuer:                   cfg.issuer,
 			VerificationURI:          cfg.deviceVerificationURI,
 			Clients:                  cfg.clientStore(),
-			DeviceCodes:              deviceCodesFor(cfg),
+			DeviceCodes:              cfg.store.DeviceCodes(),
 			Scopes:                   scopes,
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
@@ -753,33 +751,6 @@ func mountDeviceAuthorizationEndpoint(
 			Audit:                    auditEmitter,
 		})),
 	)
-}
-
-// deviceCodesFor returns the [store.DeviceCodeStore] the device-flow
-// surfaces consume. The function exists so the token-endpoint mount
-// and the device-authorization mount share an identical resolution
-// path. [validateDeviceCodeGrant] guarantees the substore is non-nil
-// whenever the grant is configured, but the helper still tolerates
-// a nil Store so the no-grant boot path (where the dispatch never
-// reaches the device-flow branch) does not require a fully-wired
-// store.
-func deviceCodesFor(cfg *config) store.DeviceCodeStore {
-	if cfg.store == nil {
-		return nil
-	}
-	return cfg.store.DeviceCodes()
-}
-
-// cibaRequestsFor returns the [store.CIBARequestStore] the CIBA
-// surfaces consume. The function mirrors [deviceCodesFor]:
-// [validateCIBAGrant] guarantees the substore is non-nil whenever
-// the CIBA grant is configured, but the helper still tolerates a
-// nil Store so the no-grant boot path is unaffected.
-func cibaRequestsFor(cfg *config) store.CIBARequestStore {
-	if cfg.store == nil {
-		return nil
-	}
-	return cfg.store.CIBARequests()
 }
 
 // cibaHintResolverAdapter bridges the public [HintResolver] surface
@@ -804,7 +775,7 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 // advertises the endpoint with the same gating, so the OP cannot
 // tell clients the endpoint exists while quietly serving 404.
 //
-// The substore is reached through [cibaRequestsFor];
+// The substore is reached through [store.Store.CIBARequests];
 // [validateCIBAGrant] runs ahead of the router so a configured
 // grant without a wired substore (or HintResolver) is rejected at
 // construction time. The handler retains a defensive nil guard so
@@ -836,7 +807,7 @@ func mountBackchannelAuthenticationEndpoint(
 	jarVerifier *jar.Verifier,
 	strictCORS *cors.Strict,
 ) {
-	if !cfg.cibaGrantConfigured() {
+	if !cfg.grantEnabled(grant.CIBA) {
 		return
 	}
 	var resolver cibaendpoint.HintResolver
@@ -848,7 +819,7 @@ func mountBackchannelAuthenticationEndpoint(
 		strictCORS.Handler(cibaendpoint.Handler(cibaendpoint.Deps{
 			Issuer:                   cfg.issuer,
 			Clients:                  cfg.clientStore(),
-			CIBARequests:             cibaRequestsFor(cfg),
+			CIBARequests:             cfg.store.CIBARequests(),
 			Scopes:                   scopes,
 			Keys:                     keySet,
 			Clock:                    cfg.clock,

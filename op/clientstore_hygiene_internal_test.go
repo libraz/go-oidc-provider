@@ -18,9 +18,6 @@ var rawClientStoreExemptions = map[string]string{
 	// The accessor itself and the decorator it wraps around the store.
 	"clientStore":      "op_builders.go",
 	"buildClientStore": "op_builders.go",
-	// The nil-capability probe checks the configured store, not the
-	// resolution path.
-	"validateStoreCapabilities": "options_validate_store.go",
 }
 
 // TestClientStoreHygiene_NoRawClientsLookup fails on any `<x>.store.Clients()`

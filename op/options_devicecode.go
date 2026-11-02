@@ -3,7 +3,6 @@ package op
 import (
 	"errors"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -222,10 +221,10 @@ func (c *config) effectiveDeviceCodePollInterval() time.Duration {
 // presented device_code. Surfacing the gap at construction time is
 // the same posture every other option takes.
 func (c *config) validateDeviceCodeGrant() error {
-	if !c.deviceCodeGrantConfiguredOrEnabled() {
+	if !c.grantEnabled(grant.DeviceCode) {
 		return nil
 	}
-	if c.store == nil {
+	if nilcheck.IsNil(c.store) {
 		// validateRequired has already failed; bail out so the
 		// substore-nil branch does not panic on the nil store.
 		return nil
@@ -236,31 +235,4 @@ func (c *config) validateDeviceCodeGrant() error {
 			"Redis adapters require an explicit implementation)", nil)
 	}
 	return nil
-}
-
-// deviceCodeGrantConfiguredOrEnabled reports whether the embedder
-// activated the device_code grant through any supported entry point
-// (the dedicated [WithDeviceCodeGrant] option or [WithGrants] with
-// [grant.DeviceCode]). The validator and the router both key on this
-// helper so the substore-presence invariant cannot drift between the
-// "explicit opt-in" and "grant set" paths.
-func (c *config) deviceCodeGrantConfiguredOrEnabled() bool {
-	if c.deviceCodeGrantEnabled {
-		return true
-	}
-	return slices.Contains(c.grants, grant.DeviceCode)
-}
-
-// deviceCodeGrantConfigured reports whether the OP should mount the
-// /device_authorization endpoint and advertise it in discovery. A
-// grant is "configured" when the embedder activated it (via the
-// dedicated [WithDeviceCodeGrant] option OR by listing
-// [grant.DeviceCode] in [WithGrants]). The substore-presence
-// invariant is enforced ahead of this helper by
-// [validateDeviceCodeGrant], so once the helper returns true the
-// router can rely on the [store.Store.DeviceCodes] substore being
-// non-nil — there is no longer a configured-without-substore path
-// that the runtime needs to fall back from.
-func (c *config) deviceCodeGrantConfigured() bool {
-	return c.deviceCodeGrantConfiguredOrEnabled()
 }

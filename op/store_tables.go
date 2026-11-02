@@ -63,11 +63,11 @@ var storeTableManifest = []storeTableRow{
 	},
 	{
 		"DeviceCodes", func(s store.Store) any { return s.DeviceCodes() },
-		func(c *config) bool { return c.deviceCodeGrantConfiguredOrEnabled() },
+		func(c *config) bool { return c.grantEnabled(grant.DeviceCode) },
 	},
 	{
 		"CIBARequests", func(s store.Store) any { return s.CIBARequests() },
-		func(c *config) bool { return c.cibaGrantConfiguredOrEnabled() },
+		func(c *config) bool { return c.grantEnabled(grant.CIBA) },
 	},
 	{
 		"SSFStreams", func(s store.Store) any { return ssfSubstores(s).streams },

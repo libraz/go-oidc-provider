@@ -88,6 +88,9 @@ const shutdownGrace = 5 * time.Second
 // cookieKeyLen is the AES-256 key length op.WithCookieKeys expects.
 const cookieKeyLen = 32
 
+// demoRSAKeyBits is the RS256 signing-key size; 2048 is the RFC 7518 §3.3 floor.
+const demoRSAKeyBits = 2048
+
 const defaultListenAddr = "127.0.0.1:9090"
 
 // Accepted -signing-alg values.
@@ -413,7 +416,7 @@ func buildProvider(ctx context.Context, cfg runConfig, logger *slog.Logger) (*op
 // ECDSA P-256 otherwise.
 func generateSigningKey(alg string) (crypto.Signer, error) {
 	if alg == algRS256 {
-		return rsa.GenerateKey(rand.Reader, 2048)
+		return rsa.GenerateKey(rand.Reader, demoRSAKeyBits)
 	}
 	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 }

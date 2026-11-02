@@ -211,7 +211,7 @@ func keyEligible(kid, alg, keyID, use, keyAlg string) bool {
 	switch {
 	case kid != "" && keyID != kid:
 		return false
-	case use != "" && use != "sig":
+	case !rpjwks.SigningUsable(use):
 		return false
 	case keyAlg != "" && keyAlg != alg:
 		return false

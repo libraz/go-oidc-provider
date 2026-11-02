@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 )
 
 // Error codes the package reports in [Error.Code].
@@ -16,11 +17,6 @@ const (
 	codeInsufficientScope = "insufficient_scope"
 	codeInsufficientAuthn = "insufficient_user_authentication"
 	codeInvalidDPoPProof  = "invalid_dpop_proof"
-)
-
-const (
-	schemeNameBearer = "Bearer"
-	schemeNameDPoP   = "DPoP"
 )
 
 // authScheme is the authorization scheme a request presented its token
@@ -98,7 +94,7 @@ func (e *Error) WWWAuthenticate() string {
 		if e.scheme != schemeNone {
 			dpopParams = append(dpopParams, attrs...)
 		}
-		return challenge(schemeNameDPoP, dpopParams)
+		return challenge(endpointsupport.BearerSchemeDPoP, dpopParams)
 	}
 	var bearerParams []string
 	if e.realm != "" {
@@ -114,7 +110,7 @@ func (e *Error) WWWAuthenticate() string {
 		dpopParams = append(dpopParams, attrs...)
 	case schemeNone:
 	}
-	return challenge(schemeNameBearer, bearerParams) + ", " + challenge(schemeNameDPoP, dpopParams)
+	return challenge(endpointsupport.BearerSchemeBearer, bearerParams) + ", " + challenge(endpointsupport.BearerSchemeDPoP, dpopParams)
 }
 
 // errorParams renders the error attributes, or nothing when there is no

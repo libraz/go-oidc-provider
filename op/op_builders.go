@@ -35,6 +35,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -1186,8 +1187,8 @@ func firstPartyClientSet(cfg *config) map[string]struct{} {
 // aligned.
 func buildDiscoveryFeatures(cfg *config) discovery.Features {
 	out := buildFeatures(cfg.features)
-	out.DeviceCodeGrant = cfg.deviceCodeGrantConfigured()
-	out.CIBAGrant = cfg.cibaGrantConfigured()
+	out.DeviceCodeGrant = cfg.grantEnabled(grant.DeviceCode)
+	out.CIBAGrant = cfg.grantEnabled(grant.CIBA)
 	out.EncryptionInbound = cfg.encryptionInboundEnabled()
 	// The advertisement of /authorize, /end_session, response_types and
 	// back-channel logout is derived from the very predicate that decides

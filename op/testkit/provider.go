@@ -16,17 +16,9 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-// trustOnce installs the testkit's TLS server certificate into
-// [http.DefaultTransport]'s root pool exactly once per test process.
-// It runs from inside [NewProvider] (which has a live [*httptest.Server]
-// to pull the cert from) and only the first call mutates the transport,
-// so subsequent parallel [NewProvider] calls observe the pool already
-// in place. Without this, [http.DefaultClient.Do] against the testkit's
-// HTTPS server fails with "x509: certificate signed by unknown
-// authority" on Go 1.25.x; Go 1.26+ relaxes loopback trust enough to
-// mask the problem. Switching to TLS is the upstream fix for Go 1.25's
-// cookiejar dropping Secure cookies on plain HTTP, so trusting the
-// testkit cert here is on the same critical path.
+// trustOnce adds the testkit's TLS certificate to [http.DefaultTransport]'s
+// root pool once per test process, so helpers calling [http.DefaultClient.Do]
+// reach the HTTPS server. Later [NewProvider] calls find the pool in place.
 var trustOnce sync.Once //nolint:gochecknoglobals // testkit-internal one-shot trust install; safe by sync.Once.
 
 func ensureTrust(srv *httptest.Server) {
@@ -248,10 +240,8 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		tb.Fatalf("testkit: op.New: %v", err)
 	}
 	// httptest.NewTLSServer (rather than NewServer) so the OP serves over
-	// HTTPS. The cookie codec marks __Host- prefixed cookies Secure, and
-	// Go 1.25's net/http/cookiejar drops Secure cookies set over plain
-	// HTTP — even on loopback. Go 1.26 relaxed this for localhost, but
-	// we still target Go 1.23 as the floor declared in go.mod.
+	// HTTPS: the cookie codec marks __Host- cookies Secure, which a
+	// cookie jar does not store from a plain-HTTP response.
 	srv := httptest.NewTLSServer(provider)
 	tb.Cleanup(srv.Close)
 	// Make http.DefaultClient trust the testkit cert so legacy test
