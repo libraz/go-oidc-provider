@@ -76,6 +76,10 @@ type Input struct {
 	// the same set the verifiers behind those surfaces enforce.
 	ClientSigningAlgs []string
 
+	// SigningAlg is the OP's single issuing JWS alg, advertised for ID
+	// tokens, UserInfo, JARM and JWT introspection. Empty means "ES256".
+	SigningAlg string
+
 	// ScopesSupported lists the scope identifiers the OP advertises
 	// in the discovery document. The op layer pre-filters this list
 	// (built-in standard scopes plus every registered scope whose
@@ -648,8 +652,8 @@ func newBaseDocument(in Input) Document {
 		GrantTypesSupported:               in.GrantsSupported,
 		SubjectTypesSupported:             subjectTypesFor(in.PairwiseEnabled),
 		PromptValuesSupported:             promptValuesFor(in.PromptCreate),
-		IDTokenSigningAlgValuesSupported:  []string{"ES256"},
-		UserInfoSigningAlgValuesSupported: []string{"ES256"},
+		IDTokenSigningAlgValuesSupported:  []string{issuingAlg(in)},
+		UserInfoSigningAlgValuesSupported: []string{issuingAlg(in)},
 		ScopesSupported:                   append([]string(nil), in.ScopesSupported...),
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: defaultAuthMethods(in.AuthMethodsSupported),
@@ -832,19 +836,26 @@ func applyDynamicRegistration(in Input, doc *Document) {
 }
 
 // applyJARMFeature publishes the four *.jwt response modes plus the
-// signing-alg list (ES256 only, mirroring the rest of the OP's posture)
-// when JARM is enabled. The legacy "query" / "form_post" entries come
-// from [newBaseDocument]; this helper appends the JWT variants on top
-// so a deployment without JARM still advertises form_post.
+// signing-alg list (the single issuing alg) when JARM is enabled. The
+// legacy "query" / "form_post" entries come from [newBaseDocument];
+// this helper appends the JWT variants on top so a deployment without
+// JARM still advertises form_post.
 func applyJARMFeature(in Input, doc *Document) {
 	if !in.Features.JARM {
 		return
 	}
 	doc.ResponseModesSupported = append(doc.ResponseModesSupported,
 		"query.jwt", "fragment.jwt", "form_post.jwt", "jwt")
-	// The OP signs with ES256 only; the field stays single-valued
-	// because the signing algorithm is fixed by design.
-	doc.AuthorizationSigningAlgValuesSupported = []string{"ES256"}
+	// The OP issues with one alg, so the field stays single-valued.
+	doc.AuthorizationSigningAlgValuesSupported = []string{issuingAlg(in)}
+}
+
+// issuingAlg returns the OP's issuing JWS alg, defaulting to ES256.
+func issuingAlg(in Input) string {
+	if in.SigningAlg == "" {
+		return "ES256"
+	}
+	return in.SigningAlg
 }
 
 // applyEndpointAuthMirrors copies the token-endpoint auth methods onto
@@ -864,9 +875,9 @@ func applyEndpointAuthMirrors(in Input, doc *Document) {
 		}
 		// RFC 9701 §6: advertise the alg values the OP signs JWT-
 		// formatted introspection responses with. The list mirrors
-		// the ID-token / JARM posture (ES256 only) because the
-		// signing key is shared.
-		doc.IntrospectionSigningAlgValuesSupported = []string{"ES256"}
+		// the ID-token / JARM posture because the signing key is
+		// shared.
+		doc.IntrospectionSigningAlgValuesSupported = []string{issuingAlg(in)}
 	}
 	if in.Features.Revoke {
 		doc.RevocationEndpointAuthMethodsSupported = append([]string(nil),

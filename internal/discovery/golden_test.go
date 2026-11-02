@@ -32,7 +32,24 @@ import (
 func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 	t.Parallel()
 
-	doc := discovery.Build(discovery.Input{
+	golden.JSON(t, discovery.Build(allFeaturesInput()), "testdata/discovery_full.golden.json")
+}
+
+// TestGolden_DiscoveryRS256 pins that the single issuing alg flows into
+// exactly the four issuer-side lists and nowhere else: the document
+// equals the all-features fixture with those fields set to RS256.
+func TestGolden_DiscoveryRS256(t *testing.T) {
+	t.Parallel()
+
+	in := allFeaturesInput()
+	in.SigningAlg = "RS256"
+	golden.JSON(t, discovery.Build(in), "testdata/discovery_rs256.golden.json")
+}
+
+// allFeaturesInput returns the maximal discovery input shared by the
+// all-features fixtures.
+func allFeaturesInput() discovery.Input {
+	return discovery.Input{
 		Issuer:      "https://idp.example.com",
 		MountPrefix: "/oidc",
 		Endpoints: discovery.EndpointPaths{
@@ -93,8 +110,7 @@ func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 		GrantManagementEnabled:        true,
 		GrantManagementActions:        []string{"create", "replace", "merge", "query", "revoke"},
 		GrantManagementActionRequired: true,
-	})
-	golden.JSON(t, doc, "testdata/discovery_full.golden.json")
+	}
 }
 
 // TestDiscovery_Golden_FullFixtureCarriesEveryOptionalEndpoint asserts

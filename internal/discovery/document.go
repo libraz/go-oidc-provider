@@ -187,13 +187,13 @@ type Document struct {
 	PromptValuesSupported []string `json:"prompt_values_supported,omitempty"`
 
 	// IDTokenSigningAlgValuesSupported lists the alg values the OP uses
-	// to sign ID tokens. Always "ES256".
+	// to sign ID tokens: the single issuing alg ("ES256" by default).
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
 
 	// UserInfoSigningAlgValuesSupported lists the JWS alg values the OP
 	// uses when serving the JWT-shape UserInfo response (OIDC Core 1.0
 	// §5.3.2 / OIDC Discovery 1.0 §3 "userinfo_signing_alg_values_supported").
-	// The value mirrors the ID-token signing posture (ES256 only) since
+	// The value mirrors the ID-token signing posture since
 	// the signing key is shared. The field is always emitted because the
 	// JWT-shape UserInfo path is unconditionally available — clients
 	// opt in by setting Accept: application/jwt on the userinfo request.
@@ -271,13 +271,13 @@ type Document struct {
 	ResponseModesSupported []string `json:"response_modes_supported,omitempty"`
 
 	// AuthorizationSigningAlgValuesSupported lists the alg values the
-	// OP uses when signing JARM responses. Always "ES256".
+	// OP uses when signing JARM responses: the single issuing alg.
 	// Emitted only when the JARM feature is enabled.
 	AuthorizationSigningAlgValuesSupported []string `json:"authorization_signing_alg_values_supported,omitempty"`
 
 	// IntrospectionSigningAlgValuesSupported lists the JWS alg values
 	// the OP signs JWT-formatted introspection responses with
-	// (RFC 9701 §6). Always "ES256". Emitted only when the
+	// (RFC 9701 §6): the single issuing alg. Emitted only when the
 	// Introspect feature is enabled because the field is meaningless
 	// without a /introspect endpoint.
 	IntrospectionSigningAlgValuesSupported []string `json:"introspection_signing_alg_values_supported,omitempty"`
