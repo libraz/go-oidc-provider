@@ -41,6 +41,8 @@ func (c *config) startupProfileExtras() map[string]any {
 		"features": c.declaredFeatureNames(),
 		"grants":   c.declaredGrantNames(),
 
+		"signing_alg": string(c.issuingAlg()),
+
 		"pkce_required":           c.requirePKCE(),
 		"par_required":            c.requirePAR(),
 		"nonce_required":          c.requireNonce(),

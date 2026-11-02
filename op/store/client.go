@@ -185,9 +185,11 @@ type Client struct {
 	SubjectType string
 
 	// IDTokenSignedResponseAlg records the JWS alg the client expects
-	// for ID tokens. Registration accepts ES256 and nothing else, so
-	// the field is informational: it can only ever hold "ES256" or be
-	// empty.
+	// for ID tokens. Registration accepts only the OP's issuing
+	// algorithm (ES256 by default, RS256 when the OP is configured for
+	// it), so the field is informational: the OP signs with its own
+	// algorithm whatever the field holds. A value recorded before the
+	// OP switched algorithms is kept verbatim and no longer matches.
 	IDTokenSignedResponseAlg string
 
 	// IntrospectionSignedResponseAlg records the JWS alg the client expects
@@ -195,14 +197,15 @@ type Client struct {
 	// When non-empty the OP MUST emit a JWT response regardless of the
 	// request's Accept header.
 	//
-	// Because the OP signs with ES256 and only ES256, the field acts as
-	// a JWT-versus-JSON switch rather than an algorithm selector: any
-	// non-empty value produces an ES256-signed response. Values other
-	// than "ES256" are stored verbatim and do not change the signing
-	// algorithm, so a client that cannot verify ES256 will fail to
-	// verify the response. Embedders populating this field from client
-	// metadata SHOULD reject other algorithms at their own registration
-	// boundary rather than recording a request the OP will not honour.
+	// Because the OP signs with a single issuing algorithm, the field acts
+	// as a JWT-versus-JSON switch rather than an algorithm selector: any
+	// non-empty value produces a response signed with the OP's algorithm.
+	// Other values are stored verbatim and do not change the signing
+	// algorithm, so a client that cannot verify the OP's algorithm will
+	// fail to verify the response. Embedders populating this field from
+	// client metadata SHOULD reject other algorithms at their own
+	// registration boundary rather than recording a request the OP will
+	// not honour.
 	IntrospectionSignedResponseAlg string
 
 	// SectorIdentifierURI is the optional pairwise sector identifier

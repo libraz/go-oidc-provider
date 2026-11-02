@@ -1,11 +1,15 @@
 package op
 
 import (
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rsa"
 	"strconv"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
@@ -45,10 +49,12 @@ func validateCookieKeysRequired(grants []grant.Type, keys [][]byte) error {
 	return nil
 }
 
-// validateKeyset enforces the v1.0 alg policy: every entry MUST be ECDSA on
-// curve P-256 (so the OP can sign ES256). It also rejects empty key IDs
-// and duplicates within the same keyset.
-func validateKeyset(ks Keyset) error {
+// validateKeyset enforces the issuing-algorithm policy: the active entry
+// (ks[0]) is a key of alg, every other entry is a key of ES256 or RS256,
+// and an entry of the other algorithm sets NotAfter so a mixed keyset is
+// only ever a transition. It also rejects empty and duplicate key IDs and
+// nil signers.
+func validateKeyset(ks Keyset, alg SigningAlgorithm) error {
 	seen := make(map[string]struct{}, len(ks))
 	for i, k := range ks {
 		if k.KeyID == "" {
@@ -61,12 +67,56 @@ func validateKeyset(ks Keyset) error {
 		if nilcheck.IsNil(k.Signer) {
 			return newConfigurationError("keyset entry "+k.KeyID+" has nil Signer", nil)
 		}
-		pub, ok := k.Signer.Public().(*ecdsa.PublicKey)
-		if !ok || pub.Curve != elliptic.P256() {
-			return newConfigurationError("keyset entry "+k.KeyID+" is not ECDSA P-256 (ES256 required)", nil)
+		shape, keyAlg := signingKeyShape(k.Signer.Public())
+		switch {
+		case i == 0 && keyAlg != alg:
+			return newConfigurationError("keyset entry "+k.KeyID+" is "+shape+"; the OP signs with "+string(alg)+
+				", which requires "+signingKeyRequirement(alg)+" for the active key", nil)
+		case keyAlg == "":
+			return newConfigurationError("keyset entry "+k.KeyID+" is "+shape+
+				"; only ECDSA P-256 and RSA of 2048 bits or more are accepted", nil)
+		case keyAlg != alg && k.NotAfter.IsZero():
+			return newConfigurationError("keyset entry "+k.KeyID+" is "+shape+" but the OP signs with "+string(alg)+
+				"; a key of the other type must set NotAfter", nil)
 		}
 	}
 	return nil
+}
+
+// signingKeyShape describes pub for the keyset errors and returns the
+// issuing algorithm it serves, or "" when it serves none.
+func signingKeyShape(pub crypto.PublicKey) (string, SigningAlgorithm) {
+	switch k := pub.(type) {
+	case *ecdsa.PublicKey:
+		if k == nil || k.Curve == nil {
+			break
+		}
+		if k.Curve == elliptic.P256() {
+			return "ECDSA P-256", AlgES256
+		}
+		return "ECDSA " + k.Curve.Params().Name, ""
+	case *rsa.PublicKey:
+		if k == nil || k.N == nil {
+			break
+		}
+		bits := k.N.BitLen()
+		shape := "RSA " + strconv.Itoa(bits) + " bits"
+		if bits < jose.MinRSAKeyBits {
+			return shape, ""
+		}
+		return shape, AlgRS256
+	case ed25519.PublicKey:
+		return "Ed25519", ""
+	}
+	return "an unsupported key type", ""
+}
+
+// signingKeyRequirement names the key type the active entry needs for alg.
+func signingKeyRequirement(alg SigningAlgorithm) string {
+	if alg == AlgRS256 {
+		return "RSA of 2048 bits or more"
+	}
+	return "ECDSA P-256"
 }
 
 // validateActiveSigningKeyLive rejects a keyset whose active entry

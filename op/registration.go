@@ -185,10 +185,11 @@ type ClientMetadata struct {
 	// "pairwise" when WithPairwiseSubject is configured.
 	SubjectType string
 
-	// IDTokenSignedResponseAlg is the requested ID token alg. ES256 is
-	// the only accepted value; any other algorithm is rejected with
-	// invalid_client_metadata. See [SigningKey] for why the OP signs
-	// with a single algorithm.
+	// IDTokenSignedResponseAlg is the requested ID token alg. The
+	// algorithm [WithSigningAlgorithm] selects is the only accepted
+	// value and fills it in when omitted; any other algorithm is
+	// rejected with invalid_client_metadata. See [SigningKey] for why
+	// the OP signs with a single algorithm.
 	IDTokenSignedResponseAlg string
 
 	// SectorIdentifierURI is the OIDC Dynamic Client Registration 1.0
@@ -341,8 +342,8 @@ type ClientMetadata struct {
 
 	// IntrospectionSignedResponseAlg selects the JWS algorithm for a JWT
 	// introspection response. Empty and "none" are normalized to the JSON
-	// response mode; ES256 selects the JWT response mode and is the only
-	// signed algorithm currently accepted by the provider.
+	// response mode; the algorithm [WithSigningAlgorithm] selects is the
+	// only signed value accepted, and selects the JWT response mode.
 	IntrospectionSignedResponseAlg string
 
 	// PostLogoutRedirectURIs lists the candidate URIs the client wants

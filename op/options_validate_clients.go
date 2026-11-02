@@ -69,6 +69,7 @@ func (c *config) validateStaticClients() error {
 		AllowLocalhostLoopback:               c.allowLocalhostLoopback,
 		AllowInsecureBackchannelLogoutForDev: c.allowInsecureBackchannelLogoutForDev,
 		JWEPolicy:                            c.jwePolicy(),
+		SigningAlg:                           string(c.issuingAlg()),
 	}
 	for i := range c.staticClients {
 		seed := c.staticClients[i]

@@ -101,6 +101,10 @@ func (c *config) validateProfiles() error {
 // stays under the gocognit budget as additional MUST clauses land
 // (Access Token TTL, refresh grace, client auth method, …).
 func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]struct{}) error {
+	if c.issuingAlg() == AlgRS256 && profile.IsFAPI(p) {
+		return newConfigurationError("WithProfile "+p.String()+
+			" does not permit WithSigningAlgorithm(RS256); FAPI 2.0 Security Profile §5.4.1 allows PS256, ES256 or EdDSA", nil)
+	}
 	for _, req := range profile.RequiredFeatures(p) {
 		if _, ok := enabled[req]; ok {
 			continue

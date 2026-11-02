@@ -1,14 +1,19 @@
 package op_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +24,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
 // reloadOtherIssuer is the issuer a reload that changes the issuer asks for.
@@ -499,4 +505,245 @@ func TestReloadable_IssuerChangeHasNoSideEffect(t *testing.T) {
 		t.Fatalf("GetClient(%s) = %v, want ErrNotFound: a refused Reload wrote a static client", newClientID, err)
 	}
 	assertActiveKid(t, r, "kid-old")
+}
+
+const (
+	algSwitchClientID = "alg-switch-rp"
+	algSwitchSecret   = "alg-switch-secret" //nolint:gosec // opaque test fixture secret, not a credential.
+	algSwitchRedirect = "https://rp.testkit.invalid/callback"
+	algSwitchSubject  = "alg-switch-user"
+)
+
+// TestReload_SigningAlgorithmSwitch pins that an OP moves from ES256 to
+// RS256 without invalidating what it already issued, as long as the old
+// key stays behind the new active one with a NotAfter; a switch that drops
+// the old key is refused.
+func TestReload_SigningAlgorithmSwitch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := inmem.New()
+	st.PutUser(ctx, &store.User{Subject: algSwitchSubject})
+	hash, err := op.HashClientSecret(algSwitchSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	if err := st.RegisterClient(ctx, &store.Client{
+		ID:                      algSwitchClientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{algSwitchRedirect},
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		Scopes:                  []string{"openid", "profile"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	}); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	cookieKey := newRandomCookieKey(t)
+	ecKey := newTestKey(t, "ec-old")
+	rsaKey := newRSATestKey(t, "rsa-new", 2048)
+	opts := func(extra ...op.Option) []op.Option {
+		return testkit.MinimalOptions(t, append([]op.Option{
+			op.WithStore(st),
+			op.WithCookieKeys(cookieKey),
+			op.WithAccessTokenFormat(store.AccessTokenFormatJWT),
+		}, extra...)...)
+	}
+
+	r, err := op.NewReloadable(opts(op.WithKeyset(op.Keyset{ecKey}))...)
+	if err != nil {
+		t.Fatalf("NewReloadable: %v", err)
+	}
+	srv := httptest.NewTLSServer(r)
+	t.Cleanup(srv.Close)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar: %v", err)
+	}
+	browser := algSwitchClient(srv, jar)
+	oldAT, oldIDT := algSwitchFlow(t, srv.URL, browser)
+	for name, tok := range map[string]string{"access token": oldAT, "ID token": oldIDT} {
+		if alg, kid := jwsHeader(t, tok); alg != "ES256" || kid != "ec-old" {
+			t.Fatalf("%s before the switch: alg=%s kid=%s, want ES256 ec-old", name, alg, kid)
+		}
+	}
+
+	// Dropping the ES256 key would strand every token it signed.
+	before := r.Provider()
+	err = r.Reload(ctx, opts(op.WithKeyset(op.Keyset{rsaKey}), op.WithSigningAlgorithm(op.AlgRS256))...)
+	if !errors.Is(err, op.ErrReloadIncompatible) {
+		t.Fatalf("Reload without the old key = %v, want ErrReloadIncompatible", err)
+	}
+	if r.Provider() != before {
+		t.Fatal("a refused Reload replaced the current Provider")
+	}
+
+	if err := r.Reload(ctx, opts(
+		op.WithKeyset(op.Keyset{rsaKey, retiring(ecKey)}),
+		op.WithSigningAlgorithm(op.AlgRS256),
+	)...); err != nil {
+		t.Fatalf("Reload to RS256: %v", err)
+	}
+
+	if status := bearerGet(t, browser, srv.URL+"/oidc/userinfo", oldAT); status != http.StatusOK {
+		t.Fatalf("/userinfo with the ES256 access token after the switch: status %d, want 200", status)
+	}
+	resp := ssfBrowserGet(t, browser, srv.URL+"/oidc/end_session?"+url.Values{"id_token_hint": {oldIDT}}.Encode())
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
+		t.Fatalf("/end_session with the ES256 id_token_hint after the switch: status %d", resp.StatusCode)
+	}
+
+	freshJar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar: %v", err)
+	}
+	newAT, newIDT := algSwitchFlow(t, srv.URL, algSwitchClient(srv, freshJar))
+	for name, tok := range map[string]string{"access token": newAT, "ID token": newIDT} {
+		if alg, kid := jwsHeader(t, tok); alg != "RS256" || kid != "rsa-new" {
+			t.Fatalf("%s after the switch: alg=%s kid=%s, want RS256 rsa-new", name, alg, kid)
+		}
+	}
+}
+
+// algSwitchClient returns a client that trusts srv and does not follow
+// redirects, so each hop of the code flow can be inspected.
+func algSwitchClient(srv *httptest.Server, jar http.CookieJar) *http.Client {
+	return &http.Client{
+		Transport:     srv.Client().Transport,
+		Jar:           jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// algSwitchFlow runs an authorization code flow for algSwitchSubject and
+// returns the access token and ID token it yields.
+func algSwitchFlow(t *testing.T, base string, browser *http.Client) (accessToken, idToken string) {
+	t.Helper()
+	verifier := "alg-switch-pkce-verifier-0123456789-abcdefghijklmn"
+	sum := sha256.Sum256([]byte(verifier))
+	q := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {algSwitchClientID},
+		"redirect_uri":          {algSwitchRedirect},
+		"scope":                 {"openid profile"},
+		"state":                 {"alg-switch-state"},
+		"nonce":                 {"alg-switch-nonce"},
+		"code_challenge":        {base64.RawURLEncoding.EncodeToString(sum[:])},
+		"code_challenge_method": {"S256"},
+	}
+	resp := ssfBrowserGet(t, browser, base+"/oidc/auth?"+q.Encode())
+	_ = resp.Body.Close()
+	loc, err := resp.Location()
+	if resp.StatusCode != http.StatusFound || err != nil || !strings.HasPrefix(loc.Path, "/oidc/interaction/") {
+		t.Fatalf("/authorize status=%d location=%v", resp.StatusCode, loc)
+	}
+	interactionURL := base + loc.Path
+
+	prompt := ssfBrowserGet(t, browser, interactionURL)
+	var step map[string]any
+	if err := json.NewDecoder(prompt.Body).Decode(&step); err != nil {
+		t.Fatalf("decode interaction prompt: %v", err)
+	}
+	_ = prompt.Body.Close()
+	csrf := ssfCookie(prompt.Cookies(), "__Host-oidc_csrf")
+	stateRef, _ := step["state_ref"].(string)
+	if csrf == nil || stateRef == "" {
+		t.Fatalf("interaction prompt lacks state_ref or CSRF cookie: %v", step)
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"state_ref": stateRef,
+		"values":    map[string]string{testkit.SubjectFieldName: algSwitchSubject},
+	})
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, interactionURL, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", testkit.DefaultIssuer)
+	req.Header.Set("X-CSRF-Token", csrf.Value)
+	req.AddCookie(csrf)
+	final, err := browser.Do(req)
+	if err != nil {
+		t.Fatalf("POST interaction: %v", err)
+	}
+	if rotated := ssfCookie(final.Cookies(), "__Host-oidc_csrf"); rotated != nil {
+		csrf = rotated
+	}
+	if consent, env, err := testkit.IsConsentPrompt(final); err != nil {
+		t.Fatalf("inspect consent: %v", err)
+	} else if consent {
+		ref, _ := env["state_ref"].(string)
+		final = testkit.PostConsentApproval(t, browser, interactionURL, testkit.DefaultIssuer, csrf.Value, ref,
+			testkit.ApprovedScopesFrom(t, env))
+	}
+	_ = final.Body.Close()
+	cb, err := final.Location()
+	if final.StatusCode != http.StatusFound || err != nil || cb.Query().Get("code") == "" {
+		t.Fatalf("interaction did not redirect with a code: status=%d location=%v", final.StatusCode, cb)
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {cb.Query().Get("code")},
+		"redirect_uri":  {algSwitchRedirect},
+		"code_verifier": {verifier},
+	}
+	tokReq, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, base+"/oidc/token",
+		strings.NewReader(form.Encode()))
+	tokReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokReq.SetBasicAuth(algSwitchClientID, algSwitchSecret)
+	tokResp, err := browser.Do(tokReq)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer func() { _ = tokResp.Body.Close() }()
+	var body struct {
+		AccessToken string `json:"access_token"`
+		IDToken     string `json:"id_token"`
+	}
+	if err := json.NewDecoder(tokResp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode /token: %v", err)
+	}
+	if tokResp.StatusCode != http.StatusOK || body.AccessToken == "" || body.IDToken == "" {
+		t.Fatalf("code exchange: status=%d body=%+v", tokResp.StatusCode, body)
+	}
+	return body.AccessToken, body.IDToken
+}
+
+// bearerGet sends a GET carrying token as a bearer credential and returns
+// the status.
+func bearerGet(t *testing.T, client *http.Client, target, token string) int {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", target, err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// jwsHeader returns the alg and kid of a compact JWS.
+func jwsHeader(t *testing.T, token string) (alg, kid string) {
+	t.Helper()
+	head, _, ok := strings.Cut(token, ".")
+	if !ok {
+		t.Fatalf("not a compact JWS: %q", token)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(head)
+	if err != nil {
+		t.Fatalf("decode JWS header: %v", err)
+	}
+	var h struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}
+	if err := json.Unmarshal(raw, &h); err != nil {
+		t.Fatalf("parse JWS header: %v", err)
+	}
+	return h.Alg, h.Kid
 }

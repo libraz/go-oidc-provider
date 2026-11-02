@@ -60,6 +60,7 @@ type config struct {
 	logger               *slog.Logger
 	auditLogger          *slog.Logger
 	keyset               Keyset
+	signingAlg           SigningAlgorithm // read through issuingAlg
 	defaultLocale        Locale
 	localeBundles        []LocaleBundle
 	preferredLocaleStore PreferredLocaleStore
@@ -1035,9 +1036,11 @@ func WithUserStore(s store.UserStore) Option {
 // WithKeyset registers the OP signing keys. The first entry is the active
 // signer; subsequent entries are kept in JWKS so RPs can verify tokens
 // issued under previous keys during a rotation window.
-// Every entry MUST be ECDSA on curve P-256: the OP signs with ES256 and
-// only ES256, permanently. Supplying any other key shape causes [New] to
-// fail at construction time. See [SigningKey] for the rationale.
+// The active entry MUST be a key of the algorithm [WithSigningAlgorithm]
+// selects (ECDSA P-256 for the default ES256, RSA of 2048 bits or more for
+// RS256); any other entry MUST be one of those two key types, and one of
+// the other type MUST set [SigningKey.NotAfter]. Any other shape causes
+// [New] to fail at construction time. See [SigningKey] for the rationale.
 // Stable since v1.0.
 func WithKeyset(ks Keyset) Option {
 	return optionFunc(func(c *config) error {

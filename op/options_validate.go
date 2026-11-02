@@ -112,7 +112,7 @@ func (c *config) validateRequired() error {
 	if len(c.keyset) == 0 {
 		return ErrKeysetRequired
 	}
-	if err := validateKeyset(c.keyset); err != nil {
+	if err := validateKeyset(c.keyset, c.issuingAlg()); err != nil {
 		return err
 	}
 	if err := validateActiveSigningKeyLive(c.keyset, c.clock.Now()); err != nil {

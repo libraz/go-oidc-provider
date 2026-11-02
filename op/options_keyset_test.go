@@ -1,11 +1,8 @@
 package op_test
 
 import (
-	"crypto"
 	"crypto/ecdsa"
-	"crypto/rsa"
 	"errors"
-	"io"
 	"strings"
 	"testing"
 	"time"
@@ -55,19 +52,18 @@ func TestWithKeyset_RejectsDuplicateKeyID(t *testing.T) {
 	}
 }
 
-func TestWithKeyset_RejectsNonES256Key(t *testing.T) {
+func TestWithKeyset_RejectsActiveKeyOfOtherAlgorithm(t *testing.T) {
 	t.Parallel()
 
-	// rsa.PublicKey satisfies crypto.Signer.Public() but is not ECDSA P-256.
-	rsaKey := &fakeRSASigner{}
+	// A valid RS256 key is still refused as the active key of an OP that
+	// signs with the default ES256.
 	_, err := op.New(
 		op.WithIssuer(validIssuer),
 		op.WithStore(stubStore{}),
-		op.WithKeyset(op.Keyset{{KeyID: "rsa-1", Signer: rsaKey}}),
+		op.WithKeyset(op.Keyset{newRSATestKey(t, "rsa-1", 2048)}),
 	)
-	if err == nil {
-		t.Fatal("expected error for non-ES256 key, got nil")
-	}
+	wantConfigurationError(t, err,
+		"keyset entry rsa-1 is RSA 2048 bits; the OP signs with ES256, which requires ECDSA P-256 for the active key")
 }
 
 func TestWithKeyset_RejectsTypedNilSigner(t *testing.T) {
@@ -169,18 +165,6 @@ func TestWithKeyset_AcceptsZeroNotAfter(t *testing.T) {
 	)...); err != nil {
 		t.Fatalf("New rejected a keyset with no retirement deadline: %v", err)
 	}
-}
-
-// fakeRSASigner reports an RSA public key from Public(), so the Keyset
-// validator can reject it without needing real RSA key generation in tests.
-type fakeRSASigner struct{}
-
-func (fakeRSASigner) Public() crypto.PublicKey { return &rsa.PublicKey{} }
-
-// Sign is never invoked because validation rejects the key shape before
-// any signing path is reached.
-func (fakeRSASigner) Sign(_ io.Reader, _ []byte, _ crypto.SignerOpts) ([]byte, error) {
-	return nil, nil
 }
 
 // validCookieKey returns a 32-byte filler suitable for the AES-256-GCM cookie

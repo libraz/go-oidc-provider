@@ -6,7 +6,7 @@ import (
 )
 
 // SigningKey is one entry in a [Keyset]. It bundles a [crypto.Signer]
-// (typically an ECDSA P-256 private key) with the key identifier the OP
+// (an ECDSA P-256 or RSA private key) with the key identifier the OP
 // publishes alongside it in JWKS.
 //
 // SigningKey carries the private signer; callers MUST treat instances as
@@ -18,15 +18,17 @@ type SigningKey struct {
 	// warm during rotations.
 	KeyID string
 
-	// Signer is the private key implementing [crypto.Signer]. The
-	// library signs with ES256 and only ES256, so the key MUST be
-	// ECDSA on curve P-256; any other shape causes [op.New] to fail at
-	// construction time. The restriction is a permanent design choice
-	// rather than a staged rollout: it removes algorithm negotiation
-	// and the downgrade guard negotiation would require. The
+	// Signer is the private key implementing [crypto.Signer]. The OP
+	// issues with the one algorithm [WithSigningAlgorithm] selects, so
+	// the active entry MUST be ECDSA on curve P-256 for ES256 (the
+	// default) or RSA of 2048 bits or more for RS256. A retiring entry
+	// may be of the other type, kept only to verify what it signed, and
+	// must then set NotAfter. Any other shape causes [op.New] to fail at
+	// construction time. One issuing algorithm per OP removes algorithm
+	// negotiation and the downgrade guard negotiation would require. The
 	// verification side is wider: RS256, PS256, ES256 and EdDSA are all
 	// accepted on client assertions and request objects, and that is
-	// the set the discovery document advertises.
+	// the set the discovery document advertises for them.
 	Signer crypto.Signer
 
 	// NotAfter is the optional retirement deadline for the entry.

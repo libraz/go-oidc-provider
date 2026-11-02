@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
@@ -208,6 +209,7 @@ func New(opts ...Option) (*Provider, error) {
 		toKeyEntries(cfg.keyset),
 		keys.WithClock(keysetClock(cfg)),
 		keys.WithRetiredKidObserver(retiredKidObserver(cfg)),
+		keys.WithSigningAlg(jose.Algorithm(cfg.issuingAlg())),
 	)
 	if err != nil {
 		return nil, newConfigurationError("keyset rejected by internal validator", err)

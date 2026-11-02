@@ -1,6 +1,7 @@
 package op
 
 import (
+	"crypto"
 	"errors"
 	"strconv"
 
@@ -74,10 +75,11 @@ const MaxKidlessEncryptionTrialKeys = jose.MaxKidlessTrialKeys
 // `use=enc`. The library enforces the constraint structurally: the
 // signing keyset is supplied through [WithKeyset] and lives in
 // [Keyset]; the encryption keyset is supplied here and lives in
-// [EncryptionKeyset]. The two slices are validated independently and
-// MUST not overlap by kid (a duplicate kid across the two slices
-// would be a configuration smell even if the underlying key
-// material is distinct).
+// [EncryptionKeyset]. The two slices MUST not overlap by kid (a
+// duplicate kid across the two slices would be a configuration smell
+// even if the underlying key material is distinct), and an entry whose
+// public key is that of a [WithKeyset] entry fails [op.New] whatever
+// kid it carries.
 //
 // Multiple keys allow rotation. An inbound ciphertext that names a
 // `kid` routes straight to that entry. A ciphertext that omits one
@@ -374,13 +376,11 @@ func familyLabel(alg jose.JWEAlg) string {
 	return "EC"
 }
 
-// validateEncryptionKeyset enforces the kid-disjoint invariant
-// between the signing keyset and the encryption keyset (RFC 7517
-// §4.2 use=sig / use=enc separation). The two slices are validated
-// independently, but a kid collision would mean the same identifier
-// appears in JWKS twice (once with use=sig, once with use=enc) which
-// is a configuration smell even if the underlying material is
-// disjoint.
+// validateEncryptionKeyset enforces that the signing keyset and the
+// encryption keyset are disjoint (RFC 7517 §4.2 use=sig / use=enc
+// separation), both by kid — a collision would list one identifier in
+// JWKS twice — and by key material, so one key never serves both a
+// signature scheme and a decryption scheme under different kids.
 func (c *config) validateEncryptionKeyset() error {
 	if len(c.encryptionKeyset) == 0 {
 		return nil
@@ -397,6 +397,28 @@ func (c *config) validateEncryptionKeyset() error {
 			return newConfigurationError("WithEncryptionKeyset kid "+k.KeyID+
 				" collides with a kid in WithKeyset (RFC 7517 §4.2 forbids the same kid for use=sig and use=enc)", nil)
 		}
+		if kid, reused := c.signingKeyReusing(k.PrivateKey); reused {
+			return newConfigurationError("WithEncryptionKeyset entry "+k.KeyID+" reuses the public key of signing key "+
+				kid+"; signing and encryption keys must be distinct", nil)
+		}
 	}
 	return nil
+}
+
+// signingKeyReusing returns the kid of the signing key whose public key is
+// priv's. A key type exposing no public key is skipped here; the
+// encryption set builder refuses it.
+func (c *config) signingKeyReusing(priv crypto.PrivateKey) (string, bool) {
+	holder, ok := priv.(interface{ Public() crypto.PublicKey })
+	if !ok {
+		return "", false
+	}
+	pub := holder.Public()
+	for _, s := range c.keyset {
+		signing, ok := s.Signer.Public().(interface{ Equal(crypto.PublicKey) bool })
+		if ok && signing.Equal(pub) {
+			return s.KeyID, true
+		}
+	}
+	return "", false
 }

@@ -12,8 +12,8 @@ const (
 	profileUnspecified Profile = iota
 
 	// FAPI2Baseline selects the OpenID Foundation FAPI 2.0 Baseline OP
-	// profile. It mandates PAR, JAR, PKCE, sender-constrained tokens
-	// (DPoP or mTLS), and ES256 signing.
+	// profile. It mandates PAR, JAR, PKCE and sender-constrained tokens
+	// (DPoP or mTLS), and refuses RS256 issuing.
 	FAPI2Baseline
 
 	// FAPI2MessageSigning selects the FAPI 2.0 Message Signing OP
