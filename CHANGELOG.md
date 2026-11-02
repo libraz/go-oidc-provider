@@ -211,6 +211,20 @@ issuer.
 
 ### Changed
 
+- `op.New` refuses a `WithEncryptionKeyset` entry whose public key is also a
+  signing key in `WithKeyset`. Signing and encryption keys were already
+  documented as distinct; a configuration that reused one EC key for ES256
+  signing and ECDH-ES decryption now fails at startup and needs a separate
+  encryption key.
+
+- Dynamic client registration rejects a `*_signed_response_alg` other than the
+  OP's signing algorithm with `... is not supported (the OP signs with ES256)`
+  (or `RS256`) instead of `... (ES256 only)`.
+
+- The OP's own verification of its access tokens, of `id_token_hint` and of
+  token-exchange subject tokens rejects a JWS whose header `alg` differs from
+  the algorithm of the key it names. Tokens the OP issued are unaffected.
+
 - The SQL adapter's schema check, at `op.New` and in `Store.ValidateSchema`,
   now requires every column the reference DDL declares on every table it
   checks. It used to check only the refresh-token table in full and, on the
@@ -438,6 +452,22 @@ issuer.
   subject mapping to `op.WithJWTBearerGrant`.
 
 ### Added
+
+- `op.WithSigningAlgorithm` selects the one algorithm the OP signs every token
+  with: `op.AlgES256` (the default) or `op.AlgRS256`. With RS256 the active
+  `Keyset` entry must be an RSA key of 2048 bits or more, discovery advertises
+  `RS256` in its four issuing alg lists, and dynamic registration defaults
+  `id_token_signed_response_alg` to `RS256`. There is no per-client choice.
+  RS256 is refused together with any FAPI profile. A key of the other type may
+  stay in the `Keyset` with `NotAfter` while the OP switches algorithms, so
+  tokens issued before the switch keep verifying. The `startup.profile` audit
+  event records `signing_alg`.
+
+- `op.LoadSigningKey` and `op.LoadKeyset` read RSA keys: PKCS#1 and PKCS#8
+  PEM and private RSA JWKs. An omitted `kid` is the RFC 7638 thumbprint.
+
+- `testkit.WithSigningAlgorithm` builds a test provider that signs with RS256,
+  and `testkit.SignedJWT` signs with either algorithm.
 
 - `op.AuditRedirectURIMismatch` is emitted when `/authorize` receives an
   unregistered `redirect_uri` and when the token endpoint receives one that
@@ -729,7 +759,8 @@ issuer.
   which `ValidateSchema` requires whether or not the feature is on; see the
   SQL migrations. `Provider.RevokeSubject` now emits session-revoked when the
   feature is on. The CAEP Interoperability Profile's RS256 signing requirement
-  (section 2.6) is not supported: the OP signs with ES256 only.
+  (section 2.6) is met only by an OP configured with
+  `op.WithSigningAlgorithm(op.AlgRS256)`.
 - `op.DeviceCodeOption`. `op.WithDeviceCodeGrant` now takes the device-code
   settings the way `op.WithCIBA` takes its own:
   `op.WithDeviceCodeGrant(op.WithDeviceCodeExpiry(d), op.WithDeviceCodePollInterval(i))`.
@@ -765,14 +796,15 @@ covered by the SemVer promise.
   `op.IDJAGIssuancePolicy` decides per request, returning the client's
   identifier at the audience server, the scope, the resource values and an
   optional email in an `op.IDJAGDecision`, or `op.ErrIDJAGUnknownAudience` /
-  `op.ErrIDJAGDenied`. The assertion is signed with ES256, lives at most five
-  minutes, and is returned with `token_type` `N_A` and no refresh token. The
+  `op.ErrIDJAGDenied`. The assertion is signed with the OP's signing
+  algorithm, lives at most five minutes, and is returned with `token_type`
+  `N_A` and no refresh token. The
   scope and resource are those of the audience server and are not checked
   against the calling client's registration. The discovery document carries
   `identity_chaining_requested_token_types_supported`. A client registered for
-  pairwise subjects cannot obtain one. Because the OP signs only with ES256, a
-  resource server that implements only the draft's RS256 baseline rejects
-  these assertions.
+  pairwise subjects cannot obtain one. A resource server that implements only
+  the draft's RS256 baseline needs an OP configured with
+  `op.WithSigningAlgorithm(op.AlgRS256)`.
 
 - Client ID metadata documents
   (draft-ietf-oauth-client-id-metadata-document-02), enabled with
