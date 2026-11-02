@@ -360,9 +360,10 @@ func clientRequiresPKCE(client *store.Client) bool {
 // every request MUST carry a code_challenge (FAPI 2.0 / OAuth 2.1
 // posture, or a public / native client per [clientRequiresPKCE]). When
 // required is false, an absent challenge falls through silently and the
-// PKCE flow is opted out for this request; a present challenge is still
-// format-validated so a half-supplied pair (challenge but no method, or
-// vice versa) produces a clear error rather than silent acceptance.
+// PKCE flow is opted out for this request, whether or not a
+// code_challenge_method was sent; a present challenge is still
+// format-validated, so a challenge without the S256 method is refused
+// rather than silently accepted.
 func (req *Request) validatePKCE(required bool) error {
 	if req.CodeChallenge == "" {
 		if required {
