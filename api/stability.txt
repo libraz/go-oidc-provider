@@ -334,5 +334,6 @@ github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb	Store.ValidateSchema
 github.com/libraz/go-oidc-provider/op/storeadapter/sql	Store.Migrations	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/sql	Store.RunGC	v1.5
 github.com/libraz/go-oidc-provider/op/storeadapter/sql	Store.ValidateSchema	v1.5
+github.com/libraz/go-oidc-provider/op/storeadapter/sql	WithTablePrefix	v1.5
 github.com/libraz/go-oidc-provider/op/testkit	WithSigningAlgorithm	v1.5
 github.com/libraz/go-oidc-provider/op/totpkit	Verify	v1.5

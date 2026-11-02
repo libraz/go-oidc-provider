@@ -35,6 +35,7 @@ type Option func(*config)
 
 type config struct {
 	clock     Clock
+	prefix    string
 	naming    nameMap
 	overrides map[string]string
 }
@@ -47,6 +48,24 @@ func WithClock(c Clock) Option {
 			cfg.clock = c
 		}
 	}
+}
+
+// WithTablePrefix sets the prefix every default table name carries. The
+// default is "oidc_", producing names like "oidc_authorization_codes"; the
+// empty prefix produces "authorization_codes". A deployment that shares a
+// database with its application, or runs several OPs in one schema, gives
+// each its own prefix. The prefix reaches the queries, [Store.Schema],
+// [Store.Migrations], [Store.Migrate], the schema checks and [Store.GC]
+// alike, and the DDL's index names follow the table names. [WithNaming]
+// entries still override individual tables outright, prefix or not.
+//
+// The prefix is validated like a [WithNaming] value (ASCII letters, digits
+// and underscore, not starting with a digit, each resulting name within 63
+// bytes); [New] returns an error otherwise.
+//
+// Stable since v1.5.
+func WithTablePrefix(prefix string) Option {
+	return func(cfg *config) { cfg.prefix = prefix }
 }
 
 // WithNaming overrides the physical table names. Keys are the logical
@@ -134,13 +153,17 @@ func New(db *databasesql.DB, dialect Dialect, opts ...Option) (*Store, error) {
 	}
 	cfg := &config{
 		clock:  systemClock{},
-		naming: defaultNames(),
+		prefix: defaultTablePrefix,
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(cfg)
 		}
 	}
+	if err := validateTablePrefix(cfg.prefix); err != nil {
+		return nil, err
+	}
+	cfg.naming = namesWithPrefix(cfg.prefix)
 	if err := cfg.naming.applyOverrides(cfg.overrides); err != nil {
 		return nil, err
 	}
@@ -222,7 +245,7 @@ func (s *Store) EmailOTPs() store.EmailOTPStore { return s.emailOTPsImpl }
 func (s *Store) AuthnLockouts() store.AuthnLockoutStore { return s.authnLockoutsImpl }
 
 // Schema returns the dialect-specific DDL the adapter expects, with
-// any [WithNaming] overrides applied. Embedders typically copy the
+// [WithTablePrefix] and [WithNaming] applied. Embedders typically copy the
 // returned string into their migration tooling rather than relying on
 // [Store.Migrate]; the schema is exposed verbatim so reviews can
 // diff the adapter's expectations against the production schema.

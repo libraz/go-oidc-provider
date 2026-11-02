@@ -770,7 +770,8 @@ func (s *Store) StaticClientReconciler() (store.StaticClientReconciler, bool) {
 // for [Users], or nil when that backend has no AuthnLockouts method. Lockout
 // records are keyed by subject, so they must live and stay durable alongside
 // the users they protect. A nil result means the OP falls back to whatever
-// op.WithAuthnLockoutStore configures.
+// op.WithAuthnLockoutStore configures; with neither, op.New refuses a login
+// flow that counts failures (op.ErrAuthnLockoutStoreRequired).
 func (s *Store) AuthnLockouts() store.AuthnLockoutStore {
 	return s.authnLockouts
 }

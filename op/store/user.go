@@ -128,9 +128,12 @@ type UserPasswordStore interface {
 	// surfaced.
 	FindByUsername(ctx context.Context, username string) (*User, error)
 
-	// ReadPasswordHash returns the PHC-encoded password hash for the
-	// subject (e.g. "$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>").
-	// It MUST return [ErrNotFound] when the subject exists but has no
+	// ReadPasswordHash returns the stored password hash for the subject:
+	// a PHC-encoded argon2id string (e.g.
+	// "$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>"), or, when
+	// PrimaryPassword.LegacySchemes is set, the legacy encoding exactly as
+	// stored (e.g. a bcrypt "$2a$", "$2b$" or "$2y$" hash) until the
+	// password is rewritten. It MUST return [ErrNotFound] when the subject exists but has no
 	// password credential set (e.g. passkey-only account); the
 	// orchestrator surfaces the same invalid-credentials prompt as a
 	// hash-mismatch so the response is enumeration-safe.
@@ -147,6 +150,12 @@ type UserPasswordStore interface {
 // return [ErrNotFound] for an unknown subject. A failure never fails the
 // login: the legacy hash stays and the next login retries. Return
 // [ErrPasswordHashUpdateUnsupported] when the store cannot update.
+//
+// After a rewrite the column holds argon2id, so any other login path of
+// the application that verifies the column with bcrypt directly must first
+// switch to a verifier that accepts both encodings (op.VerifyPassword for
+// argon2id, the legacy scheme's Verify for the rest); until it does, leave
+// this interface unimplemented.
 //
 // Stable since v1.5.
 type UserPasswordHashUpdater interface {

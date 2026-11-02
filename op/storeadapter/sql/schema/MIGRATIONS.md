@@ -4,9 +4,9 @@ The SQL lives in `schema/migrations/{sqlite,mysql,postgres}/`, one file per
 release in golang-migrate's `NNNNNN_<version>.up.sql` form.
 `000001_v1.0.0.up.sql` creates the schema v1.0.0 shipped; each later file
 applies one release's changes. `Store.Migrations()` returns the configured
-dialect's files with the `WithNaming` table names applied, so a migration tool
-can read them directly; take the files from it rather than from the repository
-when the names differ from the defaults. `TABLES.md` lists what each table
+dialect's files with the `WithTablePrefix` and `WithNaming` table names applied,
+so a migration tool can read them directly; take the files from it rather than
+from the repository when the names differ from the defaults. `TABLES.md` lists what each table
 holds and when the OP uses it.
 
 - **A new database** applies every file in order, or runs `Store.Schema()`
@@ -16,7 +16,10 @@ holds and when the OP uses it.
 - **An existing database** is first recorded at the last release it applied,
   then takes only the later files. With golang-migrate that is
   `migrate force <N>`: a database created by v1.2.0 runs `migrate force 3`,
-  after which `migrate up` applies v1.3.0 onwards. A database built from
+  after which `migrate up` applies v1.3.0 onwards. Run it against the OP's own
+  version table (see [Coexisting with your application's
+  migrations](#coexisting-with-your-applications-migrations)), never the
+  application's. A database built from
   `Store.Schema()` of the current release is recorded at the newest file.
 - golang-migrate's MySQL driver needs `multiStatements=true` in the DSN,
   because each file holds several statements.
@@ -46,7 +49,7 @@ same leading column, passes. A missing one fails with `oidcsql: <table> has no
 index on <column>`; on MySQL, where `Store.Migrate` cannot add it to an existing
 table, apply the migration files. When everything missing was added by a later
 release, the error ends with the `migrate force <N>` number that records the
-schema's current release.
+schema's current release, to be run against the OP's own version table.
 
 ## Other migration tools
 
@@ -60,7 +63,46 @@ there are no down files.
 On PostgreSQL in a schema other than `public`, the adapter resolves tables
 through the connection's `search_path` (the schema check uses
 `current_schema()`), so set `search_path` on the DSN or connection. Table names
-passed to `WithNaming` are plain identifiers, never schema-qualified.
+passed to `WithNaming`, and the prefix passed to `WithTablePrefix`, are plain
+identifiers, never schema-qualified.
+
+## Coexisting with your application's migrations
+
+The OP's files need their own version history, separate from the application's.
+Both sets are numbered from 1, and a tool that records them in one table sees
+the second set as already applied or out of order. Keep a separate directory
+and a separate version table for each tool:
+
+- **golang-migrate**: give the OP its own table through the database driver's
+  `x-migrations-table` URL parameter, for example
+  `postgres://...?x-migrations-table=oidc_schema_migrations`, or through the
+  driver `Config.MigrationsTable` when you build it with `WithInstance`. Then
+  `migrate force N` records a version in that table only, leaving the
+  application's history alone.
+- **goose**: keep the OP's files in a directory of their own and run goose
+  against it with `goose -table oidc_goose_db_version ...`, or call
+  `goose.SetTableName("oidc_goose_db_version")` before running it from Go.
+- **Flyway**: use a separate `table` (for example `oidc_flyway_history`) and
+  separate `locations` for the OP's files.
+- **Atlas**: use a separate migration directory and a separate revisions table
+  for the OP.
+
+goose and Flyway read files from disk, not from an `fs.FS`. Write
+`Store.Migrations()` out once, so the files carry the names `WithTablePrefix`
+and `WithNaming` configured, then convert them as described under Other migration tools:
+
+```go
+err := fs.WalkDir(store.Migrations(), ".", func(p string, d fs.DirEntry, err error) error {
+	if err != nil || d.IsDir() {
+		return err
+	}
+	content, err := fs.ReadFile(store.Migrations(), p)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join("db/oidc", p), content, 0o644)
+})
+```
 
 The sections below explain what each release changes.
 

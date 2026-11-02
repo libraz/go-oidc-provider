@@ -11,7 +11,8 @@ leave the unused ones empty: the release files under `migrations/<dialect>`
 alter optional tables too, and `Store.ValidateSchema`, the deploy gate,
 checks every table. A table checked always must exist even while it stays
 empty; its row says what reaches it.
-`WithNaming` renames a table through its key; the columns are fixed. Your own
+`WithTablePrefix` replaces the `oidc_` prefix of every name and `WithNaming`
+renames one table through its key; the columns are fixed. Your own
 users table needs no new column when it already has an opaque identifier that
 is assigned once and never reused: the OP only needs that subject from it,
 through a `store.UserStore`. A table keyed only by an auto-increment id or an

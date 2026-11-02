@@ -42,7 +42,7 @@
 // Existing databases are not altered by Store.Migrate. The upgrade path is
 // the migration files under schema/migrations/<dialect>, one per release in
 // golang-migrate form, which [Store.Migrations] returns with any
-// [WithNaming] overrides applied; schema/MIGRATIONS.md explains each
+// [WithTablePrefix] and [WithNaming] applied; schema/MIGRATIONS.md explains each
 // release. schema/TABLES.md lists what each table holds, when op.New checks
 // it, and why a few tables must exist even while they stay empty. Run
 // against an empty database, op.New names every table the configuration
@@ -61,9 +61,20 @@
 //
 // # Naming overrides
 //
-// [WithNaming] accepts a map of logical → physical identifier
-// rewrites so embedders that already own a "clients" table can graft
-// the OP onto a different name without forking the schema. Identifiers
+// Every table name carries the prefix "oidc_" by default.
+// [WithTablePrefix] replaces it for all tables at once, which is how an
+// OP shares a database or schema with an application whose tables would
+// otherwise collide; the empty prefix drops it:
+//
+//	store, err := oidcsql.New(db, oidcsql.Postgres(), oidcsql.WithTablePrefix("sso_"))
+//
+// [WithNaming] accepts a map of logical → physical identifier rewrites
+// for individual tables, applied on top of the prefix and overriding it
+// outright, so embedders that already own a "clients" table can graft
+// the OP onto a different name without forking the schema. The prefix
+// and the overrides reach the same places: queries, [Store.Schema],
+// [Store.Migrations], [Store.Migrate], the schema checks and [Store.GC],
+// with the DDL's index names following the table names. Identifiers
 // are plain identifiers, never schema-qualified (on PostgreSQL, select a
 // non-public schema through the connection's search_path), and are
 // validated against the SQL standard regular identifier grammar
@@ -138,6 +149,23 @@
 // them, so a schedule need not add them twice. The consumed-JTI GC is
 // reachable only through Store.GC. Device codes and CIBA requests evict
 // expired rows on their own insert path.
+//
+// The tables GC does not sweep clean up differently:
+//
+//   - email_otps holds one row per subject: a new challenge overwrites a
+//     row past its retention horizon, and the row is otherwise removed
+//     only by EmailOTPs().Delete, so the table is bounded by the number of
+//     subjects.
+//   - initial_access_tokens are issued by the embedder; a token past its
+//     use ceiling or expiry stays until the embedder deletes it.
+//   - registration_access_tokens holds one row per dynamically registered
+//     client and is deleted with that client's registration (RFC 7592).
+//   - ssf_events is swept by the Shared Signals worker, which calls
+//     DeleteExpired hourly; ssf_streams rows live until the stream is
+//     deleted.
+//   - totp_secrets, passkeys, recovery_codes, authn_lockouts, users,
+//     clients and op_metadata are durable by design: rows end through
+//     their store's Delete (or never), not through expiry.
 //
 // Every table any of those sweeps deletes from carries an index on
 // expires_at in the reference DDL, as does the grants table on

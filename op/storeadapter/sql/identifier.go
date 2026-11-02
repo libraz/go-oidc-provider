@@ -82,39 +82,57 @@ type nameMap struct {
 	ssfEvents          string
 }
 
-// defaultNames returns the canonical table names. Embedders that
-// already own a table on one of these names rewrite it through
-// [WithNaming]; everyone else keeps the defaults.
-//
-//nolint:gosec // G101 false positive: the values are SQL table names, not credentials.
-func defaultNames() nameMap {
+// defaultTablePrefix is the prefix the reference DDL carries on every
+// table; [WithTablePrefix] replaces it.
+const defaultTablePrefix = "oidc_"
+
+// defaultNames returns the canonical table names, the reference DDL's.
+// It is also the source side of every [rewriteSchema] substitution.
+func defaultNames() nameMap { return namesWithPrefix(defaultTablePrefix) }
+
+// namesWithPrefix returns the table names with prefix in front of each
+// logical name. Embedders that already own a table on one of these names
+// rewrite it through [WithNaming] on top of the prefix.
+func namesWithPrefix(p string) nameMap {
 	return nameMap{
-		clients:            "oidc_clients",
-		authCodes:          "oidc_authorization_codes",
-		refreshes:          "oidc_refresh_tokens",
-		accessTokens:       "oidc_access_tokens",
-		opaqueAccessTokens: "oidc_opaque_access_tokens",
-		grantTombstones:    "oidc_grant_revocations",
-		revokedJTIs:        "oidc_revoked_jtis",
-		grants:             "oidc_grants",
-		sessions:           "oidc_sessions",
-		pars:               "oidc_par_records",
-		interactions:       "oidc_interactions",
-		jtis:               "oidc_consumed_jtis",
-		users:              "oidc_users",
-		iats:               "oidc_initial_access_tokens",
-		rats:               "oidc_registration_access_tokens",
-		metadata:           "oidc_op_metadata",
-		deviceCodes:        "oidc_device_codes",
-		cibaRequests:       "oidc_ciba_requests",
-		totpSecrets:        "oidc_totp_secrets",
-		passkeys:           "oidc_passkeys",
-		recoveryCodes:      "oidc_recovery_codes",
-		emailOTPs:          "oidc_email_otps",
-		authnLockouts:      "oidc_authn_lockouts",
-		ssfStreams:         "oidc_ssf_streams",
-		ssfEvents:          "oidc_ssf_events",
+		clients:            p + "clients",
+		authCodes:          p + "authorization_codes",
+		refreshes:          p + "refresh_tokens",
+		accessTokens:       p + "access_tokens",
+		opaqueAccessTokens: p + "opaque_access_tokens",
+		grantTombstones:    p + "grant_revocations",
+		revokedJTIs:        p + "revoked_jtis",
+		grants:             p + "grants",
+		sessions:           p + "sessions",
+		pars:               p + "par_records",
+		interactions:       p + "interactions",
+		jtis:               p + "consumed_jtis",
+		users:              p + "users",
+		iats:               p + "initial_access_tokens",
+		rats:               p + "registration_access_tokens",
+		metadata:           p + "op_metadata",
+		deviceCodes:        p + "device_codes",
+		cibaRequests:       p + "ciba_requests",
+		totpSecrets:        p + "totp_secrets",
+		passkeys:           p + "passkeys",
+		recoveryCodes:      p + "recovery_codes",
+		emailOTPs:          p + "email_otps",
+		authnLockouts:      p + "authn_lockouts",
+		ssfStreams:         p + "ssf_streams",
+		ssfEvents:          p + "ssf_events",
 	}
+}
+
+// validateTablePrefix checks a [WithTablePrefix] value against the
+// identifier grammar. The empty prefix is valid.
+func validateTablePrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if err := validateIdentifier(prefix + "x"); err != nil {
+		return fmt.Errorf("oidcsql: invalid WithTablePrefix %q: use ASCII letters, digits and underscore, not starting with a digit: %w", prefix, err)
+	}
+	return nil
 }
 
 // applyOverrides validates each override and rewrites the matching
