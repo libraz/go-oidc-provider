@@ -65,6 +65,8 @@ func buildClientStore(cfg *config, scopes *scoperegistry.Registry) {
 		AllowedClientSigningAlgs: cfg.clientSigningJOSEAlgs(),
 		PairwiseEnabled:          cfg.pairwiseEnabled(),
 		JWEPolicy:                cfg.jwePolicy(),
+		SectorResolver:           buildSectorResolver(cfg),
+		Logger:                   cfg.logger,
 	}
 	resources := make([]string, 0, len(cfg.protectedResources))
 	for i := range cfg.protectedResources {
@@ -1156,9 +1158,11 @@ func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, cl
 // firstPartyClientSet materialises the [WithFirstPartyClients] slice
 // into the O(1) lookup map the authorize endpoint consults on every
 // request. The validator already rejects unknown ids and combinations
-// with FAPI 2.0 profiles, so the returned set is safe to consult
-// without further filtering. An empty slice yields a nil map so the
-// downstream lookup short-circuits without allocating.
+// with FAPI 2.0 profiles; the authorize endpoint additionally checks
+// the Source of the client record it resolved, so a listed id later
+// served by a dynamic or metadata-document record gets no skip. An
+// empty slice yields a nil map so the downstream lookup short-circuits
+// without allocating.
 func firstPartyClientSet(cfg *config) map[string]struct{} {
 	if len(cfg.firstPartyClients) == 0 {
 		return nil

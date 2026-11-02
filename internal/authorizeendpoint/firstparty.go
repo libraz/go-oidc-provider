@@ -17,9 +17,10 @@ import (
 // should instead be auto-resolved through the first-party skip path
 // configured by [op.WithFirstPartyClients]. The four preconditions:
 //
-//  1. The client_id appears in [Deps.FirstPartyClients]. The wiring
-//     layer materialises this set only for static / admin clients;
-//     dynamic-source clients (RFC 7591) are excluded structurally.
+//  1. The client_id appears in [Deps.FirstPartyClients] and the record
+//     resolved for this request is static, admin or legacy-empty
+//     sourced ([firstPartySource]); a dynamic or metadata-document
+//     client under a listed id never qualifies.
 //  2. The pending decision would otherwise prompt the user for
 //     consent — either an interactive consent prompt or the
 //     prompt=none consent_required error. Login / chooser / silent-
@@ -29,9 +30,6 @@ import (
 //  4. The request did NOT carry prompt=consent. An RP that explicitly
 //     asks for re-consent always gets the prompt; the first-party
 //     flag is the OP's posture, not the RP's override.
-//
-// The [store.Client.Source] guard is enforced by the wiring layer
-// (see [firstPartyClientSet]); this helper trusts that contract.
 //
 // What the skip actually elides is the scope screen: the ceremony
 // presents scopes and nothing else. RFC 9396 authorization_details are
@@ -50,7 +48,7 @@ func firstPartyShouldSkipConsent(
 	if active == nil || client == nil {
 		return false
 	}
-	if !deps.isFirstPartyClient(client.ID) {
+	if !deps.isFirstPartyClient(client.ID) || !firstPartySource(client.Source) {
 		return false
 	}
 	if !firstPartyAutoGrantRequestTrusted(r, req.RedirectURI) {
@@ -79,6 +77,19 @@ func firstPartyShouldSkipConsent(
 	case decisionInteract:
 		return hint.prompt == interaction.PromptConsent
 	case decisionConsentRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+// firstPartySource reports whether a client of source may receive the
+// first-party skip: one the operator vetted (static, admin, or the
+// legacy empty value read as static), never a self-registered or
+// metadata-document client.
+func firstPartySource(source store.ClientSource) bool {
+	switch source {
+	case "", store.ClientSourceStatic, store.ClientSourceAdmin:
 		return true
 	default:
 		return false

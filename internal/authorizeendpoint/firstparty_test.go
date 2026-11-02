@@ -355,9 +355,9 @@ func testAuthorizeFirstPartySkipsConsentAndMintsCode(t *testing.T, secFetchSite 
 	}
 }
 
-func testAuthorizeFirstPartyFallsThroughToInteraction(t *testing.T, secFetchSite string) {
+func testAuthorizeFirstPartyFallsThroughToInteraction(t *testing.T, secFetchSite string, customise ...func(*authorizeendpoint.Deps)) {
 	t.Helper()
-	h := newFirstPartyHarness(t)
+	h := newFirstPartyHarness(t, customise...)
 	out := establishFresh(t, h.sessionMgr, sessions.Login{
 		Subject:  "user-fp",
 		AuthTime: h.clock.now.Add(-time.Minute),
@@ -384,6 +384,35 @@ func testAuthorizeFirstPartyFallsThroughToInteraction(t *testing.T, secFetchSite
 		if ev.Name == "consent.granted.first_party" {
 			t.Fatalf("first-party audit fired for %s request: %+v", secFetchSite, ev)
 		}
+	}
+}
+
+// TestAuthorize_FirstParty_UnvettedSourceSuppressesSkip pins that the
+// skip is decided on the client record resolved for the request: a
+// dynamic or metadata-document record under a listed first-party id
+// still gets the consent prompt.
+func TestAuthorize_FirstParty_UnvettedSourceSuppressesSkip(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []store.ClientSource{store.ClientSourceDynamic, store.ClientSourceMetadataDocument} {
+		t.Run(string(source), func(t *testing.T) {
+			t.Parallel()
+			testAuthorizeFirstPartyFallsThroughToInteraction(t, "same-origin", func(d *authorizeendpoint.Deps) {
+				st := inmem.New()
+				if err := st.RegisterClient(context.Background(), &store.Client{
+					ID:                      "client-1",
+					RedirectURIs:            []string{"https://rp.example.com/cb"},
+					GrantTypes:              []string{"authorization_code"},
+					ResponseTypes:           []string{"code"},
+					Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+					TokenEndpointAuthMethod: "client_secret_basic",
+					Source:                  source,
+				}); err != nil {
+					t.Fatalf("RegisterClient: %v", err)
+				}
+				d.Clients = st.Clients()
+			})
+		})
 	}
 }
 
