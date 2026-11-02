@@ -96,12 +96,10 @@ func parseScope(
 			"requested scope is not permitted for this client")
 		return nil, false
 	}
-	for _, s := range scope {
-		if !deps.Scopes.Allows(s, client.ID) {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-				"scope is restricted to a different client")
-			return nil, false
-		}
+	if !deps.Scopes.AllowsAll(scope, client.ID) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
+			"scope is restricted to a different client")
+		return nil, false
 	}
 	return slices.Clone(scope), true
 }

@@ -90,7 +90,7 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	var cascade replayCascade
 	var rotation rotationOutcome
 	staged := httpx.NewBufferedWriter(http.StatusInternalServerError)
-	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, nil, effectiveAuthorizationDetails, false, false, &cascade, &rotation)
+	completeRefreshToken(ctx, staged, r, deps, client, in, dpopOut, nil, effectiveAuthorizationDetails, false, &cascade, &rotation)
 	// Each write above landed as it ran, so a recorded rotation is durable.
 	staged = rotation.confirm(ctx, deps, staged)
 	rotation.emit(ctx, deps)
@@ -145,6 +145,8 @@ func (o *rotationOutcome) emit(ctx context.Context, deps Deps) {
 	}
 }
 
+// completeRefreshToken runs the post-Consume checks and issuance. The
+// transactional path also revalidates authorization_details after its Consume.
 func completeRefreshToken(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -155,7 +157,6 @@ func completeRefreshToken(
 	dpopOut *dpopOutcome,
 	requestedAuthorizationDetails []map[string]any,
 	authorizationDetails []map[string]any,
-	revalidateAuthorizationDetails bool,
 	transactional bool,
 	cascade *replayCascade,
 	rotation *rotationOutcome,
@@ -164,7 +165,7 @@ func completeRefreshToken(
 	if !ok {
 		return rollback
 	}
-	if revalidateAuthorizationDetails && !revalidateRefreshAuthorizationDetails(
+	if transactional && !revalidateRefreshAuthorizationDetails(
 		ctx,
 		w,
 		deps,
@@ -229,7 +230,7 @@ func requireLiveRefreshSubject(
 	if !grantIsOwnConsent(exchanged.Origin) {
 		lineage, err := findGrant(ctx, deps, exchanged.GrantID)
 		if err != nil {
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteServerError(w)
 			return nil, false
 		}
 		if lineage == nil {
@@ -304,7 +305,7 @@ func handleRefreshTokenTransaction(
 	// the client is told anything, and in both settle directions.
 	cascade.run(ctx, deps)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	_ = staged.Commit(w)
@@ -353,7 +354,6 @@ func runRefreshTokenTransaction(
 		dpopOut,
 		requestedAuthorizationDetails,
 		authorizationDetails,
-		true,
 		true,
 		cascade,
 		&rotation,
@@ -431,7 +431,7 @@ func exchangeRefresh(
 ) (*refresh.Exchanged, bool) {
 	exchanger, err := newRefreshExchanger(deps)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return nil, false
 	}
 	exchanged, err := exchanger.Exchange(ctx, refresh.ExchangeInput{
@@ -464,6 +464,6 @@ func writeRefreshExchangeError(w http.ResponseWriter, err error) {
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 			"requested scope exceeds the original grant")
 	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 	}
 }

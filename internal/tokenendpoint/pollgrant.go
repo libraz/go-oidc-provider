@@ -2,11 +2,13 @@ package tokenendpoint
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/grants/pollgrant"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pollinterval"
@@ -17,6 +19,39 @@ import (
 // The polling grants (device_code and CIBA) share one poll discipline and
 // one credential-assembly path; the types and helpers below carry what is
 // common and take the differences as parameters.
+
+// pollAuthMap names the sentinels and wire descriptions one polling grant
+// supplies to [pollAuthError].
+type pollAuthMap struct {
+	pollgrant.Errors
+	Pending, Denied error
+	// Grant is the grant label in the not-permitted description, CnfRecord
+	// the record named in the binding-mismatch description, NoSubject the
+	// full subject-missing description.
+	Grant, CnfRecord, NoSubject string
+}
+
+// pollAuthError translates the sentinels the polling grants share onto the
+// wire code, HTTP status and description; anything unmapped is server_error.
+func pollAuthError(err error, m pollAuthMap) (code string, status int, description string) {
+	switch {
+	case errors.Is(err, m.NotPermitted):
+		return errUnauthorizedClient, http.StatusBadRequest, "client is not authorized for the " + m.Grant + " grant"
+	case errors.Is(err, m.ScopeForbidden):
+		return errInvalidScope, http.StatusBadRequest, "granted scope exceeds the client's registered set"
+	case errors.Is(err, m.CnfMismatch), errors.Is(err, m.CnfMissing):
+		return errInvalidGrant, http.StatusBadRequest,
+			"sender-constraint binding does not match the " + m.CnfRecord + " record"
+	case errors.Is(err, m.SubjectMissing):
+		return errInvalidGrant, http.StatusBadRequest, m.NoSubject
+	case errors.Is(err, m.Pending):
+		return errAuthorizationPending, http.StatusBadRequest, "authorization request is still pending"
+	case errors.Is(err, m.Denied):
+		return errAccessDenied, http.StatusBadRequest, "authorization request was denied"
+	default:
+		return errServerError, http.StatusInternalServerError, ""
+	}
+}
 
 // pollSpec parameterises [applyPollOutcome] for one polling grant.
 type pollSpec struct {
@@ -93,7 +128,7 @@ func applyPollOutcome(
 	case pollinterval.OutcomeInvalid:
 		fallthrough
 	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return false
 	}
 }
@@ -251,7 +286,7 @@ func preparePolledResponse(
 			ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
 			RefreshToken: refreshToken,
 			IDToken:      idToken,
-			Scope:        joinScope(red.Scope),
+			Scope:        oidcscope.Join(red.Scope),
 			GrantID:      grantIDForResponse(deps, grantID),
 		},
 		opaque:         format == store.AccessTokenFormatOpaque,

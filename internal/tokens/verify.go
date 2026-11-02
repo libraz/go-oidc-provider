@@ -62,9 +62,11 @@ var (
 	ErrAccessTokenTypeMismatch = errors.New("tokens: access token typ header is not at+jwt")
 )
 
-// DefaultLeeway is the symmetric tolerance every in-library
-// [AccessTokenVerifier] applies to the "exp" and "iat" comparisons when
-// its own [AccessTokenVerifier.Leeway] is left at zero.
+// DefaultLeeway is the symmetric tolerance the in-library verifiers apply
+// to the "exp" and "iat" comparisons when none is configured.
+// [AccessTokenVerifier.Verify] itself applies exactly Leeway, so zero
+// means no tolerance; endpointsupport.NewAccessTokenVerifier resolves a
+// non-positive Leeway to this value.
 //
 // It lives here, next to the field it feeds, because it has to be one
 // value rather than one value per endpoint: /userinfo, /introspect,
@@ -104,8 +106,9 @@ type AccessTokenVerifier struct {
 	// by RFC 7519 §4.1.4; the verifier does not enforce a maximum
 	// because resource-server policy varies.
 	//
-	// Every construction site inside this library resolves a zero value
-	// to [DefaultLeeway]. That is not a convenience: an access token's
+	// Every construction site inside this library (through
+	// endpointsupport.NewAccessTokenVerifier) resolves a zero value to
+	// [DefaultLeeway]; a verifier built directly applies zero as given. That is not a convenience: an access token's
 	// validity is a property of the token, not of the endpoint that
 	// happens to inspect it, so the surfaces that verify one have to
 	// agree on the tolerance or the same token becomes live at one and

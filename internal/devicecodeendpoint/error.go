@@ -11,6 +11,6 @@ import "github.com/libraz/go-oidc-provider/internal/endpointsupport"
 // handler reuses the §5.2 catalogue.
 const (
 	errInvalidRequest = endpointsupport.ErrInvalidRequest
-	errInvalidScope   = "invalid_scope"
+	errInvalidScope   = endpointsupport.ErrInvalidScope
 	errServerError    = endpointsupport.ErrServerError
 )

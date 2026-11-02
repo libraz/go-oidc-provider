@@ -5,10 +5,10 @@ import (
 	"errors"
 	"maps"
 	"net/http"
-	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -213,7 +213,7 @@ func projectAccessTokenClaims(c *tokens.AccessTokenClaims) response {
 		ACR:       c.ACR,
 	}
 	if len(c.Scope) > 0 {
-		out.Scope = strings.Join(c.Scope, " ")
+		out.Scope = oidcscope.Join(c.Scope)
 	}
 	if len(c.Audience) > 0 {
 		out.Aud = append([]string(nil), c.Audience...)
@@ -356,14 +356,7 @@ func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClien
 // store does not hold yields nil; any other lookup failure is returned, so
 // the echo is never projected from a grant that could not be read.
 func findGrant(ctx context.Context, deps Deps, grantID string) (*store.Grant, error) {
-	if deps.Grants == nil || grantID == "" {
-		return nil, nil //nolint:nilnil // no grant to consult
-	}
-	g, err := deps.Grants.Find(ctx, grantID)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, nil //nolint:nilnil // no grant to consult
-	}
-	return g, err
+	return tokens.FindGrant(ctx, deps.Grants, grantID)
 }
 
 // refreshTokenSubject returns the wire "sub" for a refresh-token record.
@@ -439,7 +432,7 @@ func projectOpaqueAccessToken(view *tokens.OpaqueAccessTokenView, issuer string)
 		out.AuthTime = rec.AuthTime.Unix()
 	}
 	if len(rec.Scope) > 0 {
-		out.Scope = strings.Join(rec.Scope, " ")
+		out.Scope = oidcscope.Join(rec.Scope)
 	}
 	if rec.Audience != "" {
 		out.Aud = []string{rec.Audience}
@@ -473,7 +466,7 @@ func projectRefreshToken(rec *store.RefreshToken, publicSubject, issuer string) 
 		out.Iat = rec.CreatedAt.Unix()
 	}
 	if len(rec.Scope) > 0 {
-		out.Scope = strings.Join(rec.Scope, " ")
+		out.Scope = oidcscope.Join(rec.Scope)
 	}
 	if cnf := refreshTokenCnf(rec); cnf != nil {
 		out.Cnf = cnf

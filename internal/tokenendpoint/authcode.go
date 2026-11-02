@@ -164,7 +164,7 @@ func exchangeAuthCode(
 		Clock: deps.Clock,
 	})
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return nil, false
 	}
 	exchanged, err := exchanger.Exchange(ctx, authcode.ExchangeInput{
@@ -244,7 +244,7 @@ func writeAuthCodeExchangeError(
 		})
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "PKCE verification failed")
 	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 	}
 }
 
@@ -341,7 +341,7 @@ func issueAuthCodeResponse(
 	now := deps.now().UTC()
 	authCtx, err := codeAuthContext(ctx, deps, exchanged)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
@@ -354,12 +354,12 @@ func issueAuthCodeResponse(
 	}
 	publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	chainID, err := refresh.NewChainID()
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	accessToken, err := mintAccessToken(
@@ -378,7 +378,7 @@ func issueAuthCodeResponse(
 		accessTokenOverrides{Authorization: &authCtx, ChainID: chainID},
 	)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	var idToken string
@@ -399,13 +399,13 @@ func issueAuthCodeResponse(
 		})
 		if err != nil {
 			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteServerError(w)
 			return
 		}
 		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
 		if err != nil {
 			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteServerError(w)
 			return
 		}
 	}
@@ -422,7 +422,7 @@ func issueAuthCodeResponse(
 	refreshToken, err := issueRefreshToken(ctx, deps, refreshIn)
 	if err != nil {
 		revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID, accessToken)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	if !refuseIssuanceUnderClosedGrant(ctx, w, deps, issuedUnderGrant{
@@ -439,7 +439,7 @@ func issueAuthCodeResponse(
 		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
 		RefreshToken:         refreshToken,
 		IDToken:              idToken,
-		Scope:                joinScope(exchanged.Scope),
+		Scope:                oidcscope.Join(exchanged.Scope),
 		AuthorizationDetails: authorize.CloneAuthorizationDetails(authorizationDetails),
 		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
 	})
@@ -687,7 +687,7 @@ func mintJWTAccessToken(
 	authorizationDetails []map[string]any,
 	over accessTokenOverrides,
 ) (string, error) {
-	jti, err := keys.RandomBase64URL(jtiByteLength)
+	jti, err := keys.RandomBase64URL(keys.IdentifierBytes)
 	if err != nil {
 		return "", err
 	}
@@ -963,27 +963,9 @@ func codeAuthContext(ctx context.Context, deps Deps, exchanged *authcode.Exchang
 	return authContextOf(deps, tokens.ResolveAuthorization(own, exchanged.AuthorizationRecorded, g, exchanged.ClientID)), nil
 }
 
-// errGrantStoreContract reports a GrantStore.Find that returned neither a
-// grant nor an error.
-var errGrantStoreContract = errors.New("tokenendpoint: grant store returned no grant and no error")
-
-// findGrant returns the grant grantID names, or nil when grantID is empty,
-// no grant store is wired, or the store holds no such grant. Any other
-// lookup failure is returned, so a fault never reads as an absent grant.
+// findGrant reads the grant grantID names; see [tokens.FindGrant].
 func findGrant(ctx context.Context, deps Deps, grantID string) (*store.Grant, error) {
-	if grantID == "" || deps.Grants == nil {
-		return nil, nil //nolint:nilnil // no grant to consult
-	}
-	g, err := deps.Grants.Find(ctx, grantID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return nil, nil //nolint:nilnil // no grant to consult
-	case err != nil:
-		return nil, err
-	case g == nil:
-		return nil, errGrantStoreContract
-	}
-	return g, nil
+	return tokens.FindGrant(ctx, deps.Grants, grantID)
 }
 
 // projectIDTokenClaims walks the grant's id_token "claims" payload

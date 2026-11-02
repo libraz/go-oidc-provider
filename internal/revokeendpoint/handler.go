@@ -16,19 +16,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Defaults the handler applies when [Deps] omits the corresponding
-// field.
-const (
-	// defaultLeeway is the symmetric tolerance applied to JWT
-	// access-token "exp" / "iat" comparisons during the
-	// acknowledgement check. It is an alias for [tokens.DefaultLeeway]
-	// rather than a copy of its value: every surface that verifies an
-	// access token has to accept the same set of clock-skewed tokens,
-	// and a restated literal agrees only until someone edits one of
-	// them.
-	defaultLeeway = tokens.DefaultLeeway
-)
-
 // Clock is the package-local name for the shared wall-clock interface; a nil
 // Clock falls back to the system clock.
 type Clock = timex.Clock
@@ -87,7 +74,7 @@ type Deps struct {
 
 	// Leeway overrides the symmetric tolerance the JWT verifier
 	// applies to "exp" / "iat" comparisons. Zero or negative falls
-	// back to [defaultLeeway].
+	// back to [tokens.DefaultLeeway].
 	Leeway time.Duration
 
 	// AccessTokens is the [store.AccessTokenRegistry] the JWT branch
@@ -150,24 +137,20 @@ func (d *Deps) audit() audit.Emitter {
 	return audit.OrDiscard(d.Audit)
 }
 
+// now returns the wall-clock reading for this request, falling back to
+// the system clock when [Deps.Clock] is nil.
+func (d *Deps) now() time.Time {
+	return timex.OrSystem(d.Clock).Now()
+}
+
 // Handler returns the HTTP handler the OP mounts at its revocation
 // endpoint. The returned handler is safe for concurrent use; deps
 // MUST NOT be mutated after the call.
 func Handler(deps Deps) http.Handler {
-	resolved := resolveDeps(deps)
-	verifier := newAccessTokenVerifier(resolved)
+	verifier := newAccessTokenVerifier(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serve(w, r, resolved, verifier)
+		serve(w, r, deps, verifier)
 	})
-}
-
-// resolveDeps fills in defaults the caller chose to omit. The
-// returned value is a fresh copy; the caller's [Deps] is not mutated.
-func resolveDeps(d Deps) Deps {
-	if d.Leeway <= 0 {
-		d.Leeway = defaultLeeway
-	}
-	return d
 }
 
 // newAccessTokenVerifier builds the [tokens.AccessTokenVerifier] the
@@ -228,7 +211,7 @@ func authenticate(
 			SecretVerifier:    deps.SecretVerifier,
 			AssertionVerifier: deps.AssertionVerifier,
 			AllowedMethods:    deps.AllowedClientAuthMethods,
-			Now:               timex.OrSystem(deps.Clock).Now().UTC(),
+			Now:               deps.now().UTC(),
 			Audit:             deps.audit(),
 		},
 		// /revoke does not raise an audit event on pre-authentication

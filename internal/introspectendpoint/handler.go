@@ -26,13 +26,6 @@ const (
 
 // Defaults the handler applies when [Deps] omits the corresponding field.
 const (
-	// defaultLeeway is the symmetric tolerance applied to JWT access-token
-	// "exp" / "iat" comparisons. It is an alias for [tokens.DefaultLeeway]
-	// rather than a copy of its value: every surface that verifies an
-	// access token has to accept the same set of clock-skewed tokens, and
-	// a restated literal agrees only until someone edits one of them.
-	defaultLeeway = tokens.DefaultLeeway
-
 	// tokenTypeBearer is the value the "token_type" introspection claim
 	// carries for both opaque and JWT bearer tokens (RFC 7662 §2.2).
 	// RFC 9449 §6 does not rename the type for DPoP-bound tokens — the
@@ -122,7 +115,7 @@ type Deps struct {
 
 	// Leeway overrides the symmetric tolerance the JWT verifier
 	// applies to "exp" / "iat" comparisons. Zero or negative falls
-	// back to [defaultLeeway].
+	// back to [tokens.DefaultLeeway].
 	Leeway time.Duration
 
 	// SigningKey is the OP active key used to sign JWT-formatted
@@ -209,20 +202,10 @@ type Deps struct {
 // endpoint. The returned handler is safe for concurrent use; deps MUST
 // NOT be mutated after the call.
 func Handler(deps Deps) http.Handler {
-	resolved := resolveDeps(deps)
-	verifier := newAccessTokenVerifier(resolved)
+	verifier := newAccessTokenVerifier(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serve(w, r, resolved, verifier)
+		serve(w, r, deps, verifier)
 	})
-}
-
-// resolveDeps fills in defaults the caller chose to omit. The returned
-// value is a fresh copy; the caller's [Deps] is not mutated.
-func resolveDeps(d Deps) Deps {
-	if d.Leeway <= 0 {
-		d.Leeway = defaultLeeway
-	}
-	return d
 }
 
 // newAccessTokenVerifier builds the [tokens.AccessTokenVerifier] the JWT
@@ -276,7 +259,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 }
 
 func isConfidentialIntrospectionClient(client *store.Client) bool {
-	return client != nil && !client.PublicClient && client.TokenEndpointAuthMethod != "none"
+	return client != nil && !clientauth.IsPublicClient(client)
 }
 
 // authenticate resolves the client credentials carried by the request,

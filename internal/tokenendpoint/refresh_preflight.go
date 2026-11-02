@@ -63,7 +63,7 @@ func preflightRefreshBeforeConsume(
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, true
 		}
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return nil, false
 	}
 	if rec.ConsumedAt != nil {
@@ -169,7 +169,7 @@ func preflightRefreshAuthorizationDetails(
 
 	grant, err := chainGrant(ctx, deps, rec.Origin, rec.GrantID)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return nil, false
 	}
 	granted := chainAuthorizationDetails(grant, rec.ClientID, rec.AuthorizationDetails, rec.AuthorizationRecorded)
@@ -204,7 +204,7 @@ func revalidateRefreshAuthorizationDetails(
 	}
 	grant, err := findGrant(ctx, deps, exchanged.GrantID)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return false
 	}
 	granted := chainAuthorizationDetails(grant, exchanged.ClientID, exchanged.AuthorizationDetails, exchanged.AuthorizationRecorded)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
@@ -65,9 +66,7 @@ func Handler(set *keys.Set) http.Handler {
 func HandlerWithOptions(set *keys.Set, opts HandlerOptions) http.Handler {
 	cache := &bodyCache{set: set, enc: opts.EncryptionSet}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if !httpx.EnforceMethod(w, r, http.MethodGet) {
 			return
 		}
 		body, etag, err := cache.render()

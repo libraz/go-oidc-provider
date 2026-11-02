@@ -65,7 +65,7 @@ func newGrantID(ctx context.Context, deps Deps, in grantIssuance) (string, error
 		}
 		return in.InheritedID, nil
 	case grantLineageUnbacked:
-		return keys.RandomBase64URL(jtiByteLength)
+		return keys.RandomBase64URL(keys.IdentifierBytes)
 	default:
 		return "", fmt.Errorf("tokenendpoint: unknown grant lineage %d", in.Lineage)
 	}
@@ -77,7 +77,7 @@ func saveConsentGrant(ctx context.Context, deps Deps, g store.Grant) (string, er
 	}
 	derived := g.ID != ""
 	if !derived {
-		id, err := keys.RandomBase64URL(jtiByteLength)
+		id, err := keys.RandomBase64URL(keys.IdentifierBytes)
 		if err != nil {
 			return "", err
 		}

@@ -147,12 +147,10 @@ func checkTokenScopeAllowlist(
 	clientID string,
 	granted []string,
 ) bool {
-	for _, s := range granted {
-		if !deps.Scopes.Allows(s, clientID) {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-				"scope is restricted to a different client")
-			return false
-		}
+	if !deps.Scopes.AllowsAll(granted, clientID) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
+			"scope is restricted to a different client")
+		return false
 	}
 	return true
 }
@@ -190,7 +188,7 @@ func writeClientCredsAuthError(w http.ResponseWriter, err error) {
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
 			"requested scope exceeds the client's registered set")
 	default:
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 	}
 }
 
@@ -235,14 +233,14 @@ func issueClientCredsResponse(
 	// principal.
 	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, client.ID, "", scope, resource, now, 0, binding, authorizationDetails)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	writeSuccess(w, successResponse{
 		AccessToken:          accessToken,
 		TokenType:            binding.tokenTypeFor(),
 		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
-		Scope:                joinScope(scope),
+		Scope:                oidcscope.Join(scope),
 		AuthorizationDetails: authorize.CloneAuthorizationDetails(authorizationDetails),
 	})
 }

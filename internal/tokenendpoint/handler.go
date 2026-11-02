@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/assertiongrant"
@@ -60,11 +59,6 @@ const (
 // constant.
 const (
 	defaultIDTokenTTL = 10 * time.Minute
-
-	// jtiByteLength is the entropy of the access-token "jti" claim. 16
-	// bytes (128 bits) is well above the birthday bound for any single
-	// deployment and matches the RFC 9068 §4 guidance.
-	jtiByteLength = 16
 )
 
 // The wire grant_type values the built-in handlers implement. They are
@@ -636,7 +630,7 @@ func (d *Deps) audit() audit.Emitter {
 // onto the default bucket regardless of scope so the audit signal
 // matches the actual lifetime applied at issuance.
 func ttlBucketFor(deps Deps, scope []string) string {
-	if deps.RefreshTokenOfflineTTL > 0 && oidcscope.ContainsOfflineAccess(scope) {
+	if offlineTTLApplies(deps, scope) {
 		return ttlBucketOffline
 	}
 	return ttlBucketDefault
@@ -777,6 +771,12 @@ func (d *Deps) refreshIssuanceBlockedReason(c *store.Client) string {
 	}
 }
 
+// offlineTTLApplies reports whether the offline-specific refresh TTL governs
+// a token issued under scope.
+func offlineTTLApplies(deps Deps, scope []string) bool {
+	return deps.RefreshTokenOfflineTTL > 0 && oidcscope.ContainsOfflineAccess(scope)
+}
+
 // pickRefreshTokenTTL returns the TTL the handler uses for a refresh
 // token issued or rotated under the supplied scope. The offline TTL
 // applies when the granted scope contains "offline_access" AND the
@@ -784,7 +784,7 @@ func (d *Deps) refreshIssuanceBlockedReason(c *store.Client) string {
 // the handler falls back to RefreshTokenTTL (which itself falls back
 // to [timex.RefreshTokenTTLDefault] via resolveDeps).
 func pickRefreshTokenTTL(deps Deps, scope []string) time.Duration {
-	if deps.RefreshTokenOfflineTTL > 0 && oidcscope.ContainsOfflineAccess(scope) {
+	if offlineTTLApplies(deps, scope) {
 		return deps.RefreshTokenOfflineTTL
 	}
 	return deps.RefreshTokenTTL
@@ -796,11 +796,4 @@ func pickRefreshTokenTTL(deps Deps, scope []string) time.Duration {
 // exists so the call sites do not duplicate the boundary copy.
 func activeSigningKey(deps Deps) tokens.SigningKey {
 	return tokens.FromInternalEntry(deps.Keys.Active())
-}
-
-// joinScope is the canonical RFC 6749 §3.3 space-delimited form. The
-// helper exists so the success-response builder doesn't grow a strings
-// import in two places.
-func joinScope(scope []string) string {
-	return strings.Join(scope, " ")
 }

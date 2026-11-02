@@ -19,43 +19,6 @@ const (
 	MaxPollViolations = pollinterval.MaxPollViolations
 )
 
-// PollDecision names the response the token endpoint should write for
-// a poll. Callers switch on it exhaustively.
-type PollDecision = pollinterval.Outcome
-
-// Wire decisions of the CIBA poll (CIBA Core §11).
-const (
-	// PollDecisionInvalid is the zero value; observing it is a dispatch bug.
-	PollDecisionInvalid = pollinterval.OutcomeInvalid
-
-	// PollDecisionEmit means every gate passed and the token endpoint
-	// may consume the auth_req_id and emit credentials.
-	PollDecisionEmit = pollinterval.OutcomeEmit
-
-	// PollDecisionAuthorizationPending means the user has not yet
-	// completed the authentication device interaction.
-	PollDecisionAuthorizationPending = pollinterval.OutcomePending
-
-	// PollDecisionSlowDown means the client polled inside the current
-	// interval and MUST back off; the endpoint also raises the stored
-	// interval by [pollinterval.SlowDownIncrement].
-	PollDecisionSlowDown = pollinterval.OutcomeSlowDown
-
-	// PollDecisionAccessDenied means the user rejected the request, the
-	// authentication device timed out, or the strike cap was reached.
-	PollDecisionAccessDenied = pollinterval.OutcomeDenied
-
-	// PollDecisionExpiredToken means the auth_req_id's TTL has elapsed
-	// or the record disappeared from the substore.
-	PollDecisionExpiredToken = pollinterval.OutcomeExpired
-
-	// PollDecisionAlreadyRedeemed means a previous poll already minted
-	// tokens against this record. The wire form is invalid_grant (RFC
-	// 6749 §5.2); CIBA Core §11 reserves expired_token for TTL elapse
-	// only, and the conformance suite pins the two codes apart.
-	PollDecisionAlreadyRedeemed = pollinterval.OutcomeConsumed
-)
-
 // PollInput is the parameter bundle [DecidePoll] consumes; see
 // [pollinterval.Input] for each field.
 type PollInput = pollinterval.Input
@@ -65,7 +28,7 @@ type PollInput = pollinterval.Input
 type PollOutput = pollinterval.Output
 
 // DecidePoll applies the shared polling discipline ([pollinterval.Decide])
-// and maps a consumed record to [PollDecisionAlreadyRedeemed].
+// and maps a consumed record to [pollinterval.OutcomeConsumed].
 func DecidePoll(in PollInput) PollOutput {
-	return pollinterval.DecideAs(in, PollDecisionAlreadyRedeemed)
+	return pollinterval.DecideAs(in, pollinterval.OutcomeConsumed)
 }

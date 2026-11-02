@@ -2,7 +2,6 @@ package tokenendpoint
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"time"
 
@@ -48,7 +47,7 @@ func issueRefreshResponse(
 	now := deps.now().UTC()
 	authCtx, err := refreshAuthContext(ctx, deps, exchanged)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
@@ -66,12 +65,12 @@ func issueRefreshResponse(
 	}
 	exchanged, err = withChainID(exchanged)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	accessToken, publicSubject, err := mintRefreshAccessToken(ctx, deps, client, exchanged, authCtx, binding, authorizationDetails, now)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	var idTokenExtra map[string]any
@@ -91,13 +90,13 @@ func issueRefreshResponse(
 		Extra:    idTokenExtra,
 	})
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	if idToken != "" {
 		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
 		if err != nil {
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteServerError(w)
 			return
 		}
 	}
@@ -106,12 +105,12 @@ func issueRefreshResponse(
 		TokenType:            binding.tokenTypeFor(),
 		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
 		IDToken:              idToken,
-		Scope:                joinScope(exchanged.Scope),
+		Scope:                oidcscope.Join(exchanged.Scope),
 		AuthorizationDetails: authorize.CloneAuthorizationDetails(authorizationDetails),
 		GrantID:              chainGrantIDForResponse(deps, exchanged),
 	}
 	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedForRotation(exchanged, authCtx, authorizationDetails), binding, &response, rotation); err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	issued := refreshIssuedUnderGrant(exchanged)
@@ -320,9 +319,9 @@ func rotateRefreshToken(
 		}
 		response.RefreshToken = token
 	} else {
-		retries, ok := deps.RefreshTokens.(store.RefreshRetryResponseStore)
-		if !ok {
-			return errors.New("tokenendpoint: refresh store does not support durable retry responses")
+		retries, err := retryStore(deps)
+		if err != nil {
+			return err
 		}
 		token, successor, err := issuer.Prepare(issue)
 		if err != nil {

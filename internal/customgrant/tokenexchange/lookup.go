@@ -62,7 +62,7 @@ func (h *Handler) lookupToken(ctx context.Context, raw, urn string) (lookupResul
 // or opaque-shape; we try the JWT path first and fall back to the
 // opaque store when the value does not parse as a JWS.
 func (h *Handler) lookupAccessToken(ctx context.Context, raw string) (lookupResult, error) {
-	if looksLikeJWS(raw) {
+	if endpointsupport.LooksLikeJWT(raw) {
 		return h.lookupJWT(ctx, raw, TokenTypeAccessToken)
 	}
 	return h.lookupOpaqueAccessToken(ctx, raw)
@@ -299,16 +299,6 @@ func classifyOpaqueErr(err error) string {
 	default:
 		return reasonStoreError
 	}
-}
-
-// looksLikeJWS reports whether s has the three-part shape of a
-// compact-serialised JWS.
-func looksLikeJWS(s string) bool {
-	if s == "" {
-		return false
-	}
-	parts := strings.Split(s, ".")
-	return len(parts) == 3 && parts[0] != "" && parts[1] != ""
 }
 
 // classifyVerifyErr maps a tokens.AccessTokenVerifier error onto a

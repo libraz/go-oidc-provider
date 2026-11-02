@@ -42,6 +42,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 )
 
 // SigningKey is the package-private view of a signing key. The package
@@ -431,7 +432,7 @@ func mergeAccessTokenClaims(c AccessTokenClaims) map[string]any {
 		out["jti"] = c.JTI
 	}
 	if len(c.Scope) > 0 {
-		out["scope"] = joinScope(c.Scope)
+		out["scope"] = oidcscope.Join(c.Scope)
 	}
 	if c.AuthTime != 0 {
 		out["auth_time"] = c.AuthTime
@@ -495,13 +496,6 @@ func encodeAudience(aud []string) any {
 	default:
 		return aud
 	}
-}
-
-// joinScope concatenates the scope slice with single-space separators.
-// The function is in this package so the encoding rule is colocated
-// with the only place that emits a "scope" JWT claim.
-func joinScope(scopes []string) string {
-	return strings.Join(scopes, " ")
 }
 
 // NewSigner builds the [josev4.Signer] every OP-signed JWT goes through

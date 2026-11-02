@@ -61,7 +61,7 @@ func refuseIssuanceUnderClosedGrant(
 	reportTeardown(ctx, deps, out, auditTokenRevokeFailed, teardownReasonGrantTombstoned, issued.GrantID)
 	if err != nil {
 		// A substore outage is not a revocation; keep it distinguishable for monitoring.
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return false
 	}
 	endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, description)

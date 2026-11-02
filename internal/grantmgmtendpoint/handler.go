@@ -36,6 +36,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -190,7 +191,7 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 	if !ok {
 		return nil, nil, false
 	}
-	if client.PublicClient {
+	if clientauth.IsPublicClient(client) {
 		// A public client proves nothing at authentication time: it
 		// presents a client_id and no secret. That would leave the
 		// grant_id in the request path as the endpoint's only
@@ -233,7 +234,7 @@ func serveQuery(w http.ResponseWriter, r *http.Request, deps Deps) {
 	}
 	body := queryResponse{AuthorizationDetails: g.AuthorizationDetails}
 	if len(g.Scope) > 0 {
-		body.Scopes = []scopeEntry{{Scope: strings.Join(g.Scope, " ")}}
+		body.Scopes = []scopeEntry{{Scope: oidcscope.Join(g.Scope)}}
 	}
 	httpx.StampNoStore(w)
 	_ = httpx.WriteJSON(w, http.StatusOK, body)

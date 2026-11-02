@@ -9,7 +9,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/revocation"
-	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -241,7 +240,7 @@ func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, clientID string, 
 	}
 	out := revocation.NewRevoker(
 		deps.RefreshTokens, deps.OpaqueAccessTokens, deps.AccessTokens, deps.GrantRevocations,
-		deps.RevocationStrategy, deps.AccessTokenTTL, timex.OrSystem(deps.Clock).Now(), "revoke",
+		deps.RevocationStrategy, deps.AccessTokenTTL, deps.now(), "revoke",
 	).Run(ctx, scope)
 	for _, f := range out.Failures {
 		emitRevokeFailed(ctx, deps, clientID, f.Surface, f.Err)

@@ -348,12 +348,10 @@ func parseScope(w http.ResponseWriter, form url.Values, client *store.Client, sc
 }
 
 func filterScopeAllowedClients(w http.ResponseWriter, scope []string, clientID string, scopes *scoperegistry.Registry) ([]string, bool) {
-	for _, s := range scope {
-		if !scopes.Allows(s, clientID) {
-			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
-				"scope is restricted to a different client")
-			return nil, false
-		}
+	if !scopes.AllowsAll(scope, clientID) {
+		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidScope,
+			"scope is restricted to a different client")
+		return nil, false
 	}
 	return scope, true
 }
@@ -460,15 +458,15 @@ func completeVerificationURI(base, userCode string) string {
 // during high-volume flows) the function retries with a fresh
 // user_code up to [userCodeRetryBudget] times. The return value
 // carries the user_code that was successfully persisted.
-func saveWithUserCodeRetry(ctx context.Context, store store.DeviceCodeStore, rec *store.DeviceCode) (string, error) {
+func saveWithUserCodeRetry(ctx context.Context, codes store.DeviceCodeStore, rec *store.DeviceCode) (string, error) {
 	for range userCodeRetryBudget {
 		userCode, err := devicecode.NewUserCode()
 		if err != nil {
 			return "", err
 		}
 		rec.UserCode = userCode
-		if err := store.Save(ctx, rec); err != nil {
-			if errors.Is(err, errAlreadyExists()) {
+		if err := codes.Save(ctx, rec); err != nil {
+			if errors.Is(err, store.ErrAlreadyExists) {
 				continue
 			}
 			return "", err
@@ -476,13 +474,4 @@ func saveWithUserCodeRetry(ctx context.Context, store store.DeviceCodeStore, rec
 		return userCode, nil
 	}
 	return "", errors.New("devicecodeendpoint: exhausted user_code retry budget")
-}
-
-// errAlreadyExists is a small indirection that avoids the lint
-// gate against importing op/store.ErrAlreadyExists on every
-// import; the store package's sentinel is the source of truth and
-// the helper just routes [errors.Is] into it without expanding
-// the package import surface.
-func errAlreadyExists() error {
-	return store.ErrAlreadyExists
 }

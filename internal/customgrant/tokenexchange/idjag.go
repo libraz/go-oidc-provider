@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -13,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -25,10 +25,6 @@ const idjagTokenTypeNA = "N_A"
 // that states none receives. It is the exp bound the redeeming side
 // enforces.
 const maxIDJAGTTL = clientauth.MaxAssertionLifetime
-
-// idjagJTIBytes is the jti entropy, the same 128 bits the OP's other
-// opaque identifiers carry.
-const idjagJTIBytes = 16
 
 // idjagInput is the request shape the ID-JAG branch has validated before
 // the policy runs.
@@ -82,7 +78,7 @@ func (h *Handler) handleIDJAG(ctx context.Context, req customgrant.Request) (cus
 	if ttl <= 0 || ttl > maxIDJAGTTL {
 		ttl = maxIDJAGTTL
 	}
-	jti, err := keys.RandomBase64URL(idjagJTIBytes)
+	jti, err := keys.RandomBase64URL(keys.IdentifierBytes)
 	if err != nil {
 		return customgrant.Response{}, serverError()
 	}
@@ -222,7 +218,7 @@ func (h *Handler) idjagClaims(req customgrant.Request, in idjagInput, subjectVie
 		"exp":       now.Add(ttl).Unix(),
 	}
 	if len(decision.Scope) > 0 {
-		claims["scope"] = strings.Join(decision.Scope, " ")
+		claims["scope"] = oidcscope.Join(decision.Scope)
 	}
 	if len(decision.Resource) == 1 {
 		claims["resource"] = decision.Resource[0]

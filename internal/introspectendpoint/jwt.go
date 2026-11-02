@@ -109,12 +109,12 @@ func writeJWTResponse(
 ) {
 	signed, err := signIntrospectionJWT(deps, audience, body)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	out, err := maybeEncryptIntrospection(ctx, deps, client, signed)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	httpx.StampNoStore(w)

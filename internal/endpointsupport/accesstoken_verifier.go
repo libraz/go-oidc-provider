@@ -11,8 +11,9 @@ import (
 
 // NewAccessTokenVerifier builds the [tokens.AccessTokenVerifier] the
 // bearer-consuming endpoints share. A nil clock leaves the verifier's
-// own default (the system clock); RequireJTI follows the configured
-// revocation strategy.
+// own default (the system clock) and a non-positive leeway resolves to
+// [tokens.DefaultLeeway]; RequireJTI follows the configured revocation
+// strategy.
 func NewAccessTokenVerifier(
 	set *keys.Set,
 	issuer string,
@@ -20,6 +21,9 @@ func NewAccessTokenVerifier(
 	leeway time.Duration,
 	strategy store.AccessTokenRevocationStrategy,
 ) *tokens.AccessTokenVerifier {
+	if leeway <= 0 {
+		leeway = tokens.DefaultLeeway
+	}
 	return &tokens.AccessTokenVerifier{
 		Keys:       set,
 		Issuer:     issuer,

@@ -18,7 +18,7 @@ func TestDecidePoll_TTLGate(t *testing.T) {
 		ExpiresAt:         now.Add(-time.Second),
 		Approved:          true,
 	})
-	if out.Decision != devicecode.PollDecisionExpiredToken {
+	if out.Decision != pollinterval.OutcomeExpired {
 		t.Errorf("expired record: got %v, want expired_token", out.Decision)
 	}
 }
@@ -33,7 +33,7 @@ func TestDecidePoll_ConsumedShadowsApproved(t *testing.T) {
 		Approved:          true,
 		Consumed:          true,
 	})
-	if out.Decision != devicecode.PollDecisionExpiredToken {
+	if out.Decision != pollinterval.OutcomeExpired {
 		t.Errorf("consumed record: got %v, want expired_token (replay guard)", out.Decision)
 	}
 }
@@ -47,7 +47,7 @@ func TestDecidePoll_Denied(t *testing.T) {
 		ExpiresAt:         now.Add(time.Minute),
 		Denied:            true,
 	})
-	if out.Decision != devicecode.PollDecisionAccessDenied {
+	if out.Decision != pollinterval.OutcomeDenied {
 		t.Errorf("denied: got %v, want access_denied", out.Decision)
 	}
 }
@@ -60,7 +60,7 @@ func TestDecidePoll_FirstPollAuthPending(t *testing.T) {
 		EffectiveInterval: 5 * time.Second,
 		ExpiresAt:         now.Add(time.Minute),
 	})
-	if out.Decision != devicecode.PollDecisionAuthorizationPending {
+	if out.Decision != pollinterval.OutcomePending {
 		t.Errorf("first poll, not approved: got %v, want authorization_pending", out.Decision)
 	}
 }
@@ -74,7 +74,7 @@ func TestDecidePoll_FirstPollEmitWhenApproved(t *testing.T) {
 		ExpiresAt:         now.Add(time.Minute),
 		Approved:          true,
 	})
-	if out.Decision != devicecode.PollDecisionEmit {
+	if out.Decision != pollinterval.OutcomeEmit {
 		t.Errorf("first poll, approved: got %v, want emit", out.Decision)
 	}
 }
@@ -106,7 +106,7 @@ func TestDecidePoll_SlowDownRaisesIntervalByIncrement(t *testing.T) {
 				ExpiresAt:         now.Add(time.Minute),
 				Approved:          true,
 			})
-			if out.Decision != devicecode.PollDecisionSlowDown {
+			if out.Decision != pollinterval.OutcomeSlowDown {
 				t.Errorf("poll inside interval: got %v, want slow_down", out.Decision)
 			}
 			if out.NextInterval != tc.wantNext {
@@ -133,7 +133,7 @@ func TestDecidePoll_OnTimePollWithinToleranceIsNotAViolation(t *testing.T) {
 		EffectiveInterval: devicecode.DefaultInterval,
 		ExpiresAt:         now.Add(time.Minute),
 	})
-	if out.Decision != devicecode.PollDecisionAuthorizationPending {
+	if out.Decision != pollinterval.OutcomePending {
 		t.Errorf("poll 100ms early: got %v, want authorization_pending", out.Decision)
 	}
 	if out.CountThisAsViolation {
@@ -174,19 +174,19 @@ func pollWalk(
 			PollViolations:    out.violations,
 		})
 		switch decision.Decision {
-		case devicecode.PollDecisionAccessDenied:
+		case pollinterval.OutcomeDenied:
 			out.denied = true
 			return out
-		case devicecode.PollDecisionExpiredToken:
+		case pollinterval.OutcomeExpired:
 			out.expired = true
 			return out
-		case devicecode.PollDecisionSlowDown:
+		case pollinterval.OutcomeSlowDown:
 			opInterval = decision.NextInterval
 			// The device applies the increase RFC 8628 §3.5 mandates.
 			deviceInterval += pollinterval.SlowDownIncrement
-		case devicecode.PollDecisionAuthorizationPending,
-			devicecode.PollDecisionEmit,
-			devicecode.PollDecisionInvalid:
+		case pollinterval.OutcomePending,
+			pollinterval.OutcomeEmit,
+			pollinterval.OutcomeInvalid:
 			// The bar is unchanged; the device keeps its current timer.
 		case pollinterval.OutcomeConsumed:
 			panic("device-code poll reported the CIBA-only consumed outcome")
@@ -261,7 +261,7 @@ func TestDecidePoll_PollViolationLockout(t *testing.T) {
 		Approved:          true,
 		PollViolations:    devicecode.MaxPollViolations,
 	})
-	if out.Decision != devicecode.PollDecisionAccessDenied {
+	if out.Decision != pollinterval.OutcomeDenied {
 		t.Errorf("poll violations at cap: got %v, want access_denied", out.Decision)
 	}
 }
@@ -277,7 +277,7 @@ func TestDecidePoll_FastPollFloor(t *testing.T) {
 		Approved:          true,
 	}
 	out := devicecode.DecidePoll(in)
-	if out.Decision != devicecode.PollDecisionSlowDown {
+	if out.Decision != pollinterval.OutcomeSlowDown {
 		t.Errorf("sub-FastPollFloor poll: got %v, want slow_down even when EffectiveInterval is small", out.Decision)
 	}
 }
@@ -291,21 +291,21 @@ func TestDecidePoll_ExpiredOverridesDenied(t *testing.T) {
 		ExpiresAt:         now.Add(-time.Second),
 		Denied:            true,
 	})
-	if out.Decision != devicecode.PollDecisionExpiredToken {
+	if out.Decision != pollinterval.OutcomeExpired {
 		t.Errorf("expired AND denied: got %v, want expired_token (TTL gate runs first)", out.Decision)
 	}
 }
 
 func TestPollDecision_String(t *testing.T) {
 	t.Parallel()
-	cases := map[devicecode.PollDecision]string{
-		devicecode.PollDecisionEmit:                 "emit",
-		devicecode.PollDecisionAuthorizationPending: "authorization_pending",
-		devicecode.PollDecisionSlowDown:             "slow_down",
-		devicecode.PollDecisionAccessDenied:         "access_denied",
-		devicecode.PollDecisionExpiredToken:         "expired_token",
-		devicecode.PollDecisionInvalid:              "invalid",
-		devicecode.PollDecision(99):                 "invalid",
+	cases := map[pollinterval.Outcome]string{
+		pollinterval.OutcomeEmit:     "emit",
+		pollinterval.OutcomePending:  "authorization_pending",
+		pollinterval.OutcomeSlowDown: "slow_down",
+		pollinterval.OutcomeDenied:   "access_denied",
+		pollinterval.OutcomeExpired:  "expired_token",
+		pollinterval.OutcomeInvalid:  "invalid",
+		pollinterval.Outcome(99):     "invalid",
 	}
 	for d, want := range cases {
 		if got := d.String(); got != want {

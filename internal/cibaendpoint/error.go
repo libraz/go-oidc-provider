@@ -11,7 +11,7 @@ import "github.com/libraz/go-oidc-provider/internal/endpointsupport"
 // and is omitted from this list.
 const (
 	errInvalidRequest        = endpointsupport.ErrInvalidRequest
-	errInvalidScope          = "invalid_scope"
+	errInvalidScope          = endpointsupport.ErrInvalidScope
 	errServerError           = endpointsupport.ErrServerError
 	errUnknownUserID         = "unknown_user_id"
 	errInvalidBindingMessage = "invalid_binding_message"

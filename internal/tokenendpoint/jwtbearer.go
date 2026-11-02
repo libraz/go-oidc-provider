@@ -228,7 +228,7 @@ func writeAssertionRejection(ctx context.Context, w http.ResponseWriter, deps De
 			"assertion issuer keys are temporarily unavailable")
 	default:
 		emitJWTBearerRejected(ctx, deps, clientID, issuer, jwtBearerReasonVerifierFault)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 	}
 }
 
@@ -253,7 +253,7 @@ func resolveJWTBearerSubject(
 		return "", false
 	case err != nil, subject == "":
 		emitJWTBearerRejected(ctx, deps, clientID, req.issuer, jwtBearerReasonResolverFault)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return "", false
 	}
 	if _, err := lookupLiveSubject(ctx, deps, subject); err != nil {
@@ -264,7 +264,7 @@ func resolveJWTBearerSubject(
 			return "", false
 		}
 		emitJWTBearerRejected(ctx, deps, clientID, req.issuer, jwtBearerReasonSubjectLookup)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return "", false
 	}
 	return subject, true
@@ -353,14 +353,14 @@ func issueJWTBearerResponse(
 	publicSubject, err := projectPublicSubject(ctx, deps, subject, req.client)
 	if err != nil {
 		emitJWTBearerRejected(ctx, deps, clientID, req.issuer, jwtBearerReasonIssuance)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	now := deps.now().UTC()
 	accessToken, err := mintAccessToken(ctx, deps, subject, publicSubject, clientID, "", scope, resource, now, 0, req.binding, nil)
 	if err != nil {
 		emitJWTBearerRejected(ctx, deps, clientID, req.issuer, jwtBearerReasonIssuance)
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	deps.audit().Emit(ctx, audit.Event{
@@ -378,7 +378,7 @@ func issueJWTBearerResponse(
 		AccessToken: accessToken,
 		TokenType:   req.binding.tokenTypeFor(),
 		ExpiresIn:   int64(deps.AccessTokenTTL.Seconds()),
-		Scope:       joinScope(scope),
+		Scope:       oidcscope.Join(scope),
 	})
 }
 

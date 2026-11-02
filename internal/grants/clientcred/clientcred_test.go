@@ -79,6 +79,17 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			wantErr:   clientcred.ErrPublicClient,
 		},
 		{
+			name: "auth_method_none_rejected",
+			client: &store.Client{
+				ID:                      "client-none",
+				GrantTypes:              []string{"client_credentials"},
+				Scopes:                  []string{"read"},
+				TokenEndpointAuthMethod: "none",
+			},
+			requested: nil,
+			wantErr:   clientcred.ErrPublicClient,
+		},
+		{
 			name:      "client_without_grant_rejected",
 			client:    confidential([]string{"authorization_code", "refresh_token"}, []string{"read"}),
 			requested: nil,

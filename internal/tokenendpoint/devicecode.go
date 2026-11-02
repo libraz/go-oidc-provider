@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	dcgrant "github.com/libraz/go-oidc-provider/internal/grants/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/grants/pollgrant"
 	"github.com/libraz/go-oidc-provider/internal/pollinterval"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -80,7 +81,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 		Origin:  store.RefreshOriginDeviceCode,
 	})
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	if !consumeDeviceCode(ctx, w, deps, in.DeviceCode) {
@@ -95,7 +96,6 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	emitDeviceCodeIssued(ctx, deps, deviceCodeIssuedExtras{
 		ClientID:         client.ID,
 		Subject:          authorized.Subject,
-		Scope:            authorized.Scope,
 		Audience:         authorized.Audience,
 		SenderConstraint: authorized.SenderConstraint,
 		Scopes:           authorized.Scope,
@@ -193,7 +193,7 @@ func lookupDeviceCode(
 				"device_code expired or already consumed")
 			return nil, false
 		}
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return nil, false
 	}
 	if rec.ClientID != clientID {
@@ -251,26 +251,23 @@ func authorizeDeviceCodePoll(
 //   - ErrExpiredOrConsumed     → expired_token (same defensive note).
 //   - default                  → server_error (programmer bug).
 func deviceCodeAuthError(err error) (code string, status int, description string) {
-	switch {
-	case errors.Is(err, dcgrant.ErrGrantNotPermitted):
-		return errUnauthorizedClient, http.StatusBadRequest, "client is not authorized for the device_code grant"
-	case errors.Is(err, dcgrant.ErrScopeForbidden):
-		return errInvalidScope, http.StatusBadRequest, "granted scope exceeds the client's registered set"
-	case errors.Is(err, dcgrant.ErrCnfBindingMismatch),
-		errors.Is(err, dcgrant.ErrCnfBindingMissing):
-		return errInvalidGrant, http.StatusBadRequest,
-			"sender-constraint binding does not match the device-authorization record"
-	case errors.Is(err, dcgrant.ErrSubjectMissing):
-		return errInvalidGrant, http.StatusBadRequest, "device authorization is not associated with an end user"
-	case errors.Is(err, dcgrant.ErrPendingApproval):
-		return errAuthorizationPending, http.StatusBadRequest, "authorization request is still pending"
-	case errors.Is(err, dcgrant.ErrDenied):
-		return errAccessDenied, http.StatusBadRequest, "authorization request was denied"
-	case errors.Is(err, dcgrant.ErrExpiredOrConsumed):
+	if errors.Is(err, dcgrant.ErrExpiredOrConsumed) {
 		return errExpiredToken, http.StatusBadRequest, "device_code expired or already consumed"
-	default:
-		return errServerError, http.StatusInternalServerError, ""
 	}
+	return pollAuthError(err, pollAuthMap{
+		Errors: pollgrant.Errors{
+			NotPermitted:   dcgrant.ErrGrantNotPermitted,
+			SubjectMissing: dcgrant.ErrSubjectMissing,
+			CnfMissing:     dcgrant.ErrCnfBindingMissing,
+			CnfMismatch:    dcgrant.ErrCnfBindingMismatch,
+			ScopeForbidden: dcgrant.ErrScopeForbidden,
+		},
+		Pending:   dcgrant.ErrPendingApproval,
+		Denied:    dcgrant.ErrDenied,
+		Grant:     "device_code",
+		CnfRecord: "device-authorization",
+		NoSubject: "device authorization is not associated with an end user",
+	})
 }
 
 // retireDeprovisionedDeviceCode spends an approval whose subject no
@@ -316,7 +313,7 @@ func consumeDeviceCode(
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 				"device_code is not in a consumable state")
 		default:
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteServerError(w)
 		}
 		return false
 	}
@@ -331,7 +328,6 @@ func consumeDeviceCode(
 type deviceCodeIssuedExtras struct {
 	ClientID         string
 	Subject          string
-	Scope            []string
 	Scopes           []string
 	Audience         []string
 	SenderConstraint string

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -82,7 +83,7 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 	if in.Client == nil {
 		return nil, errors.New("clientcred: nil client")
 	}
-	if in.Client.PublicClient {
+	if clientauth.IsPublicClient(in.Client) {
 		return nil, ErrPublicClient
 	}
 	if !slices.Contains(in.Client.GrantTypes, grantTypeWire) {

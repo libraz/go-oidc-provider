@@ -1,6 +1,8 @@
 package tokens
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"time"
@@ -101,4 +103,27 @@ func narrowAuthorizationDetails(own, granted []map[string]any) []map[string]any 
 		return nil
 	}
 	return out
+}
+
+// errGrantStoreContract reports a GrantStore.Find that returned neither a
+// grant nor an error.
+var errGrantStoreContract = errors.New("tokens: grant store returned no grant and no error")
+
+// FindGrant returns the grant grantID names, or nil when grantID is empty,
+// grants is nil, or the store holds no such grant. Any other lookup failure
+// is returned, so a fault never reads as an absent grant.
+func FindGrant(ctx context.Context, grants store.GrantStore, grantID string) (*store.Grant, error) {
+	if grantID == "" || grants == nil {
+		return nil, nil //nolint:nilnil // no grant to consult
+	}
+	g, err := grants.Find(ctx, grantID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil, nil //nolint:nilnil // no grant to consult
+	case err != nil:
+		return nil, err
+	case g == nil:
+		return nil, errGrantStoreContract
+	}
+	return g, nil
 }

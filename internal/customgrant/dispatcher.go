@@ -112,7 +112,9 @@ var (
 // a dispatcher via [New]. The type is safe for concurrent use after
 // construction.
 type Dispatcher struct {
-	handlers     []Handler
+	handlers []Handler
+	// forms holds each handler's compiled [ParamPolicy], keyed by Name.
+	forms        map[string]formPolicy
 	maxAccessTTL time.Duration
 	now          func() time.Time
 	auditEmit    audit.Emitter
@@ -155,8 +157,15 @@ func WithAudit(em audit.Emitter) Option {
 func New(handlers []Handler, opts ...Option) *Dispatcher {
 	stored := make([]Handler, len(handlers))
 	copy(stored, handlers)
+	forms := make(map[string]formPolicy, len(stored))
+	for _, h := range stored {
+		if _, dup := forms[h.Name()]; !dup {
+			forms[h.Name()] = compileFormPolicy(h.ParamPolicy())
+		}
+	}
 	disp := &Dispatcher{
 		handlers:  stored,
+		forms:     forms,
 		auditEmit: audit.Discard(),
 	}
 	for _, opt := range opts {
@@ -175,12 +184,7 @@ func (d *Dispatcher) HasHandler(grantType string) bool {
 	if d == nil {
 		return false
 	}
-	for _, h := range d.handlers {
-		if h.Name() == grantType {
-			return true
-		}
-	}
-	return false
+	return d.lookup(grantType) != nil
 }
 
 // Names returns the registered grant_type names in registration
@@ -280,8 +284,7 @@ func (d *Dispatcher) attempt(ctx context.Context, handler Handler, in DispatchIn
 	if !ClientPermitsGrant(in.Client, in.GrantType) {
 		return Response{}, failure{reason: "client_grant_not_permitted"}, ErrClientGrantNotPermitted
 	}
-	policy := handler.ParamPolicy()
-	form, err := filterForm(in.Form, policy)
+	form, err := filterForm(in.Form, d.forms[handler.Name()])
 	if err != nil {
 		return Response{}, failure{reason: "form_policy_violation"}, err
 	}
@@ -458,6 +461,27 @@ func (d *Dispatcher) validateBoundAccessToken(client *store.Client, resp *Respon
 	return nil
 }
 
+// formPolicy is a [ParamPolicy] indexed for per-request lookups.
+type formPolicy struct {
+	allowed map[string]bool
+	dupes   map[string]bool
+}
+
+// compileFormPolicy indexes p once, at registration.
+func compileFormPolicy(p ParamPolicy) formPolicy {
+	fp := formPolicy{
+		allowed: make(map[string]bool, len(p.Allowed)),
+		dupes:   make(map[string]bool, len(p.DupesAllowed)),
+	}
+	for _, name := range p.Allowed {
+		fp.allowed[name] = true
+	}
+	for _, name := range p.DupesAllowed {
+		fp.dupes[name] = true
+	}
+	return fp
+}
+
 // filterForm applies the [ParamPolicy] to the inbound form. Unknown
 // parameters trigger [ErrUnknownParameter]; duplicates trigger
 // [ErrDuplicateParameter] unless the name is in [DupesAllowed],
@@ -467,15 +491,8 @@ func (d *Dispatcher) validateBoundAccessToken(client *store.Client, resp *Respon
 // client_assertion_type) are implicit and excluded from the
 // "unknown parameter" check — they are consumed by the layers that
 // run before Dispatch.
-func filterForm(in url.Values, policy ParamPolicy) (map[string][]string, error) {
-	allowed := make(map[string]bool, len(policy.Allowed))
-	for _, name := range policy.Allowed {
-		allowed[name] = true
-	}
-	dupes := make(map[string]bool, len(policy.DupesAllowed))
-	for _, name := range policy.DupesAllowed {
-		dupes[name] = true
-	}
+func filterForm(in url.Values, policy formPolicy) (map[string][]string, error) {
+	allowed, dupes := policy.allowed, policy.dupes
 	out := make(map[string][]string, len(allowed))
 	for name, values := range in {
 		if isImplicitFormParameter(name) {

@@ -19,9 +19,8 @@ type Handler interface {
 	Name() string
 
 	// ParamPolicy returns the parameter-handling policy the
-	// dispatcher enforces before [Handle] runs. The value is
-	// consulted once per request; callers SHOULD return a stable
-	// snapshot rather than recomputing on every invocation.
+	// dispatcher enforces before [Handle] runs. The value is read
+	// once, when the dispatcher is constructed.
 	ParamPolicy() ParamPolicy
 
 	// Handle executes the grant. The dispatcher guarantees the

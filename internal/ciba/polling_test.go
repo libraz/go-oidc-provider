@@ -27,7 +27,7 @@ func TestDecidePoll(t *testing.T) {
 				Approved:          true,
 				Consumed:          true,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionAlreadyRedeemed},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomeConsumed},
 		},
 		{
 			name: "ttl gate fires before deny",
@@ -37,7 +37,7 @@ func TestDecidePoll(t *testing.T) {
 				ExpiresAt:         now.Add(-time.Second),
 				Denied:            true,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionExpiredToken},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomeExpired},
 		},
 		{
 			name: "denied",
@@ -47,7 +47,7 @@ func TestDecidePoll(t *testing.T) {
 				ExpiresAt:         now.Add(time.Minute),
 				Denied:            true,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionAccessDenied},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomeDenied},
 		},
 		{
 			name: "lockout when violations equal max",
@@ -58,7 +58,7 @@ func TestDecidePoll(t *testing.T) {
 				Approved:          true,
 				PollViolations:    ciba.MaxPollViolations,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionAccessDenied},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomeDenied},
 		},
 		{
 			name: "lockout when violations exceed max",
@@ -68,7 +68,7 @@ func TestDecidePoll(t *testing.T) {
 				ExpiresAt:         now.Add(time.Minute),
 				PollViolations:    ciba.MaxPollViolations + 3,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionAccessDenied},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomeDenied},
 		},
 		{
 			name: "lockout sits below cap leaves pending",
@@ -78,7 +78,7 @@ func TestDecidePoll(t *testing.T) {
 				ExpiresAt:         now.Add(time.Minute),
 				PollViolations:    ciba.MaxPollViolations - 1,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionAuthorizationPending},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomePending},
 		},
 		{
 			name: "slow_down via fast-poll floor",
@@ -90,7 +90,7 @@ func TestDecidePoll(t *testing.T) {
 				Approved:          true,
 			},
 			want: ciba.PollOutput{
-				Decision:             ciba.PollDecisionSlowDown,
+				Decision:             pollinterval.OutcomeSlowDown,
 				NextInterval:         time.Millisecond + pollinterval.SlowDownIncrement,
 				CountThisAsViolation: true,
 			},
@@ -105,7 +105,7 @@ func TestDecidePoll(t *testing.T) {
 				Approved:          true,
 			},
 			want: ciba.PollOutput{
-				Decision:             ciba.PollDecisionSlowDown,
+				Decision:             pollinterval.OutcomeSlowDown,
 				NextInterval:         10 * time.Second,
 				CountThisAsViolation: true,
 			},
@@ -117,7 +117,7 @@ func TestDecidePoll(t *testing.T) {
 				EffectiveInterval: 5 * time.Second,
 				ExpiresAt:         now.Add(time.Minute),
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionAuthorizationPending},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomePending},
 		},
 		{
 			name: "first poll emit when approved",
@@ -127,7 +127,7 @@ func TestDecidePoll(t *testing.T) {
 				ExpiresAt:         now.Add(time.Minute),
 				Approved:          true,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionEmit},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomeEmit},
 		},
 		{
 			name: "second poll past interval emits when approved",
@@ -138,7 +138,7 @@ func TestDecidePoll(t *testing.T) {
 				ExpiresAt:         now.Add(time.Minute),
 				Approved:          true,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionEmit},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomeEmit},
 		},
 		{
 			name: "second poll past interval pending when not approved",
@@ -148,7 +148,7 @@ func TestDecidePoll(t *testing.T) {
 				EffectiveInterval: 5 * time.Second,
 				ExpiresAt:         now.Add(time.Minute),
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionAuthorizationPending},
+			want: ciba.PollOutput{Decision: pollinterval.OutcomePending},
 		},
 	}
 
@@ -189,7 +189,7 @@ func TestDecidePoll_MaxPollViolationsOverride(t *testing.T) {
 		PollViolations:    ciba.MaxPollViolations + 1,
 		MaxPollViolations: ciba.MaxPollViolations + 3,
 	})
-	if hi.Decision == ciba.PollDecisionAccessDenied {
+	if hi.Decision == pollinterval.OutcomeDenied {
 		t.Errorf("higher cap: got access_denied, want authorization_pending")
 	}
 
@@ -203,7 +203,7 @@ func TestDecidePoll_MaxPollViolationsOverride(t *testing.T) {
 		PollViolations:    2,
 		MaxPollViolations: 2,
 	})
-	if lo.Decision != ciba.PollDecisionAccessDenied {
+	if lo.Decision != pollinterval.OutcomeDenied {
 		t.Errorf("lower cap: got %v, want access_denied", lo.Decision)
 	}
 }
@@ -219,7 +219,7 @@ func TestDecidePoll_NextIntervalFallback(t *testing.T) {
 		EffectiveInterval: 0,
 		ExpiresAt:         now.Add(time.Minute),
 	})
-	if out.Decision != ciba.PollDecisionSlowDown {
+	if out.Decision != pollinterval.OutcomeSlowDown {
 		t.Fatalf("decision: got %v, want slow_down", out.Decision)
 	}
 	if out.NextInterval != ciba.DefaultInterval {
@@ -243,7 +243,7 @@ func TestDecidePoll_OnTimePollWithinToleranceIsNotAViolation(t *testing.T) {
 		EffectiveInterval: ciba.DefaultInterval,
 		ExpiresAt:         now.Add(time.Minute),
 	})
-	if out.Decision != ciba.PollDecisionAuthorizationPending {
+	if out.Decision != pollinterval.OutcomePending {
 		t.Errorf("poll 100ms early: got %v, want authorization_pending", out.Decision)
 	}
 	if out.CountThisAsViolation {
@@ -284,20 +284,20 @@ func pollWalk(
 			PollViolations:    out.violations,
 		})
 		switch decision.Decision {
-		case ciba.PollDecisionAccessDenied:
+		case pollinterval.OutcomeDenied:
 			out.denied = true
 			return out
-		case ciba.PollDecisionExpiredToken:
+		case pollinterval.OutcomeExpired:
 			out.expired = true
 			return out
-		case ciba.PollDecisionSlowDown:
+		case pollinterval.OutcomeSlowDown:
 			opInterval = decision.NextInterval
 			// The client applies the increase CIBA Core §11 mandates.
 			clientInterval += pollinterval.SlowDownIncrement
-		case ciba.PollDecisionAuthorizationPending,
-			ciba.PollDecisionEmit,
-			ciba.PollDecisionAlreadyRedeemed,
-			ciba.PollDecisionInvalid:
+		case pollinterval.OutcomePending,
+			pollinterval.OutcomeEmit,
+			pollinterval.OutcomeConsumed,
+			pollinterval.OutcomeInvalid:
 			// The bar is unchanged; the client keeps its current timer.
 		}
 		if decision.CountThisAsViolation {
@@ -362,15 +362,15 @@ func TestDecidePoll_SpecCompliantClientIsNeverLockedOut(t *testing.T) {
 
 func TestPollDecision_String(t *testing.T) {
 	t.Parallel()
-	cases := map[ciba.PollDecision]string{
-		ciba.PollDecisionEmit:                 "emit",
-		ciba.PollDecisionAuthorizationPending: "authorization_pending",
-		ciba.PollDecisionSlowDown:             "slow_down",
-		ciba.PollDecisionAccessDenied:         "access_denied",
-		ciba.PollDecisionExpiredToken:         "expired_token",
-		ciba.PollDecisionAlreadyRedeemed:      "invalid_grant",
-		ciba.PollDecisionInvalid:              "invalid",
-		ciba.PollDecision(99):                 "invalid",
+	cases := map[pollinterval.Outcome]string{
+		pollinterval.OutcomeEmit:     "emit",
+		pollinterval.OutcomePending:  "authorization_pending",
+		pollinterval.OutcomeSlowDown: "slow_down",
+		pollinterval.OutcomeDenied:   "access_denied",
+		pollinterval.OutcomeExpired:  "expired_token",
+		pollinterval.OutcomeConsumed: "invalid_grant",
+		pollinterval.OutcomeInvalid:  "invalid",
+		pollinterval.Outcome(99):     "invalid",
 	}
 	for d, want := range cases {
 		if got := d.String(); got != want {

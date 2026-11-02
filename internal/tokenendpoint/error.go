@@ -9,17 +9,17 @@ import "github.com/libraz/go-oidc-provider/internal/endpointsupport"
 // so the constants live there; this list omits them.
 const (
 	errInvalidRequest       = endpointsupport.ErrInvalidRequest
-	errInvalidGrant         = "invalid_grant"
-	errUnauthorizedClient   = "unauthorized_client"
+	errInvalidGrant         = endpointsupport.ErrInvalidGrant
+	errUnauthorizedClient   = endpointsupport.ErrUnauthorizedClient
 	errUnsupportedGrantType = "unsupported_grant_type"
-	errInvalidScope         = "invalid_scope"
-	errInvalidTarget        = "invalid_target"
+	errInvalidScope         = endpointsupport.ErrInvalidScope
+	errInvalidTarget        = endpointsupport.ErrInvalidTarget
 	errInvalidAuthzDetails  = "invalid_authorization_details"
 	errServerError          = endpointsupport.ErrServerError
 
 	// RFC 8628 §3.5 / CIBA Core §11 codes shared by the polling grants.
 	errAuthorizationPending = "authorization_pending"
 	errSlowDown             = "slow_down"
-	errAccessDenied         = "access_denied"
+	errAccessDenied         = endpointsupport.ErrAccessDenied
 	errExpiredToken         = "expired_token"
 )

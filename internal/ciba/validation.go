@@ -117,17 +117,6 @@ func ExpiryFromSeconds(seconds int64, upper time.Duration) time.Duration {
 	return d
 }
 
-// ParseRequestedExpiry parses the requested_expiry parameter the
-// client sent on /bc-authorize and clamps it to upper; see
-// [ParseRequestedExpirySeconds] and [ExpiryFromSeconds].
-func ParseRequestedExpiry(raw string, upper time.Duration) (time.Duration, error) {
-	n, err := ParseRequestedExpirySeconds(raw)
-	if err != nil {
-		return 0, err
-	}
-	return ExpiryFromSeconds(n, upper), nil
-}
-
 // HintKind is the closed sum returned by [ClassifyHint] naming
 // which of the three CIBA hint parameters the client supplied. The
 // type is closed: callers exhaustively switch on it and the linter

@@ -150,6 +150,17 @@ func (r *Registry) Allows(scope, clientID string) bool {
 	return slices.Contains(e.AllowedClients, clientID)
 }
 
+// AllowsAll reports whether [Registry.Allows] holds for every scope in
+// scopes. A nil receiver and an empty slice both return true.
+func (r *Registry) AllowsAll(scopes []string, clientID string) bool {
+	for _, s := range scopes {
+		if !r.Allows(s, clientID) {
+			return false
+		}
+	}
+	return true
+}
+
 // PublicNames returns the discovery-eligible scope names in stable
 // lexicographic order. The slice is freshly allocated on every call so
 // callers may mutate it without affecting future reads.

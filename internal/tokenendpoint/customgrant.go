@@ -80,7 +80,7 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		// embedder to the handler and to the OP's audit record rather
 		// than to the client's credentials.
 		deps.CustomGrants.ReportFailure(ctx, dispatchIn, "issuance_failed")
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	// A response issuing under an inherited grant honours a closure of it
@@ -107,7 +107,7 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		ExpiresIn:       int64(issued.AccessTokenTTL.Seconds()),
 		RefreshToken:    issued.RefreshToken,
 		IDToken:         issued.IDToken,
-		Scope:           joinScope(resp.Scope),
+		Scope:           oidcscope.Join(resp.Scope),
 		IssuedTokenType: resp.IssuedTokenType,
 	})
 }
@@ -508,7 +508,7 @@ func writeCustomGrantError(w http.ResponseWriter, err error) {
 		errors.Is(err, customgrant.ErrPanic),
 		errors.Is(err, customgrant.ErrConflictingAccessTokenForms),
 		errors.Is(err, customgrant.ErrEmptyBoundSubject):
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 	default:
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 			"the supplied grant could not be honoured")

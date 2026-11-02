@@ -48,7 +48,7 @@ func writeSubjectLookupError(w http.ResponseWriter, err error) {
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "grant subject no longer exists")
 		return
 	}
-	endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+	endpointsupport.WriteServerError(w)
 }
 
 // deprovisionedRedemption describes a redemption refused because its

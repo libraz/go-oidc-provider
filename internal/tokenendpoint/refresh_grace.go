@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -27,7 +28,7 @@ func serveGraceRetry(
 ) {
 	response, found, err := loadRefreshRetryResponse(ctx, deps, exchanged.ConsumedID)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	if !found {
@@ -44,7 +45,7 @@ func serveGraceRetry(
 	}
 	// A grace retry may not widen or otherwise change the effective scope
 	// of the response originally cached for this predecessor.
-	if response.Scope != joinScope(exchanged.Scope) {
+	if response.Scope != oidcscope.Join(exchanged.Scope) {
 		endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant, "refresh token retry does not match original exchange")
 		return
 	}
@@ -111,12 +112,12 @@ func reissueGraceAccessToken(
 	now := deps.now().UTC()
 	authCtx, err := refreshAuthContext(ctx, deps, exchanged)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	accessToken, _, err := mintRefreshAccessToken(ctx, deps, client, exchanged, authCtx, binding, response.AuthorizationDetails, now)
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	response.AccessToken = accessToken
@@ -148,10 +149,9 @@ func loadRefreshRetryResponse(
 	if len(deps.RefreshRetryEncryptionKeys) == 0 {
 		return successResponse{}, false, nil
 	}
-	retries, ok := deps.RefreshTokens.(store.RefreshRetryResponseStore)
-	if !ok {
-		return successResponse{}, false,
-			errors.New("tokenendpoint: refresh store does not support durable retry responses")
+	retries, err := retryStore(deps)
+	if err != nil {
+		return successResponse{}, false, err
 	}
 	sealed, err := retries.LoadRetryResponse(ctx, predecessor)
 	if err != nil {

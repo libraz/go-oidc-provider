@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	cgrant "github.com/libraz/go-oidc-provider/internal/grants/ciba"
+	"github.com/libraz/go-oidc-provider/internal/grants/pollgrant"
 	"github.com/libraz/go-oidc-provider/internal/pollinterval"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -83,7 +84,7 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 		DiscardGrantOnFailure: true,
 	})
 	if err != nil {
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return
 	}
 	if !consumeCIBARequest(ctx, w, deps, in.AuthReqID) {
@@ -221,7 +222,7 @@ func lookupCIBARequest(
 				"auth_req_id expired or already consumed")
 			return nil, false
 		}
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return nil, false
 	}
 	if rec.ClientID != clientID {
@@ -278,27 +279,25 @@ func authorizeCIBAPoll(
 //   - default                  → server_error (programmer bug).
 func cibaAuthError(err error) (code string, status int, description string) {
 	switch {
-	case errors.Is(err, cgrant.ErrGrantNotPermitted):
-		return errUnauthorizedClient, http.StatusBadRequest, "client is not authorized for the ciba grant"
-	case errors.Is(err, cgrant.ErrScopeForbidden):
-		return errInvalidScope, http.StatusBadRequest, "granted scope exceeds the client's registered set"
-	case errors.Is(err, cgrant.ErrCnfBindingMismatch),
-		errors.Is(err, cgrant.ErrCnfBindingMissing):
-		return errInvalidGrant, http.StatusBadRequest,
-			"sender-constraint binding does not match the bc-authorize record"
-	case errors.Is(err, cgrant.ErrPendingApproval):
-		return errAuthorizationPending, http.StatusBadRequest, "authorization request is still pending"
-	case errors.Is(err, cgrant.ErrDenied):
-		return errAccessDenied, http.StatusBadRequest, "authorization request was denied"
 	case errors.Is(err, cgrant.ErrExpired):
 		return errExpiredToken, http.StatusBadRequest, "auth_req_id expired"
 	case errors.Is(err, cgrant.ErrAlreadyRedeemed):
 		return errInvalidGrant, http.StatusBadRequest, "auth_req_id was already redeemed"
-	case errors.Is(err, cgrant.ErrSubjectMissing):
-		return errInvalidGrant, http.StatusBadRequest, "authorization request is not associated with an end user"
-	default:
-		return errServerError, http.StatusInternalServerError, ""
 	}
+	return pollAuthError(err, pollAuthMap{
+		Errors: pollgrant.Errors{
+			NotPermitted:   cgrant.ErrGrantNotPermitted,
+			SubjectMissing: cgrant.ErrSubjectMissing,
+			CnfMissing:     cgrant.ErrCnfBindingMissing,
+			CnfMismatch:    cgrant.ErrCnfBindingMismatch,
+			ScopeForbidden: cgrant.ErrScopeForbidden,
+		},
+		Pending:   cgrant.ErrPendingApproval,
+		Denied:    cgrant.ErrDenied,
+		Grant:     "ciba",
+		CnfRecord: "bc-authorize",
+		NoSubject: "authorization request is not associated with an end user",
+	})
 }
 
 // retireDeprovisionedCIBARequest spends an approval whose subject no
@@ -351,7 +350,7 @@ func consumeCIBARequest(
 			endpointsupport.WriteOAuthError(w, http.StatusBadRequest, errInvalidGrant,
 				"auth_req_id is not in a consumable state")
 		default:
-			endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+			endpointsupport.WriteServerError(w)
 		}
 		return false
 	}

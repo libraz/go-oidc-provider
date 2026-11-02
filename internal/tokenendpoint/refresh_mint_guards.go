@@ -54,7 +54,7 @@ func retirePriorOpaqueAccessTokens(
 				"retryable":     transactional,
 			},
 		})
-		endpointsupport.WriteOAuthError(w, http.StatusInternalServerError, errServerError, "")
+		endpointsupport.WriteServerError(w)
 		return false
 	}
 	return true

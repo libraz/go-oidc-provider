@@ -115,64 +115,6 @@ func TestValidateScope(t *testing.T) {
 	}
 }
 
-func TestParseRequestedExpiry(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name    string
-		in      string
-		upper   time.Duration
-		want    time.Duration
-		wantErr error
-	}{
-		{name: "empty returns zero (use default)", in: "", upper: 0, want: 0, wantErr: nil},
-		{name: "whitespace returns zero", in: "   ", upper: 0, want: 0, wantErr: nil},
-		{name: "valid positive", in: "300", upper: 0, want: 300 * time.Second, wantErr: nil},
-		{name: "zero rejected", in: "0", upper: 0, want: 0, wantErr: ciba.ErrInvalidRequestedExpiry},
-		{name: "negative rejected", in: "-30", upper: 0, want: 0, wantErr: ciba.ErrInvalidRequestedExpiry},
-		{name: "non-numeric rejected", in: "abc", upper: 0, want: 0, wantErr: ciba.ErrInvalidRequestedExpiry},
-		{name: "trailing garbage rejected", in: "30s", upper: 0, want: 0, wantErr: ciba.ErrInvalidRequestedExpiry},
-		{
-			name: "below cap untouched",
-			in:   "300", upper: 600 * time.Second,
-			want: 300 * time.Second, wantErr: nil,
-		},
-		{
-			name: "exactly cap untouched",
-			in:   "600", upper: 600 * time.Second,
-			want: 600 * time.Second, wantErr: nil,
-		},
-		{
-			name: "over cap clamped",
-			in:   "1200", upper: 600 * time.Second,
-			want: 600 * time.Second, wantErr: nil,
-		},
-		{
-			name: "zero max disables clamping",
-			in:   "1200", upper: 0,
-			want: 1200 * time.Second, wantErr: nil,
-		},
-		{
-			name: "negative max disables clamping",
-			in:   "1200", upper: -1,
-			want: 1200 * time.Second, wantErr: nil,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got, err := ciba.ParseRequestedExpiry(tc.in, tc.upper)
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("err: got %v, want %v", err, tc.wantErr)
-			}
-			if got != tc.want {
-				t.Errorf("value: got %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestClassifyHint(t *testing.T) {
 	t.Parallel()
 
