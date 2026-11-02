@@ -2,16 +2,23 @@ package op
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"math"
+	"math/big"
 	"os"
+	"strconv"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/jose"
 )
 
 const (
@@ -19,18 +26,22 @@ const (
 	symmetricKeyLen = 32
 )
 
-// LoadSigningKey reads one ECDSA P-256 private key from path and returns
-// it as a [SigningKey] ready for [WithKeyset].
+// LoadSigningKey reads one ECDSA P-256 or RSA (2048 bits or more) private
+// key from path and returns it as a [SigningKey] ready for [WithKeyset].
 //
 // The format is detected from the content:
 //
-//   - PKCS#8 PEM ("PRIVATE KEY")
+//   - PKCS#8 PEM ("PRIVATE KEY"), holding an EC or RSA key
 //   - SEC1 PEM ("EC PRIVATE KEY")
-//   - a private JWK (JSON object with kty "EC", crv "P-256", x, y, d)
+//   - PKCS#1 PEM ("RSA PRIVATE KEY")
+//   - a private JWK: kty "EC" (crv "P-256", x, y, d) or kty "RSA" (n, e,
+//     d, p, q; dp, dq and qi are optional and recomputed)
 //
 // Encrypted PEM ("ENCRYPTED PRIVATE KEY" or a "Proc-Type: 4,ENCRYPTED"
-// header) is rejected: decrypt the key before handing it over. RSA keys
-// and other curves are rejected because the OP signs with ES256 only.
+// header) is rejected: decrypt the key before handing it over. Other
+// curves, other key types, RSA under 2048 bits and multi-prime RSA are
+// rejected. The key shape is checked here; whether it matches the
+// signing algorithm is checked by [New].
 //
 // KeyID is the JWK "kid" member when it is non-empty, otherwise the RFC
 // 7638 SHA-256 thumbprint of the public key (base64url, no padding), so
@@ -52,7 +63,10 @@ func LoadSigningKey(path string) (SigningKey, error) {
 		return SigningKey{}, newConfigurationError("LoadSigningKey: "+path+": "+reason, nil)
 	}
 	if kid == "" {
-		kid = p256Thumbprint(priv)
+		var ok bool
+		if kid, ok = thumbprint(priv.Public()); !ok {
+			return SigningKey{}, newConfigurationError("LoadSigningKey: "+path+": key is not ECDSA or RSA", nil)
+		}
 	}
 	return SigningKey{KeyID: kid, Signer: priv}, nil
 }
@@ -82,7 +96,8 @@ func LoadKeyset(paths ...string) (Keyset, error) {
 				"LoadKeyset: "+p+" has the same kid as "+prev+" (kid "+k.KeyID+")", nil,
 			)
 		}
-		thumb := p256Thumbprint(k.Signer.(*ecdsa.PrivateKey))
+		// LoadSigningKey only returns keys thumbprint accepts.
+		thumb, _ := thumbprint(k.Signer.Public())
 		if prev, dup := seenKey[thumb]; dup {
 			return nil, newConfigurationError("LoadKeyset: "+p+" holds the same key as "+prev, nil)
 		}
@@ -147,7 +162,7 @@ func readKeyFile(fn, path string) ([]byte, error) {
 
 // parseSigningKey returns the key and the JWK kid (empty for PEM or an
 // absent kid). A non-empty reason describes the failure.
-func parseSigningKey(raw []byte) (priv *ecdsa.PrivateKey, kid, reason string) {
+func parseSigningKey(raw []byte) (priv crypto.Signer, kid, reason string) {
 	trimmed := bytes.TrimSpace(raw)
 	if trimmed[0] == '{' {
 		return parsePrivateJWK(trimmed)
@@ -177,17 +192,38 @@ func parseSigningKey(raw []byte) (priv *ecdsa.PrivateKey, kid, reason string) {
 			return nil, "", "malformed SEC1 key"
 		}
 		parsed = k
+	case "RSA PRIVATE KEY":
+		k, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, "", "malformed PKCS#1 key"
+		}
+		parsed = k
 	default:
 		return nil, "", "unsupported PEM type " + block.Type
 	}
-	ec, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, "", "key is not ECDSA; only ECDSA P-256 is supported"
+	switch k := parsed.(type) {
+	case *ecdsa.PrivateKey:
+		if k.Curve != elliptic.P256() {
+			return nil, "", "key curve is " + k.Curve.Params().Name + "; only P-256 is supported"
+		}
+		return k, "", ""
+	case *rsa.PrivateKey:
+		if reason := checkRSASize(k); reason != "" {
+			return nil, "", reason
+		}
+		return k, "", ""
+	default:
+		return nil, "", "key is not ECDSA or RSA"
 	}
-	if ec.Curve != elliptic.P256() {
-		return nil, "", "key curve is " + ec.Curve.Params().Name + "; only P-256 is supported"
+}
+
+// checkRSASize enforces the minimum modulus size.
+func checkRSASize(k *rsa.PrivateKey) string {
+	if bits := k.N.BitLen(); bits < jose.MinRSAKeyBits {
+		return "RSA key is " + strconv.Itoa(bits) + " bits; at least " +
+			strconv.Itoa(jose.MinRSAKeyBits) + " are required"
 	}
-	return ec, "", ""
+	return ""
 }
 
 // privateKeyBlock returns the one private-key block in a PEM file. Non-key
@@ -215,22 +251,78 @@ func privateKeyBlock(pemBytes []byte) (*pem.Block, string) {
 	return block, ""
 }
 
-// parsePrivateJWK reads a private EC P-256 JWK without a JOSE library.
-func parsePrivateJWK(raw []byte) (priv *ecdsa.PrivateKey, kid, reason string) {
-	var jwk struct {
-		Kty string `json:"kty"`
-		Crv string `json:"crv"`
-		X   string `json:"x"`
-		Y   string `json:"y"`
-		D   string `json:"d"`
-		Kid string `json:"kid"`
-	}
+// privateJWK holds the members of an EC or RSA private JWK that are read.
+type privateJWK struct {
+	Kty string          `json:"kty"`
+	Crv string          `json:"crv"`
+	X   string          `json:"x"`
+	Y   string          `json:"y"`
+	D   string          `json:"d"`
+	N   string          `json:"n"`
+	E   string          `json:"e"`
+	P   string          `json:"p"`
+	Q   string          `json:"q"`
+	Oth json.RawMessage `json:"oth"`
+	Kid string          `json:"kid"`
+}
+
+// parsePrivateJWK reads a private EC P-256 or RSA JWK without a JOSE
+// library.
+func parsePrivateJWK(raw []byte) (priv crypto.Signer, kid, reason string) {
+	var jwk privateJWK
 	if err := json.Unmarshal(raw, &jwk); err != nil {
 		return nil, "", "malformed JWK JSON"
 	}
-	if jwk.Kty != "EC" {
-		return nil, "", "JWK kty must be EC"
+	switch jwk.Kty {
+	case "EC":
+		return parseECJWK(&jwk)
+	case "RSA":
+		return parseRSAJWK(&jwk)
+	default:
+		return nil, "", "JWK kty must be EC or RSA"
 	}
+}
+
+// parseRSAJWK builds an RSA key from n, e, d, p and q; the CRT members
+// are recomputed rather than trusted.
+func parseRSAJWK(jwk *privateJWK) (priv crypto.Signer, kid, reason string) {
+	if len(jwk.Oth) > 0 && string(jwk.Oth) != "null" {
+		return nil, "", "multi-prime RSA JWK is not supported"
+	}
+	members := []struct{ name, val string }{
+		{"n", jwk.N}, {"e", jwk.E}, {"d", jwk.D}, {"p", jwk.P}, {"q", jwk.Q},
+	}
+	ints := make([]*big.Int, len(members))
+	for i, m := range members {
+		if m.val == "" {
+			return nil, "", "RSA JWK is missing " + m.name
+		}
+		b, err := base64.RawURLEncoding.DecodeString(m.val)
+		if err != nil {
+			return nil, "", "RSA JWK " + m.name + " is not base64url"
+		}
+		ints[i] = new(big.Int).SetBytes(b)
+	}
+	if !ints[1].IsInt64() || ints[1].Int64() > math.MaxInt32 {
+		return nil, "", "RSA JWK e is out of range"
+	}
+	key := &rsa.PrivateKey{
+		PublicKey: rsa.PublicKey{N: ints[0], E: int(ints[1].Int64())},
+		D:         ints[2],
+		Primes:    []*big.Int{ints[3], ints[4]},
+	}
+	if reason := checkRSASize(key); reason != "" {
+		return nil, "", reason
+	}
+	key.Precompute()
+	if err := key.Validate(); err != nil {
+		return nil, "", "RSA JWK members are inconsistent"
+	}
+	return key, jwk.Kid, ""
+}
+
+// parseECJWK builds a P-256 key from x, y and d.
+func parseECJWK(jwk *privateJWK) (priv crypto.Signer, kid, reason string) {
 	if jwk.Crv != "P-256" {
 		return nil, "", "JWK crv must be P-256"
 	}
@@ -264,15 +356,31 @@ func p256Coords(pub *ecdsa.PublicKey) (x, y []byte, ok bool) {
 	return raw[1 : 1+p256CoordLen], raw[1+p256CoordLen:], true
 }
 
-// p256Thumbprint returns the RFC 7638 SHA-256 thumbprint of the public
-// key, built from the required members in lexicographic order.
-func p256Thumbprint(priv *ecdsa.PrivateKey) string {
-	x, y, _ := p256Coords(&priv.PublicKey)
+// thumbprint returns the RFC 7638 SHA-256 thumbprint of a P-256 or RSA
+// public key, built from the required members in lexicographic order.
+// ok is false for any other key.
+func thumbprint(pub crypto.PublicKey) (string, bool) {
 	enc := base64.RawURLEncoding
-	canonical := `{"crv":"P-256","kty":"EC","x":"` + enc.EncodeToString(x) +
-		`","y":"` + enc.EncodeToString(y) + `"}`
+	var canonical string
+	switch k := pub.(type) {
+	case *ecdsa.PublicKey:
+		if k.Curve != elliptic.P256() {
+			return "", false
+		}
+		x, y, ok := p256Coords(k)
+		if !ok {
+			return "", false
+		}
+		canonical = `{"crv":"P-256","kty":"EC","x":"` + enc.EncodeToString(x) +
+			`","y":"` + enc.EncodeToString(y) + `"}`
+	case *rsa.PublicKey:
+		canonical = `{"e":"` + enc.EncodeToString(big.NewInt(int64(k.E)).Bytes()) +
+			`","kty":"RSA","n":"` + enc.EncodeToString(k.N.Bytes()) + `"}`
+	default:
+		return "", false
+	}
 	sum := sha256.Sum256([]byte(canonical))
-	return enc.EncodeToString(sum[:])
+	return enc.EncodeToString(sum[:]), true
 }
 
 // decodeSymmetricKey returns the 32-byte key held by raw, or a reason.
