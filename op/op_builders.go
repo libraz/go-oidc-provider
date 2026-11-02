@@ -227,8 +227,8 @@ func buildProxyTrust(cfg *config) (*proxy.Trust, error) {
 	if h := issuerHost(cfg.issuer); h != "" {
 		hosts = append(hosts, h)
 	}
-	if len(hosts) == 0 && cfg.logger != nil {
-		cfg.logger.Warn(
+	if len(hosts) == 0 && cfg.startupLog() != nil {
+		cfg.startupLog().Warn(
 			"proxy: WithTrustedProxies configured without a host allowlist; X-Forwarded-Host from any trusted proxy will be honoured",
 		)
 	}

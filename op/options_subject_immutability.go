@@ -67,8 +67,8 @@ func (c *config) checkSubjectModeGate(ctx context.Context) (commit func(context.
 	current := c.effectiveSubjectMode()
 	meta := c.store.Metadata()
 	if meta == nil {
-		if c.logger != nil && current != store.SubjectModePublic {
-			c.logger.Warn(
+		if c.startupLog() != nil && current != store.SubjectModePublic {
+			c.startupLog().Warn(
 				"subject-mode immutability gate skipped: store does not implement MetadataStore; switching subject strategies on a populated store will silently reassign sub values.",
 				"mode", current,
 			)

@@ -79,8 +79,9 @@ those are. `users` is your existing users table behind
 table already has an identifier that is never reassigned. See
 [Bring your own user store](https://go-oidc-provider.libraz.net/use-cases/byo-userstore).
 
-`Issuer`, `Store` and `Keyset` are always required. `CookieKeys` is required
-whenever the `authorization_code` grant is enabled, which is the default.
+`Issuer`, `Store` and `Keyset` are always required. `CookieKeys` and
+`LoginFlow` are required whenever the `authorization_code` grant is enabled,
+which is the default.
 `op.New` returns an error rather than booting in an unsafe configuration, so an
 incomplete setup fails at construction time.
 
@@ -91,7 +92,7 @@ issuer, so that is the first URL to fetch.
 A security profile is declared with one option, and the constructor refuses to
 start when the declared profile conflicts with the rest of the configuration.
 Without one the OP keeps the OpenID Connect Core shape, where a confidential
-client may redeem a code without PKCE, and `op.New` logs a warning saying so:
+client may redeem a code without PKCE, and `op.New` logs a warning saying so (to `slog.Default()` when no `WithLogger` is set):
 
 ```go
 op.WithProfile(profile.Baseline)      // OAuth 2.1: PKCE on every code request

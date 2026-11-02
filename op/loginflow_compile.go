@@ -568,14 +568,15 @@ func resolveAuthnLockoutStore(c *config) store.AuthnLockoutStore { //nolint:iret
 // when the login flow schedules a counter-consuming step but no
 // lockout store resolves.
 func (c *config) warnWithoutLockoutStore() {
-	if c.logger == nil || resolveAuthnLockoutStore(c) != nil {
+	log := c.startupLog()
+	if log == nil || resolveAuthnLockoutStore(c) != nil {
 		return
 	}
 	for _, step := range c.loginFlowSteps() {
 		if !countsFailures(step) {
 			continue
 		}
-		c.logger.Warn(
+		log.Warn(
 			"the login flow has a password or second-factor step but no "+
 				"authn lockout store is available, so per-subject brute-force "+
 				"limiting is disabled; use a WithStore value that exposes "+

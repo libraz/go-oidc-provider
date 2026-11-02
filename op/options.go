@@ -58,6 +58,7 @@ type config struct {
 	userStore            store.UserStore
 	clock                Clock
 	logger               *slog.Logger
+	startupLogger        *slog.Logger // construction-time diagnostics; see startupLog
 	auditLogger          *slog.Logger
 	keyset               Keyset
 	signingAlg           SigningAlgorithm // read through issuingAlg
@@ -1105,7 +1106,9 @@ func WithClock(clock Clock) Option {
 }
 
 // WithLogger injects the [*slog.Logger] the library uses for structured
-// diagnostics. If unset, the [Provider] discards every record. Callers
+// diagnostics. If unset, request-time records are discarded and the
+// construction-time diagnostics [New] emits once (configuration warnings
+// and the claim-source line) go to [slog.Default]. Callers
 // SHOULD pass a logger backed by their service's slog handler so OP events
 // appear in the same stream as the rest of the application.
 // The supplied logger's handler is wrapped with the library's redaction

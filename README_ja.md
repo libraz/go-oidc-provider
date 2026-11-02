@@ -52,11 +52,11 @@ log.Fatal(http.ListenAndServe(":8080", handler))
 
 `st` は OP 自身のレコード（クライアント、コード、トークン、セッション）を保存します。`op.New` は、構成が使う SQL アダプタのテーブルを構築時に検査し、足りないテーブルがあれば名前を挙げて止まります。どのテーブルが対象になるかは [`TABLES.md`](op/storeadapter/sql/schema/TABLES.md) にまとめてあります。`users` は既存のユーザテーブルを `store.UserPasswordStore` として渡したもので、実装するのは読み取りメソッド 3 つです。再割り当てされない識別子の列がすでにあれば、列を足す必要はありません。詳しくは [Bring your own user store](https://go-oidc-provider.libraz.net/ja/use-cases/byo-userstore) を参照してください。
 
-`Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
+`Issuer` / `Store` / `Keyset` は常に必須です。認可コード（`authorization_code`）による認可は既定で有効になっており、これを使う場合は `CookieKeys` と `LoginFlow` も必須です。`op.New` は安全でない構成のままでは起動せずにエラーを返すので、不完全な設定は構築時に弾かれます。
 
 エンドポイントは `/oidc` の下にマウントされます（`op.WithMountPrefix` で変更できます）。discovery ドキュメントは issuer 直下の `/.well-known/openid-configuration` に置かれるので、最初はこの URL を取得してください。
 
-セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。プロファイルを宣言しないと OpenID Connect Core の形のままになり、confidential client は PKCE なしでコードを交換できます。その場合 `op.New` は警告をログに出します。
+セキュリティプロファイルはオプション 1 つで宣言できます。宣言したプロファイルと他の設定が食い違う場合、コンストラクタは起動を拒否します。プロファイルを宣言しないと OpenID Connect Core の形のままになり、confidential client は PKCE なしでコードを交換できます。その場合 `op.New` は警告をログに出します（`WithLogger` 未設定なら `slog.Default()` へ）。
 
 ```go
 op.WithProfile(profile.Baseline)      // OAuth 2.1: code 要求すべてに PKCE 必須

@@ -14,14 +14,15 @@ import (
 //
 // Capabilities [New] already requires are refused there and not listed.
 func (c *config) infoMissingStoreCapabilities() {
-	if c.logger == nil || nilcheck.IsNil(c.store) {
+	log := c.startupLog()
+	if log == nil || nilcheck.IsNil(c.store) {
 		return
 	}
 	missing := c.missingStoreCapabilities()
 	if len(missing) == 0 {
 		return
 	}
-	c.logger.Info("the store does not implement optional capabilities this configuration uses; "+
+	log.Info("the store does not implement optional capabilities this configuration uses; "+
 		"each falls back to its documented behaviour (see the op/store godoc of each interface)",
 		"missing", missing)
 }

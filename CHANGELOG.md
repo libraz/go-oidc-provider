@@ -212,6 +212,13 @@ issuer. A DynamoDB deployment must create the new `cascade_links` table (from
 
 ### Changed
 
+- Without `op.WithLogger`, the diagnostics `op.New` emits once at construction
+  now go to `slog.Default()` instead of being discarded: the warning that no
+  profile requires PKCE, the line naming the ID Token claim source, the
+  missing optional store capabilities and the other configuration warnings.
+  Request-time records are still discarded until a logger is set. A process
+  that never configured a logger sees these lines on its default handler.
+
 - `op.New` refuses a `WithEncryptionKeyset` entry whose public key is also a
   signing key in `WithKeyset`. Signing and encryption keys were already
   documented as distinct; a configuration that reused one EC key for ES256

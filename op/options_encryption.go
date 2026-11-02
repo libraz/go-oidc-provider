@@ -351,7 +351,7 @@ func (c *config) warnEncryptionKidlessTrialCap() {
 		if count <= MaxKidlessEncryptionTrialKeys {
 			continue
 		}
-		c.logger.Warn(
+		c.startupLog().Warn(
 			"WithEncryptionKeyset holds "+strconv.Itoa(count)+" "+family+" keys, above the "+
 				strconv.Itoa(MaxKidlessEncryptionTrialKeys)+"-key kid-less trial cap, so every "+
 				"encrypted request object whose protected header omits kid is refused as "+

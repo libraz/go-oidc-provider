@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	internallog "github.com/libraz/go-oidc-provider/internal/log"
+	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -32,13 +33,27 @@ const DefaultAccessTokenTTL = timex.AccessTokenTTLDefault
 // name is preserved for embedders that already reference the constant.
 const DefaultRefreshTokenTTL = timex.RefreshTokenTTLDefault
 
+// startupLog returns the logger for diagnostics emitted once while [New]
+// runs: the supplied logger, else [slog.Default]. A config that skipped
+// [config.applyDefaults] falls back to the operational logger.
+func (c *config) startupLog() *slog.Logger {
+	if c.startupLogger != nil {
+		return c.startupLogger
+	}
+	return c.logger
+}
+
 // applyDefaults fills in optional fields with their library defaults.
 func (c *config) applyDefaults() {
 	if c.clock == nil {
 		c.clock = timex.SystemClock
 	}
 	if c.logger == nil {
+		// Same redaction wrapping as [WithLogger] applies to a supplied logger.
+		c.startupLogger = slog.New(redact.WrapHandler(slog.Default().Handler()))
 		c.logger = slog.New(internallog.DiscardHandler{})
+	} else {
+		c.startupLogger = c.logger
 	}
 	// auditLogger has no fall-back default of its own: when
 	// [WithAuditLogger] is unset, [effectiveAuditLogger] returns the
@@ -81,7 +96,7 @@ func (c *config) applyDefaults() {
 		}
 	}
 	if c.chooserUIShadowedBySPA {
-		c.logger.Warn(
+		c.startupLog().Warn(
 			"WithChooserUI is configured but WithSPAUI is active; "+
 				"the chooser template will not be rendered "+
 				"(SPA owns the chooser UI)",
@@ -269,11 +284,12 @@ func (c *config) resolveGrants() {
 // a feature is live are rejected in [config.validate] instead of being
 // warned here.
 func (c *config) emitPartialWiringWarnings() {
-	if c.logger == nil {
+	log := c.startupLog()
+	if log == nil {
 		return
 	}
 	if c.allowInsecureBackchannelLogoutForDev {
-		c.logger.Warn(
+		log.Warn(
 			"WithAllowInsecureBackchannelLogoutForDev admits plain-http "+
 				"loopback URLs for backchannel_logout_uri and lets the "+
 				"deliverer POST a signed logout token at a loopback "+
@@ -282,7 +298,7 @@ func (c *config) emitPartialWiringWarnings() {
 		)
 	}
 	if c.allowInsecureSharedSignalsPushForDev {
-		c.logger.Warn(
+		log.Warn(
 			"WithAllowInsecureSharedSignalsPushForDev admits plain-http "+
 				"and loopback push endpoints for shared-signals streams and "+
 				"lets the push worker POST security event tokens there; "+
@@ -306,7 +322,7 @@ func (c *config) warnPKCENotRequired() {
 	if c.requirePKCE() || !slices.Contains(c.grants, grant.AuthorizationCode) {
 		return
 	}
-	c.logger.Warn(
+	c.startupLog().Warn(
 		"no security profile requires PKCE, so a confidential client may "+
 			"redeem an authorization code without one; declare "+
 			"op.WithProfile(profile.Baseline) unless legacy clients need this",
@@ -325,7 +341,7 @@ func (c *config) warnSessionDurabilityMismatch() {
 	if durable, reported := c.sessionStoreDurable(); !reported || durable {
 		return
 	}
-	c.logger.Warn(
+	c.startupLog().Warn(
 		"WithSessionDurabilityPosture(SessionDurabilityDurable) is declared but the "+
 			"session store reports that its sessions are on a volatile backend; "+
 			"the posture only labels back-channel logout audit events",
@@ -366,7 +382,7 @@ func (c *config) warnMTLSOptionsWithoutFeature() {
 		if !o.configured {
 			continue
 		}
-		c.logger.Warn(
+		c.startupLog().Warn(
 			o.option+" is configured but the mTLS feature is not enabled, so the "+
 				"OP builds no certificate verifier and never reads the value: "+
 				"client certificates are ignored and access tokens are issued as "+
@@ -397,7 +413,7 @@ func (c *config) warnCaptchaOnScriptlessUI() {
 	if !c.captchaScheduled() || !rendersWithoutScript(c.interactionD) {
 		return
 	}
-	c.logger.Warn(
+	c.startupLog().Warn(
 		"a StepCaptcha is scheduled in the LoginFlow but the interaction UI is the "+
 			"built-in HTML driver, which renders no client-side script; the "+
 			"token field is served as a plain text input, so a captcha whose "+

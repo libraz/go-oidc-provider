@@ -76,7 +76,8 @@
 //   - [WithStaticClients]: the relying parties known at deploy time.
 //   - [WithProfile]: the security profile, checked against everything else;
 //     without one, New warns that a confidential client may skip PKCE.
-//   - [WithLogger]: start-up and claim diagnostics, discarded without it.
+//   - [WithLogger]: where operational logs go; without it, construction-time
+//     diagnostics go to [slog.Default] and request-time records are discarded.
 //   - [WithMountPrefix], [WithTrustedProxies]: where the OP mounts and which
 //     reverse proxies it trusts.
 //   - [WithSPAUI] or [WithConsentUI]: your own login and consent pages in

@@ -88,7 +88,7 @@ func (c *config) warnUserStoreMismatch() {
 		if any(authn) == any(claims) {
 			continue
 		}
-		c.logger.Warn(
+		c.startupLog().Warn(
 			"the login flow authenticates against a different user store than "+
 				"the one claims are read from; a login will resolve a subject "+
 				"from one set of records and then serve the ID Token and "+
@@ -110,7 +110,7 @@ func (c *config) infoClaimSource(claims store.UserStore) {
 	if backend := c.store.Users(); !nilcheck.IsNil(backend) && comparableStores(claims, backend) && any(claims) != any(backend) {
 		attrs = append(attrs, "store_users", "not read")
 	}
-	c.logger.Info("resolved the source of ID Token and /userinfo claims", attrs...)
+	c.startupLog().Info("resolved the source of ID Token and /userinfo claims", attrs...)
 }
 
 // loginFlowSteps returns every [Step] the configured flow can run, in
