@@ -1,4 +1,4 @@
-package keys
+package keys_test
 
 import (
 	"bytes"
@@ -6,20 +6,23 @@ import (
 	"crypto/cipher"
 	"errors"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
 var errTestBadKey = errors.New("bad key")
 
-func ringKey(b byte) []byte { return bytes.Repeat([]byte{b}, AEADKeyLen) }
+func ringKey(b byte) []byte { return bytes.Repeat([]byte{b}, keys.AEADKeyLen) }
 
 func TestAEADRing_RoundTripAndRotation(t *testing.T) {
-	old, err := NewAEADRing(errTestBadKey, ringKey(1))
+	t.Parallel()
+	old, err := keys.NewAEADRing(errTestBadKey, ringKey(1))
 	if err != nil {
 		t.Fatal(err)
 	}
 	blob := old.Seal([]byte("secret"), []byte("aad"))
 
-	rotated, err := NewAEADRing(errTestBadKey, ringKey(2), ringKey(1))
+	rotated, err := keys.NewAEADRing(errTestBadKey, ringKey(2), ringKey(1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +41,7 @@ func TestAEADRing_RoundTripAndRotation(t *testing.T) {
 // The ring's wire format must stay nonce||ciphertext||tag so blobs sealed
 // by the earlier explicit-nonce GCM construction keep opening.
 func TestAEADRing_OpensExplicitNonceBlob(t *testing.T) {
+	t.Parallel()
 	block, err := aes.NewCipher(ringKey(3))
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +53,7 @@ func TestAEADRing_OpensExplicitNonceBlob(t *testing.T) {
 	nonce := bytes.Repeat([]byte{9}, gcm.NonceSize())
 	blob := gcm.Seal(bytes.Clone(nonce), nonce, []byte("legacy"), []byte("aad"))
 
-	r, err := NewAEADRing(errTestBadKey, ringKey(3))
+	r, err := keys.NewAEADRing(errTestBadKey, ringKey(3))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,10 +64,11 @@ func TestAEADRing_OpensExplicitNonceBlob(t *testing.T) {
 }
 
 func TestNewAEADRing_RejectsBadKeyLength(t *testing.T) {
-	if _, err := NewAEADRing(errTestBadKey, ringKey(1)[:31]); err != errTestBadKey { //nolint:errorlint // the current-key error is returned bare.
+	t.Parallel()
+	if _, err := keys.NewAEADRing(errTestBadKey, ringKey(1)[:31]); err != errTestBadKey { //nolint:errorlint // the current-key error is returned bare.
 		t.Fatalf("short current key: err = %v", err)
 	}
-	_, err := NewAEADRing(errTestBadKey, ringKey(1), ringKey(2)[:16])
+	_, err := keys.NewAEADRing(errTestBadKey, ringKey(1), ringKey(2)[:16])
 	if !errors.Is(err, errTestBadKey) {
 		t.Fatalf("short previous key: err = %v", err)
 	}

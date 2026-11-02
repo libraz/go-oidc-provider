@@ -40,6 +40,8 @@ const (
 
 // allowedAlgorithms lists, in advertisement order, every algorithm
 // [Algorithm.IsAllowed] admits.
+//
+//nolint:gochecknoglobals // closed allow-list; read-only.
 var allowedAlgorithms = [...]Algorithm{AlgRS256, AlgPS256, AlgES256, AlgEdDSA}
 
 // AllowedAlgorithmNames returns the wire names of every allowed algorithm,
