@@ -107,14 +107,15 @@ func (s GCStats) Total() int64 {
 // Store was constructed with, so scheduling it needs no second
 // connection pool and no second Store.
 //
-// The PAR sweep is skipped when the par_records table does not exist, since
-// a deployment without `feature.PAR` need not create it; any other missing
-// table fails the sweep.
+// A table the configuration may leave uncreated (schema/TABLES.md lists
+// its condition) is skipped when it does not exist; any other missing
+// table fails its sweep.
 //
-// GC stops at the first failing table and returns the counts collected
-// so far alongside the error, so a caller that publishes the stats
-// records the work that did land. A partial sweep is safe to repeat:
-// every statement is an unconditional DELETE of already-dead rows.
+// A failing sweep does not stop the others: GC runs every sweep, returns
+// the counts that landed alongside the joined errors, and a caller that
+// publishes the stats records the work that did land. A partial sweep is
+// safe to repeat: every statement is an unconditional DELETE of
+// already-dead rows.
 //
 // The substores behind the three sweeps before the last also expose their own GC
 // method, reachable through the matching accessor, for a caller that
@@ -141,33 +142,38 @@ func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 			return int64(n), err
 		}
 	}
-	parSweep := func(ctx context.Context, _ time.Time) (int64, error) {
-		cols, err := s.columnSet(ctx, s.names.pars)
-		if err != nil || len(cols) == 0 {
-			return 0, err
-		}
-		return s.sweep(ctx, s.queries.parGC, []any{cut})
-	}
 	sweeps := []struct {
 		name  string
+		table string // WithNaming key; set for tables a configuration may leave uncreated
 		run   func(ctx context.Context, cutoff time.Time) (int64, error)
 		count *int64
 	}{
-		{"authorizationCodes", query(s.queries.authCodeGC, cut), &stats.AuthorizationCodes},
-		{"pushedAuthRequests", parSweep, &stats.PushedAuthRequests},
-		{"interactions", query(s.queries.interactionGC, cut), &stats.Interactions},
-		{"sessions", query(s.queries.sessionGC, cut), &stats.Sessions},
-		{"refreshTokens", query(s.queries.refreshGC, cut, cut), &stats.RefreshTokens},
+		{"authorizationCodes", "authorization_codes", query(s.queries.authCodeGC, cut), &stats.AuthorizationCodes},
+		{"pushedAuthRequests", "par_records", query(s.queries.parGC, cut), &stats.PushedAuthRequests},
+		{"interactions", "interactions", query(s.queries.interactionGC, cut), &stats.Interactions},
+		{"sessions", "sessions", query(s.queries.sessionGC, cut), &stats.Sessions},
+		{"refreshTokens", "refresh_tokens", query(s.queries.refreshGC, cut, cut), &stats.RefreshTokens},
 		// Clearing the cached retry responses runs after the deletes so it
 		// only touches rows the refresh sweep decided to keep; it removes
 		// no row, so it has no counter.
-		{"refreshRetryResponses", query(s.queries.refreshRetryGC, cut), nil},
-		{"accessTokens", widen(s.accessTokensImpl.GC), &stats.AccessTokens},
-		{"opaqueAccessTokens", widen(s.opaqueAccessTokensImpl.GC), &stats.OpaqueAccessTokens},
-		{"grantRevocations", widen(s.grantRevocationsImpl.GC), &stats.GrantRevocations},
-		{"consumedJTIs", s.jtisImpl.GC, &stats.ConsumedJTIs},
+		{"refreshRetryResponses", "refresh_tokens", query(s.queries.refreshRetryGC, cut), nil},
+		{"accessTokens", "access_tokens", widen(s.accessTokensImpl.GC), &stats.AccessTokens},
+		{"opaqueAccessTokens", "opaque_access_tokens", widen(s.opaqueAccessTokensImpl.GC), &stats.OpaqueAccessTokens},
+		{"grantRevocations", "grant_revocations", widen(s.grantRevocationsImpl.GC), &stats.GrantRevocations},
+		{"consumedJTIs", "consumed_jtis", s.jtisImpl.GC, &stats.ConsumedJTIs},
 	}
+	var errs []error
 	for _, sweep := range sweeps {
+		if !tableRequired(sweep.table) {
+			cols, err := s.columnSet(ctx, s.names.byKey(sweep.table))
+			if err != nil {
+				errs = append(errs, wrapErr("gc."+sweep.name, err))
+				continue
+			}
+			if len(cols) == 0 {
+				continue
+			}
+		}
 		// A failing sweep may still report rows it removed before failing
 		// (grant revocations delete from two tables), so count first.
 		n, err := sweep.run(ctx, cutoff)
@@ -175,10 +181,10 @@ func (s *Store) GC(ctx context.Context, cutoff time.Time) (GCStats, error) {
 			*sweep.count = n
 		}
 		if err != nil {
-			return stats, wrapErr("gc."+sweep.name, err)
+			errs = append(errs, wrapErr("gc."+sweep.name, err))
 		}
 	}
-	return stats, nil
+	return stats, errors.Join(errs...)
 }
 
 // RunGC sweeps once immediately and then every interval until ctx is

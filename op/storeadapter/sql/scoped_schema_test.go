@@ -364,9 +364,9 @@ func scopedCases() []scopedCase {
 		},
 		{
 			name: "client_credentials only",
-			tags: []string{"grant:authorization_code", "grant:refresh_token", "authorize", "lockout"},
+			tags: []string{"grant:authorization_code", "authorize", "lockout"},
 			tables: []string{
-				"authorization_codes", "refresh_tokens", "sessions", "interactions", "authn_lockouts",
+				"authorization_codes", "sessions", "interactions", "authn_lockouts",
 			},
 			on: scopedDefault,
 			// Without a login flow the claims user store falls back to the

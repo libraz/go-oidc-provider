@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/nilcheck"
-	"github.com/libraz/go-oidc-provider/op/feature"
-	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -94,47 +92,11 @@ func (e schemaErrors) Unwrap() []error { return e }
 // order. Nil entries are left for the caller to skip.
 func (c *config) schemaCandidates() []schemaCandidate {
 	s := c.store
-	out := []schemaCandidate{
-		{"Clients", s.Clients()},
-		{"Metadata", s.Metadata()},
-		{"ConsumedJTIs", s.ConsumedJTIs()},
-		{"AccessTokens", s.AccessTokens()},
-		{"OpaqueAccessTokens", s.OpaqueAccessTokens()},
-		{"GrantRevocations", s.GrantRevocations()},
-		{"Grants", s.Grants()},
-	}
-	if slices.Contains(c.grants, grant.AuthorizationCode) {
-		out = append(out, schemaCandidate{"AuthorizationCodes", s.AuthorizationCodes()})
-	}
-	if slices.Contains(c.grants, grant.RefreshToken) {
-		out = append(out, schemaCandidate{"RefreshTokens", s.RefreshTokens()})
-	}
-	if grantsRequireAuthorizeEndpoint(c.grants) {
-		out = append(out,
-			schemaCandidate{"Sessions", s.Sessions()},
-			schemaCandidate{"Interactions", s.Interactions()},
-		)
-	}
-	if featureEnabled(c.features, feature.PAR) {
-		out = append(out, schemaCandidate{"PushedAuthRequests", s.PushedAuthRequests()})
-	}
-	if c.dcr != nil {
-		out = append(out,
-			schemaCandidate{"InitialAccessTokens", s.InitialAccessTokens()},
-			schemaCandidate{"RegistrationAccessTokens", s.RegistrationAccessTokens()},
-		)
-	}
-	if c.deviceCodeGrantConfiguredOrEnabled() {
-		out = append(out, schemaCandidate{"DeviceCodes", s.DeviceCodes()})
-	}
-	if c.cibaGrantConfiguredOrEnabled() {
-		out = append(out, schemaCandidate{"CIBARequests", s.CIBARequests()})
-	}
-	if ssf, ok := s.(store.SharedSignalsStore); ok && c.sharedSignals {
-		out = append(out,
-			schemaCandidate{"SSFStreams", ssf.SSFStreams()},
-			schemaCandidate{"SSFEvents", ssf.SSFEvents()},
-		)
+	var out []schemaCandidate
+	for _, row := range storeTableManifest {
+		if row.when == nil || row.when(c) {
+			out = append(out, schemaCandidate{row.label, row.store(s)})
+		}
 	}
 	out = append(out, schemaCandidate{"user store", c.effectiveUserStore()})
 	steps := c.loginFlowSteps()

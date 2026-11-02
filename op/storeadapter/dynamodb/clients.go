@@ -112,6 +112,24 @@ func (s *clientStore) DeleteClient(ctx context.Context, id string) error {
 // atomicity the contract requires: a partially applied static-client
 // set would leave the OP serving a mix of two configurations.
 func (s *clientStore) ReconcileStaticClients(ctx context.Context, clients []*store.Client) error {
+	err := s.reconcileOnce(ctx, clients)
+	if !errors.Is(err, errReconcileRaced) {
+		return err
+	}
+	// Another replica registered one of these ids between the comparison
+	// and the commit; a second pass accepts it when it is equivalent.
+	err = s.reconcileOnce(ctx, clients)
+	if errors.Is(err, errReconcileRaced) {
+		return store.ErrConflict
+	}
+	return err
+}
+
+// errReconcileRaced reports that the insert transaction lost to a
+// concurrent registration of one of its ids.
+var errReconcileRaced = errors.New("oidcdynamo: static client registered concurrently")
+
+func (s *clientStore) reconcileOnce(ctx context.Context, clients []*store.Client) error {
 	seen := make(map[string]struct{}, len(clients))
 	var inserts []types.TransactWriteItem
 
@@ -141,10 +159,8 @@ func (s *clientStore) ReconcileStaticClients(ctx context.Context, clients []*sto
 		TransactItems: inserts,
 	})
 	if err != nil {
-		// A condition failure here means another process registered one
-		// of these ids between the comparison and the commit.
 		if isTransactionCanceledByCondition(err) {
-			return store.ErrConflict
+			return errReconcileRaced
 		}
 		return wrapErr("clients.ReconcileStaticClients", err)
 	}

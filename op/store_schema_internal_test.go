@@ -228,11 +228,11 @@ func newSchemaFakeStore() *schemaFakeStore {
 // schemaAlways is what every configuration checks, in report order.
 var schemaAlways = []string{
 	"Clients", "Metadata", "ConsumedJTIs", "AccessTokens",
-	"OpaqueAccessTokens", "GrantRevocations", "Grants",
+	"OpaqueAccessTokens", "GrantRevocations", "Grants", "RefreshTokens",
 }
 
-// schemaDefaultGrant is what authorization_code + refresh_token add.
-var schemaDefaultGrant = []string{"AuthorizationCodes", "RefreshTokens", "Sessions", "Interactions"}
+// schemaDefaultGrant is what the authorization_code grant adds.
+var schemaDefaultGrant = []string{"AuthorizationCodes", "Sessions", "Interactions"}
 
 func schemaDefaultFlow(f *schemaFakeStore, rules ...Rule) Option {
 	return WithLoginFlow(LoginFlow{Primary: PrimaryPassword{Store: f.userPasswords}, Rules: rules})
@@ -360,7 +360,7 @@ func TestStoreSchema_SkipsNilSubstore(t *testing.T) {
 		t.Fatalf("validateStoreSchema: %v", err)
 	}
 	assertSchemaLog(t, f, slices.Concat(schemaAlways,
-		[]string{"AuthorizationCodes", "RefreshTokens", "Interactions", "user store", "AuthnLockouts"}))
+		[]string{"AuthorizationCodes", "Interactions", "user store", "AuthnLockouts"}))
 }
 
 func TestStoreSchema_SameValueCheckedOnce(t *testing.T) {

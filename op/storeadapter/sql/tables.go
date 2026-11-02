@@ -1,5 +1,7 @@
 package oidcsql
 
+import "strings"
+
 // tableInfo describes one table the adapter owns. schema/TABLES.md is
 // generated from tableCatalog, so the published table reference cannot
 // drift from the WithNaming keys, the DDL, or the release history below.
@@ -24,7 +26,7 @@ var checkedWhen = map[string]string{
 	"always:denylist":          "Always: under the default revocation strategy, every JWT access-token check reads it",
 	"always:client-jti":        "Always: whether a client sends a request object, a `private_key_jwt` assertion or a DPoP proof is the client's choice, not the configuration's",
 	"grant:authorization_code": "The `authorization_code` grant is enabled",
-	"grant:refresh_token":      "The `refresh_token` grant is enabled",
+	"always:refresh":           "Always: `/revocation`, `/introspect`, subject revocation and the client-deletion cascade look refresh tokens up and clear them, whichever grants are enabled",
 	"authorize":                "The `authorization_code` grant is enabled, so logins run through `/auth`",
 	"feature:par":              "`feature.PAR` is enabled",
 	"dcr":                      "`op.WithDynamicRegistration` is set",
@@ -37,6 +39,19 @@ var checkedWhen = map[string]string{
 	"factor:recovery":          "The login flow has an `op.StepRecoveryCode` backed by `Store.RecoveryCodes()`",
 	"factor:email_otp":         "The login flow has an `op.StepEmailOTP` backed by `Store.EmailOTPs()`",
 	"lockout":                  "The login flow has a step that counts failures and `op.WithAuthnLockoutStore` names no other store",
+}
+
+// tableRequired reports whether every configuration checks the table with
+// the given WithNaming key, so it must exist even while it stays empty. A
+// table with a condition, and the empty key, report false. GC derives the
+// tables it may skip when absent from it.
+func tableRequired(key string) bool {
+	for _, info := range tableCatalog {
+		if info.key == key {
+			return strings.HasPrefix(info.checked, "always")
+		}
+	}
+	return false
 }
 
 // defaultConfigTables are the keys of the tables op.New checks under the
@@ -93,7 +108,7 @@ var tableCatalog = []tableInfo{
 	},
 	{
 		"refresh_tokens", "RefreshTokens", "Refresh-token rotation chains and the response a retried rotation replays.",
-		"The `refresh_token` grant is enabled.", "grant:refresh_token",
+		"Written when the `refresh_token` grant is enabled; read by revocation and introspection in every configuration.", "always:refresh",
 	},
 	{
 		"access_tokens", "AccessTokens", "JTI registry of issued JWT access tokens.",
