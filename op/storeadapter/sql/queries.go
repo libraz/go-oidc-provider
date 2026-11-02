@@ -222,7 +222,8 @@ type queries struct {
 	ssfStreamDelete         string
 	ssfEventInsert          string
 	ssfEventDropOtherOfKind string
-	ssfEventSelectDue       string
+	ssfEventDueHeads        string
+	ssfEventDueStreamPart   string
 	ssfEventLease           string
 	ssfEventReschedule      string
 	ssfEventExists          string
@@ -1156,15 +1157,36 @@ func addSSFQueries(q *queries, d Dialect, n nameMap) {
 	q.ssfEventDropOtherOfKind = d.rebind(
 		"DELETE FROM " + n.ssfEvents + " WHERE stream_id = ? AND kind = ? AND jti <> ?",
 	)
-	// The window ranks each stream's due rows so a claim takes at most the
-	// per-stream cap of them; the due index confines it to push, unheld rows.
-	q.ssfEventSelectDue = d.rebind(
-		"SELECT " + eventCols + " FROM (SELECT " + eventCols +
-			", ROW_NUMBER() OVER (PARTITION BY stream_id ORDER BY next_attempt_at, jti) AS stream_rank" +
-			" FROM " + n.ssfEvents +
-			" WHERE delivery_method = ? AND held = 0 AND next_attempt_at <= ?) due" +
-			" WHERE stream_rank <= ? ORDER BY next_attempt_at, jti LIMIT ?",
-	)
+	// Each stream's head, one index probe per stream so no backlog is
+	// scanned. MySQL skips from group to group when the GROUP BY names the
+	// due index's leading columns. The other engines walk the distinct
+	// stream IDs after a given one, a page of at most a given depth at a
+	// time; MySQL would rescan the index prefix for each correlated step.
+	if d.groupMinScan {
+		q.ssfEventDueHeads = d.rebind(
+			"SELECT stream_id, MIN(next_attempt_at) FROM " + n.ssfEvents +
+				" WHERE delivery_method = ? AND held = 0 GROUP BY delivery_method, held, stream_id",
+		)
+	} else {
+		q.ssfEventDueHeads = d.rebind(
+			"WITH RECURSIVE walk(stream_id, depth) AS (" +
+				"SELECT (SELECT stream_id FROM " + n.ssfEvents +
+				" WHERE delivery_method = ? AND held = 0 AND stream_id > ? ORDER BY stream_id LIMIT 1), 1" +
+				" UNION ALL SELECT (SELECT e.stream_id FROM " + n.ssfEvents + " e" +
+				" WHERE e.delivery_method = ? AND e.held = 0 AND e.stream_id > walk.stream_id" +
+				" ORDER BY e.stream_id LIMIT 1), walk.depth + 1" +
+				" FROM walk WHERE walk.stream_id IS NOT NULL AND walk.depth < ?" +
+				") SELECT stream_id, (SELECT e.next_attempt_at FROM " + n.ssfEvents + " e" +
+				" WHERE e.delivery_method = ? AND e.held = 0 AND e.stream_id = walk.stream_id" +
+				" ORDER BY e.next_attempt_at LIMIT 1)" +
+				" FROM walk WHERE walk.stream_id IS NOT NULL ORDER BY stream_id",
+		)
+	}
+	// One stream's first due rows; ClaimDue unions one per selected stream
+	// and rebinds the whole statement.
+	q.ssfEventDueStreamPart = "SELECT " + eventCols + " FROM (SELECT " + eventCols + " FROM " + n.ssfEvents +
+		" WHERE delivery_method = ? AND held = 0 AND stream_id = ? AND next_attempt_at <= ?" +
+		" ORDER BY next_attempt_at, jti LIMIT ?) s"
 	// The lease is a compare-and-swap on the next_attempt_at the candidate
 	// scan observed, so of several concurrent claimers exactly one matches.
 	q.ssfEventLease = d.rebind(

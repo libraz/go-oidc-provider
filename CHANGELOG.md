@@ -757,7 +757,10 @@ issuer. A DynamoDB deployment must create the new `cascade_links` table (from
   events must share one backend, since a stream change moves the queued events
   in the same operation. Push delivery takes at most four SETs per stream
   in each claim and keeps one push in flight per stream, so a slow or stalled
-  receiver does not delay the others. `op.New` refuses the feature on a store without it. The
+  receiver does not delay the others. A claim's cost follows the batch size
+  and the number of streams with queued push events, never a stream's
+  backlog, and concurrent changes to one stream leave every queued event
+  matching the stream's final state. `op.New` refuses the feature on a store without it. The
   SQL adapter's v1.5.0 schema adds the `ssf_streams` and `ssf_events` tables,
   which `ValidateSchema` requires whether or not the feature is on; see the
   SQL migrations. `Provider.RevokeSubject` now emits session-revoked when the

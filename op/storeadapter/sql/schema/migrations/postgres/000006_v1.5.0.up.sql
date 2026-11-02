@@ -30,5 +30,5 @@ CREATE TABLE IF NOT EXISTS oidc_ssf_events (
     expires_at BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_stream_ready ON oidc_ssf_events(stream_id, delivery_method, held, jti);
-CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_due ON oidc_ssf_events(delivery_method, held, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_due ON oidc_ssf_events(delivery_method, held, stream_id, next_attempt_at, jti);
 CREATE INDEX IF NOT EXISTS idx_oidc_ssf_events_expires ON oidc_ssf_events(expires_at);

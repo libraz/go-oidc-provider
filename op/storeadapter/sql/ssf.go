@@ -1,10 +1,13 @@
 package oidcsql
 
 import (
+	"cmp"
 	"context"
 	databasesql "database/sql"
 	"errors"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -208,20 +211,36 @@ func (s *ssfEventStore) insert(ctx context.Context, e execer, ev *store.SSFEvent
 	return wrapErr("ssf_events.Enqueue", err)
 }
 
+// ClaimDue first reads the due head of every stream holding a push,
+// unheld event, then each of the n earliest-headed streams' first
+// min(perStream, n) due events, and leases the earliest n of those. Only
+// those streams can contribute to the claim, so the result is the one a
+// walk of every due event would give, at the cost of an index probe per
+// stream and a bounded read per contributing stream rather than of the
+// streams' backlogs.
 func (s *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n, perStream int, lease time.Duration) ([]*store.SSFEvent, error) {
 	if n <= 0 || perStream <= 0 {
 		return nil, errors.New("oidcsql: ssf_events.ClaimDue: n and perStream must be positive")
 	}
 	db := dbRunner{db: s.parent.db}
 	push := string(store.SSFDeliveryPush)
-	candidates, err := queryEvents(ctx, db, "ssf_events.ClaimDue", s.parent.queries.ssfEventSelectDue,
-		push, timeToInt64(now), perStream, n)
+	streams, err := s.dueStreams(ctx, db, timeToInt64(now), n)
 	if err != nil {
 		return nil, err
 	}
+	if len(streams) == 0 {
+		return make([]*store.SSFEvent, 0), nil
+	}
+	candidates, err := s.dueCandidates(ctx, db, streams, timeToInt64(now), min(perStream, n))
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(candidates, func(a, b *store.SSFEvent) int {
+		return cmp.Or(a.NextAttemptAt.Compare(b.NextAttemptAt), strings.Compare(a.JTI, b.JTI))
+	})
 	until := int64ToTime(timeToInt64(now.Add(lease)))
-	claimed := make([]*store.SSFEvent, 0, len(candidates))
-	for _, ev := range candidates {
+	claimed := make([]*store.SSFEvent, 0, n)
+	for _, ev := range candidates[:min(n, len(candidates))] {
 		res, err := db.ExecContext(ctx, s.parent.queries.ssfEventLease,
 			timeToInt64(until), ev.JTI, timeToInt64(ev.NextAttemptAt), push)
 		if err != nil {
@@ -239,6 +258,93 @@ func (s *ssfEventStore) ClaimDue(ctx context.Context, now time.Time, n, perStrea
 		}
 	}
 	return claimed, nil
+}
+
+// ssfDueWalkDepth is the number of streams one page of the heads walk
+// visits, bounding the recursion depth of a single query.
+const ssfDueWalkDepth = 500
+
+// streamHead is one stream's earliest push, unheld next_attempt_at.
+type streamHead struct {
+	id   string
+	head int64
+}
+
+// dueStreams returns the streams whose earliest push, unheld event is due
+// at now, earliest head first: the first n of them and every stream tied
+// with the n-th, so the JTI tiebreak is left to the caller.
+func (s *ssfEventStore) dueStreams(ctx context.Context, r runner, now int64, n int) ([]string, error) {
+	all, err := s.allHeads(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	due := slices.DeleteFunc(all, func(h streamHead) bool { return h.head > now })
+	slices.SortStableFunc(due, func(a, b streamHead) int { return cmp.Compare(a.head, b.head) })
+	out := make([]string, 0, min(n, len(due)))
+	for i, h := range due {
+		if i >= n && h.head != due[n-1].head {
+			break
+		}
+		out = append(out, h.id)
+	}
+	return out, nil
+}
+
+// allHeads reads the head of every stream holding a push, unheld event:
+// in one query where the engine skips between groups, else page by page.
+func (s *ssfEventStore) allHeads(ctx context.Context, r runner) ([]streamHead, error) {
+	push := string(store.SSFDeliveryPush)
+	if s.parent.dialect.groupMinScan {
+		return s.heads(ctx, r, []any{push})
+	}
+	var all []streamHead
+	for after := ""; ; {
+		page, err := s.heads(ctx, r, []any{push, after, push, ssfDueWalkDepth, push})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		if len(page) < ssfDueWalkDepth {
+			return all, nil
+		}
+		after = page[len(page)-1].id
+	}
+}
+
+// heads runs the due-heads query: every stream's head where the engine
+// skips between groups, else one page of the walk in stream ID order.
+func (s *ssfEventStore) heads(ctx context.Context, r runner, args []any) ([]streamHead, error) {
+	rows, err := r.QueryContext(ctx, s.parent.queries.ssfEventDueHeads, args...)
+	if err != nil {
+		return nil, wrapErr("ssf_events.ClaimDue.heads", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var page []streamHead
+	for rows.Next() {
+		var h streamHead
+		if err := rows.Scan(&h.id, &h.head); err != nil {
+			return nil, wrapErr("ssf_events.ClaimDue.heads.Scan", err)
+		}
+		page = append(page, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapErr("ssf_events.ClaimDue.heads.Rows", err)
+	}
+	return page, nil
+}
+
+// dueCandidates reads each listed stream's first limit due events, one
+// bounded index range per stream, in a single statement.
+func (s *ssfEventStore) dueCandidates(ctx context.Context, r runner, streams []string, now int64, limit int) ([]*store.SSFEvent, error) {
+	push := string(store.SSFDeliveryPush)
+	parts := make([]string, 0, len(streams))
+	args := make([]any, 0, 4*len(streams))
+	for i, id := range streams {
+		parts = append(parts, s.parent.queries.ssfEventDueStreamPart+strconv.Itoa(i))
+		args = append(args, push, id, now, limit)
+	}
+	query := s.parent.dialect.rebind(strings.Join(parts, " UNION ALL "))
+	return queryEvents(ctx, r, "ssf_events.ClaimDue", query, args...)
 }
 
 func (s *ssfEventStore) Reschedule(ctx context.Context, jti string, next time.Time, attempts int) error {

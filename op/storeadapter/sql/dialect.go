@@ -21,7 +21,11 @@ type Dialect struct {
 	usesDollar     bool
 	upsertConflict bool
 	greatest       string
-	schema         []byte
+	// groupMinScan marks an engine that answers a GROUP BY over an index's
+	// leading columns with a per-group MIN by skipping from group to group
+	// (MySQL's skip scan for grouping) rather than reading every row.
+	groupMinScan bool
+	schema       []byte
 }
 
 // Name returns the dialect's stable identifier ("sqlite", "mysql",
@@ -55,6 +59,7 @@ func MySQL() Dialect {
 		usesDollar:     false,
 		upsertConflict: false,
 		greatest:       "GREATEST",
+		groupMinScan:   true,
 		schema:         mustSchema("mysql"),
 	}
 }

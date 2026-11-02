@@ -44,6 +44,37 @@ func newMySQLFactory(t *testing.T) contract.Factory {
 // explicit regression without changing the default container configuration.
 func newMySQLFactoryWithClientFoundRows(t *testing.T, clientFoundRows bool) contract.Factory {
 	t.Helper()
+	openDB := newMySQLDBFactory(t, clientFoundRows)
+	return func(t *testing.T) contract.Backend {
+		t.Helper()
+		// One clock per sub-test: the harness advances it to reach the
+		// expired-after-the-fact states, and sub-tests run in parallel
+		// against the same server, so a shared clock would let one
+		// sub-test expire another's live records.
+		clock := &fixedClock{now: contract.Reference}
+		db := openDB(t)
+		s, err := oidcsql.New(db, oidcsql.MySQL(), oidcsql.WithClock(clock))
+		if err != nil {
+			t.Fatalf("oidcsql.New: %v", err)
+		}
+		if err := s.Migrate(t.Context()); err != nil {
+			t.Fatalf("Migrate: %v", err)
+		}
+		return contract.Backend{
+			Store: s,
+			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
+			SeedUser: seedContractUser(s),
+		}
+	}
+}
+
+// newMySQLDBFactory boots the container and returns a function that
+// opens a connection to a fresh, empty database per call.
+func newMySQLDBFactory(t *testing.T, clientFoundRows bool) func(*testing.T) *databasesql.DB {
+	t.Helper()
 	ctx := context.Background()
 
 	ctr, err := mysqlmod.Run(ctx, mysqlImage,
@@ -79,13 +110,8 @@ func newMySQLFactoryWithClientFoundRows(t *testing.T, clientFoundRows bool) cont
 
 	var seq atomic.Uint64
 
-	return func(t *testing.T) contract.Backend {
+	return func(t *testing.T) *databasesql.DB {
 		t.Helper()
-		// One clock per sub-test: the harness advances it to reach the
-		// expired-after-the-fact states, and sub-tests run in parallel
-		// against the same server, so a shared clock would let one
-		// sub-test expire another's live records.
-		clock := &fixedClock{now: contract.Reference}
 		// Database name is built from a process-local counter so it
 		// satisfies MySQL's regular identifier grammar without quoting
 		// (purely [a-z_0-9]).
@@ -105,22 +131,7 @@ func newMySQLFactoryWithClientFoundRows(t *testing.T, clientFoundRows bool) cont
 			_ = db.Close()
 			_, _ = admin.ExecContext(context.Background(), "DROP DATABASE `"+dbName+"`")
 		})
-
-		s, err := oidcsql.New(db, oidcsql.MySQL(), oidcsql.WithClock(clock))
-		if err != nil {
-			t.Fatalf("oidcsql.New: %v", err)
-		}
-		if err := s.Migrate(t.Context()); err != nil {
-			t.Fatalf("Migrate: %v", err)
-		}
-		return contract.Backend{
-			Store: s,
-			Now:   clock.Now,
-			Advance: func(delta time.Duration) {
-				clock.now = clock.now.Add(delta)
-			},
-			SeedUser: seedContractUser(s),
-		}
+		return db
 	}
 }
 
