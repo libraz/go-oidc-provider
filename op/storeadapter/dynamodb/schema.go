@@ -83,6 +83,9 @@ const (
 	// attrDueQueue is present only on push, unheld events, which makes
 	// ssf_due a sparse index of exactly what ClaimDue may lease.
 	attrDueQueue = "due_queue"
+	// attrDueKey, ssf_due's sort key, orders an event by stream, then
+	// next_attempt_at, then JTI.
+	attrDueKey = "due_key"
 	// attrSSFSort is the sort key of the SSF queue table, and attrReady,
 	// present only on poll, unheld events, the sort key of ssf_ready.
 	attrSSFSort = "sk"
@@ -404,17 +407,16 @@ func (s *Store) TableDefinitions() []TableDefinition {
 			// Update and the cascade of its deletion read it with a
 			// strongly consistent Query. A "set#<jti>" partition per event
 			// reserves the JTI and names its stream. ssf_due is sparse over
-			// due_queue and sorted by next_attempt_at, so ClaimDue reads due
-			// push events earliest first; ssf_ready is sparse over ready, so
-			// Pending reads only a stream's poll-ready events, consistently.
-			Name:      n.ssfEvents,
-			KeySchema: compositeKeySchema(attrPK, attrSSFSort),
-			AttributeDefinitions: append(
-				stringAttr(attrPK, attrSSFSort, attrDueQueue, attrReady),
-				numberAttr(attrNextAttemptAt),
-			),
+			// due_queue and sorted by due_key, which groups a stream's push
+			// events earliest first, so ClaimDue reads each stream's head
+			// and skips the rest of its backlog; ssf_ready is sparse over
+			// ready, so Pending reads only a stream's poll-ready events,
+			// consistently.
+			Name:                 n.ssfEvents,
+			KeySchema:            compositeKeySchema(attrPK, attrSSFSort),
+			AttributeDefinitions: stringAttr(attrPK, attrSSFSort, attrDueQueue, attrDueKey, attrReady),
 			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
-				gsiWithSort(indexSSFDue, attrDueQueue, attrNextAttemptAt),
+				gsiWithSort(indexSSFDue, attrDueQueue, attrDueKey),
 			},
 			LocalSecondaryIndexes: []types.LocalSecondaryIndex{
 				lsi(indexSSFReady, attrReady),
