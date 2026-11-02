@@ -44,9 +44,10 @@ const iatIDBytes = 16
 type RegistrationOption struct {
 	// Open, when true, allows POST /register without an Initial Access
 	// Token. Production deployments SHOULD leave this false; the OP
-	// emits a WARN log on every open registration and writes a
-	// dcr.open_registration_used audit event so the operational impact
-	// is visible.
+	// records a warn-level dcr.open_registration_used audit event on every
+	// open registration so the operational impact is visible. The event
+	// goes to [WithAuditLogger], else to [WithLogger]; with neither
+	// configured it is discarded.
 	Open bool
 
 	// AllowedGrantTypes whitelists the grant_type values a dynamically

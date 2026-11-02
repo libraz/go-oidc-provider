@@ -28,7 +28,10 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 //
 // Embedders that front their RPs with private DNS — typical in
 // service-mesh deployments where the RP and the OP share a pod
-// network — opt in with this option. It flips the gate at the
+// network — opt in with this option. This is network reach for
+// deployments whose relying parties live on a private network; it is
+// legitimate in production, not a development-only option, and [New] logs
+// one INFO line naming what it widens. It flips the gate at the
 // deliverer level only; the other fetchers keep their own
 // WithAllowPrivateNetwork* flags ([WithAllowPrivateNetworkJWKS],
 // [WithAllowPrivateNetworkJAR], ...) so private-network access granted

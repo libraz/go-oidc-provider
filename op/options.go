@@ -60,6 +60,7 @@ type config struct {
 	logger               *slog.Logger
 	startupLogger        *slog.Logger // construction-time diagnostics; see startupLog
 	auditLogger          *slog.Logger
+	loggerDefaulted      bool // set by applyDefaults when WithLogger was not supplied
 	keyset               Keyset
 	signingAlg           SigningAlgorithm // read through issuingAlg
 	defaultLocale        Locale
@@ -1106,9 +1107,11 @@ func WithClock(clock Clock) Option {
 }
 
 // WithLogger injects the [*slog.Logger] the library uses for structured
-// diagnostics. If unset, request-time records are discarded and the
+// diagnostics. If unset, request-time records (including audit records
+// unless [WithAuditLogger] is set) are discarded and the
 // construction-time diagnostics [New] emits once (configuration warnings
-// and the claim-source line) go to [slog.Default]. Callers
+// and the claim-source line) go to [slog.Default]; [New] warns that the
+// request-time records are being discarded. Callers
 // SHOULD pass a logger backed by their service's slog handler so OP events
 // appear in the same stream as the rest of the application.
 // The supplied logger's handler is wrapped with the library's redaction

@@ -20,7 +20,8 @@ import (
 func validateCookieKeys(keys [][]byte) error {
 	for i, k := range keys {
 		if len(k) != cookieKeyLen {
-			return newConfigurationError("WithCookieKeys: entry "+strconv.Itoa(i)+" is not 32 bytes", nil)
+			return newConfigurationError("WithCookieKeys: entry "+strconv.Itoa(i)+" is not 32 bytes (got "+
+				strconv.Itoa(len(k))+")", nil)
 		}
 	}
 	return nil
@@ -71,7 +72,7 @@ func validateKeyset(ks Keyset, alg SigningAlgorithm) error {
 		switch {
 		case i == 0 && keyAlg != alg:
 			return newConfigurationError("keyset entry "+k.KeyID+" is "+shape+"; the OP signs with "+string(alg)+
-				", which requires "+signingKeyRequirement(alg)+" for the active key", nil)
+				", which requires "+signingKeyRequirement(alg)+" for the active key"+rs256Hint(keyAlg), nil)
 		case keyAlg == "":
 			return newConfigurationError("keyset entry "+k.KeyID+" is "+shape+
 				"; only ECDSA P-256 and RSA of 2048 bits or more are accepted", nil)
@@ -109,6 +110,14 @@ func signingKeyShape(pub crypto.PublicKey) (string, SigningAlgorithm) {
 		return "Ed25519", ""
 	}
 	return "an unsupported key type", ""
+}
+
+// rs256Hint points an RSA active key at the option that makes it usable.
+func rs256Hint(keyAlg SigningAlgorithm) string {
+	if keyAlg != AlgRS256 {
+		return ""
+	}
+	return "; to sign with this key, add WithSigningAlgorithm(op.AlgRS256)"
 }
 
 // signingKeyRequirement names the key type the active entry needs for alg.

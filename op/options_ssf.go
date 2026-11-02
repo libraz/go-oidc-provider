@@ -48,8 +48,12 @@ func WithSharedSignals() Option {
 // endpoints for SSF receivers, the counterpart of
 // [WithAllowPrivateNetworkBackchannel]. The default refuses them so a
 // receiver cannot aim signed SETs at an internal service. Cloud metadata
-// addresses stay refused whatever the value. Repeating the option is a
-// no-op.
+// addresses stay refused whatever the value.
+//
+// This is network reach for deployments whose relying parties live on a
+// private network; it is legitimate in production, not a development-only
+// option, and [New] logs one INFO line naming what it widens. Repeating
+// the option is a no-op.
 //
 // Stable since v1.5.
 func WithAllowPrivateNetworkSharedSignals() Option {

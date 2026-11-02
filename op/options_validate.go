@@ -43,6 +43,7 @@ func (c *config) validate() error {
 		c.validateLoginFlow,
 		c.validateACRAdvertisement,
 		c.validateInteractionUICapabilities,
+		c.validateSPAUIDriver,
 		c.validateAccessTokenFormat,
 		c.validateAccessTokenRevocation,
 		c.validateDeviceCodeGrant,

@@ -77,7 +77,9 @@
 //   - [WithProfile]: the security profile, checked against everything else;
 //     without one, New warns that a confidential client may skip PKCE.
 //   - [WithLogger]: where operational logs go; without it, construction-time
-//     diagnostics go to [slog.Default] and request-time records are discarded.
+//     diagnostics go to [slog.Default] and request-time logs and audit records
+//     are discarded, which New warns about ([WithAuditLogger] keeps the audit
+//     stream on its own).
 //   - [WithMountPrefix], [WithTrustedProxies]: where the OP mounts and which
 //     reverse proxies it trusts.
 //   - [WithSPAUI] or [WithConsentUI]: your own login and consent pages in
@@ -113,13 +115,14 @@
 //     [WithAccessTokenRevocationStrategy], [WithIDTokenScopeClaims],
 //     [WithOpenIDScopeOptional], [WithDPoPNonceSource], [WithMTLSProxy],
 //     [WithMTLSRootCAs], [WithEncryptionKeyset], [WithSupportedEncryptionAlgs],
-//     [WithJWKSHTTPTransport], [WithAllowPrivateNetworkJWKS],
-//     [WithAllowPrivateNetworkJAR], [WithAllowPrivateNetworkSector],
-//     [WithAllowPrivateNetworkClientIDMetadata].
+//     [WithJWKSHTTPTransport].
 //   - Logout and sessions: [WithSessionDurabilityPosture],
 //     [WithBackchannelLogoutHTTPClient], [WithBackchannelLogoutTimeout],
-//     [WithBackchannelFanOutBudget], [WithAllowPrivateNetworkBackchannel],
-//     [WithSharedSignals], [WithAllowPrivateNetworkSharedSignals].
+//     [WithBackchannelFanOutBudget], [WithSharedSignals].
+//   - Network reach (for relying parties on a private network; legitimate in
+//     production): [WithAllowPrivateNetworkJWKS], [WithAllowPrivateNetworkJAR],
+//     [WithAllowPrivateNetworkSector], [WithAllowPrivateNetworkClientIDMetadata],
+//     [WithAllowPrivateNetworkBackchannel], [WithAllowPrivateNetworkSharedSignals].
 //   - Development only: [WithAllowLocalhostLoopback],
 //     [WithAllowInsecureBackchannelLogoutForDev],
 //     [WithAllowInsecureSharedSignalsPushForDev].
@@ -140,7 +143,7 @@
 // # Local development
 //
 // The defaults are tuned for production (https-only, public-network-only).
-// Two opt-in options widen the gates for demos and CI fixtures bound to
+// Three opt-in options widen the gates for demos and CI fixtures bound to
 // the loopback interface:
 //
 //   - [WithAllowLocalhostLoopback] admits the textual "localhost" host in
@@ -154,8 +157,11 @@
 //     deliverer's SSRF gate to loopback so a stub RP on 127.0.0.1 can
 //     receive the logout token POST. Every other private range stays
 //     refused; reaching one is [WithAllowPrivateNetworkBackchannel].
+//   - [WithAllowInsecureSharedSignalsPushForDev] admits http:// and loopback
+//     push endpoints for shared-signals streams, and requires a development
+//     issuer like the back-channel option above.
 //
-// Production embedders leave both off and front their RPs over TLS.
+// Production embedders leave all three off and front their RPs over TLS.
 //
 // # Standards
 //

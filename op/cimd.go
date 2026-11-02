@@ -46,8 +46,15 @@ func WithClientIDMetadataDocuments(c ClientIDMetadataDocuments) Option {
 // WithAllowPrivateNetworkClientIDMetadata is the client ID metadata
 // document counterpart of [WithAllowPrivateNetworkJAR]: it admits
 // private, loopback and link-local targets and the http scheme for
-// client_id URLs. Development and test only. The document's jwks_uri is
-// a separate fetch governed by [WithAllowPrivateNetworkJWKS].
+// client_id URLs. The document's jwks_uri is a separate fetch governed by
+// [WithAllowPrivateNetworkJWKS].
+//
+// This is network reach for deployments whose relying parties live on a
+// private network; it is legitimate in production, not a development-only
+// option. [New] logs one INFO line naming what it widens, and a WARN when
+// Client ID Metadata Documents or open dynamic registration is enabled,
+// since an unauthenticated caller can then aim the fetch at internal
+// services (SSRF exposure).
 //
 // Experimental: tracks an IETF draft, so the surface MAY change in a
 // minor release on a wire-incompatible draft bump.

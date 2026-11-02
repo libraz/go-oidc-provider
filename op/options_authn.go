@@ -17,9 +17,11 @@ import (
 // login surface — unless [WithSPAUI] is configured, in which case the
 // default falls away and the embedder's SPA owns rendering over the JSON
 // state endpoints. SSR or framework-specific Drivers replace it.
-// Combined with [WithSPAUI] the driver no longer renders or parses
-// prompts; it only renders /authorize error pages (through
-// [interaction.ErrorRenderer]), and [New] logs a warning saying so.
+// Under [WithSPAUI] the configured driver renders and parses the
+// <LoginMount>/state prompts, so it must speak the JSON envelope the SPA
+// consumes; unset, [interaction.JSONDriver] is used. Combining [WithSPAUI]
+// with [interaction.HTMLDriver] or [interaction.TemplateOverlayDriver] fails
+// [New], since the SPA would receive HTML.
 // Stable since v1.0.
 func WithInteractionDriver(d interaction.Driver) Option {
 	return optionFunc(func(c *config) error {
@@ -86,7 +88,8 @@ func WithMFAEncryptionKeys(keys ...[]byte) Option {
 		}
 		for i, k := range keys {
 			if len(k) != mfaEncryptionKeyLen {
-				return newConfigurationError("WithMFAEncryptionKeys: entry "+strconv.Itoa(i)+" is not 32 bytes", nil)
+				return newConfigurationError("WithMFAEncryptionKeys: entry "+strconv.Itoa(i)+" is not 32 bytes (got "+
+					strconv.Itoa(len(k))+")", nil)
 			}
 		}
 		// Defensive copy so a later mutation of the caller's slice does
@@ -497,7 +500,10 @@ func checkLoginFlowRuleKinds(flow LoginFlow) error {
 // WithSPAUI registers the [SPAUI] mount points the SPA frontend
 // hosts. With a SPA shell active the default HTML driver is not
 // installed, so the embedder's SPA owns rendering: it reads each prompt
-// as JSON from LoginMount/state/{uid}. The RP-Initiated Logout pages stay
+// as JSON from LoginMount/state/{uid}. The configured [WithInteractionDriver]
+// renders and parses those prompts, so it must speak the JSON envelope the
+// SPA consumes; unset, [interaction.JSONDriver] is used, and a bundled HTML
+// driver fails [New]. The RP-Initiated Logout pages stay
 // server-rendered ([WithLogoutUI] restyles them). Mutually exclusive with
 // [WithConsentUI]; supplying both fails [New], unless one of the two is
 // wrapped in [WithDefaults], in which case the explicit one wins.

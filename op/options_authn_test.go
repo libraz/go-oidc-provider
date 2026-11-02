@@ -676,24 +676,37 @@ func TestWithChooserUI_AcceptsAlongsideSPAUI(t *testing.T) {
 	}
 }
 
-// TestNew_WarnsWhenDriverShadowedBySPAUI pins the startup warning for an
-// explicit driver combined with WithSPAUI, in either option order, and its
-// absence for each option alone.
-func TestNew_WarnsWhenDriverShadowedBySPAUI(t *testing.T) {
+// TestNew_SPAUIWithInteractionDriver pins that WithSPAUI combined with a
+// bundled HTML driver fails New in either option order, and that any other
+// driver (or either option alone) is accepted without a driver warning.
+func TestNew_SPAUIWithInteractionDriver(t *testing.T) {
 	t.Parallel()
 
-	const marker = "WithInteractionDriver is configured but WithSPAUI is active"
+	const wantErr = "drop WithInteractionDriver, or use a driver that emits the JSON prompt envelope"
 	spa := op.WithSPAUI(op.SPAUI{LoginMount: "/login"})
-	drv := op.WithInteractionDriver(interaction.JSONDriver{})
+	with := op.WithInteractionDriver
 	cases := []struct {
-		name string
-		opts []op.Option
-		want bool
+		name    string
+		opts    []op.Option
+		wantErr bool
 	}{
-		{name: "driver then SPA", opts: []op.Option{drv, spa}, want: true},
-		{name: "SPA then driver", opts: []op.Option{spa, drv}, want: true},
+		{name: "HTMLDriver then SPA", opts: []op.Option{with(interaction.HTMLDriver{}), spa}, wantErr: true},
+		{name: "SPA then HTMLDriver", opts: []op.Option{spa, with(interaction.HTMLDriver{})}, wantErr: true},
+		{name: "HTMLDriver pointer", opts: []op.Option{spa, with(&interaction.HTMLDriver{})}, wantErr: true},
+		{
+			name:    "TemplateOverlayDriver",
+			opts:    []op.Option{spa, with(interaction.TemplateOverlayDriver{Inner: interaction.JSONDriver{}})},
+			wantErr: true,
+		},
+		{
+			name:    "TemplateOverlayDriver pointer",
+			opts:    []op.Option{spa, with(&interaction.TemplateOverlayDriver{Inner: interaction.JSONDriver{}})},
+			wantErr: true,
+		},
+		{name: "JSONDriver then SPA", opts: []op.Option{with(interaction.JSONDriver{}), spa}},
+		{name: "SPA then JSONDriver", opts: []op.Option{spa, with(interaction.JSONDriver{})}},
 		{name: "SPA only", opts: []op.Option{spa}},
-		{name: "driver only", opts: []op.Option{drv}},
+		{name: "HTMLDriver only", opts: []op.Option{with(interaction.HTMLDriver{})}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -702,11 +715,16 @@ func TestNew_WarnsWhenDriverShadowedBySPAUI(t *testing.T) {
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 			opts := append(validBaseOpts(t), op.WithLogger(logger))
-			if _, err := op.New(append(opts, tc.opts...)...); err != nil {
+			_, err := op.New(append(opts, tc.opts...)...)
+			if tc.wantErr {
+				wantConfigurationError(t, err, wantErr)
+				return
+			}
+			if err != nil {
 				t.Fatalf("op.New: %v", err)
 			}
-			if got := strings.Contains(buf.String(), marker); got != tc.want {
-				t.Fatalf("warning present = %v, want %v; log:\n%s", got, tc.want, buf.String())
+			if strings.Contains(buf.String(), "WithInteractionDriver is configured but WithSPAUI") {
+				t.Fatalf("unexpected driver warning; log:\n%s", buf.String())
 			}
 		})
 	}

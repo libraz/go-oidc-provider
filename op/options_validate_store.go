@@ -36,14 +36,18 @@ var storeCapabilityReasons = map[string]struct{ desc, because string }{
 // flows their backend supports never sees a spurious rejection.
 //
 // Substore-specific validators (validateAccessTokenFormat,
-// validateAccessTokenRevocation, validateRegistration, ...) keep
-// their existing checks; this function fills the gap for the
+// validateAccessTokenRevocation, validateRegistration, the device-code
+// and CIBA grant validators, ...) run earlier in validate and return
+// at their first failure; this function fills the gap for the
 // always-on substores (Clients, ConsumedJTIs, Users, AuthorizationCodes,
-// RefreshTokens, Grants) and the grant-gated specialty substores
-// (DeviceCodes, CIBARequests, PushedAuthRequests).
+// RefreshTokens, Grants) and the grant-gated PushedAuthRequests,
+// Sessions and Interactions substores.
 //
-// Every gap is reported in one joined error so a store built from
-// scratch sees them all in a single run.
+// It reports together, in one joined error, every gap among exactly
+// those substores plus the refresh-retry, transactional, compare-and-swap
+// and grant-lister capabilities, so a store built from scratch sees them
+// all in a single run. Gaps in the substores owned by the earlier
+// validators are reported one at a time, before this function runs.
 func (c *config) validateStoreCapabilities() error {
 	errs := c.nilSubstoreErrors()
 	if err := c.validateRefreshRetryStoreCapability(); err != nil {

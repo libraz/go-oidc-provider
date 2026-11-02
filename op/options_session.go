@@ -400,11 +400,15 @@ func (c *config) effectiveRefreshGrace() time.Duration {
 // uses a non-http(s) scheme; the OP does this so an attacker-
 // controlled jwks_uri value cannot pivot the OP onto an internal
 // service.
-// Embedders that legitimately host their RPs on a private network
-// (CI, on-prem deployment with an internal RP) opt in via this
-// option. The opt-in is JWKS-specific so the analogous JAR
-// request_uri fetcher remains independently gated by
-// [WithAllowPrivateNetworkJAR].
+//
+// This is network reach for deployments whose relying parties live on a
+// private network (on-prem, service mesh, internal RPs); it is legitimate
+// in production, not a development-only option. [New] logs one INFO line
+// naming what it widens, and a WARN when open dynamic registration or
+// Client ID Metadata Documents is enabled too, since an unauthenticated
+// caller can then aim the fetch at internal services (SSRF exposure). The
+// opt-in is JWKS-specific so the analogous JAR request_uri fetcher
+// remains independently gated by [WithAllowPrivateNetworkJAR].
 // Stable since v1.0.
 func WithAllowPrivateNetworkJWKS() Option {
 	return optionFunc(func(c *config) error {
@@ -418,8 +422,13 @@ func WithAllowPrivateNetworkJWKS() Option {
 // applied to RP-controlled request_uri values when /authorize fetches
 // the request object. The option is independent of the JWKS opt-in so
 // embedders can grant private-network access to one fetcher without
-// widening the other. The default false posture is the safe choice
-// for production deployments.
+// widening the other.
+//
+// This is network reach for deployments whose relying parties live on a
+// private network; it is legitimate in production, not a development-only
+// option. [New] logs one INFO line naming what it widens, and a WARN when
+// open dynamic registration or Client ID Metadata Documents is enabled
+// too (SSRF exposure).
 // Stable since v1.0.
 func WithAllowPrivateNetworkJAR() Option {
 	return optionFunc(func(c *config) error {
@@ -434,9 +443,13 @@ func WithAllowPrivateNetworkJAR() Option {
 // dynamic client registration to validate the OIDC Core 1.0 §8.1
 // pairwise subject sector. The option is independent of the JWKS and
 // JAR opt-ins so an embedder can host the sector document on a
-// private network without widening the other two fetchers. The
-// default false posture is the safe choice for production
-// deployments.
+// private network without widening the other two fetchers.
+//
+// This is network reach for deployments whose relying parties live on a
+// private network; it is legitimate in production, not a development-only
+// option. [New] logs one INFO line naming what it widens, and a WARN when
+// open dynamic registration or Client ID Metadata Documents is enabled
+// too (SSRF exposure).
 // Stable since v1.0.
 func WithAllowPrivateNetworkSector() Option {
 	return optionFunc(func(c *config) error {

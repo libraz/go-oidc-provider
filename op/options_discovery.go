@@ -463,11 +463,9 @@ func WithProfile(p profile.Profile) Option {
 			}
 		}
 		c.profiles = append(c.profiles, p)
-		// Auto-enable every required feature idempotently. The
-		// duplicate check in [WithFeature] is bypassed because the
-		// auto-enable contract is "silently skip", not "fail loudly":
-		// embedders must remain free to call [WithFeature] explicitly
-		// before or after [WithProfile].
+		// Auto-enable every required feature idempotently: a feature the
+		// embedder already enabled is skipped, so [WithFeature] may be
+		// called before or after [WithProfile].
 		for _, req := range profile.RequiredFeatures(p) {
 			if !req.IsValid() {
 				continue
